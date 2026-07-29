@@ -9,6 +9,7 @@
       "binaryDir": "${sourceDir}/build/vs2026",
       "cacheVariables": {
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/layerc",
         "LAYERC_BUILD_TESTS": "ON"
       }
     }
@@ -23,6 +24,13 @@
       "name": "vs2026-release",
       "configurePreset": "vs2026",
       "configuration": "Release"
+    },
+    {
+      "name": "vs2026-install-release",
+      "displayName": "Install Visual Studio 2026 Release",
+      "configurePreset": "vs2026",
+      "configuration": "Release",
+      "targets": ["install"]
     }
   ],
   "testPresets": [
@@ -37,6 +45,18 @@
       "configurePreset": "vs2026",
       "configuration": "Release",
       "output": { "outputOnFailure": true }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "vs2026-release",
+      "displayName": "Build, test, and install Visual Studio 2026 Release",
+      "steps": [
+        { "type": "configure", "name": "vs2026" },
+        { "type": "build", "name": "vs2026-release" },
+        { "type": "test", "name": "vs2026-release" },
+        { "type": "build", "name": "vs2026-install-release" }
+      ]
     }
   ]
 }

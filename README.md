@@ -26,6 +26,18 @@ cmake --install build/vs2026 --config Release --prefix out/layerc
 
 The install step stages only the two production programs, `layerd.exe` and `layere.exe`, in `out/layerc`.
 
+For the standard CMake configure, Release build, test, and install sequence as
+one CMake-native command, run:
+
+```powershell
+cmake --workflow --preset vs2026-release
+```
+
+This workflow uses CMake's native Workflow Presets. A future Linux configure
+preset can reuse the same build, test, and install structure without requiring
+a platform-specific orchestration script. Close LayerE and LayerD first on
+Windows so their executable files are not locked during the build or install.
+
 The test targets have separate jobs:
 
 - `layerc_core_tests` covers profile parsing, serialization, cooldown/input behavior, and runtime state without creating windows.

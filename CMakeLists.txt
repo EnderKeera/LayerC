@@ -14,7 +14,10 @@ add_library(layerc_core STATIC
     src/core/cooldown_engine.cpp
     src/core/input_matcher.cpp
     src/core/json.cpp
+    src/core/json_value.cpp
+    src/core/utf8.cpp
     src/core/profile.cpp
+    src/core/profile_fields.cpp
     src/core/profile_serialize.cpp
     src/core/runtime_instances.cpp
 )
@@ -30,13 +33,23 @@ endif()
 if(WIN32)
     add_library(layerc_windows STATIC
         src/platform/windows.cpp
+        src/platform/window_discovery.cpp
+        src/platform/text.cpp
+        src/platform/profile_store.cpp
     )
     target_include_directories(layerc_windows PUBLIC
         src/platform/include
         src/core/include
     )
-    target_link_libraries(layerc_windows PUBLIC layerc_core user32 advapi32)
-    target_compile_definitions(layerc_windows PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(layerc_windows PUBLIC layerc_core user32 advapi32 shell32 ole32)
+    target_compile_definitions(layerc_windows PUBLIC
+        UNICODE
+        _UNICODE
+        WIN32_LEAN_AND_MEAN
+        NOMINMAX
+        WINVER=0x0A00
+        _WIN32_WINNT=0x0A00
+    )
     if(MSVC)
         target_compile_options(layerc_windows PRIVATE /W4 /permissive- /EHsc /utf-8)
     else()
@@ -48,7 +61,11 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
     add_executable(layerd WIN32
         src/daemon/main.cpp
         src/daemon/daemon_app.cpp
+        src/daemon/daemon_sessions.cpp
+        src/daemon/daemon_input.cpp
+        src/daemon/daemon_overlays.cpp
         src/daemon/overlay_window.cpp
+        src/daemon/overlay_render.cpp
     )
     target_include_directories(layerd PRIVATE src/daemon)
     target_link_libraries(layerd PRIVATE layerc_core layerc_windows shell32 user32 xinput9_1_0)
@@ -72,6 +89,17 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
     add_executable(layere WIN32
         src/editor/main.cpp
         src/editor/editor_dialog.cpp
+        src/editor/editor_layout.cpp
+        src/editor/editor_profiles.cpp
+        src/editor/editor_profile_support.cpp
+        src/editor/editor_cooldowns.cpp
+        src/editor/editor_bars.cpp
+        src/editor/editor_tasks.cpp
+        src/editor/editor_theme.cpp
+        src/editor/editor_draw.cpp
+        src/editor/editor_appearance.cpp
+        src/editor/editor_color_picker.cpp
+        src/editor/editor_controls.cpp
         src/editor/editor_resources.rc
     )
     target_include_directories(layere PRIVATE src/editor)
@@ -108,6 +136,10 @@ if(LAYERC_BUILD_TESTS)
     enable_testing()
     add_executable(layerc_core_tests
         tests/core_tests.cpp
+        tests/test_support.cpp
+        tests/cooldown_input_tests.cpp
+        tests/profile_tests.cpp
+        tests/runtime_json_tests.cpp
     )
     target_link_libraries(layerc_core_tests PRIVATE layerc_core)
     add_test(NAME layerc_core_tests COMMAND layerc_core_tests)
@@ -115,15 +147,22 @@ if(LAYERC_BUILD_TESTS)
     if(WIN32)
         add_executable(lctest WIN32 tools/lctest.cpp)
         target_compile_definitions(lctest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MINGW)
+            target_link_options(lctest PRIVATE -municode)
+        endif()
         set_target_properties(lctest PROPERTIES OUTPUT_NAME "lctest")
 
         add_executable(layerc_overlay_tests
             tests/overlay_window_tests.cpp
             src/daemon/overlay_window.cpp
+            src/daemon/overlay_render.cpp
         )
         target_include_directories(layerc_overlay_tests PRIVATE src/daemon)
         target_link_libraries(layerc_overlay_tests PRIVATE layerc_core layerc_windows user32)
         target_compile_definitions(layerc_overlay_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MINGW)
+            target_link_options(layerc_overlay_tests PRIVATE -municode)
+        endif()
         if(MSVC)
             target_compile_options(layerc_overlay_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
         else()
