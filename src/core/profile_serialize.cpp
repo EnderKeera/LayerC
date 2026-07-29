@@ -218,6 +218,9 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_key(output, 8, "textColor");
     append_color(output, panel.bar.text_color);
     output += ",\n";
+    append_key(output, 8, "showText");
+    append_bool(output, panel.bar.show_text);
+    output += ",\n";
     append_key(output, 8, "hideWhenReady");
     append_bool(output, panel.bar.hide_when_ready);
     output += "\n      },\n";

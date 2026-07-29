@@ -1,5 +1,7 @@
 #include "layerc/core/json.hpp"
 
+#include "utf8.hpp"
+
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -9,86 +11,9 @@
 
 namespace layerc::core::json {
 
-Value::Value() noexcept : storage_(nullptr) {}
-Value::Value(std::nullptr_t) noexcept : storage_(nullptr) {}
-Value::Value(const bool value) noexcept : storage_(value) {}
-Value::Value(const double value) noexcept : storage_(value) {}
-Value::Value(std::string value) : storage_(std::move(value)) {}
-Value::Value(Array value) : storage_(std::move(value)) {}
-Value::Value(Object value) : storage_(std::move(value)) {}
-
-bool Value::is_null() const noexcept { return std::holds_alternative<std::nullptr_t>(storage_); }
-bool Value::is_bool() const noexcept { return std::holds_alternative<bool>(storage_); }
-bool Value::is_number() const noexcept { return std::holds_alternative<double>(storage_); }
-bool Value::is_string() const noexcept { return std::holds_alternative<std::string>(storage_); }
-bool Value::is_array() const noexcept { return std::holds_alternative<Array>(storage_); }
-bool Value::is_object() const noexcept { return std::holds_alternative<Object>(storage_); }
-
-bool Value::as_bool() const { return std::get<bool>(storage_); }
-double Value::as_number() const { return std::get<double>(storage_); }
-const std::string& Value::as_string() const { return std::get<std::string>(storage_); }
-const Value::Array& Value::as_array() const { return std::get<Array>(storage_); }
-const Value::Object& Value::as_object() const { return std::get<Object>(storage_); }
-
-const Value* Value::find(const std::string_view key) const {
-    if (!is_object()) {
-        return nullptr;
-    }
-    const auto& object = as_object();
-    const auto found = object.find(key);
-    return found == object.end() ? nullptr : &found->second;
-}
-
 namespace {
 
 constexpr std::size_t kMaximumNestingDepth = 128;
-
-[[nodiscard]] bool is_valid_utf8(const std::string_view text) {
-    std::size_t index{};
-    while (index < text.size()) {
-        const auto lead = static_cast<unsigned char>(text[index]);
-        if (lead <= 0x7FU) {
-            ++index;
-            continue;
-        }
-
-        std::size_t length{};
-        std::uint32_t codepoint{};
-        if (lead >= 0xC2U && lead <= 0xDFU) {
-            length = 2;
-            codepoint = lead & 0x1FU;
-        } else if (lead >= 0xE0U && lead <= 0xEFU) {
-            length = 3;
-            codepoint = lead & 0x0FU;
-        } else if (lead >= 0xF0U && lead <= 0xF4U) {
-            length = 4;
-            codepoint = lead & 0x07U;
-        } else {
-            return false;
-        }
-
-        if (index + length > text.size()) {
-            return false;
-        }
-        for (std::size_t continuation = 1; continuation < length; ++continuation) {
-            const auto byte = static_cast<unsigned char>(text[index + continuation]);
-            if ((byte & 0xC0U) != 0x80U) {
-                return false;
-            }
-            codepoint = (codepoint << 6U) | (byte & 0x3FU);
-        }
-
-        if ((length == 2 && codepoint < 0x80U) ||
-            (length == 3 && codepoint < 0x800U) ||
-            (length == 4 && codepoint < 0x10000U) ||
-            (codepoint >= 0xD800U && codepoint <= 0xDFFFU) ||
-            codepoint > 0x10FFFFU) {
-            return false;
-        }
-        index += length;
-    }
-    return true;
-}
 
 class Parser {
 public:
@@ -208,7 +133,7 @@ private:
         while (position_ < source_.size()) {
             const char current = source_[position_++];
             if (current == '"') {
-                if (!is_valid_utf8(result)) {
+                if (!detail::is_valid_utf8(result)) {
                     fail("invalid UTF-8 in string");
                     return {};
                 }
@@ -274,7 +199,7 @@ private:
             return false;
         }
 
-        append_utf8(output, *codepoint);
+        detail::append_utf8(output, *codepoint);
         return true;
     }
 
@@ -299,24 +224,6 @@ private:
             }
         }
         return value;
-    }
-
-    static void append_utf8(std::string& output, const std::uint32_t codepoint) {
-        if (codepoint <= 0x7FU) {
-            output.push_back(static_cast<char>(codepoint));
-        } else if (codepoint <= 0x7FFU) {
-            output.push_back(static_cast<char>(0xC0U | (codepoint >> 6U)));
-            output.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
-        } else if (codepoint <= 0xFFFFU) {
-            output.push_back(static_cast<char>(0xE0U | (codepoint >> 12U)));
-            output.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
-            output.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
-        } else {
-            output.push_back(static_cast<char>(0xF0U | (codepoint >> 18U)));
-            output.push_back(static_cast<char>(0x80U | ((codepoint >> 12U) & 0x3FU)));
-            output.push_back(static_cast<char>(0x80U | ((codepoint >> 6U) & 0x3FU)));
-            output.push_back(static_cast<char>(0x80U | (codepoint & 0x3FU)));
-        }
     }
 
     Value parse_array(const std::size_t depth) {

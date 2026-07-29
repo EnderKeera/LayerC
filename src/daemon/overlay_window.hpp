@@ -37,6 +37,10 @@ public:
               layerc::core::TimePoint now);
 
 private:
+  static constexpr LONG item_width = 78;
+  static constexpr LONG item_height = 72;
+  static constexpr LONG spacing = 6;
+  static constexpr LONG padding = 6;
   static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                       LPARAM lparam);
   bool create_window();

@@ -24,6 +24,14 @@ public:
   int run(HINSTANCE instance, int show_command);
 
 private:
+  static constexpr UINT tray_message = WM_APP + 1;
+  static constexpr UINT_PTR game_scan_timer = 1;
+  static constexpr UINT_PTR input_poll_timer = 2;
+  static constexpr UINT_PTR overlay_render_timer = 3;
+  static constexpr UINT command_open_editor = 1001;
+  static constexpr UINT command_reload = 1002;
+  static constexpr UINT command_exit = 1003;
+  static DaemonApp *foreground_hook_target_;
   struct ProfileSource {
     std::wstring key;
     layerc::core::GameProfile profile;
@@ -91,7 +99,6 @@ private:
   void update_tooltip(const std::wstring &status);
   [[nodiscard]] std::vector<Session *> foreground_sessions();
   [[nodiscard]] RECT overlay_target() const;
-  [[nodiscard]] std::filesystem::path profile_directory() const;
   static void CALLBACK foreground_event_proc(HWINEVENTHOOK hook, DWORD event,
                                              HWND window, LONG object_id,
                                              LONG child_id, DWORD event_thread,

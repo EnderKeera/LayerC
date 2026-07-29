@@ -1,92 +1,16 @@
 #include "layerc/core/profile.hpp"
 
-#include "layerc/core/json.hpp"
+#include "profile_reader.hpp"
+#include "utf8.hpp"
 
-#include <cmath>
-#include <cstdint>
-#include <limits>
-#include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <utility>
+#include <variant>
 
-namespace layerc::core {
-namespace {
+namespace layerc::core::detail {
 
-std::optional<std::uint32_t> parse_hex_color(const std::string_view value) {
-  if (value.size() != 7 || value.front() != '#') {
-    return std::nullopt;
-  }
-
-  std::uint32_t color{};
-  for (std::size_t index = 1; index < value.size(); ++index) {
-    const auto character = value[index];
-    std::uint32_t digit{};
-    if (character >= '0' && character <= '9') {
-      digit = static_cast<std::uint32_t>(character - '0');
-    } else if (character >= 'a' && character <= 'f') {
-      digit = static_cast<std::uint32_t>(character - 'a' + 10);
-    } else if (character >= 'A' && character <= 'F') {
-      digit = static_cast<std::uint32_t>(character - 'A' + 10);
-    } else {
-      return std::nullopt;
-    }
-    color = (color << 4U) | digit;
-  }
-  return color;
-}
-
-bool is_valid_utf8(const std::string_view value) {
-  for (std::size_t index = 0; index < value.size();) {
-    const auto first = static_cast<std::uint8_t>(value[index]);
-    if (first <= 0x7FU) {
-      ++index;
-      continue;
-    }
-
-    std::size_t continuations{};
-    std::uint32_t codepoint{};
-    std::uint32_t minimum{};
-    if ((first & 0xE0U) == 0xC0U) {
-      continuations = 1;
-      codepoint = first & 0x1FU;
-      minimum = 0x80U;
-    } else if ((first & 0xF0U) == 0xE0U) {
-      continuations = 2;
-      codepoint = first & 0x0FU;
-      minimum = 0x800U;
-    } else if ((first & 0xF8U) == 0xF0U) {
-      continuations = 3;
-      codepoint = first & 0x07U;
-      minimum = 0x10000U;
-    } else {
-      return false;
-    }
-    if (index + continuations >= value.size()) {
-      return false;
-    }
-    for (std::size_t offset = 1; offset <= continuations; ++offset) {
-      const auto next = static_cast<std::uint8_t>(value[index + offset]);
-      if ((next & 0xC0U) != 0x80U) {
-        return false;
-      }
-      codepoint = (codepoint << 6U) | (next & 0x3FU);
-    }
-    if (codepoint < minimum || codepoint > 0x10FFFFU ||
-        (codepoint >= 0xD800U && codepoint <= 0xDFFFU)) {
-      return false;
-    }
-    index += continuations + 1;
-  }
-  return true;
-}
-
-class ProfileReader {
-public:
-  explicit ProfileReader(const json::Value &root) : root_(root) {}
-
-  ProfileResult read() {
+ProfileReader::ProfileReader(const json::Value &root) : root_(root) {}
+ProfileResult ProfileReader::read() {
     if (!root_.is_object()) {
       return error("$", "profile root must be an object");
     }
@@ -143,10 +67,7 @@ public:
     return profile;
   }
 
-private:
-  [[nodiscard]] bool ok() const { return error_.message.empty(); }
-
-  bool read_cooldowns(GameProfile &profile) {
+bool ProfileReader::read_cooldowns(GameProfile &profile) {
     const auto *values = required_array(root_, "cooldowns", "$");
     if (values == nullptr) {
       return false;
@@ -199,7 +120,7 @@ private:
     return true;
   }
 
-  bool read_panels(GameProfile &profile) {
+bool ProfileReader::read_panels(GameProfile &profile) {
     const auto *values = required_array(root_, "panels", "$");
     if (values == nullptr) {
       return false;
@@ -270,6 +191,7 @@ private:
         optional_color(*bar, "backgroundColor", path + ".bar", panel.bar.background_color);
         optional_color(*bar, "borderColor", path + ".bar", panel.bar.border_color);
         optional_color(*bar, "textColor", path + ".bar", panel.bar.text_color);
+        optional_boolean(*bar, "showText", path + ".bar", panel.bar.show_text);
         optional_boolean(*bar, "hideWhenReady", path + ".bar", panel.bar.hide_when_ready);
         if (!ok()) {
           return false;
@@ -306,7 +228,7 @@ private:
     return true;
   }
 
-  bool read_bindings(GameProfile &profile) {
+bool ProfileReader::read_bindings(GameProfile &profile) {
     const auto *values = required_array(root_, "bindings", "$");
     if (values == nullptr) {
       return false;
@@ -386,181 +308,21 @@ private:
     }
     return true;
   }
+} // namespace layerc::core::detail
 
-  const json::Value *required_object(const json::Value &parent,
-                                     const std::string_view key,
-                                     const std::string &path) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      set_error(path + "." + std::string(key), "required value is missing");
-      return nullptr;
-    }
-    if (!value->is_object()) {
-      set_error(path + "." + std::string(key), "expected object");
-      return nullptr;
-    }
-    return value;
-  }
-
-  const json::Value::Array *required_array(const json::Value &parent,
-                                            const std::string_view key,
-                                            const std::string &path) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      set_error(path + "." + std::string(key), "required value is missing");
-      return nullptr;
-    }
-    if (!value->is_array()) {
-      set_error(path + "." + std::string(key), "expected array");
-      return nullptr;
-    }
-    return &value->as_array();
-  }
-
-  bool required_string(const json::Value &parent, const std::string_view key,
-                       const std::string &path, std::string &output) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      return set_error(path + "." + std::string(key), "required value is missing");
-    }
-    if (!value->is_string() || value->as_string().empty()) {
-      return set_error(path + "." + std::string(key), "expected non-empty string");
-    }
-    output = value->as_string();
-    return true;
-  }
-
-  void optional_string(const json::Value &parent, const std::string_view key,
-                       const std::string &path, std::string &output) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      return;
-    }
-    if (!value->is_string()) {
-      set_error(path + "." + std::string(key), "expected string");
-      return;
-    }
-    output = value->as_string();
-  }
-
-  void optional_boolean(const json::Value &parent, const std::string_view key,
-                        const std::string &path, bool &output) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      return;
-    }
-    if (!value->is_bool()) {
-      set_error(path + "." + std::string(key), "expected boolean");
-      return;
-    }
-    output = value->as_bool();
-  }
-
-  void optional_color(const json::Value &parent, const std::string_view key,
-                      const std::string &path, std::uint32_t &output) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      return;
-    }
-    if (!value->is_string()) {
-      set_error(path + "." + std::string(key), "expected #RRGGBB color string");
-      return;
-    }
-    const auto parsed = parse_hex_color(value->as_string());
-    if (!parsed.has_value()) {
-      set_error(path + "." + std::string(key), "expected #RRGGBB color string");
-      return;
-    }
-    output = *parsed;
-  }
-
-  std::optional<std::int64_t> required_integer(const json::Value &parent,
-                                                const std::string_view key,
-                                                const std::string &path,
-                                                const std::int64_t minimum,
-                                                const std::int64_t maximum) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      set_error(path + "." + std::string(key), "required value is missing");
-      return std::nullopt;
-    }
-    return checked_integer(*value, path + "." + std::string(key), minimum, maximum);
-  }
-
-  std::optional<std::int64_t> optional_integer(const json::Value &parent,
-                                                const std::string_view key,
-                                                const std::string &path,
-                                                const std::int64_t minimum,
-                                                const std::int64_t maximum,
-                                                const std::int64_t fallback) {
-    const auto *value = parent.find(key);
-    return value == nullptr ? std::optional<std::int64_t>(fallback) :
-        checked_integer(*value, path + "." + std::string(key), minimum, maximum);
-  }
-
-  std::optional<std::int64_t> checked_integer(const json::Value &value,
-                                               const std::string &path,
-                                               const std::int64_t minimum,
-                                               const std::int64_t maximum) {
-    if (!value.is_number()) {
-      set_error(path, "expected integer");
-      return std::nullopt;
-    }
-    const auto number = value.as_number();
-    if (std::floor(number) != number || number < static_cast<double>(minimum) ||
-        number > static_cast<double>(maximum)) {
-      set_error(path, "integer is outside the supported range");
-      return std::nullopt;
-    }
-    return static_cast<std::int64_t>(number);
-  }
-
-  std::optional<double> optional_number(const json::Value &parent,
-                                        const std::string_view key,
-                                        const std::string &path,
-                                        const double minimum,
-                                        const double maximum,
-                                        const double fallback) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      return fallback;
-    }
-    if (!value->is_number() || value->as_number() < minimum ||
-        value->as_number() > maximum) {
-      set_error(path + "." + std::string(key), "number is outside the supported range");
-      return std::nullopt;
-    }
-    return value->as_number();
-  }
-
-  ProfileError error(const std::string &path, const std::string &message) {
-    return ProfileError{.path = path, .message = message};
-  }
-
-  bool set_error(std::string path, std::string message) {
-    if (error_.message.empty()) {
-      error_ = ProfileError{.path = std::move(path), .message = std::move(message)};
-    }
-    return false;
-  }
-
-  const json::Value &root_;
-  std::set<std::string, std::less<>> cooldown_ids_;
-  ProfileError error_;
-};
-
-} // namespace
+namespace layerc::core {
 
 ProfileResult parse_profile_json(const std::string_view source) {
   if (source.size() > max_profile_json_bytes) {
-    return ProfileError{.path = "$", .message = "profile exceeds the 256 KiB limit"};
+    return ProfileError{.path = "$",
+                        .message = "profile exceeds the 256 KiB limit"};
   }
   auto parsed = json::parse(source);
   if (const auto *parse_error = std::get_if<json::ParseError>(&parsed)) {
     return ProfileError{.path = "$@" + std::to_string(parse_error->offset),
                         .message = parse_error->message};
   }
-  return ProfileReader(std::get<json::Value>(parsed)).read();
+  return detail::ProfileReader(std::get<json::Value>(parsed)).read();
 }
 
 } // namespace layerc::core

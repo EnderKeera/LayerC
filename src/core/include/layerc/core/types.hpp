@@ -80,6 +80,8 @@ struct BarAppearance {
     std::uint32_t background_color{0x272D35};
     std::uint32_t border_color{0x50BAC8};
     std::uint32_t text_color{0xE4E8EC};
+    // Profiles written before showText existed keep their labels.
+    bool show_text{true};
     bool hide_when_ready{true};
 };
 
