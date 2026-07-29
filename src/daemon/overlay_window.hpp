@@ -1,0 +1,73 @@
+#pragma once
+
+#include "layerc/core/types.hpp"
+
+#include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <windows.h>
+
+namespace layerc::daemon {
+
+struct OverlayCooldown {
+  std::string_view id;
+  std::wstring name;
+  layerc::core::Milliseconds duration{};
+};
+
+class OverlayWindow {
+public:
+  OverlayWindow(const layerc::core::Panel &panel,
+                std::span<const OverlayCooldown> cooldowns);
+  ~OverlayWindow();
+
+  OverlayWindow(const OverlayWindow &) = delete;
+  OverlayWindow &operator=(const OverlayWindow &) = delete;
+
+  void show_for(HWND game_window);
+  void show_on_rect(const RECT &target);
+  void set_capture_exclusion(bool enabled);
+  [[nodiscard]] bool
+  should_show(const std::vector<layerc::core::CooldownState> &states) const;
+  void hide();
+  void render(const std::vector<layerc::core::CooldownState> &states,
+              layerc::core::TimePoint now);
+
+private:
+  static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
+                                      LPARAM lparam);
+  bool create_window();
+  bool ensure_render_resources();
+  void release_render_resources();
+  void paint();
+  void calculate_size();
+  void update_position(const RECT &target);
+  void clear_window_state();
+
+  const layerc::core::Panel &panel_;
+  std::span<const OverlayCooldown> cooldowns_;
+  std::vector<std::size_t> cooldown_indices_;
+  std::wstring label_buffer_;
+  HWND window_{};
+  HWND owner_{};
+  RECT target_{};
+  bool bring_to_front_{};
+  SIZE size_{};
+  bool visible_{};
+  bool capture_exclusion_{true};
+
+  HDC buffer_dc_{};
+  HBITMAP buffer_bitmap_{};
+  HGDIOBJ previous_bitmap_{};
+  HFONT font_{};
+  HBRUSH window_brush_{};
+  HBRUSH panel_brush_{};
+  HBRUSH fill_brush_{};
+  HPEN border_pen_{};
+  COLORREF text_color_{};
+};
+
+} // namespace layerc::daemon
