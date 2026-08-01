@@ -8,6 +8,29 @@
 #include <commctrl.h>
 #include <windows.h>
 namespace layerc::editor {
+namespace {
+
+std::wstring editor_single_instance_name() {
+  HANDLE token{};
+  TOKEN_STATISTICS statistics{};
+  DWORD required{};
+  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE) {
+    const BOOL queried = GetTokenInformation(
+        token, TokenStatistics, &statistics, sizeof(statistics), &required);
+    CloseHandle(token);
+    if (queried != FALSE) {
+      wchar_t name[96]{};
+      swprintf_s(name, L"Local\\LayerC.LayerE.%08lX%08lX.v1",
+                 static_cast<unsigned long>(statistics.AuthenticationId.HighPart),
+                 static_cast<unsigned long>(statistics.AuthenticationId.LowPart));
+      return name;
+    }
+  }
+  return L"Local\\LayerC.LayerE.SingleInstance.v1";
+}
+
+} // namespace
+
 int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   instance_ = instance;
   enable_native_dark_mode();
@@ -104,7 +127,13 @@ void EditorWindow::initialize(const HWND window) {
   }
   layout();
   reload_profile_list({}, true);
-  set_status(L"Ready");
+  revision_ = (static_cast<std::uint64_t>(GetTickCount64()) << 16U) |
+              static_cast<std::uint64_t>(GetCurrentProcessId());
+  EnableWindow(GetDlgItem(dialog_, IDC_DIRECT_DRAG), FALSE);
+  set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_DIRECT_DRAG), false);
+  (void)start_daemon();
+  SetTimer(dialog_, live_channel_timer, live_timer_interval_, nullptr);
+  set_status(L"Ready — connecting to LayerD.");
 }
 
 
@@ -112,6 +141,16 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
                                           const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_SIZE: layout(); return TRUE;
+  case WM_TIMER:
+    if (wparam == autosave_timer) {
+      (void)flush_autosave();
+      return TRUE;
+    }
+    if (wparam == live_channel_timer) {
+      poll_live_channel();
+      return TRUE;
+    }
+    break;
   case WM_GETMINMAXINFO:
     reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {1080, 700}; return TRUE;
   case WM_COMMAND: {
@@ -119,7 +158,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID || id == IDC_BAR_WIDTH || id == IDC_BAR_HEIGHT) {
       if (!syncing_ && notification == EN_CHANGE) {
         sync_profile_from_controls();
-        dirty_ = true;
+        record_profile_change(ChangeKind::text);
         InvalidateRect(preview_, nullptr, TRUE);
       }
       return TRUE;
@@ -128,9 +167,16 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
         notification == BN_CLICKED) {
       toggle_owner_draw_checkbox(GetDlgItem(dialog_, id));
       sync_profile_from_controls();
-      dirty_ = true;
+      record_profile_change(ChangeKind::immediate);
       InvalidateRect(GetDlgItem(dialog_, id), nullptr, TRUE);
       InvalidateRect(preview_, nullptr, TRUE);
+      return TRUE;
+    }
+    if (id == IDC_DIRECT_DRAG && notification == BN_CLICKED) {
+      const bool enabled = !owner_draw_checkbox_checked(
+          GetDlgItem(dialog_, IDC_DIRECT_DRAG));
+      set_direct_drag_enabled(enabled, enabled);
+      InvalidateRect(GetDlgItem(dialog_, IDC_DIRECT_DRAG), nullptr, TRUE);
       return TRUE;
     }
     switch (id) {
@@ -138,7 +184,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     case IDM_FILE_NEW: new_profile(); return TRUE;
     case IDM_FILE_SAVE: (void)save_profile(false); return TRUE;
     case IDM_FILE_SAVE_AS: (void)save_profile(true); return TRUE;
-    case IDC_ATTACH_LEFT: attach_profile(); return TRUE;
+    case IDC_ATTACH_LEFT: edit_on_window(); return TRUE;
     case IDC_SHOW_TASKS_LEFT: show_tasks(); return TRUE;
     case IDM_FILE_OPTIONS: open_options(); return TRUE;
     case IDM_FILE_SPLIT_BARS: split_independent_bars(); return TRUE;
@@ -149,6 +195,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     case IDM_FILE_DELETE: delete_profile(); return TRUE;
     case IDM_FILE_OPEN_FOLDER: open_profiles_folder(); return TRUE;
     case IDM_FILE_EXIT: SendMessageW(dialog_, WM_CLOSE, 0, 0); return TRUE;
+    case IDM_EDIT_UNDO: undo(); return TRUE;
+    case IDM_EDIT_REDO: redo(); return TRUE;
     default: break;
     }
     if (id == IDC_COOLDOWN_LIST && notification == LBN_SELCHANGE) {
@@ -159,6 +207,17 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (id == IDC_BAR_LIST && notification == LBN_SELCHANGE) {
       sync_profile_from_controls();
       refresh_bar_controls();
+      if (edit_session_id_ != 0) {
+        if (const auto *panel = selected_bar(); panel != nullptr) {
+          ++revision_;
+          (void)live_channel_.send({
+              .type = layerc::core::LiveMessageType::select_panel,
+              .revision = revision_,
+              .edit_session = edit_session_id_,
+              .panel_id = panel->id,
+          });
+        }
+      }
       return TRUE;
     }
     break;
@@ -203,7 +262,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (draw->CtlType == ODT_LISTBOX) { draw_list_box_item(*draw); return TRUE; }
     if (draw->CtlType != ODT_BUTTON) break;
     const int id = static_cast<int>(draw->CtlID);
-    if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY) {
+    if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY ||
+        id == IDC_DIRECT_DRAG) {
       draw_checkbox(*draw); return TRUE;
     }
     std::optional<COLORREF> overlay_color;
@@ -238,10 +298,15 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (picking_) cancel_picker();
     break;
   case WM_CLOSE:
-    if (confirm_unsaved_changes()) DestroyWindow(window);
+    if (confirm_unsaved_changes()) {
+      end_edit_on_window();
+      DestroyWindow(window);
+    }
     return TRUE;
   case WM_DESTROY:
     cancel_picker();
+    KillTimer(window, autosave_timer);
+    KillTimer(window, live_channel_timer);
     if (task_dialog_ != nullptr && IsWindow(task_dialog_)) DestroyWindow(task_dialog_);
     task_dialog_ = nullptr;
     if (profile_check_images_ != nullptr) {
@@ -257,8 +322,29 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
 }
 
 int EditorApp::run(const HINSTANCE instance, const int show_command) {
+  const auto mutex_name = editor_single_instance_name();
+  const HANDLE single_instance =
+      CreateMutexW(nullptr, TRUE, mutex_name.c_str());
+  if (single_instance == nullptr) {
+    MessageBoxW(nullptr, L"LayerE could not create its single-instance guard.",
+                L"LayerE", MB_OK | MB_ICONERROR);
+    return 1;
+  }
+  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+    if (const HWND existing = FindWindowW(L"#32770", L"LayerE");
+        existing != nullptr) {
+      if (IsIconic(existing)) ShowWindow(existing, SW_RESTORE);
+      ShowWindow(existing, SW_SHOW);
+      SetForegroundWindow(existing);
+    }
+    CloseHandle(single_instance);
+    return 0;
+  }
   EditorWindow editor;
-  return editor.run(instance, show_command);
+  const int result = editor.run(instance, show_command);
+  ReleaseMutex(single_instance);
+  CloseHandle(single_instance);
+  return result;
 }
 
 } // namespace layerc::editor

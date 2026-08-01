@@ -80,6 +80,7 @@ void EditorWindow::layout_tasks(const HWND window) {
   move_button(IDC_PICK_WINDOW, 84);
   move_button(IDC_USE_TASK, 110);
   move_button(IDC_REFRESH_TASKS, 64);
+  move_button(IDC_EDIT_SELECTED_TASK, 102);
   move(IDC_TASK_DETAIL, margin, button_top + button_height + gap, list_width,
        detail_height);
 
@@ -106,8 +107,14 @@ void EditorWindow::refresh_tasks() {
   if (task_list_ == nullptr) return;
   const HWND previous = selected_task_window();
   task_candidates_.clear(); ListView_DeleteAllItems(task_list_);
+  auto matching_profile = profile_;
+  matching_profile.enabled = true;
   for (auto candidate : layerc::platform::enumerate_attachable_windows()) {
     if (candidate.process_id == GetCurrentProcessId()) continue;
+    if (awaiting_edit_target_ && !matching_profile.game.global &&
+        !layerc::platform::profile_matches_window(candidate,
+                                                  matching_profile))
+      continue;
     task_candidates_.push_back(std::move(candidate));
     const auto &item = task_candidates_.back();
     const int row = static_cast<int>(task_candidates_.size() - 1U);
@@ -154,8 +161,12 @@ void EditorWindow::apply_task(const layerc::platform::WindowCandidate &candidate
     const auto suggested = std::filesystem::path(candidate.executable_name).stem().wstring();
     profile_.name = to_utf8(suggested); profile_.id = safe_identifier(suggested);
   }
-  dirty_ = true; refresh_profile_controls(); update_task_detail();
-  set_status(L"Task selected. Attach saves a durable executable match.");
+  refresh_profile_controls();
+  record_profile_change(ChangeKind::immediate);
+  update_task_detail();
+  set_status(current_path_.empty()
+                 ? L"Task selected — Save once to create the profile."
+                 : L"Task selected — autosaving the durable matcher.");
 }
 
 void EditorWindow::use_selected_task() {
@@ -211,6 +222,7 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     case IDC_PICK_WINDOW: begin_picker(); return TRUE;
     case IDC_USE_TASK: use_selected_task(); return TRUE;
     case IDC_REFRESH_TASKS: refresh_tasks(); return TRUE;
+    case IDC_EDIT_SELECTED_TASK: edit_selected_task(); return TRUE;
     default: break;
     }
     break;
@@ -229,7 +241,10 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     const auto *header = reinterpret_cast<const NMHDR *>(lparam);
     if (header->idFrom == IDC_TASK_LIST) {
       if (header->code == LVN_ITEMCHANGED) update_task_detail();
-      else if (header->code == NM_DBLCLK) use_selected_task();
+      else if (header->code == NM_DBLCLK) {
+        if (awaiting_edit_target_) edit_selected_task();
+        else use_selected_task();
+      }
       else if (header->code == NM_CUSTOMDRAW) {
         auto *draw = reinterpret_cast<NMLVCUSTOMDRAW *>(lparam);
         const auto list_colors = colors(layerc::platform::EditorControlRole::list);
@@ -254,7 +269,11 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     brush(layerc::platform::EditorControlRole::window)); return TRUE; }
   case WM_CLOSE: DestroyWindow(window); return TRUE;
   case WM_DESTROY:
-    if (task_dialog_ == window) { task_dialog_ = nullptr; task_list_ = nullptr; }
+    if (task_dialog_ == window) {
+      task_dialog_ = nullptr;
+      task_list_ = nullptr;
+      awaiting_edit_target_ = false;
+    }
     return TRUE;
   default: break;
   }

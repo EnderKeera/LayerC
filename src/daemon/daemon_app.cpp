@@ -34,6 +34,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
       EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
       &DaemonApp::foreground_event_proc, 0, 0, WINEVENT_OUTOFCONTEXT);
   SetTimer(window_, game_scan_timer, 1000, nullptr);
+  SetTimer(window_, live_channel_timer, live_timer_interval_, nullptr);
 
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -180,6 +181,8 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
       poll_input_devices();
     } else if (wparam == overlay_render_timer) {
       update_overlays();
+    } else if (wparam == live_channel_timer) {
+      poll_live_channel();
     }
     return 0;
   case WM_COMMAND:
@@ -208,6 +211,8 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     KillTimer(window, game_scan_timer);
     KillTimer(window, input_poll_timer);
     KillTimer(window, overlay_render_timer);
+    KillTimer(window, live_channel_timer);
+    end_edit_session();
     PostQuitMessage(0);
     return 0;
   default:

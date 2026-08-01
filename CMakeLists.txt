@@ -13,6 +13,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(layerc_core STATIC
     src/core/cooldown_engine.cpp
     src/core/input_matcher.cpp
+    src/core/live_edit.cpp
     src/core/json.cpp
     src/core/json_value.cpp
     src/core/utf8.cpp
@@ -36,6 +37,7 @@ if(WIN32)
         src/platform/window_discovery.cpp
         src/platform/text.cpp
         src/platform/profile_store.cpp
+        src/platform/live_channel.cpp
     )
     target_include_directories(layerc_windows PUBLIC
         src/platform/include
@@ -64,6 +66,7 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/daemon_sessions.cpp
         src/daemon/daemon_input.cpp
         src/daemon/daemon_overlays.cpp
+        src/daemon/daemon_live_edit.cpp
         src/daemon/overlay_window.cpp
         src/daemon/overlay_render.cpp
     )
@@ -100,6 +103,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         src/editor/editor_appearance.cpp
         src/editor/editor_color_picker.cpp
         src/editor/editor_controls.cpp
+        src/editor/editor_live_edit.cpp
         src/editor/editor_resources.rc
     )
     target_include_directories(layere PRIVATE src/editor)
@@ -140,6 +144,7 @@ if(LAYERC_BUILD_TESTS)
         tests/cooldown_input_tests.cpp
         tests/profile_tests.cpp
         tests/runtime_json_tests.cpp
+        tests/live_edit_tests.cpp
     )
     target_link_libraries(layerc_core_tests PRIVATE layerc_core)
     add_test(NAME layerc_core_tests COMMAND layerc_core_tests)
@@ -170,5 +175,15 @@ if(LAYERC_BUILD_TESTS)
         endif()
         add_dependencies(layerc_overlay_tests lctest)
         add_test(NAME layerc_overlay_tests COMMAND layerc_overlay_tests $<TARGET_FILE:lctest>)
+
+        add_executable(layerc_platform_tests tests/platform_live_tests.cpp)
+        target_link_libraries(layerc_platform_tests PRIVATE layerc_core layerc_windows)
+        target_compile_definitions(layerc_platform_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MSVC)
+            target_compile_options(layerc_platform_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(layerc_platform_tests PRIVATE -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME layerc_platform_tests COMMAND layerc_platform_tests)
     endif()
 endif()

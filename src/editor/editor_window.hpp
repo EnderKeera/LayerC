@@ -1,12 +1,15 @@
 #pragma once
 
 #include "layerc/core/profile.hpp"
+#include "layerc/core/live_edit.hpp"
+#include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/windows.hpp"
 
 #include <commctrl.h>
 #include <windows.h>
 
 #include <array>
+#include <deque>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -60,6 +63,8 @@ public:
   int run(HINSTANCE instance, int show_command);
 
 private:
+  static constexpr UINT_PTR autosave_timer = 10;
+  static constexpr UINT_PTR live_channel_timer = 11;
   struct ProfileEntry { std::filesystem::path path; std::wstring label; bool enabled{true}; };
 
   static INT_PTR CALLBACK dialog_proc(HWND, UINT, WPARAM, LPARAM);
@@ -112,7 +117,11 @@ private:
   void delete_profile();
   void open_profiles_folder();
   void show_file_menu();
-  void attach_profile();
+  void edit_on_window();
+  void begin_edit_on_window(HWND target);
+  void end_edit_on_window(std::wstring_view status = {},
+                          bool notify_daemon = true);
+  void edit_selected_task();
 
   void refresh_tasks();
   [[nodiscard]] HWND selected_task_window() const;
@@ -141,7 +150,26 @@ private:
   [[nodiscard]] RECT bar_preview_rect(const layerc::core::Panel &, const RECT &) const;
   void paint_preview(HWND);
   bool handle_preview_message(HWND, UINT, WPARAM, LPARAM);
-  void update_dragged_bar(POINT);
+  void update_dragged_bar(POINT, bool final = false);
+  void finalize_dragged_bar();
+
+  enum class ChangeKind { text, immediate, drag };
+  void record_profile_change(ChangeKind kind);
+  void schedule_autosave(bool immediate);
+  [[nodiscard]] bool flush_autosave();
+  [[nodiscard]] bool draft_controls_valid() const;
+  void notify_profile_committed(const std::filesystem::path &path,
+                                const layerc::core::GameProfile &profile);
+  void poll_live_channel();
+  void handle_live_message(const layerc::core::LiveMessage &message);
+  void send_live_anchor(bool final);
+  void send_live_profile();
+  void select_bar_by_id(std::string_view panel_id);
+  void set_direct_drag_enabled(bool enabled, bool show_notice);
+  void undo();
+  void redo();
+  void reset_history();
+  void sync_current_profile_entry();
 
   void open_options();
   void apply_options(HWND);
@@ -197,6 +225,24 @@ private:
   std::uint32_t picker_color_{};
   bool picker_syncing_{};
   std::size_t bar_controls_panel_{SIZE_MAX};
+  layerc::platform::NamedPipeEditorDaemonChannel live_channel_{
+      layerc::platform::NamedPipeEditorDaemonChannel::Role::client};
+  layerc::core::ProfileRevision revision_{};
+  layerc::core::EditSessionId edit_session_id_{};
+  HWND edit_target_{};
+  HWND pending_edit_target_{};
+  ULONGLONG pending_edit_deadline_{};
+  bool direct_drag_enabled_{};
+  bool direct_drag_notice_shown_{};
+  bool awaiting_edit_target_{};
+  bool autosave_pending_{};
+  bool coalescing_text_{};
+  ULONGLONG last_live_drag_send_{};
+  ULONGLONG last_heartbeat_send_{};
+  UINT live_timer_interval_{100};
+  layerc::core::GameProfile undo_baseline_;
+  std::deque<layerc::core::GameProfile> undo_stack_;
+  std::deque<layerc::core::GameProfile> redo_stack_;
 };
 
 } // namespace layerc::editor

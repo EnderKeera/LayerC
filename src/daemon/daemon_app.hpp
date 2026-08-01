@@ -4,8 +4,10 @@
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
+#include "layerc/core/live_edit.hpp"
 #include "layerc/core/runtime_instances.hpp"
 #include "layerc/core/types.hpp"
+#include "layerc/platform/live_channel.hpp"
 
 #include <array>
 #include <filesystem>
@@ -28,6 +30,7 @@ private:
   static constexpr UINT_PTR game_scan_timer = 1;
   static constexpr UINT_PTR input_poll_timer = 2;
   static constexpr UINT_PTR overlay_render_timer = 3;
+  static constexpr UINT_PTR live_channel_timer = 4;
   static constexpr UINT command_open_editor = 1001;
   static constexpr UINT command_reload = 1002;
   static constexpr UINT command_exit = 1003;
@@ -35,6 +38,7 @@ private:
   struct ProfileSource {
     std::wstring key;
     layerc::core::GameProfile profile;
+    layerc::core::ProfileRevision revision{};
   };
 
   // A Session is deliberately an instance, not a profile. Each matching game
@@ -49,7 +53,10 @@ private:
                      std::wstring source_key, bool capture_exclusion);
 
     void clear_input_state();
+    void rebuild_input_configuration();
     void set_capture_exclusion(bool enabled);
+    void apply_profile(const layerc::core::GameProfile &updated,
+                       bool capture_exclusion);
     [[nodiscard]] bool is_global() const noexcept {
       return profile.game.global;
     }
@@ -69,6 +76,20 @@ private:
     bool uses_controller{};
   };
 
+  struct EditSession {
+    layerc::core::EditSessionId id{};
+    layerc::core::ProfileRevision revision{};
+    std::wstring source_key;
+    layerc::core::GameProfile profile;
+    std::string selected_panel;
+    HWND target{};
+    bool direct_drag{};
+    layerc::core::TimePoint last_heartbeat{};
+    std::vector<OverlayCooldown> overlay_cooldowns;
+    std::vector<layerc::core::CooldownState> preview_states;
+    std::vector<std::unique_ptr<OverlayWindow>> overlays;
+  };
+
   static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                       LPARAM lparam);
   LRESULT handle_message(HWND window, UINT message, WPARAM wparam,
@@ -82,6 +103,10 @@ private:
   void show_tray_menu();
   void launch_editor();
   void reload_profiles();
+  void reconcile_profile_sources(std::vector<ProfileSource> loaded);
+  void apply_profile_update(std::wstring key,
+                            layerc::core::GameProfile profile,
+                            layerc::core::ProfileRevision revision);
   [[nodiscard]] bool reload_profiles_if_requested();
   [[nodiscard]] bool reload_settings_if_requested();
   void refresh_game_windows();
@@ -96,6 +121,18 @@ private:
   [[nodiscard]] bool process_input(Session &session,
                                    const layerc::core::InputEvent &event);
   void update_overlays();
+  void poll_live_channel();
+  void handle_live_message(const layerc::core::LiveMessage &message);
+  void send_live_reply(layerc::core::LiveMessageType type,
+                       const layerc::core::LiveMessage &request,
+                       std::string text = {});
+  void begin_edit_session(const layerc::core::LiveMessage &message,
+                          layerc::core::GameProfile profile);
+  void rebuild_edit_overlays();
+  void update_edit_overlays();
+  void end_edit_session(std::string_view reason = {});
+  void on_direct_anchor(std::string_view panel_id, double anchor_x,
+                        double anchor_y, bool final);
   void update_tooltip(const std::wstring &status);
   [[nodiscard]] std::vector<Session *> foreground_sessions();
   [[nodiscard]] RECT overlay_target() const;
@@ -118,8 +155,12 @@ private:
   bool capture_exclusion_{true};
   bool input_timer_running_{};
   bool overlay_timer_running_{};
+  UINT live_timer_interval_{250};
   HWINEVENTHOOK foreground_event_hook_{};
   HWINEVENTHOOK location_event_hook_{};
+  layerc::platform::NamedPipeEditorDaemonChannel live_channel_{
+      layerc::platform::NamedPipeEditorDaemonChannel::Role::server};
+  std::unique_ptr<EditSession> edit_session_;
 };
 
 } // namespace layerc::daemon

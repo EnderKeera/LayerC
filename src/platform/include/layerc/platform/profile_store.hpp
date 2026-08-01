@@ -11,6 +11,8 @@ inline constexpr wchar_t profile_reload_event_name[] =
     L"Local\\LayerC.LayerD.ProfileReload";
 
 [[nodiscard]] std::filesystem::path profile_directory();
+[[nodiscard]] std::wstring
+canonical_profile_key(const std::filesystem::path &path);
 [[nodiscard]] std::optional<std::string>
 read_profile_file(const std::filesystem::path &path);
 [[nodiscard]] bool write_profile_file(const std::filesystem::path &path,

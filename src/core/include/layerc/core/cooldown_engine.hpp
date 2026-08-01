@@ -22,18 +22,20 @@ public:
   void snapshot(TimePoint now, std::vector<CooldownState> &output);
   [[nodiscard]] std::optional<Milliseconds>
   remaining(std::string_view cooldown_id, TimePoint now);
+  void reconfigure(std::span<const CooldownDefinition> definitions,
+                   std::span<const std::string> reset_ids, TimePoint now);
 
 private:
   struct Entry {
-    const CooldownDefinition *definition{};
+    CooldownDefinition definition;
     std::uint32_t available_charges{};
     std::optional<TimePoint> next_charge_at;
   };
 
   void update_entry(Entry &entry, TimePoint now);
 
-  std::vector<std::string_view> order_;
-  std::unordered_map<std::string_view, Entry> entries_;
+  std::vector<std::string> order_;
+  std::unordered_map<std::string, Entry> entries_;
 };
 
 } // namespace layerc::core

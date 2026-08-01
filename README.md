@@ -1,6 +1,9 @@
 # LayerC
 
-LayerC is a lightweight, open-source Windows cooldown overlay. The current implementation is the first functional v1 slice: a dependency-free C++20 core, typed JSON profiles, cooldown/input state machines, native game matching, Raw Input/XInput handling, click-through buffered-GDI panels, tests, and a disposable game harness.
+LayerC is a lightweight, open-source Windows cooldown overlay. It uses a
+dependency-free C++20 core, typed JSON profiles, cooldown/input state machines,
+native game matching, Raw Input/XInput handling, click-through buffered-GDI
+panels, a native editor, tests, and a disposable game harness.
 
 See [PLAN.md](PLAN.md) for the product and release plan.
 
@@ -24,7 +27,10 @@ ctest --preset vs2026-release
 cmake --install build/vs2026 --config Release --prefix out/layerc
 ```
 
-The install step stages only the two production programs, `layerd.exe` and `layere.exe`, in `out/layerc`.
+The install step stages only the two production programs, `layerd.exe` and
+`layere.exe`, in `out/layerc`. Build-tree executables remain under
+`build/vs2026/<Configuration>`; `out/layerc` changes only during the install
+step or the complete workflow preset.
 
 For the standard CMake configure, Release build, test, and install sequence as
 one CMake-native command, run:
@@ -43,8 +49,43 @@ The test targets have separate jobs:
 - `layerc_core_tests` covers profile parsing, serialization, cooldown/input behavior, and runtime state without creating windows.
 - `lctest` is a tiny disposable fake game window that matches `examples/lctest.json`; press Shift+E while it is foreground to exercise the Dash cooldown.
 - `layerc_overlay_tests` launches `lctest` and verifies real HWND attachment, overlay behavior, capture exclusion, and profile matching.
+- `layerc_platform_tests` verifies protected last-valid profile backups,
+  canonical Windows profile identities, authenticated peers, and framed
+  overlapped named-pipe messaging.
 
 Each matched game keeps its own non-topmost, game-owned mini overlay. Switching apps leaves the cooldown running behind the foreground app; returning to the game shows its remaining time. Minimizing or closing that game hides its overlay.
+
+## Editor and live updates
+
+Opening the single LayerE instance starts or connects to the single LayerD
+instance. Existing
+profiles autosave valid text and numeric edits after 400 ms; discrete changes
+such as colors, bindings, add/remove actions, and checkboxes save immediately.
+A new profile remains a draft until the first explicit Save. Ctrl+Z and Ctrl+Y
+provide a 50-transaction in-memory undo/redo history. Atomic replacement keeps
+the previous parseable profile beside it as `<profile>.json.bak`.
+
+LayerE and LayerD remain separate native processes. A versioned, length-prefixed
+UTF-8 protocol carries profile revisions over a current-user-only named pipe.
+Before sending profile data, LayerE verifies that the server is the sibling
+`layerd.exe` running under the same user and logon session.
+LayerD diffs revisions in place: visual, placement, name, and binding edits keep
+active cooldown timelines; only a cooldown whose runtime definition changes is
+reset. The old reload event remains as a fallback for manual file edits or an
+unavailable live channel. The transport sits behind an interface so a future
+Linux build can use a Unix-domain socket without changing the protocol or core
+reconciliation logic.
+
+**Edit on Window** selects one exact matching HWND. Dragging the editor preview
+moves the temporary overlay on that window, and direct changes are mirrored
+back into the editor. **Enable Direct Drag** is opt-in for each edit session; it
+removes click-through only from the visible bar windows, keeps them
+non-activating, and restores normal behavior on editor disconnect or a
+one-second lease timeout. LayerC does not inject code, hook graphics APIs, read
+game memory, install a driver, or synthesize game input. That design reduces
+risk but cannot guarantee compatibility with every anti-cheat. On-window
+editing supports windowed and borderless-windowed targets, not exclusive
+fullscreen compositor bypass.
 
 The native editor can also be built with MinGW. Keep the C++ and resource
 compilers from the same toolchain:

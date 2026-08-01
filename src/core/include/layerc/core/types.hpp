@@ -29,6 +29,8 @@ struct InputToken {
 
 struct InputChord {
     std::vector<InputToken> tokens;
+
+    bool operator==(const InputChord&) const = default;
 };
 
 struct InputEvent {
@@ -48,6 +50,8 @@ struct CooldownDefinition {
     std::uint32_t max_charges{1};
     RetriggerPolicy retrigger{RetriggerPolicy::ignore};
     bool stack_charges{};
+
+    bool operator==(const CooldownDefinition&) const = default;
 };
 
 struct CooldownState {
@@ -60,6 +64,8 @@ struct CooldownState {
 struct InputBinding {
     std::string cooldown_id;
     InputChord chord;
+
+    bool operator==(const InputBinding&) const = default;
 };
 
 enum class PanelLayout : std::uint8_t {
@@ -83,6 +89,8 @@ struct BarAppearance {
     // Profiles written before showText existed keep their labels.
     bool show_text{true};
     bool hide_when_ready{true};
+
+    bool operator==(const BarAppearance&) const = default;
 };
 
 struct Panel {
@@ -94,6 +102,8 @@ struct Panel {
     double anchor_x{0.5};
     double anchor_y{0.5};
     std::vector<std::string> cooldown_ids;
+
+    bool operator==(const Panel&) const = default;
 };
 
 struct GameMatch {
@@ -104,6 +114,8 @@ struct GameMatch {
     std::string executable_name;
     std::string window_class;
     std::string window_title;
+
+    bool operator==(const GameMatch&) const = default;
 };
 
 struct GameProfile {
@@ -118,7 +130,8 @@ struct GameProfile {
     std::vector<Panel> panels;
     std::vector<CooldownDefinition> cooldowns;
     std::vector<InputBinding> bindings;
+
+    bool operator==(const GameProfile&) const = default;
 };
 
 }  // namespace layerc::core
-

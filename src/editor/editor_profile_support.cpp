@@ -19,8 +19,19 @@ bool start_daemon() {
   if (length == 0 || length >= module_path.size()) return false;
   const auto daemon = std::filesystem::path(std::wstring_view(module_path.data(), length)).parent_path() /
                       L"layerd.exe";
-  return reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", daemon.c_str(), nullptr,
-                                                   daemon.parent_path().c_str(), SW_SHOWNOACTIVATE)) > 32;
+  std::wstring command = L"\"" + daemon.wstring() + L"\"";
+  std::vector<wchar_t> command_line(command.begin(), command.end());
+  command_line.push_back(L'\0');
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  const BOOL created = CreateProcessW(
+      daemon.c_str(), command_line.data(), nullptr, nullptr, FALSE,
+      CREATE_NO_WINDOW, nullptr, daemon.parent_path().c_str(), &startup,
+      &process);
+  if (process.hThread != nullptr) CloseHandle(process.hThread);
+  if (process.hProcess != nullptr) CloseHandle(process.hProcess);
+  return created != FALSE;
 }
 
 bool recycle_profile_file(const std::filesystem::path &path) {

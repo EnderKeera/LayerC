@@ -5,7 +5,8 @@
 namespace layerc::core {
 
 InputMatcher::InputMatcher(const std::span<const InputBinding> bindings)
-    : bindings_(bindings), active_(bindings_.size(), false) {}
+    : bindings_(bindings.begin(), bindings.end()),
+      active_(bindings_.size(), false) {}
 
 std::vector<std::string> InputMatcher::process(const InputEvent &event) {
   if (event.pressed) {
@@ -28,6 +29,22 @@ std::vector<std::string> InputMatcher::process(const InputEvent &event) {
 void InputMatcher::clear() {
   pressed_.clear();
   std::fill(active_.begin(), active_.end(), false);
+}
+
+void InputMatcher::replace_bindings(
+    const std::span<const InputBinding> bindings) {
+  bindings_.assign(bindings.begin(), bindings.end());
+  pressed_.clear();
+  active_.assign(bindings_.size(), false);
+}
+
+void InputMatcher::seed(const InputToken &token, const bool pressed) {
+  if (pressed)
+    pressed_.insert(token);
+  else
+    pressed_.erase(token);
+  for (std::size_t index = 0; index < bindings_.size(); ++index)
+    active_[index] = chord_pressed(bindings_[index].chord);
 }
 
 bool InputMatcher::chord_pressed(const InputChord &chord) const {
