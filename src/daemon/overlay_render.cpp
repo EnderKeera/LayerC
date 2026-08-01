@@ -147,6 +147,11 @@ void OverlayWindow::render(
           ? static_cast<LONG>(std::ceil(std::sqrt(static_cast<double>(count))))
           : count;
   const auto null_pen = static_cast<HPEN>(GetStockObject(NULL_PEN));
+  const HPEN selection_pen = edit_selected_
+      ? CreatePen(PS_SOLID, 2, to_color_ref(0xE0A15AU))
+      : nullptr;
+  const HPEN visible_border = selection_pen != nullptr ? selection_pen
+                                                        : border_pen_;
 
   for (std::size_t index = 0; index < cooldown_indices_.size(); ++index) {
     const auto &cooldown = cooldowns_[cooldown_indices_[index]];
@@ -206,9 +211,9 @@ void OverlayWindow::render(
         if (region != nullptr && SetWindowRgn(window_, region, TRUE) == 0) {
           DeleteObject(region);
         }
-        draw_rounded_rectangle(buffer_dc_, bar, 8, fill_brush_, border_pen_);
+        draw_rounded_rectangle(buffer_dc_, bar, 8, fill_brush_, visible_border);
       } else {
-        draw_rounded_rectangle(buffer_dc_, bar, 8, panel_brush_, border_pen_);
+        draw_rounded_rectangle(buffer_dc_, bar, 8, panel_brush_, visible_border);
         const int fill_width = static_cast<int>(
             std::lround(static_cast<double>(bar_width - 4) * progress));
         if (fill_width > 0) {
@@ -245,7 +250,7 @@ void OverlayWindow::render(
     const LONG left = padding + column * (item_width + spacing);
     const LONG top = padding + row * (item_height + spacing);
     const RECT item{left, top, left + item_width, top + item_height};
-    draw_rounded_rectangle(buffer_dc_, item, 6, panel_brush_, border_pen_);
+    draw_rounded_rectangle(buffer_dc_, item, 6, panel_brush_, visible_border);
 
     RECT text_rectangle{left + 3, top + 3, left + item_width - 3,
                         top + item_height - 3};
@@ -254,6 +259,8 @@ void OverlayWindow::render(
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
                   DT_NOPREFIX);
   }
+
+  if (selection_pen != nullptr) DeleteObject(selection_pen);
 
   if (saved_state != 0) {
     RestoreDC(buffer_dc_, saved_state);

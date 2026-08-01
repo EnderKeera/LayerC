@@ -47,9 +47,9 @@ void EditorWindow::layout() {
   const int sidebar_list_top = section_top + heading_height + 4;
   move(IDC_PROFILE_LIST, margin, sidebar_list_top, sidebar_width,
        std::max(120, sidebar_actions_top - sidebar_list_top - 8));
-  move(IDC_ATTACH_LEFT, margin, sidebar_actions_top, 82, 27);
-  move(IDC_SHOW_TASKS_LEFT, margin + 88, sidebar_actions_top,
-       sidebar_width - 88, 27);
+  move(IDC_ATTACH_LEFT, margin, sidebar_actions_top, 120, 27);
+  move(IDC_SHOW_TASKS_LEFT, margin + 126, sidebar_actions_top,
+       sidebar_width - 126, 27);
 
   move(IDC_PROFILE_SECTION_LABEL, content_left, section_top,
        content_width, heading_height);
@@ -130,7 +130,9 @@ void EditorWindow::layout() {
        checkbox_width, 25);
   move(IDC_HIDE_READY, properties_left + checkbox_width + 8,
        first_color_top + 67, properties_width - checkbox_width - 8, 25);
-  move(IDC_POSITION_STATUS, content_left, bars_list_top + 153,
+  move(IDC_DIRECT_DRAG, properties_left, first_color_top + 99,
+       properties_width, 25);
+  move(IDC_POSITION_STATUS, content_left, bars_list_top + 190,
        content_width, 20);
 
   move(IDC_PREVIEW_LABEL, preview_left, section_top,

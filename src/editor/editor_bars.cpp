@@ -109,8 +109,9 @@ void EditorWindow::split_independent_bars() {
     }
   }
   if (!changed) { set_status(L"Bars are already independent; legacy groups were left unchanged."); return; }
-  profile_.panels = std::move(split); dirty_ = true;
+  profile_.panels = std::move(split);
   refresh_bar_list(first_split);
+  record_profile_change(ChangeKind::immediate);
   set_status(L"Split grouped bars into independently positioned cooldown bars.");
 }
 
@@ -127,8 +128,8 @@ void EditorWindow::choose_bar_color(const int id) {
   default: return;
   }
   if (!choose_color(dialog_, *value)) return;
-  dirty_ = true;
   refresh_bar_controls();
+  record_profile_change(ChangeKind::immediate);
 }
 
 double EditorWindow::preview_aspect_ratio() const {
@@ -246,7 +247,7 @@ bool EditorWindow::handle_preview_message(const HWND window, const UINT message,
       const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       if (point.x != bar_drag_start_.x || point.y != bar_drag_start_.y)
         bar_drag_moved_ = true;
-      if (bar_drag_moved_) update_dragged_bar(point);
+      if (bar_drag_moved_) update_dragged_bar(point, false);
     }
     return dragging_bar_;
   case WM_LBUTTONUP:
@@ -254,21 +255,22 @@ bool EditorWindow::handle_preview_message(const HWND window, const UINT message,
       const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       if (point.x != bar_drag_start_.x || point.y != bar_drag_start_.y)
         bar_drag_moved_ = true;
-      if (bar_drag_moved_) update_dragged_bar(point);
+      if (bar_drag_moved_) update_dragged_bar(point, true);
       dragging_bar_ = false;
       bar_drag_moved_ = false;
       if (GetCapture() == window) ReleaseCapture();
     }
     return true;
   case WM_CAPTURECHANGED:
+    if (dragging_bar_ && bar_drag_moved_) finalize_dragged_bar();
     dragging_bar_ = false;
     bar_drag_moved_ = false;
-    return false;
+    return true;
   default: return false;
   }
 }
 
-void EditorWindow::update_dragged_bar(const POINT point) {
+void EditorWindow::update_dragged_bar(const POINT point, const bool final) {
   auto *panel = selected_bar();
   if (panel == nullptr) return;
   const auto canvas = preview_canvas();
@@ -282,7 +284,20 @@ void EditorWindow::update_dragged_bar(const POINT point) {
       (center_y - canvas.top) /
           static_cast<double>(std::max(1L, canvas.bottom - canvas.top)),
       0.0, 1.0);
-  dirty_ = true; set_status(L"Bar position updated — save to apply it to LayerD.");
+  if (final) {
+    finalize_dragged_bar();
+  } else {
+    send_live_anchor(false);
+  }
+  InvalidateRect(preview_, nullptr, TRUE);
+}
+
+void EditorWindow::finalize_dragged_bar() {
+  record_profile_change(ChangeKind::drag);
+  set_status(current_path_.empty()
+                 ? L"Bar position updated — Save once to create the profile."
+                 : L"Bar position updated and autosaving.");
+  send_live_anchor(true);
   InvalidateRect(preview_, nullptr, TRUE);
 }
 

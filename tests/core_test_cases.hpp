@@ -16,5 +16,8 @@ void test_profile_enabled_and_independent_bar_placement();
 void test_runtime_instance_tracking();
 void test_json_unicode_and_errors();
 void test_json_nesting_limit();
+void test_live_profile_reconciliation();
+void test_live_protocol_framing();
+void test_live_placement_math();
 
 } // namespace layerc::test

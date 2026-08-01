@@ -42,6 +42,8 @@ bool EditorWindow::validate_profile() {
 
 bool EditorWindow::confirm_unsaved_changes() {
   if (!dirty_) return true;
+  if (!current_path_.empty() && draft_controls_valid() && flush_autosave())
+    return true;
   const int choice = MessageBoxW(dialog_, L"The current profile has unsaved changes. Save them first?",
                                  L"Unsaved changes", MB_YESNOCANCEL | MB_ICONWARNING);
   return choice == IDYES ? save_profile(false) : choice == IDNO;
@@ -49,11 +51,13 @@ bool EditorWindow::confirm_unsaved_changes() {
 
 void EditorWindow::new_profile(const bool confirm) {
   if (confirm && !confirm_unsaved_changes()) return;
+  end_edit_on_window();
   profile_ = make_new_profile();
   current_path_.clear();
   dirty_ = true;
+  reset_history();
   refresh_profile_controls();
-  set_status(L"New profile ready — choose a task, configure bars, then Attach.");
+  set_status(L"New profile ready — Save once to create it and enable autosave.");
 }
 void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
                                        const bool open_selection) {
@@ -133,6 +137,8 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
   profile_ = *profile;
   current_path_ = target_path;
   dirty_ = false;
+  end_edit_on_window();
+  reset_history();
   select_path(target_path);
   refresh_profile_controls();
   set_status(profile_.enabled ? L"Profile loaded." : L"Disabled profile loaded.");
@@ -172,10 +178,14 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   syncing_ = true;
   ListView_SetItemText(profile_list_, row, 0, entry.label.data());
   syncing_ = was_syncing;
-  if (entry.path.lexically_normal() == current_path_.lexically_normal())
+  const bool is_current =
+      layerc::platform::canonical_profile_key(entry.path) ==
+      layerc::platform::canonical_profile_key(current_path_);
+  if (is_current)
     profile_.enabled = enabled;
-  (void)layerc::platform::signal_profile_reload();
-  set_status(enabled ? L"Profile enabled — LayerD reloaded."
+  notify_profile_committed(entry.path, *stored);
+  if (is_current) record_profile_change(ChangeKind::immediate);
+  set_status(enabled ? L"Profile enabled — LayerD updated live."
                      : L"Profile disabled — LayerD retired its instances.");
   InvalidateRect(profile_list_, nullptr, TRUE);
 }
@@ -261,9 +271,13 @@ bool EditorWindow::save_profile(const bool force_save_as) {
   }
   current_path_ = destination;
   dirty_ = false;
+  autosave_pending_ = false;
+  coalescing_text_ = false;
+  KillTimer(dialog_, autosave_timer);
+  undo_baseline_ = profile_;
   reload_profile_list(current_path_, false);
-  (void)layerc::platform::signal_profile_reload();
-  set_status(L"Profile saved — LayerD reloaded.");
+  notify_profile_committed(current_path_, profile_);
+  set_status(L"Profile saved — LayerD updated live.");
   return true;
 }
 
@@ -282,6 +296,7 @@ void EditorWindow::delete_profile() {
     MessageBoxW(dialog_, L"Could not move the profile to the Recycle Bin.", L"LayerE", MB_OK | MB_ICONERROR);
     return;
   }
+  end_edit_on_window();
   current_path_.clear(); dirty_ = false;
   (void)layerc::platform::signal_profile_reload();
   reload_profile_list(safe_remaining, true);
@@ -317,6 +332,12 @@ void EditorWindow::show_file_menu() {
   EnableMenuItem(popup, IDM_FILE_SPLIT_BARS,
                  MF_BYCOMMAND |
                      (has_grouped_bars ? MF_ENABLED : MF_GRAYED));
+  EnableMenuItem(popup, IDM_EDIT_UNDO,
+                 MF_BYCOMMAND |
+                     (undo_stack_.empty() ? MF_GRAYED : MF_ENABLED));
+  EnableMenuItem(popup, IDM_EDIT_REDO,
+                 MF_BYCOMMAND |
+                     (redo_stack_.empty() ? MF_GRAYED : MF_ENABLED));
   RECT button{};
   GetWindowRect(GetDlgItem(dialog_, IDC_FILE_MENU), &button);
   SetForegroundWindow(dialog_);
@@ -326,18 +347,4 @@ void EditorWindow::show_file_menu() {
   PostMessageW(dialog_, WM_NULL, 0, 0);
   DestroyMenu(menu);
 }
-void EditorWindow::attach_profile() {
-  if (!profile_.enabled) {
-    MessageBoxW(dialog_,
-                L"This profile is disabled. Enable it in Saved Profiles before attaching.",
-                L"Profile disabled", MB_OK | MB_ICONINFORMATION);
-    set_status(L"Profile is disabled — enable it before attaching.");
-    return;
-  }
-  if (!save_profile(false)) return;
-  if (layerc::platform::signal_profile_reload()) set_status(L"Saved — LayerD reloaded and will attach automatically.");
-  else if (start_daemon()) set_status(L"Saved — LayerD started and will attach automatically.");
-  else MessageBoxW(dialog_, L"Profile was saved, but LayerD could not be started.", L"LayerE", MB_OK | MB_ICONWARNING);
-}
-
 } // namespace layerc::editor

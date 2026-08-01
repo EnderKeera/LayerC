@@ -3,6 +3,7 @@
 #include "layerc/core/types.hpp"
 
 #include <memory>
+#include <functional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -13,13 +14,16 @@
 namespace layerc::daemon {
 
 struct OverlayCooldown {
-  std::string_view id;
+  std::string id;
   std::wstring name;
   layerc::core::Milliseconds duration{};
 };
 
 class OverlayWindow {
 public:
+  using DragCallback =
+      std::function<void(std::string_view, double, double, bool)>;
+
   OverlayWindow(const layerc::core::Panel &panel,
                 std::span<const OverlayCooldown> cooldowns);
   ~OverlayWindow();
@@ -30,6 +34,11 @@ public:
   void show_for(HWND game_window);
   void show_on_rect(const RECT &target);
   void set_capture_exclusion(bool enabled);
+  void update_snapshot(const layerc::core::Panel &panel,
+                       std::span<const OverlayCooldown> cooldowns);
+  void set_edit_mode(bool enabled, bool direct_drag, bool selected,
+                     DragCallback callback = {});
+  [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
   [[nodiscard]] bool
   should_show(const std::vector<layerc::core::CooldownState> &states) const;
   void hide();
@@ -49,10 +58,12 @@ private:
   void paint();
   void calculate_size();
   void update_position(const RECT &target);
+  void set_direct_drag(bool enabled);
+  void update_drag(POINT screen_point, bool final);
   void clear_window_state();
 
-  const layerc::core::Panel &panel_;
-  std::span<const OverlayCooldown> cooldowns_;
+  layerc::core::Panel panel_;
+  std::vector<OverlayCooldown> cooldowns_;
   std::vector<std::size_t> cooldown_indices_;
   std::wstring label_buffer_;
   HWND window_{};
@@ -62,6 +73,14 @@ private:
   SIZE size_{};
   bool visible_{};
   bool capture_exclusion_{true};
+  bool edit_mode_{};
+  bool direct_drag_{};
+  bool edit_selected_{};
+  bool dragging_{};
+  bool drag_moved_{};
+  POINT drag_start_{};
+  POINT drag_offset_{};
+  DragCallback drag_callback_;
 
   HDC buffer_dc_{};
   HBITMAP buffer_bitmap_{};

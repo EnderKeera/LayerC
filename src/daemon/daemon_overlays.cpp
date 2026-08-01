@@ -38,8 +38,11 @@ void DaemonApp::sync_overlay_location(const HWND changed_window) {
         return (!session->is_global() && session->game_window == changed_root) ||
                (session->is_global() && changed_root == foreground_root);
       });
-  if (affects_runtime) {
+  const bool affects_edit = edit_session_ != nullptr &&
+                            edit_session_->target == changed_root;
+  if (affects_runtime || affects_edit) {
     update_overlays();
+    update_edit_overlays();
   }
 }
 
@@ -69,6 +72,9 @@ void DaemonApp::update_overlays() {
   bool has_running_cooldown{};
 
   for (auto &session : sessions_) {
+    const bool hidden_for_edit =
+        edit_session_ != nullptr && !session->is_global() &&
+        session->game_window == edit_session_->target;
     const bool attached_window_invalid =
         !session->is_global() &&
         (session->game_window == nullptr || !IsWindow(session->game_window) ||
@@ -77,7 +83,7 @@ void DaemonApp::update_overlays() {
         !session->is_global() ||
         std::find(active_input_sessions_.begin(), active_input_sessions_.end(),
                   session.get()) != active_input_sessions_.end();
-    if (attached_window_invalid || !input_active) {
+    if (hidden_for_edit || attached_window_invalid || !input_active) {
       for (auto &overlay : session->overlays) {
         overlay->hide();
       }

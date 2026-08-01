@@ -28,6 +28,7 @@ public:
   [[nodiscard]] std::vector<RuntimeInstanceKey>
   foreground(std::uintptr_t window) const;
   [[nodiscard]] bool contains(const RuntimeInstanceKey &key) const;
+  void erase_profile(const std::wstring &profile_key);
   [[nodiscard]] std::size_t size() const noexcept { return active_.size(); }
   void clear() noexcept { active_.clear(); }
 

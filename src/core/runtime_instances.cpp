@@ -33,4 +33,10 @@ bool RuntimeInstanceTracker::contains(const RuntimeInstanceKey &key) const {
   return std::binary_search(active_.begin(), active_.end(), key);
 }
 
+void RuntimeInstanceTracker::erase_profile(const std::wstring &profile_key) {
+  std::erase_if(active_, [&](const RuntimeInstanceKey &key) {
+    return key.profile_key == profile_key;
+  });
+}
+
 } // namespace layerc::core

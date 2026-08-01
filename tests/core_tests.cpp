@@ -21,6 +21,9 @@ int main() {
   test_runtime_instance_tracking();
   test_json_unicode_and_errors();
   test_json_nesting_limit();
+  test_live_profile_reconciliation();
+  test_live_protocol_framing();
+  test_live_placement_math();
 
   if (failures != 0) {
     std::cerr << failures << " test(s) failed\n";

@@ -95,6 +95,15 @@ bool expect(const bool condition, const char *const message) {
   return condition;
 }
 
+bool window_is_above(const HWND upper, const HWND lower) {
+  for (HWND current = GetTopWindow(nullptr); current != nullptr;
+       current = GetWindow(current, GW_HWNDNEXT)) {
+    if (current == upper) return true;
+    if (current == lower) return false;
+  }
+  return false;
+}
+
 } // namespace
 
 int wmain(const int argc, wchar_t *argv[]) {
@@ -170,6 +179,81 @@ int wmain(const int argc, wchar_t *argv[]) {
   if (!expect(GetWindowDisplayAffinity(overlay_window, &affinity) != FALSE &&
                   affinity == WDA_NONE,
               "overlay should allow capture when privacy is disabled")) {
+    return 1;
+  }
+
+  bool drag_reported{};
+  bool drag_final{};
+  double dragged_x{};
+  overlay.set_edit_mode(
+      true, true, true,
+      [&](const std::string_view panel_id, const double anchor_x,
+          const double, const bool final) {
+        drag_reported = panel_id == "main";
+        drag_final = final;
+        dragged_x = anchor_x;
+      });
+  const auto direct_style = GetWindowLongPtrW(overlay_window, GWL_EXSTYLE);
+  if (!expect((direct_style & WS_EX_TRANSPARENT) == 0 &&
+                  (direct_style & WS_EX_NOACTIVATE) != 0,
+              "direct edit should remove transparency only while remaining non-activating")) {
+    return 1;
+  }
+
+  const HWND unrelated = CreateWindowExW(
+      WS_EX_TOOLWINDOW, L"STATIC", L"LayerC overlay z-order test",
+      WS_OVERLAPPEDWINDOW | WS_VISIBLE, work_area.left + 80,
+      work_area.top + 80, 480, 320, nullptr, nullptr,
+      GetModuleHandleW(nullptr), nullptr);
+  if (!expect(unrelated != nullptr,
+              "an unrelated foreground window should be available")) {
+    return 1;
+  }
+  SetWindowPos(unrelated, HWND_TOP, work_area.left + 80, work_area.top + 80,
+               480, 320, SWP_SHOWWINDOW);
+  SetForegroundWindow(unrelated);
+  overlay.show_for(target_window);
+  if (!expect(window_is_above(unrelated, overlay_window),
+              "a background edit overlay should remain below unrelated windows")) {
+    DestroyWindow(unrelated);
+    return 1;
+  }
+  DestroyWindow(unrelated);
+
+  RECT overlay_rect{};
+  GetWindowRect(overlay_window, &overlay_rect);
+  const int local_x = (overlay_rect.right - overlay_rect.left) / 2;
+  const int local_y = (overlay_rect.bottom - overlay_rect.top) / 2;
+  SendMessageW(overlay_window, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM(local_x, local_y));
+  SendMessageW(overlay_window, WM_MOUSEMOVE, MK_LBUTTON,
+               MAKELPARAM(local_x + 24, local_y));
+  SendMessageW(overlay_window, WM_LBUTTONUP, 0,
+               MAKELPARAM(local_x + 24, local_y));
+  if (!expect(drag_reported && drag_final && dragged_x > 0.5,
+              "direct edit should report normalized final bar movement")) {
+    return 1;
+  }
+
+  drag_reported = false;
+  drag_final = false;
+  GetWindowRect(overlay_window, &overlay_rect);
+  const int capture_x = (overlay_rect.right - overlay_rect.left) / 2;
+  const int capture_y = (overlay_rect.bottom - overlay_rect.top) / 2;
+  SendMessageW(overlay_window, WM_LBUTTONDOWN, MK_LBUTTON,
+               MAKELPARAM(capture_x, capture_y));
+  SendMessageW(overlay_window, WM_MOUSEMOVE, MK_LBUTTON,
+               MAKELPARAM(capture_x + 12, capture_y));
+  SendMessageW(overlay_window, WM_CAPTURECHANGED, 0, 0);
+  if (GetCapture() == overlay_window) ReleaseCapture();
+  if (!expect(drag_reported && drag_final,
+              "capture loss should finalize an in-progress direct drag")) {
+    return 1;
+  }
+  overlay.set_edit_mode(false, false, false);
+  if (!expect((GetWindowLongPtrW(overlay_window, GWL_EXSTYLE) &
+               WS_EX_TRANSPARENT) != 0,
+              "ending direct edit should restore click-through behavior")) {
     return 1;
   }
 

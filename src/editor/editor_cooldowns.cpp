@@ -165,10 +165,12 @@ void EditorWindow::assign_binding_key(const LPARAM key_data) {
       .cooldown_id = cooldown_id,
       .chord = layerc::core::InputChord{{{
           layerc::core::InputDevice::keyboard, code, 0}}}});
-  dirty_ = true;
   capturing_binding_ = false;
   refresh_binding_controls();
-  set_status(L"Binding updated. Save or Attach to apply it.");
+  record_profile_change(ChangeKind::immediate);
+  set_status(current_path_.empty()
+                 ? L"Binding updated — Save once to create the profile."
+                 : L"Binding updated and autosaving.");
 }
 
 
@@ -241,7 +243,8 @@ void EditorWindow::add_cooldown() {
     profile_.panels.front().cooldown_ids.push_back(id);
     refresh_bar_list();
   }
-  dirty_ = true; refresh_cooldown_list(static_cast<int>(profile_.cooldowns.size()) - 1);
+  refresh_cooldown_list(static_cast<int>(profile_.cooldowns.size()) - 1);
+  record_profile_change(ChangeKind::immediate);
   set_status(L"Cooldown added with an unused keyboard binding; Capture key can change it.");
 }
 
@@ -268,7 +271,8 @@ void EditorWindow::remove_cooldown() {
   });
   if (profile_.panels.empty()) profile_.panels.push_back({.id = "main", .name = "Main",
       .style = layerc::core::PanelStyle::bar, .cooldown_ids = {profile_.cooldowns.front().id}});
-  dirty_ = true; refresh_cooldown_list(static_cast<int>(data) - 1); refresh_bar_list();
+  refresh_cooldown_list(static_cast<int>(data) - 1); refresh_bar_list();
+  record_profile_change(ChangeKind::immediate);
   set_status(L"Cooldown removed.");
 }
 
