@@ -43,14 +43,21 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   if (dialog_ == nullptr) return 1;
   // CW_USEDEFAULT only has meaning when a window is created.  Passing it to
   // SetWindowPos placed the dialog at (-2147483648, -2147483648), leaving a
-  // running but invisible editor.  Center it inside the primary work area
-  // instead, while keeping the compact fixed initial size.
+  // running but invisible editor. Center it inside the nearest monitor's work
+  // area instead, while keeping the compact initial size.
+  MONITORINFO initial_monitor{.cbSize = sizeof(MONITORINFO)};
   RECT work{};
-  SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+  if (GetMonitorInfoW(MonitorFromWindow(dialog_, MONITOR_DEFAULTTONEAREST),
+                      &initial_monitor) != FALSE)
+    work = initial_monitor.rcWork;
+  else
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
   const int work_width = static_cast<int>(work.right - work.left);
   const int work_height = static_cast<int>(work.bottom - work.top);
-  const int width = std::min(1210, std::max(640, work_width));
-  const int height = std::min(760, std::max(480, work_height));
+  const UINT window_dpi = GetDpiForWindow(dialog_);
+  const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
+  const int width = std::max(1, std::min(MulDiv(1210, dpi, 96), work_width));
+  const int height = std::max(1, std::min(MulDiv(760, dpi, 96), work_height));
   const int left = static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
   const int top = static_cast<int>(work.top) + std::max(0, (work_height - height) / 2);
   SetWindowPos(dialog_, nullptr, left, top, width, height,
@@ -62,7 +69,13 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
     if (handle_binding_capture_message(message)) continue;
-    if (accelerators != nullptr &&
+    if (picking_ && message.message == WM_KEYDOWN &&
+        message.wParam == VK_ESCAPE) {
+      cancel_picker();
+      set_status(L"Window picker cancelled.");
+      continue;
+    }
+    if (accelerators != nullptr && IsWindowEnabled(dialog_) != FALSE &&
         TranslateAcceleratorW(dialog_, accelerators, &message) != 0) continue;
     const bool main_handled = IsDialogMessageW(dialog_, &message) != FALSE;
     const bool task_handled = task_dialog_ != nullptr && IsWindow(task_dialog_) &&
@@ -141,6 +154,29 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
                                           const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_SIZE: layout(); return TRUE;
+  case WM_DPICHANGED: {
+    const auto *suggested = reinterpret_cast<const RECT *>(lparam);
+    SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                 suggested->right - suggested->left,
+                 suggested->bottom - suggested->top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    const int dpi = static_cast<int>(HIWORD(wparam));
+    const HFONT old_font = font_;
+    const HFONT new_font =
+        CreateFontW(-MulDiv(9, dpi == 0 ? 96 : dpi, 72), 0, 0, 0,
+                    FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                    L"Segoe UI");
+    if (new_font != nullptr) {
+      font_ = new_font;
+      style_dialog_children(window);
+      if (old_font != nullptr) DeleteObject(old_font);
+    }
+    rebuild_profile_check_images();
+    layout();
+    return TRUE;
+  }
   case WM_TIMER:
     if (wparam == autosave_timer) {
       (void)flush_autosave();
@@ -151,8 +187,26 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       return TRUE;
     }
     break;
-  case WM_GETMINMAXINFO:
-    reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {1080, 700}; return TRUE;
+  case WM_GETMINMAXINFO: {
+    const UINT window_dpi = GetDpiForWindow(window);
+    const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
+    MONITORINFO monitor{.cbSize = sizeof(MONITORINFO)};
+    if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                        &monitor) != FALSE) {
+      const int work_width = monitor.rcWork.right - monitor.rcWork.left;
+      const int work_height = monitor.rcWork.bottom - monitor.rcWork.top;
+      const int geometry_dpi = std::max(
+          80, std::min({dpi, MulDiv(work_width, 96, 1080),
+                        MulDiv(work_height, 96, 700)}));
+      reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
+          std::min(work_width, MulDiv(1080, geometry_dpi, 96)),
+          std::min(work_height, MulDiv(700, geometry_dpi, 96))};
+    } else {
+      reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
+          MulDiv(1080, dpi, 96), MulDiv(700, dpi, 96)};
+    }
+    return TRUE;
+  }
   case WM_COMMAND: {
     const int id = LOWORD(wparam); const auto notification = HIWORD(wparam);
     if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID || id == IDC_BAR_WIDTH || id == IDC_BAR_HEIGHT) {
@@ -165,7 +219,6 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     }
     if ((id == IDC_SHOW_TEXT || id == IDC_HIDE_READY) &&
         notification == BN_CLICKED) {
-      toggle_owner_draw_checkbox(GetDlgItem(dialog_, id));
       sync_profile_from_controls();
       record_profile_change(ChangeKind::immediate);
       InvalidateRect(GetDlgItem(dialog_, id), nullptr, TRUE);
@@ -173,7 +226,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       return TRUE;
     }
     if (id == IDC_DIRECT_DRAG && notification == BN_CLICKED) {
-      const bool enabled = !owner_draw_checkbox_checked(
+      const bool enabled = owner_draw_checkbox_checked(
           GetDlgItem(dialog_, IDC_DIRECT_DRAG));
       set_direct_drag_enabled(enabled, enabled);
       InvalidateRect(GetDlgItem(dialog_, IDC_DIRECT_DRAG), nullptr, TRUE);
@@ -236,8 +289,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
           const bool was_syncing = syncing_;
           syncing_ = true;
           ListView_SetCheckState(profile_list_, row, enabled);
-          syncing_ = was_syncing;
           save_profile_enabled(row, enabled);
+          syncing_ = was_syncing;
           return TRUE;
         }
       } else if (header->code == LVN_ITEMCHANGED) {

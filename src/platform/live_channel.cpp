@@ -1,4 +1,5 @@
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -68,7 +69,7 @@ bool same_user_as_current_process(const HANDLE process) {
   return matches;
 }
 
-bool is_sibling_layerd(const HANDLE process) {
+bool is_sibling_image(const HANDLE process, const wchar_t *const filename) {
   std::array<wchar_t, 32'768> editor_path{};
   const DWORD editor_length = GetModuleFileNameW(
       nullptr, editor_path.data(), static_cast<DWORD>(editor_path.size()));
@@ -85,7 +86,7 @@ bool is_sibling_layerd(const HANDLE process) {
       std::filesystem::path(
           std::wstring_view(editor_path.data(), editor_length))
           .parent_path() /
-      L"layerd.exe";
+      filename;
   const auto actual = std::filesystem::path(
       std::wstring_view(server_path.data(), server_length));
   std::error_code error;
@@ -97,9 +98,9 @@ bool is_sibling_layerd(const HANDLE process) {
 
 NamedPipeEditorDaemonChannel::NamedPipeEditorDaemonChannel(
     const Role role, std::wstring pipe_name,
-    const DWORD expected_server_process_id)
+    const DWORD expected_peer_process_id)
     : role_(role), pipe_name_(std::move(pipe_name)),
-      expected_server_process_id_(expected_server_process_id),
+      expected_peer_process_id_(expected_peer_process_id),
       connect_event_(make_event()), read_event_(make_event()),
       write_event_(make_event()) {
   connect_overlapped_.hEvent = connect_event_;
@@ -194,8 +195,8 @@ bool NamedPipeEditorDaemonChannel::authenticate_server() {
     last_error_ = L"Could not identify the LayerD live-channel server.";
     return false;
   }
-  if (expected_server_process_id_ != 0 &&
-      server_process_id != expected_server_process_id_) {
+  if (expected_peer_process_id_ != 0 &&
+      server_process_id != expected_peer_process_id_) {
     last_error_ = L"Rejected an unexpected live-channel server process.";
     return false;
   }
@@ -216,17 +217,62 @@ bool NamedPipeEditorDaemonChannel::authenticate_server() {
     return false;
   }
   const bool trusted_user = same_user_as_current_process(server_process);
-  const bool trusted_image = expected_server_process_id_ != 0 ||
-                             is_sibling_layerd(server_process);
+  const bool trusted_image = expected_peer_process_id_ != 0 ||
+                             is_sibling_image(server_process, L"layerd.exe");
   CloseHandle(server_process);
   if (!trusted_user || !trusted_image) {
     last_error_ = L"Rejected an untrusted LayerD live-channel server.";
     return false;
   }
+  peer_process_id_ = server_process_id;
+  return true;
+}
+
+bool NamedPipeEditorDaemonChannel::authenticate_client() {
+  ULONG client_process_id{};
+  if (GetNamedPipeClientProcessId(pipe_, &client_process_id) == FALSE ||
+      client_process_id == 0) {
+    last_error_ = L"Could not identify the LayerE live-channel client.";
+    return false;
+  }
+  if (expected_peer_process_id_ != 0 &&
+      client_process_id != expected_peer_process_id_) {
+    last_error_ = L"Rejected an unexpected live-channel client process.";
+    return false;
+  }
+
+  DWORD current_session{};
+  DWORD client_session{};
+  if (ProcessIdToSessionId(GetCurrentProcessId(), &current_session) == FALSE ||
+      ProcessIdToSessionId(client_process_id, &client_session) == FALSE ||
+      current_session != client_session) {
+    last_error_ = L"Rejected a live-channel client from another logon session.";
+    return false;
+  }
+
+  const HANDLE client_process = OpenProcess(
+      PROCESS_QUERY_LIMITED_INFORMATION, FALSE, client_process_id);
+  if (client_process == nullptr) {
+    last_error_ = L"Could not authenticate the LayerE live-channel client.";
+    return false;
+  }
+  const bool trusted_user = same_user_as_current_process(client_process);
+  const bool trusted_image = expected_peer_process_id_ != 0 ||
+                             is_sibling_image(client_process, L"layere.exe");
+  CloseHandle(client_process);
+  if (!trusted_user || !trusted_image) {
+    last_error_ = L"Rejected an untrusted LayerE live-channel client.";
+    return false;
+  }
+  peer_process_id_ = client_process_id;
   return true;
 }
 
 void NamedPipeEditorDaemonChannel::complete_connection() {
+  if (role_ == Role::server && !authenticate_client()) {
+    disconnect(ERROR_SUCCESS);
+    return;
+  }
   connect_pending_ = false;
   connected_ = true;
   connection_changed_ = true;
@@ -243,6 +289,7 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
   }
   const bool was_connected = connected_;
   connected_ = false;
+  peer_process_id_ = 0;
   connect_pending_ = false;
   read_pending_ = false;
   write_pending_ = false;
@@ -253,7 +300,6 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
   if (error != ERROR_SUCCESS && error != ERROR_BROKEN_PIPE &&
       error != ERROR_PIPE_NOT_CONNECTED && error != ERROR_OPERATION_ABORTED)
     set_error(error);
-  if (role_ == Role::server) (void)create_server_pipe();
 }
 
 void NamedPipeEditorDaemonChannel::close_handles() {
@@ -267,18 +313,20 @@ void NamedPipeEditorDaemonChannel::close_handles() {
 
 bool NamedPipeEditorDaemonChannel::send(
     const layerc::core::LiveMessage &message) {
-  auto frame = layerc::core::encode_live_frame(message);
-  if (frame.empty()) {
-    last_error_ = L"Live message exceeds the protocol limit.";
+  auto encoded = layerc::core::encode_live_frame(message);
+  const auto *frame = std::get_if<std::vector<std::byte>>(&encoded);
+  if (frame == nullptr) {
+    last_error_ = layerc::platform::utf8_to_wide(
+        std::get<layerc::core::LiveProtocolError>(encoded).message);
     return false;
   }
   std::size_t queued = active_write_.size();
   for (const auto &pending : write_queue_) queued += pending.size();
-  if (queued + frame.size() > layerc::core::max_live_message_bytes * 4U) {
+  if (queued + frame->size() > layerc::core::max_live_message_bytes * 4U) {
     last_error_ = L"Live channel write queue is full.";
     return false;
   }
-  write_queue_.push_back(std::move(frame));
+  write_queue_.push_back(std::move(*frame));
   if (connected_) continue_write();
   return true;
 }
@@ -348,6 +396,10 @@ void NamedPipeEditorDaemonChannel::start_read(
 std::vector<layerc::core::LiveMessageResult>
 NamedPipeEditorDaemonChannel::poll() {
   std::vector<layerc::core::LiveMessageResult> messages;
+  const auto relisten_server = [&] {
+    if (role_ == Role::server && pipe_ == INVALID_HANDLE_VALUE)
+      (void)create_server_pipe();
+  };
   if (role_ == Role::server && pipe_ == INVALID_HANDLE_VALUE)
     (void)create_server_pipe();
   if (role_ == Role::client && pipe_ == INVALID_HANDLE_VALUE)
@@ -360,24 +412,36 @@ NamedPipeEditorDaemonChannel::poll() {
     else
       disconnect(GetLastError());
   }
-  if (!connected_) return messages;
+  if (!connected_) {
+    // Re-arm once after a rejected/closed peer in this poll. This is outside
+    // create_server_pipe's call stack, so a spoofing client cannot force
+    // recursive reconnects, while a legitimate editor avoids timer jitter.
+    relisten_server();
+    if (!connected_) return messages;
+  }
 
   if (write_pending_ && WaitForSingleObject(write_event_, 0) == WAIT_OBJECT_0) {
     DWORD written{};
     if (!GetOverlappedResult(pipe_, &write_overlapped_, &written, FALSE) ||
         written != active_write_.size()) {
       disconnect(GetLastError());
+      relisten_server();
       return messages;
     }
     write_pending_ = false;
     active_write_.clear();
   }
   continue_write();
+  if (!connected_) {
+    relisten_server();
+    return messages;
+  }
 
   if (read_pending_ && WaitForSingleObject(read_event_, 0) == WAIT_OBJECT_0) {
     DWORD read{};
     if (!GetOverlappedResult(pipe_, &read_overlapped_, &read, FALSE) || read == 0) {
       disconnect(GetLastError());
+      relisten_server();
       return messages;
     }
     read_pending_ = false;
@@ -388,6 +452,7 @@ NamedPipeEditorDaemonChannel::poll() {
                     std::make_move_iterator(decoded.end()));
   }
   start_read(messages);
+  if (!connected_) relisten_server();
   return messages;
 }
 

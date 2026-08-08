@@ -1,10 +1,14 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/text.hpp"
+#include "layerc/platform/windows.hpp"
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <variant>
@@ -35,10 +39,76 @@ layerc::core::GameProfile test_profile(const std::string &name) {
   return profile;
 }
 
+int run_authenticated_peer(const bool server, const std::wstring &pipe_name) {
+  using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
+  Channel channel(server ? Channel::Role::server : Channel::Role::client,
+                  pipe_name);
+  bool sent{};
+  for (int attempt = 0; attempt < 5'000; ++attempt) {
+    for (auto &result : channel.poll()) {
+      const auto *message = std::get_if<layerc::core::LiveMessage>(&result);
+      if (message == nullptr) continue;
+      if (server && message->type ==
+                        layerc::core::LiveMessageType::handshake) {
+        (void)channel.send({
+            .type = layerc::core::LiveMessageType::acknowledgement,
+            .revision = message->revision,
+            .text = "authenticated",
+        });
+        sent = true;
+      } else if (!server && message->type ==
+                               layerc::core::LiveMessageType::acknowledgement &&
+                 message->text == "authenticated") {
+        return 0;
+      }
+    }
+    if (!server && channel.connected() && !sent) {
+      sent = channel.send({.type = layerc::core::LiveMessageType::handshake,
+                           .revision = 1,
+                           .text = "sibling-auth-test"});
+    }
+    if (server && sent) {
+      // Give the overlapped acknowledgement write time to complete.
+      for (int flush = 0; flush < 20; ++flush) {
+        (void)channel.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      return 0;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return 1;
+}
+
+bool launch_auth_peer(const std::filesystem::path &executable,
+                      const wchar_t *const mode,
+                      const std::wstring &pipe_name,
+                      PROCESS_INFORMATION &process) {
+  std::wstring command = L"\"" + executable.wstring() + L"\" " + mode +
+                         L" \"" + pipe_name + L"\"";
+  std::vector<wchar_t> command_buffer(command.begin(), command.end());
+  command_buffer.push_back(L'\0');
+  STARTUPINFOW startup{.cb = sizeof(STARTUPINFOW)};
+  return CreateProcessW(executable.c_str(), command_buffer.data(), nullptr,
+                        nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                        &startup, &process) != FALSE;
+}
+
 } // namespace
 
-int main() {
+int main(const int argc, char *argv[]) {
+  if (argc == 3 &&
+      (std::string_view(argv[1]) == "--auth-server" ||
+       std::string_view(argv[1]) == "--auth-client")) {
+    const std::string pipe_utf8(argv[2]);
+    return run_authenticated_peer(
+        std::string_view(argv[1]) == "--auth-server",
+        std::wstring(pipe_utf8.begin(), pipe_utf8.end()));
+  }
   bool passed = true;
+  passed &= expect(std::wstring_view(layerc::platform::live_edit_pipe_name) ==
+                       L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v1",
+                   "the tested production pipe name should match the protocol contract");
   wchar_t temporary_root[MAX_PATH]{};
   const DWORD root_length = GetTempPathW(MAX_PATH, temporary_root);
   passed &= expect(root_length != 0 && root_length < MAX_PATH,
@@ -50,6 +120,71 @@ int main() {
   std::error_code filesystem_error;
   std::filesystem::create_directory(directory, filesystem_error);
   passed &= expect(!filesystem_error, "test directory should be created");
+
+  // Exercise the production image-name policy without touching the fixed
+  // production pipe, which may legitimately be in use by the user's daemon.
+  std::array<wchar_t, 32'768> own_executable{};
+  const DWORD own_length = GetModuleFileNameW(
+      nullptr, own_executable.data(),
+      static_cast<DWORD>(own_executable.size()));
+  const auto sibling_server = directory / L"layerd.exe";
+  const auto sibling_client = directory / L"layere.exe";
+  const bool copied_peers =
+      own_length != 0 && own_length < own_executable.size() &&
+      CopyFileW(own_executable.data(), sibling_server.c_str(), FALSE) != FALSE &&
+      CopyFileW(own_executable.data(), sibling_client.c_str(), FALSE) != FALSE;
+  passed &= expect(copied_peers,
+                   "sibling-image authentication test peers should be created");
+  if (copied_peers) {
+    const std::wstring sibling_pipe =
+        L"\\\\.\\pipe\\LayerC.SiblingAuthTest." +
+        std::to_wstring(GetCurrentProcessId()) + L"." +
+        std::to_wstring(GetTickCount64());
+    PROCESS_INFORMATION server_process{};
+    PROCESS_INFORMATION client_process{};
+    const bool server_launched = launch_auth_peer(
+        sibling_server, L"--auth-server", sibling_pipe, server_process);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const bool client_launched = launch_auth_peer(
+        sibling_client, L"--auth-client", sibling_pipe, client_process);
+    passed &= expect(server_launched && client_launched,
+                     "sibling layerd/layere authentication peers should launch");
+    if (server_launched && client_launched) {
+      const DWORD server_wait = WaitForSingleObject(server_process.hProcess, 10'000);
+      const DWORD client_wait = WaitForSingleObject(client_process.hProcess, 10'000);
+      DWORD server_exit{1};
+      DWORD client_exit{1};
+      if (server_wait == WAIT_OBJECT_0)
+        (void)GetExitCodeProcess(server_process.hProcess, &server_exit);
+      if (client_wait == WAIT_OBJECT_0)
+        (void)GetExitCodeProcess(client_process.hProcess, &client_exit);
+      passed &= expect(server_wait == WAIT_OBJECT_0 &&
+                           client_wait == WAIT_OBJECT_0 && server_exit == 0 &&
+                           client_exit == 0,
+                       "same-user, same-session sibling images should authenticate bidirectionally");
+      if (server_wait != WAIT_OBJECT_0) {
+        TerminateProcess(server_process.hProcess, 1);
+        WaitForSingleObject(server_process.hProcess, 1'000);
+      }
+      if (client_wait != WAIT_OBJECT_0) {
+        TerminateProcess(client_process.hProcess, 1);
+        WaitForSingleObject(client_process.hProcess, 1'000);
+      }
+    } else {
+      if (server_launched) {
+        TerminateProcess(server_process.hProcess, 1);
+        WaitForSingleObject(server_process.hProcess, 1'000);
+      }
+      if (client_launched) {
+        TerminateProcess(client_process.hProcess, 1);
+        WaitForSingleObject(client_process.hProcess, 1'000);
+      }
+    }
+    for (auto *process : {&client_process, &server_process}) {
+      if (process->hThread != nullptr) CloseHandle(process->hThread);
+      if (process->hProcess != nullptr) CloseHandle(process->hProcess);
+    }
+  }
 
   const auto path = directory / L"profile.json";
   auto backup = path;
@@ -117,6 +252,77 @@ int main() {
                        backup_stored->name == "First",
                    "failed backup protection must preserve the older backup");
 
+  const auto collision_path = directory / L"collision.json";
+  auto legacy_temporary = collision_path;
+  legacy_temporary += L".tmp";
+  {
+    std::ofstream sentinel(legacy_temporary, std::ios::binary);
+    sentinel << "do-not-replace";
+  }
+  passed &= expect(
+      layerc::platform::write_profile_file(
+          collision_path, layerc::core::serialize_profile_json(first)),
+      "profile writes should not collide with a legacy deterministic .tmp file");
+  std::ifstream sentinel(legacy_temporary, std::ios::binary);
+  const std::string sentinel_contents{std::istreambuf_iterator<char>(sentinel),
+                                      std::istreambuf_iterator<char>()};
+  sentinel.close();
+  passed &= expect(sentinel_contents == "do-not-replace",
+                   "unique atomic-write temporaries should leave unrelated .tmp files untouched");
+
+  std::array<wchar_t, 32'768> previous_directory{};
+  const DWORD previous_directory_length = GetCurrentDirectoryW(
+      static_cast<DWORD>(previous_directory.size()), previous_directory.data());
+  const bool changed_directory =
+      previous_directory_length != 0 &&
+      previous_directory_length < previous_directory.size() &&
+      SetCurrentDirectoryW(directory.c_str()) != FALSE;
+  bool relative_write{};
+  if (changed_directory) {
+    relative_write = layerc::platform::write_profile_file(
+        L"relative.json", layerc::core::serialize_profile_json(first));
+    (void)SetCurrentDirectoryW(previous_directory.data());
+  }
+  passed &= expect(changed_directory && relative_write,
+                   "atomic profile writes should support a path with an empty parent component");
+
+  layerc::platform::WindowCandidate candidate{
+      .title = L"Game Window",
+      .executable_path = L"C:\\Games\\I.EXE",
+      .executable_name = L"I.EXE",
+      .window_class = L"GameClass"};
+  layerc::core::GameProfile matcher_profile;
+  matcher_profile.game.executable_name = "i.exe";
+  passed &= expect(layerc::platform::profile_matches_window(
+                       candidate, matcher_profile),
+                   "window matching should use locale-invariant case folding");
+  matcher_profile.game.executable_name = std::string(1, '\xFF');
+  matcher_profile.game.window_title = "Game";
+  passed &= expect(!layerc::platform::profile_matches_window(
+                       candidate, matcher_profile),
+                   "invalid UTF-8 matcher fields must reject instead of weakening to title-only matching");
+
+  const auto corrupt_path = directory / L"corrupt.json";
+  {
+    std::ofstream corrupt(corrupt_path, std::ios::binary | std::ios::trunc);
+    corrupt << R"({"schemaVersion":1,"name":)";
+  }
+  const auto corrupt_contents =
+      layerc::platform::read_profile_file(corrupt_path);
+  passed &= expect(
+      corrupt_contents.has_value() &&
+          std::holds_alternative<layerc::core::ProfileError>(
+              layerc::core::parse_profile_json(*corrupt_contents)),
+      "an externally corrupted profile should return a bounded validation error");
+  passed &= expect(
+      layerc::platform::write_profile_file(
+          corrupt_path, layerc::core::serialize_profile_json(first)),
+      "a valid save should safely replace an externally corrupted profile");
+  auto corrupt_backup = corrupt_path;
+  corrupt_backup += L".bak";
+  passed &= expect(!std::filesystem::exists(corrupt_backup),
+                   "an invalid previous profile must not be promoted to backup");
+
   const std::wstring spoof_pipe_name =
       L"\\\\.\\pipe\\LayerC.PlatformSpoofTest." +
       std::to_wstring(GetCurrentProcessId()) + L"." +
@@ -143,7 +349,8 @@ int main() {
       std::to_wstring(GetCurrentProcessId()) + L"." +
       std::to_wstring(GetTickCount64());
   layerc::platform::NamedPipeEditorDaemonChannel server(
-      layerc::platform::NamedPipeEditorDaemonChannel::Role::server, pipe_name);
+      layerc::platform::NamedPipeEditorDaemonChannel::Role::server, pipe_name,
+      GetCurrentProcessId());
   layerc::platform::NamedPipeEditorDaemonChannel client(
       layerc::platform::NamedPipeEditorDaemonChannel::Role::client, pipe_name,
       GetCurrentProcessId());
@@ -155,6 +362,9 @@ int main() {
   }
   passed &= expect(server.connected() && client.connected(),
                    "same-user overlapped pipe peers should connect");
+  passed &= expect(server.peer_process_id() == GetCurrentProcessId() &&
+                       client.peer_process_id() == GetCurrentProcessId(),
+                   "both authenticated channel ends should retain the peer PID");
   passed &= expect(client.send({
                        .type = layerc::core::LiveMessageType::handshake,
                        .revision = 77,
@@ -175,14 +385,9 @@ int main() {
   passed &= expect(server_received,
                    "framed UTF-8 messages should cross the named pipe");
 
-  (void)DeleteFileW(path.c_str());
-  (void)DeleteFileW(backup.c_str());
-  auto temporary = path;
-  temporary += L".tmp";
-  (void)DeleteFileW(temporary.c_str());
-  auto backup_temporary = backup;
-  backup_temporary += L".tmp";
-  (void)DeleteFileW(backup_temporary.c_str());
-  (void)RemoveDirectoryW(directory.c_str());
+  filesystem_error.clear();
+  std::filesystem::remove_all(directory, filesystem_error);
+  passed &= expect(!filesystem_error,
+                   "the platform test directory should always be cleaned up");
   return passed ? 0 : 1;
 }

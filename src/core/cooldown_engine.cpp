@@ -161,6 +161,8 @@ void CooldownEngine::reconfigure(
         entry.available_charges = std::min(previous->second.available_charges,
                                            definition.max_charges);
         entry.next_charge_at = previous->second.next_charge_at;
+        if (entry.available_charges >= definition.max_charges)
+          entry.next_charge_at.reset();
       }
     }
     order.push_back(definition.id);

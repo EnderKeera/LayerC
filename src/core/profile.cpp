@@ -1,7 +1,6 @@
 #include "layerc/core/profile.hpp"
 
 #include "profile_reader.hpp"
-#include "utf8.hpp"
 
 #include <string>
 #include <utility>
@@ -43,18 +42,8 @@ ProfileResult ProfileReader::read() {
     if (!ok()) {
       return error_;
     }
-    if (!is_valid_utf8(profile.game.executable_path)) {
-      return error("$.game.executablePath", "expected valid UTF-8");
-    }
-    if (!is_valid_utf8(profile.game.executable_name)) {
-      return error("$.game.executableName", "expected valid UTF-8");
-    }
-    if (!is_valid_utf8(profile.game.window_class)) {
-      return error("$.game.windowClass", "expected valid UTF-8");
-    }
-    if (!is_valid_utf8(profile.game.window_title)) {
-      return error("$.game.windowTitle", "expected valid UTF-8");
-    }
+    // JSON parsing is the single UTF-8 validation boundary. Every persisted
+    // string reaches ProfileReader only after that parser succeeds.
     if (!profile.game.global && profile.game.executable_path.empty() &&
         profile.game.executable_name.empty()) {
       return error("$.game", "executablePath or executableName is required");

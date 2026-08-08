@@ -51,7 +51,8 @@ std::wstring window_class(const HWND window) {
 
 bool is_shell_window(const HWND window) {
   const auto klass = window_class(window);
-  return klass == L"Shell_TrayWnd" || klass == L"Progman" ||
+  return klass == L"Shell_TrayWnd" || klass == L"Shell_SecondaryTrayWnd" ||
+         klass == L"Progman" ||
          klass == L"WorkerW";
 }
 
@@ -131,29 +132,37 @@ bool profile_matches_window(const WindowCandidate &candidate,
     return false;
   }
 
+  const auto expected_path_text =
+      try_utf8_to_wide(profile.game.executable_path);
+  const auto expected_name_text =
+      try_utf8_to_wide(profile.game.executable_name);
+  const auto expected_class_text =
+      try_utf8_to_wide(profile.game.window_class);
+  const auto expected_title_text =
+      try_utf8_to_wide(profile.game.window_title);
+  if (!expected_path_text.has_value() || !expected_name_text.has_value() ||
+      !expected_class_text.has_value() || !expected_title_text.has_value())
+    return false;
+
   const auto process_path = lower_copy(candidate.executable_path);
-  const auto expected_path =
-      lower_copy(utf8_to_wide(profile.game.executable_path));
+  const auto expected_path = lower_copy(*expected_path_text);
   if (!expected_path.empty() && process_path != expected_path) {
     return false;
   }
 
-  const auto expected_name =
-      lower_copy(utf8_to_wide(profile.game.executable_name));
+  const auto expected_name = lower_copy(*expected_name_text);
   if (!expected_name.empty() &&
       lower_copy(candidate.executable_name) != expected_name) {
     return false;
   }
 
-  const auto expected_class =
-      lower_copy(utf8_to_wide(profile.game.window_class));
+  const auto expected_class = lower_copy(*expected_class_text);
   if (!expected_class.empty() &&
       lower_copy(candidate.window_class) != expected_class) {
     return false;
   }
 
-  const auto expected_title =
-      lower_copy(utf8_to_wide(profile.game.window_title));
+  const auto expected_title = lower_copy(*expected_title_text);
   return expected_title.empty() ||
          lower_copy(candidate.title).find(expected_title) != std::wstring::npos;
 }

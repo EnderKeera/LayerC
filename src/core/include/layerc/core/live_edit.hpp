@@ -14,6 +14,8 @@ namespace layerc::core {
 
 inline constexpr std::uint32_t live_protocol_version = 1;
 inline constexpr std::size_t max_live_message_bytes = 512U * 1024U;
+inline constexpr std::size_t max_live_buffer_bytes =
+    8U * max_live_message_bytes;
 using ProfileRevision = std::uint64_t;
 using EditSessionId = std::uint64_t;
 
@@ -109,12 +111,13 @@ struct LiveProtocolError {
 };
 
 using LiveMessageResult = std::variant<LiveMessage, LiveProtocolError>;
+using LiveFrameResult =
+    std::variant<std::vector<std::byte>, LiveProtocolError>;
 
 [[nodiscard]] std::string encode_live_message_json(const LiveMessage &message);
 [[nodiscard]] LiveMessageResult
 decode_live_message_json(std::string_view source);
-[[nodiscard]] std::vector<std::byte>
-encode_live_frame(const LiveMessage &message);
+[[nodiscard]] LiveFrameResult encode_live_frame(const LiveMessage &message);
 
 class LiveFrameDecoder {
 public:

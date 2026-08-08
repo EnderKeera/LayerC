@@ -25,7 +25,16 @@ INT_PTR CALLBACK EditorWindow::task_dialog_proc(HWND window, UINT message, WPARA
 
 void EditorWindow::initialize_tasks(const HWND window) {
   task_dialog_ = window;
-  set_dark_title_bar(window); style_dialog_children(window);
+  const UINT window_dpi = GetDpiForWindow(window);
+  const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
+  task_font_ = CreateFontW(-MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE,
+                           FALSE, FALSE, DEFAULT_CHARSET,
+                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                           L"Segoe UI");
+  set_dark_title_bar(window);
+  style_native_dialog_children(window,
+                               task_font_ == nullptr ? font_ : task_font_);
   task_list_ = GetDlgItem(window, IDC_TASK_LIST);
   ListView_SetExtendedListViewStyle(task_list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   const std::array<LVCOLUMNW, 3> columns{{
@@ -194,6 +203,7 @@ void EditorWindow::begin_picker() {
   picking_ = true;
   task_was_visible_ = task_dialog_ != nullptr && IsWindowVisible(task_dialog_);
   if (task_was_visible_) ShowWindow(task_dialog_, SW_HIDE);
+  SetFocus(dialog_);
   SetCapture(dialog_);
   set_status(L"Pick Window active — click a game window, or press Esc to cancel.");
 }
@@ -202,7 +212,11 @@ void EditorWindow::finish_picker() {
   POINT cursor{}; GetCursorPos(&cursor);
   const auto candidate = layerc::platform::window_at_point(cursor);
   cancel_picker();
-  if (!candidate.has_value() || candidate->window == dialog_) { set_status(L"No eligible window was picked."); return; }
+  if (!candidate.has_value() ||
+      candidate->process_id == GetCurrentProcessId()) {
+    set_status(L"No eligible window was picked.");
+    return;
+  }
   apply_task(*candidate);
 }
 
@@ -229,6 +243,28 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
   case WM_SIZE:
     layout_tasks(window);
     return TRUE;
+  case WM_DPICHANGED: {
+    const auto *suggested = reinterpret_cast<const RECT *>(lparam);
+    SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                 suggested->right - suggested->left,
+                 suggested->bottom - suggested->top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    const int dpi = static_cast<int>(HIWORD(wparam));
+    const HFONT replacement =
+        CreateFontW(-MulDiv(9, dpi == 0 ? 96 : dpi, 72), 0, 0, 0,
+                    FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                    L"Segoe UI");
+    if (replacement != nullptr) {
+      const HFONT previous = task_font_;
+      task_font_ = replacement;
+      style_native_dialog_children(window, task_font_);
+      if (previous != nullptr) DeleteObject(previous);
+    }
+    layout_tasks(window);
+    return TRUE;
+  }
   case WM_GETMINMAXINFO: {
     const UINT window_dpi = GetDpiForWindow(window);
     const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
@@ -273,6 +309,10 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
       task_dialog_ = nullptr;
       task_list_ = nullptr;
       awaiting_edit_target_ = false;
+      if (task_font_ != nullptr) {
+        DeleteObject(task_font_);
+        task_font_ = nullptr;
+      }
     }
     return TRUE;
   default: break;

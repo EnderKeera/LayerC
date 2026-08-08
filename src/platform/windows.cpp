@@ -2,6 +2,8 @@
 
 #include <string>
 
+#include <shellscalingapi.h>
+
 namespace layerc::platform {
 namespace {
 
@@ -63,6 +65,20 @@ bool apply_capture_exclusion(const HWND window, const bool enabled) {
   }
   return SetWindowDisplayAffinity(window, enabled ? capture_exclusion_affinity
                                                   : WDA_NONE) != FALSE;
+}
+
+UINT monitor_dpi_for_rect(const RECT &rect) {
+  const HMONITOR monitor =
+      MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+  UINT dpi_x{};
+  UINT dpi_y{};
+  if (monitor != nullptr &&
+      SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y)) &&
+      dpi_x != 0) {
+    return dpi_x;
+  }
+  const UINT system_dpi = GetDpiForSystem();
+  return system_dpi == 0 ? 96U : system_dpi;
 }
 
 EditorTheme editor_theme() {

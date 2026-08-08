@@ -54,7 +54,7 @@ bool OverlayWindow::ensure_render_resources() {
   if (window_dc == nullptr) {
     return false;
   }
-  const int font_height = -MulDiv(14, GetDeviceCaps(window_dc, LOGPIXELSY), 72);
+  const int font_height = -MulDiv(14, static_cast<int>(dpi_), 72);
   buffer_dc_ = CreateCompatibleDC(window_dc);
   if (buffer_dc_ != nullptr) {
     buffer_bitmap_ = CreateCompatibleBitmap(window_dc, size_.cx, size_.cy);
@@ -91,7 +91,8 @@ bool OverlayWindow::ensure_render_resources() {
   window_brush_ = CreateSolidBrush(to_color_ref(0x151A20U));
   panel_brush_ = CreateSolidBrush(to_color_ref(background_color));
   fill_brush_ = CreateSolidBrush(to_color_ref(fill_color));
-  border_pen_ = CreatePen(PS_SOLID, 1, to_color_ref(border_color));
+  border_pen_ =
+      CreatePen(PS_SOLID, std::max(1L, scaled(1)), to_color_ref(border_color));
   text_color_ = to_color_ref(text_color);
 
   const bool ready = font_ != nullptr && window_brush_ != nullptr &&
@@ -192,11 +193,14 @@ void OverlayWindow::render(
     }
 
     if (panel_.style == layerc::core::PanelStyle::bar) {
-      const int left = padding;
-      const int bar_width = static_cast<int>(panel_.bar.width);
-      const int bar_height = static_cast<int>(panel_.bar.height);
+      const int scaled_padding = scaled(padding);
+      const int scaled_spacing = scaled(spacing);
+      const int left = scaled_padding;
+      const int bar_width = scaled(static_cast<LONG>(panel_.bar.width));
+      const int bar_height = scaled(static_cast<LONG>(panel_.bar.height));
       const int top =
-          padding + static_cast<int>(index) * (bar_height + spacing);
+          scaled_padding +
+          static_cast<int>(index) * (bar_height + scaled_spacing);
       const bool is_single_bar = cooldown_indices_.size() == 1;
       const int visible_width =
           std::max(1, static_cast<int>(std::lround(
@@ -206,27 +210,42 @@ void OverlayWindow::render(
                      top + bar_height};
 
       if (is_single_bar) {
-        const HRGN region =
-            CreateRoundRectRgn(bar.left, bar.top, bar.right, bar.bottom, 8, 8);
-        if (region != nullptr && SetWindowRgn(window_, region, TRUE) == 0) {
-          DeleteObject(region);
+        const int radius = std::max(1L, scaled(8));
+        if (visible_width != last_region_width_) {
+          const HRGN region = CreateRoundRectRgn(
+              bar.left, bar.top, bar.right, bar.bottom, radius, radius);
+          if (region != nullptr) {
+            if (SetWindowRgn(window_, region, TRUE) == 0)
+              DeleteObject(region);
+            else
+              last_region_width_ = visible_width;
+          }
         }
-        draw_rounded_rectangle(buffer_dc_, bar, 8, fill_brush_, visible_border);
+        draw_rounded_rectangle(buffer_dc_, bar, radius, fill_brush_,
+                               visible_border);
       } else {
-        draw_rounded_rectangle(buffer_dc_, bar, 8, panel_brush_, visible_border);
+        const int radius = std::max(1L, scaled(8));
+        draw_rounded_rectangle(buffer_dc_, bar, radius, panel_brush_,
+                               visible_border);
+        const int inset = std::max(1L, scaled(2));
         const int fill_width = static_cast<int>(
-            std::lround(static_cast<double>(bar_width - 4) * progress));
+            std::lround(static_cast<double>(bar_width - inset * 2) * progress));
         if (fill_width > 0) {
-          const RECT fill{left + 2, top + 2, left + 2 + fill_width,
-                          top + bar_height - 2};
-          draw_rounded_rectangle(buffer_dc_, fill, 6, fill_brush_, null_pen);
+          const RECT fill{left + inset, top + inset,
+                          left + inset + fill_width,
+                          top + bar_height - inset};
+          draw_rounded_rectangle(buffer_dc_, fill, std::max(1L, scaled(6)),
+                                 fill_brush_, null_pen);
         }
       }
 
-      RECT text_rectangle{left + 8, top + 2,
+      const int horizontal_text_inset = std::max(1L, scaled(8));
+      const int vertical_text_inset = std::max(1L, scaled(2));
+      RECT text_rectangle{left + horizontal_text_inset,
+                          top + vertical_text_inset,
                           left + (is_single_bar ? visible_width : bar_width) -
-                              8,
-                          top + bar_height - 2};
+                              horizontal_text_inset,
+                          top + bar_height - vertical_text_inset};
       if (panel_.bar.show_text &&
           text_rectangle.right > text_rectangle.left) {
         DrawTextW(buffer_dc_, label_buffer_.c_str(),
@@ -247,13 +266,23 @@ void OverlayWindow::render(
       row = static_cast<LONG>(index) / grid_columns;
     }
 
-    const LONG left = padding + column * (item_width + spacing);
-    const LONG top = padding + row * (item_height + spacing);
-    const RECT item{left, top, left + item_width, top + item_height};
-    draw_rounded_rectangle(buffer_dc_, item, 6, panel_brush_, visible_border);
+    const LONG scaled_padding = scaled(padding);
+    const LONG scaled_spacing = scaled(spacing);
+    const LONG scaled_item_width = scaled(item_width);
+    const LONG scaled_item_height = scaled(item_height);
+    const LONG left =
+        scaled_padding + column * (scaled_item_width + scaled_spacing);
+    const LONG top =
+        scaled_padding + row * (scaled_item_height + scaled_spacing);
+    const RECT item{left, top, left + scaled_item_width,
+                    top + scaled_item_height};
+    draw_rounded_rectangle(buffer_dc_, item, std::max(1L, scaled(6)),
+                           panel_brush_, visible_border);
 
-    RECT text_rectangle{left + 3, top + 3, left + item_width - 3,
-                        top + item_height - 3};
+    const LONG text_inset = std::max(1L, scaled(3));
+    RECT text_rectangle{left + text_inset, top + text_inset,
+                        left + scaled_item_width - text_inset,
+                        top + scaled_item_height - text_inset};
     DrawTextW(buffer_dc_, label_buffer_.c_str(),
               static_cast<int>(label_buffer_.size()), &text_rectangle,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |

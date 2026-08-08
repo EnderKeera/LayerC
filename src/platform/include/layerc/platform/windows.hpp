@@ -76,6 +76,7 @@ profile_matches_window(const WindowCandidate &candidate,
 [[nodiscard]] bool capture_exclusion_enabled();
 [[nodiscard]] bool set_capture_exclusion_enabled(bool enabled);
 [[nodiscard]] bool apply_capture_exclusion(HWND window, bool enabled);
+[[nodiscard]] UINT monitor_dpi_for_rect(const RECT &rect);
 [[nodiscard]] EditorTheme editor_theme();
 [[nodiscard]] std::uint32_t editor_accent();
 [[nodiscard]] bool set_editor_theme(EditorTheme theme);

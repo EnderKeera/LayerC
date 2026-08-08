@@ -12,6 +12,22 @@
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/layerc",
         "LAYERC_BUILD_TESTS": "ON"
       }
+    },
+    {
+      "name": "mingw-ninja",
+      "displayName": "MinGW-w64 Ninja Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mingw-preset",
+      "environment": {
+        "PATH": "$env{MINGW_ROOT}/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "$env{MINGW_ROOT}/bin/g++.exe",
+        "CMAKE_RC_COMPILER": "$env{MINGW_ROOT}/bin/windres.exe",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/layerc-mingw",
+        "LAYERC_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -31,6 +47,15 @@
       "configurePreset": "vs2026",
       "configuration": "Release",
       "targets": ["install"]
+    },
+    {
+      "name": "mingw-ninja",
+      "configurePreset": "mingw-ninja"
+    },
+    {
+      "name": "mingw-ninja-install",
+      "configurePreset": "mingw-ninja",
+      "targets": ["install"]
     }
   ],
   "testPresets": [
@@ -45,6 +70,11 @@
       "configurePreset": "vs2026",
       "configuration": "Release",
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "mingw-ninja",
+      "configurePreset": "mingw-ninja",
+      "output": { "outputOnFailure": true }
     }
   ],
   "workflowPresets": [
@@ -57,7 +87,16 @@
         { "type": "test", "name": "vs2026-release" },
         { "type": "build", "name": "vs2026-install-release" }
       ]
+    },
+    {
+      "name": "mingw-ninja",
+      "displayName": "Build, test, and install MinGW-w64 Release",
+      "steps": [
+        { "type": "configure", "name": "mingw-ninja" },
+        { "type": "build", "name": "mingw-ninja" },
+        { "type": "test", "name": "mingw-ninja" },
+        { "type": "build", "name": "mingw-ninja-install" }
+      ]
     }
   ]
 }
-

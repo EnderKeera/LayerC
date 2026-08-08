@@ -36,6 +36,7 @@ void OverlayWindow::update_snapshot(
   calculate_size();
   if (window_ != nullptr && IsWindow(window_)) {
     SetWindowRgn(window_, nullptr, TRUE);
+    last_region_width_ = -1;
     SetWindowPos(window_, nullptr, 0, 0, size_.cx, size_.cy,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     if (target_.right > target_.left && target_.bottom > target_.top)
@@ -87,12 +88,16 @@ OverlayWindow::~OverlayWindow() {
 }
 
 void OverlayWindow::calculate_size() {
+  const LONG scaled_padding = scaled(padding);
+  const LONG scaled_spacing = scaled(spacing);
   const auto count =
       static_cast<LONG>(std::max<std::size_t>(cooldown_indices_.size(), 1));
   if (panel_.style == layerc::core::PanelStyle::bar) {
-    size_.cx = padding * 2 + static_cast<LONG>(panel_.bar.width);
-    size_.cy = padding * 2 + count * static_cast<LONG>(panel_.bar.height) +
-               std::max<LONG>(0, count - 1) * spacing;
+    size_.cx = scaled_padding * 2 +
+               scaled(static_cast<LONG>(panel_.bar.width));
+    size_.cy = scaled_padding * 2 +
+               count * scaled(static_cast<LONG>(panel_.bar.height)) +
+               std::max<LONG>(0, count - 1) * scaled_spacing;
     return;
   }
 
@@ -106,10 +111,28 @@ void OverlayWindow::calculate_size() {
         static_cast<LONG>(std::ceil(std::sqrt(static_cast<double>(count))));
     rows = (count + columns - 1) / columns;
   }
-  size_.cx = padding * 2 + columns * item_width +
-             std::max<LONG>(0, columns - 1) * spacing;
-  size_.cy =
-      padding * 2 + rows * item_height + std::max<LONG>(0, rows - 1) * spacing;
+  size_.cx = scaled_padding * 2 + columns * scaled(item_width) +
+             std::max<LONG>(0, columns - 1) * scaled_spacing;
+  size_.cy = scaled_padding * 2 + rows * scaled(item_height) +
+             std::max<LONG>(0, rows - 1) * scaled_spacing;
+}
+
+LONG OverlayWindow::scaled(const LONG value) const noexcept {
+  return MulDiv(value, static_cast<int>(dpi_), 96);
+}
+
+void OverlayWindow::update_dpi(const UINT dpi) {
+  const UINT next_dpi = dpi == 0 ? 96U : dpi;
+  if (next_dpi == dpi_) return;
+  dpi_ = next_dpi;
+  release_render_resources();
+  calculate_size();
+  if (window_ != nullptr && IsWindow(window_)) {
+    SetWindowRgn(window_, nullptr, TRUE);
+    last_region_width_ = -1;
+    SetWindowPos(window_, nullptr, 0, 0, size_.cx, size_.cy,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
 }
 
 bool OverlayWindow::create_window() {
@@ -146,6 +169,17 @@ void OverlayWindow::show_for(const HWND game_window) {
     hide();
     return;
   }
+  RECT client{};
+  POINT origin{};
+  if (!GetClientRect(game_window, &client) ||
+      !ClientToScreen(game_window, &origin)) {
+    hide();
+    return;
+  }
+  const auto width = client.right - client.left;
+  const auto height = client.bottom - client.top;
+  target_ = {origin.x, origin.y, origin.x + width, origin.y + height};
+  update_dpi(layerc::platform::monitor_dpi_for_rect(target_));
   if (window_ == nullptr && !create_window()) {
     return;
   }
@@ -159,16 +193,6 @@ void OverlayWindow::show_for(const HWND game_window) {
     }
     owner_ = game_window;
   }
-  RECT client{};
-  POINT origin{};
-  if (!GetClientRect(game_window, &client) ||
-      !ClientToScreen(game_window, &origin)) {
-    hide();
-    return;
-  }
-  const auto width = client.right - client.left;
-  const auto height = client.bottom - client.top;
-  target_ = {origin.x, origin.y, origin.x + width, origin.y + height};
   const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
   // Ownership already keeps this popup immediately above its game. Raising an
   // edit overlay to HWND_TOP while the game is in the background would place it
@@ -183,6 +207,7 @@ void OverlayWindow::show_on_rect(const RECT &target) {
     hide();
     return;
   }
+  update_dpi(layerc::platform::monitor_dpi_for_rect(target));
   if (window_ == nullptr && !create_window()) {
     return;
   }

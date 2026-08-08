@@ -1,7 +1,9 @@
 #include "layerc/core/profile.hpp"
 
 #include <array>
+#include <charconv>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 
 namespace layerc::core {
@@ -20,6 +22,15 @@ void append_unsigned(std::string &output, std::uint64_t value) {
 
 void append_indent(std::string &output, const int count) {
   output.append(static_cast<std::size_t>(count), ' ');
+}
+
+void append_double(std::string &output, const double value) {
+  std::array<char, 64> buffer{};
+  const auto converted = std::to_chars(
+      buffer.data(), buffer.data() + buffer.size(), value,
+      std::chars_format::general, std::numeric_limits<double>::max_digits10);
+  if (converted.ec == std::errc{})
+    output.append(buffer.data(), converted.ptr);
 }
 
 void append_quoted(std::string &output, const std::string_view text) {
@@ -225,10 +236,10 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_bool(output, panel.bar.hide_when_ready);
     output += "\n      },\n";
     append_key(output, 6, "anchorX");
-    output += std::to_string(panel.anchor_x);
+    append_double(output, panel.anchor_x);
     output += ",\n";
     append_key(output, 6, "anchorY");
-    output += std::to_string(panel.anchor_y);
+    append_double(output, panel.anchor_y);
     output += ",\n";
     append_key(output, 6, "cooldowns");
     output += "[";

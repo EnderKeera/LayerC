@@ -1,9 +1,11 @@
 #include "layerc/platform/profile_store.hpp"
 
 #include "layerc/core/profile.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <utility>
 #include <vector>
@@ -14,24 +16,18 @@
 namespace layerc::platform {
 namespace {
 
-std::wstring invariant_lower(std::wstring value) {
-  if (value.empty()) return value;
-  const int required = LCMapStringEx(
-      LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
-      static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr, 0);
-  if (required > 0) {
-    std::wstring lowered(static_cast<std::size_t>(required), L'\0');
-    if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
-                      static_cast<int>(value.size()), lowered.data(), required,
-                      nullptr, nullptr, 0) != 0)
-      return lowered;
-  }
-  CharLowerBuffW(value.data(), static_cast<DWORD>(value.size()));
-  return value;
-}
-
 void remove_temporary_file(const std::filesystem::path &path) {
   (void)DeleteFileW(path.c_str());
+}
+
+std::filesystem::path
+unique_temporary_path(const std::filesystem::path &path) {
+  static std::atomic_uint64_t sequence{};
+  auto temporary = path;
+  temporary += L"." + std::to_wstring(GetCurrentProcessId()) + L"." +
+               std::to_wstring(sequence.fetch_add(1, std::memory_order_relaxed)) +
+               L".tmp";
+  return temporary;
 }
 
 } // namespace
@@ -88,7 +84,7 @@ std::wstring canonical_profile_key(const std::filesystem::path &path) {
                    .wstring();
   }
   std::replace(resolved.begin(), resolved.end(), L'/', L'\\');
-  return invariant_lower(std::move(resolved));
+  return lower_copy(std::move(resolved));
 }
 
 std::optional<std::string>
@@ -113,23 +109,25 @@ read_profile_file(const std::filesystem::path &path) {
 bool write_profile_file(const std::filesystem::path &path,
                         const std::string_view contents) {
   std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error) {
-    return false;
+  const auto parent = path.parent_path();
+  if (!parent.empty()) {
+    std::filesystem::create_directories(parent, error);
+    if (error) return false;
   }
 
-  auto temporary = path;
-  temporary += L".tmp";
+  const auto temporary = unique_temporary_path(path);
+  bool temporary_written{};
   {
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output) {
-      return false;
+    if (output) {
+      output.write(contents.data(),
+                   static_cast<std::streamsize>(contents.size()));
+      temporary_written = static_cast<bool>(output);
     }
-    output.write(contents.data(),
-                 static_cast<std::streamsize>(contents.size()));
-    if (!output) {
-      return false;
-    }
+  }
+  if (!temporary_written) {
+    remove_temporary_file(temporary);
+    return false;
   }
 
   // Keep the previous parseable profile as the last-valid recovery point.
@@ -139,8 +137,7 @@ bool write_profile_file(const std::filesystem::path &path,
           layerc::core::parse_profile_json(*previous))) {
     auto backup = path;
     backup += L".bak";
-    auto backup_temporary = backup;
-    backup_temporary += L".tmp";
+    const auto backup_temporary = unique_temporary_path(backup);
     if (CopyFileW(path.c_str(), backup_temporary.c_str(), FALSE) == FALSE ||
         MoveFileExW(backup_temporary.c_str(), backup.c_str(),
                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==

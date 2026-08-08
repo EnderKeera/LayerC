@@ -55,8 +55,45 @@ void test_live_profile_reconciliation() {
   changed_definition.cooldowns.front().duration = 9s;
   const auto reset_plan =
       plan_session_reconciliation(cosmetic, changed_definition);
-  expect(reset_plan.reset_cooldown_ids == std::vector<std::string>{"dash"},
+  expect(reset_plan.rebuild_overlays &&
+             reset_plan.reset_cooldown_ids == std::vector<std::string>{"dash"},
          "runtime cooldown definition edits should reset only that cooldown");
+
+  auto visuals_only = before;
+  visuals_only.cooldowns.front().name = "Dash visual";
+  const auto visuals_plan = plan_session_reconciliation(before, visuals_only);
+  expect(!visuals_plan.recreate_instances &&
+             !visuals_plan.rebuild_input_matcher &&
+             visuals_plan.rebuild_overlays &&
+             visuals_plan.reset_cooldown_ids.empty(),
+         "visual-only edits should rebuild overlays without resetting state");
+
+  auto enablement_only = before;
+  enablement_only.enabled = false;
+  const auto enablement_plan =
+      plan_session_reconciliation(before, enablement_only);
+  expect(enablement_plan.recreate_instances &&
+             !enablement_plan.rebuild_input_matcher &&
+             !enablement_plan.rebuild_overlays,
+         "enablement-only edits should recreate instance membership only");
+
+  auto added = before;
+  added.cooldowns.push_back({.id = "smoke",
+                             .name = "Smoke",
+                             .duration = 3s});
+  const auto added_plan = plan_session_reconciliation(before, added);
+  expect(added_plan.added_cooldown_ids == std::vector<std::string>{"smoke"} &&
+             added_plan.rebuild_input_matcher && added_plan.rebuild_overlays,
+         "added cooldowns should rebuild dependent input and overlay state");
+
+  auto removed = added;
+  removed.cooldowns.erase(removed.cooldowns.begin());
+  const auto removed_plan = plan_session_reconciliation(added, removed);
+  expect(removed_plan.removed_cooldown_ids ==
+                 std::vector<std::string>{"dash"} &&
+             removed_plan.rebuild_input_matcher &&
+             removed_plan.rebuild_overlays,
+         "removed cooldowns should rebuild dependent input and overlay state");
 
   auto changed_matcher = changed_definition;
   changed_matcher.game.executable_name = "other.exe";
@@ -99,14 +136,18 @@ void test_live_protocol_framing() {
              message->anchor_y == source.anchor_y,
          "live JSON should preserve UTF-8 and 64-bit identifiers exactly");
 
-  const auto frame = encode_live_frame(source);
+  const auto encoded_frame = encode_live_frame(source);
+  const auto *frame = std::get_if<std::vector<std::byte>>(&encoded_frame);
+  expect(frame != nullptr, "a bounded live message should produce a frame");
   LiveFrameDecoder decoder;
-  expect(decoder.push(std::span(frame).first(2)).empty(),
-         "partial frame headers should remain buffered");
-  const auto results = decoder.push(std::span(frame).subspan(2));
-  expect(results.size() == 1 &&
-             std::holds_alternative<LiveMessage>(results.front()),
-         "split live frames should decode once complete");
+  if (frame != nullptr) {
+    expect(decoder.push(std::span(*frame).first(2)).empty(),
+           "partial frame headers should remain buffered");
+    const auto results = decoder.push(std::span(*frame).subspan(2));
+    expect(results.size() == 1 &&
+               std::holds_alternative<LiveMessage>(results.front()),
+           "split live frames should decode once complete");
+  }
 
   auto wrong_version = encoded;
   const auto version = wrong_version.find("\"protocolVersion\":1");
@@ -119,6 +160,22 @@ void test_live_protocol_framing() {
              revision_decision(9, 9) == RevisionDecision::duplicate &&
              revision_decision(8, 9) == RevisionDecision::stale,
          "revision decisions should reject duplicate and stale state");
+  expect(revision_decision(1, 0) == RevisionDecision::accept &&
+             revision_decision(1, 100) == RevisionDecision::stale,
+         "peer-origin revisions must be compared with their peer stream, not a local send counter");
+
+  expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
+             R"({"protocolVersion":1,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
+         "anchor messages missing a mandatory coordinate should be rejected");
+
+  LiveMessage too_large{.type = LiveMessageType::live_profile,
+                        .revision = 1,
+                        .edit_session = 1,
+                        .profile_json =
+                            std::string(max_live_message_bytes, 'x')};
+  expect(std::holds_alternative<LiveProtocolError>(
+             encode_live_frame(too_large)),
+         "oversized outbound messages should return an explicit protocol error");
 
   const std::byte oversized_header[]{std::byte{0x01}, std::byte{0x00},
                                      std::byte{0x08}, std::byte{0x00}};
@@ -126,6 +183,14 @@ void test_live_protocol_framing() {
   expect(oversized.size() == 1 &&
              std::holds_alternative<LiveProtocolError>(oversized.front()),
          "oversized live frames should fail before allocating their payload");
+
+  std::vector<std::byte> excessive_buffer(max_live_buffer_bytes + 1U,
+                                          std::byte{});
+  const auto excessive = decoder.push(excessive_buffer);
+  expect(excessive.size() == 1 &&
+             std::holds_alternative<LiveProtocolError>(excessive.front()) &&
+             decoder.buffered_bytes() == 0,
+         "incomplete or hostile streams should not grow the decoder buffer without bound");
 }
 
 void test_live_placement_math() {
