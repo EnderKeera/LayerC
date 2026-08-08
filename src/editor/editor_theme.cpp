@@ -1,6 +1,7 @@
 #include "editor_window.hpp"
 #include "editor_resource.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -10,27 +11,25 @@
 #include <windows.h>
 namespace layerc::editor {
 constexpr int dark_title_bar_attribute = 20;
-constexpr wchar_t owner_draw_checkbox_property[] =
-    L"LayerC.OwnerDrawCheckboxChecked";
+
+ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
+  const int dpi = source_dpi == 0 ? 96 : static_cast<int>(source_dpi);
+  return {
+      .image_size = std::max(1, MulDiv(16, dpi, 96)),
+      .inset = std::max(1, MulDiv(2, dpi, 96)),
+      .pen_width = std::max(1, MulDiv(2, dpi, 96)),
+  };
+}
 
 void set_owner_draw_checkbox(const HWND control, const bool checked) {
   if (control == nullptr) return;
-  if (checked) {
-    SetPropW(control, owner_draw_checkbox_property,
-             reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
-  } else {
-    RemovePropW(control, owner_draw_checkbox_property);
-  }
+  SendMessageW(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
   InvalidateRect(control, nullptr, TRUE);
 }
 
 [[nodiscard]] bool owner_draw_checkbox_checked(const HWND control) {
   return control != nullptr &&
-         GetPropW(control, owner_draw_checkbox_property) != nullptr;
-}
-
-void toggle_owner_draw_checkbox(const HWND control) {
-  set_owner_draw_checkbox(control, !owner_draw_checkbox_checked(control));
+         SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
 
 struct ThemeBase {
@@ -176,23 +175,28 @@ void set_dark_title_bar(const HWND window) {
 }
 
 
-void EditorWindow::style_dialog_children(const HWND dialog) const {
+void style_native_dialog_children(const HWND dialog, const HFONT font) {
   for (HWND child = GetWindow(dialog, GW_CHILD); child != nullptr;
        child = GetWindow(child, GW_HWNDNEXT)) {
-    SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font_), TRUE);
+    SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     std::array<wchar_t, 64> class_name{};
     GetClassNameW(child, class_name.data(), static_cast<int>(class_name.size()));
     if (wcscmp(class_name.data(), L"Button") == 0) {
       const auto style = GetWindowLongPtrW(child, GWL_STYLE);
       const auto button_type = style & static_cast<LONG_PTR>(BS_TYPEMASK);
-      const bool is_checkbox =
-          button_type == BS_CHECKBOX || button_type == BS_AUTOCHECKBOX ||
-          button_type == BS_3STATE || button_type == BS_AUTO3STATE;
-      const bool was_checked =
-          is_checkbox && SendMessageW(child, BM_GETCHECK, 0, 0) == BST_CHECKED;
-      SetWindowLongPtrW(child, GWL_STYLE,
-                        (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) | BS_OWNERDRAW);
-      if (is_checkbox) set_owner_draw_checkbox(child, was_checked);
+      if (button_type == BS_PUSHBUTTON) {
+        SetWindowLongPtrW(
+            child, GWL_STYLE,
+            (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) | BS_OWNERDRAW);
+        SetWindowPos(child, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED);
+      } else {
+        // Keep BS_DEFPUSHBUTTON and the native auto-check/radio styles.  The
+        // dialog manager relies on those type bits for Enter, Space, and
+        // accessibility semantics.
+        SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
+      }
     } else if (wcscmp(class_name.data(), L"ComboBox") == 0) {
       SetWindowTheme(child, L"DarkMode_CFD", nullptr);
     } else if (wcscmp(class_name.data(), L"ListBox") == 0) {
@@ -208,6 +212,10 @@ void EditorWindow::style_dialog_children(const HWND dialog) const {
       SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
     }
   }
+}
+
+void EditorWindow::style_dialog_children(const HWND dialog) const {
+  style_native_dialog_children(dialog, font_);
 }
 
 void EditorWindow::style_list_view(const HWND list, const bool hide_header) const {
@@ -228,7 +236,9 @@ void EditorWindow::style_list_view(const HWND list, const bool hide_header) cons
 
 void EditorWindow::rebuild_profile_check_images() {
   if (profile_list_ == nullptr) return;
-  const HIMAGELIST images = ImageList_Create(16, 16, ILC_COLOR24, 2, 0);
+  const auto metrics = profile_checkbox_metrics(GetDpiForWindow(profile_list_));
+  const HIMAGELIST images = ImageList_Create(
+      metrics.image_size, metrics.image_size, ILC_COLOR24, 2, 0);
   const HDC screen = GetDC(profile_list_);
   const HDC memory = screen == nullptr ? nullptr : CreateCompatibleDC(screen);
   if (images == nullptr || screen == nullptr || memory == nullptr) {
@@ -241,14 +251,17 @@ void EditorWindow::rebuild_profile_check_images() {
   const auto list_colors = colors(layerc::platform::EditorControlRole::list);
   const auto check_colors = colors(layerc::platform::EditorControlRole::checkbox);
   for (const bool checked : {false, true}) {
-    const HBITMAP bitmap = CreateCompatibleBitmap(screen, 16, 16);
+    const HBITMAP bitmap = CreateCompatibleBitmap(
+        screen, metrics.image_size, metrics.image_size);
     const HGDIOBJ previous_bitmap = SelectObject(memory, bitmap);
-    RECT image_rect{0, 0, 16, 16};
+    RECT image_rect{0, 0, metrics.image_size, metrics.image_size};
     const HBRUSH background = CreateSolidBrush(list_colors.fill);
     FillRect(memory, &image_rect, background);
     DeleteObject(background);
 
-    RECT box{2, 2, 14, 14};
+    RECT box{metrics.inset, metrics.inset,
+             metrics.image_size - metrics.inset,
+             metrics.image_size - metrics.inset};
     const HBRUSH box_fill = CreateSolidBrush(checked ? check_colors.selection
                                                      : check_colors.hover);
     FillRect(memory, &box, box_fill);
@@ -257,11 +270,16 @@ void EditorWindow::rebuild_profile_check_images() {
     FrameRect(memory, &box, border);
     DeleteObject(border);
     if (checked) {
-      const HPEN tick = CreatePen(PS_SOLID, 2, check_colors.text);
+      const HPEN tick =
+          CreatePen(PS_SOLID, metrics.pen_width, check_colors.text);
       const HGDIOBJ previous_pen = SelectObject(memory, tick);
-      MoveToEx(memory, 4, 8, nullptr);
-      LineTo(memory, 7, 11);
-      LineTo(memory, 12, 5);
+      const int box_size = box.right - box.left;
+      MoveToEx(memory, box.left + box_size / 6,
+               box.top + box_size / 2, nullptr);
+      LineTo(memory, box.left + box_size * 5 / 12,
+             box.bottom - box_size / 4);
+      LineTo(memory, box.right - box_size / 6,
+             box.top + box_size / 4);
       SelectObject(memory, previous_pen);
       DeleteObject(tick);
     }

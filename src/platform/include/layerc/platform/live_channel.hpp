@@ -30,7 +30,7 @@ public:
 
   explicit NamedPipeEditorDaemonChannel(
       Role role, std::wstring pipe_name = live_edit_pipe_name,
-      DWORD expected_server_process_id = 0);
+      DWORD expected_peer_process_id = 0);
   ~NamedPipeEditorDaemonChannel() override;
   NamedPipeEditorDaemonChannel(const NamedPipeEditorDaemonChannel &) = delete;
   NamedPipeEditorDaemonChannel &
@@ -40,6 +40,9 @@ public:
   [[nodiscard]] bool send(const layerc::core::LiveMessage &message) override;
   [[nodiscard]] std::vector<layerc::core::LiveMessageResult> poll() override;
   [[nodiscard]] bool take_connection_changed() noexcept;
+  [[nodiscard]] DWORD peer_process_id() const noexcept {
+    return peer_process_id_;
+  }
   [[nodiscard]] const std::wstring &last_error() const noexcept {
     return last_error_;
   }
@@ -48,6 +51,7 @@ private:
   bool create_server_pipe();
   bool connect_client();
   bool authenticate_server();
+  bool authenticate_client();
   void complete_connection();
   void start_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void continue_write();
@@ -58,7 +62,8 @@ private:
   static constexpr std::size_t io_buffer_size = 64U * 1024U;
   Role role_;
   std::wstring pipe_name_;
-  DWORD expected_server_process_id_{};
+  DWORD expected_peer_process_id_{};
+  DWORD peer_process_id_{};
   HANDLE pipe_{INVALID_HANDLE_VALUE};
   HANDLE connect_event_{};
   HANDLE read_event_{};

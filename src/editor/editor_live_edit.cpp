@@ -29,10 +29,7 @@ bool bounded_decimal(const std::wstring &text, const std::uint32_t minimum,
 } // namespace
 
 void EditorWindow::reset_history() {
-  undo_stack_.clear();
-  redo_stack_.clear();
-  undo_baseline_ = profile_;
-  coalescing_text_ = false;
+  history_.reset(profile_);
 }
 
 void EditorWindow::sync_current_profile_entry() {
@@ -59,21 +56,14 @@ void EditorWindow::sync_current_profile_entry() {
 
 void EditorWindow::record_profile_change(const ChangeKind kind) {
   if (syncing_) return;
-  if (profile_ == undo_baseline_) {
+  if (history_.is_baseline(profile_)) {
     if (!draft_controls_valid()) {
       dirty_ = true;
       schedule_autosave(false);
     }
     return;
   }
-  const bool coalesced = kind == ChangeKind::text && coalescing_text_;
-  if (!coalesced) {
-    undo_stack_.push_back(undo_baseline_);
-    if (undo_stack_.size() > 50) undo_stack_.pop_front();
-    redo_stack_.clear();
-  }
-  undo_baseline_ = profile_;
-  coalescing_text_ = kind == ChangeKind::text;
+  (void)history_.record(profile_, kind == ChangeKind::text);
   dirty_ = true;
   schedule_autosave(kind != ChangeKind::text);
   send_live_profile();
@@ -84,7 +74,6 @@ void EditorWindow::schedule_autosave(const bool immediate) {
     set_status(L"Draft changed — use Save once to create the profile.");
     return;
   }
-  autosave_pending_ = true;
   KillTimer(dialog_, autosave_timer);
   SetTimer(dialog_, autosave_timer, immediate ? 1U : 400U, nullptr);
   if (!immediate) set_status(L"Editing — autosave pending.");
@@ -106,8 +95,7 @@ bool EditorWindow::draft_controls_valid() const {
 
 bool EditorWindow::flush_autosave() {
   KillTimer(dialog_, autosave_timer);
-  autosave_pending_ = false;
-  coalescing_text_ = false;
+  history_.end_text_coalescing();
   if (!dirty_) return true;
   if (current_path_.empty() || !draft_controls_valid()) {
     set_status(current_path_.empty()
@@ -124,11 +112,11 @@ bool EditorWindow::flush_autosave() {
     return false;
   }
   profile_ = *validated;
-  undo_baseline_ = profile_;
   if (!layerc::platform::write_profile_file(current_path_, serialized)) {
     set_status(L"Autosave failed — the last committed profile is still active.");
     return false;
   }
+  history_.rebase(profile_);
   dirty_ = false;
   sync_current_profile_entry();
   notify_profile_committed(current_path_, profile_);
@@ -245,6 +233,10 @@ void EditorWindow::handle_live_message(
   if (message.type != layerc::core::LiveMessageType::anchor_changed ||
       message.edit_session != edit_session_id_)
     return;
+  if (layerc::core::revision_decision(message.revision, peer_revision_) !=
+      layerc::core::RevisionDecision::accept)
+    return;
+  peer_revision_ = message.revision;
   const auto panel = std::ranges::find_if(
       profile_.panels, [&](const layerc::core::Panel &candidate) {
         return candidate.id == message.panel_id;
@@ -358,6 +350,12 @@ void EditorWindow::edit_selected_task() {
 
 void EditorWindow::begin_edit_on_window(const HWND target) {
   if (target == nullptr || !IsWindow(target)) return;
+  DWORD target_process_id{};
+  GetWindowThreadProcessId(target, &target_process_id);
+  if (target_process_id == 0 || target_process_id == GetCurrentProcessId()) {
+    set_status(L"LayerE cannot attach edit overlays to its own windows.");
+    return;
+  }
   if (!live_channel_.connected()) {
     (void)start_daemon();
     pending_edit_target_ = target;
@@ -371,6 +369,7 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
       (static_cast<std::uint64_t>(GetCurrentProcessId()) << 1U) ^
       reinterpret_cast<std::uintptr_t>(target);
   if (edit_session_id_ == 0) edit_session_id_ = 1;
+  peer_revision_ = 0;
   direct_drag_enabled_ = false;
   direct_drag_notice_shown_ = false;
   set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_DIRECT_DRAG), false);
@@ -402,6 +401,7 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
     });
   }
   edit_session_id_ = 0;
+  peer_revision_ = 0;
   edit_target_ = nullptr;
   pending_edit_target_ = nullptr;
   pending_edit_deadline_ = 0;
@@ -441,14 +441,10 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled,
 }
 
 void EditorWindow::undo() {
-  if (undo_stack_.empty()) return;
-  redo_stack_.push_back(profile_);
-  if (redo_stack_.size() > 50) redo_stack_.pop_front();
-  profile_ = std::move(undo_stack_.back());
-  undo_stack_.pop_back();
-  undo_baseline_ = profile_;
-  coalescing_text_ = false;
-  dirty_ = true;
+  auto previous = history_.undo(profile_);
+  if (!previous.has_value()) return;
+  profile_ = std::move(*previous);
+  dirty_ = history_.is_dirty(profile_, !current_path_.empty());
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);
@@ -456,14 +452,10 @@ void EditorWindow::undo() {
 }
 
 void EditorWindow::redo() {
-  if (redo_stack_.empty()) return;
-  undo_stack_.push_back(profile_);
-  if (undo_stack_.size() > 50) undo_stack_.pop_front();
-  profile_ = std::move(redo_stack_.back());
-  redo_stack_.pop_back();
-  undo_baseline_ = profile_;
-  coalescing_text_ = false;
-  dirty_ = true;
+  auto next = history_.redo(profile_);
+  if (!next.has_value()) return;
+  profile_ = std::move(*next);
+  dirty_ = history_.is_dirty(profile_, !current_path_.empty());
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);

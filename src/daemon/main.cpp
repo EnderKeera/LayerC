@@ -3,6 +3,8 @@
 #include <windows.h>
 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
+    (void)SetProcessDpiAwarenessContext(
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     const HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\LayerC.LayerD.SingleInstance");
     if (mutex == nullptr) {
         return 1;
@@ -18,4 +20,3 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     CloseHandle(mutex);
     return result;
 }
-

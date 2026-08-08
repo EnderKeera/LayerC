@@ -147,44 +147,66 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
 void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   if (row < 0 || static_cast<std::size_t>(row) >= entries_.size()) return;
   auto &entry = entries_[static_cast<std::size_t>(row)];
+  if (entry.enabled == enabled) return;
   const auto restore_checkbox = [&] {
     const bool was_syncing = syncing_;
     syncing_ = true;
     ListView_SetCheckState(profile_list_, row, entry.enabled);
     syncing_ = was_syncing;
   };
-  const auto contents = layerc::platform::read_profile_file(entry.path);
-  if (!contents.has_value()) {
-    restore_checkbox();
-    set_status(L"Could not update the selected profile.");
-    return;
+  const bool is_current =
+      layerc::platform::canonical_profile_key(entry.path) ==
+      layerc::platform::canonical_profile_key(current_path_);
+  layerc::core::GameProfile stored_profile;
+  if (is_current) {
+    sync_profile_from_controls();
+    if (!draft_controls_valid()) {
+      restore_checkbox();
+      set_status(L"Finish the invalid field before changing enablement.");
+      return;
+    }
+    stored_profile = profile_;
+  } else {
+    const auto contents = layerc::platform::read_profile_file(entry.path);
+    if (!contents.has_value()) {
+      restore_checkbox();
+      set_status(L"Could not update the selected profile.");
+      return;
+    }
+    auto parsed = layerc::core::parse_profile_json(*contents);
+    const auto *stored = std::get_if<layerc::core::GameProfile>(&parsed);
+    if (stored == nullptr) {
+      restore_checkbox();
+      set_status(L"Could not update an invalid profile.");
+      return;
+    }
+    stored_profile = *stored;
   }
-  auto parsed = layerc::core::parse_profile_json(*contents);
-  auto *stored = std::get_if<layerc::core::GameProfile>(&parsed);
-  if (stored == nullptr) {
-    restore_checkbox();
-    set_status(L"Could not update an invalid profile.");
-    return;
-  }
-  stored->enabled = enabled;
-  if (!layerc::platform::write_profile_file(entry.path, layerc::core::serialize_profile_json(*stored))) {
+  stored_profile.enabled = enabled;
+  const auto serialized = layerc::core::serialize_profile_json(stored_profile);
+  if (!std::holds_alternative<layerc::core::GameProfile>(
+          layerc::core::parse_profile_json(serialized)) ||
+      !layerc::platform::write_profile_file(entry.path, serialized)) {
     restore_checkbox();
     set_status(L"Could not save the profile enablement change.");
     return;
   }
   entry.enabled = enabled;
-  entry.label = profile_list_label(*stored);
+  entry.label = profile_list_label(stored_profile);
   const bool was_syncing = syncing_;
   syncing_ = true;
   ListView_SetItemText(profile_list_, row, 0, entry.label.data());
   syncing_ = was_syncing;
-  const bool is_current =
-      layerc::platform::canonical_profile_key(entry.path) ==
-      layerc::platform::canonical_profile_key(current_path_);
-  if (is_current)
-    profile_.enabled = enabled;
-  notify_profile_committed(entry.path, *stored);
-  if (is_current) record_profile_change(ChangeKind::immediate);
+  if (is_current) {
+    if (profile_ != stored_profile) {
+      (void)history_.record(stored_profile, false);
+    }
+    profile_ = stored_profile;
+    history_.rebase(profile_);
+    dirty_ = false;
+    KillTimer(dialog_, autosave_timer);
+  }
+  notify_profile_committed(entry.path, stored_profile);
   set_status(enabled ? L"Profile enabled — LayerD updated live."
                      : L"Profile disabled — LayerD retired its instances.");
   InvalidateRect(profile_list_, nullptr, TRUE);
@@ -271,10 +293,8 @@ bool EditorWindow::save_profile(const bool force_save_as) {
   }
   current_path_ = destination;
   dirty_ = false;
-  autosave_pending_ = false;
-  coalescing_text_ = false;
+  history_.rebase(profile_);
   KillTimer(dialog_, autosave_timer);
-  undo_baseline_ = profile_;
   reload_profile_list(current_path_, false);
   notify_profile_committed(current_path_, profile_);
   set_status(L"Profile saved — LayerD updated live.");
@@ -286,6 +306,7 @@ void EditorWindow::delete_profile() {
     MessageBoxW(dialog_, L"Save this profile before deleting it.", L"LayerE", MB_OK | MB_ICONINFORMATION);
     return;
   }
+  if (!confirm_unsaved_changes()) return;
   const auto prompt = L"Move '" + to_wide(profile_.name) + L"' to the Recycle Bin?";
   if (MessageBoxW(dialog_, prompt.c_str(), L"Delete profile", MB_YESNO | MB_ICONWARNING) != IDYES) return;
   std::filesystem::path safe_remaining;
@@ -334,10 +355,10 @@ void EditorWindow::show_file_menu() {
                      (has_grouped_bars ? MF_ENABLED : MF_GRAYED));
   EnableMenuItem(popup, IDM_EDIT_UNDO,
                  MF_BYCOMMAND |
-                     (undo_stack_.empty() ? MF_GRAYED : MF_ENABLED));
+                     (history_.can_undo() ? MF_ENABLED : MF_GRAYED));
   EnableMenuItem(popup, IDM_EDIT_REDO,
                  MF_BYCOMMAND |
-                     (redo_stack_.empty() ? MF_GRAYED : MF_ENABLED));
+                     (history_.can_redo() ? MF_ENABLED : MF_GRAYED));
   RECT button{};
   GetWindowRect(GetDlgItem(dialog_, IDC_FILE_MENU), &button);
   SetForegroundWindow(dialog_);

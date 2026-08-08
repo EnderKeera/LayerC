@@ -10,6 +10,14 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MINGW)
+    # Ninja otherwise scales to every logical CPU; MinGW's C++ front end can
+    # exhaust memory when several Win32-heavy translation units compile at
+    # once. Link and resource jobs remain unconstrained.
+    set_property(GLOBAL PROPERTY JOB_POOLS layerc_mingw_compile=2)
+    set(CMAKE_JOB_POOL_COMPILE layerc_mingw_compile)
+endif()
+
 add_library(layerc_core STATIC
     src/core/cooldown_engine.cpp
     src/core/input_matcher.cpp
@@ -43,7 +51,8 @@ if(WIN32)
         src/platform/include
         src/core/include
     )
-    target_link_libraries(layerc_windows PUBLIC layerc_core user32 advapi32 shell32 ole32)
+    target_link_libraries(layerc_windows PUBLIC
+        layerc_core user32 advapi32 shell32 ole32 gdi32 shcore)
     target_compile_definitions(layerc_windows PUBLIC
         UNICODE
         _UNICODE
@@ -71,7 +80,8 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/overlay_render.cpp
     )
     target_include_directories(layerd PRIVATE src/daemon)
-    target_link_libraries(layerd PRIVATE layerc_core layerc_windows shell32 user32 xinput9_1_0)
+    target_link_libraries(layerd PRIVATE
+        layerc_core layerc_windows shell32 user32 gdi32 xinput9_1_0)
     target_compile_definitions(layerd PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     if(MSVC)
         target_compile_options(layerd PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -116,6 +126,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         shell32
         uxtheme
         user32
+        gdi32
     )
     target_compile_definitions(layere PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     if(MSVC)
@@ -148,6 +159,7 @@ if(LAYERC_BUILD_TESTS)
     )
     target_link_libraries(layerc_core_tests PRIVATE layerc_core)
     add_test(NAME layerc_core_tests COMMAND layerc_core_tests)
+    set_tests_properties(layerc_core_tests PROPERTIES TIMEOUT 30)
 
     if(WIN32)
         add_executable(lctest WIN32 tools/lctest.cpp)
@@ -163,7 +175,8 @@ if(LAYERC_BUILD_TESTS)
             src/daemon/overlay_render.cpp
         )
         target_include_directories(layerc_overlay_tests PRIVATE src/daemon)
-        target_link_libraries(layerc_overlay_tests PRIVATE layerc_core layerc_windows user32)
+        target_link_libraries(layerc_overlay_tests PRIVATE
+            layerc_core layerc_windows user32 gdi32)
         target_compile_definitions(layerc_overlay_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
         if(MINGW)
             target_link_options(layerc_overlay_tests PRIVATE -municode)
@@ -175,6 +188,9 @@ if(LAYERC_BUILD_TESTS)
         endif()
         add_dependencies(layerc_overlay_tests lctest)
         add_test(NAME layerc_overlay_tests COMMAND layerc_overlay_tests $<TARGET_FILE:lctest>)
+        set_tests_properties(layerc_overlay_tests PROPERTIES
+            TIMEOUT 45
+            SKIP_RETURN_CODE 77)
 
         add_executable(layerc_platform_tests tests/platform_live_tests.cpp)
         target_link_libraries(layerc_platform_tests PRIVATE layerc_core layerc_windows)
@@ -185,5 +201,44 @@ if(LAYERC_BUILD_TESTS)
             target_compile_options(layerc_platform_tests PRIVATE -Wall -Wextra -Wpedantic)
         endif()
         add_test(NAME layerc_platform_tests COMMAND layerc_platform_tests)
+        set_tests_properties(layerc_platform_tests PROPERTIES TIMEOUT 30)
+
+        add_executable(layerc_editor_tests
+            tests/editor_dialog_tests.cpp
+            src/editor/editor_theme.cpp
+            src/editor/editor_resources.rc
+        )
+        target_include_directories(layerc_editor_tests PRIVATE src/editor)
+        target_link_libraries(layerc_editor_tests PRIVATE
+            layerc_core layerc_windows comctl32 dwmapi uxtheme user32 gdi32)
+        target_compile_definitions(layerc_editor_tests PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MSVC)
+            target_compile_options(layerc_editor_tests PRIVATE
+                /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(layerc_editor_tests PRIVATE
+                -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME layerc_editor_tests COMMAND layerc_editor_tests)
+        set_tests_properties(layerc_editor_tests PROPERTIES TIMEOUT 30)
+        if(TARGET layere)
+            # Avoid compiling the large theming translation unit twice at the
+            # same time on memory-constrained MinGW builders.
+            add_dependencies(layerc_editor_tests layere)
+        endif()
+
+        if(MINGW)
+            get_filename_component(LAYERC_MINGW_RUNTIME_DIR
+                "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            set_tests_properties(
+                layerc_core_tests
+                layerc_overlay_tests
+                layerc_platform_tests
+                layerc_editor_tests
+                PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:${LAYERC_MINGW_RUNTIME_DIR}"
+            )
+        endif()
     endif()
 endif()

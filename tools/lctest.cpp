@@ -3,21 +3,28 @@
 namespace {
 
 bool active = false;
+bool shift_down = false;
+bool e_down = false;
+
+void update_active(const HWND window) {
+  const bool next = shift_down && e_down;
+  if (next == active) return;
+  active = next;
+  InvalidateRect(window, nullptr, FALSE);
+}
 
 LRESULT CALLBACK window_proc(const HWND window, const UINT message,
                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_KEYDOWN:
-    if (wparam == 'E') {
-      active = true;
-      InvalidateRect(window, nullptr, FALSE);
-    }
+    if (wparam == 'E') e_down = true;
+    if (wparam == VK_SHIFT) shift_down = true;
+    update_active(window);
     return 0;
   case WM_KEYUP:
-    if (wparam == 'E') {
-      active = false;
-      InvalidateRect(window, nullptr, FALSE);
-    }
+    if (wparam == 'E') e_down = false;
+    if (wparam == VK_SHIFT) shift_down = false;
+    update_active(window);
     return 0;
   case WM_PAINT: {
     PAINTSTRUCT paint{};

@@ -4,12 +4,12 @@
 #include "layerc/core/live_edit.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/windows.hpp"
+#include "editor_history.hpp"
 
 #include <commctrl.h>
 #include <windows.h>
 
 #include <array>
-#include <deque>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -28,9 +28,15 @@ struct RoleColors {
   COLORREF disabled{};
 };
 
+struct ProfileCheckboxMetrics {
+  int image_size{};
+  int inset{};
+  int pen_width{};
+};
+
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
-void toggle_owner_draw_checkbox(HWND control);
+[[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
 [[nodiscard]] RoleColors resolved_colors(
     layerc::platform::EditorTheme theme, std::uint32_t accent,
     layerc::platform::EditorControlRole role);
@@ -42,6 +48,7 @@ void toggle_owner_draw_checkbox(HWND control);
 void set_text(HWND control, std::wstring_view text);
 void enable_native_dark_mode();
 void set_dark_title_bar(HWND window);
+void style_native_dialog_children(HWND dialog, HFONT font);
 [[nodiscard]] bool start_daemon();
 [[nodiscard]] bool recycle_profile_file(const std::filesystem::path &path);
 [[nodiscard]] std::string safe_identifier(
@@ -205,6 +212,7 @@ private:
   HWND task_list_{};
   HIMAGELIST profile_check_images_{};
   HFONT font_{};
+  HFONT task_font_{};
   std::array<HBRUSH, static_cast<std::size_t>(layerc::platform::EditorControlRole::count)> brushes_{};
   std::vector<ProfileEntry> entries_;
   std::vector<layerc::platform::WindowCandidate> task_candidates_;
@@ -228,6 +236,7 @@ private:
   layerc::platform::NamedPipeEditorDaemonChannel live_channel_{
       layerc::platform::NamedPipeEditorDaemonChannel::Role::client};
   layerc::core::ProfileRevision revision_{};
+  layerc::core::ProfileRevision peer_revision_{};
   layerc::core::EditSessionId edit_session_id_{};
   HWND edit_target_{};
   HWND pending_edit_target_{};
@@ -235,14 +244,10 @@ private:
   bool direct_drag_enabled_{};
   bool direct_drag_notice_shown_{};
   bool awaiting_edit_target_{};
-  bool autosave_pending_{};
-  bool coalescing_text_{};
   ULONGLONG last_live_drag_send_{};
   ULONGLONG last_heartbeat_send_{};
   UINT live_timer_interval_{100};
-  layerc::core::GameProfile undo_baseline_;
-  std::deque<layerc::core::GameProfile> undo_stack_;
-  std::deque<layerc::core::GameProfile> redo_stack_;
+  EditorProfileHistory history_;
 };
 
 } // namespace layerc::editor

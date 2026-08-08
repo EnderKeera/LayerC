@@ -57,6 +57,8 @@ private:
   void release_render_resources();
   void paint();
   void calculate_size();
+  void update_dpi(UINT dpi);
+  [[nodiscard]] LONG scaled(LONG value) const noexcept;
   void update_position(const RECT &target);
   void set_direct_drag(bool enabled);
   void update_drag(POINT screen_point, bool final);
@@ -70,6 +72,7 @@ private:
   HWND owner_{};
   RECT target_{};
   bool bring_to_front_{};
+  UINT dpi_{96};
   SIZE size_{};
   bool visible_{};
   bool capture_exclusion_{true};
@@ -78,6 +81,7 @@ private:
   bool edit_selected_{};
   bool dragging_{};
   bool drag_moved_{};
+  int last_region_width_{-1};
   POINT drag_start_{};
   POINT drag_offset_{};
   DragCallback drag_callback_;

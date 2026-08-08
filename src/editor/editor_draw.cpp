@@ -112,9 +112,15 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
     const bool checked =
         ListView_GetCheckState(draw.hwndItem, static_cast<int>(draw.itemID)) != FALSE;
     const int item_height = std::max(1L, row.bottom - row.top);
-    const int box_size = std::clamp(item_height - 4, 10, 14);
+    const auto metrics = profile_checkbox_metrics(GetDpiForWindow(draw.hwndItem));
+    const int desired_box_size =
+        std::max(1, metrics.image_size - metrics.inset * 2);
+    const int box_size =
+        std::min(std::max(1, item_height - metrics.inset * 2),
+                 desired_box_size);
     const int box_top = row.top + (item_height - box_size) / 2;
-    RECT box{row.left + 3, box_top, row.left + 3 + box_size,
+    RECT box{row.left + metrics.inset, box_top,
+             row.left + metrics.inset + box_size,
              box_top + box_size};
     const HBRUSH box_fill = CreateSolidBrush(
         checked ? checkbox_colors.selection : checkbox_colors.hover);
@@ -124,11 +130,15 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
     FrameRect(draw.hDC, &box, box_border);
     DeleteObject(box_border);
     if (checked) {
-      const HPEN tick = CreatePen(PS_SOLID, 2, checkbox_colors.text);
+      const HPEN tick =
+          CreatePen(PS_SOLID, metrics.pen_width, checkbox_colors.text);
       const HGDIOBJ previous_pen = SelectObject(draw.hDC, tick);
-      MoveToEx(draw.hDC, box.left + 2, box.top + box_size / 2, nullptr);
-      LineTo(draw.hDC, box.left + box_size / 2 - 1, box.bottom - 3);
-      LineTo(draw.hDC, box.right - 2, box.top + 3);
+      MoveToEx(draw.hDC, box.left + box_size / 6,
+               box.top + box_size / 2, nullptr);
+      LineTo(draw.hDC, box.left + box_size * 5 / 12,
+             box.bottom - box_size / 4);
+      LineTo(draw.hDC, box.right - box_size / 6,
+             box.top + box_size / 4);
       SelectObject(draw.hDC, previous_pen);
       DeleteObject(tick);
     }
@@ -136,8 +146,8 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
     const std::wstring label =
         index < entries_.size() ? entries_[index].label : std::wstring{};
     RECT text = row;
-    text.left = box.right + 5;
-    text.right -= 4;
+    text.left = box.right + std::max(1, MulDiv(5, metrics.image_size, 16));
+    text.right -= std::max(1, MulDiv(4, metrics.image_size, 16));
     SetBkMode(draw.hDC, TRANSPARENT);
     SetTextColor(draw.hDC, enabled ? list_colors.text : list_colors.disabled);
     const HGDIOBJ previous_font = SelectObject(draw.hDC, font_);

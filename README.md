@@ -52,6 +52,8 @@ The test targets have separate jobs:
 - `layerc_platform_tests` verifies protected last-valid profile backups,
   canonical Windows profile identities, authenticated peers, and framed
   overlapped named-pipe messaging.
+- `layerc_editor_tests` verifies native dialog default-button and checkbox
+  semantics after dark theming, plus coalesced and bounded undo/redo history.
 
 Each matched game keeps its own non-topmost, game-owned mini overlay. Switching apps leaves the cooldown running behind the foreground app; returning to the game shows its remaining time. Minimizing or closing that game hides its overlay.
 
@@ -67,8 +69,9 @@ the previous parseable profile beside it as `<profile>.json.bak`.
 
 LayerE and LayerD remain separate native processes. A versioned, length-prefixed
 UTF-8 protocol carries profile revisions over a current-user-only named pipe.
-Before sending profile data, LayerE verifies that the server is the sibling
-`layerd.exe` running under the same user and logon session.
+Before exchanging profile data, both ends verify the peer process: LayerE
+requires the sibling `layerd.exe`, and LayerD requires the sibling
+`layere.exe`, under the same user and logon session.
 LayerD diffs revisions in place: visual, placement, name, and binding edits keep
 active cooldown timelines; only a cooldown whose runtime definition changes is
 reset. The old reload event remains as a fallback for manual file edits or an
@@ -87,17 +90,13 @@ risk but cannot guarantee compatibility with every anti-cheat. On-window
 editing supports windowed and borderless-windowed targets, not exclusive
 fullscreen compositor bypass.
 
-The native editor can also be built with MinGW. Keep the C++ and resource
-compilers from the same toolchain:
+The native editor can also be built with MinGW. Set `MINGW_ROOT` to the
+MinGW-w64 installation and use the checked-in preset, with Ninja available on
+`PATH`:
 
 ```powershell
-$mingw = "C:/path/to/mingw64"
-$ninja = "C:/path/to/ninja.exe"
-cmake -S . -B build/mingw -G Ninja `
-  -DCMAKE_MAKE_PROGRAM="$ninja" `
-  -DCMAKE_CXX_COMPILER="$mingw/bin/g++.exe" `
-  -DCMAKE_RC_COMPILER="$mingw/bin/windres.exe"
-cmake --build build/mingw --target layere
+$env:MINGW_ROOT = "C:/path/to/mingw64"
+cmake --workflow --preset mingw-ninja
 ```
 
 This build needs the matching MinGW GCC runtime DLLs at deployment time unless that toolchain is configured for static runtimes; it does not need Qt.

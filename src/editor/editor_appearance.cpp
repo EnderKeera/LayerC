@@ -172,7 +172,6 @@ LRESULT EditorWindow::handle_options_message(const HWND window, const UINT messa
   switch (message) {
   case WM_COMMAND:
     if (LOWORD(wparam) == IDC_CAPTURE_PRIVACY && HIWORD(wparam) == BN_CLICKED) {
-      toggle_owner_draw_checkbox(GetDlgItem(window, IDC_CAPTURE_PRIVACY));
       InvalidateRect(GetDlgItem(window, IDC_CAPTURE_PRIVACY), nullptr, TRUE); return TRUE;
     }
     if (LOWORD(wparam) == IDC_OPEN_APPEARANCE) {

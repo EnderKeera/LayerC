@@ -3,4 +3,5 @@
 /out/
 *.user
 *.suo
-
+CMakeUserPresets.json
+compile_commands.json

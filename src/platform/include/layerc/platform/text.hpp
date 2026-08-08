@@ -1,10 +1,13 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace layerc::platform {
 
+[[nodiscard]] std::optional<std::wstring>
+try_utf8_to_wide(std::string_view text);
 [[nodiscard]] std::wstring utf8_to_wide(std::string_view text);
 [[nodiscard]] std::string wide_to_utf8(std::wstring_view text);
 [[nodiscard]] std::wstring lower_copy(std::wstring value);

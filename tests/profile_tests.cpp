@@ -184,6 +184,8 @@ void test_profile_serialization() {
   profile.name = "Game \"profile\"";
   profile.cooldowns.front().name = "Dash\nReady";
   profile.panels.front().bar.show_text = false;
+  profile.panels.front().anchor_x = 0.12345678901234566;
+  profile.panels.front().anchor_y = 0.87654321098765431;
   const auto serialized = serialize_profile_json(profile);
   const auto reparsed = parse_profile_json(serialized);
   const auto *round_tripped = std::get_if<GameProfile>(&reparsed);
@@ -205,8 +207,12 @@ void test_profile_serialization() {
              round_tripped->panels.front().style == PanelStyle::bar &&
              round_tripped->panels.front().bar.width == 360 &&
              !round_tripped->panels.front().bar.show_text &&
-             round_tripped->panels.front().bar.hide_when_ready,
-         "serializer should preserve bar appearance");
+             round_tripped->panels.front().bar.hide_when_ready &&
+             round_tripped->panels.front().anchor_x ==
+                 profile.panels.front().anchor_x &&
+             round_tripped->panels.front().anchor_y ==
+                 profile.panels.front().anchor_y,
+         "serializer should preserve bar appearance and exact normalized placement");
   expect(round_tripped->bindings.size() == 1 &&
              round_tripped->bindings.front().chord.tokens.size() == 1 &&
              round_tripped->bindings.front().chord.tokens.front().code == 69,

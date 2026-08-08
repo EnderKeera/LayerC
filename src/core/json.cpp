@@ -83,6 +83,10 @@ private:
         }
         if (peek('0')) {
             ++position_;
+            if (has_digit()) {
+                fail("leading zero is not allowed in number");
+                return {};
+            }
         } else {
             if (!has_digit()) {
                 fail("expected digit in number");
@@ -140,7 +144,7 @@ private:
                 return result;
             }
             if (static_cast<unsigned char>(current) < 0x20U) {
-                fail("control character in string");
+                fail_at(position_ - 1, "control character in string");
                 return {};
             }
             if (current != '\\') {
@@ -168,7 +172,7 @@ private:
                     }
                     break;
                 default:
-                    fail("invalid escape sequence");
+                    fail_at(position_ - 1, "invalid escape sequence");
                     return {};
             }
         }
@@ -210,6 +214,7 @@ private:
         }
         std::uint32_t value{};
         for (int index = 0; index < 4; ++index) {
+            const auto character_offset = position_;
             const char character = source_[position_++];
             value <<= 4U;
             if (character >= '0' && character <= '9') {
@@ -219,7 +224,7 @@ private:
             } else if (character >= 'A' && character <= 'F') {
                 value |= static_cast<std::uint32_t>(character - 'A' + 10);
             } else {
-                fail("invalid hex digit in unicode escape");
+                fail_at(character_offset, "invalid hex digit in unicode escape");
                 return std::nullopt;
             }
         }
@@ -237,7 +242,9 @@ private:
 
         while (error_.message.empty()) {
             skip_whitespace();
-            result.push_back(parse_value(depth));
+            auto value = parse_value(depth);
+            if (!error_.message.empty()) return {};
+            result.push_back(std::move(value));
             skip_whitespace();
             if (peek(']')) {
                 ++position_;
@@ -268,6 +275,7 @@ private:
                 return {};
             }
             auto key = parse_string();
+            if (!error_.message.empty()) return {};
             skip_whitespace();
             if (!peek(':')) {
                 fail("expected ':' after object key");
@@ -276,6 +284,7 @@ private:
             ++position_;
             skip_whitespace();
             auto value = parse_value(depth);
+            if (!error_.message.empty()) return {};
             if (!result.emplace(std::move(key), std::move(value)).second) {
                 fail("duplicate object key");
                 return {};
@@ -317,8 +326,12 @@ private:
     }
 
     void fail(std::string message) {
+        fail_at(position_, std::move(message));
+    }
+
+    void fail_at(const std::size_t offset, std::string message) {
         if (error_.message.empty()) {
-            error_ = ParseError{.offset = position_, .message = std::move(message)};
+            error_ = ParseError{.offset = offset, .message = std::move(message)};
         }
     }
 

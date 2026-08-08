@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -22,6 +23,61 @@ std::vector<OverlayCooldown> make_overlay_cooldowns(
                       .duration = definition.duration});
   }
   return result;
+}
+
+bool is_layerc_editor_process(const DWORD process_id,
+                              const DWORD authenticated_editor_id) {
+  if (process_id == 0) return false;
+  if (authenticated_editor_id != 0 && process_id == authenticated_editor_id)
+    return true;
+
+  struct CachedResult {
+    bool is_editor{};
+    ULONGLONG checked_at{};
+  };
+  static std::unordered_map<DWORD, CachedResult> cache;
+  const ULONGLONG now = GetTickCount64();
+  if (const auto cached = cache.find(process_id);
+      cached != cache.end() && now - cached->second.checked_at < 2'000U)
+    return cached->second.is_editor;
+
+  const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                     process_id);
+  if (process == nullptr) {
+    cache[process_id] = {.is_editor = false, .checked_at = now};
+    return false;
+  }
+  std::array<wchar_t, 32'768> actual_buffer{};
+  DWORD actual_length = static_cast<DWORD>(actual_buffer.size());
+  const bool queried =
+      QueryFullProcessImageNameW(process, 0, actual_buffer.data(),
+                                 &actual_length) != FALSE;
+  CloseHandle(process);
+  if (!queried || actual_length == 0) {
+    cache[process_id] = {.is_editor = false, .checked_at = now};
+    return false;
+  }
+
+  std::array<wchar_t, 32'768> daemon_buffer{};
+  const DWORD daemon_length = GetModuleFileNameW(
+      nullptr, daemon_buffer.data(), static_cast<DWORD>(daemon_buffer.size()));
+  if (daemon_length == 0 || daemon_length >= daemon_buffer.size()) {
+    cache[process_id] = {.is_editor = false, .checked_at = now};
+    return false;
+  }
+  const auto expected =
+      std::filesystem::path(
+          std::wstring_view(daemon_buffer.data(), daemon_length))
+          .parent_path() /
+      L"layere.exe";
+  const auto actual = std::filesystem::path(
+      std::wstring_view(actual_buffer.data(), actual_length));
+  std::error_code error;
+  const bool matches =
+      std::filesystem::equivalent(expected, actual, error) && !error;
+  if (cache.size() > 128U) cache.clear();
+  cache[process_id] = {.is_editor = matches, .checked_at = now};
+  return matches;
 }
 
 } // namespace
@@ -92,12 +148,15 @@ void DaemonApp::Session::apply_profile(
   cooldowns.reconfigure(updated.cooldowns, plan.reset_cooldown_ids,
                         layerc::core::MonotonicClock::now());
   profile = updated;
-  overlay_cooldowns = make_overlay_cooldowns(profile.cooldowns);
-  input.replace_bindings(profile.bindings);
-  rebuild_input_configuration();
+  if (plan.rebuild_input_matcher) {
+    input.replace_bindings(profile.bindings);
+    rebuild_input_configuration();
+  }
   snapshot_buffer.clear();
   snapshot_buffer.reserve(profile.cooldowns.size());
 
+  if (!plan.rebuild_overlays) return;
+  overlay_cooldowns = make_overlay_cooldowns(profile.cooldowns);
   std::vector<std::unique_ptr<OverlayWindow>> next;
   next.reserve(profile.panels.size());
   for (const auto &panel : profile.panels) {
@@ -306,6 +365,12 @@ void DaemonApp::refresh_game_windows() {
         if (!described.has_value()) {
           return TRUE;
         }
+        if (described->process_id == GetCurrentProcessId() ||
+            is_layerc_editor_process(
+                described->process_id,
+                context.first->live_channel_.peer_process_id())) {
+          return TRUE;
+        }
         for (const auto &source : context.first->profile_sources_) {
           if (!layerc::platform::profile_matches_window(*described,
                                                         source.profile)) {
@@ -410,6 +475,12 @@ void DaemonApp::sync_foreground_state() {
 
 std::vector<DaemonApp::Session *> DaemonApp::foreground_sessions() {
   const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
+  DWORD foreground_process_id{};
+  if (foreground != nullptr)
+    GetWindowThreadProcessId(foreground, &foreground_process_id);
+  if (is_layerc_editor_process(foreground_process_id,
+                               live_channel_.peer_process_id()))
+    return {};
   if (edit_session_ != nullptr &&
       GetAncestor(edit_session_->target, GA_ROOT) == foreground)
     return {};

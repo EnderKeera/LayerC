@@ -79,6 +79,7 @@ private:
   struct EditSession {
     layerc::core::EditSessionId id{};
     layerc::core::ProfileRevision revision{};
+    layerc::core::ProfileRevision outbound_revision{};
     std::wstring source_key;
     layerc::core::GameProfile profile;
     std::string selected_panel;

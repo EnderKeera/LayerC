@@ -125,9 +125,14 @@ void DaemonApp::handle_live_message(
         layerc::platform::utf8_to_wide(message.profile_key);
     const auto target = reinterpret_cast<HWND>(
         static_cast<std::uintptr_t>(message.target_window));
+    DWORD target_process_id{};
+    if (target != nullptr)
+      GetWindowThreadProcessId(target, &target_process_id);
     if (profile == nullptr || message.edit_session == 0 ||
         source_key.empty() || target == nullptr || !IsWindow(target) ||
-        IsIconic(target)) {
+        IsIconic(target) || target_process_id == 0 ||
+        target_process_id == GetCurrentProcessId() ||
+        target_process_id == live_channel_.peer_process_id()) {
       send_live_reply(LiveMessageType::error, message,
                       "edit target or profile is invalid");
       return;
@@ -292,9 +297,10 @@ void DaemonApp::on_direct_anchor(const std::string_view panel_id,
     edit_session_->selected_panel = std::string(panel_id);
     rebuild_edit_overlays();
   }
+  ++edit_session_->outbound_revision;
   (void)live_channel_.send({
       .type = layerc::core::LiveMessageType::anchor_changed,
-      .revision = edit_session_->revision,
+      .revision = edit_session_->outbound_revision,
       .edit_session = edit_session_->id,
       .panel_id = std::string(panel_id),
       .anchor_x = anchor_x,

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <initializer_list>
 #include <locale>
 #include <optional>
 #include <sstream>
@@ -218,6 +219,17 @@ bool decimal_string_field(const json::Value &root, const std::string_view name,
   return true;
 }
 
+bool require_fields(const json::Value &root,
+                    const std::initializer_list<std::string_view> names,
+                    std::string &error) {
+  for (const auto name : names) {
+    if (root.find(name) != nullptr) continue;
+    error = std::string(name) + " is required";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 RevisionDecision revision_decision(const ProfileRevision incoming,
@@ -275,7 +287,8 @@ plan_session_reconciliation(const GameProfile &before,
   plan.rebuild_overlays =
       delta.panels_changed || delta.cooldown_visuals_changed ||
       !delta.added_cooldown_ids.empty() ||
-      !delta.removed_cooldown_ids.empty();
+      !delta.removed_cooldown_ids.empty() ||
+      !delta.reset_cooldown_ids.empty();
   plan.added_cooldown_ids = delta.added_cooldown_ids;
   plan.removed_cooldown_ids = delta.removed_cooldown_ids;
   plan.reset_cooldown_ids = delta.reset_cooldown_ids;
@@ -369,6 +382,54 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
   LiveMessage message;
   message.type = *parsed_type;
   std::string error;
+  if (!require_fields(root, {"revision"}, error))
+    return LiveProtocolError{std::move(error)};
+  switch (message.type) {
+  case LiveMessageType::handshake:
+    if (!require_fields(root, {"text"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::committed_profile:
+    if (!require_fields(root, {"profileKey", "profileBase64"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::begin_edit:
+    if (!require_fields(root,
+                        {"editSession", "targetWindow", "profileKey",
+                         "panelId", "profileBase64"},
+                        error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::live_profile:
+    if (!require_fields(root, {"editSession", "profileBase64"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::select_panel:
+    if (!require_fields(root, {"editSession", "panelId"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::anchor_changed:
+    if (!require_fields(root,
+                        {"editSession", "panelId", "anchorX", "anchorY",
+                         "final"},
+                        error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::set_direct_drag:
+    if (!require_fields(root, {"editSession", "directDrag"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::end_edit:
+  case LiveMessageType::heartbeat:
+    if (!require_fields(root, {"editSession"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::acknowledgement:
+  case LiveMessageType::error:
+    if (!require_fields(root, {"text"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  }
   std::string encoded_profile;
   if (!decimal_string_field(root, "revision", message.revision, error) ||
       !decimal_string_field(root, "editSession", message.edit_session, error) ||
@@ -392,9 +453,10 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
   return message;
 }
 
-std::vector<std::byte> encode_live_frame(const LiveMessage &message) {
+LiveFrameResult encode_live_frame(const LiveMessage &message) {
   const auto payload = encode_live_message_json(message);
-  if (payload.size() > max_live_message_bytes) return {};
+  if (payload.size() > max_live_message_bytes)
+    return LiveProtocolError{"live message exceeds the 512 KiB limit"};
   const auto length = static_cast<std::uint32_t>(payload.size());
   std::vector<std::byte> frame(sizeof(length) + payload.size());
   frame[0] = static_cast<std::byte>(length & 0xFFU);
@@ -407,6 +469,11 @@ std::vector<std::byte> encode_live_frame(const LiveMessage &message) {
 
 std::vector<LiveMessageResult>
 LiveFrameDecoder::push(const std::span<const std::byte> bytes) {
+  if (bytes.size() > max_live_buffer_bytes ||
+      buffer_.size() > max_live_buffer_bytes - bytes.size()) {
+    buffer_.clear();
+    return {LiveProtocolError{"live frame buffer exceeds the 4 MiB limit"}};
+  }
   buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
   std::vector<LiveMessageResult> results;
   std::size_t consumed{};
