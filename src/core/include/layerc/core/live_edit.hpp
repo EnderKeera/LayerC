@@ -86,6 +86,7 @@ enum class LiveMessageType : std::uint8_t {
   set_direct_drag,
   end_edit,
   heartbeat,
+  runtime_status,
   acknowledgement,
   error,
 };
@@ -123,9 +124,14 @@ class LiveFrameDecoder {
 public:
   [[nodiscard]] std::vector<LiveMessageResult>
   push(std::span<const std::byte> bytes);
-  void clear() noexcept { buffer_.clear(); }
+  // A disconnected editor can leave a frame-sized allocation behind. Release
+  // it instead of retaining capacity in the always-on daemon.
+  void clear() noexcept { std::vector<std::byte>().swap(buffer_); }
   [[nodiscard]] std::size_t buffered_bytes() const noexcept {
     return buffer_.size();
+  }
+  [[nodiscard]] std::size_t reserved_bytes() const noexcept {
+    return buffer_.capacity();
   }
 
 private:

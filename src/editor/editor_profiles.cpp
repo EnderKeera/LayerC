@@ -18,6 +18,7 @@ void EditorWindow::sync_profile_from_controls() {
   if (syncing_) return;
   profile_.name = to_utf8(control_text(GetDlgItem(dialog_, IDC_PROFILE_NAME)));
   profile_.id = to_utf8(control_text(GetDlgItem(dialog_, IDC_PROFILE_ID)));
+  if (visual_profile_) visual_profile_->profile_id = profile_.id;
   if (bar_controls_panel_ < profile_.panels.size()) {
     auto &panel = profile_.panels[bar_controls_panel_];
     panel.bar.width = parse_uint(control_text(GetDlgItem(dialog_, IDC_BAR_WIDTH)), panel.bar.width);
@@ -53,6 +54,9 @@ void EditorWindow::new_profile(const bool confirm) {
   if (confirm && !confirm_unsaved_changes()) return;
   end_edit_on_window();
   profile_ = make_new_profile();
+  visual_profile_.reset();
+  visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
+  visual_sidecar_error_.clear();
   current_path_.clear();
   dirty_ = true;
   reset_history();
@@ -136,6 +140,7 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
   }
   profile_ = *profile;
   current_path_ = target_path;
+  load_current_visual_profile();
   dirty_ = false;
   end_edit_on_window();
   reset_history();
@@ -158,6 +163,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       layerc::platform::canonical_profile_key(entry.path) ==
       layerc::platform::canonical_profile_key(current_path_);
   layerc::core::GameProfile stored_profile;
+  std::optional<layerc::core::VisualProfile> stored_visual;
   if (is_current) {
     sync_profile_from_controls();
     if (!draft_controls_valid()) {
@@ -166,6 +172,13 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     stored_profile = profile_;
+    if (visual_sidecar_state_ ==
+        layerc::platform::VisualSidecarState::invalid) {
+      restore_checkbox();
+      set_status(L"Repair the invalid visual sidecar before changing enablement.");
+      return;
+    }
+    stored_visual = visual_profile_;
   } else {
     const auto contents = layerc::platform::read_profile_file(entry.path);
     if (!contents.has_value()) {
@@ -181,12 +194,21 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     stored_profile = *stored;
+    const auto visual =
+        layerc::platform::load_visual_sidecar(entry.path, stored_profile);
+    if (visual.state == layerc::platform::VisualSidecarState::invalid) {
+      restore_checkbox();
+      set_status(L"Could not update a profile with an invalid visual sidecar.");
+      return;
+    }
+    stored_visual = visual.profile;
   }
   stored_profile.enabled = enabled;
   const auto serialized = layerc::core::serialize_profile_json(stored_profile);
   if (!std::holds_alternative<layerc::core::GameProfile>(
           layerc::core::parse_profile_json(serialized)) ||
-      !layerc::platform::write_profile_file(entry.path, serialized)) {
+      !layerc::platform::write_profile_bundle(entry.path, stored_profile,
+                                               stored_visual)) {
     restore_checkbox();
     set_status(L"Could not save the profile enablement change.");
     return;
@@ -198,11 +220,17 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   ListView_SetItemText(profile_list_, row, 0, entry.label.data());
   syncing_ = was_syncing;
   if (is_current) {
+    visual_profile_ = stored_visual;
+    if (visual_profile_) {
+      visual_sidecar_state_ =
+          layerc::platform::VisualSidecarState::valid;
+      visual_sidecar_error_.clear();
+    }
     if (profile_ != stored_profile) {
-      (void)history_.record(stored_profile, false);
+      (void)history_.record(stored_profile, visual_profile_, false);
     }
     profile_ = stored_profile;
-    history_.rebase(profile_);
+    history_.rebase(profile_, visual_profile_);
     dirty_ = false;
     KillTimer(dialog_, autosave_timer);
   }
@@ -276,6 +304,15 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
 
 bool EditorWindow::save_profile(const bool force_save_as) {
   if (!validate_profile()) return false;
+  if (!visual_profile_ &&
+      visual_sidecar_state_ ==
+          layerc::platform::VisualSidecarState::invalid) {
+    MessageBoxW(
+        dialog_,
+        L"Repair the invalid visual sidecar with Calibrate before saving this profile. This prevents an unrelated base edit from silently discarding recovery data.",
+        L"Visual sidecar needs repair", MB_OK | MB_ICONWARNING);
+    return false;
+  }
   auto destination = current_path_;
   if (force_save_as) {
     if (!choose_save_path(destination)) return false;
@@ -287,13 +324,17 @@ bool EditorWindow::save_profile(const bool force_save_as) {
                     L"Profile already exists", MB_YESNO | MB_ICONWARNING) != IDYES) return false;
     if (error) { MessageBoxW(dialog_, L"Could not inspect the profile destination.", L"LayerE", MB_OK | MB_ICONERROR); return false; }
   }
-  if (!layerc::platform::write_profile_file(destination, layerc::core::serialize_profile_json(profile_))) {
-    MessageBoxW(dialog_, L"Could not save the profile file.", L"LayerE", MB_OK | MB_ICONERROR);
+  if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if (!layerc::platform::write_profile_bundle(destination, profile_,
+                                               visual_profile_)) {
+    MessageBoxW(dialog_,
+                L"Could not save a consistent profile and visual-sidecar bundle. The previous valid bundle was preserved.",
+                L"Profile save failed", MB_OK | MB_ICONERROR);
     return false;
   }
   current_path_ = destination;
   dirty_ = false;
-  history_.rebase(profile_);
+  history_.rebase(profile_, visual_profile_);
   KillTimer(dialog_, autosave_timer);
   reload_profile_list(current_path_, false);
   notify_profile_committed(current_path_, profile_);
@@ -313,12 +354,15 @@ void EditorWindow::delete_profile() {
   for (const auto &entry : entries_) {
     if (entry.path.lexically_normal() != current_path_.lexically_normal()) { safe_remaining = entry.path; break; }
   }
-  if (!recycle_profile_file(current_path_)) {
+  if (!recycle_profile_bundle(current_path_)) {
     MessageBoxW(dialog_, L"Could not move the profile to the Recycle Bin.", L"LayerE", MB_OK | MB_ICONERROR);
     return;
   }
   end_edit_on_window();
   current_path_.clear(); dirty_ = false;
+  visual_profile_.reset();
+  visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
+  visual_sidecar_error_.clear();
   (void)layerc::platform::signal_profile_reload();
   reload_profile_list(safe_remaining, true);
   set_status(safe_remaining.empty() ? L"Profile moved to the Recycle Bin."

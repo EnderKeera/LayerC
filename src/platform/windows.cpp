@@ -1,5 +1,6 @@
 #include "layerc/platform/windows.hpp"
 
+#include <optional>
 #include <string>
 
 #include <shellscalingapi.h>
@@ -9,6 +10,8 @@ namespace {
 
 constexpr wchar_t settings_registry_key[] = L"Software\\LayerC";
 constexpr wchar_t capture_exclusion_value[] = L"ExcludeFromCapture";
+constexpr wchar_t visual_recognition_value[] = L"VisualRecognitionEnabled";
+constexpr wchar_t visual_capture_notice_value[] = L"VisualCaptureNoticeSeen";
 constexpr wchar_t editor_theme_value[] = L"EditorTheme";
 constexpr wchar_t editor_accent_value[] = L"EditorAccent";
 constexpr wchar_t editor_appearance_prefix[] = L"EditorAppearance.";
@@ -32,31 +35,71 @@ std::wstring editor_appearance_value_name(const EditorControlRole role) {
          std::to_wstring(static_cast<std::uint32_t>(role));
 }
 
+HKEY open_layerc_key(const REGSAM access, const bool create) {
+  HKEY key{};
+  const LSTATUS result =
+      create ? RegCreateKeyExW(HKEY_CURRENT_USER, settings_registry_key, 0,
+                              nullptr, 0, access, nullptr, &key, nullptr)
+             : RegOpenKeyExW(HKEY_CURRENT_USER, settings_registry_key, 0,
+                             access, &key);
+  return result == ERROR_SUCCESS ? key : nullptr;
+}
+
+std::optional<DWORD> read_dword(const wchar_t *name) {
+  const HKEY key = open_layerc_key(KEY_QUERY_VALUE, false);
+  if (key == nullptr) return std::nullopt;
+  DWORD value{};
+  DWORD size = sizeof(value);
+  const LSTATUS result = RegGetValueW(key, nullptr, name, RRF_RT_REG_DWORD,
+                                      nullptr, &value, &size);
+  RegCloseKey(key);
+  return result == ERROR_SUCCESS ? std::optional<DWORD>(value) : std::nullopt;
+}
+
+bool read_default_true_dword(const wchar_t *name) {
+  const auto value = read_dword(name);
+  return !value.has_value() || *value != 0;
+}
+
+bool write_dword(const wchar_t *name, const DWORD value) {
+  const HKEY key = open_layerc_key(KEY_SET_VALUE, true);
+  if (key == nullptr) return false;
+  const auto written = RegSetValueExW(
+      key, name, 0, REG_DWORD, reinterpret_cast<const BYTE *>(&value),
+      sizeof(value));
+  RegCloseKey(key);
+  return written == ERROR_SUCCESS;
+}
+
+bool write_bool_dword(const wchar_t *name, const bool enabled) {
+  return write_dword(name, enabled ? 1U : 0U);
+}
+
 } // namespace
 
 bool capture_exclusion_enabled() {
-  DWORD value = 1;
-  DWORD size = sizeof(value);
-  const LSTATUS result = RegGetValueW(
-      HKEY_CURRENT_USER, settings_registry_key, capture_exclusion_value,
-      RRF_RT_REG_DWORD, nullptr, &value, &size);
-  return result != ERROR_SUCCESS || value != 0;
+  return read_default_true_dword(capture_exclusion_value);
 }
 
 bool set_capture_exclusion_enabled(const bool enabled) {
-  HKEY key{};
-  const LSTATUS created = RegCreateKeyExW(
-      HKEY_CURRENT_USER, settings_registry_key, 0, nullptr, 0, KEY_SET_VALUE,
-      nullptr, &key, nullptr);
-  if (created != ERROR_SUCCESS) {
-    return false;
-  }
-  const DWORD value = enabled ? 1U : 0U;
-  const LSTATUS written = RegSetValueExW(
-      key, capture_exclusion_value, 0, REG_DWORD,
-      reinterpret_cast<const BYTE *>(&value), sizeof(value));
-  RegCloseKey(key);
-  return written == ERROR_SUCCESS;
+  return write_bool_dword(capture_exclusion_value, enabled);
+}
+
+bool visual_recognition_enabled() {
+  return read_default_true_dword(visual_recognition_value);
+}
+
+bool set_visual_recognition_enabled(const bool enabled) {
+  return write_bool_dword(visual_recognition_value, enabled);
+}
+
+bool visual_capture_notice_acknowledged() {
+  const auto value = read_dword(visual_capture_notice_value);
+  return value.has_value() && *value != 0;
+}
+
+bool set_visual_capture_notice_acknowledged(const bool acknowledged) {
+  return write_bool_dword(visual_capture_notice_value, acknowledged);
 }
 
 bool apply_capture_exclusion(const HWND window, const bool enabled) {
@@ -82,41 +125,21 @@ UINT monitor_dpi_for_rect(const RECT &rect) {
 }
 
 EditorTheme editor_theme() {
-  DWORD value = static_cast<DWORD>(EditorTheme::copper);
-  DWORD size = sizeof(value);
-  const LSTATUS result = RegGetValueW(
-      HKEY_CURRENT_USER, settings_registry_key, editor_theme_value,
-      RRF_RT_REG_DWORD, nullptr, &value, &size);
-  if (result != ERROR_SUCCESS || !is_known_editor_theme(value)) {
+  const auto value = read_dword(editor_theme_value);
+  if (!value.has_value() || !is_known_editor_theme(*value)) {
     return EditorTheme::copper;
   }
-  return static_cast<EditorTheme>(value);
+  return static_cast<EditorTheme>(*value);
 }
 
 std::uint32_t editor_accent() {
-  DWORD value = default_editor_accent;
-  DWORD size = sizeof(value);
-  const LSTATUS result = RegGetValueW(
-      HKEY_CURRENT_USER, settings_registry_key, editor_accent_value,
-      RRF_RT_REG_DWORD, nullptr, &value, &size);
-  return result == ERROR_SUCCESS ? (value & 0x00FFFFFFU)
-                                 : default_editor_accent;
+  const auto value = read_dword(editor_accent_value);
+  return value.has_value() ? (*value & 0x00FFFFFFU) : default_editor_accent;
 }
 
 bool set_editor_accent(const std::uint32_t color) {
   const DWORD value = color & 0x00FFFFFFU;
-  HKEY key{};
-  const LSTATUS created = RegCreateKeyExW(
-      HKEY_CURRENT_USER, settings_registry_key, 0, nullptr, 0, KEY_SET_VALUE,
-      nullptr, &key, nullptr);
-  if (created != ERROR_SUCCESS) {
-    return false;
-  }
-  const LSTATUS written = RegSetValueExW(
-      key, editor_accent_value, 0, REG_DWORD,
-      reinterpret_cast<const BYTE *>(&value), sizeof(value));
-  RegCloseKey(key);
-  return written == ERROR_SUCCESS;
+  return write_dword(editor_accent_value, value);
 }
 
 bool set_editor_theme(const EditorTheme theme) {
@@ -124,18 +147,7 @@ bool set_editor_theme(const EditorTheme theme) {
   if (!is_known_editor_theme(value)) {
     return false;
   }
-  HKEY key{};
-  const LSTATUS created = RegCreateKeyExW(
-      HKEY_CURRENT_USER, settings_registry_key, 0, nullptr, 0, KEY_SET_VALUE,
-      nullptr, &key, nullptr);
-  if (created != ERROR_SUCCESS) {
-    return false;
-  }
-  const LSTATUS written = RegSetValueExW(
-      key, editor_theme_value, 0, REG_DWORD,
-      reinterpret_cast<const BYTE *>(&value), sizeof(value));
-  RegCloseKey(key);
-  return written == ERROR_SUCCESS;
+  return write_dword(editor_theme_value, value);
 }
 
 EditorAppearanceOverrides
@@ -146,9 +158,12 @@ editor_appearance_overrides(const EditorControlRole role) {
   EditorAppearanceOverrides overrides{};
   DWORD size = sizeof(overrides);
   const auto value_name = editor_appearance_value_name(role);
-  const LSTATUS result = RegGetValueW(
-      HKEY_CURRENT_USER, settings_registry_key, value_name.c_str(),
-      RRF_RT_REG_BINARY, nullptr, &overrides, &size);
+  const HKEY key = open_layerc_key(KEY_QUERY_VALUE, false);
+  if (key == nullptr) return {};
+  const LSTATUS result = RegGetValueW(key, nullptr, value_name.c_str(),
+                                      RRF_RT_REG_BINARY, nullptr, &overrides,
+                                      &size);
+  RegCloseKey(key);
   if (result != ERROR_SUCCESS || size != sizeof(overrides)) {
     return {};
   }
@@ -165,13 +180,8 @@ bool set_editor_appearance_overrides(
   EditorAppearanceOverrides overrides = source_overrides;
   overrides.fields &= all_editor_appearance_fields;
   const auto value_name = editor_appearance_value_name(role);
-  HKEY key{};
-  const LSTATUS created = RegCreateKeyExW(
-      HKEY_CURRENT_USER, settings_registry_key, 0, nullptr, 0, KEY_SET_VALUE,
-      nullptr, &key, nullptr);
-  if (created != ERROR_SUCCESS) {
-    return false;
-  }
+  const HKEY key = open_layerc_key(KEY_SET_VALUE, true);
+  if (key == nullptr) return false;
   LSTATUS written = ERROR_SUCCESS;
   if (overrides.fields == 0) {
     written = RegDeleteValueW(key, value_name.c_str());

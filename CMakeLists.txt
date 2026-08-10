@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(LayerC VERSION 0.1.0 LANGUAGES CXX)
+project(LayerC VERSION 1.1.0 LANGUAGES CXX)
 
 option(LAYERC_BUILD_DAEMON "Build the native layerd daemon" ON)
 option(LAYERC_BUILD_EDITOR "Build the native LayerE editor" ON)
 option(LAYERC_BUILD_TESTS "Build LayerC tests" ON)
+option(LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS
+    "Register tests that require an unlocked interactive Windows desktop" OFF)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,6 +31,10 @@ add_library(layerc_core STATIC
     src/core/profile_fields.cpp
     src/core/profile_serialize.cpp
     src/core/runtime_instances.cpp
+    src/core/visual.cpp
+    src/core/pixel_evaluator.cpp
+    src/core/visual_trigger_engine.cpp
+    src/core/calibration.cpp
 )
 target_include_directories(layerc_core PUBLIC src/core/include)
 target_compile_features(layerc_core PUBLIC cxx_std_20)
@@ -46,6 +52,7 @@ if(WIN32)
         src/platform/text.cpp
         src/platform/profile_store.cpp
         src/platform/live_channel.cpp
+        src/platform/framed_pipe.cpp
     )
     target_include_directories(layerc_windows PUBLIC
         src/platform/include
@@ -66,6 +73,32 @@ if(WIN32)
     else()
         target_compile_options(layerc_windows PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+
+    add_library(layerc_capture STATIC
+        src/capture/window_capture.cpp
+        src/capture/static_window_snapshot.cpp
+        src/capture/d3d_capture_support.cpp
+        src/capture/wgc_backend.cpp
+        src/capture/desktop_duplication_backend.cpp
+    )
+    target_include_directories(layerc_capture PUBLIC
+        src/capture/include
+        src/core/include
+    )
+    target_include_directories(layerc_capture PRIVATE src/capture)
+    target_link_libraries(layerc_capture PUBLIC layerc_core)
+    target_link_libraries(layerc_capture PRIVATE
+        d3d11 dxgi dwmapi user32 gdi32)
+    target_compile_definitions(layerc_capture PUBLIC
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+        WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    if(MSVC)
+        target_compile_options(layerc_capture PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+    else()
+        target_compile_options(layerc_capture PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
 endif()
 
 if(WIN32 AND LAYERC_BUILD_DAEMON)
@@ -76,12 +109,15 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/daemon_input.cpp
         src/daemon/daemon_overlays.cpp
         src/daemon/daemon_live_edit.cpp
+        src/daemon/daemon_visual.cpp
+        src/daemon/visual_capture_worker.cpp
         src/daemon/overlay_window.cpp
         src/daemon/overlay_render.cpp
     )
     target_include_directories(layerd PRIVATE src/daemon)
     target_link_libraries(layerd PRIVATE
-        layerc_core layerc_windows shell32 user32 gdi32 xinput9_1_0)
+        layerc_core layerc_windows layerc_capture
+        shell32 user32 gdi32 xinput9_1_0)
     target_compile_definitions(layerd PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     if(MSVC)
         target_compile_options(layerd PRIVATE /W4 /permissive- /EHsc /utf-8)
@@ -114,6 +150,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         src/editor/editor_color_picker.cpp
         src/editor/editor_controls.cpp
         src/editor/editor_live_edit.cpp
+        src/editor/editor_visual.cpp
         src/editor/editor_resources.rc
     )
     target_include_directories(layere PRIVATE src/editor)
@@ -140,11 +177,37 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
     set_target_properties(layere PROPERTIES OUTPUT_NAME "layere")
 endif()
 
+if(WIN32 AND LAYERC_BUILD_EDITOR)
+    add_executable(layercal WIN32
+        src/calibration/main.cpp
+        src/calibration/calibration_window.cpp
+        src/calibration/calibration_resources.rc
+    )
+    target_include_directories(layercal PRIVATE src/calibration)
+    target_link_libraries(layercal PRIVATE
+        layerc_core layerc_windows layerc_capture
+        comctl32 dwmapi shell32 uxtheme user32 gdi32)
+    target_compile_definitions(layercal PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        target_compile_options(layercal PRIVATE /W4 /permissive- /EHsc /utf-8)
+    else()
+        target_compile_options(layercal PRIVATE -Wall -Wextra -Wpedantic)
+        if(MINGW)
+            target_link_options(layercal PRIVATE -municode)
+        endif()
+    endif()
+    set_target_properties(layercal PROPERTIES OUTPUT_NAME "layercal")
+endif()
+
 if(TARGET layerd)
     install(TARGETS layerd RUNTIME DESTINATION . COMPONENT Runtime)
 endif()
 if(TARGET layere)
     install(TARGETS layere RUNTIME DESTINATION . COMPONENT Runtime)
+endif()
+if(TARGET layercal)
+    install(TARGETS layercal RUNTIME DESTINATION . COMPONENT Runtime)
 endif()
 
 if(LAYERC_BUILD_TESTS)
@@ -156,12 +219,38 @@ if(LAYERC_BUILD_TESTS)
         tests/profile_tests.cpp
         tests/runtime_json_tests.cpp
         tests/live_edit_tests.cpp
+        tests/visual_profile_tests.cpp
+        tests/pixel_engine_tests.cpp
     )
     target_link_libraries(layerc_core_tests PRIVATE layerc_core)
     add_test(NAME layerc_core_tests COMMAND layerc_core_tests)
     set_tests_properties(layerc_core_tests PROPERTIES TIMEOUT 30)
 
     if(WIN32)
+        add_executable(layerc_capture_tests tests/capture_math_tests.cpp)
+        target_link_libraries(layerc_capture_tests PRIVATE layerc_capture)
+        add_test(NAME layerc_capture_tests COMMAND layerc_capture_tests)
+        set_tests_properties(layerc_capture_tests PROPERTIES TIMEOUT 30)
+
+        add_executable(layerc_capture_integration_tests
+            tests/capture_integration_tests.cpp)
+        target_link_libraries(layerc_capture_integration_tests
+            PRIVATE layerc_capture)
+        if(LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS)
+            add_test(NAME layerc_capture_integration_tests
+                COMMAND layerc_capture_integration_tests)
+            set_tests_properties(layerc_capture_integration_tests PROPERTIES
+                TIMEOUT 30 LABELS "interactive")
+        endif()
+
+        add_executable(layerc_capture_probe tools/capture_probe.cpp)
+        target_link_libraries(layerc_capture_probe PRIVATE layerc_capture)
+        target_compile_definitions(layerc_capture_probe PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MINGW)
+            target_link_options(layerc_capture_probe PRIVATE -municode)
+        endif()
+
         add_executable(lctest WIN32 tools/lctest.cpp)
         target_compile_definitions(lctest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
         if(MINGW)
@@ -235,10 +324,16 @@ if(LAYERC_BUILD_TESTS)
                 layerc_core_tests
                 layerc_overlay_tests
                 layerc_platform_tests
-                layerc_editor_tests
+                 layerc_editor_tests
+                 layerc_capture_tests
                 PROPERTIES ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:${LAYERC_MINGW_RUNTIME_DIR}"
             )
+            if(LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS)
+                set_tests_properties(layerc_capture_integration_tests
+                    PROPERTIES ENVIRONMENT_MODIFICATION
+                    "PATH=path_list_prepend:${LAYERC_MINGW_RUNTIME_DIR}")
+            endif()
         endif()
     endif()
 endif()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <string_view>
@@ -49,6 +50,8 @@ struct ParseError {
 using ParseResult = std::variant<Value, ParseError>;
 
 [[nodiscard]] ParseResult parse(std::string_view source);
+void append_unsigned(std::string &output, std::uint64_t value);
+void append_number(std::string &output, double value);
+void append_quoted(std::string &output, std::string_view text);
 
 }  // namespace layerc::core::json
-

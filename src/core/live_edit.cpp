@@ -6,11 +6,8 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
-#include <iomanip>
 #include <initializer_list>
-#include <locale>
 #include <optional>
-#include <sstream>
 
 namespace layerc::core {
 namespace {
@@ -31,35 +28,6 @@ find_cooldown(const std::vector<CooldownDefinition> &definitions,
         return candidate.id == id;
       });
   return found == definitions.end() ? nullptr : &*found;
-}
-
-std::string escaped_json_string(const std::string_view value) {
-  std::string output;
-  output.reserve(value.size() + 2);
-  output.push_back('"');
-  constexpr char hex[] = "0123456789ABCDEF";
-  for (const unsigned char character : value) {
-    switch (character) {
-    case '"': output += "\\\""; break;
-    case '\\': output += "\\\\"; break;
-    case '\b': output += "\\b"; break;
-    case '\f': output += "\\f"; break;
-    case '\n': output += "\\n"; break;
-    case '\r': output += "\\r"; break;
-    case '\t': output += "\\t"; break;
-    default:
-      if (character < 0x20U) {
-        output += "\\u00";
-        output.push_back(hex[character >> 4U]);
-        output.push_back(hex[character & 0x0FU]);
-      } else {
-        output.push_back(static_cast<char>(character));
-      }
-      break;
-    }
-  }
-  output.push_back('"');
-  return output;
 }
 
 std::string base64_encode(const std::string_view source) {
@@ -136,6 +104,7 @@ std::string_view message_type_name(const LiveMessageType type) {
   case LiveMessageType::set_direct_drag: return "setDirectDrag";
   case LiveMessageType::end_edit: return "endEdit";
   case LiveMessageType::heartbeat: return "heartbeat";
+  case LiveMessageType::runtime_status: return "runtimeStatus";
   case LiveMessageType::acknowledgement: return "ack";
   case LiveMessageType::error: return "error";
   }
@@ -153,6 +122,7 @@ std::optional<LiveMessageType> parse_message_type(const std::string_view name) {
       {"setDirectDrag", LiveMessageType::set_direct_drag},
       {"endEdit", LiveMessageType::end_edit},
       {"heartbeat", LiveMessageType::heartbeat},
+      {"runtimeStatus", LiveMessageType::runtime_status},
       {"ack", LiveMessageType::acknowledgement},
       {"error", LiveMessageType::error},
   };
@@ -335,25 +305,43 @@ PixelRect overlay_rectangle(const NormalizedAnchor anchor,
 }
 
 std::string encode_live_message_json(const LiveMessage &message) {
-  std::ostringstream output;
-  output.imbue(std::locale::classic());
-  output << "{\"protocolVersion\":" << message.protocol_version
-         << ",\"type\":" << escaped_json_string(message_type_name(message.type))
-         << ",\"revision\":" << escaped_json_string(std::to_string(message.revision))
-         << ",\"editSession\":"
-         << escaped_json_string(std::to_string(message.edit_session))
-         << ",\"targetWindow\":"
-         << escaped_json_string(std::to_string(message.target_window))
-         << ",\"profileKey\":" << escaped_json_string(message.profile_key)
-         << ",\"panelId\":" << escaped_json_string(message.panel_id)
-         << ",\"profileBase64\":"
-         << escaped_json_string(base64_encode(message.profile_json))
-         << ",\"text\":" << escaped_json_string(message.text)
-         << ",\"anchorX\":" << std::setprecision(17) << message.anchor_x
-         << ",\"anchorY\":" << std::setprecision(17) << message.anchor_y
-         << ",\"directDrag\":" << (message.direct_drag ? "true" : "false")
-         << ",\"final\":" << (message.final ? "true" : "false") << '}';
-  return output.str();
+  const auto encoded_profile = base64_encode(message.profile_json);
+  std::string output;
+  output.reserve(256U + message.profile_key.size() + message.panel_id.size() +
+                 encoded_profile.size() + message.text.size());
+  const auto append_quoted_unsigned = [&](const std::uint64_t value) {
+    output.push_back('"');
+    json::append_unsigned(output, value);
+    output.push_back('"');
+  };
+
+  output += "{\"protocolVersion\":";
+  json::append_unsigned(output, message.protocol_version);
+  output += ",\"type\":";
+  json::append_quoted(output, message_type_name(message.type));
+  output += ",\"revision\":";
+  append_quoted_unsigned(message.revision);
+  output += ",\"editSession\":";
+  append_quoted_unsigned(message.edit_session);
+  output += ",\"targetWindow\":";
+  append_quoted_unsigned(message.target_window);
+  output += ",\"profileKey\":";
+  json::append_quoted(output, message.profile_key);
+  output += ",\"panelId\":";
+  json::append_quoted(output, message.panel_id);
+  output += ",\"profileBase64\":";
+  json::append_quoted(output, encoded_profile);
+  output += ",\"text\":";
+  json::append_quoted(output, message.text);
+  output += ",\"anchorX\":";
+  json::append_number(output, message.anchor_x);
+  output += ",\"anchorY\":";
+  json::append_number(output, message.anchor_y);
+  output += message.direct_drag
+                ? ",\"directDrag\":true"
+                : ",\"directDrag\":false";
+  output += message.final ? ",\"final\":true}" : ",\"final\":false}";
+  return output;
 }
 
 LiveMessageResult decode_live_message_json(const std::string_view source) {
@@ -424,6 +412,10 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
     if (!require_fields(root, {"editSession"}, error))
       return LiveProtocolError{std::move(error)};
     break;
+  case LiveMessageType::runtime_status:
+    if (!require_fields(root, {"text"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
   case LiveMessageType::acknowledgement:
   case LiveMessageType::error:
     if (!require_fields(root, {"text"}, error))
@@ -471,7 +463,7 @@ std::vector<LiveMessageResult>
 LiveFrameDecoder::push(const std::span<const std::byte> bytes) {
   if (bytes.size() > max_live_buffer_bytes ||
       buffer_.size() > max_live_buffer_bytes - bytes.size()) {
-    buffer_.clear();
+    clear();
     return {LiveProtocolError{"live frame buffer exceeds the 4 MiB limit"}};
   }
   buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
@@ -486,7 +478,7 @@ LiveFrameDecoder::push(const std::span<const std::byte> bytes) {
     if (length > max_live_message_bytes) {
       results.emplace_back(
           LiveProtocolError{"live frame exceeds the 512 KiB limit"});
-      buffer_.clear();
+      clear();
       return results;
     }
     if (buffer_.size() - consumed < sizeof(std::uint32_t) + length) break;

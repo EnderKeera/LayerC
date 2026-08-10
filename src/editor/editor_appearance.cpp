@@ -44,6 +44,8 @@ void EditorWindow::initialize_options(const HWND window) {
   (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion_);
   set_owner_draw_checkbox(GetDlgItem(window, IDC_CAPTURE_PRIVACY),
                           capture_exclusion_);
+  set_owner_draw_checkbox(GetDlgItem(window, IDC_VISUAL_MASTER),
+                          layerc::platform::visual_recognition_enabled());
   const HWND preset = GetDlgItem(window, IDC_THEME_PRESET);
   for (const wchar_t *name : {L"Graphite / Copper", L"Graphite / Teal", L"Graphite / Plum"})
     SendMessageW(preset, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
@@ -53,9 +55,12 @@ void EditorWindow::initialize_options(const HWND window) {
 void EditorWindow::apply_options(const HWND window) {
   const bool capture =
       owner_draw_checkbox_checked(GetDlgItem(window, IDC_CAPTURE_PRIVACY));
+  const bool visual =
+      owner_draw_checkbox_checked(GetDlgItem(window, IDC_VISUAL_MASTER));
   const auto selection = static_cast<int>(SendMessageW(GetDlgItem(window, IDC_THEME_PRESET), LB_GETCURSEL, 0, 0));
   const auto theme = static_cast<layerc::platform::EditorTheme>(std::clamp(selection, 0, 2));
   if (!layerc::platform::set_capture_exclusion_enabled(capture) ||
+      !layerc::platform::set_visual_recognition_enabled(visual) ||
       !layerc::platform::set_editor_theme(theme)) {
     MessageBoxW(window, L"Could not save the selected options.", L"LayerE", MB_OK | MB_ICONWARNING);
     return;
@@ -171,8 +176,10 @@ LRESULT EditorWindow::handle_options_message(const HWND window, const UINT messa
                                              const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_COMMAND:
-    if (LOWORD(wparam) == IDC_CAPTURE_PRIVACY && HIWORD(wparam) == BN_CLICKED) {
-      InvalidateRect(GetDlgItem(window, IDC_CAPTURE_PRIVACY), nullptr, TRUE); return TRUE;
+    if ((LOWORD(wparam) == IDC_CAPTURE_PRIVACY ||
+         LOWORD(wparam) == IDC_VISUAL_MASTER) &&
+        HIWORD(wparam) == BN_CLICKED) {
+      InvalidateRect(GetDlgItem(window, LOWORD(wparam)), nullptr, TRUE); return TRUE;
     }
     if (LOWORD(wparam) == IDC_OPEN_APPEARANCE) {
       DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_APPEARANCE), window, &EditorWindow::appearance_dialog_proc,
@@ -186,7 +193,8 @@ LRESULT EditorWindow::handle_options_message(const HWND window, const UINT messa
     const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
     if (draw->CtlType == ODT_LISTBOX) { draw_list_box_item(*draw); return TRUE; }
     if (draw->CtlType == ODT_BUTTON) {
-      if (draw->CtlID == IDC_CAPTURE_PRIVACY) draw_checkbox(*draw);
+      if (draw->CtlID == IDC_CAPTURE_PRIVACY ||
+          draw->CtlID == IDC_VISUAL_MASTER) draw_checkbox(*draw);
       else draw_button(*draw, layerc::platform::EditorControlRole::button);
       return TRUE;
     }

@@ -13,18 +13,6 @@
 
 namespace layerc::daemon {
 namespace {
-std::vector<OverlayCooldown> make_overlay_cooldowns(
-    const std::vector<layerc::core::CooldownDefinition> &definitions) {
-  std::vector<OverlayCooldown> result;
-  result.reserve(definitions.size());
-  for (const auto &definition : definitions) {
-    result.push_back({.id = definition.id,
-                      .name = layerc::platform::utf8_to_wide(definition.name),
-                      .duration = definition.duration});
-  }
-  return result;
-}
-
 bool is_layerc_editor_process(const DWORD process_id,
                               const DWORD authenticated_editor_id) {
   if (process_id == 0) return false;
@@ -80,15 +68,30 @@ bool is_layerc_editor_process(const DWORD process_id,
   return matches;
 }
 
+std::filesystem::path profile_path_for_key(const std::wstring_view key) {
+  if (key.empty()) return {};
+  const std::filesystem::path candidate(key);
+  std::error_code error;
+  if (std::filesystem::exists(candidate, error) && !error) return candidate;
+  return {};
+}
+
 } // namespace
 
 DaemonApp::Session::Session(layerc::core::GameProfile source_profile,
                             std::wstring source_key_value,
+                            std::optional<layerc::core::VisualProfile>
+                                source_visual_profile,
+                            const layerc::platform::VisualSidecarState
+                                source_visual_health,
+                            const bool visual_enabled,
                             const bool capture_exclusion)
     : source_key(std::move(source_key_value)),
       profile(std::move(source_profile)),
       overlay_cooldowns(make_overlay_cooldowns(profile.cooldowns)),
       cooldowns(profile.cooldowns), input(profile.bindings) {
+  apply_visual_profile(std::move(source_visual_profile), source_visual_health,
+                       visual_enabled);
   snapshot_buffer.reserve(profile.cooldowns.size());
   rebuild_input_configuration();
   overlays.reserve(profile.panels.size());
@@ -97,6 +100,33 @@ DaemonApp::Session::Session(layerc::core::GameProfile source_profile,
     overlay->set_capture_exclusion(capture_exclusion);
     overlays.push_back(std::move(overlay));
   }
+}
+
+void DaemonApp::Session::apply_visual_profile(
+    std::optional<layerc::core::VisualProfile> updated_visual_profile,
+    const layerc::platform::VisualSidecarState updated_health,
+    const bool visual_enabled) {
+  visual_profile = std::move(updated_visual_profile);
+  visual_health = updated_health;
+  last_visual_sequence = 0;
+  if (visual_profile.has_value() &&
+      visual_health != layerc::platform::VisualSidecarState::invalid) {
+    if (visual_triggers)
+      visual_triggers->reconfigure(*visual_profile);
+    else
+      visual_triggers =
+          std::make_unique<layerc::core::VisualTriggerEngine>(*visual_profile);
+    visual_triggers->set_visual_enabled(visual_enabled);
+  } else {
+    visual_triggers.reset();
+  }
+}
+
+bool DaemonApp::Session::has_active_visual_rules() const noexcept {
+  return visual_triggers != nullptr && visual_profile.has_value() &&
+         visual_health != layerc::platform::VisualSidecarState::invalid &&
+         layerc::core::has_enabled_visual_assignments(*visual_profile) &&
+         visual_triggers->visual_enabled();
 }
 
 void DaemonApp::Session::rebuild_input_configuration() {
@@ -190,6 +220,22 @@ void DaemonApp::Session::clear_input_state() {
   }
 }
 
+void DaemonApp::load_visual_source(ProfileSource &source) {
+  source.visual_profile.reset();
+  source.visual_error.clear();
+  const auto visual =
+      layerc::platform::load_visual_sidecar(source.path, source.profile);
+  source.visual_health = visual.state;
+  if (visual.state == layerc::platform::VisualSidecarState::valid ||
+      visual.state == layerc::platform::VisualSidecarState::recovered_backup) {
+    source.visual_profile = visual.profile;
+  }
+  if (visual.state == layerc::platform::VisualSidecarState::recovered_backup ||
+      visual.state == layerc::platform::VisualSidecarState::invalid) {
+    source.visual_error = visual.error.message;
+  }
+}
+
 void DaemonApp::reload_profiles() {
   std::vector<ProfileSource> loaded;
   const auto directory = layerc::platform::profile_directory();
@@ -209,11 +255,14 @@ void DaemonApp::reload_profiles() {
       }
       auto parsed = layerc::core::parse_profile_json(*contents);
       if (auto *profile = std::get_if<layerc::core::GameProfile>(&parsed)) {
-        loaded.push_back({.key =
-                              layerc::platform::canonical_profile_key(
-                                  entry.path()),
-                          .profile = std::move(*profile),
-                          .revision = 0});
+        ProfileSource source{.key =
+                                 layerc::platform::canonical_profile_key(
+                                     entry.path()),
+                             .path = entry.path(),
+                             .profile = std::move(*profile),
+                             .revision = 0};
+        load_visual_source(source);
+        loaded.push_back(std::move(source));
       }
     }
   }
@@ -228,9 +277,14 @@ void DaemonApp::apply_profile_update(
   auto loaded = profile_sources_;
   const auto found = std::ranges::find_if(
       loaded, [&](const ProfileSource &source) { return source.key == key; });
+  auto source_path =
+      found == loaded.end() ? profile_path_for_key(key) : found->path;
+  if (source_path.empty()) source_path = std::filesystem::path(key);
   ProfileSource source{.key = std::move(key),
+                       .path = source_path,
                        .profile = std::move(profile),
                        .revision = revision};
+  load_visual_source(source);
   if (found == loaded.end())
     loaded.push_back(std::move(source));
   else
@@ -296,6 +350,11 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
       return true;
     if (session->profile != source->profile)
       session->apply_profile(source->profile, capture_exclusion_);
+    if (session->visual_profile != source->visual_profile ||
+        session->visual_health != source->visual_health)
+      session->apply_visual_profile(source->visual_profile,
+                                    source->visual_health,
+                                    visual_recognition_enabled_);
     return false;
   });
   for (const auto &key : recreate_keys) runtime_instances_.erase_profile(key);
@@ -309,7 +368,9 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
         });
     if (!exists)
       sessions_.push_back(std::make_unique<Session>(
-          source.profile, source.key, capture_exclusion_));
+          source.profile, source.key, source.visual_profile,
+          source.visual_health, visual_recognition_enabled_,
+          capture_exclusion_));
   }
 
   const bool has_enabled_profile = std::any_of(
@@ -327,14 +388,20 @@ bool DaemonApp::reload_settings_if_requested() {
   }
   ResetEvent(settings_reload_event_);
   capture_exclusion_ = layerc::platform::capture_exclusion_enabled();
+  visual_recognition_enabled_ =
+      layerc::platform::visual_recognition_enabled();
   for (auto &session : sessions_) {
     session->set_capture_exclusion(capture_exclusion_);
+    if (session->visual_triggers)
+      session->visual_triggers->set_visual_enabled(
+          visual_recognition_enabled_);
   }
   if (edit_session_ != nullptr) {
     for (auto &overlay : edit_session_->overlays)
       overlay->set_capture_exclusion(capture_exclusion_);
   }
   update_overlays();
+  reconcile_visual_captures();
   return true;
 }
 
@@ -409,6 +476,9 @@ void DaemonApp::refresh_game_windows() {
       continue;
     }
     auto instance = std::make_unique<Session>(source->profile, source->key,
+                                               source->visual_profile,
+                                               source->visual_health,
+                                               visual_recognition_enabled_,
                                                capture_exclusion_);
     instance->game_window = window;
     sessions_.push_back(std::move(instance));
@@ -471,6 +541,7 @@ void DaemonApp::sync_foreground_state() {
     }
   }
   update_overlays();
+  reconcile_visual_captures();
 }
 
 std::vector<DaemonApp::Session *> DaemonApp::foreground_sessions() {

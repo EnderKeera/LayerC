@@ -174,12 +174,26 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
 bool DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto triggered = session.input.process(event);
+  if (session.blocks_all_triggers()) return false;
   const auto now = layerc::core::MonotonicClock::now();
   bool changed{};
   for (const auto &cooldown_id : triggered) {
-    if (session.cooldowns.trigger(cooldown_id, now)) {
-      changed = true;
-      update_tooltip(L"LayerD - triggered " + layerc::platform::utf8_to_wide(cooldown_id));
+    std::vector<layerc::core::VisualTriggerRequest> requests;
+    if (session.visual_triggers)
+      requests = session.visual_triggers->on_input(cooldown_id, now);
+    else
+      requests.push_back(
+          {cooldown_id, layerc::core::VisualTriggerSource::direct_input});
+    for (const auto &request : requests) {
+      if (session.cooldowns.trigger(request.cooldown_id, now)) {
+        if (session.visual_triggers)
+          session.visual_triggers->on_cooldown_triggered(
+              request.cooldown_id);
+        changed = true;
+        update_tooltip(
+            L"LayerD - triggered " +
+            layerc::platform::utf8_to_wide(request.cooldown_id));
+      }
     }
   }
   return changed;

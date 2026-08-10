@@ -111,15 +111,19 @@ void EditorWindow::initialize_color_picker(const HWND window) {
 
 void EditorWindow::refresh_color_picker(const HWND window) {
   picker_syncing_ = true;
+  refresh_color_picker_rgb(window);
+  set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(picker_color_));
+  picker_syncing_ = false;
+  invalidate_picker(window);
+}
+
+void EditorWindow::refresh_color_picker_rgb(const HWND window) {
   set_text(GetDlgItem(window, IDC_COLOR_RED),
            std::to_wstring((picker_color_ >> 16U) & 0xFFU));
   set_text(GetDlgItem(window, IDC_COLOR_GREEN),
            std::to_wstring((picker_color_ >> 8U) & 0xFFU));
   set_text(GetDlgItem(window, IDC_COLOR_BLUE),
            std::to_wstring(picker_color_ & 0xFFU));
-  set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(picker_color_));
-  picker_syncing_ = false;
-  invalidate_picker(window);
 }
 
 void EditorWindow::update_color_picker_from_rgb(const HWND window) {
@@ -139,12 +143,7 @@ void EditorWindow::update_color_picker_from_hex(const HWND window) {
   if (!value.has_value()) return;
   picker_color_ = *value;
   picker_syncing_ = true;
-  set_text(GetDlgItem(window, IDC_COLOR_RED),
-           std::to_wstring((picker_color_ >> 16U) & 0xFFU));
-  set_text(GetDlgItem(window, IDC_COLOR_GREEN),
-           std::to_wstring((picker_color_ >> 8U) & 0xFFU));
-  set_text(GetDlgItem(window, IDC_COLOR_BLUE),
-           std::to_wstring(picker_color_ & 0xFFU));
+  refresh_color_picker_rgb(window);
   picker_syncing_ = false;
   invalidate_picker(window);
 }

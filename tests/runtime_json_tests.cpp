@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <variant>
 #include <vector>
@@ -88,6 +89,39 @@ void test_json_unicode_and_errors() {
   const auto *leading_zero_error = std::get_if<ParseError>(&leading_zero);
   expect(leading_zero_error != nullptr && leading_zero_error->offset == 10,
          "RFC 8259 leading-zero numbers should fail at the extra digit");
+
+  const std::string special = "quote\" slash\\ controls\n\t\x01 UTF-8: \xC3\xA9";
+  std::string formatted = "{\"text\":";
+  append_quoted(formatted, special);
+  formatted += ",\"maximum\":";
+  append_unsigned(formatted, std::numeric_limits<std::uint64_t>::max());
+  formatted += ",\"decimal\":";
+  append_number(formatted, 0.1);
+  formatted += '}';
+  std::string quoted_special;
+  append_quoted(quoted_special, special);
+  const auto formatted_result = parse(formatted);
+  const auto *formatted_value = std::get_if<Value>(&formatted_result);
+  expect(formatted_value != nullptr &&
+             formatted_value->find("text") != nullptr &&
+             formatted_value->find("text")->as_string() == special &&
+             quoted_special == formatted.substr(
+                                   std::string_view("{\"text\":").size(),
+                                   quoted_special.size()),
+         "shared JSON formatting should escape strings and preserve UTF-8");
+
+  std::string non_finite = "[";
+  append_number(non_finite, std::numeric_limits<double>::quiet_NaN());
+  non_finite.push_back(',');
+  append_number(non_finite, std::numeric_limits<double>::infinity());
+  non_finite.push_back(']');
+  const auto non_finite_result = parse(non_finite);
+  const auto *non_finite_value = std::get_if<Value>(&non_finite_result);
+  expect(non_finite_value != nullptr && non_finite_value->is_array() &&
+             non_finite_value->as_array().size() == 2 &&
+             non_finite_value->as_array()[0].as_number() == 0.0 &&
+             non_finite_value->as_array()[1].as_number() == 0.0,
+         "non-finite values should retain valid JSON syntax through the safe numeric fallback");
 }
 
 void test_json_nesting_limit() {

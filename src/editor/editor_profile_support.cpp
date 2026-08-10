@@ -1,5 +1,7 @@
 #include "editor_window.hpp"
 
+#include "layerc/platform/profile_store.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -34,12 +36,35 @@ bool start_daemon() {
   return created != FALSE;
 }
 
-bool recycle_profile_file(const std::filesystem::path &path) {
-  std::wstring source = path.wstring();
+bool recycle_profile_bundle(const std::filesystem::path &path) {
+  std::vector<std::filesystem::path> candidates{path};
+  auto profile_backup = path;
+  profile_backup += L".bak";
+  candidates.push_back(std::move(profile_backup));
+  const auto visual = layerc::platform::visual_sidecar_path(path);
+  candidates.push_back(visual);
+  auto visual_backup = visual;
+  visual_backup += L".bak";
+  candidates.push_back(std::move(visual_backup));
+  auto visual_state = visual;
+  visual_state += L".state";
+  candidates.push_back(std::move(visual_state));
+
+  std::wstring source;
+  std::error_code error;
+  for (const auto &candidate : candidates) {
+    if (candidate.empty() || !std::filesystem::exists(candidate, error)) {
+      error.clear();
+      continue;
+    }
+    source += candidate.wstring();
+    source.push_back(L'\0');
+  }
+  if (source.empty()) return false;
   source.push_back(L'\0');
   SHFILEOPSTRUCTW operation{};
   operation.wFunc = FO_DELETE;
-  operation.pFrom = source.c_str();
+  operation.pFrom = source.data();
   operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT;
   return SHFileOperationW(&operation) == 0 && !operation.fAnyOperationsAborted;
 }

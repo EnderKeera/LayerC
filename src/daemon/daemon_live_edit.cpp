@@ -10,21 +10,6 @@
 #include <variant>
 
 namespace layerc::daemon {
-namespace {
-
-std::vector<OverlayCooldown> edit_overlay_cooldowns(
-    const std::vector<layerc::core::CooldownDefinition> &definitions) {
-  std::vector<OverlayCooldown> result;
-  result.reserve(definitions.size());
-  for (const auto &definition : definitions) {
-    result.push_back({.id = definition.id,
-                      .name = layerc::platform::utf8_to_wide(definition.name),
-                      .duration = definition.duration});
-  }
-  return result;
-}
-
-} // namespace
 
 void DaemonApp::send_live_reply(const layerc::core::LiveMessageType type,
                                 const layerc::core::LiveMessage &request,
@@ -70,7 +55,11 @@ void DaemonApp::handle_live_message(
   using layerc::core::LiveMessageType;
   if (message.type == LiveMessageType::handshake) {
     send_live_reply(LiveMessageType::acknowledgement, message,
-                    "live-profile,mirrored-drag,direct-drag,lease-v1");
+                    "live-profile,mirrored-drag,direct-drag,lease-v1,visual-status-v1");
+    (void)live_channel_.send({
+        .type = LiveMessageType::runtime_status,
+        .text = layerc::platform::wide_to_utf8(visual_status_),
+    });
     return;
   }
   if (message.type == LiveMessageType::committed_profile) {
@@ -233,7 +222,7 @@ void DaemonApp::begin_edit_session(
 void DaemonApp::rebuild_edit_overlays() {
   if (edit_session_ == nullptr) return;
   auto &session = *edit_session_;
-  session.overlay_cooldowns = edit_overlay_cooldowns(session.profile.cooldowns);
+  session.overlay_cooldowns = make_overlay_cooldowns(session.profile.cooldowns);
   session.preview_states.clear();
   session.preview_states.reserve(session.profile.cooldowns.size());
   for (const auto &cooldown : session.profile.cooldowns) {

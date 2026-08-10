@@ -103,11 +103,7 @@ INT_PTR CALLBACK EditorWindow::dialog_proc(HWND window, UINT message, WPARAM wpa
 
 void EditorWindow::initialize(const HWND window) {
   dialog_ = window;
-  const UINT window_dpi = GetDpiForWindow(window);
-  const int font_height = -MulDiv(9, window_dpi == 0 ? 96 : static_cast<int>(window_dpi), 72);
-  font_ = CreateFontW(font_height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                      DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  font_ = create_editor_font(GetDpiForWindow(window));
   theme_ = layerc::platform::editor_theme();
   accent_ = layerc::platform::editor_accent();
   capture_exclusion_ = layerc::platform::capture_exclusion_enabled();
@@ -155,19 +151,10 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   switch (message) {
   case WM_SIZE: layout(); return TRUE;
   case WM_DPICHANGED: {
-    const auto *suggested = reinterpret_cast<const RECT *>(lparam);
-    SetWindowPos(window, nullptr, suggested->left, suggested->top,
-                 suggested->right - suggested->left,
-                 suggested->bottom - suggested->top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    const int dpi = static_cast<int>(HIWORD(wparam));
+    apply_suggested_dpi_rect(window, lparam);
+    const UINT dpi = HIWORD(wparam);
     const HFONT old_font = font_;
-    const HFONT new_font =
-        CreateFontW(-MulDiv(9, dpi == 0 ? 96 : dpi, 72), 0, 0, 0,
-                    FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                    L"Segoe UI");
+    const HFONT new_font = create_editor_font(dpi);
     if (new_font != nullptr) {
       font_ = new_font;
       style_dialog_children(window);
@@ -232,6 +219,11 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       InvalidateRect(GetDlgItem(dialog_, IDC_DIRECT_DRAG), nullptr, TRUE);
       return TRUE;
     }
+    if (id == IDC_VISUAL_ENABLED && notification == BN_CLICKED) {
+      set_visual_assignment_enabled(owner_draw_checkbox_checked(
+          GetDlgItem(dialog_, IDC_VISUAL_ENABLED)));
+      return TRUE;
+    }
     switch (id) {
     case IDC_FILE_MENU: show_file_menu(); return TRUE;
     case IDM_FILE_NEW: new_profile(); return TRUE;
@@ -244,6 +236,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     case IDC_ADD_COOLDOWN: add_cooldown(); return TRUE;
     case IDC_REMOVE_COOLDOWN: remove_cooldown(); return TRUE;
     case IDC_CAPTURE_BINDING: begin_binding_capture(); return TRUE;
+    case IDC_CALIBRATE_VISUAL: calibrate_visual(); return TRUE;
+    case IDC_REMOVE_VISUAL: remove_visual_assignment(); return TRUE;
     case IDC_BAR_FILL: case IDC_BAR_BACKGROUND: case IDC_BAR_BORDER: case IDC_BAR_TEXT: choose_bar_color(id); return TRUE;
     case IDM_FILE_DELETE: delete_profile(); return TRUE;
     case IDM_FILE_OPEN_FOLDER: open_profiles_folder(); return TRUE;
@@ -316,7 +310,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (draw->CtlType != ODT_BUTTON) break;
     const int id = static_cast<int>(draw->CtlID);
     if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY ||
-        id == IDC_DIRECT_DRAG) {
+        id == IDC_DIRECT_DRAG || id == IDC_VISUAL_ENABLED) {
       draw_checkbox(*draw); return TRUE;
     }
     std::optional<COLORREF> overlay_color;

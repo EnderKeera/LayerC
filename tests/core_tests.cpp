@@ -28,6 +28,11 @@ int main() {
   test_live_profile_reconciliation();
   test_live_protocol_framing();
   test_live_placement_math();
+  test_visual_profile_parser();
+  test_pixel_rule_evaluation();
+  test_visual_trigger_state_machine();
+  test_visual_repeat_when_ready();
+  test_calibration_protocol();
 
   if (failures != 0) {
     std::cerr << failures << " test(s) failed\n";

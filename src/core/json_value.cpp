@@ -1,5 +1,10 @@
 #include "layerc/core/json.hpp"
 
+#include <array>
+#include <cassert>
+#include <charconv>
+#include <cmath>
+#include <limits>
 #include <utility>
 
 namespace layerc::core::json {
@@ -31,6 +36,61 @@ const Value* Value::find(const std::string_view key) const {
     const auto& object = as_object();
     const auto found = object.find(key);
     return found == object.end() ? nullptr : &found->second;
+}
+
+void append_unsigned(std::string &output, std::uint64_t value) {
+    std::array<char, 32> buffer;
+    const auto converted = std::to_chars(buffer.data(),
+                                         buffer.data() + buffer.size(), value);
+    if (converted.ec == std::errc{}) {
+        output.append(buffer.data(), converted.ptr);
+        return;
+    }
+    assert(false && "the fixed uint64 JSON buffer is too small");
+    output.push_back('0');
+}
+
+void append_number(std::string &output, double value) {
+    if (!std::isfinite(value)) {
+        output += "0.0";
+        return;
+    }
+    std::array<char, 64> buffer;
+    const auto converted = std::to_chars(
+        buffer.data(), buffer.data() + buffer.size(), value,
+        std::chars_format::general, std::numeric_limits<double>::max_digits10);
+    if (converted.ec == std::errc{}) {
+        output.append(buffer.data(), converted.ptr);
+        return;
+    }
+    assert(false && "the fixed double JSON buffer is too small");
+    output += "0.0";
+}
+
+void append_quoted(std::string &output, std::string_view text) {
+    constexpr std::string_view hex = "0123456789abcdef";
+    output.push_back('"');
+    for (const unsigned char character : text) {
+        switch (character) {
+        case '"': output += "\\\""; break;
+        case '\\': output += "\\\\"; break;
+        case '\b': output += "\\b"; break;
+        case '\f': output += "\\f"; break;
+        case '\n': output += "\\n"; break;
+        case '\r': output += "\\r"; break;
+        case '\t': output += "\\t"; break;
+        default:
+            if (character < 0x20U) {
+                output += "\\u00";
+                output.push_back(hex[(character >> 4U) & 0x0FU]);
+                output.push_back(hex[character & 0x0FU]);
+            } else {
+                output.push_back(static_cast<char>(character));
+            }
+            break;
+        }
+    }
+    output.push_back('"');
 }
 
 } // namespace layerc::core::json

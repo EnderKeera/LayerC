@@ -80,6 +80,7 @@ void EditorWindow::refresh_binding_controls() {
   EnableWindow(binding, cooldown != nullptr);
   EnableWindow(capture, cooldown != nullptr);
   set_text(capture, capturing_binding_ ? L"Press key..." : L"Capture key");
+  refresh_visual_controls();
   if (cooldown == nullptr) {
     set_text(binding, L"Select a cooldown");
     return;
@@ -264,6 +265,9 @@ void EditorWindow::remove_cooldown() {
   const auto prompt = L"Remove '" + to_wide(cooldown.name) + L"'?";
   if (MessageBoxW(dialog_, prompt.c_str(), L"Remove cooldown", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
   const auto id = cooldown.id;
+  if (visual_profile_) {
+    erase_visual_assignment(*visual_profile_, id);
+  }
   profile_.cooldowns.erase(profile_.cooldowns.begin() + data);
   std::erase_if(profile_.bindings, [&](const layerc::core::InputBinding &binding) { return binding.cooldown_id == id; });
   std::erase_if(profile_.panels, [&](layerc::core::Panel &panel) {
