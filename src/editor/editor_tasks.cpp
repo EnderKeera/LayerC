@@ -25,13 +25,7 @@ INT_PTR CALLBACK EditorWindow::task_dialog_proc(HWND window, UINT message, WPARA
 
 void EditorWindow::initialize_tasks(const HWND window) {
   task_dialog_ = window;
-  const UINT window_dpi = GetDpiForWindow(window);
-  const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-  task_font_ = CreateFontW(-MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE,
-                           FALSE, FALSE, DEFAULT_CHARSET,
-                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                           L"Segoe UI");
+  task_font_ = create_editor_font(GetDpiForWindow(window));
   set_dark_title_bar(window);
   style_native_dialog_children(window,
                                task_font_ == nullptr ? font_ : task_font_);
@@ -90,6 +84,7 @@ void EditorWindow::layout_tasks(const HWND window) {
   move_button(IDC_USE_TASK, 110);
   move_button(IDC_REFRESH_TASKS, 64);
   move_button(IDC_EDIT_SELECTED_TASK, 102);
+  move_button(IDC_CALIBRATE_SELECTED_TASK, 110);
   move(IDC_TASK_DETAIL, margin, button_top + button_height + gap, list_width,
        detail_height);
 
@@ -120,7 +115,8 @@ void EditorWindow::refresh_tasks() {
   matching_profile.enabled = true;
   for (auto candidate : layerc::platform::enumerate_attachable_windows()) {
     if (candidate.process_id == GetCurrentProcessId()) continue;
-    if (awaiting_edit_target_ && !matching_profile.game.global &&
+    if ((awaiting_edit_target_ || awaiting_calibration_target_) &&
+        !matching_profile.game.global &&
         !layerc::platform::profile_matches_window(candidate,
                                                   matching_profile))
       continue;
@@ -153,6 +149,20 @@ const layerc::platform::WindowCandidate *EditorWindow::selected_task() const {
       ? &task_candidates_[static_cast<std::size_t>(row)] : nullptr;
 }
 
+const layerc::platform::WindowCandidate *EditorWindow::require_selected_task(
+    const bool live_window_required) {
+  const auto *candidate = selected_task();
+  if (candidate != nullptr &&
+      (!live_window_required || IsWindow(candidate->window)))
+    return candidate;
+  MessageBoxW(task_dialog_,
+              candidate == nullptr
+                  ? L"Select a task first."
+                  : L"The selected task has closed. Refresh the list before using a live-window action.",
+              L"LayerE", MB_OK | MB_ICONINFORMATION);
+  return nullptr;
+}
+
 void EditorWindow::update_task_detail() {
   if (task_dialog_ == nullptr) return;
   const auto *candidate = selected_task();
@@ -179,11 +189,10 @@ void EditorWindow::apply_task(const layerc::platform::WindowCandidate &candidate
 }
 
 void EditorWindow::use_selected_task() {
-  const auto *candidate = selected_task();
-  if (candidate == nullptr) {
-    MessageBoxW(task_dialog_, L"Select a visible task first.", L"LayerE", MB_OK | MB_ICONINFORMATION);
-    return;
-  }
+  // Attaching stores the enumerated executable matcher and does not require
+  // the original HWND to remain alive between enumeration and this click.
+  const auto *candidate = require_selected_task(false);
+  if (candidate == nullptr) return;
   apply_task(*candidate);
 }
 
@@ -217,6 +226,23 @@ void EditorWindow::finish_picker() {
     set_status(L"No eligible window was picked.");
     return;
   }
+  if (awaiting_calibration_target_ || awaiting_edit_target_) {
+    auto matching = profile_;
+    matching.enabled = true;
+    if (!matching.game.global &&
+        !layerc::platform::profile_matches_window(*candidate, matching)) {
+      set_status(L"The picked window does not match this profile.");
+      return;
+    }
+    if (awaiting_calibration_target_) {
+      awaiting_calibration_target_ = false;
+      launch_calibration(candidate->window);
+    } else {
+      awaiting_edit_target_ = false;
+      begin_edit_on_window(candidate->window);
+    }
+    return;
+  }
   apply_task(*candidate);
 }
 
@@ -237,6 +263,7 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     case IDC_USE_TASK: use_selected_task(); return TRUE;
     case IDC_REFRESH_TASKS: refresh_tasks(); return TRUE;
     case IDC_EDIT_SELECTED_TASK: edit_selected_task(); return TRUE;
+    case IDC_CALIBRATE_SELECTED_TASK: calibrate_selected_task(); return TRUE;
     default: break;
     }
     break;
@@ -244,18 +271,8 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     layout_tasks(window);
     return TRUE;
   case WM_DPICHANGED: {
-    const auto *suggested = reinterpret_cast<const RECT *>(lparam);
-    SetWindowPos(window, nullptr, suggested->left, suggested->top,
-                 suggested->right - suggested->left,
-                 suggested->bottom - suggested->top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
-    const int dpi = static_cast<int>(HIWORD(wparam));
-    const HFONT replacement =
-        CreateFontW(-MulDiv(9, dpi == 0 ? 96 : dpi, 72), 0, 0, 0,
-                    FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                    OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                    L"Segoe UI");
+    apply_suggested_dpi_rect(window, lparam);
+    const HFONT replacement = create_editor_font(HIWORD(wparam));
     if (replacement != nullptr) {
       const HFONT previous = task_font_;
       task_font_ = replacement;
@@ -278,7 +295,8 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     if (header->idFrom == IDC_TASK_LIST) {
       if (header->code == LVN_ITEMCHANGED) update_task_detail();
       else if (header->code == NM_DBLCLK) {
-        if (awaiting_edit_target_) edit_selected_task();
+        if (awaiting_calibration_target_) calibrate_selected_task();
+        else if (awaiting_edit_target_) edit_selected_task();
         else use_selected_task();
       }
       else if (header->code == NM_CUSTOMDRAW) {
@@ -309,6 +327,7 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
       task_dialog_ = nullptr;
       task_list_ = nullptr;
       awaiting_edit_target_ = false;
+      awaiting_calibration_target_ = false;
       if (task_font_ != nullptr) {
         DeleteObject(task_font_);
         task_font_ = nullptr;

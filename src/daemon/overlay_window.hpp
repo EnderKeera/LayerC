@@ -19,6 +19,9 @@ struct OverlayCooldown {
   layerc::core::Milliseconds duration{};
 };
 
+[[nodiscard]] std::vector<OverlayCooldown> make_overlay_cooldowns(
+    std::span<const layerc::core::CooldownDefinition> definitions);
+
 class OverlayWindow {
 public:
   using DragCallback =
@@ -39,6 +42,7 @@ public:
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
                      DragCallback callback = {});
   [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
+  [[nodiscard]] bool screen_bounds(RECT &bounds) const noexcept;
   [[nodiscard]] bool
   should_show(const std::vector<layerc::core::CooldownState> &states) const;
   void hide();

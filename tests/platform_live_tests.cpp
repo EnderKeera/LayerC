@@ -1,5 +1,7 @@
 #include "layerc/core/profile.hpp"
+#include "layerc/core/visual.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/framed_pipe.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/windows.hpp"
@@ -36,6 +38,20 @@ layerc::core::GameProfile test_profile(const std::string &name) {
   profile.bindings.push_back(
       {.cooldown_id = "dash",
        .chord = {{{layerc::core::InputDevice::keyboard, 0x20, 0}}}});
+  return profile;
+}
+
+layerc::core::VisualProfile test_visual_profile() {
+  using namespace layerc::core;
+  VisualProfile profile;
+  profile.profile_id = "store-test";
+  profile.rules.push_back({.id = "ready",
+                           .name = "Ready",
+                           .region = {0.1, 0.2, 0.3, 0.4},
+                           .predicate = AverageColorPredicate{0x123456, 10}});
+  profile.triggers.push_back({.cooldown_id = "dash",
+                              .rule_id = "ready",
+                              .mode = VisualTriggerMode::pixel_only});
   return profile;
 }
 
@@ -252,6 +268,90 @@ int main(const int argc, char *argv[]) {
                        backup_stored->name == "First",
                    "failed backup protection must preserve the older backup");
 
+  const auto expected_sidecar = directory / L"_visual" / L"profile.json";
+  passed &= expect(layerc::platform::visual_sidecar_path(path) ==
+                       expected_sidecar,
+                   "visual sidecars should pair by base profile filename");
+  const auto absent_visual =
+      layerc::platform::load_visual_sidecar(path, second);
+  passed &= expect(absent_visual.state ==
+                       layerc::platform::VisualSidecarState::absent,
+                   "profiles without a visual sidecar should remain input-only");
+  auto visual = test_visual_profile();
+  passed &= expect(layerc::platform::write_visual_sidecar(path, visual, second),
+                   "the first visual sidecar write should succeed");
+  visual.sample_rate_hz = 15;
+  passed &= expect(layerc::platform::write_visual_sidecar(path, visual, second),
+                   "a replacement visual sidecar should create a protected backup");
+  auto visual_backup = expected_sidecar;
+  visual_backup += L".bak";
+  passed &= expect(std::filesystem::exists(visual_backup),
+                   "a valid previous visual sidecar should be backed up");
+  auto visual_state = expected_sidecar;
+  visual_state += L".state";
+  const HANDLE locked_visual_state = CreateFileW(
+      visual_state.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  passed &= expect(locked_visual_state != INVALID_HANDLE_VALUE,
+                   "the visual state marker should be lockable");
+  if (locked_visual_state != INVALID_HANDLE_VALUE) {
+    visual.sample_rate_hz = 5;
+    passed &= expect(
+        !layerc::platform::write_visual_sidecar(path, visual, second),
+        "a state-publication failure should fail the visual write");
+    CloseHandle(locked_visual_state);
+    const auto after_state_failure =
+        layerc::platform::load_visual_sidecar(path, second);
+    passed &= expect(
+        after_state_failure.state ==
+                layerc::platform::VisualSidecarState::valid &&
+            after_state_failure.profile.has_value() &&
+            after_state_failure.profile->sample_rate_hz == 15,
+        "a state-publication failure must restore the previous visual and backup");
+    visual.sample_rate_hz = 15;
+  }
+  {
+    std::ofstream corrupt(expected_sidecar,
+                          std::ios::binary | std::ios::trunc);
+    corrupt << "{broken";
+  }
+  const auto recovered_visual =
+      layerc::platform::load_visual_sidecar(path, second);
+  passed &= expect(
+      recovered_visual.state ==
+              layerc::platform::VisualSidecarState::recovered_backup &&
+          recovered_visual.profile.has_value() &&
+          recovered_visual.profile->sample_rate_hz == 10,
+      "an invalid visual sidecar should recover its last valid backup");
+  {
+    std::ofstream corrupt(visual_backup,
+                          std::ios::binary | std::ios::trunc);
+    corrupt << "{also-broken";
+  }
+  const auto invalid_visual =
+      layerc::platform::load_visual_sidecar(path, second);
+  passed &= expect(invalid_visual.state ==
+                       layerc::platform::VisualSidecarState::invalid &&
+                       !invalid_visual.error.message.empty(),
+                   "two invalid visual copies should produce a blocking diagnostic");
+  visual.sample_rate_hz = 5;
+  passed &= expect(
+      layerc::platform::write_visual_sidecar(path, visual, second),
+      "repairing an invalid visual sidecar should replace its stale backup");
+  {
+    std::ofstream corrupt(expected_sidecar,
+                          std::ios::binary | std::ios::trunc);
+    corrupt << "{broken-again";
+  }
+  const auto repaired_backup =
+      layerc::platform::load_visual_sidecar(path, second);
+  passed &= expect(
+      repaired_backup.state ==
+              layerc::platform::VisualSidecarState::recovered_backup &&
+          repaired_backup.profile.has_value() &&
+          repaired_backup.profile->sample_rate_hz == 5,
+      "a second corruption should recover the repaired visual definition");
+
   const auto collision_path = directory / L"collision.json";
   auto legacy_temporary = collision_path;
   legacy_temporary += L".tmp";
@@ -268,7 +368,160 @@ int main(const int argc, char *argv[]) {
                                       std::istreambuf_iterator<char>()};
   sentinel.close();
   passed &= expect(sentinel_contents == "do-not-replace",
-                   "unique atomic-write temporaries should leave unrelated .tmp files untouched");
+                    "unique atomic-write temporaries should leave unrelated .tmp files untouched");
+
+  const auto bundle_path = directory / L"bundle.json";
+  auto old_bundle_profile = test_profile("Old bundle");
+  old_bundle_profile.id = "bundle-old";
+  auto old_bundle_visual = test_visual_profile();
+  old_bundle_visual.profile_id = old_bundle_profile.id;
+  passed &= expect(
+      layerc::platform::write_profile_file(
+          bundle_path,
+          layerc::core::serialize_profile_json(old_bundle_profile)) &&
+          layerc::platform::write_profile_file(
+              bundle_path,
+              layerc::core::serialize_profile_json(old_bundle_profile)) &&
+          layerc::platform::write_visual_sidecar(
+              bundle_path, old_bundle_visual, old_bundle_profile),
+      "the old profile bundle should be created for rollback testing");
+  auto new_bundle_profile = old_bundle_profile;
+  new_bundle_profile.id = "bundle-new";
+  new_bundle_profile.name = "New bundle";
+  auto new_bundle_visual = old_bundle_visual;
+  new_bundle_visual.profile_id = new_bundle_profile.id;
+  auto bundle_backup = bundle_path;
+  bundle_backup += L".bak";
+  const HANDLE locked_bundle_backup = CreateFileW(
+      bundle_backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  passed &= expect(locked_bundle_backup != INVALID_HANDLE_VALUE,
+                    "the bundle backup should be lockable for rollback testing");
+  if (locked_bundle_backup != INVALID_HANDLE_VALUE) {
+    passed &= expect(
+        !layerc::platform::write_profile_bundle(
+            bundle_path, new_bundle_profile, new_bundle_visual),
+        "a failed second bundle replacement should report failure");
+    CloseHandle(locked_bundle_backup);
+  }
+  const auto rolled_back_profile_json =
+      layerc::platform::read_profile_file(bundle_path);
+  const auto rolled_back_profile =
+      rolled_back_profile_json
+          ? layerc::core::parse_profile_json(*rolled_back_profile_json)
+          : layerc::core::ProfileResult(layerc::core::ProfileError{});
+  const auto *rolled_back =
+      std::get_if<layerc::core::GameProfile>(&rolled_back_profile);
+  layerc::platform::VisualSidecarLoad rolled_back_visual;
+  if (rolled_back == nullptr)
+    rolled_back_visual.state =
+        layerc::platform::VisualSidecarState::invalid;
+  else
+    rolled_back_visual =
+        layerc::platform::load_visual_sidecar(bundle_path, *rolled_back);
+  passed &= expect(
+      rolled_back != nullptr && rolled_back->id == "bundle-old" &&
+          rolled_back_visual.profile.has_value() &&
+          rolled_back_visual.profile->profile_id == "bundle-old",
+      "a partial bundle failure must restore a matching profile and sidecar");
+  passed &= expect(
+      layerc::platform::write_profile_bundle(
+          bundle_path, new_bundle_profile, new_bundle_visual),
+      "a complete bundle replacement should succeed after the lock clears");
+  const auto committed_visual =
+      layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
+  passed &= expect(
+      committed_visual.profile.has_value() &&
+          committed_visual.profile->profile_id == "bundle-new",
+      "a successful bundle replacement should commit the matching sidecar");
+  auto committed_visual_backup =
+      layerc::platform::visual_sidecar_path(bundle_path);
+  committed_visual_backup += L".bak";
+  const HANDLE locked_visual_backup = CreateFileW(
+      committed_visual_backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  passed &= expect(locked_visual_backup != INVALID_HANDLE_VALUE,
+                   "the visual recovery copy should be lockable");
+  if (locked_visual_backup != INVALID_HANDLE_VALUE) {
+    auto rejected_profile = new_bundle_profile;
+    rejected_profile.id = "bundle-rejected";
+    auto rejected_visual = new_bundle_visual;
+    rejected_visual.profile_id = rejected_profile.id;
+    passed &= expect(
+        !layerc::platform::write_profile_bundle(
+            bundle_path, rejected_profile, rejected_visual),
+        "a locked visual backup refresh should reject the bundle before publishing it");
+    CloseHandle(locked_visual_backup);
+    const auto unchanged_profile_json =
+        layerc::platform::read_profile_file(bundle_path);
+    const auto unchanged_profile =
+        unchanged_profile_json
+            ? layerc::core::parse_profile_json(*unchanged_profile_json)
+            : layerc::core::ProfileResult(layerc::core::ProfileError{});
+    const auto *unchanged =
+        std::get_if<layerc::core::GameProfile>(&unchanged_profile);
+    const auto unchanged_visual =
+        unchanged != nullptr
+            ? layerc::platform::load_visual_sidecar(bundle_path, *unchanged)
+            : layerc::platform::VisualSidecarLoad{};
+    passed &= expect(
+        unchanged != nullptr && unchanged->id == "bundle-new" &&
+            unchanged_visual.profile.has_value() &&
+            unchanged_visual.profile->profile_id == "bundle-new",
+        "a backup-refresh failure must leave the active profile bundle unchanged");
+  }
+  const auto committed_visual_path =
+      layerc::platform::visual_sidecar_path(bundle_path);
+  const HANDLE locked_visual = CreateFileW(
+      committed_visual_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  passed &= expect(locked_visual != INVALID_HANDLE_VALUE,
+                   "the committed visual sidecar should be lockable");
+  if (locked_visual != INVALID_HANDLE_VALUE) {
+    passed &= expect(
+        layerc::platform::write_profile_bundle(
+            bundle_path, new_bundle_profile, std::nullopt),
+        "a durable removal marker should commit even while stale visual bytes are locked");
+    const auto removed_while_locked =
+        layerc::platform::load_visual_sidecar(bundle_path,
+                                              new_bundle_profile);
+    passed &= expect(
+        removed_while_locked.state ==
+            layerc::platform::VisualSidecarState::absent,
+        "locked stale visual bytes must remain inactive after removal commits");
+    CloseHandle(locked_visual);
+  }
+  passed &= expect(
+      layerc::platform::write_profile_bundle(
+          bundle_path, new_bundle_profile, std::nullopt),
+      "an input-only bundle should replace the base and remove visual data");
+  passed &= expect(
+      !std::filesystem::exists(
+          layerc::platform::visual_sidecar_path(bundle_path)) &&
+          !std::filesystem::exists(committed_visual_backup) &&
+          layerc::platform::load_visual_sidecar(bundle_path,
+                                                new_bundle_profile)
+                  .state ==
+              layerc::platform::VisualSidecarState::absent,
+      "an input-only overwrite must keep both stale visual copies inactive and clean them when unlocked");
+
+  HANDLE framed_read{};
+  HANDLE framed_write{};
+  passed &= expect(CreatePipe(&framed_read, &framed_write, nullptr, 4'096) != FALSE,
+                   "anonymous calibration test pipe should be created");
+  if (framed_read != nullptr && framed_write != nullptr) {
+    std::string framed_error;
+    passed &= expect(layerc::platform::write_framed_pipe(
+                         framed_write, "{\"calibration\":true}", 1'024,
+                         framed_error),
+                     "bounded calibration frame should be written");
+    const auto framed =
+        layerc::platform::read_framed_pipe(framed_read, 1'024);
+    passed &= expect(framed && framed.payload == "{\"calibration\":true}",
+                     "bounded calibration frame should be read exactly");
+    CloseHandle(framed_write);
+    CloseHandle(framed_read);
+  }
 
   std::array<wchar_t, 32'768> previous_directory{};
   const DWORD previous_directory_length = GetCurrentDirectoryW(

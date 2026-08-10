@@ -23,5 +23,10 @@ void test_json_malformed_corpus();
 void test_live_profile_reconciliation();
 void test_live_protocol_framing();
 void test_live_placement_math();
+void test_visual_profile_parser();
+void test_pixel_rule_evaluation();
+void test_visual_trigger_state_machine();
+void test_visual_repeat_when_ready();
+void test_calibration_protocol();
 
 } // namespace layerc::test

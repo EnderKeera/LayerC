@@ -281,12 +281,7 @@ void NamedPipeEditorDaemonChannel::complete_connection() {
 }
 
 void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
-  if (pipe_ != INVALID_HANDLE_VALUE) {
-    CancelIoEx(pipe_, nullptr);
-    if (role_ == Role::server) DisconnectNamedPipe(pipe_);
-    CloseHandle(pipe_);
-    pipe_ = INVALID_HANDLE_VALUE;
-  }
+  close_handles();
   const bool was_connected = connected_;
   connected_ = false;
   peer_process_id_ = 0;
@@ -294,8 +289,10 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
   read_pending_ = false;
   write_pending_ = false;
   decoder_.clear();
-  active_write_.clear();
-  write_queue_.clear();
+  // This object lives for LayerD's entire lifetime. clear() would keep the
+  // largest profile frame and deque storage committed after LayerE closes.
+  std::vector<std::byte>().swap(active_write_);
+  std::deque<std::vector<std::byte>>().swap(write_queue_);
   if (was_connected) connection_changed_ = true;
   if (error != ERROR_SUCCESS && error != ERROR_BROKEN_PIPE &&
       error != ERROR_PIPE_NOT_CONNECTED && error != ERROR_OPERATION_ABORTED)

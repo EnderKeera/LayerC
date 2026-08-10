@@ -136,6 +136,16 @@ void test_live_protocol_framing() {
              message->anchor_y == source.anchor_y,
          "live JSON should preserve UTF-8 and 64-bit identifiers exactly");
 
+  const LiveMessage status{.type = LiveMessageType::runtime_status,
+                           .text = "Visual recognition: WGC active"};
+  const auto decoded_status =
+      decode_live_message_json(encode_live_message_json(status));
+  const auto *status_message = std::get_if<LiveMessage>(&decoded_status);
+  expect(status_message != nullptr &&
+             status_message->type == LiveMessageType::runtime_status &&
+             status_message->text == status.text,
+         "runtime capture status should round-trip over the authenticated channel");
+
   const auto encoded_frame = encode_live_frame(source);
   const auto *frame = std::get_if<std::vector<std::byte>>(&encoded_frame);
   expect(frame != nullptr, "a bounded live message should produce a frame");
@@ -189,8 +199,21 @@ void test_live_protocol_framing() {
   const auto excessive = decoder.push(excessive_buffer);
   expect(excessive.size() == 1 &&
              std::holds_alternative<LiveProtocolError>(excessive.front()) &&
-             decoder.buffered_bytes() == 0,
+             decoder.buffered_bytes() == 0 && decoder.reserved_bytes() == 0,
          "incomplete or hostile streams should not grow the decoder buffer without bound");
+
+  std::vector<std::byte> partial(64U * 1024U, std::byte{});
+  const auto partial_length = static_cast<std::uint32_t>(max_live_message_bytes);
+  partial[0] = static_cast<std::byte>(partial_length & 0xFFU);
+  partial[1] = static_cast<std::byte>((partial_length >> 8U) & 0xFFU);
+  partial[2] = static_cast<std::byte>((partial_length >> 16U) & 0xFFU);
+  partial[3] = static_cast<std::byte>((partial_length >> 24U) & 0xFFU);
+  expect(decoder.push(partial).empty() && decoder.buffered_bytes() != 0 &&
+             decoder.reserved_bytes() != 0,
+         "an incomplete valid frame should reserve decoder storage");
+  decoder.clear();
+  expect(decoder.buffered_bytes() == 0 && decoder.reserved_bytes() == 0,
+         "disconnect cleanup should release decoder capacity");
 }
 
 void test_live_placement_math() {

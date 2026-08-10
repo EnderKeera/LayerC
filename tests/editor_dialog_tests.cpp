@@ -46,20 +46,30 @@ int main() {
       dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
   const HWND apply = GetDlgItem(dialog, IDC_OPTIONS_APPLY);
   const HWND checkbox = GetDlgItem(dialog, IDC_CAPTURE_PRIVACY);
+  const HWND visual_checkbox = GetDlgItem(dialog, IDC_VISUAL_MASTER);
   const auto apply_type =
       GetWindowLongPtrW(apply, GWL_STYLE) & BS_TYPEMASK;
   const auto checkbox_type =
       GetWindowLongPtrW(checkbox, GWL_STYLE) & BS_TYPEMASK;
+  const auto visual_checkbox_type =
+      GetWindowLongPtrW(visual_checkbox, GWL_STYLE) & BS_TYPEMASK;
   bool passed = true;
   passed &= expect(apply_type == BS_DEFPUSHBUTTON,
                    "the default Apply button must retain dialog-manager semantics");
   passed &= expect(checkbox_type == BS_AUTOCHECKBOX,
                    "the capture checkbox must retain native auto-toggle semantics");
+  passed &= expect(visual_checkbox_type == BS_AUTOCHECKBOX,
+                   "the visual master checkbox must retain native auto-toggle semantics");
 
   SendMessageW(checkbox, BM_SETCHECK, BST_UNCHECKED, 0);
   SendMessageW(checkbox, BM_CLICK, 0, 0);
   passed &= expect(SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED,
                    "a themed native checkbox should toggle through BM_CLICK");
+  SendMessageW(visual_checkbox, BM_SETCHECK, BST_UNCHECKED, 0);
+  SendMessageW(visual_checkbox, BM_CLICK, 0, 0);
+  passed &= expect(
+      SendMessageW(visual_checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED,
+      "the themed visual master checkbox should toggle through BM_CLICK");
 
   const LRESULT default_id = SendMessageW(dialog, DM_GETDEFID, 0, 0);
   passed &= expect(HIWORD(default_id) == DC_HASDEFID &&
@@ -125,6 +135,59 @@ int main() {
   }
 
   history.reset(original);
+  layerc::core::VisualProfile assigned_visual;
+  assigned_visual.profile_id = original.id;
+  assigned_visual.rules.push_back({.id = "ready", .name = "Ready"});
+  assigned_visual.triggers.push_back(
+      {.cooldown_id = "dash", .rule_id = "ready"});
+  history.reset(original, assigned_visual);
+  auto without_cooldown = original;
+  without_cooldown.name = "Cooldown removed";
+  auto without_visual = assigned_visual;
+  without_visual.rules.clear();
+  without_visual.triggers.clear();
+  passed &= expect(
+      history.record(without_cooldown, without_visual, false),
+      "a cooldown and visual-assignment removal should share one history transaction");
+  const auto restored_bundle =
+      history.undo(without_cooldown, without_visual);
+  passed &= expect(
+      restored_bundle.has_value() &&
+          restored_bundle->profile.name == original.name &&
+          restored_bundle->visual_profile.has_value() &&
+          restored_bundle->visual_profile->triggers.size() == 1,
+      "undo should restore a removed cooldown's visual assignment");
+
+  history.reset(original, assigned_visual);
+  auto pending_base = original;
+  pending_base.name = "Pending base edit";
+  passed &= expect(history.record(pending_base, assigned_visual, false),
+                    "a pending base edit should enter combined history");
+  auto committed_visual = assigned_visual;
+  committed_visual.triggers.front().enabled = false;
+  passed &= expect(
+      history.record(pending_base, committed_visual, false),
+      "a committed visual-only action should enter combined history");
+  history.rebase_visual(committed_visual);
+  passed &= expect(
+      history.is_dirty(pending_base, committed_visual, true),
+      "committing a visual-only action must not mark a pending base edit saved");
+  const auto base_undo = history.undo(pending_base, committed_visual);
+  passed &= expect(
+      base_undo.has_value() &&
+          base_undo->profile.name == pending_base.name &&
+          base_undo->visual_profile == assigned_visual,
+      "undo should restore the visual state before a visual-only commit");
+  if (base_undo.has_value()) {
+    const auto visual_redo =
+        history.redo(base_undo->profile, base_undo->visual_profile);
+    passed &= expect(
+        visual_redo.has_value() && visual_redo->profile == pending_base &&
+            visual_redo->visual_profile == committed_visual,
+        "redo should deterministically restore the committed visual state");
+  }
+
+  history.reset(original);
   auto bounded = original;
   for (int index = 0; index < 60; ++index) {
     bounded.name = "Edit " + std::to_string(index);
@@ -148,6 +211,26 @@ int main() {
                        high_dpi_checkbox.inset == 4 &&
                        high_dpi_checkbox.pen_width == 4,
                    "profile checkbox resources and hit target should scale with DPI");
+
+  const HWND editor_dialog = CreateDialogParamW(
+      instance, MAKEINTRESOURCEW(IDD_EDITOR), nullptr, &test_dialog_proc, 0);
+  passed &= expect(editor_dialog != nullptr,
+                   "the V1.1 native editor resource should load");
+  if (editor_dialog != nullptr) {
+    layerc::editor::style_native_dialog_children(
+        editor_dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    const HWND assignment = GetDlgItem(editor_dialog, IDC_VISUAL_ENABLED);
+    const auto assignment_type =
+        GetWindowLongPtrW(assignment, GWL_STYLE) & BS_TYPEMASK;
+    passed &= expect(assignment_type == BS_AUTOCHECKBOX,
+                     "the visual assignment checkbox must retain auto-toggle semantics");
+    SendMessageW(assignment, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(assignment, BM_CLICK, 0, 0);
+    passed &= expect(
+        SendMessageW(assignment, BM_GETCHECK, 0, 0) == BST_CHECKED,
+        "the visual assignment checkbox should toggle through BM_CLICK");
+    DestroyWindow(editor_dialog);
+  }
 
   DestroyWindow(dialog);
   return passed ? 0 : 1;

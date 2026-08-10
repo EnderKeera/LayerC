@@ -29,7 +29,7 @@ bool bounded_decimal(const std::wstring &text, const std::uint32_t minimum,
 } // namespace
 
 void EditorWindow::reset_history() {
-  history_.reset(profile_);
+  history_.reset(profile_, visual_profile_);
 }
 
 void EditorWindow::sync_current_profile_entry() {
@@ -56,14 +56,15 @@ void EditorWindow::sync_current_profile_entry() {
 
 void EditorWindow::record_profile_change(const ChangeKind kind) {
   if (syncing_) return;
-  if (history_.is_baseline(profile_)) {
+  if (history_.is_baseline(profile_, visual_profile_)) {
     if (!draft_controls_valid()) {
       dirty_ = true;
       schedule_autosave(false);
     }
     return;
   }
-  (void)history_.record(profile_, kind == ChangeKind::text);
+  (void)history_.record(profile_, visual_profile_,
+                        kind == ChangeKind::text);
   dirty_ = true;
   schedule_autosave(kind != ChangeKind::text);
   send_live_profile();
@@ -103,6 +104,12 @@ bool EditorWindow::flush_autosave() {
                    : L"Not autosaved — finish the invalid field.");
     return false;
   }
+  if (!visual_profile_ &&
+      visual_sidecar_state_ ==
+          layerc::platform::VisualSidecarState::invalid) {
+    set_status(L"Not autosaved — repair the invalid visual sidecar first.");
+    return false;
+  }
   sync_profile_from_controls();
   const auto serialized = layerc::core::serialize_profile_json(profile_);
   const auto parsed = layerc::core::parse_profile_json(serialized);
@@ -112,11 +119,13 @@ bool EditorWindow::flush_autosave() {
     return false;
   }
   profile_ = *validated;
-  if (!layerc::platform::write_profile_file(current_path_, serialized)) {
-    set_status(L"Autosave failed — the last committed profile is still active.");
+  if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if (!layerc::platform::write_profile_bundle(current_path_, profile_,
+                                               visual_profile_)) {
+    set_status(L"Autosave failed — the last consistent profile bundle remains active.");
     return false;
   }
-  history_.rebase(profile_);
+  history_.rebase(profile_, visual_profile_);
   dirty_ = false;
   sync_current_profile_entry();
   notify_profile_committed(current_path_, profile_);
@@ -204,6 +213,11 @@ void EditorWindow::poll_live_channel() {
 
 void EditorWindow::handle_live_message(
     const layerc::core::LiveMessage &message) {
+  if (message.type == layerc::core::LiveMessageType::runtime_status) {
+    visual_runtime_status_ = to_wide(message.text);
+    refresh_visual_controls();
+    return;
+  }
   if (message.type == layerc::core::LiveMessageType::error) {
     if (edit_session_id_ != 0 &&
         message.edit_session == edit_session_id_) {
@@ -329,12 +343,8 @@ void EditorWindow::edit_on_window() {
 }
 
 void EditorWindow::edit_selected_task() {
-  const auto *candidate = selected_task();
-  if (candidate == nullptr || !IsWindow(candidate->window)) {
-    MessageBoxW(task_dialog_, L"Select a visible task first.", L"LayerE",
-                MB_OK | MB_ICONINFORMATION);
-    return;
-  }
+  const auto *candidate = require_selected_task();
+  if (candidate == nullptr) return;
   auto matching = profile_;
   matching.enabled = true;
   if (!matching.game.global &&
@@ -441,21 +451,22 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled,
 }
 
 void EditorWindow::undo() {
-  auto previous = history_.undo(profile_);
+  auto previous = history_.undo(profile_, visual_profile_);
   if (!previous.has_value()) return;
-  profile_ = std::move(*previous);
-  dirty_ = history_.is_dirty(profile_, !current_path_.empty());
-  refresh_profile_controls();
-  sync_current_profile_entry();
-  schedule_autosave(true);
-  send_live_profile();
+  apply_history_snapshot(std::move(*previous));
 }
 
 void EditorWindow::redo() {
-  auto next = history_.redo(profile_);
+  auto next = history_.redo(profile_, visual_profile_);
   if (!next.has_value()) return;
-  profile_ = std::move(*next);
-  dirty_ = history_.is_dirty(profile_, !current_path_.empty());
+  apply_history_snapshot(std::move(*next));
+}
+
+void EditorWindow::apply_history_snapshot(EditorProfileSnapshot snapshot) {
+  profile_ = std::move(snapshot.profile);
+  visual_profile_ = std::move(snapshot.visual_profile);
+  dirty_ =
+      history_.is_dirty(profile_, visual_profile_, !current_path_.empty());
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);

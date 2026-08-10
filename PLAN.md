@@ -128,13 +128,27 @@ Measure private bytes, working set, thread count, thread cycle time, CPU, input-
 
 V1.1 is a focused opt-in update after the input-only v1 meets its acceptance criteria. It adds visual confirmation without expanding into general image recognition.
 
+Implementation status: the native V1.1 path is implemented. LayerE launches
+the short-lived `layercal.exe` calibration utility, while LayerD owns runtime
+capture and recognition. The checked-in benchmark workflow is the release
+evidence mechanism; integrated- and discrete-GPU result files are still
+machine-specific release artifacts rather than source-controlled claims.
+
 - Capture only the active foreground game HWND using `Windows.Graphics.Capture`; windowed and borderless modes remain the supported targets.
 - Allow at most four normalized regions per profile and sample at 5, 10, or 15 Hz.
 - Support average RGB, brightness threshold, and percentage of pixels near a selected color.
 - Support pixel-only triggers and input-plus-pixel confirmation with stable-sample debounce.
 - Add an editor calibration view for drawing a region, sampling a color, selecting tolerance/rate, and previewing predicate state.
 - Start capture only when an active profile contains enabled pixel rules; input-only profiles allocate no capture device, textures, or capture thread.
-- Use a two-frame GPU capture pool, reduce or crop regions on the GPU, and read back only the small result needed by the predicate.
+- Use a one-buffer newest-frame WGC pool because older frames are intentionally
+  dropped between 5-15 Hz polls. Low and Balanced keep CPU readback and
+  evaluation bounded to aspect-preserving 64- and 256-pixel grids, with compact
+  sampled-row/column staging instead of a full-window CPU texture; Exact reads
+  every captured pixel and carries no performance guarantee. GPU allocation is
+  recorded separately. Shared HWNDs use independent quality buckets, and the
+  Desktop Duplication staging copy is limited to the window intersection,
+  transforms rotated outputs, and marks LayerC-overlay intersections
+  unavailable instead of sampling masked pixels.
 - Recreate capture after game resize, window replacement, device loss, or capture-session failure.
 - Treat black/protected frames and unavailable capture as an explicit unavailable state, never as a successful trigger.
 - Exclude OCR, template matching, motion detection, automatic region discovery, and exclusive-fullscreen support.
@@ -142,6 +156,13 @@ V1.1 is a focused opt-in update after the input-only v1 meets its acceptance cri
 Provisional V1.1 active-capture budget at 15 Hz is at most 35 MB private bytes, 50 MB working set, and 3% average CPU on the reference machine; GPU memory is recorded separately because full-window capture surfaces scale with game resolution.
 
 V1.1 tests add synthetic SDR and HDR-tonemapped frames, threshold boundaries, noisy regions, stable-sample debounce, input-confirmation timeouts, resize/recreation, black frames, protected content, and 5/10/15 Hz performance. Acceptance requires capture failure to leave input triggers and overlays functioning normally.
+Live-desktop GDI snapshot coverage is an explicit interactive integration test;
+the default capture-math suite remains deterministic on headless CI.
+
+Run `tools\benchmark_v11.ps1` for `low` and `balanced` on an integrated-GPU
+system and a discrete-GPU system. The script refuses a false pass unless the
+hardware capture probe first receives a real frame, and records its evidence
+as JSON under `out\benchmarks`.
 
 ## Deferred roadmap
 

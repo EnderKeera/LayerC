@@ -2,7 +2,10 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/core/live_edit.hpp"
+#include "layerc/core/calibration.hpp"
+#include "layerc/core/visual.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/windows.hpp"
 #include "editor_history.hpp"
 
@@ -49,8 +52,10 @@ void set_text(HWND control, std::wstring_view text);
 void enable_native_dark_mode();
 void set_dark_title_bar(HWND window);
 void style_native_dialog_children(HWND dialog, HFONT font);
+[[nodiscard]] HFONT create_editor_font(UINT dpi);
+void apply_suggested_dpi_rect(HWND window, LPARAM lparam);
 [[nodiscard]] bool start_daemon();
-[[nodiscard]] bool recycle_profile_file(const std::filesystem::path &path);
+[[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
 [[nodiscard]] std::string safe_identifier(
     std::wstring_view text, std::string_view fallback = "profile");
 [[nodiscard]] layerc::core::GameProfile make_new_profile();
@@ -65,6 +70,10 @@ profile_error_text(const layerc::core::ProfileError &error);
                                        std::uint32_t fallback);
 [[nodiscard]] std::wstring color_label(const wchar_t *label,
                                         std::uint32_t value);
+void erase_visual_assignment(layerc::core::VisualProfile &visual,
+                             std::string_view cooldown_id);
+void gc_orphan_visual_rule(layerc::core::VisualProfile &visual,
+                           std::string_view rule_id);
 class EditorWindow {
 public:
   int run(HINSTANCE instance, int show_command);
@@ -105,6 +114,15 @@ private:
   void refresh_cooldown_list(int selection = 0);
   [[nodiscard]] layerc::core::CooldownDefinition *selected_cooldown();
   void refresh_binding_controls();
+  void load_current_visual_profile();
+  void refresh_visual_controls();
+  void calibrate_visual();
+  void calibrate_selected_task();
+  bool launch_calibration(HWND target);
+  [[nodiscard]] bool merge_calibration_result(std::string_view visual_json);
+  [[nodiscard]] bool save_visual_profile();
+  void set_visual_assignment_enabled(bool enabled);
+  void remove_visual_assignment();
   void begin_binding_capture();
   void cancel_binding_capture(std::wstring_view status = {});
   void assign_binding_key(LPARAM key_data);
@@ -133,6 +151,8 @@ private:
   void refresh_tasks();
   [[nodiscard]] HWND selected_task_window() const;
   [[nodiscard]] const layerc::platform::WindowCandidate *selected_task() const;
+  [[nodiscard]] const layerc::platform::WindowCandidate *require_selected_task(
+      bool live_window_required = true);
   void update_task_detail();
   void apply_task(const layerc::platform::WindowCandidate &candidate);
   void use_selected_task();
@@ -148,6 +168,7 @@ private:
   [[nodiscard]] bool choose_color(HWND owner, std::uint32_t &value);
   void initialize_color_picker(HWND);
   void refresh_color_picker(HWND);
+  void refresh_color_picker_rgb(HWND);
   void update_color_picker_from_rgb(HWND);
   void update_color_picker_from_hex(HWND);
   [[nodiscard]] bool draw_color_picker_item(const DRAWITEMSTRUCT &) const;
@@ -175,6 +196,7 @@ private:
   void set_direct_drag_enabled(bool enabled, bool show_notice);
   void undo();
   void redo();
+  void apply_history_snapshot(EditorProfileSnapshot snapshot);
   void reset_history();
   void sync_current_profile_entry();
 
@@ -208,6 +230,7 @@ private:
   HWND bar_list_{};
   HWND preview_{};
   HWND status_{};
+  std::wstring visual_runtime_status_{L"Visual recognition: connecting"};
   HWND application_path_{};
   HWND task_list_{};
   HIMAGELIST profile_check_images_{};
@@ -217,6 +240,10 @@ private:
   std::vector<ProfileEntry> entries_;
   std::vector<layerc::platform::WindowCandidate> task_candidates_;
   layerc::core::GameProfile profile_;
+  std::optional<layerc::core::VisualProfile> visual_profile_;
+  layerc::platform::VisualSidecarState visual_sidecar_state_{
+      layerc::platform::VisualSidecarState::absent};
+  std::string visual_sidecar_error_;
   std::filesystem::path current_path_;
   layerc::platform::EditorTheme theme_{layerc::platform::EditorTheme::copper};
   std::uint32_t accent_{0xD88E4BU};
@@ -244,6 +271,7 @@ private:
   bool direct_drag_enabled_{};
   bool direct_drag_notice_shown_{};
   bool awaiting_edit_target_{};
+  bool awaiting_calibration_target_{};
   ULONGLONG last_live_drag_send_{};
   ULONGLONG last_heartbeat_send_{};
   UINT live_timer_interval_{100};

@@ -1,82 +1,20 @@
 #include "layerc/core/profile.hpp"
+#include "layerc/core/json.hpp"
 
-#include <array>
-#include <charconv>
 #include <cstdint>
-#include <limits>
 #include <string_view>
 
 namespace layerc::core {
 namespace {
 
-void append_unsigned(std::string &output, std::uint64_t value) {
-  std::array<char, 32> digits{};
-  auto *end = digits.data() + digits.size();
-  auto *cursor = end;
-  do {
-    *--cursor = static_cast<char>('0' + value % 10U);
-    value /= 10U;
-  } while (value != 0);
-  output.append(cursor, end);
-}
-
 void append_indent(std::string &output, const int count) {
   output.append(static_cast<std::size_t>(count), ' ');
-}
-
-void append_double(std::string &output, const double value) {
-  std::array<char, 64> buffer{};
-  const auto converted = std::to_chars(
-      buffer.data(), buffer.data() + buffer.size(), value,
-      std::chars_format::general, std::numeric_limits<double>::max_digits10);
-  if (converted.ec == std::errc{})
-    output.append(buffer.data(), converted.ptr);
-}
-
-void append_quoted(std::string &output, const std::string_view text) {
-  output.push_back('"');
-  constexpr std::string_view hex = "0123456789abcdef";
-  for (const unsigned char character : text) {
-    switch (character) {
-    case '"':
-      output += "\\\"";
-      break;
-    case '\\':
-      output += "\\\\";
-      break;
-    case '\b':
-      output += "\\b";
-      break;
-    case '\f':
-      output += "\\f";
-      break;
-    case '\n':
-      output += "\\n";
-      break;
-    case '\r':
-      output += "\\r";
-      break;
-    case '\t':
-      output += "\\t";
-      break;
-    default:
-      if (character < 0x20U) {
-        output += "\\u00";
-        output.push_back(hex[(character >> 4U) & 0x0FU]);
-        output.push_back(hex[character & 0x0FU]);
-      } else {
-        output.push_back(static_cast<char>(character));
-      }
-      break;
-    }
-  }
-  output.push_back('"');
 }
 
 void append_key(std::string &output, const int indent,
                 const std::string_view key) {
   append_indent(output, indent);
-  append_quoted(output, key);
+  json::append_quoted(output, key);
   output += ": ";
 }
 
@@ -133,13 +71,13 @@ std::string serialize_profile_json(const GameProfile &profile) {
   output.reserve(2048);
   output += "{\n";
   append_key(output, 2, "schemaVersion");
-  append_unsigned(output, profile.schema_version);
+  json::append_unsigned(output, profile.schema_version);
   output += ",\n";
   append_key(output, 2, "id");
-  append_quoted(output, profile.id);
+  json::append_quoted(output, profile.id);
   output += ",\n";
   append_key(output, 2, "name");
-  append_quoted(output, profile.name);
+  json::append_quoted(output, profile.name);
   output += ",\n";  append_key(output, 2, "enabled");
   append_bool(output, profile.enabled);
   output += ",\n";
@@ -150,16 +88,16 @@ std::string serialize_profile_json(const GameProfile &profile) {
   append_bool(output, profile.game.global);
   output += ",\n";
   append_key(output, 4, "executablePath");
-  append_quoted(output, profile.game.executable_path);
+  json::append_quoted(output, profile.game.executable_path);
   output += ",\n";
   append_key(output, 4, "executableName");
-  append_quoted(output, profile.game.executable_name);
+  json::append_quoted(output, profile.game.executable_name);
   output += ",\n";
   append_key(output, 4, "windowClass");
-  append_quoted(output, profile.game.window_class);
+  json::append_quoted(output, profile.game.window_class);
   output += ",\n";
   append_key(output, 4, "windowTitle");
-  append_quoted(output, profile.game.window_title);
+  json::append_quoted(output, profile.game.window_title);
   output += "\n  },\n";
 
   append_key(output, 2, "cooldowns");
@@ -169,20 +107,20 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_indent(output, 4);
     output += "{\n";
     append_key(output, 6, "id");
-    append_quoted(output, cooldown.id);
+    json::append_quoted(output, cooldown.id);
     output += ",\n";
     append_key(output, 6, "name");
-    append_quoted(output, cooldown.name);
+    json::append_quoted(output, cooldown.name);
     output += ",\n";
     append_key(output, 6, "durationMs");
-    append_unsigned(output,
-                    static_cast<std::uint64_t>(cooldown.duration.count()));
+    json::append_unsigned(
+        output, static_cast<std::uint64_t>(cooldown.duration.count()));
     output += ",\n";
     append_key(output, 6, "maxCharges");
-    append_unsigned(output, cooldown.max_charges);
+    json::append_unsigned(output, cooldown.max_charges);
     output += ",\n";
     append_key(output, 6, "retrigger");
-    append_quoted(output, retrigger_name(cooldown.retrigger));
+    json::append_quoted(output, retrigger_name(cooldown.retrigger));
     output += ",\n";
     append_key(output, 6, "stackCharges");
     append_bool(output, cooldown.stack_charges);
@@ -198,24 +136,24 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_indent(output, 4);
     output += "{\n";
     append_key(output, 6, "id");
-    append_quoted(output, panel.id);
+    json::append_quoted(output, panel.id);
     output += ",\n";
     append_key(output, 6, "name");
-    append_quoted(output, panel.name);
+    json::append_quoted(output, panel.name);
     output += ",\n";
     append_key(output, 6, "layout");
-    append_quoted(output, layout_name(panel.layout));
+    json::append_quoted(output, layout_name(panel.layout));
     output += ",\n";
     append_key(output, 6, "style");
-    append_quoted(output, style_name(panel.style));
+    json::append_quoted(output, style_name(panel.style));
     output += ",\n";
     append_key(output, 6, "bar");
     output += "{\n";
     append_key(output, 8, "width");
-    append_unsigned(output, panel.bar.width);
+    json::append_unsigned(output, panel.bar.width);
     output += ",\n";
     append_key(output, 8, "height");
-    append_unsigned(output, panel.bar.height);
+    json::append_unsigned(output, panel.bar.height);
     output += ",\n";
     append_key(output, 8, "fillColor");
     append_color(output, panel.bar.fill_color);
@@ -236,10 +174,10 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_bool(output, panel.bar.hide_when_ready);
     output += "\n      },\n";
     append_key(output, 6, "anchorX");
-    append_double(output, panel.anchor_x);
+    json::append_number(output, panel.anchor_x);
     output += ",\n";
     append_key(output, 6, "anchorY");
-    append_double(output, panel.anchor_y);
+    json::append_number(output, panel.anchor_y);
     output += ",\n";
     append_key(output, 6, "cooldowns");
     output += "[";
@@ -248,7 +186,7 @@ std::string serialize_profile_json(const GameProfile &profile) {
       if (cooldown_index != 0) {
         output += ", ";
       }
-      append_quoted(output, panel.cooldown_ids[cooldown_index]);
+      json::append_quoted(output, panel.cooldown_ids[cooldown_index]);
     }
     output += "]\n    }";
     output += index + 1 == profile.panels.size() ? "\n" : ",\n";
@@ -262,7 +200,7 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_indent(output, 4);
     output += "{\n";
     append_key(output, 6, "cooldownId");
-    append_quoted(output, binding.cooldown_id);
+    json::append_quoted(output, binding.cooldown_id);
     output += ",\n";
     append_key(output, 6, "chord");
     output += "[\n";
@@ -272,14 +210,14 @@ std::string serialize_profile_json(const GameProfile &profile) {
       append_indent(output, 8);
       output += "{\n";
       append_key(output, 10, "device");
-      append_quoted(output, device_name(token.device));
+      json::append_quoted(output, device_name(token.device));
       output += ",\n";
       append_key(output, 10, "code");
-      append_unsigned(output, token.code);
+      json::append_unsigned(output, token.code);
       if (token.device == InputDevice::controller) {
         output += ",\n";
         append_key(output, 10, "controllerIndex");
-        append_unsigned(output, token.controller_index);
+        json::append_unsigned(output, token.controller_index);
       }
       output += "\n        }";
       output += token_index + 1 == binding.chord.tokens.size() ? "\n" : ",\n";

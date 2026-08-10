@@ -1,18 +1,24 @@
 #pragma once
 
 #include "overlay_window.hpp"
+#include "visual_capture_worker.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/live_edit.hpp"
+#include "layerc/core/pixel_engine.hpp"
 #include "layerc/core/runtime_instances.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/profile_store.hpp"
 
 #include <array>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <shellapi.h>
@@ -31,13 +37,19 @@ private:
   static constexpr UINT_PTR input_poll_timer = 2;
   static constexpr UINT_PTR overlay_render_timer = 3;
   static constexpr UINT_PTR live_channel_timer = 4;
+  static constexpr UINT_PTR visual_capture_timer = 5;
   static constexpr UINT command_open_editor = 1001;
   static constexpr UINT command_reload = 1002;
   static constexpr UINT command_exit = 1003;
   static DaemonApp *foreground_hook_target_;
   struct ProfileSource {
     std::wstring key;
+    std::filesystem::path path;
     layerc::core::GameProfile profile;
+    std::optional<layerc::core::VisualProfile> visual_profile;
+    layerc::platform::VisualSidecarState visual_health{
+        layerc::platform::VisualSidecarState::absent};
+    std::string visual_error;
     layerc::core::ProfileRevision revision{};
   };
 
@@ -50,13 +62,23 @@ private:
     };
 
     explicit Session(layerc::core::GameProfile source_profile,
-                     std::wstring source_key, bool capture_exclusion);
+                     std::wstring source_key,
+                     std::optional<layerc::core::VisualProfile> visual_profile,
+                     layerc::platform::VisualSidecarState visual_health,
+                     bool visual_enabled, bool capture_exclusion);
 
     void clear_input_state();
     void rebuild_input_configuration();
     void set_capture_exclusion(bool enabled);
     void apply_profile(const layerc::core::GameProfile &updated,
                        bool capture_exclusion);
+    void apply_visual_profile(
+        std::optional<layerc::core::VisualProfile> visual_profile,
+        layerc::platform::VisualSidecarState visual_health, bool visual_enabled);
+    [[nodiscard]] bool has_active_visual_rules() const noexcept;
+    [[nodiscard]] bool blocks_all_triggers() const noexcept {
+      return visual_health == layerc::platform::VisualSidecarState::invalid;
+    }
     [[nodiscard]] bool is_global() const noexcept {
       return profile.game.global;
     }
@@ -69,6 +91,11 @@ private:
     std::vector<OverlayCooldown> overlay_cooldowns;
     layerc::core::CooldownEngine cooldowns;
     layerc::core::InputMatcher input;
+    std::optional<layerc::core::VisualProfile> visual_profile;
+    std::unique_ptr<layerc::core::VisualTriggerEngine> visual_triggers;
+    layerc::platform::VisualSidecarState visual_health{
+        layerc::platform::VisualSidecarState::absent};
+    std::uint64_t last_visual_sequence{};
     std::vector<layerc::core::CooldownState> snapshot_buffer;
     std::vector<std::unique_ptr<OverlayWindow>> overlays;
     std::vector<PolledKeyState> global_keyboard;
@@ -104,6 +131,7 @@ private:
   void show_tray_menu();
   void launch_editor();
   void reload_profiles();
+  void load_visual_source(ProfileSource &source);
   void reconcile_profile_sources(std::vector<ProfileSource> loaded);
   void apply_profile_update(std::wstring key,
                             layerc::core::GameProfile profile,
@@ -122,6 +150,11 @@ private:
   [[nodiscard]] bool process_input(Session &session,
                                    const layerc::core::InputEvent &event);
   void update_overlays();
+  void reconcile_visual_captures();
+  void poll_visual_captures();
+  void update_visual_status();
+  void publish_visual_status(
+      std::span<const VisualCaptureSnapshot> snapshots);
   void poll_live_channel();
   void handle_live_message(const layerc::core::LiveMessage &message);
   void send_live_reply(layerc::core::LiveMessageType type,
@@ -153,15 +186,22 @@ private:
   HWND input_foreground_{};
   HANDLE reload_event_{};
   HANDLE settings_reload_event_{};
+  HANDLE visual_capture_active_event_{};
   bool capture_exclusion_{true};
+  bool visual_recognition_enabled_{true};
   bool input_timer_running_{};
   bool overlay_timer_running_{};
+  bool visual_timer_running_{};
   UINT live_timer_interval_{250};
   HWINEVENTHOOK foreground_event_hook_{};
   HWINEVENTHOOK location_event_hook_{};
   layerc::platform::NamedPipeEditorDaemonChannel live_channel_{
       layerc::platform::NamedPipeEditorDaemonChannel::Role::server};
   std::unique_ptr<EditSession> edit_session_;
+  using VisualCaptureWorkerSet =
+      std::array<std::unique_ptr<VisualCaptureWorker>, 3>;
+  std::unordered_map<HWND, VisualCaptureWorkerSet> visual_captures_;
+  std::wstring visual_status_{L"Visual recognition: inactive"};
 };
 
 } // namespace layerc::daemon

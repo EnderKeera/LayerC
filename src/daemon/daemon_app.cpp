@@ -18,9 +18,14 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     return 1;
   }
   capture_exclusion_ = layerc::platform::capture_exclusion_enabled();
+  visual_recognition_enabled_ =
+      layerc::platform::visual_recognition_enabled();
   reload_event_ = CreateEventW(nullptr, TRUE, FALSE, layerc::platform::profile_reload_event_name);
   settings_reload_event_ = CreateEventW(
       nullptr, TRUE, FALSE, layerc::platform::settings_reload_event_name);
+  visual_capture_active_event_ = CreateEventW(
+      nullptr, TRUE, FALSE,
+      layerc::platform::visual_capture_active_event_name);
   register_input_devices();
   add_tray_icon();
   reload_profiles();
@@ -56,6 +61,9 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   }
   if (settings_reload_event_ != nullptr) {
     CloseHandle(settings_reload_event_);
+  }
+  if (visual_capture_active_event_ != nullptr) {
+    CloseHandle(visual_capture_active_event_);
   }
   remove_tray_icon();
   return static_cast<int>(message.wParam);
@@ -113,6 +121,8 @@ void DaemonApp::show_tray_menu() {
   if (menu == nullptr) {
     return;
   }
+  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_status_.c_str());
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, command_open_editor, L"Open editor");
   AppendMenuW(menu, MF_STRING, command_reload, L"Reload profiles");
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -183,6 +193,8 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
       update_overlays();
     } else if (wparam == live_channel_timer) {
       poll_live_channel();
+    } else if (wparam == visual_capture_timer) {
+      poll_visual_captures();
     }
     return 0;
   case WM_COMMAND:
@@ -212,6 +224,11 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     KillTimer(window, input_poll_timer);
     KillTimer(window, overlay_render_timer);
     KillTimer(window, live_channel_timer);
+    KillTimer(window, visual_capture_timer);
+    visual_timer_running_ = false;
+    visual_captures_.clear();
+    if (visual_capture_active_event_ != nullptr)
+      ResetEvent(visual_capture_active_event_);
     end_edit_session();
     PostQuitMessage(0);
     return 0;

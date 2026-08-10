@@ -1,5 +1,6 @@
 #include "overlay_window.hpp"
 
+#include "layerc/platform/text.hpp"
 #include "layerc/platform/windows.hpp"
 
 #include <algorithm>
@@ -8,6 +9,19 @@
 #include <windowsx.h>
 
 namespace layerc::daemon {
+
+std::vector<OverlayCooldown> make_overlay_cooldowns(
+    const std::span<const layerc::core::CooldownDefinition> definitions) {
+  std::vector<OverlayCooldown> result;
+  result.reserve(definitions.size());
+  for (const auto &definition : definitions) {
+    result.push_back({.id = definition.id,
+                      .name = layerc::platform::utf8_to_wide(definition.name),
+                      .duration = definition.duration});
+  }
+  return result;
+}
+
 OverlayWindow::OverlayWindow(const layerc::core::Panel &panel,
                              const std::span<const OverlayCooldown> cooldowns)
     : panel_(panel), cooldowns_(cooldowns.begin(), cooldowns.end()) {
@@ -79,6 +93,12 @@ void OverlayWindow::set_capture_exclusion(const bool enabled) {
   if (window_ != nullptr && IsWindow(window_)) {
     (void)layerc::platform::apply_capture_exclusion(window_, enabled);
   }
+}
+
+bool OverlayWindow::screen_bounds(RECT &bounds) const noexcept {
+  bounds = {};
+  return window_ != nullptr && visible_ && IsWindowVisible(window_) &&
+         GetWindowRect(window_, &bounds) != FALSE;
 }
 
 OverlayWindow::~OverlayWindow() {

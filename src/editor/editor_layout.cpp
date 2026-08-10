@@ -162,8 +162,28 @@ void EditorWindow::layout() {
        properties_width - checkbox_width - scaled(8), scaled(25));
   move(IDC_DIRECT_DRAG, properties_left, first_color_top + scaled(99),
        properties_width, scaled(25));
-  move(IDC_POSITION_STATUS, content_left, bars_list_top + scaled(190),
+  // Anchor the visual strip above the bottom status line. A bars-relative
+  // position overlapped the status area at the minimum window height.
+  const int visual_heading_top = status_top - scaled(126);
+  move(IDC_POSITION_STATUS, content_left,
+       std::min(bars_list_top + scaled(190),
+                visual_heading_top - scaled(30)),
        content_width, scaled(20));
+
+  move(IDC_VISUAL_SECTION_LABEL, content_left, visual_heading_top,
+       content_width, heading_height);
+  const int visual_summary_top = visual_heading_top + scaled(22);
+  move(IDC_VISUAL_SUMMARY, content_left, visual_summary_top,
+       content_width - scaled(90), scaled(22));
+  move(IDC_VISUAL_ENABLED, content_right - scaled(82), visual_summary_top,
+       scaled(82), scaled(22));
+  const int visual_actions_top = visual_summary_top + scaled(28);
+  move(IDC_CALIBRATE_VISUAL, content_left, visual_actions_top,
+       scaled(112), scaled(27));
+  move(IDC_REMOVE_VISUAL, content_left + scaled(120), visual_actions_top,
+       scaled(78), scaled(27));
+  move(IDC_VISUAL_RUNTIME_STATUS, content_left,
+       visual_actions_top + scaled(34), content_width, scaled(34));
 
   move(IDC_PREVIEW_LABEL, preview_left, section_top,
        preview_width, heading_height);

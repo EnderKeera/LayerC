@@ -13,6 +13,8 @@ namespace layerc::platform {
 
 inline constexpr wchar_t settings_reload_event_name[] =
     L"Local\\LayerC.LayerD.SettingsReload";
+inline constexpr wchar_t visual_capture_active_event_name[] =
+    L"Local\\LayerC.LayerD.VisualCaptureActive";
 
 enum class EditorTheme : std::uint32_t {
   copper = 0,
@@ -75,6 +77,10 @@ profile_matches_window(const WindowCandidate &candidate,
 
 [[nodiscard]] bool capture_exclusion_enabled();
 [[nodiscard]] bool set_capture_exclusion_enabled(bool enabled);
+[[nodiscard]] bool visual_recognition_enabled();
+[[nodiscard]] bool set_visual_recognition_enabled(bool enabled);
+[[nodiscard]] bool visual_capture_notice_acknowledged();
+[[nodiscard]] bool set_visual_capture_notice_acknowledged(bool acknowledged);
 [[nodiscard]] bool apply_capture_exclusion(HWND window, bool enabled);
 [[nodiscard]] UINT monitor_dpi_for_rect(const RECT &rect);
 [[nodiscard]] EditorTheme editor_theme();
