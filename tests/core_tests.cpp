@@ -30,6 +30,7 @@ int main() {
   test_live_placement_math();
   test_visual_profile_parser();
   test_pixel_rule_evaluation();
+  test_template_matching();
   test_visual_trigger_state_machine();
   test_visual_repeat_when_ready();
   test_calibration_protocol();

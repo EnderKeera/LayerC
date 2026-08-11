@@ -166,7 +166,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   }
   case WM_TIMER:
     if (wparam == autosave_timer) {
-      (void)flush_autosave();
+      (void)flush_autosave(false);
       return TRUE;
     }
     if (wparam == live_channel_timer) {

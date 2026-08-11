@@ -3,6 +3,8 @@
 param(
     [ValidateSet('low', 'balanced')]
     [string]$Quality = 'balanced',
+    [ValidateSet('v11-pixel', 'v21-template')]
+    [string]$Workload = 'v11-pixel',
     [string]$BuildDirectory = '',
     [ValidateRange(2, 120)]
     [int]$WarmupSeconds = 8,
@@ -24,6 +26,8 @@ public static class LayerCBenchmarkNative {
     [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string className, string windowName);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
@@ -99,48 +103,166 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $outputDirectory = Join-Path $repository 'out\benchmarks'
     [IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
-    $OutputPath = Join-Path $outputDirectory "v11-$Quality-$stamp.json"
+    $workloadTag = $Workload -replace '-', '_'
+    $OutputPath = Join-Path $outputDirectory "$workloadTag-$Quality-$stamp.json"
 }
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
 
-$temporary = Join-Path ([IO.Path]::GetTempPath()) "LayerC-v11-benchmark-$PID-$stamp"
+$temporary = Join-Path ([IO.Path]::GetTempPath()) "LayerC-visual-benchmark-$PID-$stamp"
 $profileDirectory = Join-Path $temporary 'profiles'
 $visualDirectory = Join-Path $profileDirectory '_visual'
 [IO.Directory]::CreateDirectory($visualDirectory) | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-[IO.File]::WriteAllText(
-    (Join-Path $profileDirectory 'lctest.json'),
-    [IO.File]::ReadAllText((Join-Path $repository 'examples\lctest.json')),
-    $utf8)
-$visual = @"
+$profilePath = Join-Path $profileDirectory 'lctest.json'
+$visualPath = Join-Path $visualDirectory 'lctest.json'
+if ($Workload -eq 'v11-pixel') {
+    [IO.File]::WriteAllText(
+        $profilePath,
+        [IO.File]::ReadAllText((Join-Path $repository 'examples\lctest.json')),
+        $utf8)
+    $visual = @"
 {
   "schemaVersion": 1,
   "profileId": "lctest",
   "sampleRateHz": 15,
   "quality": "$Quality",
-  "rules": [
-    {
-      "id": "benchmark-ready",
-      "name": "Benchmark Ready",
-      "region": {"x": 0, "y": 0, "width": 1, "height": 1},
-      "predicate": {"type": "brightness", "comparison": "below", "threshold": 250},
-      "stableSamples": 2,
-      "repeat": "edge"
-    }
-  ],
-  "triggers": [
-    {
-      "cooldownId": "dash",
-      "ruleId": "benchmark-ready",
-      "enabled": true,
-      "mode": "pixelOnly",
-      "keepInput": false,
-      "onUnavailable": "ignore"
-    }
-  ]
+  "rules": [{
+    "id": "benchmark-ready", "name": "Benchmark Ready",
+    "region": {"x": 0, "y": 0, "width": 1, "height": 1},
+    "predicate": {"type": "brightness", "comparison": "below", "threshold": 250},
+    "stableSamples": 2, "repeat": "edge"
+  }],
+  "triggers": [{
+    "cooldownId": "dash", "ruleId": "benchmark-ready",
+    "enabled": true, "mode": "pixelOnly", "keepInput": false,
+    "onUnavailable": "ignore"
+  }]
 }
 "@
+} else {
+    $assets = Join-Path $visualDirectory 'assets'
+    [IO.Directory]::CreateDirectory($assets) | Out-Null
+    try {
+        Add-Type -AssemblyName System.Drawing
+    } catch {
+        throw "The V2.1 template workload requires Windows GDI+ to create its deterministic PNG fixtures: $($_.Exception.Message)"
+    }
+    $assetHashes = @()
+    for ($seed = 0; $seed -lt 4; ++$seed) {
+        $temporaryPng = Join-Path $temporary "template-$seed.png"
+        $bitmap = [Drawing.Bitmap]::new(
+            512, 512, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        try {
+            if ($seed -eq 0) {
+                # LC Test paints this four-quadrant marker into one fifth of
+                # its client. The structured smaller reference forces a real
+                # candidate search while the other references remain decoys.
+                $graphics.Clear([Drawing.Color]::FromArgb(255, 80, 186, 200))
+                $topRight = [Drawing.SolidBrush]::new(
+                    [Drawing.Color]::FromArgb(255, 212, 142, 75))
+                $bottomLeft = [Drawing.SolidBrush]::new(
+                    [Drawing.Color]::FromArgb(255, 90, 140, 100))
+                $bottomRight = [Drawing.SolidBrush]::new(
+                    [Drawing.Color]::FromArgb(255, 180, 90, 120))
+                try {
+                    $graphics.FillRectangle($topRight, 256, 0, 256, 256)
+                    $graphics.FillRectangle($bottomLeft, 0, 256, 256, 256)
+                    $graphics.FillRectangle($bottomRight, 256, 256, 256, 256)
+                } finally {
+                    $topRight.Dispose()
+                    $bottomLeft.Dispose()
+                    $bottomRight.Dispose()
+                }
+            } else {
+                $graphics.Clear([Drawing.Color]::FromArgb(
+                    255, 24 + $seed * 31, 42 + $seed * 23, 68 + $seed * 17))
+            }
+            for ($stripe = 0; $seed -ne 0 -and $stripe -lt 32; ++$stripe) {
+                $color = [Drawing.Color]::FromArgb(
+                    255,
+                    ($seed * 53 + $stripe * 7) % 256,
+                    ($seed * 29 + $stripe * 13) % 256,
+                    ($seed * 71 + $stripe * 19) % 256)
+                $brush = New-Object Drawing.SolidBrush $color
+                try {
+                    $graphics.FillRectangle($brush, $stripe * 16,
+                        ($stripe * 37 + $seed * 41) % 384, 16, 128)
+                } finally { $brush.Dispose() }
+            }
+            $bitmap.Save($temporaryPng, [Drawing.Imaging.ImageFormat]::Png)
+        } finally {
+            $graphics.Dispose()
+            $bitmap.Dispose()
+        }
+        $hash = (Get-FileHash -LiteralPath $temporaryPng -Algorithm SHA256).Hash.ToLowerInvariant()
+        Move-Item -LiteralPath $temporaryPng -Destination (Join-Path $assets "$hash.png")
+        $assetHashes += $hash
+    }
+
+    $cooldowns = @()
+    $bindings = @()
+    $cooldownIds = @()
+    for ($index = 1; $index -le 4; ++$index) {
+        $id = "benchmark-$index"
+        $cooldownIds += $id
+        $cooldowns += [ordered]@{
+            id = $id; name = "Benchmark $index"; durationMs = 120000
+            maxCharges = 1; retrigger = 'ignore'
+        }
+        $bindings += [ordered]@{
+            cooldownId = $id
+            chord = @([ordered]@{ device = 'keyboard'; code = 1 + $index })
+        }
+    }
+    $base = [ordered]@{
+        schemaVersion = 2; id = 'lctest'; name = 'LC Test V2.1 benchmark'
+        game = [ordered]@{ executableName = 'lctest.exe' }
+        cooldowns = $cooldowns
+        panels = @([ordered]@{
+            id = 'benchmark'; name = 'Benchmark'; layout = 'column'
+            style = 'bar'; anchorX = 0.5; anchorY = 0.75
+            bar = [ordered]@{
+                width = 360; height = 30
+                fillColor = '#50BAC8'; backgroundColor = '#202A31'
+                borderColor = '#80D8E8'; textColor = '#F1F5F7'
+                hideWhenReady = $true
+            }
+            cooldowns = $cooldownIds
+        })
+        bindings = $bindings
+    }
+    [IO.File]::WriteAllText($profilePath,
+        ($base | ConvertTo-Json -Depth 12), $utf8)
+
+    $references = @($assetHashes | ForEach-Object {
+        [ordered]@{ asset = $_ }
+    })
+    $observations = @()
+    $triggers = @()
+    for ($index = 1; $index -le 4; ++$index) {
+        $observationId = "template-$index"
+        $observations += [ordered]@{
+            type = 'template'; id = $observationId
+            name = "Template $index"
+            searchRegion = [ordered]@{ x = 0; y = 0; width = 1; height = 1 }
+            expectedSize = [ordered]@{ width = 0.2; height = 0.2 }
+            references = $references
+            confidence = 0.85; scaleTolerancePercent = 2
+            colorTolerance = 32; stableSamples = 2; repeat = 'edge'
+        }
+        $triggers += [ordered]@{
+            cooldownId = "benchmark-$index"; observationId = $observationId
+            enabled = $true; mode = 'pixelOnly'; keepInput = $false
+            onUnavailable = 'ignore'
+        }
+    }
+    $visual = [ordered]@{
+        schemaVersion = 2; profileId = 'lctest'; sampleRateHz = 15
+        quality = $Quality; observations = $observations; triggers = $triggers
+    } | ConvertTo-Json -Depth 12
+}
 [IO.File]::WriteAllText((Join-Path $visualDirectory 'lctest.json'), $visual, $utf8)
 
 function Get-GpuProcessMemoryBytes([int]$ProcessId) {
@@ -205,6 +327,7 @@ $oldVisualSetting = $null
 $game = $null
 $daemon = $null
 $captureEvent = $null
+$templateMatchVerified = $Workload -ne 'v21-template'
 try {
     try {
         $oldVisualSetting = (Get-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -ErrorAction Stop).$visualSettingName
@@ -276,6 +399,22 @@ try {
     if (-not $daemonCaptureVerified) {
         throw 'LayerD did not activate its visual capture worker; refusing an idle-process benchmark.'
     }
+    if ($Workload -eq 'v21-template') {
+        for ($attempt = 0; $attempt -lt 50 -and -not $templateMatchVerified; ++$attempt) {
+            [void](Set-BenchmarkForeground $game $activator)
+            $overlay = [LayerCBenchmarkNative]::FindWindow(
+                'LayerDOverlayWindow', 'LayerD Overlay')
+            $templateMatchVerified =
+                $overlay -ne [IntPtr]::Zero -and
+                [LayerCBenchmarkNative]::IsWindowVisible($overlay)
+            if (-not $templateMatchVerified) {
+                Start-Sleep -Milliseconds 100
+            }
+        }
+        if (-not $templateMatchVerified) {
+            throw 'LayerD capture was active, but no template match triggered the hidden benchmark overlay.'
+        }
+    }
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
     $measurement = Measure-LayerProcess $daemon $DurationSeconds
@@ -290,7 +429,7 @@ try {
     $gatePassed = $measurement.maxPrivateMiB -le $thresholds.maxPrivateMiB -and
         $measurement.maxWorkingSetMiB -le $thresholds.maxWorkingSetMiB -and
         $measurement.averageCpuPercent -le $thresholds.maxAverageCpuPercent -and
-        $daemonCaptureVerified
+        $daemonCaptureVerified -and $templateMatchVerified
     $adapters = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object {
         [ordered]@{
             name = $_.Name
@@ -301,8 +440,11 @@ try {
     $result = [ordered]@{
         schemaVersion = 1
         measuredAt = (Get-Date).ToUniversalTime().ToString('o')
+        workload = $Workload
         quality = $Quality
         sampleRateHz = 15
+        templateStates = if ($Workload -eq 'v21-template') { 4 } else { 0 }
+        referencesPerTemplate = if ($Workload -eq 'v21-template') { 4 } else { 0 }
         host = [ordered]@{
             computerName = $env:COMPUTERNAME
             os = [Environment]::OSVersion.VersionString
@@ -311,6 +453,7 @@ try {
         }
         captureProbe = $captureProbe
         daemonCaptureVerified = $daemonCaptureVerified
+        templateMatchVerified = $templateMatchVerified
         layerd = $measurement
         thresholds = $thresholds
         passed = $gatePassed

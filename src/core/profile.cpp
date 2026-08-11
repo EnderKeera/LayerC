@@ -15,11 +15,14 @@ ProfileResult ProfileReader::read() {
     }
 
     GameProfile profile;
-    const auto schema_version = required_integer(root_, "schemaVersion", "$", 1, 1);
+    const auto schema_version =
+        required_integer(root_, "schemaVersion", "$", 1, 2);
     if (!schema_version.has_value()) {
       return error_;
     }
-    profile.schema_version = static_cast<std::uint32_t>(*schema_version);
+    // Version 1 has the same base fields as the initial V2.1.0 schema and is
+    // migrated in memory. Saving through LayerE therefore upgrades it once.
+    profile.schema_version = 2;
 
     if (!required_string(root_, "id", "$", profile.id) ||
         !required_string(root_, "name", "$", profile.name)) {

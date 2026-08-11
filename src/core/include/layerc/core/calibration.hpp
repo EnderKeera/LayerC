@@ -8,7 +8,10 @@
 
 namespace layerc::core {
 
-inline constexpr std::size_t max_calibration_packet_bytes = 512U * 1024U;
+// A request embeds both bounded JSON documents as escaped JSON strings. In
+// the worst supported case that can approach twice their combined source
+// size, so the transport envelope needs more room than either file alone.
+inline constexpr std::size_t max_calibration_packet_bytes = 2U * 1024U * 1024U;
 
 struct CalibrationRequest {
   std::uint32_t protocol_version{1};
@@ -22,7 +25,7 @@ struct CalibrationRequest {
 struct CalibrationResponse {
   std::uint32_t protocol_version{1};
   bool applied{};
-  // On Apply this is a valid one-rule, one-trigger VisualProfile sidecar.
+  // On Apply this is a valid one-observation, one-trigger VisualProfile.
   std::string visual_json;
   std::string error;
 };

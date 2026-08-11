@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(LayerC VERSION 1.1.0 LANGUAGES CXX)
+project(LayerC VERSION 2.1.0 LANGUAGES CXX)
 
 option(LAYERC_BUILD_DAEMON "Build the native layerd daemon" ON)
 option(LAYERC_BUILD_EDITOR "Build the native LayerE editor" ON)
@@ -33,6 +33,7 @@ add_library(layerc_core STATIC
     src/core/runtime_instances.cpp
     src/core/visual.cpp
     src/core/pixel_evaluator.cpp
+    src/core/template_matcher.cpp
     src/core/visual_trigger_engine.cpp
     src/core/calibration.cpp
 )
@@ -51,6 +52,7 @@ if(WIN32)
         src/platform/window_discovery.cpp
         src/platform/text.cpp
         src/platform/profile_store.cpp
+        src/platform/visual_assets.cpp
         src/platform/live_channel.cpp
         src/platform/framed_pipe.cpp
     )
@@ -59,7 +61,8 @@ if(WIN32)
         src/core/include
     )
     target_link_libraries(layerc_windows PUBLIC
-        layerc_core user32 advapi32 shell32 ole32 gdi32 shcore)
+        layerc_core user32 advapi32 shell32 ole32 gdi32 shcore
+        windowscodecs bcrypt)
     target_compile_definitions(layerc_windows PUBLIC
         UNICODE
         _UNICODE
@@ -141,6 +144,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         src/editor/editor_layout.cpp
         src/editor/editor_profiles.cpp
         src/editor/editor_profile_support.cpp
+        src/editor/editor_schema.cpp
         src/editor/editor_cooldowns.cpp
         src/editor/editor_bars.cpp
         src/editor/editor_tasks.cpp
@@ -209,6 +213,16 @@ endif()
 if(TARGET layercal)
     install(TARGETS layercal RUNTIME DESTINATION . COMPONENT Runtime)
 endif()
+
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_PACKAGE_NAME "LayerC")
+set(CPACK_PACKAGE_VENDOR "LayerC")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_FILE_NAME
+    "LayerC-${PROJECT_VERSION}-windows-x64")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+set(CPACK_MONOLITHIC_INSTALL ON)
+include(CPack)
 
 if(LAYERC_BUILD_TESTS)
     enable_testing()
@@ -295,7 +309,9 @@ if(LAYERC_BUILD_TESTS)
         add_executable(layerc_editor_tests
             tests/editor_dialog_tests.cpp
             src/editor/editor_theme.cpp
+            src/editor/editor_schema.cpp
             src/editor/editor_resources.rc
+            src/calibration/calibration_resources.rc
         )
         target_include_directories(layerc_editor_tests PRIVATE src/editor)
         target_link_libraries(layerc_editor_tests PRIVATE

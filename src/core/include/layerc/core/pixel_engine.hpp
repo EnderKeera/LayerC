@@ -43,12 +43,17 @@ struct PixelEvaluation {
 [[nodiscard]] PixelEvaluation evaluate_pixel_rule(
     const PixelRule &rule, PixelFrameView frame, CaptureQuality quality);
 
-struct PixelRuleMeasurement {
-  std::string rule_id;
+struct ObservationMeasurement {
+  std::string observation_id;
   CaptureAvailability availability{CaptureAvailability::inactive};
   bool matched{};
+  double confidence{};
   TimePoint sampled_at{};
 };
+
+// Source compatibility for V1.1 integrations. New code should use the
+// observation name because template and pixel measurements share this type.
+using PixelRuleMeasurement = ObservationMeasurement;
 
 enum class VisualTriggerSource : std::uint8_t {
   direct_input,
@@ -80,7 +85,7 @@ public:
   [[nodiscard]] std::vector<VisualTriggerRequest>
   on_input(std::string_view cooldown_id, TimePoint now);
   [[nodiscard]] std::vector<VisualTriggerRequest>
-  on_measurements(std::span<const PixelRuleMeasurement> measurements,
+  on_measurements(std::span<const ObservationMeasurement> measurements,
                   std::span<const CooldownState> cooldowns, TimePoint now);
   // The daemon calls this only after CooldownEngine accepts a request. It
   // rearms ready-repeat immediately, so a cooldown that starts and completes
@@ -104,7 +109,9 @@ private:
     TimePoint confirmation_deadline{};
   };
 
-  [[nodiscard]] const PixelRule *find_rule(std::string_view id) const;
+  [[nodiscard]] bool observation_exists(std::string_view id) const;
+  [[nodiscard]] std::uint8_t stable_samples(std::string_view id) const;
+  [[nodiscard]] PixelRepeatPolicy repeat_policy(std::string_view id) const;
   [[nodiscard]] const VisualTrigger *
   find_trigger(std::string_view cooldown_id) const;
   [[nodiscard]] bool measurement_is_fresh(const RuleState &state,

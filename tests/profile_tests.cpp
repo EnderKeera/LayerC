@@ -45,6 +45,8 @@ void test_profile_parser() {
          "valid profile should parse");
 
   if (const auto *profile = std::get_if<GameProfile>(&result)) {
+    expect(profile->schema_version == 2,
+           "schema-v1 base profiles should migrate to v2 in memory");
     expect(profile->cooldowns.size() == 1, "profile should contain cooldown");
     expect(profile->panels.front().cooldown_ids.front() == "dash",
            "panel reference should resolve");
@@ -61,6 +63,9 @@ void test_profile_parser() {
            "bar appearance should parse with legacy showText default");
     expect(profile->cooldowns.front().stack_charges,
            "stackCharges should parse");
+    expect(serialize_profile_json(*profile).find("\"schemaVersion\": 2") !=
+               std::string::npos,
+           "saving a migrated base profile should emit schema v2");
   }
 
   const std::string oversized(max_profile_json_bytes + 1U, 'x');

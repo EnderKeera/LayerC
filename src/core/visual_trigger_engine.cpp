@@ -27,9 +27,10 @@ void VisualTriggerEngine::reconfigure(const VisualProfile &profile) {
   profile_ = profile;
   rules_.clear();
   triggers_.clear();
-  rules_.reserve(profile_.rules.size());
+  rules_.reserve(profile_.rules.size() + profile_.templates.size());
   triggers_.reserve(profile_.triggers.size());
   for (const auto &rule : profile_.rules) rules_.try_emplace(rule.id);
+  for (const auto &state : profile_.templates) rules_.try_emplace(state.id);
   for (const auto &trigger : profile_.triggers)
     triggers_.try_emplace(trigger.cooldown_id);
 }
@@ -68,7 +69,7 @@ VisualTriggerEngine::on_input(const std::string_view cooldown_id,
   if (trigger->mode == VisualTriggerMode::pixel_only) {
     if (trigger->keep_input)
       return {{std::string(cooldown_id), VisualTriggerSource::direct_input}};
-    const auto rule = rules_.find(trigger->rule_id);
+    const auto rule = rules_.find(trigger->observation_id);
     if (trigger->unavailable_policy ==
             CaptureUnavailablePolicy::trigger_from_input &&
         (rule == rules_.end() || !rule->second.has_sample ||
@@ -79,7 +80,7 @@ VisualTriggerEngine::on_input(const std::string_view cooldown_id,
   }
 
   auto &trigger_state = triggers_.at(trigger->cooldown_id);
-  const auto rule = rules_.find(trigger->rule_id);
+  const auto rule = rules_.find(trigger->observation_id);
   if (rule != rules_.end() && measurement_is_fresh(rule->second, now) &&
       rule->second.availability == CaptureAvailability::available &&
       rule->second.stable_match) {
@@ -110,15 +111,16 @@ VisualTriggerEngine::on_input(const std::string_view cooldown_id,
 }
 
 std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
-    const std::span<const PixelRuleMeasurement> measurements,
+    const std::span<const ObservationMeasurement> measurements,
     const std::span<const CooldownState> cooldowns, const TimePoint now) {
   std::vector<VisualTriggerRequest> output;
   if (!enabled_) return output;
 
   for (const auto &measurement : measurements) {
-    const auto *definition = find_rule(measurement.rule_id);
-    const auto found = rules_.find(measurement.rule_id);
-    if (definition == nullptr || found == rules_.end()) continue;
+    const auto found = rules_.find(measurement.observation_id);
+    if (!observation_exists(measurement.observation_id) ||
+        found == rules_.end())
+      continue;
     auto &state = found->second;
     state.availability = measurement.availability;
     state.sampled_at = measurement.sampled_at;
@@ -128,7 +130,7 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
       state.nonmatching_samples = 0;
       state.stable_match = false;
       for (const auto &trigger : profile_.triggers) {
-        if (trigger.rule_id != measurement.rule_id) continue;
+        if (trigger.observation_id != measurement.observation_id) continue;
         auto &trigger_state = triggers_.at(trigger.cooldown_id);
         trigger_state.edge_armed = true;
         trigger_state.repeat_fired_for_ready = false;
@@ -137,15 +139,18 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
     }
     if (measurement.matched) {
       state.nonmatching_samples = 0;
-      if (state.matching_samples < definition->stable_samples)
+      if (state.matching_samples < stable_samples(measurement.observation_id))
         ++state.matching_samples;
-      if (state.matching_samples >= definition->stable_samples)
+      if (state.matching_samples >=
+          stable_samples(measurement.observation_id))
         state.stable_match = true;
     } else {
       state.matching_samples = 0;
-      if (state.nonmatching_samples < definition->stable_samples)
+      if (state.nonmatching_samples <
+          stable_samples(measurement.observation_id))
         ++state.nonmatching_samples;
-      if (state.nonmatching_samples >= definition->stable_samples)
+      if (state.nonmatching_samples >=
+          stable_samples(measurement.observation_id))
         state.stable_match = false;
     }
   }
@@ -153,9 +158,10 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
   for (const auto &trigger : profile_.triggers) {
     if (!trigger.enabled) continue;
     auto &trigger_state = triggers_.at(trigger.cooldown_id);
-    const auto rule_it = rules_.find(trigger.rule_id);
-    const auto *rule = find_rule(trigger.rule_id);
-    if (rule_it == rules_.end() || rule == nullptr) continue;
+    const auto rule_it = rules_.find(trigger.observation_id);
+    if (rule_it == rules_.end() ||
+        !observation_exists(trigger.observation_id))
+      continue;
     const auto &rule_state = rule_it->second;
 
     if (trigger.mode == VisualTriggerMode::confirm_input) {
@@ -193,7 +199,7 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
       continue;
     }
 
-    if (rule->repeat == PixelRepeatPolicy::edge) {
+    if (repeat_policy(trigger.observation_id) == PixelRepeatPolicy::edge) {
       if (trigger_state.edge_armed) {
         output.push_back(
             {trigger.cooldown_id, VisualTriggerSource::pixel_edge});
@@ -215,10 +221,19 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
   return output;
 }
 
-const PixelRule *VisualTriggerEngine::find_rule(const std::string_view id) const {
-  const auto found = std::ranges::find_if(
-      profile_.rules, [&](const PixelRule &rule) { return rule.id == id; });
-  return found == profile_.rules.end() ? nullptr : &*found;
+bool VisualTriggerEngine::observation_exists(
+    const std::string_view id) const {
+  return has_observation(profile_, id);
+}
+
+std::uint8_t VisualTriggerEngine::stable_samples(
+    const std::string_view id) const {
+  return observation_stable_samples(profile_, id);
+}
+
+PixelRepeatPolicy VisualTriggerEngine::repeat_policy(
+    const std::string_view id) const {
+  return observation_repeat_policy(profile_, id);
 }
 
 const VisualTrigger *

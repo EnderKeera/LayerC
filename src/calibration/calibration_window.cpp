@@ -4,6 +4,7 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/visual_assets.hpp"
 #include "layerc/platform/windows.hpp"
 
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <variant>
 
 #include <commctrl.h>
+#include <commdlg.h>
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <windowsx.h>
@@ -36,6 +38,20 @@ bool contains_binding(const layerc::core::GameProfile &profile,
   return std::ranges::any_of(profile.bindings, [&](const auto &binding) {
     return binding.cooldown_id == cooldown_id;
   });
+}
+
+layerc::core::NormalizedRegion expanded_template_search_region(
+    const layerc::core::NormalizedRegion selected) {
+  const auto expand = [](const double origin, const double extent) {
+    const double expanded = std::min(1.0, extent * 2.0);
+    const double center = origin + extent * 0.5;
+    return std::pair{std::clamp(center - expanded * 0.5, 0.0,
+                                1.0 - expanded),
+                     expanded};
+  };
+  const auto [x, width] = expand(selected.x, selected.width);
+  const auto [y, height] = expand(selected.y, selected.height);
+  return {x, y, width, height};
 }
 
 } // namespace
@@ -77,8 +93,10 @@ LRESULT CALLBACK CalibrationWindow::preview_proc(
   if (calibration != nullptr) {
     const auto result = calibration->handle_preview(window, message, wparam,
                                                      lparam);
-    if (result != 0 || message == WM_LBUTTONDOWN || message == WM_MOUSEMOVE ||
-        message == WM_LBUTTONUP || message == WM_CAPTURECHANGED)
+    if (result != 0 || message == WM_LBUTTONDOWN ||
+        message == WM_RBUTTONDOWN || message == WM_MOUSEMOVE ||
+        message == WM_LBUTTONUP || message == WM_RBUTTONUP ||
+        message == WM_CAPTURECHANGED)
       return result;
   }
   return DefSubclassProc(window, message, wparam, lparam);
@@ -133,14 +151,20 @@ bool CalibrationWindow::initialize(const HWND window) {
   }
 
   trigger_ = {.cooldown_id = cooldown->id,
-              .rule_id = cooldown->id + "-visual",
+              .observation_id = cooldown->id + "-visual",
               .enabled = true,
               .mode = layerc::core::VisualTriggerMode::pixel_only,
               .keep_input = false};
-  rule_ = {.id = trigger_.rule_id,
-           .name = cooldown->name + " Ready",
-           .region = {0.4, 0.4, 0.2, 0.2},
-           .predicate = layerc::core::AverageColorPredicate{0xFFFFFF, 16}};
+  rule_ = {.id = trigger_.observation_id,
+            .name = cooldown->name + " Ready",
+            .region = {0.4, 0.4, 0.2, 0.2},
+            .predicate = layerc::core::AverageColorPredicate{0xFFFFFF, 16}};
+  template_state_ = {
+      .id = trigger_.observation_id,
+      .name = cooldown->name + " Ready",
+      .search_region = rule_.region,
+      .expected_width = rule_.region.width,
+      .expected_height = rule_.region.height};
   if (existing_visual_) {
     const auto assignment = std::ranges::find_if(
         existing_visual_->triggers, [&](const auto &candidate_trigger) {
@@ -148,19 +172,32 @@ bool CalibrationWindow::initialize(const HWND window) {
         });
     if (assignment != existing_visual_->triggers.end()) {
       trigger_ = *assignment;
-      const auto existing_rule = std::ranges::find_if(
-          existing_visual_->rules, [&](const auto &candidate_rule) {
-            return candidate_rule.id == trigger_.rule_id;
-          });
-      if (existing_rule != existing_visual_->rules.end()) rule_ = *existing_rule;
+      rule_.id = trigger_.observation_id;
+      template_state_.id = trigger_.observation_id;
+      if (const auto *existing_rule = layerc::core::find_pixel_rule(
+              *existing_visual_, trigger_.observation_id)) {
+        rule_ = *existing_rule;
+      } else if (const auto *existing_template =
+                     layerc::core::find_template_state(
+                         *existing_visual_, trigger_.observation_id)) {
+        template_state_ = *existing_template;
+        rule_.region = template_state_.search_region;
+        for (const auto &reference : template_state_.references) {
+          auto loaded = layerc::platform::load_template_asset(
+              reference.asset_sha256);
+          if (auto *image =
+                  std::get_if<layerc::core::TemplateImage>(&loaded))
+            template_images_.push_back(std::move(*image));
+        }
+      }
     } else {
-      std::string base = trigger_.rule_id;
+      std::string base = trigger_.observation_id;
       unsigned suffix = 2;
-      while (std::ranges::any_of(existing_visual_->rules, [&](const auto &item) {
-        return item.id == trigger_.rule_id;
-      }))
-        trigger_.rule_id = base + "-" + std::to_string(suffix++);
-      rule_.id = trigger_.rule_id;
+      while (layerc::core::has_observation(*existing_visual_,
+                                           trigger_.observation_id))
+        trigger_.observation_id = base + "-" + std::to_string(suffix++);
+      rule_.id = trigger_.observation_id;
+      template_state_.id = trigger_.observation_id;
     }
   }
   if (const auto *average =
@@ -215,6 +252,7 @@ void CalibrationWindow::initialize_controls() {
   add(IDC_CAL_PREDICATE, L"Average color near target");
   add(IDC_CAL_PREDICATE, L"Brightness threshold");
   add(IDC_CAL_PREDICATE, L"Target color coverage");
+  add(IDC_CAL_PREDICATE, L"Template match");
   add(IDC_CAL_COMPARISON, L"Above");
   add(IDC_CAL_COMPARISON, L"Below");
   add(IDC_CAL_REPEAT, L"Edge");
@@ -235,7 +273,10 @@ void CalibrationWindow::initialize_controls() {
   int threshold = 128;
   int comparison{};
   int minimum_percent = 50;
-  if (const auto *average =
+  if (!template_state_.references.empty()) {
+    predicate_index = 3;
+    tolerance = template_state_.color_tolerance;
+  } else if (const auto *average =
           std::get_if<layerc::core::AverageColorPredicate>(&rule_.predicate)) {
     tolerance = average->tolerance;
   } else if (const auto *brightness =
@@ -259,8 +300,9 @@ void CalibrationWindow::initialize_controls() {
                       predicate_index, 0);
   SendDlgItemMessageW(dialog_, IDC_CAL_COMPARISON, CB_SETCURSEL, comparison, 0);
   SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_SETCURSEL,
-                      rule_.repeat ==
-                              layerc::core::PixelRepeatPolicy::when_fully_ready
+                       (predicate_index == 3 ? template_state_.repeat
+                                             : rule_.repeat) ==
+                               layerc::core::PixelRepeatPolicy::when_fully_ready
                           ? 1
                           : 0,
                       0);
@@ -294,9 +336,20 @@ void CalibrationWindow::initialize_controls() {
   set_control_text(IDC_CAL_MINIMUM_PERCENT,
                    std::to_wstring(minimum_percent));
   set_control_text(IDC_CAL_STABLE_SAMPLES,
-                   std::to_wstring(rule_.stable_samples));
+                   std::to_wstring(predicate_index == 3
+                                      ? template_state_.stable_samples
+                                      : rule_.stable_samples));
+  set_control_text(
+      IDC_CAL_CONFIDENCE,
+      std::to_wstring(static_cast<int>(
+          std::lround(template_state_.confidence_threshold * 100.0))));
+  set_control_text(
+      IDC_CAL_SCALE_TOLERANCE,
+      std::to_wstring(static_cast<int>(
+          std::lround(template_state_.scale_tolerance * 100.0))));
   set_control_text(IDC_CAL_TIMEOUT,
                    std::to_wstring(trigger_.confirmation_timeout.count()));
+  refresh_template_reference_label();
   update_control_enablement();
 }
 
@@ -304,12 +357,37 @@ void CalibrationWindow::update_control_enablement() {
   const auto predicate = static_cast<int>(SendDlgItemMessageW(
       dialog_, IDC_CAL_PREDICATE, CB_GETCURSEL, 0, 0));
   const bool color_predicate = predicate == 0 || predicate == 2;
+  const bool template_predicate = predicate == 3;
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_PREDICATE), !mask_editing_);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_SAMPLE_COLOR), color_predicate);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_COLOR_VALUE), color_predicate);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_TOLERANCE), color_predicate);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_COMPARISON), predicate == 1);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_THRESHOLD), predicate == 1);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_MINIMUM_PERCENT), predicate == 2);
+  constexpr std::array template_controls{
+      IDC_CAL_TEMPLATE_GROUP, IDC_CAL_CAPTURE_TEMPLATE,
+      IDC_CAL_IMPORT_TEMPLATE, IDC_CAL_TEMPLATE_REFERENCES,
+      IDC_CAL_CONFIDENCE, IDC_CAL_SCALE_TOLERANCE,
+      IDC_CAL_CLEAR_TEMPLATES, IDC_CAL_CONFIDENCE_LABEL,
+      IDC_CAL_SCALE_LABEL, IDC_CAL_TEMPLATE_HELP,
+      IDC_CAL_EDIT_TEMPLATE_MASK};
+  for (const int id : template_controls)
+    ShowWindow(GetDlgItem(dialog_, id),
+               template_predicate ? SW_SHOW : SW_HIDE);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_CLEAR_TEMPLATES),
+               template_predicate && !mask_editing_ &&
+                   !template_state_.references.empty());
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_CAPTURE_TEMPLATE),
+               template_predicate && !mask_editing_);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_IMPORT_TEMPLATE),
+               template_predicate && !mask_editing_);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK),
+               template_predicate &&
+                   (mask_editing_ ||
+                    (template_images_.size() ==
+                         template_state_.references.size() &&
+                     !template_images_.empty())));
 
   const bool confirmation =
       SendDlgItemMessageW(dialog_, IDC_CAL_TRIGGER_MODE, CB_GETCURSEL, 0, 0) ==
@@ -358,6 +436,22 @@ INT_PTR CalibrationWindow::handle_message(const HWND window,
     }
     if (id == IDC_CAL_SAMPLE_COLOR && notification == BN_CLICKED) {
       sample_target_color();
+      return TRUE;
+    }
+    if (id == IDC_CAL_CAPTURE_TEMPLATE && notification == BN_CLICKED) {
+      capture_template_reference();
+      return TRUE;
+    }
+    if (id == IDC_CAL_IMPORT_TEMPLATE && notification == BN_CLICKED) {
+      import_template_reference();
+      return TRUE;
+    }
+    if (id == IDC_CAL_CLEAR_TEMPLATES && notification == BN_CLICKED) {
+      clear_template_references();
+      return TRUE;
+    }
+    if (id == IDC_CAL_EDIT_TEMPLATE_MASK && notification == BN_CLICKED) {
+      toggle_template_mask_editing();
       return TRUE;
     }
     if (id == IDC_CAL_APPLY && notification == BN_CLICKED) {
@@ -418,17 +512,35 @@ LRESULT CalibrationWindow::handle_preview(const HWND window,
   POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
   switch (message) {
   case WM_LBUTTONDOWN:
+  case WM_RBUTTONDOWN:
+    if (mask_editing_) {
+      dragging_ = true;
+      mask_opaque_ = message == WM_RBUTTONDOWN;
+      SetCapture(window);
+      update_template_mask(point, mask_opaque_);
+      return 0;
+    }
+    if (message == WM_RBUTTONDOWN) return 0;
     dragging_ = true;
     drag_start_ = point;
     SetCapture(window);
     update_region_from_pointer(point, false);
     return 0;
   case WM_MOUSEMOVE:
-    if (dragging_) update_region_from_pointer(point, false);
+    if (dragging_) {
+      if (mask_editing_)
+        update_template_mask(point, mask_opaque_);
+      else
+        update_region_from_pointer(point, false);
+    }
     return 0;
   case WM_LBUTTONUP:
+  case WM_RBUTTONUP:
     if (dragging_) {
-      update_region_from_pointer(point, true);
+      if (mask_editing_)
+        update_template_mask(point, mask_opaque_);
+      else if (message == WM_LBUTTONUP)
+        update_region_from_pointer(point, true);
       dragging_ = false;
       if (GetCapture() == window) ReleaseCapture();
     }
@@ -497,7 +609,7 @@ void CalibrationWindow::refresh_preview_frame() {
                              (static_cast<std::uint32_t>(pixel.red) << 16U);
   }
   InvalidateRect(preview_, nullptr, FALSE);
-  update_match_status();
+  update_match_status(false);
 }
 
 void CalibrationWindow::begin_fallback_snapshot() {
@@ -530,7 +642,10 @@ void CalibrationWindow::finish_fallback_snapshot(
 
 void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
   FillRect(draw.hDC, &draw.rcItem, input_brush_);
-  if (!frame_ || preview_pixels_.empty()) {
+  const bool mask_preview =
+      mask_editing_ && !template_images_.empty() &&
+      !mask_preview_pixels_.empty();
+  if (!mask_preview && (!frame_ || preview_pixels_.empty())) {
     SetTextColor(draw.hDC, muted);
     SetBkMode(draw.hDC, TRANSPARENT);
     DrawTextW(draw.hDC, L"Waiting for captured pixels...", -1,
@@ -539,17 +654,25 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
     return;
   }
   const auto image = preview_image_rect();
+  const auto width =
+      mask_preview ? template_images_.back().width : frame_->width;
+  const auto height =
+      mask_preview ? template_images_.back().height : frame_->height;
+  const auto *pixels = mask_preview ? mask_preview_pixels_.data()
+                                    : preview_pixels_.data();
   BITMAPINFO bitmap{};
   bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-  bitmap.bmiHeader.biWidth = static_cast<LONG>(frame_->width);
-  bitmap.bmiHeader.biHeight = -static_cast<LONG>(frame_->height);
+  bitmap.bmiHeader.biWidth = static_cast<LONG>(width);
+  bitmap.bmiHeader.biHeight = -static_cast<LONG>(height);
   bitmap.bmiHeader.biPlanes = 1;
   bitmap.bmiHeader.biBitCount = 32;
   bitmap.bmiHeader.biCompression = BI_RGB;
   SetStretchBltMode(draw.hDC, HALFTONE);
   StretchDIBits(draw.hDC, image.left, image.top, image.right - image.left,
-                image.bottom - image.top, 0, 0, frame_->width, frame_->height,
-                preview_pixels_.data(), &bitmap, DIB_RGB_COLORS, SRCCOPY);
+                image.bottom - image.top, 0, 0, width, height, pixels, &bitmap,
+                DIB_RGB_COLORS, SRCCOPY);
+
+  if (mask_preview) return;
 
   RECT region{
       image.left + static_cast<LONG>(
@@ -574,22 +697,31 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
 RECT CalibrationWindow::preview_image_rect() const {
   RECT client{};
   GetClientRect(preview_, &client);
-  if (!frame_ || frame_->width == 0 || frame_->height == 0) return client;
+  const auto source_width = mask_editing_ && !template_images_.empty()
+                                ? template_images_.back().width
+                                : frame_ ? frame_->width : 0;
+  const auto source_height = mask_editing_ && !template_images_.empty()
+                                 ? template_images_.back().height
+                                 : frame_ ? frame_->height : 0;
+  if (source_width == 0 || source_height == 0) return client;
   const double frame_aspect =
-      static_cast<double>(frame_->width) / frame_->height;
+      static_cast<double>(source_width) / source_height;
   const double client_aspect =
       static_cast<double>(client.right) / std::max<LONG>(1, client.bottom);
   if (client_aspect > frame_aspect) {
-    const auto width = static_cast<LONG>(std::lround(client.bottom * frame_aspect));
-    const auto left = (client.right - width) / 2;
-    return {left, 0, left + width, client.bottom};
+    const auto display_width =
+        static_cast<LONG>(std::lround(client.bottom * frame_aspect));
+    const auto left = (client.right - display_width) / 2;
+    return {left, 0, left + display_width, client.bottom};
   }
-  const auto height = static_cast<LONG>(std::lround(client.right / frame_aspect));
-  const auto top = (client.bottom - height) / 2;
-  return {0, top, client.right, top + height};
+  const auto display_height =
+      static_cast<LONG>(std::lround(client.right / frame_aspect));
+  const auto top = (client.bottom - display_height) / 2;
+  return {0, top, client.right, top + display_height};
 }
 
-void CalibrationWindow::update_region_from_pointer(POINT point, bool) {
+void CalibrationWindow::update_region_from_pointer(POINT point,
+                                                   const bool final) {
   const auto image = preview_image_rect();
   const auto clamp_point = [&](POINT value) {
     value.x = std::clamp(value.x, image.left, image.right);
@@ -610,8 +742,9 @@ void CalibrationWindow::update_region_from_pointer(POINT point, bool) {
       static_cast<double>(top - image.top) / height,
       static_cast<double>(right - left) / width,
       static_cast<double>(bottom - top) / height};
+  if (template_mode()) template_state_.search_region = rule_.region;
   InvalidateRect(preview_, nullptr, FALSE);
-  update_match_status();
+  update_match_status(final);
 }
 
 void CalibrationWindow::sample_target_color() {
@@ -628,6 +761,311 @@ void CalibrationWindow::sample_target_color() {
   target_color_ = evaluation.average_color;
   set_control_text(IDC_CAL_COLOR_VALUE, color_text(target_color_));
   update_match_status();
+}
+
+bool CalibrationWindow::template_mode() const {
+  return dialog_ != nullptr &&
+         SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE, CB_GETCURSEL, 0, 0) ==
+             3;
+}
+
+layerc::core::TemplateState
+CalibrationWindow::current_template_from_controls() const {
+  auto state = template_state_;
+  state.search_region = rule_.region;
+  state.confidence_threshold =
+      integer_control(IDC_CAL_CONFIDENCE, 90, 0, 100) / 100.0;
+  state.scale_tolerance =
+      integer_control(IDC_CAL_SCALE_TOLERANCE, 5, 0, 20) / 100.0;
+  state.color_tolerance = static_cast<std::uint8_t>(
+      integer_control(IDC_CAL_TOLERANCE, 24, 0, 255));
+  state.stable_samples = static_cast<std::uint8_t>(
+      integer_control(IDC_CAL_STABLE_SAMPLES, 2, 1, 15));
+  state.repeat =
+      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0) == 1
+          ? layerc::core::PixelRepeatPolicy::when_fully_ready
+          : layerc::core::PixelRepeatPolicy::edge;
+  return state;
+}
+
+void CalibrationWindow::refresh_template_reference_label() {
+  std::wstring label =
+      std::to_wstring(template_state_.references.size()) + L" / " +
+      std::to_wstring(layerc::core::max_template_references) +
+      L" references";
+  if (template_images_.size() != template_state_.references.size())
+    label += L" (one or more assets unavailable)";
+  set_control_text(IDC_CAL_TEMPLATE_REFERENCES, label);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_CLEAR_TEMPLATES),
+               !template_state_.references.empty());
+}
+
+void CalibrationWindow::capture_template_reference() {
+  if (!frame_) {
+    MessageBoxW(dialog_, L"Wait for a captured frame first.", L"LayerC",
+                MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  if (template_state_.references.size() >=
+      layerc::core::max_template_references) {
+    MessageBoxW(dialog_, L"A template state supports at most four references.",
+                L"Template reference limit", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  const auto &region = rule_.region;
+  const auto left = static_cast<std::uint32_t>(std::clamp(
+      std::floor(region.x * frame_->width), 0.0,
+      static_cast<double>(frame_->width)));
+  const auto top = static_cast<std::uint32_t>(std::clamp(
+      std::floor(region.y * frame_->height), 0.0,
+      static_cast<double>(frame_->height)));
+  const auto right = static_cast<std::uint32_t>(std::clamp(
+      std::ceil((region.x + region.width) * frame_->width), 0.0,
+      static_cast<double>(frame_->width)));
+  const auto bottom = static_cast<std::uint32_t>(std::clamp(
+      std::ceil((region.y + region.height) * frame_->height), 0.0,
+      static_cast<double>(frame_->height)));
+  if (right <= left || bottom <= top ||
+      static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U) {
+    MessageBoxW(dialog_,
+                L"Select a region containing at least 64 captured pixels.",
+                L"Template region too small", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  const auto source_width = right - left;
+  const auto source_height = bottom - top;
+  const double factor =
+      std::min(1.0, 512.0 / std::max(source_width, source_height));
+  layerc::core::TemplateImage image;
+  image.width = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(std::lround(source_width * factor)));
+  image.height = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(std::lround(source_height * factor)));
+  image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
+  image.alpha.assign(image.pixels.size(), 255);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    const auto source_y =
+        top + std::min(source_height - 1,
+                       static_cast<std::uint32_t>(
+                           (static_cast<std::uint64_t>(y) * 2U + 1U) *
+                           source_height /
+                           (static_cast<std::uint64_t>(image.height) * 2U)));
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      const auto source_x =
+          left + std::min(source_width - 1,
+                          static_cast<std::uint32_t>(
+                              (static_cast<std::uint64_t>(x) * 2U + 1U) *
+                              source_width /
+                              (static_cast<std::uint64_t>(image.width) * 2U)));
+      image.pixels[static_cast<std::size_t>(y) * image.width + x] =
+          frame_->pixels[static_cast<std::size_t>(source_y) * frame_->width +
+                         source_x];
+    }
+  }
+  auto stored = layerc::platform::store_template_asset(image);
+  const auto *asset =
+      std::get_if<layerc::platform::ImportedTemplateAsset>(&stored);
+  if (asset == nullptr) {
+    const auto &error =
+        std::get<layerc::platform::VisualAssetError>(stored);
+    MessageBoxW(dialog_,
+                layerc::platform::utf8_to_wide(error.message).c_str(),
+                L"Template capture failed", MB_OK | MB_ICONERROR);
+    return;
+  }
+  if (std::ranges::none_of(template_state_.references, [&](const auto &item) {
+        return item.asset_sha256 == asset->reference.asset_sha256;
+      })) {
+    template_state_.references.push_back(asset->reference);
+    template_images_.push_back(asset->image);
+  }
+  template_state_.expected_width = region.width;
+  template_state_.expected_height = region.height;
+  template_state_.search_region = expanded_template_search_region(region);
+  rule_.region = template_state_.search_region;
+  template_matcher_.clear();
+  refresh_template_reference_label();
+  InvalidateRect(preview_, nullptr, FALSE);
+  update_match_status();
+}
+
+void CalibrationWindow::import_template_reference() {
+  if (template_state_.references.size() >=
+      layerc::core::max_template_references) {
+    MessageBoxW(dialog_, L"A template state supports at most four references.",
+                L"Template reference limit", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  std::array<wchar_t, 32'768> path{};
+  OPENFILENAMEW picker{};
+  picker.lStructSize = sizeof(OPENFILENAMEW);
+  picker.hwndOwner = dialog_;
+  picker.lpstrFilter = L"PNG images (*.png)\0*.png\0\0";
+  picker.lpstrFile = path.data();
+  picker.nMaxFile = static_cast<DWORD>(path.size());
+  picker.lpstrDefExt = L"png";
+  picker.Flags =
+      OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_DONTADDTORECENT;
+  if (GetOpenFileNameW(&picker) == FALSE) return;
+  auto imported =
+      layerc::platform::import_template_asset(std::filesystem::path(path.data()));
+  const auto *asset =
+      std::get_if<layerc::platform::ImportedTemplateAsset>(&imported);
+  if (asset == nullptr) {
+    const auto &error =
+        std::get<layerc::platform::VisualAssetError>(imported);
+    MessageBoxW(dialog_,
+                layerc::platform::utf8_to_wide(error.message).c_str(),
+                L"Template import failed", MB_OK | MB_ICONERROR);
+    return;
+  }
+  if (std::ranges::none_of(template_state_.references, [&](const auto &item) {
+        return item.asset_sha256 == asset->reference.asset_sha256;
+      })) {
+    template_state_.references.push_back(asset->reference);
+    template_images_.push_back(asset->image);
+  }
+  const auto selected = rule_.region;
+  template_state_.expected_width = selected.width;
+  template_state_.expected_height = selected.height;
+  template_state_.search_region = expanded_template_search_region(selected);
+  rule_.region = template_state_.search_region;
+  template_matcher_.clear();
+  refresh_template_reference_label();
+  update_match_status();
+}
+
+void CalibrationWindow::clear_template_references() {
+  mask_editing_ = false;
+  mask_changed_ = false;
+  mask_preview_pixels_.clear();
+  template_state_.references.clear();
+  template_images_.clear();
+  template_matcher_.clear();
+  refresh_template_reference_label();
+  update_match_status();
+}
+
+void CalibrationWindow::toggle_template_mask_editing() {
+  if (mask_editing_) {
+    (void)finish_template_mask_editing();
+    return;
+  }
+  if (template_images_.empty() ||
+      template_images_.size() != template_state_.references.size()) {
+    MessageBoxW(dialog_, L"All template references must be available first.",
+                L"Mask unavailable", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  mask_editing_ = true;
+  mask_changed_ = false;
+  SetDlgItemTextW(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK, L"Done");
+  refresh_template_mask_preview();
+  update_control_enablement();
+  update_match_status();
+}
+
+bool CalibrationWindow::finish_template_mask_editing() {
+  if (!mask_editing_) return true;
+  auto &image = template_images_.back();
+  if (!image.valid()) {
+    MessageBoxW(dialog_,
+                L"Keep at least 64 opaque pixels in the template mask.",
+                L"Mask is too small", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  if (mask_changed_) {
+    auto stored = layerc::platform::store_template_asset(image);
+    const auto *asset =
+        std::get_if<layerc::platform::ImportedTemplateAsset>(&stored);
+    if (asset == nullptr) {
+      const auto &error =
+          std::get<layerc::platform::VisualAssetError>(stored);
+      MessageBoxW(dialog_,
+                  layerc::platform::utf8_to_wide(error.message).c_str(),
+                  L"Mask save failed", MB_OK | MB_ICONERROR);
+      return false;
+    }
+    const bool duplicates_earlier = std::ranges::any_of(
+        template_state_.references.begin(),
+        template_state_.references.end() - 1, [&](const auto &reference) {
+          return reference.asset_sha256 == asset->reference.asset_sha256;
+        });
+    if (duplicates_earlier) {
+      MessageBoxW(dialog_,
+                  L"This mask duplicates an earlier reference. Change it or clear the duplicate reference.",
+                  L"Duplicate template", MB_OK | MB_ICONWARNING);
+      return false;
+    }
+    template_state_.references.back() = asset->reference;
+    image = asset->image;
+    template_matcher_.clear();
+  }
+  mask_editing_ = false;
+  mask_changed_ = false;
+  mask_preview_pixels_.clear();
+  SetDlgItemTextW(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK, L"Mask...");
+  refresh_template_reference_label();
+  update_control_enablement();
+  InvalidateRect(preview_, nullptr, FALSE);
+  refresh_preview_frame();
+  return true;
+}
+
+void CalibrationWindow::refresh_template_mask_preview() {
+  if (!mask_editing_ || template_images_.empty()) return;
+  const auto &image = template_images_.back();
+  mask_preview_pixels_.resize(image.pixels.size());
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      const auto index = static_cast<std::size_t>(y) * image.width + x;
+      const auto pixel = image.pixels[index];
+      if (image.alpha[index] == 0) {
+        const auto checker = ((x / 12U) + (y / 12U)) % 2U == 0U
+                                 ? 0x3A3F46U
+                                 : 0x24282DU;
+        mask_preview_pixels_[index] = checker;
+      } else {
+        mask_preview_pixels_[index] =
+            pixel.blue | (static_cast<std::uint32_t>(pixel.green) << 8U) |
+            (static_cast<std::uint32_t>(pixel.red) << 16U);
+      }
+    }
+  }
+  InvalidateRect(preview_, nullptr, FALSE);
+}
+
+void CalibrationWindow::update_template_mask(POINT point,
+                                             const bool opaque) {
+  if (!mask_editing_ || template_images_.empty()) return;
+  const auto bounds = preview_image_rect();
+  if (point.x < bounds.left || point.x >= bounds.right ||
+      point.y < bounds.top || point.y >= bounds.bottom)
+    return;
+  auto &image = template_images_.back();
+  const auto x = static_cast<std::uint32_t>(
+      static_cast<std::uint64_t>(point.x - bounds.left) * image.width /
+      std::max<LONG>(1, bounds.right - bounds.left));
+  const auto y = static_cast<std::uint32_t>(
+      static_cast<std::uint64_t>(point.y - bounds.top) * image.height /
+      std::max<LONG>(1, bounds.bottom - bounds.top));
+  const int radius = std::max<int>(1, std::min(image.width, image.height) / 32);
+  for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
+    for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
+      if (offset_x * offset_x + offset_y * offset_y > radius * radius)
+        continue;
+      const int target_x = static_cast<int>(x) + offset_x;
+      const int target_y = static_cast<int>(y) + offset_y;
+      if (target_x < 0 || target_y < 0 ||
+          target_x >= static_cast<int>(image.width) ||
+          target_y >= static_cast<int>(image.height))
+        continue;
+      image.alpha[static_cast<std::size_t>(target_y) * image.width +
+                  target_x] = opaque ? 255 : 0;
+    }
+  }
+  mask_changed_ = true;
+  refresh_template_mask_preview();
 }
 
 layerc::core::PixelRule
@@ -662,8 +1100,45 @@ CalibrationWindow::current_rule_from_controls() const {
   return rule;
 }
 
-void CalibrationWindow::update_match_status() {
+void CalibrationWindow::update_match_status(const bool force) {
+  if (mask_editing_) {
+    set_control_text(IDC_CAL_MATCH,
+                     L"Editing alpha mask — left drag ignores pixels; right drag restores them.");
+    return;
+  }
   if (!frame_) return;
+  if (template_mode()) {
+    if (template_state_.references.empty()) {
+      set_control_text(
+          IDC_CAL_MATCH,
+          L"Capture or import at least one template reference.");
+      return;
+    }
+    if (template_images_.size() != template_state_.references.size()) {
+      set_control_text(
+          IDC_CAL_MATCH,
+          L"One or more referenced template assets are unavailable.");
+      return;
+    }
+    const auto now = GetTickCount64();
+    if (!force && now < next_template_match_at_) return;
+    // Exact can consume the full 8M-comparison allowance. Keep that bounded
+    // evaluation off the 15 Hz paint/capture cadence so the modal UI remains
+    // responsive while still refreshing live status twice per second.
+    next_template_match_at_ = now + 500;
+    const auto state = current_template_from_controls();
+    const auto result = template_matcher_.evaluate(
+        state, template_images_, frame_->view(), quality_);
+    std::wstring status =
+        result.matched ? L"TEMPLATE MATCHED" : L"Template not matched";
+    status += L"\nConfidence " +
+              std::to_wstring(static_cast<int>(
+                  std::lround(result.confidence * 100.0))) +
+              L"%, candidates " +
+              std::to_wstring(result.candidates_evaluated);
+    set_control_text(IDC_CAL_MATCH, status);
+    return;
+  }
   const auto rule = current_rule_from_controls();
   const auto result = layerc::core::evaluate_pixel_rule(
       rule, frame_->view(), quality_);
@@ -680,7 +1155,30 @@ void CalibrationWindow::update_match_status() {
 }
 
 bool CalibrationWindow::apply() {
-  rule_ = current_rule_from_controls();
+  if (!finish_template_mask_editing()) return false;
+  const bool use_template = template_mode();
+  if (use_template) {
+    template_state_ = current_template_from_controls();
+    template_state_.id = trigger_.observation_id;
+    if (template_state_.references.empty()) {
+      MessageBoxW(dialog_,
+                  L"Capture or import at least one template reference first.",
+                  L"Template reference required",
+                  MB_OK | MB_ICONINFORMATION);
+      return false;
+    }
+    if (template_images_.size() != template_state_.references.size() ||
+        !std::ranges::all_of(template_images_,
+                             layerc::core::template_image_has_structure)) {
+      MessageBoxW(dialog_,
+                  L"Every referenced template asset must be available and contain visible visual structure.",
+                  L"Template assets unavailable", MB_OK | MB_ICONWARNING);
+      return false;
+    }
+  } else {
+    rule_ = current_rule_from_controls();
+    rule_.id = trigger_.observation_id;
+  }
   const auto rate_index = SendDlgItemMessageW(dialog_, IDC_CAL_SAMPLE_RATE,
                                                CB_GETCURSEL, 0, 0);
   sample_rate_hz_ = rate_index == 0 ? 5 : rate_index == 2 ? 15 : 10;
@@ -693,7 +1191,7 @@ bool CalibrationWindow::apply() {
                        : layerc::core::CaptureQuality::balanced;
   if (quality_ == layerc::core::CaptureQuality::exact &&
       MessageBoxW(dialog_,
-                  L"Exact evaluates every pixel in the selected region and is not covered by the V1.1 CPU/memory budget. Continue?",
+                  L"Exact retains full-resolution pixel and template data and is not covered by the V2.1 Low/Balanced CPU/memory budget. Continue?",
                   L"Exact quality", MB_YESNO | MB_ICONWARNING) != IDYES)
     return false;
 
@@ -722,7 +1220,10 @@ bool CalibrationWindow::apply() {
   result.profile_id = profile_.id;
   result.sample_rate_hz = sample_rate_hz_;
   result.quality = quality_;
-  result.rules.push_back(rule_);
+  if (use_template)
+    result.templates.push_back(template_state_);
+  else
+    result.rules.push_back(rule_);
   result.triggers.push_back(trigger_);
   const auto validation =
       layerc::core::validate_visual_profile(result, profile_);

@@ -119,7 +119,7 @@ struct GameMatch {
 };
 
 struct GameProfile {
-    std::uint32_t schema_version{1};
+    std::uint32_t schema_version{2};
     std::string id;
     std::string name;
     // A disabled profile stays on disk and remains editable, but LayerD does

@@ -77,7 +77,7 @@ const json::Value *root_value(const std::string_view source,
                               json::ParseResult &parsed,
                               CalibrationProtocolError &failure) {
   if (source.size() > max_calibration_packet_bytes) {
-    failure = error("calibration packet exceeds 512 KiB");
+    failure = error("calibration packet exceeds 2 MiB");
     return nullptr;
   }
   parsed = json::parse(source);
@@ -153,7 +153,7 @@ decode_calibration_response(const std::string_view source) {
       !string_field(*root, "error", response.error, message, false))
     return error(std::move(message));
   if (response.applied && response.visual_json.empty())
-    return error("applied calibration response has no visual rule");
+    return error("applied calibration response has no visual observation");
   return response;
 }
 

@@ -1,6 +1,8 @@
 #include "editor_resource.h"
 #include "editor_window.hpp"
+#include "../src/calibration/calibration_resource.h"
 
+#include <algorithm>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -139,7 +141,7 @@ int main() {
   assigned_visual.profile_id = original.id;
   assigned_visual.rules.push_back({.id = "ready", .name = "Ready"});
   assigned_visual.triggers.push_back(
-      {.cooldown_id = "dash", .rule_id = "ready"});
+      {.cooldown_id = "dash", .observation_id = "ready"});
   history.reset(original, assigned_visual);
   auto without_cooldown = original;
   without_cooldown.name = "Cooldown removed";
@@ -211,11 +213,18 @@ int main() {
                        high_dpi_checkbox.inset == 4 &&
                        high_dpi_checkbox.pen_width == 4,
                    "profile checkbox resources and hit target should scale with DPI");
+  passed &= expect(
+      layerc::editor::source_uses_schema_v1(
+          R"({"schemaVersion":1,"name":"legacy"})") &&
+          !layerc::editor::source_uses_schema_v1(
+              R"({"schemaVersion":2,"name":"current"})") &&
+          !layerc::editor::source_uses_schema_v1("{broken"),
+      "the editor should warn only for a valid schema-v1 source document");
 
   const HWND editor_dialog = CreateDialogParamW(
       instance, MAKEINTRESOURCEW(IDD_EDITOR), nullptr, &test_dialog_proc, 0);
   passed &= expect(editor_dialog != nullptr,
-                   "the V1.1 native editor resource should load");
+                   "the native V2.1 editor resource should load");
   if (editor_dialog != nullptr) {
     layerc::editor::style_native_dialog_children(
         editor_dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
@@ -230,6 +239,43 @@ int main() {
         SendMessageW(assignment, BM_GETCHECK, 0, 0) == BST_CHECKED,
         "the visual assignment checkbox should toggle through BM_CLICK");
     DestroyWindow(editor_dialog);
+  }
+
+  const HWND calibration_dialog = CreateDialogParamW(
+      instance, MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr, &test_dialog_proc,
+      0);
+  passed &= expect(
+      calibration_dialog != nullptr &&
+          GetDlgItem(calibration_dialog, IDC_CAL_CAPTURE_TEMPLATE) != nullptr &&
+          GetDlgItem(calibration_dialog, IDC_CAL_IMPORT_TEMPLATE) != nullptr &&
+          GetDlgItem(calibration_dialog, IDC_CAL_EDIT_TEMPLATE_MASK) != nullptr,
+      "the V2.1 calibration resource should expose capture, import, and mask controls");
+  if (calibration_dialog != nullptr) {
+    RECT window_rect{};
+    GetWindowRect(calibration_dialog, &window_rect);
+    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(calibration_dialog));
+    const int logical_width =
+        MulDiv(window_rect.right - window_rect.left, 96, dpi);
+    const int logical_height =
+        MulDiv(window_rect.bottom - window_rect.top, 96, dpi);
+    passed &= expect(
+        logical_width <= 1600 && logical_height <= 1040,
+        "the calibration dialog should fit inside a 1920x1080 desktop work area at 100% scaling");
+
+    RECT client{};
+    GetClientRect(calibration_dialog, &client);
+    for (const int id : {IDC_CAL_APPLY, IDCANCEL}) {
+      RECT button{};
+      const HWND control = GetDlgItem(calibration_dialog, id);
+      GetWindowRect(control, &button);
+      MapWindowPoints(HWND_DESKTOP, calibration_dialog,
+                      reinterpret_cast<POINT *>(&button), 2);
+      passed &= expect(button.left >= client.left && button.top >= client.top &&
+                           button.right <= client.right &&
+                           button.bottom <= client.bottom,
+                       "calibration Apply and Cancel must remain inside the visible client area");
+    }
+    DestroyWindow(calibration_dialog);
   }
 
   DestroyWindow(dialog);

@@ -1,8 +1,10 @@
 #include "daemon_app.hpp"
 
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/visual_assets.hpp"
 
 #include <algorithm>
+#include <filesystem>
 
 namespace layerc::daemon {
 namespace {
@@ -21,6 +23,38 @@ layerc::core::CaptureQuality quality_from_index(const std::size_t index) {
   return static_cast<layerc::core::CaptureQuality>(index);
 }
 
+bool observation_enabled(const layerc::core::VisualProfile &profile,
+                         const std::string_view id) {
+  return std::ranges::any_of(profile.triggers, [&](const auto &trigger) {
+    return trigger.enabled && trigger.observation_id == id;
+  });
+}
+
+VisualAssetSignature asset_signature(const std::string_view hash) {
+  const auto path = layerc::platform::visual_asset_path(hash);
+  if (path.empty()) return {};
+  const HANDLE file = CreateFileW(
+      path.c_str(), FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return {};
+  BY_HANDLE_FILE_INFORMATION information{};
+  const bool loaded = GetFileInformationByHandle(file, &information) != FALSE;
+  CloseHandle(file);
+  if (!loaded) return {};
+  const auto combine = [](const DWORD high, const DWORD low) {
+    return (static_cast<std::uint64_t>(high) << 32U) | low;
+  };
+  return {.present = true,
+          .volume_serial = information.dwVolumeSerialNumber,
+          .file_index = combine(information.nFileIndexHigh,
+                                information.nFileIndexLow),
+          .file_size = combine(information.nFileSizeHigh,
+                               information.nFileSizeLow),
+          .last_write_ticks = combine(information.ftLastWriteTime.dwHighDateTime,
+                                      information.ftLastWriteTime.dwLowDateTime)};
+}
+
 } // namespace
 
 void DaemonApp::reconcile_visual_captures() {
@@ -32,20 +66,34 @@ void DaemonApp::reconcile_visual_captures() {
       if (session->is_global() || !session->has_active_visual_rules() ||
           session->game_window == nullptr)
         continue;
+      VisualEvaluationRequest request{
+          .source_key = session->source_key,
+          .sample_rate_hz = session->visual_profile->sample_rate_hz,
+          .quality = session->visual_profile->quality};
+      for (const auto &rule : session->visual_profile->rules) {
+        if (observation_enabled(*session->visual_profile, rule.id))
+          request.rules.push_back(rule);
+      }
+      for (const auto &state : session->visual_profile->templates) {
+        if (!observation_enabled(*session->visual_profile, state.id)) continue;
+        VisualTemplateEvaluation evaluation{.state = state};
+        evaluation.asset_signatures.reserve(state.references.size());
+        for (const auto &reference : state.references) {
+          evaluation.asset_signatures.push_back(
+              asset_signature(reference.asset_sha256));
+        }
+        request.templates.push_back(std::move(evaluation));
+      }
       desired[session->game_window]
              [quality_index(session->visual_profile->quality)]
-                 .push_back(
-          {.source_key = session->source_key,
-           .sample_rate_hz = session->visual_profile->sample_rate_hz,
-           .quality = session->visual_profile->quality,
-           .rules = session->visual_profile->rules});
+                 .push_back(std::move(request));
     }
   }
 
   std::erase_if(visual_captures_, [&](auto &entry) {
     return !desired.contains(entry.first) || !IsWindow(entry.first);
   });
-  for (const auto &[window, configurations] : desired) {
+  for (auto &[window, configurations] : desired) {
     auto &workers = visual_captures_[window];
     for (std::size_t index = 0; index < visual_quality_count; ++index) {
       if (configurations[index].empty()) {
@@ -55,10 +103,10 @@ void DaemonApp::reconcile_visual_captures() {
       if (!workers[index]) {
         workers[index] = std::make_unique<VisualCaptureWorker>(
             window, quality_from_index(index));
-        workers[index]->configure(configurations[index]);
+        workers[index]->configure(std::move(configurations[index]));
         workers[index]->start();
       } else {
-        workers[index]->configure(configurations[index]);
+        workers[index]->configure(std::move(configurations[index]));
       }
     }
   }
@@ -171,6 +219,7 @@ void DaemonApp::publish_visual_status(
   } else {
     bool fallback{};
     bool unavailable{};
+    bool missing_assets{};
     std::wstring gpu;
     for (const auto &current : snapshots) {
       fallback = fallback ||
@@ -181,10 +230,17 @@ void DaemonApp::publish_visual_status(
                         layerc::core::CaptureAvailability::unavailable ||
                     current.result.availability ==
                         layerc::core::CaptureAvailability::protected_or_black;
+      missing_assets =
+          missing_assets ||
+          std::ranges::any_of(current.evaluations, [](const auto &evaluation) {
+            return evaluation.missing_template_assets;
+          });
       if (gpu.empty() && !current.gpu_description.empty())
         gpu = layerc::platform::utf8_to_wide(current.gpu_description);
     }
-    if (unavailable)
+    if (missing_assets)
+      next = L"Visual recognition: template asset missing or corrupt";
+    else if (unavailable)
       next = L"Visual recognition: capture unavailable";
     else if (fallback)
       next = L"Visual recognition: Desktop Duplication fallback";

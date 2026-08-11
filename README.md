@@ -40,9 +40,11 @@ one CMake-native command, run:
 cmake --workflow --preset vs2026-release
 ```
 
-This workflow uses CMake's native Workflow Presets. A future Linux configure
-preset can reuse the same build, test, and install structure without requiring
-a platform-specific orchestration script. Close LayerE and LayerD first on
+This workflow uses CMake's native Workflow and Package Presets. It configures,
+builds, tests, installs to `out\layerc`, and emits the versioned portable ZIP
+`build\vs2026\LayerC-2.1.0-windows-x64.zip`. A future Linux configure preset can
+reuse the same build, test, install, and package structure without requiring a
+platform-specific orchestration script. Close LayerE and LayerD first on
 Windows so their executable files are not locked during the build or install.
 
 The test targets have separate jobs:
@@ -106,17 +108,29 @@ cmake --workflow --preset mingw-ninja
 
 This build needs the matching MinGW GCC runtime DLLs at deployment time unless that toolchain is configured for static runtimes; it does not need Qt.
 
-## V1.1 visual recognition
+## Visual recognition (V1.1 and V2.1.0)
 
 Visual recognition is opt-in per cooldown. Choose **Calibrate** in LayerE,
 select a matching game window, draw a normalized region, and configure one of
 three numeric predicates: average color, brightness above/below a threshold,
-or minimum target-color coverage. `layercal.exe` is a short-lived native child
-of LayerE; LayerD performs recognition during gameplay.
+or minimum target-color coverage. V2.1 also provides **Template match**: capture
+the selected game region or import up to four PNG references, set confidence
+and scale tolerance, and use **Mask** to left-drag transparent/ignored pixels or
+right-drag them opaque again. The drawn rectangle defines expected size and,
+for both capture and import, LayerCal searches a centered area up to twice as
+large. Flat references are rejected because they cannot identify a position;
+PNG alpha is preserved. Live template confidence is paced to two evaluations
+per second so Exact does not block every capture tick. `layercal.exe` is a
+short-lived native child of LayerE; LayerD performs recognition during gameplay.
 
 LayerC stores visual data separately at
-`profiles\_visual\<profile filename>.json` (schema version 1). This preserves
-the base input binding. Pixel-only mode normally replaces input semantically,
+`profiles\_visual\<profile filename>.json`. V2.1 reads schema-v1 base/visual
+files and writes typed schema v2 after an explicit compatibility warning.
+Template PNGs are metadata-free, content-addressed files under
+`profiles\_visual\assets\<sha256>.png`; their hash is verified before use.
+Collection deletes orphans only after every profile, sidecar, and backup has
+been parsed successfully. This preserves the base input binding. Pixel-only
+mode normally replaces input semantically,
 while Confirm Input arms a bounded confirmation window. Disabling the visual
 assignment or the global visual-recognition option immediately restores normal
 input routing. Both modes can explicitly choose `triggerFromInput` when
@@ -133,7 +147,7 @@ sidecar is repaired or removed; the session and overlays remain available so
 the diagnostic is visible.
 
 LayerD starts capture workers only for the foreground HWND when an enabled
-visual rule needs them. Profiles sharing an HWND are bucketed by quality, so a
+visual observation needs them. Profiles sharing an HWND are bucketed by quality, so a
 Low or Balanced assignment is never promoted to Exact by another profile. WGC
 is primary. Desktop Duplication is a
 foreground-only fallback limited to the window portion on its
@@ -157,6 +171,16 @@ per-window worker, so an Exact scan can reduce visual sample throughput without
 blocking LayerD's input and overlay message loop. Capture resizes recreate the
 WGC frame pool. An invalid primary sidecar recovers from `.bak` when possible.
 
+Template matching is a bounded platform-neutral coarse-to-fine CPU pass. Low
+normally retains at most a 32-pixel reference axis, Balanced at most 64, and
+only the best eight structural candidates receive RGB refinement. Sparse masks
+may retain the source image while constructing the same bounded sample set so
+they do not lose the required 64 opaque pixels. LayerD shares decoded reference
+sets and retains only the representation the selected quality can consume;
+full-resolution assets remain on disk and in the short-lived calibrator.
+Missing or corrupt assets make only that observation unavailable, so ordinary
+input and overlays remain usable.
+
 The default `layerc_capture_tests` target contains only deterministic capture
 math and runs on headless or locked CI sessions. The one-shot GDI calibration
 snapshot test is built separately and is registered only when configuring with
@@ -167,7 +191,7 @@ window is three sample intervals (200 ms at 15 Hz, 600 ms at 5 Hz); an older
 stable result arms the normal bounded confirmation wait rather than confirming
 from stale pixels.
 
-### V1.1 release benchmark
+### Visual release benchmark
 
 Build Release with tests enabled, close any existing LayerD, then run both
 guaranteed qualities:
@@ -177,9 +201,19 @@ guaranteed qualities:
 .\tools\benchmark_v11.ps1 -Quality balanced
 ```
 
-The isolated workflow creates a temporary lctest profile, first requires a
-real hardware capture frame, then measures the actual LayerD path at 15 Hz. It
-writes JSON evidence under `out\benchmarks` with adapter/driver data, backend,
+For the V2.1 worst-case workload (four active template states with four
+references each), run the same isolated harness with:
+
+```powershell
+.\tools\benchmark_v11.ps1 -Workload v21-template -Quality low
+.\tools\benchmark_v11.ps1 -Workload v21-template -Quality balanced
+```
+
+The isolated workflow creates a temporary lctest profile and first requires a
+real hardware capture frame. The V2.1 workload must also observe a successful
+template-triggered overlay before it can measure the actual LayerD path at
+15 Hz; an idle capture worker cannot pass. It writes JSON evidence under
+`out\benchmarks` with adapter/driver data, backend,
 frame dimensions, private memory, working set, CPU, threads, and GPU-local
 memory when Windows exposes that counter. The gate is 35 MiB private, 50 MiB
 working set, and 3% average CPU. Run both qualities on at least one integrated

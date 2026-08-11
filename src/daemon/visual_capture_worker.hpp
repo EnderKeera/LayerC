@@ -1,10 +1,12 @@
 #pragma once
 
 #include "layerc/capture/window_capture.hpp"
+#include "layerc/core/template_matcher.hpp"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <thread>
@@ -13,12 +15,38 @@
 
 namespace layerc::daemon {
 
+struct VisualAssetSignature {
+  bool present{};
+  std::uint32_t volume_serial{};
+  std::uint64_t file_index{};
+  std::uint64_t file_size{};
+  std::uint64_t last_write_ticks{};
+
+  bool operator==(const VisualAssetSignature &) const = default;
+};
+
+struct VisualTemplateEvaluation {
+  layerc::core::TemplateState state;
+  // File identity plus metadata detects atomic replacement even when a repair
+  // preserves size and timestamp. Cryptographic verification and PNG decoding
+  // remain isolated on the worker thread.
+  std::vector<VisualAssetSignature> asset_signatures;
+  // Populated only in the worker''s private request copy.
+  std::shared_ptr<const std::vector<layerc::core::TemplateImage>> references;
+  bool assets_available{true};
+
+  bool operator==(const VisualTemplateEvaluation &other) const noexcept {
+    return state == other.state && asset_signatures == other.asset_signatures;
+  }
+};
+
 struct VisualEvaluationRequest {
   std::wstring source_key;
   std::uint8_t sample_rate_hz{10};
   layerc::core::CaptureQuality quality{
       layerc::core::CaptureQuality::balanced};
   std::vector<layerc::core::PixelRule> rules;
+  std::vector<VisualTemplateEvaluation> templates;
 
   bool operator==(const VisualEvaluationRequest &) const = default;
 };
@@ -26,7 +54,8 @@ struct VisualEvaluationRequest {
 struct VisualEvaluationSnapshot {
   std::wstring source_key;
   std::uint64_t sequence{};
-  std::vector<layerc::core::PixelRuleMeasurement> measurements;
+  bool missing_template_assets{};
+  std::vector<layerc::core::ObservationMeasurement> measurements;
 };
 
 struct VisualCaptureSnapshot {
