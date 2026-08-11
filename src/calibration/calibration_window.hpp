@@ -2,6 +2,7 @@
 
 #include "layerc/capture/window_capture.hpp"
 #include "layerc/core/calibration.hpp"
+#include "layerc/core/template_matcher.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
 
@@ -40,7 +41,15 @@ private:
   void paint_preview(const DRAWITEMSTRUCT &draw);
   void update_region_from_pointer(POINT point, bool final);
   void sample_target_color();
-  void update_match_status();
+  void capture_template_reference();
+  void import_template_reference();
+  void clear_template_references();
+  void toggle_template_mask_editing();
+  [[nodiscard]] bool finish_template_mask_editing();
+  void update_template_mask(POINT point, bool opaque);
+  void refresh_template_mask_preview();
+  void refresh_template_reference_label();
+  void update_match_status(bool force = true);
   bool apply();
 
   [[nodiscard]] int integer_control(int id, int fallback, int minimum,
@@ -49,12 +58,16 @@ private:
   void set_control_text(int id, std::wstring_view text) const;
   [[nodiscard]] RECT preview_image_rect() const;
   [[nodiscard]] layerc::core::PixelRule current_rule_from_controls() const;
+  [[nodiscard]] layerc::core::TemplateState
+  current_template_from_controls() const;
+  [[nodiscard]] bool template_mode() const;
 
   layerc::core::CalibrationRequest request_;
   layerc::core::CalibrationResponse response_;
   layerc::core::GameProfile profile_;
   std::optional<layerc::core::VisualProfile> existing_visual_;
   layerc::core::PixelRule rule_;
+  layerc::core::TemplateState template_state_;
   layerc::core::VisualTrigger trigger_;
   std::uint8_t sample_rate_hz_{10};
   layerc::core::CaptureQuality quality_{layerc::core::CaptureQuality::balanced};
@@ -70,7 +83,14 @@ private:
   std::unique_ptr<layerc::capture::WindowCaptureSession> capture_;
   std::shared_ptr<const layerc::capture::CaptureFrame> frame_;
   std::vector<std::uint32_t> preview_pixels_;
+  std::vector<std::uint32_t> mask_preview_pixels_;
+  std::vector<layerc::core::TemplateImage> template_images_;
+  layerc::core::CpuTemplateMatcher template_matcher_;
+  ULONGLONG next_template_match_at_{};
   bool dragging_{};
+  bool mask_editing_{};
+  bool mask_changed_{};
+  bool mask_opaque_{};
   POINT drag_start_{};
   bool fallback_snapshot_{};
   bool fallback_started_{};

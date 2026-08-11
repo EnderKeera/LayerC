@@ -68,12 +68,14 @@ profile_list_label(const layerc::core::GameProfile &profile);
 profile_error_text(const layerc::core::ProfileError &error);
 [[nodiscard]] std::uint32_t parse_uint(std::wstring_view text,
                                        std::uint32_t fallback);
+[[nodiscard]] bool source_uses_schema_v1(std::string_view json);
+[[nodiscard]] bool confirm_v2_schema_upgrade(HWND owner);
 [[nodiscard]] std::wstring color_label(const wchar_t *label,
                                         std::uint32_t value);
 void erase_visual_assignment(layerc::core::VisualProfile &visual,
                              std::string_view cooldown_id);
-void gc_orphan_visual_rule(layerc::core::VisualProfile &visual,
-                           std::string_view rule_id);
+void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
+                                  std::string_view observation_id);
 class EditorWindow {
 public:
   int run(HINSTANCE instance, int show_command);
@@ -132,6 +134,7 @@ private:
   [[nodiscard]] layerc::core::Panel *selected_bar();
   [[nodiscard]] const layerc::core::Panel *selected_bar() const;
   [[nodiscard]] bool validate_profile();
+  [[nodiscard]] bool confirm_v2_upgrade();
   [[nodiscard]] bool confirm_unsaved_changes();
   void new_profile(bool confirm = true);
   void reload_profile_list(const std::filesystem::path &select_path = {}, bool open_selection = true);
@@ -184,7 +187,7 @@ private:
   enum class ChangeKind { text, immediate, drag };
   void record_profile_change(ChangeKind kind);
   void schedule_autosave(bool immediate);
-  [[nodiscard]] bool flush_autosave();
+  [[nodiscard]] bool flush_autosave(bool allow_upgrade_prompt = true);
   [[nodiscard]] bool draft_controls_valid() const;
   void notify_profile_committed(const std::filesystem::path &path,
                                 const layerc::core::GameProfile &profile);
@@ -248,6 +251,9 @@ private:
   layerc::platform::EditorTheme theme_{layerc::platform::EditorTheme::copper};
   std::uint32_t accent_{0xD88E4BU};
   bool capture_exclusion_{true};
+  bool legacy_base_schema_{};
+  bool legacy_visual_schema_{};
+  bool v2_upgrade_acknowledged_{};
   bool dirty_{};
   bool syncing_{};
   bool picking_{};

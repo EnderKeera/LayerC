@@ -11,8 +11,10 @@
 
 namespace layerc::core {
 
-inline constexpr std::size_t max_visual_json_bytes = 64U * 1024U;
+inline constexpr std::size_t max_visual_json_bytes = 256U * 1024U;
 inline constexpr std::size_t max_pixel_rules = 4;
+inline constexpr std::size_t max_template_states = 4;
+inline constexpr std::size_t max_template_references = 4;
 
 enum class CaptureQuality : std::uint8_t {
   low,
@@ -107,9 +109,33 @@ struct PixelRule {
   bool operator==(const PixelRule &) const = default;
 };
 
+struct TemplateReference {
+  // Lower-case SHA-256 digest. The platform asset store maps it to
+  // _visual/assets/<digest>.png and verifies the contents before use.
+  std::string asset_sha256;
+
+  bool operator==(const TemplateReference &) const = default;
+};
+
+struct TemplateState {
+  std::string id;
+  std::string name;
+  NormalizedRegion search_region;
+  double expected_width{0.1};
+  double expected_height{0.1};
+  std::vector<TemplateReference> references;
+  double confidence_threshold{0.90};
+  double scale_tolerance{0.05};
+  std::uint8_t color_tolerance{24};
+  std::uint8_t stable_samples{2};
+  PixelRepeatPolicy repeat{PixelRepeatPolicy::edge};
+
+  bool operator==(const TemplateState &) const = default;
+};
+
 struct VisualTrigger {
   std::string cooldown_id;
-  std::string rule_id;
+  std::string observation_id;
   bool enabled{true};
   VisualTriggerMode mode{VisualTriggerMode::pixel_only};
   // Pixel-only assignments suppress the underlying input binding when false.
@@ -122,11 +148,12 @@ struct VisualTrigger {
 };
 
 struct VisualProfile {
-  std::uint32_t schema_version{1};
+  std::uint32_t schema_version{2};
   std::string profile_id;
   std::uint8_t sample_rate_hz{10};
   CaptureQuality quality{CaptureQuality::balanced};
   std::vector<PixelRule> rules;
+  std::vector<TemplateState> templates;
   std::vector<VisualTrigger> triggers;
 
   bool operator==(const VisualProfile &) const = default;
@@ -149,6 +176,18 @@ validate_visual_profile(const VisualProfile &profile,
                         const GameProfile &base_profile);
 [[nodiscard]] bool
 has_enabled_visual_assignments(const VisualProfile &profile) noexcept;
+[[nodiscard]] const PixelRule *
+find_pixel_rule(const VisualProfile &profile, std::string_view id) noexcept;
+[[nodiscard]] const TemplateState *
+find_template_state(const VisualProfile &profile, std::string_view id) noexcept;
+[[nodiscard]] bool
+has_observation(const VisualProfile &profile, std::string_view id) noexcept;
+[[nodiscard]] std::uint8_t
+observation_stable_samples(const VisualProfile &profile,
+                           std::string_view id) noexcept;
+[[nodiscard]] PixelRepeatPolicy
+observation_repeat_policy(const VisualProfile &profile,
+                          std::string_view id) noexcept;
 
 [[nodiscard]] constexpr PixelPredicateKind
 predicate_kind(const PixelPredicate &predicate) noexcept {

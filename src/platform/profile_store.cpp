@@ -128,12 +128,12 @@ read_profile_file(const std::filesystem::path &path) {
   return read_bounded_file(path, layerc::core::max_profile_json_bytes);
 }
 
-namespace {
-
 std::optional<std::string> read_visual_file(
     const std::filesystem::path &path) {
   return read_bounded_file(path, layerc::core::max_visual_json_bytes);
 }
+
+namespace {
 
 bool replace_file_atomically(const std::filesystem::path &path,
                              const std::string_view contents,

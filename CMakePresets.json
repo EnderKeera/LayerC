@@ -23,8 +23,8 @@
       },
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_COMPILER": "$env{MINGW_ROOT}/bin/g++.exe",
-        "CMAKE_RC_COMPILER": "$env{MINGW_ROOT}/bin/windres.exe",
+        "CMAKE_CXX_COMPILER": "g++.exe",
+        "CMAKE_RC_COMPILER": "windres.exe",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/layerc-mingw",
         "LAYERC_BUILD_TESTS": "ON"
       }
@@ -77,25 +77,40 @@
       "output": { "outputOnFailure": true }
     }
   ],
+  "packagePresets": [
+    {
+      "name": "vs2026-release",
+      "configurePreset": "vs2026",
+      "configurations": ["Release"],
+      "generators": ["ZIP"]
+    },
+    {
+      "name": "mingw-ninja",
+      "configurePreset": "mingw-ninja",
+      "generators": ["ZIP"]
+    }
+  ],
   "workflowPresets": [
     {
       "name": "vs2026-release",
-      "displayName": "Build, test, and install Visual Studio 2026 Release",
+      "displayName": "Build, test, install, and package Visual Studio 2026 Release",
       "steps": [
         { "type": "configure", "name": "vs2026" },
         { "type": "build", "name": "vs2026-release" },
         { "type": "test", "name": "vs2026-release" },
-        { "type": "build", "name": "vs2026-install-release" }
+        { "type": "build", "name": "vs2026-install-release" },
+        { "type": "package", "name": "vs2026-release" }
       ]
     },
     {
       "name": "mingw-ninja",
-      "displayName": "Build, test, and install MinGW-w64 Release",
+      "displayName": "Build, test, install, and package MinGW-w64 Release",
       "steps": [
         { "type": "configure", "name": "mingw-ninja" },
         { "type": "build", "name": "mingw-ninja" },
         { "type": "test", "name": "mingw-ninja" },
-        { "type": "build", "name": "mingw-ninja-install" }
+        { "type": "build", "name": "mingw-ninja-install" },
+        { "type": "package", "name": "mingw-ninja" }
       ]
     }
   ]

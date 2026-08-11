@@ -4,8 +4,10 @@
 #include "layerc/platform/framed_pipe.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/visual_assets.hpp"
 #include "layerc/platform/windows.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -50,7 +52,7 @@ layerc::core::VisualProfile test_visual_profile() {
                            .region = {0.1, 0.2, 0.3, 0.4},
                            .predicate = AverageColorPredicate{0x123456, 10}});
   profile.triggers.push_back({.cooldown_id = "dash",
-                              .rule_id = "ready",
+                              .observation_id = "ready",
                               .mode = VisualTriggerMode::pixel_only});
   return profile;
 }
@@ -136,6 +138,177 @@ int main(const int argc, char *argv[]) {
   std::error_code filesystem_error;
   std::filesystem::create_directory(directory, filesystem_error);
   passed &= expect(!filesystem_error, "test directory should be created");
+  std::array<wchar_t, 32'768> previous_profile_directory{};
+  const DWORD previous_profile_directory_length = GetEnvironmentVariableW(
+      L"LAYERC_PROFILE_DIR", previous_profile_directory.data(),
+      static_cast<DWORD>(previous_profile_directory.size()));
+  const bool had_profile_directory =
+      previous_profile_directory_length > 0 &&
+      previous_profile_directory_length < previous_profile_directory.size();
+  passed &= expect(SetEnvironmentVariableW(L"LAYERC_PROFILE_DIR",
+                                           directory.c_str()) != FALSE,
+                   "asset tests should use an isolated profile directory");
+
+  layerc::core::TemplateImage asset{
+      .width = 8,
+      .height = 8,
+      .pixels = std::vector<layerc::core::RgbPixel>(64),
+      .alpha = std::vector<std::uint8_t>(64, 255)};
+  for (std::size_t index = 0; index < asset.pixels.size(); ++index) {
+    asset.pixels[index] = {
+        static_cast<std::uint8_t>(index * 3U),
+        static_cast<std::uint8_t>(255U - index * 2U),
+        static_cast<std::uint8_t>(index * 4U)};
+  }
+  auto flat_asset = asset;
+  std::ranges::fill(flat_asset.pixels,
+                    layerc::core::RgbPixel{80, 186, 200});
+  passed &= expect(
+      std::holds_alternative<layerc::platform::VisualAssetError>(
+          layerc::platform::store_template_asset(flat_asset)),
+      "flat template assets should be rejected before entering content-addressed storage");
+  auto stored_asset = layerc::platform::store_template_asset(asset);
+  auto *stored_asset_info =
+      std::get_if<layerc::platform::ImportedTemplateAsset>(&stored_asset);
+  if (const auto *error =
+          std::get_if<layerc::platform::VisualAssetError>(&stored_asset))
+    std::cerr << "Asset store error: " << error->message << '\n';
+  passed &= expect(stored_asset_info != nullptr &&
+                       stored_asset_info->reference.asset_sha256.size() == 64 &&
+                       std::filesystem::exists(stored_asset_info->path),
+                   "template pixels should be sanitized and stored by SHA-256");
+  if (stored_asset_info != nullptr) {
+    auto loaded = layerc::platform::load_template_asset(
+        stored_asset_info->reference.asset_sha256);
+    const auto *image = std::get_if<layerc::core::TemplateImage>(&loaded);
+    passed &= expect(image != nullptr && image->pixels == asset.pixels &&
+                         image->alpha == asset.alpha,
+                     "stored template assets should verify and round-trip");
+    {
+      std::ofstream corrupt(stored_asset_info->path,
+                            std::ios::binary | std::ios::trunc);
+      corrupt << "not a png";
+    }
+    passed &= expect(
+        std::holds_alternative<layerc::platform::VisualAssetError>(
+            layerc::platform::load_template_asset(
+                stored_asset_info->reference.asset_sha256)),
+        "a replaced template asset must fail content-hash verification");
+    stored_asset = layerc::platform::store_template_asset(asset);
+    stored_asset_info =
+        std::get_if<layerc::platform::ImportedTemplateAsset>(&stored_asset);
+    passed &= expect(stored_asset_info != nullptr,
+                     "storing known pixels should repair a corrupt asset");
+  }
+
+  auto second_asset = asset;
+  second_asset.pixels.front().red ^= 0x7FU;
+  const auto second_result =
+      layerc::platform::store_template_asset(second_asset);
+  const auto *second_asset_info =
+      std::get_if<layerc::platform::ImportedTemplateAsset>(&second_result);
+  if (stored_asset_info != nullptr && second_asset_info != nullptr) {
+    auto gc_base = test_profile("Asset GC");
+    layerc::core::VisualProfile gc_visual;
+    gc_visual.profile_id = gc_base.id;
+    gc_visual.templates.push_back(
+        {.id = "template",
+         .name = "Template",
+         .search_region = {0.0, 0.0, 1.0, 1.0},
+         .expected_width = 0.25,
+         .expected_height = 0.25,
+         .references = {stored_asset_info->reference}});
+    gc_visual.triggers.push_back(
+        {.cooldown_id = "dash", .observation_id = "template"});
+    const auto gc_profile_path = directory / L"asset-gc.json";
+    const auto stale_asset_temporary =
+        layerc::platform::visual_asset_directory() /
+        (std::wstring(64, L'd') + L".png.1.1.tmp");
+    {
+      std::ofstream output(stale_asset_temporary,
+                           std::ios::binary | std::ios::trunc);
+      output << "stale";
+    }
+    std::filesystem::last_write_time(
+        stale_asset_temporary,
+        std::filesystem::file_time_type::clock::now() -
+            std::chrono::hours(48),
+        filesystem_error);
+    passed &= expect(!filesystem_error,
+                     "stale asset temporary timestamp should be set");
+    passed &= expect(
+        layerc::platform::write_profile_bundle(gc_profile_path, gc_base,
+                                                gc_visual) &&
+            layerc::platform::garbage_collect_unreferenced_visual_assets() &&
+            std::filesystem::exists(stored_asset_info->path) &&
+            !std::filesystem::exists(second_asset_info->path) &&
+            !std::filesystem::exists(stale_asset_temporary),
+        "a complete profile scan should retain references and remove orphans and stale asset temporaries");
+
+    auto third_asset = asset;
+    third_asset.pixels.back().blue ^= 0x55U;
+    const auto third_result =
+        layerc::platform::store_template_asset(third_asset);
+    const auto *third_asset_info =
+        std::get_if<layerc::platform::ImportedTemplateAsset>(&third_result);
+    auto stale_backup =
+        layerc::platform::visual_sidecar_path(gc_profile_path);
+    stale_backup += L".bak";
+    if (third_asset_info != nullptr) {
+      auto recovery_visual = gc_visual;
+      recovery_visual.templates.front().references = {
+          third_asset_info->reference};
+      std::ofstream output(stale_backup,
+                           std::ios::binary | std::ios::trunc);
+      output << layerc::core::serialize_visual_profile_json(
+          recovery_visual);
+    }
+    passed &= expect(
+        third_asset_info != nullptr &&
+            layerc::platform::garbage_collect_unreferenced_visual_assets() &&
+            std::filesystem::exists(third_asset_info->path),
+        "assets referenced only by a valid recovery sidecar should be retained");
+
+    const auto malformed = directory / L"unreadable.json";
+    {
+      std::ofstream output(malformed, std::ios::binary | std::ios::trunc);
+      output << "{not-json";
+    }
+    {
+      std::ofstream output(stale_backup,
+                           std::ios::binary | std::ios::trunc);
+      output << "{corrupt-stale-backup";
+    }
+    passed &= expect(
+        third_asset_info != nullptr &&
+            layerc::platform::garbage_collect_unreferenced_visual_assets() &&
+            !std::filesystem::exists(third_asset_info->path) &&
+            std::filesystem::exists(stored_asset_info->path),
+        "an unrelated malformed base and corrupt stale backup should not block safe collection");
+    std::filesystem::remove(malformed, filesystem_error);
+    filesystem_error.clear();
+
+    auto fourth_asset = asset;
+    fourth_asset.pixels[1].green ^= 0x33U;
+    const auto fourth_result =
+        layerc::platform::store_template_asset(fourth_asset);
+    const auto *fourth_asset_info =
+        std::get_if<layerc::platform::ImportedTemplateAsset>(&fourth_result);
+    const auto active_sidecar =
+        layerc::platform::visual_sidecar_path(gc_profile_path);
+    {
+      std::ofstream output(active_sidecar,
+                           std::ios::binary | std::ios::trunc);
+      output << "{invalid-active-sidecar";
+    }
+    passed &= expect(
+        fourth_asset_info != nullptr &&
+            !layerc::platform::garbage_collect_unreferenced_visual_assets() &&
+            std::filesystem::exists(fourth_asset_info->path),
+        "an invalid active sidecar bundle should conservatively abort collection");
+  } else {
+    passed = false;
+  }
 
   // Exercise the production image-name policy without touching the fixed
   // production pipe, which may legitimately be in use by the user's daemon.
@@ -638,6 +811,9 @@ int main(const int argc, char *argv[]) {
   passed &= expect(server_received,
                    "framed UTF-8 messages should cross the named pipe");
 
+  (void)SetEnvironmentVariableW(
+      L"LAYERC_PROFILE_DIR",
+      had_profile_directory ? previous_profile_directory.data() : nullptr);
   filesystem_error.clear();
   std::filesystem::remove_all(directory, filesystem_error);
   passed &= expect(!filesystem_error,

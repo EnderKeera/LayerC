@@ -3,6 +3,7 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/visual_assets.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <ranges>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -29,22 +31,27 @@ layerc::core::VisualTrigger *find_trigger(
   return found == visual.triggers.end() ? nullptr : &*found;
 }
 
-const layerc::core::PixelRule *find_rule(
-    const layerc::core::VisualProfile &visual, const std::string_view id) {
-  const auto found =
-      std::ranges::find(visual.rules, id, &layerc::core::PixelRule::id);
-  return found == visual.rules.end() ? nullptr : &*found;
+using VisualObservation =
+    std::variant<layerc::core::PixelRule, layerc::core::TemplateState>;
+
+std::string observation_id(const VisualObservation &observation) {
+  return std::visit([](const auto &item) { return item.id; }, observation);
 }
 
-std::string unique_rule_id(const std::string_view requested,
-                           const std::vector<layerc::core::PixelRule> &rules,
-                           const std::string_view allowed = {}) {
-  const std::string base = requested.empty() ? "visual-rule" : std::string(requested);
+void set_observation_id(VisualObservation &observation,
+                        const std::string_view id) {
+  std::visit([&](auto &item) { item.id = id; }, observation);
+}
+
+std::string unique_observation_id(
+    const std::string_view requested,
+    const layerc::core::VisualProfile &profile,
+    const std::string_view allowed = {}) {
+  const std::string base =
+      requested.empty() ? "visual-observation" : std::string(requested);
   auto used = [&](const std::string_view value) {
     if (!allowed.empty() && value == allowed) return false;
-    return std::ranges::any_of(rules, [&](const auto &rule) {
-      return rule.id == value;
-    });
+    return layerc::core::has_observation(profile, value);
   };
   std::string candidate = base;
   for (std::size_t suffix = 2; used(candidate); ++suffix)
@@ -71,15 +78,55 @@ void close_handle(HANDLE &handle) {
   handle = nullptr;
 }
 
-bool ensure_visual_rule_capacity(
-    const HWND owner, const layerc::core::VisualProfile &profile) {
-  if (profile.rules.size() < layerc::core::max_pixel_rules) return true;
-  const auto message =
-      L"This profile already has the maximum " +
-      std::to_wstring(layerc::core::max_pixel_rules) + L" visual rules.";
-  MessageBoxW(owner, message.c_str(), L"Visual rule limit",
+bool ensure_observation_capacity(
+    const HWND owner, const layerc::core::VisualProfile &profile,
+    const VisualObservation &candidate,
+    const std::string_view replacing_id = {}) {
+  const bool is_pixel = std::holds_alternative<layerc::core::PixelRule>(candidate);
+  std::size_t count = is_pixel ? profile.rules.size() : profile.templates.size();
+  if (!replacing_id.empty()) {
+    const bool replaces_same_type =
+        is_pixel ? layerc::core::find_pixel_rule(profile, replacing_id) != nullptr
+                 : layerc::core::find_template_state(profile, replacing_id) != nullptr;
+    if (replaces_same_type) --count;
+  }
+  const auto maximum = is_pixel ? layerc::core::max_pixel_rules
+                                : layerc::core::max_template_states;
+  if (count < maximum) return true;
+  const auto kind = is_pixel ? L"pixel" : L"template";
+  const auto message = L"This profile already has the maximum " +
+                       std::to_wstring(maximum) + L" " + kind +
+                       L" observations.";
+  MessageBoxW(owner, message.c_str(), L"Visual observation limit",
               MB_OK | MB_ICONINFORMATION);
   return false;
+}
+
+void append_observation(layerc::core::VisualProfile &profile,
+                        const VisualObservation &observation) {
+  std::visit([&](const auto &item) {
+    using T = std::decay_t<decltype(item)>;
+    if constexpr (std::is_same_v<T, layerc::core::PixelRule>)
+      profile.rules.push_back(item);
+    else
+      profile.templates.push_back(item);
+  }, observation);
+}
+
+void replace_observation(layerc::core::VisualProfile &profile,
+                         const std::string_view old_id,
+                         const VisualObservation &observation) {
+  std::erase_if(profile.rules, [&](const auto &item) { return item.id == old_id; });
+  std::erase_if(profile.templates,
+                [&](const auto &item) { return item.id == old_id; });
+  append_observation(profile, observation);
+}
+
+std::optional<VisualObservation>
+single_observation(const layerc::core::VisualProfile &profile) {
+  if (profile.rules.size() + profile.templates.size() != 1) return std::nullopt;
+  if (!profile.rules.empty()) return VisualObservation{profile.rules.front()};
+  return VisualObservation{profile.templates.front()};
 }
 
 } // namespace
@@ -89,28 +136,35 @@ void erase_visual_assignment(layerc::core::VisualProfile &visual,
   std::string old_rule;
   for (const auto &trigger : visual.triggers) {
     if (trigger.cooldown_id == cooldown_id) {
-      old_rule = trigger.rule_id;
+      old_rule = trigger.observation_id;
       break;
     }
   }
   std::erase_if(visual.triggers, [&](const auto &t) {
     return t.cooldown_id == cooldown_id;
   });
-  gc_orphan_visual_rule(visual, old_rule);
+  gc_orphan_visual_observation(visual, old_rule);
 }
 
-void gc_orphan_visual_rule(layerc::core::VisualProfile &visual,
-                           const std::string_view rule_id) {
-  if (rule_id.empty()) return;
+void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
+                                  const std::string_view observation_id) {
+  if (observation_id.empty()) return;
   if (std::none_of(visual.triggers.begin(), visual.triggers.end(),
-                   [&](const auto &t) { return t.rule_id == rule_id; })) {
+                   [&](const auto &t) {
+                     return t.observation_id == observation_id;
+                   })) {
     std::erase_if(visual.rules,
-                  [&](const auto &r) { return r.id == rule_id; });
+                  [&](const auto &r) { return r.id == observation_id; });
+    std::erase_if(visual.templates,
+                  [&](const auto &state) {
+                    return state.id == observation_id;
+                  });
   }
 }
 
 void EditorWindow::load_current_visual_profile() {
   visual_profile_.reset();
+  legacy_visual_schema_ = false;
   visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
   visual_sidecar_error_.clear();
   if (!current_path_.empty()) {
@@ -119,6 +173,12 @@ void EditorWindow::load_current_visual_profile() {
     visual_sidecar_state_ = loaded.state;
     visual_profile_ = std::move(loaded.profile);
     visual_sidecar_error_ = std::move(loaded.error.message);
+    if (!loaded.source_path.empty()) {
+      const auto contents =
+          layerc::platform::read_visual_file(loaded.source_path);
+      legacy_visual_schema_ =
+          contents.has_value() && source_uses_schema_v1(*contents);
+    }
   }
   refresh_visual_controls();
 }
@@ -136,9 +196,15 @@ void EditorWindow::refresh_visual_controls() {
   const bool editable = cooldown != nullptr && !profile_.game.global;
   const layerc::core::VisualTrigger *trigger{};
   const layerc::core::PixelRule *rule{};
+  const layerc::core::TemplateState *template_state{};
   if (editable && visual_profile_) {
     trigger = find_trigger(*visual_profile_, cooldown->id);
-    if (trigger != nullptr) rule = find_rule(*visual_profile_, trigger->rule_id);
+    if (trigger != nullptr) {
+      rule = layerc::core::find_pixel_rule(*visual_profile_,
+                                           trigger->observation_id);
+      template_state = layerc::core::find_template_state(
+          *visual_profile_, trigger->observation_id);
+    }
   }
 
   std::wstring text = L"Input only";
@@ -152,7 +218,9 @@ void EditorWindow::refresh_visual_controls() {
   } else if (trigger != nullptr) {
     text = visual_mode_label(*trigger);
     if (rule != nullptr && !rule->name.empty())
-      text += L" — " + to_wide(rule->name);
+      text += L" — Pixel: " + to_wide(rule->name);
+    else if (template_state != nullptr && !template_state->name.empty())
+      text += L" — Template: " + to_wide(template_state->name);
     if (visual_sidecar_state_ ==
         layerc::platform::VisualSidecarState::recovered_backup)
       text += L" (recovered backup)";
@@ -162,7 +230,7 @@ void EditorWindow::refresh_visual_controls() {
   EnableWindow(enabled, trigger != nullptr);
   EnableWindow(remove, trigger != nullptr);
   // Calibration can repair an invalid sidecar by replacing the selected
-  // assignment with a newly validated one-rule result.
+  // assignment with a newly validated single-observation result.
   EnableWindow(calibrate, editable && !current_path_.empty());
   InvalidateRect(enabled, nullptr, TRUE);
 }
@@ -184,6 +252,7 @@ bool EditorWindow::save_visual_profile() {
   }
   profile_ = *validated;
   visual_profile_->profile_id = profile_.id;
+  if (!confirm_v2_upgrade()) return false;
   if (!layerc::platform::write_profile_bundle(current_path_, profile_,
                                                visual_profile_)) {
     MessageBoxW(dialog_,
@@ -196,9 +265,16 @@ bool EditorWindow::save_visual_profile() {
   (void)history_.record(profile_, visual_profile_, false);
   history_.rebase(profile_, visual_profile_);
   dirty_ = false;
+  legacy_base_schema_ = false;
+  legacy_visual_schema_ = false;
+  v2_upgrade_acknowledged_ = false;
   KillTimer(dialog_, autosave_timer);
   sync_current_profile_entry();
   notify_profile_committed(current_path_, profile_);
+  // Collection is deliberately post-commit. LayerCal may already have made a
+  // new content-addressed asset durable, and it must not be considered live
+  // until the sidecar reference above is durable too.
+  (void)layerc::platform::garbage_collect_unreferenced_visual_assets();
   refresh_visual_controls();
   return true;
 }
@@ -302,6 +378,7 @@ bool EditorWindow::launch_calibration(const HWND target) {
   const auto *cooldown = selected_cooldown();
   if (cooldown == nullptr || target == nullptr || !IsWindow(target))
     return false;
+  (void)layerc::platform::garbage_collect_unreferenced_visual_assets();
   if (!layerc::platform::visual_capture_notice_acknowledged()) {
     if (MessageBoxW(
             dialog_,
@@ -560,9 +637,12 @@ bool EditorWindow::launch_calibration(const HWND target) {
     return false;
   }
   if (result.applied) {
-    if (!merge_calibration_result(result.visual_json)) return false;
+    const bool merged = merge_calibration_result(result.visual_json);
+    (void)layerc::platform::garbage_collect_unreferenced_visual_assets();
+    if (!merged) return false;
     set_status(L"Visual calibration applied and committed.");
   } else {
+    (void)layerc::platform::garbage_collect_unreferenced_visual_assets();
     set_status(L"Visual calibration cancelled; no changes were made.");
   }
   return true;
@@ -574,8 +654,10 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
   const auto *candidate_profile =
       std::get_if<layerc::core::VisualProfile>(&parsed);
   const auto *cooldown = selected_cooldown();
-  if (candidate_profile == nullptr || cooldown == nullptr ||
-      candidate_profile->rules.size() != 1 ||
+  const auto candidate = candidate_profile == nullptr
+                             ? std::optional<VisualObservation>{}
+                             : single_observation(*candidate_profile);
+  if (candidate_profile == nullptr || cooldown == nullptr || !candidate ||
       candidate_profile->triggers.size() != 1 ||
       candidate_profile->triggers.front().cooldown_id != cooldown->id) {
     MessageBoxW(dialog_,
@@ -591,46 +673,57 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
   merged.profile_id = profile_.id;
   merged.sample_rate_hz = candidate_profile->sample_rate_hz;
   merged.quality = candidate_profile->quality;
-  auto candidate_rule = candidate_profile->rules.front();
+  auto candidate_observation = *candidate;
   auto candidate_trigger = candidate_profile->triggers.front();
   auto *old_trigger = find_trigger(merged, cooldown->id);
-  std::string old_rule_id;
+  std::string old_observation_id;
   if (old_trigger != nullptr) {
-    old_rule_id = old_trigger->rule_id;
+    old_observation_id = old_trigger->observation_id;
     const auto references = std::ranges::count_if(
         merged.triggers,
-        [&](const auto &trigger) { return trigger.rule_id == old_rule_id; });
+        [&](const auto &trigger) {
+          return trigger.observation_id == old_observation_id;
+        });
     bool update_shared = references <= 1;
     if (references > 1) {
       const int choice = MessageBoxW(
           dialog_,
-          L"This visual rule is shared by multiple cooldowns. Choose Yes to update the shared rule, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
-          L"Shared visual rule", MB_YESNOCANCEL | MB_ICONQUESTION);
+          L"This visual observation is shared by multiple cooldowns. Choose Yes to update the shared observation, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
+          L"Shared visual observation", MB_YESNOCANCEL | MB_ICONQUESTION);
       if (choice == IDCANCEL) return false;
       update_shared = choice == IDYES;
     }
     if (update_shared) {
-      candidate_rule.id = old_rule_id;
-      const auto old = std::ranges::find(merged.rules, old_rule_id,
-                                         &layerc::core::PixelRule::id);
-      if (old != merged.rules.end()) *old = candidate_rule;
-      candidate_trigger.rule_id = old_rule_id;
+      if (!ensure_observation_capacity(dialog_, merged,
+                                       candidate_observation,
+                                       old_observation_id))
+        return false;
+      set_observation_id(candidate_observation, old_observation_id);
+      replace_observation(merged, old_observation_id, candidate_observation);
+      candidate_trigger.observation_id = old_observation_id;
     } else {
-      if (!ensure_visual_rule_capacity(dialog_, merged)) return false;
-      candidate_rule.id = unique_rule_id(candidate_rule.id, merged.rules);
-      candidate_trigger.rule_id = candidate_rule.id;
-      merged.rules.push_back(candidate_rule);
+      if (!ensure_observation_capacity(dialog_, merged,
+                                       candidate_observation))
+        return false;
+      const auto new_id = unique_observation_id(
+          observation_id(candidate_observation), merged);
+      set_observation_id(candidate_observation, new_id);
+      candidate_trigger.observation_id = new_id;
+      append_observation(merged, candidate_observation);
     }
     *old_trigger = candidate_trigger;
   } else {
-    if (!ensure_visual_rule_capacity(dialog_, merged)) return false;
-    candidate_rule.id = unique_rule_id(candidate_rule.id, merged.rules);
-    candidate_trigger.rule_id = candidate_rule.id;
-    merged.rules.push_back(candidate_rule);
+    if (!ensure_observation_capacity(dialog_, merged, candidate_observation))
+      return false;
+    const auto new_id = unique_observation_id(
+        observation_id(candidate_observation), merged);
+    set_observation_id(candidate_observation, new_id);
+    candidate_trigger.observation_id = new_id;
+    append_observation(merged, candidate_observation);
     merged.triggers.push_back(candidate_trigger);
   }
 
-  gc_orphan_visual_rule(merged, old_rule_id);
+  gc_orphan_visual_observation(merged, old_observation_id);
 
   const auto error = layerc::core::validate_visual_profile(merged, profile_);
   if (!error.message.empty()) {

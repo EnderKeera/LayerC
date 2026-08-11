@@ -20,6 +20,8 @@ visual_sidecar_path(const std::filesystem::path &profile_path);
 canonical_profile_key(const std::filesystem::path &path);
 [[nodiscard]] std::optional<std::string>
 read_profile_file(const std::filesystem::path &path);
+[[nodiscard]] std::optional<std::string>
+read_visual_file(const std::filesystem::path &path);
 [[nodiscard]] bool write_profile_file(const std::filesystem::path &path,
                                       std::string_view contents);
 // Commits the base profile and its optional visual sidecar as a consistent

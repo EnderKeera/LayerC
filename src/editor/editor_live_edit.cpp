@@ -67,7 +67,11 @@ void EditorWindow::record_profile_change(const ChangeKind kind) {
                         kind == ChangeKind::text);
   dirty_ = true;
   schedule_autosave(kind != ChangeKind::text);
-  send_live_profile();
+  // Do not publish an in-memory schema-v2 migration before the user has
+  // approved making that one-way disk upgrade.
+  if ((!legacy_base_schema_ && !legacy_visual_schema_) ||
+      v2_upgrade_acknowledged_)
+    send_live_profile();
 }
 
 void EditorWindow::schedule_autosave(const bool immediate) {
@@ -94,7 +98,7 @@ bool EditorWindow::draft_controls_valid() const {
   return true;
 }
 
-bool EditorWindow::flush_autosave() {
+bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
   KillTimer(dialog_, autosave_timer);
   history_.end_text_coalescing();
   if (!dirty_) return true;
@@ -120,6 +124,18 @@ bool EditorWindow::flush_autosave() {
   }
   profile_ = *validated;
   if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if ((legacy_base_schema_ || legacy_visual_schema_) &&
+      !v2_upgrade_acknowledged_) {
+    if (!allow_upgrade_prompt) {
+      set_status(
+          L"Autosave paused — use Save to approve the schema-v2 upgrade.");
+      return false;
+    }
+    if (!confirm_v2_upgrade()) {
+      set_status(L"Not saved — schema upgrade was not confirmed.");
+      return false;
+    }
+  }
   if (!layerc::platform::write_profile_bundle(current_path_, profile_,
                                                visual_profile_)) {
     set_status(L"Autosave failed — the last consistent profile bundle remains active.");
@@ -127,6 +143,9 @@ bool EditorWindow::flush_autosave() {
   }
   history_.rebase(profile_, visual_profile_);
   dirty_ = false;
+  legacy_base_schema_ = false;
+  legacy_visual_schema_ = false;
+  v2_upgrade_acknowledged_ = false;
   sync_current_profile_entry();
   notify_profile_committed(current_path_, profile_);
   set_status(L"Autosaved — LayerD updated live.");
@@ -366,6 +385,10 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
     set_status(L"LayerE cannot attach edit overlays to its own windows.");
     return;
   }
+  if (!confirm_v2_upgrade()) {
+    set_status(L"On-window editing was not started because the schema-v2 upgrade was not approved.");
+    return;
+  }
   if (!live_channel_.connected()) {
     (void)start_daemon();
     pending_edit_target_ = target;
@@ -470,7 +493,9 @@ void EditorWindow::apply_history_snapshot(EditorProfileSnapshot snapshot) {
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);
-  send_live_profile();
+  if ((!legacy_base_schema_ && !legacy_visual_schema_) ||
+      v2_upgrade_acknowledged_)
+    send_live_profile();
 }
 
 } // namespace layerc::editor

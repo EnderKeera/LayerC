@@ -2,8 +2,10 @@
 #include "test_support.hpp"
 
 #include "layerc/core/pixel_engine.hpp"
+#include "layerc/core/template_matcher.hpp"
 
 #include <chrono>
+#include <iostream>
 #include <vector>
 
 namespace layerc::test {
@@ -25,7 +27,7 @@ layerc::core::VisualProfile visual_profile(
                            .stable_samples = 2,
                            .repeat = repeat});
   profile.triggers.push_back({.cooldown_id = "dash",
-                              .rule_id = "ready",
+                              .observation_id = "ready",
                               .enabled = true,
                               .mode = mode,
                               .keep_input = false,
@@ -39,7 +41,7 @@ layerc::core::PixelRuleMeasurement measurement(
     const bool matched, const layerc::core::TimePoint at,
     const layerc::core::CaptureAvailability availability =
         layerc::core::CaptureAvailability::available) {
-  return {.rule_id = "ready",
+  return {.observation_id = "ready",
           .availability = availability,
           .matched = matched,
           .sampled_at = at};
@@ -82,6 +84,227 @@ void test_pixel_rule_evaluation() {
   expect(evaluate_pixel_rule(brightness, frame, CaptureQuality::balanced)
              .matched,
          "brightness predicates should use the sampled average luminance");
+}
+
+void test_template_matching() {
+  using namespace layerc::core;
+  constexpr std::uint32_t frame_axis = 64;
+  constexpr std::uint32_t template_axis = 10;
+  std::vector<RgbPixel> pixels(frame_axis * frame_axis, {12, 18, 24});
+  TemplateImage reference{.asset_sha256 = std::string(64, 'a'),
+                          .width = template_axis,
+                          .height = template_axis,
+                          .pixels = std::vector<RgbPixel>(
+                              template_axis * template_axis),
+                          .alpha = std::vector<std::uint8_t>(
+                              template_axis * template_axis, 0)};
+  for (std::uint32_t y = 1; y < 9; ++y) {
+    for (std::uint32_t x = 1; x < 9; ++x) {
+      const RgbPixel value{
+          static_cast<std::uint8_t>(20 + x * 19),
+          static_cast<std::uint8_t>(30 + y * 17),
+          static_cast<std::uint8_t>(40 + (x + y) * 9)};
+      reference.pixels[y * template_axis + x] = value;
+      reference.alpha[y * template_axis + x] = 255;
+      pixels[(24 + y) * frame_axis + (18 + x)] = value;
+    }
+  }
+  expect(reference.valid(),
+         "a bounded template with 64 opaque pixels should be valid");
+  expect(template_image_has_structure(reference),
+         "a varied template should carry enough spatial structure to match");
+
+  TemplateImage flat{.asset_sha256 = std::string(64, 'f'),
+                     .width = 8,
+                     .height = 8,
+                     .pixels = std::vector<RgbPixel>(64, {80, 186, 200}),
+                     .alpha = std::vector<std::uint8_t>(64, 255)};
+  expect(flat.valid() && !template_image_has_structure(flat),
+         "a syntactically valid flat image should be rejected as a positional template");
+  std::vector<RgbPixel> flat_frame(frame_axis * frame_axis, {80, 186, 200});
+  TemplateState flat_state{
+      .id = "flat",
+      .name = "Flat",
+      .search_region = {0.0, 0.0, 1.0, 1.0},
+      .expected_width = 0.125,
+      .expected_height = 0.125,
+      .references = {{flat.asset_sha256}},
+      .confidence_threshold = 0.90,
+      .color_tolerance = 32};
+  CpuTemplateMatcher flat_matcher;
+  const auto flat_result = flat_matcher.evaluate(
+      flat_state, std::span<const TemplateImage>(&flat, 1),
+      PixelFrameView{flat_frame, frame_axis, frame_axis, 0},
+      CaptureQuality::balanced);
+  expect(!flat_result.matched && flat_result.search_region_available &&
+             flat_result.candidates_evaluated == 0,
+         "flat references must fail closed without being mislabeled as outside captured output");
+
+  TemplateState state{
+      .id = "ready-template",
+      .name = "Ready template",
+      .search_region = {0.0, 0.0, 1.0, 1.0},
+      .expected_width = static_cast<double>(template_axis) / frame_axis,
+      .expected_height = static_cast<double>(template_axis) / frame_axis,
+      .references = {{reference.asset_sha256}},
+      .confidence_threshold = 0.98,
+      .scale_tolerance = 0.0,
+      .color_tolerance = 0};
+  CpuTemplateMatcher matcher;
+  const auto matched = matcher.evaluate(
+      state, std::span<const TemplateImage>(&reference, 1),
+      PixelFrameView{pixels, frame_axis, frame_axis, 0},
+      CaptureQuality::exact);
+  expect(matched.matched && matched.confidence >= 0.98 &&
+             matched.reference_sha256 == reference.asset_sha256,
+         "template matching should find a masked reference in its search region");
+  expect(matched.pixel_comparisons <= 8U * 1024U * 1024U,
+         "exact template matching should still enforce its hard work budget");
+
+  for (auto &pixel : pixels) pixel = {200, 4, 220};
+  const auto rejected = matcher.evaluate(
+      state, std::span<const TemplateImage>(&reference, 1),
+      PixelFrameView{pixels, frame_axis, frame_axis, 0},
+      CaptureQuality::balanced);
+  expect(!rejected.matched,
+         "template matching should reject a structurally and chromatically different frame");
+
+  auto invalid = reference;
+  invalid.alpha.pop_back();
+  expect(!invalid.valid(),
+         "template assets with incomplete alpha masks should be rejected");
+
+  TemplateImage large{.asset_sha256 = std::string(64, 'b'),
+                      .width = 128,
+                      .height = 64,
+                      .pixels = std::vector<RgbPixel>(128U * 64U,
+                                                     {40, 80, 120}),
+                      .alpha = std::vector<std::uint8_t>(128U * 64U, 255)};
+  const auto balanced =
+      compact_template_image(large, CaptureQuality::balanced);
+  const auto low = compact_template_image(large, CaptureQuality::low);
+  expect(balanced.valid() && balanced.width == 64 && balanced.height == 32 &&
+             balanced.asset_sha256 == large.asset_sha256 && low.valid() &&
+             low.width == 32 && low.height == 16,
+         "runtime references should compact to the selected quality bound while preserving identity and masks");
+
+  constexpr std::uint32_t search_width = 640;
+  constexpr std::uint32_t search_height = 360;
+  constexpr std::uint32_t off_grid_width = 40;
+  constexpr std::uint32_t off_grid_height = 28;
+  constexpr std::uint32_t off_grid_left = 317;
+  constexpr std::uint32_t off_grid_top = 173;
+  std::vector<RgbPixel> search_pixels(search_width * search_height,
+                                      {7, 11, 17});
+  TemplateImage off_grid{
+      .asset_sha256 = std::string(64, 'c'),
+      .width = off_grid_width,
+      .height = off_grid_height,
+      .pixels = std::vector<RgbPixel>(off_grid_width * off_grid_height),
+      .alpha = std::vector<std::uint8_t>(off_grid_width * off_grid_height,
+                                        255)};
+  for (std::uint32_t y = 0; y < off_grid_height; ++y) {
+    for (std::uint32_t x = 0; x < off_grid_width; ++x) {
+      const RgbPixel pixel{
+          static_cast<std::uint8_t>((x * 29U + y * 3U) % 251U),
+          static_cast<std::uint8_t>((x * 7U + y * 31U) % 253U),
+          static_cast<std::uint8_t>((x * 17U + y * 11U) % 247U)};
+      off_grid.pixels[static_cast<std::size_t>(y) * off_grid_width + x] =
+          pixel;
+      search_pixels[static_cast<std::size_t>(off_grid_top + y) *
+                        search_width +
+                    off_grid_left + x] = pixel;
+    }
+  }
+  TemplateState off_grid_state{
+      .id = "off-grid",
+      .name = "Off-grid",
+      .search_region = {0.0, 0.0, 1.0, 1.0},
+      .expected_width =
+          static_cast<double>(off_grid_width) / search_width,
+      .expected_height =
+          static_cast<double>(off_grid_height) / search_height,
+      .references = {{off_grid.asset_sha256}},
+      .confidence_threshold = 0.98,
+      .scale_tolerance = 0.0,
+      .color_tolerance = 0};
+  CpuTemplateMatcher off_grid_matcher;
+  const NormalizedRegion unrelated_exclusion{0.0, 0.0, 0.1, 0.1};
+  const auto refined = off_grid_matcher.evaluate(
+      off_grid_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced,
+      {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>(&unrelated_exclusion, 1));
+  if (!refined.matched || refined.confidence < 0.98 ||
+      refined.pixel_comparisons > 1024U * 1024U) {
+    std::cerr << "off-grid confidence=" << refined.confidence
+              << " candidates=" << refined.candidates_evaluated
+              << " comparisons=" << refined.pixel_comparisons << '\n';
+  }
+  expect(refined.matched && refined.confidence >= 0.98 &&
+             refined.pixel_comparisons <= 1024U * 1024U,
+         "balanced matching should refine an off-grid template while respecting its work budget and unrelated exclusions");
+
+  auto intermediate_scale_state = off_grid_state;
+  constexpr double rendered_scale = 0.95;
+  intermediate_scale_state.expected_width =
+      static_cast<double>(off_grid_width) / search_width / rendered_scale;
+  intermediate_scale_state.expected_height =
+      static_cast<double>(off_grid_height) / search_height / rendered_scale;
+  intermediate_scale_state.scale_tolerance = 0.20;
+  const auto intermediate_scale = off_grid_matcher.evaluate(
+      intermediate_scale_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced);
+  if (!intermediate_scale.matched || intermediate_scale.confidence < 0.98 ||
+      intermediate_scale.pixel_comparisons > 1024U * 1024U) {
+    std::cerr << "intermediate-scale confidence="
+              << intermediate_scale.confidence
+              << " candidates=" << intermediate_scale.candidates_evaluated
+              << " comparisons=" << intermediate_scale.pixel_comparisons
+              << '\n';
+  }
+  expect(intermediate_scale.matched &&
+             intermediate_scale.confidence >= 0.98 &&
+             intermediate_scale.pixel_comparisons <= 1024U * 1024U,
+         "balanced matching should search a pixel-distinct 0.95 scale that lies between the coarse tolerance anchors without exceeding its work budget");
+
+  const NormalizedRegion covered{
+      static_cast<double>(off_grid_left) / search_width,
+      static_cast<double>(off_grid_top) / search_height,
+      static_cast<double>(off_grid_width) / search_width,
+      static_cast<double>(off_grid_height) / search_height};
+  const auto excluded = off_grid_matcher.evaluate(
+      off_grid_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>(&covered, 1));
+  expect(!excluded.matched,
+         "template candidates overlapping capture-excluded overlay pixels must not be evaluated as real image data");
+  expect(excluded.search_region_available,
+         "an excluded candidate region should remain capture-available instead of enabling input fallback");
+
+  const NormalizedRegion all_excluded{0.0, 0.0, 1.0, 1.0};
+  const auto no_candidates = off_grid_matcher.evaluate(
+      off_grid_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>(&all_excluded, 1));
+  expect(no_candidates.search_region_available &&
+             no_candidates.candidates_evaluated == 0 &&
+             !no_candidates.matched,
+         "zero candidates caused by exclusions should fail closed without being mislabeled as outside captured output");
+
+  auto outside_state = off_grid_state;
+  outside_state.search_region = {0.4, 0.4, 0.5, 0.5};
+  const NormalizedRegion different_output{0.0, 0.0, 0.1, 0.1};
+  const auto outside = off_grid_matcher.evaluate(
+      outside_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced, different_output);
+  expect(!outside.search_region_available && outside.candidates_evaluated == 0,
+         "only a search region outside the supplied capture output should report outside-output status");
 }
 
 void test_visual_trigger_state_machine() {

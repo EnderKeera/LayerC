@@ -2,6 +2,7 @@
 #include "editor_resource.h"
 
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/visual_assets.hpp"
 
 #include <algorithm>
 #include <array>
@@ -41,9 +42,19 @@ bool EditorWindow::validate_profile() {
   return true;
 }
 
+bool EditorWindow::confirm_v2_upgrade() {
+  if ((!legacy_base_schema_ && !legacy_visual_schema_) ||
+      v2_upgrade_acknowledged_)
+    return true;
+  if (!confirm_v2_schema_upgrade(dialog_)) return false;
+  v2_upgrade_acknowledged_ = true;
+  return true;
+}
+
 bool EditorWindow::confirm_unsaved_changes() {
   if (!dirty_) return true;
-  if (!current_path_.empty() && draft_controls_valid() && flush_autosave())
+  if (!current_path_.empty() && draft_controls_valid() &&
+      flush_autosave(false))
     return true;
   const int choice = MessageBoxW(dialog_, L"The current profile has unsaved changes. Save them first?",
                                  L"Unsaved changes", MB_YESNOCANCEL | MB_ICONWARNING);
@@ -57,6 +68,9 @@ void EditorWindow::new_profile(const bool confirm) {
   visual_profile_.reset();
   visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
   visual_sidecar_error_.clear();
+  legacy_base_schema_ = false;
+  legacy_visual_schema_ = false;
+  v2_upgrade_acknowledged_ = false;
   current_path_.clear();
   dirty_ = true;
   reset_history();
@@ -139,6 +153,8 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
     return;
   }
   profile_ = *profile;
+  legacy_base_schema_ = source_uses_schema_v1(*contents);
+  v2_upgrade_acknowledged_ = false;
   current_path_ = target_path;
   load_current_visual_profile();
   dirty_ = false;
@@ -164,6 +180,8 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       layerc::platform::canonical_profile_key(current_path_);
   layerc::core::GameProfile stored_profile;
   std::optional<layerc::core::VisualProfile> stored_visual;
+  bool legacy_upgrade{};
+  bool commit_bundle{is_current};
   if (is_current) {
     sync_profile_from_controls();
     if (!draft_controls_valid()) {
@@ -179,6 +197,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     stored_visual = visual_profile_;
+    legacy_upgrade = legacy_base_schema_ || legacy_visual_schema_;
   } else {
     const auto contents = layerc::platform::read_profile_file(entry.path);
     if (!contents.has_value()) {
@@ -202,13 +221,38 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     stored_visual = visual.profile;
+    const bool legacy_base = source_uses_schema_v1(*contents);
+    legacy_upgrade = legacy_base;
+    commit_bundle = commit_bundle || legacy_base;
+    if (!visual.source_path.empty()) {
+      const auto visual_contents =
+          layerc::platform::read_visual_file(visual.source_path);
+      const bool legacy_visual =
+          visual_contents.has_value() &&
+          source_uses_schema_v1(*visual_contents);
+      legacy_upgrade = legacy_upgrade || legacy_visual;
+      commit_bundle = commit_bundle || legacy_visual;
+    }
   }
   stored_profile.enabled = enabled;
+  if (legacy_upgrade &&
+      !(is_current ? confirm_v2_upgrade()
+                   : confirm_v2_schema_upgrade(dialog_))) {
+    restore_checkbox();
+    set_status(L"Profile enablement was not changed.");
+    return;
+  }
   const auto serialized = layerc::core::serialize_profile_json(stored_profile);
-  if (!std::holds_alternative<layerc::core::GameProfile>(
-          layerc::core::parse_profile_json(serialized)) ||
-      !layerc::platform::write_profile_bundle(entry.path, stored_profile,
-                                               stored_visual)) {
+  const bool serialized_valid =
+      std::holds_alternative<layerc::core::GameProfile>(
+          layerc::core::parse_profile_json(serialized));
+  const bool persisted =
+      serialized_valid &&
+      (commit_bundle
+           ? layerc::platform::write_profile_bundle(entry.path, stored_profile,
+                                                    stored_visual)
+           : layerc::platform::write_profile_file(entry.path, serialized));
+  if (!persisted) {
     restore_checkbox();
     set_status(L"Could not save the profile enablement change.");
     return;
@@ -232,6 +276,9 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     profile_ = stored_profile;
     history_.rebase(profile_, visual_profile_);
     dirty_ = false;
+    legacy_base_schema_ = false;
+    legacy_visual_schema_ = false;
+    v2_upgrade_acknowledged_ = false;
     KillTimer(dialog_, autosave_timer);
   }
   notify_profile_committed(entry.path, stored_profile);
@@ -325,6 +372,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     if (error) { MessageBoxW(dialog_, L"Could not inspect the profile destination.", L"LayerE", MB_OK | MB_ICONERROR); return false; }
   }
   if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if (!confirm_v2_upgrade()) return false;
   if (!layerc::platform::write_profile_bundle(destination, profile_,
                                                visual_profile_)) {
     MessageBoxW(dialog_,
@@ -334,6 +382,9 @@ bool EditorWindow::save_profile(const bool force_save_as) {
   }
   current_path_ = destination;
   dirty_ = false;
+  legacy_base_schema_ = false;
+  legacy_visual_schema_ = false;
+  v2_upgrade_acknowledged_ = false;
   history_.rebase(profile_, visual_profile_);
   KillTimer(dialog_, autosave_timer);
   reload_profile_list(current_path_, false);
@@ -364,6 +415,7 @@ void EditorWindow::delete_profile() {
   visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
   visual_sidecar_error_.clear();
   (void)layerc::platform::signal_profile_reload();
+  (void)layerc::platform::garbage_collect_unreferenced_visual_assets();
   reload_profile_list(safe_remaining, true);
   set_status(safe_remaining.empty() ? L"Profile moved to the Recycle Bin."
                                     : L"Profile deleted and LayerD reloaded.");

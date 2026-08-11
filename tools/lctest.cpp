@@ -35,6 +35,29 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
         CreateSolidBrush(active ? RGB(37, 95, 104) : RGB(30, 35, 41));
     FillRect(dc, &client, background);
     DeleteObject(background);
+    const auto client_width = client.right - client.left;
+    const auto client_height = client.bottom - client.top;
+    RECT visual_fixture{client.left + client_width / 8,
+                        client.top + client_height / 8,
+                        client.left + client_width / 8 + client_width / 5,
+                        client.top + client_height / 8 + client_height / 5};
+    const auto middle_x = (visual_fixture.left + visual_fixture.right) / 2;
+    const auto middle_y = (visual_fixture.top + visual_fixture.bottom) / 2;
+    const auto fill_fixture = [&](const RECT region, const COLORREF color) {
+      const HBRUSH brush = CreateSolidBrush(color);
+      FillRect(dc, &region, brush);
+      DeleteObject(brush);
+    };
+    fill_fixture({visual_fixture.left, visual_fixture.top, middle_x, middle_y},
+                 RGB(80, 186, 200));
+    fill_fixture({middle_x, visual_fixture.top, visual_fixture.right, middle_y},
+                 RGB(212, 142, 75));
+    fill_fixture({visual_fixture.left, middle_y, middle_x,
+                  visual_fixture.bottom},
+                 RGB(90, 140, 100));
+    fill_fixture({middle_x, middle_y, visual_fixture.right,
+                  visual_fixture.bottom},
+                 RGB(180, 90, 120));
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(228, 232, 236));
     DrawTextW(dc, L"LC Test\n\nPress Shift+E to trigger Dash", -1, &client,
