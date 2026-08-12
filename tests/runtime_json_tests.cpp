@@ -2,6 +2,7 @@
 #include "test_support.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/hash.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/runtime_instances.hpp"
@@ -15,6 +16,37 @@
 #include <vector>
 
 namespace layerc::test {
+void test_sha256_helpers() {
+  const auto digest = [](const std::string_view value) {
+    return layerc::core::sha256(std::span(
+        reinterpret_cast<const std::byte *>(value.data()), value.size()));
+  };
+  expect(digest({}) ==
+             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+         "SHA-256 should match the standard empty-input vector");
+  expect(digest("abc") ==
+             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+         "SHA-256 should match the standard abc vector");
+  const std::string exact_block(64, 'a');
+  expect(digest(exact_block) ==
+             "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
+         "SHA-256 should clear the padding block after exactly 64 input bytes");
+  constexpr std::string_view multi_block =
+      "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+      "hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+  expect(digest(multi_block) ==
+             "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1",
+         "SHA-256 should match the standard multi-block vector");
+  const auto empty_bytes = layerc::core::sha256(std::span<const std::byte>{});
+  expect(empty_bytes == digest({}),
+         "the byte-span overload should handle an empty span safely");
+  const auto valid_digest = digest("abc");
+  expect(layerc::core::is_lowercase_sha256(valid_digest) &&
+             !layerc::core::is_lowercase_sha256(std::string(64, 'A')) &&
+             !layerc::core::is_lowercase_sha256(std::string(63, 'a')),
+         "the shared hash validator should accept only 64 lowercase hex characters");
+}
+
 void test_runtime_instance_tracking() {
   using namespace layerc::core;
   RuntimeInstanceTracker tracker;

@@ -1,5 +1,7 @@
 #include "editor_app.hpp"
 #include "editor_window.hpp"
+
+#include "layerc/platform/profile_transaction.hpp"
 #include "editor_resource.h"
 
 #include <algorithm>
@@ -33,6 +35,14 @@ std::wstring editor_single_instance_name() {
 
 int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   instance_ = instance;
+  if (!layerc::platform::recover_profile_transactions(
+          layerc::platform::profile_directory())) {
+    MessageBoxW(nullptr,
+                L"LayerE could not recover an interrupted profile import. "
+                L"Resolve the _transactions directory before editing profiles.",
+                L"LayerC profile recovery", MB_OK | MB_ICONERROR);
+    return 1;
+  }
   enable_native_dark_mode();
   INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
                                 .dwICC = ICC_LISTVIEW_CLASSES | ICC_WIN95_CLASSES};
@@ -224,6 +234,26 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
           GetDlgItem(dialog_, IDC_VISUAL_ENABLED)));
       return TRUE;
     }
+    if (id == IDC_VISUAL_ISOLATED && notification == BN_CLICKED) {
+      bool isolated = owner_draw_checkbox_checked(
+          GetDlgItem(dialog_, IDC_VISUAL_ISOLATED));
+      if (isolated &&
+          MessageBoxW(
+              dialog_,
+              L"Isolated capture starts one bounded layerworker.exe for this game window while visual recognition is active. It improves crash containment but uses additional process memory. Continue?",
+              L"Isolate visual capture", MB_YESNO | MB_ICONINFORMATION) !=
+              IDYES) {
+        isolated = false;
+        set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_VISUAL_ISOLATED),
+                                false);
+      }
+      profile_.visual_runtime =
+          isolated ? layerc::core::VisualRuntime::isolated
+                   : layerc::core::VisualRuntime::inline_process;
+      record_profile_change(ChangeKind::immediate);
+      refresh_visual_controls();
+      return TRUE;
+    }
     switch (id) {
     case IDC_FILE_MENU: show_file_menu(); return TRUE;
     case IDM_FILE_NEW: new_profile(); return TRUE;
@@ -232,10 +262,14 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     case IDC_ATTACH_LEFT: edit_on_window(); return TRUE;
     case IDC_SHOW_TASKS_LEFT: show_tasks(); return TRUE;
     case IDM_FILE_OPTIONS: open_options(); return TRUE;
+    case IDM_FILE_EXPORT_PACK: export_profile_pack(); return TRUE;
+    case IDM_FILE_IMPORT_PACK: import_profile_pack(); return TRUE;
+    case IDM_FILE_RUNTIME_DIAGNOSTICS: open_runtime_diagnostics(); return TRUE;
     case IDM_FILE_SPLIT_BARS: split_independent_bars(); return TRUE;
     case IDC_ADD_COOLDOWN: add_cooldown(); return TRUE;
     case IDC_REMOVE_COOLDOWN: remove_cooldown(); return TRUE;
     case IDC_CAPTURE_BINDING: begin_binding_capture(); return TRUE;
+    case IDC_CAPTURE_HID: capture_hid_binding(); return TRUE;
     case IDC_CALIBRATE_VISUAL: calibrate_visual(); return TRUE;
     case IDC_REMOVE_VISUAL: remove_visual_assignment(); return TRUE;
     case IDC_BAR_FILL: case IDC_BAR_BACKGROUND: case IDC_BAR_BORDER: case IDC_BAR_TEXT: choose_bar_color(id); return TRUE;
@@ -310,7 +344,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (draw->CtlType != ODT_BUTTON) break;
     const int id = static_cast<int>(draw->CtlID);
     if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY ||
-        id == IDC_DIRECT_DRAG || id == IDC_VISUAL_ENABLED) {
+        id == IDC_DIRECT_DRAG || id == IDC_VISUAL_ENABLED ||
+        id == IDC_VISUAL_ISOLATED) {
       draw_checkbox(*draw); return TRUE;
     }
     std::optional<COLORREF> overlay_color;

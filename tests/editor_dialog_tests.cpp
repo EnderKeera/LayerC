@@ -1,6 +1,7 @@
 #include "editor_resource.h"
 #include "editor_window.hpp"
 #include "../src/calibration/calibration_resource.h"
+#include "test_support.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -27,10 +28,7 @@ INT_PTR CALLBACK test_dialog_proc(const HWND window, const UINT message,
   return FALSE;
 }
 
-bool expect(const bool condition, const char *const message) {
-  if (!condition) std::cerr << "FAIL: " << message << '\n';
-  return condition;
-}
+using layerc::test::expect;
 
 } // namespace
 
@@ -214,21 +212,28 @@ int main() {
                        high_dpi_checkbox.pen_width == 4,
                    "profile checkbox resources and hit target should scale with DPI");
   passed &= expect(
-      layerc::editor::source_uses_schema_v1(
+      layerc::editor::source_uses_legacy_base_schema(
           R"({"schemaVersion":1,"name":"legacy"})") &&
-          !layerc::editor::source_uses_schema_v1(
-              R"({"schemaVersion":2,"name":"current"})") &&
-          !layerc::editor::source_uses_schema_v1("{broken"),
-      "the editor should warn only for a valid schema-v1 source document");
+          layerc::editor::source_uses_legacy_base_schema(
+              R"({"schemaVersion":2,"name":"legacy"})") &&
+          !layerc::editor::source_uses_legacy_base_schema(
+              R"({"schemaVersion":3,"name":"current"})") &&
+          layerc::editor::source_uses_legacy_visual_schema(
+              R"({"schemaVersion":1})") &&
+          !layerc::editor::source_uses_legacy_visual_schema(
+              R"({"schemaVersion":2})") &&
+          !layerc::editor::source_uses_legacy_base_schema("{broken"),
+      "the editor should warn only when a valid source predates its current schema");
 
   const HWND editor_dialog = CreateDialogParamW(
       instance, MAKEINTRESOURCEW(IDD_EDITOR), nullptr, &test_dialog_proc, 0);
   passed &= expect(editor_dialog != nullptr,
-                   "the native V2.1 editor resource should load");
+                    "the native V2.2 editor resource should load");
   if (editor_dialog != nullptr) {
     layerc::editor::style_native_dialog_children(
         editor_dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
     const HWND assignment = GetDlgItem(editor_dialog, IDC_VISUAL_ENABLED);
+    const HWND isolated = GetDlgItem(editor_dialog, IDC_VISUAL_ISOLATED);
     const auto assignment_type =
         GetWindowLongPtrW(assignment, GWL_STYLE) & BS_TYPEMASK;
     passed &= expect(assignment_type == BS_AUTOCHECKBOX,
@@ -238,8 +243,52 @@ int main() {
     passed &= expect(
         SendMessageW(assignment, BM_GETCHECK, 0, 0) == BST_CHECKED,
         "the visual assignment checkbox should toggle through BM_CLICK");
+    passed &= expect(
+        (GetWindowLongPtrW(isolated, GWL_STYLE) & BS_TYPEMASK) ==
+            BS_AUTOCHECKBOX,
+        "the isolated visual checkbox must retain auto-toggle semantics");
+    SendMessageW(isolated, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(isolated, BM_CLICK, 0, 0);
+    passed &= expect(SendMessageW(isolated, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                     "the isolated visual checkbox should toggle through BM_CLICK");
     DestroyWindow(editor_dialog);
   }
+
+  const HWND hid_dialog = CreateDialogParamW(
+      instance, MAKEINTRESOURCEW(IDD_HID_BINDING), nullptr, &test_dialog_proc,
+      0);
+  passed &= expect(
+      hid_dialog != nullptr && GetDlgItem(hid_dialog, IDC_HID_DEVICE) != nullptr &&
+          GetDlgItem(hid_dialog, IDC_HID_CAPTURE) != nullptr &&
+          GetDlgItem(hid_dialog, IDC_HID_THRESHOLD) != nullptr &&
+          GetDlgItem(hid_dialog, IDC_HID_HYSTERESIS) != nullptr &&
+          GetDlgItem(hid_dialog, IDC_HID_SLOT) != nullptr,
+      "the HID capture/refine resource should expose every V2.2 control");
+  if (hid_dialog != nullptr) {
+    layerc::editor::style_native_dialog_children(
+        hid_dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    const HWND advanced = GetDlgItem(hid_dialog, IDC_HID_SYSTEM_CLASS);
+    passed &= expect(
+        (GetWindowLongPtrW(advanced, GWL_STYLE) & BS_TYPEMASK) ==
+            BS_AUTOCHECKBOX,
+        "the system-class HID opt-in must retain explicit checkbox semantics");
+    passed &= expect(
+        LOWORD(SendMessageW(hid_dialog, DM_GETDEFID, 0, 0)) == IDC_HID_APPLY,
+        "Use Binding should remain the HID dialog default action");
+    DestroyWindow(hid_dialog);
+  }
+
+  const HWND diagnostics_dialog = CreateDialogParamW(
+      instance, MAKEINTRESOURCEW(IDD_RUNTIME_DIAGNOSTICS), nullptr,
+      &test_dialog_proc, 0);
+  passed &= expect(
+      diagnostics_dialog != nullptr &&
+          GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_TEXT) != nullptr &&
+          GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_REFRESH) != nullptr &&
+          GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_COPY) != nullptr &&
+          GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_RETRY_VISUAL) != nullptr,
+      "runtime diagnostics should expose one-shot refresh, copy, and helper retry controls");
+  if (diagnostics_dialog != nullptr) DestroyWindow(diagnostics_dialog);
 
   const HWND calibration_dialog = CreateDialogParamW(
       instance, MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr, &test_dialog_proc,

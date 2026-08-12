@@ -36,6 +36,8 @@ std::string_view device_name(const InputDevice device) {
     return "mouse";
   case InputDevice::controller:
     return "controller";
+  case InputDevice::generic_hid:
+    return "hid";
   }
   return "keyboard";
 }
@@ -60,6 +62,24 @@ std::string_view style_name(const PanelStyle style) {
   return style == PanelStyle::bar ? "bar" : "card";
 }
 
+std::string_view hid_activation_name(const HidActivationMode activation) {
+  switch (activation) {
+  case HidActivationMode::button:
+    return "button";
+  case HidActivationMode::equals:
+    return "equals";
+  case HidActivationMode::axis_positive:
+    return "axisPositive";
+  case HidActivationMode::axis_negative:
+    return "axisNegative";
+  case HidActivationMode::relative_positive:
+    return "relativePositive";
+  case HidActivationMode::relative_negative:
+    return "relativeNegative";
+  }
+  return "button";
+}
+
 void append_bool(std::string &output, const bool value) {
   output += value ? "true" : "false";
 }
@@ -71,7 +91,7 @@ std::string serialize_profile_json(const GameProfile &profile) {
   output.reserve(2048);
   output += "{\n";
   append_key(output, 2, "schemaVersion");
-  json::append_unsigned(output, profile.schema_version);
+  json::append_unsigned(output, 3);
   output += ",\n";
   append_key(output, 2, "id");
   json::append_quoted(output, profile.id);
@@ -100,6 +120,21 @@ std::string serialize_profile_json(const GameProfile &profile) {
   json::append_quoted(output, profile.game.window_title);
   output += "\n  },\n";
 
+  append_key(output, 2, "visualRuntime");
+  json::append_quoted(output, profile.visual_runtime == VisualRuntime::isolated
+                                 ? "isolated"
+                                 : "inline");
+  output += ",\n";
+  append_key(output, 2, "modules");
+  output += "[";
+  for (std::size_t index = 0; index < profile.modules.size(); ++index) {
+    if (index != 0) output += ", ";
+    output += "{\"kind\":\"visual\",\"schemaVersion\":";
+    json::append_unsigned(output, profile.modules[index].schema_version);
+    output += "}";
+  }
+  output += "],\n";
+
   append_key(output, 2, "cooldowns");
   output += "[\n";
   for (std::size_t index = 0; index < profile.cooldowns.size(); ++index) {
@@ -126,6 +161,59 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_bool(output, cooldown.stack_charges);
     output += "\n    }";
     output += index + 1 == profile.cooldowns.size() ? "\n" : ",\n";
+  }
+  output += "  ],\n";
+
+  append_key(output, 2, "hidBindings");
+  output += "[\n";
+  for (std::size_t index = 0; index < profile.hid_bindings.size(); ++index) {
+    const auto &binding = profile.hid_bindings[index];
+    output += "    {\n";
+    append_key(output, 6, "id");
+    json::append_quoted(output, binding.id);
+    output += ",\n";
+    append_key(output, 6, "device");
+    output += "{\"vid\":";
+    json::append_unsigned(output, binding.device.vendor_id);
+    output += ",\"pid\":";
+    json::append_unsigned(output, binding.device.product_id);
+    output += ",\"version\":";
+    json::append_unsigned(output, binding.device.version);
+    output += ",\"usagePage\":";
+    json::append_unsigned(output, binding.device.usage_page);
+    output += ",\"usage\":";
+    json::append_unsigned(output, binding.device.usage);
+    output += ",\"descriptorHash\":";
+    json::append_quoted(output, binding.device.descriptor_hash);
+    if (!binding.device.serial.empty()) {
+      output += ",\"serial\":";
+      json::append_quoted(output, binding.device.serial);
+    }
+    output += ",\"stableSlot\":";
+    json::append_unsigned(output, binding.device.stable_slot);
+    output += "},\n";
+    append_key(output, 6, "control");
+    output += "{\"reportId\":";
+    json::append_unsigned(output, binding.report_id);
+    output += ",\"usagePage\":";
+    json::append_unsigned(output, binding.usage_page);
+    output += ",\"usage\":";
+    json::append_unsigned(output, binding.usage);
+    output += ",\"linkCollection\":";
+    json::append_unsigned(output, binding.link_collection);
+    output += ",\"activation\":";
+    json::append_quoted(output, hid_activation_name(binding.activation));
+    output += ",\"value\":";
+    json::append_number(output, binding.discrete_value);
+    output += ",\"threshold\":";
+    json::append_number(output, binding.threshold);
+    output += ",\"hysteresis\":";
+    json::append_number(output, binding.hysteresis);
+    output += "},\n";
+    append_key(output, 6, "allowSystemClass");
+    append_bool(output, binding.allow_system_class);
+    output += "\n    }";
+    output += index + 1U == profile.hid_bindings.size() ? "\n" : ",\n";
   }
   output += "  ],\n";
 
@@ -211,13 +299,24 @@ std::string serialize_profile_json(const GameProfile &profile) {
       output += "{\n";
       append_key(output, 10, "device");
       json::append_quoted(output, device_name(token.device));
-      output += ",\n";
-      append_key(output, 10, "code");
-      json::append_unsigned(output, token.code);
-      if (token.device == InputDevice::controller) {
+      if (token.device == InputDevice::generic_hid) {
         output += ",\n";
-        append_key(output, 10, "controllerIndex");
-        json::append_unsigned(output, token.controller_index);
+        append_key(output, 10, "bindingId");
+        if (token.code > 0 &&
+            token.code <= profile.hid_bindings.size())
+          json::append_quoted(output,
+                              profile.hid_bindings[token.code - 1U].id);
+        else
+          json::append_quoted(output, "");
+      } else {
+        output += ",\n";
+        append_key(output, 10, "code");
+        json::append_unsigned(output, token.code);
+        if (token.device == InputDevice::controller) {
+          output += ",\n";
+          append_key(output, 10, "controllerIndex");
+          json::append_unsigned(output, token.controller_index);
+        }
       }
       output += "\n        }";
       output += token_index + 1 == binding.chord.tokens.size() ? "\n" : ",\n";

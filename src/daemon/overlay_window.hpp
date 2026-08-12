@@ -42,6 +42,9 @@ public:
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
                      DragCallback callback = {});
   [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
+  [[nodiscard]] bool created() const noexcept {
+    return window_ != nullptr && IsWindow(window_) != FALSE;
+  }
   [[nodiscard]] bool screen_bounds(RECT &bounds) const noexcept;
   [[nodiscard]] bool
   should_show(const std::vector<layerc::core::CooldownState> &states) const;

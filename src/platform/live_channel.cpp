@@ -459,4 +459,21 @@ bool NamedPipeEditorDaemonChannel::take_connection_changed() noexcept {
   return changed;
 }
 
+void NamedPipeEditorDaemonChannel::disconnect_peer() noexcept {
+  disconnect(ERROR_REVISION_MISMATCH);
+}
+
+std::size_t NamedPipeEditorDaemonChannel::wait_handles(
+    const std::span<HANDLE> output) const noexcept {
+  std::size_t count{};
+  const auto append = [&](const bool pending, const HANDLE event) {
+    if (!pending || event == nullptr || count >= output.size()) return;
+    output[count++] = event;
+  };
+  append(connect_pending_, connect_event_);
+  append(read_pending_, read_event_);
+  append(write_pending_, write_event_);
+  return count;
+}
+
 } // namespace layerc::platform

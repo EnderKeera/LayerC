@@ -1,25 +1,13 @@
 #include "d3d_capture_support.hpp"
 
+#include "layerc/platform/text.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace layerc::capture {
 namespace {
-
-std::string utf8_from_wide(const wchar_t *text) {
-  if (text == nullptr || *text == L'\0') return {};
-  const auto size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, -1,
-                                        nullptr, 0, nullptr, nullptr);
-  if (size <= 1) return {};
-  std::string output(static_cast<std::size_t>(size), '\0');
-  const auto converted =
-      WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text, -1,
-                          output.data(), size, nullptr, nullptr);
-  if (converted != size) return {};
-  output.resize(static_cast<std::size_t>(size - 1));
-  return output;
-}
 
 float half_to_float(const std::uint16_t value) {
   const auto sign = static_cast<std::uint32_t>(value & 0x8000U) << 16U;
@@ -88,7 +76,8 @@ bool create_hardware_device(IDXGIAdapter *adapter, D3dDevice &output,
     if (SUCCEEDED(dxgi_device->GetAdapter(actual_adapter.put()))) {
       DXGI_ADAPTER_DESC description{};
       if (SUCCEEDED(actual_adapter->GetDesc(&description)))
-        output.description = utf8_from_wide(description.Description);
+        output.description =
+            layerc::platform::wide_to_utf8(description.Description);
     }
   }
   if (output.description.empty()) output.description = "hardware D3D11 adapter";
@@ -306,7 +295,8 @@ std::string hresult_message(const HRESULT result) {
       nullptr, static_cast<DWORD>(result), 0,
       reinterpret_cast<wchar_t *>(&message), 0, nullptr);
   std::string output;
-  if (length != 0 && message != nullptr) output = utf8_from_wide(message);
+  if (length != 0 && message != nullptr)
+    output = layerc::platform::wide_to_utf8(message);
   if (message != nullptr) LocalFree(message);
   while (!output.empty() &&
          (output.back() == '\r' || output.back() == '\n' || output.back() == ' '))

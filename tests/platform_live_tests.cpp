@@ -2,12 +2,16 @@
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/hid_device.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets.hpp"
 #include "layerc/platform/windows.hpp"
+#include "test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -21,10 +25,7 @@
 
 namespace {
 
-bool expect(const bool condition, const char *message) {
-  if (!condition) std::cerr << "FAIL: " << message << '\n';
-  return condition;
-}
+using layerc::test::expect;
 
 layerc::core::GameProfile test_profile(const std::string &name) {
   using namespace std::chrono_literals;
@@ -125,7 +126,7 @@ int main(const int argc, char *argv[]) {
   }
   bool passed = true;
   passed &= expect(std::wstring_view(layerc::platform::live_edit_pipe_name) ==
-                       L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v1",
+                       L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v2",
                    "the tested production pipe name should match the protocol contract");
   wchar_t temporary_root[MAX_PATH]{};
   const DWORD root_length = GetTempPathW(MAX_PATH, temporary_root);
@@ -138,6 +139,87 @@ int main(const int argc, char *argv[]) {
   std::error_code filesystem_error;
   std::filesystem::create_directory(directory, filesystem_error);
   passed &= expect(!filesystem_error, "test directory should be created");
+
+  HANDLE abandoned_mutex = CreateMutexW(
+      nullptr, FALSE, L"Local\\LayerC.ProfileTransaction.v1");
+  bool mutex_owned{};
+  std::thread abandoned_owner([&] {
+    mutex_owned =
+        WaitForSingleObject(abandoned_mutex, 5'000) == WAIT_OBJECT_0;
+    // Exiting without ReleaseMutex intentionally creates WAIT_ABANDONED.
+  });
+  abandoned_owner.join();
+  passed &= expect(
+      mutex_owned &&
+          layerc::platform::recover_profile_transactions(directory),
+      "transaction recovery should accept and release ownership of an abandoned mutex");
+  if (abandoned_mutex != nullptr) CloseHandle(abandoned_mutex);
+
+  const layerc::platform::ProfileFileMutation colliding_mutations[] = {
+      {.target = directory / L"Caf\u00c9.json",
+       .contents = std::vector<std::byte>{std::byte{'a'}}},
+      {.target = directory / L"caf\u00e9.json",
+       .contents = std::vector<std::byte>{std::byte{'b'}}},
+  };
+  passed &= expect(
+      !layerc::platform::commit_profile_transaction(
+          directory, colliding_mutations),
+      "transaction target validation should reject invariant-casefolded Unicode collisions");
+
+  layerc::platform::HidRawDevice system_keyboard{
+      .handle = reinterpret_cast<HANDLE>(0x1234),
+      .raw_type = RIM_TYPEKEYBOARD};
+  RAWINPUT keyboard_input{};
+  keyboard_input.header.dwType = RIM_TYPEKEYBOARD;
+  keyboard_input.header.hDevice = system_keyboard.handle;
+  keyboard_input.data.keyboard.MakeCode = 0x36;
+  layerc::core::HidControlBinding system_key{
+      .usage_page = 0x07,
+      .usage = 0x36,
+      .activation = layerc::core::HidActivationMode::button,
+      .allow_system_class = true};
+  const auto key_down = layerc::platform::sample_hid_control(
+      system_keyboard, system_key, keyboard_input);
+  keyboard_input.data.keyboard.Flags = RI_KEY_BREAK;
+  const auto key_up = layerc::platform::sample_hid_control(
+      system_keyboard, system_key, keyboard_input);
+  passed &= expect(key_down.has_value() && key_down->button_active &&
+                       key_up.has_value() && !key_up->button_active,
+                   "Advanced system keyboard bindings should retain device-specific press and release samples");
+
+  layerc::platform::HidRawDevice system_mouse{
+      .handle = reinterpret_cast<HANDLE>(0x5678),
+      .raw_type = RIM_TYPEMOUSE};
+  RAWINPUT mouse_input{};
+  mouse_input.header.dwType = RIM_TYPEMOUSE;
+  mouse_input.header.hDevice = system_mouse.handle;
+  mouse_input.data.mouse.lLastX = 4;
+  layerc::core::HidControlBinding relative_mouse{
+      .usage_page = 0x01,
+      .usage = 0x30,
+      .activation = layerc::core::HidActivationMode::relative_positive,
+      .allow_system_class = true};
+  const auto first_movement = layerc::platform::sample_hid_control(
+      system_mouse, relative_mouse, mouse_input);
+  const auto second_movement = layerc::platform::sample_hid_control(
+      system_mouse, relative_mouse, mouse_input);
+  passed &= expect(first_movement.has_value() &&
+                       second_movement.has_value() &&
+                       first_movement->relative && first_movement->value == 4,
+                   "each successive relative system-mouse report should remain an independently available movement sample");
+
+  const std::array<std::byte, 2> report_bytes{std::byte{0x7f},
+                                               std::byte{0x20}};
+  layerc::platform::HidRawDevice reportless_device{};
+  passed &= expect(
+      layerc::platform::effective_hid_report_id(reportless_device,
+                                                report_bytes) == 0,
+      "report-ID-less collections should persist report ID zero instead of the first data byte");
+  reportless_device.uses_report_ids = true;
+  passed &= expect(
+      layerc::platform::effective_hid_report_id(reportless_device,
+                                                report_bytes) == 0x7f,
+      "collections with report IDs should preserve the leading report ID");
   std::array<wchar_t, 32'768> previous_profile_directory{};
   const DWORD previous_profile_directory_length = GetEnvironmentVariableW(
       L"LAYERC_PROFILE_DIR", previous_profile_directory.data(),
@@ -780,6 +862,9 @@ int main(const int argc, char *argv[]) {
   layerc::platform::NamedPipeEditorDaemonChannel client(
       layerc::platform::NamedPipeEditorDaemonChannel::Role::client, pipe_name,
       GetCurrentProcessId());
+  std::array<HANDLE, 3> wait_handles{};
+  passed &= expect(server.wait_handles(wait_handles) == 1,
+                   "a listening server should expose one waitable connect event");
   for (int attempt = 0;
        attempt < 1000 && (!server.connected() || !client.connected()); ++attempt) {
     (void)client.poll();
@@ -788,6 +873,8 @@ int main(const int argc, char *argv[]) {
   }
   passed &= expect(server.connected() && client.connected(),
                    "same-user overlapped pipe peers should connect");
+  passed &= expect(server.wait_handles(wait_handles) >= 1,
+                   "a connected server should expose waitable overlapped I/O");
   passed &= expect(server.peer_process_id() == GetCurrentProcessId() &&
                        client.peer_process_id() == GetCurrentProcessId(),
                    "both authenticated channel ends should retain the peer PID");

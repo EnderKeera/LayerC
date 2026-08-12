@@ -5,6 +5,7 @@ param(
     [string]$Quality = 'balanced',
     [ValidateSet('v11-pixel', 'v21-template')]
     [string]$Workload = 'v11-pixel',
+    [switch]$Isolated,
     [string]$BuildDirectory = '',
     [ValidateRange(2, 120)]
     [int]$WarmupSeconds = 8,
@@ -84,12 +85,50 @@ function Set-BenchmarkForeground(
     return $foregroundRoot -eq $targetRoot
 }
 
+function Ensure-BenchmarkForeground(
+    [System.Diagnostics.Process]$Target,
+    [object]$Activator) {
+    $Target.Refresh()
+    $root = [LayerCBenchmarkNative]::GetAncestor(
+        [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
+    if ($root -eq $Target.MainWindowHandle) { return $true }
+    return Set-BenchmarkForeground $Target $Activator
+}
+
+function Assert-BenchmarkMeasurementActive(
+    [System.Diagnostics.Process]$Target,
+    [object]$Activator,
+    [Threading.EventWaitHandle]$CaptureEvent) {
+    $Target.Refresh()
+    $root = [LayerCBenchmarkNative]::GetAncestor(
+        [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
+    if ($root -ne $Target.MainWindowHandle) {
+        [void](Set-BenchmarkForeground $Target $Activator)
+        throw 'Benchmark sample interrupted: the fixture lost foreground.'
+    }
+    if ($null -eq $CaptureEvent -or -not $CaptureEvent.WaitOne(0)) {
+        throw 'Benchmark sample interrupted: LayerD capture became inactive.'
+    }
+}
+
+function Wait-BenchmarkWarmup(
+    [System.Diagnostics.Process]$Target,
+    [object]$Activator,
+    [int]$Seconds) {
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
+        [void](Ensure-BenchmarkForeground $Target $Activator)
+        Start-Sleep -Milliseconds 100
+    }
+}
+
 $repository = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
     $BuildDirectory = Join-Path $repository 'build\vs2026\Release'
 }
 $BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
 $required = @('layerd.exe', 'lctest.exe', 'layerc_capture_probe.exe')
+if ($Isolated) { $required += 'layerworker.exe' }
 foreach ($name in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
         throw "Missing $name in $BuildDirectory. Build Release with tests enabled first."
@@ -104,6 +143,7 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $outputDirectory = Join-Path $repository 'out\benchmarks'
     [IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
     $workloadTag = $Workload -replace '-', '_'
+    if ($Isolated) { $workloadTag += '_isolated' }
     $OutputPath = Join-Path $outputDirectory "$workloadTag-$Quality-$stamp.json"
 }
 $OutputPath = [IO.Path]::GetFullPath($OutputPath)
@@ -217,7 +257,8 @@ if ($Workload -eq 'v11-pixel') {
         }
     }
     $base = [ordered]@{
-        schemaVersion = 2; id = 'lctest'; name = 'LC Test V2.1 benchmark'
+        schemaVersion = if ($Isolated) { 3 } else { 2 }
+        id = 'lctest'; name = 'LC Test V2.1 benchmark'
         game = [ordered]@{ executableName = 'lctest.exe' }
         cooldowns = $cooldowns
         panels = @([ordered]@{
@@ -232,6 +273,11 @@ if ($Workload -eq 'v11-pixel') {
             cooldowns = $cooldownIds
         })
         bindings = $bindings
+    }
+    if ($Isolated) { $base.visualRuntime = 'isolated' }
+    if ($Isolated) {
+        $base.modules = @([ordered]@{ kind = 'visual'; schemaVersion = 2 })
+        $base.hidBindings = @()
     }
     [IO.File]::WriteAllText($profilePath,
         ($base | ConvertTo-Json -Depth 12), $utf8)
@@ -278,7 +324,10 @@ function Get-GpuProcessMemoryBytes([int]$ProcessId) {
     }
 }
 
-function Measure-LayerProcess([Diagnostics.Process]$Process, [int]$Seconds) {
+function Measure-LayerProcess(
+    [Diagnostics.Process]$Process, [int]$Seconds,
+    [Diagnostics.Process]$Game, [object]$Activator,
+    [Threading.EventWaitHandle]$CaptureEvent) {
     $Process.Refresh()
     $startCpu = $Process.TotalProcessorTime.TotalMilliseconds
     $clock = [Diagnostics.Stopwatch]::StartNew()
@@ -289,6 +338,7 @@ function Measure-LayerProcess([Diagnostics.Process]$Process, [int]$Seconds) {
     $gpuSeen = $false
     $nextGpuSample = 0.0
     while ($clock.Elapsed.TotalSeconds -lt $Seconds -and -not $Process.HasExited) {
+        Assert-BenchmarkMeasurementActive $Game $Activator $CaptureEvent
         $Process.Refresh()
         $maxPrivate = [Math]::Max($maxPrivate, $Process.PrivateMemorySize64)
         $maxWorking = [Math]::Max($maxWorking, $Process.WorkingSet64)
@@ -318,6 +368,84 @@ function Measure-LayerProcess([Diagnostics.Process]$Process, [int]$Seconds) {
     }
 }
 
+function Measure-LayerProcesses(
+    [Diagnostics.Process[]]$Processes, [int]$Seconds,
+    [Diagnostics.Process]$Game, [object]$Activator,
+    [Threading.EventWaitHandle]$CaptureEvent) {
+    foreach ($process in $Processes) { $process.Refresh() }
+    $startCpu = @{}
+    $processNames = @{}
+    foreach ($process in $Processes) {
+        # Materialize the native handle while the process is alive. Windows
+        # PowerShell can otherwise lose both ProcessName and ExitCode after a
+        # short-lived helper exits, obscuring the benchmark failure.
+        [void]$process.Handle
+        $processNames[$process.Id] = $process.ProcessName
+        $startCpu[$process.Id] = $process.TotalProcessorTime.TotalMilliseconds
+    }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    [int64]$maxPrivate = 0
+    [int64]$maxWorking = 0
+    [int]$maxThreads = 0
+    [int64]$maxGpuLocal = 0
+    $gpuSeen = $false
+    $nextGpuSample = 0.0
+    while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
+        Assert-BenchmarkMeasurementActive $Game $Activator $CaptureEvent
+        [int64]$private = 0
+        [int64]$working = 0
+        [int]$threads = 0
+        foreach ($process in $Processes) {
+            if ($process.HasExited) {
+                $process.Refresh()
+                $exitCode = try { $process.ExitCode } catch { 'unavailable' }
+                throw "Runtime process $($processNames[$process.Id]) ($($process.Id)) exited with code $exitCode during combined measurement."
+            }
+            $process.Refresh()
+            $private += $process.PrivateMemorySize64
+            $working += $process.WorkingSet64
+            $threads += $process.Threads.Count
+        }
+        $maxPrivate = [Math]::Max($maxPrivate, $private)
+        $maxWorking = [Math]::Max($maxWorking, $working)
+        $maxThreads = [Math]::Max($maxThreads, $threads)
+        if ($clock.Elapsed.TotalSeconds -ge $nextGpuSample) {
+            [int64]$gpuTotal = 0
+            $available = $true
+            foreach ($process in $Processes) {
+                $gpu = Get-GpuProcessMemoryBytes $process.Id
+                if ($null -eq $gpu) { $available = $false; break }
+                $gpuTotal += $gpu
+            }
+            if ($available) {
+                $gpuSeen = $true
+                $maxGpuLocal = [Math]::Max($maxGpuLocal, $gpuTotal)
+            }
+            $nextGpuSample += 1.0
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    $cpuMs = 0.0
+    foreach ($process in $Processes) {
+        $process.Refresh()
+        $cpuMs += $process.TotalProcessorTime.TotalMilliseconds -
+            $startCpu[$process.Id]
+    }
+    $elapsedMs = [Math]::Max(1.0, $clock.Elapsed.TotalMilliseconds)
+    return [ordered]@{
+        processIds = @($Processes | ForEach-Object { $_.Id })
+        durationSeconds = [Math]::Round($clock.Elapsed.TotalSeconds, 3)
+        averageCpuPercent = [Math]::Round($cpuMs / $elapsedMs /
+            [Environment]::ProcessorCount * 100.0, 3)
+        maxPrivateMiB = [Math]::Round($maxPrivate / 1MB, 3)
+        maxWorkingSetMiB = [Math]::Round($maxWorking / 1MB, 3)
+        maxThreadCount = $maxThreads
+        maxGpuLocalMiB = if ($gpuSeen) {
+            [Math]::Round($maxGpuLocal / 1MB, 3)
+        } else { $null }
+    }
+}
+
 $oldProfileDirectory = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR', 'Process')
 $settingsRegistryPath = 'HKCU:\Software\LayerC'
 $visualSettingName = 'VisualRecognitionEnabled'
@@ -326,6 +454,7 @@ $visualSettingTouched = $false
 $oldVisualSetting = $null
 $game = $null
 $daemon = $null
+$helper = $null
 $captureEvent = $null
 $templateMatchVerified = $Workload -ne 'v21-template'
 try {
@@ -415,16 +544,100 @@ try {
             throw 'LayerD capture was active, but no template match triggered the hidden benchmark overlay.'
         }
     }
-    Start-Sleep -Seconds $WarmupSeconds
-    if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
-    $measurement = Measure-LayerProcess $daemon $DurationSeconds
+    $measurement = $null
+    $measurementAttempts = 0
+    $maximumMeasurementAttempts = if ($Isolated) { 5 } else { 3 }
+    while ($null -eq $measurement -and
+           $measurementAttempts -lt $maximumMeasurementAttempts) {
+        ++$measurementAttempts
+        Wait-BenchmarkWarmup $game $activator $WarmupSeconds
+        if ($daemon.HasExited) {
+            throw "LayerD exited during warmup with code $($daemon.ExitCode)."
+        }
+        if ($Isolated) {
+            # Setup or user activity can briefly lose foreground. LayerD
+            # intentionally retires capture immediately in that case, so
+            # select the owned helper only after warm-up and require the same
+            # live PID across several observations before measuring it.
+            $helper = $null
+            $stableHelperId = 0
+            $stableHelperObservations = 0
+            for ($attempt = 0; $attempt -lt 50 -and
+                 $stableHelperObservations -lt 5; ++$attempt) {
+                [void](Ensure-BenchmarkForeground $game $activator)
+                $candidate = Get-CimInstance Win32_Process `
+                    -Filter "Name='layerworker.exe'" |
+                    Where-Object {
+                        [uint32]$_.ParentProcessId -eq [uint32]$daemon.Id
+                    } |
+                    Select-Object -First 1
+                $candidateProcess = if ($null -ne $candidate) {
+                    Get-Process -Id ([int]$candidate.ProcessId) `
+                        -ErrorAction SilentlyContinue
+                } else { $null }
+                if ($null -ne $candidateProcess -and
+                    -not $candidateProcess.HasExited) {
+                    if ($candidateProcess.Id -eq $stableHelperId) {
+                        ++$stableHelperObservations
+                    } else {
+                        $stableHelperId = $candidateProcess.Id
+                        $stableHelperObservations = 1
+                    }
+                    $helper = $candidateProcess
+                } else {
+                    $stableHelperId = 0
+                    $stableHelperObservations = 0
+                    $helper = $null
+                }
+                if ($stableHelperObservations -lt 5) {
+                    Start-Sleep -Milliseconds 100
+                }
+            }
+            if ($null -eq $helper -or $stableHelperObservations -lt 5) {
+                throw 'Isolated benchmark did not observe a stable owned layerworker.exe.'
+            }
+        }
+        try {
+            $measurement = if ($Isolated) {
+                Measure-LayerProcesses @($daemon, $helper) $DurationSeconds `
+                    $game $activator $captureEvent
+            } else {
+                Measure-LayerProcess $daemon $DurationSeconds $game `
+                    $activator $captureEvent
+            }
+        } catch {
+            $message = $_.Exception.Message
+            $interrupted = $message.StartsWith(
+                'Benchmark sample interrupted:') -or
+                ($Isolated -and $message -match
+                    '^Runtime process layerworker .* exited with code 995 ')
+            if (-not $interrupted -or
+                $measurementAttempts -ge $maximumMeasurementAttempts) {
+                throw
+            }
+            # Discard every partial sample. The next pass must provide one
+            # uninterrupted foreground/capture window of the requested length.
+            $measurement = $null
+        }
+    }
+    if ($null -eq $measurement) {
+        throw 'Could not obtain an uninterrupted active-capture measurement window.'
+    }
     if ($daemon.HasExited) {
         throw "LayerD exited during measurement with code $($daemon.ExitCode); refusing partial benchmark evidence."
     }
-    $thresholds = [ordered]@{
-        maxPrivateMiB = 35.0
-        maxWorkingSetMiB = 50.0
-        maxAverageCpuPercent = 3.0
+    $thresholds = if ($Isolated) {
+        [ordered]@{
+            maxPrivateMiB = 50.0
+            maxWorkingSetMiB = 70.0
+            maxAverageCpuPercent = 3.5
+        }
+    } else {
+        [ordered]@{
+            maxPrivateMiB = 35.0
+            maxWorkingSetMiB = 50.0
+            maxAverageCpuPercent = 3.0
+        }
     }
     $gatePassed = $measurement.maxPrivateMiB -le $thresholds.maxPrivateMiB -and
         $measurement.maxWorkingSetMiB -le $thresholds.maxWorkingSetMiB -and
@@ -441,6 +654,7 @@ try {
         schemaVersion = 1
         measuredAt = (Get-Date).ToUniversalTime().ToString('o')
         workload = $Workload
+        isolated = [bool]$Isolated
         quality = $Quality
         sampleRateHz = 15
         templateStates = if ($Workload -eq 'v21-template') { 4 } else { 0 }
@@ -454,10 +668,16 @@ try {
         captureProbe = $captureProbe
         daemonCaptureVerified = $daemonCaptureVerified
         templateMatchVerified = $templateMatchVerified
-        layerd = $measurement
+        measurementAttempts = $measurementAttempts
+        runtime = $measurement
+        layerd = if ($Isolated) { $null } else { $measurement }
         thresholds = $thresholds
         passed = $gatePassed
-        note = 'Run both low and balanced on at least one integrated-GPU and one discrete-GPU system. Exact is intentionally outside this gate.'
+        note = if ($Isolated) {
+            'Combined LayerD plus its owned layerworker. Run both low and balanced on integrated and discrete GPUs.'
+        } else {
+            'Run both low and balanced on at least one integrated-GPU and one discrete-GPU system. Exact is intentionally outside this gate.'
+        }
     }
     [IO.File]::WriteAllText($OutputPath, ($result | ConvertTo-Json -Depth 8), $utf8)
     $result | ConvertTo-Json -Depth 8

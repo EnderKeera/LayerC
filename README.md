@@ -2,9 +2,10 @@
 
 LayerC is a lightweight, open-source Windows cooldown overlay. It uses a
 dependency-free C++20 core, typed JSON profiles, cooldown/input state machines,
-native game matching, Raw Input/XInput handling, click-through buffered-GDI
-panels, opt-in visual predicates, a native editor and calibration utility,
-tests, and a disposable game harness.
+native game matching, demand-driven Raw Input/XInput/generic-HID handling,
+click-through buffered-GDI panels, opt-in pixel/template recognition, a native
+editor and calibration utility, deterministic profile packs, tests, and a
+disposable game harness.
 
 See [PLAN.md](PLAN.md) for the product and release plan.
 
@@ -28,8 +29,9 @@ ctest --preset vs2026-release
 cmake --install build/vs2026 --config Release --prefix out/layerc
 ```
 
-The install step stages the three production programs, `layerd.exe`,
-`layere.exe`, and `layercal.exe`, in `out/layerc`. Build-tree executables remain under
+The install step stages the four production programs, `layerd.exe`,
+`layere.exe`, `layercal.exe`, and the demand-launched `layerworker.exe`, plus
+the plan and third-party notices, in `out/layerc`. Build-tree executables remain under
 `build/vs2026/<Configuration>`; `out/layerc` changes only during the install
 step or the complete workflow preset.
 
@@ -42,7 +44,7 @@ cmake --workflow --preset vs2026-release
 
 This workflow uses CMake's native Workflow and Package Presets. It configures,
 builds, tests, installs to `out\layerc`, and emits the versioned portable ZIP
-`build\vs2026\LayerC-2.1.0-windows-x64.zip`. A future Linux configure preset can
+`build\vs2026\LayerC-2.2.0-windows-x64.zip`. A future Linux configure preset can
 reuse the same build, test, install, and package structure without requiring a
 platform-specific orchestration script. Close LayerE and LayerD first on
 Windows so their executable files are not locked during the build or install.
@@ -50,6 +52,9 @@ Windows so their executable files are not locked during the build or install.
 The test targets have separate jobs:
 
 - `layerc_core_tests` covers profile parsing, serialization, cooldown/input behavior, and runtime state without creating windows.
+- `layerc_runtime_tests` covers the immutable capability-demand matrix,
+  lazy service ownership, reentrant reconciliation, reverse teardown, failure
+  rollback, and 100 activation cycles.
 - `layerc_capture_tests` covers normalized fallback bounds and the bounded
   Low/Balanced/Exact sampling contract without requiring a GPU.
 - `layerc_capture_probe` is a manual hardware smoke tool used by the V1.1
@@ -61,6 +66,69 @@ The test targets have separate jobs:
   overlapped named-pipe messaging.
 - `layerc_editor_tests` verifies native dialog default-button and checkbox
   semantics after dark theming, plus coalesced and bounded undo/redo history.
+- `layerc_bundle_tests` validates deterministic multi-profile packs, hashes,
+  conflicts, path limits, and recoverable transactions.
+- `layerc_isolated_visual_tests` validates the helper handshake, package and
+  protocol pinning, message bounds, sequence ordering, and timestamp freshness.
+
+## V2.2 modular runtime
+
+LayerD now owns first-party capabilities through the platform-neutral
+`DaemonKernel`. Input, generic HID, overlays, inline visual capture, template
+evaluation, isolated visual capture, and authenticated live editing are static
+native services, but each service object and its heavy resources exist only
+while an active session demands them. Opening LayerE alone authenticates only
+the live connection; it does not start capture, HID, template, or edit-overlay
+resources. Visual snapshots wake LayerD through a service-owned event instead
+of a 33 ms daemon polling timer.
+
+File -> Runtime Diagnostics requests a one-shot JSON ownership snapshot from
+LayerD. It reports service consumers and resources, sessions, last matched
+input, process memory/CPU/handles/threads, capture status, and isolated helper
+state. The dialog keeps no continuous trace.
+
+The V2.2 live channel is intentionally package-exact: LayerE and LayerD derive
+their handshake identities from the same package version and reject mixed
+V2.1/V2.2 binaries. Upgrade or replace all installed LayerC executables
+together.
+
+Profiles read schemas 1-3. An explicit Save upgrades an older profile to
+schema 3 after the compatibility warning. Schema 3 persists first-party module
+metadata, `visualRuntime`, and generic-HID descriptors separately from compact
+runtime tokens. Unknown schema/module kinds are rejected.
+
+### Generic HID
+
+Select a cooldown and choose **HID...**. LayerE enumerates ordinary Raw Input
+devices only while the capture dialog is open: choose the device, press
+Capture, actuate a button/hat/axis, then refine threshold, hysteresis, and the
+machine-local stable slot. Serial identity is preferred. Otherwise LayerC uses
+VID/PID/version/top-level usage plus the descriptor SHA-256 and the explicit
+slot mapping; ambiguous identical devices remain unavailable until assigned.
+Keyboard/mouse-class collections require the Advanced opt-in and duplicate
+event warning. LayerC installs no driver, claims no device, and sends no
+synthetic input. Slot mappings are never exported.
+
+### Profile packs
+
+File -> Export Pack creates a deterministic `.layercprofile` ZIP containing
+selected valid profiles, declared module sidecars, and deduplicated
+content-addressed assets. File -> Import Pack validates the complete bounded
+archive before showing choices, defaults conflicts to Import Copy, and commits
+all selected documents/assets as one recoverable transaction. Packs are
+data-only and checksummed, not publisher-signed.
+
+### Isolated visual capture
+
+The per-profile **Isolate capture** option moves every visual assignment for
+that game HWND into one demand-launched `layerworker.exe`; the editor warns
+about the additional process memory. LayerD retains cooldowns, input policy,
+overlays, and all authoritative state. The helper returns bounded measurements,
+not frames, is constrained by a kill-on-close one-process Job with a 256 MiB
+commit cap, and mutually authenticates a random pipe/nonce plus sibling
+path/PID/session/package version. Stale or out-of-order measurements are
+rejected. A hang is terminated and retried once; a second failure quarantines
+visual evaluation while input remains usable. Runtime Diagnostics can retry it.
 
 Each matched game keeps its own non-topmost, game-owned mini overlay. Switching apps leaves the cooldown running behind the foreground app; returning to the game shows its remaining time. Minimizing or closing that game hides its overlay.
 
@@ -108,7 +176,7 @@ cmake --workflow --preset mingw-ninja
 
 This build needs the matching MinGW GCC runtime DLLs at deployment time unless that toolchain is configured for static runtimes; it does not need Qt.
 
-## Visual recognition (V1.1 and V2.1.0)
+## Visual recognition (V1.1 through V2.2.0)
 
 Visual recognition is opt-in per cooldown. Choose **Calibrate** in LayerE,
 select a matching game window, draw a normalized region, and configure one of
@@ -125,7 +193,7 @@ short-lived native child of LayerE; LayerD performs recognition during gameplay.
 
 LayerC stores visual data separately at
 `profiles\_visual\<profile filename>.json`. V2.1 reads schema-v1 base/visual
-files and writes typed schema v2 after an explicit compatibility warning.
+files and writes base schema v3 after an explicit compatibility warning.
 Template PNGs are metadata-free, content-addressed files under
 `profiles\_visual\assets\<sha256>.png`; their hash is verified before use.
 Collection deletes orphans only after every profile, sidecar, and backup has
@@ -146,10 +214,11 @@ deliberately block every trigger in that profile as a fail-safe until the
 sidecar is repaired or removed; the session and overlays remain available so
 the diagnostic is visible.
 
-LayerD starts capture workers only for the foreground HWND when an enabled
-visual observation needs them. Profiles sharing an HWND are bucketed by quality, so a
-Low or Balanced assignment is never promoted to Exact by another profile. WGC
-is primary. Desktop Duplication is a
+LayerD starts capture workers only for a foreground matched HWND when an
+enabled visual observation needs them. Profiles sharing an HWND share one
+capture session; capture uses the highest requested quality while each profile
+retains its own bounded evaluation quality and sample rate. WGC is primary.
+Desktop Duplication is a
 foreground-only fallback limited to the window portion on its
 largest-intersection monitor. Rotated outputs are transformed back into logical
 desktop orientation, and rules touching LayerC overlay pixels are marked
@@ -209,6 +278,14 @@ references each), run the same isolated harness with:
 .\tools\benchmark_v11.ps1 -Workload v21-template -Quality balanced
 ```
 
+To validate the V2.2 helper boundary and its combined provisional resource cap,
+run the same real-capture workload with `-Isolated`:
+
+```powershell
+.\tools\benchmark_v11.ps1 -Workload v21-template -Quality low -Isolated
+.\tools\benchmark_v11.ps1 -Workload v21-template -Quality balanced -Isolated
+```
+
 The isolated workflow creates a temporary lctest profile and first requires a
 real hardware capture frame. The V2.1 workload must also observe a successful
 template-triggered overlay before it can measure the actual LayerD path at
@@ -218,6 +295,31 @@ frame dimensions, private memory, working set, CPU, threads, and GPU-local
 memory when Windows exposes that counter. The gate is 35 MiB private, 50 MiB
 working set, and 3% average CPU. Run both qualities on at least one integrated
 GPU and one discrete GPU; Exact is intentionally excluded.
+
+### V2.2 modular-runtime benchmark
+
+With existing LayerD and LayerE processes closed, measure the empty-profile
+daemon plateau, open LayerE without edit mode, then verify the daemon returns to
+its prior plateau after the editor closes:
+
+```powershell
+.\tools\benchmark_v22.ps1 -BuildDirectory .\build\mingw-preset
+```
+
+The JSON evidence is written under `out\benchmarks`. The gate checks the V2.2
+no-game memory/CPU limits, zero daemon-thread growth while LayerE is open, the
+editor memory deltas, and post-close recovery.
+
+When a preserved V2.1 Release build is available, run the same-machine Raw
+Input-to-overlay A/B latency gate with:
+
+```powershell
+.\tools\benchmark_latency.ps1 `
+  -BaselineBuildDirectory .\build\mingw-v11 `
+  -CandidateBuildDirectory .\build\mingw-preset
+```
+
+It fails if either candidate median or p95 latency regresses by more than 1 ms.
 
 During development, set `LAYERC_PROFILE_DIR` to load profiles from a disposable directory instead of `%LOCALAPPDATA%\\LayerC\\profiles`. For example:
 

@@ -1,5 +1,6 @@
 #include "daemon_app.hpp"
 
+#include "layerc/core/hid.hpp"
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
@@ -8,19 +9,96 @@
 #include <vector>
 
 namespace layerc::daemon {
+namespace {
+
+std::string_view input_device_label(const layerc::core::InputDevice device) {
+  using layerc::core::InputDevice;
+  switch (device) {
+  case InputDevice::keyboard: return "keyboard";
+  case InputDevice::mouse: return "mouse";
+  case InputDevice::controller: return "controller";
+  case InputDevice::generic_hid: return "hid";
+  }
+  return "unknown";
+}
+
+} // namespace
+
 bool DaemonApp::register_input_devices() {
   const RAWINPUTDEVICE devices[] = {
       {.usUsagePage = 0x01,
        .usUsage = 0x06,
-       .dwFlags = RIDEV_INPUTSINK,
+       .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
        .hwndTarget = window_},
       {.usUsagePage = 0x01,
        .usUsage = 0x02,
-       .dwFlags = RIDEV_INPUTSINK,
+       .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
        .hwndTarget = window_},
   };
   return RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
                                  sizeof(RAWINPUTDEVICE)) != FALSE;
+}
+
+void DaemonApp::unregister_input_devices() noexcept {
+  if (!raw_input_registered_) return;
+  const RAWINPUTDEVICE devices[] = {
+      {.usUsagePage = 0x01,
+       .usUsage = 0x06,
+       .dwFlags = RIDEV_REMOVE,
+       .hwndTarget = nullptr},
+      {.usUsagePage = 0x01,
+       .usUsage = 0x02,
+       .dwFlags = RIDEV_REMOVE,
+       .hwndTarget = nullptr},
+  };
+  (void)RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
+                                sizeof(RAWINPUTDEVICE));
+  raw_input_registered_ = false;
+}
+
+void DaemonApp::reconcile_input_runtime() {
+  const bool needs_system_hid = std::ranges::any_of(
+      active_input_sessions_, [](const Session *session) {
+        return session != nullptr &&
+               std::ranges::any_of(
+                   session->profile.hid_bindings, [](const auto &binding) {
+                     return binding.allow_system_class &&
+                            layerc::core::is_system_keyboard_or_mouse(
+                                binding.device);
+                   });
+      });
+  const bool needs_raw_input = std::ranges::any_of(
+      active_input_sessions_, [](const Session *session) {
+        return session != nullptr && session->uses_raw_input;
+      }) || needs_system_hid;
+  if (needs_raw_input && !raw_input_registered_)
+    raw_input_registered_ = register_input_devices();
+  else if (!needs_raw_input)
+    unregister_input_devices();
+
+  const bool needs_polling = std::ranges::any_of(
+      active_input_sessions_, [](const Session *session) {
+        return session != nullptr && session->requires_input_polling();
+      });
+  if (needs_polling && !input_timer_running_) {
+    SetTimer(window_, input_poll_timer, 16, nullptr);
+    input_timer_running_ = true;
+  } else if (!needs_polling && input_timer_running_) {
+    KillTimer(window_, input_poll_timer);
+    input_timer_running_ = false;
+    controller_states_ = {};
+    for (auto &session : sessions_) session->clear_input_state();
+  }
+}
+
+void DaemonApp::quiesce_input_runtime() noexcept {
+  if (input_timer_running_ && window_ != nullptr)
+    KillTimer(window_, input_poll_timer);
+  input_timer_running_ = false;
+  unregister_input_devices();
+  controller_states_ = {};
+  input_foreground_ = nullptr;
+  for (auto &session : sessions_) session->clear_input_state();
 }
 
 void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
@@ -42,6 +120,7 @@ void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
   }
 
   const auto &input = *reinterpret_cast<const RAWINPUT *>(buffer);
+  if (hid_runtime_) handle_hid_input(input);
   if (input.header.dwType == RIM_TYPEKEYBOARD) {
     const auto &keyboard = input.data.keyboard;
     std::uint16_t code = keyboard.MakeCode;
@@ -174,6 +253,13 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
 bool DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto triggered = session.input.process(event);
+  if (!triggered.empty()) {
+    session.last_input_match =
+        std::string(input_device_label(event.token.device)) +
+        ":" + std::to_string(event.token.code) +
+        (event.pressed ? ":press" : ":release");
+    session.last_input_at = layerc::core::MonotonicClock::now();
+  }
   if (session.blocks_all_triggers()) return false;
   const auto now = layerc::core::MonotonicClock::now();
   bool changed{};

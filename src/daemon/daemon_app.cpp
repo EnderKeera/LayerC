@@ -1,8 +1,10 @@
 #include "daemon_app.hpp"
 
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/windows.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cwchar>
 #include <filesystem>
@@ -10,10 +12,17 @@
 
 namespace layerc::daemon {
 
-DaemonApp *DaemonApp::foreground_hook_target_{};
 int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   (void)show_command;
   instance_ = instance;
+  if (!layerc::platform::recover_profile_transactions(
+          layerc::platform::profile_directory())) {
+    MessageBoxW(nullptr,
+                L"LayerD could not recover an interrupted profile import. "
+                L"Profiles were not loaded to avoid publishing a partial transaction.",
+                L"LayerC profile recovery", MB_OK | MB_ICONERROR);
+    return 1;
+  }
   if (!create_message_window(instance)) {
     return 1;
   }
@@ -26,7 +35,6 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   visual_capture_active_event_ = CreateEventW(
       nullptr, TRUE, FALSE,
       layerc::platform::visual_capture_active_event_name);
-  register_input_devices();
   add_tray_icon();
   reload_profiles();
   foreground_hook_target_ = this;
@@ -39,12 +47,57 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
       EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
       &DaemonApp::foreground_event_proc, 0, 0, WINEVENT_OUTOFCONTEXT);
   SetTimer(window_, game_scan_timer, 1000, nullptr);
-  SetTimer(window_, live_channel_timer, live_timer_interval_, nullptr);
+  poll_live_channel();
 
+  bool running = true;
+  int exit_code{};
   MSG message{};
-  while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-    TranslateMessage(&message);
-    DispatchMessageW(&message);
+  while (running) {
+    std::array<HANDLE, 4> live_handles{};
+    const auto live_handle_count = static_cast<DWORD>(
+        live_channel_.wait_handles(
+            std::span<HANDLE>(live_handles).first(3)));
+    DWORD wait_handle_count = live_handle_count;
+    const bool visual_wait = visual_snapshot_event_ != nullptr;
+    if (visual_wait) live_handles[wait_handle_count++] = visual_snapshot_event_;
+    const DWORD timeout =
+        edit_session_ != nullptr
+            ? 250U
+            : (!isolated_visual_captures_.empty()
+                   ? 500U
+                   : (wait_handle_count == 0 ? 1'000U : INFINITE));
+    const DWORD result = MsgWaitForMultipleObjectsEx(
+        wait_handle_count,
+        wait_handle_count == 0 ? nullptr : live_handles.data(), timeout,
+        QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    if (result == WAIT_FAILED) {
+      exit_code = 1;
+      break;
+    }
+    if (result == WAIT_TIMEOUT) {
+      maintain_isolated_visual_captures();
+      poll_live_channel();
+      continue;
+    }
+    if (result >= WAIT_OBJECT_0 &&
+        result < WAIT_OBJECT_0 + live_handle_count) {
+      poll_live_channel();
+      continue;
+    }
+    if (visual_wait && result == WAIT_OBJECT_0 + live_handle_count) {
+      poll_visual_captures();
+      continue;
+    }
+    if (result != WAIT_OBJECT_0 + wait_handle_count) continue;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+      if (message.message == WM_QUIT) {
+        exit_code = static_cast<int>(message.wParam);
+        running = false;
+        break;
+      }
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
   }
 
   if (foreground_hook_target_ == this) {
@@ -66,7 +119,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     CloseHandle(visual_capture_active_event_);
   }
   remove_tray_icon();
-  return static_cast<int>(message.wParam);
+  return exit_code;
 }
 
 bool DaemonApp::create_message_window(const HINSTANCE instance) {
@@ -179,6 +232,10 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
   case WM_INPUT:
     handle_raw_input(reinterpret_cast<HRAWINPUT>(lparam));
     return 0;
+  case WM_INPUT_DEVICE_CHANGE:
+    handle_hid_device_change(reinterpret_cast<HANDLE>(lparam),
+                             wparam == GIDC_ARRIVAL);
+    return 0;
   case WM_TIMER:
     if (wparam == game_scan_timer) {
       ensure_tray_icon();
@@ -191,10 +248,6 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
       poll_input_devices();
     } else if (wparam == overlay_render_timer) {
       update_overlays();
-    } else if (wparam == live_channel_timer) {
-      poll_live_channel();
-    } else if (wparam == visual_capture_timer) {
-      poll_visual_captures();
     }
     return 0;
   case WM_COMMAND:
@@ -220,16 +273,11 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     }
     return 0;
   case WM_DESTROY:
+    shutting_down_ = true;
     KillTimer(window, game_scan_timer);
-    KillTimer(window, input_poll_timer);
     KillTimer(window, overlay_render_timer);
-    KillTimer(window, live_channel_timer);
-    KillTimer(window, visual_capture_timer);
-    visual_timer_running_ = false;
-    visual_captures_.clear();
-    if (visual_capture_active_event_ != nullptr)
-      ResetEvent(visual_capture_active_event_);
     end_edit_session();
+    runtime_kernel_.quiesce();
     PostQuitMessage(0);
     return 0;
   default:

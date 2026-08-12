@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <set>
 #include <string>
 #include <string_view>
@@ -20,6 +21,8 @@ private:
   [[nodiscard]] bool ok() const;
   bool read_cooldowns(GameProfile &profile);
   bool read_panels(GameProfile &profile);
+  bool read_modules(GameProfile &profile, std::uint32_t source_schema);
+  bool read_hid_bindings(GameProfile &profile, std::uint32_t source_schema);
   bool read_bindings(GameProfile &profile);
 
   const json::Value *required_object(const json::Value &parent,
@@ -58,6 +61,7 @@ private:
 
   const json::Value &root_;
   std::set<std::string, std::less<>> cooldown_ids_;
+  std::map<std::string, std::uint16_t, std::less<>> hid_binding_ids_;
   ProfileError error_;
 };
 

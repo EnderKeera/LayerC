@@ -1,16 +1,19 @@
 #pragma once
 
-#include "overlay_window.hpp"
+#include "daemon_session.hpp"
+#include "isolated_visual_worker.hpp"
 #include "visual_capture_worker.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
+#include "layerc/core/hid.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "layerc/core/pixel_engine.hpp"
 #include "layerc/core/runtime_instances.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/runtime/daemon_kernel.hpp"
 
 #include <array>
 #include <filesystem>
@@ -29,95 +32,28 @@ namespace layerc::daemon {
 
 class DaemonApp {
 public:
+  struct HidRuntimeState;
+  DaemonApp();
+  ~DaemonApp();
   int run(HINSTANCE instance, int show_command);
 
 private:
+  class InputRuntimeService;
+  class LiveEditRuntimeService;
+  class OverlayRuntimeService;
+  class VisualRuntimeService;
+  class TemplateRuntimeService;
+  class IsolatedVisualRuntimeService;
+  class HidRuntimeService;
+
   static constexpr UINT tray_message = WM_APP + 1;
   static constexpr UINT_PTR game_scan_timer = 1;
   static constexpr UINT_PTR input_poll_timer = 2;
   static constexpr UINT_PTR overlay_render_timer = 3;
-  static constexpr UINT_PTR live_channel_timer = 4;
-  static constexpr UINT_PTR visual_capture_timer = 5;
   static constexpr UINT command_open_editor = 1001;
   static constexpr UINT command_reload = 1002;
   static constexpr UINT command_exit = 1003;
   static DaemonApp *foreground_hook_target_;
-  struct ProfileSource {
-    std::wstring key;
-    std::filesystem::path path;
-    layerc::core::GameProfile profile;
-    std::optional<layerc::core::VisualProfile> visual_profile;
-    layerc::platform::VisualSidecarState visual_health{
-        layerc::platform::VisualSidecarState::absent};
-    std::string visual_error;
-    layerc::core::ProfileRevision revision{};
-  };
-
-  // A Session is deliberately an instance, not a profile. Each matching game
-  // window gets its own cooldown engine and its own overlay windows.
-  struct Session {
-    struct PolledKeyState {
-      layerc::core::InputToken token;
-      bool pressed{};
-    };
-
-    explicit Session(layerc::core::GameProfile source_profile,
-                     std::wstring source_key,
-                     std::optional<layerc::core::VisualProfile> visual_profile,
-                     layerc::platform::VisualSidecarState visual_health,
-                     bool visual_enabled, bool capture_exclusion);
-
-    void clear_input_state();
-    void rebuild_input_configuration();
-    void set_capture_exclusion(bool enabled);
-    void apply_profile(const layerc::core::GameProfile &updated,
-                       bool capture_exclusion);
-    void apply_visual_profile(
-        std::optional<layerc::core::VisualProfile> visual_profile,
-        layerc::platform::VisualSidecarState visual_health, bool visual_enabled);
-    [[nodiscard]] bool has_active_visual_rules() const noexcept;
-    [[nodiscard]] bool blocks_all_triggers() const noexcept {
-      return visual_health == layerc::platform::VisualSidecarState::invalid;
-    }
-    [[nodiscard]] bool is_global() const noexcept {
-      return profile.game.global;
-    }
-    [[nodiscard]] bool requires_input_polling() const noexcept {
-      return uses_controller || !global_keyboard.empty();
-    }
-
-    std::wstring source_key;
-    layerc::core::GameProfile profile;
-    std::vector<OverlayCooldown> overlay_cooldowns;
-    layerc::core::CooldownEngine cooldowns;
-    layerc::core::InputMatcher input;
-    std::optional<layerc::core::VisualProfile> visual_profile;
-    std::unique_ptr<layerc::core::VisualTriggerEngine> visual_triggers;
-    layerc::platform::VisualSidecarState visual_health{
-        layerc::platform::VisualSidecarState::absent};
-    std::uint64_t last_visual_sequence{};
-    std::vector<layerc::core::CooldownState> snapshot_buffer;
-    std::vector<std::unique_ptr<OverlayWindow>> overlays;
-    std::vector<PolledKeyState> global_keyboard;
-    HWND game_window{};
-    bool uses_controller{};
-  };
-
-  struct EditSession {
-    layerc::core::EditSessionId id{};
-    layerc::core::ProfileRevision revision{};
-    layerc::core::ProfileRevision outbound_revision{};
-    std::wstring source_key;
-    layerc::core::GameProfile profile;
-    std::string selected_panel;
-    HWND target{};
-    bool direct_drag{};
-    layerc::core::TimePoint last_heartbeat{};
-    std::vector<OverlayCooldown> overlay_cooldowns;
-    std::vector<layerc::core::CooldownState> preview_states;
-    std::vector<std::unique_ptr<OverlayWindow>> overlays;
-  };
-
   static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                       LPARAM lparam);
   LRESULT handle_message(HWND window, UINT message, WPARAM wparam,
@@ -125,6 +61,9 @@ private:
 
   bool create_message_window(HINSTANCE instance);
   bool register_input_devices();
+  void unregister_input_devices() noexcept;
+  void reconcile_input_runtime();
+  void quiesce_input_runtime() noexcept;
   void add_tray_icon();
   void ensure_tray_icon();
   void remove_tray_icon();
@@ -142,6 +81,12 @@ private:
   void sync_foreground_state();
   void sync_overlay_location(HWND changed_window);
   void handle_raw_input(HRAWINPUT handle);
+  void handle_hid_input(const RAWINPUT &input);
+  void handle_hid_device_change(HANDLE device, bool arrived);
+  [[nodiscard]] bool reconcile_hid_runtime();
+  void quiesce_hid_runtime() noexcept;
+  [[nodiscard]] layerc::runtime::RuntimeResourceStats
+  hid_runtime_resources() const noexcept;
   void poll_input_devices();
   [[nodiscard]] bool poll_global_keyboard(Session &session);
   void seed_controller_states();
@@ -150,11 +95,35 @@ private:
   [[nodiscard]] bool process_input(Session &session,
                                    const layerc::core::InputEvent &event);
   void update_overlays();
+  void reconcile_overlay_runtime();
+  void quiesce_overlay_runtime() noexcept;
   void reconcile_visual_captures();
+  void quiesce_inline_visual_captures() noexcept;
+  void quiesce_isolated_visual_captures() noexcept;
+  void quiesce_visual_captures() noexcept;
+  void reconcile_runtime_services();
+  [[nodiscard]] layerc::runtime::CapabilityDemand runtime_demand() const;
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_input_runtime_service(void *context);
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_live_edit_runtime_service(void *context);
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_overlay_runtime_service(void *context);
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_visual_runtime_service(void *context);
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_template_runtime_service(void *context);
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_isolated_visual_runtime_service(void *context);
+  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
+  create_hid_runtime_service(void *context);
   void poll_visual_captures();
+  void maintain_isolated_visual_captures();
+  void retry_quarantined_visual_helpers();
   void update_visual_status();
   void publish_visual_status(
       std::span<const VisualCaptureSnapshot> snapshots);
+  [[nodiscard]] std::string runtime_diagnostics_json() const;
   void poll_live_channel();
   void handle_live_message(const layerc::core::LiveMessage &message);
   void send_live_reply(layerc::core::LiveMessageType type,
@@ -187,20 +156,25 @@ private:
   HANDLE reload_event_{};
   HANDLE settings_reload_event_{};
   HANDLE visual_capture_active_event_{};
+  HANDLE visual_snapshot_event_{};
   bool capture_exclusion_{true};
   bool visual_recognition_enabled_{true};
+  bool shutting_down_{};
+  bool raw_input_registered_{};
   bool input_timer_running_{};
   bool overlay_timer_running_{};
-  bool visual_timer_running_{};
-  UINT live_timer_interval_{250};
+  bool live_package_authenticated_{};
+  std::unique_ptr<HidRuntimeState> hid_runtime_;
   HWINEVENTHOOK foreground_event_hook_{};
   HWINEVENTHOOK location_event_hook_{};
   layerc::platform::NamedPipeEditorDaemonChannel live_channel_{
       layerc::platform::NamedPipeEditorDaemonChannel::Role::server};
   std::unique_ptr<EditSession> edit_session_;
-  using VisualCaptureWorkerSet =
-      std::array<std::unique_ptr<VisualCaptureWorker>, 3>;
-  std::unordered_map<HWND, VisualCaptureWorkerSet> visual_captures_;
+  std::unordered_map<HWND, std::unique_ptr<VisualCaptureWorker>>
+      visual_captures_;
+  std::unordered_map<HWND, std::unique_ptr<IsolatedVisualWorker>>
+      isolated_visual_captures_;
+  layerc::runtime::DaemonKernel runtime_kernel_;
   std::wstring visual_status_{L"Visual recognition: inactive"};
 };
 

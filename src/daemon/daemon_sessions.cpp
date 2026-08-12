@@ -78,7 +78,7 @@ std::filesystem::path profile_path_for_key(const std::wstring_view key) {
 
 } // namespace
 
-DaemonApp::Session::Session(layerc::core::GameProfile source_profile,
+Session::Session(layerc::core::GameProfile source_profile,
                             std::wstring source_key_value,
                             std::optional<layerc::core::VisualProfile>
                                 source_visual_profile,
@@ -88,21 +88,23 @@ DaemonApp::Session::Session(layerc::core::GameProfile source_profile,
                             const bool capture_exclusion)
     : source_key(std::move(source_key_value)),
       profile(std::move(source_profile)),
-      overlay_cooldowns(make_overlay_cooldowns(profile.cooldowns)),
       cooldowns(profile.cooldowns), input(profile.bindings) {
   apply_visual_profile(std::move(source_visual_profile), source_visual_health,
                        visual_enabled);
   snapshot_buffer.reserve(profile.cooldowns.size());
   rebuild_input_configuration();
-  overlays.reserve(profile.panels.size());
-  for (const auto &panel : profile.panels) {
-    auto overlay = std::make_unique<OverlayWindow>(panel, overlay_cooldowns);
-    overlay->set_capture_exclusion(capture_exclusion);
-    overlays.push_back(std::move(overlay));
-  }
+  (void)capture_exclusion;
 }
 
-void DaemonApp::Session::apply_visual_profile(
+void Session::ensure_overlays(const bool capture_exclusion) {
+  overlays.ensure(profile, capture_exclusion);
+}
+
+void Session::release_overlays() noexcept {
+  overlays.release();
+}
+
+void Session::apply_visual_profile(
     std::optional<layerc::core::VisualProfile> updated_visual_profile,
     const layerc::platform::VisualSidecarState updated_health,
     const bool visual_enabled) {
@@ -122,20 +124,28 @@ void DaemonApp::Session::apply_visual_profile(
   }
 }
 
-bool DaemonApp::Session::has_active_visual_rules() const noexcept {
+bool Session::has_active_visual_rules() const noexcept {
   return visual_triggers != nullptr && visual_profile.has_value() &&
          visual_health != layerc::platform::VisualSidecarState::invalid &&
          layerc::core::has_enabled_visual_assignments(*visual_profile) &&
          visual_triggers->visual_enabled();
 }
 
-void DaemonApp::Session::rebuild_input_configuration() {
+void Session::rebuild_input_configuration() {
   uses_controller = false;
+  uses_raw_input = false;
+  uses_hid = false;
+  hid_states.assign(profile.hid_bindings.size(), {});
   global_keyboard.clear();
   for (const auto &binding : profile.bindings) {
     for (const auto &token : binding.chord.tokens) {
       uses_controller = uses_controller ||
                         token.device == layerc::core::InputDevice::controller;
+      uses_raw_input = uses_raw_input ||
+                       token.device == layerc::core::InputDevice::keyboard ||
+                       token.device == layerc::core::InputDevice::mouse;
+      uses_hid = uses_hid ||
+                 token.device == layerc::core::InputDevice::generic_hid;
       bool pressed{};
       if (token.device == layerc::core::InputDevice::keyboard) {
         const UINT virtual_key = MapVirtualKeyW(token.code, MAPVK_VSC_TO_VK_EX);
@@ -171,7 +181,7 @@ void DaemonApp::Session::rebuild_input_configuration() {
   }
 }
 
-void DaemonApp::Session::apply_profile(
+void Session::apply_profile(
     const layerc::core::GameProfile &updated, const bool capture_exclusion) {
   const auto plan =
       layerc::core::plan_session_reconciliation(profile, updated);
@@ -186,34 +196,14 @@ void DaemonApp::Session::apply_profile(
   snapshot_buffer.reserve(profile.cooldowns.size());
 
   if (!plan.rebuild_overlays) return;
-  overlay_cooldowns = make_overlay_cooldowns(profile.cooldowns);
-  std::vector<std::unique_ptr<OverlayWindow>> next;
-  next.reserve(profile.panels.size());
-  for (const auto &panel : profile.panels) {
-    const auto found = std::ranges::find_if(
-        overlays, [&](const auto &candidate) {
-          return candidate != nullptr && candidate->panel_id() == panel.id;
-        });
-    std::unique_ptr<OverlayWindow> overlay;
-    if (found == overlays.end())
-      overlay = std::make_unique<OverlayWindow>(panel, overlay_cooldowns);
-    else {
-      overlay = std::move(*found);
-      overlay->update_snapshot(panel, overlay_cooldowns);
-    }
-    overlay->set_capture_exclusion(capture_exclusion);
-    next.push_back(std::move(overlay));
-  }
-  overlays = std::move(next);
+  if (!overlays.empty()) overlays.rebuild(profile, capture_exclusion);
 }
 
-void DaemonApp::Session::set_capture_exclusion(const bool enabled) {
-  for (auto &overlay : overlays) {
-    overlay->set_capture_exclusion(enabled);
-  }
+void Session::set_capture_exclusion(const bool enabled) {
+  overlays.set_capture_exclusion(enabled);
 }
 
-void DaemonApp::Session::clear_input_state() {
+void Session::clear_input_state() {
   input.clear();
   for (auto &key : global_keyboard) {
     key.pressed = false;
@@ -268,6 +258,7 @@ void DaemonApp::reload_profiles() {
   }
 
   reconcile_profile_sources(std::move(loaded));
+  retry_quarantined_visual_helpers();
 }
 
 void DaemonApp::apply_profile_update(
@@ -290,6 +281,7 @@ void DaemonApp::apply_profile_update(
   else
     *found = std::move(source);
   reconcile_profile_sources(std::move(loaded));
+  retry_quarantined_visual_helpers();
 }
 
 void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
@@ -397,11 +389,9 @@ bool DaemonApp::reload_settings_if_requested() {
           visual_recognition_enabled_);
   }
   if (edit_session_ != nullptr) {
-    for (auto &overlay : edit_session_->overlays)
-      overlay->set_capture_exclusion(capture_exclusion_);
+    edit_session_->overlays.set_capture_exclusion(capture_exclusion_);
   }
-  update_overlays();
-  reconcile_visual_captures();
+  reconcile_runtime_services();
   return true;
 }
 
@@ -526,25 +516,10 @@ void DaemonApp::sync_foreground_state() {
   }
   active_input_sessions_ = std::move(active_sessions);
 
-  const bool needs_input_polling = std::any_of(
-      active_input_sessions_.begin(), active_input_sessions_.end(),
-      [](const Session *session) { return session->requires_input_polling(); });
-  if (needs_input_polling && !input_timer_running_) {
-    SetTimer(window_, input_poll_timer, 16, nullptr);
-    input_timer_running_ = true;
-  } else if (!needs_input_polling && input_timer_running_) {
-    KillTimer(window_, input_poll_timer);
-    input_timer_running_ = false;
-    controller_states_ = {};
-    for (auto &session : sessions_) {
-      session->clear_input_state();
-    }
-  }
-  update_overlays();
-  reconcile_visual_captures();
+  reconcile_runtime_services();
 }
 
-std::vector<DaemonApp::Session *> DaemonApp::foreground_sessions() {
+std::vector<Session *> DaemonApp::foreground_sessions() {
   const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
   DWORD foreground_process_id{};
   if (foreground != nullptr)

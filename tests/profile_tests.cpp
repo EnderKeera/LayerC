@@ -45,8 +45,8 @@ void test_profile_parser() {
          "valid profile should parse");
 
   if (const auto *profile = std::get_if<GameProfile>(&result)) {
-    expect(profile->schema_version == 2,
-           "schema-v1 base profiles should migrate to v2 in memory");
+    expect(profile->schema_version == 3,
+           "legacy base profiles should migrate to v3 in memory");
     expect(profile->cooldowns.size() == 1, "profile should contain cooldown");
     expect(profile->panels.front().cooldown_ids.front() == "dash",
            "panel reference should resolve");
@@ -63,9 +63,9 @@ void test_profile_parser() {
            "bar appearance should parse with legacy showText default");
     expect(profile->cooldowns.front().stack_charges,
            "stackCharges should parse");
-    expect(serialize_profile_json(*profile).find("\"schemaVersion\": 2") !=
+    expect(serialize_profile_json(*profile).find("\"schemaVersion\": 3") !=
                std::string::npos,
-           "saving a migrated base profile should emit schema v2");
+           "saving a migrated base profile should emit schema v3");
   }
 
   const std::string oversized(max_profile_json_bytes + 1U, 'x');
@@ -284,6 +284,75 @@ void test_profile_enabled_and_independent_bar_placement() {
              serialized->panels[0].anchor_y == 0.81 &&
              serialized->panels[1].anchor_x == 0.87,
          "serializer should preserve enabled state and per-bar placement");
+}
+
+void test_profile_schema3_hid() {
+  using namespace layerc::core;
+  constexpr std::string_view source = R"json(
+  {
+    "schemaVersion": 3,
+    "id": "hid-game",
+    "name": "HID Game",
+    "enabled": true,
+    "game": {"executableName":"game.exe"},
+    "visualRuntime": "isolated",
+    "modules": [],
+    "cooldowns": [{"id":"dash","name":"Dash","durationMs":1000}],
+    "hidBindings": [{
+      "id": "pedal",
+      "device": {
+        "vid": 4660, "pid": 22136, "version": 1,
+        "usagePage": 1, "usage": 4,
+        "descriptorHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "stableSlot": 1
+      },
+      "control": {
+        "reportId": 2, "usagePage": 1, "usage": 48,
+        "linkCollection": 0, "activation": "axisPositive",
+        "value": 0, "threshold": 0.7, "hysteresis": 0.1
+      },
+      "allowSystemClass": false
+    }],
+    "panels": [{"id":"main","name":"Main","cooldowns":["dash"]}],
+    "bindings": [{
+      "cooldownId":"dash",
+      "chord":[{"device":"hid","bindingId":"pedal"}]
+    }]
+  })json";
+  const auto parsed = parse_profile_json(source);
+  const auto *profile = std::get_if<GameProfile>(&parsed);
+  expect(profile != nullptr && profile->schema_version == 3 &&
+             profile->visual_runtime == VisualRuntime::isolated &&
+             profile->hid_bindings.size() == 1 &&
+             profile->bindings.front().chord.tokens.front().device ==
+                 InputDevice::generic_hid &&
+             profile->bindings.front().chord.tokens.front().code == 1,
+         "schema 3 should resolve persisted HID binding IDs to compact tokens");
+  if (profile != nullptr) {
+    const auto round_trip = parse_profile_json(serialize_profile_json(*profile));
+    expect(std::holds_alternative<GameProfile>(round_trip) &&
+               std::get<GameProfile>(round_trip) == *profile,
+           "schema-3 HID descriptors should round trip deterministically");
+  }
+
+  auto system_class = std::string(source);
+  const auto usage = system_class.find(R"json("usage": 4)json");
+  if (usage != std::string::npos)
+    system_class.replace(usage, std::string_view(R"json("usage": 4)json").size(),
+                         R"json("usage": 6)json");
+  expect(std::holds_alternative<ProfileError>(
+             parse_profile_json(system_class)),
+         "keyboard-class HID should require explicit per-binding opt-in");
+
+  auto unknown_module = std::string(source);
+  const auto modules = unknown_module.find(R"json("modules": [])json");
+  if (modules != std::string::npos)
+    unknown_module.replace(
+        modules, std::string_view(R"json("modules": [])json").size(),
+        R"json("modules": [{"kind":"plugin","schemaVersion":1}])json");
+  expect(std::holds_alternative<ProfileError>(
+             parse_profile_json(unknown_module)),
+         "schema 3 should reject unknown module kinds");
 }
 
 } // namespace layerc::test

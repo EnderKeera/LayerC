@@ -12,7 +12,17 @@
 
 namespace layerc::core {
 
-inline constexpr std::uint32_t live_protocol_version = 1;
+inline constexpr std::uint32_t live_protocol_version = 2;
+inline constexpr std::string_view package_version = "2.2.0";
+[[nodiscard]] inline std::string
+package_identity(const std::string_view component) {
+  std::string result;
+  result.reserve(component.size() + 1U + package_version.size());
+  result.append(component);
+  result.push_back('/');
+  result.append(package_version);
+  return result;
+}
 inline constexpr std::size_t max_live_message_bytes = 512U * 1024U;
 inline constexpr std::size_t max_live_buffer_bytes =
     8U * max_live_message_bytes;
@@ -87,6 +97,9 @@ enum class LiveMessageType : std::uint8_t {
   end_edit,
   heartbeat,
   runtime_status,
+  diagnostics_request,
+  diagnostics_reply,
+  retry_visual,
   acknowledgement,
   error,
 };

@@ -99,8 +99,9 @@ std::pair<layerc::core::CaptureAvailability, bool> evaluate_once(
 } // namespace
 
 VisualCaptureWorker::VisualCaptureWorker(
-    const HWND window, const layerc::core::CaptureQuality quality)
-    : window_(window), quality_(quality) {}
+    const HWND window, const layerc::core::CaptureQuality quality,
+    const HANDLE snapshot_event)
+    : window_(window), quality_(quality), snapshot_event_(snapshot_event) {}
 VisualCaptureWorker::~VisualCaptureWorker() { stop(); }
 
 void VisualCaptureWorker::start() {
@@ -118,9 +119,6 @@ void VisualCaptureWorker::stop() {
 void VisualCaptureWorker::configure(
     std::vector<VisualEvaluationRequest> requests) {
   std::uint8_t maximum_rate{5};
-  std::erase_if(requests, [&](const VisualEvaluationRequest &request) {
-    return request.quality != quality_;
-  });
   for (auto &request : requests) {
     request.sample_rate_hz = static_cast<std::uint8_t>(
         std::clamp<int>(request.sample_rate_hz, 5, 15));
@@ -205,8 +203,25 @@ void VisualCaptureWorker::run() {
       capture.set_excluded_screen_rects(exclusions);
     if (requests_changed) {
       template_matcher.clear();
+      struct ReferenceSet {
+        std::shared_ptr<const std::vector<layerc::core::TemplateImage>> images;
+        bool available{};
+      };
+      std::unordered_map<std::string, ReferenceSet> reference_sets;
       for (auto &request : requests) {
         for (auto &evaluation : request.templates) {
+          std::string reference_key =
+              std::to_string(static_cast<unsigned>(request.quality));
+          for (const auto &definition : evaluation.state.references) {
+            reference_key.push_back(':');
+            reference_key += definition.asset_sha256;
+          }
+          if (const auto cached = reference_sets.find(reference_key);
+              cached != reference_sets.end()) {
+            evaluation.references = cached->second.images;
+            evaluation.assets_available = cached->second.available;
+            continue;
+          }
           auto references =
               std::make_shared<std::vector<layerc::core::TemplateImage>>();
           references->reserve(evaluation.state.references.size());
@@ -224,7 +239,11 @@ void VisualCaptureWorker::run() {
             references->push_back(layerc::core::compact_template_image(
                 *image, request.quality));
           }
-          evaluation.references = std::move(references);
+          evaluation.references = references;
+          reference_sets.emplace(
+              std::move(reference_key),
+              ReferenceSet{.images = std::move(references),
+                           .available = evaluation.assets_available});
         }
       }
     }
@@ -312,13 +331,16 @@ void VisualCaptureWorker::run() {
         }
       }
     }
+    if (snapshot_event_ != nullptr) SetEvent(snapshot_event_);
 
     const auto rate = std::max<std::uint8_t>(
         1, sample_rate_hz_.load(std::memory_order_acquire));
     const auto interval = std::chrono::milliseconds(1'000 / rate);
     std::unique_lock lock(mutex_);
     wake_.wait_for(lock, interval, [&] {
-      return stopping_.load(std::memory_order_acquire);
+      return stopping_.load(std::memory_order_acquire) ||
+             request_revision_ != applied_request_revision ||
+             exclusion_revision_ != applied_exclusion_revision;
     });
   }
   capture.stop();

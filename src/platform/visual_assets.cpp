@@ -1,5 +1,6 @@
 #include "layerc/platform/visual_assets.hpp"
 
+#include "layerc/core/hash.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
@@ -14,7 +15,6 @@
 #include <vector>
 
 #include <windows.h>
-#include <bcrypt.h>
 #include <objidl.h>
 #include <wincodec.h>
 
@@ -56,14 +56,6 @@ private:
 
 VisualAssetError failure(std::string message) {
   return {.message = std::move(message)};
-}
-
-bool valid_hash(const std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](const char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
 }
 
 bool path_exists(const std::filesystem::path &path, std::error_code &error) {
@@ -154,37 +146,6 @@ read_asset_bytes(const std::filesystem::path &path) {
   if (input.gcount() != static_cast<std::streamsize>(bytes.size()))
     return std::nullopt;
   return bytes;
-}
-
-std::optional<std::string>
-sha256(const std::span<const std::uint8_t> bytes) {
-  BCRYPT_ALG_HANDLE algorithm{};
-  BCRYPT_HASH_HANDLE hash{};
-  std::array<std::uint8_t, 32> digest{};
-  if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr,
-                                  0) < 0)
-    return std::nullopt;
-  const auto close_algorithm = [&] {
-    if (hash != nullptr) BCryptDestroyHash(hash);
-    BCryptCloseAlgorithmProvider(algorithm, 0);
-  };
-  if (BCryptCreateHash(algorithm, &hash, nullptr, 0, nullptr, 0, 0) < 0 ||
-      BCryptHashData(hash, const_cast<PUCHAR>(bytes.data()),
-                     static_cast<ULONG>(bytes.size()), 0) < 0 ||
-      BCryptFinishHash(hash, digest.data(),
-                       static_cast<ULONG>(digest.size()), 0) < 0) {
-    close_algorithm();
-    return std::nullopt;
-  }
-  close_algorithm();
-  constexpr std::string_view hexadecimal = "0123456789abcdef";
-  std::string output;
-  output.reserve(64);
-  for (const auto byte : digest) {
-    output.push_back(hexadecimal[byte >> 4U]);
-    output.push_back(hexadecimal[byte & 0xFU]);
-  }
-  return output;
 }
 
 std::variant<layerc::core::TemplateImage, VisualAssetError>
@@ -339,7 +300,7 @@ std::filesystem::path visual_asset_directory() {
 }
 
 std::filesystem::path visual_asset_path(const std::string_view sha256_value) {
-  if (!valid_hash(sha256_value)) return {};
+  if (!layerc::core::is_lowercase_sha256(sha256_value)) return {};
   std::wstring filename(sha256_value.begin(), sha256_value.end());
   filename += L".png";
   return visual_asset_directory() / filename;
@@ -354,25 +315,22 @@ store_template_asset(const layerc::core::TemplateImage &image) {
   if (const auto *error = std::get_if<VisualAssetError>(&encoded))
     return *error;
   auto &bytes = std::get<std::vector<std::uint8_t>>(encoded);
-  const auto digest = sha256(bytes);
-  if (!digest.has_value()) return failure("SHA-256 hashing failed");
-  const auto destination = visual_asset_path(*digest);
+  const auto digest = layerc::core::sha256(bytes);
+  const auto destination = visual_asset_path(digest);
   if (destination.empty())
     return failure("content-addressed asset path is invalid");
 
   bool needs_write = true;
   if (auto existing = read_asset_bytes(destination); existing.has_value()) {
-    const auto existing_digest = sha256(*existing);
-    needs_write = !existing_digest.has_value() ||
-                  *existing_digest != *digest;
+    needs_write = layerc::core::sha256(*existing) != digest;
   }
   if (needs_write && !write_asset_atomically(destination, bytes))
     return failure("template asset could not be stored atomically");
 
   auto stored = image;
-  stored.asset_sha256 = *digest;
+  stored.asset_sha256 = digest;
   return ImportedTemplateAsset{
-      .reference = {.asset_sha256 = *digest},
+      .reference = {.asset_sha256 = digest},
       .image = std::move(stored),
       .path = destination};
 }
@@ -390,14 +348,14 @@ import_template_asset(const std::filesystem::path &source) {
 }
 
 TemplateImageResult load_template_asset(const std::string_view sha256_value) {
-  if (!valid_hash(sha256_value))
+  if (!layerc::core::is_lowercase_sha256(sha256_value))
     return failure("template asset id is not a lower-case SHA-256 digest");
   const auto path = visual_asset_path(sha256_value);
   auto bytes = read_asset_bytes(path);
   if (!bytes.has_value())
     return failure("template asset is missing or exceeds the 4 MiB limit");
-  const auto digest = sha256(*bytes);
-  if (!digest.has_value() || *digest != sha256_value)
+  const auto digest = layerc::core::sha256(*bytes);
+  if (digest != sha256_value)
     return failure("template asset hash does not match its profile reference");
   auto decoded = decode_png(*bytes);
   if (auto *image = std::get_if<layerc::core::TemplateImage>(&decoded)) {

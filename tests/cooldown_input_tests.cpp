@@ -3,6 +3,7 @@
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
+#include "layerc/core/hid.hpp"
 
 #include <chrono>
 #include <string>
@@ -231,6 +232,112 @@ void test_input_matcher_state_management() {
              matcher.process(InputEvent{controller, true}) ==
                  std::vector<std::string>{"controller"},
          "replacement bindings should route mouse and indexed controller edges");
+}
+
+void test_hid_boolean_evaluation() {
+  using namespace layerc::core;
+  HidControlBinding axis{.activation = HidActivationMode::axis_positive,
+                         .threshold = 0.6,
+                         .hysteresis = 0.1};
+  HidControlState state;
+  HidControlBinding button{.activation = HidActivationMode::button};
+  auto edge = evaluate_hid_control(button, {.button_active = false}, state);
+  expect(edge == false && state.initialized && !state.pressed,
+         "button baselines should publish an initial released state");
+  edge = evaluate_hid_control(button, {.button_active = true}, state);
+  expect(edge == true && state.pressed,
+         "button reports should publish their press edge");
+  expect(!evaluate_hid_control(button, {.button_active = true}, state),
+         "held HID buttons should not repeat");
+
+  HidControlBinding discrete{.activation = HidActivationMode::equals,
+                             .discrete_value = 8};
+  state = {};
+  edge = evaluate_hid_control(
+      discrete, {.value = 8, .logical_min = 0, .logical_max = 8}, state);
+  expect(edge == true,
+         "hat and array values should activate through discrete equality");
+  edge = evaluate_hid_control(
+      discrete, {.value = 0, .logical_min = 0, .logical_max = 8}, state);
+  expect(edge == false, "discrete HID values should publish release edges");
+
+  edge = evaluate_hid_control(
+      axis, {.value = 70, .logical_min = 0, .logical_max = 100}, state);
+  expect(edge == true && state.pressed,
+         "positive HID axes should cross their normalized threshold");
+  edge = evaluate_hid_control(
+      axis, {.value = 55, .logical_min = 0, .logical_max = 100}, state);
+  expect(!edge.has_value() && state.pressed,
+         "HID axis hysteresis should retain the pressed state");
+  edge = evaluate_hid_control(
+      axis, {.value = 45, .logical_min = 0, .logical_max = 100}, state);
+  expect(edge == false && !state.pressed,
+         "HID axis should release below threshold minus hysteresis");
+
+  HidControlBinding negative{.activation = HidActivationMode::axis_negative,
+                             .threshold = 0.75,
+                             .hysteresis = 0.1};
+  state = {};
+  edge = evaluate_hid_control(
+      negative, {.value = -90, .logical_min = -100, .logical_max = 100},
+      state);
+  expect(edge == true,
+         "centered negative HID axes should normalize before thresholding");
+  edge = evaluate_hid_control(
+      negative, {.value = 0, .logical_min = -100, .logical_max = 100},
+      state);
+  expect(edge == false,
+         "centered negative HID axes should release near center");
+
+  HidControlBinding relative{
+      .activation = HidActivationMode::relative_positive};
+  state = {};
+  edge = evaluate_hid_control(
+      relative, {.relative = true, .value = 3, .logical_max = 127}, state);
+  expect(edge == true,
+         "positive relative HID controls should produce a momentary press");
+  edge = evaluate_hid_control(
+      relative, {.relative = true, .value = 0, .logical_max = 127}, state);
+  expect(edge == false,
+         "relative HID controls should rearm at zero");
+
+  edge = evaluate_hid_control(axis, {.available = false}, state);
+  expect(!edge.has_value() && !state.initialized,
+         "unavailable HID samples should clear their stable baseline");
+  expect(is_system_keyboard_or_mouse(
+             {.usage_page = 1, .usage = 6}) &&
+             !is_system_keyboard_or_mouse(
+                 {.usage_page = 1, .usage = 5}),
+         "system keyboard and mouse top-level collections should be detected");
+
+  GameProfile profile;
+  profile.hid_bindings = {{.id = "first"}, {.id = "orphan"}, {.id = "last"}};
+  profile.bindings = {
+      {.cooldown_id = "a",
+       .chord = InputChord{{{InputDevice::generic_hid, 3, 0}}}},
+      {.cooldown_id = "b",
+       .chord = InputChord{{{InputDevice::generic_hid, 1, 0}}}},
+  };
+  compact_hid_bindings(profile);
+  expect(profile.hid_bindings.size() == 2 &&
+             profile.hid_bindings[0].id == "last" &&
+             profile.hid_bindings[1].id == "first" &&
+             profile.bindings[0].chord.tokens[0].code == 1 &&
+             profile.bindings[1].chord.tokens[0].code == 2,
+         "HID descriptor compaction should remove orphans and remap tokens");
+
+  GameProfile malformed;
+  malformed.hid_bindings = {{.id = "only"}};
+  malformed.bindings = {
+      {.cooldown_id = "unsafe-zero",
+       .chord = InputChord{{{InputDevice::keyboard, 30, 0},
+                            {InputDevice::generic_hid, 0, 0}}}},
+      {.cooldown_id = "unsafe-range",
+       .chord = InputChord{{{InputDevice::generic_hid, 2, 0}}}},
+  };
+  compact_hid_bindings(malformed);
+  expect(malformed.bindings.empty() && malformed.hid_bindings.empty(),
+         "invalid compact HID tokens should remove their complete chords instead of serializing empty IDs or weakening a chord");
 }
 
 } // namespace layerc::test

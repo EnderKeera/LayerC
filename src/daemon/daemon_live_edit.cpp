@@ -22,11 +22,14 @@ void DaemonApp::send_live_reply(const layerc::core::LiveMessageType type,
 }
 
 void DaemonApp::poll_live_channel() {
+  auto results = live_channel_.poll();
   const bool connection_changed = live_channel_.take_connection_changed();
-  if (connection_changed && !live_channel_.connected())
-    end_edit_session("editor disconnected");
+  if (connection_changed) {
+    live_package_authenticated_ = false;
+    if (!live_channel_.connected()) end_edit_session("editor disconnected");
+  }
 
-  for (auto &result : live_channel_.poll()) {
+  for (auto &result : results) {
     if (const auto *error =
             std::get_if<layerc::core::LiveProtocolError>(&result)) {
       layerc::core::LiveMessage request;
@@ -43,23 +46,46 @@ void DaemonApp::poll_live_channel() {
     end_edit_session("edit lease expired");
   }
   update_edit_overlays();
-  const UINT desired_interval = live_channel_.connected() ? 16U : 250U;
-  if (desired_interval != live_timer_interval_) {
-    live_timer_interval_ = desired_interval;
-    SetTimer(window_, live_channel_timer, live_timer_interval_, nullptr);
-  }
+  reconcile_runtime_services();
 }
 
 void DaemonApp::handle_live_message(
     const layerc::core::LiveMessage &message) {
   using layerc::core::LiveMessageType;
   if (message.type == LiveMessageType::handshake) {
-    send_live_reply(LiveMessageType::acknowledgement, message,
-                    "live-profile,mirrored-drag,direct-drag,lease-v1,visual-status-v1");
+    if (message.text != layerc::core::package_identity("LayerE")) {
+      live_package_authenticated_ = false;
+      live_channel_.disconnect_peer();
+      return;
+    }
+    live_package_authenticated_ = true;
+    send_live_reply(
+        LiveMessageType::acknowledgement, message,
+        layerc::core::package_identity("LayerD") +
+            ";live-profile,mirrored-drag,direct-drag,lease-v1,visual-status-v1,diagnostics-v1");
     (void)live_channel_.send({
         .type = LiveMessageType::runtime_status,
         .text = layerc::platform::wide_to_utf8(visual_status_),
     });
+    return;
+  }
+  if (!live_package_authenticated_) {
+    live_channel_.disconnect_peer();
+    return;
+  }
+  if (message.type == LiveMessageType::diagnostics_request) {
+    send_live_reply(LiveMessageType::diagnostics_reply, message,
+                    runtime_diagnostics_json());
+    return;
+  }
+  if (message.type == LiveMessageType::retry_visual) {
+    for (auto &[window, worker] : isolated_visual_captures_) {
+      (void)window;
+      worker->retry();
+    }
+    reconcile_runtime_services();
+    send_live_reply(LiveMessageType::acknowledgement, message,
+                    "visual runtime retry requested");
     return;
   }
   if (message.type == LiveMessageType::committed_profile) {
@@ -189,12 +215,7 @@ void DaemonApp::handle_live_message(
     panel->anchor_x = message.anchor_x;
     panel->anchor_y = message.anchor_y;
     edit_session_->revision = message.revision;
-    const auto overlay = std::ranges::find_if(
-        edit_session_->overlays, [&](const auto &candidate) {
-          return candidate->panel_id() == panel->id;
-        });
-    if (overlay != edit_session_->overlays.end())
-      (*overlay)->update_snapshot(*panel, edit_session_->overlay_cooldowns);
+    edit_session_->overlays.update_panel(*panel);
     update_edit_overlays();
   }
 }
@@ -222,7 +243,6 @@ void DaemonApp::begin_edit_session(
 void DaemonApp::rebuild_edit_overlays() {
   if (edit_session_ == nullptr) return;
   auto &session = *edit_session_;
-  session.overlay_cooldowns = make_overlay_cooldowns(session.profile.cooldowns);
   session.preview_states.clear();
   session.preview_states.reserve(session.profile.cooldowns.size());
   for (const auto &cooldown : session.profile.cooldowns) {
@@ -231,29 +251,13 @@ void DaemonApp::rebuild_edit_overlays() {
                                       .max_charges = cooldown.max_charges});
   }
 
-  std::vector<std::unique_ptr<OverlayWindow>> next;
-  next.reserve(session.profile.panels.size());
-  for (const auto &panel : session.profile.panels) {
-    auto found = std::ranges::find_if(
-        session.overlays, [&](const auto &candidate) {
-          return candidate != nullptr && candidate->panel_id() == panel.id;
-        });
-    std::unique_ptr<OverlayWindow> overlay;
-    if (found != session.overlays.end()) {
-      overlay = std::move(*found);
-      overlay->update_snapshot(panel, session.overlay_cooldowns);
-    } else {
-      overlay = std::make_unique<OverlayWindow>(panel,
-                                                session.overlay_cooldowns);
-      overlay->set_capture_exclusion(capture_exclusion_);
-    }
-    overlay->set_edit_mode(
-        true, session.direct_drag, panel.id == session.selected_panel,
-        [this](const std::string_view id, const double x, const double y,
-               const bool final) { on_direct_anchor(id, x, y, final); });
-    next.push_back(std::move(overlay));
-  }
-  session.overlays = std::move(next);
+  const OverlayEditMode edit_mode{
+      .direct_drag = session.direct_drag,
+      .selected_panel = session.selected_panel,
+      .drag_callback =
+          [this](const std::string_view id, const double x, const double y,
+                 const bool final) { on_direct_anchor(id, x, y, final); }};
+  session.overlays.rebuild(session.profile, capture_exclusion_, &edit_mode);
   update_edit_overlays();
 }
 
@@ -265,10 +269,8 @@ void DaemonApp::update_edit_overlays() {
     return;
   }
   const auto now = layerc::core::MonotonicClock::now();
-  for (auto &overlay : edit_session_->overlays) {
-    overlay->show_for(edit_session_->target);
-    overlay->render(edit_session_->preview_states, now);
-  }
+  edit_session_->overlays.render_for(edit_session_->target,
+                                     edit_session_->preview_states, now, true);
 }
 
 void DaemonApp::on_direct_anchor(const std::string_view panel_id,
@@ -300,7 +302,8 @@ void DaemonApp::on_direct_anchor(const std::string_view panel_id,
 
 void DaemonApp::end_edit_session(const std::string_view reason) {
   if (edit_session_ == nullptr) return;
-  if (!reason.empty() && live_channel_.connected()) {
+  if (!reason.empty() && live_channel_.connected() &&
+      live_package_authenticated_) {
     const layerc::core::LiveMessage ended{
         .revision = edit_session_->revision,
         .edit_session = edit_session_->id,
@@ -310,8 +313,9 @@ void DaemonApp::end_edit_session(const std::string_view reason) {
     send_live_reply(layerc::core::LiveMessageType::end_edit, ended,
                     std::string(reason));
   }
-  for (auto &overlay : edit_session_->overlays) overlay->hide();
+  edit_session_->overlays.hide();
   edit_session_.reset();
+  if (shutting_down_) return;
   sync_foreground_state();
   update_overlays();
   if (!reason.empty())

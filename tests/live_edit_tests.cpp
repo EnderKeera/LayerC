@@ -77,6 +77,37 @@ void test_live_profile_reconciliation() {
              !enablement_plan.rebuild_overlays,
          "enablement-only edits should recreate instance membership only");
 
+  auto hid_before = before;
+  hid_before.hid_bindings.push_back({.id = "stick",
+                                     .device = {.vendor_id = 1,
+                                                .product_id = 2,
+                                                .usage_page = 1,
+                                                .usage = 4,
+                                                .descriptor_hash =
+                                                    std::string(64, 'a')},
+                                     .usage_page = 1,
+                                     .usage = 0x30,
+                                     .activation =
+                                         HidActivationMode::axis_positive});
+  hid_before.bindings.front().chord.tokens = {
+      {InputDevice::generic_hid, 1, 0}};
+  auto hid_after = hid_before;
+  hid_after.hid_bindings.front().usage = 0x31;
+  const auto hid_plan = plan_session_reconciliation(hid_before, hid_after);
+  expect(!hid_plan.recreate_instances && hid_plan.rebuild_input_matcher,
+         "HID descriptor recapture should rebuild baselines even when compact tokens are unchanged");
+
+  auto isolated = before;
+  isolated.visual_runtime = VisualRuntime::isolated;
+  expect(plan_session_reconciliation(before, isolated).recreate_instances,
+         "changing visual runtime ownership should recreate affected sessions");
+  auto module_changed = before;
+  module_changed.modules.push_back(
+      {.kind = ProfileModuleKind::visual, .schema_version = 1});
+  expect(plan_session_reconciliation(before, module_changed)
+             .recreate_instances,
+         "changing visual module identity should recreate affected sessions");
+
   auto added = before;
   added.cooldowns.push_back({.id = "smoke",
                              .name = "Smoke",
@@ -146,6 +177,21 @@ void test_live_protocol_framing() {
              status_message->text == status.text,
          "runtime capture status should round-trip over the authenticated channel");
 
+  for (const auto type : {LiveMessageType::diagnostics_request,
+                          LiveMessageType::diagnostics_reply,
+                          LiveMessageType::retry_visual}) {
+    const LiveMessage diagnostic{.type = type,
+                                 .revision = 7,
+                                 .text = "{\"workingSet\":1}"};
+    const auto round_trip =
+        decode_live_message_json(encode_live_message_json(diagnostic));
+    const auto *decoded_diagnostic = std::get_if<LiveMessage>(&round_trip);
+    expect(decoded_diagnostic != nullptr &&
+               decoded_diagnostic->type == type &&
+               decoded_diagnostic->text == diagnostic.text,
+           "V2.2 diagnostics messages should round-trip over protocol 2");
+  }
+
   const auto encoded_frame = encode_live_frame(source);
   const auto *frame = std::get_if<std::vector<std::byte>>(&encoded_frame);
   expect(frame != nullptr, "a bounded live message should produce a frame");
@@ -160,9 +206,9 @@ void test_live_protocol_framing() {
   }
 
   auto wrong_version = encoded;
-  const auto version = wrong_version.find("\"protocolVersion\":1");
+  const auto version = wrong_version.find("\"protocolVersion\":2");
   if (version != std::string::npos)
-    wrong_version.replace(version, 19, "\"protocolVersion\":2");
+    wrong_version.replace(version, 19, "\"protocolVersion\":1");
   expect(std::holds_alternative<LiveProtocolError>(
              decode_live_message_json(wrong_version)),
          "protocol version mismatches should be rejected");
@@ -175,7 +221,7 @@ void test_live_protocol_framing() {
          "peer-origin revisions must be compared with their peer stream, not a local send counter");
 
   expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
-             R"({"protocolVersion":1,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
+             R"({"protocolVersion":2,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
          "anchor messages missing a mandatory coordinate should be rejected");
 
   LiveMessage too_large{.type = LiveMessageType::live_profile,

@@ -67,7 +67,7 @@ void EditorWindow::record_profile_change(const ChangeKind kind) {
                         kind == ChangeKind::text);
   dirty_ = true;
   schedule_autosave(kind != ChangeKind::text);
-  // Do not publish an in-memory schema-v2 migration before the user has
+  // Do not publish an in-memory schema-v3 migration before the user has
   // approved making that one-way disk upgrade.
   if ((!legacy_base_schema_ && !legacy_visual_schema_) ||
       v2_upgrade_acknowledged_)
@@ -128,7 +128,7 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
       !v2_upgrade_acknowledged_) {
     if (!allow_upgrade_prompt) {
       set_status(
-          L"Autosave paused — use Save to approve the schema-v2 upgrade.");
+          L"Autosave paused — use Save to approve the schema-v3 upgrade.");
       return false;
     }
     if (!confirm_v2_upgrade()) {
@@ -156,15 +156,15 @@ void EditorWindow::notify_profile_committed(
     const std::filesystem::path &path,
     const layerc::core::GameProfile &profile) {
   ++revision_;
-  const bool connected = live_channel_.connected();
-  (void)live_channel_.send({
-      .type = layerc::core::LiveMessageType::committed_profile,
-      .revision = revision_,
-      .profile_key =
-          to_utf8(layerc::platform::canonical_profile_key(path)),
-      .profile_json = layerc::core::serialize_profile_json(profile),
-  });
-  if (!connected) {
+  if (live_channel_.connected() && live_package_authenticated_) {
+    (void)live_channel_.send({
+        .type = layerc::core::LiveMessageType::committed_profile,
+        .revision = revision_,
+        .profile_key =
+            to_utf8(layerc::platform::canonical_profile_key(path)),
+        .profile_json = layerc::core::serialize_profile_json(profile),
+    });
+  } else {
     (void)start_daemon();
     (void)layerc::platform::signal_profile_reload();
   }
@@ -180,15 +180,14 @@ void EditorWindow::poll_live_channel() {
     handle_live_message(std::get<layerc::core::LiveMessage>(result));
   }
   if (live_channel_.take_connection_changed()) {
+    live_package_authenticated_ = false;
     if (live_channel_.connected()) {
       (void)live_channel_.send({
           .type = layerc::core::LiveMessageType::handshake,
           .revision = revision_,
-          .text = "layere",
+          .text = layerc::core::package_identity("LayerE"),
       });
-      set_status(L"Ready — authenticated LayerD connection.");
-      if (!current_path_.empty() && !dirty_)
-        notify_profile_committed(current_path_, profile_);
+      set_status(L"Authenticating LayerD package...");
     } else if (edit_session_id_ != 0) {
       end_edit_on_window(
           L"Live editor connection lost; normal overlays restored.", false);
@@ -196,7 +195,7 @@ void EditorWindow::poll_live_channel() {
   }
 
   if (pending_edit_target_ != nullptr) {
-    if (live_channel_.connected()) {
+    if (live_channel_.connected() && live_package_authenticated_) {
       const HWND target = pending_edit_target_;
       pending_edit_target_ = nullptr;
       pending_edit_deadline_ = 0;
@@ -212,7 +211,8 @@ void EditorWindow::poll_live_channel() {
   }
 
   const ULONGLONG now = GetTickCount64();
-  if (edit_session_id_ != 0 && now - last_heartbeat_send_ >= 250) {
+  if (live_package_authenticated_ && edit_session_id_ != 0 &&
+      now - last_heartbeat_send_ >= 250) {
     last_heartbeat_send_ = now;
     (void)live_channel_.send({
         .type = layerc::core::LiveMessageType::heartbeat,
@@ -237,6 +237,13 @@ void EditorWindow::handle_live_message(
     refresh_visual_controls();
     return;
   }
+  if (message.type == layerc::core::LiveMessageType::diagnostics_reply) {
+    runtime_diagnostics_json_ = message.text;
+    if (diagnostics_dialog_ != nullptr && IsWindow(diagnostics_dialog_))
+      set_text(GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_TEXT),
+               to_wide(runtime_diagnostics_json_));
+    return;
+  }
   if (message.type == layerc::core::LiveMessageType::error) {
     if (edit_session_id_ != 0 &&
         message.edit_session == edit_session_id_) {
@@ -259,6 +266,18 @@ void EditorWindow::handle_live_message(
     return;
   }
   if (message.type == layerc::core::LiveMessageType::acknowledgement) {
+    if (!live_package_authenticated_) {
+      const auto expected = layerc::core::package_identity("LayerD") + ";";
+      if (!message.text.starts_with(expected)) {
+        set_status(L"Connected LayerD is not from the current LayerC package.");
+        return;
+      }
+      live_package_authenticated_ = true;
+      set_status(L"Ready — authenticated matching LayerD connection.");
+      if (!current_path_.empty() && !dirty_)
+        notify_profile_committed(current_path_, profile_);
+      return;
+    }
     if (message.edit_session == edit_session_id_ && edit_session_id_ != 0)
       set_status(L"Editing bars on the selected window.");
     return;
@@ -386,10 +405,10 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
     return;
   }
   if (!confirm_v2_upgrade()) {
-    set_status(L"On-window editing was not started because the schema-v2 upgrade was not approved.");
+    set_status(L"On-window editing was not started because the schema-v3 upgrade was not approved.");
     return;
   }
-  if (!live_channel_.connected()) {
+  if (!live_channel_.connected() || !live_package_authenticated_) {
     (void)start_daemon();
     pending_edit_target_ = target;
     pending_edit_deadline_ = GetTickCount64() + 2000;

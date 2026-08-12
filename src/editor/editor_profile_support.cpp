@@ -73,7 +73,9 @@ std::string safe_identifier(const std::wstring_view text, const std::string_view
   std::string output;
   bool last_dash{};
   for (const wchar_t character : text) {
-    const wchar_t lower = static_cast<wchar_t>(std::towlower(character));
+    const wchar_t lower = character >= L'A' && character <= L'Z'
+                              ? character + (L'a' - L'A')
+                              : character;
     if ((lower >= L'a' && lower <= L'z') || (lower >= L'0' && lower <= L'9')) {
       output.push_back(static_cast<char>(lower)); last_dash = false;
     } else if (!output.empty() && !last_dash) { output.push_back('-'); last_dash = true; }

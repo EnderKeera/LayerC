@@ -105,7 +105,8 @@ void EditorWindow::layout() {
        cooldown_list_top + scaled(33), cooldown_button_width, scaled(27));
   const int binding_top = cooldown_list_top + scaled(119);
   const int binding_label_width = scaled(58);
-  const int capture_button_width = scaled(108);
+  const int capture_button_width = scaled(178);
+  const int hid_button_width = scaled(66);
   move(IDC_COOLDOWN_BINDING_LABEL, content_left, binding_top + scaled(3),
        binding_label_width, heading_height);
   move(IDC_COOLDOWN_BINDING, content_left + binding_label_width + scaled(6),
@@ -113,7 +114,9 @@ void EditorWindow::layout() {
        content_width - binding_label_width - capture_button_width - scaled(20),
        row_height);
   move(IDC_CAPTURE_BINDING, content_right - capture_button_width, binding_top,
-       capture_button_width, row_height);
+       capture_button_width - hid_button_width - scaled(6), row_height);
+  move(IDC_CAPTURE_HID, content_right - hid_button_width, binding_top,
+       hid_button_width, row_height);
 
   const int bars_heading_top = binding_top + row_height + scaled(18);
   const int bars_list_top = bars_heading_top + heading_height + scaled(4);
@@ -182,6 +185,8 @@ void EditorWindow::layout() {
        scaled(112), scaled(27));
   move(IDC_REMOVE_VISUAL, content_left + scaled(120), visual_actions_top,
        scaled(78), scaled(27));
+  move(IDC_VISUAL_ISOLATED, content_left + scaled(206), visual_actions_top,
+       scaled(124), scaled(27));
   move(IDC_VISUAL_RUNTIME_STATUS, content_left,
        visual_actions_top + scaled(34), content_width, scaled(34));
 
