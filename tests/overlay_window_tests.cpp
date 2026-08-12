@@ -1,6 +1,7 @@
 #include "layerc/platform/windows.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "overlay_window.hpp"
+#include "test_support.hpp"
 
 #include <array>
 #include <chrono>
@@ -12,6 +13,8 @@
 #include <vector>
 
 namespace {
+
+using layerc::test::expect;
 
 HWND find_window_for_process(const DWORD process_id,
                              const wchar_t *const class_name) {
@@ -89,13 +92,6 @@ private:
   PROCESS_INFORMATION process_{};
   bool launched_{};
 };
-
-bool expect(const bool condition, const char *const message) {
-  if (!condition) {
-    std::cerr << "FAIL: " << message << '\n';
-  }
-  return condition;
-}
 
 int run_on_private_desktop(const wchar_t *const test_target) {
   const std::wstring desktop_name =

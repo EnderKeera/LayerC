@@ -256,7 +256,16 @@ bool write_profile_bundle(
     const std::filesystem::path &path,
     const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile) {
-  const auto profile_json = layerc::core::serialize_profile_json(profile);
+  auto stored_profile = profile;
+  stored_profile.schema_version = 3;
+  stored_profile.modules.clear();
+  if (visual_profile.has_value()) {
+    stored_profile.modules.push_back(
+        {.kind = layerc::core::ProfileModuleKind::visual,
+         .schema_version = visual_profile->schema_version});
+  }
+  const auto profile_json =
+      layerc::core::serialize_profile_json(stored_profile);
   const auto sidecar = visual_sidecar_path(path);
   if (sidecar.empty()) return false;
   if (!visual_profile.has_value()) {
@@ -288,7 +297,7 @@ bool write_profile_bundle(
     (void)DeleteFileW(sidecar_backup.c_str());
     return true;
   }
-  if (!layerc::core::validate_visual_profile(*visual_profile, profile)
+  if (!layerc::core::validate_visual_profile(*visual_profile, stored_profile)
            .message.empty())
     return false;
 

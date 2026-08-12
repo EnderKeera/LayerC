@@ -46,7 +46,7 @@ bool EditorWindow::confirm_v2_upgrade() {
   if ((!legacy_base_schema_ && !legacy_visual_schema_) ||
       v2_upgrade_acknowledged_)
     return true;
-  if (!confirm_v2_schema_upgrade(dialog_)) return false;
+  if (!confirm_v3_schema_upgrade(dialog_)) return false;
   v2_upgrade_acknowledged_ = true;
   return true;
 }
@@ -153,7 +153,7 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
     return;
   }
   profile_ = *profile;
-  legacy_base_schema_ = source_uses_schema_v1(*contents);
+  legacy_base_schema_ = source_uses_legacy_base_schema(*contents);
   v2_upgrade_acknowledged_ = false;
   current_path_ = target_path;
   load_current_visual_profile();
@@ -221,7 +221,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     stored_visual = visual.profile;
-    const bool legacy_base = source_uses_schema_v1(*contents);
+    const bool legacy_base = source_uses_legacy_base_schema(*contents);
     legacy_upgrade = legacy_base;
     commit_bundle = commit_bundle || legacy_base;
     if (!visual.source_path.empty()) {
@@ -229,7 +229,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
           layerc::platform::read_visual_file(visual.source_path);
       const bool legacy_visual =
           visual_contents.has_value() &&
-          source_uses_schema_v1(*visual_contents);
+          source_uses_legacy_visual_schema(*visual_contents);
       legacy_upgrade = legacy_upgrade || legacy_visual;
       commit_bundle = commit_bundle || legacy_visual;
     }
@@ -237,7 +237,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   stored_profile.enabled = enabled;
   if (legacy_upgrade &&
       !(is_current ? confirm_v2_upgrade()
-                   : confirm_v2_schema_upgrade(dialog_))) {
+                   : confirm_v3_schema_upgrade(dialog_))) {
     restore_checkbox();
     set_status(L"Profile enablement was not changed.");
     return;

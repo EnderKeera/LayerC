@@ -17,6 +17,7 @@ enum class InputDevice : std::uint8_t {
     keyboard,
     mouse,
     controller,
+    generic_hid,
 };
 
 struct InputToken {
@@ -66,6 +67,44 @@ struct InputBinding {
     InputChord chord;
 
     bool operator==(const InputBinding&) const = default;
+};
+
+enum class HidActivationMode : std::uint8_t {
+    button,
+    equals,
+    axis_positive,
+    axis_negative,
+    relative_positive,
+    relative_negative,
+};
+
+struct HidDeviceSelector {
+    std::uint16_t vendor_id{};
+    std::uint16_t product_id{};
+    std::uint16_t version{};
+    std::uint16_t usage_page{};
+    std::uint16_t usage{};
+    std::string descriptor_hash;
+    std::string serial;
+    std::uint16_t stable_slot{1};
+
+    bool operator==(const HidDeviceSelector&) const = default;
+};
+
+struct HidControlBinding {
+    std::string id;
+    HidDeviceSelector device;
+    std::uint8_t report_id{};
+    std::uint16_t usage_page{};
+    std::uint16_t usage{};
+    std::uint16_t link_collection{};
+    HidActivationMode activation{HidActivationMode::button};
+    std::int32_t discrete_value{};
+    double threshold{0.5};
+    double hysteresis{0.1};
+    bool allow_system_class{};
+
+    bool operator==(const HidControlBinding&) const = default;
 };
 
 enum class PanelLayout : std::uint8_t {
@@ -118,8 +157,24 @@ struct GameMatch {
     bool operator==(const GameMatch&) const = default;
 };
 
-struct GameProfile {
+enum class VisualRuntime : std::uint8_t {
+    inline_process,
+    isolated,
+};
+
+enum class ProfileModuleKind : std::uint8_t {
+    visual,
+};
+
+struct ProfileModule {
+    ProfileModuleKind kind{ProfileModuleKind::visual};
     std::uint32_t schema_version{2};
+
+    bool operator==(const ProfileModule&) const = default;
+};
+
+struct GameProfile {
+    std::uint32_t schema_version{3};
     std::string id;
     std::string name;
     // A disabled profile stays on disk and remains editable, but LayerD does
@@ -127,8 +182,11 @@ struct GameProfile {
     // profiles written before this field existed remain active.
     bool enabled{true};
     GameMatch game;
+    VisualRuntime visual_runtime{VisualRuntime::inline_process};
+    std::vector<ProfileModule> modules;
     std::vector<Panel> panels;
     std::vector<CooldownDefinition> cooldowns;
+    std::vector<HidControlBinding> hid_bindings;
     std::vector<InputBinding> bindings;
 
     bool operator==(const GameProfile&) const = default;

@@ -1,4 +1,5 @@
 #include "layerc/core/visual.hpp"
+#include "layerc/core/hash.hpp"
 
 #include "layerc/core/json.hpp"
 
@@ -56,7 +57,7 @@ public:
       if (rules->size() > max_pixel_rules)
         return error("$.rules", "at most four pixel rules are supported");
       for (std::size_t index = 0; index < rules->size(); ++index) {
-        if (!read_rule((*rules)[index], index, result.rules, false))
+        if (!read_legacy_rule((*rules)[index], index, result.rules))
           return error_;
       }
     } else {
@@ -83,15 +84,25 @@ public:
   }
 
 private:
-  bool read_rule(const json::Value &value, const std::size_t index,
-                 std::vector<PixelRule> &output, const bool typed) {
-    const auto path = std::string(typed ? "$.observations[" : "$.rules[") +
-                      std::to_string(index) + "]";
+  bool read_legacy_rule(const json::Value &value, const std::size_t index,
+                        std::vector<PixelRule> &output) {
+    return read_rule(value, "$.rules[" + std::to_string(index) + "]", output,
+                     false);
+  }
+
+  bool read_typed_rule(const json::Value &value, const std::size_t index,
+                       std::vector<PixelRule> &output) {
+    return read_rule(value, "$.observations[" + std::to_string(index) + "]",
+                     output, true);
+  }
+
+  bool read_rule(const json::Value &value, const std::string &path,
+                 std::vector<PixelRule> &output, const bool includes_type) {
     if (!value.is_object()) return set(path, "pixel rule must be an object");
-    if ((typed &&
+    if ((includes_type &&
          !fields(value, {"type", "id", "name", "region", "predicate",
                          "stableSamples", "repeat"}, path)) ||
-        (!typed &&
+        (!includes_type &&
          !fields(value, {"id", "name", "region", "predicate",
                          "stableSamples", "repeat"}, path)))
       return false;
@@ -185,7 +196,7 @@ private:
     if (type == "pixel") {
       if (output.rules.size() >= max_pixel_rules)
         return set(path, "at most four pixel observations are supported");
-      return read_rule(value, index, output.rules, true);
+      return read_typed_rule(value, index, output.rules);
     }
     if (type != "template")
       return set(path + ".type", "expected pixel or template");
@@ -495,14 +506,6 @@ bool valid_region(const NormalizedRegion &region) {
          region.y + region.height <= 1.0 + 1e-12;
 }
 
-bool valid_sha256(const std::string_view value) {
-  return value.size() == 64 &&
-         std::ranges::all_of(value, [](const char character) {
-           return (character >= '0' && character <= '9') ||
-                  (character >= 'a' && character <= 'f');
-         });
-}
-
 } // namespace
 
 VisualError validate_visual_profile(const VisualProfile &profile,
@@ -579,7 +582,7 @@ VisualError validate_visual_profile(const VisualProfile &profile,
       const auto &reference = state.references[reference_index];
       const auto reference_path =
           path + ".references[" + std::to_string(reference_index) + "].asset";
-      if (!valid_sha256(reference.asset_sha256))
+      if (!is_lowercase_sha256(reference.asset_sha256))
         return invalid(reference_path,
                        "asset must be a lower-case SHA-256 digest");
       if (!references.insert(reference.asset_sha256).second)

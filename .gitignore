@@ -6,3 +6,5 @@
 CMakeUserPresets.json
 compile_commands.json
 .claude/settings.local.json
+*.env
+/review/

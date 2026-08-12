@@ -177,7 +177,7 @@ void EditorWindow::load_current_visual_profile() {
       const auto contents =
           layerc::platform::read_visual_file(loaded.source_path);
       legacy_visual_schema_ =
-          contents.has_value() && source_uses_schema_v1(*contents);
+          contents.has_value() && source_uses_legacy_visual_schema(*contents);
     }
   }
   refresh_visual_controls();
@@ -189,6 +189,7 @@ void EditorWindow::refresh_visual_controls() {
   const HWND enabled = GetDlgItem(dialog_, IDC_VISUAL_ENABLED);
   const HWND calibrate = GetDlgItem(dialog_, IDC_CALIBRATE_VISUAL);
   const HWND remove = GetDlgItem(dialog_, IDC_REMOVE_VISUAL);
+  const HWND isolated = GetDlgItem(dialog_, IDC_VISUAL_ISOLATED);
   set_text(GetDlgItem(dialog_, IDC_VISUAL_RUNTIME_STATUS),
            visual_runtime_status_);
 
@@ -227,12 +228,17 @@ void EditorWindow::refresh_visual_controls() {
   }
   set_text(summary, text);
   set_owner_draw_checkbox(enabled, trigger != nullptr && trigger->enabled);
+  set_owner_draw_checkbox(
+      isolated,
+      profile_.visual_runtime == layerc::core::VisualRuntime::isolated);
   EnableWindow(enabled, trigger != nullptr);
   EnableWindow(remove, trigger != nullptr);
+  EnableWindow(isolated, !profile_.game.global);
   // Calibration can repair an invalid sidecar by replacing the selected
   // assignment with a newly validated single-observation result.
   EnableWindow(calibrate, editable && !current_path_.empty());
   InvalidateRect(enabled, nullptr, TRUE);
+  InvalidateRect(isolated, nullptr, TRUE);
 }
 
 bool EditorWindow::save_visual_profile() {

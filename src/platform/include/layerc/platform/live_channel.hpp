@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -14,7 +15,7 @@
 namespace layerc::platform {
 
 inline constexpr wchar_t live_edit_pipe_name[] =
-    L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v1";
+    L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v2";
 
 class IEditorDaemonChannel {
 public:
@@ -40,6 +41,9 @@ public:
   [[nodiscard]] bool send(const layerc::core::LiveMessage &message) override;
   [[nodiscard]] std::vector<layerc::core::LiveMessageResult> poll() override;
   [[nodiscard]] bool take_connection_changed() noexcept;
+  void disconnect_peer() noexcept;
+  [[nodiscard]] std::size_t
+  wait_handles(std::span<HANDLE> output) const noexcept;
   [[nodiscard]] DWORD peer_process_id() const noexcept {
     return peer_process_id_;
   }

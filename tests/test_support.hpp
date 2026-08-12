@@ -5,6 +5,6 @@
 namespace layerc::test {
 
 extern int failures;
-void expect(bool condition, std::string_view message);
+bool expect(bool condition, std::string_view message);
 
 } // namespace layerc::test

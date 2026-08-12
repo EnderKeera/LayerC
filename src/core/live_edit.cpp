@@ -105,6 +105,9 @@ std::string_view message_type_name(const LiveMessageType type) {
   case LiveMessageType::end_edit: return "endEdit";
   case LiveMessageType::heartbeat: return "heartbeat";
   case LiveMessageType::runtime_status: return "runtimeStatus";
+  case LiveMessageType::diagnostics_request: return "diagnosticsRequest";
+  case LiveMessageType::diagnostics_reply: return "diagnosticsReply";
+  case LiveMessageType::retry_visual: return "retryVisual";
   case LiveMessageType::acknowledgement: return "ack";
   case LiveMessageType::error: return "error";
   }
@@ -123,6 +126,9 @@ std::optional<LiveMessageType> parse_message_type(const std::string_view name) {
       {"endEdit", LiveMessageType::end_edit},
       {"heartbeat", LiveMessageType::heartbeat},
       {"runtimeStatus", LiveMessageType::runtime_status},
+      {"diagnosticsRequest", LiveMessageType::diagnostics_request},
+      {"diagnosticsReply", LiveMessageType::diagnostics_reply},
+      {"retryVisual", LiveMessageType::retry_visual},
       {"ack", LiveMessageType::acknowledgement},
       {"error", LiveMessageType::error},
   };
@@ -221,10 +227,13 @@ ProfileDelta diff_profiles(const GameProfile &before,
   ProfileDelta delta;
   delta.metadata_changed =
       before.schema_version != after.schema_version || before.id != after.id ||
-      before.name != after.name;
+      before.name != after.name ||
+      before.visual_runtime != after.visual_runtime ||
+      before.modules != after.modules;
   delta.enablement_changed = before.enabled != after.enabled;
   delta.matcher_changed = before.game != after.game;
-  delta.bindings_changed = before.bindings != after.bindings;
+  delta.bindings_changed = before.bindings != after.bindings ||
+                           before.hid_bindings != after.hid_bindings;
   delta.panels_changed = before.panels != after.panels;
 
   for (const auto &definition : before.cooldowns) {
@@ -250,7 +259,9 @@ plan_session_reconciliation(const GameProfile &before,
                             const GameProfile &after) {
   const auto delta = diff_profiles(before, after);
   SessionReconcilePlan plan;
-  plan.recreate_instances = delta.enablement_changed || delta.matcher_changed;
+  plan.recreate_instances = delta.enablement_changed || delta.matcher_changed ||
+                            before.visual_runtime != after.visual_runtime ||
+                            before.modules != after.modules;
   plan.rebuild_input_matcher =
       delta.bindings_changed || !delta.added_cooldown_ids.empty() ||
       !delta.removed_cooldown_ids.empty();
@@ -413,8 +424,12 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
       return LiveProtocolError{std::move(error)};
     break;
   case LiveMessageType::runtime_status:
+  case LiveMessageType::diagnostics_reply:
     if (!require_fields(root, {"text"}, error))
       return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::diagnostics_request:
+  case LiveMessageType::retry_visual:
     break;
   case LiveMessageType::acknowledgement:
   case LiveMessageType::error:

@@ -13,6 +13,7 @@
 namespace layerc::editor {
 std::wstring to_wide(const std::string_view text) {
   const auto converted = layerc::platform::utf8_to_wide(text);
+  // External diagnostics remain visible even if a provider returns bad UTF-8.
   return !text.empty() && converted.empty() ? L"?" : converted;
 }
 

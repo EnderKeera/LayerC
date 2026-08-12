@@ -30,37 +30,48 @@ std::wstring utf8_to_wide(const std::string_view text) {
   return converted.has_value() ? std::move(*converted) : std::wstring{};
 }
 
-std::string wide_to_utf8(const std::wstring_view text) {
-  if (text.empty() || text.size() > static_cast<std::size_t>(INT_MAX)) {
-    return {};
-  }
+std::optional<std::string> try_wide_to_utf8(const std::wstring_view text) {
+  if (text.empty()) return std::string{};
+  if (text.size() > static_cast<std::size_t>(INT_MAX)) return std::nullopt;
   const int count = WideCharToMultiByte(
       CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
       nullptr, 0, nullptr, nullptr);
   if (count <= 0) {
-    return {};
+    return std::nullopt;
   }
   std::string output(static_cast<std::size_t>(count), '\0');
   if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
                           static_cast<int>(text.size()), output.data(), count,
                           nullptr, nullptr) == 0) {
-    return {};
+    return std::nullopt;
   }
   return output;
 }
 
-std::wstring lower_copy(std::wstring value) {
-  if (value.empty()) return value;
+std::string wide_to_utf8(const std::wstring_view text) {
+  auto converted = try_wide_to_utf8(text);
+  return converted.has_value() ? std::move(*converted) : std::string{};
+}
+
+std::optional<std::wstring>
+try_invariant_lower(const std::wstring_view value) {
+  if (value.empty()) return std::wstring{};
+  if (value.size() > static_cast<std::size_t>(INT_MAX)) return std::nullopt;
   const int required = LCMapStringEx(
       LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
       static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr, 0);
-  if (required > 0) {
-    std::wstring lowered(static_cast<std::size_t>(required), L'\0');
-    if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
-                      static_cast<int>(value.size()), lowered.data(), required,
-                      nullptr, nullptr, 0) != 0)
-      return lowered;
-  }
+  if (required <= 0) return std::nullopt;
+  std::wstring lowered(static_cast<std::size_t>(required), L'\0');
+  if (LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, value.data(),
+                    static_cast<int>(value.size()), lowered.data(), required,
+                    nullptr, nullptr, 0) != required)
+    return std::nullopt;
+  return lowered;
+}
+
+std::wstring lower_copy(std::wstring value) {
+  if (value.empty()) return value;
+  if (auto lowered = try_invariant_lower(value)) return std::move(*lowered);
   CharLowerBuffW(value.data(), static_cast<DWORD>(value.size()));
   return value;
 }

@@ -9,20 +9,6 @@
 namespace layerc::daemon {
 namespace {
 
-constexpr std::size_t visual_quality_count = 3;
-static_assert(static_cast<std::size_t>(
-                  layerc::core::CaptureQuality::exact) +
-                  1U ==
-              visual_quality_count);
-
-std::size_t quality_index(const layerc::core::CaptureQuality quality) {
-  return static_cast<std::size_t>(quality);
-}
-
-layerc::core::CaptureQuality quality_from_index(const std::size_t index) {
-  return static_cast<layerc::core::CaptureQuality>(index);
-}
-
 bool observation_enabled(const layerc::core::VisualProfile &profile,
                          const std::string_view id) {
   return std::ranges::any_of(profile.triggers, [&](const auto &trigger) {
@@ -58,9 +44,8 @@ VisualAssetSignature asset_signature(const std::string_view hash) {
 } // namespace
 
 void DaemonApp::reconcile_visual_captures() {
-  using QualityConfigurations =
-      std::array<std::vector<VisualEvaluationRequest>, visual_quality_count>;
-  std::unordered_map<HWND, QualityConfigurations> desired;
+  std::unordered_map<HWND, std::vector<VisualEvaluationRequest>> desired;
+  std::unordered_map<HWND, bool> isolated;
   if (visual_recognition_enabled_) {
     for (const auto *session : active_input_sessions_) {
       if (session->is_global() || !session->has_active_visual_rules() ||
@@ -84,46 +69,81 @@ void DaemonApp::reconcile_visual_captures() {
         }
         request.templates.push_back(std::move(evaluation));
       }
-      desired[session->game_window]
-             [quality_index(session->visual_profile->quality)]
-                 .push_back(std::move(request));
+      desired[session->game_window].push_back(std::move(request));
+      auto &window_isolated = isolated[session->game_window];
+      window_isolated =
+          window_isolated ||
+          session->profile.visual_runtime ==
+              layerc::core::VisualRuntime::isolated;
     }
   }
+
+  if (!desired.empty() && visual_snapshot_event_ == nullptr)
+    visual_snapshot_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  const auto exclusions_for = [&](const HWND window) {
+    std::vector<RECT> result;
+    result.reserve(16);
+    for (const auto &session : sessions_) {
+      if (session->is_global() || session->game_window != window) continue;
+      session->overlays.append_screen_bounds(result);
+    }
+    return result;
+  };
+  const auto is_isolated = [&](const HWND window) {
+    const auto found = isolated.find(window);
+    return found != isolated.end() && found->second;
+  };
 
   std::erase_if(visual_captures_, [&](auto &entry) {
-    return !desired.contains(entry.first) || !IsWindow(entry.first);
+    return !desired.contains(entry.first) || is_isolated(entry.first) ||
+           !IsWindow(entry.first);
+  });
+  std::erase_if(isolated_visual_captures_, [&](auto &entry) {
+    return !desired.contains(entry.first) || !is_isolated(entry.first) ||
+           !IsWindow(entry.first);
   });
   for (auto &[window, configurations] : desired) {
-    auto &workers = visual_captures_[window];
-    for (std::size_t index = 0; index < visual_quality_count; ++index) {
-      if (configurations[index].empty()) {
-        workers[index].reset();
-        continue;
-      }
-      if (!workers[index]) {
-        workers[index] = std::make_unique<VisualCaptureWorker>(
-            window, quality_from_index(index));
-        workers[index]->configure(std::move(configurations[index]));
-        workers[index]->start();
+    if (configurations.empty()) continue;
+    const auto quality = std::ranges::max(configurations, {},
+                                           &VisualEvaluationRequest::quality)
+                             .quality;
+    if (is_isolated(window)) {
+      visual_captures_.erase(window);
+      auto &worker = isolated_visual_captures_[window];
+      if (!worker) {
+        worker = std::make_unique<IsolatedVisualWorker>(
+            window, visual_snapshot_event_);
+        worker->configure(configurations, quality);
+        const auto exclusions = exclusions_for(window);
+        worker->set_excluded_screen_rects(exclusions);
+        worker->start();
       } else {
-        workers[index]->configure(std::move(configurations[index]));
+        worker->configure(configurations, quality);
       }
+      continue;
+    }
+    isolated_visual_captures_.erase(window);
+    auto &worker = visual_captures_[window];
+    if (!worker || worker->quality() != quality) {
+      worker = std::make_unique<VisualCaptureWorker>(
+          window, quality, visual_snapshot_event_);
+      worker->configure(std::move(configurations));
+      const auto exclusions = exclusions_for(window);
+      worker->set_excluded_screen_rects(exclusions);
+      worker->start();
+    } else {
+      worker->configure(std::move(configurations));
     }
   }
-  std::erase_if(visual_captures_, [](const auto &entry) {
-    return std::ranges::none_of(
-        entry.second, [](const auto &worker) { return worker != nullptr; });
-  });
 
-  if (!visual_captures_.empty() && !visual_timer_running_) {
-    SetTimer(window_, visual_capture_timer, 33, nullptr);
-    visual_timer_running_ = true;
-  } else if (visual_captures_.empty() && visual_timer_running_) {
-    KillTimer(window_, visual_capture_timer);
-    visual_timer_running_ = false;
+  const bool any_capture =
+      !visual_captures_.empty() || !isolated_visual_captures_.empty();
+  if (!any_capture && visual_snapshot_event_ != nullptr) {
+    CloseHandle(visual_snapshot_event_);
+    visual_snapshot_event_ = nullptr;
   }
   if (visual_capture_active_event_ != nullptr) {
-    if (visual_captures_.empty())
+    if (!any_capture)
       ResetEvent(visual_capture_active_event_);
     else
       SetEvent(visual_capture_active_event_);
@@ -131,32 +151,59 @@ void DaemonApp::reconcile_visual_captures() {
   update_visual_status();
 }
 
+void DaemonApp::quiesce_inline_visual_captures() noexcept {
+  visual_captures_.clear();
+  if (isolated_visual_captures_.empty() && visual_snapshot_event_ != nullptr) {
+    CloseHandle(visual_snapshot_event_);
+    visual_snapshot_event_ = nullptr;
+  }
+  if (visual_capture_active_event_ != nullptr &&
+      isolated_visual_captures_.empty())
+    ResetEvent(visual_capture_active_event_);
+  update_visual_status();
+}
+
+void DaemonApp::quiesce_isolated_visual_captures() noexcept {
+  isolated_visual_captures_.clear();
+  if (visual_captures_.empty() && visual_snapshot_event_ != nullptr) {
+    CloseHandle(visual_snapshot_event_);
+    visual_snapshot_event_ = nullptr;
+  }
+  if (visual_capture_active_event_ != nullptr && visual_captures_.empty())
+    ResetEvent(visual_capture_active_event_);
+  update_visual_status();
+}
+
+void DaemonApp::quiesce_visual_captures() noexcept {
+  visual_captures_.clear();
+  isolated_visual_captures_.clear();
+  if (visual_snapshot_event_ != nullptr) CloseHandle(visual_snapshot_event_);
+  visual_snapshot_event_ = nullptr;
+  if (visual_capture_active_event_ != nullptr)
+    ResetEvent(visual_capture_active_event_);
+  update_visual_status();
+}
+
 void DaemonApp::poll_visual_captures() {
   const auto now = layerc::core::MonotonicClock::now();
   bool overlays_changed{};
   std::vector<VisualCaptureSnapshot> captured_snapshots;
-  captured_snapshots.reserve(visual_captures_.size() * visual_quality_count);
+  captured_snapshots.reserve(visual_captures_.size());
   std::vector<RECT> exclusions;
   exclusions.reserve(16);
-  for (auto &[window, workers] : visual_captures_) {
+  for (auto &[window, worker] : visual_captures_) {
     exclusions.clear();
     for (const auto &session : sessions_) {
       if (session->is_global() || session->game_window != window) continue;
-      for (const auto &overlay : session->overlays) {
-        RECT bounds{};
-        if (overlay->screen_bounds(bounds)) exclusions.push_back(bounds);
-      }
+      session->overlays.append_screen_bounds(exclusions);
     }
-    for (std::size_t index = 0; index < visual_quality_count; ++index) {
-      auto &worker = workers[index];
-      if (!worker) continue;
-      worker->set_excluded_screen_rects(exclusions);
-      const auto captured = worker->snapshot();
-      if (captured.sequence != 0) {
+    if (!worker) continue;
+    worker->set_excluded_screen_rects(exclusions);
+    const auto captured = worker->snapshot();
+    if (captured.sequence != 0) {
         for (auto *session : active_input_sessions_) {
           if (session->game_window != window ||
-              !session->has_active_visual_rules() ||
-              quality_index(session->visual_profile->quality) != index)
+              !session->has_active_visual_rules())
             continue;
           const auto evaluation = std::ranges::find(
               captured.evaluations, session->source_key,
@@ -180,24 +227,77 @@ void DaemonApp::poll_visual_captures() {
             }
           }
         }
-      }
-      // Status should describe the newest capture result, not necessarily the
-      // pre-evaluation snapshot used for this UI-thread polling pass.
-      captured_snapshots.push_back(worker->snapshot());
     }
+    captured_snapshots.push_back(captured);
+  }
+  for (auto &[window, worker] : isolated_visual_captures_) {
+    exclusions.clear();
+    for (const auto &session : sessions_) {
+      if (session->is_global() || session->game_window != window) continue;
+      session->overlays.append_screen_bounds(exclusions);
+    }
+    worker->set_excluded_screen_rects(exclusions);
+    worker->maintain();
+    const auto captured = worker->snapshot();
+    if (captured.sequence != 0) {
+      for (auto *session : active_input_sessions_) {
+        if (session->game_window != window ||
+            !session->has_active_visual_rules())
+          continue;
+        const auto evaluation = std::ranges::find(
+            captured.evaluations, session->source_key,
+            &VisualEvaluationSnapshot::source_key);
+        if (evaluation == captured.evaluations.end() ||
+            evaluation->sequence == session->last_visual_sequence)
+          continue;
+        session->last_visual_sequence = evaluation->sequence;
+        session->cooldowns.snapshot(now, session->snapshot_buffer);
+        const auto requests = session->visual_triggers->on_measurements(
+            evaluation->measurements, session->snapshot_buffer, now);
+        for (const auto &request : requests) {
+          if (session->cooldowns.trigger(request.cooldown_id, now)) {
+            session->visual_triggers->on_cooldown_triggered(
+                request.cooldown_id);
+            overlays_changed = true;
+            update_tooltip(
+                L"LayerD - visual trigger " +
+                layerc::platform::utf8_to_wide(request.cooldown_id));
+          }
+        }
+      }
+    }
+    captured_snapshots.push_back(captured);
   }
   if (overlays_changed) update_overlays();
   publish_visual_status(captured_snapshots);
 }
 
+void DaemonApp::maintain_isolated_visual_captures() {
+  for (auto &[window, worker] : isolated_visual_captures_) {
+    (void)window;
+    if (worker) worker->maintain();
+  }
+  update_visual_status();
+}
+
+void DaemonApp::retry_quarantined_visual_helpers() {
+  for (auto &[window, worker] : isolated_visual_captures_) {
+    (void)window;
+    if (worker && worker->status().quarantined) worker->retry();
+  }
+  update_visual_status();
+}
+
 void DaemonApp::update_visual_status() {
   std::vector<VisualCaptureSnapshot> snapshots;
-  snapshots.reserve(visual_captures_.size() * visual_quality_count);
-  for (const auto &[window, workers] : visual_captures_) {
+  snapshots.reserve(visual_captures_.size());
+  for (const auto &[window, worker] : visual_captures_) {
     (void)window;
-    for (const auto &worker : workers) {
-      if (worker) snapshots.push_back(worker->snapshot());
-    }
+    if (worker) snapshots.push_back(worker->snapshot());
+  }
+  for (const auto &[window, worker] : isolated_visual_captures_) {
+    (void)window;
+    if (worker) snapshots.push_back(worker->snapshot());
   }
   publish_visual_status(snapshots);
 }
@@ -214,12 +314,14 @@ void DaemonApp::publish_visual_status(
     next = L"Visual recognition: blocked (invalid sidecar)";
   } else if (!visual_recognition_enabled_) {
     next = L"Visual recognition: disabled";
-  } else if (visual_captures_.empty()) {
+  } else if (visual_captures_.empty() &&
+             isolated_visual_captures_.empty()) {
     next = L"Visual recognition: inactive";
   } else {
     bool fallback{};
     bool unavailable{};
     bool missing_assets{};
+    bool quarantined{};
     std::wstring gpu;
     for (const auto &current : snapshots) {
       fallback = fallback ||
@@ -238,7 +340,13 @@ void DaemonApp::publish_visual_status(
       if (gpu.empty() && !current.gpu_description.empty())
         gpu = layerc::platform::utf8_to_wide(current.gpu_description);
     }
-    if (missing_assets)
+    for (const auto &[window, worker] : isolated_visual_captures_) {
+      (void)window;
+      quarantined = quarantined || worker->status().quarantined;
+    }
+    if (quarantined)
+      next = L"Visual recognition: isolated helper quarantined (use Runtime Diagnostics to retry)";
+    else if (missing_assets)
       next = L"Visual recognition: template asset missing or corrupt";
     else if (unavailable)
       next = L"Visual recognition: capture unavailable";
@@ -250,7 +358,7 @@ void DaemonApp::publish_visual_status(
   }
   if (next == visual_status_) return;
   visual_status_ = std::move(next);
-  if (live_channel_.connected())
+  if (live_channel_.connected() && live_package_authenticated_)
     (void)live_channel_.send({
         .type = layerc::core::LiveMessageType::runtime_status,
         .text = layerc::platform::wide_to_utf8(visual_status_),

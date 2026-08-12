@@ -85,6 +85,14 @@ Versioned extensions add new sources without changing the cooldown engine contra
 
 - V1.1 adds `IPixelSource` and `PixelPredicate`, which emit the same normalized trigger events as `IInputSource`.
 - V2.1 adds `ITemplateMatcher`, which evaluates preprocessed reference images and reports confidence through `IPixelSource`.
+- V2.2 adds `DaemonKernel`, `CapabilityDemand`, `IRuntimeService`,
+  `RuntimeResourceStats`, first-party platform backend contracts, generic HID,
+  and validated profile-bundle interfaces.
+- V2.3 adds the typed automation AST, runtime events, transactions, recovery
+  modes, cooldown groups, presentation overrides, tracing, and deterministic
+  simulation.
+- V2.4 adds immutable panel-subscription messages for the optional Game Bar
+  companion without moving cooldown authority out of LayerD.
 
 ## Memory and performance targets
 
@@ -166,23 +174,19 @@ as JSON under `out\benchmarks`.
 
 ## Version 2 roadmap
 
-### Version 2.1: Windows template recognition and automation
+### Version 2.1: Template recognition
 
-Scope locked on 2026-08-10. Version 2.1 is delivered as three independently
-releasable stages so template recognition and automation are not held back by
-Game Bar packaging:
-
-1. **V2.1.0 - Template Recognition**
-2. **V2.1.1 - Automation Graphs**
-3. **V2.1.2 - Optional Game Bar Companion**
+V2.1 is the focused Windows template-recognition release. The implementation,
+automated tests, portable package workflow, and Low/Balanced integrated- and
+discrete-GPU benchmark gates are complete. A human visual click-through remains
+a release checklist item rather than additional feature scope.
 
 The existing native Win32 LayerD, LayerE, and LayerCal architecture remains.
-LayerD continues to be the sole authority for cooldown state and overlays. The
-portable ZIP remains supported throughout V2.1. Linux remains a V2.2 target, so
-new matching, expression, and state-machine code must stay platform-neutral
-where practical.
+LayerD continues to be the sole authority for cooldown state and overlays. New
+matching code stays platform-neutral so later runtime and Linux backends can
+reuse it.
 
-#### V2.1.0 - Template Recognition
+#### V2.1 implementation
 
 Template states extend the V1.1 visual sidecar and contain:
 
@@ -238,23 +242,278 @@ observations through one ordered interface. Capture workers remain shared per
 window and quality level. Disabled assignments, input-only profiles, minimized
 targets, and inactive sessions allocate no visual capture or matcher resources.
 
-V2.1.0 retains the V1.1 active-capture release gate at 15 Hz: at most 35 MiB
+V2.1 retains the V1.1 active-capture release gate at 15 Hz: at most 35 MiB
 private bytes, 50 MiB working set, and 3 percent average CPU on the reference
 integrated-GPU and discrete-GPU systems. The worst-case benchmark is four
 simultaneously active template states with four references each. It must verify
 that LayerD actually activated capture before accepting a result.
 
-#### V2.1.1 - Automation Graphs
+### Version 2.2: Modular runtime and extensibility
+
+V2.2 ships as one public `2.2.0` release built through three internal phases:
+
+1. modular daemon kernel;
+2. profile packs and generic HID;
+3. isolated visual worker and portable platform contracts.
+
+LayerD remains a native, single-process daemon by default. First-party modules
+are statically linked but instantiated only when demanded. V2.2 adds no public
+DLL/plugin ABI, automation, Game Bar, or Linux runtime. The kernel extraction
+must preserve V2.1 behavior exactly before new features are added, and heavy
+resources are released immediately when their final consumer disappears.
+
+#### V2.2 modular runtime
+
+Introduce a platform-neutral `layerc_runtime` static library containing
+`DaemonKernel`, `CapabilityDemand`, `SessionId`, opaque `WindowId`,
+`IRuntimeService`, `RuntimeResourceStats`, and service lifecycle/reconciliation
+helpers. Windows implementations remain statically linked into LayerD:
+
+- `InputService` owns Raw Input, global-key polling, XInput, and the lazy HID
+  backend;
+- `OverlayService` owns session/edit overlay HWNDs, rendering, positioning, and
+  capture exclusion;
+- `VisualService` owns capture workers, pixel evaluation, and measurement
+  delivery;
+- `TemplateEvaluator` is a lazy child of a visual worker and exists only while
+  template observations are active;
+- `LiveEditService` owns authenticated connection buffers, edit leases,
+  heartbeats, and live messages.
+
+`DaemonKernel` retains only the message window, tray, window hooks, game scan,
+profile and settings reconciliation, reload events, session authority, service
+ownership, demand calculation, and shutdown. It calculates one immutable
+`CapabilityDemand` after every profile, game-window, focus, setting, or editor
+state change.
+
+Each service implements equivalent `reconcile(const CapabilityDemand &)`,
+`quiesce() noexcept`, and `stats() const` behavior. An absent service is a null
+`unique_ptr` and owns no worker, timer, HWND, capture device, decoded image,
+queue, cache, or active IPC connection. Quiescence releases resources in the
+same reconciliation cycle; there is no warm-cache grace period.
+
+LayerD keeps one dormant current-user-only named-pipe listener and completion
+event so LayerE can connect at any time. The existing 250 ms live-channel poll
+timer is replaced by event-driven connection/read notification. The
+`LiveEditService` object is constructed only after peer authentication.
+
+Raw Input is registered only while a foreground or global session requires it.
+XInput and generic HID activate independently. Visual workers notify the kernel
+only when a new bounded snapshot exists; no idle visual polling remains.
+Session objects retain authoritative cooldown, input-matcher, and visual-trigger
+state. Services provide only normalized input events, measurements, and
+presentation.
+
+Activation order is session state, input baseline seeding, overlays, then visual
+capture. Teardown stops visual/input producers first, hides overlays, and then
+retires session state. Opening LayerE alone activates only `LiveEditService` and
+must not construct capture, template, HID, or edit-overlay resources.
+
+The expected demand tiers are:
+
+| Active requirement | Resident capabilities |
+| --- | --- |
+| No matched game | Kernel, profile metadata, tray, reload events, dormant pipe listener |
+| Input-only session | Input backend, cooldown session, visible overlay state |
+| Pixel observation | Input tier plus `VisualService` and bounded capture state |
+| Template observation | Pixel tier plus lazy evaluator and referenced assets |
+| Connected editor | Requested tier plus `LiveEditService` for the connection |
+| Generic HID binding | Input tier plus only the configured device backend |
+| Isolated visual window | Kernel plus one bounded helper for that HWND |
+
+Increment the editor-daemon live protocol to version 2 and require LayerD,
+LayerE, and helper binaries from the same package version. Add one-shot runtime
+diagnostic request/reply messages. LayerE exposes File -> Runtime Diagnostics
+with Refresh and Copy JSON. Each service reports state, consumer count, owned
+threads/timers/handles/HWNDs/queues/capture sessions, decoded assets and cache
+bytes, last activation/quiescence, activation/fault count, and last error.
+Aggregate diagnostics include private bytes, working set, handle/thread count,
+CPU time, and available GPU allocation data. No continuous trace is allocated
+while the dialog is closed.
+
+#### V2.2 schema 3 and generic HID
+
+V2.2 reads profile schemas 1 through 3. Any LayerE save upgrades the base
+profile to schema 3 after the existing explicit older-build compatibility
+warning; autosave and live edit cannot approve that boundary implicitly.
+Schema 3 adds generic-HID binding descriptors, `visualRuntime` with values
+`inline` or `isolated` and an `inline` default, plus first-party module metadata
+required for bundle consistency. Persistence becomes a multi-document
+transaction without regressing the existing base/visual recovery guarantees.
+Unknown schemas or module kinds are rejected rather than guessed or discarded.
+
+Persisted HID configuration is separate from compact runtime input tokens:
+
+- `HidDeviceSelector` contains VID, PID, device version, top-level usage,
+  descriptor hash, optional serial, and stable machine slot;
+- `HidControlBinding` contains report ID, usage page, usage, link collection,
+  activation mode, normalized threshold, and hysteresis;
+- resolved `RuntimeInputToken` contains only backend, resolved device instance,
+  and compact control ID.
+
+Support buttons, arrays, hats/discrete values, absolute axes converted to
+Boolean press/release events using direction/threshold/hysteresis, and relative
+controls converted to momentary directional events. Continuous analog values
+remain V2.3 work.
+
+Keyboard- and mouse-class HID controls are hidden by default. An Advanced
+per-binding opt-in exposes device-specific keyboard/mouse controls with a
+duplicate-event warning. LayerE uses Capture then refine: select a device,
+actuate a control, infer its kind/direction, then optionally edit threshold,
+hysteresis, stable slot, and system-class opt-in.
+
+Prefer serial identity. Otherwise resolve descriptor fingerprint plus a
+persistent machine-local stable slot. Ambiguous identical devices make the
+binding unavailable until the user reassigns the slot; LayerC never silently
+chooses the first enumerated device. Slot mappings are global machine settings
+and are excluded from exported packs.
+
+The daemon enumerates or listens to generic HID only while an active binding
+demands it. LayerC installs no driver, requests no administrator permission,
+claims no device exclusively, and performs no input synthesis or injection.
+
+#### V2.2 multi-profile packs
+
+Vendor miniz 3.1.2 at its tagged upstream commit, include its MIT license and
+source hashes, and compile it only into a separate bundle library used by
+LayerE and tests. LayerD does not link the ZIP implementation.
+
+A `.layercprofile` file is a standard ZIP containing `manifest.json`, one or
+more base profiles, their known module sidecars, and deduplicated
+content-addressed assets. Manifest schema 1 records the pack kind/version,
+producing LayerC version, suggested filenames, profile IDs, module paths/types
+and schema versions, sizes, and SHA-256 hashes.
+
+Export Pack opens a checklist with the current profile selected by default,
+Select All, profile count, and deduplicated asset-size summary. It exports only
+current valid primary documents. Backups, removal markers, appearance/options,
+HID slot mappings, logs, and runtime state are excluded. Entry order, names,
+content, timestamps, and compression settings are deterministic.
+
+Import validates the complete archive before showing choices. Limits are
+128 MiB for the archive and total uncompressed data, 256 entries, 64 profiles,
+the existing 256 KiB per JSON document, and 4 MiB per asset. Reject encrypted
+entries, ZIP64, symlinks/reparse entries, absolute/UNC/drive paths, traversal,
+alternate streams, duplicate paths, Windows case-fold collisions, undeclared
+files, bad hashes, and unsupported schemas.
+
+The validated import preview offers a profile checklist and, for each ID or
+filename conflict, Replace or Import Copy with Copy selected by default. Copy
+regenerates the profile ID and dependent module references while preserving
+cooldown and panel IDs local to that profile.
+
+Commit all selected profiles and shared assets as one recoverable transaction:
+stage and validate every output, write a durable journal, publish immutable
+assets, replace profile/module documents with write-through renames, publish a
+commit marker, then remove recovery state. Startup rolls back a transaction
+without a commit marker and finishes cleanup for a committed transaction.
+Checksums provide integrity, not publisher identity; packs are data-only and
+unsigned until V3 trust work.
+
+#### V2.2 isolated visual runtime and portability
+
+Add `layerworker.exe`, launched only when an active visual session requests
+isolation. The per-profile Advanced option is off by default and warns about
+additional process memory.
+
+Isolation is resolved per game HWND. If any matching profile requests
+isolation, that window's entire capture/pixel/template evaluation pipeline moves
+to one shared helper so LayerC never captures the same HWND twice. LayerD
+retains input matching, cooldowns, visual-trigger policy, overlays, profile
+reconciliation, and all authoritative state. The helper returns bounded
+`ObservationMeasurement` snapshots, never frames or mutable cooldown state.
+
+Launch the same-package sibling executable as the current user in a Windows Job
+with active-process limit one, kill-on-job-close, a 256 MiB process-commit cap,
+and canonical executable/process validation. This is crash and resource
+containment, not a security sandbox.
+
+Use a random per-launch pipe name and nonce, current-user-only ACL, mutual
+PID/path/session validation, version handshake, 1 MiB message limit, and 4 MiB
+queued-data limit. Sequence numbers and QPC timestamps reject stale,
+duplicated, oversized, or out-of-order measurements.
+
+Require a 500 ms heartbeat. After two seconds without progress, terminate the
+owned helper and retry once after one second. A second fault quarantines visual
+evaluation for that HWND while input cooldowns and overlays continue. Runtime
+Diagnostics exposes Retry. Game restart or relevant profile reload clears the
+quarantine automatically.
+
+Freeze source-level, not binary, platform contracts for game/window discovery
+and focus, normalized input, overlay presentation, capture-session creation,
+current-user control transport, and helper lifecycle. Platform-neutral code
+uses opaque IDs, rectangles/scaling data, monotonic time, and normalized events;
+Win32 handles remain inside Windows adapters. V2.2 does not implement Linux.
+
+#### V2.2 verification and release gates
+
+Internal Phase A extracts services with no profile, UI, overlay, timing, or IPC
+behavior change. Every V2.1 test and visual benchmark passes before Phase B
+adds schema 3, diagnostics, packs, and HID. Phase C adds the isolated helper and
+freezes platform contracts. Only the complete result ships as LayerC 2.2.0.
+
+Required coverage includes:
+
+- the service-demand matrix for no game, foreground/background games, global
+  profiles, editor connection/edit mode, input-only, pixel, template, HID, and
+  isolation;
+- idempotent reconciliation, activation/teardown ordering, failure rollback,
+  reentrant notifications, and 100 activation cycles per service;
+- independent cooldowns and correct foreground input for two profiles and two
+  matching game windows;
+- proof that opening/closing LayerE without edit mode creates no visual,
+  template, HID, edit-overlay, daemon timer, or daemon worker resource;
+- synthetic HID descriptors/reports covering buttons, arrays, hats, centered
+  and unipolar axes, relative controls, malformed reports, hot-plug, ambiguous
+  devices, slot reassignment, system-class opt-in, chords, and held baselines;
+- deterministic pack round trips, shared assets, Replace/Copy mixtures, every
+  transaction crash point, corrupt hashes/CRC, ZIP bombs, traversal,
+  Unicode/case collisions, unsupported schemas, duplicate IDs, and missing
+  modules/assets;
+- helper spoofing/version/session failures, oversized/out-of-order messages,
+  capture/device loss, crash, hang, retry, quarantine, manual recovery, HWND
+  close, daemon shutdown, and several isolated profiles sharing one helper;
+- clean MSVC and MinGW builds plus the complete CTest suite.
+
+Resource gates remain:
+
+- no game: at most 12 MiB private, 20 MiB working set, and 0.2 percent average
+  CPU;
+- existing input-only and in-process visual limits, including the 35 MiB
+  private, 50 MiB working-set, and 3 percent Low/Balanced visual gate;
+- opening LayerE without edit mode adds no daemon thread/timer and at most
+  1 MiB private and 2 MiB working set, returning to the prior plateau on close;
+- after 100 service cycles: no thread/GPU-allocation growth, no inactive
+  capability handles, at most 1 MiB private-byte growth, and at most two total
+  handles for the dormant listener;
+- generic HID remains inside the existing input-only budget with no worker
+  thread;
+- isolated Low/Balanced mode is provisionally capped at 50 MiB combined private
+  bytes, 70 MiB combined working set, and 3.5 percent average CPU across LayerD
+  and its helper;
+- median and p95 input-to-overlay latency regress by no more than 1 ms from the
+  recorded V2.1 baseline.
+
+Release artifacts include `layerd.exe`, `layere.exe`, `layercal.exe`,
+`layerworker.exe`, third-party notices, the portable ZIP, updated README, and
+this canonical plan. V2.2 deliberately exposes no third-party native plugin
+ABI; signing, permissions, distribution, and stable external extensions remain
+V3 trust work.
+
+### Version 2.3: Automation Graphs
 
 Automation is a bounded declarative system, not an embedded scripting runtime.
 LayerE offers ordinary users presets and a Basic editor, plus an Advanced Graph
 editor backed by a typed JSON AST. There is no text programming language,
 looping, recursion, user-defined function, filesystem access, process launch,
 network access, native extension loading, or arbitrary code execution.
+LayerD constructs `AutomationService` only for active sessions with enabled
+rules; disabling the last graph releases its AST, variables, timers, trace
+state, and evaluator allocation.
 
 Expression values include null, Boolean, signed 64-bit integer, finite number,
 duration, confidence, UTF-8 string, bounded list, and bounded string-keyed map.
-Record-like data uses maps in V2.1. Expressions provide arithmetic,
+Record-like data uses maps in V2.3. Expressions provide arithmetic,
 comparisons, Boolean operations, indexing, `min`, `max`, `clamp`, and bounded
 collection operations such as `any`, `all`, `map`, and `filter`.
 
@@ -309,19 +568,25 @@ changes, and failures. Tracing allocates no ongoing buffer when there is no
 subscriber. A deterministic simulator replays recorded timestamped events
 through the same production evaluator without requiring a live game.
 
-#### V2.1.2 - Optional Game Bar Companion
+### Version 2.4: Optional Xbox Game Bar companion
 
-The Game Bar companion is an optional follow-up and cannot block V2.1.0 or
-V2.1.1. The portable ZIP continues to contain the normal desktop applications.
+The Game Bar companion is an optional follow-up and cannot block V2.1, V2.2,
+or V2.3. The portable ZIP continues to contain the normal desktop applications.
 A separate full MSIX packages LayerD, LayerE, LayerCal, and a C++/WinRT Xbox
 Game Bar companion.
 
 The package declares eight fixed standard panel-widget extensions plus one
 settings widget. Each panel slot subscribes to one panel in the current
-foreground LayerC session, and the slot mapping is stored in the schema-v2
-profile. A same-package `LayerC.GameBar.v1` App Service carries bounded,
-immutable panel snapshots. LayerD remains authoritative; the widget performs
-no capture, input processing, or cooldown mutation.
+foreground LayerC session, and the slot mapping is stored in a separately
+versioned companion sidecar. A same-package `LayerC.GameBar.v1` App Service
+carries bounded, immutable panel snapshots. LayerD remains authoritative; the
+widget performs no capture, input processing, or cooldown mutation.
+
+`GameBarBridge` remains absent when the companion is not installed or connected.
+Installing the MSIX adds no gameplay thread or polling loop to the portable
+LayerD path. Measurements report the incremental LayerC bridge/widget cost and
+the Game Bar host's own memory, CPU, and GPU cost separately; Game Bar overhead
+must never be represented as part of the native-overlay budget.
 
 The companion reconnects after LayerD, Game Bar, package, and Explorer
 restarts, and hides data that has been stale for more than two seconds. It must
@@ -334,77 +599,144 @@ universal exclusive-fullscreen support. CI produces an unsigned test MSIX;
 official release packages are signed using an externally supplied certificate
 secret.
 
-#### V2.1 schemas and compatibility
+### Version 2 schemas and compatibility
 
-Saving any profile in a V2.1 build upgrades its base profile and visual sidecar
-to schema version 2 after a clear warning that older builds cannot reopen it.
-Schema-v1 profiles remain readable and migrate in memory. Primary and backup
-files retain atomic bundle semantics.
+V2.1 already writes base and visual schema version 2 after a clear warning that
+older builds cannot reopen the saved files. Schema-v1 profiles remain readable
+and migrate in memory. Base schema v2 preserves the established input/cooldown
+model while visual schema v2 adds typed observations, template references,
+asset hashes, confidence configuration, and alpha-mask semantics. Primary,
+backup, removal-marker, and asset publication retain atomic bundle semantics.
 
-Base schema v2 adds recovery modes, cooldown groups, transient-variable
-declarations, automation rules and actions, and Game Bar slot mappings. Visual
-schema v2 adds observation types, template references, asset hashes, confidence
-configuration, and alpha-mask semantics.
+Future milestones must not add fields with semantics that an older build could
+silently discard while retaining the same schema number. The owning document
+increments its schema whenever backward-safe preservation is impossible.
+LayerE shows the compatibility boundary before the first persistent upgrade;
+autosave and live edit cannot approve it implicitly. Newer unknown schemas are
+rejected rather than guessed or overwritten.
 
-The public core abstractions include:
+Modular feature data prefers separately versioned sidecars so installing or
+disabling one capability does not enlarge every base profile:
 
-- `ITemplateMatcher`, `TemplateState`, `TemplateReference`, and
-  `ObservationMeasurement`;
-- `ExpressionValue`, `ExpressionNode`, `RuntimeEvent`, `AutomationRule`,
-  `AutomationAction`, and `AutomationTransaction`;
-- `CooldownRecoveryMode`, `CooldownGroup`, and parallel recovery deadlines;
-- `OverlayPresentationOverrides`;
-- Game Bar subscription and immutable snapshot messages.
+- V2.2 defines a versioned bundle manifest and module-sidecar envelope. Generic
+  HID bindings and isolated-runtime policy increment the base schema only where
+  their core references require it.
+- V2.3 stores the typed automation graph in an automation sidecar. Core
+  recovery modes and cooldown groups increment the base schema because they
+  change authoritative cooldown behavior.
+- V2.4 stores widget-slot mappings and companion presentation preferences in a
+  companion sidecar rather than making Game Bar fields mandatory in the base
+  profile.
 
-Missing assets, missing graph references, or invalid automation disable only
-the affected visual or automation path; normal input cooldowns remain usable.
-Unknown schema versions, expression nodes, and action types are rejected rather
-than guessed.
+The profile store expands its transaction from base-plus-visual into a bounded
+set of declared module documents and assets. A commit either publishes a
+mutually compatible set or restores the previous valid set. Missing or invalid
+optional module data disables only that capability and reports the exact source;
+ordinary input cooldowns and overlays remain usable. A module cannot execute
+content or reinterpret an unknown node/action/type.
 
-#### V2.1 verification and release gates
+### Cross-version verification and release gates
 
-- Template tests cover masks, threshold boundaries, scale tolerance, noise,
-  SDR and HDR-tonemapped frames, capture loss, unavailable regions, malformed
-  assets, path traversal, content hashes, crash consistency, and safe garbage
-  collection.
-- Matcher performance is measured at the worst-case four-by-four workload on
-  integrated and discrete GPUs for both Low and Balanced quality.
-- Expression tests cover every type and operator, static validation, all hard
+- V2.1 template tests cover masks, threshold boundaries, pixel-distinct scale
+  tolerance, noise, SDR and HDR-tonemapped frames, capture loss, unavailable
+  regions, malformed/flat assets, path traversal, content hashes, crash
+  consistency, and fail-closed garbage collection.
+- V2.1 matcher performance uses the worst-case four-state by four-reference
+  workload on integrated and discrete GPUs for Low and Balanced quality and
+  refuses an idle-capture false pass.
+- V2.2 service tests cover every demand transition, activation/quiescence,
+  missing consumers, profile/window churn, resource plateau, bundle rollback,
+  HID disconnect/reconnect, helper authentication, and helper crash isolation.
+- V2.3 expression tests cover every type/operator, static validation, all hard
   limits, event ordering, priority conflicts, transaction rollback, session
   cleanup, timer monotonicity, deterministic replay, fuzzing, and property
   tests.
-- Cooldown tests cover legacy migration, single, sequential, and parallel
+- V2.3 cooldown tests cover legacy migration, single, sequential, and parallel
   recovery, refunds, reductions, shared pools, propagation, reconfiguration,
-  and clock discontinuities.
-- UI tests verify session-local presentation overrides reset correctly and
-  never alter persisted profile appearance.
-- Game Bar tests cover all eight panel slots, reconnection and package
-  lifecycle, stale-state hiding, controller input, click-through, DPI changes,
-  and a documented fullscreen compatibility matrix.
-- Every V1 and V1.1 parser, runtime, capture, overlay, editor, daemon, and
-  benchmark regression remains mandatory.
+  and clock discontinuities. UI tests prove session-local presentation
+  overrides reset correctly and never alter persisted appearance.
+- V2.4 Game Bar tests cover all eight panel slots, authenticated reconnection,
+  package and Explorer lifecycle, stale-state hiding, controller input,
+  click-through, DPI changes, resource accounting, and a documented fullscreen
+  compatibility matrix.
+- Every earlier parser, runtime, capture, overlay, editor, daemon, packaging,
+  and benchmark regression remains mandatory for every later milestone.
 
-V2.1 deliberately excludes OpenCV, embedded scripting runtimes, OCR, rotation
+V2.x deliberately excludes OpenCV, embedded scripting runtimes, OCR, rotation
 or perspective matching, automatic object discovery, cloud services,
-telemetry, community distribution, and third-party extension execution.
+telemetry, community distribution, and untrusted native extension execution
+unless a later milestone explicitly replaces that exclusion with a threat
+model and release gate.
 
-### Version 2.2: Portability and sharing
+### Version 2.5: Linux foundation and X11
 
-- Validated `.layercprofile` import/export bundles with assets, manifest, and checksums.
-- Generic HID/controller support beyond XInput.
-- Optional isolated per-game runtime for profiles that demonstrate stability problems.
-- Linux editor/daemon port for X11, followed by a gamescope feasibility implementation.
+Linux is a sequence of backend releases, not one portability checkbox. V2.5
+targets a supportable X11 path while preserving the same platform-neutral core,
+profile semantics, resource-demand model, and no-injection/no-root posture.
 
-### Version 3
+V2.5 is staged as:
 
-- Wayland support through XDG portals with an explicit compositor capability matrix.
-- Community profile distribution only after signing, moderation, update, and trust requirements are specified.
-- Sandboxed WebAssembly extensions only if real profiles cannot be represented by the declarative v2 rule system.
+1. **V2.5.0 - Linux core and headless runtime:** compile and run profile,
+   cooldown, template, automation, bundle, and deterministic simulation tests;
+   add Linux packaging, current-user storage, monotonic timers, and a
+   current-user Unix-domain control channel.
+2. **V2.5.1 - X11 input-only parity:** add game-window tracking, foreground
+   routing, normalized keyboard/mouse/controller input, overlays, DPI/scale
+   handling, tray/application lifecycle, and an editor strategy without
+   leaking X11 types into core interfaces.
+3. **V2.5.2 - X11 visual parity:** add bounded window capture, calibration,
+   unavailable/protected handling, template assets, and Low/Balanced benchmark
+   evidence where the active X11 stack can support them reliably.
+
+The first Linux release does not claim Wayland, gamescope, universal global
+input, exclusive fullscreen, or parity on every desktop environment. Import and
+export bundles remain cross-platform, while bindings that reference an
+unavailable device/backend are preserved and reported instead of discarded.
+
+### Version 2.6: Gamescope and Steam Deck
+
+V2.6 begins with a feasibility prototype rather than a compatibility promise.
+It determines which documented gamescope/SteamOS paths can provide panel
+presentation, focus/session identity, controller-first operation, capture, and
+safe packaging without injection, privileged helpers, or compositor bypasses.
+
+Supported paths receive explicit capability detection, controller-navigable
+configuration, suspend/resume and game-mode lifecycle handling, resource
+benchmarks on target hardware, and a published compatibility matrix. Unsupported
+graphics/session combinations fail visibly and retain input-only operation when
+possible.
+
+### Version 2.7: Wayland
+
+V2.7 uses XDG portals and compositor-approved protocols with an explicit
+capability matrix. Global input, window identity, capture, overlay placement,
+click-through, and always-visible behavior vary by compositor; LayerC detects
+the available contract and never claims capabilities supplied only by X11 or
+gamescope.
+
+No design may bypass portal consent, request unnecessary privilege, scrape
+another client's private protocol state, or promise universal overlay behavior.
+XWayland fallback is reported as X11 compatibility, not native Wayland parity.
+
+### Version 3: Ecosystem and trust
+
+- Community profile distribution only after signing, moderation, update,
+  revocation, provenance, and trust requirements are specified and implemented.
+- A stable third-party extension ABI is considered only after first-party V2.x
+  module contracts survive Windows and Linux backends; it requires capability
+  permissions, version negotiation, crash isolation, and resource limits.
+- Sandboxed WebAssembly extensions are considered only if real profiles cannot
+  be represented by the bounded declarative automation system and a concrete
+  threat model justifies the additional runtime.
+- V3 is reserved for an actual compatibility, extension, or trust-boundary
+  change rather than merely another first-party platform backend.
 
 ## Assumptions
 
 - Version 1 prioritizes reliable keyboard/mouse/controller cooldown overlays over fullscreen, visual recognition, automation, sharing, and cross-platform support.
-- The portable ZIP is the only v1 distribution; MSIX packaging begins with the Game Bar work in v2.1.
+- The portable ZIP remains the default desktop distribution through V2.x; optional MSIX packaging begins with the Game Bar work in V2.4.
 - Memory numbers are acceptance budgets to validate with a prototype, not claims that the first build will meet automatically.
 - V1.1 means simple numeric pixel predicates; V2.1 means user-provided image/template matching, not OCR.
+- V2.2 means first-party modular runtime and extensibility, V2.3 means bounded declarative automation, and V2.4 means the optional Game Bar presentation layer.
+- Linux support is intentionally staged across V2.5 X11, V2.6 gamescope, and V2.7 Wayland rather than promised as one port.
 - `SolOG.md` and `Luna+.md` remain historical source notes; this file is the canonical merged plan.

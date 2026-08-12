@@ -1,5 +1,6 @@
 #include "editor_window.hpp"
 #include "editor_resource.h"
+#include "layerc/core/hid.hpp"
 
 #include <algorithm>
 #include <array>
@@ -77,8 +78,10 @@ void EditorWindow::refresh_binding_controls() {
   const auto *cooldown = selected_cooldown();
   const HWND binding = GetDlgItem(dialog_, IDC_COOLDOWN_BINDING);
   const HWND capture = GetDlgItem(dialog_, IDC_CAPTURE_BINDING);
+  const HWND capture_hid = GetDlgItem(dialog_, IDC_CAPTURE_HID);
   EnableWindow(binding, cooldown != nullptr);
   EnableWindow(capture, cooldown != nullptr);
+  EnableWindow(capture_hid, cooldown != nullptr);
   set_text(capture, capturing_binding_ ? L"Press key..." : L"Capture key");
   refresh_visual_controls();
   if (cooldown == nullptr) {
@@ -117,6 +120,13 @@ void EditorWindow::refresh_binding_controls() {
     label += code;
   } else if (token.device == layerc::core::InputDevice::mouse) {
     label = L"Mouse button " + std::to_wstring(token.code);
+  } else if (token.device == layerc::core::InputDevice::generic_hid) {
+    if (token.code != 0 && token.code <= profile_.hid_bindings.size()) {
+      const auto &hid = profile_.hid_bindings[token.code - 1U];
+      label = L"HID — " + to_wide(hid.id);
+    } else {
+      label = L"HID binding unavailable";
+    }
   } else {
     label = L"Controller " + std::to_wstring(token.controller_index + 1U) +
             L", input " + std::to_wstring(token.code);
@@ -166,6 +176,7 @@ void EditorWindow::assign_binding_key(const LPARAM key_data) {
       .cooldown_id = cooldown_id,
       .chord = layerc::core::InputChord{{{
           layerc::core::InputDevice::keyboard, code, 0}}}});
+  layerc::core::compact_hid_bindings(profile_);
   capturing_binding_ = false;
   refresh_binding_controls();
   record_profile_change(ChangeKind::immediate);
@@ -270,6 +281,7 @@ void EditorWindow::remove_cooldown() {
   }
   profile_.cooldowns.erase(profile_.cooldowns.begin() + data);
   std::erase_if(profile_.bindings, [&](const layerc::core::InputBinding &binding) { return binding.cooldown_id == id; });
+  layerc::core::compact_hid_bindings(profile_);
   std::erase_if(profile_.panels, [&](layerc::core::Panel &panel) {
     std::erase(panel.cooldown_ids, id); return panel.cooldown_ids.empty();
   });

@@ -6,11 +6,12 @@ namespace layerc::test {
 
 int failures{};
 
-void expect(const bool condition, const std::string_view message) {
+bool expect(const bool condition, const std::string_view message) {
   if (!condition) {
     ++failures;
     std::cerr << "FAIL: " << message << '\n';
   }
+  return condition;
 }
 
 } // namespace layerc::test

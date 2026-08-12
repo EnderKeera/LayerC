@@ -67,6 +67,23 @@ RECT DaemonApp::overlay_target() const {
   return {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
 }
 
+void DaemonApp::reconcile_overlay_runtime() {
+  for (auto *session : active_input_sessions_) {
+    if (session != nullptr) session->ensure_overlays(capture_exclusion_);
+  }
+  update_overlays();
+}
+
+void DaemonApp::quiesce_overlay_runtime() noexcept {
+  if (overlay_timer_running_ && window_ != nullptr)
+    KillTimer(window_, overlay_render_timer);
+  overlay_timer_running_ = false;
+  for (auto &session : sessions_) session->release_overlays();
+  if (edit_session_ != nullptr) {
+    edit_session_->overlays.release();
+  }
+}
+
 void DaemonApp::update_overlays() {
   const auto now = layerc::core::MonotonicClock::now();
   bool has_running_cooldown{};
@@ -84,9 +101,7 @@ void DaemonApp::update_overlays() {
         std::find(active_input_sessions_.begin(), active_input_sessions_.end(),
                   session.get()) != active_input_sessions_.end();
     if (hidden_for_edit || attached_window_invalid || !input_active) {
-      for (auto &overlay : session->overlays) {
-        overlay->hide();
-      }
+      session->overlays.hide();
       continue;
     }
 
@@ -98,20 +113,10 @@ void DaemonApp::update_overlays() {
         });
     has_running_cooldown = has_running_cooldown || session_is_running;
 
-    for (auto &overlay : session->overlays) {
-      if (!overlay->should_show(states)) {
-        overlay->hide();
-        continue;
-      }
-      if (session->is_global()) {
-        overlay->show_on_rect(overlay_target());
-      } else {
-        // A background game's overlay remains owned by that game and is never
-        // raised above the foreground application.
-        overlay->show_for(session->game_window);
-      }
-      overlay->render(states, now);
-    }
+    if (session->is_global())
+      session->overlays.render_on_rect(overlay_target(), states, now);
+    else
+      session->overlays.render_for(session->game_window, states, now);
   }
 
   if (has_running_cooldown && !overlay_timer_running_) {

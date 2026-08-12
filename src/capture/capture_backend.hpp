@@ -15,6 +15,8 @@ public:
   virtual void stop() = 0;
   [[nodiscard]] virtual CapturePollResult poll(core::TimePoint now,
                                                 bool foreground) = 0;
+  // Backends that capture an application surface directly may ignore desktop
+  // exclusion rectangles; desktop-compositing backends must mark them unavailable.
   virtual void set_excluded_screen_rects(std::span<const RECT> rectangles) = 0;
   virtual void set_quality(core::CaptureQuality quality) = 0;
   [[nodiscard]] virtual core::CaptureBackendKind kind() const noexcept = 0;

@@ -67,7 +67,8 @@ struct VisualCaptureSnapshot {
 
 class VisualCaptureWorker {
 public:
-  VisualCaptureWorker(HWND window, layerc::core::CaptureQuality quality);
+  VisualCaptureWorker(HWND window, layerc::core::CaptureQuality quality,
+                      HANDLE snapshot_event = nullptr);
   ~VisualCaptureWorker();
   VisualCaptureWorker(const VisualCaptureWorker &) = delete;
   VisualCaptureWorker &operator=(const VisualCaptureWorker &) = delete;
@@ -87,6 +88,7 @@ private:
 
   HWND window_{};
   layerc::core::CaptureQuality quality_{};
+  HANDLE snapshot_event_{}; // non-owning, owned by VisualService
   std::atomic_bool stopping_{};
   std::atomic_uint8_t sample_rate_hz_{10};
   mutable std::mutex mutex_;

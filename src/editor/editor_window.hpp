@@ -68,8 +68,9 @@ profile_list_label(const layerc::core::GameProfile &profile);
 profile_error_text(const layerc::core::ProfileError &error);
 [[nodiscard]] std::uint32_t parse_uint(std::wstring_view text,
                                        std::uint32_t fallback);
-[[nodiscard]] bool source_uses_schema_v1(std::string_view json);
-[[nodiscard]] bool confirm_v2_schema_upgrade(HWND owner);
+[[nodiscard]] bool source_uses_legacy_base_schema(std::string_view json);
+[[nodiscard]] bool source_uses_legacy_visual_schema(std::string_view json);
+[[nodiscard]] bool confirm_v3_schema_upgrade(HWND owner);
 [[nodiscard]] std::wstring color_label(const wchar_t *label,
                                         std::uint32_t value);
 void erase_visual_assignment(layerc::core::VisualProfile &visual,
@@ -90,6 +91,10 @@ private:
   static INT_PTR CALLBACK options_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK appearance_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK color_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+  static INT_PTR CALLBACK export_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+  static INT_PTR CALLBACK import_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+  static INT_PTR CALLBACK diagnostics_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+  static INT_PTR CALLBACK hid_binding_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static LRESULT CALLBACK preview_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
   bool handle_binding_capture_message(const MSG &message);
 
@@ -126,6 +131,7 @@ private:
   void set_visual_assignment_enabled(bool enabled);
   void remove_visual_assignment();
   void begin_binding_capture();
+  void capture_hid_binding();
   void cancel_binding_capture(std::wstring_view status = {});
   void assign_binding_key(LPARAM key_data);
   void refresh_bar_list(std::size_t preferred_panel = SIZE_MAX);
@@ -144,6 +150,10 @@ private:
   [[nodiscard]] bool save_profile(bool force_save_as);
   void delete_profile();
   void open_profiles_folder();
+  void export_profile_pack();
+  void import_profile_pack();
+  void open_runtime_diagnostics();
+  void request_runtime_diagnostics();
   void show_file_menu();
   void edit_on_window();
   void begin_edit_on_window(HWND target);
@@ -234,6 +244,8 @@ private:
   HWND preview_{};
   HWND status_{};
   std::wstring visual_runtime_status_{L"Visual recognition: connecting"};
+  HWND diagnostics_dialog_{};
+  std::string runtime_diagnostics_json_;
   HWND application_path_{};
   HWND task_list_{};
   HIMAGELIST profile_check_images_{};
@@ -281,6 +293,7 @@ private:
   ULONGLONG last_live_drag_send_{};
   ULONGLONG last_heartbeat_send_{};
   UINT live_timer_interval_{100};
+  bool live_package_authenticated_{};
   EditorProfileHistory history_;
 };
 
