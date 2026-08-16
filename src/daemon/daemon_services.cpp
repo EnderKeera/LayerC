@@ -207,6 +207,41 @@ private:
   DaemonApp &app_;
 };
 
+class DaemonApp::AutomationRuntimeService final
+    : public layerc::runtime::IRuntimeService {
+public:
+  explicit AutomationRuntimeService(DaemonApp &app) : app_(app) {}
+  [[nodiscard]] layerc::runtime::Capability
+  capability() const noexcept override {
+    return layerc::runtime::Capability::automation;
+  }
+  [[nodiscard]] layerc::runtime::ServiceReconcileResult
+  reconcile(const layerc::runtime::CapabilityDemand &) override {
+    app_.reconcile_automation_runtime();
+    return {};
+  }
+  void quiesce() noexcept override { app_.quiesce_automation_runtime(); }
+  [[nodiscard]] layerc::runtime::RuntimeResourceStats
+  resources() const noexcept override {
+    std::uint32_t runtimes{};
+    std::uint64_t bytes{};
+    for (const auto &session : app_.sessions_) {
+      if (!session->automation_runtime) continue;
+      ++runtimes;
+      const auto &snapshot = session->automation_runtime->snapshot();
+      bytes += snapshot.variables.size() * sizeof(layerc::core::AutomationValue);
+      bytes += snapshot.timers.size() * sizeof(layerc::core::AutomationTimer);
+      bytes += snapshot.overlay_overrides.size() *
+               sizeof(layerc::core::OverlayPropertyOverride);
+    }
+    return {.timers = app_.automation_timer_running_ ? 1U : 0U,
+            .objects = runtimes,
+            .cache_bytes = bytes};
+  }
+
+private:
+  DaemonApp &app_;
+};
 DaemonApp *DaemonApp::foreground_hook_target_{};
 
 std::unique_ptr<layerc::runtime::IRuntimeService>
@@ -257,6 +292,12 @@ DaemonApp::create_hid_runtime_service(void *const context) {
       *static_cast<DaemonApp *>(context));
 }
 
+std::unique_ptr<layerc::runtime::IRuntimeService>
+DaemonApp::create_automation_runtime_service(void *const context) {
+  if (context == nullptr) return {};
+  return std::make_unique<AutomationRuntimeService>(
+      *static_cast<DaemonApp *>(context));
+}
 layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() const {
   std::vector<layerc::runtime::SessionCapabilityRequest> requests;
   requests.reserve(active_input_sessions_.size());
@@ -278,8 +319,15 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() const {
             layerc::core::VisualRuntime::isolated,
     });
   }
-  return layerc::runtime::calculate_capability_demand(
+  auto demand = layerc::runtime::calculate_capability_demand(
       requests, live_package_authenticated_, edit_session_ != nullptr);
+  const auto automation_consumers = static_cast<std::uint32_t>(
+      std::ranges::count_if(sessions_, [](const auto &session) {
+        return session != nullptr && session->has_enabled_automations();
+      }));
+  demand.set(layerc::runtime::Capability::automation,
+             automation_consumers);
+  return demand;
 }
 
 void DaemonApp::reconcile_runtime_services() {
@@ -311,6 +359,10 @@ void DaemonApp::reconcile_runtime_services() {
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::live_edit,
           .create = &DaemonApp::create_live_edit_runtime_service,
+          .context = this},
+      layerc::runtime::RuntimeServiceDescriptor{
+          .capability = layerc::runtime::Capability::automation,
+          .create = &DaemonApp::create_automation_runtime_service,
           .context = this}};
   (void)runtime_kernel_.reconcile(runtime_demand(), descriptors);
 }

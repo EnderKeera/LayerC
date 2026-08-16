@@ -58,6 +58,12 @@ void OverlayWindow::update_snapshot(
   }
 }
 
+void OverlayWindow::set_session_override(
+    const std::optional<bool> visible,
+    std::optional<std::wstring> text) {
+  visibility_override_ = visible;
+  text_override_ = std::move(text);
+}
 void OverlayWindow::set_edit_mode(const bool enabled, const bool direct_drag,
                                   const bool selected,
                                   DragCallback callback) {
@@ -243,6 +249,7 @@ void OverlayWindow::show_on_rect(const RECT &target) {
 
 bool OverlayWindow::should_show(
     const std::vector<layerc::core::CooldownState> &states) const {
+  if (visibility_override_.has_value()) return *visibility_override_;
   if (edit_mode_ || panel_.style != layerc::core::PanelStyle::bar ||
       !panel_.bar.hide_when_ready) {
     return true;

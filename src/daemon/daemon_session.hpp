@@ -2,6 +2,7 @@
 
 #include "overlay_collection.hpp"
 
+#include "layerc/core/automation.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/hid.hpp"
 #include "layerc/core/input_matcher.hpp"
@@ -11,6 +12,7 @@
 #include "layerc/platform/profile_store.hpp"
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -28,6 +30,12 @@ struct ProfileSource {
   layerc::platform::VisualSidecarState visual_health{
       layerc::platform::VisualSidecarState::absent};
   std::string visual_error;
+  std::optional<layerc::core::AutomationProfile> automation_profile;
+  layerc::platform::AutomationSidecarState automation_health{
+      layerc::platform::AutomationSidecarState::absent};
+  std::string automation_error;
+  layerc::core::AutomationPersistentValues automation_state;
+  std::optional<layerc::core::TimePoint> automation_state_due;
   layerc::core::ProfileRevision revision{};
 };
 
@@ -41,6 +49,9 @@ struct Session {
                    std::wstring source_key,
                    std::optional<layerc::core::VisualProfile> visual_profile,
                    layerc::platform::VisualSidecarState visual_health,
+                   std::optional<layerc::core::AutomationProfile>
+                       automation_profile,
+                   layerc::platform::AutomationSidecarState automation_health,
                    bool visual_enabled, bool capture_exclusion);
 
   void clear_input_state();
@@ -53,6 +64,10 @@ struct Session {
   void apply_visual_profile(
       std::optional<layerc::core::VisualProfile> visual_profile,
       layerc::platform::VisualSidecarState visual_health, bool visual_enabled);
+  void apply_automation_profile(
+      std::optional<layerc::core::AutomationProfile> automation_profile,
+      layerc::platform::AutomationSidecarState automation_health);
+  [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
   [[nodiscard]] bool blocks_all_triggers() const noexcept {
     return visual_health == layerc::platform::VisualSidecarState::invalid;
@@ -69,6 +84,12 @@ struct Session {
   layerc::core::InputMatcher input;
   std::optional<layerc::core::VisualProfile> visual_profile;
   std::unique_ptr<layerc::core::VisualTriggerEngine> visual_triggers;
+  std::optional<layerc::core::AutomationProfile> automation_profile;
+  std::unique_ptr<layerc::core::AutomationRuntime> automation_runtime;
+  std::vector<layerc::core::OverlayPropertyOverride>
+      applied_overlay_overrides;
+  layerc::platform::AutomationSidecarState automation_health{
+      layerc::platform::AutomationSidecarState::absent};
   layerc::platform::VisualSidecarState visual_health{
       layerc::platform::VisualSidecarState::absent};
   std::uint64_t last_visual_sequence{};

@@ -12,8 +12,8 @@
 
 namespace layerc::core {
 
-inline constexpr std::uint32_t live_protocol_version = 2;
-inline constexpr std::string_view package_version = "2.2.0";
+inline constexpr std::uint32_t live_protocol_version = 3;
+inline constexpr std::string_view package_version = "2.3.0";
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;
@@ -100,6 +100,10 @@ enum class LiveMessageType : std::uint8_t {
   diagnostics_request,
   diagnostics_reply,
   retry_visual,
+  automation_trace_subscribe,
+  automation_trace_unsubscribe,
+  automation_trace_event,
+  retry_automation,
   acknowledgement,
   error,
 };

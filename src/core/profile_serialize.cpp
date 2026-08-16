@@ -45,6 +45,22 @@ std::string_view device_name(const InputDevice device) {
 std::string_view retrigger_name(const RetriggerPolicy policy) {
   return policy == RetriggerPolicy::restart ? "restart" : "ignore";
 }
+std::string_view recovery_name(const RecoveryMode mode) {
+  switch (mode) {
+  case RecoveryMode::single:
+    return "single";
+  case RecoveryMode::sequential:
+    return "sequential";
+  case RecoveryMode::parallel:
+    return "parallel";
+  }
+  return "single";
+}
+
+std::string_view group_mode_name(const CooldownGroupMode mode) {
+  return mode == CooldownGroupMode::shared_pool ? "sharedPool"
+                                                : "triggerPropagation";
+}
 
 std::string_view layout_name(const PanelLayout layout) {
   switch (layout) {
@@ -91,7 +107,7 @@ std::string serialize_profile_json(const GameProfile &profile) {
   output.reserve(2048);
   output += "{\n";
   append_key(output, 2, "schemaVersion");
-  json::append_unsigned(output, 3);
+  json::append_unsigned(output, 4);
   output += ",\n";
   append_key(output, 2, "id");
   json::append_quoted(output, profile.id);
@@ -129,7 +145,11 @@ std::string serialize_profile_json(const GameProfile &profile) {
   output += "[";
   for (std::size_t index = 0; index < profile.modules.size(); ++index) {
     if (index != 0) output += ", ";
-    output += "{\"kind\":\"visual\",\"schemaVersion\":";
+    output += "{\"kind\":\"";
+    output += profile.modules[index].kind == ProfileModuleKind::automation
+                  ? "automation"
+                  : "visual";
+    output += "\",\"schemaVersion\":";
     json::append_unsigned(output, profile.modules[index].schema_version);
     output += "}";
   }
@@ -157,13 +177,53 @@ std::string serialize_profile_json(const GameProfile &profile) {
     append_key(output, 6, "retrigger");
     json::append_quoted(output, retrigger_name(cooldown.retrigger));
     output += ",\n";
-    append_key(output, 6, "stackCharges");
-    append_bool(output, cooldown.stack_charges);
+    append_key(output, 6, "recovery");
+    json::append_quoted(output, recovery_name(cooldown.recovery));
     output += "\n    }";
     output += index + 1 == profile.cooldowns.size() ? "\n" : ",\n";
   }
   output += "  ],\n";
 
+  append_key(output, 2, "cooldownGroups");
+  output += "[\n";
+  for (std::size_t index{}; index < profile.cooldown_groups.size(); ++index) {
+    const auto &group = profile.cooldown_groups[index];
+    output += "    {\n";
+    append_key(output, 6, "id");
+    json::append_quoted(output, group.id);
+    output += ",\n";
+    append_key(output, 6, "name");
+    json::append_quoted(output, group.name);
+    output += ",\n";
+    append_key(output, 6, "mode");
+    json::append_quoted(output, group_mode_name(group.mode));
+    output += ",\n";
+    append_key(output, 6, "cooldowns");
+    output += "[";
+    for (std::size_t member{}; member < group.cooldown_ids.size(); ++member) {
+      if (member != 0) output += ", ";
+      json::append_quoted(output, group.cooldown_ids[member]);
+    }
+    output += "]";
+    if (group.mode == CooldownGroupMode::shared_pool) {
+      output += ",\n";
+      append_key(output, 6, "durationMs");
+      json::append_unsigned(
+          output, static_cast<std::uint64_t>(group.duration.count()));
+      output += ",\n";
+      append_key(output, 6, "maxCharges");
+      json::append_unsigned(output, group.max_charges);
+      output += ",\n";
+      append_key(output, 6, "recovery");
+      json::append_quoted(output, recovery_name(group.recovery));
+      output += ",\n";
+      append_key(output, 6, "retrigger");
+      json::append_quoted(output, retrigger_name(group.retrigger));
+    }
+    output += "\n    }";
+    output += index + 1U == profile.cooldown_groups.size() ? "\n" : ",\n";
+  }
+  output += "  ],\n";
   append_key(output, 2, "hidBindings");
   output += "[\n";
   for (std::size_t index = 0; index < profile.hid_bindings.size(); ++index) {

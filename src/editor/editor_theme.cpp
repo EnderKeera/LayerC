@@ -234,65 +234,31 @@ void EditorWindow::style_list_view(const HWND list, const bool hide_header) cons
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
-void EditorWindow::rebuild_profile_check_images() {
+void EditorWindow::rebuild_profile_check_hit_images() {
   if (profile_list_ == nullptr) return;
   const auto metrics = profile_checkbox_metrics(GetDpiForWindow(profile_list_));
   const HIMAGELIST images = ImageList_Create(
-      metrics.image_size, metrics.image_size, ILC_COLOR24, 2, 0);
-  const HDC screen = GetDC(profile_list_);
-  const HDC memory = screen == nullptr ? nullptr : CreateCompatibleDC(screen);
-  if (images == nullptr || screen == nullptr || memory == nullptr) {
-    if (memory != nullptr) DeleteDC(memory);
-    if (screen != nullptr) ReleaseDC(profile_list_, screen);
-    if (images != nullptr) ImageList_Destroy(images);
+      metrics.image_size, metrics.image_size, ILC_COLOR32 | ILC_MASK, 2, 0);
+  if (images == nullptr) return;
+
+  // LVS_EX_CHECKBOXES uses the state-image dimensions for hit testing even
+  // when LVS_OWNERDRAWFIXED paints the row. Keep transparent state images for
+  // that geometry; the single paint_checkbox path owns all visible pixels.
+  const HBITMAP transparent =
+      CreateBitmap(metrics.image_size, metrics.image_size, 1, 32, nullptr);
+  if (transparent == nullptr ||
+      ImageList_AddMasked(images, transparent, RGB(0, 0, 0)) < 0 ||
+      ImageList_AddMasked(images, transparent, RGB(0, 0, 0)) < 0) {
+    if (transparent != nullptr) DeleteObject(transparent);
+    ImageList_Destroy(images);
     return;
   }
+  DeleteObject(transparent);
 
-  const auto list_colors = colors(layerc::platform::EditorControlRole::list);
-  const auto check_colors = colors(layerc::platform::EditorControlRole::checkbox);
-  for (const bool checked : {false, true}) {
-    const HBITMAP bitmap = CreateCompatibleBitmap(
-        screen, metrics.image_size, metrics.image_size);
-    const HGDIOBJ previous_bitmap = SelectObject(memory, bitmap);
-    RECT image_rect{0, 0, metrics.image_size, metrics.image_size};
-    const HBRUSH background = CreateSolidBrush(list_colors.fill);
-    FillRect(memory, &image_rect, background);
-    DeleteObject(background);
-
-    RECT box{metrics.inset, metrics.inset,
-             metrics.image_size - metrics.inset,
-             metrics.image_size - metrics.inset};
-    const HBRUSH box_fill = CreateSolidBrush(checked ? check_colors.selection
-                                                     : check_colors.hover);
-    FillRect(memory, &box, box_fill);
-    DeleteObject(box_fill);
-    const HBRUSH border = CreateSolidBrush(check_colors.border);
-    FrameRect(memory, &box, border);
-    DeleteObject(border);
-    if (checked) {
-      const HPEN tick =
-          CreatePen(PS_SOLID, metrics.pen_width, check_colors.text);
-      const HGDIOBJ previous_pen = SelectObject(memory, tick);
-      const int box_size = box.right - box.left;
-      MoveToEx(memory, box.left + box_size / 6,
-               box.top + box_size / 2, nullptr);
-      LineTo(memory, box.left + box_size * 5 / 12,
-             box.bottom - box_size / 4);
-      LineTo(memory, box.right - box_size / 6,
-             box.top + box_size / 4);
-      SelectObject(memory, previous_pen);
-      DeleteObject(tick);
-    }
-    SelectObject(memory, previous_bitmap);
-    ImageList_Add(images, bitmap, nullptr);
-    DeleteObject(bitmap);
-  }
-  DeleteDC(memory);
-  ReleaseDC(profile_list_, screen);
-  ImageList_SetBkColor(images, list_colors.fill);
   (void)ListView_SetImageList(profile_list_, images, LVSIL_STATE);
-  if (profile_check_images_ != nullptr) ImageList_Destroy(profile_check_images_);
-  profile_check_images_ = images;
+  if (profile_check_hit_images_ != nullptr)
+    ImageList_Destroy(profile_check_hit_images_);
+  profile_check_hit_images_ = images;
 }
 void EditorWindow::rebuild_brushes() {
   for (auto &brush_value : brushes_) {
@@ -309,7 +275,7 @@ void EditorWindow::rebuild_brushes() {
 void EditorWindow::refresh_theme() {
   rebuild_brushes();
   style_list_view(profile_list_, true);
-  rebuild_profile_check_images();
+  rebuild_profile_check_hit_images();
   style_list_view(task_list_, false);
   if (dialog_ != nullptr) {
     DrawMenuBar(dialog_);

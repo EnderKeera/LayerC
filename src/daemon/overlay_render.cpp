@@ -160,7 +160,10 @@ void OverlayWindow::render(
         states, [&](const layerc::core::CooldownState &candidate) {
           return candidate.id == cooldown.id;
         });
-    label_buffer_.assign(cooldown.name);
+    if (text_override_.has_value())
+      label_buffer_.assign(*text_override_);
+    else
+      label_buffer_.assign(cooldown.name);
     double progress = 1.0;
     if (state != states.end()) {
       if (state->next_charge_at.has_value()) {

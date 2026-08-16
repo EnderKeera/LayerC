@@ -154,6 +154,22 @@ void test_json_unicode_and_errors() {
              non_finite_value->as_array()[0].as_number() == 0.0 &&
              non_finite_value->as_array()[1].as_number() == 0.0,
          "non-finite values should retain valid JSON syntax through the safe numeric fallback");
+
+  // Integral JSON tokens keep exact int64 storage: values beyond the 2^53
+  // double mantissa round-trip exactly instead of silently rounding.
+  const auto exact = parse(R"json({"big":9007199254740993,"neg":-42,"real":1.5})json");
+  const auto *exact_value = std::get_if<Value>(&exact);
+  expect(exact_value != nullptr && exact_value->find("big")->is_integer() &&
+             exact_value->find("big")->as_integer() ==
+                 std::int64_t{9'007'199'254'740'993} &&
+             exact_value->find("neg")->is_integer() &&
+             exact_value->find("neg")->as_integer() == -42 &&
+             exact_value->find("real")->is_number() &&
+             !exact_value->find("real")->is_integer() &&
+             exact_value->find("real")->as_number() == 1.5 &&
+             exact_value->find("big")->is_number() &&
+             exact_value->find("big")->as_number() == 9'007'199'254'740'993.0,
+         "integral JSON should parse to exact int64 storage usable as number");
 }
 
 void test_json_nesting_limit() {

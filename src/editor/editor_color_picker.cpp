@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
 #include <array>
@@ -74,29 +75,14 @@ void invalidate_picker(const HWND window) {
 
 } // namespace
 
-INT_PTR CALLBACK EditorWindow::color_dialog_proc(const HWND window,
-                                                  const UINT message,
-                                                  const WPARAM wparam,
-                                                  const LPARAM lparam) {
-  auto *editor = reinterpret_cast<EditorWindow *>(
-      GetWindowLongPtrW(window, DWLP_USER));
-  if (message == WM_INITDIALOG) {
-    editor = reinterpret_cast<EditorWindow *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(editor));
-    editor->initialize_color_picker(window);
-    return TRUE;
-  }
-  return editor == nullptr
-             ? FALSE
-             : editor->handle_color_picker_message(window, message, wparam,
-                                                   lparam);
-}
-
 bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
   picker_color_ = value & 0xFFFFFFU;
   const INT_PTR result = DialogBoxParamW(
       instance_, MAKEINTRESOURCEW(IDD_COLOR_PICKER), owner,
-      &EditorWindow::color_dialog_proc, reinterpret_cast<LPARAM>(this));
+      &dispatch_member_dialog<EditorWindow,
+                              &EditorWindow::initialize_color_picker,
+                              &EditorWindow::handle_color_picker_message>,
+      reinterpret_cast<LPARAM>(this));
   if (result != IDOK) return false;
   value = picker_color_;
   return true;

@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <variant>
 #include <vector>
@@ -40,6 +41,35 @@ layerc::core::GameProfile profile(std::string id, std::string name,
       {.cooldown_id = "dash",
        .chord = {.tokens = {{.device = layerc::core::InputDevice::keyboard,
                              .code = key}}}});
+  return result;
+}
+
+layerc::core::AutomationExpression automation_literal(
+    layerc::core::AutomationValue value) {
+  layerc::core::AutomationExpression result;
+  result.kind = layerc::core::ExpressionKind::literal;
+  result.literal = std::move(value);
+  return result;
+}
+
+layerc::core::AutomationProfile automation_profile(const std::string &id) {
+  using namespace layerc::core;
+  AutomationProfile result;
+  result.profile_id = id;
+  result.variables.push_back(
+      {.id = "count",
+       .type = AutomationValueType::integer,
+       .default_value = AutomationValue(std::int64_t{0}),
+       .persistent = true});
+  AutomationRule rule;
+  rule.id = "start";
+  rule.event = AutomationEventKind::session_started;
+  rule.actions.push_back(
+      {.kind = AutomationActionKind::increment_variable,
+       .target = "count",
+       .value = automation_literal(AutomationValue(std::int64_t{1}))});
+  result.automations.push_back(
+      {.id = "counter", .name = "Counter", .rules = {rule}});
   return result;
 }
 
@@ -206,9 +236,16 @@ int main() {
                                   (std::string(asset_hash) + ".png"),
                               "abc"),
                    "content-addressed test asset should be created");
+  const auto first_automation = automation_profile("first");
   passed &= expect(layerc::platform::write_profile_bundle(
-                       first_path, profile("first", "First", 30), first_visual),
-                   "first schema-3 profile and visual module should save");
+                       first_path, profile("first", "First", 30), first_visual,
+                       first_automation),
+                   "first schema-4 profile, visual, and automation modules should save");
+  passed &= expect(
+      layerc::platform::write_automation_state(
+          first_path, first_automation,
+          {{"count", layerc::core::AutomationValue(std::int64_t{9})}}),
+      "machine-local automation state should exist beside the export fixture");
   passed &= expect(layerc::platform::write_profile_bundle(
                        second_path, profile("second", "Second", 31),
                        std::nullopt),
@@ -290,6 +327,15 @@ int main() {
   passed &= expect(validated != nullptr && validated->profiles.size() == 2,
                    "exported pack should validate with both profiles");
   if (validated != nullptr) {
+    const auto first = std::ranges::find(
+        validated->profiles, std::string("first"),
+        [](const auto &entry) { return entry.profile.id; });
+    passed &= expect(
+        first != validated->profiles.end() &&
+            first->automation_profile.has_value(),
+        "automation definitions and defaults should be included in a profile pack");
+  }
+  if (validated != nullptr) {
     const std::array choices{
         layerc::bundle::ImportChoice{
             .profile_index = 0,
@@ -312,6 +358,12 @@ int main() {
                 std::vector<std::byte>{std::byte{'a'}, std::byte{'b'},
                                        std::byte{'c'}},
         "sidecars and assets should import beneath the requested destination root");
+    passed &= expect(
+        std::filesystem::exists(imported / "_automation" / "first.json") &&
+            !std::filesystem::exists(
+                imported / "_automation_state" /
+                "first.json.automation-state.json"),
+        "packs should import automation definitions while excluding machine-local state");
 
     const std::array copy_choice{layerc::bundle::ImportChoice{
         .profile_index = 0, .action = layerc::bundle::ImportAction::copy}};

@@ -3,6 +3,7 @@
 #include "layerc/core/types.hpp"
 
 #include <memory>
+#include <optional>
 #include <functional>
 #include <span>
 #include <string>
@@ -39,6 +40,8 @@ public:
   void set_capture_exclusion(bool enabled);
   void update_snapshot(const layerc::core::Panel &panel,
                        std::span<const OverlayCooldown> cooldowns);
+  void set_session_override(std::optional<bool> visible,
+                            std::optional<std::wstring> text);
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
                      DragCallback callback = {});
   [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
@@ -86,6 +89,8 @@ private:
   bool edit_mode_{};
   bool direct_drag_{};
   bool edit_selected_{};
+  std::optional<bool> visibility_override_;
+  std::optional<std::wstring> text_override_;
   bool dragging_{};
   bool drag_moved_{};
   int last_region_width_{-1};

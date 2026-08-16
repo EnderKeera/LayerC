@@ -44,7 +44,8 @@ read_file(const std::filesystem::path &path, const std::size_t maximum) {
                  std::numeric_limits<std::streamsize>::max()))
     return std::nullopt;
   std::ifstream input(path, std::ios::binary);
-  if (!input) return std::nullopt;
+  if (!input)
+    return std::nullopt;
   std::vector<std::byte> bytes(static_cast<std::size_t>(size));
   input.read(reinterpret_cast<char *>(bytes.data()),
              static_cast<std::streamsize>(bytes.size()));
@@ -63,12 +64,6 @@ std::vector<std::byte> as_bytes(const std::string_view source) {
   return bytes;
 }
 
-std::optional<std::wstring> casefold_path(const std::string_view value) {
-  auto wide = platform::try_utf8_to_wide(value);
-  if (!wide.has_value()) return std::nullopt;
-  return platform::try_invariant_lower(*wide);
-}
-
 bool safe_entry_path(const std::string_view path) {
   if (path.empty() || path.front() == '/' || path.front() == '\\' ||
       path.find('\\') != std::string_view::npos ||
@@ -82,15 +77,13 @@ bool safe_entry_path(const std::string_view path) {
         wide->back() == L'.' || wide->back() == L' ')
       return false;
     for (const auto character : *wide) {
-      if (character < 32 ||
-          std::wstring_view(L"<>:\"/\\|?*").find(character) !=
-              std::wstring_view::npos)
+      if (character < 32 || std::wstring_view(L"<>:\"/\\|?*").find(character) !=
+                                std::wstring_view::npos)
         return false;
     }
     auto stem = wide->substr(0, wide->find(L'.'));
     std::ranges::transform(stem, stem.begin(), towupper);
-    if (stem == L"CON" || stem == L"PRN" || stem == L"AUX" ||
-        stem == L"NUL")
+    if (stem == L"CON" || stem == L"PRN" || stem == L"AUX" || stem == L"NUL")
       return false;
     if (stem.size() == 4 &&
         (stem.starts_with(L"COM") || stem.starts_with(L"LPT")) &&
@@ -101,22 +94,23 @@ bool safe_entry_path(const std::string_view path) {
   std::size_t start{};
   while (start <= path.size()) {
     const auto end = path.find('/', start);
-    const auto part = path.substr(start, end == std::string_view::npos
-                                            ? path.size() - start
-                                            : end - start);
-    if (part.empty() || part == "." || part == ".." ||
-        !safe_component(part))
+    const auto part =
+        path.substr(start, end == std::string_view::npos ? path.size() - start
+                                                         : end - start);
+    if (part.empty() || part == "." || part == ".." || !safe_component(part))
       return false;
-    if (end == std::string_view::npos) break;
+    if (end == std::string_view::npos)
+      break;
     start = end + 1U;
   }
   return true;
 }
 
-std::filesystem::path asset_path_for_profile_root(
-    const std::filesystem::path &profile_root,
-    const std::string_view hash) {
-  if (!core::is_lowercase_sha256(hash)) return {};
+std::filesystem::path
+asset_path_for_profile_root(const std::filesystem::path &profile_root,
+                            const std::string_view hash) {
+  if (!core::is_lowercase_sha256(hash))
+    return {};
   return profile_root / L"_visual" / L"assets" /
          (std::wstring(hash.begin(), hash.end()) + L".png");
 }
@@ -129,13 +123,13 @@ const core::json::Value *required(const core::json::Value &object,
 std::optional<std::string> required_string(const core::json::Value &object,
                                            const std::string_view key) {
   const auto *value = required(object, key);
-  if (value == nullptr || !value->is_string()) return std::nullopt;
+  if (value == nullptr || !value->is_string())
+    return std::nullopt;
   return value->as_string();
 }
 
-std::optional<std::uint64_t>
-required_unsigned(const core::json::Value &object,
-                  const std::string_view key) {
+std::optional<std::uint64_t> required_unsigned(const core::json::Value &object,
+                                               const std::string_view key) {
   const auto *value = required(object, key);
   if (value == nullptr || !value->is_number() ||
       !std::isfinite(value->as_number()) || value->as_number() < 0.0 ||
@@ -148,10 +142,12 @@ required_unsigned(const core::json::Value &object,
 
 bool exact_fields(const core::json::Value &object,
                   const std::initializer_list<std::string_view> allowed) {
-  if (!object.is_object()) return false;
+  if (!object.is_object())
+    return false;
   for (const auto &[key, unused] : object.as_object()) {
     (void)unused;
-    if (std::ranges::find(allowed, key) == allowed.end()) return false;
+    if (std::ranges::find(allowed, key) == allowed.end())
+      return false;
   }
   return true;
 }
@@ -159,7 +155,8 @@ bool exact_fields(const core::json::Value &object,
 std::optional<std::uint32_t> source_schema(const std::string_view json) {
   const auto parsed = core::json::parse(json);
   const auto *root = std::get_if<core::json::Value>(&parsed);
-  if (root == nullptr) return std::nullopt;
+  if (root == nullptr)
+    return std::nullopt;
   const auto schema = required_unsigned(*root, "schemaVersion");
   if (!schema.has_value() ||
       *schema > std::numeric_limits<std::uint32_t>::max())
@@ -180,8 +177,11 @@ std::optional<std::string>
 manifest_json(const std::vector<PackProfile> &profiles,
               const std::map<std::string, PackAsset, std::less<>> &assets,
               const std::vector<std::string> &base_paths,
-              const std::vector<std::string> &visual_paths) {
-  std::string output = "{\n  \"schemaVersion\": 1,\n  \"kind\": \"layerc-profile-pack\",\n  \"producerVersion\": \"2.2.0\",\n  \"profiles\": [\n";
+              const std::vector<std::string> &visual_paths,
+              const std::vector<std::string> &automation_paths) {
+  std::string output =
+      "{\n  \"schemaVersion\": 1,\n  \"kind\": \"layerc-profile-pack\",\n  "
+      "\"producerVersion\": \"2.3.0\",\n  \"profiles\": [\n";
   for (std::size_t index = 0; index < profiles.size(); ++index) {
     const auto &profile = profiles[index];
     output += "    {\"id\":";
@@ -196,7 +196,7 @@ manifest_json(const std::vector<PackProfile> &profiles,
     output += ",\"size\":";
     core::json::append_unsigned(output, profile.base_json.size());
     output += ",\"sha256\":";
-    const auto base_hash = core::sha256(as_bytes(profile.base_json));
+    const auto base_hash = core::sha256(profile.base_json);
     core::json::append_quoted(output, base_hash);
     output += "},\"modules\":[";
     if (profile.visual_json.has_value()) {
@@ -208,13 +208,30 @@ manifest_json(const std::vector<PackProfile> &profiles,
       output += ",\"size\":";
       core::json::append_unsigned(output, profile.visual_json->size());
       output += ",\"sha256\":";
-      const auto visual_hash = core::sha256(as_bytes(*profile.visual_json));
+      const auto visual_hash = core::sha256(*profile.visual_json);
       core::json::append_quoted(output, visual_hash);
+      output += "}";
+    }
+    if (profile.automation_json.has_value()) {
+      if (profile.visual_json.has_value())
+        output.push_back(',');
+      output += "{\"kind\":\"automation\",\"path\":";
+      core::json::append_quoted(output, automation_paths[index]);
+      output += ",\"schemaVersion\":";
+      core::json::append_unsigned(
+          output, source_schema(*profile.automation_json).value_or(0));
+      output += ",\"size\":";
+      core::json::append_unsigned(output, profile.automation_json->size());
+      output += ",\"sha256\":";
+      const auto automation_hash =
+          core::sha256(*profile.automation_json);
+      core::json::append_quoted(output, automation_hash);
       output += "}";
     }
     output += "],\"assets\":[";
     for (std::size_t asset = 0; asset < profile.asset_sha256.size(); ++asset) {
-      if (asset != 0) output += ',';
+      if (asset != 0)
+        output += ',';
       core::json::append_quoted(output, profile.asset_sha256[asset]);
     }
     output += "]}";
@@ -239,10 +256,10 @@ manifest_json(const std::vector<PackProfile> &profiles,
 bool add_zip_entry(mz_zip_archive &zip, const std::string &path,
                    const std::span<const std::byte> bytes) {
   MZ_TIME_T fixed_time = static_cast<MZ_TIME_T>(315662400);
-  return mz_zip_writer_add_mem_ex_v2(
-             &zip, path.c_str(), bytes.data(), bytes.size(), nullptr, 0,
-             MZ_BEST_COMPRESSION, 0, 0, &fixed_time, nullptr, 0, nullptr, 0) !=
-         0;
+  return mz_zip_writer_add_mem_ex_v2(&zip, path.c_str(), bytes.data(),
+                                     bytes.size(), nullptr, 0,
+                                     MZ_BEST_COMPRESSION, 0, 0, &fixed_time,
+                                     nullptr, 0, nullptr, 0) != 0;
 }
 
 bool write_file_atomically(const std::filesystem::path &destination,
@@ -250,13 +267,15 @@ bool write_file_atomically(const std::filesystem::path &destination,
   std::error_code error;
   if (!destination.parent_path().empty()) {
     std::filesystem::create_directories(destination.parent_path(), error);
-    if (error) return false;
+    if (error)
+      return false;
   }
   auto temporary = destination;
   temporary += L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
   {
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output) return false;
+    if (!output)
+      return false;
     output.write(reinterpret_cast<const char *>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
     if (!output) {
@@ -265,7 +284,8 @@ bool write_file_atomically(const std::filesystem::path &destination,
     }
   }
   if (MoveFileExW(temporary.c_str(), destination.c_str(),
-                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == FALSE) {
+                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==
+      FALSE) {
     std::filesystem::remove(temporary, error);
     return false;
   }
@@ -277,7 +297,8 @@ bool write_file_atomically(const std::filesystem::path &destination,
 std::optional<std::filesystem::path>
 resolve_suggested_profile_filename(const std::string_view suggested_filename) {
   auto filename = platform::try_utf8_to_wide(suggested_filename);
-  if (!filename.has_value() || filename->empty()) return std::nullopt;
+  if (!filename.has_value() || filename->empty())
+    return std::nullopt;
   for (auto &character : *filename) {
     if (std::wstring_view(L"<>\"|?*").find(character) !=
         std::wstring_view::npos)
@@ -327,11 +348,12 @@ PackOperationResult export_profile_pack(
     if (!reserve_entry(base->size()))
       return failure("pack would exceed 256 entries or 128 MiB uncompressed");
 
-    PackProfile item{.suggested_filename =
-                         platform::try_wide_to_utf8(path.filename().wstring()).value_or(
-                             "profile.json"),
-                     .base_json = *base,
-                     .profile = *profile};
+    PackProfile item;
+    item.suggested_filename =
+        platform::try_wide_to_utf8(path.filename().wstring())
+            .value_or("profile.json");
+    item.base_json = *base;
+    item.profile = *profile;
     const auto visual = platform::load_visual_sidecar(path, *profile);
     if (visual.state == platform::VisualSidecarState::invalid)
       return failure("visual sidecar is invalid: " + path.string());
@@ -348,17 +370,37 @@ PackOperationResult export_profile_pack(
         return failure("pack would exceed 256 entries or 128 MiB uncompressed");
       item.asset_sha256 = visual_asset_references(*visual.profile);
       for (const auto &hash : item.asset_sha256) {
-        if (assets.contains(hash)) continue;
-        const auto bytes = read_file(
-            asset_path_for_profile_root(path.parent_path(), hash),
-            max_pack_asset_bytes);
+        if (assets.contains(hash))
+          continue;
+        const auto bytes =
+            read_file(asset_path_for_profile_root(path.parent_path(), hash),
+                      max_pack_asset_bytes);
         if (!bytes.has_value() || core::sha256(*bytes) != hash)
           return failure("visual asset is missing or corrupt: " + hash);
         if (!reserve_entry(bytes->size()))
-          return failure("pack would exceed 256 entries or 128 MiB uncompressed");
+          return failure(
+              "pack would exceed 256 entries or 128 MiB uncompressed");
         assets.try_emplace(
             hash, PackAsset{.sha256 = hash, .bytes = std::move(*bytes)});
       }
+    }
+    const auto automation = platform::load_automation_sidecar(path, *profile);
+    if (automation.state == platform::AutomationSidecarState::invalid)
+      return failure("automation sidecar is invalid: " + path.string());
+    if (automation.state == platform::AutomationSidecarState::recovered_backup)
+      return failure(
+          "save the recovered automation sidecar before exporting: " +
+          path.string());
+    if (automation.state == platform::AutomationSidecarState::valid &&
+        automation.profile.has_value()) {
+      item.automation_profile = automation.profile;
+      item.automation_json =
+          platform::read_automation_file(automation.source_path);
+      if (!item.automation_json.has_value())
+        return failure("automation sidecar could not be read: " +
+                       path.string());
+      if (!reserve_entry(item.automation_json->size()))
+        return failure("pack would exceed 256 entries or 128 MiB uncompressed");
     }
     profiles.push_back(std::move(item));
   }
@@ -368,6 +410,8 @@ PackOperationResult export_profile_pack(
   });
   std::vector<std::string> base_paths(profiles.size());
   std::vector<std::string> visual_paths(profiles.size());
+  std::vector<std::string> automation_paths(profiles.size());
+
   EntryMap entries;
   for (std::size_t index = 0; index < profiles.size(); ++index) {
     const auto ordinal = std::to_string(1000U + index).substr(1);
@@ -378,10 +422,16 @@ PackOperationResult export_profile_pack(
       entries.emplace(visual_paths[index],
                       as_bytes(*profiles[index].visual_json));
     }
+    if (profiles[index].automation_json.has_value()) {
+      automation_paths[index] = "modules/" + ordinal + ".automation.json";
+      entries.emplace(automation_paths[index],
+                      as_bytes(*profiles[index].automation_json));
+    }
   }
   for (const auto &[hash, asset] : assets)
     entries.emplace("assets/" + hash + ".png", asset.bytes);
-  const auto manifest = manifest_json(profiles, assets, base_paths, visual_paths);
+  const auto manifest = manifest_json(profiles, assets, base_paths,
+                                      visual_paths, automation_paths);
   if (!manifest.has_value())
     return failure("could not hash profile data for the pack manifest");
   if (manifest->size() > max_pack_bytes - aggregate_bytes)
@@ -399,7 +449,8 @@ PackOperationResult export_profile_pack(
        mz_zip_writer_finalize_heap_archive(&zip, &archive_data, &archive_size);
   mz_zip_writer_end(&zip);
   if (!ok || archive_data == nullptr || archive_size > max_pack_bytes) {
-    if (archive_data != nullptr) mz_free(archive_data);
+    if (archive_data != nullptr)
+      mz_free(archive_data);
     return failure("pack ZIP creation failed or exceeded 128 MiB");
   }
   const auto archive = std::span(
@@ -446,7 +497,8 @@ validate_profile_pack(const std::filesystem::path &source) {
     }
     if (stat.m_is_encrypted || !stat.m_is_supported) {
       close_zip();
-      return validation_failure("encrypted or unsupported ZIP entries are not allowed");
+      return validation_failure(
+          "encrypted or unsupported ZIP entries are not allowed");
     }
     const auto unix_mode = (stat.m_external_attr >> 16U) & 0170000U;
     if (unix_mode == 0120000U ||
@@ -470,7 +522,7 @@ validate_profile_pack(const std::filesystem::path &source) {
       close_zip();
       return validation_failure("unsafe pack entry path: " + path);
     }
-    const auto folded = casefold_path(path);
+    const auto folded = platform::try_casefold_path(path);
     if (!folded.has_value() || !folded_paths.insert(*folded).second) {
       close_zip();
       return validation_failure("duplicate or case-colliding pack entry: " +
@@ -517,23 +569,26 @@ validate_profile_pack(const std::filesystem::path &source) {
       !producer.has_value() || profile_values == nullptr ||
       !profile_values->is_array() || asset_values == nullptr ||
       !asset_values->is_array())
-    return validation_failure("manifest identity or collection fields are invalid");
+    return validation_failure(
+        "manifest identity or collection fields are invalid");
   if (profile_values->as_array().empty() ||
       profile_values->as_array().size() > max_pack_profiles)
-    return validation_failure("manifest must declare between 1 and 64 profiles");
+    return validation_failure(
+        "manifest must declare between 1 and 64 profiles");
 
-  ValidatedPack pack{.producer_version = *producer};
+  ValidatedPack pack;
+  pack.producer_version = *producer;
   std::set<std::string, std::less<>> declared_paths{"manifest.json"};
   for (const auto &value : asset_values->as_array()) {
     if (!exact_fields(value, {"sha256", "path", "size"}))
-      return validation_failure("asset descriptor has unknown or missing fields");
+      return validation_failure(
+          "asset descriptor has unknown or missing fields");
     const auto hash = required_string(value, "sha256");
     const auto path = required_string(value, "path");
     const auto size = required_unsigned(value, "size");
     if (!hash.has_value() || !core::is_lowercase_sha256(*hash) ||
-        !path.has_value() ||
-        !size.has_value() || *size > max_pack_asset_bytes ||
-        *path != "assets/" + *hash + ".png")
+        !path.has_value() || !size.has_value() ||
+        *size > max_pack_asset_bytes || *path != "assets/" + *hash + ".png")
       return validation_failure("asset descriptor is invalid");
     const auto found = entries.find(*path);
     if (found == entries.end() || found->second.size() != *size ||
@@ -541,26 +596,26 @@ validate_profile_pack(const std::filesystem::path &source) {
       return validation_failure("asset size or SHA-256 mismatch: " + *hash);
     if (!declared_paths.insert(*path).second ||
         !pack.assets
-             .emplace(*hash,
-                      PackAsset{.sha256 = *hash, .bytes = found->second})
+             .emplace(*hash, PackAsset{.sha256 = *hash, .bytes = found->second})
              .second)
       return validation_failure("duplicate asset declaration: " + *hash);
   }
 
   std::set<std::string, std::less<>> profile_ids;
   for (const auto &value : profile_values->as_array()) {
-    if (!exact_fields(value, {"id", "suggestedFilename", "base", "modules",
-                              "assets"}))
-      return validation_failure("profile descriptor has unknown or missing fields");
+    if (!exact_fields(value,
+                      {"id", "suggestedFilename", "base", "modules", "assets"}))
+      return validation_failure(
+          "profile descriptor has unknown or missing fields");
     const auto id = required_string(value, "id");
     const auto suggested = required_string(value, "suggestedFilename");
     const auto *base = required(value, "base");
     const auto *modules = required(value, "modules");
     const auto *references = required(value, "assets");
-    if (!id.has_value() || id->empty() ||
-        !profile_ids.insert(*id).second || !suggested.has_value() ||
-        suggested->empty() || !safe_entry_path(*suggested) || base == nullptr ||
-        modules == nullptr || !modules->is_array() || references == nullptr ||
+    if (!id.has_value() || id->empty() || !profile_ids.insert(*id).second ||
+        !suggested.has_value() || suggested->empty() ||
+        !safe_entry_path(*suggested) || base == nullptr || modules == nullptr ||
+        !modules->is_array() || references == nullptr ||
         !references->is_array())
       return validation_failure("profile descriptor identity is invalid");
     if (!exact_fields(*base, {"path", "schemaVersion", "size", "sha256"}))
@@ -570,12 +625,13 @@ validate_profile_pack(const std::filesystem::path &source) {
     const auto base_size = required_unsigned(*base, "size");
     const auto base_hash = required_string(*base, "sha256");
     if (!base_path.has_value() || !base_schema.has_value() ||
-        *base_schema < 1U || *base_schema > 3U || !base_size.has_value() ||
+        *base_schema < 1U || *base_schema > 4U || !base_size.has_value() ||
         *base_size > core::max_profile_json_bytes || !base_hash.has_value() ||
         !core::is_lowercase_sha256(*base_hash))
       return validation_failure("base profile descriptor fields are invalid");
     const auto base_entry = entries.find(*base_path);
-    if (base_entry == entries.end() || base_entry->second.size() != *base_size ||
+    if (base_entry == entries.end() ||
+        base_entry->second.size() != *base_size ||
         core::sha256(base_entry->second) != *base_hash ||
         !declared_paths.insert(*base_path).second)
       return validation_failure("base profile size, hash, or path mismatch");
@@ -585,29 +641,41 @@ validate_profile_pack(const std::filesystem::path &source) {
     const auto parsed_profile = core::parse_profile_json(base_json);
     const auto *profile = std::get_if<core::GameProfile>(&parsed_profile);
     if (profile == nullptr || profile->id != *id)
-      return validation_failure("base profile is invalid or has a mismatched ID");
+      return validation_failure(
+          "base profile is invalid or has a mismatched ID");
 
-    PackProfile item{.suggested_filename = *suggested,
-                     .base_json = base_json,
-                     .profile = *profile};
+    PackProfile item;
+    item.suggested_filename = *suggested;
+    item.base_json = base_json;
+    item.profile = *profile;
     std::optional<std::uint32_t> packed_visual_schema;
-    if (modules->as_array().size() > 1U)
-      return validation_failure("only one first-party visual module is supported");
+    std::optional<std::uint32_t> packed_automation_schema;
+    if (modules->as_array().size() > 2U)
+      return validation_failure(
+          "at most one visual and one automation module are supported");
+    std::set<std::string, std::less<>> module_kinds;
     for (const auto &module : modules->as_array()) {
       if (!exact_fields(module,
                         {"kind", "path", "schemaVersion", "size", "sha256"}))
-        return validation_failure("module descriptor has unknown or missing fields");
+        return validation_failure(
+            "module descriptor has unknown or missing fields");
       const auto module_kind = required_string(module, "kind");
       const auto module_path = required_string(module, "path");
       const auto module_schema = required_unsigned(module, "schemaVersion");
       const auto module_size = required_unsigned(module, "size");
       const auto module_hash = required_string(module, "sha256");
-      if (module_kind != "visual" || !module_path.has_value() ||
-          !module_schema.has_value() || *module_schema < 1U ||
-          *module_schema > 2U || !module_size.has_value() ||
-          *module_size > core::max_visual_json_bytes ||
-          !module_hash.has_value() ||
-          !core::is_lowercase_sha256(*module_hash))
+      if (!module_kind.has_value() ||
+          !module_kinds.insert(*module_kind).second ||
+          !module_path.has_value() || !module_schema.has_value() ||
+          *module_schema < 1U || !module_size.has_value() ||
+          !module_hash.has_value() || !core::is_lowercase_sha256(*module_hash))
+        return validation_failure("unsupported or invalid module descriptor");
+      const auto maximum_size = *module_kind == "visual"
+                                    ? core::max_visual_json_bytes
+                                    : core::max_automation_json_bytes;
+      const auto maximum_schema = *module_kind == "visual" ? 2U : 1U;
+      if ((*module_kind != "visual" && *module_kind != "automation") ||
+          *module_schema > maximum_schema || *module_size > maximum_size)
         return validation_failure("unsupported or invalid module descriptor");
       const auto module_entry = entries.find(*module_path);
       if (module_entry == entries.end() ||
@@ -615,36 +683,61 @@ validate_profile_pack(const std::filesystem::path &source) {
           core::sha256(module_entry->second) != *module_hash ||
           !declared_paths.insert(*module_path).second)
         return validation_failure("module size, hash, or path mismatch");
-      item.visual_json = as_string(module_entry->second);
-      if (source_schema(*item.visual_json) != *module_schema)
-        return validation_failure("visual schema does not match manifest");
-      const auto parsed_visual =
-          core::parse_visual_profile_json(*item.visual_json, *profile);
-      const auto *visual = std::get_if<core::VisualProfile>(&parsed_visual);
-      if (visual == nullptr)
-        return validation_failure("visual module is invalid");
-      item.visual_profile = *visual;
-      packed_visual_schema = static_cast<std::uint32_t>(*module_schema);
+      const auto module_json = as_string(module_entry->second);
+      if (source_schema(module_json) != *module_schema)
+        return validation_failure("module schema does not match manifest");
+      if (*module_kind == "visual") {
+        const auto parsed_visual =
+            core::parse_visual_profile_json(module_json, *profile);
+        const auto *visual = std::get_if<core::VisualProfile>(&parsed_visual);
+        if (visual == nullptr)
+          return validation_failure("visual module is invalid");
+        item.visual_json = module_json;
+        item.visual_profile = *visual;
+        packed_visual_schema = static_cast<std::uint32_t>(*module_schema);
+      } else {
+        const auto parsed_automation =
+            core::parse_automation_profile_json(module_json, *profile);
+        const auto *automation =
+            std::get_if<core::AutomationProfile>(&parsed_automation);
+        if (automation == nullptr)
+          return validation_failure("automation module is invalid");
+        item.automation_json = module_json;
+        item.automation_profile = *automation;
+        packed_automation_schema = static_cast<std::uint32_t>(*module_schema);
+      }
     }
-    if (*base_schema == 3U) {
-      const auto declared_visual = std::ranges::find(
-          profile->modules, core::ProfileModuleKind::visual,
-          &core::ProfileModule::kind);
+    if (*base_schema >= 3U) {
+      const auto declared_visual =
+          std::ranges::find(profile->modules, core::ProfileModuleKind::visual,
+                            &core::ProfileModule::kind);
       const bool declares_visual = declared_visual != profile->modules.end();
       if (declares_visual != packed_visual_schema.has_value() ||
           (declares_visual &&
-           declared_visual->schema_version !=
-               *packed_visual_schema))
-        return validation_failure("schema 3 module metadata disagrees with pack modules");
+           declared_visual->schema_version != *packed_visual_schema))
+        return validation_failure(
+            "base visual metadata disagrees with pack modules");
     }
-
+    if (*base_schema >= 4U) {
+      const auto declared_automation = std::ranges::find(
+          profile->modules, core::ProfileModuleKind::automation,
+          &core::ProfileModule::kind);
+      const bool declares_automation =
+          declared_automation != profile->modules.end();
+      if (declares_automation != packed_automation_schema.has_value() ||
+          (declares_automation &&
+           declared_automation->schema_version != *packed_automation_schema))
+        return validation_failure(
+            "base automation metadata disagrees with pack modules");
+    }
     std::set<std::string, std::less<>> declared_references;
     for (const auto &reference : references->as_array()) {
       if (!reference.is_string() ||
           !core::is_lowercase_sha256(reference.as_string()) ||
           !declared_references.insert(reference.as_string()).second ||
           !pack.assets.contains(reference.as_string()))
-        return validation_failure("profile contains an invalid asset reference");
+        return validation_failure(
+            "profile contains an invalid asset reference");
       item.asset_sha256.push_back(reference.as_string());
     }
     const auto actual_references =
@@ -652,7 +745,8 @@ validate_profile_pack(const std::filesystem::path &source) {
             ? visual_asset_references(*item.visual_profile)
             : std::vector<std::string>{};
     if (actual_references != item.asset_sha256)
-      return validation_failure("manifest assets do not match visual references");
+      return validation_failure(
+          "manifest assets do not match visual references");
     pack.profiles.push_back(std::move(item));
   }
 
@@ -661,9 +755,10 @@ validate_profile_pack(const std::filesystem::path &source) {
   return pack;
 }
 
-PackOperationResult import_profile_pack(
-    const ValidatedPack &pack, const std::span<const ImportChoice> choices,
-    const std::filesystem::path &profile_directory) {
+PackOperationResult
+import_profile_pack(const ValidatedPack &pack,
+                    const std::span<const ImportChoice> choices,
+                    const std::filesystem::path &profile_directory) {
   if (choices.empty() || choices.size() > pack.profiles.size())
     return failure("select at least one valid pack profile");
 
@@ -676,28 +771,33 @@ PackOperationResult import_profile_pack(
   std::set<std::wstring, std::less<>> used_filenames;
   std::error_code error;
   std::filesystem::create_directories(profile_directory, error);
-  if (error) return failure("profile directory could not be created");
+  if (error)
+    return failure("profile directory could not be created");
   for (std::filesystem::directory_iterator iterator(profile_directory, error),
        end;
        !error && iterator != end; iterator.increment(error)) {
-    if (!iterator->is_regular_file(error) || error) continue;
-    if (_wcsicmp(iterator->path().extension().c_str(), L".json") != 0) continue;
-    const auto folded =
-        casefold_path(platform::try_wide_to_utf8(
-                          iterator->path().filename().wstring())
-                          .value_or(std::string{}));
+    if (!iterator->is_regular_file(error) || error)
+      continue;
+    if (_wcsicmp(iterator->path().extension().c_str(), L".json") != 0)
+      continue;
+    const auto folded = platform::try_casefold_path(
+        platform::try_wide_to_utf8(iterator->path().filename().wstring())
+            .value_or(std::string{}));
     if (!folded.has_value() || !used_filenames.insert(*folded).second)
       return failure("profile directory contains case-colliding filenames");
     const auto source = platform::read_profile_file(iterator->path());
-    if (!source.has_value()) continue;
+    if (!source.has_value())
+      continue;
     const auto parsed = core::parse_profile_json(*source);
     const auto *profile = std::get_if<core::GameProfile>(&parsed);
-    if (profile == nullptr) continue;
+    if (profile == nullptr)
+      continue;
     if (!used_ids.insert(profile->id).second)
       return failure("profile directory contains duplicate profile IDs");
     existing.push_back({.path = iterator->path(), .id = profile->id});
   }
-  if (error) return failure("profile directory could not be enumerated");
+  if (error)
+    return failure("profile directory could not be enumerated");
 
   std::set<std::size_t> selected_indices;
   std::set<std::wstring, std::less<>> selected_targets;
@@ -711,19 +811,21 @@ PackOperationResult import_profile_pack(
       return std::nullopt;
     return read_file(path, limit);
   };
-  const auto add_backup_mutation =
-      [&](const std::filesystem::path &target,
-          const std::size_t limit) -> bool {
+  const auto add_backup_mutation = [&](const std::filesystem::path &target,
+                                       const std::size_t limit) -> bool {
     std::error_code exists_error;
     const bool exists = std::filesystem::exists(target, exists_error);
-    if (exists_error) return false;
-    if (!exists) return true;
+    if (exists_error)
+      return false;
+    if (!exists)
+      return true;
     const auto previous = read_existing_bytes(target, limit);
-    if (!previous.has_value()) return false;
+    if (!previous.has_value())
+      return false;
     auto backup = target;
     backup += L".bak";
-    mutations.push_back({.target = std::move(backup),
-                         .contents = std::move(previous)});
+    mutations.push_back(
+        {.target = std::move(backup), .contents = std::move(previous)});
     return true;
   };
 
@@ -739,21 +841,20 @@ PackOperationResult import_profile_pack(
       return failure("suggested profile filename is invalid");
     const auto suggested = *resolved_suggested;
 
-    const auto by_id = std::ranges::find_if(
-        existing, [&](const ExistingProfile &candidate) {
+    const auto by_id =
+        std::ranges::find_if(existing, [&](const ExistingProfile &candidate) {
           return candidate.id == imported.profile.id;
         });
     const auto suggested_folded =
-        casefold_path(platform::try_wide_to_utf8(suggested.wstring())
+        platform::try_casefold_path(platform::try_wide_to_utf8(suggested.wstring())
                           .value_or(std::string{}));
     if (!suggested_folded.has_value())
       return failure("suggested profile filename is invalid");
-    const auto by_filename = std::ranges::find_if(
-        existing, [&](const ExistingProfile &candidate) {
-          const auto folded =
-              casefold_path(platform::try_wide_to_utf8(
-                                candidate.path.filename().wstring())
-                                .value_or(std::string{}));
+    const auto by_filename =
+        std::ranges::find_if(existing, [&](const ExistingProfile &candidate) {
+          const auto folded = platform::try_casefold_path(
+              platform::try_wide_to_utf8(candidate.path.filename().wstring())
+                  .value_or(std::string{}));
           return folded.has_value() && *folded == *suggested_folded;
         });
 
@@ -766,52 +867,59 @@ PackOperationResult import_profile_pack(
         imported.profile.id = base_id + "-" + std::to_string(suffix);
       if (imported.visual_profile.has_value())
         imported.visual_profile->profile_id = imported.profile.id;
+      if (imported.automation_profile.has_value())
+        imported.automation_profile->profile_id = imported.profile.id;
 
       const auto stem = suggested.stem().wstring() + L" copy";
       target = profile_directory / (stem + L".json");
       for (std::uint32_t suffix = 2;; ++suffix) {
-        const auto folded = casefold_path(
+        const auto folded = platform::try_casefold_path(
             platform::try_wide_to_utf8(target.filename().wstring())
                 .value_or(std::string{}));
-        if (folded.has_value() && !used_filenames.contains(*folded)) break;
-        target =
-            profile_directory /
-            (stem + L" " + std::to_wstring(suffix) + L".json");
+        if (folded.has_value() && !used_filenames.contains(*folded))
+          break;
+        target = profile_directory /
+                 (stem + L" " + std::to_wstring(suffix) + L".json");
       }
     } else {
       if (by_id != existing.end() && by_filename != existing.end() &&
           by_id->path != by_filename->path)
-        return failure("profile ID and filename conflict with different files; import a copy instead");
+        return failure("profile ID and filename conflict with different files; "
+                       "import a copy instead");
       if (by_id != existing.end())
         target = by_id->path;
       else if (by_filename != existing.end())
         target = by_filename->path;
       else if (used_filenames.contains(*suggested_folded))
-        return failure(
-            "suggested filename belongs to an unreadable or invalid profile; import a copy instead");
+        return failure("suggested filename belongs to an unreadable or invalid "
+                       "profile; import a copy instead");
       else
         target = profile_directory / suggested;
     }
     const auto target_folded =
-        casefold_path(platform::try_wide_to_utf8(target.filename().wstring())
+        platform::try_casefold_path(platform::try_wide_to_utf8(target.filename().wstring())
                           .value_or(std::string{}));
     if (!target_folded.has_value() ||
         !selected_targets.insert(*target_folded).second)
-      return failure("multiple selected profiles resolve to the same output file");
+      return failure(
+          "multiple selected profiles resolve to the same output file");
     used_filenames.insert(*target_folded);
     used_ids.insert(imported.profile.id);
 
-    imported.profile.schema_version = 3;
+    imported.profile.schema_version = 4;
     imported.profile.modules.clear();
     if (imported.visual_profile.has_value())
       imported.profile.modules.push_back(
           {.kind = core::ProfileModuleKind::visual,
            .schema_version = imported.visual_profile->schema_version});
+    if (imported.automation_profile.has_value())
+      imported.profile.modules.push_back(
+          {.kind = core::ProfileModuleKind::automation,
+           .schema_version = imported.automation_profile->schema_version});
     const auto base_json = core::serialize_profile_json(imported.profile);
     if (!add_backup_mutation(target, core::max_profile_json_bytes))
       return failure("existing profile could not be protected by a backup");
-    mutations.push_back(
-        {.target = target, .contents = as_bytes(base_json)});
+    mutations.push_back({.target = target, .contents = as_bytes(base_json)});
 
     const auto sidecar = platform::visual_sidecar_path(target);
     auto sidecar_state = sidecar;
@@ -822,7 +930,8 @@ PackOperationResult import_profile_pack(
       const auto visual_json =
           core::serialize_visual_profile_json(*imported.visual_profile);
       if (!add_backup_mutation(sidecar, core::max_visual_json_bytes))
-        return failure("existing visual sidecar could not be protected by a backup");
+        return failure(
+            "existing visual sidecar could not be protected by a backup");
       mutations.push_back(
           {.target = sidecar, .contents = as_bytes(visual_json)});
       mutations.push_back(
@@ -845,6 +954,40 @@ PackOperationResult import_profile_pack(
             {.target = sidecar_state, .contents = as_bytes("removed\n")});
       }
     }
+    const auto automation_sidecar = platform::automation_sidecar_path(target);
+    auto automation_state = automation_sidecar;
+    automation_state += L".state";
+    auto automation_backup = automation_sidecar;
+    automation_backup += L".bak";
+    if (imported.automation_profile.has_value()) {
+      const auto automation_json =
+          core::serialize_automation_profile_json(*imported.automation_profile);
+      if (!add_backup_mutation(automation_sidecar,
+                               core::max_automation_json_bytes))
+        return failure(
+            "existing automation sidecar could not be protected by a backup");
+      mutations.push_back({.target = automation_sidecar,
+                           .contents = as_bytes(automation_json)});
+      mutations.push_back(
+          {.target = automation_state, .contents = as_bytes("active\n")});
+    } else {
+      std::error_code automation_error;
+      const bool has_stale_automation =
+          std::filesystem::exists(automation_sidecar, automation_error) ||
+          std::filesystem::exists(automation_backup, automation_error) ||
+          std::filesystem::exists(automation_state, automation_error);
+      if (automation_error)
+        return failure(
+            "existing automation sidecar state could not be inspected");
+      if (has_stale_automation) {
+        mutations.push_back(
+            {.target = automation_sidecar, .contents = std::nullopt});
+        mutations.push_back(
+            {.target = automation_backup, .contents = std::nullopt});
+        mutations.push_back(
+            {.target = automation_state, .contents = as_bytes("removed\n")});
+      }
+    }
   }
 
   // Immutable assets publish before profile documents. Existing content must
@@ -852,7 +995,8 @@ PackOperationResult import_profile_pack(
   std::vector<platform::ProfileFileMutation> asset_mutations;
   for (const auto &hash : required_assets) {
     const auto found = pack.assets.find(hash);
-    if (found == pack.assets.end()) return failure("selected profile asset is missing");
+    if (found == pack.assets.end())
+      return failure("selected profile asset is missing");
     const auto target = asset_path_for_profile_root(profile_directory, hash);
     std::error_code asset_error;
     if (std::filesystem::exists(target, asset_error)) {
@@ -862,15 +1006,15 @@ PackOperationResult import_profile_pack(
         return failure("existing content-addressed asset is corrupt: " + hash);
       continue;
     }
-    if (asset_error) return failure("asset destination could not be inspected");
+    if (asset_error)
+      return failure("asset destination could not be inspected");
     asset_mutations.push_back(
         {.target = target, .contents = found->second.bytes});
   }
   asset_mutations.insert(asset_mutations.end(),
                          std::make_move_iterator(mutations.begin()),
                          std::make_move_iterator(mutations.end()));
-  if (!platform::commit_profile_transaction(profile_directory,
-                                             asset_mutations))
+  if (!platform::commit_profile_transaction(profile_directory, asset_mutations))
     return failure("profile-pack transaction failed and was rolled back");
   // LayerD may legitimately not be running. The committed files are the
   // source of truth and will be loaded at its next startup.
@@ -882,7 +1026,8 @@ PackOperationResult recover_profile_pack_transactions(
     const std::filesystem::path &profile_directory) {
   return platform::recover_profile_transactions(profile_directory)
              ? PackOperationResult{std::monostate{}}
-             : failure("an interrupted profile-pack transaction could not be recovered");
+             : failure("an interrupted profile-pack transaction could not be "
+                       "recovered");
 }
 
 } // namespace layerc::bundle

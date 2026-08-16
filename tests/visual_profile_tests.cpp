@@ -18,7 +18,7 @@ layerc::core::GameProfile visual_base_profile() {
   profile.game.executable_name = "game.exe";
   profile.cooldowns.push_back(
       {.id = "dash", .name = "Dash", .duration = Milliseconds(1'000),
-       .max_charges = 2, .stack_charges = true});
+       .max_charges = 2, .recovery = RecoveryMode::sequential});
   profile.bindings.push_back(
       {.cooldown_id = "dash",
        .chord = InputChord{{InputToken{InputDevice::keyboard, 0x12, 0}}}});

@@ -15,7 +15,7 @@
 namespace layerc::platform {
 
 inline constexpr wchar_t live_edit_pipe_name[] =
-    L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v2";
+    L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3";
 
 class IEditorDaemonChannel {
 public:

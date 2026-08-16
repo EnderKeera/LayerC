@@ -1,5 +1,6 @@
 #include "editor_app.hpp"
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 
 #include "layerc/platform/profile_transaction.hpp"
 #include "editor_resource.h"
@@ -47,9 +48,11 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
                                 .dwICC = ICC_LISTVIEW_CLASSES | ICC_WIN95_CLASSES};
   InitCommonControlsEx(&controls);
-  dialog_ = CreateDialogParamW(instance_, MAKEINTRESOURCEW(IDD_EDITOR), nullptr,
-                               &EditorWindow::dialog_proc,
-                               reinterpret_cast<LPARAM>(this));
+  dialog_ = CreateDialogParamW(
+      instance_, MAKEINTRESOURCEW(IDD_EDITOR), nullptr,
+      &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize,
+                              &EditorWindow::handle_main_message>,
+      reinterpret_cast<LPARAM>(this));
   if (dialog_ == nullptr) return 1;
   // CW_USEDEFAULT only has meaning when a window is created.  Passing it to
   // SetWindowPos placed the dialog at (-2147483648, -2147483648), leaving a
@@ -98,19 +101,6 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   return static_cast<int>(message.wParam);
 }
 
-INT_PTR CALLBACK EditorWindow::dialog_proc(HWND window, UINT message, WPARAM wparam,
-                                           LPARAM lparam) {
-  auto *editor = reinterpret_cast<EditorWindow *>(GetWindowLongPtrW(window, DWLP_USER));
-  if (message == WM_INITDIALOG) {
-    editor = reinterpret_cast<EditorWindow *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(editor));
-    editor->initialize(window);
-    return TRUE;
-  }
-  return editor == nullptr ? FALSE : editor->handle_main_message(window, message, wparam, lparam);
-}
-
-
 void EditorWindow::initialize(const HWND window) {
   dialog_ = window;
   font_ = create_editor_font(GetDpiForWindow(window));
@@ -133,7 +123,7 @@ void EditorWindow::initialize(const HWND window) {
                    .pszText = const_cast<LPWSTR>(L"Profile")};
   ListView_InsertColumn(profile_list_, 0, &column);
   style_list_view(profile_list_, true);
-  rebuild_profile_check_images();
+  rebuild_profile_check_hit_images();
   DrawMenuBar(dialog_);
   if (preview_ != nullptr) {
     const auto style = GetWindowLongPtrW(preview_, GWL_STYLE);
@@ -170,7 +160,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       style_dialog_children(window);
       if (old_font != nullptr) DeleteObject(old_font);
     }
-    rebuild_profile_check_images();
+    rebuild_profile_check_hit_images();
     layout();
     return TRUE;
   }
@@ -265,6 +255,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     case IDM_FILE_EXPORT_PACK: export_profile_pack(); return TRUE;
     case IDM_FILE_IMPORT_PACK: import_profile_pack(); return TRUE;
     case IDM_FILE_RUNTIME_DIAGNOSTICS: open_runtime_diagnostics(); return TRUE;
+    case IDM_FILE_AUTOMATION: open_automation_editor(); return TRUE;
     case IDM_FILE_SPLIT_BARS: split_independent_bars(); return TRUE;
     case IDC_ADD_COOLDOWN: add_cooldown(); return TRUE;
     case IDC_REMOVE_COOLDOWN: remove_cooldown(); return TRUE;
@@ -391,9 +382,9 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     KillTimer(window, live_channel_timer);
     if (task_dialog_ != nullptr && IsWindow(task_dialog_)) DestroyWindow(task_dialog_);
     task_dialog_ = nullptr;
-    if (profile_check_images_ != nullptr) {
-      ImageList_Destroy(profile_check_images_);
-      profile_check_images_ = nullptr;
+    if (profile_check_hit_images_ != nullptr) {
+      ImageList_Destroy(profile_check_hit_images_);
+      profile_check_hit_images_ = nullptr;
     }
     for (auto &brush_value : brushes_) { if (brush_value != nullptr) DeleteObject(brush_value); brush_value = nullptr; }
     if (font_ != nullptr) { DeleteObject(font_); font_ = nullptr; }

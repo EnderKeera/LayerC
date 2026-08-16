@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
 #include "layerc/core/hid.hpp"
@@ -195,11 +196,9 @@ void EditorWindow::capture_hid_binding() {
 INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
     const HWND window, const UINT message, const WPARAM wparam,
     const LPARAM lparam) {
-  auto *state = reinterpret_cast<HidDialogState *>(
-      GetWindowLongPtrW(window, DWLP_USER));
+  auto *state = bind_dialog_state<HidDialogState>(window, message, lparam);
+  if (state == nullptr) return FALSE;
   if (message == WM_INITDIALOG) {
-    state = reinterpret_cast<HidDialogState *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(state));
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
         window, state->editor->capture_exclusion_);
@@ -213,7 +212,6 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
     register_devices(window, *state);
     return TRUE;
   }
-  if (state == nullptr) return FALSE;
   if (message == WM_INPUT_DEVICE_CHANGE) {
     state->devices = layerc::platform::enumerate_raw_hid_devices();
     state->baselines.clear();

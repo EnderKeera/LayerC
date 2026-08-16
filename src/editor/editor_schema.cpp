@@ -21,18 +21,18 @@ bool source_schema_before(const std::string_view source,
 } // namespace
 
 bool source_uses_legacy_base_schema(const std::string_view source) {
-  return source_schema_before(source, 3.0);
+  return source_schema_before(source, 4.0);
 }
 
 bool source_uses_legacy_visual_schema(const std::string_view source) {
   return source_schema_before(source, 2.0);
 }
 
-bool confirm_v3_schema_upgrade(const HWND owner) {
+bool confirm_schema_upgrade(const HWND owner) {
   return MessageBoxW(
              owner,
-             L"Saving this legacy profile upgrades its base profile to schema version 3 and any legacy visual sidecar to its current schema. Older LayerC builds cannot reopen the upgraded files. Continue?",
-             L"Upgrade profile to LayerC V2", MB_YESNO | MB_ICONWARNING) ==
+             L"Saving this legacy profile upgrades its base profile to schema version 4 and all declared module sidecars to their current schemas. Older LayerC builds cannot reopen the upgraded files. Continue?",
+             L"Upgrade profile to LayerC V2.3", MB_YESNO | MB_ICONWARNING) ==
          IDYES;
 }
 

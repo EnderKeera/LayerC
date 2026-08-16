@@ -3,7 +3,8 @@
 LayerC is a lightweight, open-source Windows cooldown overlay. It uses a
 dependency-free C++20 core, typed JSON profiles, cooldown/input state machines,
 native game matching, demand-driven Raw Input/XInput/generic-HID handling,
-click-through buffered-GDI panels, opt-in pixel/template recognition, a native
+click-through buffered-GDI panels, opt-in pixel/template recognition, bounded
+Automation Graphs, a native
 editor and calibration utility, deterministic profile packs, tests, and a
 disposable game harness.
 
@@ -44,14 +45,15 @@ cmake --workflow --preset vs2026-release
 
 This workflow uses CMake's native Workflow and Package Presets. It configures,
 builds, tests, installs to `out\layerc`, and emits the versioned portable ZIP
-`build\vs2026\LayerC-2.2.0-windows-x64.zip`. A future Linux configure preset can
+`build\vs2026\LayerC-2.3.0-windows-x64.zip`. A future Linux configure preset can
 reuse the same build, test, install, and package structure without requiring a
 platform-specific orchestration script. Close LayerE and LayerD first on
 Windows so their executable files are not locked during the build or install.
 
 The test targets have separate jobs:
 
-- `layerc_core_tests` covers profile parsing, serialization, cooldown/input behavior, and runtime state without creating windows.
+- `layerc_core_tests` covers profile parsing, serialization, cooldown/input behavior, typed automation,
+  deterministic replay, and runtime state without creating windows.
 - `layerc_runtime_tests` covers the immutable capability-demand matrix,
   lazy service ownership, reentrant reconciliation, reverse teardown, failure
   rollback, and 100 activation cycles.
@@ -71,7 +73,7 @@ The test targets have separate jobs:
 - `layerc_isolated_visual_tests` validates the helper handshake, package and
   protocol pinning, message bounds, sequence ordering, and timestamp freshness.
 
-## V2.2 modular runtime
+## V2.2 modular runtime (foundation retained in V2.3)
 
 LayerD now owns first-party capabilities through the platform-neutral
 `DaemonKernel`. Input, generic HID, overlays, inline visual capture, template
@@ -87,15 +89,15 @@ LayerD. It reports service consumers and resources, sessions, last matched
 input, process memory/CPU/handles/threads, capture status, and isolated helper
 state. The dialog keeps no continuous trace.
 
-The V2.2 live channel is intentionally package-exact: LayerE and LayerD derive
-their handshake identities from the same package version and reject mixed
-V2.1/V2.2 binaries. Upgrade or replace all installed LayerC executables
+The V2.3 live channel is intentionally package-exact: LayerE and LayerD derive
+their handshake identities from the same package version and reject mixed release binaries. Upgrade or replace all installed LayerC executables
 together.
 
-Profiles read schemas 1-3. An explicit Save upgrades an older profile to
-schema 3 after the compatibility warning. Schema 3 persists first-party module
-metadata, `visualRuntime`, and generic-HID descriptors separately from compact
-runtime tokens. Unknown schema/module kinds are rejected.
+Profiles read base schemas 1-4. An explicit Save upgrades an older profile to
+schema 4 after the compatibility warning. Schema 3 introduced first-party
+module metadata, `visualRuntime`, and generic-HID descriptors; schema 4 adds
+explicit cooldown recovery modes and cooldown groups. Automation definitions use
+a separately versioned schema-1 sidecar. Unknown schema/module kinds are rejected.
 
 ### Generic HID
 
@@ -132,6 +134,49 @@ visual evaluation while input remains usable. Runtime Diagnostics can retry it.
 
 Each matched game keeps its own non-topmost, game-owned mini overlay. Switching apps leaves the cooldown running behind the foreground app; returning to the game shows its remaining time. Minimizing or closing that game hides its overlay.
 
+## V2.3 Automation Graphs
+
+Choose **File -> Automation...** to add multiple independent bounded
+automations to the current profile. The Basic editor includes input-cooldown,
+repeating-timer, and ready-overlay presets plus a node palette. Click a rule or
+action on the connected canvas to edit its event, source, priority, action,
+target, typed JSON value, or repeating-timer flag. The Advanced editor exposes
+the complete typed JSON AST; both views edit the same schema-1 automation
+sidecar under `profiles\_automation`.
+
+Rules react to input transitions and demanded controller/HID values, visual
+observations, cooldown/group changes, session lifecycle, variable changes, and
+monotonic timers. A root event is one ordered transaction across all enabled
+automations. Priority resolves per-target conflicts; a bad graph faults only
+that automation in that game-window session, while ordinary bindings and other
+automations continue. Retry, reload, or editing clears the fault.
+
+Variables support null, Boolean, signed 64-bit integer, finite number, duration,
+confidence, bounded UTF-8 string, list, and map values. They are session-local
+unless explicitly marked persistent. Persistent values are shared across the
+profile's sessions and atomically checkpointed under `profiles\_state` within
+one second even under continuous changes, with a final normal-shutdown flush.
+State and `.layerctrace` recordings are machine-local and never exported in
+profile packs; packs include definitions and defaults only.
+Trace files intentionally retain bounded typed source-field values for exact
+simulator replay; treat user-authored string/map values as potentially
+sensitive and share `.layerctrace` files only when their contents are safe.
+
+Live trace requires the authenticated LayerE/LayerD connection and allocates no
+daemon trace buffer while unsubscribed. The deterministic simulator uses the
+same production evaluator and supports typed synthetic or recorded events,
+play/pause/step/speed, rule breakpoints, state inspection, and assertions.
+AutomationService itself is demand-created and owns no worker thread. A
+matching, non-minimized game window remains an active session while in the
+background so timers and non-input rules continue; focus loss suppresses only
+input-derived rules, as designed. The
+release benchmark verifies activation, a real persistent checkpoint, inactive
+recovery, <=1 MiB private and <=2 MiB working-set overhead, and evaluator gates
+of <=0.25 ms average and <=2 ms maximum:
+
+```powershell
+.\tools\benchmark_v23.ps1 -BuildDirectory .\build\vs2026\Release
+```
 ## Editor and live updates
 
 Opening the single LayerE instance starts or connects to the single LayerD
@@ -176,7 +221,7 @@ cmake --workflow --preset mingw-ninja
 
 This build needs the matching MinGW GCC runtime DLLs at deployment time unless that toolchain is configured for static runtimes; it does not need Qt.
 
-## Visual recognition (V1.1 through V2.2.0)
+## Visual recognition (V1.1 through V2.3.0)
 
 Visual recognition is opt-in per cooldown. Choose **Calibrate** in LayerE,
 select a matching game window, draw a normalized region, and configure one of

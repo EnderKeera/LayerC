@@ -120,8 +120,20 @@ private:
             }
         }
 
-        double number{};
         const auto text = source_.substr(start, position_ - start);
+        // Integral tokens without a fraction or exponent keep exact int64
+        // storage; everything else parses as a double as before.
+        if (text.find('.') == std::string_view::npos &&
+            text.find('e') == std::string_view::npos &&
+            text.find('E') == std::string_view::npos) {
+            std::int64_t integer{};
+            const auto integer_conversion = std::from_chars(
+                text.data(), text.data() + text.size(), integer);
+            if (integer_conversion.ec == std::errc{} &&
+                integer_conversion.ptr == text.data() + text.size())
+                return Value(integer);
+        }
+        double number{};
         const auto conversion = std::from_chars(text.data(), text.data() + text.size(), number);
         if (conversion.ec != std::errc{} || conversion.ptr != text.data() + text.size() || !std::isfinite(number)) {
             fail("invalid number");

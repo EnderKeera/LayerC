@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,6 +14,85 @@
 
 #include <windows.h>
 namespace layerc::editor {
+namespace {
+
+std::uint16_t scan_code_from_lparam(const LPARAM key_data) noexcept {
+  const auto message_data = static_cast<std::uintptr_t>(key_data);
+  std::uint16_t code =
+      static_cast<std::uint16_t>((message_data >> 16U) & 0x00FFU);
+  if ((message_data & (1ULL << 24U)) != 0)
+    code = static_cast<std::uint16_t>(code | 0xE000U);
+  return code;
+}
+
+std::wstring key_name_for_scan_code(const std::uint16_t code) {
+  const LONG key_data = static_cast<LONG>((code & 0x00FFU) << 16U) |
+                        ((code & 0xE000U) != 0 ? (1L << 24) : 0L);
+  std::array<wchar_t, 128> name{};
+  std::wstring label =
+      GetKeyNameTextW(key_data, name.data(), static_cast<int>(name.size())) > 0
+          ? std::wstring(name.data())
+          : L"Keyboard key";
+  wchar_t suffix[24]{};
+  swprintf_s(suffix, L"  (scan 0x%04X)", code);
+  label += suffix;
+  return label;
+}
+
+void sync_bar_panels(layerc::core::GameProfile &profile,
+                     const std::optional<std::string_view> added = std::nullopt) {
+  const bool independent = !profile.panels.empty() &&
+      std::ranges::all_of(profile.panels, [](const layerc::core::Panel &panel) {
+        return panel.style == layerc::core::PanelStyle::bar &&
+               panel.cooldown_ids.size() == 1;
+      });
+  const auto exists = [&](const std::string_view id) {
+    return std::ranges::any_of(profile.cooldowns, [&](const auto &cooldown) {
+      return cooldown.id == id;
+    });
+  };
+  for (auto &panel : profile.panels)
+    std::erase_if(panel.cooldown_ids,
+                  [&](const auto &id) { return !exists(id); });
+  std::erase_if(profile.panels,
+                [](const auto &panel) { return panel.cooldown_ids.empty(); });
+  if (profile.cooldowns.empty()) return;
+
+  if (added && independent) {
+    const auto cooldown =
+        std::ranges::find(profile.cooldowns, *added,
+                          &layerc::core::CooldownDefinition::id);
+    if (cooldown != profile.cooldowns.end()) {
+      layerc::core::Panel panel;
+      panel.id = unique_panel_id(cooldown->id + "-bar", profile.panels);
+      panel.name = cooldown->name;
+      panel.style = layerc::core::PanelStyle::bar;
+      panel.anchor_x = 0.5;
+      panel.anchor_y = std::clamp(
+          0.2 + 0.10 * static_cast<double>(profile.cooldowns.size() - 1U),
+          0.0, 1.0);
+      panel.cooldown_ids = {cooldown->id};
+      profile.panels.push_back(std::move(panel));
+      return;
+    }
+  }
+
+  if (profile.panels.empty()) {
+    profile.panels.push_back({.id = "main",
+                              .name = "Main",
+                              .style = layerc::core::PanelStyle::bar,
+                              .cooldown_ids = {}});
+  }
+  const std::string_view required = added.value_or(profile.cooldowns.front().id);
+  const bool assigned = std::ranges::any_of(
+      profile.panels, [&](const layerc::core::Panel &panel) {
+        return std::ranges::find(panel.cooldown_ids, required) !=
+               panel.cooldown_ids.end();
+      });
+  if (!assigned) profile.panels.front().cooldown_ids.emplace_back(required);
+}
+
+} // namespace
 bool EditorWindow::handle_binding_capture_message(const MSG &message) {
   if (!capturing_binding_) return false;
   if (message.message == WM_KEYDOWN || message.message == WM_SYSKEYDOWN) {
@@ -108,16 +188,7 @@ void EditorWindow::refresh_binding_controls() {
   const auto &token = only->chord.tokens.front();
   std::wstring label;
   if (token.device == layerc::core::InputDevice::keyboard) {
-    const LONG key_data = static_cast<LONG>((token.code & 0x00FFU) << 16U) |
-                          ((token.code & 0xE000U) != 0 ? (1L << 24) : 0L);
-    std::array<wchar_t, 128> name{};
-    if (GetKeyNameTextW(key_data, name.data(), static_cast<int>(name.size())) > 0)
-      label = name.data();
-    else
-      label = L"Keyboard key";
-    wchar_t code[24]{};
-    swprintf_s(code, L"  (scan 0x%04X)", token.code);
-    label += code;
+    label = key_name_for_scan_code(token.code);
   } else if (token.device == layerc::core::InputDevice::mouse) {
     label = L"Mouse button " + std::to_wstring(token.code);
   } else if (token.device == layerc::core::InputDevice::generic_hid) {
@@ -158,11 +229,8 @@ void EditorWindow::assign_binding_key(const LPARAM key_data) {
     cancel_binding_capture(L"Binding capture cancelled because no cooldown is selected.");
     return;
   }
-  const auto message_data = static_cast<std::uintptr_t>(key_data);
-  std::uint16_t code =
-      static_cast<std::uint16_t>((message_data >> 16U) & 0x00FFU);
-  if ((message_data & (1ULL << 24U)) != 0)
-    code = static_cast<std::uint16_t>(code | 0xE000U);
+  const std::uint16_t code = scan_code_from_lparam(key_data);
+
   if ((code & 0x00FFU) == 0) {
     set_status(L"That key cannot be represented as a Windows scan code; try another key.");
     return;
@@ -235,26 +303,8 @@ void EditorWindow::add_cooldown() {
   if (scan_code == 0) scan_code = 0x12;
   profile_.bindings.push_back({.cooldown_id = id,
       .chord = layerc::core::InputChord{{{layerc::core::InputDevice::keyboard, scan_code, 0}}}});
-  const bool independent = !profile_.panels.empty() && std::all_of(
-      profile_.panels.begin(), profile_.panels.end(), [](const layerc::core::Panel &panel) {
-        return panel.style == layerc::core::PanelStyle::bar && panel.cooldown_ids.size() == 1;
-      });
-  if (independent) {
-    layerc::core::Panel panel;
-    panel.id = unique_panel_id(id + "-bar", profile_.panels);
-    panel.name = "Ability " + std::to_string(display_number);
-    panel.style = layerc::core::PanelStyle::bar;
-    panel.anchor_x = 0.5;
-    panel.anchor_y = std::clamp(0.2 + 0.10 * static_cast<double>(display_number), 0.0, 1.0);
-    panel.cooldown_ids = {id};
-    profile_.panels.push_back(std::move(panel));
-    refresh_bar_list(profile_.panels.size() - 1U);
-  } else {
-    if (profile_.panels.empty()) profile_.panels.push_back({.id = "main", .name = "Main",
-        .style = layerc::core::PanelStyle::bar, .cooldown_ids = {}});
-    profile_.panels.front().cooldown_ids.push_back(id);
-    refresh_bar_list();
-  }
+  sync_bar_panels(profile_, id);
+  refresh_bar_list(profile_.panels.size() - 1U);
   refresh_cooldown_list(static_cast<int>(profile_.cooldowns.size()) - 1);
   record_profile_change(ChangeKind::immediate);
   set_status(L"Cooldown added with an unused keyboard binding; Capture key can change it.");
@@ -282,11 +332,8 @@ void EditorWindow::remove_cooldown() {
   profile_.cooldowns.erase(profile_.cooldowns.begin() + data);
   std::erase_if(profile_.bindings, [&](const layerc::core::InputBinding &binding) { return binding.cooldown_id == id; });
   layerc::core::compact_hid_bindings(profile_);
-  std::erase_if(profile_.panels, [&](layerc::core::Panel &panel) {
-    std::erase(panel.cooldown_ids, id); return panel.cooldown_ids.empty();
-  });
-  if (profile_.panels.empty()) profile_.panels.push_back({.id = "main", .name = "Main",
-      .style = layerc::core::PanelStyle::bar, .cooldown_ids = {profile_.cooldowns.front().id}});
+  sync_bar_panels(profile_);
+
   refresh_cooldown_list(static_cast<int>(data) - 1); refresh_bar_list();
   record_profile_change(ChangeKind::immediate);
   set_status(L"Cooldown removed.");

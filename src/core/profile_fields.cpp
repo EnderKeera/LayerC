@@ -154,6 +154,14 @@ std::optional<std::int64_t> ProfileReader::checked_integer(const json::Value &va
       set_error(path, "expected integer");
       return std::nullopt;
     }
+    if (value.is_integer()) {
+      const auto integer = value.as_integer();
+      if (integer < minimum || integer > maximum) {
+        set_error(path, "integer is outside the supported range");
+        return std::nullopt;
+      }
+      return integer;
+    }
     const auto number = value.as_number();
     if (std::floor(number) != number || number < static_cast<double>(minimum) ||
         number > static_cast<double>(maximum)) {

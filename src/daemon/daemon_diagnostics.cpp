@@ -15,9 +15,12 @@ namespace {
 
 const char *state_name(const layerc::runtime::ServiceState state) noexcept {
   switch (state) {
-  case layerc::runtime::ServiceState::absent: return "absent";
-  case layerc::runtime::ServiceState::active: return "active";
-  case layerc::runtime::ServiceState::faulted: return "faulted";
+  case layerc::runtime::ServiceState::absent:
+    return "absent";
+  case layerc::runtime::ServiceState::active:
+    return "active";
+  case layerc::runtime::ServiceState::faulted:
+    return "faulted";
   }
   return "unknown";
 }
@@ -29,12 +32,14 @@ std::uint64_t file_time_value(const FILETIME value) noexcept {
 
 std::uint32_t process_thread_count() noexcept {
   const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-  if (snapshot == INVALID_HANDLE_VALUE) return 0;
+  if (snapshot == INVALID_HANDLE_VALUE)
+    return 0;
   THREADENTRY32 entry{.dwSize = sizeof(THREADENTRY32)};
   std::uint32_t count{};
   if (Thread32First(snapshot, &entry) != FALSE) {
     do {
-      if (entry.th32OwnerProcessID == GetCurrentProcessId()) ++count;
+      if (entry.th32OwnerProcessID == GetCurrentProcessId())
+        ++count;
       entry.dwSize = sizeof(THREADENTRY32);
     } while (Thread32Next(snapshot, &entry) != FALSE);
   }
@@ -45,18 +50,20 @@ std::uint32_t process_thread_count() noexcept {
 template <typename Integer>
 void append_number_field(std::string &output, const std::string_view name,
                          const Integer value, bool &first) {
-  if (!first) output.push_back(',');
+  if (!first)
+    output.push_back(',');
   first = false;
   layerc::core::json::append_quoted(output, name);
   output.push_back(':');
   layerc::core::json::append_unsigned(output,
-      static_cast<std::uint64_t>(value));
+                                      static_cast<std::uint64_t>(value));
 }
 
 void append_time(std::string &output, const std::string_view name,
                  const std::optional<layerc::core::TimePoint> value,
                  bool &first) {
-  if (!first) output.push_back(',');
+  if (!first)
+    output.push_back(',');
   first = false;
   layerc::core::json::append_quoted(output, name);
   output.push_back(':');
@@ -83,8 +90,7 @@ void append_resources(std::string &output,
   append_number_field(output, "captureSessions", resources.capture_sessions,
                       first);
   append_number_field(output, "queues", resources.queues, first);
-  append_number_field(output, "decodedAssets", resources.decoded_assets,
-                      first);
+  append_number_field(output, "decodedAssets", resources.decoded_assets, first);
   append_number_field(output, "cacheBytes", resources.cache_bytes, first);
   output.push_back('}');
 }
@@ -94,9 +100,10 @@ void append_resources(std::string &output,
 std::string DaemonApp::runtime_diagnostics_json() const {
   PROCESS_MEMORY_COUNTERS_EX memory{};
   memory.cb = sizeof(memory);
-  const bool have_memory = GetProcessMemoryInfo(
-      GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory),
-      sizeof(memory)) != FALSE;
+  const bool have_memory =
+      GetProcessMemoryInfo(GetCurrentProcess(),
+                           reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory),
+                           sizeof(memory)) != FALSE;
   DWORD handles{};
   (void)GetProcessHandleCount(GetCurrentProcess(), &handles);
   FILETIME created{}, exited{}, kernel{}, user{};
@@ -105,7 +112,10 @@ std::string DaemonApp::runtime_diagnostics_json() const {
 
   std::string output;
   output.reserve(8U * 1024U);
-  output += "{\"schemaVersion\":1,\"packageVersion\":\"2.2.0\",\"protocolVersion\":2";
+  output +=
+      "{\"schemaVersion\":1,\"packageVersion\":\"2.3.0\",\"protocolVersion\":";
+  layerc::core::json::append_unsigned(output,
+                                      layerc::core::live_protocol_version);
   output += ",\"process\":{";
   bool first = true;
   append_number_field(output, "pid", GetCurrentProcessId(), first);
@@ -119,13 +129,15 @@ std::string DaemonApp::runtime_diagnostics_json() const {
                       have_times ? file_time_value(kernel) : 0, first);
   append_number_field(output, "userTime100ns",
                       have_times ? file_time_value(user) : 0, first);
-  output += ",\"gpuAllocation\":{\"available\":false,\"reason\":\"adapter budget telemetry unavailable\"}}";
+  output += ",\"gpuAllocation\":{\"available\":false,\"reason\":\"adapter "
+            "budget telemetry unavailable\"}}";
 
   output += ",\"services\":[";
   const auto services = runtime_kernel_.services().all_stats();
   for (std::size_t index = 0; index < services.size(); ++index) {
     const auto &service = services[index];
-    if (index != 0) output.push_back(',');
+    if (index != 0)
+      output.push_back(',');
     output += "{\"capability\":";
     layerc::core::json::append_quoted(
         output, layerc::runtime::capability_name(service.capability));
@@ -150,14 +162,14 @@ std::string DaemonApp::runtime_diagnostics_json() const {
   }
   output.push_back(']');
   output += ",\"aggregateOwnedResources\":";
-  append_resources(output,
-                   runtime_kernel_.services().aggregate_resources());
+  append_resources(output, runtime_kernel_.services().aggregate_resources());
 
   output += ",\"sessions\":[";
   const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
   for (std::size_t index = 0; index < sessions_.size(); ++index) {
     const auto &session = *sessions_[index];
-    if (index != 0) output.push_back(',');
+    if (index != 0)
+      output.push_back(',');
     output += "{\"profileId\":";
     layerc::core::json::append_quoted(output, session.profile.id);
     output += ",\"sourceKey\":";
@@ -167,9 +179,10 @@ std::string DaemonApp::runtime_diagnostics_json() const {
     layerc::core::json::append_unsigned(
         output, reinterpret_cast<std::uintptr_t>(session.game_window));
     output += "\",\"foreground\":";
-    output += session.game_window != nullptr && session.game_window == foreground
-                  ? "true"
-                  : "false";
+    output +=
+        session.game_window != nullptr && session.game_window == foreground
+            ? "true"
+            : "false";
     output += ",\"overlayWindows\":";
     layerc::core::json::append_unsigned(output,
                                         session.overlays.object_count());
@@ -182,7 +195,8 @@ std::string DaemonApp::runtime_diagnostics_json() const {
   output += ",\"isolatedHelpers\":[";
   bool first_helper = true;
   for (const auto &[window, worker] : isolated_visual_captures_) {
-    if (!first_helper) output.push_back(',');
+    if (!first_helper)
+      output.push_back(',');
     first_helper = false;
     const auto status = worker->status();
     output += "{\"window\":\"";
@@ -191,8 +205,8 @@ std::string DaemonApp::runtime_diagnostics_json() const {
     output += "\",\"pid\":";
     layerc::core::json::append_unsigned(output, status.helper_process_id);
     output += status.running ? ",\"running\":true" : ",\"running\":false";
-    output += status.quarantined ? ",\"quarantined\":true"
-                                 : ",\"quarantined\":false";
+    output +=
+        status.quarantined ? ",\"quarantined\":true" : ",\"quarantined\":false";
     output += ",\"faultCount\":";
     layerc::core::json::append_unsigned(output, status.fault_count);
     output += ",\"lastError\":";

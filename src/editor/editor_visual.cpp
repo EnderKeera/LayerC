@@ -259,8 +259,8 @@ bool EditorWindow::save_visual_profile() {
   profile_ = *validated;
   visual_profile_->profile_id = profile_.id;
   if (!confirm_v2_upgrade()) return false;
-  if (!layerc::platform::write_profile_bundle(current_path_, profile_,
-                                               visual_profile_)) {
+  if (!layerc::platform::write_profile_bundle(
+          current_path_, profile_, visual_profile_, automation_profile_)) {
     MessageBoxW(dialog_,
                 L"The matching profile and visual sidecar could not be validated and committed as one bundle. The previous consistent bundle remains active.",
                 L"Visual save failed", MB_OK | MB_ICONERROR);
@@ -268,8 +268,8 @@ bool EditorWindow::save_visual_profile() {
   }
   visual_sidecar_state_ = layerc::platform::VisualSidecarState::valid;
   visual_sidecar_error_.clear();
-  (void)history_.record(profile_, visual_profile_, false);
-  history_.rebase(profile_, visual_profile_);
+  (void)history_.record(profile_, visual_profile_, automation_profile_, false);
+  history_.rebase(profile_, visual_profile_, automation_profile_);
   dirty_ = false;
   legacy_base_schema_ = false;
   legacy_visual_schema_ = false;

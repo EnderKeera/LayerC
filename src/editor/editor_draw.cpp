@@ -8,6 +8,37 @@
 
 #include <windows.h>
 namespace layerc::editor {
+namespace {
+
+RECT paint_checkbox(const HDC dc, const RECT bounds, const bool checked,
+                    const RoleColors &colors,
+                    const ProfileCheckboxMetrics &metrics) {
+  const int height = std::max(1L, bounds.bottom - bounds.top);
+  const int desired = std::max(1, metrics.image_size - metrics.inset * 2);
+  const int size = std::min(std::max(1, height - metrics.inset * 2), desired);
+  const int top = bounds.top + (height - size) / 2;
+  RECT box{bounds.left + metrics.inset, top,
+           bounds.left + metrics.inset + size, top + size};
+  const HBRUSH fill =
+      CreateSolidBrush(checked ? colors.selection : colors.hover);
+  FillRect(dc, &box, fill);
+  DeleteObject(fill);
+  const HBRUSH border = CreateSolidBrush(colors.border);
+  FrameRect(dc, &box, border);
+  DeleteObject(border);
+  if (checked) {
+    const HPEN tick = CreatePen(PS_SOLID, metrics.pen_width, colors.text);
+    const HGDIOBJ previous_pen = SelectObject(dc, tick);
+    MoveToEx(dc, box.left + size / 6, box.top + size / 2, nullptr);
+    LineTo(dc, box.left + size * 5 / 12, box.bottom - size / 4);
+    LineTo(dc, box.right - size / 6, box.top + size / 4);
+    SelectObject(dc, previous_pen);
+    DeleteObject(tick);
+  }
+  return box;
+}
+
+} // namespace
 void EditorWindow::draw_button(const DRAWITEMSTRUCT &draw,
                                const layerc::platform::EditorControlRole role,
                                const std::optional<COLORREF> explicit_fill) const {
@@ -95,7 +126,8 @@ void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
 }
 void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
   const auto list_colors = colors(layerc::platform::EditorControlRole::list);
-  const auto checkbox_colors = colors(layerc::platform::EditorControlRole::checkbox);
+  const auto checkbox_colors =
+      colors(layerc::platform::EditorControlRole::checkbox);
   const bool selected = (draw.itemState & ODS_SELECTED) != 0;
   RECT row = draw.rcItem;
   RECT client{};
@@ -110,38 +142,12 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
     const auto index = static_cast<std::size_t>(draw.itemID);
     const bool enabled = index < entries_.size() && entries_[index].enabled;
     const bool checked =
-        ListView_GetCheckState(draw.hwndItem, static_cast<int>(draw.itemID)) != FALSE;
-    const int item_height = std::max(1L, row.bottom - row.top);
-    const auto metrics = profile_checkbox_metrics(GetDpiForWindow(draw.hwndItem));
-    const int desired_box_size =
-        std::max(1, metrics.image_size - metrics.inset * 2);
-    const int box_size =
-        std::min(std::max(1, item_height - metrics.inset * 2),
-                 desired_box_size);
-    const int box_top = row.top + (item_height - box_size) / 2;
-    RECT box{row.left + metrics.inset, box_top,
-             row.left + metrics.inset + box_size,
-             box_top + box_size};
-    const HBRUSH box_fill = CreateSolidBrush(
-        checked ? checkbox_colors.selection : checkbox_colors.hover);
-    FillRect(draw.hDC, &box, box_fill);
-    DeleteObject(box_fill);
-    const HBRUSH box_border = CreateSolidBrush(checkbox_colors.border);
-    FrameRect(draw.hDC, &box, box_border);
-    DeleteObject(box_border);
-    if (checked) {
-      const HPEN tick =
-          CreatePen(PS_SOLID, metrics.pen_width, checkbox_colors.text);
-      const HGDIOBJ previous_pen = SelectObject(draw.hDC, tick);
-      MoveToEx(draw.hDC, box.left + box_size / 6,
-               box.top + box_size / 2, nullptr);
-      LineTo(draw.hDC, box.left + box_size * 5 / 12,
-             box.bottom - box_size / 4);
-      LineTo(draw.hDC, box.right - box_size / 6,
-             box.top + box_size / 4);
-      SelectObject(draw.hDC, previous_pen);
-      DeleteObject(tick);
-    }
+        ListView_GetCheckState(draw.hwndItem,
+                               static_cast<int>(draw.itemID)) != FALSE;
+    const auto metrics =
+        profile_checkbox_metrics(GetDpiForWindow(draw.hwndItem));
+    const RECT box =
+        paint_checkbox(draw.hDC, row, checked, checkbox_colors, metrics);
 
     const std::wstring label =
         index < entries_.size() ? entries_[index].label : std::wstring{};
@@ -165,31 +171,31 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
     DeleteObject(focus_brush);
   }
 }
-
 void EditorWindow::draw_checkbox(const DRAWITEMSTRUCT &draw) const {
-  const auto role_colors = colors(layerc::platform::EditorControlRole::checkbox);
+  const auto role_colors =
+      colors(layerc::platform::EditorControlRole::checkbox);
   const bool checked = owner_draw_checkbox_checked(draw.hwndItem);
   const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
-  const HBRUSH background = CreateSolidBrush(role_colors.fill); FillRect(draw.hDC, &draw.rcItem, background); DeleteObject(background);
-  RECT box{draw.rcItem.left + 4, draw.rcItem.top + 4, draw.rcItem.left + 20, draw.rcItem.top + 20};
-  const HBRUSH box_fill = CreateSolidBrush(checked ? role_colors.selection : role_colors.hover);
-  FillRect(draw.hDC, &box, box_fill); DeleteObject(box_fill);
-  const HPEN border = CreatePen(PS_SOLID, 1, role_colors.border); const auto previous = SelectObject(draw.hDC, border);
-  SelectObject(draw.hDC, GetStockObject(NULL_BRUSH)); Rectangle(draw.hDC, box.left, box.top, box.right, box.bottom);
-  if (checked) {
-    const HPEN tick = CreatePen(PS_SOLID, 2, role_colors.text); SelectObject(draw.hDC, tick);
-    MoveToEx(draw.hDC, box.left + 3, box.top + 8, nullptr); LineTo(draw.hDC, box.left + 7, box.bottom - 4);
-    LineTo(draw.hDC, box.right - 3, box.top + 4); SelectObject(draw.hDC, border); DeleteObject(tick);
-  }
-  SelectObject(draw.hDC, previous); DeleteObject(border);
-  std::array<wchar_t, 160> label{}; GetWindowTextW(draw.hwndItem, label.data(), static_cast<int>(label.size()));
-  RECT text = draw.rcItem; text.left += 27; SetBkMode(draw.hDC, TRANSPARENT);
-  SetTextColor(draw.hDC, disabled ? role_colors.disabled : role_colors.text);
+  const HBRUSH background = CreateSolidBrush(role_colors.fill);
+  FillRect(draw.hDC, &draw.rcItem, background);
+  DeleteObject(background);
+  const auto metrics =
+      profile_checkbox_metrics(GetDpiForWindow(draw.hwndItem));
+  const RECT box =
+      paint_checkbox(draw.hDC, draw.rcItem, checked, role_colors, metrics);
+
+  std::array<wchar_t, 160> label{};
+  GetWindowTextW(draw.hwndItem, label.data(), static_cast<int>(label.size()));
+  RECT text = draw.rcItem;
+  text.left = box.right + std::max(1, MulDiv(7, metrics.image_size, 16));
+  SetBkMode(draw.hDC, TRANSPARENT);
+  SetTextColor(draw.hDC,
+               disabled ? role_colors.disabled : role_colors.text);
   const HGDIOBJ previous_font = SelectObject(draw.hDC, font_);
-  DrawTextW(draw.hDC, label.data(), -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+  DrawTextW(draw.hDC, label.data(), -1, &text,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
   SelectObject(draw.hDC, previous_font);
 }
-
 void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw, const HWND window) const {
   const HGDIOBJ previous_font = SelectObject(draw.hDC, font_);
   const auto role_colors = colors(appearance_role(window));
