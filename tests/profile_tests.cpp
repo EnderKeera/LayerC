@@ -45,8 +45,8 @@ void test_profile_parser() {
          "valid profile should parse");
 
   if (const auto *profile = std::get_if<GameProfile>(&result)) {
-    expect(profile->schema_version == 3,
-           "legacy base profiles should migrate to v3 in memory");
+    expect(profile->schema_version == 4,
+           "legacy base profiles should migrate to v4 in memory");
     expect(profile->cooldowns.size() == 1, "profile should contain cooldown");
     expect(profile->panels.front().cooldown_ids.front() == "dash",
            "panel reference should resolve");
@@ -61,11 +61,11 @@ void test_profile_parser() {
                profile->panels.front().bar.show_text &&
                profile->panels.front().bar.hide_when_ready,
            "bar appearance should parse with legacy showText default");
-    expect(profile->cooldowns.front().stack_charges,
-           "stackCharges should parse");
-    expect(serialize_profile_json(*profile).find("\"schemaVersion\": 3") !=
+    expect(profile->cooldowns.front().recovery == RecoveryMode::sequential,
+           "schema <4 stackCharges should derive sequential recovery");
+    expect(serialize_profile_json(*profile).find("\"schemaVersion\": 4") !=
                std::string::npos,
-           "saving a migrated base profile should emit schema v3");
+           "saving a migrated base profile should emit schema v4");
   }
 
   const std::string oversized(max_profile_json_bytes + 1U, 'x');
@@ -321,7 +321,7 @@ void test_profile_schema3_hid() {
   })json";
   const auto parsed = parse_profile_json(source);
   const auto *profile = std::get_if<GameProfile>(&parsed);
-  expect(profile != nullptr && profile->schema_version == 3 &&
+  expect(profile != nullptr && profile->schema_version == 4 &&
              profile->visual_runtime == VisualRuntime::isolated &&
              profile->hid_bindings.size() == 1 &&
              profile->bindings.front().chord.tokens.front().device ==

@@ -7,6 +7,7 @@ void test_non_stacking_cooldown();
 void test_restart_policy();
 void test_restart_with_empty_stacked_charges();
 void test_cooldown_control_operations();
+void test_cooldown_recovery_modes_and_groups();
 void test_snapshot_reuse();
 void test_input_chord_edges();
 void test_input_matcher_state_management();
@@ -32,5 +33,12 @@ void test_template_matching();
 void test_visual_trigger_state_machine();
 void test_visual_repeat_when_ready();
 void test_calibration_protocol();
+void test_automation_profile_round_trip();
+void test_automation_runtime_transaction_and_replay();
+void test_automation_priority_fault_isolation_and_reconfigure();
+void test_automation_value_round_trip_and_bounds();
+void test_automation_expression_and_action_contract();
+void test_automation_limits_and_fault_rollback();
+void test_automation_persistent_sync_and_cascade_bounds();
 
 } // namespace layerc::test

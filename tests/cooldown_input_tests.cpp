@@ -5,6 +5,7 @@
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/hid.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <vector>
@@ -20,7 +21,7 @@ void test_cooldown_charges() {
       .duration = 5s,
       .max_charges = 2,
       .retrigger = RetriggerPolicy::ignore,
-      .stack_charges = true,
+      .recovery = RecoveryMode::sequential,
   }};
   CooldownEngine engine(definitions);
 
@@ -100,7 +101,7 @@ void test_restart_with_empty_stacked_charges() {
       .duration = 5s,
       .max_charges = 2,
       .retrigger = RetriggerPolicy::restart,
-      .stack_charges = true,
+      .recovery = RecoveryMode::sequential,
   }};
   CooldownEngine engine(definitions);
   const TimePoint start{};
@@ -150,6 +151,97 @@ void test_cooldown_control_operations() {
          "shrinking max charges to the available count should clear a stray recharge timer");
 }
 
+void test_cooldown_recovery_modes_and_groups() {
+  using namespace std::chrono_literals;
+  using namespace layerc::core;
+  const TimePoint start{};
+
+  const std::vector<CooldownDefinition> parallel_definitions{{
+      .id = "charges",
+      .name = "Charges",
+      .duration = 5s,
+      .max_charges = 2,
+      .recovery = RecoveryMode::parallel,
+  }};
+  CooldownEngine parallel(parallel_definitions);
+  expect(parallel.trigger("charges", start) &&
+             parallel.trigger("charges", start + 1s),
+         "parallel recovery should spend independent charges");
+  auto state = parallel.snapshot(start + 5s).front();
+  expect(state.available_charges == 1 &&
+             state.recovery_deadlines.size() == 1,
+         "parallel recovery should restore each charge at its own deadline");
+  expect(parallel.refund("charges", start + 5s) &&
+             parallel.snapshot(start + 5s).front().available_charges == 2,
+         "parallel refunds should cancel the newest outstanding deadline");
+
+  const std::vector<CooldownDefinition> sequential_definitions{{
+      .id = "charges",
+      .name = "Charges",
+      .duration = 5s,
+      .max_charges = 2,
+      .recovery = RecoveryMode::sequential,
+  }};
+  CooldownEngine sequential(sequential_definitions);
+  expect(sequential.trigger("charges", start) &&
+             sequential.trigger("charges", start + 1s) &&
+             sequential.snapshot(start + 5s).front().available_charges == 1 &&
+             sequential.snapshot(start + 10s).front().available_charges == 2,
+         "sequential recovery should restore one charge per duration");
+
+  const std::vector<CooldownDefinition> definitions{
+      {.id = "dash", .name = "Dash", .duration = 3s},
+      {.id = "blink", .name = "Blink", .duration = 4s}};
+  const std::vector<CooldownGroup> groups{
+      {.id = "movement-pool",
+       .name = "Movement Pool",
+       .mode = CooldownGroupMode::shared_pool,
+       .cooldown_ids = {"dash", "blink"},
+       .duration = 5s,
+       .max_charges = 2,
+       .recovery = RecoveryMode::parallel},
+      {.id = "movement-all",
+       .name = "Movement All",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"dash", "blink"}}};
+  CooldownEngine grouped(definitions, groups);
+  expect(grouped.trigger("dash", start),
+         "a shared-pool member should trigger its pool");
+  const auto shared = grouped.snapshot(start);
+  expect(shared.size() == 2 && shared[0].available_charges == 1 &&
+             shared[1].available_charges == 1,
+         "shared-pool members should expose identical charge state");
+  expect(grouped.reset_group("movement-pool") &&
+             grouped.snapshot(start).front().available_charges == 2,
+         "resetting a shared pool should restore its common state once");
+  expect(!grouped.trigger_group("movement-all", start, 77).empty() &&
+             grouped.snapshot(start).front().available_charges == 1,
+         "propagation should trigger every distinct member state without recursion");
+
+  const std::vector<CooldownDefinition> propagated_definitions{
+      {.id = "one", .name = "One", .duration = 3s},
+      {.id = "two", .name = "Two", .duration = 3s},
+      {.id = "three", .name = "Three", .duration = 3s}};
+  const std::vector<CooldownGroup> propagated_groups{
+      {.id = "first",
+       .name = "First",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"one", "two"}},
+      {.id = "second",
+       .name = "Second",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"two", "three"}}};
+  CooldownEngine propagated(propagated_definitions, propagated_groups);
+  const auto triggered =
+      propagated.trigger_with_propagation("one", start, 91);
+  const auto states = propagated.snapshot(start);
+  expect(triggered.size() == 3 &&
+             std::ranges::all_of(states, [](const auto &state) {
+               return state.available_charges == 0;
+             }),
+         "a direct cooldown trigger should transitively fan through every "
+         "overlapping propagation group exactly once");
+}
 void test_snapshot_reuse() {
   using namespace std::chrono_literals;
   using namespace layerc::core;

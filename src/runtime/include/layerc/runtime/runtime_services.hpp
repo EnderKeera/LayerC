@@ -21,6 +21,7 @@ enum class Capability : std::uint8_t {
   template_evaluation,
   isolated_visual,
   live_edit,
+  automation,
   count,
 };
 

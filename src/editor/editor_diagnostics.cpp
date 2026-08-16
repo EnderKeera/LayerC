@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
 #include <string>
@@ -36,12 +37,9 @@ void EditorWindow::open_runtime_diagnostics() {
 INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     const HWND window, const UINT message, const WPARAM wparam,
     const LPARAM lparam) {
-  auto *editor = reinterpret_cast<EditorWindow *>(
-      GetWindowLongPtrW(window, DWLP_USER));
+  auto *editor = bind_dialog_state<EditorWindow>(window, message, lparam);
+  if (editor == nullptr) return FALSE;
   if (message == WM_INITDIALOG) {
-    editor = reinterpret_cast<EditorWindow *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER,
-                      reinterpret_cast<LONG_PTR>(editor));
     editor->diagnostics_dialog_ = window;
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
@@ -50,7 +48,6 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     editor->request_runtime_diagnostics();
     return TRUE;
   }
-  if (editor == nullptr) return FALSE;
   if (message == WM_COMMAND) {
     switch (LOWORD(wparam)) {
     case IDC_DIAGNOSTICS_REFRESH:

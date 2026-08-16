@@ -1,8 +1,74 @@
 #include "daemon_app.hpp"
 
+#include "layerc/platform/text.hpp"
+
 #include <algorithm>
+#include <map>
+#include <optional>
+#include <string>
 
 namespace layerc::daemon {
+namespace {
+
+bool override_precedes(const layerc::core::OverlayPropertyOverride &left,
+                       const layerc::core::OverlayPropertyOverride &right) {
+  if (left.priority != right.priority) return left.priority > right.priority;
+  if (left.automation_order != right.automation_order)
+    return left.automation_order < right.automation_order;
+  return left.rule_order < right.rule_order;
+}
+
+void apply_property(layerc::core::Panel &panel, std::optional<bool> &visible,
+                    std::optional<std::wstring> &text,
+                    const layerc::core::OverlayPropertyOverride &item) {
+  const auto *spec = layerc::core::find_overlay_property(item.property);
+  if (spec == nullptr)
+    return;
+  if (spec->panel_visibility) {
+    if (const auto *boolean = std::get_if<bool>(&item.value.storage))
+      visible = *boolean;
+  } else if (spec->panel_text) {
+    if (const auto *string = std::get_if<std::string>(&item.value.storage))
+      text = layerc::platform::utf8_to_wide(*string);
+  } else if (spec->apply != nullptr) {
+    spec->apply(panel, item.value);
+  }
+}
+
+void apply_automation_overrides(Session &session) {
+  static const std::vector<layerc::core::OverlayPropertyOverride> empty;
+  const auto &overrides =
+      session.automation_runtime
+          ? session.automation_runtime->snapshot().overlay_overrides
+          : empty;
+  if (overrides == session.applied_overlay_overrides) return;
+  session.applied_overlay_overrides = overrides;
+
+  for (const auto &base_panel : session.profile.panels) {
+    auto panel = base_panel;
+    std::optional<bool> visible;
+    std::optional<std::wstring> text;
+    std::map<std::string,
+             const layerc::core::OverlayPropertyOverride *,
+             std::less<>>
+        winners;
+    for (const auto &item : overrides) {
+      if (item.panel_id != panel.id) continue;
+      const auto found = winners.find(item.property);
+      if (found == winners.end() ||
+          override_precedes(item, *found->second))
+        winners[item.property] = &item;
+    }
+    for (const auto &[property, item] : winners) {
+      (void)property;
+      apply_property(panel, visible, text, *item);
+    }
+    session.overlays.apply_session_override(panel, visible, std::move(text));
+  }
+}
+
+} // namespace
+
 void CALLBACK DaemonApp::foreground_event_proc(
     const HWINEVENTHOOK hook, const DWORD event, const HWND window,
     const LONG object_id, const LONG child_id, const DWORD event_thread,
@@ -89,6 +155,7 @@ void DaemonApp::update_overlays() {
   bool has_running_cooldown{};
 
   for (auto &session : sessions_) {
+    apply_automation_overrides(*session);
     const bool hidden_for_edit =
         edit_session_ != nullptr && !session->is_global() &&
         session->game_window == edit_session_->target;

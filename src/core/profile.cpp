@@ -20,13 +20,13 @@ ProfileResult ProfileReader::read() {
 
     GameProfile profile;
     const auto schema_version =
-        required_integer(root_, "schemaVersion", "$", 1, 3);
+        required_integer(root_, "schemaVersion", "$", 1, 4);
     if (!schema_version.has_value()) {
       return error_;
     }
     // Schemas 1 and 2 are migrated in memory. LayerE retains the source schema
     // separately so only an explicit Save can approve the V2.2 boundary.
-    profile.schema_version = 3;
+    profile.schema_version = 4;
 
     if (!required_string(root_, "id", "$", profile.id) ||
         !required_string(root_, "name", "$", profile.name)) {
@@ -70,8 +70,10 @@ ProfileResult ProfileReader::read() {
     if (!read_modules(profile, static_cast<std::uint32_t>(*schema_version)) ||
         !read_hid_bindings(profile,
                            static_cast<std::uint32_t>(*schema_version)) ||
-        !read_cooldowns(profile) || !read_panels(profile) ||
-        !read_bindings(profile)) {
+        !read_cooldowns(profile, static_cast<std::uint32_t>(*schema_version)) ||
+        !read_cooldown_groups(
+            profile, static_cast<std::uint32_t>(*schema_version)) ||
+        !read_panels(profile) || !read_bindings(profile)) {
       return error_;
     }
     return profile;
@@ -229,13 +231,21 @@ bool ProfileReader::read_modules(GameProfile &profile,
       std::string kind;
       if (!required_string(entry, "kind", path, kind)) return false;
       ProfileModule module;
+      std::int64_t maximum_version{};
       if (kind == "visual") {
         module.kind = ProfileModuleKind::visual;
+        maximum_version = 2;
+      } else if (kind == "automation") {
+        if (source_schema < 4)
+          return set_error(path + ".kind",
+                           "automation modules require schema version 4");
+        module.kind = ProfileModuleKind::automation;
+        maximum_version = 1;
       } else {
         return set_error(path + ".kind", "unsupported module kind");
       }
-      const auto version =
-          required_integer(entry, "schemaVersion", path, 1, 2);
+      const auto version = required_integer(
+          entry, "schemaVersion", path, 1, maximum_version);
       if (!version.has_value()) return false;
       module.schema_version = static_cast<std::uint32_t>(*version);
       if (!kinds.insert(module.kind).second)
@@ -245,7 +255,8 @@ bool ProfileReader::read_modules(GameProfile &profile,
     return true;
   }
 
-bool ProfileReader::read_cooldowns(GameProfile &profile) {
+bool ProfileReader::read_cooldowns(GameProfile &profile,
+                                   const std::uint32_t source_schema) {
     const auto *values = required_array(root_, "cooldowns", "$");
     if (values == nullptr) {
       return false;
@@ -281,10 +292,27 @@ bool ProfileReader::read_cooldowns(GameProfile &profile) {
 
       std::string retrigger = "ignore";
       optional_string(value, "retrigger", path, retrigger);
-      optional_boolean(value, "stackCharges", path, definition.stack_charges);
-      if (!ok()) {
-        return false;
+      if (source_schema >= 4) {
+        std::string recovery;
+        if (!required_string(value, "recovery", path, recovery)) return false;
+        if (recovery == "single")
+          definition.recovery = RecoveryMode::single;
+        else if (recovery == "sequential")
+          definition.recovery = RecoveryMode::sequential;
+        else if (recovery == "parallel")
+          definition.recovery = RecoveryMode::parallel;
+        else
+          return set_error(path + ".recovery",
+                           "expected single, sequential, or parallel");
+      } else {
+        // Schema <4 expressed recovery as a stackCharges boolean; derive the
+        // canonical field here so runtime code never sees the mirror.
+        bool stack_charges{};
+        optional_boolean(value, "stackCharges", path, stack_charges);
+        definition.recovery = stack_charges ? RecoveryMode::sequential
+                                            : RecoveryMode::single;
       }
+      if (!ok()) return false;
       if (retrigger == "ignore") {
         definition.retrigger = RetriggerPolicy::ignore;
       } else if (retrigger == "restart") {
@@ -298,6 +326,103 @@ bool ProfileReader::read_cooldowns(GameProfile &profile) {
     return true;
   }
 
+bool ProfileReader::read_cooldown_groups(
+    GameProfile &profile, const std::uint32_t source_schema) {
+  const auto *values = root_.find("cooldownGroups");
+  if (values == nullptr) {
+    if (source_schema >= 4)
+      return set_error("$.cooldownGroups",
+                       "schema 4 requires a cooldown group collection");
+    return true;
+  }
+  if (source_schema < 4)
+    return set_error("$.cooldownGroups",
+                     "cooldown groups require schema version 4");
+  if (!values->is_array())
+    return set_error("$.cooldownGroups", "expected array");
+  if (values->as_array().size() > 64U)
+    return set_error("$.cooldownGroups", "at most 64 groups are allowed");
+
+  std::set<std::string, std::less<>> group_ids;
+  std::set<std::string, std::less<>> shared_members;
+  for (std::size_t index{}; index < values->as_array().size(); ++index) {
+    const auto path = "$.cooldownGroups[" + std::to_string(index) + "]";
+    const auto &value = values->as_array()[index];
+    if (!value.is_object())
+      return set_error(path, "cooldown group must be an object");
+    CooldownGroup group;
+    if (!required_string(value, "id", path, group.id) ||
+        !required_string(value, "name", path, group.name))
+      return false;
+    if (group.id.empty() || !group_ids.insert(group.id).second)
+      return set_error(path + ".id", "duplicate or empty group id");
+
+    std::string mode;
+    if (!required_string(value, "mode", path, mode)) return false;
+    if (mode == "sharedPool")
+      group.mode = CooldownGroupMode::shared_pool;
+    else if (mode == "triggerPropagation")
+      group.mode = CooldownGroupMode::trigger_propagation;
+    else
+      return set_error(path + ".mode",
+                       "expected sharedPool or triggerPropagation");
+
+    const auto *members = required_array(value, "cooldowns", path);
+    if (members == nullptr) return false;
+    if (members->empty())
+      return set_error(path + ".cooldowns", "group requires a member");
+    std::set<std::string, std::less<>> local_members;
+    for (std::size_t item{}; item < members->size(); ++item) {
+      const auto item_path = path + ".cooldowns[" + std::to_string(item) + "]";
+      if (!(*members)[item].is_string())
+        return set_error(item_path, "expected cooldown id");
+      const auto &id = (*members)[item].as_string();
+      if (!cooldown_ids_.contains(id))
+        return set_error(item_path, "unknown cooldown id");
+      if (!local_members.insert(id).second)
+        return set_error(item_path, "duplicate group member");
+      if (group.mode == CooldownGroupMode::shared_pool &&
+          !shared_members.insert(id).second)
+        return set_error(item_path,
+                         "cooldown belongs to more than one shared pool");
+      group.cooldown_ids.push_back(id);
+    }
+
+    if (group.mode == CooldownGroupMode::shared_pool) {
+      const auto duration =
+          required_integer(value, "durationMs", path, 1, 86'400'000);
+      const auto charges =
+          optional_integer(value, "maxCharges", path, 1, 99, 1);
+      std::string recovery;
+      std::string retrigger = "ignore";
+      if (!duration.has_value() || !charges.has_value() ||
+          !required_string(value, "recovery", path, recovery))
+        return false;
+      optional_string(value, "retrigger", path, retrigger);
+      if (!ok()) return false;
+      group.duration = Milliseconds(*duration);
+      group.max_charges = static_cast<std::uint32_t>(*charges);
+      if (recovery == "single")
+        group.recovery = RecoveryMode::single;
+      else if (recovery == "sequential")
+        group.recovery = RecoveryMode::sequential;
+      else if (recovery == "parallel")
+        group.recovery = RecoveryMode::parallel;
+      else
+        return set_error(path + ".recovery",
+                         "expected single, sequential, or parallel");
+      if (retrigger == "ignore")
+        group.retrigger = RetriggerPolicy::ignore;
+      else if (retrigger == "restart")
+        group.retrigger = RetriggerPolicy::restart;
+      else
+        return set_error(path + ".retrigger",
+                         "expected ignore or restart");
+    }
+    profile.cooldown_groups.push_back(std::move(group));
+  }
+  return true;
+}
 bool ProfileReader::read_panels(GameProfile &profile) {
     const auto *values = required_array(root_, "panels", "$");
     if (values == nullptr) {

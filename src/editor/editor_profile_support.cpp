@@ -49,6 +49,16 @@ bool recycle_profile_bundle(const std::filesystem::path &path) {
   auto visual_state = visual;
   visual_state += L".state";
   candidates.push_back(std::move(visual_state));
+  const auto automation = layerc::platform::automation_sidecar_path(path);
+  candidates.push_back(automation);
+  auto automation_backup = automation;
+  automation_backup += L".bak";
+  candidates.push_back(std::move(automation_backup));
+  const auto automation_state = layerc::platform::automation_state_path(path);
+  candidates.push_back(automation_state);
+  auto automation_state_backup = automation_state;
+  automation_state_backup += L".bak";
+  candidates.push_back(std::move(automation_state_backup));
 
   std::wstring source;
   std::error_code error;

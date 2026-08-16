@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "automation_editor.hpp"
 #include "editor_resource.h"
 
 #include "layerc/core/profile.hpp"
@@ -29,7 +30,7 @@ bool bounded_decimal(const std::wstring &text, const std::uint32_t minimum,
 } // namespace
 
 void EditorWindow::reset_history() {
-  history_.reset(profile_, visual_profile_);
+  history_.reset(profile_, visual_profile_, automation_profile_);
 }
 
 void EditorWindow::sync_current_profile_entry() {
@@ -56,14 +57,14 @@ void EditorWindow::sync_current_profile_entry() {
 
 void EditorWindow::record_profile_change(const ChangeKind kind) {
   if (syncing_) return;
-  if (history_.is_baseline(profile_, visual_profile_)) {
+  if (history_.is_baseline(profile_, visual_profile_, automation_profile_)) {
     if (!draft_controls_valid()) {
       dirty_ = true;
       schedule_autosave(false);
     }
     return;
   }
-  (void)history_.record(profile_, visual_profile_,
+  (void)history_.record(profile_, visual_profile_, automation_profile_,
                         kind == ChangeKind::text);
   dirty_ = true;
   schedule_autosave(kind != ChangeKind::text);
@@ -114,6 +115,12 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
     set_status(L"Not autosaved — repair the invalid visual sidecar first.");
     return false;
   }
+  if (!automation_profile_ &&
+      automation_sidecar_state_ ==
+          layerc::platform::AutomationSidecarState::invalid) {
+    set_status(L"Not autosaved — repair the invalid automation sidecar first.");
+    return false;
+  }
   sync_profile_from_controls();
   const auto serialized = layerc::core::serialize_profile_json(profile_);
   const auto parsed = layerc::core::parse_profile_json(serialized);
@@ -124,6 +131,7 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
   }
   profile_ = *validated;
   if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if (automation_profile_) automation_profile_->profile_id = profile_.id;
   if ((legacy_base_schema_ || legacy_visual_schema_) &&
       !v2_upgrade_acknowledged_) {
     if (!allow_upgrade_prompt) {
@@ -136,12 +144,12 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
       return false;
     }
   }
-  if (!layerc::platform::write_profile_bundle(current_path_, profile_,
-                                               visual_profile_)) {
+  if (!layerc::platform::write_profile_bundle(
+          current_path_, profile_, visual_profile_, automation_profile_)) {
     set_status(L"Autosave failed — the last consistent profile bundle remains active.");
     return false;
   }
-  history_.rebase(profile_, visual_profile_);
+  history_.rebase(profile_, visual_profile_, automation_profile_);
   dirty_ = false;
   legacy_base_schema_ = false;
   legacy_visual_schema_ = false;
@@ -244,6 +252,7 @@ void EditorWindow::handle_live_message(
                to_wide(runtime_diagnostics_json_));
     return;
   }
+  if (automation_editor_->handle_live_message(message)) return;
   if (message.type == layerc::core::LiveMessageType::error) {
     if (edit_session_id_ != 0 &&
         message.edit_session == edit_session_id_) {
@@ -274,6 +283,8 @@ void EditorWindow::handle_live_message(
       }
       live_package_authenticated_ = true;
       set_status(L"Ready — authenticated matching LayerD connection.");
+      automation_editor_->restore_live_subscription();
+
       if (!current_path_.empty() && !dirty_)
         notify_profile_committed(current_path_, profile_);
       return;
@@ -493,13 +504,13 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled,
 }
 
 void EditorWindow::undo() {
-  auto previous = history_.undo(profile_, visual_profile_);
+  auto previous = history_.undo(profile_, visual_profile_, automation_profile_);
   if (!previous.has_value()) return;
   apply_history_snapshot(std::move(*previous));
 }
 
 void EditorWindow::redo() {
-  auto next = history_.redo(profile_, visual_profile_);
+  auto next = history_.redo(profile_, visual_profile_, automation_profile_);
   if (!next.has_value()) return;
   apply_history_snapshot(std::move(*next));
 }
@@ -507,8 +518,9 @@ void EditorWindow::redo() {
 void EditorWindow::apply_history_snapshot(EditorProfileSnapshot snapshot) {
   profile_ = std::move(snapshot.profile);
   visual_profile_ = std::move(snapshot.visual_profile);
-  dirty_ =
-      history_.is_dirty(profile_, visual_profile_, !current_path_.empty());
+  automation_profile_ = std::move(snapshot.automation_profile);
+  dirty_ = history_.is_dirty(profile_, visual_profile_, automation_profile_,
+                             !current_path_.empty());
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);

@@ -20,6 +20,7 @@ void EditorWindow::sync_profile_from_controls() {
   profile_.name = to_utf8(control_text(GetDlgItem(dialog_, IDC_PROFILE_NAME)));
   profile_.id = to_utf8(control_text(GetDlgItem(dialog_, IDC_PROFILE_ID)));
   if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if (automation_profile_) automation_profile_->profile_id = profile_.id;
   if (bar_controls_panel_ < profile_.panels.size()) {
     auto &panel = profile_.panels[bar_controls_panel_];
     panel.bar.width = parse_uint(control_text(GetDlgItem(dialog_, IDC_BAR_WIDTH)), panel.bar.width);
@@ -46,7 +47,7 @@ bool EditorWindow::confirm_v2_upgrade() {
   if ((!legacy_base_schema_ && !legacy_visual_schema_) ||
       v2_upgrade_acknowledged_)
     return true;
-  if (!confirm_v3_schema_upgrade(dialog_)) return false;
+  if (!confirm_schema_upgrade(dialog_)) return false;
   v2_upgrade_acknowledged_ = true;
   return true;
 }
@@ -66,6 +67,10 @@ void EditorWindow::new_profile(const bool confirm) {
   end_edit_on_window();
   profile_ = make_new_profile();
   visual_profile_.reset();
+  automation_profile_.reset();
+  automation_sidecar_state_ =
+      layerc::platform::AutomationSidecarState::absent;
+  automation_sidecar_error_.clear();
   visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
   visual_sidecar_error_.clear();
   legacy_base_schema_ = false;
@@ -157,6 +162,7 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
   v2_upgrade_acknowledged_ = false;
   current_path_ = target_path;
   load_current_visual_profile();
+  load_current_automation_profile();
   dirty_ = false;
   end_edit_on_window();
   reset_history();
@@ -180,6 +186,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       layerc::platform::canonical_profile_key(current_path_);
   layerc::core::GameProfile stored_profile;
   std::optional<layerc::core::VisualProfile> stored_visual;
+  std::optional<layerc::core::AutomationProfile> stored_automation;
   bool legacy_upgrade{};
   bool commit_bundle{is_current};
   if (is_current) {
@@ -196,7 +203,15 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       set_status(L"Repair the invalid visual sidecar before changing enablement.");
       return;
     }
+    if (automation_sidecar_state_ ==
+        layerc::platform::AutomationSidecarState::invalid) {
+      restore_checkbox();
+      set_status(
+          L"Repair the invalid automation sidecar before changing enablement.");
+      return;
+    }
     stored_visual = visual_profile_;
+    stored_automation = automation_profile_;
     legacy_upgrade = legacy_base_schema_ || legacy_visual_schema_;
   } else {
     const auto contents = layerc::platform::read_profile_file(entry.path);
@@ -221,6 +236,16 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     stored_visual = visual.profile;
+    const auto automation =
+        layerc::platform::load_automation_sidecar(entry.path, stored_profile);
+    if (automation.state ==
+        layerc::platform::AutomationSidecarState::invalid) {
+      restore_checkbox();
+      set_status(
+          L"Could not update a profile with an invalid automation sidecar.");
+      return;
+    }
+    stored_automation = automation.profile;
     const bool legacy_base = source_uses_legacy_base_schema(*contents);
     legacy_upgrade = legacy_base;
     commit_bundle = commit_bundle || legacy_base;
@@ -237,7 +262,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   stored_profile.enabled = enabled;
   if (legacy_upgrade &&
       !(is_current ? confirm_v2_upgrade()
-                   : confirm_v3_schema_upgrade(dialog_))) {
+                   : confirm_schema_upgrade(dialog_))) {
     restore_checkbox();
     set_status(L"Profile enablement was not changed.");
     return;
@@ -249,8 +274,8 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   const bool persisted =
       serialized_valid &&
       (commit_bundle
-           ? layerc::platform::write_profile_bundle(entry.path, stored_profile,
-                                                    stored_visual)
+           ? layerc::platform::write_profile_bundle(
+                 entry.path, stored_profile, stored_visual, stored_automation)
            : layerc::platform::write_profile_file(entry.path, serialized));
   if (!persisted) {
     restore_checkbox();
@@ -265,16 +290,22 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   syncing_ = was_syncing;
   if (is_current) {
     visual_profile_ = stored_visual;
+    automation_profile_ = stored_automation;
+    if (automation_profile_) {
+      automation_sidecar_state_ =
+          layerc::platform::AutomationSidecarState::valid;
+      automation_sidecar_error_.clear();
+    }
     if (visual_profile_) {
       visual_sidecar_state_ =
           layerc::platform::VisualSidecarState::valid;
       visual_sidecar_error_.clear();
     }
     if (profile_ != stored_profile) {
-      (void)history_.record(stored_profile, visual_profile_, false);
+      (void)history_.record(stored_profile, visual_profile_, automation_profile_, false);
     }
     profile_ = stored_profile;
-    history_.rebase(profile_, visual_profile_);
+    history_.rebase(profile_, visual_profile_, automation_profile_);
     dirty_ = false;
     legacy_base_schema_ = false;
     legacy_visual_schema_ = false;
@@ -360,6 +391,15 @@ bool EditorWindow::save_profile(const bool force_save_as) {
         L"Visual sidecar needs repair", MB_OK | MB_ICONWARNING);
     return false;
   }
+  if (!automation_profile_ &&
+      automation_sidecar_state_ ==
+          layerc::platform::AutomationSidecarState::invalid) {
+    MessageBoxW(
+        dialog_,
+        L"Repair the invalid automation sidecar before saving this profile. This prevents an unrelated base edit from discarding recovery data.",
+        L"Automation sidecar needs repair", MB_OK | MB_ICONWARNING);
+    return false;
+  }
   auto destination = current_path_;
   if (force_save_as) {
     if (!choose_save_path(destination)) return false;
@@ -372,9 +412,10 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     if (error) { MessageBoxW(dialog_, L"Could not inspect the profile destination.", L"LayerE", MB_OK | MB_ICONERROR); return false; }
   }
   if (visual_profile_) visual_profile_->profile_id = profile_.id;
+  if (automation_profile_) automation_profile_->profile_id = profile_.id;
   if (!confirm_v2_upgrade()) return false;
-  if (!layerc::platform::write_profile_bundle(destination, profile_,
-                                               visual_profile_)) {
+  if (!layerc::platform::write_profile_bundle(
+          destination, profile_, visual_profile_, automation_profile_)) {
     MessageBoxW(dialog_,
                 L"Could not save a consistent profile and visual-sidecar bundle. The previous valid bundle was preserved.",
                 L"Profile save failed", MB_OK | MB_ICONERROR);
@@ -385,7 +426,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
   legacy_base_schema_ = false;
   legacy_visual_schema_ = false;
   v2_upgrade_acknowledged_ = false;
-  history_.rebase(profile_, visual_profile_);
+  history_.rebase(profile_, visual_profile_, automation_profile_);
   KillTimer(dialog_, autosave_timer);
   reload_profile_list(current_path_, false);
   notify_profile_committed(current_path_, profile_);
@@ -412,6 +453,10 @@ void EditorWindow::delete_profile() {
   end_edit_on_window();
   current_path_.clear(); dirty_ = false;
   visual_profile_.reset();
+  automation_profile_.reset();
+  automation_sidecar_state_ =
+      layerc::platform::AutomationSidecarState::absent;
+  automation_sidecar_error_.clear();
   visual_sidecar_state_ = layerc::platform::VisualSidecarState::absent;
   visual_sidecar_error_.clear();
   (void)layerc::platform::signal_profile_reload();

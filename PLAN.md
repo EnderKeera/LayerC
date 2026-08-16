@@ -502,47 +502,89 @@ V3 trust work.
 
 ### Version 2.3: Automation Graphs
 
-Automation is a bounded declarative system, not an embedded scripting runtime.
-LayerE offers ordinary users presets and a Basic editor, plus an Advanced Graph
-editor backed by a typed JSON AST. There is no text programming language,
-looping, recursion, user-defined function, filesystem access, process launch,
-network access, native extension loading, or arbitrary code execution.
-LayerD constructs `AutomationService` only for active sessions with enabled
-rules; disabling the last graph releases its AST, variables, timers, trace
-state, and evaluator allocation.
+V2.3 is the bounded declarative automation milestone. It is not an embedded
+scripting runtime. One profile may own multiple independent automations, and
+the Basic editor and Advanced editor compile to the same typed JSON AST. There
+is no text programming language, loop, recursion, user-defined function,
+filesystem or registry access, process launch, network access, memory access,
+injection, native extension loading, or arbitrary code execution.
+
+LayerD constructs `AutomationService` only while at least one matching session
+has an enabled automation with rules. Disabling or removing the last graph
+releases its AST, variables, timers, trace state, evaluator allocation, and the
+service-owned timer. Here a matching session means a live, non-minimized
+matched game window, including one temporarily in the background: timers and
+non-input rules must continue there, while only input-derived rules pause on
+focus loss. Ordinary input, cooldowns, overlays, visual recognition, HID, and
+live editing remain separate capabilities in the V2.2 runtime kernel.
+Opening LayerE alone does not activate automation.
+
+#### Typed graph and state
 
 Expression values include null, Boolean, signed 64-bit integer, finite number,
-duration, confidence, UTF-8 string, bounded list, and bounded string-keyed map.
-Record-like data uses maps in V2.3. Expressions provide arithmetic,
-comparisons, Boolean operations, indexing, `min`, `max`, `clamp`, and bounded
-collection operations such as `any`, `all`, `map`, and `filter`.
+duration, confidence, bounded UTF-8 string, bounded heterogeneous list, and
+bounded string-keyed map. Record-like data uses maps. Expressions provide
+checked arithmetic, comparisons, Boolean operations, indexing, `min`, `max`,
+`clamp`, and bounded `any`, `all`, `map`, and `filter` collection operations.
+Integer overflow, division by zero, non-finite values, invalid UTF-8, wrong
+types, or limit violations fail closed.
 
-Event sources include input transitions, visual observations, cooldown and
-group transitions, session lifecycle, transient variable changes, timers, and
-event age. Evaluation is event-driven and uses monotonic timers; it must not
-introduce a fixed-rate busy loop. Each root event evaluates against one
-immutable state snapshot. Matching rules form one transaction:
+Variables are declared with a type and default value. Session variables reset
+when the matching game-window session retires. A declaration may opt into
+persistence for any bounded value type. Persistent values are shared by all
+sessions of the same profile, survive compatible live edits with the same ID
+and type, and use a machine-local state file under `profiles\_state`. LayerD
+coalesces mutations into an atomic checkpoint no later than one second after
+the first unsaved change and performs a final flush on normal teardown;
+continuous activity cannot postpone checkpoints indefinitely. Definitions and
+defaults may be exported, but machine-local values and traces never enter a
+profile pack.
 
-- higher priority wins when actions conflict;
-- earlier declaration wins a priority tie;
+Event sources include input press/release and demanded continuous
+controller/HID values, visual observations, cooldown and group transitions,
+session start/stop, variable changes, monotonic timers, and event age. Losing
+foreground focus pauses only input-derived rules. Cooldowns, visual/session
+state, and timers continue, so returning to a game never rewinds automation.
+Continuous inputs use profile deadzone/change thresholds and a bounded rate;
+relative HID movement is a momentary value event.
+
+Each root event evaluates against one immutable state snapshot. Derived events
+are bounded and carry an origin token so overlapping propagation groups cannot
+cycle; each rule may fire at most once for one root. All enabled automations in
+the session participate in one ordered transaction:
+
+- higher rule priority wins a conflict on the same target;
+- earlier automation and rule declaration wins a priority tie;
 - non-conflicting actions compose;
-- actions commit only after the full transaction validates.
+- external effects commit only after the complete winning set validates;
+- an error rolls back and faults only the offending automation in that session,
+  then the remaining automations are re-evaluated from the original snapshot.
+
+Reload, an explicit Retry command, or an edit re-enables a faulted automation.
+A live edit takes effect on the next event boundary. Same-ID, same-type variable
+values survive; timers and presentation overrides owned by a changed graph are
+canceled, while unchanged graph state remains.
 
 Actions may trigger, reset, reduce, or refund cooldowns; trigger or reset
-groups; update transient values and collections; create or cancel timers; and
-temporarily override overlay visibility, text, colors, dimensions, anchor,
-layout, and hide-ready behavior. These presentation overrides are session-local
-and are never written back to profile JSON.
+cooldown groups; update variables and bounded collections; create or cancel
+one-shot/repeating timers; and temporarily override overlay visibility, text,
+colors, dimensions, anchor, layout, text visibility, and hide-ready behavior.
+Named presentation overrides are session-local, carry normal conflict ordering,
+and last until their optional duration expires or an explicit clear action.
+They never rewrite profile appearance. Timers share the window message-loop
+scheduler, have a 50 ms minimum, coalesce missed wakeups, and introduce no
+fixed-rate worker or busy loop.
 
-The initial hard limits are 64 rules and 64 transient variables per profile,
-256 AST nodes at depth 16 per rule, 64 entries per list or map, 512 bytes per
-string, 32 actions per rule, 32 timers per session, 8,192 node evaluations per
-root event, and 32 derived events per root event. Validation rejects documents
-that exceed a limit. A runtime graph error disables automation for that session
-and reports the error, while legacy input bindings, cooldowns, and overlays
-continue operating.
+The initial hard limits are 64 rules and 64 variables per profile, 256 AST
+nodes at depth 16 per rule, 64 entries per list or map, 512 UTF-8 bytes per
+string, 32 actions per rule, 32 timers per session, 8,192 node evaluations and
+32 derived events per root, a 256 KiB sidecar, a 64 KiB state file, and a 4 MiB
+trace. A normal root averages no more than 0.25 ms in the release workload; a
+root exceeding the 2 ms hard budget faults its offending automation.
 
-Cooldown recovery becomes an explicit enum:
+#### Cooldown recovery and groups
+
+Base schema 4 makes cooldown recovery explicit:
 
 - `single` preserves legacy `stackCharges == false` behavior;
 - `sequential` preserves legacy `stackCharges == true` behavior;
@@ -550,24 +592,62 @@ Cooldown recovery becomes an explicit enum:
 
 For parallel recovery, a refund cancels the most recently created outstanding
 deadline. Reduction actions explicitly choose the next deadline or every
-deadline.
+deadline. Shared-pool groups own duration, charge count, recovery mode, and
+retrigger policy, while trigger-propagation groups fan one origin-tagged event
+out to otherwise independent cooldowns. A cooldown belongs to at most one
+shared pool and may participate in multiple propagation groups. Nested group
+references and cyclic propagation are invalid.
 
-Cooldown groups support two independent modes:
+#### Native editor, trace, and simulator
 
-- a shared pool owns duration, charge count, recovery mode, and retrigger
-  policy, while members display and consume the same underlying state;
-- trigger propagation fans an event out to otherwise independent cooldowns.
+LayerE remains native Win32. The Automation Graphs dialog provides multiple
+Basic presets, an automation list, node palette, connected zoomable canvas,
+clickable rule/action nodes, typed property fields, node deletion, validation,
+and an Advanced whole-graph JSON editor. Basic and Advanced modes edit the same
+AST. Enable/disable, preset, node, and graph changes join the existing 50-step
+bundle undo/redo history and valid saved profiles autosave immediately.
 
-A cooldown belongs to at most one shared pool and may participate in multiple
-propagation groups. Nested groups and cyclic propagation are invalid.
+An authenticated live-trace subscription reports bounded source events,
+evaluated rules, winners, state changes, and errors. LayerD allocates no trace
+buffer without a subscriber. `.layerctrace` import/export is sanitized,
+bounded, timestamped, and data-only. Exact replay retains validated typed
+source-field values, including user-authored strings and maps, so the editor
+warns that trace files may contain sensitive profile variable contents. The deterministic simulator uses the
+production evaluator and supports synthetic typed events, recorded traces,
+play/pause, step, speed, rule breakpoints, variable/timer state, and assertions.
+It requires no game or daemon.
 
-Transient variables and timers live only for the matching game-window session
-and reset when that session retires. LayerE can subscribe to an authenticated
-live trace showing source events, evaluated rules, winning actions, state
-changes, and failures. Tracing allocates no ongoing buffer when there is no
-subscriber. A deterministic simulator replays recorded timestamped events
-through the same production evaluator without requiring a live game.
+#### Schema, packs, and release gates
 
+The owning base document is schema 4 and declares an automation module at
+schema 1. Definitions live at `profiles\_automation\<profile filename>.json`;
+state lives separately under `_state`. LayerE requires the existing explicit
+compatibility approval before first persistence of a legacy base. Base,
+visual, and automation documents commit through one crash-recoverable bundle
+transaction. A missing or invalid optional automation sidecar disables only
+automation and reports the exact error; it does not block input cooldowns.
+Profile packs carry compatible automation definitions/defaults and checksums,
+but never `_state` files or traces.
+
+Required release evidence includes all earlier V2.2 gates plus:
+
+- round trips for every value, expression, event, action, recovery mode, group,
+  sidecar, state file, trace, and pack module;
+- hard-limit, malformed/truncated mutation, transaction rollback, conflict,
+  per-automation fault, origin-cycle, timer, focus, reconfiguration, and
+  deterministic replay tests;
+- native dialog checks for presets, canvas notification, property controls,
+  checkbox semantics, Advanced AST editing, validation, and simulator controls;
+- a disposable daemon benchmark that proves AutomationService activation,
+  proves a persistent checkpoint, compares inactive/active/disabled plateaus,
+  and refuses a false pass;
+- no automation thread, at most 1 MiB private and 2 MiB working-set incremental
+  cost, no more than 0.25 ms average and 2 ms maximum per benchmark root, and
+  return to the inactive resource plateau after disabling the last graph;
+- clean MinGW and MSVC Release builds, the complete CTest suite, both V2.2 and
+  V2.3 resource benchmarks, install staging, and the versioned portable ZIP.
+
+Only the complete result ships as LayerC 2.3.0.
 ### Version 2.4: Optional Xbox Game Bar companion
 
 The Game Bar companion is an optional follow-up and cannot block V2.1, V2.2,

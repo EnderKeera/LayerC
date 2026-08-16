@@ -1,13 +1,14 @@
 #pragma once
 
-#include "layerc/core/profile.hpp"
-#include "layerc/core/live_edit.hpp"
+#include "editor_history.hpp"
+#include "layerc/core/automation.hpp"
 #include "layerc/core/calibration.hpp"
+#include "layerc/core/live_edit.hpp"
+#include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/windows.hpp"
-#include "editor_history.hpp"
 
 #include <commctrl.h>
 #include <windows.h>
@@ -15,6 +16,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,9 +42,9 @@ struct ProfileCheckboxMetrics {
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
-[[nodiscard]] RoleColors resolved_colors(
-    layerc::platform::EditorTheme theme, std::uint32_t accent,
-    layerc::platform::EditorControlRole role);
+[[nodiscard]] RoleColors
+resolved_colors(layerc::platform::EditorTheme theme, std::uint32_t accent,
+                layerc::platform::EditorControlRole role);
 [[nodiscard]] COLORREF color_ref(std::uint32_t color);
 [[nodiscard]] std::uint32_t rgb_value(COLORREF color);
 [[nodiscard]] std::wstring to_wide(std::string_view text);
@@ -56,49 +58,59 @@ void style_native_dialog_children(HWND dialog, HFONT font);
 void apply_suggested_dpi_rect(HWND window, LPARAM lparam);
 [[nodiscard]] bool start_daemon();
 [[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
-[[nodiscard]] std::string safe_identifier(
-    std::wstring_view text, std::string_view fallback = "profile");
+[[nodiscard]] std::string
+safe_identifier(std::wstring_view text, std::string_view fallback = "profile");
 [[nodiscard]] layerc::core::GameProfile make_new_profile();
 [[nodiscard]] std::wstring
 profile_list_label(const layerc::core::GameProfile &profile);
-[[nodiscard]] std::string unique_panel_id(
-    std::string_view base, const std::vector<layerc::core::Panel> &existing,
-    const std::vector<layerc::core::Panel> *generated = nullptr);
+[[nodiscard]] std::string
+unique_panel_id(std::string_view base,
+                const std::vector<layerc::core::Panel> &existing,
+                const std::vector<layerc::core::Panel> *generated = nullptr);
 [[nodiscard]] std::wstring
 profile_error_text(const layerc::core::ProfileError &error);
 [[nodiscard]] std::uint32_t parse_uint(std::wstring_view text,
                                        std::uint32_t fallback);
 [[nodiscard]] bool source_uses_legacy_base_schema(std::string_view json);
 [[nodiscard]] bool source_uses_legacy_visual_schema(std::string_view json);
-[[nodiscard]] bool confirm_v3_schema_upgrade(HWND owner);
+[[nodiscard]] bool confirm_schema_upgrade(HWND owner);
 [[nodiscard]] std::wstring color_label(const wchar_t *label,
-                                        std::uint32_t value);
+                                       std::uint32_t value);
 void erase_visual_assignment(layerc::core::VisualProfile &visual,
                              std::string_view cooldown_id);
 void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
                                   std::string_view observation_id);
+class AutomationEditor;
+
 class EditorWindow {
 public:
+  EditorWindow();
+  ~EditorWindow();
+
   int run(HINSTANCE instance, int show_command);
 
 private:
+  friend class AutomationEditor;
+
   static constexpr UINT_PTR autosave_timer = 10;
   static constexpr UINT_PTR live_channel_timer = 11;
-  struct ProfileEntry { std::filesystem::path path; std::wstring label; bool enabled{true}; };
+  struct ProfileEntry {
+    std::filesystem::path path;
+    std::wstring label;
+    bool enabled{true};
+  };
 
-  static INT_PTR CALLBACK dialog_proc(HWND, UINT, WPARAM, LPARAM);
-  static INT_PTR CALLBACK task_dialog_proc(HWND, UINT, WPARAM, LPARAM);
-  static INT_PTR CALLBACK options_dialog_proc(HWND, UINT, WPARAM, LPARAM);
-  static INT_PTR CALLBACK appearance_dialog_proc(HWND, UINT, WPARAM, LPARAM);
-  static INT_PTR CALLBACK color_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+
   static INT_PTR CALLBACK export_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK import_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK diagnostics_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK hid_binding_dialog_proc(HWND, UINT, WPARAM, LPARAM);
-  static LRESULT CALLBACK preview_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+  static LRESULT CALLBACK preview_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR,
+                                           DWORD_PTR);
   bool handle_binding_capture_message(const MSG &message);
 
-  [[nodiscard]] RoleColors colors(layerc::platform::EditorControlRole role) const {
+  [[nodiscard]] RoleColors
+  colors(layerc::platform::EditorControlRole role) const {
     return resolved_colors(theme_, accent_, role);
   }
   void initialize(HWND);
@@ -107,7 +119,7 @@ private:
   void initialize_appearance(HWND);
   void style_dialog_children(HWND) const;
   void style_list_view(HWND, bool hide_header) const;
-  void rebuild_profile_check_images();
+  void rebuild_profile_check_hit_images();
   void rebuild_brushes();
   void refresh_theme();
   void layout();
@@ -122,6 +134,8 @@ private:
   [[nodiscard]] layerc::core::CooldownDefinition *selected_cooldown();
   void refresh_binding_controls();
   void load_current_visual_profile();
+  void load_current_automation_profile();
+  void open_automation_editor();
   void refresh_visual_controls();
   void calibrate_visual();
   void calibrate_selected_task();
@@ -143,7 +157,8 @@ private:
   [[nodiscard]] bool confirm_v2_upgrade();
   [[nodiscard]] bool confirm_unsaved_changes();
   void new_profile(bool confirm = true);
-  void reload_profile_list(const std::filesystem::path &select_path = {}, bool open_selection = true);
+  void reload_profile_list(const std::filesystem::path &select_path = {},
+                           bool open_selection = true);
   void open_profile_row(int row, bool confirm);
   void save_profile_enabled(int row, bool enabled);
   [[nodiscard]] bool choose_save_path(std::filesystem::path &path);
@@ -164,8 +179,8 @@ private:
   void refresh_tasks();
   [[nodiscard]] HWND selected_task_window() const;
   [[nodiscard]] const layerc::platform::WindowCandidate *selected_task() const;
-  [[nodiscard]] const layerc::platform::WindowCandidate *require_selected_task(
-      bool live_window_required = true);
+  [[nodiscard]] const layerc::platform::WindowCandidate *
+  require_selected_task(bool live_window_required = true);
   void update_task_detail();
   void apply_task(const layerc::platform::WindowCandidate &candidate);
   void use_selected_task();
@@ -188,7 +203,8 @@ private:
 
   [[nodiscard]] double preview_aspect_ratio() const;
   [[nodiscard]] RECT preview_canvas() const;
-  [[nodiscard]] RECT bar_preview_rect(const layerc::core::Panel &, const RECT &) const;
+  [[nodiscard]] RECT bar_preview_rect(const layerc::core::Panel &,
+                                      const RECT &) const;
   void paint_preview(HWND);
   bool handle_preview_message(HWND, UINT, WPARAM, LPARAM);
   void update_dragged_bar(POINT, bool final = false);
@@ -216,8 +232,11 @@ private:
   void open_options();
   void apply_options(HWND);
   [[nodiscard]] layerc::platform::EditorControlRole appearance_role(HWND) const;
-  static std::uint32_t *appearance_value(layerc::platform::EditorAppearanceOverrides &, std::uint32_t);
-  [[nodiscard]] COLORREF appearance_color(HWND, std::uint32_t) const;
+  static std::uint32_t *
+  appearance_value(layerc::platform::EditorAppearanceOverrides &,
+                   std::uint32_t);
+  [[nodiscard]] std::optional<COLORREF>
+  appearance_color(HWND, std::uint32_t) const;
   void refresh_appearance_controls(HWND);
   void choose_appearance_color(HWND, std::uint32_t);
   void reset_appearance(HWND);
@@ -246,16 +265,23 @@ private:
   std::wstring visual_runtime_status_{L"Visual recognition: connecting"};
   HWND diagnostics_dialog_{};
   std::string runtime_diagnostics_json_;
+  std::unique_ptr<AutomationEditor> automation_editor_;
   HWND application_path_{};
   HWND task_list_{};
-  HIMAGELIST profile_check_images_{};
+  HIMAGELIST profile_check_hit_images_{};
   HFONT font_{};
   HFONT task_font_{};
-  std::array<HBRUSH, static_cast<std::size_t>(layerc::platform::EditorControlRole::count)> brushes_{};
+  std::array<HBRUSH, static_cast<std::size_t>(
+                         layerc::platform::EditorControlRole::count)>
+      brushes_{};
   std::vector<ProfileEntry> entries_;
   std::vector<layerc::platform::WindowCandidate> task_candidates_;
   layerc::core::GameProfile profile_;
   std::optional<layerc::core::VisualProfile> visual_profile_;
+  std::optional<layerc::core::AutomationProfile> automation_profile_;
+  layerc::platform::AutomationSidecarState automation_sidecar_state_{
+      layerc::platform::AutomationSidecarState::absent};
+  std::string automation_sidecar_error_;
   layerc::platform::VisualSidecarState visual_sidecar_state_{
       layerc::platform::VisualSidecarState::absent};
   std::string visual_sidecar_error_;

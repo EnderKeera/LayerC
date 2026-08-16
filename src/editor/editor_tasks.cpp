@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
 #include <algorithm>
@@ -10,19 +11,6 @@
 #include <commctrl.h>
 #include <windows.h>
 namespace layerc::editor {
-INT_PTR CALLBACK EditorWindow::task_dialog_proc(HWND window, UINT message, WPARAM wparam,
-                                                LPARAM lparam) {
-  auto *editor = reinterpret_cast<EditorWindow *>(GetWindowLongPtrW(window, DWLP_USER));
-  if (message == WM_INITDIALOG) {
-    editor = reinterpret_cast<EditorWindow *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(editor));
-    editor->initialize_tasks(window);
-    return TRUE;
-  }
-  return editor == nullptr ? FALSE : editor->handle_task_message(window, message, wparam, lparam);
-}
-
-
 void EditorWindow::initialize_tasks(const HWND window) {
   task_dialog_ = window;
   task_font_ = create_editor_font(GetDpiForWindow(window));
@@ -199,7 +187,9 @@ void EditorWindow::use_selected_task() {
 void EditorWindow::show_tasks() {
   if (task_dialog_ == nullptr || !IsWindow(task_dialog_)) {
     task_dialog_ = CreateDialogParamW(instance_, MAKEINTRESOURCEW(IDD_TASKS), dialog_,
-                                      &EditorWindow::task_dialog_proc, reinterpret_cast<LPARAM>(this));
+                                      &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_tasks,
+                                                              &EditorWindow::handle_task_message>,
+                                      reinterpret_cast<LPARAM>(this));
   }
   if (task_dialog_ == nullptr) { set_status(L"Could not open the task picker."); return; }
   refresh_tasks(); set_dark_title_bar(task_dialog_);

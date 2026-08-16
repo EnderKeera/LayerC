@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(LayerC VERSION 2.2.0 LANGUAGES C CXX)
+project(LayerC VERSION 2.3.0 LANGUAGES C CXX)
 
 option(LAYERC_BUILD_DAEMON "Build the native layerd daemon" ON)
 option(LAYERC_BUILD_EDITOR "Build the native LayerE editor" ON)
@@ -16,11 +16,14 @@ if(MINGW)
     # Ninja otherwise scales to every logical CPU; MinGW's C++ front end can
     # exhaust memory when several Win32-heavy translation units compile at
     # once. Link and resource jobs remain unconstrained.
-    set_property(GLOBAL PROPERTY JOB_POOLS layerc_mingw_compile=2)
+    set_property(GLOBAL PROPERTY JOB_POOLS layerc_mingw_compile=1)
     set(CMAKE_JOB_POOL_COMPILE layerc_mingw_compile)
 endif()
 
 add_library(layerc_core STATIC
+    src/core/automation_profile.cpp
+    src/core/automation_runtime.cpp
+    src/core/automation_effects.cpp
     src/core/cooldown_engine.cpp
     src/core/input_matcher.cpp
     src/core/hid.cpp
@@ -175,6 +178,7 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/main.cpp
         src/daemon/daemon_app.cpp
         src/daemon/daemon_services.cpp
+        src/daemon/daemon_automation.cpp
         src/daemon/daemon_sessions.cpp
         src/daemon/daemon_input.cpp
         src/daemon/daemon_hid.cpp
@@ -253,6 +257,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         src/editor/editor_controls.cpp
         src/editor/editor_live_edit.cpp
         src/editor/editor_visual.cpp
+        src/editor/editor_automation.cpp
         src/editor/editor_packs.cpp
         src/editor/editor_diagnostics.cpp
         src/editor/editor_hid.cpp
@@ -376,6 +381,9 @@ if(LAYERC_BUILD_TESTS)
         tests/core_tests.cpp
         tests/test_support.cpp
         tests/cooldown_input_tests.cpp
+        tests/automation_tests.cpp
+        tests/automation_value_tests.cpp
+        tests/automation_contract_tests.cpp
         tests/profile_tests.cpp
         tests/runtime_json_tests.cpp
         tests/live_edit_tests.cpp
@@ -386,8 +394,21 @@ if(LAYERC_BUILD_TESTS)
     add_test(NAME layerc_core_tests COMMAND layerc_core_tests)
     set_tests_properties(layerc_core_tests PROPERTIES TIMEOUT 30)
 
+    add_executable(layerc_automation_benchmark
+        tools/automation_benchmark.cpp)
+    target_link_libraries(layerc_automation_benchmark PRIVATE layerc_core)
+    if(MSVC)
+        target_compile_options(layerc_automation_benchmark PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+    else()
+        target_compile_options(layerc_automation_benchmark PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+
     if(WIN32)
-        add_executable(layerc_capture_tests tests/capture_math_tests.cpp)
+        add_executable(layerc_capture_tests
+            tests/capture_math_tests.cpp
+            tests/test_support.cpp)
         target_link_libraries(layerc_capture_tests PRIVATE layerc_capture)
         add_test(NAME layerc_capture_tests COMMAND layerc_capture_tests)
         set_tests_properties(layerc_capture_tests PROPERTIES TIMEOUT 30)

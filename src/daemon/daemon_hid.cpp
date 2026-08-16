@@ -3,6 +3,7 @@
 
 #include "layerc/platform/hid_device.hpp"
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <string>
@@ -174,6 +175,31 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
           const layerc::core::HidControlSample &sample) {
         auto &state = session.hid_states[index];
         const bool initialized = state.initialized;
+        if (session.automation_runtime && sample.available &&
+            sample.logical_max > sample.logical_min) {
+          const double normalized =
+              sample.relative
+                  ? static_cast<double>(sample.value) /
+                        std::max(
+                            1.0,
+                            std::max(
+                                std::abs(
+                                    static_cast<double>(sample.logical_min)),
+                                std::abs(
+                                    static_cast<double>(sample.logical_max))))
+                  : (static_cast<double>(sample.value) -
+                     sample.logical_min) /
+                        static_cast<double>(sample.logical_max -
+                                            sample.logical_min);
+          const bool momentary = sample.relative;
+          if (!momentary || sample.value != 0)
+            overlays_changed =
+                process_automation_input_value(
+                    session, "hid:" + std::to_string(index + 1U),
+                    normalized, layerc::core::MonotonicClock::now(),
+                    momentary) ||
+                overlays_changed;
+        }
         const auto edge = layerc::core::evaluate_hid_control(binding, sample,
                                                               state);
         if (!edge) return;

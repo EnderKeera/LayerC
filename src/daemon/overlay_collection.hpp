@@ -4,7 +4,9 @@
 
 #include "layerc/core/types.hpp"
 
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -30,6 +32,9 @@ public:
                bool capture_exclusion,
                const OverlayEditMode *edit_mode = nullptr);
   void update_panel(const layerc::core::Panel &panel);
+  void apply_session_override(const layerc::core::Panel &panel,
+                              std::optional<bool> visible,
+                              std::optional<std::wstring> text);
   void set_capture_exclusion(bool enabled);
   void hide() noexcept;
   void release() noexcept;

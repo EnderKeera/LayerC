@@ -15,7 +15,8 @@ namespace layerc::daemon {
 namespace {
 bool is_layerc_editor_process(const DWORD process_id,
                               const DWORD authenticated_editor_id) {
-  if (process_id == 0) return false;
+  if (process_id == 0)
+    return false;
   if (authenticated_editor_id != 0 && process_id == authenticated_editor_id)
     return true;
 
@@ -29,8 +30,8 @@ bool is_layerc_editor_process(const DWORD process_id,
       cached != cache.end() && now - cached->second.checked_at < 2'000U)
     return cached->second.is_editor;
 
-  const HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
-                                     process_id);
+  const HANDLE process =
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
   if (process == nullptr) {
     cache[process_id] = {.is_editor = false, .checked_at = now};
     return false;
@@ -63,34 +64,39 @@ bool is_layerc_editor_process(const DWORD process_id,
   std::error_code error;
   const bool matches =
       std::filesystem::equivalent(expected, actual, error) && !error;
-  if (cache.size() > 128U) cache.clear();
+  if (cache.size() > 128U)
+    cache.clear();
   cache[process_id] = {.is_editor = matches, .checked_at = now};
   return matches;
 }
 
 std::filesystem::path profile_path_for_key(const std::wstring_view key) {
-  if (key.empty()) return {};
+  if (key.empty())
+    return {};
   const std::filesystem::path candidate(key);
   std::error_code error;
-  if (std::filesystem::exists(candidate, error) && !error) return candidate;
+  if (std::filesystem::exists(candidate, error) && !error)
+    return candidate;
   return {};
 }
 
 } // namespace
 
-Session::Session(layerc::core::GameProfile source_profile,
-                            std::wstring source_key_value,
-                            std::optional<layerc::core::VisualProfile>
-                                source_visual_profile,
-                            const layerc::platform::VisualSidecarState
-                                source_visual_health,
-                            const bool visual_enabled,
-                            const bool capture_exclusion)
+Session::Session(
+    layerc::core::GameProfile source_profile, std::wstring source_key_value,
+    std::optional<layerc::core::VisualProfile> source_visual_profile,
+    const layerc::platform::VisualSidecarState source_visual_health,
+    std::optional<layerc::core::AutomationProfile> source_automation_profile,
+    const layerc::platform::AutomationSidecarState source_automation_health,
+    const bool visual_enabled, const bool capture_exclusion)
     : source_key(std::move(source_key_value)),
       profile(std::move(source_profile)),
-      cooldowns(profile.cooldowns), input(profile.bindings) {
+      cooldowns(profile.cooldowns, profile.cooldown_groups),
+      input(profile.bindings) {
   apply_visual_profile(std::move(source_visual_profile), source_visual_health,
                        visual_enabled);
+  apply_automation_profile(std::move(source_automation_profile),
+                           source_automation_health);
   snapshot_buffer.reserve(profile.cooldowns.size());
   rebuild_input_configuration();
   (void)capture_exclusion;
@@ -100,9 +106,7 @@ void Session::ensure_overlays(const bool capture_exclusion) {
   overlays.ensure(profile, capture_exclusion);
 }
 
-void Session::release_overlays() noexcept {
-  overlays.release();
-}
+void Session::release_overlays() noexcept { overlays.release(); }
 
 void Session::apply_visual_profile(
     std::optional<layerc::core::VisualProfile> updated_visual_profile,
@@ -124,6 +128,27 @@ void Session::apply_visual_profile(
   }
 }
 
+void Session::apply_automation_profile(
+    std::optional<layerc::core::AutomationProfile> updated,
+    const layerc::platform::AutomationSidecarState updated_health) {
+  automation_health = updated_health;
+  if (updated_health == layerc::platform::AutomationSidecarState::invalid)
+    updated.reset();
+  if (!updated.has_value())
+    automation_runtime.reset();
+  automation_profile = std::move(updated);
+  rebuild_input_configuration();
+}
+
+bool Session::has_enabled_automations() const noexcept {
+  return automation_profile.has_value() &&
+         automation_health !=
+             layerc::platform::AutomationSidecarState::invalid &&
+         std::ranges::any_of(
+             automation_profile->automations, [](const auto &automation) {
+               return automation.enabled && !automation.rules.empty();
+             });
+}
 bool Session::has_active_visual_rules() const noexcept {
   return visual_triggers != nullptr && visual_profile.has_value() &&
          visual_health != layerc::platform::VisualSidecarState::invalid &&
@@ -144,13 +169,14 @@ void Session::rebuild_input_configuration() {
       uses_raw_input = uses_raw_input ||
                        token.device == layerc::core::InputDevice::keyboard ||
                        token.device == layerc::core::InputDevice::mouse;
-      uses_hid = uses_hid ||
-                 token.device == layerc::core::InputDevice::generic_hid;
+      uses_hid =
+          uses_hid || token.device == layerc::core::InputDevice::generic_hid;
       bool pressed{};
       if (token.device == layerc::core::InputDevice::keyboard) {
         const UINT virtual_key = MapVirtualKeyW(token.code, MAPVK_VSC_TO_VK_EX);
-        pressed = virtual_key != 0 &&
-                  (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0;
+        pressed =
+            virtual_key != 0 &&
+            (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0;
         input.seed(token, pressed);
       } else if (token.device == layerc::core::InputDevice::controller &&
                  token.controller_index < XUSER_MAX_COUNT) {
@@ -160,11 +186,11 @@ void Session::rebuild_input_configuration() {
             const WORD mask = static_cast<WORD>(1U << (token.code - 1U));
             pressed = (state.Gamepad.wButtons & mask) != 0;
           } else if (token.code == 17) {
-            pressed = state.Gamepad.bLeftTrigger >=
-                      XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+            pressed =
+                state.Gamepad.bLeftTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
           } else if (token.code == 18) {
-            pressed = state.Gamepad.bRightTrigger >=
-                      XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+            pressed =
+                state.Gamepad.bRightTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
           }
           input.seed(token, pressed);
         }
@@ -179,14 +205,31 @@ void Session::rebuild_input_configuration() {
       }
     }
   }
+  if (automation_profile.has_value()) {
+    for (const auto &automation : automation_profile->automations) {
+      if (!automation.enabled)
+        continue;
+      for (const auto &rule : automation.rules) {
+        if (rule.event !=
+            layerc::core::AutomationEventKind::input_value_changed)
+          continue;
+        if (rule.source_filter.empty() ||
+            rule.source_filter.starts_with("controller:"))
+          uses_controller = true;
+        if (rule.source_filter.starts_with("hid:") &&
+            !profile.hid_bindings.empty())
+          uses_hid = true;
+      }
+    }
+  }
 }
 
-void Session::apply_profile(
-    const layerc::core::GameProfile &updated, const bool capture_exclusion) {
-  const auto plan =
-      layerc::core::plan_session_reconciliation(profile, updated);
+void Session::apply_profile(const layerc::core::GameProfile &updated,
+                            const bool capture_exclusion) {
+  const auto plan = layerc::core::plan_session_reconciliation(profile, updated);
   cooldowns.reconfigure(updated.cooldowns, plan.reset_cooldown_ids,
-                        layerc::core::MonotonicClock::now());
+                        layerc::core::MonotonicClock::now(),
+                        updated.cooldown_groups);
   profile = updated;
   if (plan.rebuild_input_matcher) {
     input.replace_bindings(profile.bindings);
@@ -195,8 +238,10 @@ void Session::apply_profile(
   snapshot_buffer.clear();
   snapshot_buffer.reserve(profile.cooldowns.size());
 
-  if (!plan.rebuild_overlays) return;
-  if (!overlays.empty()) overlays.rebuild(profile, capture_exclusion);
+  if (!plan.rebuild_overlays)
+    return;
+  if (!overlays.empty())
+    overlays.rebuild(profile, capture_exclusion);
 }
 
 void Session::set_capture_exclusion(const bool enabled) {
@@ -226,6 +271,29 @@ void DaemonApp::load_visual_source(ProfileSource &source) {
   }
 }
 
+void DaemonApp::load_automation_source(ProfileSource &source) {
+  source.automation_profile.reset();
+  source.automation_error.clear();
+  source.automation_state.clear();
+  source.automation_state_due.reset();
+  const auto automation =
+      layerc::platform::load_automation_sidecar(source.path, source.profile);
+  source.automation_health = automation.state;
+  if (automation.state == layerc::platform::AutomationSidecarState::valid ||
+      automation.state ==
+          layerc::platform::AutomationSidecarState::recovered_backup) {
+    source.automation_profile = automation.profile;
+    const auto state = layerc::platform::load_automation_state(
+        source.path, *source.automation_profile);
+    source.automation_state = state.values;
+    if (state.error.has_value())
+      source.automation_error = state.error->message;
+  }
+  if (automation.state ==
+          layerc::platform::AutomationSidecarState::recovered_backup ||
+      automation.state == layerc::platform::AutomationSidecarState::invalid)
+    source.automation_error = automation.error.message;
+}
 void DaemonApp::reload_profiles() {
   std::vector<ProfileSource> loaded;
   const auto directory = layerc::platform::profile_directory();
@@ -234,9 +302,11 @@ void DaemonApp::reload_profiles() {
     std::filesystem::create_directories(directory, error);
   }
   if (!error && !directory.empty()) {
-    for (const auto &entry : std::filesystem::directory_iterator(directory, error)) {
+    for (const auto &entry :
+         std::filesystem::directory_iterator(directory, error)) {
       if (error || !entry.is_regular_file() ||
-          layerc::platform::lower_copy(entry.path().extension().wstring()) != L".json") {
+          layerc::platform::lower_copy(entry.path().extension().wstring()) !=
+              L".json") {
         continue;
       }
       const auto contents = layerc::platform::read_profile_file(entry.path());
@@ -245,13 +315,13 @@ void DaemonApp::reload_profiles() {
       }
       auto parsed = layerc::core::parse_profile_json(*contents);
       if (auto *profile = std::get_if<layerc::core::GameProfile>(&parsed)) {
-        ProfileSource source{.key =
-                                 layerc::platform::canonical_profile_key(
-                                     entry.path()),
-                             .path = entry.path(),
-                             .profile = std::move(*profile),
-                             .revision = 0};
+        ProfileSource source{
+            .key = layerc::platform::canonical_profile_key(entry.path()),
+            .path = entry.path(),
+            .profile = std::move(*profile),
+            .revision = 0};
         load_visual_source(source);
+        load_automation_source(source);
         loaded.push_back(std::move(source));
       }
     }
@@ -270,12 +340,14 @@ void DaemonApp::apply_profile_update(
       loaded, [&](const ProfileSource &source) { return source.key == key; });
   auto source_path =
       found == loaded.end() ? profile_path_for_key(key) : found->path;
-  if (source_path.empty()) source_path = std::filesystem::path(key);
+  if (source_path.empty())
+    source_path = std::filesystem::path(key);
   ProfileSource source{.key = std::move(key),
                        .path = source_path,
                        .profile = std::move(profile),
                        .revision = revision};
   load_visual_source(source);
+  load_automation_source(source);
   if (found == loaded.end())
     loaded.push_back(std::move(source));
   else
@@ -315,8 +387,29 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
       source.revision = source.profile == previous->profile
                             ? previous->revision
                             : previous->revision + 1;
+    if (source.automation_profile.has_value() &&
+        previous->automation_profile.has_value()) {
+      bool carried_state{};
+      for (const auto &variable : source.automation_profile->variables) {
+        if (!variable.persistent)
+          continue;
+        const auto previous_declaration = std::ranges::find(
+            previous->automation_profile->variables, variable.id,
+            &layerc::core::AutomationVariable::id);
+        const auto value = previous->automation_state.find(variable.id);
+        if (previous_declaration ==
+                previous->automation_profile->variables.end() ||
+            previous_declaration->type != variable.type ||
+            value == previous->automation_state.end())
+          continue;
+        source.automation_state[variable.id] = value->second;
+        carried_state = true;
+      }
+      if (carried_state && previous->automation_state_due.has_value())
+        source.automation_state_due = previous->automation_state_due;
+    }
     if (layerc::core::plan_session_reconciliation(previous->profile,
-                                                   source.profile)
+                                                  source.profile)
             .recreate_instances)
       recreate_keys.push_back(source.key);
   }
@@ -333,13 +426,16 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
   std::erase_if(active_input_sessions_, [&](const Session *session) {
     return should_recreate(session->source_key);
   });
+  const auto reconcile_now = layerc::core::MonotonicClock::now();
   std::erase_if(sessions_, [&](const std::unique_ptr<Session> &session) {
-    const auto source = std::ranges::find_if(
-        loaded, [&](const ProfileSource &candidate) {
+    const auto source =
+        std::ranges::find_if(loaded, [&](const ProfileSource &candidate) {
           return candidate.key == session->source_key;
         });
-    if (source == loaded.end() || should_recreate(session->source_key))
+    if (source == loaded.end() || should_recreate(session->source_key)) {
+      retire_automation_session(*session, reconcile_now);
       return true;
+    }
     if (session->profile != source->profile)
       session->apply_profile(source->profile, capture_exclusion_);
     if (session->visual_profile != source->visual_profile ||
@@ -347,13 +443,19 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
       session->apply_visual_profile(source->visual_profile,
                                     source->visual_health,
                                     visual_recognition_enabled_);
+    if (session->automation_profile != source->automation_profile ||
+        session->automation_health != source->automation_health)
+      session->apply_automation_profile(source->automation_profile,
+                                        source->automation_health);
     return false;
   });
-  for (const auto &key : recreate_keys) runtime_instances_.erase_profile(key);
+  for (const auto &key : recreate_keys)
+    runtime_instances_.erase_profile(key);
 
   profile_sources_ = std::move(loaded);
   for (const auto &source : profile_sources_) {
-    if (!source.profile.enabled || !source.profile.game.global) continue;
+    if (!source.profile.enabled || !source.profile.game.global)
+      continue;
     const bool exists = std::ranges::any_of(
         sessions_, [&](const std::unique_ptr<Session> &session) {
           return session->source_key == source.key && session->is_global();
@@ -361,7 +463,8 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
     if (!exists)
       sessions_.push_back(std::make_unique<Session>(
           source.profile, source.key, source.visual_profile,
-          source.visual_health, visual_recognition_enabled_,
+          source.visual_health, source.automation_profile,
+          source.automation_health, visual_recognition_enabled_,
           capture_exclusion_));
   }
 
@@ -380,13 +483,11 @@ bool DaemonApp::reload_settings_if_requested() {
   }
   ResetEvent(settings_reload_event_);
   capture_exclusion_ = layerc::platform::capture_exclusion_enabled();
-  visual_recognition_enabled_ =
-      layerc::platform::visual_recognition_enabled();
+  visual_recognition_enabled_ = layerc::platform::visual_recognition_enabled();
   for (auto &session : sessions_) {
     session->set_capture_exclusion(capture_exclusion_);
     if (session->visual_triggers)
-      session->visual_triggers->set_visual_enabled(
-          visual_recognition_enabled_);
+      session->visual_triggers->set_visual_enabled(visual_recognition_enabled_);
   }
   if (edit_session_ != nullptr) {
     edit_session_->overlays.set_capture_exclusion(capture_exclusion_);
@@ -445,31 +546,36 @@ void DaemonApp::refresh_game_windows() {
     return !session->is_global() &&
            !runtime_instances_.contains(
                {.profile_key = session->source_key,
-                .window = reinterpret_cast<std::uintptr_t>(session->game_window)});
+                .window =
+                    reinterpret_cast<std::uintptr_t>(session->game_window)});
   });
+  const auto refresh_now = layerc::core::MonotonicClock::now();
   std::erase_if(sessions_, [&](const std::unique_ptr<Session> &session) {
-    if (session->is_global()) {
+    if (session->is_global())
       return false;
-    }
-    return !runtime_instances_.contains(
+    const bool removed = !runtime_instances_.contains(
         {.profile_key = session->source_key,
          .window = reinterpret_cast<std::uintptr_t>(session->game_window)});
+    if (removed)
+      retire_automation_session(*session, refresh_now);
+    return removed;
   });
 
   for (const auto &key : changes.added) {
-    const auto source = std::find_if(
-        profile_sources_.begin(), profile_sources_.end(), [&](const ProfileSource &candidate) {
-          return candidate.key == key.profile_key;
-        });
+    const auto source =
+        std::find_if(profile_sources_.begin(), profile_sources_.end(),
+                     [&](const ProfileSource &candidate) {
+                       return candidate.key == key.profile_key;
+                     });
     const auto window = reinterpret_cast<HWND>(key.window);
     if (source == profile_sources_.end() || !IsWindow(window)) {
       continue;
     }
-    auto instance = std::make_unique<Session>(source->profile, source->key,
-                                               source->visual_profile,
-                                               source->visual_health,
-                                               visual_recognition_enabled_,
-                                               capture_exclusion_);
+    auto instance = std::make_unique<Session>(
+        source->profile, source->key, source->visual_profile,
+        source->visual_health, source->automation_profile,
+        source->automation_health, visual_recognition_enabled_,
+        capture_exclusion_);
     instance->game_window = window;
     sessions_.push_back(std::move(instance));
   }
@@ -479,12 +585,11 @@ void DaemonApp::refresh_game_windows() {
 void DaemonApp::sync_foreground_state() {
   auto active_sessions = foreground_sessions();
   const HWND foreground_root = GetAncestor(GetForegroundWindow(), GA_ROOT);
-  const HWND active_window =
-      active_sessions.empty()
-          ? nullptr
-          : (active_sessions.front()->is_global()
-                 ? foreground_root
-                 : active_sessions.front()->game_window);
+  const HWND active_window = active_sessions.empty()
+                                 ? nullptr
+                                 : (active_sessions.front()->is_global()
+                                        ? foreground_root
+                                        : active_sessions.front()->game_window);
   const bool used_controller = std::any_of(
       active_input_sessions_.begin(), active_input_sessions_.end(),
       [](const Session *session) { return session->uses_controller; });
@@ -535,19 +640,23 @@ std::vector<Session *> DaemonApp::foreground_sessions() {
   std::vector<Session *> matches;
   matches.reserve(active.size());
   for (auto &session : sessions_) {
-    if (session->is_global()) continue;
-    const auto found = std::find_if(
-        active.begin(), active.end(),
-        [&](const layerc::core::RuntimeInstanceKey &key) {
-          return session->source_key == key.profile_key &&
-                 reinterpret_cast<std::uintptr_t>(session->game_window) ==
-                     key.window;
-        });
-    if (found != active.end()) matches.push_back(session.get());
+    if (session->is_global())
+      continue;
+    const auto found =
+        std::find_if(active.begin(), active.end(),
+                     [&](const layerc::core::RuntimeInstanceKey &key) {
+                       return session->source_key == key.profile_key &&
+                              reinterpret_cast<std::uintptr_t>(
+                                  session->game_window) == key.window;
+                     });
+    if (found != active.end())
+      matches.push_back(session.get());
   }
-  if (!matches.empty()) return matches;
+  if (!matches.empty())
+    return matches;
   for (auto &session : sessions_) {
-    if (session->is_global()) matches.push_back(session.get());
+    if (session->is_global())
+      matches.push_back(session.get());
   }
   return matches;
 }

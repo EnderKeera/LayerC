@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
 #include <algorithm>
@@ -9,33 +10,55 @@
 
 #include <windows.h>
 namespace layerc::editor {
-INT_PTR CALLBACK EditorWindow::options_dialog_proc(HWND window, UINT message, WPARAM wparam,
-                                                   LPARAM lparam) {
-  auto *editor = reinterpret_cast<EditorWindow *>(GetWindowLongPtrW(window, DWLP_USER));
-  if (message == WM_INITDIALOG) {
-    editor = reinterpret_cast<EditorWindow *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(editor));
-    editor->initialize_options(window);
-    return TRUE;
-  }
-  return editor == nullptr ? FALSE : editor->handle_options_message(window, message, wparam, lparam);
+namespace {
+
+struct AppearanceFieldAction {
+  int control{};
+  std::uint32_t field{};
+  std::uint32_t layerc::platform::EditorAppearanceOverrides::*override_value{};
+  COLORREF RoleColors::*resolved_value{};
+};
+
+constexpr std::array appearance_fields{
+    AppearanceFieldAction{IDC_APPEARANCE_FILL, layerc::platform::editor_fill,
+                          &layerc::platform::EditorAppearanceOverrides::fill,
+                          &RoleColors::fill},
+    AppearanceFieldAction{IDC_APPEARANCE_TEXT, layerc::platform::editor_text,
+                          &layerc::platform::EditorAppearanceOverrides::text,
+                          &RoleColors::text},
+    AppearanceFieldAction{IDC_APPEARANCE_BORDER,
+                          layerc::platform::editor_border,
+                          &layerc::platform::EditorAppearanceOverrides::border,
+                          &RoleColors::border},
+    AppearanceFieldAction{IDC_APPEARANCE_HOVER, layerc::platform::editor_hover,
+                          &layerc::platform::EditorAppearanceOverrides::hover,
+                          &RoleColors::hover},
+    AppearanceFieldAction{IDC_APPEARANCE_SELECTION,
+                          layerc::platform::editor_selection,
+                          &layerc::platform::EditorAppearanceOverrides::selection,
+                          &RoleColors::selection},
+    AppearanceFieldAction{IDC_APPEARANCE_DISABLED,
+                          layerc::platform::editor_disabled,
+                          &layerc::platform::EditorAppearanceOverrides::disabled,
+                          &RoleColors::disabled},
+};
+
+constexpr std::uint32_t appearance_all_fields = [] {
+  std::uint32_t result{};
+  for (const auto &entry : appearance_fields) result |= entry.field;
+  return result;
+}();
+
+const AppearanceFieldAction *appearance_field(const std::uint32_t field) {
+  const auto found = std::ranges::find(appearance_fields, field,
+                                       &AppearanceFieldAction::field);
+  return found == appearance_fields.end() ? nullptr : &*found;
 }
 
-INT_PTR CALLBACK EditorWindow::appearance_dialog_proc(HWND window, UINT message, WPARAM wparam,
-                                                      LPARAM lparam) {
-  auto *editor = reinterpret_cast<EditorWindow *>(GetWindowLongPtrW(window, DWLP_USER));
-  if (message == WM_INITDIALOG) {
-    editor = reinterpret_cast<EditorWindow *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(editor));
-    editor->initialize_appearance(window);
-    return TRUE;
-  }
-  return editor == nullptr ? FALSE : editor->handle_appearance_message(window, message, wparam, lparam);
-}
-
-
+} // namespace
 void EditorWindow::open_options() {
-  DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_OPTIONS), dialog_, &EditorWindow::options_dialog_proc,
+  DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_OPTIONS), dialog_, &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_options,
+                                         &EditorWindow::handle_options_message>,
                   reinterpret_cast<LPARAM>(this));
 }
 
@@ -108,36 +131,24 @@ void EditorWindow::initialize_appearance(const HWND window) {
   refresh_appearance_controls(window);
 }
 
-std::uint32_t *EditorWindow::appearance_value(layerc::platform::EditorAppearanceOverrides &overrides,
-                                               const std::uint32_t field) {
-  switch (field) {
-  case layerc::platform::editor_fill: return &overrides.fill;
-  case layerc::platform::editor_text: return &overrides.text;
-  case layerc::platform::editor_border: return &overrides.border;
-  case layerc::platform::editor_hover: return &overrides.hover;
-  case layerc::platform::editor_selection: return &overrides.selection;
-  case layerc::platform::editor_disabled: return &overrides.disabled;
-  default: return nullptr;
-  }
+std::uint32_t *EditorWindow::appearance_value(
+    layerc::platform::EditorAppearanceOverrides &overrides,
+    const std::uint32_t field) {
+  const auto *entry = appearance_field(field);
+  return entry == nullptr ? nullptr : &(overrides.*(entry->override_value));
 }
 
-COLORREF EditorWindow::appearance_color(const HWND window, const std::uint32_t field) const {
+std::optional<COLORREF>
+EditorWindow::appearance_color(const HWND window,
+                               const std::uint32_t field) const {
+  const auto *entry = appearance_field(field);
+  if (entry == nullptr) return std::nullopt;
   const auto role = appearance_role(window);
   auto overrides = layerc::platform::editor_appearance_overrides(role);
-  if (const auto *value = appearance_value(overrides, field);
-      value != nullptr && (overrides.fields & field) != 0) return color_ref(*value);
-  const auto role_colors = colors(role);
-  switch (field) {
-  case layerc::platform::editor_fill: return role_colors.fill;
-  case layerc::platform::editor_text: return role_colors.text;
-  case layerc::platform::editor_border: return role_colors.border;
-  case layerc::platform::editor_hover: return role_colors.hover;
-  case layerc::platform::editor_selection: return role_colors.selection;
-  case layerc::platform::editor_disabled: return role_colors.disabled;
-  default: return role_colors.fill;
-  }
+  if ((overrides.fields & field) != 0)
+    return color_ref(overrides.*(entry->override_value));
+  return colors(role).*(entry->resolved_value);
 }
-
 void EditorWindow::refresh_appearance_controls(const HWND window) {
   for (const int id : {IDC_APPEARANCE_FILL, IDC_APPEARANCE_TEXT, IDC_APPEARANCE_BORDER,
                        IDC_APPEARANCE_HOVER, IDC_APPEARANCE_SELECTION, IDC_APPEARANCE_DISABLED,
@@ -148,7 +159,9 @@ void EditorWindow::refresh_appearance_controls(const HWND window) {
 void EditorWindow::choose_appearance_color(const HWND window, const std::uint32_t field) {
   const auto role = appearance_role(window);
   auto overrides = layerc::platform::editor_appearance_overrides(role);
-  std::uint32_t selected = rgb_value(appearance_color(window, field));
+  const auto current = appearance_color(window, field);
+  if (!current) return;
+  std::uint32_t selected = rgb_value(*current);
   if (!choose_color(window, selected)) return;
   if (auto *value = appearance_value(overrides, field); value != nullptr) {
     *value = selected; overrides.fields |= field;
@@ -161,10 +174,8 @@ void EditorWindow::choose_appearance_color(const HWND window, const std::uint32_
 }
 
 void EditorWindow::reset_appearance(const HWND window) {
-  constexpr std::uint32_t all_fields = layerc::platform::editor_fill | layerc::platform::editor_text |
-      layerc::platform::editor_border | layerc::platform::editor_hover |
-      layerc::platform::editor_selection | layerc::platform::editor_disabled;
-  if (!layerc::platform::reset_editor_appearance_overrides(appearance_role(window), all_fields)) {
+  if (!layerc::platform::reset_editor_appearance_overrides(
+          appearance_role(window), appearance_all_fields)) {
     MessageBoxW(window, L"Could not reset this appearance override.", L"LayerE", MB_OK | MB_ICONWARNING);
     return;
   }
@@ -182,7 +193,8 @@ LRESULT EditorWindow::handle_options_message(const HWND window, const UINT messa
       InvalidateRect(GetDlgItem(window, LOWORD(wparam)), nullptr, TRUE); return TRUE;
     }
     if (LOWORD(wparam) == IDC_OPEN_APPEARANCE) {
-      DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_APPEARANCE), window, &EditorWindow::appearance_dialog_proc,
+      DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_APPEARANCE), window, &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_appearance,
+                                          &EditorWindow::handle_appearance_message>,
                       reinterpret_cast<LPARAM>(this));
       refresh_theme(); return TRUE;
     }
@@ -215,12 +227,11 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window, const UINT me
   case WM_COMMAND: {
     const int id = LOWORD(wparam);
     if (id == IDC_APPEARANCE_TREE && HIWORD(wparam) == LBN_SELCHANGE) { refresh_appearance_controls(window); return TRUE; }
-    constexpr std::array<std::pair<int, std::uint32_t>, 6> color_actions{{
-        {IDC_APPEARANCE_FILL, layerc::platform::editor_fill}, {IDC_APPEARANCE_TEXT, layerc::platform::editor_text},
-        {IDC_APPEARANCE_BORDER, layerc::platform::editor_border}, {IDC_APPEARANCE_HOVER, layerc::platform::editor_hover},
-        {IDC_APPEARANCE_SELECTION, layerc::platform::editor_selection}, {IDC_APPEARANCE_DISABLED, layerc::platform::editor_disabled},
-    }};
-    for (const auto &[button, field] : color_actions) if (id == button) { choose_appearance_color(window, field); return TRUE; }
+    for (const auto &entry : appearance_fields)
+      if (id == entry.control) {
+        choose_appearance_color(window, entry.field);
+        return TRUE;
+      }
     if (id == IDC_APPEARANCE_RESET) { reset_appearance(window); return TRUE; }
     if (id == IDOK || id == IDCANCEL) { EndDialog(window, id); return TRUE; }
     break;
@@ -231,12 +242,9 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window, const UINT me
     if (draw->CtlID == IDC_APPEARANCE_PREVIEW) { draw_appearance_preview(*draw, window); return TRUE; }
     if (draw->CtlType == ODT_BUTTON) {
       std::optional<COLORREF> fill;
-      constexpr std::array<std::pair<int, std::uint32_t>, 6> color_actions{{
-          {IDC_APPEARANCE_FILL, layerc::platform::editor_fill}, {IDC_APPEARANCE_TEXT, layerc::platform::editor_text},
-          {IDC_APPEARANCE_BORDER, layerc::platform::editor_border}, {IDC_APPEARANCE_HOVER, layerc::platform::editor_hover},
-          {IDC_APPEARANCE_SELECTION, layerc::platform::editor_selection}, {IDC_APPEARANCE_DISABLED, layerc::platform::editor_disabled},
-      }};
-      for (const auto &[button, field] : color_actions) if (static_cast<int>(draw->CtlID) == button) fill = appearance_color(window, field);
+      for (const auto &entry : appearance_fields)
+        if (static_cast<int>(draw->CtlID) == entry.control)
+          fill = appearance_color(window, entry.field);
       draw_button(*draw, layerc::platform::EditorControlRole::button, fill); return TRUE;
     }
     break;

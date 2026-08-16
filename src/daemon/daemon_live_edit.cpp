@@ -26,7 +26,15 @@ void DaemonApp::poll_live_channel() {
   const bool connection_changed = live_channel_.take_connection_changed();
   if (connection_changed) {
     live_package_authenticated_ = false;
-    if (!live_channel_.connected()) end_edit_session("editor disconnected");
+    if (!live_channel_.connected()) {
+      automation_trace_subscribed_ = false;
+      for (auto &session : sessions_) {
+        if (!session->automation_runtime) continue;
+        session->automation_runtime->set_trace_enabled(false);
+        session->automation_runtime->clear_trace();
+      }
+      end_edit_session("editor disconnected");
+    }
   }
 
   for (auto &result : results) {
@@ -62,7 +70,7 @@ void DaemonApp::handle_live_message(
     send_live_reply(
         LiveMessageType::acknowledgement, message,
         layerc::core::package_identity("LayerD") +
-            ";live-profile,mirrored-drag,direct-drag,lease-v1,visual-status-v1,diagnostics-v1");
+            ";live-profile,mirrored-drag,direct-drag,lease-v1,visual-status-v1,diagnostics-v1,automation-trace-v1");
     (void)live_channel_.send({
         .type = LiveMessageType::runtime_status,
         .text = layerc::platform::wide_to_utf8(visual_status_),
@@ -86,6 +94,41 @@ void DaemonApp::handle_live_message(
     reconcile_runtime_services();
     send_live_reply(LiveMessageType::acknowledgement, message,
                     "visual runtime retry requested");
+    return;
+  }
+  if (message.type == LiveMessageType::automation_trace_subscribe ||
+      message.type == LiveMessageType::automation_trace_unsubscribe) {
+    automation_trace_subscribed_ =
+        message.type == LiveMessageType::automation_trace_subscribe;
+    for (auto &session : sessions_) {
+      if (!session->automation_runtime) continue;
+      session->automation_runtime->clear_trace();
+      session->automation_runtime->set_trace_enabled(
+          automation_trace_subscribed_);
+    }
+    send_live_reply(
+        LiveMessageType::acknowledgement, message,
+        automation_trace_subscribed_ ? "automation trace subscribed"
+                                     : "automation trace unsubscribed");
+    return;
+  }
+  if (message.type == LiveMessageType::retry_automation) {
+    bool retried{};
+    for (auto &session : sessions_) {
+      if (!session->automation_runtime) continue;
+      if (!message.profile_key.empty() &&
+          session->source_key !=
+              layerc::platform::canonical_profile_key(
+                  layerc::platform::utf8_to_wide(message.profile_key)))
+        continue;
+      session->automation_runtime->retry(message.text);
+      retried = true;
+    }
+    send_live_reply(
+        retried ? LiveMessageType::acknowledgement
+                : LiveMessageType::error,
+        message, retried ? "automation retry requested"
+                         : "matching automation session was not found");
     return;
   }
   if (message.type == LiveMessageType::committed_profile) {

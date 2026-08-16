@@ -124,6 +124,12 @@ std::string sha256(const std::span<const std::byte> bytes) {
       reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()));
 }
 
+std::string sha256(const std::string_view text) {
+  if (text.empty()) return sha256(std::span<const std::uint8_t>{});
+  return sha256(std::span(
+      reinterpret_cast<const std::uint8_t *>(text.data()), text.size()));
+}
+
 bool is_lowercase_sha256(const std::string_view value) noexcept {
   if (value.size() != 64U) return false;
   for (const auto character : value) {

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <fstream>
 #include <limits>
 #include <set>
@@ -189,8 +190,10 @@ parse_journal(const std::filesystem::path &root,
 }
 
 bool rollback(const std::filesystem::path &transaction,
-              const std::vector<JournalOperation> &operations) {
-  for (std::size_t offset = operations.size(); offset != 0; --offset) {
+              const std::vector<JournalOperation> &operations,
+              const std::size_t published_count) {
+  if (published_count > operations.size()) return false;
+  for (std::size_t offset = published_count; offset != 0; --offset) {
     const auto index = offset - 1U;
     const auto backup =
         transaction / L"backup" / (std::to_wstring(index) + L".bin");
@@ -229,6 +232,27 @@ private:
   bool locked_{};
 };
 
+std::optional<std::size_t> read_published_count(
+    const std::filesystem::path &transaction,
+    const std::size_t operation_count) {
+  const auto source = read_bounded(transaction / L"published", 32U);
+  if (!source.has_value() || source->empty()) return std::nullopt;
+  std::size_t value{};
+  const auto [end, error] =
+      std::from_chars(source->data(), source->data() + source->size(), value);
+  if (error != std::errc{} ||
+      (end != source->data() + source->size() && *end != '\n') ||
+      value > operation_count)
+    return std::nullopt;
+  return value;
+}
+
+bool write_published_count(const std::filesystem::path &transaction,
+                           const std::size_t count) {
+  return durable_write(transaction / L"published",
+                       std::to_string(count) + "\n");
+}
+
 bool recover_locked(const std::filesystem::path &profile_root) {
   const auto transactions = transaction_root(profile_root);
   std::error_code error;
@@ -247,7 +271,12 @@ bool recover_locked(const std::filesystem::path &profile_root) {
     const auto operations = parse_journal(profile_root, *journal_source);
     if (!operations.has_value()) return false;
     if (!std::filesystem::exists(directory / L"committed", error)) {
-      if (error || !rollback(directory, *operations)) return false;
+      const auto published =
+          read_published_count(directory, operations->size());
+      // Journals from older builds did not carry a progress file, so retain
+      // their conservative full rollback behavior during upgrade recovery.
+      const auto count = published.value_or(operations->size());
+      if (error || !rollback(directory, *operations, count)) return false;
     }
     std::filesystem::remove_all(directory, error);
     if (error) return false;
@@ -330,13 +359,22 @@ bool commit_profile_transaction(
   }
   const auto serialized = journal_json(profile_root, journal);
   if (!prepared || journal.size() != mutations.size() || serialized.empty() ||
-      !durable_write(transaction / L"journal.json", serialized)) {
+      !durable_write(transaction / L"journal.json", serialized) ||
+      !write_published_count(transaction, 0)) {
     std::filesystem::remove_all(transaction, error);
     return false;
   }
 
+  std::size_t published_count{};
   bool published = true;
   for (std::size_t index = 0; index < mutations.size(); ++index) {
+    // The durable upper bound makes a crash between replacement and progress
+    // recording recoverable. On an ordinary replacement failure it is reset
+    // to the known successful prefix before rollback begins.
+    if (!write_published_count(transaction, index + 1U)) {
+      published = false;
+      break;
+    }
     if (mutations[index].contents.has_value()) {
       published =
           replace_from_file(transaction / L"stage" /
@@ -345,15 +383,19 @@ bool commit_profile_transaction(
     } else {
       published = delete_target(mutations[index].target);
     }
-    if (!published) break;
+    if (!published) {
+      (void)write_published_count(transaction, published_count);
+      break;
+    }
+    published_count = index + 1U;
   }
   if (!published) {
-    if (rollback(transaction, journal))
+    if (rollback(transaction, journal, published_count))
       std::filesystem::remove_all(transaction, error);
     return false;
   }
   if (!durable_write(transaction / L"committed", "committed\n")) {
-    if (rollback(transaction, journal))
+    if (rollback(transaction, journal, published_count))
       std::filesystem::remove_all(transaction, error);
     return false;
   }

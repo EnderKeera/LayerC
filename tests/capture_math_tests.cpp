@@ -1,3 +1,5 @@
+#include "test_support.hpp"
+
 #include "layerc/capture/window_capture.hpp"
 
 #include <cstdlib>
@@ -7,13 +9,7 @@
 int main() {
   using layerc::capture::region_is_available;
   using layerc::core::NormalizedRegion;
-  bool passed = true;
-  const auto expect = [&](const bool condition, const char *message) {
-    if (!condition) {
-      std::cerr << "FAIL: " << message << '\n';
-      passed = false;
-    }
-  };
+  using layerc::test::expect;
   expect(region_is_available({0.2, 0.2, 0.2, 0.2},
                              {0.1, 0.1, 0.8, 0.8}),
          "a rule inside the fallback output should remain available");
@@ -91,5 +87,10 @@ int main() {
   }
   expect(!layerc::capture::frame_is_nearly_black(black_frame),
          "sparse bright window borders should not be missed by black-frame sampling");
-  return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (layerc::test::failures != 0) {
+    std::cerr << layerc::test::failures << " test(s) failed\n";
+    return EXIT_FAILURE;
+  }
+  std::cout << "All LayerC capture tests passed\n";
+  return EXIT_SUCCESS;
 }

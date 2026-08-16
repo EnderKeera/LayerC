@@ -191,6 +191,32 @@ void DaemonApp::poll_visual_captures() {
   captured_snapshots.reserve(visual_captures_.size());
   std::vector<RECT> exclusions;
   exclusions.reserve(16);
+  const auto publish_observations =
+      [&](Session &session,
+          const std::span<const layerc::core::ObservationMeasurement>
+              measurements) {
+        bool changed{};
+        if (!session.automation_runtime) return changed;
+        for (const auto &measurement : measurements) {
+          auto event = automation_event(
+              layerc::core::AutomationEventKind::visual_observation,
+              measurement.observation_id, now);
+          event.fields.emplace(
+              "available",
+              layerc::core::AutomationValue(
+                  measurement.availability ==
+                  layerc::core::CaptureAvailability::available));
+          event.fields.emplace(
+              "matched",
+              layerc::core::AutomationValue(measurement.matched));
+          event.fields.emplace(
+              "confidence",
+              layerc::core::AutomationValue(
+                  layerc::core::ConfidenceValue{measurement.confidence}));
+          changed = process_automation_event(session, event) || changed;
+        }
+        return changed;
+      };
   for (auto &[window, worker] : visual_captures_) {
     exclusions.clear();
     for (const auto &session : sessions_) {
@@ -214,12 +240,14 @@ void DaemonApp::poll_visual_captures() {
           session->last_visual_sequence = evaluation->sequence;
 
           session->cooldowns.snapshot(now, session->snapshot_buffer);
+          overlays_changed =
+              publish_observations(*session, evaluation->measurements) ||
+              overlays_changed;
           const auto requests = session->visual_triggers->on_measurements(
               evaluation->measurements, session->snapshot_buffer, now);
           for (const auto &request : requests) {
-            if (session->cooldowns.trigger(request.cooldown_id, now)) {
-              session->visual_triggers->on_cooldown_triggered(
-                  request.cooldown_id);
+            if (trigger_cooldown_with_automation(
+                    *session, request.cooldown_id, now)) {
               overlays_changed = true;
               update_tooltip(
                   L"LayerD - visual trigger " +
@@ -252,12 +280,14 @@ void DaemonApp::poll_visual_captures() {
           continue;
         session->last_visual_sequence = evaluation->sequence;
         session->cooldowns.snapshot(now, session->snapshot_buffer);
+        overlays_changed =
+            publish_observations(*session, evaluation->measurements) ||
+            overlays_changed;
         const auto requests = session->visual_triggers->on_measurements(
             evaluation->measurements, session->snapshot_buffer, now);
         for (const auto &request : requests) {
-          if (session->cooldowns.trigger(request.cooldown_id, now)) {
-            session->visual_triggers->on_cooldown_triggered(
-                request.cooldown_id);
+          if (trigger_cooldown_with_automation(
+                  *session, request.cooldown_id, now)) {
             overlays_changed = true;
             update_tooltip(
                 L"LayerD - visual trigger " +

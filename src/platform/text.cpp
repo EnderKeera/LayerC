@@ -76,4 +76,12 @@ std::wstring lower_copy(std::wstring value) {
   return value;
 }
 
+std::optional<std::wstring>
+try_casefold_path(const std::string_view value) {
+  auto wide = try_utf8_to_wide(value);
+  if (!wide.has_value())
+    return std::nullopt;
+  return try_invariant_lower(*wide);
+}
+
 } // namespace layerc::platform

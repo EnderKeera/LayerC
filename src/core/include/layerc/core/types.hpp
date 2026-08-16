@@ -44,13 +44,22 @@ enum class RetriggerPolicy : std::uint8_t {
     restart,
 };
 
+enum class RecoveryMode : std::uint8_t {
+    single,
+    sequential,
+    parallel,
+};
+
 struct CooldownDefinition {
     std::string id;
     std::string name;
     Milliseconds duration{};
     std::uint32_t max_charges{1};
     RetriggerPolicy retrigger{RetriggerPolicy::ignore};
-    bool stack_charges{};
+    // Schema <4 expressed charge recovery as a stackCharges boolean; the
+    // parser derives this field from it at the read boundary, so runtime code
+    // only ever sees recovery.
+    RecoveryMode recovery{RecoveryMode::single};
 
     bool operator==(const CooldownDefinition&) const = default;
 };
@@ -60,6 +69,25 @@ struct CooldownState {
     std::uint32_t available_charges{};
     std::uint32_t max_charges{};
     std::optional<TimePoint> next_charge_at;
+    std::vector<TimePoint> recovery_deadlines;
+};
+
+enum class CooldownGroupMode : std::uint8_t {
+    shared_pool,
+    trigger_propagation,
+};
+
+struct CooldownGroup {
+    std::string id;
+    std::string name;
+    CooldownGroupMode mode{CooldownGroupMode::trigger_propagation};
+    std::vector<std::string> cooldown_ids;
+    Milliseconds duration{};
+    std::uint32_t max_charges{1};
+    RecoveryMode recovery{RecoveryMode::single};
+    RetriggerPolicy retrigger{RetriggerPolicy::ignore};
+
+    bool operator==(const CooldownGroup &) const = default;
 };
 
 struct InputBinding {
@@ -164,6 +192,7 @@ enum class VisualRuntime : std::uint8_t {
 
 enum class ProfileModuleKind : std::uint8_t {
     visual,
+    automation,
 };
 
 struct ProfileModule {
@@ -174,7 +203,7 @@ struct ProfileModule {
 };
 
 struct GameProfile {
-    std::uint32_t schema_version{3};
+    std::uint32_t schema_version{4};
     std::string id;
     std::string name;
     // A disabled profile stays on disk and remains editable, but LayerD does
@@ -186,6 +215,7 @@ struct GameProfile {
     std::vector<ProfileModule> modules;
     std::vector<Panel> panels;
     std::vector<CooldownDefinition> cooldowns;
+    std::vector<CooldownGroup> cooldown_groups;
     std::vector<HidControlBinding> hid_bindings;
     std::vector<InputBinding> bindings;
 

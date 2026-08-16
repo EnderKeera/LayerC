@@ -62,6 +62,17 @@ void OverlayCollection::update_panel(const layerc::core::Panel &panel) {
   if (found != windows_.end()) (*found)->update_snapshot(panel, cooldowns_);
 }
 
+void OverlayCollection::apply_session_override(
+    const layerc::core::Panel &panel, const std::optional<bool> visible,
+    std::optional<std::wstring> text) {
+  const auto found = std::ranges::find_if(
+      windows_, [&](const auto &candidate) {
+        return candidate != nullptr && candidate->panel_id() == panel.id;
+      });
+  if (found == windows_.end()) return;
+  (*found)->update_snapshot(panel, cooldowns_);
+  (*found)->set_session_override(visible, std::move(text));
+}
 void OverlayCollection::set_capture_exclusion(const bool enabled) {
   for (auto &overlay : windows_) overlay->set_capture_exclusion(enabled);
 }

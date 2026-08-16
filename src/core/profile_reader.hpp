@@ -19,7 +19,9 @@ public:
 
 private:
   [[nodiscard]] bool ok() const;
-  bool read_cooldowns(GameProfile &profile);
+  bool read_cooldowns(GameProfile &profile, std::uint32_t source_schema);
+  bool read_cooldown_groups(GameProfile &profile,
+                            std::uint32_t source_schema);
   bool read_panels(GameProfile &profile);
   bool read_modules(GameProfile &profile, std::uint32_t source_schema);
   bool read_hid_bindings(GameProfile &profile, std::uint32_t source_schema);

@@ -16,17 +16,15 @@ bool same_runtime_definition(const CooldownDefinition &left,
                              const CooldownDefinition &right) {
   return left.id == right.id && left.duration == right.duration &&
          left.max_charges == right.max_charges &&
-         left.retrigger == right.retrigger &&
-         left.stack_charges == right.stack_charges;
+         left.retrigger == right.retrigger && left.recovery == right.recovery;
 }
 
 const CooldownDefinition *
 find_cooldown(const std::vector<CooldownDefinition> &definitions,
               const std::string_view id) {
   const auto found = std::ranges::find_if(
-      definitions, [&](const CooldownDefinition &candidate) {
-        return candidate.id == id;
-      });
+      definitions,
+      [&](const CooldownDefinition &candidate) { return candidate.id == id; });
   return found == definitions.end() ? nullptr : &*found;
 }
 
@@ -48,9 +46,8 @@ std::string base64_encode(const std::string_view source) {
                                 static_cast<std::uint32_t>(third);
     output.push_back(alphabet[(value >> 18U) & 0x3FU]);
     output.push_back(alphabet[(value >> 12U) & 0x3FU]);
-    output.push_back(offset + 1U < source.size()
-                         ? alphabet[(value >> 6U) & 0x3FU]
-                         : '=');
+    output.push_back(
+        offset + 1U < source.size() ? alphabet[(value >> 6U) & 0x3FU] : '=');
     output.push_back(offset + 2U < source.size() ? alphabet[value & 0x3FU]
                                                  : '=');
   }
@@ -58,13 +55,19 @@ std::string base64_encode(const std::string_view source) {
 }
 
 std::optional<std::string> base64_decode(const std::string_view source) {
-  if (source.size() % 4U != 0) return std::nullopt;
+  if (source.size() % 4U != 0)
+    return std::nullopt;
   const auto value_of = [](const char character) -> int {
-    if (character >= 'A' && character <= 'Z') return character - 'A';
-    if (character >= 'a' && character <= 'z') return character - 'a' + 26;
-    if (character >= '0' && character <= '9') return character - '0' + 52;
-    if (character == '+') return 62;
-    if (character == '/') return 63;
+    if (character >= 'A' && character <= 'Z')
+      return character - 'A';
+    if (character >= 'a' && character <= 'z')
+      return character - 'a' + 26;
+    if (character >= '0' && character <= '9')
+      return character - '0' + 52;
+    if (character == '+')
+      return 62;
+    if (character == '/')
+      return 63;
     return -1;
   };
   std::string output;
@@ -81,35 +84,59 @@ std::optional<std::string> base64_decode(const std::string_view source) {
     const int fourth = pad_three ? 0 : value_of(source[offset + 3U]);
     if (first < 0 || second < 0 || third < 0 || fourth < 0)
       return std::nullopt;
-    const std::uint32_t value =
-        (static_cast<std::uint32_t>(first) << 18U) |
-        (static_cast<std::uint32_t>(second) << 12U) |
-        (static_cast<std::uint32_t>(third) << 6U) |
-        static_cast<std::uint32_t>(fourth);
+    const std::uint32_t value = (static_cast<std::uint32_t>(first) << 18U) |
+                                (static_cast<std::uint32_t>(second) << 12U) |
+                                (static_cast<std::uint32_t>(third) << 6U) |
+                                static_cast<std::uint32_t>(fourth);
     output.push_back(static_cast<char>((value >> 16U) & 0xFFU));
-    if (!pad_two) output.push_back(static_cast<char>((value >> 8U) & 0xFFU));
-    if (!pad_three) output.push_back(static_cast<char>(value & 0xFFU));
+    if (!pad_two)
+      output.push_back(static_cast<char>((value >> 8U) & 0xFFU));
+    if (!pad_three)
+      output.push_back(static_cast<char>(value & 0xFFU));
   }
   return output;
 }
 
 std::string_view message_type_name(const LiveMessageType type) {
   switch (type) {
-  case LiveMessageType::handshake: return "handshake";
-  case LiveMessageType::committed_profile: return "committedProfile";
-  case LiveMessageType::begin_edit: return "beginEdit";
-  case LiveMessageType::live_profile: return "liveProfile";
-  case LiveMessageType::select_panel: return "selectPanel";
-  case LiveMessageType::anchor_changed: return "anchorChanged";
-  case LiveMessageType::set_direct_drag: return "setDirectDrag";
-  case LiveMessageType::end_edit: return "endEdit";
-  case LiveMessageType::heartbeat: return "heartbeat";
-  case LiveMessageType::runtime_status: return "runtimeStatus";
-  case LiveMessageType::diagnostics_request: return "diagnosticsRequest";
-  case LiveMessageType::diagnostics_reply: return "diagnosticsReply";
-  case LiveMessageType::retry_visual: return "retryVisual";
-  case LiveMessageType::acknowledgement: return "ack";
-  case LiveMessageType::error: return "error";
+  case LiveMessageType::handshake:
+    return "handshake";
+  case LiveMessageType::committed_profile:
+    return "committedProfile";
+  case LiveMessageType::begin_edit:
+    return "beginEdit";
+  case LiveMessageType::live_profile:
+    return "liveProfile";
+  case LiveMessageType::select_panel:
+    return "selectPanel";
+  case LiveMessageType::anchor_changed:
+    return "anchorChanged";
+  case LiveMessageType::set_direct_drag:
+    return "setDirectDrag";
+  case LiveMessageType::end_edit:
+    return "endEdit";
+  case LiveMessageType::heartbeat:
+    return "heartbeat";
+  case LiveMessageType::runtime_status:
+    return "runtimeStatus";
+  case LiveMessageType::diagnostics_request:
+    return "diagnosticsRequest";
+  case LiveMessageType::diagnostics_reply:
+    return "diagnosticsReply";
+  case LiveMessageType::retry_visual:
+    return "retryVisual";
+  case LiveMessageType::automation_trace_subscribe:
+    return "automationTraceSubscribe";
+  case LiveMessageType::automation_trace_unsubscribe:
+    return "automationTraceUnsubscribe";
+  case LiveMessageType::automation_trace_event:
+    return "automationTraceEvent";
+  case LiveMessageType::retry_automation:
+    return "retryAutomation";
+  case LiveMessageType::acknowledgement:
+    return "ack";
+  case LiveMessageType::error:
+    return "error";
   }
   return "error";
 }
@@ -129,19 +156,24 @@ std::optional<LiveMessageType> parse_message_type(const std::string_view name) {
       {"diagnosticsRequest", LiveMessageType::diagnostics_request},
       {"diagnosticsReply", LiveMessageType::diagnostics_reply},
       {"retryVisual", LiveMessageType::retry_visual},
+      {"automationTraceSubscribe", LiveMessageType::automation_trace_subscribe},
+      {"automationTraceUnsubscribe",
+       LiveMessageType::automation_trace_unsubscribe},
+      {"automationTraceEvent", LiveMessageType::automation_trace_event},
+      {"retryAutomation", LiveMessageType::retry_automation},
       {"ack", LiveMessageType::acknowledgement},
       {"error", LiveMessageType::error},
   };
   const auto found = std::ranges::find_if(
       names, [&](const auto &entry) { return entry.first == name; });
-  return found == std::end(names) ? std::nullopt
-                                  : std::optional(found->second);
+  return found == std::end(names) ? std::nullopt : std::optional(found->second);
 }
 
 bool string_field(const json::Value &root, const std::string_view name,
                   std::string &output, std::string &error) {
   const auto *value = root.find(name);
-  if (value == nullptr) return true;
+  if (value == nullptr)
+    return true;
   if (!value->is_string()) {
     error = std::string(name) + " must be a string";
     return false;
@@ -153,7 +185,8 @@ bool string_field(const json::Value &root, const std::string_view name,
 bool bool_field(const json::Value &root, const std::string_view name,
                 bool &output, std::string &error) {
   const auto *value = root.find(name);
-  if (value == nullptr) return true;
+  if (value == nullptr)
+    return true;
   if (!value->is_bool()) {
     error = std::string(name) + " must be a boolean";
     return false;
@@ -165,7 +198,8 @@ bool bool_field(const json::Value &root, const std::string_view name,
 bool double_field(const json::Value &root, const std::string_view name,
                   double &output, std::string &error) {
   const auto *value = root.find(name);
-  if (value == nullptr) return true;
+  if (value == nullptr)
+    return true;
   if (!value->is_number() || !std::isfinite(value->as_number())) {
     error = std::string(name) + " must be a finite number";
     return false;
@@ -178,7 +212,8 @@ template <typename Integer>
 bool decimal_string_field(const json::Value &root, const std::string_view name,
                           Integer &output, std::string &error) {
   const auto *value = root.find(name);
-  if (value == nullptr) return true;
+  if (value == nullptr)
+    return true;
   if (!value->is_string()) {
     error = std::string(name) + " must be a decimal string";
     return false;
@@ -199,7 +234,8 @@ bool require_fields(const json::Value &root,
                     const std::initializer_list<std::string_view> names,
                     std::string &error) {
   for (const auto name : names) {
-    if (root.find(name) != nullptr) continue;
+    if (root.find(name) != nullptr)
+      continue;
     error = std::string(name) + " is required";
     return false;
   }
@@ -210,7 +246,8 @@ bool require_fields(const json::Value &root,
 
 RevisionDecision revision_decision(const ProfileRevision incoming,
                                    const ProfileRevision current) {
-  if (incoming > current) return RevisionDecision::accept;
+  if (incoming > current)
+    return RevisionDecision::accept;
   return incoming == current ? RevisionDecision::duplicate
                              : RevisionDecision::stale;
 }
@@ -225,11 +262,10 @@ bool ProfileDelta::empty() const noexcept {
 ProfileDelta diff_profiles(const GameProfile &before,
                            const GameProfile &after) {
   ProfileDelta delta;
-  delta.metadata_changed =
-      before.schema_version != after.schema_version || before.id != after.id ||
-      before.name != after.name ||
-      before.visual_runtime != after.visual_runtime ||
-      before.modules != after.modules;
+  delta.metadata_changed = before.schema_version != after.schema_version ||
+                           before.id != after.id || before.name != after.name ||
+                           before.visual_runtime != after.visual_runtime ||
+                           before.modules != after.modules;
   delta.enablement_changed = before.enabled != after.enabled;
   delta.matcher_changed = before.game != after.game;
   delta.bindings_changed = before.bindings != after.bindings ||
@@ -254,22 +290,20 @@ ProfileDelta diff_profiles(const GameProfile &before,
   return delta;
 }
 
-SessionReconcilePlan
-plan_session_reconciliation(const GameProfile &before,
-                            const GameProfile &after) {
+SessionReconcilePlan plan_session_reconciliation(const GameProfile &before,
+                                                 const GameProfile &after) {
   const auto delta = diff_profiles(before, after);
   SessionReconcilePlan plan;
   plan.recreate_instances = delta.enablement_changed || delta.matcher_changed ||
                             before.visual_runtime != after.visual_runtime ||
                             before.modules != after.modules;
-  plan.rebuild_input_matcher =
-      delta.bindings_changed || !delta.added_cooldown_ids.empty() ||
-      !delta.removed_cooldown_ids.empty();
+  plan.rebuild_input_matcher = delta.bindings_changed ||
+                               !delta.added_cooldown_ids.empty() ||
+                               !delta.removed_cooldown_ids.empty();
   plan.rebuild_overlays =
       delta.panels_changed || delta.cooldown_visuals_changed ||
       !delta.added_cooldown_ids.empty() ||
-      !delta.removed_cooldown_ids.empty() ||
-      !delta.reset_cooldown_ids.empty();
+      !delta.removed_cooldown_ids.empty() || !delta.reset_cooldown_ids.empty();
   plan.added_cooldown_ids = delta.added_cooldown_ids;
   plan.removed_cooldown_ids = delta.removed_cooldown_ids;
   plan.reset_cooldown_ids = delta.reset_cooldown_ids;
@@ -283,9 +317,11 @@ plan_session_reconciliation(const GameProfile &before,
   return plan;
 }
 
-NormalizedAnchor normalized_anchor_for_drag(
-    const long pointer_x, const long pointer_y, const long grab_offset_x,
-    const long grab_offset_y, const PixelRect &target) {
+NormalizedAnchor normalized_anchor_for_drag(const long pointer_x,
+                                            const long pointer_y,
+                                            const long grab_offset_x,
+                                            const long grab_offset_y,
+                                            const PixelRect &target) {
   const auto width = std::max(1L, target.right - target.left);
   const auto height = std::max(1L, target.bottom - target.top);
   return {
@@ -303,10 +339,12 @@ PixelRect overlay_rectangle(const NormalizedAnchor anchor,
                             const long height) {
   const auto target_width = std::max(1L, target.right - target.left);
   const auto target_height = std::max(1L, target.bottom - target.top);
-  const auto center_x = target.left + static_cast<long>(std::lround(
-      std::clamp(anchor.x, 0.0, 1.0) * target_width));
-  const auto center_y = target.top + static_cast<long>(std::lround(
-      std::clamp(anchor.y, 0.0, 1.0) * target_height));
+  const auto center_x =
+      target.left + static_cast<long>(std::lround(
+                        std::clamp(anchor.x, 0.0, 1.0) * target_width));
+  const auto center_y =
+      target.top + static_cast<long>(std::lround(
+                       std::clamp(anchor.y, 0.0, 1.0) * target_height));
   const auto safe_width = std::max(1L, width);
   const auto safe_height = std::max(1L, height);
   return {.left = center_x - safe_width / 2,
@@ -348,9 +386,8 @@ std::string encode_live_message_json(const LiveMessage &message) {
   json::append_number(output, message.anchor_x);
   output += ",\"anchorY\":";
   json::append_number(output, message.anchor_y);
-  output += message.direct_drag
-                ? ",\"directDrag\":true"
-                : ",\"directDrag\":false";
+  output +=
+      message.direct_drag ? ",\"directDrag\":true" : ",\"directDrag\":false";
   output += message.final ? ",\"final\":true}" : ",\"final\":false}";
   return output;
 }
@@ -394,8 +431,8 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
     break;
   case LiveMessageType::begin_edit:
     if (!require_fields(root,
-                        {"editSession", "targetWindow", "profileKey",
-                         "panelId", "profileBase64"},
+                        {"editSession", "targetWindow", "profileKey", "panelId",
+                         "profileBase64"},
                         error))
       return LiveProtocolError{std::move(error)};
     break;
@@ -408,10 +445,9 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
       return LiveProtocolError{std::move(error)};
     break;
   case LiveMessageType::anchor_changed:
-    if (!require_fields(root,
-                        {"editSession", "panelId", "anchorX", "anchorY",
-                         "final"},
-                        error))
+    if (!require_fields(
+            root, {"editSession", "panelId", "anchorX", "anchorY", "final"},
+            error))
       return LiveProtocolError{std::move(error)};
     break;
   case LiveMessageType::set_direct_drag:
@@ -430,6 +466,16 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
     break;
   case LiveMessageType::diagnostics_request:
   case LiveMessageType::retry_visual:
+  case LiveMessageType::automation_trace_subscribe:
+  case LiveMessageType::automation_trace_unsubscribe:
+    break;
+  case LiveMessageType::automation_trace_event:
+    if (!require_fields(root, {"profileKey", "text"}, error))
+      return LiveProtocolError{std::move(error)};
+    break;
+  case LiveMessageType::retry_automation:
+    if (!require_fields(root, {"profileKey", "text"}, error))
+      return LiveProtocolError{std::move(error)};
     break;
   case LiveMessageType::acknowledgement:
   case LiveMessageType::error:
@@ -440,7 +486,8 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
   std::string encoded_profile;
   if (!decimal_string_field(root, "revision", message.revision, error) ||
       !decimal_string_field(root, "editSession", message.edit_session, error) ||
-      !decimal_string_field(root, "targetWindow", message.target_window, error) ||
+      !decimal_string_field(root, "targetWindow", message.target_window,
+                            error) ||
       !string_field(root, "profileKey", message.profile_key, error) ||
       !string_field(root, "panelId", message.panel_id, error) ||
       !string_field(root, "profileBase64", encoded_profile, error) ||
@@ -496,10 +543,12 @@ LiveFrameDecoder::push(const std::span<const std::byte> bytes) {
       clear();
       return results;
     }
-    if (buffer_.size() - consumed < sizeof(std::uint32_t) + length) break;
+    if (buffer_.size() - consumed < sizeof(std::uint32_t) + length)
+      break;
     const auto *payload = reinterpret_cast<const char *>(
         buffer_.data() + consumed + sizeof(std::uint32_t));
-    results.push_back(decode_live_message_json(std::string_view(payload, length)));
+    results.push_back(
+        decode_live_message_json(std::string_view(payload, length)));
     consumed += sizeof(std::uint32_t) + length;
   }
   if (consumed != 0) {

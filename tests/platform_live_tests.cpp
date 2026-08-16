@@ -1,8 +1,8 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
-#include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/framed_pipe.hpp"
 #include "layerc/platform/hid_device.hpp"
+#include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/text.hpp"
@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <thread>
 #include <variant>
@@ -33,11 +34,9 @@ layerc::core::GameProfile test_profile(const std::string &name) {
   profile.id = "store-test";
   profile.name = name;
   profile.game.executable_name = "test.exe";
-  profile.cooldowns.push_back(
-      {.id = "dash", .name = "Dash", .duration = 1s});
-  profile.panels.push_back({.id = "main",
-                            .name = "Main",
-                            .cooldown_ids = {"dash"}});
+  profile.cooldowns.push_back({.id = "dash", .name = "Dash", .duration = 1s});
+  profile.panels.push_back(
+      {.id = "main", .name = "Main", .cooldown_ids = {"dash"}});
   profile.bindings.push_back(
       {.cooldown_id = "dash",
        .chord = {{{layerc::core::InputDevice::keyboard, 0x20, 0}}}});
@@ -57,7 +56,54 @@ layerc::core::VisualProfile test_visual_profile() {
                               .mode = VisualTriggerMode::pixel_only});
   return profile;
 }
+layerc::core::AutomationExpression
+automation_literal(layerc::core::AutomationValue value) {
+  layerc::core::AutomationExpression result;
+  result.kind = layerc::core::ExpressionKind::literal;
+  result.literal = std::move(value);
+  return result;
+}
 
+layerc::core::AutomationProfile
+test_automation_profile(const std::string &profile_id = "store-test") {
+  using namespace layerc::core;
+  AutomationProfile profile;
+  profile.profile_id = profile_id;
+  profile.variables.push_back(
+      {.id = "count",
+       .type = AutomationValueType::integer,
+       .default_value = AutomationValue(std::int64_t{0}),
+       .persistent = true});
+  AutomationRule rule;
+  rule.id = "start";
+  rule.event = AutomationEventKind::session_started;
+  rule.actions.push_back(
+      {.kind = AutomationActionKind::increment_variable,
+       .target = "count",
+       .value = automation_literal(AutomationValue(std::int64_t{1}))});
+  profile.automations.push_back(
+      {.id = "counter", .name = "Counter", .rules = {rule}});
+  return profile;
+}
+
+bool write_test_file(const std::filesystem::path &path,
+                     const std::string_view contents) {
+  std::error_code error;
+  std::filesystem::create_directories(path.parent_path(), error);
+  if (error)
+    return false;
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  return static_cast<bool>(output);
+}
+
+std::optional<std::string> read_test_file(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input)
+    return std::nullopt;
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
+}
 int run_authenticated_peer(const bool server, const std::wstring &pipe_name) {
   using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
   Channel channel(server ? Channel::Role::server : Channel::Role::client,
@@ -66,17 +112,18 @@ int run_authenticated_peer(const bool server, const std::wstring &pipe_name) {
   for (int attempt = 0; attempt < 5'000; ++attempt) {
     for (auto &result : channel.poll()) {
       const auto *message = std::get_if<layerc::core::LiveMessage>(&result);
-      if (message == nullptr) continue;
-      if (server && message->type ==
-                        layerc::core::LiveMessageType::handshake) {
+      if (message == nullptr)
+        continue;
+      if (server && message->type == layerc::core::LiveMessageType::handshake) {
         (void)channel.send({
             .type = layerc::core::LiveMessageType::acknowledgement,
             .revision = message->revision,
             .text = "authenticated",
         });
         sent = true;
-      } else if (!server && message->type ==
-                               layerc::core::LiveMessageType::acknowledgement &&
+      } else if (!server &&
+                 message->type ==
+                     layerc::core::LiveMessageType::acknowledgement &&
                  message->text == "authenticated") {
         return 0;
       }
@@ -100,11 +147,10 @@ int run_authenticated_peer(const bool server, const std::wstring &pipe_name) {
 }
 
 bool launch_auth_peer(const std::filesystem::path &executable,
-                      const wchar_t *const mode,
-                      const std::wstring &pipe_name,
+                      const wchar_t *const mode, const std::wstring &pipe_name,
                       PROCESS_INFORMATION &process) {
-  std::wstring command = L"\"" + executable.wstring() + L"\" " + mode +
-                         L" \"" + pipe_name + L"\"";
+  std::wstring command =
+      L"\"" + executable.wstring() + L"\" " + mode + L" \"" + pipe_name + L"\"";
   std::vector<wchar_t> command_buffer(command.begin(), command.end());
   command_buffer.push_back(L'\0');
   STARTUPINFOW startup{.cb = sizeof(STARTUPINFOW)};
@@ -116,18 +162,18 @@ bool launch_auth_peer(const std::filesystem::path &executable,
 } // namespace
 
 int main(const int argc, char *argv[]) {
-  if (argc == 3 &&
-      (std::string_view(argv[1]) == "--auth-server" ||
-       std::string_view(argv[1]) == "--auth-client")) {
+  if (argc == 3 && (std::string_view(argv[1]) == "--auth-server" ||
+                    std::string_view(argv[1]) == "--auth-client")) {
     const std::string pipe_utf8(argv[2]);
     return run_authenticated_peer(
         std::string_view(argv[1]) == "--auth-server",
         std::wstring(pipe_utf8.begin(), pipe_utf8.end()));
   }
   bool passed = true;
-  passed &= expect(std::wstring_view(layerc::platform::live_edit_pipe_name) ==
-                       L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v2",
-                   "the tested production pipe name should match the protocol contract");
+  passed &= expect(
+      std::wstring_view(layerc::platform::live_edit_pipe_name) ==
+          L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3",
+      "the tested production pipe name should match the protocol contract");
   wchar_t temporary_root[MAX_PATH]{};
   const DWORD root_length = GetTempPathW(MAX_PATH, temporary_root);
   passed &= expect(root_length != 0 && root_length < MAX_PATH,
@@ -140,20 +186,20 @@ int main(const int argc, char *argv[]) {
   std::filesystem::create_directory(directory, filesystem_error);
   passed &= expect(!filesystem_error, "test directory should be created");
 
-  HANDLE abandoned_mutex = CreateMutexW(
-      nullptr, FALSE, L"Local\\LayerC.ProfileTransaction.v1");
+  HANDLE abandoned_mutex =
+      CreateMutexW(nullptr, FALSE, L"Local\\LayerC.ProfileTransaction.v1");
   bool mutex_owned{};
   std::thread abandoned_owner([&] {
-    mutex_owned =
-        WaitForSingleObject(abandoned_mutex, 5'000) == WAIT_OBJECT_0;
+    mutex_owned = WaitForSingleObject(abandoned_mutex, 5'000) == WAIT_OBJECT_0;
     // Exiting without ReleaseMutex intentionally creates WAIT_ABANDONED.
   });
   abandoned_owner.join();
   passed &= expect(
-      mutex_owned &&
-          layerc::platform::recover_profile_transactions(directory),
-      "transaction recovery should accept and release ownership of an abandoned mutex");
-  if (abandoned_mutex != nullptr) CloseHandle(abandoned_mutex);
+      mutex_owned && layerc::platform::recover_profile_transactions(directory),
+      "transaction recovery should accept and release ownership of an "
+      "abandoned mutex");
+  if (abandoned_mutex != nullptr)
+    CloseHandle(abandoned_mutex);
 
   const layerc::platform::ProfileFileMutation colliding_mutations[] = {
       {.target = directory / L"Caf\u00c9.json",
@@ -161,14 +207,52 @@ int main(const int argc, char *argv[]) {
       {.target = directory / L"caf\u00e9.json",
        .contents = std::vector<std::byte>{std::byte{'b'}}},
   };
-  passed &= expect(
-      !layerc::platform::commit_profile_transaction(
-          directory, colliding_mutations),
-      "transaction target validation should reject invariant-casefolded Unicode collisions");
+  passed &= expect(!layerc::platform::commit_profile_transaction(
+                       directory, colliding_mutations),
+                   "transaction target validation should reject "
+                   "invariant-casefolded Unicode collisions");
 
+  const auto recovery_first = directory / L"recovery-first.bin";
+  const auto recovery_second = directory / L"recovery-second.bin";
+  const auto transaction =
+      directory / L"_transactions" / L"published-upper-bound";
+  passed &= expect(
+      write_test_file(recovery_first, "new-first") &&
+          write_test_file(recovery_second, "old-second") &&
+          write_test_file(transaction / L"backup" / L"0.bin", "old-first") &&
+          write_test_file(transaction / L"backup" / L"1.bin", "old-second") &&
+          write_test_file(
+              transaction / L"journal.json",
+              "{\"schemaVersion\":1,\"operations\":["
+              "{\"target\":\"recovery-first.bin\",\"existed\":true},"
+              "{\"target\":\"recovery-second.bin\",\"existed\":true}]}\n") &&
+          write_test_file(transaction / L"published", "2\n") &&
+          layerc::platform::recover_profile_transactions(directory) &&
+          read_test_file(recovery_first) == "old-first" &&
+          read_test_file(recovery_second) == "old-second",
+      "recovery should roll back the durable published upper bound when a "
+      "crash occurs before the next replacement");
+
+  const auto committed_target = directory / L"recovery-committed.bin";
+  const auto committed_transaction =
+      directory / L"_transactions" / L"committed-cleanup";
+  passed &= expect(
+      write_test_file(committed_target, "published") &&
+          write_test_file(committed_transaction / L"backup" / L"0.bin",
+                          "old") &&
+          write_test_file(committed_transaction / L"journal.json",
+                          "{\"schemaVersion\":1,\"operations\":["
+                          "{\"target\":\"recovery-committed.bin\","
+                          "\"existed\":true}]}\n") &&
+          write_test_file(committed_transaction / L"published", "1\n") &&
+          write_test_file(committed_transaction / L"committed",
+                          "committed\n") &&
+          layerc::platform::recover_profile_transactions(directory) &&
+          read_test_file(committed_target) == "published",
+      "recovery should retain a committed publication and clean only its "
+      "journal residue");
   layerc::platform::HidRawDevice system_keyboard{
-      .handle = reinterpret_cast<HANDLE>(0x1234),
-      .raw_type = RIM_TYPEKEYBOARD};
+      .handle = reinterpret_cast<HANDLE>(0x1234), .raw_type = RIM_TYPEKEYBOARD};
   RAWINPUT keyboard_input{};
   keyboard_input.header.dwType = RIM_TYPEKEYBOARD;
   keyboard_input.header.hDevice = system_keyboard.handle;
@@ -185,11 +269,11 @@ int main(const int argc, char *argv[]) {
       system_keyboard, system_key, keyboard_input);
   passed &= expect(key_down.has_value() && key_down->button_active &&
                        key_up.has_value() && !key_up->button_active,
-                   "Advanced system keyboard bindings should retain device-specific press and release samples");
+                   "Advanced system keyboard bindings should retain "
+                   "device-specific press and release samples");
 
   layerc::platform::HidRawDevice system_mouse{
-      .handle = reinterpret_cast<HANDLE>(0x5678),
-      .raw_type = RIM_TYPEMOUSE};
+      .handle = reinterpret_cast<HANDLE>(0x5678), .raw_type = RIM_TYPEMOUSE};
   RAWINPUT mouse_input{};
   mouse_input.header.dwType = RIM_TYPEMOUSE;
   mouse_input.header.hDevice = system_mouse.handle;
@@ -203,18 +287,17 @@ int main(const int argc, char *argv[]) {
       system_mouse, relative_mouse, mouse_input);
   const auto second_movement = layerc::platform::sample_hid_control(
       system_mouse, relative_mouse, mouse_input);
-  passed &= expect(first_movement.has_value() &&
-                       second_movement.has_value() &&
+  passed &= expect(first_movement.has_value() && second_movement.has_value() &&
                        first_movement->relative && first_movement->value == 4,
-                   "each successive relative system-mouse report should remain an independently available movement sample");
+                   "each successive relative system-mouse report should remain "
+                   "an independently available movement sample");
 
-  const std::array<std::byte, 2> report_bytes{std::byte{0x7f},
-                                               std::byte{0x20}};
+  const std::array<std::byte, 2> report_bytes{std::byte{0x7f}, std::byte{0x20}};
   layerc::platform::HidRawDevice reportless_device{};
-  passed &= expect(
-      layerc::platform::effective_hid_report_id(reportless_device,
-                                                report_bytes) == 0,
-      "report-ID-less collections should persist report ID zero instead of the first data byte");
+  passed &= expect(layerc::platform::effective_hid_report_id(reportless_device,
+                                                             report_bytes) == 0,
+                   "report-ID-less collections should persist report ID zero "
+                   "instead of the first data byte");
   reportless_device.uses_report_ids = true;
   passed &= expect(
       layerc::platform::effective_hid_report_id(reportless_device,
@@ -237,18 +320,16 @@ int main(const int argc, char *argv[]) {
       .pixels = std::vector<layerc::core::RgbPixel>(64),
       .alpha = std::vector<std::uint8_t>(64, 255)};
   for (std::size_t index = 0; index < asset.pixels.size(); ++index) {
-    asset.pixels[index] = {
-        static_cast<std::uint8_t>(index * 3U),
-        static_cast<std::uint8_t>(255U - index * 2U),
-        static_cast<std::uint8_t>(index * 4U)};
+    asset.pixels[index] = {static_cast<std::uint8_t>(index * 3U),
+                           static_cast<std::uint8_t>(255U - index * 2U),
+                           static_cast<std::uint8_t>(index * 4U)};
   }
   auto flat_asset = asset;
-  std::ranges::fill(flat_asset.pixels,
-                    layerc::core::RgbPixel{80, 186, 200});
-  passed &= expect(
-      std::holds_alternative<layerc::platform::VisualAssetError>(
-          layerc::platform::store_template_asset(flat_asset)),
-      "flat template assets should be rejected before entering content-addressed storage");
+  std::ranges::fill(flat_asset.pixels, layerc::core::RgbPixel{80, 186, 200});
+  passed &= expect(std::holds_alternative<layerc::platform::VisualAssetError>(
+                       layerc::platform::store_template_asset(flat_asset)),
+                   "flat template assets should be rejected before entering "
+                   "content-addressed storage");
   auto stored_asset = layerc::platform::store_template_asset(asset);
   auto *stored_asset_info =
       std::get_if<layerc::platform::ImportedTemplateAsset>(&stored_asset);
@@ -271,11 +352,11 @@ int main(const int argc, char *argv[]) {
                             std::ios::binary | std::ios::trunc);
       corrupt << "not a png";
     }
-    passed &= expect(
-        std::holds_alternative<layerc::platform::VisualAssetError>(
-            layerc::platform::load_template_asset(
-                stored_asset_info->reference.asset_sha256)),
-        "a replaced template asset must fail content-hash verification");
+    passed &=
+        expect(std::holds_alternative<layerc::platform::VisualAssetError>(
+                   layerc::platform::load_template_asset(
+                       stored_asset_info->reference.asset_sha256)),
+               "a replaced template asset must fail content-hash verification");
     stored_asset = layerc::platform::store_template_asset(asset);
     stored_asset_info =
         std::get_if<layerc::platform::ImportedTemplateAsset>(&stored_asset);
@@ -313,19 +394,19 @@ int main(const int argc, char *argv[]) {
     }
     std::filesystem::last_write_time(
         stale_asset_temporary,
-        std::filesystem::file_time_type::clock::now() -
-            std::chrono::hours(48),
+        std::filesystem::file_time_type::clock::now() - std::chrono::hours(48),
         filesystem_error);
     passed &= expect(!filesystem_error,
                      "stale asset temporary timestamp should be set");
     passed &= expect(
         layerc::platform::write_profile_bundle(gc_profile_path, gc_base,
-                                                gc_visual) &&
+                                               gc_visual) &&
             layerc::platform::garbage_collect_unreferenced_visual_assets() &&
             std::filesystem::exists(stored_asset_info->path) &&
             !std::filesystem::exists(second_asset_info->path) &&
             !std::filesystem::exists(stale_asset_temporary),
-        "a complete profile scan should retain references and remove orphans and stale asset temporaries");
+        "a complete profile scan should retain references and remove orphans "
+        "and stale asset temporaries");
 
     auto third_asset = asset;
     third_asset.pixels.back().blue ^= 0x55U;
@@ -333,23 +414,21 @@ int main(const int argc, char *argv[]) {
         layerc::platform::store_template_asset(third_asset);
     const auto *third_asset_info =
         std::get_if<layerc::platform::ImportedTemplateAsset>(&third_result);
-    auto stale_backup =
-        layerc::platform::visual_sidecar_path(gc_profile_path);
+    auto stale_backup = layerc::platform::visual_sidecar_path(gc_profile_path);
     stale_backup += L".bak";
     if (third_asset_info != nullptr) {
       auto recovery_visual = gc_visual;
       recovery_visual.templates.front().references = {
           third_asset_info->reference};
-      std::ofstream output(stale_backup,
-                           std::ios::binary | std::ios::trunc);
-      output << layerc::core::serialize_visual_profile_json(
-          recovery_visual);
+      std::ofstream output(stale_backup, std::ios::binary | std::ios::trunc);
+      output << layerc::core::serialize_visual_profile_json(recovery_visual);
     }
     passed &= expect(
         third_asset_info != nullptr &&
             layerc::platform::garbage_collect_unreferenced_visual_assets() &&
             std::filesystem::exists(third_asset_info->path),
-        "assets referenced only by a valid recovery sidecar should be retained");
+        "assets referenced only by a valid recovery sidecar should be "
+        "retained");
 
     const auto malformed = directory / L"unreadable.json";
     {
@@ -357,8 +436,7 @@ int main(const int argc, char *argv[]) {
       output << "{not-json";
     }
     {
-      std::ofstream output(stale_backup,
-                           std::ios::binary | std::ios::trunc);
+      std::ofstream output(stale_backup, std::ios::binary | std::ios::trunc);
       output << "{corrupt-stale-backup";
     }
     passed &= expect(
@@ -366,7 +444,8 @@ int main(const int argc, char *argv[]) {
             layerc::platform::garbage_collect_unreferenced_visual_assets() &&
             !std::filesystem::exists(third_asset_info->path) &&
             std::filesystem::exists(stored_asset_info->path),
-        "an unrelated malformed base and corrupt stale backup should not block safe collection");
+        "an unrelated malformed base and corrupt stale backup should not block "
+        "safe collection");
     std::filesystem::remove(malformed, filesystem_error);
     filesystem_error.clear();
 
@@ -379,15 +458,15 @@ int main(const int argc, char *argv[]) {
     const auto active_sidecar =
         layerc::platform::visual_sidecar_path(gc_profile_path);
     {
-      std::ofstream output(active_sidecar,
-                           std::ios::binary | std::ios::trunc);
+      std::ofstream output(active_sidecar, std::ios::binary | std::ios::trunc);
       output << "{invalid-active-sidecar";
     }
     passed &= expect(
         fourth_asset_info != nullptr &&
             !layerc::platform::garbage_collect_unreferenced_visual_assets() &&
             std::filesystem::exists(fourth_asset_info->path),
-        "an invalid active sidecar bundle should conservatively abort collection");
+        "an invalid active sidecar bundle should conservatively abort "
+        "collection");
   } else {
     passed = false;
   }
@@ -395,22 +474,22 @@ int main(const int argc, char *argv[]) {
   // Exercise the production image-name policy without touching the fixed
   // production pipe, which may legitimately be in use by the user's daemon.
   std::array<wchar_t, 32'768> own_executable{};
-  const DWORD own_length = GetModuleFileNameW(
-      nullptr, own_executable.data(),
-      static_cast<DWORD>(own_executable.size()));
+  const DWORD own_length =
+      GetModuleFileNameW(nullptr, own_executable.data(),
+                         static_cast<DWORD>(own_executable.size()));
   const auto sibling_server = directory / L"layerd.exe";
   const auto sibling_client = directory / L"layere.exe";
   const bool copied_peers =
       own_length != 0 && own_length < own_executable.size() &&
-      CopyFileW(own_executable.data(), sibling_server.c_str(), FALSE) != FALSE &&
+      CopyFileW(own_executable.data(), sibling_server.c_str(), FALSE) !=
+          FALSE &&
       CopyFileW(own_executable.data(), sibling_client.c_str(), FALSE) != FALSE;
   passed &= expect(copied_peers,
                    "sibling-image authentication test peers should be created");
   if (copied_peers) {
-    const std::wstring sibling_pipe =
-        L"\\\\.\\pipe\\LayerC.SiblingAuthTest." +
-        std::to_wstring(GetCurrentProcessId()) + L"." +
-        std::to_wstring(GetTickCount64());
+    const std::wstring sibling_pipe = L"\\\\.\\pipe\\LayerC.SiblingAuthTest." +
+                                      std::to_wstring(GetCurrentProcessId()) +
+                                      L"." + std::to_wstring(GetTickCount64());
     PROCESS_INFORMATION server_process{};
     PROCESS_INFORMATION client_process{};
     const bool server_launched = launch_auth_peer(
@@ -418,21 +497,25 @@ int main(const int argc, char *argv[]) {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     const bool client_launched = launch_auth_peer(
         sibling_client, L"--auth-client", sibling_pipe, client_process);
-    passed &= expect(server_launched && client_launched,
-                     "sibling layerd/layere authentication peers should launch");
+    passed &=
+        expect(server_launched && client_launched,
+               "sibling layerd/layere authentication peers should launch");
     if (server_launched && client_launched) {
-      const DWORD server_wait = WaitForSingleObject(server_process.hProcess, 10'000);
-      const DWORD client_wait = WaitForSingleObject(client_process.hProcess, 10'000);
+      const DWORD server_wait =
+          WaitForSingleObject(server_process.hProcess, 10'000);
+      const DWORD client_wait =
+          WaitForSingleObject(client_process.hProcess, 10'000);
       DWORD server_exit{1};
       DWORD client_exit{1};
       if (server_wait == WAIT_OBJECT_0)
         (void)GetExitCodeProcess(server_process.hProcess, &server_exit);
       if (client_wait == WAIT_OBJECT_0)
         (void)GetExitCodeProcess(client_process.hProcess, &client_exit);
-      passed &= expect(server_wait == WAIT_OBJECT_0 &&
-                           client_wait == WAIT_OBJECT_0 && server_exit == 0 &&
-                           client_exit == 0,
-                       "same-user, same-session sibling images should authenticate bidirectionally");
+      passed &=
+          expect(server_wait == WAIT_OBJECT_0 && client_wait == WAIT_OBJECT_0 &&
+                     server_exit == 0 && client_exit == 0,
+                 "same-user, same-session sibling images should authenticate "
+                 "bidirectionally");
       if (server_wait != WAIT_OBJECT_0) {
         TerminateProcess(server_process.hProcess, 1);
         WaitForSingleObject(server_process.hProcess, 1'000);
@@ -452,8 +535,10 @@ int main(const int argc, char *argv[]) {
       }
     }
     for (auto *process : {&client_process, &server_process}) {
-      if (process->hThread != nullptr) CloseHandle(process->hThread);
-      if (process->hProcess != nullptr) CloseHandle(process->hProcess);
+      if (process->hThread != nullptr)
+        CloseHandle(process->hThread);
+      if (process->hProcess != nullptr)
+        CloseHandle(process->hProcess);
     }
   }
 
@@ -479,28 +564,26 @@ int main(const int argc, char *argv[]) {
 
   const auto canonical = layerc::platform::canonical_profile_key(path);
   const auto dotted = directory / L"." / L"profile.json";
-  passed &= expect(
-      canonical == layerc::platform::canonical_profile_key(dotted),
-      "canonical profile keys should collapse lexical aliases");
+  passed &= expect(canonical == layerc::platform::canonical_profile_key(dotted),
+                   "canonical profile keys should collapse lexical aliases");
   std::wstring differently_cased = path.wstring();
   CharUpperBuffW(differently_cased.data(),
                  static_cast<DWORD>(differently_cased.size()));
   passed &= expect(
-      canonical ==
-          layerc::platform::canonical_profile_key(differently_cased),
+      canonical == layerc::platform::canonical_profile_key(differently_cased),
       "canonical profile keys should ignore Windows path casing");
 
-  const HANDLE locked_backup = CreateFileW(
-      backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-      FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE locked_backup =
+      CreateFileW(backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   passed &= expect(locked_backup != INVALID_HANDLE_VALUE,
                    "the backup should be lockable for failure testing");
   const auto third = test_profile("Third");
   if (locked_backup != INVALID_HANDLE_VALUE) {
-    passed &= expect(
-        !layerc::platform::write_profile_file(
-            path, layerc::core::serialize_profile_json(third)),
-        "a locked backup replacement should fail the protected write");
+    passed &=
+        expect(!layerc::platform::write_profile_file(
+                   path, layerc::core::serialize_profile_json(third)),
+               "a locked backup replacement should fail the protected write");
     CloseHandle(locked_backup);
   }
   const auto live_after_failure = layerc::platform::read_profile_file(path);
@@ -519,83 +602,80 @@ int main(const int argc, char *argv[]) {
       std::get_if<layerc::core::GameProfile>(&backup_parsed);
   passed &= expect(live_stored != nullptr && live_stored->name == "Second",
                    "failed backup protection must leave the live file intact");
-  passed &= expect(backup_stored != nullptr &&
-                       backup_stored->name == "First",
+  passed &= expect(backup_stored != nullptr && backup_stored->name == "First",
                    "failed backup protection must preserve the older backup");
 
   const auto expected_sidecar = directory / L"_visual" / L"profile.json";
-  passed &= expect(layerc::platform::visual_sidecar_path(path) ==
-                       expected_sidecar,
-                   "visual sidecars should pair by base profile filename");
+  passed &=
+      expect(layerc::platform::visual_sidecar_path(path) == expected_sidecar,
+             "visual sidecars should pair by base profile filename");
   const auto absent_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  passed &= expect(absent_visual.state ==
-                       layerc::platform::VisualSidecarState::absent,
-                   "profiles without a visual sidecar should remain input-only");
+  passed &= expect(
+      absent_visual.state == layerc::platform::VisualSidecarState::absent,
+      "profiles without a visual sidecar should remain input-only");
   auto visual = test_visual_profile();
   passed &= expect(layerc::platform::write_visual_sidecar(path, visual, second),
                    "the first visual sidecar write should succeed");
   visual.sample_rate_hz = 15;
-  passed &= expect(layerc::platform::write_visual_sidecar(path, visual, second),
-                   "a replacement visual sidecar should create a protected backup");
+  passed &=
+      expect(layerc::platform::write_visual_sidecar(path, visual, second),
+             "a replacement visual sidecar should create a protected backup");
   auto visual_backup = expected_sidecar;
   visual_backup += L".bak";
   passed &= expect(std::filesystem::exists(visual_backup),
                    "a valid previous visual sidecar should be backed up");
   auto visual_state = expected_sidecar;
   visual_state += L".state";
-  const HANDLE locked_visual_state = CreateFileW(
-      visual_state.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE locked_visual_state =
+      CreateFileW(visual_state.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   passed &= expect(locked_visual_state != INVALID_HANDLE_VALUE,
                    "the visual state marker should be lockable");
   if (locked_visual_state != INVALID_HANDLE_VALUE) {
     visual.sample_rate_hz = 5;
-    passed &= expect(
-        !layerc::platform::write_visual_sidecar(path, visual, second),
-        "a state-publication failure should fail the visual write");
+    passed &=
+        expect(!layerc::platform::write_visual_sidecar(path, visual, second),
+               "a state-publication failure should fail the visual write");
     CloseHandle(locked_visual_state);
     const auto after_state_failure =
         layerc::platform::load_visual_sidecar(path, second);
-    passed &= expect(
-        after_state_failure.state ==
-                layerc::platform::VisualSidecarState::valid &&
-            after_state_failure.profile.has_value() &&
-            after_state_failure.profile->sample_rate_hz == 15,
-        "a state-publication failure must restore the previous visual and backup");
+    passed &= expect(after_state_failure.state ==
+                             layerc::platform::VisualSidecarState::valid &&
+                         after_state_failure.profile.has_value() &&
+                         after_state_failure.profile->sample_rate_hz == 15,
+                     "a state-publication failure must restore the previous "
+                     "visual and backup");
     visual.sample_rate_hz = 15;
   }
   {
-    std::ofstream corrupt(expected_sidecar,
-                          std::ios::binary | std::ios::trunc);
+    std::ofstream corrupt(expected_sidecar, std::ios::binary | std::ios::trunc);
     corrupt << "{broken";
   }
   const auto recovered_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  passed &= expect(
-      recovered_visual.state ==
-              layerc::platform::VisualSidecarState::recovered_backup &&
-          recovered_visual.profile.has_value() &&
-          recovered_visual.profile->sample_rate_hz == 10,
-      "an invalid visual sidecar should recover its last valid backup");
+  passed &=
+      expect(recovered_visual.state ==
+                     layerc::platform::VisualSidecarState::recovered_backup &&
+                 recovered_visual.profile.has_value() &&
+                 recovered_visual.profile->sample_rate_hz == 10,
+             "an invalid visual sidecar should recover its last valid backup");
   {
-    std::ofstream corrupt(visual_backup,
-                          std::ios::binary | std::ios::trunc);
+    std::ofstream corrupt(visual_backup, std::ios::binary | std::ios::trunc);
     corrupt << "{also-broken";
   }
   const auto invalid_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  passed &= expect(invalid_visual.state ==
-                       layerc::platform::VisualSidecarState::invalid &&
-                       !invalid_visual.error.message.empty(),
-                   "two invalid visual copies should produce a blocking diagnostic");
+  passed &= expect(
+      invalid_visual.state == layerc::platform::VisualSidecarState::invalid &&
+          !invalid_visual.error.message.empty(),
+      "two invalid visual copies should produce a blocking diagnostic");
   visual.sample_rate_hz = 5;
   passed &= expect(
       layerc::platform::write_visual_sidecar(path, visual, second),
       "repairing an invalid visual sidecar should replace its stale backup");
   {
-    std::ofstream corrupt(expected_sidecar,
-                          std::ios::binary | std::ios::trunc);
+    std::ofstream corrupt(expected_sidecar, std::ios::binary | std::ios::trunc);
     corrupt << "{broken-again";
   }
   const auto repaired_backup =
@@ -614,16 +694,18 @@ int main(const int argc, char *argv[]) {
     std::ofstream sentinel(legacy_temporary, std::ios::binary);
     sentinel << "do-not-replace";
   }
-  passed &= expect(
-      layerc::platform::write_profile_file(
-          collision_path, layerc::core::serialize_profile_json(first)),
-      "profile writes should not collide with a legacy deterministic .tmp file");
+  passed &=
+      expect(layerc::platform::write_profile_file(
+                 collision_path, layerc::core::serialize_profile_json(first)),
+             "profile writes should not collide with a legacy deterministic "
+             ".tmp file");
   std::ifstream sentinel(legacy_temporary, std::ios::binary);
   const std::string sentinel_contents{std::istreambuf_iterator<char>(sentinel),
                                       std::istreambuf_iterator<char>()};
   sentinel.close();
   passed &= expect(sentinel_contents == "do-not-replace",
-                    "unique atomic-write temporaries should leave unrelated .tmp files untouched");
+                   "unique atomic-write temporaries should leave unrelated "
+                   ".tmp files untouched");
 
   const auto bundle_path = directory / L"bundle.json";
   auto old_bundle_profile = test_profile("Old bundle");
@@ -637,8 +719,8 @@ int main(const int argc, char *argv[]) {
           layerc::platform::write_profile_file(
               bundle_path,
               layerc::core::serialize_profile_json(old_bundle_profile)) &&
-          layerc::platform::write_visual_sidecar(
-              bundle_path, old_bundle_visual, old_bundle_profile),
+          layerc::platform::write_visual_sidecar(bundle_path, old_bundle_visual,
+                                                 old_bundle_profile),
       "the old profile bundle should be created for rollback testing");
   auto new_bundle_profile = old_bundle_profile;
   new_bundle_profile.id = "bundle-new";
@@ -647,16 +729,16 @@ int main(const int argc, char *argv[]) {
   new_bundle_visual.profile_id = new_bundle_profile.id;
   auto bundle_backup = bundle_path;
   bundle_backup += L".bak";
-  const HANDLE locked_bundle_backup = CreateFileW(
-      bundle_backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE locked_bundle_backup =
+      CreateFileW(bundle_backup.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   passed &= expect(locked_bundle_backup != INVALID_HANDLE_VALUE,
-                    "the bundle backup should be lockable for rollback testing");
+                   "the bundle backup should be lockable for rollback testing");
   if (locked_bundle_backup != INVALID_HANDLE_VALUE) {
-    passed &= expect(
-        !layerc::platform::write_profile_bundle(
-            bundle_path, new_bundle_profile, new_bundle_visual),
-        "a failed second bundle replacement should report failure");
+    passed &=
+        expect(!layerc::platform::write_profile_bundle(
+                   bundle_path, new_bundle_profile, new_bundle_visual),
+               "a failed second bundle replacement should report failure");
     CloseHandle(locked_bundle_backup);
   }
   const auto rolled_back_profile_json =
@@ -669,8 +751,7 @@ int main(const int argc, char *argv[]) {
       std::get_if<layerc::core::GameProfile>(&rolled_back_profile);
   layerc::platform::VisualSidecarLoad rolled_back_visual;
   if (rolled_back == nullptr)
-    rolled_back_visual.state =
-        layerc::platform::VisualSidecarState::invalid;
+    rolled_back_visual.state = layerc::platform::VisualSidecarState::invalid;
   else
     rolled_back_visual =
         layerc::platform::load_visual_sidecar(bundle_path, *rolled_back);
@@ -680,8 +761,8 @@ int main(const int argc, char *argv[]) {
           rolled_back_visual.profile->profile_id == "bundle-old",
       "a partial bundle failure must restore a matching profile and sidecar");
   passed &= expect(
-      layerc::platform::write_profile_bundle(
-          bundle_path, new_bundle_profile, new_bundle_visual),
+      layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
+                                             new_bundle_visual),
       "a complete bundle replacement should succeed after the lock clears");
   const auto committed_visual =
       layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
@@ -702,10 +783,10 @@ int main(const int argc, char *argv[]) {
     rejected_profile.id = "bundle-rejected";
     auto rejected_visual = new_bundle_visual;
     rejected_visual.profile_id = rejected_profile.id;
-    passed &= expect(
-        !layerc::platform::write_profile_bundle(
-            bundle_path, rejected_profile, rejected_visual),
-        "a locked visual backup refresh should reject the bundle before publishing it");
+    passed &= expect(!layerc::platform::write_profile_bundle(
+                         bundle_path, rejected_profile, rejected_visual),
+                     "a locked visual backup refresh should reject the bundle "
+                     "before publishing it");
     CloseHandle(locked_visual_backup);
     const auto unchanged_profile_json =
         layerc::platform::read_profile_file(bundle_path);
@@ -719,27 +800,26 @@ int main(const int argc, char *argv[]) {
         unchanged != nullptr
             ? layerc::platform::load_visual_sidecar(bundle_path, *unchanged)
             : layerc::platform::VisualSidecarLoad{};
-    passed &= expect(
-        unchanged != nullptr && unchanged->id == "bundle-new" &&
-            unchanged_visual.profile.has_value() &&
-            unchanged_visual.profile->profile_id == "bundle-new",
-        "a backup-refresh failure must leave the active profile bundle unchanged");
+    passed &= expect(unchanged != nullptr && unchanged->id == "bundle-new" &&
+                         unchanged_visual.profile.has_value() &&
+                         unchanged_visual.profile->profile_id == "bundle-new",
+                     "a backup-refresh failure must leave the active profile "
+                     "bundle unchanged");
   }
   const auto committed_visual_path =
       layerc::platform::visual_sidecar_path(bundle_path);
-  const HANDLE locked_visual = CreateFileW(
-      committed_visual_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE locked_visual =
+      CreateFileW(committed_visual_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   passed &= expect(locked_visual != INVALID_HANDLE_VALUE,
                    "the committed visual sidecar should be lockable");
   if (locked_visual != INVALID_HANDLE_VALUE) {
-    passed &= expect(
-        layerc::platform::write_profile_bundle(
-            bundle_path, new_bundle_profile, std::nullopt),
-        "a durable removal marker should commit even while stale visual bytes are locked");
+    passed &= expect(layerc::platform::write_profile_bundle(
+                         bundle_path, new_bundle_profile, std::nullopt),
+                     "a durable removal marker should commit even while stale "
+                     "visual bytes are locked");
     const auto removed_while_locked =
-        layerc::platform::load_visual_sidecar(bundle_path,
-                                              new_bundle_profile);
+        layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
     passed &= expect(
         removed_while_locked.state ==
             layerc::platform::VisualSidecarState::absent,
@@ -747,31 +827,120 @@ int main(const int argc, char *argv[]) {
     CloseHandle(locked_visual);
   }
   passed &= expect(
-      layerc::platform::write_profile_bundle(
-          bundle_path, new_bundle_profile, std::nullopt),
+      layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
+                                             std::nullopt),
       "an input-only bundle should replace the base and remove visual data");
   passed &= expect(
       !std::filesystem::exists(
           layerc::platform::visual_sidecar_path(bundle_path)) &&
           !std::filesystem::exists(committed_visual_backup) &&
-          layerc::platform::load_visual_sidecar(bundle_path,
-                                                new_bundle_profile)
-                  .state ==
-              layerc::platform::VisualSidecarState::absent,
-      "an input-only overwrite must keep both stale visual copies inactive and clean them when unlocked");
+          layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile)
+                  .state == layerc::platform::VisualSidecarState::absent,
+      "an input-only overwrite must keep both stale visual copies inactive and "
+      "clean them when unlocked");
+
+  auto automation_bundle = test_automation_profile(new_bundle_profile.id);
+  passed &= expect(
+      layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
+                                             new_bundle_visual,
+                                             automation_bundle),
+      "a base, visual, and automation module should commit as one bundle");
+  const auto committed_automation = layerc::platform::load_automation_sidecar(
+      bundle_path, new_bundle_profile);
+  passed &= expect(
+      committed_automation.profile.has_value() &&
+          committed_automation.profile->profile_id == new_bundle_profile.id,
+      "the committed automation sidecar should match its base profile");
+  const layerc::core::AutomationPersistentValues persistent_values{
+      {"count", layerc::core::AutomationValue(std::int64_t{7})}};
+  const auto reloaded_state = [&] {
+    if (!layerc::platform::write_automation_state(
+            bundle_path, automation_bundle, persistent_values))
+      return layerc::platform::AutomationStateLoad{};
+    return layerc::platform::load_automation_state(bundle_path,
+                                                   automation_bundle);
+  }();
+  const auto saved_count = reloaded_state.values.find("count");
+  passed &= expect(
+      saved_count != reloaded_state.values.end() &&
+          saved_count->second == layerc::core::AutomationValue(std::int64_t{7}),
+      "machine-local persistent automation values should checkpoint and load");
+
+  const auto automation_state_path =
+      layerc::platform::automation_state_path(bundle_path);
+  const HANDLE locked_state =
+      CreateFileW(automation_state_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  passed &= expect(locked_state != INVALID_HANDLE_VALUE,
+                   "the committed automation state should be lockable");
+  if (locked_state != INVALID_HANDLE_VALUE) {
+    const layerc::core::AutomationPersistentValues replacement_values{
+        {"count", layerc::core::AutomationValue(std::int64_t{8})}};
+    passed &=
+        expect(!layerc::platform::write_automation_state(
+                   bundle_path, automation_bundle, replacement_values),
+               "a blocked atomic state replacement should report failure");
+    const auto retained =
+        layerc::platform::load_automation_state(bundle_path, automation_bundle);
+    passed &= expect(
+        retained.values.contains("count") &&
+            retained.values.at("count") ==
+                layerc::core::AutomationValue(std::int64_t{7}),
+        "a failed state replacement must retain the prior durable checkpoint");
+    CloseHandle(locked_state);
+  }
+  passed &= expect(write_test_file(automation_state_path, "{malformed") &&
+                       layerc::platform::load_automation_state(
+                           bundle_path, automation_bundle)
+                           .error.has_value(),
+                   "corrupt machine-local automation state should fail closed");
+  passed &= expect(
+      layerc::platform::write_automation_state(bundle_path, automation_bundle,
+                                               persistent_values),
+      "a valid checkpoint should recover after corrupt state is rejected");
+  const auto automation_path =
+      layerc::platform::automation_sidecar_path(bundle_path);
+  auto automation_backup = automation_path;
+  automation_backup += L".bak";
+  const HANDLE locked_automation =
+      CreateFileW(automation_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  passed &= expect(locked_automation != INVALID_HANDLE_VALUE,
+                   "the committed automation sidecar should be lockable");
+  if (locked_automation != INVALID_HANDLE_VALUE) {
+    passed &= expect(
+        layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
+                                               new_bundle_visual, std::nullopt),
+        "a durable removal marker should commit while stale automation bytes "
+        "are locked");
+    passed &= expect(
+        layerc::platform::load_automation_sidecar(bundle_path,
+                                                  new_bundle_profile)
+                .state == layerc::platform::AutomationSidecarState::absent,
+        "locked stale automation bytes must remain inactive after removal "
+        "commits");
+    CloseHandle(locked_automation);
+  }
+  passed &= expect(
+      layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
+                                             new_bundle_visual, std::nullopt) &&
+          !std::filesystem::exists(automation_path) &&
+          !std::filesystem::exists(automation_backup),
+      "automation removal should clean stale primary and recovery bytes once "
+      "unlocked");
 
   HANDLE framed_read{};
   HANDLE framed_write{};
-  passed &= expect(CreatePipe(&framed_read, &framed_write, nullptr, 4'096) != FALSE,
-                   "anonymous calibration test pipe should be created");
+  passed &=
+      expect(CreatePipe(&framed_read, &framed_write, nullptr, 4'096) != FALSE,
+             "anonymous calibration test pipe should be created");
   if (framed_read != nullptr && framed_write != nullptr) {
     std::string framed_error;
-    passed &= expect(layerc::platform::write_framed_pipe(
-                         framed_write, "{\"calibration\":true}", 1'024,
-                         framed_error),
-                     "bounded calibration frame should be written");
-    const auto framed =
-        layerc::platform::read_framed_pipe(framed_read, 1'024);
+    passed &=
+        expect(layerc::platform::write_framed_pipe(
+                   framed_write, "{\"calibration\":true}", 1'024, framed_error),
+               "bounded calibration frame should be written");
+    const auto framed = layerc::platform::read_framed_pipe(framed_read, 1'024);
     passed &= expect(framed && framed.payload == "{\"calibration\":true}",
                      "bounded calibration frame should be read exactly");
     CloseHandle(framed_write);
@@ -792,23 +961,25 @@ int main(const int argc, char *argv[]) {
     (void)SetCurrentDirectoryW(previous_directory.data());
   }
   passed &= expect(changed_directory && relative_write,
-                   "atomic profile writes should support a path with an empty parent component");
+                   "atomic profile writes should support a path with an empty "
+                   "parent component");
 
-  layerc::platform::WindowCandidate candidate{
-      .title = L"Game Window",
-      .executable_path = L"C:\\Games\\I.EXE",
-      .executable_name = L"I.EXE",
-      .window_class = L"GameClass"};
+  layerc::platform::WindowCandidate candidate{.title = L"Game Window",
+                                              .executable_path =
+                                                  L"C:\\Games\\I.EXE",
+                                              .executable_name = L"I.EXE",
+                                              .window_class = L"GameClass"};
   layerc::core::GameProfile matcher_profile;
   matcher_profile.game.executable_name = "i.exe";
-  passed &= expect(layerc::platform::profile_matches_window(
-                       candidate, matcher_profile),
-                   "window matching should use locale-invariant case folding");
+  passed &= expect(
+      layerc::platform::profile_matches_window(candidate, matcher_profile),
+      "window matching should use locale-invariant case folding");
   matcher_profile.game.executable_name = std::string(1, '\xFF');
   matcher_profile.game.window_title = "Game";
-  passed &= expect(!layerc::platform::profile_matches_window(
-                       candidate, matcher_profile),
-                   "invalid UTF-8 matcher fields must reject instead of weakening to title-only matching");
+  passed &= expect(
+      !layerc::platform::profile_matches_window(candidate, matcher_profile),
+      "invalid UTF-8 matcher fields must reject instead of weakening to "
+      "title-only matching");
 
   const auto corrupt_path = directory / L"corrupt.json";
   {
@@ -817,19 +988,20 @@ int main(const int argc, char *argv[]) {
   }
   const auto corrupt_contents =
       layerc::platform::read_profile_file(corrupt_path);
-  passed &= expect(
-      corrupt_contents.has_value() &&
-          std::holds_alternative<layerc::core::ProfileError>(
-              layerc::core::parse_profile_json(*corrupt_contents)),
-      "an externally corrupted profile should return a bounded validation error");
+  passed &= expect(corrupt_contents.has_value() &&
+                       std::holds_alternative<layerc::core::ProfileError>(
+                           layerc::core::parse_profile_json(*corrupt_contents)),
+                   "an externally corrupted profile should return a bounded "
+                   "validation error");
   passed &= expect(
       layerc::platform::write_profile_file(
           corrupt_path, layerc::core::serialize_profile_json(first)),
       "a valid save should safely replace an externally corrupted profile");
   auto corrupt_backup = corrupt_path;
   corrupt_backup += L".bak";
-  passed &= expect(!std::filesystem::exists(corrupt_backup),
-                   "an invalid previous profile must not be promoted to backup");
+  passed &=
+      expect(!std::filesystem::exists(corrupt_backup),
+             "an invalid previous profile must not be promoted to backup");
 
   const std::wstring spoof_pipe_name =
       L"\\\\.\\pipe\\LayerC.PlatformSpoofTest." +
@@ -852,10 +1024,9 @@ int main(const int argc, char *argv[]) {
                      "the client should reject an unexpected pipe server PID");
   }
 
-  const std::wstring pipe_name =
-      L"\\\\.\\pipe\\LayerC.PlatformTest." +
-      std::to_wstring(GetCurrentProcessId()) + L"." +
-      std::to_wstring(GetTickCount64());
+  const std::wstring pipe_name = L"\\\\.\\pipe\\LayerC.PlatformTest." +
+                                 std::to_wstring(GetCurrentProcessId()) + L"." +
+                                 std::to_wstring(GetTickCount64());
   layerc::platform::NamedPipeEditorDaemonChannel server(
       layerc::platform::NamedPipeEditorDaemonChannel::Role::server, pipe_name,
       GetCurrentProcessId());
@@ -863,10 +1034,12 @@ int main(const int argc, char *argv[]) {
       layerc::platform::NamedPipeEditorDaemonChannel::Role::client, pipe_name,
       GetCurrentProcessId());
   std::array<HANDLE, 3> wait_handles{};
-  passed &= expect(server.wait_handles(wait_handles) == 1,
-                   "a listening server should expose one waitable connect event");
+  passed &=
+      expect(server.wait_handles(wait_handles) == 1,
+             "a listening server should expose one waitable connect event");
   for (int attempt = 0;
-       attempt < 1000 && (!server.connected() || !client.connected()); ++attempt) {
+       attempt < 1000 && (!server.connected() || !client.connected());
+       ++attempt) {
     (void)client.poll();
     (void)server.poll();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -875,9 +1048,10 @@ int main(const int argc, char *argv[]) {
                    "same-user overlapped pipe peers should connect");
   passed &= expect(server.wait_handles(wait_handles) >= 1,
                    "a connected server should expose waitable overlapped I/O");
-  passed &= expect(server.peer_process_id() == GetCurrentProcessId() &&
-                       client.peer_process_id() == GetCurrentProcessId(),
-                   "both authenticated channel ends should retain the peer PID");
+  passed &=
+      expect(server.peer_process_id() == GetCurrentProcessId() &&
+                 client.peer_process_id() == GetCurrentProcessId(),
+             "both authenticated channel ends should retain the peer PID");
   passed &= expect(client.send({
                        .type = layerc::core::LiveMessageType::handshake,
                        .revision = 77,

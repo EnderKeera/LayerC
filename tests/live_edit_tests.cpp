@@ -59,6 +59,14 @@ void test_live_profile_reconciliation() {
              reset_plan.reset_cooldown_ids == std::vector<std::string>{"dash"},
          "runtime cooldown definition edits should reset only that cooldown");
 
+  auto recovery_changed = cosmetic;
+  recovery_changed.cooldowns.front().recovery = RecoveryMode::parallel;
+  const auto recovery_plan =
+      plan_session_reconciliation(cosmetic, recovery_changed);
+  expect(
+      recovery_plan.reset_cooldown_ids == std::vector<std::string>{"dash"},
+      "recovery-mode edits (single to parallel) should reset the cooldown");
+
   auto visuals_only = before;
   visuals_only.cooldowns.front().name = "Dash visual";
   const auto visuals_plan = plan_session_reconciliation(before, visuals_only);
@@ -189,7 +197,7 @@ void test_live_protocol_framing() {
     expect(decoded_diagnostic != nullptr &&
                decoded_diagnostic->type == type &&
                decoded_diagnostic->text == diagnostic.text,
-           "V2.2 diagnostics messages should round-trip over protocol 2");
+           "diagnostics messages should round-trip over the current live protocol");
   }
 
   const auto encoded_frame = encode_live_frame(source);
@@ -206,7 +214,7 @@ void test_live_protocol_framing() {
   }
 
   auto wrong_version = encoded;
-  const auto version = wrong_version.find("\"protocolVersion\":2");
+  const auto version = wrong_version.find("\"protocolVersion\":3");
   if (version != std::string::npos)
     wrong_version.replace(version, 19, "\"protocolVersion\":1");
   expect(std::holds_alternative<LiveProtocolError>(
@@ -221,7 +229,7 @@ void test_live_protocol_framing() {
          "peer-origin revisions must be compared with their peer stream, not a local send counter");
 
   expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
-             R"({"protocolVersion":2,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
+             R"({"protocolVersion":3,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
          "anchor messages missing a mandatory coordinate should be rejected");
 
   LiveMessage too_large{.type = LiveMessageType::live_profile,

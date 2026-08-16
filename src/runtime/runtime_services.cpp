@@ -24,6 +24,7 @@ std::string_view capability_name(const Capability capability) noexcept {
   case Capability::template_evaluation: return "templateEvaluation";
   case Capability::isolated_visual: return "isolatedVisual";
   case Capability::live_edit: return "liveEdit";
+  case Capability::automation: return "automation";
   case Capability::count: break;
   }
   return "unknown";

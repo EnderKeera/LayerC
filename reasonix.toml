@@ -1,0 +1,30 @@
+default_model = "deepseek-flash/deepseek-v4-flash"
+language = "en"
+[permissions]
+allow = ["Bash(cd /d/oursoft/LayerC && git status --short | head -60 && echo ==== && git branch --show-current && echo ==== && git log --oneline -8)", "Bash(cd /d/oursoft/LayerC && git diff HEAD > /tmp/layerc_review.diff && wc -l /tmp/layerc_review.diff && echo ==== && for f in $(git diff --name-only HEAD); do wc -l \"$f\"; done | sort -rn | head -25 && echo ==== && for f in src/core/automation_profile.cpp src/core/automation_runtime.cpp src/core/include/layerc/core/automation.hpp src/daemon/daemon_automation.cpp src/editor/editor_automation.cpp tests/automation_tests.cpp; do wc -l \"$f\"; done)"]
+
+[ui]
+show_reasoning = true
+
+[network]
+
+[network.proxy]
+type = "socks5"
+
+[agent]
+temperature = 0.1
+cold_resume_prune = true
+planner_model = "deepseek-flash"
+subagent_models = { review = "deepseek-flash", security_review = "deepseek-flash" }
+subagent_efforts = { review = "high", task = "high" }
+output_style = "concise"
+
+[tools]
+bash_timeout_seconds = 120
+mcp_call_timeout_seconds = 300
+
+[tools.background_jobs]
+stalled_warning_seconds = 900
+
+
+

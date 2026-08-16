@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
 #include "layerc/bundle/profile_pack.hpp"
@@ -144,11 +145,9 @@ void show_pack_error(const HWND owner, const wchar_t *title,
 INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
     const HWND window, const UINT message, const WPARAM wparam,
     const LPARAM lparam) {
-  auto *state = reinterpret_cast<ExportDialogState *>(
-      GetWindowLongPtrW(window, DWLP_USER));
+  auto *state = bind_dialog_state<ExportDialogState>(window, message, lparam);
+  if (state == nullptr) return FALSE;
   if (message == WM_INITDIALOG) {
-    state = reinterpret_cast<ExportDialogState *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(state));
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
         window, state->editor->capture_exclusion_);
@@ -171,7 +170,6 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
     update_export_summary(window, *state);
     return TRUE;
   }
-  if (state == nullptr) return FALSE;
   if (message == WM_NOTIFY &&
       reinterpret_cast<NMHDR *>(lparam)->idFrom == IDC_PACK_LIST &&
       reinterpret_cast<NMHDR *>(lparam)->code == LVN_ITEMCHANGED) {
@@ -216,11 +214,9 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
 INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
     const HWND window, const UINT message, const WPARAM wparam,
     const LPARAM lparam) {
-  auto *state = reinterpret_cast<ImportDialogState *>(
-      GetWindowLongPtrW(window, DWLP_USER));
+  auto *state = bind_dialog_state<ImportDialogState>(window, message, lparam);
+  if (state == nullptr) return FALSE;
   if (message == WM_INITDIALOG) {
-    state = reinterpret_cast<ImportDialogState *>(lparam);
-    SetWindowLongPtrW(window, DWLP_USER, reinterpret_cast<LONG_PTR>(state));
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
         window, state->editor->capture_exclusion_);
@@ -248,7 +244,6 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
     update_import_summary(window);
     return TRUE;
   }
-  if (state == nullptr) return FALSE;
   if (message == WM_NOTIFY &&
       reinterpret_cast<NMHDR *>(lparam)->idFrom == IDC_PACK_LIST &&
       reinterpret_cast<NMHDR *>(lparam)->code == LVN_ITEMCHANGED) {

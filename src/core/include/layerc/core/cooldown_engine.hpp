@@ -2,6 +2,7 @@
 
 #include "layerc/core/types.hpp"
 
+#include <functional>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -10,12 +11,41 @@
 
 namespace layerc::core {
 
+// Transparent hashing lets the engine look entries up by string_view without
+// constructing temporary std::string keys on the per-trigger hot path.
+struct CooldownIdHash {
+  using is_transparent = void;
+  [[nodiscard]] std::size_t
+  operator()(std::string_view value) const noexcept {
+    return std::hash<std::string_view>{}(value);
+  }
+};
+
+struct CooldownIdEqual {
+  using is_transparent = void;
+  [[nodiscard]] bool operator()(std::string_view left,
+                                std::string_view right) const noexcept {
+    return left == right;
+  }
+};
+
 class CooldownEngine {
 public:
-  explicit CooldownEngine(std::span<const CooldownDefinition> definitions);
+  explicit CooldownEngine(std::span<const CooldownDefinition> definitions,
+                          std::span<const CooldownGroup> groups = {});
 
   [[nodiscard]] bool trigger(std::string_view cooldown_id, TimePoint now);
+  [[nodiscard]] std::vector<std::string>
+  trigger_with_propagation(std::string_view cooldown_id, TimePoint now,
+                           std::uint64_t origin_token = 0);
   [[nodiscard]] bool reset(std::string_view cooldown_id);
+  [[nodiscard]] bool refund(std::string_view cooldown_id, TimePoint now);
+  [[nodiscard]] bool reduce(std::string_view cooldown_id, Milliseconds amount,
+                            bool all_deadlines, TimePoint now);
+  [[nodiscard]] std::vector<std::string>
+  trigger_group(std::string_view group_id, TimePoint now,
+                std::uint64_t origin_token = 0);
+  [[nodiscard]] bool reset_group(std::string_view group_id);
   void update(TimePoint now);
 
   [[nodiscard]] std::vector<CooldownState> snapshot(TimePoint now);
@@ -23,19 +53,32 @@ public:
   [[nodiscard]] std::optional<Milliseconds>
   remaining(std::string_view cooldown_id, TimePoint now);
   void reconfigure(std::span<const CooldownDefinition> definitions,
-                   std::span<const std::string> reset_ids, TimePoint now);
+                   std::span<const std::string> reset_ids, TimePoint now,
+                   std::span<const CooldownGroup> groups = {});
 
 private:
   struct Entry {
     CooldownDefinition definition;
     std::uint32_t available_charges{};
     std::optional<TimePoint> next_charge_at;
+    std::vector<TimePoint> recovery_deadlines;
+    std::uint64_t last_trigger_origin{};
   };
 
   void update_entry(Entry &entry, TimePoint now);
+  [[nodiscard]] bool trigger_entry(Entry &entry, TimePoint now);
+  [[nodiscard]] std::vector<std::string>
+  trigger_many_with_propagation(std::span<const std::string> cooldown_ids,
+                                TimePoint now, std::uint64_t origin_token);
+  [[nodiscard]] Entry *entry_for(std::string_view cooldown_id);
+  [[nodiscard]] const Entry *entry_for(std::string_view cooldown_id) const;
 
   std::vector<std::string> order_;
-  std::unordered_map<std::string, Entry> entries_;
+  std::unordered_map<std::string, Entry, CooldownIdHash, CooldownIdEqual>
+      entries_;
+  std::unordered_map<std::string, std::string, CooldownIdHash, CooldownIdEqual>
+      shared_entries_;
+  std::vector<CooldownGroup> groups_;
 };
 
 } // namespace layerc::core
