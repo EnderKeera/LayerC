@@ -146,9 +146,13 @@ std::string serialize_profile_json(const GameProfile &profile) {
   for (std::size_t index = 0; index < profile.modules.size(); ++index) {
     if (index != 0) output += ", ";
     output += "{\"kind\":\"";
-    output += profile.modules[index].kind == ProfileModuleKind::automation
-                  ? "automation"
-                  : "visual";
+    if (profile.modules[index].kind == ProfileModuleKind::automation) {
+      output += "automation";
+    } else if (profile.modules[index].kind == ProfileModuleKind::companion) {
+      output += "companion";
+    } else {
+      output += "visual";
+    }
     output += "\",\"schemaVersion\":";
     json::append_unsigned(output, profile.modules[index].schema_version);
     output += "}";

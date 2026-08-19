@@ -13,6 +13,15 @@ std::string pool_key(const std::string_view id) {
   return "@shared-pool/" + std::string(id);
 }
 
+// Parallel recovery derives the public next-charge time from the earliest
+// pending deadline; every derivation site shares this rule so the empty
+// (fully charged) case maps to nullopt exactly once.
+[[nodiscard]] std::optional<TimePoint>
+earliest_deadline(const std::vector<TimePoint> &deadlines) noexcept {
+  if (deadlines.empty()) return std::nullopt;
+  return *std::ranges::min_element(deadlines);
+}
+
 } // namespace
 
 CooldownEngine::CooldownEngine(
@@ -106,8 +115,7 @@ bool CooldownEngine::trigger_entry(Entry &entry, const TimePoint now) {
     --entry.available_charges;
     if (recovery == RecoveryMode::parallel) {
       entry.recovery_deadlines.push_back(now + entry.definition.duration);
-      entry.next_charge_at =
-          *std::ranges::min_element(entry.recovery_deadlines);
+      entry.next_charge_at = earliest_deadline(entry.recovery_deadlines);
     } else if (!entry.next_charge_at) {
       entry.next_charge_at = now + entry.definition.duration;
     }
@@ -117,11 +125,11 @@ bool CooldownEngine::trigger_entry(Entry &entry, const TimePoint now) {
   if (entry.definition.retrigger != RetriggerPolicy::restart)
     return false;
   if (recovery == RecoveryMode::parallel && !entry.recovery_deadlines.empty()) {
-    const auto earliest = *std::ranges::min_element(entry.recovery_deadlines);
-    const auto shift = now + entry.definition.duration - earliest;
+    const auto earliest = earliest_deadline(entry.recovery_deadlines);
+    const auto shift = now + entry.definition.duration - *earliest;
     for (auto &deadline : entry.recovery_deadlines)
       deadline += shift;
-    entry.next_charge_at = *std::ranges::min_element(entry.recovery_deadlines);
+    entry.next_charge_at = earliest_deadline(entry.recovery_deadlines);
   } else {
     entry.next_charge_at = now + entry.definition.duration;
   }
@@ -202,15 +210,18 @@ bool CooldownEngine::refund(const std::string_view cooldown_id,
   ++entry->available_charges;
   if (entry->definition.recovery == RecoveryMode::parallel &&
       !entry->recovery_deadlines.empty()) {
-    entry->recovery_deadlines.pop_back();
+    // Cancel the latest pending recovery. Deadlines are appended in trigger
+    // order, but reduce/restart can disturb that ordering, so pick the
+    // maximum explicitly instead of assuming the back element is newest.
+    entry->recovery_deadlines.erase(
+        std::ranges::max_element(entry->recovery_deadlines));
   }
   if (entry->available_charges >= entry->definition.max_charges) {
     entry->available_charges = entry->definition.max_charges;
     entry->next_charge_at.reset();
     entry->recovery_deadlines.clear();
   } else if (entry->definition.recovery == RecoveryMode::parallel) {
-    entry->next_charge_at =
-        *std::ranges::min_element(entry->recovery_deadlines);
+    entry->next_charge_at = earliest_deadline(entry->recovery_deadlines);
   }
   return true;
 }
@@ -335,8 +346,7 @@ void CooldownEngine::update_entry(Entry &entry, const TimePoint now) {
     if (entry.recovery_deadlines.empty()) {
       entry.next_charge_at.reset();
     } else {
-      entry.next_charge_at =
-          *std::ranges::min_element(entry.recovery_deadlines);
+      entry.next_charge_at = earliest_deadline(entry.recovery_deadlines);
     }
     return;
   }
@@ -397,7 +407,7 @@ void CooldownEngine::reconfigure(
                                  replacement->recovery_deadlines.size());
       }
       replacement->next_charge_at =
-          *std::ranges::min_element(replacement->recovery_deadlines);
+          earliest_deadline(replacement->recovery_deadlines);
     } else {
       replacement->next_charge_at = first_deadline;
     }

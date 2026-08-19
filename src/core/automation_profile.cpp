@@ -23,25 +23,7 @@ using detail::automation_value_type_name;
 using detail::parse_automation_event_name;
 
 std::optional<AutomationValueType> parse_type(std::string_view text) {
-  if (text == "null")
-    return AutomationValueType::null_value;
-  if (text == "bool")
-    return AutomationValueType::boolean;
-  if (text == "int")
-    return AutomationValueType::integer;
-  if (text == "number")
-    return AutomationValueType::number;
-  if (text == "duration")
-    return AutomationValueType::duration;
-  if (text == "confidence")
-    return AutomationValueType::confidence;
-  if (text == "string")
-    return AutomationValueType::string;
-  if (text == "list")
-    return AutomationValueType::list;
-  if (text == "map")
-    return AutomationValueType::map;
-  return std::nullopt;
+  return detail::parse_automation_value_type_name(text);
 }
 std::string_view action_name(AutomationActionKind kind) {
   switch (kind) {

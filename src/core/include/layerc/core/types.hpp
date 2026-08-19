@@ -193,6 +193,7 @@ enum class VisualRuntime : std::uint8_t {
 enum class ProfileModuleKind : std::uint8_t {
     visual,
     automation,
+    companion,
 };
 
 struct ProfileModule {

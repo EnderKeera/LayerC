@@ -3,7 +3,11 @@
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets.hpp"
 
+#include <winioctl.h>
+
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <filesystem>
 
 namespace layerc::daemon {
@@ -31,6 +35,30 @@ VisualAssetSignature asset_signature(const std::string_view hash) {
   const auto combine = [](const DWORD high, const DWORD low) {
     return (static_cast<std::uint64_t>(high) << 32U) | low;
   };
+  // The change-journal USN binds the signature to content history: any
+  // write bumps it, so a replacement that preserves size and mtime — and
+  // even one whose MFT record reuses the same file index — still produces a
+  // different signature and forces the worker to re-decode. Volumes without
+  // a journal keep 0 and fall back to the metadata fields.
+  std::uint64_t change_usn{};
+  std::array<unsigned char, 128> journal{};
+  DWORD journal_bytes{};
+  if (DeviceIoControl(file, FSCTL_READ_FILE_USN_DATA, nullptr, 0,
+                      journal.data(), static_cast<DWORD>(journal.size()),
+                      &journal_bytes, nullptr) &&
+      journal_bytes >= sizeof(DWORD) + sizeof(WORD)) {
+    const auto version =
+        *reinterpret_cast<const WORD *>(journal.data() + sizeof(DWORD));
+    std::size_t usn_offset = std::size_t(-1);
+    if (version == 2)
+      usn_offset = offsetof(USN_RECORD_V2, Usn);
+    else if (version == 3)
+      usn_offset = offsetof(USN_RECORD_V3, Usn);
+    if (usn_offset != std::size_t(-1) &&
+        journal_bytes >= usn_offset + sizeof(std::uint64_t))
+      change_usn = *reinterpret_cast<const std::uint64_t *>(
+          journal.data() + usn_offset);
+  }
   return {.present = true,
           .volume_serial = information.dwVolumeSerialNumber,
           .file_index = combine(information.nFileIndexHigh,
@@ -38,7 +66,8 @@ VisualAssetSignature asset_signature(const std::string_view hash) {
           .file_size = combine(information.nFileSizeHigh,
                                information.nFileSizeLow),
           .last_write_ticks = combine(information.ftLastWriteTime.dwHighDateTime,
-                                      information.ftLastWriteTime.dwLowDateTime)};
+                                      information.ftLastWriteTime.dwLowDateTime),
+          .change_usn = change_usn};
 }
 
 } // namespace

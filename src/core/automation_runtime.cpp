@@ -53,6 +53,49 @@ bool effect_precedes(const AutomationEffect &left,
     return left.automation_order < right.automation_order;
   return left.rule_order < right.rule_order;
 }
+// Defense in depth for hand-assembled profiles: parsing validates these
+// contracts, but the evaluator indexes argument vectors directly, so an
+// expression with an unknown operator or out-of-range arity must never
+// reach eval().
+bool expression_within_contract(const AutomationExpression &expression,
+                                const std::size_t depth) {
+  if (depth > max_automation_ast_depth)
+    return false;
+  switch (expression.kind) {
+  case ExpressionKind::literal:
+  case ExpressionKind::variable:
+  case ExpressionKind::event_field:
+    return true;
+  case ExpressionKind::index:
+    if (expression.arguments.size() != 2U)
+      return false;
+    break;
+  case ExpressionKind::unary:
+  case ExpressionKind::binary:
+  case ExpressionKind::call: {
+    const auto *spec = detail::find_automation_op(expression.operation);
+    if (spec == nullptr || spec->kind != expression.kind)
+      return false;
+    if (expression.arguments.size() < spec->min_args ||
+        expression.arguments.size() > spec->max_args)
+      return false;
+    break;
+  }
+  }
+  return std::ranges::all_of(expression.arguments, [&](const auto &child) {
+    return expression_within_contract(child, depth + 1U);
+  });
+}
+bool expressions_within_contract(const AutomationDefinition &automation) {
+  return std::ranges::all_of(automation.rules, [](const auto &rule) {
+    if (!expression_within_contract(rule.condition, 0))
+      return false;
+    return std::ranges::all_of(rule.actions, [](const auto &action) {
+      return expression_within_contract(action.value, 0) &&
+             expression_within_contract(action.secondary, 0);
+    });
+  });
+}
 } // namespace
 
 struct AutomationRuntime::Impl {
@@ -82,6 +125,22 @@ struct AutomationRuntime::Impl {
       }
       state.variables[variable.id] = std::move(value);
     }
+    // Fail closed on out-of-contract expressions instead of evaluating them:
+    // the faulted set keeps the session diagnosable and retry/reload clears
+    // it once the profile is fixed.
+    for (const auto &automation : profile.automations)
+      if (!expressions_within_contract(automation))
+        faulted.insert(automation.id);
+  }
+  void consume_timer_firing(const std::string_view id, const TimePoint now) {
+    const auto timer =
+        std::ranges::find(state.timers, id, &AutomationTimer::id);
+    if (timer == state.timers.end() || timer->due > now)
+      return; // cancelled, replaced, or a firing that is not yet due
+    if (timer->repeating)
+      timer->due = now + timer->interval;
+    else
+      state.timers.erase(timer);
   }
   void make_trace_room() {
     if (trace_entries.size() == 2048)
@@ -423,6 +482,14 @@ struct AutomationRuntime::Impl {
       });
       return true;
     case AutomationActionKind::trigger_cooldown: {
+      // Closure semantics (deliberate): the runtime does not own the
+      // CooldownEngine, so intra-batch cooldown_triggered events expand the
+      // trigger-propagation closure from the profile's cooldown groups.
+      // Whether a charge is actually consumed is decided by the daemon-side
+      // committer against the real engine; the daemon's own trigger paths
+      // emit engine-derived events with real origin tokens. A rule keyed on
+      // cooldown_triggered inside the triggering batch therefore observes
+      // "the trigger action was issued", not "a charge was consumed".
       const std::array<std::string, 1> seed{effect.target};
       for (const auto &id : propagated_cooldowns(seed))
         derived.push_back({.kind = AutomationEventKind::cooldown_triggered,
@@ -524,6 +591,13 @@ AutomationRuntime::process(const AutomationEvent &root,
     result.error = {"$event", "source event exceeds automation bounds"};
     return result;
   }
+  // Delivering a timer firing consumes it — repeating timers rearm from the
+  // event timestamp, one-shot timers retire — before evaluation begins. The
+  // firing is a fact about time, not an automation decision: consuming it
+  // at delivery means a faulted or rejected batch neither loses the timer
+  // nor double-fires it on the next poll.
+  if (root.kind == AutomationEventKind::timer_fired)
+    impl_->consume_timer_firing(root.source_id, root.timestamp);
   // One deadline spans the whole fault-retry cascade: restarting the
   // evaluation used to grant each recursive retry a fresh budget, so a
   // chain of faulted automations could block the daemon loop for up to
@@ -561,7 +635,17 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate(
   result.derived_events.clear();
   result.committed = false;
   result.error.reset();
+  // Batch isolation (deliberate): every condition and value expression in
+  // this batch reads root_snapshot — the state as it was when the root event
+  // arrived — not the staged mid-batch state. Two rules keyed on the same
+  // trigger therefore race on equal footing, and a losing rule's staged
+  // write cannot change whether a later rule fires; only the committed
+  // winning set becomes observable. Evaluating staged state instead would
+  // make rule outcomes order-dependent inside one batch.
   const auto root_snapshot = state;
+  // The staged copy is bounded by the caps (<=64 variables, <=32 timers,
+  // <=64 collection entries per value) and accepted per benchmark v23:
+  // transactional rollback requires a private working state.
   auto staged = root_snapshot;
   std::vector<AutomationEvent> queue{root};
   // Rule identity as (automation order << 32) | rule order: the match loop
@@ -769,31 +853,40 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate(
 }
 std::vector<AutomationEvent>
 AutomationRuntime::due_timer_events(TimePoint now) {
-  std::vector<AutomationEvent> events;
-  std::ranges::sort(impl_->state.timers, {}, &AutomationTimer::due);
-  for (auto &timer : impl_->state.timers) {
-    if (timer.due > now || events.size() >= max_automation_derived_events)
+  // Pure collection, ordered oldest deadline first: the firing is consumed
+  // when the event is delivered to process(), so a collected but
+  // unprocessed event leaves the timer due and the next poll re-collects it
+  // (at-least-once delivery) instead of losing it at collection time.
+  std::vector<std::pair<TimePoint, const AutomationTimer *>> due;
+  for (const auto &timer : impl_->state.timers) {
+    if (timer.due > now || due.size() >= max_automation_derived_events)
       continue;
+    due.emplace_back(timer.due, &timer);
+  }
+  std::ranges::sort(due, {},
+                    &std::pair<TimePoint, const AutomationTimer *>::first);
+  std::vector<AutomationEvent> events;
+  events.reserve(due.size());
+  for (const auto &[deadline, timer] : due) {
     AutomationEvent event;
     event.kind = AutomationEventKind::timer_fired;
     event.timestamp = now;
-    event.source_id = timer.id;
+    event.source_id = timer->id;
     event.fields.emplace(
         "lateBy",
         AutomationValue(DurationValue{std::max(
             Milliseconds::zero(),
-            std::chrono::duration_cast<Milliseconds>(now - timer.due))}));
+            std::chrono::duration_cast<Milliseconds>(now - deadline))}));
     events.push_back(std::move(event));
-    if (timer.repeating)
-      timer.due = now + timer.interval;
   }
-  std::erase_if(impl_->state.timers, [&](const auto &timer) {
-    return !timer.repeating && timer.due <= now;
-  });
+  return events;
+}
+bool AutomationRuntime::expire_overlay_overrides(const TimePoint now) {
+  const auto before = impl_->state.overlay_overrides.size();
   std::erase_if(impl_->state.overlay_overrides, [&](const auto &item) {
     return item.expires_at && *item.expires_at <= now;
   });
-  return events;
+  return impl_->state.overlay_overrides.size() != before;
 }
 std::optional<TimePoint> AutomationRuntime::next_timer_due() const noexcept {
   std::optional<TimePoint> result;

@@ -360,8 +360,12 @@ inline bool eval_comparison(const AutomationOpSpec &self, const Args arguments,
       result = AutomationValue(*left_integer <= *right_integer);
     else if (self.name == "greater")
       result = AutomationValue(*left_integer > *right_integer);
-    else
+    else if (self.name == "greaterEqual")
       result = AutomationValue(*left_integer >= *right_integer);
+    else {
+      error = "unsupported expression operation";
+      return false;
+    }
     return true;
   }
   const auto left = number(arguments[0]);
@@ -376,8 +380,12 @@ inline bool eval_comparison(const AutomationOpSpec &self, const Args arguments,
     result = AutomationValue(*left <= *right);
   else if (self.name == "greater")
     result = AutomationValue(*left > *right);
-  else
+  else if (self.name == "greaterEqual")
     result = AutomationValue(*left >= *right);
+  else {
+    error = "unsupported expression operation";
+    return false;
+  }
   return true;
 }
 
@@ -433,6 +441,9 @@ inline bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
       return false;
     }
     value = std::fmod(*left, *right);
+  } else {
+    error = "unsupported expression operation";
+    return false;
   }
   if (duration_operands) {
     auto duration = duration_result(value);

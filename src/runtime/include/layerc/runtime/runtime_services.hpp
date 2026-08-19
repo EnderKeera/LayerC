@@ -22,6 +22,7 @@ enum class Capability : std::uint8_t {
   isolated_visual,
   live_edit,
   automation,
+  gamebar,
   count,
 };
 

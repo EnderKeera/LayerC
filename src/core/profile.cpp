@@ -241,6 +241,9 @@ bool ProfileReader::read_modules(GameProfile &profile,
                            "automation modules require schema version 4");
         module.kind = ProfileModuleKind::automation;
         maximum_version = 1;
+      } else if (kind == "companion") {
+        module.kind = ProfileModuleKind::companion;
+        maximum_version = 1;
       } else {
         return set_error(path + ".kind", "unsupported module kind");
       }

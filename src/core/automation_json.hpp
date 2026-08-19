@@ -3,6 +3,7 @@
 #include "layerc/core/automation.hpp"
 #include "layerc/core/json.hpp"
 
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -86,81 +87,13 @@ inline void append_exact_integer(std::string &output,
   json::append_quoted(output, std::to_string(value));
 }
 
-// Canonical enum<->wire-name tables shared by the profile serializer, the
-// runtime trace format, and their parsers. The two formats deliberately use
-// identical names so traces replay through the profile reader.
-[[nodiscard]] inline std::string_view
-automation_event_name(const AutomationEventKind kind) {
-  switch (kind) {
-  case AutomationEventKind::input_pressed:
-    return "inputPressed";
-  case AutomationEventKind::input_released:
-    return "inputReleased";
-  case AutomationEventKind::input_value_changed:
-    return "inputValueChanged";
-  case AutomationEventKind::visual_observation:
-    return "visualObservation";
-  case AutomationEventKind::cooldown_triggered:
-    return "cooldownTriggered";
-  case AutomationEventKind::cooldown_ready:
-    return "cooldownReady";
-  case AutomationEventKind::group_triggered:
-    return "groupTriggered";
-  case AutomationEventKind::group_ready:
-    return "groupReady";
-  case AutomationEventKind::session_started:
-    return "sessionStarted";
-  case AutomationEventKind::session_stopping:
-    return "sessionStopping";
-  case AutomationEventKind::variable_changed:
-    return "variableChanged";
-  case AutomationEventKind::timer_fired:
-    return "timerFired";
-  }
-  return "sessionStarted";
-}
+// The wire-name vocabulary lives in the public automation.hpp; these
+// aliases keep the detail:: call sites in the serializer and runtime working.
+using layerc::core::automation_event_kinds;
+using layerc::core::automation_event_name;
+using layerc::core::automation_value_type_name;
+using layerc::core::parse_automation_event_name;
+using layerc::core::parse_automation_value_type_name;
 
-[[nodiscard]] inline std::optional<AutomationEventKind>
-parse_automation_event_name(const std::string_view name) {
-  for (const auto kind :
-       {AutomationEventKind::input_pressed, AutomationEventKind::input_released,
-        AutomationEventKind::input_value_changed,
-        AutomationEventKind::visual_observation,
-        AutomationEventKind::cooldown_triggered,
-        AutomationEventKind::cooldown_ready,
-        AutomationEventKind::group_triggered, AutomationEventKind::group_ready,
-        AutomationEventKind::session_started,
-        AutomationEventKind::session_stopping,
-        AutomationEventKind::variable_changed,
-        AutomationEventKind::timer_fired})
-    if (automation_event_name(kind) == name)
-      return kind;
-  return std::nullopt;
-}
-
-[[nodiscard]] inline std::string_view
-automation_value_type_name(const AutomationValueType type) {
-  switch (type) {
-  case AutomationValueType::null_value:
-    return "null";
-  case AutomationValueType::boolean:
-    return "bool";
-  case AutomationValueType::integer:
-    return "int";
-  case AutomationValueType::number:
-    return "number";
-  case AutomationValueType::duration:
-    return "duration";
-  case AutomationValueType::confidence:
-    return "confidence";
-  case AutomationValueType::string:
-    return "string";
-  case AutomationValueType::list:
-    return "list";
-  case AutomationValueType::map:
-    return "map";
-  }
-  return "null";
-}
 
 } // namespace layerc::core::detail

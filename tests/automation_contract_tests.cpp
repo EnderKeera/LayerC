@@ -332,15 +332,47 @@ void test_automation_expression_and_action_contract() {
   const auto timer_events = action_runtime.due_timer_events(TimePoint(250ms));
   expect(timer_events.size() == 1U &&
              timer_events.front().source_id == "pulse" &&
-             action_runtime.next_timer_due() == TimePoint(300ms),
-         "repeating timers should coalesce sleep into one event and rearm from "
-         "now");
+             action_runtime.next_timer_due() == TimePoint(50ms),
+         "collection must be pure: the firing is consumed by process(), so "
+         "the timer stays due until its event is delivered");
   const auto cleaned = action_runtime.process(timer_events.front());
   expect(cleaned.committed && action_runtime.snapshot().timers.empty() &&
              action_runtime.snapshot().overlay_overrides.empty() &&
              action_runtime.snapshot().variables.at("record") ==
                  AutomationValue(AutomationMap{}),
          "erase, cancel, and explicit override-clear actions should commit");
+
+  {
+    AutomationProfile rearm_profile;
+    rearm_profile.profile_id = "game";
+    AutomationRule arm;
+    arm.id = "arm";
+    arm.event = AutomationEventKind::session_started;
+    arm.actions = {{.kind = AutomationActionKind::create_timer,
+                    .target = "tick",
+                    .value = literal(AutomationValue(DurationValue{50ms})),
+                    .repeating = true}};
+    rearm_profile.automations = {
+        {.id = "clock", .name = "Clock", .rules = {arm}}};
+    AutomationRuntime rearm(rearm_profile);
+    (void)rearm.process({.kind = AutomationEventKind::session_started,
+                         .timestamp = TimePoint{},
+                         .origin_token = 1});
+    const auto firing = rearm.due_timer_events(TimePoint(120ms));
+    const auto fired = rearm.process(firing.front());
+    expect(firing.size() == 1U && fired.committed &&
+               rearm.next_timer_due() == TimePoint(170ms),
+           "a repeating timer firing should rearm from the event timestamp "
+           "when process() consumes it");
+    const auto stale = rearm.process(
+        {.kind = AutomationEventKind::timer_fired,
+         .timestamp = TimePoint(121ms),
+         .source_id = "tick",
+         .origin_token = 2});
+    expect(stale.committed && rearm.next_timer_due() == TimePoint(170ms),
+           "a redelivered firing before the rearmed deadline must not "
+           "consume the timer again");
+  }
 
   AutomationProfile external;
   external.profile_id = "game";

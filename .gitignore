@@ -7,3 +7,6 @@ CMakeUserPresets.json
 compile_commands.json
 *.env
 /review/
+/.codewhale/
+/.mimosa/
+/.review_tmp/

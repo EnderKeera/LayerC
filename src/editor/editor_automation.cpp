@@ -139,19 +139,10 @@ literal(layerc::core::AutomationValue value) {
   return expression;
 }
 
-constexpr std::array automation_event_kinds{
-    layerc::core::AutomationEventKind::input_pressed,
-    layerc::core::AutomationEventKind::input_released,
-    layerc::core::AutomationEventKind::input_value_changed,
-    layerc::core::AutomationEventKind::visual_observation,
-    layerc::core::AutomationEventKind::cooldown_triggered,
-    layerc::core::AutomationEventKind::cooldown_ready,
-    layerc::core::AutomationEventKind::group_triggered,
-    layerc::core::AutomationEventKind::group_ready,
-    layerc::core::AutomationEventKind::session_started,
-    layerc::core::AutomationEventKind::session_stopping,
-    layerc::core::AutomationEventKind::variable_changed,
-    layerc::core::AutomationEventKind::timer_fired};
+// One list with the core wire format: combo order, label lookup, and the
+// simulator all index the same canonical ordering.
+constexpr auto &automation_event_kinds =
+    layerc::core::automation_event_kinds;
 
 constexpr std::array automation_action_kinds{
     layerc::core::AutomationActionKind::set_variable,
@@ -1101,6 +1092,7 @@ void AutomationEditor::step_simulator(const HWND dialog) {
   const auto &event =
       simulator_events_[simulator_index_++];
   const auto trace_start = simulator_->trace().size();
+  (void)simulator_->expire_overlay_overrides(event.timestamp);
   for (const auto &timer_event :
        simulator_->due_timer_events(event.timestamp))
     (void)simulator_->process(timer_event);
@@ -1123,19 +1115,7 @@ void AutomationEditor::step_simulator(const HWND dialog) {
   update_simulator_view(dialog);
 }
 void AutomationEditor::add_simulator_event(const HWND dialog) {
-  static constexpr std::array kinds{
-      layerc::core::AutomationEventKind::input_pressed,
-      layerc::core::AutomationEventKind::input_released,
-      layerc::core::AutomationEventKind::input_value_changed,
-      layerc::core::AutomationEventKind::visual_observation,
-      layerc::core::AutomationEventKind::cooldown_triggered,
-      layerc::core::AutomationEventKind::cooldown_ready,
-      layerc::core::AutomationEventKind::group_triggered,
-      layerc::core::AutomationEventKind::group_ready,
-      layerc::core::AutomationEventKind::session_started,
-      layerc::core::AutomationEventKind::session_stopping,
-      layerc::core::AutomationEventKind::variable_changed,
-      layerc::core::AutomationEventKind::timer_fired};
+  constexpr auto &kinds = layerc::core::automation_event_kinds;
   const int selected = static_cast<int>(SendDlgItemMessageW(
       dialog, IDC_AUTOMATION_SIM_EVENT, CB_GETCURSEL, 0, 0));
   if (selected < 0 || static_cast<std::size_t>(selected) >= kinds.size())
@@ -1156,27 +1136,6 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
   auto fields =
       to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_FIELDS)));
   if (fields != "field:type=JSON; ..." && !fields.empty()) {
-    const auto parse_type = [](const std::string_view name)
-        -> std::optional<layerc::core::AutomationValueType> {
-      using layerc::core::AutomationValueType;
-      if (name == "bool")
-        return AutomationValueType::boolean;
-      if (name == "int")
-        return AutomationValueType::integer;
-      if (name == "number")
-        return AutomationValueType::number;
-      if (name == "duration")
-        return AutomationValueType::duration;
-      if (name == "confidence")
-        return AutomationValueType::confidence;
-      if (name == "string")
-        return AutomationValueType::string;
-      if (name == "list")
-        return AutomationValueType::list;
-      if (name == "map")
-        return AutomationValueType::map;
-      return std::nullopt;
-    };
     std::size_t cursor{};
     while (cursor < fields.size()) {
       const auto end = fields.find(';', cursor);
@@ -1191,7 +1150,8 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
         return;
       }
-      const auto type = parse_type(item.substr(colon + 1U, equal - colon - 1U));
+      const auto type = layerc::core::parse_automation_value_type_name(
+          item.substr(colon + 1U, equal - colon - 1U));
       if (!type.has_value()) {
         MessageBoxW(dialog, L"Unsupported synthetic field type.",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);

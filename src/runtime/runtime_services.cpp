@@ -25,6 +25,7 @@ std::string_view capability_name(const Capability capability) noexcept {
   case Capability::isolated_visual: return "isolatedVisual";
   case Capability::live_edit: return "liveEdit";
   case Capability::automation: return "automation";
+  case Capability::gamebar: return "gamebar";
   case Capability::count: break;
   }
   return "unknown";

@@ -1,5 +1,6 @@
 #include "layerc/core/live_edit.hpp"
 
+#include "layerc/core/frame.hpp"
 #include "layerc/core/json.hpp"
 
 #include <algorithm>
@@ -512,12 +513,10 @@ LiveFrameResult encode_live_frame(const LiveMessage &message) {
   if (payload.size() > max_live_message_bytes)
     return LiveProtocolError{"live message exceeds the 512 KiB limit"};
   const auto length = static_cast<std::uint32_t>(payload.size());
-  std::vector<std::byte> frame(sizeof(length) + payload.size());
-  frame[0] = static_cast<std::byte>(length & 0xFFU);
-  frame[1] = static_cast<std::byte>((length >> 8U) & 0xFFU);
-  frame[2] = static_cast<std::byte>((length >> 16U) & 0xFFU);
-  frame[3] = static_cast<std::byte>((length >> 24U) & 0xFFU);
-  std::memcpy(frame.data() + sizeof(length), payload.data(), payload.size());
+  std::vector<std::byte> frame(frame_header_bytes + payload.size());
+  append_frame_header(frame.data(), length);
+  std::memcpy(frame.data() + frame_header_bytes, payload.data(),
+              payload.size());
   return frame;
 }
 
@@ -531,25 +530,22 @@ LiveFrameDecoder::push(const std::span<const std::byte> bytes) {
   buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
   std::vector<LiveMessageResult> results;
   std::size_t consumed{};
-  while (buffer_.size() - consumed >= sizeof(std::uint32_t)) {
-    const auto byte = [&](const std::size_t offset) {
-      return std::to_integer<std::uint32_t>(buffer_[consumed + offset]);
-    };
+  while (buffer_.size() - consumed >= frame_header_bytes) {
     const std::uint32_t length =
-        byte(0) | (byte(1) << 8U) | (byte(2) << 16U) | (byte(3) << 24U);
+        read_frame_header(buffer_.data() + consumed);
     if (length > max_live_message_bytes) {
       results.emplace_back(
           LiveProtocolError{"live frame exceeds the 512 KiB limit"});
       clear();
       return results;
     }
-    if (buffer_.size() - consumed < sizeof(std::uint32_t) + length)
+    if (buffer_.size() - consumed < frame_header_bytes + length)
       break;
     const auto *payload = reinterpret_cast<const char *>(
-        buffer_.data() + consumed + sizeof(std::uint32_t));
+        buffer_.data() + consumed + frame_header_bytes);
     results.push_back(
         decode_live_message_json(std::string_view(payload, length)));
-    consumed += sizeof(std::uint32_t) + length;
+    consumed += frame_header_bytes + length;
   }
   if (consumed != 0) {
     buffer_.erase(buffer_.begin(),
