@@ -14,6 +14,10 @@ namespace layerc::core {
 inline constexpr std::uint32_t companion_schema_version = 1;
 inline constexpr std::size_t max_companion_slots = 8;
 inline constexpr std::size_t max_companion_sidecar_bytes = 64 * 1024; // 64 KiB
+inline constexpr std::size_t max_companion_snapshot_bytes = 64 * 1024;
+inline constexpr std::size_t max_companion_snapshot_panels = 8;
+inline constexpr std::size_t max_companion_snapshot_items = 32;
+inline constexpr std::size_t max_companion_text_bytes = 512;
 
 struct CompanionSlotMapping {
   std::uint32_t slot_index{}; // 0..7
@@ -76,8 +80,15 @@ struct CompanionSessionSnapshot {
 parse_companion_profile_json(std::string_view json,
                              const GameProfile &base_profile);
 
+[[nodiscard]] CompanionError
+validate_companion_profile(const CompanionProfile &profile,
+                           const GameProfile &base_profile);
+
 [[nodiscard]] std::string
 serialize_companion_profile_json(const CompanionProfile &profile);
+
+[[nodiscard]] CompanionError
+validate_companion_snapshot(const CompanionSessionSnapshot &snapshot);
 
 [[nodiscard]] std::string
 serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot);

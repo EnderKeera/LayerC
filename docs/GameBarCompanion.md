@@ -115,8 +115,7 @@ struct CompanionSidecar {
 ```
 
 ## Current Status (audited)
-- This document is a design/specification skeleton; the Game Bar companion is not build-integrated.
-- `src/gamebar/GameBarBridge.cpp` is incomplete: its header, slot-mapping implementation, package manifest, and tests are absent from the working tree.
-- The current bridge source refers to an unavailable JSON dependency and does not implement stale-data expiry or authenticated lifecycle reconnection.
-- CMake does not register a Game Bar target or an MSIX packaging step.
-- Do not claim V2.4 is implemented until these items compile and the PLAN.md release gates pass.
+- The typed bridge, bounded snapshot parser, daemon-owned publication transport, sidecar validation/preservation, focused tests, CMake integration, and unsigned manifest skeleton are implemented.
+- The transport is a current-user/same-session named-pipe publisher with bounded framed JSON and stale-data suppression in the bridge.
+- The compiled C++/WinRT widget host, real AppService client, MSIX assembly/signing, and Game Bar host smoke gates are still outstanding.
+- Do not claim V2.4 is a complete shipping companion until the remaining PLAN.md Game Bar gates pass.

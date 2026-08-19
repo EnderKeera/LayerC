@@ -2,7 +2,10 @@
 #include "layerc/core/json.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <charconv>
+#include <limits>
+#include <tuple>
 
 namespace layerc::core {
 
@@ -18,8 +21,8 @@ bool parse_slot_mapping(const json::Value &val, const std::string &path,
   }
   const auto &obj = val.as_object();
   const auto slot_it = obj.find("slotIndex");
-  if (slot_it == obj.end() || !slot_it->second.is_number()) {
-    out_error = {path + ".slotIndex", "slotIndex must be an integer"};
+  if (slot_it == obj.end() || !slot_it->second.is_integer()) {
+    out_error = {path + ".slotIndex", "slotIndex must be an exact integer"};
     return false;
   }
   const auto slot_idx = slot_it->second.as_integer();
@@ -35,6 +38,11 @@ bool parse_slot_mapping(const json::Value &val, const std::string &path,
     return false;
   }
   out_slot.panel_id = panel_it->second.as_string();
+  if (out_slot.panel_id.empty() ||
+      out_slot.panel_id.size() > max_companion_text_bytes) {
+    out_error = {path + ".panelId", "panelId must be a bounded non-empty string"};
+    return false;
+  }
 
   const bool panel_exists = std::ranges::any_of(
       base_profile.panels,
@@ -59,11 +67,13 @@ bool parse_slot_mapping(const json::Value &val, const std::string &path,
     out_slot.click_through = ct_it->second.as_bool();
   }
   if (const auto op_it = obj.find("opacity"); op_it != obj.end()) {
-    if (!op_it->second.is_number()) {
-      out_error = {path + ".opacity", "opacity must be a number between 0.0 and 1.0"};
+    if (!op_it->second.is_number() ||
+        !std::isfinite(op_it->second.as_number()) ||
+        op_it->second.as_number() < 0.0 || op_it->second.as_number() > 1.0) {
+      out_error = {path + ".opacity", "opacity must be finite and within [0,1]"};
       return false;
     }
-    out_slot.opacity = std::clamp(op_it->second.as_number(), 0.0, 1.0);
+    out_slot.opacity = op_it->second.as_number();
   }
   return true;
 }
@@ -83,7 +93,7 @@ parse_companion_profile_json(const std::string_view json_str,
   }
   const auto &root = parsed->as_object();
   const auto schema_it = root.find("schemaVersion");
-  if (schema_it == root.end() || !schema_it->second.is_number() ||
+  if (schema_it == root.end() || !schema_it->second.is_integer() ||
       schema_it->second.as_integer() != static_cast<std::int64_t>(companion_schema_version)) {
     return CompanionError{"$.schemaVersion", "unsupported companion schemaVersion"};
   }
@@ -123,7 +133,44 @@ parse_companion_profile_json(const std::string_view json_str,
     }
   }
 
+  if (const auto validation = validate_companion_profile(profile, base_profile);
+      !validation.message.empty())
+    return validation;
   return profile;
+}
+
+CompanionError validate_companion_profile(const CompanionProfile &profile,
+                                          const GameProfile &base_profile) {
+  if (profile.schema_version != companion_schema_version)
+    return {"$.schemaVersion", "unsupported companion schemaVersion"};
+  if (profile.profile_id.empty() || profile.profile_id != base_profile.id)
+    return {"$.profileId", "companion profileId must match base profile id"};
+  if (profile.slots.size() > max_companion_slots)
+    return {"$.slots", "companion slots exceed maximum limit (8)"};
+  std::vector<std::uint32_t> seen_slots;
+  std::vector<std::string> seen_panels;
+  for (std::size_t index = 0; index < profile.slots.size(); ++index) {
+    const auto &slot = profile.slots[index];
+    const std::string path = "$.slots[" + std::to_string(index) + "]";
+    if (slot.slot_index >= max_companion_slots)
+      return {path + ".slotIndex", "slotIndex must be between 0 and 7"};
+    if (std::ranges::find(seen_slots, slot.slot_index) != seen_slots.end())
+      return {path + ".slotIndex", "duplicate slotIndex mapping"};
+    seen_slots.push_back(slot.slot_index);
+    if (slot.panel_id.empty() || slot.panel_id.size() > max_companion_text_bytes)
+      return {path + ".panelId", "panelId must be a bounded non-empty string"};
+    if (std::ranges::find(seen_panels, slot.panel_id) != seen_panels.end())
+      return {path + ".panelId", "a panel may be assigned to only one slot"};
+    seen_panels.push_back(slot.panel_id);
+    const bool panel_exists = std::ranges::any_of(
+        base_profile.panels,
+        [&](const Panel &panel) { return panel.id == slot.panel_id; });
+    if (!panel_exists)
+      return {path + ".panelId", "referenced panelId does not exist in base profile"};
+    if (!std::isfinite(slot.opacity) || slot.opacity < 0.0 || slot.opacity > 1.0)
+      return {path + ".opacity", "opacity must be finite and within [0,1]"};
+  }
+  return {};
 }
 
 std::string serialize_companion_profile_json(const CompanionProfile &profile) {
@@ -151,8 +198,75 @@ std::string serialize_companion_profile_json(const CompanionProfile &profile) {
   return out;
 }
 
+CompanionError validate_companion_snapshot(
+    const CompanionSessionSnapshot &snapshot) {
+  if (snapshot.profile_id.empty() ||
+      snapshot.profile_id.size() > max_companion_text_bytes)
+    return {"$.profileId", "profileId must be a bounded non-empty string"};
+  if (snapshot.session_key.empty() ||
+      snapshot.session_key.size() > max_companion_text_bytes)
+    return {"$.sessionKey", "sessionKey must be a bounded non-empty string"};
+  if (snapshot.panels.size() > max_companion_snapshot_panels)
+    return {"$.panels", "panel count exceeds its bound"};
+  std::vector<std::uint32_t> slots;
+  for (std::size_t panel_index = 0; panel_index < snapshot.panels.size();
+       ++panel_index) {
+    const auto &panel = snapshot.panels[panel_index];
+    const std::string path = "$.panels[" + std::to_string(panel_index) + "]";
+    if (panel.panel_id.empty() ||
+        panel.panel_id.size() > max_companion_text_bytes)
+      return {path + ".panelId", "panelId must be a bounded non-empty string"};
+    if (panel.slot_index >= max_companion_slots)
+      return {path + ".slotIndex", "slotIndex must be between 0 and 7"};
+    if (std::ranges::find(slots, panel.slot_index) != slots.end())
+      return {path + ".slotIndex", "duplicate slotIndex in snapshot"};
+    slots.push_back(panel.slot_index);
+    if (panel.items.size() > max_companion_snapshot_items)
+      return {path + ".items", "item count exceeds its bound"};
+    for (std::size_t item_index = 0; item_index < panel.items.size();
+         ++item_index) {
+      const auto &item = panel.items[item_index];
+      const std::string item_path =
+          path + ".items[" + std::to_string(item_index) + "]";
+      const auto bounded_text = [&](std::string_view value,
+                                    std::string_view field,
+                                    bool allow_empty) -> CompanionError {
+        if ((!allow_empty && value.empty()) ||
+            value.size() > max_companion_text_bytes)
+          return {item_path + "." + std::string(field),
+                  "string is empty or exceeds its bound"};
+        return {};
+      };
+      for (const auto &[value, field, allow_empty] :
+           {std::tuple<std::string_view, std::string_view, bool>{
+                item.cooldown_id, "cooldownId", false},
+            {item.name, "name", false}, {item.icon, "icon", true},
+            {item.color, "color", true}}) {
+        if (const auto error = bounded_text(value, field, allow_empty);
+            !error.message.empty())
+          return error;
+      }
+      if (!std::isfinite(item.progress) || item.progress < 0.0 ||
+          item.progress > 1.0)
+        return {item_path + ".progress",
+                "progress must be finite and within [0,1]"};
+      if (item.max_charges == 0 ||
+          item.available_charges > item.max_charges)
+        return {item_path + ".availableCharges",
+                "charges must be within maxCharges"};
+      if (item.remaining_ms < 0)
+        return {item_path + ".remainingMs", "remainingMs cannot be negative"};
+    }
+  }
+  return {};
+}
+
 std::string
 serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
+  if (const auto error = validate_companion_snapshot(snapshot);
+      !error.message.empty())
+    return {};
+
   std::string out = "{\"profileId\":";
   json::append_quoted(out, snapshot.profile_id);
   out += ",\"sessionKey\":";
@@ -201,56 +315,108 @@ serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
 
 std::variant<CompanionSessionSnapshot, CompanionError>
 parse_companion_snapshot_json(const std::string_view json_str) {
-  auto parsed_result = json::parse(json_str);
+  if (json_str.size() > max_companion_snapshot_bytes)
+    return CompanionError{"$", "companion snapshot exceeds bounded message size"};
+  const auto parsed_result = json::parse(json_str);
   const auto *parsed = std::get_if<json::Value>(&parsed_result);
-  if (parsed == nullptr || !parsed->is_object()) {
+  if (parsed == nullptr || !parsed->is_object())
     return CompanionError{"$", "invalid JSON root object for companion snapshot"};
-  }
   const auto &root = parsed->as_object();
-  CompanionSessionSnapshot snapshot;
-  if (const auto id_it = root.find("profileId"); id_it != root.end() && id_it->second.is_string()) {
-    snapshot.profile_id = id_it->second.as_string();
-  }
-  if (const auto key_it = root.find("sessionKey"); key_it != root.end() && key_it->second.is_string()) {
-    snapshot.session_key = key_it->second.as_string();
-  }
-  if (const auto ts_it = root.find("timestampMs"); ts_it != root.end() && ts_it->second.is_number()) {
-    snapshot.timestamp_ms = static_cast<std::uint64_t>(ts_it->second.as_integer());
-  }
 
-  if (const auto panels_it = root.find("panels"); panels_it != root.end() && panels_it->second.is_array()) {
-    for (const auto &p_val : panels_it->second.as_array()) {
-      if (!p_val.is_object()) continue;
-      const auto &p_obj = p_val.as_object();
-      CompanionPanelSnapshot p_snap;
-      if (const auto pid = p_obj.find("panelId"); pid != p_obj.end() && pid->second.is_string()) {
-        p_snap.panel_id = pid->second.as_string();
-      }
-      if (const auto s_idx = p_obj.find("slotIndex"); s_idx != p_obj.end() && s_idx->second.is_number()) {
-        p_snap.slot_index = static_cast<std::uint32_t>(s_idx->second.as_integer());
-      }
-      if (const auto vis = p_obj.find("visible"); vis != p_obj.end() && vis->second.is_bool()) {
-        p_snap.visible = vis->second.as_bool();
-      }
-      if (const auto items_it = p_obj.find("items"); items_it != p_obj.end() && items_it->second.is_array()) {
-        for (const auto &it_val : items_it->second.as_array()) {
-          if (!it_val.is_object()) continue;
-          const auto &it_obj = it_val.as_object();
-          CompanionSnapshotItem item;
-          if (const auto cid = it_obj.find("cooldownId"); cid != it_obj.end() && cid->second.is_string()) item.cooldown_id = cid->second.as_string();
-          if (const auto nm = it_obj.find("name"); nm != it_obj.end() && nm->second.is_string()) item.name = nm->second.as_string();
-          if (const auto ic = it_obj.find("icon"); ic != it_obj.end() && ic->second.is_string()) item.icon = ic->second.as_string();
-          if (const auto pr = it_obj.find("progress"); pr != it_obj.end() && pr->second.is_number()) item.progress = pr->second.as_number();
-          if (const auto ac = it_obj.find("availableCharges"); ac != it_obj.end() && ac->second.is_number()) item.available_charges = static_cast<std::uint32_t>(ac->second.as_integer());
-          if (const auto mc = it_obj.find("maxCharges"); mc != it_obj.end() && mc->second.is_number()) item.max_charges = static_cast<std::uint32_t>(mc->second.as_integer());
-          if (const auto rm = it_obj.find("remainingMs"); rm != it_obj.end() && rm->second.is_number()) item.remaining_ms = rm->second.as_integer();
-          if (const auto rdy = it_obj.find("isReady"); rdy != it_obj.end() && rdy->second.is_bool()) item.is_ready = rdy->second.as_bool();
-          if (const auto clr = it_obj.find("color"); clr != it_obj.end() && clr->second.is_string()) item.color = clr->second.as_string();
-          p_snap.items.push_back(std::move(item));
-        }
-      }
-      snapshot.panels.push_back(std::move(p_snap));
+  const auto required_string = [](const json::Value::Object &object,
+                                  const char *key, const std::string &path,
+                                  bool allow_empty, std::string &out)
+      -> std::optional<CompanionError> {
+    const auto it = object.find(key);
+    if (it == object.end() || !it->second.is_string())
+      return CompanionError{path + "." + key, "required field must be a string"};
+    const auto &value = it->second.as_string();
+    if ((!allow_empty && value.empty()) || value.size() > max_companion_text_bytes)
+      return CompanionError{path + "." + key, "string is empty or exceeds its bound"};
+    out = value;
+    return std::nullopt;
+  };
+  const auto required_integer = [](const json::Value::Object &object,
+                                   const char *key, const std::string &path,
+                                   std::int64_t minimum, std::int64_t maximum,
+                                   std::int64_t &out) -> std::optional<CompanionError> {
+    const auto it = object.find(key);
+    if (it == object.end() || !it->second.is_integer())
+      return CompanionError{path + "." + key, "required field must be an exact integer"};
+    const auto value = it->second.as_integer();
+    if (value < minimum || value > maximum)
+      return CompanionError{path + "." + key, "integer is outside its allowed range"};
+    out = value;
+    return std::nullopt;
+  };
+  const auto required_bool = [](const json::Value::Object &object,
+                                const char *key, const std::string &path,
+                                bool &out) -> std::optional<CompanionError> {
+    const auto it = object.find(key);
+    if (it == object.end() || !it->second.is_bool())
+      return CompanionError{path + "." + key, "required field must be a boolean"};
+    out = it->second.as_bool();
+    return std::nullopt;
+  };
+
+  CompanionSessionSnapshot snapshot;
+  if (const auto error = required_string(root, "profileId", "$", false, snapshot.profile_id)) return *error;
+  if (const auto error = required_string(root, "sessionKey", "$", false, snapshot.session_key)) return *error;
+  std::int64_t timestamp{};
+  if (const auto error = required_integer(root, "timestampMs", "$", 0, std::numeric_limits<std::int64_t>::max(), timestamp)) return *error;
+  snapshot.timestamp_ms = static_cast<std::uint64_t>(timestamp);
+
+  const auto panels_it = root.find("panels");
+  if (panels_it == root.end() || !panels_it->second.is_array())
+    return CompanionError{"$.panels", "required field must be an array"};
+  if (panels_it->second.as_array().size() > max_companion_snapshot_panels)
+    return CompanionError{"$.panels", "panel count exceeds its bound"};
+
+  for (std::size_t panel_index = 0; panel_index < panels_it->second.as_array().size(); ++panel_index) {
+    const auto &panel_value = panels_it->second.as_array()[panel_index];
+    const std::string path = "$.panels[" + std::to_string(panel_index) + "]";
+    if (!panel_value.is_object()) return CompanionError{path, "panel must be an object"};
+    const auto &panel_object = panel_value.as_object();
+    CompanionPanelSnapshot panel;
+    if (const auto error = required_string(panel_object, "panelId", path, false, panel.panel_id)) return *error;
+    std::int64_t slot{};
+    if (const auto error = required_integer(panel_object, "slotIndex", path, 0, static_cast<std::int64_t>(max_companion_slots - 1), slot)) return *error;
+    panel.slot_index = static_cast<std::uint32_t>(slot);
+    if (const auto error = required_bool(panel_object, "visible", path, panel.visible)) return *error;
+    const auto items_it = panel_object.find("items");
+    if (items_it == panel_object.end() || !items_it->second.is_array())
+      return CompanionError{path + ".items", "required field must be an array"};
+    if (items_it->second.as_array().size() > max_companion_snapshot_items)
+      return CompanionError{path + ".items", "item count exceeds its bound"};
+
+    for (std::size_t item_index = 0; item_index < items_it->second.as_array().size(); ++item_index) {
+      const auto &item_value = items_it->second.as_array()[item_index];
+      const std::string item_path = path + ".items[" + std::to_string(item_index) + "]";
+      if (!item_value.is_object()) return CompanionError{item_path, "item must be an object"};
+      const auto &item_object = item_value.as_object();
+      CompanionSnapshotItem item;
+      if (const auto error = required_string(item_object, "cooldownId", item_path, false, item.cooldown_id)) return *error;
+      if (const auto error = required_string(item_object, "name", item_path, false, item.name)) return *error;
+      if (const auto error = required_string(item_object, "icon", item_path, true, item.icon)) return *error;
+      const auto progress_it = item_object.find("progress");
+      if (progress_it == item_object.end() || !progress_it->second.is_number() || !std::isfinite(progress_it->second.as_number()) || progress_it->second.as_number() < 0.0 || progress_it->second.as_number() > 1.0)
+        return CompanionError{item_path + ".progress", "progress must be finite and within [0,1]"};
+      item.progress = progress_it->second.as_number();
+      std::int64_t available{};
+      if (const auto error = required_integer(item_object, "availableCharges", item_path, 0, std::numeric_limits<std::uint32_t>::max(), available)) return *error;
+      item.available_charges = static_cast<std::uint32_t>(available);
+      std::int64_t maximum{};
+      if (const auto error = required_integer(item_object, "maxCharges", item_path, 1, std::numeric_limits<std::uint32_t>::max(), maximum)) return *error;
+      item.max_charges = static_cast<std::uint32_t>(maximum);
+      if (item.available_charges > item.max_charges) return CompanionError{item_path + ".availableCharges", "available charges exceed max charges"};
+      std::int64_t remaining{};
+      if (const auto error = required_integer(item_object, "remainingMs", item_path, 0, std::numeric_limits<std::int64_t>::max(), remaining)) return *error;
+      item.remaining_ms = remaining;
+      if (const auto error = required_bool(item_object, "isReady", item_path, item.is_ready)) return *error;
+      if (const auto error = required_string(item_object, "color", item_path, true, item.color)) return *error;
+      panel.items.push_back(std::move(item));
     }
+    snapshot.panels.push_back(std::move(panel));
   }
   return snapshot;
 }

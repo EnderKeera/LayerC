@@ -358,9 +358,7 @@ struct CompanionSidecarCodec {
   }
   static auto validate(const Profile &profile,
                        const layerc::core::GameProfile &base) {
-    (void)base;
-    (void)profile;
-    return Error{};
+    return layerc::core::validate_companion_profile(profile, base);
   }
   static std::string serialize(const Profile &profile) {
     return layerc::core::serialize_companion_profile_json(profile);
@@ -509,6 +507,20 @@ bool write_profile_bundle(
   stored_profile.schema_version = 4;
   stored_profile.modules.clear();
 
+  // Existing companion data is owned by the profile bundle even when the
+  // caller is saving an unrelated base, visual, or automation edit. Until
+  // LayerE exposes companion editing/removal, omitted companion state means
+  // preserve a valid active sidecar; invalid existing data blocks the save.
+  std::optional<layerc::core::CompanionProfile> preserved_companion;
+  if (!companion_profile.has_value()) {
+    const auto existing = load_companion_sidecar(path, stored_profile);
+    if (existing.state == CompanionSidecarState::invalid)
+      return false;
+    if (existing.profile.has_value()) preserved_companion = existing.profile;
+  }
+  const auto &effective_companion =
+      companion_profile.has_value() ? companion_profile : preserved_companion;
+
   if (visual_profile.has_value()) {
     if (!layerc::core::validate_visual_profile(*visual_profile, stored_profile)
              .message.empty())
@@ -525,6 +537,15 @@ bool write_profile_bundle(
     stored_profile.modules.push_back(
         {.kind = layerc::core::ProfileModuleKind::automation,
          .schema_version = automation_profile->schema_version});
+  }
+  if (effective_companion.has_value()) {
+    if (!layerc::core::validate_companion_profile(*effective_companion,
+                                                  stored_profile)
+             .message.empty())
+      return false;
+    stored_profile.modules.push_back(
+        {.kind = layerc::core::ProfileModuleKind::companion,
+         .schema_version = effective_companion->schema_version});
   }
 
   const auto root = path.parent_path();
@@ -611,9 +632,9 @@ bool write_profile_bundle(
         mutation(automation_marker, std::string(sidecar_state_removed)));
   }
 
-  if (companion_profile.has_value()) {
+  if (effective_companion.has_value()) {
     const auto contents =
-        layerc::core::serialize_companion_profile_json(*companion_profile);
+        layerc::core::serialize_companion_profile_json(*effective_companion);
     mutations.push_back(mutation(companion_backup, contents));
     mutations.push_back(mutation(companion, contents));
     mutations.push_back(
@@ -640,7 +661,7 @@ bool write_profile_bundle(
     (void)DeleteFileW(automation.c_str());
     (void)DeleteFileW(automation_backup.c_str());
   }
-  if (!companion_profile.has_value()) {
+  if (!effective_companion.has_value()) {
     (void)DeleteFileW(companion.c_str());
     (void)DeleteFileW(companion_backup.c_str());
   }

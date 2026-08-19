@@ -40,7 +40,14 @@ purely passively. These are hard product constraints.
 | `tools/` | `lctest` fake game window, `capture_probe`, benchmark scripts (`benchmark_v11/v22/v23/latency.ps1`), automation benchmark. |
 | `examples/` | `lctest.json` (matches the lctest harness), `smoke.json` (global free-floating smoke profile). |
 | `review/` | Layer review files (`layerN.review-YYYY-MM-DD.md`) and perf reports; gitignored working docs (see Review workflow). |
-| `build/`, `out/` | Build outputs; never touched by hand, never committed. |
+| `build/`, `out/` | Build outputs; never touched by hand, never committed. For repository analysis, ignore `build/` entirely; inspect only deployable `out/**/layer*.exe` and required adjacent runtime DLLs when EXE load/runtime behavior matters. |
+
+### Analysis input policy
+
+- `.mimosa/` is hook/checkpoint state, not product code; `.codewhale/`, `.review_tmp/`, and `review/` are agent/review working data. Exclude all of them from repository analysis.
+- Exclude `build/` completely: it contains compiler intermediates, duplicate configurations, test binaries, and packaged staging trees.
+- Treat `out/` as mixed deployment output: default to current `out/layerc/layer*.exe`; use `out/layerc-mingw/layer*.exe` plus `out/layerc-mingw/lib*.dll` only for MinGW load/dependency analysis. Older deployment variants are opt-in comparison inputs. Exclude `out/benchmarks/**`, JSON reports, Markdown/notices, and license trees.
+- Prefer explicit source globs (`src/**`, `tests/**`, `tools/**`, `examples/**`, `third_party/miniz/**`) or explicit deployment globs such as `out/layerc/layer*.exe`. Do not use a root-wide `*`/`**/*` discovery query. DSH discovery deliberately uses hidden+ignored traversal, so `.gitignore` alone does not reduce its search scope.
 
 ## Build, test, run
 

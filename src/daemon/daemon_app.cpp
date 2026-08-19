@@ -53,10 +53,15 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   int exit_code{};
   MSG message{};
   while (running) {
-    std::array<HANDLE, 4> live_handles{};
+    std::array<HANDLE, 5> live_handles{};
     const auto live_handle_count = static_cast<DWORD>(
         live_channel_.wait_handles(std::span<HANDLE>(live_handles).first(3)));
     DWORD wait_handle_count = live_handle_count;
+    const DWORD gamebar_wait_index = wait_handle_count;
+    const HANDLE gamebar_wait = gamebar_transport_.wait_handle();
+    if (gamebar_wait != nullptr)
+      live_handles[wait_handle_count++] = gamebar_wait;
+    const DWORD visual_wait_index = wait_handle_count;
     const bool visual_wait = visual_snapshot_event_ != nullptr;
     if (visual_wait)
       live_handles[wait_handle_count++] = visual_snapshot_event_;
@@ -77,13 +82,19 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     if (result == WAIT_TIMEOUT) {
       maintain_isolated_visual_captures();
       poll_live_channel();
+      gamebar_transport_.poll();
       continue;
     }
     if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + live_handle_count) {
       poll_live_channel();
       continue;
     }
-    if (visual_wait && result == WAIT_OBJECT_0 + live_handle_count) {
+    if (gamebar_wait != nullptr &&
+        result == WAIT_OBJECT_0 + gamebar_wait_index) {
+      gamebar_transport_.poll();
+      continue;
+    }
+    if (visual_wait && result == WAIT_OBJECT_0 + visual_wait_index) {
       poll_visual_captures();
       continue;
     }
@@ -242,6 +253,8 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     return 0;
   case WM_TIMER:
     if (wparam == game_scan_timer) {
+      gamebar_transport_.poll();
+      publish_companion_snapshots(layerc::core::MonotonicClock::now());
       ensure_tray_icon();
       const bool profiles_reloaded = reload_profiles_if_requested();
       const bool settings_reloaded = reload_settings_if_requested();

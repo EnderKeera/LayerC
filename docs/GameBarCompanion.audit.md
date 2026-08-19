@@ -1,19 +1,17 @@
 # Game Bar Companion Audit
 
-## Finding
-The current Game Bar companion work is not implemented or build-integrated despite `docs/GameBarCompanion.md` claiming it is ready.
+## Current status
 
-## Evidence
-- `src/gamebar/` contains only `GameBarBridge.cpp`; the documented header, slot-mapping files, package manifest, and tests are absent.
-- `GameBarBridge.cpp` includes `GameBarBridge.hpp` and `json.hpp`, but neither include is present at the documented path / target include setup.
-- The bridge calls `nlohmann::json::parse`, while the repository's JSON implementation is `layerc::core::json` and no nlohmann dependency is configured.
-- `HideStaleData()` is a placeholder and does not expire snapshots after two seconds.
-- `Reconnect()` only calls the placeholder stale-data method; it does not reconnect.
-- `ConnectAsync()` unconditionally returns `Success` without opening or authenticating an AppService connection.
-- CMake has no Game Bar target or MSIX packaging step.
+The source tree now contains a typed companion contract, strict bounded snapshot
+parser, stale-data bridge, daemon-owned publication transport, sidecar validation
+and preservation, focused tests, and an unsigned manifest/package skeleton.
 
-## Impact
-The documented V2.4 status is materially inaccurate. A build or release claim should not be made until the code is implemented, integrated, and covered by the PLAN.md Game Bar gates.
+## Remaining release gates
 
-## Immediate fix
-Replace the status section in `docs/GameBarCompanion.md` with an audited incomplete status, then implement the bridge, sidecar, package, build integration, and tests in separate verified changes.
+- The compiled C++/WinRT host and AppService package now build; the Xbox Game Bar SDK-specific widget registration and real AppService client behavior remain release-gate work.
+- CMake now assembles an unsigned MSIX; CI must install it and run Game Bar/Explorer restart,
+  reconnect, eight-slot, controller, click-through, DPI, and fullscreen matrix tests.
+- Official release packaging still requires an externally supplied signing secret.
+
+Until those gates pass, V2.4 remains work in progress and must not be described as
+a complete shipping Game Bar companion.

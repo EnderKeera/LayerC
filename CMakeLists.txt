@@ -195,6 +195,7 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/overlay_window.cpp
         src/daemon/overlay_render.cpp
         src/gamebar/GameBarBridge.cpp
+        src/gamebar/GameBarTransport.cpp
     )
     target_include_directories(layerd PRIVATE src/daemon src/gamebar)
     target_link_libraries(layerd PRIVATE
@@ -239,6 +240,67 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         endif()
     endif()
     set_target_properties(layerworker PROPERTIES OUTPUT_NAME "layerworker")
+endif()
+
+option(LAYERC_BUILD_GAMEBAR_HOST "Build the C++/WinRT Game Bar companion host" ON)
+if(WIN32 AND LAYERC_BUILD_GAMEBAR_HOST)
+    add_executable(layerc_gamebar_host WIN32
+        src/gamebar/GameBarCompanionHost.cpp
+        src/core/companion.cpp
+        src/core/json.cpp
+        src/core/json_value.cpp
+        src/core/utf8.cpp)
+    target_include_directories(layerc_gamebar_host PRIVATE
+        src/core/include
+        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/cppwinrt")
+    target_compile_features(layerc_gamebar_host PRIVATE cxx_std_20)
+    target_link_libraries(layerc_gamebar_host PRIVATE
+        windowsapp user32)
+    target_compile_definitions(layerc_gamebar_host PRIVATE
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    if(MSVC)
+        target_compile_options(layerc_gamebar_host PRIVATE /W4 /permissive- /EHsc /utf-8)
+    else()
+        target_compile_options(layerc_gamebar_host PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    set_target_properties(layerc_gamebar_host PROPERTIES OUTPUT_NAME "layerc-gamebar")
+
+    find_program(LAYERC_MAKEAPPX makeappx.exe
+        PATHS
+        "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
+        "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64")
+    if(LAYERC_MAKEAPPX)
+        set(LAYERC_GAMEBAR_PACKAGE_DIR
+            "${CMAKE_CURRENT_BINARY_DIR}/gamebar-package")
+        set(LAYERC_GAMEBAR_MSIX
+            "${CMAKE_CURRENT_BINARY_DIR}/LayerC.GameBar.v1.msix")
+        add_custom_command(
+            OUTPUT "${LAYERC_GAMEBAR_MSIX}"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf
+                "${LAYERC_GAMEBAR_PACKAGE_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${LAYERC_GAMEBAR_PACKAGE_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "$<TARGET_FILE:layerc_gamebar_host>"
+                "${LAYERC_GAMEBAR_PACKAGE_DIR}/layerc-gamebar.exe"
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
+                "${LAYERC_GAMEBAR_PACKAGE_DIR}/AppxManifest.xml"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${LAYERC_GAMEBAR_PACKAGE_DIR}/Assets"
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Assets/StoreLogo.png"
+                "${LAYERC_GAMEBAR_PACKAGE_DIR}/Assets/StoreLogo.png"
+            COMMAND "${LAYERC_MAKEAPPX}" pack
+                /d "${LAYERC_GAMEBAR_PACKAGE_DIR}"
+                /p "${LAYERC_GAMEBAR_MSIX}" /o
+            DEPENDS layerc_gamebar_host
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Assets/StoreLogo.png"
+            VERBATIM)
+        add_custom_target(layerc_gamebar_msix
+            DEPENDS "${LAYERC_GAMEBAR_MSIX}")
+    endif()
 endif()
 
 if(WIN32 AND LAYERC_BUILD_EDITOR)
@@ -326,6 +388,11 @@ endif()
 if(TARGET layerworker)
     install(TARGETS layerworker RUNTIME DESTINATION . COMPONENT Runtime)
 endif()
+if(TARGET layerc_gamebar_host)
+    install(TARGETS layerc_gamebar_host RUNTIME DESTINATION gamebar COMPONENT GameBar)
+endif()
+# The portable ZIP intentionally remains desktop-only. Game Bar package
+# inputs are staged only by an explicit future MSIX packaging target.
 install(FILES
     README.md
     PLAN.md
@@ -521,6 +588,7 @@ if(LAYERC_BUILD_TESTS)
             tests/companion_tests.cpp
             tests/test_support.cpp
             src/gamebar/GameBarBridge.cpp
+            src/gamebar/GameBarTransport.cpp
         )
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
         target_link_libraries(layerc_companion_tests PRIVATE
@@ -536,6 +604,24 @@ if(LAYERC_BUILD_TESTS)
         endif()
         add_test(NAME layerc_companion_tests COMMAND layerc_companion_tests)
         set_tests_properties(layerc_companion_tests PROPERTIES TIMEOUT 30)
+
+        add_executable(layerc_gamebar_host_tests
+            tests/gamebar_host_tests.cpp)
+        target_link_libraries(layerc_gamebar_host_tests PRIVATE
+            layerc_core)
+        target_compile_definitions(layerc_gamebar_host_tests PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MSVC)
+            target_compile_options(layerc_gamebar_host_tests PRIVATE
+                /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(layerc_gamebar_host_tests PRIVATE
+                -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME layerc_gamebar_host_tests
+            COMMAND layerc_gamebar_host_tests $<TARGET_FILE:layerc_gamebar_host>)
+        set_tests_properties(layerc_gamebar_host_tests PROPERTIES TIMEOUT 30)
+        add_dependencies(layerc_gamebar_host_tests layerc_gamebar_host)
 
         add_executable(layerc_editor_tests
             tests/editor_dialog_tests.cpp
