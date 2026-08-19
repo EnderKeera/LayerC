@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         IgnorableNamespaces="uap">
+  <Identity Name="LayerC.GameBar.v1" Publisher="CN=LayerC" Version="2.4.0.0" />
+  <Properties>
+    <DisplayName>LayerC Game Bar Companion</DisplayName>
+    <PublisherDisplayName>LayerC</PublisherDisplayName>
+    <Description>LayerC cooldown panel companion</Description>
+    <Logo>Assets/StoreLogo.png</Logo>
+  </Properties>
+  <Resources><Resource Language="en-us" /></Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Applications>
+    <Application Id="LayerC.GameBar" Executable="layerc-gamebar.exe" EntryPoint="LayerC.GameBar.App">
+      <uap:VisualElements AppListEntry="none" DisplayName="LayerC Game Bar Companion"
+                           Description="LayerC cooldown panel companion"
+                           BackgroundColor="#20252B"
+                           Square44x44Logo="Assets/StoreLogo.png"
+                           Square150x150Logo="Assets/StoreLogo.png" />
+      <Extensions>
+        <uap:Extension Category="windows.appService" EntryPoint="LayerC.GameBar.AppService">
+          <uap:AppService Name="LayerC.GameBar.v1" />
+        </uap:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>

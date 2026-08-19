@@ -217,16 +217,21 @@ public:
   }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult
   reconcile(const layerc::runtime::CapabilityDemand &) override {
+    if (!app_.gamebar_transport_.start())
+      return {false, "Game Bar transport could not start"};
+    app_.gamebar_transport_.poll();
     return {};
   }
-  void quiesce() noexcept override {}
+  void quiesce() noexcept override { app_.gamebar_transport_.stop(); }
   [[nodiscard]] layerc::runtime::RuntimeResourceStats
   resources() const noexcept override {
     std::uint32_t active_companion_sessions{};
     for (const auto &session : app_.sessions_) {
       if (session->has_companion_slots()) ++active_companion_sessions;
     }
-    return {.objects = active_companion_sessions};
+    return {.handles = static_cast<std::uint32_t>(
+                 app_.gamebar_transport_.resource_handle_count()),
+             .objects = active_companion_sessions};
   }
 
 private:

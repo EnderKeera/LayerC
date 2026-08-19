@@ -31,23 +31,24 @@ layerc::core::CompanionSessionSnapshot GameBarBridge::create_session_snapshot(
     def_map[d.id] = &d;
   }
 
-  for (std::size_t p_idx = 0; p_idx < panels.size(); ++p_idx) {
-    const auto &panel = panels[p_idx];
-    layerc::core::CompanionPanelSnapshot p_snap;
-    p_snap.panel_id = panel.id;
-    p_snap.slot_index = static_cast<std::uint32_t>(p_idx % 8);
-    p_snap.visible = true;
-
+  std::size_t fallback_slot{};
+  for (const auto &panel : panels) {
+    const layerc::core::CompanionSlotMapping *mapping = nullptr;
     if (companion.has_value()) {
       const auto slot_it = std::ranges::find_if(
           companion->slots,
-          [&](const layerc::core::CompanionSlotMapping &mapping) {
-            return mapping.panel_id == panel.id;
+          [&](const layerc::core::CompanionSlotMapping &candidate) {
+            return candidate.panel_id == panel.id;
           });
-      if (slot_it != companion->slots.end()) {
-        p_snap.slot_index = slot_it->slot_index;
-      }
+      if (slot_it == companion->slots.end()) continue;
+      mapping = &*slot_it;
     }
+    layerc::core::CompanionPanelSnapshot p_snap;
+    p_snap.panel_id = panel.id;
+    p_snap.slot_index = mapping != nullptr
+                            ? mapping->slot_index
+                            : static_cast<std::uint32_t>(fallback_slot++);
+    p_snap.visible = true;
 
     for (const auto &item_id : panel.cooldown_ids) {
       const auto def_it = def_map.find(item_id);
@@ -89,6 +90,8 @@ layerc::core::CompanionSessionSnapshot GameBarBridge::create_session_snapshot(
       }
       p_snap.items.push_back(std::move(item));
     }
+    if (snapshot.panels.size() >= layerc::core::max_companion_snapshot_panels)
+      break;
     snapshot.panels.push_back(std::move(p_snap));
   }
   return snapshot;
@@ -101,6 +104,12 @@ void GameBarBridge::update_snapshot(
   last_update_time_ = layerc::core::MonotonicClock::now();
 }
 
+void GameBarBridge::clear_snapshot() noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  latest_snapshot_.reset();
+  last_update_time_ = {};
+}
+
 std::optional<layerc::core::CompanionSessionSnapshot>
 GameBarBridge::latest_snapshot(const layerc::core::TimePoint now) const {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -111,6 +120,17 @@ GameBarBridge::latest_snapshot(const layerc::core::TimePoint now) const {
     return std::nullopt; // Hide stale data after 2.0s
   }
   return latest_snapshot_;
+}
+
+std::optional<std::string> GameBarBridge::latest_snapshot_json(
+    const layerc::core::TimePoint now) const {
+  const auto snapshot = latest_snapshot(now);
+  if (!snapshot.has_value()) return std::nullopt;
+  const auto json = layerc::core::serialize_companion_snapshot_json(*snapshot);
+  if (json.empty() ||
+      json.size() > layerc::core::max_companion_snapshot_bytes)
+    return std::nullopt;
+  return json;
 }
 
 } // namespace layerc::gamebar

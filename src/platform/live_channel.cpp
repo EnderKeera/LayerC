@@ -69,6 +69,31 @@ bool same_user_as_current_process(const HANDLE process) {
   return matches;
 }
 
+bool is_sibling_image(const HANDLE process, const wchar_t *const filename) {
+  std::array<wchar_t, 32'768> editor_path{};
+  const DWORD editor_length = GetModuleFileNameW(
+      nullptr, editor_path.data(), static_cast<DWORD>(editor_path.size()));
+  if (editor_length == 0 || editor_length >= editor_path.size()) return false;
+
+  std::array<wchar_t, 32'768> server_path{};
+  DWORD server_length = static_cast<DWORD>(server_path.size());
+  if (QueryFullProcessImageNameW(process, 0, server_path.data(),
+                                 &server_length) == FALSE ||
+      server_length == 0)
+    return false;
+
+  const auto expected =
+      std::filesystem::path(
+          std::wstring_view(editor_path.data(), editor_length))
+          .parent_path() /
+      filename;
+  const auto actual = std::filesystem::path(
+      std::wstring_view(server_path.data(), server_length));
+  std::error_code error;
+  const bool equivalent = std::filesystem::equivalent(expected, actual, error);
+  return !error && equivalent;
+}
+
 } // namespace
 
 bool is_sibling_process_image(const DWORD process_id,
@@ -76,34 +101,9 @@ bool is_sibling_process_image(const DWORD process_id,
   const HANDLE process =
       OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
   if (process == nullptr) return false;
-  std::array<wchar_t, 32'768> current_path{};
-  const DWORD current_length = GetModuleFileNameW(
-      nullptr, current_path.data(), static_cast<DWORD>(current_path.size()));
-  if (current_length == 0 || current_length >= current_path.size()) {
-    CloseHandle(process);
-    return false;
-  }
-
-  std::array<wchar_t, 32'768> peer_path{};
-  DWORD peer_length = static_cast<DWORD>(peer_path.size());
-  if (QueryFullProcessImageNameW(process, 0, peer_path.data(),
-                                 &peer_length) == FALSE ||
-      peer_length == 0) {
-    CloseHandle(process);
-    return false;
-  }
+  const bool sibling = is_sibling_image(process, filename);
   CloseHandle(process);
-
-  const auto expected =
-      std::filesystem::path(
-          std::wstring_view(current_path.data(), current_length))
-          .parent_path() /
-      filename;
-  const auto actual =
-      std::filesystem::path(std::wstring_view(peer_path.data(), peer_length));
-  std::error_code error;
-  const bool equivalent = std::filesystem::equivalent(expected, actual, error);
-  return !error && equivalent;
+  return sibling;
 }
 
 NamedPipeEditorDaemonChannel::NamedPipeEditorDaemonChannel(
@@ -227,10 +227,9 @@ bool NamedPipeEditorDaemonChannel::authenticate_server() {
     return false;
   }
   const bool trusted_user = same_user_as_current_process(server_process);
+  const bool trusted_image = expected_peer_process_id_ != 0 ||
+                             is_sibling_image(server_process, L"layerd.exe");
   CloseHandle(server_process);
-  const bool trusted_image =
-      expected_peer_process_id_ != 0 ||
-      is_sibling_process_image(server_process_id, L"layerd.exe");
   if (!trusted_user || !trusted_image) {
     last_error_ = L"Rejected an untrusted LayerD live-channel server.";
     return false;
@@ -268,10 +267,9 @@ bool NamedPipeEditorDaemonChannel::authenticate_client() {
     return false;
   }
   const bool trusted_user = same_user_as_current_process(client_process);
+  const bool trusted_image = expected_peer_process_id_ != 0 ||
+                             is_sibling_image(client_process, L"layere.exe");
   CloseHandle(client_process);
-  const bool trusted_image =
-      expected_peer_process_id_ != 0 ||
-      is_sibling_process_image(client_process_id, L"layere.exe");
   if (!trusted_user || !trusted_image) {
     last_error_ = L"Rejected an untrusted LayerE live-channel client.";
     return false;

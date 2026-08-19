@@ -152,6 +152,7 @@ void DaemonApp::quiesce_overlay_runtime() noexcept {
 
 void DaemonApp::update_overlays() {
   const auto now = layerc::core::MonotonicClock::now();
+  publish_companion_snapshots(now);
   bool has_running_cooldown{};
 
   for (auto &session : sessions_) {
@@ -193,6 +194,32 @@ void DaemonApp::update_overlays() {
     KillTimer(window_, overlay_render_timer);
     overlay_timer_running_ = false;
   }
+}
+
+void DaemonApp::publish_companion_snapshots(
+    const layerc::core::TimePoint now) {
+  const auto foreground = foreground_sessions();
+  if (foreground.empty()) {
+    gamebar_bridge_.clear_snapshot();
+    gamebar_transport_.poll();
+    return;
+  }
+  for (auto *session : foreground) {
+    if (session == nullptr || !session->has_companion_slots()) continue;
+    session->cooldowns.snapshot(now, session->snapshot_buffer);
+    const auto snapshot = layerc::gamebar::GameBarBridge::create_session_snapshot(
+        session->profile.id, layerc::platform::wide_to_utf8(session->source_key),
+        session->profile.panels, session->profile.cooldowns,
+        session->snapshot_buffer, session->companion_profile, now);
+    gamebar_bridge_.update_snapshot(snapshot);
+    if (const auto json = gamebar_bridge_.latest_snapshot_json(now);
+        json.has_value())
+      (void)gamebar_transport_.publish(*json);
+    gamebar_transport_.poll();
+    return;
+  }
+  gamebar_bridge_.clear_snapshot();
+  gamebar_transport_.poll();
 }
 
 } // namespace layerc::daemon

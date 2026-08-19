@@ -4,6 +4,8 @@
 #include "../src/gamebar/GameBarBridge.hpp"
 
 #include <filesystem>
+#include <fstream>
+#include <limits>
 
 using namespace layerc::core;
 using namespace layerc::platform;
@@ -114,8 +116,86 @@ static void test_companion_snapshot_bridge() {
                        "snapshot stale after 2.5s");
 }
 
+static void test_companion_snapshot_rejects_malformed_input() {
+  const std::string valid =
+      R"({"profileId":"p","sessionKey":"s","timestampMs":1,"panels":[]})";
+  const auto expect_rejected = [](const std::string &source,
+                                  const char *message) {
+    layerc::test::expect(std::holds_alternative<CompanionError>(
+                             parse_companion_snapshot_json(source)),
+                         message);
+  };
+  expect_rejected(R"({"profileId":"p","sessionKey":"s"})",
+                  "snapshot requires panels");
+  expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0.5,"panels":[]})",
+                  "snapshot rejects fractional timestamp");
+  expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[null]})",
+                  "snapshot rejects malformed panel");
+  expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":0,"visible":true,"items":[{"cooldownId":"c","name":"C","icon":"","progress":1.1,"availableCharges":0,"maxCharges":1,"remainingMs":0,"isReady":true,"color":""}]}]})",
+                  "snapshot rejects out-of-range progress");
+  expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":0,"visible":true,"items":[{"cooldownId":"c","name":"C","icon":"","progress":0,"availableCharges":0.5,"maxCharges":1,"remainingMs":0,"isReady":true,"color":""}]}]})",
+                  "snapshot rejects fractional charges");
+  expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":8,"visible":true,"items":[]}]})",
+                  "snapshot rejects out-of-range slot");
+  expect_rejected(std::string(max_companion_snapshot_bytes + 1, 'x'),
+                  "snapshot rejects oversized message");
+  (void)valid;
+}
+
+static void test_companion_sidecar_survives_unrelated_bundle_save() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    "LayerC-companion-preservation";
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+  std::filesystem::create_directories(root, error);
+  const auto base_path = root / "profile.json";
+
+  GameProfile base;
+  base.id = "preserve";
+  base.name = "Preserve";
+  base.panels.push_back(Panel{.id = "panel"});
+  CompanionProfile companion;
+  companion.profile_id = base.id;
+  companion.slots = {{.slot_index = 0, .panel_id = "panel"}};
+  layerc::test::expect(write_profile_bundle(base_path, base, std::nullopt,
+                                            std::nullopt, companion),
+                       "companion bundle should be written");
+
+  auto changed = base;
+  changed.name = "Changed";
+  layerc::test::expect(write_profile_bundle(base_path, changed, std::nullopt),
+                       "unrelated bundle save should succeed");
+  const auto loaded = load_companion_sidecar(base_path, changed);
+  layerc::test::expect(loaded.profile.has_value() &&
+                           loaded.profile->profile_id == base.id &&
+                           loaded.profile->slots.size() == 1,
+                       "unrelated bundle save must preserve companion sidecar");
+  std::filesystem::remove_all(root, error);
+}
+
+static void test_companion_profile_write_validation() {
+  GameProfile base;
+  base.id = "p";
+  base.panels.push_back(Panel{.id = "panel"});
+  CompanionProfile duplicate_panel;
+  duplicate_panel.profile_id = "p";
+  duplicate_panel.slots = {{.slot_index = 0, .panel_id = "panel"},
+                           {.slot_index = 1, .panel_id = "panel"}};
+  const auto error = validate_companion_profile(duplicate_panel, base);
+  layerc::test::expect(!error.message.empty(),
+                       "validator rejects duplicate panel assignments");
+  CompanionProfile invalid_opacity;
+  invalid_opacity.profile_id = "p";
+  invalid_opacity.slots = {{.slot_index = 0, .panel_id = "panel", .opacity = 2.0}};
+  layerc::test::expect(!validate_companion_profile(invalid_opacity, base).message.empty(),
+                       "validator rejects out-of-range opacity");
+}
+
 int main() {
   test_companion_json_roundtrip();
   test_companion_snapshot_bridge();
+  test_companion_snapshot_rejects_malformed_input();
+  test_companion_profile_write_validation();
+  test_companion_sidecar_survives_unrelated_bundle_save();
   return 0;
 }

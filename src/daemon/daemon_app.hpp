@@ -12,6 +12,8 @@
 #include "layerc/core/runtime_instances.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "GameBarBridge.hpp"
+#include "GameBarTransport.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 
@@ -104,6 +106,7 @@ private:
                                                     layerc::core::TimePoint now,
                                                     bool momentary = false);
   void update_overlays();
+  void publish_companion_snapshots(layerc::core::TimePoint now);
   void reconcile_overlay_runtime();
   void quiesce_overlay_runtime() noexcept;
   void reconcile_visual_captures();
@@ -210,6 +213,8 @@ private:
       isolated_visual_captures_;
   layerc::runtime::DaemonKernel runtime_kernel_;
   std::wstring visual_status_{L"Visual recognition: inactive"};
+  layerc::gamebar::GameBarBridge gamebar_bridge_;
+  layerc::gamebar::GameBarTransport gamebar_transport_;
 };
 
 } // namespace layerc::daemon
