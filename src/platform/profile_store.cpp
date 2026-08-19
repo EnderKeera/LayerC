@@ -94,6 +94,10 @@ std::filesystem::path automation_state_directory() {
   return profile_directory() / L"_state";
 }
 
+std::filesystem::path companion_directory() {
+  return profile_directory() / L"_companion";
+}
+
 std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path) {
   if (profile_path.filename().empty())
@@ -115,6 +119,13 @@ automation_state_path(const std::filesystem::path &profile_path) {
   auto filename = profile_path.filename();
   filename += L".automation-state.json";
   return profile_path.parent_path() / L"_state" / filename;
+}
+
+std::filesystem::path
+companion_sidecar_path(const std::filesystem::path &profile_path) {
+  if (profile_path.filename().empty())
+    return {};
+  return profile_path.parent_path() / L"_companion" / profile_path.filename();
 }
 
 std::wstring canonical_profile_key(const std::filesystem::path &path) {
@@ -183,6 +194,10 @@ std::optional<std::string> read_visual_file(const std::filesystem::path &path) {
 std::optional<std::string>
 read_automation_file(const std::filesystem::path &path) {
   return read_bounded_file(path, layerc::core::max_automation_json_bytes);
+}
+std::optional<std::string>
+read_companion_file(const std::filesystem::path &path) {
+  return read_bounded_file(path, layerc::core::max_companion_sidecar_bytes);
 }
 
 namespace {
@@ -331,6 +346,27 @@ struct AutomationSidecarCodec {
   }
 };
 
+struct CompanionSidecarCodec {
+  using Profile = layerc::core::CompanionProfile;
+  using Error = layerc::core::CompanionError;
+  static constexpr std::string_view kind = "companion";
+  static constexpr std::size_t max_bytes =
+      layerc::core::max_companion_sidecar_bytes;
+  static auto parse(const std::string_view source,
+                    const layerc::core::GameProfile &base) {
+    return layerc::core::parse_companion_profile_json(source, base);
+  }
+  static auto validate(const Profile &profile,
+                       const layerc::core::GameProfile &base) {
+    (void)base;
+    (void)profile;
+    return Error{};
+  }
+  static std::string serialize(const Profile &profile) {
+    return layerc::core::serialize_companion_profile_json(profile);
+  }
+};
+
 template <typename CodecT> class SidecarStore {
 public:
   using Profile = typename CodecT::Profile;
@@ -467,7 +503,8 @@ bool write_profile_file(const std::filesystem::path &path,
 bool write_profile_bundle(
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile,
-    const std::optional<layerc::core::AutomationProfile> &automation_profile) {
+    const std::optional<layerc::core::AutomationProfile> &automation_profile,
+    const std::optional<layerc::core::CompanionProfile> &companion_profile) {
   auto stored_profile = profile;
   stored_profile.schema_version = 4;
   stored_profile.modules.clear();
@@ -493,7 +530,8 @@ bool write_profile_bundle(
   const auto root = path.parent_path();
   const auto visual = visual_sidecar_path(path);
   const auto automation = automation_sidecar_path(path);
-  if (root.empty() || visual.empty() || automation.empty())
+  const auto companion = companion_sidecar_path(path);
+  if (root.empty() || visual.empty() || automation.empty() || companion.empty())
     return false;
 
   const auto bytes = [](const std::string &source) {
@@ -512,24 +550,32 @@ bool write_profile_bundle(
 
   const auto visual_backup = backup_path(visual);
   const auto automation_backup = backup_path(automation);
+  const auto companion_backup = backup_path(companion);
   const auto visual_marker = sidecar_state_path(visual);
   const auto automation_marker = sidecar_state_path(automation);
+  const auto companion_marker = sidecar_state_path(companion);
   bool visual_exists{};
   bool visual_backup_exists{};
   bool visual_marker_exists{};
   bool automation_exists{};
   bool automation_backup_exists{};
   bool automation_marker_exists{};
+  bool companion_exists{};
+  bool companion_backup_exists{};
+  bool companion_marker_exists{};
   if (!exists(visual, visual_exists) ||
       !exists(visual_backup, visual_backup_exists) ||
       !exists(visual_marker, visual_marker_exists) ||
       !exists(automation, automation_exists) ||
       !exists(automation_backup, automation_backup_exists) ||
-      !exists(automation_marker, automation_marker_exists))
+      !exists(automation_marker, automation_marker_exists) ||
+      !exists(companion, companion_exists) ||
+      !exists(companion_backup, companion_backup_exists) ||
+      !exists(companion_marker, companion_marker_exists))
     return false;
 
   std::vector<ProfileFileMutation> mutations;
-  mutations.reserve(10);
+  mutations.reserve(12);
 
   // Preserve the last parseable base as the user-visible recovery copy. The
   // transaction journal itself separately owns rollback snapshots.
@@ -565,6 +611,19 @@ bool write_profile_bundle(
         mutation(automation_marker, std::string(sidecar_state_removed)));
   }
 
+  if (companion_profile.has_value()) {
+    const auto contents =
+        layerc::core::serialize_companion_profile_json(*companion_profile);
+    mutations.push_back(mutation(companion_backup, contents));
+    mutations.push_back(mutation(companion, contents));
+    mutations.push_back(
+        mutation(companion_marker, std::string(sidecar_state_active)));
+  } else if (companion_exists || companion_backup_exists ||
+             companion_marker_exists) {
+    mutations.push_back(
+        mutation(companion_marker, std::string(sidecar_state_removed)));
+  }
+
   mutations.push_back(
       mutation(path, layerc::core::serialize_profile_json(stored_profile)));
   if (!commit_profile_transaction(root, mutations))
@@ -580,6 +639,10 @@ bool write_profile_bundle(
   if (!automation_profile.has_value()) {
     (void)DeleteFileW(automation.c_str());
     (void)DeleteFileW(automation_backup.c_str());
+  }
+  if (!companion_profile.has_value()) {
+    (void)DeleteFileW(companion.c_str());
+    (void)DeleteFileW(companion_backup.c_str());
   }
   return true;
 }
@@ -618,6 +681,25 @@ bool write_automation_sidecar(
     const layerc::core::GameProfile &base_profile) {
   return SidecarStore<AutomationSidecarCodec>{}.write(
       automation_sidecar_path(profile_path), automation_profile, base_profile);
+}
+
+CompanionSidecarLoad
+load_companion_sidecar(const std::filesystem::path &profile_path,
+                       const layerc::core::GameProfile &base_profile) {
+  const auto result = SidecarStore<CompanionSidecarCodec>{}.load(
+      companion_sidecar_path(profile_path), base_profile);
+  return {.state = sidecar_state_for<CompanionSidecarState>(result.outcome),
+          .profile = std::move(result.profile),
+          .error = std::move(result.error),
+          .source_path = std::move(result.source_path)};
+}
+
+bool write_companion_sidecar(
+    const std::filesystem::path &profile_path,
+    const layerc::core::CompanionProfile &companion_profile,
+    const layerc::core::GameProfile &base_profile) {
+  return SidecarStore<CompanionSidecarCodec>{}.write(
+      companion_sidecar_path(profile_path), companion_profile, base_profile);
 }
 
 AutomationStateLoad load_automation_state(

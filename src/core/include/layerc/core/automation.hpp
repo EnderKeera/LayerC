@@ -73,6 +73,7 @@ enum class AutomationValueType : std::uint8_t {
 
 [[nodiscard]] AutomationValueType value_type(const AutomationValue &) noexcept;
 [[nodiscard]] bool automation_value_valid(const AutomationValue &) noexcept;
+
 [[nodiscard]] std::string automation_value_json(const AutomationValue &);
 // Interprets a duration-typed or non-negative integer value as a duration;
 // anything else is not a duration.
@@ -101,6 +102,102 @@ struct AutomationEvent {
   std::uint64_t origin_token{};
   AutomationMap fields;
 };
+
+// Wire-name vocabulary shared by the profile serializer, the trace format,
+// packs, and editor UIs. One table per concept; nothing re-declares these.
+[[nodiscard]] inline std::string_view
+automation_event_name(const AutomationEventKind kind) {
+  switch (kind) {
+  case AutomationEventKind::input_pressed:
+    return "inputPressed";
+  case AutomationEventKind::input_released:
+    return "inputReleased";
+  case AutomationEventKind::input_value_changed:
+    return "inputValueChanged";
+  case AutomationEventKind::visual_observation:
+    return "visualObservation";
+  case AutomationEventKind::cooldown_triggered:
+    return "cooldownTriggered";
+  case AutomationEventKind::cooldown_ready:
+    return "cooldownReady";
+  case AutomationEventKind::group_triggered:
+    return "groupTriggered";
+  case AutomationEventKind::group_ready:
+    return "groupReady";
+  case AutomationEventKind::session_started:
+    return "sessionStarted";
+  case AutomationEventKind::session_stopping:
+    return "sessionStopping";
+  case AutomationEventKind::variable_changed:
+    return "variableChanged";
+  case AutomationEventKind::timer_fired:
+    return "timerFired";
+  }
+  return "sessionStarted";
+}
+
+// Canonical presentation order of event kinds; editors derive combo boxes
+// and simulator indices from this one list.
+inline constexpr std::array automation_event_kinds{
+    AutomationEventKind::input_pressed,
+    AutomationEventKind::input_released,
+    AutomationEventKind::input_value_changed,
+    AutomationEventKind::visual_observation,
+    AutomationEventKind::cooldown_triggered,
+    AutomationEventKind::cooldown_ready,
+    AutomationEventKind::group_triggered,
+    AutomationEventKind::group_ready,
+    AutomationEventKind::session_started,
+    AutomationEventKind::session_stopping,
+    AutomationEventKind::variable_changed,
+    AutomationEventKind::timer_fired};
+
+[[nodiscard]] inline std::optional<AutomationEventKind>
+parse_automation_event_name(const std::string_view name) {
+  for (const auto kind : automation_event_kinds)
+    if (automation_event_name(kind) == name)
+      return kind;
+  return std::nullopt;
+}
+
+[[nodiscard]] inline std::string_view
+automation_value_type_name(const AutomationValueType type) {
+  switch (type) {
+  case AutomationValueType::null_value:
+    return "null";
+  case AutomationValueType::boolean:
+    return "bool";
+  case AutomationValueType::integer:
+    return "int";
+  case AutomationValueType::number:
+    return "number";
+  case AutomationValueType::duration:
+    return "duration";
+  case AutomationValueType::confidence:
+    return "confidence";
+  case AutomationValueType::string:
+    return "string";
+  case AutomationValueType::list:
+    return "list";
+  case AutomationValueType::map:
+    return "map";
+  }
+  return "null";
+}
+
+[[nodiscard]] inline std::optional<AutomationValueType>
+parse_automation_value_type_name(const std::string_view name) {
+  for (const auto type :
+       {AutomationValueType::null_value, AutomationValueType::boolean,
+        AutomationValueType::integer, AutomationValueType::number,
+        AutomationValueType::duration, AutomationValueType::confidence,
+        AutomationValueType::string, AutomationValueType::list,
+        AutomationValueType::map})
+    if (automation_value_type_name(type) == name)
+      return type;
+  return std::nullopt;
+}
+
 
 enum class ExpressionKind : std::uint8_t {
   literal,
@@ -413,10 +510,30 @@ public:
   [[nodiscard]] const AutomationRuntimeSnapshot &snapshot() const noexcept;
   [[nodiscard]] AutomationSessionEdges &edges() noexcept;
   [[nodiscard]] const AutomationSessionEdges &edges() const noexcept;
+  // Evaluates one root event as a transaction: every condition and value
+  // expression reads the batch-start snapshot (not staged mid-batch state),
+  // so two rules keyed on the same trigger race on equal footing and only
+  // the committed winning set becomes observable. Effects commit in one
+  // validator+committer call; an error faults only the offending automation,
+  // which is re-evaluated from the original snapshot. cooldown_triggered
+  // events derived from trigger actions expand the profile's
+  // trigger-propagation closure: the runtime does not own the cooldown
+  // engine, so whether a charge was actually consumed is decided by the
+  // daemon-side committer (its own trigger paths emit engine-derived events
+  // with real origin tokens).
   [[nodiscard]] AutomationEvaluationResult
   process(const AutomationEvent &event, const EffectValidator &validator = {},
           const EffectCommitter &committer = {});
+  // Pure collection of due timer firings, ordered oldest deadline first.
+  // The firing itself is consumed when the event is delivered to process():
+  // a collected but unprocessed event leaves the timer due, so the next poll
+  // re-collects it instead of losing it.
   [[nodiscard]] std::vector<AutomationEvent> due_timer_events(TimePoint now);
+  // Time-based housekeeping in the spirit of cooldown recovery: override
+  // expiry is a fact about the clock, not an automation decision, so it
+  // happens outside the evaluation transaction. Returns whether anything
+  // expired so callers can refresh overlays.
+  [[nodiscard]] bool expire_overlay_overrides(TimePoint now);
   [[nodiscard]] std::optional<TimePoint> next_timer_due() const noexcept;
   void reconfigure(AutomationProfile profile,
                    std::span<const CooldownGroup> cooldown_groups = {});

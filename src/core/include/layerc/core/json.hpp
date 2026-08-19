@@ -61,4 +61,21 @@ void append_unsigned(std::string &output, std::uint64_t value);
 void append_number(std::string &output, double value);
 void append_quoted(std::string &output, std::string_view text);
 
+// Emits the ',' between array elements or object members: call once per
+// element before writing it; the first call emits nothing. Replaces the
+// "if (index != 0) output.push_back(',');" boilerplate in serializers.
+class Join {
+  public:
+    void operator()(std::string &output) {
+        if (first_) {
+            first_ = false;
+            return;
+        }
+        output.push_back(',');
+    }
+
+  private:
+    bool first_{true};
+};
+
 }  // namespace layerc::core::json

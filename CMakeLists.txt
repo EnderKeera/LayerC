@@ -41,6 +41,7 @@ add_library(layerc_core STATIC
     src/core/template_matcher.cpp
     src/core/visual_trigger_engine.cpp
     src/core/calibration.cpp
+    src/core/companion.cpp
 )
 target_include_directories(layerc_core PUBLIC src/core/include)
 target_compile_features(layerc_core PUBLIC cxx_std_20)
@@ -193,8 +194,9 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/visual_capture_worker.cpp
         src/daemon/overlay_window.cpp
         src/daemon/overlay_render.cpp
+        src/gamebar/GameBarBridge.cpp
     )
-    target_include_directories(layerd PRIVATE src/daemon)
+    target_include_directories(layerd PRIVATE src/daemon src/gamebar)
     target_link_libraries(layerd PRIVATE
         layerc_core layerc_runtime layerc_windows layerc_capture
         shell32 user32 gdi32 xinput9_1_0)
@@ -514,6 +516,26 @@ if(LAYERC_BUILD_TESTS)
             COMMAND layerc_isolated_visual_tests)
         set_tests_properties(layerc_isolated_visual_tests PROPERTIES
             TIMEOUT 30)
+
+        add_executable(layerc_companion_tests
+            tests/companion_tests.cpp
+            tests/test_support.cpp
+            src/gamebar/GameBarBridge.cpp
+        )
+        target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
+        target_link_libraries(layerc_companion_tests PRIVATE
+            layerc_core layerc_windows)
+        target_compile_definitions(layerc_companion_tests PRIVATE
+            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MSVC)
+            target_compile_options(layerc_companion_tests PRIVATE
+                /W4 /permissive- /EHsc /utf-8)
+        else()
+            target_compile_options(layerc_companion_tests PRIVATE
+                -Wall -Wextra -Wpedantic)
+        endif()
+        add_test(NAME layerc_companion_tests COMMAND layerc_companion_tests)
+        set_tests_properties(layerc_companion_tests PROPERTIES TIMEOUT 30)
 
         add_executable(layerc_editor_tests
             tests/editor_dialog_tests.cpp

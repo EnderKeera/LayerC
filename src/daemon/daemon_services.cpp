@@ -207,6 +207,32 @@ private:
   DaemonApp &app_;
 };
 
+class DaemonApp::GameBarRuntimeService final
+    : public layerc::runtime::IRuntimeService {
+public:
+  explicit GameBarRuntimeService(DaemonApp &app) : app_(app) {}
+  [[nodiscard]] layerc::runtime::Capability
+  capability() const noexcept override {
+    return layerc::runtime::Capability::gamebar;
+  }
+  [[nodiscard]] layerc::runtime::ServiceReconcileResult
+  reconcile(const layerc::runtime::CapabilityDemand &) override {
+    return {};
+  }
+  void quiesce() noexcept override {}
+  [[nodiscard]] layerc::runtime::RuntimeResourceStats
+  resources() const noexcept override {
+    std::uint32_t active_companion_sessions{};
+    for (const auto &session : app_.sessions_) {
+      if (session->has_companion_slots()) ++active_companion_sessions;
+    }
+    return {.objects = active_companion_sessions};
+  }
+
+private:
+  DaemonApp &app_;
+};
+
 class DaemonApp::AutomationRuntimeService final
     : public layerc::runtime::IRuntimeService {
 public:
@@ -244,60 +270,13 @@ private:
 };
 DaemonApp *DaemonApp::foreground_hook_target_{};
 
+template <typename ServiceT>
 std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_input_runtime_service(void *const context) {
+DaemonApp::create_runtime_service(void *const context) {
   if (context == nullptr) return {};
-  return std::make_unique<InputRuntimeService>(*static_cast<DaemonApp *>(context));
+  return std::make_unique<ServiceT>(*static_cast<DaemonApp *>(context));
 }
 
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_live_edit_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<LiveEditRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
-
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_overlay_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<OverlayRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
-
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_visual_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<VisualRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
-
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_template_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<TemplateRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
-
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_isolated_visual_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<IsolatedVisualRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
-
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_hid_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<HidRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
-
-std::unique_ptr<layerc::runtime::IRuntimeService>
-DaemonApp::create_automation_runtime_service(void *const context) {
-  if (context == nullptr) return {};
-  return std::make_unique<AutomationRuntimeService>(
-      *static_cast<DaemonApp *>(context));
-}
 layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() const {
   std::vector<layerc::runtime::SessionCapabilityRequest> requests;
   requests.reserve(active_input_sessions_.size());
@@ -317,6 +296,7 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() const {
         .isolated_visual =
             session->profile.visual_runtime ==
             layerc::core::VisualRuntime::isolated,
+        .companion = session->has_companion_slots(),
     });
   }
   auto demand = layerc::runtime::calculate_capability_demand(
@@ -327,6 +307,12 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() const {
       }));
   demand.set(layerc::runtime::Capability::automation,
              automation_consumers);
+  const auto companion_consumers = static_cast<std::uint32_t>(
+      std::ranges::count_if(sessions_, [](const auto &session) {
+        return session != nullptr && session->has_companion_slots();
+      }));
+  demand.set(layerc::runtime::Capability::gamebar,
+             companion_consumers);
   return demand;
 }
 
@@ -334,35 +320,44 @@ void DaemonApp::reconcile_runtime_services() {
   const std::array descriptors{
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::input,
-          .create = &DaemonApp::create_input_runtime_service,
+          .create = &DaemonApp::create_runtime_service<InputRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::overlay,
-          .create = &DaemonApp::create_overlay_runtime_service,
+          .create = &DaemonApp::create_runtime_service<OverlayRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::visual,
-          .create = &DaemonApp::create_visual_runtime_service,
+          .create = &DaemonApp::create_runtime_service<VisualRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::template_evaluation,
-          .create = &DaemonApp::create_template_runtime_service,
+          .create =
+              &DaemonApp::create_runtime_service<TemplateRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::isolated_visual,
-          .create = &DaemonApp::create_isolated_visual_runtime_service,
+          .create = &DaemonApp::create_runtime_service<
+              IsolatedVisualRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::generic_hid,
-          .create = &DaemonApp::create_hid_runtime_service,
+          .create = &DaemonApp::create_runtime_service<HidRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::live_edit,
-          .create = &DaemonApp::create_live_edit_runtime_service,
+          .create =
+              &DaemonApp::create_runtime_service<LiveEditRuntimeService>,
           .context = this},
       layerc::runtime::RuntimeServiceDescriptor{
           .capability = layerc::runtime::Capability::automation,
-          .create = &DaemonApp::create_automation_runtime_service,
+          .create =
+              &DaemonApp::create_runtime_service<AutomationRuntimeService>,
+          .context = this},
+      layerc::runtime::RuntimeServiceDescriptor{
+          .capability = layerc::runtime::Capability::gamebar,
+          .create =
+              &DaemonApp::create_runtime_service<GameBarRuntimeService>,
           .context = this}};
   (void)runtime_kernel_.reconcile(runtime_demand(), descriptors);
 }

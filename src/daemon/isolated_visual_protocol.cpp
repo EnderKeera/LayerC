@@ -267,6 +267,8 @@ std::string encode_isolated_configuration(
         append_decimal(output, signature.file_size);
         output += ",\"lastWriteTicks\":";
         append_decimal(output, signature.last_write_ticks);
+        output += ",\"changeUsn\":";
+        append_decimal(output, signature.change_usn);
         output.push_back('}');
       }
       output.push_back(']');
@@ -360,12 +362,14 @@ decode_isolated_configuration(const std::string_view json) {
         if (!encoded.is_object())
           return IsolatedProtocolError{"asset signature must be an object"};
         VisualAssetSignature signature;
-        std::uint64_t volume_serial{}, file_index{}, file_size{}, write_ticks{};
+        std::uint64_t volume_serial{}, file_index{}, file_size{},
+            write_ticks{}, change_usn{};
         if (!bool_value(encoded, "present", signature.present, error) ||
             !decimal_value(encoded, "volumeSerial", volume_serial, error) ||
             !decimal_value(encoded, "fileIndex", file_index, error) ||
             !decimal_value(encoded, "fileSize", file_size, error) ||
             !decimal_value(encoded, "lastWriteTicks", write_ticks, error) ||
+            !decimal_value(encoded, "changeUsn", change_usn, error) ||
             volume_serial > std::numeric_limits<std::uint32_t>::max())
           return IsolatedProtocolError{
               error.empty() ? "invalid asset signature" : std::move(error)};
@@ -373,6 +377,7 @@ decode_isolated_configuration(const std::string_view json) {
         signature.file_index = file_index;
         signature.file_size = file_size;
         signature.last_write_ticks = write_ticks;
+        signature.change_usn = change_usn;
         evaluation.asset_signatures.push_back(signature);
       }
       request.templates.push_back(std::move(evaluation));

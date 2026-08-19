@@ -6,7 +6,8 @@ namespace layerc::runtime {
 
 CapabilityDemand calculate_capability_demand(
     const std::span<const SessionCapabilityRequest> sessions,
-    const bool editor_connected, const bool edit_overlay_active) noexcept {
+    const bool editor_connected, const bool edit_overlay_active,
+    const bool companion_active) noexcept {
   CapabilityDemand demand;
   std::vector<WindowId> isolated_windows;
   for (const auto &session : sessions) {
@@ -22,6 +23,7 @@ CapabilityDemand calculate_capability_demand(
     demand.add(Capability::input);
     demand.add(Capability::overlay);
     if (session.generic_hid) demand.add(Capability::generic_hid);
+    if (session.companion || companion_active) demand.add(Capability::gamebar);
     if (session.global || !session.visual) continue;
     const bool isolated = std::ranges::find(isolated_windows, session.window) !=
                           isolated_windows.end();
@@ -34,6 +36,7 @@ CapabilityDemand calculate_capability_demand(
   }
   if (editor_connected) demand.add(Capability::live_edit);
   if (edit_overlay_active) demand.add(Capability::overlay);
+  if (companion_active) demand.add(Capability::gamebar);
   return demand;
 }
 

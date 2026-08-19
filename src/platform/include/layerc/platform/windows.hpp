@@ -71,6 +71,11 @@ struct WindowCandidate {
 [[nodiscard]] std::optional<WindowCandidate>
 describe_attachable_window(HWND window);
 [[nodiscard]] std::optional<WindowCandidate> window_at_point(POINT point);
+// True when the process runs the executable with the given file name from
+// the same directory as the current executable (sibling install). Used to
+// authenticate same-install peers before acting on their windows or pipes.
+[[nodiscard]] bool is_sibling_process_image(DWORD process_id,
+                                            const wchar_t *filename);
 [[nodiscard]] bool
 profile_matches_window(const WindowCandidate &candidate,
                        const layerc::core::GameProfile &profile);

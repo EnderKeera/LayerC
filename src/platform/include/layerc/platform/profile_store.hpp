@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/automation.hpp"
+#include "layerc/core/companion.hpp"
 #include "layerc/core/visual.hpp"
 
 #include <filesystem>
@@ -14,17 +15,22 @@ inline constexpr wchar_t profile_reload_event_name[] =
     L"Local\\LayerC.LayerD.ProfileReload";
 inline constexpr wchar_t automation_active_event_name[] =
     L"Local\\LayerC.LayerD.AutomationActive.v1";
+inline constexpr wchar_t companion_active_event_name[] =
+    L"Local\\LayerC.LayerD.CompanionActive.v1";
 
 [[nodiscard]] std::filesystem::path profile_directory();
 [[nodiscard]] std::filesystem::path visual_directory();
 [[nodiscard]] std::filesystem::path automation_directory();
 [[nodiscard]] std::filesystem::path automation_state_directory();
+[[nodiscard]] std::filesystem::path companion_directory();
 [[nodiscard]] std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path
 automation_sidecar_path(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path
 automation_state_path(const std::filesystem::path &profile_path);
+[[nodiscard]] std::filesystem::path
+companion_sidecar_path(const std::filesystem::path &profile_path);
 [[nodiscard]] std::wstring
 canonical_profile_key(const std::filesystem::path &path);
 [[nodiscard]] std::optional<std::string>
@@ -33,6 +39,8 @@ read_profile_file(const std::filesystem::path &path);
 read_visual_file(const std::filesystem::path &path);
 [[nodiscard]] std::optional<std::string>
 read_automation_file(const std::filesystem::path &path);
+[[nodiscard]] std::optional<std::string>
+read_companion_file(const std::filesystem::path &path);
 [[nodiscard]] bool write_profile_file(const std::filesystem::path &path,
                                       std::string_view contents);
 
@@ -42,6 +50,8 @@ read_automation_file(const std::filesystem::path &path);
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile,
     const std::optional<layerc::core::AutomationProfile> &automation_profile =
+        std::nullopt,
+    const std::optional<layerc::core::CompanionProfile> &companion_profile =
         std::nullopt);
 
 enum class VisualSidecarState {
@@ -86,6 +96,28 @@ load_automation_sidecar(const std::filesystem::path &profile_path,
 [[nodiscard]] bool write_automation_sidecar(
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
+    const layerc::core::GameProfile &base_profile);
+
+enum class CompanionSidecarState {
+  absent,
+  valid,
+  recovered_backup,
+  invalid,
+};
+
+struct CompanionSidecarLoad {
+  CompanionSidecarState state{CompanionSidecarState::absent};
+  std::optional<layerc::core::CompanionProfile> profile;
+  layerc::core::CompanionError error;
+  std::filesystem::path source_path;
+};
+
+[[nodiscard]] CompanionSidecarLoad
+load_companion_sidecar(const std::filesystem::path &profile_path,
+                       const layerc::core::GameProfile &base_profile);
+[[nodiscard]] bool write_companion_sidecar(
+    const std::filesystem::path &profile_path,
+    const layerc::core::CompanionProfile &companion_profile,
     const layerc::core::GameProfile &base_profile);
 
 struct AutomationStateLoad {

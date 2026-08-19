@@ -16,7 +16,8 @@ visual-capture helper. The only vendored third-party code is miniz (ZIP) under `
 
 Versions: V1 (input+overlay), V1.1 (pixel predicates), V2.1 (template recognition), V2.2 (modular
 runtime, generic HID, profile packs, isolated visual worker), V2.3 (bounded Automation Graphs,
-cooldown recovery modes and groups), V2.4 planned (Game Bar).
+cooldown recovery modes and groups), V2.4 (Game Bar companion work in progress; verify release
+status against PLAN.md and the applicable review register).
 
 **The product does not**: inject into games, read game memory, install drivers, require admin,
 evade anti-cheat, synthesize gameplay input, or do any network access/telemetry. It treats input
@@ -38,7 +39,7 @@ purely passively. These are hard product constraints.
 | `tests/` | CTest suites (see Build). `tests/test_support.*` is the canonical harness (`layerc::test::expect`). |
 | `tools/` | `lctest` fake game window, `capture_probe`, benchmark scripts (`benchmark_v11/v22/v23/latency.ps1`), automation benchmark. |
 | `examples/` | `lctest.json` (matches the lctest harness), `smoke.json` (global free-floating smoke profile). |
-| `review/` | Layer review files (`layerNN.review-YYYY-MM-DD.md`) and perf reports; gitignored working docs (see Review workflow). |
+| `review/` | Layer review files (`layerN.review-YYYY-MM-DD.md`) and perf reports; gitignored working docs (see Review workflow). |
 | `build/`, `out/` | Build outputs; never touched by hand, never committed. |
 
 ## Build, test, run
@@ -180,27 +181,21 @@ Evidence lands in `out\benchmarks`.
 
 ## Review workflow (this repository's process)
 
-- Reviews live in `review/` (gitignored working docs, not committed): `layerNN.review-YYYY-MM-DD.md`
-  for code reviews, `cpu-profile-report-YYYY-MM-DD.md` / `startup-ram-report-*.md` for perf evidence.
-  The latest layer is 20 (`layer20.review-2026-08-17.md`), the single consolidated open-finding
-  register — every older review file (layers 11-19, cpu-profile, startup-ram) is archived under
-  `review/archiv/` with its open items merged into the register.
+- Reviews live in `review/` (gitignored working docs, not committed). Use
+  `layerN.review-YYYY-MM-DD.md` as the code-review filename convention; `layerN` is a
+  placeholder, not a current layer number. When a review is requested, inspect the
+  working tree and select the applicable consolidated register instead of relying on a
+  hardcoded pointer in this guide.
 - Findings use severity (blocker/major/medium/low/nit), category, evidence with `file:line`, and a
-  concrete remedy. Each layer review re-verifies prior items as **FIXED / PARTIAL / REMAINING**.
+  concrete remedy. Each review re-verifies prior items as **FIXED / PARTIAL / REMAINING**.
 - **Housekeeping rule**: when a review file is checked, every finding is verified against the current
-  working tree. A file whose findings are ALL fixed is moved to `review/archiv/` (e.g. layer14 with
-  31/31 fixed, startup-ram-report whose actionable items are resolved). A file with open findings
-  keeps them and the open items are compiled — deduplicated, tagged with their source like
-  `[L16-B1]` — into the next layer review file, which serves as the consolidated working register.
-  As of 2026-08-17 the user directed full consolidation: all pre-layer20 files are archived
-  (open items absorbed into `layer20.review-2026-08-17.md`, which is self-contained). The
-  un-merged detail from the 2026-08-14 audit is in `.review_tmp/CODE_REVIEW.md`.
-- Blocker status (as of the 2026-08-17 fix pass): all layer20 blockers and the N1/N2
-  release-gate majors are FIXED (marked inline in the register, with regression tests);
-  `entry_for` hot-path allocations are fixed as well. Remaining register items are structural
-  majors/mediums (json `double`-only numeric storage, sidecar "visual_" naming with drifted
-  clones, overlay-property table in four copies, eval op-string dispatch, five 1k+ files) plus
-  low-severity behavioral items (L16-S3/S5/S7).
+  working tree. A file whose findings are ALL fixed is moved to `review/archiv/`. A file with open
+  findings remains available and its open items are compiled — deduplicated, tagged with their source
+  such as `[LN-B1]` — into the applicable consolidated review file.
+- Release-gate status and prior-finding status live in the applicable review register. This guide
+  intentionally does not embed a current layer number, archived range, or stale fix-pass summary.
+  Re-run release gates after fix commits land.
+  The un-merged detail from the 2026-08-14 audit is in `.review_tmp/CODE_REVIEW.md`.
 - External review tooling: `reasonix.toml` is the checked-in config for the Reasonix CLI (external
   review/delegation). Per the workflow rules below it is only used when the user explicitly asks.
   When running Reasonix from an automated environment, beware leftover processes holding session
@@ -226,10 +221,10 @@ Evidence lands in `out\benchmarks`.
   explicitly requests it for the current task.
 - Never stage or commit legacy `.codewhale/` runtime state unless the user explicitly requests it.
 
-## Current working-tree state (2026-08-17)
+## Baseline project state (recorded 2026-08-17)
 
 - V2.3 (automation core+runtime+daemon+editor, cooldown groups/recovery, schema 4, packs with
-  automation modules) is COMMITTED as LayerC 2.3.0 after the layer20 fix pass cleared all
+  automation modules) is COMMITTED as LayerC 2.3.0 after the V2.3 fix pass cleared all
   blockers; release gates verified same day: MSVC + MinGW Release builds, full CTest suites on
   both toolchains, benchmark v22 (plateau 1.9/11.3 MiB) and v23 (13.0 us avg / 1614 us max),
   install staging, and the `LayerC-2.3.0-windows-x64.zip` portable package.
@@ -245,4 +240,4 @@ Evidence lands in `out\benchmarks`.
 - `PLAN.md` — canonical product plan, version gates, resource budgets, acceptance criteria.
 - `THIRD_PARTY_NOTICES.md` — vendored components (miniz).
 - `reasonix.toml` — external review CLI configuration (used only on explicit request).
-- `review/layer20.review-2026-08-17.md` — the current consolidated open-finding register (all older reviews archived).
+- The applicable consolidated open-finding register under `review/`; review files use the `layerN.review-YYYY-MM-DD.md` convention.

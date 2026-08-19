@@ -34,9 +34,37 @@ struct ProfileSource {
   layerc::platform::AutomationSidecarState automation_health{
       layerc::platform::AutomationSidecarState::absent};
   std::string automation_error;
+  std::optional<layerc::core::CompanionProfile> companion_profile;
+  layerc::platform::CompanionSidecarState companion_health{
+      layerc::platform::CompanionSidecarState::absent};
+  std::string companion_error;
   layerc::core::AutomationPersistentValues automation_state;
   std::optional<layerc::core::TimePoint> automation_state_due;
   layerc::core::ProfileRevision revision{};
+  // Bumped whenever automation-relevant content changes (the automation
+  // sidecar, its health, or the base revision that owns cooldown groups) so
+  // per-reconcile deep profile compares run only after real edits. The
+  // sidecar can change on disk while the base profile stays identical, so
+  // the base revision alone is not enough.
+  layerc::core::ProfileRevision automation_revision{};
+};
+
+// Everything a Session is constructed from; named fields keep the construction
+// inputs readable and order-independent at call sites.
+struct SessionInit {
+  layerc::core::GameProfile profile;
+  std::wstring source_key;
+  std::optional<layerc::core::VisualProfile> visual_profile;
+  layerc::platform::VisualSidecarState visual_health{
+      layerc::platform::VisualSidecarState::absent};
+  std::optional<layerc::core::AutomationProfile> automation_profile;
+  layerc::platform::AutomationSidecarState automation_health{
+      layerc::platform::AutomationSidecarState::absent};
+  std::optional<layerc::core::CompanionProfile> companion_profile;
+  layerc::platform::CompanionSidecarState companion_health{
+      layerc::platform::CompanionSidecarState::absent};
+  bool visual_enabled{};
+  bool capture_exclusion{};
 };
 
 struct Session {
@@ -45,14 +73,7 @@ struct Session {
     bool pressed{};
   };
 
-  explicit Session(layerc::core::GameProfile source_profile,
-                   std::wstring source_key,
-                   std::optional<layerc::core::VisualProfile> visual_profile,
-                   layerc::platform::VisualSidecarState visual_health,
-                   std::optional<layerc::core::AutomationProfile>
-                       automation_profile,
-                   layerc::platform::AutomationSidecarState automation_health,
-                   bool visual_enabled, bool capture_exclusion);
+  explicit Session(SessionInit init);
 
   void clear_input_state();
   void rebuild_input_configuration();
@@ -67,8 +88,12 @@ struct Session {
   void apply_automation_profile(
       std::optional<layerc::core::AutomationProfile> automation_profile,
       layerc::platform::AutomationSidecarState automation_health);
+  void apply_companion_profile(
+      std::optional<layerc::core::CompanionProfile> companion_profile,
+      layerc::platform::CompanionSidecarState companion_health);
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
+  [[nodiscard]] bool has_companion_slots() const noexcept;
   [[nodiscard]] bool blocks_all_triggers() const noexcept {
     return visual_health == layerc::platform::VisualSidecarState::invalid;
   }
@@ -86,6 +111,13 @@ struct Session {
   std::unique_ptr<layerc::core::VisualTriggerEngine> visual_triggers;
   std::optional<layerc::core::AutomationProfile> automation_profile;
   std::unique_ptr<layerc::core::AutomationRuntime> automation_runtime;
+  std::optional<layerc::core::CompanionProfile> companion_profile;
+  layerc::platform::CompanionSidecarState companion_health{
+      layerc::platform::CompanionSidecarState::absent};
+  // The source automation_revision the runtime was created or last
+  // reconfigured against; reconcile compares this instead of deep-comparing
+  // profiles on every state change.
+  layerc::core::ProfileRevision automation_revision{};
   std::vector<layerc::core::OverlayPropertyOverride>
       applied_overlay_overrides;
   layerc::platform::AutomationSidecarState automation_health{

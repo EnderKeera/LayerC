@@ -69,6 +69,7 @@ void DaemonApp::reconcile_automation_runtime() {
           std::make_unique<layerc::core::AutomationRuntime>(
               *source->automation_profile, source->automation_state,
               session->profile.cooldown_groups);
+      session->automation_revision = source->automation_revision;
       session->automation_runtime->set_trace_enabled(
           automation_trace_subscribed_);
       (void)poll_automation_cooldown_transitions(*session, now, false);
@@ -77,15 +78,33 @@ void DaemonApp::reconcile_automation_runtime() {
               *session,
               automation_event(AutomationEventKind::session_started, {}, now)) ||
           overlays_changed;
-    } else if (session->automation_runtime->profile() !=
-                   *source->automation_profile ||
-               !std::ranges::equal(
-                   session->automation_runtime->cooldown_groups(),
-                   session->profile.cooldown_groups)) {
-      session->automation_runtime->reconfigure(
-          *source->automation_profile, session->profile.cooldown_groups);
-      session->automation_runtime->apply_persistent_values(
-          source->automation_state);
+    } else if (session->automation_revision != source->automation_revision) {
+      // The revision gate replaced a deep AutomationProfile compare plus a
+      // cooldown-group compare that used to run on every reconcile: now they
+      // run only after the source's automation-relevant content changed, and
+      // they still decide whether a full reconfigure is needed.
+      session->automation_revision = source->automation_revision;
+      if (session->automation_runtime->profile() !=
+              *source->automation_profile ||
+          !std::ranges::equal(
+              session->automation_runtime->cooldown_groups(),
+              session->profile.cooldown_groups)) {
+        session->automation_runtime->reconfigure(
+            *source->automation_profile, session->profile.cooldown_groups);
+        session->automation_runtime->apply_persistent_values(
+            source->automation_state);
+        // Reconfigure resets session-scoped state (variables, timers, edge
+        // monitors), so replay session_started like a fresh runtime: rules
+        // keyed on it re-run against the edited profile instead of waiting
+        // for the next session.
+        (void)poll_automation_cooldown_transitions(*session, now, false);
+        overlays_changed =
+            process_automation_event(
+                *session,
+                automation_event(AutomationEventKind::session_started, {},
+                                 now)) ||
+            overlays_changed;
+      }
     }
   }
   const bool active = std::ranges::any_of(sessions_, [](const auto &session) {
@@ -201,13 +220,10 @@ void DaemonApp::poll_automation_timer() {
       continue;
     changed =
         poll_automation_cooldown_transitions(*session, now, true) || changed;
-    const auto overrides_before =
-        session->automation_runtime->snapshot().overlay_overrides;
-    const auto events = session->automation_runtime->due_timer_events(now);
-    changed = changed ||
-              overrides_before !=
-                  session->automation_runtime->snapshot().overlay_overrides;
-    for (const auto &event : events)
+    changed = session->automation_runtime->expire_overlay_overrides(now) ||
+              changed;
+    for (const auto &event :
+         session->automation_runtime->due_timer_events(now))
       changed = process_automation_event(*session, event) || changed;
     synchronize_automation_state(*session, now);
   }

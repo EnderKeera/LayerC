@@ -21,15 +21,20 @@ struct VisualAssetSignature {
   std::uint64_t file_index{};
   std::uint64_t file_size{};
   std::uint64_t last_write_ticks{};
+  // NTFS change-journal USN: any write to the file bumps it, so a
+  // replacement that preserves size and timestamp (and even reuses the file
+  // index) still invalidates the cached decode. Zero on volumes without a
+  // journal, where the metadata fields above remain the fallback.
+  std::uint64_t change_usn{};
 
   bool operator==(const VisualAssetSignature &) const = default;
 };
 
 struct VisualTemplateEvaluation {
   layerc::core::TemplateState state;
-  // File identity plus metadata detects atomic replacement even when a repair
-  // preserves size and timestamp. Cryptographic verification and PNG decoding
-  // remain isolated on the worker thread.
+  // File identity plus metadata plus journal USN detects atomic replacement
+  // even when a repair preserves size and timestamp. Cryptographic
+  // verification and PNG decoding remain isolated on the worker thread.
   std::vector<VisualAssetSignature> asset_signatures;
   // Populated only in the worker''s private request copy.
   std::shared_ptr<const std::vector<layerc::core::TemplateImage>> references;

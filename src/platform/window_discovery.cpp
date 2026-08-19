@@ -110,15 +110,28 @@ std::vector<WindowCandidate> enumerate_attachable_windows() {
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&result));
-  std::ranges::sort(
-      result, [](const WindowCandidate &left, const WindowCandidate &right) {
-        if (left.executable_name != right.executable_name) {
-          return lower_copy(left.executable_name) <
-                 lower_copy(right.executable_name);
-        }
-        return lower_copy(left.title) < lower_copy(right.title);
-      });
-  return result;
+  // Case-insensitive ordering with the sort keys lower-cased once per
+  // window instead of twice per comparison.
+  struct SortKey {
+    std::wstring executable;
+    std::wstring title;
+    std::size_t index;
+  };
+  std::vector<SortKey> order;
+  order.reserve(result.size());
+  for (std::size_t index = 0; index < result.size(); ++index)
+    order.push_back({lower_copy(result[index].executable_name),
+                     lower_copy(result[index].title), index});
+  std::ranges::sort(order, [](const SortKey &left, const SortKey &right) {
+    if (left.executable != right.executable)
+      return left.executable < right.executable;
+    return left.title < right.title;
+  });
+  std::vector<WindowCandidate> sorted;
+  sorted.reserve(result.size());
+  for (const auto &entry : order)
+    sorted.push_back(std::move(result[entry.index]));
+  return sorted;
 }
 
 std::optional<WindowCandidate> window_at_point(const POINT point) {

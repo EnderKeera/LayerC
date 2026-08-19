@@ -8,3 +8,6 @@ compile_commands.json
 .claude/settings.local.json
 *.env
 /review/
+/.codewhale/
+/.mimosa/
+/.review_tmp/

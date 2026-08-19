@@ -3,9 +3,11 @@
 #include "editor_dialog_dispatch.hpp"
 
 #include "layerc/platform/profile_transaction.hpp"
+#include "layerc/platform/windows.hpp"
 #include "editor_resource.h"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 
 #include <commctrl.h>
@@ -30,6 +32,42 @@ std::wstring editor_single_instance_name() {
     }
   }
   return L"Local\\LayerC.LayerE.SingleInstance.v1";
+}
+
+// "#32770" is the shared system dialog class: FindWindowW alone would match
+// any application's dialog titled LayerE. Only raise a window owned by a
+// process from this install.
+void raise_existing_editor() {
+  struct Context {
+    HWND found{};
+  } context;
+  EnumWindows(
+      [](const HWND window, const LPARAM raw) -> BOOL {
+        auto &context = *reinterpret_cast<Context *>(raw);
+        if (GetWindow(window, GW_OWNER) != nullptr) return TRUE;
+        std::array<wchar_t, 32> class_name{};
+        if (GetClassNameW(window, class_name.data(),
+                          static_cast<int>(class_name.size())) == 0)
+          return TRUE;
+        if (wcscmp(class_name.data(), L"#32770") != 0) return TRUE;
+        std::array<wchar_t, 32> title{};
+        const int length = GetWindowTextW(
+            window, title.data(), static_cast<int>(title.size()));
+        if (length <= 0 || wcscmp(title.data(), L"LayerE") != 0) return TRUE;
+        DWORD process_id{};
+        GetWindowThreadProcessId(window, &process_id);
+        if (process_id == 0 ||
+            !layerc::platform::is_sibling_process_image(process_id,
+                                                        L"layere.exe"))
+          return TRUE;
+        context.found = window;
+        return FALSE;
+      },
+      reinterpret_cast<LPARAM>(&context));
+  if (context.found == nullptr) return;
+  if (IsIconic(context.found)) ShowWindow(context.found, SW_RESTORE);
+  ShowWindow(context.found, SW_SHOW);
+  SetForegroundWindow(context.found);
 }
 
 } // namespace
@@ -404,12 +442,7 @@ int EditorApp::run(const HINSTANCE instance, const int show_command) {
     return 1;
   }
   if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    if (const HWND existing = FindWindowW(L"#32770", L"LayerE");
-        existing != nullptr) {
-      if (IsIconic(existing)) ShowWindow(existing, SW_RESTORE);
-      ShowWindow(existing, SW_SHOW);
-      SetForegroundWindow(existing);
-    }
+    raise_existing_editor();
     CloseHandle(single_instance);
     return 0;
   }

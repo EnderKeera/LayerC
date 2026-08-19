@@ -46,6 +46,7 @@ private:
   class IsolatedVisualRuntimeService;
   class HidRuntimeService;
   class AutomationRuntimeService;
+  class GameBarRuntimeService;
 
   static constexpr UINT tray_message = WM_APP + 1;
   static constexpr UINT_PTR game_scan_timer = 1;
@@ -74,6 +75,7 @@ private:
   void reload_profiles();
   void load_visual_source(ProfileSource &source);
   void load_automation_source(ProfileSource &source);
+  void load_companion_source(ProfileSource &source);
   void reconcile_profile_sources(std::vector<ProfileSource> loaded);
   void apply_profile_update(std::wstring key, layerc::core::GameProfile profile,
                             layerc::core::ProfileRevision revision);
@@ -141,22 +143,11 @@ private:
                                     layerc::core::TimePoint now);
   void reconcile_runtime_services();
   [[nodiscard]] layerc::runtime::CapabilityDemand runtime_demand() const;
+  // One factory for every runtime service class: each wraps a DaemonApp&
+  // and is instantiated with its Capability's implementation class.
+  template <typename ServiceT>
   [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_input_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_live_edit_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_overlay_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_visual_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_template_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_isolated_visual_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_hid_runtime_service(void *context);
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_automation_runtime_service(void *context);
+  create_runtime_service(void *context);
   void poll_visual_captures();
   void maintain_isolated_visual_captures();
   void retry_quarantined_visual_helpers();

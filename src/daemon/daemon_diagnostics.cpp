@@ -134,31 +134,32 @@ std::string DaemonApp::runtime_diagnostics_json() const {
 
   output += ",\"services\":[";
   const auto services = runtime_kernel_.services().all_stats();
-  for (std::size_t index = 0; index < services.size(); ++index) {
-    const auto &service = services[index];
-    if (index != 0)
-      output.push_back(',');
-    output += "{\"capability\":";
-    layerc::core::json::append_quoted(
-        output, layerc::runtime::capability_name(service.capability));
-    output += ",\"state\":";
-    layerc::core::json::append_quoted(output, state_name(service.state));
-    output += ",\"consumers\":";
-    layerc::core::json::append_unsigned(output, service.consumers);
-    output += ",\"resources\":";
-    append_resources(output, service.resources);
-    output += ",\"activationCount\":";
-    layerc::core::json::append_unsigned(output, service.activation_count);
-    output += ",\"faultCount\":";
-    layerc::core::json::append_unsigned(output, service.fault_count);
-    bool time_first = false;
-    append_time(output, "lastActivationNs", service.last_activation,
-                time_first);
-    append_time(output, "lastQuiescenceNs", service.last_quiescence,
-                time_first);
-    output += ",\"lastError\":";
-    layerc::core::json::append_quoted(output, service.last_error);
-    output.push_back('}');
+  {
+    layerc::core::json::Join join;
+    for (const auto &service : services) {
+      join(output);
+      output += "{\"capability\":";
+      layerc::core::json::append_quoted(
+          output, layerc::runtime::capability_name(service.capability));
+      output += ",\"state\":";
+      layerc::core::json::append_quoted(output, state_name(service.state));
+      output += ",\"consumers\":";
+      layerc::core::json::append_unsigned(output, service.consumers);
+      output += ",\"resources\":";
+      append_resources(output, service.resources);
+      output += ",\"activationCount\":";
+      layerc::core::json::append_unsigned(output, service.activation_count);
+      output += ",\"faultCount\":";
+      layerc::core::json::append_unsigned(output, service.fault_count);
+      bool time_first = false;
+      append_time(output, "lastActivationNs", service.last_activation,
+                  time_first);
+      append_time(output, "lastQuiescenceNs", service.last_quiescence,
+                  time_first);
+      output += ",\"lastError\":";
+      layerc::core::json::append_quoted(output, service.last_error);
+      output.push_back('}');
+    }
   }
   output.push_back(']');
   output += ",\"aggregateOwnedResources\":";
@@ -166,52 +167,53 @@ std::string DaemonApp::runtime_diagnostics_json() const {
 
   output += ",\"sessions\":[";
   const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
-  for (std::size_t index = 0; index < sessions_.size(); ++index) {
-    const auto &session = *sessions_[index];
-    if (index != 0)
-      output.push_back(',');
-    output += "{\"profileId\":";
-    layerc::core::json::append_quoted(output, session.profile.id);
-    output += ",\"sourceKey\":";
-    layerc::core::json::append_quoted(
-        output, layerc::platform::wide_to_utf8(session.source_key));
-    output += ",\"window\":\"";
-    layerc::core::json::append_unsigned(
-        output, reinterpret_cast<std::uintptr_t>(session.game_window));
-    output += "\",\"foreground\":";
-    output +=
-        session.game_window != nullptr && session.game_window == foreground
-            ? "true"
-            : "false";
-    output += ",\"overlayWindows\":";
-    layerc::core::json::append_unsigned(output,
-                                        session.overlays.object_count());
-    output += ",\"lastInputMatch\":";
-    layerc::core::json::append_quoted(output, session.last_input_match);
-    output.push_back('}');
+  {
+    layerc::core::json::Join join;
+    for (const auto &entry : sessions_) {
+      const auto &session = *entry;
+      join(output);
+      output += "{\"profileId\":";
+      layerc::core::json::append_quoted(output, session.profile.id);
+      output += ",\"sourceKey\":";
+      layerc::core::json::append_quoted(
+          output, layerc::platform::wide_to_utf8(session.source_key));
+      output += ",\"window\":\"";
+      layerc::core::json::append_unsigned(
+          output, reinterpret_cast<std::uintptr_t>(session.game_window));
+      output += "\",\"foreground\":";
+      output +=
+          session.game_window != nullptr && session.game_window == foreground
+              ? "true"
+              : "false";
+      output += ",\"overlayWindows\":";
+      layerc::core::json::append_unsigned(output,
+                                          session.overlays.object_count());
+      output += ",\"lastInputMatch\":";
+      layerc::core::json::append_quoted(output, session.last_input_match);
+      output.push_back('}');
+    }
   }
-  output += "]}";
-  output.pop_back();
+  output.push_back(']');
   output += ",\"isolatedHelpers\":[";
-  bool first_helper = true;
-  for (const auto &[window, worker] : isolated_visual_captures_) {
-    if (!first_helper)
-      output.push_back(',');
-    first_helper = false;
-    const auto status = worker->status();
-    output += "{\"window\":\"";
-    layerc::core::json::append_unsigned(
-        output, reinterpret_cast<std::uintptr_t>(window));
-    output += "\",\"pid\":";
-    layerc::core::json::append_unsigned(output, status.helper_process_id);
-    output += status.running ? ",\"running\":true" : ",\"running\":false";
-    output +=
-        status.quarantined ? ",\"quarantined\":true" : ",\"quarantined\":false";
-    output += ",\"faultCount\":";
-    layerc::core::json::append_unsigned(output, status.fault_count);
-    output += ",\"lastError\":";
-    layerc::core::json::append_quoted(output, status.last_error);
-    output.push_back('}');
+  {
+    layerc::core::json::Join join;
+    for (const auto &[window, worker] : isolated_visual_captures_) {
+      join(output);
+      const auto status = worker->status();
+      output += "{\"window\":\"";
+      layerc::core::json::append_unsigned(
+          output, reinterpret_cast<std::uintptr_t>(window));
+      output += "\",\"pid\":";
+      layerc::core::json::append_unsigned(output, status.helper_process_id);
+      output += status.running ? ",\"running\":true" : ",\"running\":false";
+      output +=
+          status.quarantined ? ",\"quarantined\":true" : ",\"quarantined\":false";
+      output += ",\"faultCount\":";
+      layerc::core::json::append_unsigned(output, status.fault_count);
+      output += ",\"lastError\":";
+      layerc::core::json::append_quoted(output, status.last_error);
+      output.push_back('}');
+    }
   }
   output += "]}";
   return output;
