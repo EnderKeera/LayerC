@@ -127,8 +127,8 @@ std::optional<std::string> GameBarBridge::latest_snapshot_json(
   const auto snapshot = latest_snapshot(now);
   if (!snapshot.has_value()) return std::nullopt;
   const auto json = layerc::core::serialize_companion_snapshot_json(*snapshot);
-  if (json.empty() ||
-      json.size() > layerc::core::max_companion_snapshot_bytes)
+  if (!json.has_value() ||
+      json->size() > layerc::core::max_companion_snapshot_bytes)
     return std::nullopt;
   return json;
 }

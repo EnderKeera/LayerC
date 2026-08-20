@@ -90,7 +90,7 @@ serialize_companion_profile_json(const CompanionProfile &profile);
 [[nodiscard]] CompanionError
 validate_companion_snapshot(const CompanionSessionSnapshot &snapshot);
 
-[[nodiscard]] std::string
+[[nodiscard]] std::optional<std::string>
 serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot);
 
 [[nodiscard]] std::variant<CompanionSessionSnapshot, CompanionError>

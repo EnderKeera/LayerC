@@ -261,11 +261,11 @@ CompanionError validate_companion_snapshot(
   return {};
 }
 
-std::string
+std::optional<std::string>
 serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
   if (const auto error = validate_companion_snapshot(snapshot);
       !error.message.empty())
-    return {};
+    return std::nullopt;
 
   std::string out = "{\"profileId\":";
   json::append_quoted(out, snapshot.profile_id);
@@ -418,6 +418,11 @@ parse_companion_snapshot_json(const std::string_view json_str) {
     }
     snapshot.panels.push_back(std::move(panel));
   }
+  // Enforce the same invariants as the validator (cross-panel duplicate
+  // slots, bounds) so a parsed snapshot is never rejected on round-trip.
+  if (const auto error = validate_companion_snapshot(snapshot);
+      !error.message.empty())
+    return error;
   return snapshot;
 }
 
