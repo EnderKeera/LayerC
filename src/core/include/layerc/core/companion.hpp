@@ -47,8 +47,12 @@ struct CompanionError {
 struct CompanionSnapshotItem {
   std::string cooldown_id;
   std::string name;
+  // Reserved: no per-cooldown icon/color source exists yet; the bridge emits
+  // empty strings until a renderer defines the data source.
   std::string icon;
-  double progress{0.0}; // 0.0 ready, 1.0 full duration
+  // Fraction of the cooldown elapsed toward ready: 1.0 = ready, 0.0 = just
+  // triggered (see GameBarBridge::create_session_snapshot).
+  double progress{0.0};
   std::uint32_t available_charges{1};
   std::uint32_t max_charges{1};
   std::int64_t remaining_ms{0};
@@ -61,6 +65,8 @@ struct CompanionSnapshotItem {
 struct CompanionPanelSnapshot {
   std::string panel_id;
   std::uint32_t slot_index{};
+  // Reserved: the bridge currently marks every published panel visible until
+  // session-level panel visibility is plumbed through.
   bool visible{true};
   std::vector<CompanionSnapshotItem> items;
 
