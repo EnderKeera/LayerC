@@ -99,8 +99,9 @@ static void test_companion_snapshot_bridge() {
   layerc::test::expect(snapshot.panels[0].items[1].is_ready == true, "heal is ready");
 
   // Roundtrip snapshot json
-  const std::string snap_json = serialize_companion_snapshot_json(snapshot);
-  auto parsed_snap = parse_companion_snapshot_json(snap_json);
+  const auto serialized = serialize_companion_snapshot_json(snapshot);
+  layerc::test::expect(serialized.has_value(), "valid snapshot serializes");
+  auto parsed_snap = parse_companion_snapshot_json(*serialized);
   layerc::test::expect(std::holds_alternative<CompanionSessionSnapshot>(parsed_snap),
                        "snapshot parses from json");
   const auto &unpacked = std::get<CompanionSessionSnapshot>(parsed_snap);
@@ -137,9 +138,29 @@ static void test_companion_snapshot_rejects_malformed_input() {
                   "snapshot rejects fractional charges");
   expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":8,"visible":true,"items":[]}]})",
                   "snapshot rejects out-of-range slot");
+  // layer21-F7: a cross-panel duplicate slot is accepted by the per-field
+  // parser but rejected by the validator; parse must agree with the validator.
+  expect_rejected(R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"a","slotIndex":1,"visible":true,"items":[]},{"panelId":"b","slotIndex":1,"visible":true,"items":[]}]})",
+                  "snapshot rejects duplicate slot across panels");
   expect_rejected(std::string(max_companion_snapshot_bytes + 1, 'x'),
                   "snapshot rejects oversized message");
   (void)valid;
+
+  // layer21-F9: serialization reports validation failure as std::nullopt
+  // rather than an empty string that callers must misread as a failure.
+  CompanionSessionSnapshot invalid;
+  invalid.profile_id = "";
+  layerc::test::expect(!serialize_companion_snapshot_json(invalid).has_value(),
+                       "invalid snapshot serializes to nullopt");
+  CompanionSessionSnapshot duplicate;
+  duplicate.profile_id = "p";
+  duplicate.session_key = "s";
+  duplicate.timestamp_ms = 1;
+  duplicate.panels = {
+      {.panel_id = "a", .slot_index = 2},
+      {.panel_id = "b", .slot_index = 2}};
+  layerc::test::expect(!serialize_companion_snapshot_json(duplicate).has_value(),
+                       "duplicate-slot snapshot serializes to nullopt");
 }
 
 static void test_companion_sidecar_survives_unrelated_bundle_save() {
