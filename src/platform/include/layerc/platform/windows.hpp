@@ -16,6 +16,9 @@ inline constexpr wchar_t settings_reload_event_name[] =
 inline constexpr wchar_t visual_capture_active_event_name[] =
     L"Local\\LayerC.LayerD.VisualCaptureActive";
 
+// Human-readable text for a Win32 error code; empty for ERROR_SUCCESS.
+[[nodiscard]] std::wstring windows_error_text(DWORD error);
+
 enum class EditorTheme : std::uint32_t {
   copper = 0,
   teal = 1,

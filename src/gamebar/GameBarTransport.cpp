@@ -1,6 +1,7 @@
 #include "GameBarTransport.hpp"
 
 #include "layerc/core/frame.hpp"
+#include "layerc/platform/windows.hpp"
 
 #include <cstring>
 #include <sddl.h>
@@ -9,23 +10,6 @@
 
 namespace layerc::gamebar {
 namespace {
-
-std::wstring windows_error_text(const DWORD error) {
-  wchar_t *message{};
-  const DWORD length = FormatMessageW(
-      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-          FORMAT_MESSAGE_IGNORE_INSERTS,
-      nullptr, error, 0, reinterpret_cast<LPWSTR>(&message), 0, nullptr);
-  std::wstring result = length != 0 && message != nullptr
-                            ? std::wstring(message, length)
-                            : L"Windows error " + std::to_wstring(error);
-  if (message != nullptr) LocalFree(message);
-  while (!result.empty() &&
-         (result.back() == L'\r' || result.back() == L'\n' ||
-          result.back() == L' '))
-    result.pop_back();
-  return result;
-}
 
 PSECURITY_DESCRIPTOR current_user_descriptor() {
   HANDLE token{};
@@ -119,7 +103,7 @@ void GameBarTransport::stop() noexcept {
 }
 
 void GameBarTransport::set_error(const DWORD error) {
-  last_error_ = windows_error_text(error);
+  last_error_ = layerc::platform::windows_error_text(error);
 }
 
 bool GameBarTransport::create_server() {
