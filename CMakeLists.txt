@@ -244,6 +244,40 @@ endif()
 
 option(LAYERC_BUILD_GAMEBAR_HOST "Build the C++/WinRT Game Bar companion host" ON)
 if(WIN32 AND LAYERC_BUILD_GAMEBAR_HOST)
+    # Discover the Windows SDK instead of pinning one version (layer21-F5):
+    # prefer the VS UCRT environment, then the newest installed SDK. When the
+    # SDK/C++-WinRT headers are missing the host is skipped gracefully so the
+    # default build never fails on a machine without the exact SDK.
+    set(LAYERC_CPPWINRT_DIR)
+    set(LAYERC_WINSDK_ROOT)
+    set(LAYERC_WINSDK_VER)
+    if(DEFINED ENV{UniversalCRTSdkDir} AND DEFINED ENV{UCRTVersion})
+        set(_cppwinrt_candidate "$ENV{UniversalCRTSdkDir}/Include/$ENV{UCRTVersion}/cppwinrt")
+        if(EXISTS "${_cppwinrt_candidate}")
+            set(LAYERC_CPPWINRT_DIR "${_cppwinrt_candidate}")
+            set(LAYERC_WINSDK_ROOT "$ENV{UniversalCRTSdkDir}")
+            set(LAYERC_WINSDK_VER "$ENV{UCRTVersion}")
+        endif()
+    endif()
+    if(NOT LAYERC_CPPWINRT_DIR)
+        foreach(_root "C:/Program Files (x86)/Windows Kits/10" "C:/Program Files/Windows Kits/10")
+            if(EXISTS "${_root}/Include")
+                file(GLOB _cppwinrt RELATIVE "${_root}/Include" "${_root}/Include/*/cppwinrt")
+                list(SORT _cppwinrt ORDER DESCENDING)
+                if(_cppwinrt)
+                    list(GET _cppwinrt 0 _top)
+                    set(LAYERC_CPPWINRT_DIR "${_root}/Include/${_top}")
+                    get_filename_component(LAYERC_WINSDK_VER "${_top}" PATH)
+                    set(LAYERC_WINSDK_ROOT "${_root}")
+                    break()
+                endif()
+            endif()
+        endforeach()
+    endif()
+    if(NOT LAYERC_CPPWINRT_DIR)
+        message(STATUS "Game Bar host disabled: Windows SDK C++/WinRT headers not found (set LAYERC_BUILD_GAMEBAR_HOST=OFF to silence)")
+    else()
+    message(STATUS "Game Bar host enabled: C++/WinRT at ${LAYERC_CPPWINRT_DIR}")
     add_executable(layerc_gamebar_host WIN32
         src/gamebar/GameBarCompanionHost.cpp
         src/core/companion.cpp
@@ -252,7 +286,7 @@ if(WIN32 AND LAYERC_BUILD_GAMEBAR_HOST)
         src/core/utf8.cpp)
     target_include_directories(layerc_gamebar_host PRIVATE
         src/core/include
-        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/cppwinrt")
+        "${LAYERC_CPPWINRT_DIR}")
     target_compile_features(layerc_gamebar_host PRIVATE cxx_std_20)
     target_link_libraries(layerc_gamebar_host PRIVATE
         windowsapp user32)
@@ -266,9 +300,7 @@ if(WIN32 AND LAYERC_BUILD_GAMEBAR_HOST)
     set_target_properties(layerc_gamebar_host PROPERTIES OUTPUT_NAME "layerc-gamebar")
 
     find_program(LAYERC_MAKEAPPX makeappx.exe
-        PATHS
-        "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
-        "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64")
+        HINTS "${LAYERC_WINSDK_ROOT}/bin/${LAYERC_WINSDK_VER}/x64")
     if(LAYERC_MAKEAPPX)
         set(LAYERC_GAMEBAR_PACKAGE_DIR
             "${CMAKE_CURRENT_BINARY_DIR}/gamebar-package")
@@ -300,7 +332,10 @@ if(WIN32 AND LAYERC_BUILD_GAMEBAR_HOST)
             VERBATIM)
         add_custom_target(layerc_gamebar_msix
             DEPENDS "${LAYERC_GAMEBAR_MSIX}")
-    endif()
+        else()
+            message(STATUS "makeappx not found; unsigned Game Bar MSIX target is not configured")
+        endif()
+        endif()
 endif()
 
 if(WIN32 AND LAYERC_BUILD_EDITOR)
