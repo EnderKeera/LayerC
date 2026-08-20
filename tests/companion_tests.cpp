@@ -97,6 +97,12 @@ static void test_companion_snapshot_bridge() {
   layerc::test::expect(snapshot.panels[0].items[0].available_charges == 1, "dash available charges");
   layerc::test::expect(snapshot.panels[0].items[0].remaining_ms == 2500, "dash remaining ms");
   layerc::test::expect(snapshot.panels[0].items[1].is_ready == true, "heal is ready");
+  // layer21-F8: progress convention is 'elapsed toward ready' (1.0 = ready).
+  layerc::test::expect(snapshot.panels[0].items[0].progress < 1.0 &&
+                           snapshot.panels[0].items[0].progress > 0.0,
+                       "recharging item progress is between 0 and 1");
+  layerc::test::expect(snapshot.panels[0].items[1].progress == 1.0,
+                       "ready item progress is 1.0");
 
   // Roundtrip snapshot json
   const auto serialized = serialize_companion_snapshot_json(snapshot);

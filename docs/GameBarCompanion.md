@@ -24,7 +24,9 @@ for the package layout, see `src/gamebar/README.md`.
 - `CompanionSessionSnapshot` — bounded immutable snapshot: `profileId`,
   `sessionKey`, `timestampMs`, and up to 8 panels, each with up to 32 item
   rows (cooldown id, name, icon, progress, charges, remaining time, ready,
-  color).
+  color). `progress` is the fraction of the cooldown elapsed toward ready
+  (1.0 = ready, 0.0 = just triggered); `icon`/`color` and panel `visible`
+  are reserved fields the bridge does not yet populate.
 - All documents carry a 64 KiB bound and a 512-byte text bound.
 
 ## 2. Persistence (sidecar, `src/platform/profile_store.cpp`)
