@@ -117,14 +117,17 @@ struct AutomationOpSpec {
   std::uint8_t min_args;
   std::uint8_t max_args;
   // Static inference over the argument types (nullopt = dynamically typed).
-  [[nodiscard]] bool (*infer)(
+  // The result bool is checked by the evaluator; [[nodiscard]] cannot be
+  // applied to function-pointer members (MSVC C4869 ignores it).
+  bool (*infer)(
       const AutomationOpSpec &self,
       std::span<const std::optional<AutomationValueType>> argument_types,
       std::optional<AutomationValueType> &result, std::string &error);
-  // Dynamic evaluation over already-evaluated arguments.
-  [[nodiscard]] bool (*evaluate)(const AutomationOpSpec &self,
-                                 std::span<const AutomationValue> arguments,
-                                 AutomationValue &result, std::string &error);
+  // Dynamic evaluation over already-evaluated arguments. Callers check the
+  // bool; see the note above about [[nodiscard]] on function-pointer members.
+  bool (*evaluate)(const AutomationOpSpec &self,
+                   std::span<const AutomationValue> arguments,
+                   AutomationValue &result, std::string &error);
 };
 
 namespace op_impl {

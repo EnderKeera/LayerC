@@ -278,7 +278,8 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
                    layerc::platform::infer_hid_control(*device, input)) {
       candidates.push_back(std::move(*inferred));
     }
-    for (auto &inferred : candidates) {
+    if (!candidates.empty()) {
+      auto &inferred = candidates.front();
       inferred.binding.allow_system_class =
           owner_draw_checkbox_checked(
               GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
@@ -296,7 +297,6 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
                    state->inferred->binding.hysteresis * 100.0))));
       set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"Recapture");
       EnableWindow(GetDlgItem(window, IDC_HID_APPLY), TRUE);
-      break;
     }
     return TRUE;
   }
