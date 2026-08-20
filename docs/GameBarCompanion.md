@@ -1,121 +1,85 @@
 # LayerC Game Bar Companion (v2.4)
 
 ## Overview
-The Game Bar companion is an optional Xbox Game Bar extension (C++/WinRT) that subscribes to LayerC cooldown panel snapshots and displays them in the 8 standard panel slots + 1 settings widget. It is **not** part of the portable ZIP; it ships only in the separate MSIX package.
+
+The Game Bar companion is an optional Xbox Game Bar extension that displays
+LayerC cooldown panel snapshots in the 8 standard panel slots plus one settings
+widget. It is **not** part of the portable ZIP; it ships only in the separate
+MSIX package. This document describes what the current source tree actually
+ships. For the authoritative release status, see `docs/GameBarCompanion.audit.md`;
+for the package layout, see `src/gamebar/README.md`.
 
 **Key invariants** (must never be violated):
 - LayerD remains the sole source of truth for cooldown state.
 - No capture, input processing, or mutation happens in the companion.
-- Companion reconnects on LayerD/Game Bar/Explorer restart and hides stale data after 2 seconds.
+- The companion reconnects on LayerD/Game Bar/Explorer restart and hides stale
+  data after 2 seconds.
 - All measurements treat companion cost separately from native LayerD budgets.
 
-## Package Structure (new directories)
-```
-src/gamebar/
-├── GameBarBridge.hpp          # WinRT interface + AppService contract
-├── GameBarBridge.cpp
-├── PanelSlotMapping.hpp       # Versioned sidecar schema
-├── PanelSlotMapping.cpp
-└── Resources/
-    └── GameBarExtension/
-        └── Package.appxmanifest
-```
+## 1. Data model (`src/core/include/layerc/core/companion.hpp`)
 
-## 1. GameBarBridge (Core Bridge)
-```cpp
-// src/gamebar/GameBarBridge.hpp
-#pragma once
-#include <winrt/Windows.ApplicationModel.AppService.h>
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Storage.h>
+- `CompanionProfile` — schema-1 profile sidecar: `profileId` + a bounded set
+  of `CompanionSlotMapping` entries (0..7 slots) mapping a slot to a panel
+  `panelId`, with `pinned`, `clickThrough`, and `opacity` overrides.
+- `CompanionSessionSnapshot` — bounded immutable snapshot: `profileId`,
+  `sessionKey`, `timestampMs`, and up to 8 panels, each with up to 32 item
+  rows (cooldown id, name, icon, progress, charges, remaining time, ready,
+  color).
+- All documents carry a 64 KiB bound and a 512-byte text bound.
 
-namespace layerc::gamebar {
+## 2. Persistence (sidecar, `src/platform/profile_store.cpp`)
 
-struct PanelSnapshot {
-    std::string panelId;                    // e.g. "cooldown-1"
-    int8_t cooldownPercent;                 // 0-100
-    std::string remainingText;              // "45s" or "READY"
-    std::string color;                      // #RRGGBB
-    bool isReady = false;
-    bool isVisible = true;
-};
+- Slot mappings persist per profile under `profiles/_companion/<profile>.json`
+  (base schema 4, companion module schema 1) through the same crash-recoverable
+  bundle transaction as base/visual/automation.
+- Saving an unrelated base/visual/automation edit preserves an existing valid
+  companion sidecar; an invalid existing sidecar fails the bundle closed.
+- Writes are validated by `layerc::core::validate_companion_profile` (duplicate
+  slot, duplicate panel, unknown panelId, out-of-range opacity).
 
-class GameBarBridge : public winrt::implements<GameBarBridge, IGameBarBridge> {
-public:
-    GameBarBridge() = default;
-    ~GameBarBridge();
+## 3. Bridge (`src/gamebar/GameBarBridge.cpp`)
 
-    // Called from LayerD via framed JSON over the same-package AppService
-    winrt::fire_and_forget OnLayerDSnapshot(std::string jsonSnapshot);
+`layerc::gamebar::GameBarBridge` is a plain C++ snapshot stash: it formats an
+immutable `CompanionSessionSnapshot` from session cooldown/panel state
+(`create_session_snapshot`), keeps one latest snapshot under a mutex, and
+hides data older than the 2.0 s cutoff (`latest_snapshot` /
+`latest_snapshot_json`). It is not WinRT and owns no connection.
 
-    // AppService contract methods
-    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::ApplicationModel::AppService::AppServiceConnectionStatus>
-    ConnectAsync(winrt::Windows::ApplicationModel::AppService::AppServiceConnection connection);
+## 4. Transport (`src/gamebar/GameBarTransport.cpp`, daemon-owned)
 
-private:
-    std::mutex m_snapshotMutex;
-    std::map<std::string, PanelSnapshot> m_activeSnapshots;
-    bool m_reconnected = false;
+- The daemon owns a current-user named pipe `\\.\pipe\LayerC.GameBar.v1`
+  with a per-user SDDL ACL, `PIPE_REJECT_REMOTE_CLIENTS`, same-logon-session
+  and MSIX package-identity (`LayerC.GameBar.v1`) client authentication, and
+  overlapped I/O.
+- `GameBarRuntimeService` starts/polls/stops the transport on demand; the
+  daemon feeds it bounded, immutable framed JSON snapshots (64 KiB) when
+  demands change and on the game-scan timer (`DaemonApp::publish_companion_snapshots`).
+- Companion cost is accounted separately from the native-overlay budget.
 
-    void Reconnect();
-    void HideStaleData();
-};
-}
-```
+## 5. Host (`src/gamebar/GameBarCompanionHost.cpp`, `layerc-gamebar.exe`)
 
-## 2. PanelSlotMapping (Versioned Sidecar)
-```cpp
-// src/gamebar/PanelSlotMapping.hpp
-struct PanelSlotMapping {
-    std::string panelId;
-    std::string widgetId;           // "widget-1", "widget-8", "settings"
-    bool isEnabled = true;
-    bool isPinned = false;
-    bool isTransparent = true;
-};
+- The host is the MSIX executable. Current state: a named-pipe one-way consumer
+  that reads framed snapshots, bounds-checks them, and parses them; error exits
+  2-5 are defined for pipe/size/schema/unreadable failures.
+- **Outstanding (not implemented):** Windows AppService activation factory,
+  Game Bar widget registration/rendering, and an end-to-end launch path (the
+  daemon does not launch the host and Game Bar has no activation entry point yet).
+  The host's `AppServiceConnection` construction is a package-readiness stub
+  only. Watch `docs/GameBarCompanion.audit.md` for when this closes; do not
+  describe the companion as a shipping Game Bar widget until it does.
 
-struct CompanionSidecar {
-    std::string version = "v1";
-    std::vector<PanelSlotMapping> mappings;   // 9 entries total
-    std::string lastUpdated;
-};
-```
+## 6. MSIX skeleton (`src/gamebar/Package.appxmanifest` + CMake)
 
-## 3. MSIX Packaging Skeleton (new file)
-```xml
-<!-- src/gamebar/GameBarExtension/Package.appxmanifest -->
-<?xml version="1.0" encoding="utf-8"?>
-<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" 
-         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" 
-         IgnorableNamespaces="uap">
-    <Identity Name="LayerC.GameBar.v1" Version="2.4.0.0" Publisher="CN=LayerC" Architecture="x64" />
-    <Properties>
-        <DisplayName>LayerC Game Bar Companion</DisplayName>
-        <PublisherDisplayName>LayerC</PublisherDisplayName>
-        <Description>LayerC cooldown panel companion for Xbox Game Bar</Description>
-    </Properties>
-    <Resources>
-        <Resource Language="en-us" />
-    </Resources>
-    <Capabilities>
-        <Capability Name="internetClient" />
-    </Capabilities>
-    <Extensions>
-        <uap:Extension Category="windows.appService" EntryPoint="LayerC.GameBar.AppService">
-            <uap:AppService Name="LayerC.GameBar.v1" />
-        </uap:Extension>
-        <uap:Extension Category="windows.gameBar" EntryPoint="LayerC.GameBar.Extension">
-            <uap:GameBar>
-                <uap:GameBarPanelSlot Name="1" />
-                <!-- ... slots 2-8 + settings ... -->
-            </uap:GameBar>
-        </uap:Extension>
-    </Extensions>
-</Package>
-```
+- `Package.appxmanifest` declares an App Service (`LayerC.GameBar.v1`) and
+  the package identity; MSIX staging renames it to `AppxManifest.xml`. Widget
+  registration uses the Xbox Game Bar SDK/host manifest extension, not the
+  generic Windows 10 AppX schema.
+- CMake builds `layerc-gamebar.exe` and, when `makeappx` is available,
+  assembles an unsigned `LayerC.GameBar.v1.msix`. Official distribution still
+  requires signing and Game Bar host smoke coverage on a supported Windows image.
 
-## Current Status (audited)
-- The typed bridge, bounded snapshot parser, daemon-owned publication transport, sidecar validation/preservation, focused tests, CMake integration, and unsigned manifest skeleton are implemented.
-- The transport is a current-user/same-session named-pipe publisher with bounded framed JSON and stale-data suppression in the bridge.
-- The compiled C++/WinRT widget host, real AppService client, MSIX assembly/signing, and Game Bar host smoke gates are still outstanding.
-- Do not claim V2.4 is a complete shipping companion until the remaining PLAN.md Game Bar gates pass.
+## Conventions summary
+
+companion model -> validated sidecar -> bounded snapshot -> stale-capped bridge
+-> daemon-owned named-pipe publisher -> unsigned MSIX skeleton (activation
+path outstanding).
