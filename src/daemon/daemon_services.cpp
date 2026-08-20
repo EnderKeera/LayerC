@@ -312,12 +312,6 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() const {
       }));
   demand.set(layerc::runtime::Capability::automation,
              automation_consumers);
-  const auto companion_consumers = static_cast<std::uint32_t>(
-      std::ranges::count_if(sessions_, [](const auto &session) {
-        return session != nullptr && session->has_companion_slots();
-      }));
-  demand.set(layerc::runtime::Capability::gamebar,
-             companion_consumers);
   return demand;
 }
 

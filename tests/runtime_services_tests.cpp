@@ -275,6 +275,19 @@ void demand_matrix_is_explicit() {
              !demand.required(Capability::template_evaluation),
          "one isolated profile should route every profile on its HWND through one isolated tier");
 
+  demand = calculate({{.window = {1}, .active = true},
+                      {.window = {2}, .active = true, .companion = true}});
+  expect(demand.required(Capability::gamebar) &&
+             demand.consumers(Capability::gamebar) == 1 &&
+             demand.consumers(Capability::input) == 2,
+         "companion slots should demand the Game Bar capability per active session");
+  demand = calculate({{.window = {1}, .active = true}});
+  expect(!demand.required(Capability::gamebar),
+         "an input-only active session should not demand Game Bar");
+  demand = calculate({{.window = {1}, .active = false, .companion = true}});
+  expect(!demand.required(Capability::gamebar),
+         "an inactive companion session should not demand Game Bar");
+
   demand = calculate({}, true, false);
   expect(demand.required(Capability::live_edit) &&
              !demand.required(Capability::overlay) &&
