@@ -23,8 +23,7 @@ struct SessionCapabilityRequest {
 
 [[nodiscard]] CapabilityDemand calculate_capability_demand(
     std::span<const SessionCapabilityRequest> sessions,
-    bool editor_connected, bool edit_overlay_active,
-    bool companion_active = false) noexcept;
+    bool editor_connected, bool edit_overlay_active) noexcept;
 
 // Platform-neutral authority for immutable capability demand and first-party
 // service ownership. Native adapters remain outside this class.
