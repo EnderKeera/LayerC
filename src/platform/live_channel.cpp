@@ -1,5 +1,6 @@
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/windows.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,24 +15,6 @@ namespace {
 
 HANDLE make_event() {
   return CreateEventW(nullptr, TRUE, FALSE, nullptr);
-}
-
-std::wstring windows_error_text(const DWORD error) {
-  if (error == ERROR_SUCCESS) return {};
-  wchar_t *message{};
-  const DWORD length = FormatMessageW(
-      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-          FORMAT_MESSAGE_IGNORE_INSERTS,
-      nullptr, error, 0, reinterpret_cast<LPWSTR>(&message), 0, nullptr);
-  std::wstring result = length != 0 && message != nullptr
-                            ? std::wstring(message, length)
-                            : L"Windows error " + std::to_wstring(error);
-  if (message != nullptr) LocalFree(message);
-  while (!result.empty() &&
-         (result.back() == L'\r' || result.back() == L'\n' ||
-          result.back() == L' '))
-    result.pop_back();
-  return result;
 }
 
 bool same_user_as_current_process(const HANDLE process) {
