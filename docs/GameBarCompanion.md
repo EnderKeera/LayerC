@@ -61,8 +61,11 @@ hides data older than the 2.0 s cutoff (`latest_snapshot` /
 ## 5. Host (`src/gamebar/GameBarCompanionHost.cpp`, `layerc-gamebar.exe`)
 
 - The host is the MSIX executable. Current state: a named-pipe one-way consumer
-  that reads framed snapshots, bounds-checks them, and parses them; error exits
-  2-5 are defined for pipe/size/schema/unreadable failures.
+  that reads framed snapshots, bounds-checks them, and parses them; it verifies
+  the pipe server is a sibling `layerd.exe` from the same install before
+  consuming (mutual authentication) and reconnects with backoff. Error exits:
+  2 pipe unavailable, 3 oversized frame, 4 malformed frame, 5 connected but no
+  usable frame (one-shot), 6 server identity not trusted.
 - **Outstanding (not implemented):** Windows AppService activation factory,
   Game Bar widget registration/rendering, and an end-to-end launch path (the
   daemon does not launch the host and Game Bar has no activation entry point yet).
