@@ -84,6 +84,14 @@ recovery), `benchmark_v23.ps1` (automation activation/checkpoint/overhead, <=0.2
 <=2 ms max evaluator budget), `benchmark_latency.ps1` (<=1 ms median/p95 input-to-overlay regression).
 Evidence lands in `out\benchmarks`.
 
+## DevOps (free GitHub)
+
+* **CI** `.github/workflows/ci.yml` runs on `windows-2022` free: `cmake --preset ci` (Ninja/Release) → build → `ctest --preset ci` (9/9) → optional `benchmark_v23`/`latency` → install → `cpack --preset ci` → `out/layerc` + `build/ci/*.zip` artifact. `benchmark_v11`/`v22` stay local (need WGC/GPU/foreground).
+* **CodeQL** `.github/workflows/codeql.yml` (`windows-2022`, `cpp`, weekly + PR) — no extra setup.
+* **Dependabot** `.github/dependabot.yml` — weekly `github-actions` updates, 5 PR limit.
+* **Release** `.github/workflows/release.yml` — tag `v*.*.*` → same `ci` preset → `softprops/action-gh-release` with `build/ci/*.zip` + `out/layerc`.
+* **Branch protection** (set once in Settings → Branches): protect `main`, require `windows-msvc` + `CodeQL` checks, linear history, block force-push after V2.4 squash.
+
 ## Architecture (what every change must respect)
 
 ### Layering and boundaries
