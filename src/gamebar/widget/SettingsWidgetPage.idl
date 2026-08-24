@@ -1,0 +1,9 @@
+namespace LayerC.GameBar
+{
+    [default_interface]
+    runtimeclass SettingsWidgetPage : Windows.UI.Xaml.Controls.Page
+    {
+        SettingsWidgetPage();
+        String ProfileId;
+    }
+}

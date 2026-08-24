@@ -193,32 +193,11 @@ bool NamedPipeEditorDaemonChannel::authenticate_server() {
     last_error_ = L"Rejected an unexpected live-channel server process.";
     return false;
   }
-
-  DWORD current_session{};
-  DWORD server_session{};
-  if (ProcessIdToSessionId(GetCurrentProcessId(), &current_session) == FALSE ||
-      ProcessIdToSessionId(server_process_id, &server_session) == FALSE ||
-      current_session != server_session) {
-    last_error_ = L"Rejected a live-channel server from another logon session.";
-    return false;
-  }
-
-  const HANDLE server_process = OpenProcess(
-      PROCESS_QUERY_LIMITED_INFORMATION, FALSE, server_process_id);
-  if (server_process == nullptr) {
-    last_error_ = L"Could not authenticate the LayerD live-channel server.";
-    return false;
-  }
-  const bool trusted_user = same_user_as_current_process(server_process);
-  const bool trusted_image = expected_peer_process_id_ != 0 ||
-                             is_sibling_image(server_process, L"layerd.exe");
-  CloseHandle(server_process);
-  if (!trusted_user || !trusted_image) {
-    last_error_ = L"Rejected an untrusted LayerD live-channel server.";
-    return false;
-  }
-  peer_process_id_ = server_process_id;
-  return true;
+  return verify_peer_identity(
+      server_process_id, L"layerd.exe",
+      L"Rejected a live-channel server from another logon session.",
+      L"Could not authenticate the LayerD live-channel server.",
+      L"Rejected an untrusted LayerD live-channel server.");
 }
 
 bool NamedPipeEditorDaemonChannel::authenticate_client() {
@@ -233,31 +212,41 @@ bool NamedPipeEditorDaemonChannel::authenticate_client() {
     last_error_ = L"Rejected an unexpected live-channel client process.";
     return false;
   }
+  return verify_peer_identity(
+      client_process_id, L"layere.exe",
+      L"Rejected a live-channel client from another logon session.",
+      L"Could not authenticate the LayerE live-channel client.",
+      L"Rejected an untrusted LayerE live-channel client.");
+}
 
+bool NamedPipeEditorDaemonChannel::verify_peer_identity(
+    const DWORD peer_pid, const wchar_t *sibling_image,
+    const std::wstring_view session_error,
+    const std::wstring_view authenticate_error,
+    const std::wstring_view untrusted_error) {
   DWORD current_session{};
-  DWORD client_session{};
+  DWORD peer_session{};
   if (ProcessIdToSessionId(GetCurrentProcessId(), &current_session) == FALSE ||
-      ProcessIdToSessionId(client_process_id, &client_session) == FALSE ||
-      current_session != client_session) {
-    last_error_ = L"Rejected a live-channel client from another logon session.";
+      ProcessIdToSessionId(peer_pid, &peer_session) == FALSE ||
+      current_session != peer_session) {
+    last_error_ = std::wstring(session_error);
     return false;
   }
-
-  const HANDLE client_process = OpenProcess(
-      PROCESS_QUERY_LIMITED_INFORMATION, FALSE, client_process_id);
-  if (client_process == nullptr) {
-    last_error_ = L"Could not authenticate the LayerE live-channel client.";
+  const HANDLE peer_process =
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, peer_pid);
+  if (peer_process == nullptr) {
+    last_error_ = std::wstring(authenticate_error);
     return false;
   }
-  const bool trusted_user = same_user_as_current_process(client_process);
+  const bool trusted_user = same_user_as_current_process(peer_process);
   const bool trusted_image = expected_peer_process_id_ != 0 ||
-                             is_sibling_image(client_process, L"layere.exe");
-  CloseHandle(client_process);
+                             is_sibling_image(peer_process, sibling_image);
+  CloseHandle(peer_process);
   if (!trusted_user || !trusted_image) {
-    last_error_ = L"Rejected an untrusted LayerE live-channel client.";
+    last_error_ = std::wstring(untrusted_error);
     return false;
   }
-  peer_process_id_ = client_process_id;
+  peer_process_id_ = peer_pid;
   return true;
 }
 

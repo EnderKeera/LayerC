@@ -36,7 +36,7 @@ layerc::core::GameProfile test_profile(const std::string &name) {
   profile.game.executable_name = "test.exe";
   profile.cooldowns.push_back({.id = "dash", .name = "Dash", .duration = 1s});
   profile.panels.push_back(
-      {.id = "main", .name = "Main", .cooldown_ids = {"dash"}});
+      {.id = "main", .name = "Main", .bar = {}, .cooldown_ids = {"dash"}});
   profile.bindings.push_back(
       {.cooldown_id = "dash",
        .chord = {{{layerc::core::InputDevice::keyboard, 0x20, 0}}}});
@@ -77,10 +77,11 @@ test_automation_profile(const std::string &profile_id = "store-test") {
   AutomationRule rule;
   rule.id = "start";
   rule.event = AutomationEventKind::session_started;
-  rule.actions.push_back(
-      {.kind = AutomationActionKind::increment_variable,
-       .target = "count",
-       .value = automation_literal(AutomationValue(std::int64_t{1}))});
+  AutomationAction action;
+  action.kind = AutomationActionKind::increment_variable;
+  action.target = "count";
+  action.value = automation_literal(AutomationValue(std::int64_t{1}));
+  rule.actions.push_back(std::move(action));
   profile.automations.push_back(
       {.id = "counter", .name = "Counter", .rules = {rule}});
   return profile;
@@ -153,7 +154,8 @@ bool launch_auth_peer(const std::filesystem::path &executable,
       L"\"" + executable.wstring() + L"\" " + mode + L" \"" + pipe_name + L"\"";
   std::vector<wchar_t> command_buffer(command.begin(), command.end());
   command_buffer.push_back(L'\0');
-  STARTUPINFOW startup{.cb = sizeof(STARTUPINFOW)};
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
   return CreateProcessW(executable.c_str(), command_buffer.data(), nullptr,
                         nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
                         &startup, &process) != FALSE;
@@ -251,17 +253,18 @@ int main(const int argc, char *argv[]) {
           read_test_file(committed_target) == "published",
       "recovery should retain a committed publication and clean only its "
       "journal residue");
-  layerc::platform::HidRawDevice system_keyboard{
-      .handle = reinterpret_cast<HANDLE>(0x1234), .raw_type = RIM_TYPEKEYBOARD};
+  layerc::platform::HidRawDevice system_keyboard{};
+  system_keyboard.handle = reinterpret_cast<HANDLE>(0x1234);
+  system_keyboard.raw_type = RIM_TYPEKEYBOARD;
   RAWINPUT keyboard_input{};
   keyboard_input.header.dwType = RIM_TYPEKEYBOARD;
   keyboard_input.header.hDevice = system_keyboard.handle;
   keyboard_input.data.keyboard.MakeCode = 0x36;
-  layerc::core::HidControlBinding system_key{
-      .usage_page = 0x07,
-      .usage = 0x36,
-      .activation = layerc::core::HidActivationMode::button,
-      .allow_system_class = true};
+  layerc::core::HidControlBinding system_key{};
+  system_key.usage_page = 0x07;
+  system_key.usage = 0x36;
+  system_key.activation = layerc::core::HidActivationMode::button;
+  system_key.allow_system_class = true;
   const auto key_down = layerc::platform::sample_hid_control(
       system_keyboard, system_key, keyboard_input);
   keyboard_input.data.keyboard.Flags = RI_KEY_BREAK;
@@ -272,17 +275,19 @@ int main(const int argc, char *argv[]) {
                    "Advanced system keyboard bindings should retain "
                    "device-specific press and release samples");
 
-  layerc::platform::HidRawDevice system_mouse{
-      .handle = reinterpret_cast<HANDLE>(0x5678), .raw_type = RIM_TYPEMOUSE};
+  layerc::platform::HidRawDevice system_mouse{};
+  system_mouse.handle = reinterpret_cast<HANDLE>(0x5678);
+  system_mouse.raw_type = RIM_TYPEMOUSE;
   RAWINPUT mouse_input{};
   mouse_input.header.dwType = RIM_TYPEMOUSE;
   mouse_input.header.hDevice = system_mouse.handle;
   mouse_input.data.mouse.lLastX = 4;
-  layerc::core::HidControlBinding relative_mouse{
-      .usage_page = 0x01,
-      .usage = 0x30,
-      .activation = layerc::core::HidActivationMode::relative_positive,
-      .allow_system_class = true};
+  layerc::core::HidControlBinding relative_mouse{};
+  relative_mouse.usage_page = 0x01;
+  relative_mouse.usage = 0x30;
+  relative_mouse.activation =
+      layerc::core::HidActivationMode::relative_positive;
+  relative_mouse.allow_system_class = true;
   const auto first_movement = layerc::platform::sample_hid_control(
       system_mouse, relative_mouse, mouse_input);
   const auto second_movement = layerc::platform::sample_hid_control(
@@ -315,6 +320,7 @@ int main(const int argc, char *argv[]) {
                    "asset tests should use an isolated profile directory");
 
   layerc::core::TemplateImage asset{
+      .asset_sha256 = {},
       .width = 8,
       .height = 8,
       .pixels = std::vector<layerc::core::RgbPixel>(64),

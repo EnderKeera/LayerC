@@ -1,5 +1,5 @@
-#include "layerc/platform/windows.hpp"
 #include "layerc/core/live_edit.hpp"
+#include "layerc/platform/windows.hpp"
 #include "overlay_window.hpp"
 #include "test_support.hpp"
 
@@ -94,13 +94,14 @@ private:
 };
 
 int run_on_private_desktop(const wchar_t *const test_target) {
-  const std::wstring desktop_name =
-      L"LayerC.OverlayTests." + std::to_wstring(GetCurrentProcessId()) +
-      L"." + std::to_wstring(GetTickCount64());
-  const HDESK desktop = CreateDesktopW(
-      desktop_name.c_str(), nullptr, nullptr, 0, GENERIC_ALL, nullptr);
+  const std::wstring desktop_name = L"LayerC.OverlayTests." +
+                                    std::to_wstring(GetCurrentProcessId()) +
+                                    L"." + std::to_wstring(GetTickCount64());
+  const HDESK desktop = CreateDesktopW(desktop_name.c_str(), nullptr, nullptr,
+                                       0, GENERIC_ALL, nullptr);
   if (desktop == nullptr) {
-    std::cerr << "SKIP: private test desktop is unavailable on this window station\n";
+    std::cerr
+        << "SKIP: private test desktop is unavailable on this window station\n";
     return 77;
   }
 
@@ -119,9 +120,9 @@ int run_on_private_desktop(const wchar_t *const test_target) {
   startup.cb = sizeof(startup);
   startup.lpDesktop = const_cast<LPWSTR>(desktop_name.c_str());
   PROCESS_INFORMATION process{};
-  const BOOL launched = CreateProcessW(
-      executable.data(), command_buffer.data(), nullptr, nullptr, FALSE, 0,
-      nullptr, nullptr, &startup, &process);
+  const BOOL launched =
+      CreateProcessW(executable.data(), command_buffer.data(), nullptr, nullptr,
+                     FALSE, 0, nullptr, nullptr, &startup, &process);
   if (launched == FALSE) {
     CloseDesktop(desktop);
     std::cerr << "FAIL: private-desktop test process could not start\n";
@@ -145,8 +146,10 @@ int run_on_private_desktop(const wchar_t *const test_target) {
 bool window_is_above(const HWND upper, const HWND lower) {
   for (HWND current = GetTopWindow(nullptr); current != nullptr;
        current = GetWindow(current, GW_HWNDNEXT)) {
-    if (current == upper) return true;
-    if (current == lower) return false;
+    if (current == upper)
+      return true;
+    if (current == lower)
+      return false;
   }
   return false;
 }
@@ -162,7 +165,8 @@ bool rectangles_near(const RECT &left, const layerc::core::PixelRect &right,
 } // namespace
 
 int wmain(const int argc, wchar_t *argv[]) {
-  if (argc == 2) return run_on_private_desktop(argv[1]);
+  if (argc == 2)
+    return run_on_private_desktop(argv[1]);
   if (argc != 3 || std::wcscmp(argv[1], L"--desktop-child") != 0) {
     std::cerr << "FAIL: lctest executable path is required\n";
     return 1;
@@ -198,6 +202,7 @@ int wmain(const int argc, wchar_t *argv[]) {
       .id = "main",
       .name = "Main",
       .style = layerc::core::PanelStyle::card,
+      .bar = {},
       .anchor_x = 0.5,
       .anchor_y = 0.75,
       .cooldown_ids = {"dash"},
@@ -248,9 +253,8 @@ int wmain(const int argc, wchar_t *argv[]) {
     return 1;
   }
 
-  SetWindowPos(target_window, nullptr, work_area.left + 120,
-               work_area.top + 90, 820, 610,
-               SWP_NOZORDER | SWP_NOACTIVATE);
+  SetWindowPos(target_window, nullptr, work_area.left + 120, work_area.top + 90,
+               820, 610, SWP_NOZORDER | SWP_NOACTIVATE);
   origin = {};
   if (!expect(GetClientRect(target_window, &client) != FALSE &&
                   ClientToScreen(target_window, &origin) != FALSE,
@@ -271,49 +275,50 @@ int wmain(const int argc, wchar_t *argv[]) {
                             resized_target.right, resized_target.bottom};
   const UINT attached_dpi =
       layerc::platform::monitor_dpi_for_rect(resized_monitor_rect);
-  if (!expect(aligned_overlay.right - aligned_overlay.left ==
-                      MulDiv(90, static_cast<int>(attached_dpi), 96) &&
-                  aligned_overlay.bottom - aligned_overlay.top ==
-                      MulDiv(84, static_cast<int>(attached_dpi), 96),
-              "attached overlay dimensions should use the target monitor DPI")) {
+  if (!expect(
+          aligned_overlay.right - aligned_overlay.left ==
+                  MulDiv(90, static_cast<int>(attached_dpi), 96) &&
+              aligned_overlay.bottom - aligned_overlay.top ==
+                  MulDiv(84, static_cast<int>(attached_dpi), 96),
+          "attached overlay dimensions should use the target monitor DPI")) {
     return 1;
   }
   if (!rectangles_near(aligned_overlay, expected_overlay, 2)) {
     std::cerr << "alignment actual=" << aligned_overlay.left << ','
               << aligned_overlay.top << ',' << aligned_overlay.right << ','
-              << aligned_overlay.bottom << " expected="
-              << expected_overlay.left << ',' << expected_overlay.top << ','
-              << expected_overlay.right << ',' << expected_overlay.bottom
-              << '\n';
+              << aligned_overlay.bottom << " expected=" << expected_overlay.left
+              << ',' << expected_overlay.top << ',' << expected_overlay.right
+              << ',' << expected_overlay.bottom << '\n';
   }
   if (!expect(rectangles_near(aligned_overlay, expected_overlay, 2),
-              "overlay anchors should remain aligned within two pixels after target move and resize")) {
+              "overlay anchors should remain aligned within two pixels after "
+              "target move and resize")) {
     return 1;
   }
 
   bool drag_reported{};
   bool drag_final{};
   double dragged_x{};
-  overlay.set_edit_mode(
-      true, true, true,
-      [&](const std::string_view panel_id, const double anchor_x,
-          const double, const bool final) {
-        drag_reported = panel_id == "main";
-        drag_final = final;
-        dragged_x = anchor_x;
-      });
+  overlay.set_edit_mode(true, true, true,
+                        [&](const std::string_view panel_id,
+                            const double anchor_x, const double,
+                            const bool final) {
+                          drag_reported = panel_id == "main";
+                          drag_final = final;
+                          dragged_x = anchor_x;
+                        });
   const auto direct_style = GetWindowLongPtrW(overlay_window, GWL_EXSTYLE);
   if (!expect((direct_style & WS_EX_TRANSPARENT) == 0 &&
                   (direct_style & WS_EX_NOACTIVATE) != 0,
-              "direct edit should remove transparency only while remaining non-activating")) {
+              "direct edit should remove transparency only while remaining "
+              "non-activating")) {
     return 1;
   }
 
   const HWND unrelated = CreateWindowExW(
       WS_EX_TOOLWINDOW, L"STATIC", L"LayerC overlay z-order test",
-      WS_OVERLAPPEDWINDOW | WS_VISIBLE, work_area.left + 80,
-      work_area.top + 80, 480, 320, nullptr, nullptr,
-      GetModuleHandleW(nullptr), nullptr);
+      WS_OVERLAPPEDWINDOW | WS_VISIBLE, work_area.left + 80, work_area.top + 80,
+      480, 320, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
   if (!expect(unrelated != nullptr,
               "an unrelated foreground window should be available")) {
     return 1;
@@ -322,8 +327,9 @@ int wmain(const int argc, wchar_t *argv[]) {
                480, 320, SWP_SHOWWINDOW);
   SetForegroundWindow(unrelated);
   overlay.show_for(target_window);
-  if (!expect(window_is_above(unrelated, overlay_window),
-              "a background edit overlay should remain below unrelated windows")) {
+  if (!expect(
+          window_is_above(unrelated, overlay_window),
+          "a background edit overlay should remain below unrelated windows")) {
     DestroyWindow(unrelated);
     return 1;
   }
@@ -354,7 +360,8 @@ int wmain(const int argc, wchar_t *argv[]) {
   SendMessageW(overlay_window, WM_MOUSEMOVE, MK_LBUTTON,
                MAKELPARAM(capture_x + 12, capture_y));
   SendMessageW(overlay_window, WM_CAPTURECHANGED, 0, 0);
-  if (GetCapture() == overlay_window) ReleaseCapture();
+  if (GetCapture() == overlay_window)
+    ReleaseCapture();
   if (!expect(drag_reported && drag_final,
               "capture loss should finalize an in-progress direct drag")) {
     return 1;

@@ -15,7 +15,9 @@ See [PLAN.md](PLAN.md) for the product and release plan.
 Requirements:
 
 - Windows 10 22H2 or Windows 11
-- Visual Studio 2026 with the Desktop C++ workload
+- Visual Studio 2026 with the Desktop C++ workload; the optional Game Bar
+  package also requires **Universal Windows Platform tools** and
+  **C++ Universal Windows Platform tools (Latest MSVC)**
 - CMake 3.28 or newer
 
 LayerD and LayerE are both native Win32 C++ applications. LayerE has no Qt or
@@ -29,6 +31,17 @@ cmake --build --preset vs2026-release
 ctest --preset vs2026-release
 cmake --install build/vs2026 --config Release --prefix out/layerc
 ```
+
+The optional full Game Bar package restores the pinned
+`Microsoft.Windows.CppWinRT` and `Microsoft.Gaming.XboxGameBar` NuGet build
+packages, builds the UWP XAML host, stages all five executables, the SDK
+runtime/metadata, and the x64 desktop VC runtime, then validates an unsigned MSIX:
+
+```powershell
+cmake --build --preset vs2026-release --target layerc_gamebar_msix
+```
+
+The normal install/portable ZIP remains desktop-only.
 
 The install step stages the four production programs, `layerd.exe`,
 `layere.exe`, `layercal.exe`, and the demand-launched `layerworker.exe`, plus
@@ -45,7 +58,7 @@ cmake --workflow --preset vs2026-release
 
 This workflow uses CMake's native Workflow and Package Presets. It configures,
 builds, tests, installs to `out\layerc`, and emits the versioned portable ZIP
-`build\vs2026\LayerC-2.3.0-windows-x64.zip`. A future Linux configure preset can
+`build\vs2026\LayerC-2.4.0-windows-x64.zip`. A future Linux configure preset can
 reuse the same build, test, install, and package structure without requiring a
 platform-specific orchestration script. Close LayerE and LayerD first on
 Windows so their executable files are not locked during the build or install.
@@ -72,6 +85,34 @@ The test targets have separate jobs:
   conflicts, path limits, and recoverable transactions.
 - `layerc_isolated_visual_tests` validates the helper handshake, package and
   protocol pinning, message bounds, sequence ordering, and timestamp freshness.
+- `layerc_companion_tests` covers companion sidecars, bounded snapshot
+  serialization/catalog/preferences, stale expiry, package identity, and the
+  unpackaged no-resource path.
+
+## V2.4 optional Xbox Game Bar companion (work in progress)
+
+The separate full MSIX now implements the real Xbox Game Bar activation path:
+eight standard panel widgets and one settings widget are registered through the
+official SDK. Game Bar launches a UWP C++/WinRT XAML host, which starts the
+packaged single-instance LayerD full-trust process. LayerD remains authoritative
+and exchanges bounded immutable snapshots and validated presentation
+preferences over the same-package `LayerC.GameBar.v1` App Service. Portable
+LayerD allocates no Game Bar service.
+
+Panel widgets render cooldown progress, remaining time, and charges; honor Game
+Bar theme, opacity, compact mode, pinning and click-through state; and hide
+snapshots after two seconds without an update. The settings widget maps all
+eight slots to the current profile's bounded panel catalog and atomically saves
+click-through/opacity preferences into `_companion` through LayerD. Runtime
+Diagnostics includes `gameBarTransport.connected` and `lastError`.
+
+An earlier loose package was registered and smoke-tested with `lctest`
+(`Main`/`Dash` plus all eight settings controls). Fresh x64 MSVC, MinGW,
+portable-ZIP, and unsigned full-MSIX artifacts now build cleanly and all 9 CTest
+suites pass. V2.4 remains unreleased: the fresh package still needs the runtime
+restart/UI/resource/fullscreen matrix, the V1.1 Low/Balanced private-byte gate
+is still over budget, discrete-GPU evidence is outstanding, and the official
+MSIX requires the external release certificate.
 
 ## V2.2 modular runtime (foundation retained in V2.3)
 
@@ -221,7 +262,7 @@ cmake --workflow --preset mingw-ninja
 
 This build needs the matching MinGW GCC runtime DLLs at deployment time unless that toolchain is configured for static runtimes; it does not need Qt.
 
-## Visual recognition (V1.1 through V2.3.0)
+## Visual recognition (V1.1 through V2.4.0)
 
 Visual recognition is opt-in per cooldown. Choose **Calibrate** in LayerE,
 select a matching game window, draw a normalized region, and configure one of

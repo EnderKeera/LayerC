@@ -56,6 +56,10 @@ private:
   bool connect_client();
   bool authenticate_server();
   bool authenticate_client();
+  bool verify_peer_identity(DWORD peer_pid, const wchar_t *sibling_image,
+                            std::wstring_view session_error,
+                            std::wstring_view authenticate_error,
+                            std::wstring_view untrusted_error);
   void complete_connection();
   void start_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void continue_write();

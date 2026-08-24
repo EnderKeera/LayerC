@@ -179,81 +179,126 @@ void EditorWindow::reset_appearance(const HWND window) {
     MessageBoxW(window, L"Could not reset this appearance override.", L"LayerE", MB_OK | MB_ICONWARNING);
     return;
   }
-  refresh_theme(); refresh_appearance_controls(window);
+  refresh_theme();
+  refresh_appearance_controls(window);
 }
 
-
-LRESULT EditorWindow::handle_options_message(const HWND window, const UINT message,
-                                             const WPARAM wparam, const LPARAM lparam) {
+LRESULT EditorWindow::handle_options_message(const HWND window,
+                                             const UINT message,
+                                             const WPARAM wparam,
+                                             const LPARAM lparam) {
   switch (message) {
-  case WM_COMMAND:
-    if ((LOWORD(wparam) == IDC_CAPTURE_PRIVACY ||
-         LOWORD(wparam) == IDC_VISUAL_MASTER) &&
+  case WM_COMMAND: {
+    const int id = LOWORD(wparam);
+    if ((id == IDC_CAPTURE_PRIVACY || id == IDC_VISUAL_MASTER) &&
         HIWORD(wparam) == BN_CLICKED) {
-      InvalidateRect(GetDlgItem(window, LOWORD(wparam)), nullptr, TRUE); return TRUE;
+      InvalidateRect(GetDlgItem(window, id), nullptr, TRUE);
+      return TRUE;
     }
-    if (LOWORD(wparam) == IDC_OPEN_APPEARANCE) {
-      DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_APPEARANCE), window, &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_appearance,
-                                          &EditorWindow::handle_appearance_message>,
-                      reinterpret_cast<LPARAM>(this));
-      refresh_theme(); return TRUE;
+    if (id == IDC_OPEN_APPEARANCE) {
+      DialogBoxParamW(
+          instance_, MAKEINTRESOURCEW(IDD_APPEARANCE), window,
+          &dispatch_member_dialog<
+              EditorWindow, &EditorWindow::initialize_appearance,
+              &EditorWindow::handle_appearance_message>,
+          reinterpret_cast<LPARAM>(this));
+      refresh_theme();
+      return TRUE;
     }
-    if (LOWORD(wparam) == IDC_OPTIONS_APPLY) { apply_options(window); return TRUE; }
-    if (LOWORD(wparam) == IDCANCEL) { EndDialog(window, IDCANCEL); return TRUE; }
-    break;
-  case WM_DRAWITEM: {
-    const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
-    if (draw->CtlType == ODT_LISTBOX) { draw_list_box_item(*draw); return TRUE; }
-    if (draw->CtlType == ODT_BUTTON) {
-      if (draw->CtlID == IDC_CAPTURE_PRIVACY ||
-          draw->CtlID == IDC_VISUAL_MASTER) draw_checkbox(*draw);
-      else draw_button(*draw, layerc::platform::EditorControlRole::button);
+    if (id == IDC_OPTIONS_APPLY) {
+      apply_options(window);
+      return TRUE;
+    }
+    if (id == IDCANCEL) {
+      EndDialog(window, IDCANCEL);
       return TRUE;
     }
     break;
   }
-  case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
+  case WM_DRAWITEM: {
+    const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
+    if (draw->CtlType == ODT_LISTBOX) {
+      draw_list_box_item(*draw);
+      return TRUE;
+    }
+    if (draw->CtlType == ODT_BUTTON) {
+      if (draw->CtlID == IDC_CAPTURE_PRIVACY ||
+          draw->CtlID == IDC_VISUAL_MASTER)
+        draw_checkbox(*draw);
+      else
+        draw_button(*draw, layerc::platform::EditorControlRole::button);
+      return TRUE;
+    }
+    break;
+  }
+  case WM_CTLCOLORSTATIC:
+  case WM_CTLCOLOREDIT:
+  case WM_CTLCOLORLISTBOX:
     return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND: { RECT client{}; GetClientRect(window, &client); FillRect(reinterpret_cast<HDC>(wparam), &client,
-    brush(layerc::platform::EditorControlRole::window)); return TRUE; }
-  default: break;
+  case WM_ERASEBKGND:
+    return erase_dialog_background(window, wparam);
+  default:
+    break;
   }
   return FALSE;
 }
 
-LRESULT EditorWindow::handle_appearance_message(const HWND window, const UINT message,
-                                                const WPARAM wparam, const LPARAM lparam) {
+LRESULT EditorWindow::handle_appearance_message(const HWND window,
+                                                const UINT message,
+                                                const WPARAM wparam,
+                                                const LPARAM lparam) {
   switch (message) {
   case WM_COMMAND: {
     const int id = LOWORD(wparam);
-    if (id == IDC_APPEARANCE_TREE && HIWORD(wparam) == LBN_SELCHANGE) { refresh_appearance_controls(window); return TRUE; }
-    for (const auto &entry : appearance_fields)
+    if (id == IDC_APPEARANCE_TREE && HIWORD(wparam) == LBN_SELCHANGE) {
+      refresh_appearance_controls(window);
+      return TRUE;
+    }
+    for (const auto &entry : appearance_fields) {
       if (id == entry.control) {
         choose_appearance_color(window, entry.field);
         return TRUE;
       }
-    if (id == IDC_APPEARANCE_RESET) { reset_appearance(window); return TRUE; }
-    if (id == IDOK || id == IDCANCEL) { EndDialog(window, id); return TRUE; }
+    }
+    if (id == IDC_APPEARANCE_RESET) {
+      reset_appearance(window);
+      return TRUE;
+    }
+    if (id == IDOK || id == IDCANCEL) {
+      EndDialog(window, id);
+      return TRUE;
+    }
     break;
   }
   case WM_DRAWITEM: {
     const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
-    if (draw->CtlType == ODT_LISTBOX) { draw_list_box_item(*draw); return TRUE; }
-    if (draw->CtlID == IDC_APPEARANCE_PREVIEW) { draw_appearance_preview(*draw, window); return TRUE; }
+    if (draw->CtlType == ODT_LISTBOX) {
+      draw_list_box_item(*draw);
+      return TRUE;
+    }
+    if (draw->CtlID == IDC_APPEARANCE_PREVIEW) {
+      draw_appearance_preview(*draw, window);
+      return TRUE;
+    }
     if (draw->CtlType == ODT_BUTTON) {
       std::optional<COLORREF> fill;
-      for (const auto &entry : appearance_fields)
+      for (const auto &entry : appearance_fields) {
         if (static_cast<int>(draw->CtlID) == entry.control)
           fill = appearance_color(window, entry.field);
-      draw_button(*draw, layerc::platform::EditorControlRole::button, fill); return TRUE;
+      }
+      draw_button(*draw, layerc::platform::EditorControlRole::button, fill);
+      return TRUE;
     }
     break;
   }
-  case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
+  case WM_CTLCOLORSTATIC:
+  case WM_CTLCOLOREDIT:
+  case WM_CTLCOLORLISTBOX:
     return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND: { RECT client{}; GetClientRect(window, &client); FillRect(reinterpret_cast<HDC>(wparam), &client,
-    brush(layerc::platform::EditorControlRole::window)); return TRUE; }
-  default: break;
+  case WM_ERASEBKGND:
+    return erase_dialog_background(window, wparam);
+  default:
+    break;
   }
   return FALSE;
 }

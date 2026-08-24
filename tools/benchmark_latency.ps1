@@ -37,14 +37,68 @@ using System.Runtime.InteropServices;
 public static class LayerCLatencyNative {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)]
     public static extern IntPtr FindWindow(string className, string title);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
 }
 '@
 }
 
+function Set-BenchmarkForeground(
+    [Diagnostics.Process]$Target,
+    [object]$Activator) {
+    $Target.Refresh()
+    $window = $Target.MainWindowHandle
+    if ($window -eq [IntPtr]::Zero) { return $false }
+
+    [void][LayerCLatencyNative]::ShowWindowAsync($window, 9)
+    [void]$Activator.AppActivate($Target.Id)
+
+    $currentThread = [LayerCLatencyNative]::GetCurrentThreadId()
+    $foreground = [LayerCLatencyNative]::GetForegroundWindow()
+    [uint32]$ignoredProcess = 0
+    $foregroundThread = if ($foreground -ne [IntPtr]::Zero) {
+        [LayerCLatencyNative]::GetWindowThreadProcessId(
+            $foreground, [ref]$ignoredProcess)
+    } else { 0 }
+    [uint32]$targetProcess = 0
+    $targetThread = [LayerCLatencyNative]::GetWindowThreadProcessId(
+        $window, [ref]$targetProcess)
+
+    $attachedForeground = $foregroundThread -ne 0 -and
+        $foregroundThread -ne $currentThread -and
+        [LayerCLatencyNative]::AttachThreadInput(
+            $currentThread, $foregroundThread, $true)
+    $attachedTarget = $targetThread -ne 0 -and
+        $targetThread -ne $currentThread -and
+        [LayerCLatencyNative]::AttachThreadInput(
+            $currentThread, $targetThread, $true)
+    try {
+        [void][LayerCLatencyNative]::BringWindowToTop($window)
+        [void][LayerCLatencyNative]::SetForegroundWindow($window)
+    } finally {
+        if ($attachedTarget) {
+            [void][LayerCLatencyNative]::AttachThreadInput(
+                $currentThread, $targetThread, $false)
+        }
+        if ($attachedForeground) {
+            [void][LayerCLatencyNative]::AttachThreadInput(
+                $currentThread, $foregroundThread, $false)
+        }
+    }
+
+    $foregroundRoot = [LayerCLatencyNative]::GetAncestor(
+        [LayerCLatencyNative]::GetForegroundWindow(), 2)
+    $targetRoot = [LayerCLatencyNative]::GetAncestor($window, 2)
+    return $foregroundRoot -eq $targetRoot
+}
 function Send-TriggerChord {
     $scanCode = 0x0008 # KEYEVENTF_SCANCODE
     $keyUp = 0x0002
@@ -70,13 +124,12 @@ function Measure-Version([string]$BuildDirectory, [Diagnostics.Process]$Game) {
         for ($attempt = 0; $attempt -lt 80; ++$attempt) {
             if ($daemon.HasExited) { throw "LayerD exited with code $($daemon.ExitCode)." }
             $Game.Refresh()
-            [void][LayerCLatencyNative]::ShowWindowAsync($Game.MainWindowHandle, 9)
-            [void]$activator.AppActivate($Game.Id)
-            [void][LayerCLatencyNative]::SetForegroundWindow($Game.MainWindowHandle)
+            $foreground = Set-BenchmarkForeground $Game $activator
             # Overlay HWNDs are created lazily on the first visible cooldown.
             # Warm the real Raw Input path after giving profile/window matching
             # time to settle; the timed samples below begin only after it hides.
-            if ($attempt -ge 10 -and ($attempt % 5) -eq 0) {
+            if ($foreground -and $attempt -ge 10 -and
+                    ($attempt % 5) -eq 0) {
                 Send-TriggerChord
             }
             $overlay = [LayerCLatencyNative]::FindWindow('LayerDOverlayWindow', 'LayerD Overlay')
@@ -93,8 +146,9 @@ function Measure-Version([string]$BuildDirectory, [Diagnostics.Process]$Game) {
             if ([LayerCLatencyNative]::IsWindowVisible($overlay)) {
                 throw 'Overlay did not return to its ready-hidden state.'
             }
-            [void]$activator.AppActivate($Game.Id)
-            [void][LayerCLatencyNative]::SetForegroundWindow($Game.MainWindowHandle)
+            if (-not (Set-BenchmarkForeground $Game $activator)) {
+                throw 'Benchmark sample interrupted: lctest lost foreground.'
+            }
             $clock = [Diagnostics.Stopwatch]::StartNew()
             Send-TriggerChord
             while (-not [LayerCLatencyNative]::IsWindowVisible($overlay) -and

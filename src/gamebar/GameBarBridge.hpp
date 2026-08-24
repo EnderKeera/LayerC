@@ -8,8 +8,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 namespace layerc::gamebar {
 
@@ -35,11 +33,10 @@ public:
   void update_snapshot(layerc::core::CompanionSessionSnapshot snapshot);
   void clear_snapshot() noexcept;
   [[nodiscard]] std::optional<layerc::core::CompanionSessionSnapshot>
-  latest_snapshot(layerc::core::TimePoint now =
-                      layerc::core::MonotonicClock::now()) const;
-  [[nodiscard]] std::optional<std::string>
-  latest_snapshot_json(layerc::core::TimePoint now =
-                           layerc::core::MonotonicClock::now()) const;
+  latest_snapshot(
+      layerc::core::TimePoint now = layerc::core::MonotonicClock::now()) const;
+  [[nodiscard]] std::optional<std::string> latest_snapshot_json(
+      layerc::core::TimePoint now = layerc::core::MonotonicClock::now()) const;
 
   // Stale data cutoff is 2.0 seconds per V2.4 specification
   static constexpr std::chrono::milliseconds stale_timeout{2000};

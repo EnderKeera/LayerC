@@ -1,11 +1,11 @@
-#include "editor_window.hpp"
 #include "editor_resource.h"
+#include "editor_window.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cstdint>
-
 #include <commctrl.h>
+#include <cstdint>
+#include <cstring>
 #include <dwmapi.h>
 #include <uxtheme.h>
 #include <windows.h>
@@ -22,7 +22,8 @@ ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
 }
 
 void set_owner_draw_checkbox(const HWND control, const bool checked) {
-  if (control == nullptr) return;
+  if (control == nullptr)
+    return;
   SendMessageW(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
   InvalidateRect(control, nullptr, TRUE);
 }
@@ -50,8 +51,7 @@ constexpr ThemeBase plum{0x211E29, 0x312B3C, 0x282231, 0x5A506B,
                          0xECE7F1, 0xB0A7BC, 0xB382E2};
 
 COLORREF color_ref(const std::uint32_t color) {
-  return RGB((color >> 16U) & 0xFFU, (color >> 8U) & 0xFFU,
-             color & 0xFFU);
+  return RGB((color >> 16U) & 0xFFU, (color >> 8U) & 0xFFU, color & 0xFFU);
 }
 
 std::uint32_t rgb_value(const COLORREF color) {
@@ -120,15 +120,20 @@ RoleColors resolved_colors(const layerc::platform::EditorTheme theme,
                            const layerc::platform::EditorControlRole role) {
   auto colors = default_colors(theme, accent, role);
   const auto overrides = layerc::platform::editor_appearance_overrides(role);
-  if ((overrides.fields & layerc::platform::editor_fill) != 0) colors.fill = color_ref(overrides.fill);
-  if ((overrides.fields & layerc::platform::editor_text) != 0) colors.text = color_ref(overrides.text);
-  if ((overrides.fields & layerc::platform::editor_border) != 0) colors.border = color_ref(overrides.border);
-  if ((overrides.fields & layerc::platform::editor_hover) != 0) colors.hover = color_ref(overrides.hover);
-  if ((overrides.fields & layerc::platform::editor_selection) != 0) colors.selection = color_ref(overrides.selection);
-  if ((overrides.fields & layerc::platform::editor_disabled) != 0) colors.disabled = color_ref(overrides.disabled);
+  if ((overrides.fields & layerc::platform::editor_fill) != 0)
+    colors.fill = color_ref(overrides.fill);
+  if ((overrides.fields & layerc::platform::editor_text) != 0)
+    colors.text = color_ref(overrides.text);
+  if ((overrides.fields & layerc::platform::editor_border) != 0)
+    colors.border = color_ref(overrides.border);
+  if ((overrides.fields & layerc::platform::editor_hover) != 0)
+    colors.hover = color_ref(overrides.hover);
+  if ((overrides.fields & layerc::platform::editor_selection) != 0)
+    colors.selection = color_ref(overrides.selection);
+  if ((overrides.fields & layerc::platform::editor_disabled) != 0)
+    colors.disabled = color_ref(overrides.disabled);
   return colors;
 }
-
 
 enum class PreferredAppMode : int {
   default_mode,
@@ -140,23 +145,38 @@ enum class PreferredAppMode : int {
 
 HMODULE uxtheme_module() {
   static const HMODULE module = [] {
-    HMODULE loaded = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE loaded =
+        LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     return loaded != nullptr ? loaded : LoadLibraryW(L"uxtheme.dll");
   }();
   return module;
 }
 
+namespace {
+
+template <typename Function>
+Function uxtheme_function(const HMODULE module, const LPCSTR ordinal) {
+  const FARPROC procedure = GetProcAddress(module, ordinal);
+  static_assert(sizeof(Function) == sizeof(procedure));
+  Function function{};
+  std::memcpy(&function, &procedure, sizeof(function));
+  return function;
+}
+
+} // namespace
+
 void enable_native_dark_mode() {
   const HMODULE module = uxtheme_module();
-  if (module == nullptr) return;
+  if (module == nullptr)
+    return;
   using SetPreferredAppMode = PreferredAppMode(WINAPI *)(PreferredAppMode);
   using FlushMenuThemes = void(WINAPI *)();
-  if (const auto set_mode = reinterpret_cast<SetPreferredAppMode>(
-          GetProcAddress(module, MAKEINTRESOURCEA(135)));
+  if (const auto set_mode =
+          uxtheme_function<SetPreferredAppMode>(module, MAKEINTRESOURCEA(135));
       set_mode != nullptr)
     (void)set_mode(PreferredAppMode::allow_dark);
-  if (const auto flush = reinterpret_cast<FlushMenuThemes>(
-          GetProcAddress(module, MAKEINTRESOURCEA(136)));
+  if (const auto flush =
+          uxtheme_function<FlushMenuThemes>(module, MAKEINTRESOURCEA(136));
       flush != nullptr)
     flush();
 }
@@ -164,33 +184,34 @@ void enable_native_dark_mode() {
 void set_dark_title_bar(const HWND window) {
   if (const HMODULE module = uxtheme_module(); module != nullptr) {
     using AllowDarkModeForWindow = BOOL(WINAPI *)(HWND, BOOL);
-    if (const auto allow = reinterpret_cast<AllowDarkModeForWindow>(
-            GetProcAddress(module, MAKEINTRESOURCEA(133)));
+    if (const auto allow = uxtheme_function<AllowDarkModeForWindow>(
+            module, MAKEINTRESOURCEA(133));
         allow != nullptr)
       (void)allow(window, TRUE);
   }
   SetWindowTheme(window, L"DarkMode_Explorer", nullptr);
   const BOOL enabled = TRUE;
-  (void)DwmSetWindowAttribute(window, dark_title_bar_attribute, &enabled, sizeof(enabled));
+  (void)DwmSetWindowAttribute(window, dark_title_bar_attribute, &enabled,
+                              sizeof(enabled));
 }
-
 
 void style_native_dialog_children(const HWND dialog, const HFONT font) {
   for (HWND child = GetWindow(dialog, GW_CHILD); child != nullptr;
        child = GetWindow(child, GW_HWNDNEXT)) {
     SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     std::array<wchar_t, 64> class_name{};
-    GetClassNameW(child, class_name.data(), static_cast<int>(class_name.size()));
+    GetClassNameW(child, class_name.data(),
+                  static_cast<int>(class_name.size()));
     if (wcscmp(class_name.data(), L"Button") == 0) {
       const auto style = GetWindowLongPtrW(child, GWL_STYLE);
       const auto button_type = style & static_cast<LONG_PTR>(BS_TYPEMASK);
       if (button_type == BS_PUSHBUTTON) {
-        SetWindowLongPtrW(
-            child, GWL_STYLE,
-            (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) | BS_OWNERDRAW);
+        SetWindowLongPtrW(child, GWL_STYLE,
+                          (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) |
+                              BS_OWNERDRAW);
         SetWindowPos(child, nullptr, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                         SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                         SWP_FRAMECHANGED);
       } else {
         // Keep BS_DEFPUSHBUTTON and the native auto-check/radio styles.  The
         // dialog manager relies on those type bits for Enter, Space, and
@@ -205,7 +226,8 @@ void style_native_dialog_children(const HWND dialog, const HFONT font) {
                         style | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS);
       const UINT dpi = GetDpiForWindow(dialog);
       SendMessageW(child, LB_SETITEMHEIGHT, 0,
-                   static_cast<LPARAM>(MulDiv(18, dpi == 0 ? 96 : static_cast<int>(dpi), 96)));
+                   static_cast<LPARAM>(
+                       MulDiv(18, dpi == 0 ? 96 : static_cast<int>(dpi), 96)));
       SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
     } else if (wcscmp(class_name.data(), L"Edit") == 0 ||
                wcscmp(class_name.data(), WC_LISTVIEWW) == 0) {
@@ -218,10 +240,13 @@ void EditorWindow::style_dialog_children(const HWND dialog) const {
   style_native_dialog_children(dialog, font_);
 }
 
-void EditorWindow::style_list_view(const HWND list, const bool hide_header) const {
-  if (list == nullptr) return;
+void EditorWindow::style_list_view(const HWND list,
+                                   const bool hide_header) const {
+  if (list == nullptr)
+    return;
   auto style = GetWindowLongPtrW(list, GWL_STYLE);
-  if (hide_header) style |= LVS_NOCOLUMNHEADER;
+  if (hide_header)
+    style |= LVS_NOCOLUMNHEADER;
   SetWindowLongPtrW(list, GWL_STYLE, style);
   const auto list_colors = colors(layerc::platform::EditorControlRole::list);
   ListView_SetBkColor(list, list_colors.fill);
@@ -231,15 +256,18 @@ void EditorWindow::style_list_view(const HWND list, const bool hide_header) cons
   if (const HWND header = ListView_GetHeader(list); header != nullptr)
     SetWindowTheme(header, L"DarkMode_ItemsView", nullptr);
   SetWindowPos(list, nullptr, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
 }
 
 void EditorWindow::rebuild_profile_check_hit_images() {
-  if (profile_list_ == nullptr) return;
+  if (profile_list_ == nullptr)
+    return;
   const auto metrics = profile_checkbox_metrics(GetDpiForWindow(profile_list_));
   const HIMAGELIST images = ImageList_Create(
       metrics.image_size, metrics.image_size, ILC_COLOR32 | ILC_MASK, 2, 0);
-  if (images == nullptr) return;
+  if (images == nullptr)
+    return;
 
   // LVS_EX_CHECKBOXES uses the state-image dimensions for hit testing even
   // when LVS_OWNERDRAWFIXED paints the row. Keep transparent state images for
@@ -249,7 +277,8 @@ void EditorWindow::rebuild_profile_check_hit_images() {
   if (transparent == nullptr ||
       ImageList_AddMasked(images, transparent, RGB(0, 0, 0)) < 0 ||
       ImageList_AddMasked(images, transparent, RGB(0, 0, 0)) < 0) {
-    if (transparent != nullptr) DeleteObject(transparent);
+    if (transparent != nullptr)
+      DeleteObject(transparent);
     ImageList_Destroy(images);
     return;
   }
@@ -262,11 +291,14 @@ void EditorWindow::rebuild_profile_check_hit_images() {
 }
 void EditorWindow::rebuild_brushes() {
   for (auto &brush_value : brushes_) {
-    if (brush_value != nullptr) DeleteObject(brush_value);
+    if (brush_value != nullptr)
+      DeleteObject(brush_value);
     brush_value = nullptr;
   }
   for (std::uint32_t index = 0;
-       index < static_cast<std::uint32_t>(layerc::platform::EditorControlRole::count); ++index) {
+       index <
+       static_cast<std::uint32_t>(layerc::platform::EditorControlRole::count);
+       ++index) {
     const auto role = static_cast<layerc::platform::EditorControlRole>(index);
     brushes_[index] = CreateSolidBrush(colors(role).fill);
   }
@@ -280,12 +312,16 @@ void EditorWindow::refresh_theme() {
   if (dialog_ != nullptr) {
     DrawMenuBar(dialog_);
     InvalidateRect(dialog_, nullptr, TRUE);
-    EnumChildWindows(dialog_, [](HWND child, LPARAM) -> BOOL {
-      InvalidateRect(child, nullptr, TRUE); return TRUE;
-    }, 0);
+    EnumChildWindows(
+        dialog_,
+        [](HWND child, LPARAM) -> BOOL {
+          InvalidateRect(child, nullptr, TRUE);
+          return TRUE;
+        },
+        0);
   }
-  if (task_dialog_ != nullptr) InvalidateRect(task_dialog_, nullptr, TRUE);
+  if (task_dialog_ != nullptr)
+    InvalidateRect(task_dialog_, nullptr, TRUE);
 }
-
 
 } // namespace layerc::editor

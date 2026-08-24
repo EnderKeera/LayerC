@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <LayerCNuGetRoot Condition="'$(LayerCNuGetRoot)'==''">$(MSBuildProjectDirectory)\packages</LayerCNuGetRoot>
+  </PropertyGroup>
+  <Import Project="$(LayerCNuGetRoot)\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.props"
+          Condition="Exists('$(LayerCNuGetRoot)\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.props')" />
+  <PropertyGroup Label="Globals">
+    <CppWinRTOptimized>true</CppWinRTOptimized>
+    <CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
+    <ProjectGuid>{77159265-1572-4C91-8A87-E0DE5BF33D35}</ProjectGuid>
+    <ProjectName>LayerC.GameBar</ProjectName>
+    <RootNamespace>LayerC.GameBar</RootNamespace>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <MinimumVisualStudioVersion>18.0</MinimumVisualStudioVersion>
+    <AppContainerApplication>true</AppContainerApplication>
+    <ApplicationType>Windows Store</ApplicationType>
+    <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
+    <TargetPlatformVersion>10.0.26100.0</TargetPlatformVersion>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
+            Condition="Exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')"
+            Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetName>layerc-gamebar</TargetName>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
+    <AppxBundle>Never</AppxBundle>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GeneratedFilesDir>$(IntDir)Generated Files\</GeneratedFilesDir>
+    <!-- The final full package is validated by makeappx after desktop payload
+         staging; this project builds only the UWP widget payload. -->
+    <SkipAppxManifestValidation>true</SkipAppxManifestValidation>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
+      <WarningLevel>Level4</WarningLevel>
+      <MultiProcessorCompilation>false</MultiProcessorCompilation>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\..\..\core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/utf-8 /bigobj /DWINRT_NO_MAKE_DETECTION %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>OneCore.lib;WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile><PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <Link><GenerateDebugInformation>DebugFull</GenerateDebugInformation></Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile><PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <SDKReference Include="WindowsDesktop, Version=$(TargetPlatformVersion)">
+      <Name>Windows Desktop Extensions for the UWP</Name>
+    </SDKReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="pch.h" />
+    <ClInclude Include="App.h"><DependentUpon>App.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="PanelWidgetPage.h"><DependentUpon>PanelWidgetPage.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="SettingsWidgetPage.h"><DependentUpon>SettingsWidgetPage.xaml</DependentUpon></ClInclude>
+    <ClInclude Include="WidgetSnapshotHub.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ApplicationDefinition Include="App.xaml"><SubType>Designer</SubType></ApplicationDefinition>
+    <Page Include="PanelWidgetPage.xaml"><SubType>Designer</SubType></Page>
+    <Page Include="SettingsWidgetPage.xaml"><SubType>Designer</SubType></Page>
+  </ItemGroup>
+  <ItemGroup>
+    <AppxManifest Include="..\Package.appxmanifest"><SubType>Designer</SubType></AppxManifest>
+  </ItemGroup>
+  <ItemGroup Condition="'$(LayerCGameBarAsset)'!=''">
+    <Image Include="$(LayerCGameBarAsset)"><Link>Assets\StoreLogo.png</Link></Image>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
+    <ClCompile Include="App.cpp"><DependentUpon>App.xaml</DependentUpon></ClCompile>
+    <ClCompile Include="PanelWidgetPage.cpp"><DependentUpon>PanelWidgetPage.xaml</DependentUpon></ClCompile>
+    <ClCompile Include="SettingsWidgetPage.cpp"><DependentUpon>SettingsWidgetPage.xaml</DependentUpon></ClCompile>
+    <ClCompile Include="WidgetSnapshotHub.cpp" />
+    <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
+    <ClCompile Include="..\..\core\companion.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\..\core\json.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\..\core\json_value.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\..\core\utf8.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Midl Include="App.idl"><DependentUpon>App.xaml</DependentUpon></Midl>
+    <Midl Include="PanelWidgetPage.idl"><DependentUpon>PanelWidgetPage.xaml</DependentUpon></Midl>
+    <Midl Include="SettingsWidgetPage.idl"><DependentUpon>SettingsWidgetPage.xaml</DependentUpon></Midl>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(LayerCNuGetRoot)\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.targets"
+            Condition="Exists('$(LayerCNuGetRoot)\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.targets')" />
+    <Import Project="$(LayerCNuGetRoot)\Microsoft.Gaming.XboxGameBar.7.3.2607010\build\native\Microsoft.Gaming.XboxGameBar.targets"
+            Condition="Exists('$(LayerCNuGetRoot)\Microsoft.Gaming.XboxGameBar.7.3.2607010\build\native\Microsoft.Gaming.XboxGameBar.targets')" />
+  </ImportGroup>
+  <Target Name="EnsureLayerCGameBarPackages" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(LayerCNuGetRoot)\Microsoft.Windows.CppWinRT.3.0.260715.1\build\native\Microsoft.Windows.CppWinRT.targets')"
+           Text="Restore Microsoft.Windows.CppWinRT 3.0.260715.1 before building the Game Bar widget." />
+    <Error Condition="!Exists('$(LayerCNuGetRoot)\Microsoft.Gaming.XboxGameBar.7.3.2607010\build\native\Microsoft.Gaming.XboxGameBar.targets')"
+           Text="Restore Microsoft.Gaming.XboxGameBar 7.3.2607010 before building the Game Bar widget." />
+  </Target>
+</Project>

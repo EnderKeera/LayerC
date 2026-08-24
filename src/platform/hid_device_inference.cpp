@@ -8,16 +8,6 @@
 namespace layerc::platform {
 namespace {
 
-std::int32_t signed_value(ULONG raw, const HIDP_VALUE_CAPS &caps) {
-  if (caps.LogicalMin < 0 && caps.BitSize > 0 && caps.BitSize < 32) {
-    const auto sign = 1U << (caps.BitSize - 1U);
-    const auto mask = (1U << caps.BitSize) - 1U;
-    raw &= mask;
-    if ((raw & sign) != 0U) raw |= ~mask;
-  }
-  return static_cast<std::int32_t>(raw);
-}
-
 layerc::core::HidDeviceSelector selector_for(const HidRawDevice &device) {
   return {.vendor_id = static_cast<std::uint16_t>(device.info.dwVendorId),
           .product_id = static_cast<std::uint16_t>(device.info.dwProductId),
@@ -129,8 +119,8 @@ infer_hid_control(const HidRawDevice &device,
                              preparsed, baseline_data, baseline_size) !=
               HIDP_STATUS_SUCCESS)
         continue;
-      const auto value = signed_value(raw, caps);
-      const auto idle_value = signed_value(baseline_raw, caps);
+      const auto value = detail::signed_hid_value(raw, caps);
+      const auto idle_value = detail::signed_hid_value(baseline_raw, caps);
       if (value == idle_value) continue;
       const double range =
           std::max(1.0, static_cast<double>(caps.LogicalMax) -

@@ -16,23 +16,28 @@
 namespace layerc::editor {
 bool start_daemon() {
   std::array<wchar_t, 32'768> module_path{};
-  const DWORD length = GetModuleFileNameW(nullptr, module_path.data(),
-                                           static_cast<DWORD>(module_path.size()));
-  if (length == 0 || length >= module_path.size()) return false;
-  const auto daemon = std::filesystem::path(std::wstring_view(module_path.data(), length)).parent_path() /
-                      L"layerd.exe";
+  const DWORD length = GetModuleFileNameW(
+      nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+  if (length == 0 || length >= module_path.size())
+    return false;
+  const auto daemon =
+      std::filesystem::path(std::wstring_view(module_path.data(), length))
+          .parent_path() /
+      L"layerd.exe";
   std::wstring command = L"\"" + daemon.wstring() + L"\"";
   std::vector<wchar_t> command_line(command.begin(), command.end());
   command_line.push_back(L'\0');
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   PROCESS_INFORMATION process{};
-  const BOOL created = CreateProcessW(
-      daemon.c_str(), command_line.data(), nullptr, nullptr, FALSE,
-      CREATE_NO_WINDOW, nullptr, daemon.parent_path().c_str(), &startup,
-      &process);
-  if (process.hThread != nullptr) CloseHandle(process.hThread);
-  if (process.hProcess != nullptr) CloseHandle(process.hProcess);
+  const BOOL created =
+      CreateProcessW(daemon.c_str(), command_line.data(), nullptr, nullptr,
+                     FALSE, CREATE_NO_WINDOW, nullptr,
+                     daemon.parent_path().c_str(), &startup, &process);
+  if (process.hThread != nullptr)
+    CloseHandle(process.hThread);
+  if (process.hProcess != nullptr)
+    CloseHandle(process.hProcess);
   return created != FALSE;
 }
 
@@ -70,7 +75,8 @@ bool recycle_profile_bundle(const std::filesystem::path &path) {
     source += candidate.wstring();
     source.push_back(L'\0');
   }
-  if (source.empty()) return false;
+  if (source.empty())
+    return false;
   source.push_back(L'\0');
   SHFILEOPSTRUCTW operation{};
   operation.wFunc = FO_DELETE;
@@ -79,7 +85,8 @@ bool recycle_profile_bundle(const std::filesystem::path &path) {
   return SHFileOperationW(&operation) == 0 && !operation.fAnyOperationsAborted;
 }
 
-std::string safe_identifier(const std::wstring_view text, const std::string_view fallback) {
+std::string safe_identifier(const std::wstring_view text,
+                            const std::string_view fallback) {
   std::string output;
   bool last_dash{};
   for (const wchar_t character : text) {
@@ -87,10 +94,15 @@ std::string safe_identifier(const std::wstring_view text, const std::string_view
                               ? character + (L'a' - L'A')
                               : character;
     if ((lower >= L'a' && lower <= L'z') || (lower >= L'0' && lower <= L'9')) {
-      output.push_back(static_cast<char>(lower)); last_dash = false;
-    } else if (!output.empty() && !last_dash) { output.push_back('-'); last_dash = true; }
+      output.push_back(static_cast<char>(lower));
+      last_dash = false;
+    } else if (!output.empty() && !last_dash) {
+      output.push_back('-');
+      last_dash = true;
+    }
   }
-  while (!output.empty() && output.back() == '-') output.pop_back();
+  while (!output.empty() && output.back() == '-')
+    output.pop_back();
   return output.empty() ? std::string(fallback) : output;
 }
 
@@ -101,12 +113,21 @@ layerc::core::GameProfile make_new_profile() {
   profile.id = "new-profile";
   profile.name = "New Profile";
   profile.enabled = true;
-  profile.cooldowns.push_back({.id = "ability", .name = "Ability", .duration = 5s,
-                               .max_charges = 1, .retrigger = RetriggerPolicy::ignore});
-  profile.panels.push_back({.id = "main", .name = "Main", .style = PanelStyle::bar,
-                            .anchor_x = 0.5, .anchor_y = 0.75, .cooldown_ids = {"ability"}});
-  profile.bindings.push_back({.cooldown_id = "ability",
-                              .chord = InputChord{{{InputDevice::keyboard, 0x12, 0}}}});
+  profile.cooldowns.push_back({.id = "ability",
+                               .name = "Ability",
+                               .duration = 5s,
+                               .max_charges = 1,
+                               .retrigger = RetriggerPolicy::ignore});
+  profile.panels.push_back({.id = "main",
+                            .name = "Main",
+                            .style = PanelStyle::bar,
+                            .bar = {},
+                            .anchor_x = 0.5,
+                            .anchor_y = 0.75,
+                            .cooldown_ids = {"ability"}});
+  profile.bindings.push_back(
+      {.cooldown_id = "ability",
+       .chord = InputChord{{{InputDevice::keyboard, 0x12, 0}}}});
   return profile;
 }
 
@@ -114,14 +135,14 @@ std::wstring profile_list_label(const layerc::core::GameProfile &profile) {
   std::wstring label = to_wide(profile.name);
   if (!profile.game.executable_name.empty())
     label += L"  —  " + to_wide(profile.game.executable_name);
-  if (!profile.enabled) label += L"  (disabled)";
+  if (!profile.enabled)
+    label += L"  (disabled)";
   return label;
 }
 
-std::string unique_panel_id(
-    const std::string_view base,
-    const std::vector<layerc::core::Panel> &existing,
-    const std::vector<layerc::core::Panel> *generated) {
+std::string unique_panel_id(const std::string_view base,
+                            const std::vector<layerc::core::Panel> &existing,
+                            const std::vector<layerc::core::Panel> *generated) {
   const auto is_used = [&](const std::string &candidate) {
     const auto contains = [&](const std::vector<layerc::core::Panel> &panels) {
       return std::any_of(panels.begin(), panels.end(),

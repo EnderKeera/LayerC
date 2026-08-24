@@ -33,6 +33,20 @@ struct InferredHidControl {
   std::wstring description;
 };
 
+namespace detail {
+[[nodiscard]] inline std::int32_t
+signed_hid_value(ULONG raw, const HIDP_VALUE_CAPS &caps) noexcept {
+  if (caps.LogicalMin < 0 && caps.BitSize > 0 && caps.BitSize < 32) {
+    const auto sign = 1U << (caps.BitSize - 1U);
+    const auto mask = (1U << caps.BitSize) - 1U;
+    raw &= mask;
+    if ((raw & sign) != 0U)
+      raw |= ~mask;
+  }
+  return static_cast<std::int32_t>(raw);
+}
+} // namespace detail
+
 [[nodiscard]] std::optional<HidRawDevice>
 load_raw_hid_device(HANDLE handle);
 [[nodiscard]] std::vector<HidRawDevice> enumerate_raw_hid_devices();

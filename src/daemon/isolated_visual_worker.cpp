@@ -32,9 +32,10 @@ std::string random_hex() {
 
 std::filesystem::path sibling_path(const wchar_t *filename) {
   std::array<wchar_t, 32'768> module{};
-  const DWORD length = GetModuleFileNameW(
-      nullptr, module.data(), static_cast<DWORD>(module.size()));
-  if (length == 0 || length >= module.size()) return {};
+  const DWORD length = GetModuleFileNameW(nullptr, module.data(),
+                                          static_cast<DWORD>(module.size()));
+  if (length == 0 || length >= module.size())
+    return {};
   return std::filesystem::path(std::wstring_view(module.data(), length))
              .parent_path() /
          filename;
@@ -103,7 +104,8 @@ IsolatedVisualWorker::IsolatedVisualWorker(const HWND window,
 IsolatedVisualWorker::~IsolatedVisualWorker() { stop(); }
 
 void IsolatedVisualWorker::start() {
-  if (thread_.joinable()) return;
+  if (thread_.joinable())
+    return;
   stopping_.store(false, std::memory_order_release);
   quarantined_.store(false, std::memory_order_release);
   last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
@@ -115,7 +117,8 @@ void IsolatedVisualWorker::stop() noexcept {
   wake_.notify_all();
   terminate_owned_helper(ERROR_OPERATION_ABORTED);
   if (thread_.joinable()) {
-    (void)CancelSynchronousIo(cancellable_thread_handle(thread_.native_handle()));
+    (void)CancelSynchronousIo(
+        cancellable_thread_handle(thread_.native_handle()));
     thread_.join();
   }
   running_.store(false, std::memory_order_release);
@@ -136,7 +139,8 @@ void IsolatedVisualWorker::configure(
   }
   if (changed) {
     wake_.notify_all();
-    if (quarantined_.load(std::memory_order_acquire)) retry();
+    if (quarantined_.load(std::memory_order_acquire))
+      retry();
   }
 }
 
@@ -151,13 +155,15 @@ void IsolatedVisualWorker::set_excluded_screen_rects(
       changed = true;
     }
   }
-  if (changed) wake_.notify_all();
+  if (changed)
+    wake_.notify_all();
 }
 
 void IsolatedVisualWorker::terminate_owned_helper(
     const DWORD exit_code) noexcept {
   std::scoped_lock lock(process_mutex_);
-  if (job_ != nullptr) (void)TerminateJobObject(job_, exit_code);
+  if (job_ != nullptr)
+    (void)TerminateJobObject(job_, exit_code);
   // The process may not have reached AssignProcessToJobObject yet when a
   // foreground transition destroys this worker. Terminate it directly as
   // well so the CREATE_SUSPENDED launch window cannot leak an orphan.
@@ -165,7 +171,8 @@ void IsolatedVisualWorker::terminate_owned_helper(
     (void)TerminateProcess(process_, exit_code);
     (void)WaitForSingleObject(process_, 2'000);
   }
-  if (pipe_ != INVALID_HANDLE_VALUE) (void)CancelIoEx(pipe_, nullptr);
+  if (pipe_ != INVALID_HANDLE_VALUE)
+    (void)CancelIoEx(pipe_, nullptr);
 }
 
 void IsolatedVisualWorker::close_owned_helper_handles() noexcept {
@@ -191,19 +198,23 @@ void IsolatedVisualWorker::maintain() {
       quarantined_.load(std::memory_order_acquire))
     return;
   const auto last = last_progress_ms_.load(std::memory_order_acquire);
-  if (GetTickCount64() - last <= isolated_visual_watchdog_ms) return;
+  if (GetTickCount64() - last <= isolated_visual_watchdog_ms)
+    return;
   {
     const std::scoped_lock lock(mutex_);
     last_error_ = "isolated visual helper made no progress for two seconds";
   }
   terminate_owned_helper(ERROR_TIMEOUT);
   if (thread_.joinable())
-    (void)CancelSynchronousIo(cancellable_thread_handle(thread_.native_handle()));
+    (void)CancelSynchronousIo(
+        cancellable_thread_handle(thread_.native_handle()));
 }
 
 void IsolatedVisualWorker::retry() {
-  if (!quarantined_.load(std::memory_order_acquire)) return;
-  if (thread_.joinable()) thread_.join();
+  if (!quarantined_.load(std::memory_order_acquire))
+    return;
+  if (thread_.joinable())
+    thread_.join();
   fault_count_.store(0, std::memory_order_release);
   quarantined_.store(false, std::memory_order_release);
   {
@@ -242,10 +253,9 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
     error = "could not create isolated helper identity";
     return false;
   }
-  const std::wstring pipe_name =
-      L"\\\\.\\pipe\\LayerC.VisualWorker." +
-      std::to_wstring(GetCurrentProcessId()) + L"." +
-      std::wstring(suffix.begin(), suffix.end());
+  const std::wstring pipe_name = L"\\\\.\\pipe\\LayerC.VisualWorker." +
+                                 std::to_wstring(GetCurrentProcessId()) + L"." +
+                                 std::wstring(suffix.begin(), suffix.end());
 
   PSECURITY_DESCRIPTOR descriptor{};
   if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
@@ -276,10 +286,9 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
     return false;
   }
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-  limits.BasicLimitInformation.LimitFlags =
-      JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-      JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
-      JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+                                            JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
+                                            JOB_OBJECT_LIMIT_PROCESS_MEMORY;
   limits.BasicLimitInformation.ActiveProcessLimit = 1;
   limits.ProcessMemoryLimit = 256ULL * 1024ULL * 1024ULL;
   if (SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits,
@@ -293,16 +302,17 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
   const std::wstring command =
       quoted(helper.wstring()) + L" --pipe=" + quoted(pipe_name) +
       L" --nonce=" + quoted(std::wstring(nonce.begin(), nonce.end())) +
-      L" --parent=" + std::to_wstring(GetCurrentProcessId()) +
-      L" --window=" +
+      L" --parent=" + std::to_wstring(GetCurrentProcessId()) + L" --window=" +
       std::to_wstring(reinterpret_cast<std::uintptr_t>(window_));
   std::vector<wchar_t> mutable_command(command.begin(), command.end());
   mutable_command.push_back(L'\0');
-  STARTUPINFOW startup{.cb = sizeof(STARTUPINFOW)};
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
   PROCESS_INFORMATION process{};
   if (CreateProcessW(helper.c_str(), mutable_command.data(), nullptr, nullptr,
                      FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr,
-                     helper.parent_path().c_str(), &startup, &process) == FALSE) {
+                     helper.parent_path().c_str(), &startup,
+                     &process) == FALSE) {
     CloseHandle(job);
     CloseHandle(pipe);
     error = "could not launch layerworker.exe";
@@ -327,8 +337,8 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
       ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
       ProcessIdToSessionId(process.dwProcessId, &helper_session) != FALSE &&
       current_session == helper_session;
-  if (stopping_.load(std::memory_order_acquire) || !assigned ||
-      !trusted_path || !same_session ||
+  if (stopping_.load(std::memory_order_acquire) || !assigned || !trusted_path ||
+      !same_session ||
       ResumeThread(process.hThread) == static_cast<DWORD>(-1)) {
     terminate_owned_helper(stopping_.load(std::memory_order_acquire)
                                ? ERROR_OPERATION_ABORTED
@@ -359,20 +369,18 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
   if (error.empty()) {
     auto hello = layerc::platform::read_framed_pipe(
         pipe, isolated_visual_max_message_bytes);
-    if (!hello || !validate_isolated_hello(
-                      hello.payload, nonce, "worker", process.dwProcessId,
-                      error)) {
-      if (error.empty()) error = hello.error;
+    if (!hello || !validate_isolated_hello(hello.payload, nonce, "worker",
+                                           process.dwProcessId, error)) {
+      if (error.empty())
+        error = hello.error;
     } else {
       std::string write_error;
       if (!layerc::platform::write_framed_pipe(
-              pipe,
-              isolated_hello_json(nonce, "daemon", GetCurrentProcessId()),
+              pipe, isolated_hello_json(nonce, "daemon", GetCurrentProcessId()),
               isolated_visual_max_message_bytes, write_error))
         error = std::move(write_error);
       else
-        last_progress_ms_.store(GetTickCount64(),
-                                std::memory_order_release);
+        last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
     }
   }
 
@@ -399,9 +407,10 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
       }
       auto reply = layerc::platform::read_framed_pipe(
           pipe, isolated_visual_max_message_bytes);
-      if (!reply || !decode_isolated_ack(reply.payload,
-                                         configuration.sequence, error)) {
-        if (error.empty()) error = reply.error;
+      if (!reply ||
+          !decode_isolated_ack(reply.payload, configuration.sequence, error)) {
+        if (error.empty())
+          error = reply.error;
         break;
       }
       applied_revision = configuration.sequence;
@@ -438,7 +447,8 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
     if (disposition == IsolatedSnapshotDisposition::accepted) {
       const std::scoped_lock lock(mutex_);
       latest_ = std::move(snapshot);
-      if (snapshot_event_ != nullptr) SetEvent(snapshot_event_);
+      if (snapshot_event_ != nullptr)
+        SetEvent(snapshot_event_);
     }
     last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
   }
@@ -451,22 +461,24 @@ void IsolatedVisualWorker::run() {
   running_.store(true, std::memory_order_release);
   while (!stopping_.load(std::memory_order_acquire)) {
     std::string error;
-    if (run_helper(error) || stopping_.load(std::memory_order_acquire)) break;
+    if (run_helper(error) || stopping_.load(std::memory_order_acquire))
+      break;
     {
       const std::scoped_lock lock(mutex_);
       last_error_ = std::move(error);
       latest_ = {};
     }
-    const auto faults = fault_count_.fetch_add(1, std::memory_order_acq_rel) + 1U;
+    const auto faults =
+        fault_count_.fetch_add(1, std::memory_order_acq_rel) + 1U;
     if (faults >= 2) {
       quarantined_.store(true, std::memory_order_release);
-      if (snapshot_event_ != nullptr) SetEvent(snapshot_event_);
+      if (snapshot_event_ != nullptr)
+        SetEvent(snapshot_event_);
       break;
     }
     std::unique_lock lock(mutex_);
-    wake_.wait_for(lock, std::chrono::seconds(1), [&] {
-      return stopping_.load(std::memory_order_acquire);
-    });
+    wake_.wait_for(lock, std::chrono::seconds(1),
+                   [&] { return stopping_.load(std::memory_order_acquire); });
     last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
   }
   running_.store(false, std::memory_order_release);
