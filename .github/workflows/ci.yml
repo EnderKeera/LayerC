@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows-msvc:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@master
+
+      - name: Configure (CI preset)
+        shell: pwsh
+        run: cmake --preset ci
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build --preset ci --parallel
+
+      - name: Test
+        shell: pwsh
+        run: ctest --preset ci --output-on-failure
+
+      - name: Benchmark (CPU-only, optional)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          if (Test-Path tools/benchmark_v23.ps1) { pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci }
+          if (Test-Path tools/benchmark_latency.ps1) { pwsh -File tools/benchmark_latency.ps1 -CandidateBuildDirectory build/ci -BaselineBuildDirectory build/ci }
+
+      - name: Install
+        shell: pwsh
+        run: cmake --build --preset ci-install
+
+      - name: Package (ZIP)
+        shell: pwsh
+        run: |
+          cpack --preset ci --verbose
+          Get-ChildItem -Recurse -Filter *.zip | Select-Object FullName,Length | Format-Table
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: layerc-windows-x64
+          path: |
+            out/layerc/**
+            build/ci/*.zip
+            *.zip
+          if-no-files-found: warn

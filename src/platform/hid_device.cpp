@@ -138,16 +138,6 @@ find_value_caps(const HidRawDevice &device,
   return found == values.end() ? std::nullopt : std::optional(*found);
 }
 
-std::int32_t signed_value(ULONG raw, const HIDP_VALUE_CAPS &caps) {
-  if (caps.LogicalMin < 0 && caps.BitSize > 0 && caps.BitSize < 32) {
-    const auto sign = 1U << (caps.BitSize - 1U);
-    const auto mask = (1U << caps.BitSize) - 1U;
-    raw &= mask;
-    if ((raw & sign) != 0U) raw |= ~mask;
-  }
-  return static_cast<std::int32_t>(raw);
-}
-
 } // namespace
 
 std::optional<HidRawDevice> load_raw_hid_device(const HANDLE handle) {
@@ -308,7 +298,7 @@ layerc::core::HidControlSample sample_hid_control(
     sample.available = false;
     return sample;
   }
-  sample.value = signed_value(raw, *caps);
+  sample.value = detail::signed_hid_value(raw, *caps);
   sample.logical_min = caps->LogicalMin;
   sample.logical_max = caps->LogicalMax;
   sample.relative = caps->IsAbsolute == FALSE;

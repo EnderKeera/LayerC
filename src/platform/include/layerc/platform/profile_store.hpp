@@ -133,6 +133,9 @@ struct AutomationStateLoad {
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values);
 
+[[nodiscard]] bool has_stale_sidecar_markers(
+    const std::filesystem::path &sidecar, std::error_code &out_error) noexcept;
+
 [[nodiscard]] bool signal_profile_reload();
 
 } // namespace layerc::platform

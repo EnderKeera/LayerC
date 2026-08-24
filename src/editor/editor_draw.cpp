@@ -220,14 +220,30 @@ void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw, const HWN
   SelectObject(draw.hDC, previous_font);
 }
 
-LRESULT EditorWindow::color_message(const UINT message, const WPARAM wparam, const LPARAM lparam) const {
-  const HWND control = reinterpret_cast<HWND>(lparam); const HDC dc = reinterpret_cast<HDC>(wparam);
+LRESULT EditorWindow::color_message(const UINT message, const WPARAM wparam,
+                                    const LPARAM lparam) const {
+  const HWND control = reinterpret_cast<HWND>(lparam);
+  const HDC dc = reinterpret_cast<HDC>(wparam);
   auto role = layerc::platform::EditorControlRole::label;
-  if (message == WM_CTLCOLOREDIT) role = layerc::platform::EditorControlRole::edit;
-  else if (message == WM_CTLCOLORLISTBOX) role = layerc::platform::EditorControlRole::list;
-  else if (control == status_) role = layerc::platform::EditorControlRole::status;
-  const auto role_colors = colors(role); SetTextColor(dc, role_colors.text); SetBkColor(dc, role_colors.fill);
+  if (message == WM_CTLCOLOREDIT)
+    role = layerc::platform::EditorControlRole::edit;
+  else if (message == WM_CTLCOLORLISTBOX)
+    role = layerc::platform::EditorControlRole::list;
+  else if (control == status_)
+    role = layerc::platform::EditorControlRole::status;
+  const auto role_colors = colors(role);
+  SetTextColor(dc, role_colors.text);
+  SetBkColor(dc, role_colors.fill);
   return reinterpret_cast<LRESULT>(brush(role));
+}
+
+LRESULT EditorWindow::erase_dialog_background(const HWND window,
+                                              const WPARAM wparam) const {
+  RECT client{};
+  GetClientRect(window, &client);
+  FillRect(reinterpret_cast<HDC>(wparam), &client,
+           brush(layerc::platform::EditorControlRole::window));
+  return TRUE;
 }
 
 } // namespace layerc::editor

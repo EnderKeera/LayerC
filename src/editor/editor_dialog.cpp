@@ -1,10 +1,10 @@
 #include "editor_app.hpp"
-#include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
+#include "editor_window.hpp"
 
+#include "editor_resource.h"
 #include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/windows.hpp"
-#include "editor_resource.h"
 
 #include <algorithm>
 #include <array>
@@ -25,9 +25,10 @@ std::wstring editor_single_instance_name() {
     CloseHandle(token);
     if (queried != FALSE) {
       wchar_t name[96]{};
-      swprintf_s(name, L"Local\\LayerC.LayerE.%08lX%08lX.v1",
-                 static_cast<unsigned long>(statistics.AuthenticationId.HighPart),
-                 static_cast<unsigned long>(statistics.AuthenticationId.LowPart));
+      swprintf_s(
+          name, L"Local\\LayerC.LayerE.%08lX%08lX.v1",
+          static_cast<unsigned long>(statistics.AuthenticationId.HighPart),
+          static_cast<unsigned long>(statistics.AuthenticationId.LowPart));
       return name;
     }
   }
@@ -44,28 +45,32 @@ void raise_existing_editor() {
   EnumWindows(
       [](const HWND window, const LPARAM raw) -> BOOL {
         auto &context = *reinterpret_cast<Context *>(raw);
-        if (GetWindow(window, GW_OWNER) != nullptr) return TRUE;
+        if (GetWindow(window, GW_OWNER) != nullptr)
+          return TRUE;
         std::array<wchar_t, 32> class_name{};
         if (GetClassNameW(window, class_name.data(),
                           static_cast<int>(class_name.size())) == 0)
           return TRUE;
-        if (wcscmp(class_name.data(), L"#32770") != 0) return TRUE;
+        if (wcscmp(class_name.data(), L"#32770") != 0)
+          return TRUE;
         std::array<wchar_t, 32> title{};
-        const int length = GetWindowTextW(
-            window, title.data(), static_cast<int>(title.size()));
-        if (length <= 0 || wcscmp(title.data(), L"LayerE") != 0) return TRUE;
+        const int length = GetWindowTextW(window, title.data(),
+                                          static_cast<int>(title.size()));
+        if (length <= 0 || wcscmp(title.data(), L"LayerE") != 0)
+          return TRUE;
         DWORD process_id{};
         GetWindowThreadProcessId(window, &process_id);
-        if (process_id == 0 ||
-            !layerc::platform::is_sibling_process_image(process_id,
-                                                        L"layere.exe"))
+        if (process_id == 0 || !layerc::platform::is_sibling_process_image(
+                                   process_id, L"layere.exe"))
           return TRUE;
         context.found = window;
         return FALSE;
       },
       reinterpret_cast<LPARAM>(&context));
-  if (context.found == nullptr) return;
-  if (IsIconic(context.found)) ShowWindow(context.found, SW_RESTORE);
+  if (context.found == nullptr)
+    return;
+  if (IsIconic(context.found))
+    ShowWindow(context.found, SW_RESTORE);
   ShowWindow(context.found, SW_SHOW);
   SetForegroundWindow(context.found);
 }
@@ -84,19 +89,22 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   }
   enable_native_dark_mode();
   INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
-                                .dwICC = ICC_LISTVIEW_CLASSES | ICC_WIN95_CLASSES};
+                                .dwICC =
+                                    ICC_LISTVIEW_CLASSES | ICC_WIN95_CLASSES};
   InitCommonControlsEx(&controls);
   dialog_ = CreateDialogParamW(
       instance_, MAKEINTRESOURCEW(IDD_EDITOR), nullptr,
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize,
                               &EditorWindow::handle_main_message>,
       reinterpret_cast<LPARAM>(this));
-  if (dialog_ == nullptr) return 1;
+  if (dialog_ == nullptr)
+    return 1;
   // CW_USEDEFAULT only has meaning when a window is created.  Passing it to
   // SetWindowPos placed the dialog at (-2147483648, -2147483648), leaving a
   // running but invisible editor. Center it inside the nearest monitor's work
   // area instead, while keeping the compact initial size.
-  MONITORINFO initial_monitor{.cbSize = sizeof(MONITORINFO)};
+  MONITORINFO initial_monitor{};
+  initial_monitor.cbSize = sizeof(initial_monitor);
   RECT work{};
   if (GetMonitorInfoW(MonitorFromWindow(dialog_, MONITOR_DEFAULTTONEAREST),
                       &initial_monitor) != FALSE)
@@ -109,8 +117,10 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
   const int width = std::max(1, std::min(MulDiv(1210, dpi, 96), work_width));
   const int height = std::max(1, std::min(MulDiv(760, dpi, 96), work_height));
-  const int left = static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
-  const int top = static_cast<int>(work.top) + std::max(0, (work_height - height) / 2);
+  const int left =
+      static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
+  const int top =
+      static_cast<int>(work.top) + std::max(0, (work_height - height) / 2);
   SetWindowPos(dialog_, nullptr, left, top, width, height,
                SWP_NOZORDER | SWP_NOACTIVATE);
   ShowWindow(dialog_, show_command);
@@ -119,7 +129,8 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
       LoadAcceleratorsW(instance_, MAKEINTRESOURCEW(IDR_EDITOR_ACCELERATORS));
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-    if (handle_binding_capture_message(message)) continue;
+    if (handle_binding_capture_message(message))
+      continue;
     if (picking_ && message.message == WM_KEYDOWN &&
         message.wParam == VK_ESCAPE) {
       cancel_picker();
@@ -127,9 +138,11 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
       continue;
     }
     if (accelerators != nullptr && IsWindowEnabled(dialog_) != FALSE &&
-        TranslateAcceleratorW(dialog_, accelerators, &message) != 0) continue;
+        TranslateAcceleratorW(dialog_, accelerators, &message) != 0)
+      continue;
     const bool main_handled = IsDialogMessageW(dialog_, &message) != FALSE;
-    const bool task_handled = task_dialog_ != nullptr && IsWindow(task_dialog_) &&
+    const bool task_handled = task_dialog_ != nullptr &&
+                              IsWindow(task_dialog_) &&
                               IsDialogMessageW(task_dialog_, &message) != FALSE;
     if (!main_handled && !task_handled) {
       TranslateMessage(&message);
@@ -155,10 +168,13 @@ void EditorWindow::initialize(const HWND window) {
   preview_ = GetDlgItem(dialog_, IDC_PREVIEW);
   status_ = GetDlgItem(dialog_, IDC_STATUS);
   application_path_ = GetDlgItem(dialog_, IDC_APPLICATION_PATH);
-  ListView_SetExtendedListViewStyle(profile_list_, LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES |
-                                                   LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
-  LVCOLUMNW column{.mask = LVCF_TEXT | LVCF_WIDTH, .cx = 198,
-                   .pszText = const_cast<LPWSTR>(L"Profile")};
+  ListView_SetExtendedListViewStyle(profile_list_,
+                                    LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES |
+                                        LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+  LVCOLUMNW column{};
+  column.mask = LVCF_TEXT | LVCF_WIDTH;
+  column.cx = 198;
+  column.pszText = const_cast<LPWSTR>(L"Profile");
   ListView_InsertColumn(profile_list_, 0, &column);
   style_list_view(profile_list_, true);
   rebuild_profile_check_hit_images();
@@ -167,8 +183,8 @@ void EditorWindow::initialize(const HWND window) {
     const auto style = GetWindowLongPtrW(preview_, GWL_STYLE);
     SetWindowLongPtrW(preview_, GWL_STYLE, style | SS_NOTIFY);
     SetWindowPos(preview_, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
     SetWindowSubclass(preview_, &EditorWindow::preview_subclass, 1,
                       reinterpret_cast<DWORD_PTR>(this));
   }
@@ -183,11 +199,13 @@ void EditorWindow::initialize(const HWND window) {
   set_status(L"Ready — connecting to LayerD.");
 }
 
-
 LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
-                                          const WPARAM wparam, const LPARAM lparam) {
+                                          const WPARAM wparam,
+                                          const LPARAM lparam) {
   switch (message) {
-  case WM_SIZE: layout(); return TRUE;
+  case WM_SIZE:
+    layout();
+    return TRUE;
   case WM_DPICHANGED: {
     apply_suggested_dpi_rect(window, lparam);
     const UINT dpi = HIWORD(wparam);
@@ -196,7 +214,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (new_font != nullptr) {
       font_ = new_font;
       style_dialog_children(window);
-      if (old_font != nullptr) DeleteObject(old_font);
+      if (old_font != nullptr)
+        DeleteObject(old_font);
     }
     rebuild_profile_check_hit_images();
     layout();
@@ -215,14 +234,15 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   case WM_GETMINMAXINFO: {
     const UINT window_dpi = GetDpiForWindow(window);
     const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-    MONITORINFO monitor{.cbSize = sizeof(MONITORINFO)};
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
     if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
                         &monitor) != FALSE) {
       const int work_width = monitor.rcWork.right - monitor.rcWork.left;
       const int work_height = monitor.rcWork.bottom - monitor.rcWork.top;
-      const int geometry_dpi = std::max(
-          80, std::min({dpi, MulDiv(work_width, 96, 1080),
-                        MulDiv(work_height, 96, 700)}));
+      const int geometry_dpi =
+          std::max(80, std::min({dpi, MulDiv(work_width, 96, 1080),
+                                 MulDiv(work_height, 96, 700)}));
       reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
           std::min(work_width, MulDiv(1080, geometry_dpi, 96)),
           std::min(work_height, MulDiv(700, geometry_dpi, 96))};
@@ -233,8 +253,10 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     return TRUE;
   }
   case WM_COMMAND: {
-    const int id = LOWORD(wparam); const auto notification = HIWORD(wparam);
-    if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID || id == IDC_BAR_WIDTH || id == IDC_BAR_HEIGHT) {
+    const int id = LOWORD(wparam);
+    const auto notification = HIWORD(wparam);
+    if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID || id == IDC_BAR_WIDTH ||
+        id == IDC_BAR_HEIGHT) {
       if (!syncing_ && notification == EN_CHANGE) {
         sync_profile_from_controls();
         record_profile_change(ChangeKind::text);
@@ -251,26 +273,28 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       return TRUE;
     }
     if (id == IDC_DIRECT_DRAG && notification == BN_CLICKED) {
-      const bool enabled = owner_draw_checkbox_checked(
-          GetDlgItem(dialog_, IDC_DIRECT_DRAG));
+      const bool enabled =
+          owner_draw_checkbox_checked(GetDlgItem(dialog_, IDC_DIRECT_DRAG));
       set_direct_drag_enabled(enabled, enabled);
       InvalidateRect(GetDlgItem(dialog_, IDC_DIRECT_DRAG), nullptr, TRUE);
       return TRUE;
     }
     if (id == IDC_VISUAL_ENABLED && notification == BN_CLICKED) {
-      set_visual_assignment_enabled(owner_draw_checkbox_checked(
-          GetDlgItem(dialog_, IDC_VISUAL_ENABLED)));
+      set_visual_assignment_enabled(
+          owner_draw_checkbox_checked(GetDlgItem(dialog_, IDC_VISUAL_ENABLED)));
       return TRUE;
     }
     if (id == IDC_VISUAL_ISOLATED && notification == BN_CLICKED) {
-      bool isolated = owner_draw_checkbox_checked(
-          GetDlgItem(dialog_, IDC_VISUAL_ISOLATED));
+      bool isolated =
+          owner_draw_checkbox_checked(GetDlgItem(dialog_, IDC_VISUAL_ISOLATED));
       if (isolated &&
-          MessageBoxW(
-              dialog_,
-              L"Isolated capture starts one bounded layerworker.exe for this game window while visual recognition is active. It improves crash containment but uses additional process memory. Continue?",
-              L"Isolate visual capture", MB_YESNO | MB_ICONINFORMATION) !=
-              IDYES) {
+          MessageBoxW(dialog_,
+                      L"Isolated capture starts one bounded layerworker.exe "
+                      L"for this game window while visual recognition is "
+                      L"active. It improves crash containment but uses "
+                      L"additional process memory. Continue?",
+                      L"Isolate visual capture",
+                      MB_YESNO | MB_ICONINFORMATION) != IDYES) {
         isolated = false;
         set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_VISUAL_ISOLATED),
                                 false);
@@ -283,31 +307,83 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       return TRUE;
     }
     switch (id) {
-    case IDC_FILE_MENU: show_file_menu(); return TRUE;
-    case IDM_FILE_NEW: new_profile(); return TRUE;
-    case IDM_FILE_SAVE: (void)save_profile(false); return TRUE;
-    case IDM_FILE_SAVE_AS: (void)save_profile(true); return TRUE;
-    case IDC_ATTACH_LEFT: edit_on_window(); return TRUE;
-    case IDC_SHOW_TASKS_LEFT: show_tasks(); return TRUE;
-    case IDM_FILE_OPTIONS: open_options(); return TRUE;
-    case IDM_FILE_EXPORT_PACK: export_profile_pack(); return TRUE;
-    case IDM_FILE_IMPORT_PACK: import_profile_pack(); return TRUE;
-    case IDM_FILE_RUNTIME_DIAGNOSTICS: open_runtime_diagnostics(); return TRUE;
-    case IDM_FILE_AUTOMATION: open_automation_editor(); return TRUE;
-    case IDM_FILE_SPLIT_BARS: split_independent_bars(); return TRUE;
-    case IDC_ADD_COOLDOWN: add_cooldown(); return TRUE;
-    case IDC_REMOVE_COOLDOWN: remove_cooldown(); return TRUE;
-    case IDC_CAPTURE_BINDING: begin_binding_capture(); return TRUE;
-    case IDC_CAPTURE_HID: capture_hid_binding(); return TRUE;
-    case IDC_CALIBRATE_VISUAL: calibrate_visual(); return TRUE;
-    case IDC_REMOVE_VISUAL: remove_visual_assignment(); return TRUE;
-    case IDC_BAR_FILL: case IDC_BAR_BACKGROUND: case IDC_BAR_BORDER: case IDC_BAR_TEXT: choose_bar_color(id); return TRUE;
-    case IDM_FILE_DELETE: delete_profile(); return TRUE;
-    case IDM_FILE_OPEN_FOLDER: open_profiles_folder(); return TRUE;
-    case IDM_FILE_EXIT: SendMessageW(dialog_, WM_CLOSE, 0, 0); return TRUE;
-    case IDM_EDIT_UNDO: undo(); return TRUE;
-    case IDM_EDIT_REDO: redo(); return TRUE;
-    default: break;
+    case IDC_FILE_MENU:
+      show_file_menu();
+      return TRUE;
+    case IDM_FILE_NEW:
+      new_profile();
+      return TRUE;
+    case IDM_FILE_SAVE:
+      (void)save_profile(false);
+      return TRUE;
+    case IDM_FILE_SAVE_AS:
+      (void)save_profile(true);
+      return TRUE;
+    case IDC_ATTACH_LEFT:
+      edit_on_window();
+      return TRUE;
+    case IDC_SHOW_TASKS_LEFT:
+      show_tasks();
+      return TRUE;
+    case IDM_FILE_OPTIONS:
+      open_options();
+      return TRUE;
+    case IDM_FILE_EXPORT_PACK:
+      export_profile_pack();
+      return TRUE;
+    case IDM_FILE_IMPORT_PACK:
+      import_profile_pack();
+      return TRUE;
+    case IDM_FILE_RUNTIME_DIAGNOSTICS:
+      open_runtime_diagnostics();
+      return TRUE;
+    case IDM_FILE_AUTOMATION:
+      open_automation_editor();
+      return TRUE;
+    case IDM_FILE_SPLIT_BARS:
+      split_independent_bars();
+      return TRUE;
+    case IDC_ADD_COOLDOWN:
+      add_cooldown();
+      return TRUE;
+    case IDC_REMOVE_COOLDOWN:
+      remove_cooldown();
+      return TRUE;
+    case IDC_CAPTURE_BINDING:
+      begin_binding_capture();
+      return TRUE;
+    case IDC_CAPTURE_HID:
+      capture_hid_binding();
+      return TRUE;
+    case IDC_CALIBRATE_VISUAL:
+      calibrate_visual();
+      return TRUE;
+    case IDC_REMOVE_VISUAL:
+      remove_visual_assignment();
+      return TRUE;
+    case IDC_BAR_FILL:
+    case IDC_BAR_BACKGROUND:
+    case IDC_BAR_BORDER:
+    case IDC_BAR_TEXT:
+      choose_bar_color(id);
+      return TRUE;
+    case IDM_FILE_DELETE:
+      delete_profile();
+      return TRUE;
+    case IDM_FILE_OPEN_FOLDER:
+      open_profiles_folder();
+      return TRUE;
+    case IDM_FILE_EXIT:
+      SendMessageW(dialog_, WM_CLOSE, 0, 0);
+      return TRUE;
+    case IDM_EDIT_UNDO:
+      undo();
+      return TRUE;
+    case IDM_EDIT_REDO:
+      redo();
+      return TRUE;
+    default:
+      break;
     }
     if (id == IDC_COOLDOWN_LIST && notification == LBN_SELCHANGE) {
       cancel_binding_capture();
@@ -352,14 +428,22 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
         }
       } else if (header->code == LVN_ITEMCHANGED) {
         const auto *change = reinterpret_cast<const NMLISTVIEW *>(lparam);
-        if (syncing_) return TRUE;
+        if (syncing_)
+          return TRUE;
         if ((change->uChanged & LVIF_STATE) != 0 &&
-            ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) != 0) {
-          save_profile_enabled(change->iItem, ListView_GetCheckState(profile_list_, change->iItem) != FALSE);
+            ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) !=
+                0) {
+          save_profile_enabled(
+              change->iItem,
+              ListView_GetCheckState(profile_list_, change->iItem) != FALSE);
           return TRUE;
         }
-        if ((change->uChanged & LVIF_STATE) != 0 && (change->uNewState & LVIS_SELECTED) != 0 &&
-            (change->uOldState & LVIS_SELECTED) == 0) { open_profile_row(change->iItem, true); return TRUE; }
+        if ((change->uChanged & LVIF_STATE) != 0 &&
+            (change->uNewState & LVIS_SELECTED) != 0 &&
+            (change->uOldState & LVIS_SELECTED) == 0) {
+          open_profile_row(change->iItem, true);
+          return TRUE;
+        }
       }
     }
     break;
@@ -367,46 +451,71 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   case WM_DRAWITEM: {
     const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
     if (draw->CtlType == ODT_LISTVIEW && draw->CtlID == IDC_PROFILE_LIST) {
-      draw_profile_item(*draw); return TRUE;
+      draw_profile_item(*draw);
+      return TRUE;
     }
-    if (draw->CtlType == ODT_LISTBOX) { draw_list_box_item(*draw); return TRUE; }
-    if (draw->CtlType != ODT_BUTTON) break;
+    if (draw->CtlType == ODT_LISTBOX) {
+      draw_list_box_item(*draw);
+      return TRUE;
+    }
+    if (draw->CtlType != ODT_BUTTON)
+      break;
     const int id = static_cast<int>(draw->CtlID);
-    if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY ||
-        id == IDC_DIRECT_DRAG || id == IDC_VISUAL_ENABLED ||
-        id == IDC_VISUAL_ISOLATED) {
-      draw_checkbox(*draw); return TRUE;
+    if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY || id == IDC_DIRECT_DRAG ||
+        id == IDC_VISUAL_ENABLED || id == IDC_VISUAL_ISOLATED) {
+      draw_checkbox(*draw);
+      return TRUE;
     }
     std::optional<COLORREF> overlay_color;
     if (const auto *panel = selected_bar()) {
-      if (id == IDC_BAR_FILL) overlay_color = color_ref(panel->bar.fill_color);
-      else if (id == IDC_BAR_BACKGROUND) overlay_color = color_ref(panel->bar.background_color);
-      else if (id == IDC_BAR_BORDER) overlay_color = color_ref(panel->bar.border_color);
-      else if (id == IDC_BAR_TEXT) overlay_color = color_ref(panel->bar.text_color);
+      if (id == IDC_BAR_FILL)
+        overlay_color = color_ref(panel->bar.fill_color);
+      else if (id == IDC_BAR_BACKGROUND)
+        overlay_color = color_ref(panel->bar.background_color);
+      else if (id == IDC_BAR_BORDER)
+        overlay_color = color_ref(panel->bar.border_color);
+      else if (id == IDC_BAR_TEXT)
+        overlay_color = color_ref(panel->bar.text_color);
     }
     const bool toolbar = id == IDC_FILE_MENU;
-    draw_button(*draw, toolbar ? layerc::platform::EditorControlRole::toolbar
-                               : layerc::platform::EditorControlRole::button, overlay_color);
+    draw_button(*draw,
+                toolbar ? layerc::platform::EditorControlRole::toolbar
+                        : layerc::platform::EditorControlRole::button,
+                overlay_color);
     return TRUE;
   }
-  case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
+  case WM_CTLCOLORSTATIC:
+  case WM_CTLCOLOREDIT:
+  case WM_CTLCOLORLISTBOX:
     return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND: {
-    RECT client{}; GetClientRect(window, &client);
-    FillRect(reinterpret_cast<HDC>(wparam), &client, brush(layerc::platform::EditorControlRole::window)); return TRUE;
-  }
+  case WM_ERASEBKGND:
+    return erase_dialog_background(window, wparam);
   case WM_LBUTTONUP:
-    if (picking_) { finish_picker(); return TRUE; }
+    if (picking_) {
+      finish_picker();
+      return TRUE;
+    }
     break;
   case WM_KEYDOWN:
-    if (picking_ && wparam == VK_ESCAPE) { cancel_picker(); set_status(L"Window picker cancelled."); return TRUE; }
+    if (picking_ && wparam == VK_ESCAPE) {
+      cancel_picker();
+      set_status(L"Window picker cancelled.");
+      return TRUE;
+    }
     if ((GetKeyState(VK_CONTROL) & 0x8000) != 0) {
-      if (wparam == 'S') { (void)save_profile(false); return TRUE; }
-      if (wparam == 'N') { new_profile(); return TRUE; }
+      if (wparam == 'S') {
+        (void)save_profile(false);
+        return TRUE;
+      }
+      if (wparam == 'N') {
+        new_profile();
+        return TRUE;
+      }
     }
     break;
   case WM_CAPTURECHANGED:
-    if (picking_) cancel_picker();
+    if (picking_)
+      cancel_picker();
     break;
   case WM_CLOSE:
     if (confirm_unsaved_changes()) {
@@ -418,16 +527,26 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     cancel_picker();
     KillTimer(window, autosave_timer);
     KillTimer(window, live_channel_timer);
-    if (task_dialog_ != nullptr && IsWindow(task_dialog_)) DestroyWindow(task_dialog_);
+    if (task_dialog_ != nullptr && IsWindow(task_dialog_))
+      DestroyWindow(task_dialog_);
     task_dialog_ = nullptr;
     if (profile_check_hit_images_ != nullptr) {
       ImageList_Destroy(profile_check_hit_images_);
       profile_check_hit_images_ = nullptr;
     }
-    for (auto &brush_value : brushes_) { if (brush_value != nullptr) DeleteObject(brush_value); brush_value = nullptr; }
-    if (font_ != nullptr) { DeleteObject(font_); font_ = nullptr; }
-    PostQuitMessage(0); return TRUE;
-  default: break;
+    for (auto &brush_value : brushes_) {
+      if (brush_value != nullptr)
+        DeleteObject(brush_value);
+      brush_value = nullptr;
+    }
+    if (font_ != nullptr) {
+      DeleteObject(font_);
+      font_ = nullptr;
+    }
+    PostQuitMessage(0);
+    return TRUE;
+  default:
+    break;
   }
   return FALSE;
 }

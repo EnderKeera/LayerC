@@ -18,21 +18,21 @@ struct SessionCapabilityRequest {
   bool templates{};
   bool generic_hid{};
   bool isolated_visual{};
-  bool companion{};
 };
 
-[[nodiscard]] CapabilityDemand calculate_capability_demand(
-    std::span<const SessionCapabilityRequest> sessions,
-    bool editor_connected, bool edit_overlay_active) noexcept;
+[[nodiscard]] CapabilityDemand
+calculate_capability_demand(std::span<const SessionCapabilityRequest> sessions,
+                            bool editor_connected,
+                            bool edit_overlay_active) noexcept;
 
 // Platform-neutral authority for immutable capability demand and first-party
 // service ownership. Native adapters remain outside this class.
 class DaemonKernel {
 public:
-  [[nodiscard]] bool reconcile(
-      CapabilityDemand demand,
-      std::span<const RuntimeServiceDescriptor> descriptors,
-      core::TimePoint now = core::MonotonicClock::now());
+  [[nodiscard]] bool
+  reconcile(CapabilityDemand demand,
+            std::span<const RuntimeServiceDescriptor> descriptors,
+            core::TimePoint now = core::MonotonicClock::now());
   void quiesce(core::TimePoint now = core::MonotonicClock::now()) noexcept;
 
   [[nodiscard]] const CapabilityDemand &demand() const noexcept {

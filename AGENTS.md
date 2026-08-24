@@ -84,6 +84,14 @@ recovery), `benchmark_v23.ps1` (automation activation/checkpoint/overhead, <=0.2
 <=2 ms max evaluator budget), `benchmark_latency.ps1` (<=1 ms median/p95 input-to-overlay regression).
 Evidence lands in `out\benchmarks`.
 
+## DevOps (free GitHub)
+
+* **CI** `.github/workflows/ci.yml` runs on `windows-2022` free: `cmake --preset ci` (Ninja/Release) → build → `ctest --preset ci` (9/9) → optional `benchmark_v23`/`latency` → install → `cpack --preset ci` → `out/layerc` + `build/ci/*.zip` artifact. `benchmark_v11`/`v22` stay local (need WGC/GPU/foreground).
+* **CodeQL** `.github/workflows/codeql.yml` (`windows-2022`, `cpp`, weekly + PR) — no extra setup.
+* **Dependabot** `.github/dependabot.yml` — weekly `github-actions` updates, 5 PR limit.
+* **Release** `.github/workflows/release.yml` — tag `v*.*.*` → same `ci` preset → `softprops/action-gh-release` with `build/ci/*.zip` + `out/layerc`.
+* **Branch protection** (set once in Settings → Branches): protect `main`, require `windows-msvc` + `CodeQL` checks, linear history, block force-push after V2.4 squash.
+
 ## Architecture (what every change must respect)
 
 ### Layering and boundaries
@@ -227,6 +235,22 @@ Evidence lands in `out\benchmarks`.
 - Do not invoke Reasonix, CodeWhale, or another external review/delegation agent unless the user
   explicitly requests it for the current task.
 - Never stage or commit legacy `.codewhale/` runtime state unless the user explicitly requests it.
+
+## V2.4 — Uncommitted WIP guard (2026-08-21 — keep until V2.4 is tagged)
+
+> **All V2.4 Game Bar work is currently UNCOMMITTED working-tree WIP.**
+> HEAD is `21f1218`; `git status` shows 28 modified/deleted/untracked files and `0` staged.
+> The real UWP widget, App Service transport, snapshot catalog, profile-pack companion,
+> and package registration are implemented but NOT yet committed. Do not change that invariant
+> without an explicit user `commit`/`stage`/`push` request.
+
+- **Do not `git add` / `git commit` / `git push` V2.4 files** unless the user explicitly says to commit. Verify with `git status --short --branch` and `git diff --stat HEAD` before assuming HEAD contains the work.
+- **Do not `Add-AppxPackage -Register` / `Remove-AppxPackage`** for `LayerC.GameBar.v1` without an explicit `ask` confirmation. Registration was done on this machine and left installed for smoke testing; re-registration requires `StageGameBarPackage.ps1` + `makeappx` first.
+- **Do not modify the user's real profile store** (`%LOCALAPPDATA%\LayerC\profiles\*.json` or `_companion/*`). For smoke tests create a disposable `*_gamebar-smoke.json`-style file or set `LAYERC_PROFILE_DIR` to a temp directory, then delete only that file. Existing `lctest.json` is intentionally `disabled` — do not re-enable it without ask.
+- **Build gate for the widget:** requires VS 2026 **Universal Windows Platform tools** + **C++ UWP tools (Latest)**. Without them the `layerc_gamebar_host` CMake target is intentionally disabled (not a failure). Install via Visual Studio Installer → Individual components only after an `ask`.
+- **Previous stub is deleted:** `src/gamebar/GameBarCompanionHost.cpp` (Win32 pipe consumer) and `tests/gamebar_host_tests.cpp` are intentionally removed; do not restore them. The host is now `src/gamebar/widget/LayerC.GameBar.vcxproj` (`layerc-gamebar.exe`).
+- **Keep docs honest:** `docs/GameBarCompanion.md` + `docs/GameBarCompanion.audit.md` already describe the real UWP/App Service flow and the remaining gates (Explorer/Game Bar restart matrix, DPI/compact/controller, resource accounting, fullscreen matrix, signed MSIX). Do not reintroduce pipe-name/“outstanding activation” language.
+
 
 ## Baseline project state (recorded 2026-08-17)
 

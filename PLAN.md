@@ -655,6 +655,20 @@ or V2.3. The portable ZIP continues to contain the normal desktop applications.
 A separate full MSIX packages LayerD, LayerE, LayerCal, and a C++/WinRT Xbox
 Game Bar companion.
 
+Implementation status (2026-08-24): the real UWP XAML activation path, eight
+standard widgets, settings widget, same-package App Service, transactional
+preference writeback, full-trust LayerD launch, strict snapshot/catalog codec,
+profile-pack companion modules, and unsigned x64 full-MSIX build are
+implemented. Clean MSVC and MinGW Release builds and all 9 CTest suites pass;
+the modular-runtime, automation, and input-to-overlay latency regressions pass.
+The V1.1 Low and Balanced visual runs still exceed the 35 MiB private-byte gate
+and discrete-GPU coverage remains required. An earlier loose package was
+registered and smoke-tested with `lctest` (panel data plus all eight settings
+controls), but the fresh x64 artifact still requires registration and the full
+package/Explorer restart, controller, DPI, click-through, resource, and
+fullscreen compatibility matrix. V2.4 remains **work in progress** until those
+gates pass and the official package is externally signed.
+
 The package declares eight fixed standard panel-widget extensions plus one
 settings widget. Each panel slot subscribes to one panel in the current
 foreground LayerC session, and the slot mapping is stored in a separately

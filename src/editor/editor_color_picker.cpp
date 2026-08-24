@@ -234,13 +234,8 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
   case WM_CTLCOLOREDIT:
   case WM_CTLCOLORLISTBOX:
     return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND: {
-    RECT client{};
-    GetClientRect(window, &client);
-    FillRect(reinterpret_cast<HDC>(wparam), &client,
-             brush(layerc::platform::EditorControlRole::window));
-    return TRUE;
-  }
+  case WM_ERASEBKGND:
+    return erase_dialog_background(window, wparam);
   case WM_CLOSE:
     EndDialog(window, IDCANCEL);
     return TRUE;

@@ -34,7 +34,8 @@ std::uint32_t process_thread_count() noexcept {
   const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snapshot == INVALID_HANDLE_VALUE)
     return 0;
-  THREADENTRY32 entry{.dwSize = sizeof(THREADENTRY32)};
+  THREADENTRY32 entry{};
+  entry.dwSize = sizeof(entry);
   std::uint32_t count{};
   if (Thread32First(snapshot, &entry) != FALSE) {
     do {
@@ -113,7 +114,7 @@ std::string DaemonApp::runtime_diagnostics_json() const {
   std::string output;
   output.reserve(8U * 1024U);
   output +=
-      "{\"schemaVersion\":1,\"packageVersion\":\"2.3.0\",\"protocolVersion\":";
+      "{\"schemaVersion\":1,\"packageVersion\":\"2.4.0\",\"protocolVersion\":";
   layerc::core::json::append_unsigned(output,
                                       layerc::core::live_protocol_version);
   output += ",\"process\":{";
@@ -162,6 +163,12 @@ std::string DaemonApp::runtime_diagnostics_json() const {
     }
   }
   output.push_back(']');
+  output += ",\"gameBarTransport\":{\"connected\":";
+  output += gamebar_transport_.connected() ? "true" : "false";
+  output += ",\"lastError\":";
+  layerc::core::json::append_quoted(
+      output, layerc::platform::wide_to_utf8(gamebar_transport_.last_error()));
+  output.push_back('}');
   output += ",\"aggregateOwnedResources\":";
   append_resources(output, runtime_kernel_.services().aggregate_resources());
 
@@ -206,8 +213,8 @@ std::string DaemonApp::runtime_diagnostics_json() const {
       output += "\",\"pid\":";
       layerc::core::json::append_unsigned(output, status.helper_process_id);
       output += status.running ? ",\"running\":true" : ",\"running\":false";
-      output +=
-          status.quarantined ? ",\"quarantined\":true" : ",\"quarantined\":false";
+      output += status.quarantined ? ",\"quarantined\":true"
+                                   : ",\"quarantined\":false";
       output += ",\"faultCount\":";
       layerc::core::json::append_unsigned(output, status.fault_count);
       output += ",\"lastError\":";

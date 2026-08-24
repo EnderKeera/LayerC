@@ -18,7 +18,8 @@ std::string pool_key(const std::string_view id) {
 // (fully charged) case maps to nullopt exactly once.
 [[nodiscard]] std::optional<TimePoint>
 earliest_deadline(const std::vector<TimePoint> &deadlines) noexcept {
-  if (deadlines.empty()) return std::nullopt;
+  if (deadlines.empty())
+    return std::nullopt;
   return *std::ranges::min_element(deadlines);
 }
 
@@ -40,7 +41,9 @@ CooldownEngine::CooldownEngine(
       throw std::invalid_argument("cooldown max_charges must be positive");
 
     Entry entry{.definition = source,
-                .available_charges = source.max_charges};
+                .available_charges = source.max_charges,
+                .next_charge_at = std::nullopt,
+                .recovery_deadlines = {}};
     if (!entries_.emplace(source.id, std::move(entry)).second)
       throw std::invalid_argument("duplicate cooldown id: " + source.id);
     order_.push_back(source.id);
@@ -72,7 +75,9 @@ CooldownEngine::CooldownEngine(
         .recovery = group.recovery,
     };
     Entry entry{.definition = definition,
-                .available_charges = definition.max_charges};
+                .available_charges = definition.max_charges,
+                .next_charge_at = std::nullopt,
+                .recovery_deadlines = {}};
     entries_.emplace(definition.id, std::move(entry));
     for (const auto &id : group.cooldown_ids) {
       if (!shared_entries_.emplace(id, definition.id).second)
@@ -84,11 +89,7 @@ CooldownEngine::CooldownEngine(
 
 CooldownEngine::Entry *
 CooldownEngine::entry_for(const std::string_view cooldown_id) {
-  const auto shared = shared_entries_.find(cooldown_id);
-  const auto found = entries_.find(shared != shared_entries_.end()
-                                       ? std::string_view(shared->second)
-                                       : cooldown_id);
-  return found == entries_.end() ? nullptr : &found->second;
+  return const_cast<Entry *>(std::as_const(*this).entry_for(cooldown_id));
 }
 
 const CooldownEngine::Entry *

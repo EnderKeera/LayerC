@@ -18,23 +18,28 @@ CapabilityDemand calculate_capability_demand(
       isolated_windows.push_back(session.window);
   }
   for (const auto &session : sessions) {
-    if (!session.active) continue;
+    if (!session.active)
+      continue;
     demand.add(Capability::input);
     demand.add(Capability::overlay);
-    if (session.generic_hid) demand.add(Capability::generic_hid);
-    if (session.companion) demand.add(Capability::gamebar);
-    if (session.global || !session.visual) continue;
+    if (session.generic_hid)
+      demand.add(Capability::generic_hid);
+    if (session.global || !session.visual)
+      continue;
     const bool isolated = std::ranges::find(isolated_windows, session.window) !=
                           isolated_windows.end();
     if (isolated) {
       demand.add(Capability::isolated_visual);
     } else {
       demand.add(Capability::visual);
-      if (session.templates) demand.add(Capability::template_evaluation);
+      if (session.templates)
+        demand.add(Capability::template_evaluation);
     }
   }
-  if (editor_connected) demand.add(Capability::live_edit);
-  if (edit_overlay_active) demand.add(Capability::overlay);
+  if (editor_connected)
+    demand.add(Capability::live_edit);
+  if (edit_overlay_active)
+    demand.add(Capability::overlay);
   return demand;
 }
 
@@ -43,19 +48,19 @@ bool DaemonKernel::reconcile(
     const std::span<const RuntimeServiceDescriptor> descriptors,
     const core::TimePoint now) {
   if (reconciling_) {
-    pending_ = PendingReconcile{.demand = std::move(demand),
-                                .descriptors = {descriptors.begin(),
-                                                descriptors.end()},
-                                .now = now};
+    pending_ = PendingReconcile{
+        .demand = std::move(demand),
+        .descriptors = {descriptors.begin(), descriptors.end()},
+        .now = now};
     return true;
   }
 
   reconciling_ = true;
   bool success = true;
-  PendingReconcile current{.demand = std::move(demand),
-                           .descriptors = {descriptors.begin(),
-                                           descriptors.end()},
-                           .now = now};
+  PendingReconcile current{
+      .demand = std::move(demand),
+      .descriptors = {descriptors.begin(), descriptors.end()},
+      .now = now};
   do {
     if (demand_ != current.demand) {
       demand_ = current.demand;
@@ -63,7 +68,8 @@ bool DaemonKernel::reconcile(
     }
     success = services_.reconcile(demand_, current.descriptors, current.now) &&
               success;
-    if (!pending_) break;
+    if (!pending_)
+      break;
     current = std::move(*pending_);
     pending_.reset();
   } while (true);

@@ -100,7 +100,10 @@ editor_appearance_overrides(EditorControlRole role);
 [[nodiscard]] bool set_editor_appearance_overrides(
     EditorControlRole role, const EditorAppearanceOverrides &overrides);
 [[nodiscard]] bool reset_editor_appearance_overrides(EditorControlRole role,
-                                                      std::uint32_t fields);
+                                                     std::uint32_t fields);
 [[nodiscard]] bool signal_settings_reload();
+[[nodiscard]] bool is_gamebar_overlay_process(DWORD process_id);
+[[nodiscard]] std::string window_session_key(HWND window);
+
 
 } // namespace layerc::platform

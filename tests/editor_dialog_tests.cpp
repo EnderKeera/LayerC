@@ -78,10 +78,11 @@ int main() {
       expect(HIWORD(default_id) == DC_HASDEFID &&
                  LOWORD(default_id) == IDC_OPTIONS_APPLY,
              "the Options dialog should advertise Apply as its default action");
-  MSG enter{.hwnd = checkbox,
-            .message = WM_KEYDOWN,
-            .wParam = VK_RETURN,
-            .lParam = 1};
+  MSG enter{};
+  enter.hwnd = checkbox;
+  enter.message = WM_KEYDOWN;
+  enter.wParam = VK_RETURN;
+  enter.lParam = 1;
   (void)IsDialogMessageW(dialog, &enter);
   passed &= expect(apply_commands == 1,
                    "Enter should dispatch the modal dialog's default action");
@@ -164,7 +165,10 @@ int main() {
   history.reset(original, no_visual, no_automation);
   layerc::core::VisualProfile assigned_visual;
   assigned_visual.profile_id = original.id;
-  assigned_visual.rules.push_back({.id = "ready", .name = "Ready"});
+  layerc::core::PixelRule ready_rule;
+  ready_rule.id = "ready";
+  ready_rule.name = "Ready";
+  assigned_visual.rules.push_back(std::move(ready_rule));
   assigned_visual.triggers.push_back(
       {.cooldown_id = "dash", .observation_id = "ready"});
   history.reset(original, assigned_visual, no_automation);

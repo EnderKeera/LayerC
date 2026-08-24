@@ -16,8 +16,10 @@ RECT intersect_rect(const RECT &left, const RECT &right) {
   RECT result{std::max(left.left, right.left), std::max(left.top, right.top),
               std::min(left.right, right.right),
               std::min(left.bottom, right.bottom)};
-  if (result.right < result.left) result.right = result.left;
-  if (result.bottom < result.top) result.bottom = result.top;
+  if (result.right < result.left)
+    result.right = result.left;
+  if (result.bottom < result.top)
+    result.bottom = result.top;
   return result;
 }
 
@@ -44,8 +46,7 @@ public:
   bool start() override {
     stop();
     RECT window_bounds{};
-    if (!IsWindow(window_) ||
-        !capture_window_bounds(window_, window_bounds)) {
+    if (!IsWindow(window_) || !capture_window_bounds(window_, window_bounds)) {
       error_ = "capture target is no longer available";
       return false;
     }
@@ -53,18 +54,23 @@ public:
 
     ComPtr<IDXGIFactory1> factory;
     auto result = CreateDXGIFactory1(IID_PPV_ARGS(factory.put()));
-    if (FAILED(result)) return fail("DXGI factory creation failed", result);
+    if (FAILED(result))
+      return fail("DXGI factory creation failed", result);
     for (UINT adapter_index = 0; !output_; ++adapter_index) {
       ComPtr<IDXGIAdapter1> candidate_adapter;
       result = factory->EnumAdapters1(adapter_index, candidate_adapter.put());
-      if (result == DXGI_ERROR_NOT_FOUND) break;
-      if (FAILED(result)) continue;
+      if (result == DXGI_ERROR_NOT_FOUND)
+        break;
+      if (FAILED(result))
+        continue;
       for (UINT output_index = 0;; ++output_index) {
         ComPtr<IDXGIOutput> candidate_output;
         result = candidate_adapter->EnumOutputs(output_index,
                                                 candidate_output.put());
-        if (result == DXGI_ERROR_NOT_FOUND) break;
-        if (FAILED(result)) continue;
+        if (result == DXGI_ERROR_NOT_FOUND)
+          break;
+        if (FAILED(result))
+          continue;
         DXGI_OUTPUT_DESC description{};
         if (SUCCEEDED(candidate_output->GetDesc(&description)) &&
             description.Monitor == monitor_) {
@@ -110,7 +116,8 @@ public:
     if (!foreground)
       return {.availability = core::CaptureAvailability::inactive,
               .backend = kind(),
-              .diagnostic = std::string(fallback_warning)};
+              .diagnostic = std::string(fallback_warning),
+              .frame = {}};
 
     RECT window_bounds{};
     if (!capture_window_bounds(window_, window_bounds))
@@ -118,7 +125,8 @@ public:
     const auto monitor =
         MonitorFromRect(&window_bounds, MONITOR_DEFAULTTONEAREST);
     if (monitor != monitor_) {
-      if (!start()) return unavailable(error_);
+      if (!start())
+        return unavailable(error_);
       if (!capture_window_bounds(window_, window_bounds))
         return unavailable("capture target bounds are unavailable");
     }
@@ -130,10 +138,12 @@ public:
     if (result == DXGI_ERROR_WAIT_TIMEOUT)
       return current_result();
     if (result == DXGI_ERROR_ACCESS_LOST) {
-      if (!start()) return unavailable(error_);
+      if (!start())
+        return unavailable(error_);
       return {.availability = core::CaptureAvailability::starting,
               .backend = kind(),
-              .diagnostic = std::string(fallback_warning)};
+              .diagnostic = std::string(fallback_warning),
+              .frame = {}};
     }
     if (FAILED(result)) {
       const auto failure =
@@ -143,7 +153,8 @@ public:
       return {.availability = core::CaptureAvailability::starting,
               .backend = kind(),
               .diagnostic = failure + "; capture session restarted; " +
-                            std::string(fallback_warning)};
+                            std::string(fallback_warning),
+              .frame = {}};
     }
 
     ComPtr<ID3D11Texture2D> texture;
@@ -155,51 +166,52 @@ public:
     }
 
     const auto intersection = intersect_rect(window_bounds, output_bounds_);
-    const auto window_width = static_cast<std::uint32_t>(
-        window_bounds.right - window_bounds.left);
-    const auto window_height = static_cast<std::uint32_t>(
-        window_bounds.bottom - window_bounds.top);
+    const auto window_width =
+        static_cast<std::uint32_t>(window_bounds.right - window_bounds.left);
+    const auto window_height =
+        static_cast<std::uint32_t>(window_bounds.bottom - window_bounds.top);
     if (intersection.right <= intersection.left ||
         intersection.bottom <= intersection.top) {
       (void)duplication_->ReleaseFrame();
       return {.availability = core::CaptureAvailability::outside_output,
               .backend = kind(),
-              .diagnostic = std::string(fallback_warning)};
+              .diagnostic = std::string(fallback_warning),
+              .frame = {}};
     }
 
-    const auto logical_left = static_cast<UINT>(intersection.left -
-                                                output_bounds_.left);
-    const auto logical_top = static_cast<UINT>(intersection.top -
-                                               output_bounds_.top);
+    const auto logical_left =
+        static_cast<UINT>(intersection.left - output_bounds_.left);
+    const auto logical_top =
+        static_cast<UINT>(intersection.top - output_bounds_.top);
     const auto logical_copy_width =
         static_cast<UINT>(intersection.right - intersection.left);
     const auto logical_copy_height =
         static_cast<UINT>(intersection.bottom - intersection.top);
-    const auto logical_output_width = static_cast<std::uint32_t>(
-        output_bounds_.right - output_bounds_.left);
-    const auto logical_output_height = static_cast<std::uint32_t>(
-        output_bounds_.bottom - output_bounds_.top);
+    const auto logical_output_width =
+        static_cast<std::uint32_t>(output_bounds_.right - output_bounds_.left);
+    const auto logical_output_height =
+        static_cast<std::uint32_t>(output_bounds_.bottom - output_bounds_.top);
     const auto transformed = transform_output_crop(
         {logical_left, logical_top, logical_left + logical_copy_width,
          logical_top + logical_copy_height},
         logical_output_width, logical_output_height, output_rotation_);
-    const D3D11_BOX source{transformed.left, transformed.top, 0,
+    const D3D11_BOX source{transformed.left,  transformed.top,    0,
                            transformed.right, transformed.bottom, 1};
-    const auto destination_x = static_cast<std::uint32_t>(
-        intersection.left - window_bounds.left);
-    const auto destination_y = static_cast<std::uint32_t>(
-        intersection.top - window_bounds.top);
+    const auto destination_x =
+        static_cast<std::uint32_t>(intersection.left - window_bounds.left);
+    const auto destination_y =
+        static_cast<std::uint32_t>(intersection.top - window_bounds.top);
     const core::NormalizedRegion available{
         static_cast<double>(destination_x) / window_width,
         static_cast<double>(destination_y) / window_height,
         static_cast<double>(logical_copy_width) / window_width,
         static_cast<double>(logical_copy_height) / window_height};
     auto captured = readback_.read(
-        d3d_, texture.get(), source, window_width, window_height,
-        destination_x, destination_y, available, output_rotation_, quality_,
-        now, error_);
+        d3d_, texture.get(), source, window_width, window_height, destination_x,
+        destination_y, available, output_rotation_, quality_, now, error_);
     (void)duplication_->ReleaseFrame();
-    if (!captured) return unavailable(error_);
+    if (!captured)
+      return unavailable(error_);
 
     // Detect protected/black capture before masking LayerC's own pixels.
     if (frame_is_nearly_black(*captured))
@@ -211,12 +223,13 @@ public:
     return current_result();
   }
 
-  void set_excluded_screen_rects(
-      const std::span<const RECT> rectangles) override {
+  void
+  set_excluded_screen_rects(const std::span<const RECT> rectangles) override {
     excluded_.assign(rectangles.begin(), rectangles.end());
   }
   void set_quality(const core::CaptureQuality quality) override {
-    if (quality_ == quality) return;
+    if (quality_ == quality)
+      return;
     quality_ = quality;
     last_frame_.reset();
     black_frames_ = 0;
@@ -247,19 +260,20 @@ private:
   }
 
   CapturePollResult unavailable(std::string diagnostic) const {
-    if (!diagnostic.empty()) diagnostic += "; ";
+    if (!diagnostic.empty())
+      diagnostic += "; ";
     diagnostic += fallback_warning;
     return {.availability = core::CaptureAvailability::unavailable,
             .backend = kind(),
-            .diagnostic = std::move(diagnostic)};
+            .diagnostic = std::move(diagnostic),
+            .frame = {}};
   }
 
   CapturePollResult current_result() const {
     const auto availability =
-        black_frames_ >= 30
-            ? core::CaptureAvailability::protected_or_black
-            : last_frame_ ? core::CaptureAvailability::available
-                          : core::CaptureAvailability::starting;
+        black_frames_ >= 30 ? core::CaptureAvailability::protected_or_black
+        : last_frame_       ? core::CaptureAvailability::available
+                            : core::CaptureAvailability::starting;
     auto diagnostic = std::string(fallback_warning);
     if (availability == core::CaptureAvailability::protected_or_black)
       diagnostic += "; persistent black frames detected";
@@ -271,10 +285,10 @@ private:
 
   void apply_excluded_rectangles(CaptureFrame &frame,
                                  const RECT &window_bounds) const {
-    const auto window_width = std::max<LONG>(1, window_bounds.right -
-                                                   window_bounds.left);
-    const auto window_height = std::max<LONG>(1, window_bounds.bottom -
-                                                    window_bounds.top);
+    const auto window_width =
+        std::max<LONG>(1, window_bounds.right - window_bounds.left);
+    const auto window_height =
+        std::max<LONG>(1, window_bounds.bottom - window_bounds.top);
     for (const auto &excluded : excluded_) {
       const auto overlap = intersect_rect(excluded, window_bounds);
       if (overlap.right <= overlap.left || overlap.bottom <= overlap.top)
@@ -282,38 +296,29 @@ private:
       frame.unavailable_regions.push_back(
           {static_cast<double>(overlap.left - window_bounds.left) /
                window_width,
-           static_cast<double>(overlap.top - window_bounds.top) /
-               window_height,
+           static_cast<double>(overlap.top - window_bounds.top) / window_height,
            static_cast<double>(overlap.right - overlap.left) / window_width,
            static_cast<double>(overlap.bottom - overlap.top) / window_height});
-      const auto left = static_cast<std::uint32_t>(
-          std::clamp<std::int64_t>(
-              static_cast<std::int64_t>(overlap.left - window_bounds.left) *
-                  frame.width /
-                  window_width,
-              0, frame.width));
-      const auto top = static_cast<std::uint32_t>(
-          std::clamp<std::int64_t>(
-              static_cast<std::int64_t>(overlap.top - window_bounds.top) *
-                  frame.height /
-                  window_height,
-              0, frame.height));
-      const auto right = static_cast<std::uint32_t>(
-          std::clamp<std::int64_t>(
-              (static_cast<std::int64_t>(overlap.right -
-                                         window_bounds.left) *
-                   frame.width +
-               window_width - 1) /
-                  window_width,
-              0, frame.width));
-      const auto bottom = static_cast<std::uint32_t>(
-          std::clamp<std::int64_t>(
-              (static_cast<std::int64_t>(overlap.bottom -
-                                         window_bounds.top) *
-                   frame.height +
-               window_height - 1) /
-                  window_height,
-              0, frame.height));
+      const auto left = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+          static_cast<std::int64_t>(overlap.left - window_bounds.left) *
+              frame.width / window_width,
+          0, frame.width));
+      const auto top = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+          static_cast<std::int64_t>(overlap.top - window_bounds.top) *
+              frame.height / window_height,
+          0, frame.height));
+      const auto right = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+          (static_cast<std::int64_t>(overlap.right - window_bounds.left) *
+               frame.width +
+           window_width - 1) /
+              window_width,
+          0, frame.width));
+      const auto bottom = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+          (static_cast<std::int64_t>(overlap.bottom - window_bounds.top) *
+               frame.height +
+           window_height - 1) /
+              window_height,
+          0, frame.height));
       for (auto y = top; y < bottom; ++y)
         std::fill(frame.pixels.begin() +
                       static_cast<std::size_t>(y) * frame.width + left,

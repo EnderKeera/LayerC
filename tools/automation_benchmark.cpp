@@ -56,10 +56,11 @@ AutomationProfile workload() {
     rule.condition =
         binary("less", variable("count"),
                literal(AutomationValue(std::int64_t{1'000'000'000})));
-    rule.actions.push_back(
-        {.kind = AutomationActionKind::increment_variable,
-         .target = "count",
-         .value = literal(AutomationValue(std::int64_t{1}))});
+    AutomationAction action;
+    action.kind = AutomationActionKind::increment_variable;
+    action.target = "count";
+    action.value = literal(AutomationValue(std::int64_t{1}));
+    rule.actions.push_back(std::move(action));
     automation.rules.push_back(std::move(rule));
   }
   profile.automations.push_back(std::move(automation));

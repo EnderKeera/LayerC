@@ -65,12 +65,13 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     const bool visual_wait = visual_snapshot_event_ != nullptr;
     if (visual_wait)
       live_handles[wait_handle_count++] = visual_snapshot_event_;
-    const DWORD timeout =
-        edit_session_ != nullptr
-            ? 250U
-            : (!isolated_visual_captures_.empty()
-                   ? 500U
-                   : (wait_handle_count == 0 ? 1'000U : INFINITE));
+    DWORD timeout = INFINITE;
+    if (edit_session_ != nullptr)
+      timeout = 250U;
+    else if (!isolated_visual_captures_.empty())
+      timeout = 500U;
+    else if (wait_handle_count == 0)
+      timeout = 1'000U;
     const DWORD result = MsgWaitForMultipleObjectsEx(
         wait_handle_count,
         wait_handle_count == 0 ? nullptr : live_handles.data(), timeout,
@@ -82,7 +83,6 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     if (result == WAIT_TIMEOUT) {
       maintain_isolated_visual_captures();
       poll_live_channel();
-      gamebar_transport_.poll();
       continue;
     }
     if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + live_handle_count) {
@@ -91,7 +91,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     }
     if (gamebar_wait != nullptr &&
         result == WAIT_OBJECT_0 + gamebar_wait_index) {
-      gamebar_transport_.poll();
+      poll_gamebar_transport();
       continue;
     }
     if (visual_wait && result == WAIT_OBJECT_0 + visual_wait_index) {
@@ -138,11 +138,10 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
 }
 
 bool DaemonApp::create_message_window(const HINSTANCE instance) {
-  const WNDCLASSW definition{
-      .lpfnWndProc = &DaemonApp::window_proc,
-      .hInstance = instance,
-      .lpszClassName = L"LayerDMessageWindow",
-  };
+  WNDCLASSW definition{};
+  definition.lpfnWndProc = &DaemonApp::window_proc;
+  definition.hInstance = instance;
+  definition.lpszClassName = L"LayerDMessageWindow";
   if (RegisterClassW(&definition) == 0 &&
       GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
     return false;
@@ -253,7 +252,6 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     return 0;
   case WM_TIMER:
     if (wparam == game_scan_timer) {
-      gamebar_transport_.poll();
       publish_companion_snapshots(layerc::core::MonotonicClock::now());
       ensure_tray_icon();
       const bool profiles_reloaded = reload_profiles_if_requested();

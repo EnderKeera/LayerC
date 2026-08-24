@@ -21,13 +21,16 @@ bool capture_window_bounds(const HWND window, RECT &bounds) noexcept {
 }
 
 bool frame_is_nearly_black(const CaptureFrame &frame) noexcept {
-  if (frame.pixels.empty()) return true;
+  if (frame.pixels.empty())
+    return true;
   std::size_t bright{};
   std::size_t sampled{};
   const auto sample = [&](const std::size_t index) {
-    if (index >= frame.pixels.size()) return;
+    if (index >= frame.pixels.size())
+      return;
     const auto pixel = frame.pixels[index];
-    if (pixel.red > 3 || pixel.green > 3 || pixel.blue > 3) ++bright;
+    if (pixel.red > 3 || pixel.green > 3 || pixel.blue > 3)
+      ++bright;
     ++sampled;
   };
 
@@ -42,12 +45,12 @@ bool frame_is_nearly_black(const CaptureFrame &frame) noexcept {
       expected_pixels <= frame.pixels.size()) {
     const std::size_t width = frame.width;
     const std::size_t height = frame.height;
-    const std::size_t perimeter =
-        height == 1 ? width
-                    : width == 1 ? height : 2U * width + 2U * (height - 2U);
+    const std::size_t perimeter = height == 1 ? width
+                                  : width == 1
+                                      ? height
+                                      : 2U * width + 2U * (height - 2U);
     const auto border_step = std::max<std::size_t>(1, perimeter / 1'024U);
-    for (std::size_t offset = 0; offset < perimeter;
-         offset += border_step) {
+    for (std::size_t offset = 0; offset < perimeter; offset += border_step) {
       std::size_t x{};
       std::size_t y{};
       if (height == 1) {
@@ -92,8 +95,8 @@ public:
     }
     backend_ = make_desktop_duplication_backend(window_);
     if (!backend_->start()) {
-      error_ = "WGC: " + wgc_error + "; Desktop Duplication: " +
-               backend_->last_error();
+      error_ = "WGC: " + wgc_error +
+               "; Desktop Duplication: " + backend_->last_error();
       backend_.reset();
       return false;
     }
@@ -104,7 +107,8 @@ public:
   }
 
   void stop() {
-    if (backend_) backend_->stop();
+    if (backend_)
+      backend_->stop();
     backend_.reset();
     error_.clear();
     fallback_reason_.clear();
@@ -114,11 +118,11 @@ public:
     if (!backend_)
       return {.availability = core::CaptureAvailability::unavailable,
               .backend = core::CaptureBackendKind::none,
-              .diagnostic = error_.empty() ? "capture is not started" : error_};
+              .diagnostic = error_.empty() ? "capture is not started" : error_,
+              .frame = {}};
     auto result = backend_->poll(now, foreground);
     if (result.availability == core::CaptureAvailability::unavailable &&
-        result.backend ==
-            core::CaptureBackendKind::windows_graphics_capture &&
+        result.backend == core::CaptureBackendKind::windows_graphics_capture &&
         options_.allow_desktop_duplication && IsWindow(window_)) {
       fallback_reason_ = result.diagnostic;
       backend_->stop();
@@ -131,14 +135,16 @@ public:
                                     : core::CaptureAvailability::inactive,
                 .backend = core::CaptureBackendKind::desktop_duplication,
                 .diagnostic = "WGC became unavailable (" + fallback_reason_ +
-                              "); Desktop Duplication fallback is starting"};
+                              "); Desktop Duplication fallback is starting",
+                .frame = {}};
       }
-      error_ = "WGC: " + fallback_reason_ + "; Desktop Duplication: " +
-               backend_->last_error();
+      error_ = "WGC: " + fallback_reason_ +
+               "; Desktop Duplication: " + backend_->last_error();
       backend_.reset();
       return {.availability = core::CaptureAvailability::unavailable,
               .backend = core::CaptureBackendKind::none,
-              .diagnostic = error_};
+              .diagnostic = error_,
+              .frame = {}};
     }
     if (result.backend == core::CaptureBackendKind::desktop_duplication &&
         !fallback_reason_.empty())
@@ -153,7 +159,8 @@ public:
 
   void set_quality(const core::CaptureQuality quality) {
     options_.quality = quality;
-    if (backend_) backend_->set_quality(quality);
+    if (backend_)
+      backend_->set_quality(quality);
   }
 
   core::CaptureBackendKind kind() const noexcept {
@@ -165,7 +172,8 @@ public:
 
 private:
   void apply_exclusions() {
-    if (backend_) backend_->set_excluded_screen_rects(excluded_);
+    if (backend_)
+      backend_->set_excluded_screen_rects(excluded_);
   }
 
   HWND window_{};
@@ -205,8 +213,9 @@ std::string WindowCaptureSession::gpu_description() const {
   return impl_->gpu_description();
 }
 
-bool region_is_available(const core::NormalizedRegion &rule_region,
-                         const core::NormalizedRegion &available_region) noexcept {
+bool region_is_available(
+    const core::NormalizedRegion &rule_region,
+    const core::NormalizedRegion &available_region) noexcept {
   constexpr double epsilon = 1e-9;
   return rule_region.x >= available_region.x - epsilon &&
          rule_region.y >= available_region.y - epsilon &&
@@ -218,11 +227,11 @@ bool region_is_available(const core::NormalizedRegion &rule_region,
 
 bool region_is_available(const core::NormalizedRegion &rule_region,
                          const CaptureFrame &frame) noexcept {
-  if (!region_is_available(rule_region, frame.available_region)) return false;
+  if (!region_is_available(rule_region, frame.available_region))
+    return false;
   constexpr double epsilon = 1e-9;
   return std::ranges::none_of(
-      frame.unavailable_regions,
-      [&](const core::NormalizedRegion &excluded) {
+      frame.unavailable_regions, [&](const core::NormalizedRegion &excluded) {
         return rule_region.x < excluded.x + excluded.width - epsilon &&
                rule_region.x + rule_region.width > excluded.x + epsilon &&
                rule_region.y < excluded.y + excluded.height - epsilon &&
@@ -230,10 +239,10 @@ bool region_is_available(const core::NormalizedRegion &rule_region,
       });
 }
 
-PixelBounds transform_output_crop(
-    const PixelBounds logical_crop, const std::uint32_t logical_output_width,
-    const std::uint32_t logical_output_height,
-    const OutputRotation rotation) noexcept {
+PixelBounds transform_output_crop(const PixelBounds logical_crop,
+                                  const std::uint32_t logical_output_width,
+                                  const std::uint32_t logical_output_height,
+                                  const OutputRotation rotation) noexcept {
   switch (rotation) {
   case OutputRotation::rotate90:
     return {logical_crop.top, logical_output_width - logical_crop.right,
@@ -253,14 +262,22 @@ PixelBounds transform_output_crop(
 }
 
 std::pair<std::uint32_t, std::uint32_t>
-capture_sample_dimensions(const std::uint32_t width,
-                          const std::uint32_t height,
+capture_sample_dimensions(const std::uint32_t width, const std::uint32_t height,
                           const core::CaptureQuality quality) noexcept {
-  if (width == 0 || height == 0) return {0, 0};
-  const std::uint32_t limit =
-      quality == core::CaptureQuality::low
-          ? 64U
-          : quality == core::CaptureQuality::balanced ? 256U : 0U;
+  if (width == 0 || height == 0)
+    return {0, 0};
+  std::uint32_t limit{};
+  switch (quality) {
+  case core::CaptureQuality::low:
+    limit = 64U;
+    break;
+  case core::CaptureQuality::balanced:
+    limit = 256U;
+    break;
+  case core::CaptureQuality::exact:
+    limit = 0U;
+    break;
+  }
   if (limit == 0 || (width <= limit && height <= limit))
     return {width, height};
   const double scale = std::min(static_cast<double>(limit) / width,

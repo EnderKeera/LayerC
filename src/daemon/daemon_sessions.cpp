@@ -1,5 +1,5 @@
+#include "companion_session_selection.hpp"
 #include "daemon_app.hpp"
-
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/text.hpp"
@@ -15,45 +15,26 @@ namespace layerc::daemon {
 namespace {
 bool is_layerc_editor_process(const DWORD process_id,
                               const DWORD authenticated_editor_id) {
-  if (process_id == 0)
-    return false;
+  if (process_id == 0) return false;
   if (authenticated_editor_id != 0 && process_id == authenticated_editor_id)
     return true;
 
-  struct CachedResult {
-    bool is_editor{};
-    ULONGLONG checked_at{};
-  };
-  static std::unordered_map<DWORD, CachedResult> cache;
-  const ULONGLONG now = GetTickCount64();
-  if (const auto cached = cache.find(process_id);
-      cached != cache.end() && now - cached->second.checked_at < 2'000U)
-    return cached->second.is_editor;
-
   const HANDLE process =
       OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr) {
-    cache[process_id] = {.is_editor = false, .checked_at = now};
-    return false;
-  }
+  if (process == nullptr) return false;
   std::array<wchar_t, 32'768> actual_buffer{};
   DWORD actual_length = static_cast<DWORD>(actual_buffer.size());
-  const bool queried =
-      QueryFullProcessImageNameW(process, 0, actual_buffer.data(),
-                                 &actual_length) != FALSE;
+  const bool queried = QueryFullProcessImageNameW(
+                           process, 0, actual_buffer.data(), &actual_length) !=
+                       FALSE;
   CloseHandle(process);
-  if (!queried || actual_length == 0) {
-    cache[process_id] = {.is_editor = false, .checked_at = now};
-    return false;
-  }
+  if (!queried || actual_length == 0) return false;
 
   std::array<wchar_t, 32'768> daemon_buffer{};
   const DWORD daemon_length = GetModuleFileNameW(
       nullptr, daemon_buffer.data(), static_cast<DWORD>(daemon_buffer.size()));
-  if (daemon_length == 0 || daemon_length >= daemon_buffer.size()) {
-    cache[process_id] = {.is_editor = false, .checked_at = now};
+  if (daemon_length == 0 || daemon_length >= daemon_buffer.size())
     return false;
-  }
   const auto expected =
       std::filesystem::path(
           std::wstring_view(daemon_buffer.data(), daemon_length))
@@ -62,14 +43,8 @@ bool is_layerc_editor_process(const DWORD process_id,
   const auto actual = std::filesystem::path(
       std::wstring_view(actual_buffer.data(), actual_length));
   std::error_code error;
-  const bool matches =
-      std::filesystem::equivalent(expected, actual, error) && !error;
-  if (cache.size() > 128U)
-    cache.clear();
-  cache[process_id] = {.is_editor = matches, .checked_at = now};
-  return matches;
+  return std::filesystem::equivalent(expected, actual, error) && !error;
 }
-
 std::filesystem::path profile_path_for_key(const std::wstring_view key) {
   if (key.empty())
     return {};
@@ -83,8 +58,7 @@ std::filesystem::path profile_path_for_key(const std::wstring_view key) {
 } // namespace
 
 Session::Session(SessionInit init)
-    : source_key(std::move(init.source_key)),
-      profile(std::move(init.profile)),
+    : source_key(std::move(init.source_key)), profile(std::move(init.profile)),
       cooldowns(profile.cooldowns, profile.cooldown_groups),
       input(profile.bindings) {
   apply_visual_profile(std::move(init.visual_profile), init.visual_health,
@@ -311,10 +285,12 @@ void DaemonApp::load_companion_source(ProfileSource &source) {
       layerc::platform::load_companion_sidecar(source.path, source.profile);
   source.companion_health = companion.state;
   if (companion.state == layerc::platform::CompanionSidecarState::valid ||
-      companion.state == layerc::platform::CompanionSidecarState::recovered_backup) {
+      companion.state ==
+          layerc::platform::CompanionSidecarState::recovered_backup) {
     source.companion_profile = companion.profile;
   }
-  if (companion.state == layerc::platform::CompanionSidecarState::recovered_backup ||
+  if (companion.state ==
+          layerc::platform::CompanionSidecarState::recovered_backup ||
       companion.state == layerc::platform::CompanionSidecarState::invalid) {
     source.companion_error = companion.error.message;
   }
@@ -341,11 +317,11 @@ void DaemonApp::reload_profiles() {
       }
       auto parsed = layerc::core::parse_profile_json(*contents);
       if (auto *profile = std::get_if<layerc::core::GameProfile>(&parsed)) {
-        ProfileSource source{
-            .key = layerc::platform::canonical_profile_key(entry.path()),
-            .path = entry.path(),
-            .profile = std::move(*profile),
-            .revision = 0};
+        ProfileSource source;
+        source.key = layerc::platform::canonical_profile_key(entry.path());
+        source.path = entry.path();
+        source.profile = std::move(*profile);
+        source.revision = 0;
         load_visual_source(source);
         load_automation_source(source);
         load_companion_source(source);
@@ -369,10 +345,11 @@ void DaemonApp::apply_profile_update(
       found == loaded.end() ? profile_path_for_key(key) : found->path;
   if (source_path.empty())
     source_path = std::filesystem::path(key);
-  ProfileSource source{.key = std::move(key),
-                       .path = source_path,
-                       .profile = std::move(profile),
-                       .revision = revision};
+  ProfileSource source;
+  source.key = std::move(key);
+  source.path = source_path;
+  source.profile = std::move(profile);
+  source.revision = revision;
   load_visual_source(source);
   load_automation_source(source);
   load_companion_source(source);
@@ -499,17 +476,17 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
           return session->source_key == source.key && session->is_global();
         });
     if (!exists)
-      sessions_.push_back(std::make_unique<Session>(SessionInit{
-          .profile = source.profile,
-          .source_key = source.key,
-          .visual_profile = source.visual_profile,
-          .visual_health = source.visual_health,
-          .automation_profile = source.automation_profile,
-          .automation_health = source.automation_health,
-          .companion_profile = source.companion_profile,
-          .companion_health = source.companion_health,
-          .visual_enabled = visual_recognition_enabled_,
-          .capture_exclusion = capture_exclusion_}));
+      sessions_.push_back(std::make_unique<Session>(
+          SessionInit{.profile = source.profile,
+                      .source_key = source.key,
+                      .visual_profile = source.visual_profile,
+                      .visual_health = source.visual_health,
+                      .automation_profile = source.automation_profile,
+                      .automation_health = source.automation_health,
+                      .companion_profile = source.companion_profile,
+                      .companion_health = source.companion_health,
+                      .visual_enabled = visual_recognition_enabled_,
+                      .capture_exclusion = capture_exclusion_}));
   }
 
   const bool has_enabled_profile = std::any_of(
@@ -615,17 +592,17 @@ void DaemonApp::refresh_game_windows() {
     if (source == profile_sources_.end() || !IsWindow(window)) {
       continue;
     }
-    auto instance = std::make_unique<Session>(SessionInit{
-        .profile = source->profile,
-        .source_key = source->key,
-        .visual_profile = source->visual_profile,
-        .visual_health = source->visual_health,
-        .automation_profile = source->automation_profile,
-        .automation_health = source->automation_health,
-        .companion_profile = source->companion_profile,
-        .companion_health = source->companion_health,
-        .visual_enabled = visual_recognition_enabled_,
-        .capture_exclusion = capture_exclusion_});
+    auto instance = std::make_unique<Session>(
+        SessionInit{.profile = source->profile,
+                    .source_key = source->key,
+                    .visual_profile = source->visual_profile,
+                    .visual_health = source->visual_health,
+                    .automation_profile = source->automation_profile,
+                    .automation_health = source->automation_health,
+                    .companion_profile = source->companion_profile,
+                    .companion_health = source->companion_health,
+                    .visual_enabled = visual_recognition_enabled_,
+                    .capture_exclusion = capture_exclusion_});
     instance->game_window = window;
     sessions_.push_back(std::move(instance));
   }
@@ -633,8 +610,8 @@ void DaemonApp::refresh_game_windows() {
   sync_foreground_state();
 }
 void DaemonApp::sync_foreground_state() {
-  auto active_sessions = foreground_sessions();
   const HWND foreground_root = GetAncestor(GetForegroundWindow(), GA_ROOT);
+  auto active_sessions = foreground_sessions();
   const HWND active_window = active_sessions.empty()
                                  ? nullptr
                                  : (active_sessions.front()->is_global()
@@ -674,7 +651,7 @@ void DaemonApp::sync_foreground_state() {
   reconcile_runtime_services();
 }
 
-std::vector<Session *> DaemonApp::foreground_sessions() {
+std::vector<Session *> DaemonApp::foreground_sessions() const {
   const HWND foreground = GetAncestor(GetForegroundWindow(), GA_ROOT);
   DWORD foreground_process_id{};
   if (foreground != nullptr)
@@ -711,4 +688,19 @@ std::vector<Session *> DaemonApp::foreground_sessions() {
   return matches;
 }
 
+std::vector<Session *> DaemonApp::current_companion_sessions() const {
+  const auto foreground = foreground_sessions();
+  const HWND foreground_window = GetAncestor(GetForegroundWindow(), GA_ROOT);
+  DWORD foreground_process_id{};
+  if (foreground_window != nullptr)
+    GetWindowThreadProcessId(foreground_window, &foreground_process_id);
+
+  std::vector<Session *> all_sessions;
+  all_sessions.reserve(sessions_.size());
+  for (const auto &session : sessions_)
+    all_sessions.push_back(session.get());
+  return select_companion_sessions<Session>(
+      foreground, all_sessions,
+      platform::is_gamebar_overlay_process(foreground_process_id));
+}
 } // namespace layerc::daemon

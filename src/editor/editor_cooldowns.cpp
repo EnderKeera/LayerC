@@ -1,5 +1,5 @@
-#include "editor_window.hpp"
 #include "editor_resource.h"
+#include "editor_window.hpp"
 #include "layerc/core/hid.hpp"
 
 #include <algorithm>
@@ -39,9 +39,11 @@ std::wstring key_name_for_scan_code(const std::uint16_t code) {
   return label;
 }
 
-void sync_bar_panels(layerc::core::GameProfile &profile,
-                     const std::optional<std::string_view> added = std::nullopt) {
-  const bool independent = !profile.panels.empty() &&
+void sync_bar_panels(
+    layerc::core::GameProfile &profile,
+    const std::optional<std::string_view> added = std::nullopt) {
+  const bool independent =
+      !profile.panels.empty() &&
       std::ranges::all_of(profile.panels, [](const layerc::core::Panel &panel) {
         return panel.style == layerc::core::PanelStyle::bar &&
                panel.cooldown_ids.size() == 1;
@@ -56,12 +58,12 @@ void sync_bar_panels(layerc::core::GameProfile &profile,
                   [&](const auto &id) { return !exists(id); });
   std::erase_if(profile.panels,
                 [](const auto &panel) { return panel.cooldown_ids.empty(); });
-  if (profile.cooldowns.empty()) return;
+  if (profile.cooldowns.empty())
+    return;
 
   if (added && independent) {
-    const auto cooldown =
-        std::ranges::find(profile.cooldowns, *added,
-                          &layerc::core::CooldownDefinition::id);
+    const auto cooldown = std::ranges::find(
+        profile.cooldowns, *added, &layerc::core::CooldownDefinition::id);
     if (cooldown != profile.cooldowns.end()) {
       layerc::core::Panel panel;
       panel.id = unique_panel_id(cooldown->id + "-bar", profile.panels);
@@ -69,8 +71,8 @@ void sync_bar_panels(layerc::core::GameProfile &profile,
       panel.style = layerc::core::PanelStyle::bar;
       panel.anchor_x = 0.5;
       panel.anchor_y = std::clamp(
-          0.2 + 0.10 * static_cast<double>(profile.cooldowns.size() - 1U),
-          0.0, 1.0);
+          0.2 + 0.10 * static_cast<double>(profile.cooldowns.size() - 1U), 0.0,
+          1.0);
       panel.cooldown_ids = {cooldown->id};
       profile.panels.push_back(std::move(panel));
       return;
@@ -81,20 +83,24 @@ void sync_bar_panels(layerc::core::GameProfile &profile,
     profile.panels.push_back({.id = "main",
                               .name = "Main",
                               .style = layerc::core::PanelStyle::bar,
+                              .bar = {},
                               .cooldown_ids = {}});
   }
-  const std::string_view required = added.value_or(profile.cooldowns.front().id);
+  const std::string_view required =
+      added.value_or(profile.cooldowns.front().id);
   const bool assigned = std::ranges::any_of(
       profile.panels, [&](const layerc::core::Panel &panel) {
         return std::ranges::find(panel.cooldown_ids, required) !=
                panel.cooldown_ids.end();
       });
-  if (!assigned) profile.panels.front().cooldown_ids.emplace_back(required);
+  if (!assigned)
+    profile.panels.front().cooldown_ids.emplace_back(required);
 }
 
 } // namespace
 bool EditorWindow::handle_binding_capture_message(const MSG &message) {
-  if (!capturing_binding_) return false;
+  if (!capturing_binding_)
+    return false;
   if (message.message == WM_KEYDOWN || message.message == WM_SYSKEYDOWN) {
     if (message.wParam == VK_ESCAPE) {
       cancel_binding_capture(L"Binding capture cancelled.");
@@ -111,15 +117,15 @@ bool EditorWindow::handle_binding_capture_message(const MSG &message) {
   return false;
 }
 
-
 void EditorWindow::refresh_profile_controls() {
   capturing_binding_ = false;
   syncing_ = true;
   set_text(GetDlgItem(dialog_, IDC_PROFILE_NAME), to_wide(profile_.name));
   set_text(GetDlgItem(dialog_, IDC_PROFILE_ID), to_wide(profile_.id));
-  const auto application = profile_.game.executable_path.empty()
-                               ? L"Choose a task from Detected Tasks or Pick Window."
-                               : to_wide(profile_.game.executable_path);
+  const auto application =
+      profile_.game.executable_path.empty()
+          ? L"Choose a task from Detected Tasks or Pick Window."
+          : to_wide(profile_.game.executable_path);
   set_text(application_path_, application);
   refresh_cooldown_list();
   refresh_bar_list();
@@ -131,26 +137,34 @@ void EditorWindow::refresh_cooldown_list(const int selection) {
   SendMessageW(cooldown_list_, LB_RESETCONTENT, 0, 0);
   for (std::size_t index = 0; index < profile_.cooldowns.size(); ++index) {
     const auto &cooldown = profile_.cooldowns[index];
-    const auto label = to_wide(cooldown.name) + L"  —  " +
-                       std::to_wstring(cooldown.duration.count() / 1000) + L"." +
-                       std::to_wstring((cooldown.duration.count() % 1000) / 100) + L" s";
-    const auto item = SendMessageW(cooldown_list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+    const auto label =
+        to_wide(cooldown.name) + L"  —  " +
+        std::to_wstring(cooldown.duration.count() / 1000) + L"." +
+        std::to_wstring((cooldown.duration.count() % 1000) / 100) + L" s";
+    const auto item = SendMessageW(cooldown_list_, LB_ADDSTRING, 0,
+                                   reinterpret_cast<LPARAM>(label.c_str()));
     if (item != LB_ERR && item != LB_ERRSPACE)
-      SendMessageW(cooldown_list_, LB_SETITEMDATA, static_cast<WPARAM>(item), static_cast<LPARAM>(index));
+      SendMessageW(cooldown_list_, LB_SETITEMDATA, static_cast<WPARAM>(item),
+                   static_cast<LPARAM>(index));
   }
   if (!profile_.cooldowns.empty())
-    SendMessageW(cooldown_list_, LB_SETCURSEL,
-                 static_cast<WPARAM>(std::clamp(selection, 0, static_cast<int>(profile_.cooldowns.size()) - 1)), 0);
+    SendMessageW(
+        cooldown_list_, LB_SETCURSEL,
+        static_cast<WPARAM>(std::clamp(
+            selection, 0, static_cast<int>(profile_.cooldowns.size()) - 1)),
+        0);
   refresh_binding_controls();
 }
 
 layerc::core::CooldownDefinition *EditorWindow::selected_cooldown() {
   const LRESULT row = SendMessageW(cooldown_list_, LB_GETCURSEL, 0, 0);
-  if (row == LB_ERR) return nullptr;
+  if (row == LB_ERR)
+    return nullptr;
   const LRESULT value =
       SendMessageW(cooldown_list_, LB_GETITEMDATA, static_cast<WPARAM>(row), 0);
   if (value == LB_ERR || value < 0 ||
-      static_cast<std::size_t>(value) >= profile_.cooldowns.size()) return nullptr;
+      static_cast<std::size_t>(value) >= profile_.cooldowns.size())
+    return nullptr;
   return &profile_.cooldowns[static_cast<std::size_t>(value)];
 }
 
@@ -176,12 +190,14 @@ void EditorWindow::refresh_binding_controls() {
   const layerc::core::InputBinding *only{};
   std::size_t count{};
   for (const auto &candidate : profile_.bindings) {
-    if (candidate.cooldown_id != cooldown->id) continue;
+    if (candidate.cooldown_id != cooldown->id)
+      continue;
     only = &candidate;
     ++count;
   }
   if (count != 1 || only == nullptr || only->chord.tokens.size() != 1) {
-    set_text(binding, count == 0 ? L"Unbound" : L"Custom chord — capture replaces it");
+    set_text(binding,
+             count == 0 ? L"Unbound" : L"Custom chord — capture replaces it");
     return;
   }
 
@@ -217,33 +233,38 @@ void EditorWindow::begin_binding_capture() {
 }
 
 void EditorWindow::cancel_binding_capture(const std::wstring_view status) {
-  if (!capturing_binding_) return;
+  if (!capturing_binding_)
+    return;
   capturing_binding_ = false;
   refresh_binding_controls();
-  if (!status.empty()) set_status(status);
+  if (!status.empty())
+    set_status(status);
 }
 
 void EditorWindow::assign_binding_key(const LPARAM key_data) {
   auto *cooldown = selected_cooldown();
   if (cooldown == nullptr) {
-    cancel_binding_capture(L"Binding capture cancelled because no cooldown is selected.");
+    cancel_binding_capture(
+        L"Binding capture cancelled because no cooldown is selected.");
     return;
   }
   const std::uint16_t code = scan_code_from_lparam(key_data);
 
   if ((code & 0x00FFU) == 0) {
-    set_status(L"That key cannot be represented as a Windows scan code; try another key.");
+    set_status(L"That key cannot be represented as a Windows scan code; try "
+               L"another key.");
     return;
   }
 
   const auto cooldown_id = cooldown->id;
-  std::erase_if(profile_.bindings, [&](const layerc::core::InputBinding &binding) {
-    return binding.cooldown_id == cooldown_id;
-  });
-  profile_.bindings.push_back({
-      .cooldown_id = cooldown_id,
-      .chord = layerc::core::InputChord{{{
-          layerc::core::InputDevice::keyboard, code, 0}}}});
+  std::erase_if(profile_.bindings,
+                [&](const layerc::core::InputBinding &binding) {
+                  return binding.cooldown_id == cooldown_id;
+                });
+  profile_.bindings.push_back(
+      {.cooldown_id = cooldown_id,
+       .chord = layerc::core::InputChord{
+           {{layerc::core::InputDevice::keyboard, code, 0}}}});
   layerc::core::compact_hid_bindings(profile_);
   capturing_binding_ = false;
   refresh_binding_controls();
@@ -252,7 +273,6 @@ void EditorWindow::assign_binding_key(const LPARAM key_data) {
                  ? L"Binding updated — Save once to create the profile."
                  : L"Binding updated and autosaving.");
 }
-
 
 void EditorWindow::add_cooldown() {
   sync_profile_from_controls();
@@ -265,25 +285,28 @@ void EditorWindow::add_cooldown() {
                          return cooldown.id == id;
                        }));
   const int display_number = number - 1;
-  profile_.cooldowns.push_back({.id = id, .name = "Ability " + std::to_string(display_number),
-                                .duration = std::chrono::seconds(5), .max_charges = 1,
-                                .retrigger = layerc::core::RetriggerPolicy::ignore});
+  profile_.cooldowns.push_back(
+      {.id = id,
+       .name = "Ability " + std::to_string(display_number),
+       .duration = std::chrono::seconds(5),
+       .max_charges = 1,
+       .retrigger = layerc::core::RetriggerPolicy::ignore});
 
   constexpr std::array<std::uint16_t, 36> preferred_scan_codes{
-      0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19,
-      0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
-      0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32,
-      0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B,
-      0x3B, 0x3C};
+      0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1E, 0x1F, 0x20, 0x21,
+      0x22, 0x23, 0x24, 0x25, 0x26, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32,
+      0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x3B, 0x3C};
   const auto scan_code_used = [&](const std::uint16_t candidate) {
-    return std::any_of(profile_.bindings.begin(), profile_.bindings.end(),
-                       [&](const layerc::core::InputBinding &binding) {
-      return std::any_of(binding.chord.tokens.begin(), binding.chord.tokens.end(),
-                         [&](const layerc::core::InputToken &token) {
-        return token.device == layerc::core::InputDevice::keyboard &&
-               token.code == candidate;
-      });
-    });
+    return std::any_of(
+        profile_.bindings.begin(), profile_.bindings.end(),
+        [&](const layerc::core::InputBinding &binding) {
+          return std::any_of(
+              binding.chord.tokens.begin(), binding.chord.tokens.end(),
+              [&](const layerc::core::InputToken &token) {
+                return token.device == layerc::core::InputDevice::keyboard &&
+                       token.code == candidate;
+              });
+        });
   };
   std::uint16_t scan_code{};
   for (const auto candidate : preferred_scan_codes) {
@@ -300,44 +323,58 @@ void EditorWindow::add_cooldown() {
       }
     }
   }
-  if (scan_code == 0) scan_code = 0x12;
-  profile_.bindings.push_back({.cooldown_id = id,
-      .chord = layerc::core::InputChord{{{layerc::core::InputDevice::keyboard, scan_code, 0}}}});
+  if (scan_code == 0)
+    scan_code = 0x12;
+  profile_.bindings.push_back(
+      {.cooldown_id = id,
+       .chord = layerc::core::InputChord{
+           {{layerc::core::InputDevice::keyboard, scan_code, 0}}}});
   sync_bar_panels(profile_, id);
   refresh_bar_list(profile_.panels.size() - 1U);
   refresh_cooldown_list(static_cast<int>(profile_.cooldowns.size()) - 1);
   record_profile_change(ChangeKind::immediate);
-  set_status(L"Cooldown added with an unused keyboard binding; Capture key can change it.");
+  set_status(L"Cooldown added with an unused keyboard binding; Capture key can "
+             L"change it.");
 }
 
 void EditorWindow::remove_cooldown() {
   if (profile_.cooldowns.size() <= 1) {
-    MessageBoxW(dialog_, L"A profile needs at least one cooldown.", L"LayerE", MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(dialog_, L"A profile needs at least one cooldown.", L"LayerE",
+                MB_OK | MB_ICONINFORMATION);
     return;
   }
   const LRESULT row = SendMessageW(cooldown_list_, LB_GETCURSEL, 0, 0);
-  const LRESULT data = row == LB_ERR ? LB_ERR :
-      SendMessageW(cooldown_list_, LB_GETITEMDATA, static_cast<WPARAM>(row), 0);
-  if (data == LB_ERR || data < 0 || static_cast<std::size_t>(data) >= profile_.cooldowns.size()) {
-    MessageBoxW(dialog_, L"Select a cooldown to remove.", L"LayerE", MB_OK | MB_ICONINFORMATION);
+  const LRESULT data = row == LB_ERR
+                           ? LB_ERR
+                           : SendMessageW(cooldown_list_, LB_GETITEMDATA,
+                                          static_cast<WPARAM>(row), 0);
+  if (data == LB_ERR || data < 0 ||
+      static_cast<std::size_t>(data) >= profile_.cooldowns.size()) {
+    MessageBoxW(dialog_, L"Select a cooldown to remove.", L"LayerE",
+                MB_OK | MB_ICONINFORMATION);
     return;
   }
   const auto &cooldown = profile_.cooldowns[static_cast<std::size_t>(data)];
   const auto prompt = L"Remove '" + to_wide(cooldown.name) + L"'?";
-  if (MessageBoxW(dialog_, prompt.c_str(), L"Remove cooldown", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+  if (MessageBoxW(dialog_, prompt.c_str(), L"Remove cooldown",
+                  MB_YESNO | MB_ICONQUESTION) != IDYES)
+    return;
   const auto id = cooldown.id;
   if (visual_profile_) {
     erase_visual_assignment(*visual_profile_, id);
   }
   profile_.cooldowns.erase(profile_.cooldowns.begin() + data);
-  std::erase_if(profile_.bindings, [&](const layerc::core::InputBinding &binding) { return binding.cooldown_id == id; });
+  std::erase_if(profile_.bindings,
+                [&](const layerc::core::InputBinding &binding) {
+                  return binding.cooldown_id == id;
+                });
   layerc::core::compact_hid_bindings(profile_);
   sync_bar_panels(profile_);
 
-  refresh_cooldown_list(static_cast<int>(data) - 1); refresh_bar_list();
+  refresh_cooldown_list(static_cast<int>(data) - 1);
+  refresh_bar_list();
   record_profile_change(ChangeKind::immediate);
   set_status(L"Cooldown removed.");
 }
-
 
 } // namespace layerc::editor

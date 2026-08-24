@@ -1,0 +1,21 @@
+<Page
+    x:Class="LayerC.GameBar.PanelWidgetPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="{StaticResource LayerCBackgroundBrush}"
+    XYFocusKeyboardNavigation="Enabled">
+  <Grid x:Name="Root" Padding="12" RowSpacing="8">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+    </Grid.RowDefinitions>
+    <TextBlock x:Name="PanelTitle" FontSize="18" FontWeight="SemiBold"
+               Text="LayerC" TextWrapping="Wrap" />
+    <TextBlock x:Name="StatusText" Grid.Row="1" Opacity="0.8"
+               Text="Waiting for LayerD…" TextWrapping="Wrap" />
+    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+      <StackPanel x:Name="ItemsHost" Spacing="8" />
+    </ScrollViewer>
+  </Grid>
+</Page>

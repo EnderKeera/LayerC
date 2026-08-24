@@ -25,12 +25,13 @@ public:
     ++context_.constructed;
   }
 
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
+  [[nodiscard]] layerc::runtime::Capability
+  capability() const noexcept override {
     return context_.capability;
   }
 
-  [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
-      const layerc::runtime::CapabilityDemand &demand) override {
+  [[nodiscard]] layerc::runtime::ServiceReconcileResult
+  reconcile(const layerc::runtime::CapabilityDemand &demand) override {
     ++context_.reconciled;
     consumers_ = demand.consumers(context_.capability);
     return context_.fail
@@ -54,8 +55,7 @@ private:
   std::uint32_t consumers_{};
 };
 
-std::unique_ptr<layerc::runtime::IRuntimeService>
-make_fake(void *context) {
+std::unique_ptr<layerc::runtime::IRuntimeService> make_fake(void *context) {
   return std::make_unique<FakeService>(*static_cast<FakeContext *>(context));
 }
 
@@ -83,8 +83,7 @@ void host_is_lazy_and_idempotent() {
 
   expect(host.reconcile(demand, {&descriptor, 1}),
          "empty demand should reconcile");
-  expect(context.constructed == 0,
-         "empty demand must not construct a service");
+  expect(context.constructed == 0, "empty demand must not construct a service");
 
   demand.set(layerc::runtime::Capability::visual, 2);
   expect(host.reconcile(demand, {&descriptor, 1}),
@@ -195,8 +194,7 @@ void teardown_is_reverse_ordered() {
   demand = {};
   expect(host.reconcile(demand, descriptors),
          "multiple services should quiesce");
-  expect(order.size() == 2 &&
-             order[0] == layerc::runtime::Capability::visual &&
+  expect(order.size() == 2 && order[0] == layerc::runtime::Capability::visual &&
              order[1] == layerc::runtime::Capability::input,
          "services should quiesce in reverse dependency order");
 }
@@ -232,8 +230,8 @@ void demand_matrix_is_explicit() {
   const auto calculate = [](std::initializer_list<SessionCapabilityRequest> s,
                             const bool editor = false,
                             const bool edit = false) {
-    return layerc::runtime::calculate_capability_demand(
-        {s.begin(), s.size()}, editor, edit);
+    return layerc::runtime::calculate_capability_demand({s.begin(), s.size()},
+                                                        editor, edit);
   };
 
   expect(calculate({}).empty(), "no game should demand no service");
@@ -246,8 +244,11 @@ void demand_matrix_is_explicit() {
              !demand.required(Capability::visual),
          "input-only foreground game should own input and overlay only");
 
-  demand = calculate({{.window = {1}, .active = true, .global = true,
-                       .visual = true, .templates = true}});
+  demand = calculate({{.window = {1},
+                       .active = true,
+                       .global = true,
+                       .visual = true,
+                       .templates = true}});
   expect(demand.required(Capability::input) &&
              !demand.required(Capability::visual) &&
              !demand.required(Capability::template_evaluation),
@@ -258,8 +259,11 @@ void demand_matrix_is_explicit() {
              !demand.required(Capability::template_evaluation),
          "pixel observations should activate inline visual only");
 
-  demand = calculate({{.window = {1}, .active = true, .visual = true,
-                       .templates = true, .generic_hid = true}});
+  demand = calculate({{.window = {1},
+                       .active = true,
+                       .visual = true,
+                       .templates = true,
+                       .generic_hid = true}});
   expect(demand.required(Capability::visual) &&
              demand.required(Capability::template_evaluation) &&
              demand.required(Capability::generic_hid),
@@ -267,26 +271,13 @@ void demand_matrix_is_explicit() {
 
   demand = calculate({
       {.window = {9}, .active = true, .visual = true, .templates = true},
-      {.window = {9}, .active = true, .visual = true,
-       .isolated_visual = true},
+      {.window = {9}, .active = true, .visual = true, .isolated_visual = true},
   });
   expect(demand.consumers(Capability::isolated_visual) == 2 &&
              !demand.required(Capability::visual) &&
              !demand.required(Capability::template_evaluation),
-         "one isolated profile should route every profile on its HWND through one isolated tier");
-
-  demand = calculate({{.window = {1}, .active = true},
-                      {.window = {2}, .active = true, .companion = true}});
-  expect(demand.required(Capability::gamebar) &&
-             demand.consumers(Capability::gamebar) == 1 &&
-             demand.consumers(Capability::input) == 2,
-         "companion slots should demand the Game Bar capability per active session");
-  demand = calculate({{.window = {1}, .active = true}});
-  expect(!demand.required(Capability::gamebar),
-         "an input-only active session should not demand Game Bar");
-  demand = calculate({{.window = {1}, .active = false, .companion = true}});
-  expect(!demand.required(Capability::gamebar),
-         "an inactive companion session should not demand Game Bar");
+         "one isolated profile should route every profile on its HWND through "
+         "one isolated tier");
 
   demand = calculate({}, true, false);
   expect(demand.required(Capability::live_edit) &&
@@ -309,22 +300,24 @@ struct ReentrantContext {
 class ReentrantService final : public layerc::runtime::IRuntimeService {
 public:
   explicit ReentrantService(ReentrantContext &context) : context_(context) {}
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
+  [[nodiscard]] layerc::runtime::Capability
+  capability() const noexcept override {
     return layerc::runtime::Capability::visual;
   }
-  [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
-      const layerc::runtime::CapabilityDemand &) override {
+  [[nodiscard]] layerc::runtime::ServiceReconcileResult
+  reconcile(const layerc::runtime::CapabilityDemand &) override {
     if (!context_.notified) {
       context_.notified = true;
       layerc::runtime::CapabilityDemand cleared;
-      (void)context_.kernel->reconcile(cleared,
-                                      {context_.descriptor, 1});
+      (void)context_.kernel->reconcile(cleared, {context_.descriptor, 1});
     }
     return {};
   }
   void quiesce() noexcept override { ++context_.quiesced; }
   [[nodiscard]] layerc::runtime::RuntimeResourceStats
-  resources() const noexcept override { return {.threads = 1}; }
+  resources() const noexcept override {
+    return {.threads = 1};
+  }
 
 private:
   ReentrantContext &context_;
@@ -366,7 +359,8 @@ int main() {
   repeated_activation_has_bounded_ownership();
   demand_matrix_is_explicit();
   kernel_serializes_reentrant_demand();
-  if (layerc::test::failures != 0) return 1;
+  if (layerc::test::failures != 0)
+    return 1;
   std::cout << "runtime service tests passed\n";
   return 0;
 }

@@ -5,6 +5,9 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/profile_transaction.hpp"
+#include "pack_detail.hpp"
+#include "pack_sidecar_table.hpp"
+
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets.hpp"
 
@@ -14,8 +17,8 @@
 #include <array>
 #include <cmath>
 #include <cstring>
-#include <fstream>
 #include <limits>
+#include <memory>
 #include <set>
 #include <system_error>
 #include <utility>
@@ -25,232 +28,52 @@
 namespace layerc::bundle {
 namespace {
 
-using EntryMap = std::map<std::string, std::vector<std::byte>, std::less<>>;
+using detail::as_bytes;
+using detail::as_string;
+using detail::asset_path_for_profile_root;
+using detail::EntryMap;
+using detail::exact_fields;
+using detail::failure;
+using detail::manifest_json;
+using detail::read_file;
+using detail::required;
+using detail::required_string;
+using detail::required_unsigned;
+using detail::safe_entry_path;
+using detail::source_schema;
+using detail::validation_failure;
+using detail::visual_asset_references;
+using detail::write_file_atomically;
 
-PackOperationResult failure(std::string message) {
-  return PackError{std::move(message)};
+template <typename Sidecar>
+std::optional<PackError>
+sidecar_export_error(const Sidecar &sidecar,
+                     const std::filesystem::path &profile_path,
+                     const std::string_view kind) {
+  if (sidecar.state == decltype(sidecar.state)::invalid)
+    return PackError{std::string(kind) +
+                     " sidecar is invalid: " + profile_path.string()};
+  if (sidecar.state == decltype(sidecar.state)::recovered_backup)
+    return PackError{"save the recovered " + std::string(kind) +
+                     " sidecar before exporting: " + profile_path.string()};
+  return std::nullopt;
 }
 
-PackValidationResult validation_failure(std::string message) {
-  return PackError{std::move(message)};
-}
-
-std::optional<std::vector<std::byte>>
-read_file(const std::filesystem::path &path, const std::size_t maximum) {
-  std::error_code error;
-  const auto size = std::filesystem::file_size(path, error);
-  if (error || size > maximum ||
-      size > static_cast<std::uintmax_t>(
-                 std::numeric_limits<std::streamsize>::max()))
-    return std::nullopt;
-  std::ifstream input(path, std::ios::binary);
-  if (!input)
-    return std::nullopt;
-  std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-  input.read(reinterpret_cast<char *>(bytes.data()),
-             static_cast<std::streamsize>(bytes.size()));
-  if (input.gcount() != static_cast<std::streamsize>(bytes.size()))
-    return std::nullopt;
-  return bytes;
-}
-
-std::string as_string(const std::span<const std::byte> bytes) {
-  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-}
-
-std::vector<std::byte> as_bytes(const std::string_view source) {
-  std::vector<std::byte> bytes(source.size());
-  std::memcpy(bytes.data(), source.data(), source.size());
-  return bytes;
-}
-
-bool safe_entry_path(const std::string_view path) {
-  if (path.empty() || path.front() == '/' || path.front() == '\\' ||
-      path.find('\\') != std::string_view::npos ||
-      path.find(':') != std::string_view::npos ||
-      path.find('\0') != std::string_view::npos ||
-      !platform::try_utf8_to_wide(path).has_value())
-    return false;
-  const auto safe_component = [](const std::string_view component) {
-    const auto wide = platform::try_utf8_to_wide(component);
-    if (!wide.has_value() || wide->empty() || wide->size() > 240 ||
-        wide->back() == L'.' || wide->back() == L' ')
-      return false;
-    for (const auto character : *wide) {
-      if (character < 32 || std::wstring_view(L"<>:\"/\\|?*").find(character) !=
-                                std::wstring_view::npos)
-        return false;
-    }
-    auto stem = wide->substr(0, wide->find(L'.'));
-    std::ranges::transform(stem, stem.begin(), towupper);
-    if (stem == L"CON" || stem == L"PRN" || stem == L"AUX" || stem == L"NUL")
-      return false;
-    if (stem.size() == 4 &&
-        (stem.starts_with(L"COM") || stem.starts_with(L"LPT")) &&
-        stem[3] >= L'1' && stem[3] <= L'9')
-      return false;
-    return true;
-  };
-  std::size_t start{};
-  while (start <= path.size()) {
-    const auto end = path.find('/', start);
-    const auto part =
-        path.substr(start, end == std::string_view::npos ? path.size() - start
-                                                         : end - start);
-    if (part.empty() || part == "." || part == ".." || !safe_component(part))
-      return false;
-    if (end == std::string_view::npos)
-      break;
-    start = end + 1U;
-  }
-  return true;
-}
-
-std::filesystem::path
-asset_path_for_profile_root(const std::filesystem::path &profile_root,
-                            const std::string_view hash) {
-  if (!core::is_lowercase_sha256(hash))
-    return {};
-  return profile_root / L"_visual" / L"assets" /
-         (std::wstring(hash.begin(), hash.end()) + L".png");
-}
-
-const core::json::Value *required(const core::json::Value &object,
-                                  const std::string_view key) {
-  return object.is_object() ? object.find(key) : nullptr;
-}
-
-std::optional<std::string> required_string(const core::json::Value &object,
-                                           const std::string_view key) {
-  const auto *value = required(object, key);
-  if (value == nullptr || !value->is_string())
-    return std::nullopt;
-  return value->as_string();
-}
-
-std::optional<std::uint64_t> required_unsigned(const core::json::Value &object,
-                                               const std::string_view key) {
-  const auto *value = required(object, key);
-  if (value == nullptr || !value->is_number() ||
-      !std::isfinite(value->as_number()) || value->as_number() < 0.0 ||
-      std::floor(value->as_number()) != value->as_number() ||
-      value->as_number() >
-          static_cast<double>(std::numeric_limits<std::uint64_t>::max()))
-    return std::nullopt;
-  return static_cast<std::uint64_t>(value->as_number());
-}
-
-bool exact_fields(const core::json::Value &object,
-                  const std::initializer_list<std::string_view> allowed) {
-  if (!object.is_object())
-    return false;
-  for (const auto &[key, unused] : object.as_object()) {
-    (void)unused;
-    if (std::ranges::find(allowed, key) == allowed.end())
-      return false;
-  }
-  return true;
-}
-
-std::optional<std::uint32_t> source_schema(const std::string_view json) {
-  const auto parsed = core::json::parse(json);
-  const auto *root = std::get_if<core::json::Value>(&parsed);
-  if (root == nullptr)
-    return std::nullopt;
-  const auto schema = required_unsigned(*root, "schemaVersion");
-  if (!schema.has_value() ||
-      *schema > std::numeric_limits<std::uint32_t>::max())
-    return std::nullopt;
-  return static_cast<std::uint32_t>(*schema);
-}
-
-std::vector<std::string>
-visual_asset_references(const core::VisualProfile &profile) {
-  std::set<std::string, std::less<>> unique;
-  for (const auto &state : profile.templates)
-    for (const auto &reference : state.references)
-      unique.insert(reference.asset_sha256);
-  return {unique.begin(), unique.end()};
-}
-
-std::optional<std::string>
-manifest_json(const std::vector<PackProfile> &profiles,
-              const std::map<std::string, PackAsset, std::less<>> &assets,
-              const std::vector<std::string> &base_paths,
-              const std::vector<std::string> &visual_paths,
-              const std::vector<std::string> &automation_paths) {
-  std::string output =
-      "{\n  \"schemaVersion\": 1,\n  \"kind\": \"layerc-profile-pack\",\n  "
-      "\"producerVersion\": \"2.3.0\",\n  \"profiles\": [\n";
-  for (std::size_t index = 0; index < profiles.size(); ++index) {
-    const auto &profile = profiles[index];
-    output += "    {\"id\":";
-    core::json::append_quoted(output, profile.profile.id);
-    output += ",\"suggestedFilename\":";
-    core::json::append_quoted(output, profile.suggested_filename);
-    output += ",\"base\":{\"path\":";
-    core::json::append_quoted(output, base_paths[index]);
-    output += ",\"schemaVersion\":";
-    core::json::append_unsigned(output,
-                                source_schema(profile.base_json).value_or(0));
-    output += ",\"size\":";
-    core::json::append_unsigned(output, profile.base_json.size());
-    output += ",\"sha256\":";
-    const auto base_hash = core::sha256(profile.base_json);
-    core::json::append_quoted(output, base_hash);
-    output += "},\"modules\":[";
-    if (profile.visual_json.has_value()) {
-      output += "{\"kind\":\"visual\",\"path\":";
-      core::json::append_quoted(output, visual_paths[index]);
-      output += ",\"schemaVersion\":";
-      core::json::append_unsigned(
-          output, source_schema(*profile.visual_json).value_or(0));
-      output += ",\"size\":";
-      core::json::append_unsigned(output, profile.visual_json->size());
-      output += ",\"sha256\":";
-      const auto visual_hash = core::sha256(*profile.visual_json);
-      core::json::append_quoted(output, visual_hash);
-      output += "}";
-    }
-    if (profile.automation_json.has_value()) {
-      if (profile.visual_json.has_value())
-        output.push_back(',');
-      output += "{\"kind\":\"automation\",\"path\":";
-      core::json::append_quoted(output, automation_paths[index]);
-      output += ",\"schemaVersion\":";
-      core::json::append_unsigned(
-          output, source_schema(*profile.automation_json).value_or(0));
-      output += ",\"size\":";
-      core::json::append_unsigned(output, profile.automation_json->size());
-      output += ",\"sha256\":";
-      const auto automation_hash =
-          core::sha256(*profile.automation_json);
-      core::json::append_quoted(output, automation_hash);
-      output += "}";
-    }
-    output += "],\"assets\":[";
-    for (std::size_t asset = 0; asset < profile.asset_sha256.size(); ++asset) {
-      if (asset != 0)
-        output += ',';
-      core::json::append_quoted(output, profile.asset_sha256[asset]);
-    }
-    output += "]}";
-    output += index + 1U == profiles.size() ? "\n" : ",\n";
-  }
-  output += "  ],\n  \"assets\": [\n";
-  std::size_t index{};
-  for (const auto &[hash, asset] : assets) {
-    output += "    {\"sha256\":";
-    core::json::append_quoted(output, hash);
-    output += ",\"path\":";
-    core::json::append_quoted(output, "assets/" + hash + ".png");
-    output += ",\"size\":";
-    core::json::append_unsigned(output, asset.bytes.size());
-    output += "}";
-    output += ++index == assets.size() ? "\n" : ",\n";
-  }
-  output += "  ]\n}\n";
-  return output;
+template <typename ReadFn, typename Reserve>
+std::optional<PackError>
+load_sidecar_json_for_export(const std::filesystem::path &sidecar_source,
+                             const std::filesystem::path &profile_path,
+                             const std::string_view kind, ReadFn &&read_fn,
+                             std::optional<std::string> &out_json,
+                             const Reserve &reserve_entry) {
+  auto json = read_fn(sidecar_source);
+  if (!json.has_value())
+    return PackError{std::string(kind) +
+                     " sidecar could not be read: " + profile_path.string()};
+  if (!reserve_entry(json->size()))
+    return PackError{"pack would exceed 256 entries or 128 MiB uncompressed"};
+  out_json = std::move(json);
+  return std::nullopt;
 }
 
 bool add_zip_entry(mz_zip_archive &zip, const std::string &path,
@@ -262,35 +85,9 @@ bool add_zip_entry(mz_zip_archive &zip, const std::string &path,
                                      nullptr, 0, nullptr, 0) != 0;
 }
 
-bool write_file_atomically(const std::filesystem::path &destination,
-                           const std::span<const std::byte> bytes) {
-  std::error_code error;
-  if (!destination.parent_path().empty()) {
-    std::filesystem::create_directories(destination.parent_path(), error);
-    if (error)
-      return false;
-  }
-  auto temporary = destination;
-  temporary += L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
-  {
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
-    if (!output)
-      return false;
-    output.write(reinterpret_cast<const char *>(bytes.data()),
-                 static_cast<std::streamsize>(bytes.size()));
-    if (!output) {
-      std::filesystem::remove(temporary, error);
-      return false;
-    }
-  }
-  if (MoveFileExW(temporary.c_str(), destination.c_str(),
-                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ==
-      FALSE) {
-    std::filesystem::remove(temporary, error);
-    return false;
-  }
-  return true;
-}
+using detail::kSidecars;
+using detail::sidecar_desc_for_kind;
+using detail::SidecarKind;
 
 } // namespace
 
@@ -354,84 +151,114 @@ PackOperationResult export_profile_pack(
             .value_or("profile.json");
     item.base_json = *base;
     item.profile = *profile;
-    const auto visual = platform::load_visual_sidecar(path, *profile);
-    if (visual.state == platform::VisualSidecarState::invalid)
-      return failure("visual sidecar is invalid: " + path.string());
-    if (visual.state == platform::VisualSidecarState::recovered_backup)
-      return failure("save the recovered visual sidecar before exporting: " +
-                     path.string());
-    if (visual.state == platform::VisualSidecarState::valid &&
-        visual.profile.has_value()) {
-      item.visual_profile = visual.profile;
-      item.visual_json = platform::read_visual_file(visual.source_path);
-      if (!item.visual_json.has_value())
-        return failure("visual sidecar could not be read: " + path.string());
-      if (!reserve_entry(item.visual_json->size()))
-        return failure("pack would exceed 256 entries or 128 MiB uncompressed");
-      item.asset_sha256 = visual_asset_references(*visual.profile);
-      for (const auto &hash : item.asset_sha256) {
-        if (assets.contains(hash))
-          continue;
-        const auto bytes =
-            read_file(asset_path_for_profile_root(path.parent_path(), hash),
-                      max_pack_asset_bytes);
-        if (!bytes.has_value() || core::sha256(*bytes) != hash)
-          return failure("visual asset is missing or corrupt: " + hash);
-        if (!reserve_entry(bytes->size()))
-          return failure(
-              "pack would exceed 256 entries or 128 MiB uncompressed");
-        assets.try_emplace(
-            hash, PackAsset{.sha256 = hash, .bytes = std::move(*bytes)});
+    for (const auto &desc : kSidecars) {
+      switch (desc.type) {
+      case SidecarKind::visual: {
+        const auto sidecar = platform::load_visual_sidecar(path, *profile);
+        if (auto err = sidecar_export_error(sidecar, path, desc.kind))
+          return *err;
+        if (sidecar.state == platform::VisualSidecarState::valid &&
+            sidecar.profile.has_value()) {
+          item.visual_profile = sidecar.profile;
+          if (auto error = load_sidecar_json_for_export(
+                  sidecar.source_path, path, desc.kind,
+                  platform::read_visual_file, item.visual_json, reserve_entry))
+            return *error;
+          item.asset_sha256 = visual_asset_references(*sidecar.profile);
+          for (const auto &hash : item.asset_sha256) {
+            if (assets.contains(hash))
+              continue;
+            const auto bytes =
+                read_file(asset_path_for_profile_root(path.parent_path(), hash),
+                          max_pack_asset_bytes);
+            if (!bytes.has_value() || core::sha256(*bytes) != hash)
+              return failure("visual asset is missing or corrupt: " + hash);
+            if (!reserve_entry(bytes->size()))
+              return failure(
+                  "pack would exceed 256 entries or 128 MiB uncompressed");
+            assets.try_emplace(
+                hash, PackAsset{.sha256 = hash, .bytes = std::move(*bytes)});
+          }
+        }
+        break;
       }
-    }
-    const auto automation = platform::load_automation_sidecar(path, *profile);
-    if (automation.state == platform::AutomationSidecarState::invalid)
-      return failure("automation sidecar is invalid: " + path.string());
-    if (automation.state == platform::AutomationSidecarState::recovered_backup)
-      return failure(
-          "save the recovered automation sidecar before exporting: " +
-          path.string());
-    if (automation.state == platform::AutomationSidecarState::valid &&
-        automation.profile.has_value()) {
-      item.automation_profile = automation.profile;
-      item.automation_json =
-          platform::read_automation_file(automation.source_path);
-      if (!item.automation_json.has_value())
-        return failure("automation sidecar could not be read: " +
-                       path.string());
-      if (!reserve_entry(item.automation_json->size()))
-        return failure("pack would exceed 256 entries or 128 MiB uncompressed");
+      case SidecarKind::automation: {
+        const auto sidecar = platform::load_automation_sidecar(path, *profile);
+        if (auto err = sidecar_export_error(sidecar, path, desc.kind))
+          return *err;
+        if (sidecar.state == platform::AutomationSidecarState::valid &&
+            sidecar.profile.has_value()) {
+          item.automation_profile = sidecar.profile;
+          if (auto error = load_sidecar_json_for_export(
+                  sidecar.source_path, path, desc.kind,
+                  platform::read_automation_file, item.automation_json,
+                  reserve_entry))
+            return *error;
+        }
+        break;
+      }
+      case SidecarKind::companion: {
+        const auto sidecar = platform::load_companion_sidecar(path, *profile);
+        if (auto err = sidecar_export_error(sidecar, path, desc.kind))
+          return *err;
+        if (sidecar.state == platform::CompanionSidecarState::valid &&
+            sidecar.profile.has_value()) {
+          item.companion_profile = sidecar.profile;
+          if (auto error = load_sidecar_json_for_export(
+                  sidecar.source_path, path, desc.kind,
+                  platform::read_companion_file, item.companion_json,
+                  reserve_entry))
+            return *error;
+        }
+        break;
+      }
+      }
     }
     profiles.push_back(std::move(item));
   }
-
   std::ranges::sort(profiles, {}, [](const PackProfile &profile) {
     return profile.profile.id;
   });
   std::vector<std::string> base_paths(profiles.size());
   std::vector<std::string> visual_paths(profiles.size());
   std::vector<std::string> automation_paths(profiles.size());
+  std::vector<std::string> companion_paths(profiles.size());
 
   EntryMap entries;
   for (std::size_t index = 0; index < profiles.size(); ++index) {
     const auto ordinal = std::to_string(1000U + index).substr(1);
     base_paths[index] = "profiles/" + ordinal + ".json";
     entries.emplace(base_paths[index], as_bytes(profiles[index].base_json));
-    if (profiles[index].visual_json.has_value()) {
-      visual_paths[index] = "modules/" + ordinal + ".visual.json";
-      entries.emplace(visual_paths[index],
-                      as_bytes(*profiles[index].visual_json));
-    }
-    if (profiles[index].automation_json.has_value()) {
-      automation_paths[index] = "modules/" + ordinal + ".automation.json";
-      entries.emplace(automation_paths[index],
-                      as_bytes(*profiles[index].automation_json));
+    auto stage_module = [&](const std::optional<std::string> &json,
+                            std::string &out_path,
+                            const std::string_view suffix) {
+      if (!json.has_value())
+        return;
+      out_path = "modules/" + ordinal + std::string(suffix);
+      entries.emplace(out_path, as_bytes(*json));
+    };
+    for (const auto &desc : kSidecars) {
+      switch (desc.type) {
+      case SidecarKind::visual:
+        stage_module(profiles[index].visual_json, visual_paths[index],
+                     desc.suffix);
+        break;
+      case SidecarKind::automation:
+        stage_module(profiles[index].automation_json, automation_paths[index],
+                     desc.suffix);
+        break;
+      case SidecarKind::companion:
+        stage_module(profiles[index].companion_json, companion_paths[index],
+                     desc.suffix);
+        break;
+      }
     }
   }
   for (const auto &[hash, asset] : assets)
     entries.emplace("assets/" + hash + ".png", asset.bytes);
-  const auto manifest = manifest_json(profiles, assets, base_paths,
-                                      visual_paths, automation_paths);
+  const auto manifest =
+      manifest_json(profiles, assets, base_paths, visual_paths,
+                    automation_paths, companion_paths);
   if (!manifest.has_value())
     return failure("could not hash profile data for the pack manifest");
   if (manifest->size() > max_pack_bytes - aggregate_bytes)
@@ -471,83 +298,61 @@ validate_profile_pack(const std::filesystem::path &source) {
   if (!mz_zip_reader_init_mem(&zip, archive_bytes->data(),
                               archive_bytes->size(), 0))
     return validation_failure("file is not a valid ZIP archive");
-  const auto close_zip = [&] { mz_zip_reader_end(&zip); };
-  if (mz_zip_is_zip64(&zip)) {
-    close_zip();
+  const auto close_zip = [](mz_zip_archive *archive) {
+    (void)mz_zip_reader_end(archive);
+  };
+  std::unique_ptr<mz_zip_archive, decltype(close_zip)> zip_guard{
+      &zip, close_zip};
+  if (mz_zip_is_zip64(&zip))
     return validation_failure("ZIP64 packs are not supported");
-  }
   const auto count = mz_zip_reader_get_num_files(&zip);
-  if (count == 0 || count > max_pack_entries) {
-    close_zip();
+  if (count == 0 || count > max_pack_entries)
     return validation_failure("pack must contain between 1 and 256 entries");
-  }
 
   EntryMap entries;
   std::set<std::wstring, std::less<>> folded_paths;
   std::uint64_t total_uncompressed{};
   for (mz_uint index = 0; index < count; ++index) {
     mz_zip_archive_file_stat stat{};
-    if (!mz_zip_reader_file_stat(&zip, index, &stat)) {
-      close_zip();
+    if (!mz_zip_reader_file_stat(&zip, index, &stat))
       return validation_failure("pack central directory is invalid");
-    }
-    if (stat.m_is_directory) {
-      close_zip();
+    if (stat.m_is_directory)
       return validation_failure("directory entries are not allowed");
-    }
-    if (stat.m_is_encrypted || !stat.m_is_supported) {
-      close_zip();
+    if (stat.m_is_encrypted || !stat.m_is_supported)
       return validation_failure(
           "encrypted or unsupported ZIP entries are not allowed");
-    }
     const auto unix_mode = (stat.m_external_attr >> 16U) & 0170000U;
     if (unix_mode == 0120000U ||
-        (stat.m_external_attr & FILE_ATTRIBUTE_REPARSE_POINT) != 0U) {
-      close_zip();
+        (stat.m_external_attr & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)
       return validation_failure("symlink or reparse entries are not allowed");
-    }
     const auto filename_size =
         mz_zip_reader_get_filename(&zip, index, nullptr, 0);
-    if (filename_size <= 1U || filename_size > 4096U) {
-      close_zip();
+    if (filename_size <= 1U || filename_size > 4096U)
       return validation_failure("pack entry name is empty or too long");
-    }
     std::string path(static_cast<std::size_t>(filename_size) - 1U, '\0');
     if (mz_zip_reader_get_filename(&zip, index, path.data(), filename_size) !=
-        filename_size) {
-      close_zip();
+        filename_size)
       return validation_failure("pack entry name could not be read");
-    }
-    if (!safe_entry_path(path)) {
-      close_zip();
+    if (!safe_entry_path(path))
       return validation_failure("unsafe pack entry path: " + path);
-    }
     const auto folded = platform::try_casefold_path(path);
-    if (!folded.has_value() || !folded_paths.insert(*folded).second) {
-      close_zip();
+    if (!folded.has_value() || !folded_paths.insert(*folded).second)
       return validation_failure("duplicate or case-colliding pack entry: " +
                                 path);
-    }
     if (stat.m_uncomp_size > max_pack_bytes ||
-        total_uncompressed > max_pack_bytes - stat.m_uncomp_size) {
-      close_zip();
+        total_uncompressed > max_pack_bytes - stat.m_uncomp_size)
       return validation_failure("pack expands beyond 128 MiB");
-    }
     total_uncompressed += stat.m_uncomp_size;
     std::vector<std::byte> bytes(static_cast<std::size_t>(stat.m_uncomp_size));
     if (!mz_zip_reader_extract_to_mem(&zip, index, bytes.data(), bytes.size(),
-                                      0)) {
-      close_zip();
+                                      0))
       return validation_failure("pack entry failed CRC or decompression: " +
                                 path);
-    }
     entries.emplace(std::move(path), std::move(bytes));
   }
-  if (!mz_zip_validate_archive(&zip, 0)) {
-    close_zip();
+  if (!mz_zip_validate_archive(&zip, 0))
     return validation_failure("ZIP archive validation failed");
-  }
-  close_zip();
+  zip_guard.reset();
 
   const auto manifest_entry = entries.find("manifest.json");
   if (manifest_entry == entries.end() ||
@@ -648,11 +453,10 @@ validate_profile_pack(const std::filesystem::path &source) {
     item.suggested_filename = *suggested;
     item.base_json = base_json;
     item.profile = *profile;
-    std::optional<std::uint32_t> packed_visual_schema;
-    std::optional<std::uint32_t> packed_automation_schema;
-    if (modules->as_array().size() > 2U)
+    std::map<std::string, std::uint32_t, std::less<>> packed_schemas;
+    if (modules->as_array().size() > kSidecars.size())
       return validation_failure(
-          "at most one visual and one automation module are supported");
+          "at most one visual, automation, and companion module are supported");
     std::set<std::string, std::less<>> module_kinds;
     for (const auto &module : modules->as_array()) {
       if (!exact_fields(module,
@@ -670,12 +474,9 @@ validate_profile_pack(const std::filesystem::path &source) {
           *module_schema < 1U || !module_size.has_value() ||
           !module_hash.has_value() || !core::is_lowercase_sha256(*module_hash))
         return validation_failure("unsupported or invalid module descriptor");
-      const auto maximum_size = *module_kind == "visual"
-                                    ? core::max_visual_json_bytes
-                                    : core::max_automation_json_bytes;
-      const auto maximum_schema = *module_kind == "visual" ? 2U : 1U;
-      if ((*module_kind != "visual" && *module_kind != "automation") ||
-          *module_schema > maximum_schema || *module_size > maximum_size)
+      const auto desc = sidecar_desc_for_kind(*module_kind);
+      if (!desc.has_value() || *module_schema > desc->max_schema ||
+          *module_size > desc->max_bytes)
         return validation_failure("unsupported or invalid module descriptor");
       const auto module_entry = entries.find(*module_path);
       if (module_entry == entries.end() ||
@@ -686,7 +487,8 @@ validate_profile_pack(const std::filesystem::path &source) {
       const auto module_json = as_string(module_entry->second);
       if (source_schema(module_json) != *module_schema)
         return validation_failure("module schema does not match manifest");
-      if (*module_kind == "visual") {
+      switch (desc->type) {
+      case SidecarKind::visual: {
         const auto parsed_visual =
             core::parse_visual_profile_json(module_json, *profile);
         const auto *visual = std::get_if<core::VisualProfile>(&parsed_visual);
@@ -694,8 +496,9 @@ validate_profile_pack(const std::filesystem::path &source) {
           return validation_failure("visual module is invalid");
         item.visual_json = module_json;
         item.visual_profile = *visual;
-        packed_visual_schema = static_cast<std::uint32_t>(*module_schema);
-      } else {
+        break;
+      }
+      case SidecarKind::automation: {
         const auto parsed_automation =
             core::parse_automation_profile_json(module_json, *profile);
         const auto *automation =
@@ -704,31 +507,51 @@ validate_profile_pack(const std::filesystem::path &source) {
           return validation_failure("automation module is invalid");
         item.automation_json = module_json;
         item.automation_profile = *automation;
-        packed_automation_schema = static_cast<std::uint32_t>(*module_schema);
+        break;
       }
+      case SidecarKind::companion: {
+        const auto parsed_companion =
+            core::parse_companion_profile_json(module_json, *profile);
+        const auto *companion =
+            std::get_if<core::CompanionProfile>(&parsed_companion);
+        if (companion == nullptr)
+          return validation_failure("companion module is invalid");
+        item.companion_json = module_json;
+        item.companion_profile = *companion;
+        break;
+      }
+      }
+      packed_schemas[std::string(*module_kind)] =
+          static_cast<std::uint32_t>(*module_schema);
     }
-    if (*base_schema >= 3U) {
-      const auto declared_visual =
-          std::ranges::find(profile->modules, core::ProfileModuleKind::visual,
-                            &core::ProfileModule::kind);
-      const bool declares_visual = declared_visual != profile->modules.end();
-      if (declares_visual != packed_visual_schema.has_value() ||
-          (declares_visual &&
-           declared_visual->schema_version != *packed_visual_schema))
-        return validation_failure(
-            "base visual metadata disagrees with pack modules");
-    }
-    if (*base_schema >= 4U) {
-      const auto declared_automation = std::ranges::find(
-          profile->modules, core::ProfileModuleKind::automation,
-          &core::ProfileModule::kind);
-      const bool declares_automation =
-          declared_automation != profile->modules.end();
-      if (declares_automation != packed_automation_schema.has_value() ||
-          (declares_automation &&
-           declared_automation->schema_version != *packed_automation_schema))
-        return validation_failure(
-            "base automation metadata disagrees with pack modules");
+    for (const auto &desc : kSidecars) {
+      bool should_check = true;
+      core::ProfileModuleKind module_kind{};
+      switch (desc.type) {
+      case SidecarKind::visual:
+        should_check = *base_schema >= 3U;
+        module_kind = core::ProfileModuleKind::visual;
+        break;
+      case SidecarKind::automation:
+        should_check = *base_schema >= 4U;
+        module_kind = core::ProfileModuleKind::automation;
+        break;
+      case SidecarKind::companion:
+        module_kind = core::ProfileModuleKind::companion;
+        break;
+      }
+      if (!should_check)
+        continue;
+      const auto declared = std::ranges::find(profile->modules, module_kind,
+                                              &core::ProfileModule::kind);
+      const bool declares = declared != profile->modules.end();
+      const auto packed = packed_schemas.find(std::string(desc.kind));
+      const bool has_packed = packed != packed_schemas.end();
+      if (declares != has_packed ||
+          (declares && declared->schema_version != packed->second))
+        return validation_failure(std::string("base ") +
+                                  std::string(desc.kind) +
+                                  " metadata disagrees with pack modules");
     }
     std::set<std::string, std::less<>> declared_references;
     for (const auto &reference : references->as_array()) {
@@ -845,9 +668,9 @@ import_profile_pack(const ValidatedPack &pack,
         std::ranges::find_if(existing, [&](const ExistingProfile &candidate) {
           return candidate.id == imported.profile.id;
         });
-    const auto suggested_folded =
-        platform::try_casefold_path(platform::try_wide_to_utf8(suggested.wstring())
-                          .value_or(std::string{}));
+    const auto suggested_folded = platform::try_casefold_path(
+        platform::try_wide_to_utf8(suggested.wstring())
+            .value_or(std::string{}));
     if (!suggested_folded.has_value())
       return failure("suggested profile filename is invalid");
     const auto by_filename =
@@ -869,6 +692,8 @@ import_profile_pack(const ValidatedPack &pack,
         imported.visual_profile->profile_id = imported.profile.id;
       if (imported.automation_profile.has_value())
         imported.automation_profile->profile_id = imported.profile.id;
+      if (imported.companion_profile.has_value())
+        imported.companion_profile->profile_id = imported.profile.id;
 
       const auto stem = suggested.stem().wstring() + L" copy";
       target = profile_directory / (stem + L".json");
@@ -896,9 +721,9 @@ import_profile_pack(const ValidatedPack &pack,
       else
         target = profile_directory / suggested;
     }
-    const auto target_folded =
-        platform::try_casefold_path(platform::try_wide_to_utf8(target.filename().wstring())
-                          .value_or(std::string{}));
+    const auto target_folded = platform::try_casefold_path(
+        platform::try_wide_to_utf8(target.filename().wstring())
+            .value_or(std::string{}));
     if (!target_folded.has_value() ||
         !selected_targets.insert(*target_folded).second)
       return failure(
@@ -908,85 +733,93 @@ import_profile_pack(const ValidatedPack &pack,
 
     imported.profile.schema_version = 4;
     imported.profile.modules.clear();
-    if (imported.visual_profile.has_value())
-      imported.profile.modules.push_back(
-          {.kind = core::ProfileModuleKind::visual,
-           .schema_version = imported.visual_profile->schema_version});
-    if (imported.automation_profile.has_value())
-      imported.profile.modules.push_back(
-          {.kind = core::ProfileModuleKind::automation,
-           .schema_version = imported.automation_profile->schema_version});
+    for (const auto &desc : kSidecars) {
+      switch (desc.type) {
+      case SidecarKind::visual:
+        if (imported.visual_profile.has_value())
+          imported.profile.modules.push_back(
+              {.kind = core::ProfileModuleKind::visual,
+               .schema_version = imported.visual_profile->schema_version});
+        break;
+      case SidecarKind::automation:
+        if (imported.automation_profile.has_value())
+          imported.profile.modules.push_back(
+              {.kind = core::ProfileModuleKind::automation,
+               .schema_version = imported.automation_profile->schema_version});
+        break;
+      case SidecarKind::companion:
+        if (imported.companion_profile.has_value())
+          imported.profile.modules.push_back(
+              {.kind = core::ProfileModuleKind::companion,
+               .schema_version = imported.companion_profile->schema_version});
+        break;
+      }
+    }
     const auto base_json = core::serialize_profile_json(imported.profile);
     if (!add_backup_mutation(target, core::max_profile_json_bytes))
       return failure("existing profile could not be protected by a backup");
     mutations.push_back({.target = target, .contents = as_bytes(base_json)});
-
-    const auto sidecar = platform::visual_sidecar_path(target);
-    auto sidecar_state = sidecar;
-    sidecar_state += L".state";
-    auto sidecar_backup = sidecar;
-    sidecar_backup += L".bak";
-    if (imported.visual_profile.has_value()) {
-      const auto visual_json =
-          core::serialize_visual_profile_json(*imported.visual_profile);
-      if (!add_backup_mutation(sidecar, core::max_visual_json_bytes))
-        return failure(
-            "existing visual sidecar could not be protected by a backup");
-      mutations.push_back(
-          {.target = sidecar, .contents = as_bytes(visual_json)});
-      mutations.push_back(
-          {.target = sidecar_state, .contents = as_bytes("active\n")});
-      for (const auto &hash : imported.asset_sha256)
-        required_assets.insert(hash);
-    } else {
-      std::error_code sidecar_error;
-      const bool has_stale_visual =
-          std::filesystem::exists(sidecar, sidecar_error) ||
-          std::filesystem::exists(sidecar_backup, sidecar_error) ||
-          std::filesystem::exists(sidecar_state, sidecar_error);
+    auto stage_sidecar = [&](const std::filesystem::path &sidecar_path,
+                             const auto &profile, const std::string_view kind,
+                             const std::size_t max_bytes,
+                             auto serialize) -> std::optional<PackError> {
+      auto state_path = sidecar_path;
+      state_path += L".state";
+      auto backup_path = sidecar_path;
+      backup_path += L".bak";
+      if (profile.has_value()) {
+        const auto json = serialize(*profile);
+        if (!add_backup_mutation(sidecar_path, max_bytes))
+          return PackError{"existing " + std::string(kind) +
+                           " sidecar could not be protected by a backup"};
+        mutations.push_back(
+            {.target = sidecar_path, .contents = as_bytes(json)});
+        mutations.push_back(
+            {.target = state_path, .contents = as_bytes("active\n")});
+      } else {
+        std::error_code error;
+        const bool has_stale =
+            platform::has_stale_sidecar_markers(sidecar_path, error);
+        if (error)
+          return PackError{"existing " + std::string(kind) +
+                           " sidecar state could not be inspected"};
+        if (has_stale) {
+          mutations.push_back(
+              {.target = sidecar_path, .contents = std::nullopt});
+          mutations.push_back(
+              {.target = backup_path, .contents = std::nullopt});
+          mutations.push_back(
+              {.target = state_path, .contents = as_bytes("removed\n")});
+        }
+      }
+      return std::nullopt;
+    };
+    for (const auto &desc : kSidecars) {
+      std::optional<PackError> sidecar_error;
+      switch (desc.type) {
+      case SidecarKind::visual:
+        sidecar_error = stage_sidecar(
+            platform::visual_sidecar_path(target), imported.visual_profile,
+            desc.kind, desc.max_bytes, core::serialize_visual_profile_json);
+        if (imported.visual_profile.has_value())
+          for (const auto &hash : imported.asset_sha256)
+            required_assets.insert(hash);
+        break;
+      case SidecarKind::automation:
+        sidecar_error = stage_sidecar(platform::automation_sidecar_path(target),
+                                      imported.automation_profile, desc.kind,
+                                      desc.max_bytes,
+                                      core::serialize_automation_profile_json);
+        break;
+      case SidecarKind::companion:
+        sidecar_error =
+            stage_sidecar(platform::companion_sidecar_path(target),
+                          imported.companion_profile, desc.kind, desc.max_bytes,
+                          core::serialize_companion_profile_json);
+        break;
+      }
       if (sidecar_error)
-        return failure("existing visual sidecar state could not be inspected");
-      if (has_stale_visual) {
-        mutations.push_back({.target = sidecar, .contents = std::nullopt});
-        mutations.push_back(
-            {.target = sidecar_backup, .contents = std::nullopt});
-        mutations.push_back(
-            {.target = sidecar_state, .contents = as_bytes("removed\n")});
-      }
-    }
-    const auto automation_sidecar = platform::automation_sidecar_path(target);
-    auto automation_state = automation_sidecar;
-    automation_state += L".state";
-    auto automation_backup = automation_sidecar;
-    automation_backup += L".bak";
-    if (imported.automation_profile.has_value()) {
-      const auto automation_json =
-          core::serialize_automation_profile_json(*imported.automation_profile);
-      if (!add_backup_mutation(automation_sidecar,
-                               core::max_automation_json_bytes))
-        return failure(
-            "existing automation sidecar could not be protected by a backup");
-      mutations.push_back({.target = automation_sidecar,
-                           .contents = as_bytes(automation_json)});
-      mutations.push_back(
-          {.target = automation_state, .contents = as_bytes("active\n")});
-    } else {
-      std::error_code automation_error;
-      const bool has_stale_automation =
-          std::filesystem::exists(automation_sidecar, automation_error) ||
-          std::filesystem::exists(automation_backup, automation_error) ||
-          std::filesystem::exists(automation_state, automation_error);
-      if (automation_error)
-        return failure(
-            "existing automation sidecar state could not be inspected");
-      if (has_stale_automation) {
-        mutations.push_back(
-            {.target = automation_sidecar, .contents = std::nullopt});
-        mutations.push_back(
-            {.target = automation_backup, .contents = std::nullopt});
-        mutations.push_back(
-            {.target = automation_state, .contents = as_bytes("removed\n")});
-      }
+        return *sidecar_error;
     }
   }
 
