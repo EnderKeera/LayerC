@@ -16,8 +16,9 @@ The end-to-end Xbox Game Bar companion implementation is complete:
 
 ## Verification Completed (2026-08-24 / 2026-08-25)
 
-- MSVC 2026 Release build and full CTest suite passed (**0 warnings, 9/9 tests**).
-- MinGW Release workflow passed (**0 warnings, 9/9 tests**).
+- MSVC 2026 Release build and full CTest suite passed (**0 warnings, 10/10 tests**).
+- MinGW Release workflow passed (**0 warnings, 10/10 tests**).
+- CI `ci` preset builds with `sccache` + `UNITY_BUILD` and caches `~/.cache/sccache` + `~/.nuget/packages` (no `build/ci` cache).
 - `layerc_gamebar_msix` target builds the UWP host and packages unsigned `LayerC.GameBar.v1.msix` with all 5 binaries, VC runtime, and Game Bar SDK metadata.
 - Automated tests cover 8-slot snapshots, sidecar transactions, catalog/preference bounds, 2s stale expiry, and package identity.
 - V2.2 modular runtime benchmark passed (2.16 MiB private, 11.5 MiB WS, 0% CPU baseline).

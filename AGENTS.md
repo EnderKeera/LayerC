@@ -1,148 +1,135 @@
-# LayerC — Agent Guide and Project Memory
+# LayerC — Agent Guide
 
-This file is the canonical agent-facing guide for LayerC: architecture, repository layout, non-negotiable design rules, build/test workflows, and coding conventions. `README.md` (user documentation) and `PLAN.md` (canonical product/plan/gates) are authoritative.
+Canonical agent guide. `README.md` (user docs) and `PLAN.md` (roadmap/gates) are authoritative. Repo state overrides memory.
 
 ## Project Overview
 
-LayerC is a lightweight, open-source **Windows cooldown overlay** (Windows 10 22H2 / Windows 11 x64) in dependency-free C++20 with native Win32 UIs (no Qt, no .NET).
+Lightweight **Windows cooldown overlay** — dependency-free C++20, native Win32 (no Qt/.NET). Windows 10 22H2 / Windows 11 x64.
 
-### Core Components
-- `layerd.exe` — background daemon: passive input, cooldown/automation state machines, click-through GDI overlays.
-- `layere.exe` — native Win32 editor: profile management, live editing, automation canvas & simulator.
-- `layercal.exe` — visual calibration helper launched from LayerE.
-- `layerworker.exe` — isolated visual capture/matching worker (demand-launched).
-- `third_party/miniz` — vendored miniz 3.1.2 for deterministic ZIP profile packs (the only third-party code).
+- `layerd.exe` — daemon: passive input, cooldown/automation, click-through GDI overlays.
+- `layere.exe` — editor: profile CRUD, live edit, automation canvas + simulator.
+- `layercal.exe` — calibration helper (launched from editor).
+- `layerworker.exe` — isolated WGC capture worker (demand-launched, 256 MiB Job, kill-on-close).
+- `third_party/miniz` — vendored miniz 3.1.2, only third-party code.
 
-### Product Invariants (Non-Negotiable)
-- **Passive input only**: never block, modify, or synthesize keyboard/mouse/controller input.
-- **No anti-cheat bypass**: no code injection, memory reading, driver installation, or admin elevation.
-- **No telemetry/network**: zero network connections (except same-package Game Bar App Service IPC).
-- **Monotonic timing**: all cooldowns and timers use monotonic clocks (`std::chrono::steady_clock`).
-
----
+**Invariants**
+- Passive input only — never block/synthesize input.
+- No anti-cheat bypass — no injection, memory read, driver, or admin elevation.
+- No telemetry/network — except same-package Game Bar App Service (`LayerC.GameBar.v1`).
+- Monotonic timing — `steady_clock` for all cooldowns/timers.
 
 ## Repository Layout
 
 | Path | Description |
 |---|---|
-| `src/core/` | Platform-neutral core: profile models (`types.hpp`), JSON parser/serializer, cooldown engine, matcher, automation AST & runtime, live-edit protocol, hash/text/utf8 utilities. Headers in `src/core/include/layerc/core/`. |
-| `src/platform/` | Win32 adapters: named pipes, live channel, profile store + transaction journal, HID devices, visual assets, window discovery. Headers in `src/platform/include/layerc/platform/`. |
-| `src/capture/` | Capture backends: Windows Graphics Capture (primary), Desktop Duplication (fallback), aspect-preserving readback math. |
-| `src/runtime/` | Platform-neutral runtime: `DaemonKernel`, `CapabilityDemand`, `IRuntimeService`, `RuntimeServiceHost`. Headers in `src/runtime/include/layerc/runtime/`. |
-| `src/daemon/` | `layerd.exe`: session manager, input router, overlay window manager, visual worker manager, diagnostics. |
-| `src/editor/` | `layere.exe`: Win32 UI, property inspector, zoomable automation canvas, timeline simulator. |
-| `src/calibration/` | `layercal.exe`: screen region picker, color/brightness predicates, template reference editor. |
-| `src/bundle/` | `.layercprofile` packs: deterministic ZIP packaging via miniz, SHA-256 asset deduplication. |
-| `src/worker/` | `layerworker.exe`: isolated capture worker with kill-on-close Job object and 256 MiB commit limit. |
-| `src/gamebar/` | Game Bar companion: UWP C++/WinRT host (`widget/`), App Service transport, snapshot bridge. |
-| `tests/` | CTest test suites. `tests/test_support.*` provides canonical assertion helpers. |
-| `tools/` | `lctest` fake game harness, `capture_probe`, benchmark scripts (`benchmark_v11/v22/v23/latency.ps1`). |
-| `examples/` | `lctest.json` (matches `lctest.exe`), `smoke.json` (free-floating desktop test profile). |
-| `build/`, `out/` | Build & install outputs (gitignored). Never touch by hand; never commit. |
-| `review/` | Code review registers (gitignored). Archived reviews live under `review/archiv/`. |
+| `src/core/` | Platform-neutral core: `types.hpp`, JSON, cooldown engine, matcher, automation AST/runtime, companion, hash/text/utf8. Headers `src/core/include/layerc/core/` |
+| `src/platform/` | Win32 adapters: pipes, live channel, `profile_store` + journal, HID, visual assets, window discovery. Headers `src/platform/include/layerc/platform/` |
+| `src/capture/` | WGC (primary) + Desktop Duplication (fallback), aspect readback math |
+| `src/runtime/` | `DaemonKernel`, `CapabilityDemand`, `IRuntimeService`, `RuntimeServiceHost`. Headers `src/runtime/include/layerc/runtime/` |
+| `src/daemon/` | `layerd.exe` |
+| `src/editor/` | `layere.exe` |
+| `src/calibration/` | `layercal.exe` |
+| `src/bundle/` | `.layercprofile` ZIP via miniz, SHA-256 dedup. `pack_detail.*` + `pack_sidecar_table.hpp` |
+| `src/worker/` | `layerworker.exe` |
+| `src/gamebar/` | UWP C++/WinRT host `widget/` + App Service bridge. Manifest `Package.appxmanifest` |
+| `tests/` | CTest suites, `test_support.*` helpers |
+| `tools/` | `lctest` harness, `capture_probe`, `benchmark_v11/v22/v23/latency.ps1` → `out/benchmarks/` |
+| `examples/` | `lctest.json`, `smoke.json` |
+| `build/`, `out/` | Build/install outputs (gitignored, never commit). `build/` ~9 GB — delete after push |
+| `review/` | Review registers (gitignored), `review/archiv/` archived |
 
-### Analysis Input Policy
-- Exclude `build/`, `out/`, `review/`, `.review_tmp/`, `.codewhale/`, and `.mimosa/` from broad codebase scans.
-- Default deployable executables live in `out/layerc/layer*.exe`.
-- Prefer explicit source globs (`src/**`, `tests/**`, `tools/**`, `examples/**`) over broad root queries.
+Analysis: exclude `build/`, `out/`, `review/`, `.review_tmp/`, `.codewhale/`, `.mimosa/`. Prefer explicit `src/**` `tests/**` `tools/**` `examples/**` globs; default deployables `out/layerc/layer*.exe`.
 
----
+## Build & Test
 
-## Build & Test Workflow
-
-Requirements: Windows 10 22H2+ / Windows 11 x64, Visual Studio 2026 (Desktop C++ workload), CMake 3.28+.
+Req: Windows 10 22H2+ / 11 x64, VS 2026 (Desktop C++), CMake 3.28+.
 
 ```powershell
-# Standard Debug build & tests
+# Debug — local iterative
 cmake --preset vs2026
 cmake --build --preset vs2026-debug
 ctest --preset vs2026-debug
 
-# Full Release workflow (build, test, install to out/layerc, and emit portable ZIP)
-cmake --workflow --preset vs2026-release
+# Release — local full package
+cmake --workflow --preset vs2026-release  # build → test 10/10 → install out/layerc → CPack ZIP
 
-# Optional Game Bar UWP MSIX (requires UWP C++ tools)
+# CI preset — what GitHub Actions uses (Ninja + MSVC + sccache + UNITY)
+cmake --preset ci
+cmake --build --preset ci --parallel
+ctest --preset ci
+
+# MinGW second opinion (no UWP host)
+cmake --workflow --preset mingw-ninja
+
+# Game Bar MSIX (needs UWP tools)
 cmake --build --preset vs2026-release --target layerc_gamebar_msix
 ```
 
-### Key Test Suites
-- `layerc_core_tests`: profile codec, cooldown state machine, automation evaluator, replay.
-- `layerc_runtime_tests`: demand matrix, lazy service lifecycle, rollback, 100-cycle stress.
-- `layerc_capture_tests`: capture math, downsampling bounds, format conversion (headless-safe).
-- `layerc_overlay_tests`: HWND attachment, GDI rendering, capture exclusion via `lctest.exe`.
-- `layerc_platform_tests`: atomic profile store, transaction recovery, named pipe IPC security.
-- `layerc_editor_tests`: native dialog controls, undo/redo stack.
-- `layerc_bundle_tests`: deterministic ZIP packs, SHA-256 asset hashing, import conflict handling.
-- `layerc_isolated_visual_tests`: `layerworker.exe` IPC protocol, nonce auth, quarantine recovery.
-- `layerc_companion_tests`: Game Bar snapshot codec, 2s stale data timeout, sidecar persistence.
-- `layerc_automation_benchmark`: CPU automation evaluation micro-benchmark (gate: $\le 0.25\text{ ms}$ avg, $\le 2.0\text{ ms}$ max budget; run automatically via CTest).
-### Release Benchmark Gates
-Benchmark scripts in `tools/` output JSON to `out/benchmarks/` and refuse false passes:
-1. **`benchmark_v11.ps1`**: Visual recognition (gate: $\le 35\text{ MiB}$ private, $\le 50\text{ MiB}$ WS, $\le 3\%\text{ CPU}$).
-2. **`benchmark_v22.ps1`**: Modular runtime idle plateau ($\le 12\text{ MiB}$ private, $\le 20\text{ MiB}$ WS, $\le 0.2\%\text{ CPU}$, zero thread growth).
-3. **`benchmark_latency.ps1`**: Input-to-overlay latency regression ($\le 1\text{ ms}$ median / p95 vs baseline).
-4. **`benchmark_v23.ps1`**: Automation evaluator ($\le 0.25\text{ ms}$ avg, $\le 2.0\text{ ms}$ max budget).
+Presets: `vs2026` (VS 2026), `mingw-ninja` (MinGW-w64 + Ninja), `ci` (Ninja + `sccache` launchers + `UNITY_BUILD` batch 16). After push, free space: `Remove-Item -Recurse -Force build, out -ErrorAction SilentlyContinue` (keep `out/benchmarks` if needed for evidence).
 
----
+### Test Suites
 
-## Architecture & Design Rules
+| Suite | Covers |
+|---|---|
+| `layerc_core_tests` | profile codec, cooldown state, automation eval, replay |
+| `layerc_runtime_tests` | demand matrix, lazy lifecycle, rollback, 100-cycle stress |
+| `layerc_capture_tests` | capture math, downsample bounds, format conversion |
+| `layerc_overlay_tests` | HWND attach, GDI, exclusion (`lctest.exe`) |
+| `layerc_platform_tests` | atomic store, journal recovery, named pipe security |
+| `layerc_editor_tests` | dialog controls, undo/redo |
+| `layerc_bundle_tests` | deterministic ZIP, SHA-256, import conflicts |
+| `layerc_isolated_visual_tests` | worker IPC, nonce, quarantine |
+| `layerc_companion_tests` | snapshot codec, 2s stale, sidecar persistence |
+| `layerc_automation_benchmark` | CPU eval ($\le 0.25$ ms avg, $\le 2.0$ ms max) — also CTest |
+
+### Benchmark Gates (hard, `tools/*.ps1` → `out/benchmarks/*.json`)
+
+1. `benchmark_v11.ps1` — visual: $\le 35$ MiB private, $\le 50$ MiB WS, $\le 3\%$ CPU
+2. `benchmark_v22.ps1` — idle plateau: $\le 12$ MiB private, $\le 20$ MiB WS, $\le 0.2\%$ CPU, zero thread growth
+3. `benchmark_latency.ps1` — input→overlay $\le 1$ ms median/p95 vs baseline
+4. `benchmark_v23.ps1` — automation: $\le 0.25$ ms avg, $\le 2.0$ ms max
+
+Run headful on integrated + discrete GPU where required; `out/benchmarks` is the evidence dir.
+
+## Architecture Rules
 
 ### 1. Demand-Driven Services (V2.2)
-- `DaemonKernel` computes an immutable `CapabilityDemand` on every session state transition.
-- `RuntimeServiceHost` allocates heavy service resources (Raw Input, WGC capture, template matcher, live edit channel) **only while an active session demands them**.
-- Opening LayerE connects the live channel but allocates **no** capture, HID, or overlay resources.
-- Idle daemon: zero capture threads, zero polling timers, event-driven wakeups.
+`DaemonKernel` → immutable `CapabilityDemand` each session transition. `RuntimeServiceHost` allocates Raw Input / WGC / matcher / live channel **only when demanded**. Opening LayerE allocates nothing. Idle daemon = zero capture/polling threads.
 
-### 2. Declarative Automation Graphs (V2.3)
-- Bounded rule-based engine — **never** a general-purpose scripting runtime.
-- **Hard caps**: 64 rules, 64 variables, 32 timers, 256 AST nodes (max depth 16), 512-byte string values, 2 ms evaluation deadline per root event.
-- Root events execute as one atomic transaction across all enabled graphs.
-- Persistent variables checkpoint to `profiles/_state/<id>.json` within 1s; `.layerctrace` recordings are local-only and never exported in packs.
+### 2. Declarative Automation (V2.3)
+Bounded engine, never scripting. Caps: 64 rules, 64 vars, 32 timers, 256 AST nodes (depth $\le 16$), 512-byte strings, 2 ms/root-event deadline. Root event = atomic transaction. Vars checkpoint to `profiles/_state/<id>.json` ≤1s; `.layerctrace` never packed.
 
-### 3. Storage & Transactional Persistence
-- Base profile: UTF-8 JSON under `profiles/<id>.json` (schemas 1–4). Atomic replacement with `<id>.json.bak` fallback.
-- Sidecars: `_visual/` (schema 2), `_automation/` (schema 1), `_companion/` (schema 1), `_state/` (schema 1).
-- Multi-document saves commit through a crash-recoverable journal (`profile_transaction.cpp`): stage $\to$ journal $\to$ replace $\to$ commit marker $\to$ cleanup.
-- `.state` marker files (`active` / `removed`) provide authoritative sidecar removal semantics.
+### 3. Storage & Transactions
+Base UTF-8 JSON `profiles/<id>.json` (schemas 1–4) + sidecars `_visual/` (2), `_automation/` (1), `_companion/` (1), `_state/` (1). Atomic `.bak` fallback. Multi-doc saves via journal `stage → journal → replace → commit → cleanup`. `.state` marker (`active`/`removed`) for deletion.
 
-### 4. Visual Capture & Template Matching
-- Windows Graphics Capture (WGC) is primary; Desktop Duplication is fallback. No WARP or GDI runtime fallbacks.
-- Readback grids are aspect-preserving and downsampled: Low (64px), Balanced (256px), Exact (full, unbenchmarked).
-- Template matching is a bounded CPU coarse-to-fine pass ($\le 4$ states, $\le 4$ references each $\le 512\times512$, $\ge 64$ opaque pixels).
-- Per-profile **Isolate capture** sandboxes WGC into `layerworker.exe` under a 256 MiB Job object.
+### 4. Visual Capture & Matching
+WGC primary, Desktop Duplication fallback (no WARP/GDI). Grids Low 64px / Balanced 256px / Exact full (unbenchmarked). Matching: bounded coarse-to-fine ≤4 states × ≤4 refs ≤512×512, ≥64 opaque. Isolate mode sandboxes WGC in `layerworker.exe` (256 MiB Job).
 
 ### 5. Game Bar Companion (V2.4)
-- Separate UWP C++/WinRT XAML host (`layerc-gamebar.exe`) communicating with packaged `layerd.exe` over App Service `LayerC.GameBar.v1`.
-- LayerD remains the sole authority: pushes bounded 64 KiB immutable snapshots and accepts validated preference sidecars.
-- Unpackaged desktop LayerD runs zero Game Bar code/threads.
-
----
+Separate UWP XAML host (`layerc-gamebar.exe`) via App Service `LayerC.GameBar.v1`. LayerD authoritative — pushes bounded 64 KiB snapshots (2s stale clear), accepts validated `_companion` sidecar. Unpackaged LayerD = zero Game Bar code/threads.
 
 ## Code Conventions
 
-- **Standard**: C++20. MSVC flags: `/W4 /permissive- /EHsc /utf-8`. MinGW flags: `-Wall -Wextra -Wpedantic`.
-- **File size limit**: keep files under $\sim 1000$ lines; split cohesive subsystems across translation units rather than sprawling.
-- **Errors**: use `std::optional` / `std::variant` with typed error structs (`ProfileError`, `AutomationError`, `PackOperationResult`); mark returns `[[nodiscard]]`.
-- **Namespaces**: `layerc::core`, `layerc::platform`, `layerc::daemon`, `layerc::editor`, `layerc::gamebar`, `layerc::runtime`.
-- **Helpers**: reuse shared primitives in `core/` (`json.cpp`, `text.cpp`, `hash.cpp`, `utf8.cpp`) — do not duplicate.
-- **JSON**: serialize via `json::append_*` primitives for byte-stable output.
-- **Threading**: daemon runs on a single main message loop; worker threads are owned and joined; shared data is mutex-guarded and value-copied at boundaries.
-
----
+- C++20, `/W4 /permissive- /EHsc /utf-8` (MSVC), `-Wall -Wextra -Wpedantic` (MinGW).
+- Files ≤~1000 lines; split TUs instead of sprawling.
+- Errors: `optional`/`variant` + typed `*Error` (`[[nodiscard]]`).
+- Namespaces: `layerc::core/platform/daemon/editor/gamebar/runtime`.
+- Reuse `core/` primitives (`json`, `text`, `hash`, `utf8`) — don't duplicate.
+- JSON via `json::append_*` for byte-stable output.
+- Threading: daemon = single message loop; workers owned/joined; shared data mutex + value-copy at boundaries.
 
 ## DevOps & CI
 
-- **CI workflow** (`.github/workflows/ci.yml`): runs on `windows-2022` with Ninja + MSVC (`ci` preset) $\to$ build $\to$ `ctest` 9/9 $\to$ install $\to$ CPack ZIP.
-- **Dependabot** (`.github/dependabot.yml`): weekly GitHub Actions version bumps.
-- **Release workflow** (`.github/workflows/release.yml`): triggers on `v*.*.*` tags $\to$ builds Release package $\to$ creates GitHub Release with ZIP.
-- **Branch protection**: protect `main`, require `windows-msvc` CI status check, enforce linear history.
+- **CI** `.github/workflows/ci.yml`: `windows-2022` + `ilammy/msvc-dev-cmd` + `seanmiddleditch/gha-setup-ninja` + `mozilla-actions/sccache-action` + `actions/cache` (`~/.cache/sccache` + `~/.nuget/packages`, key `hashFiles('**/CMakeLists.txt','**/*.cmake','src/**','third_party/**')`). Steps: `clean out/bench-*` → configure `ci` → build → `ctest 10/10` → `benchmark_v23` → install → `cpack` → upload `out/layerc` + ZIP. Never cache `build/ci` (stale `CMakeCache` breaks Ninja). Free tier: 10 GB cache, 7-day expiry.
+- **PR Agent** `.github/workflows/pr-agent.yml` + `.pr_agent.toml`: `The-PR-Agent/pr-agent@v0.43.0` on `pull_request`/`issue_comment`, `DEEPSEEK_API_KEY` + `OPENAI_API_BASE=https://api.deepseek.com`, model `deepseek-v4-flash-vision-exp` → `v4-flash`.
+- **Dependabot** `.github/dependabot.yml`: weekly Actions bumps.
+- **Release** `.github/workflows/release.yml`: on `v*.*.*` tags → build Release → GitHub Release + ZIP.
+- Branch protection: `main` linear, require `windows-msvc`.
 
----
+## Agent Workflow
 
-## Agent Workflow Rules
-
-1. Primary agent implements, builds, tests, and fixes directly in this workspace without subagent delegation.
-2. Never stage or commit `.codewhale/`, `.review_tmp/`, or `review/` working files.
-3. Keep `README.md` and `PLAN.md` in sync with feature and milestone changes.
-4. Verify tests pass (`ctest --preset vs2026-debug`) and builds remain warning-free before concluding tasks.
-5. Reviews live under `review/layerN.review-YYYY-MM-DD.md`; move to `review/archiv/` once all findings are marked FIXED.
+1. Implement inline — no subagent delegation (vibe mode forbids spawning; gate with `vs2026-debug` build + `ctest`).
+2. Never stage/commit `.codewhale/`, `.review_tmp/`, `review/` working files. Avoid unscoped globs ( `build/` is 10k files ); use `git ls-files` and `read :range`.
+3. Keep `README.md` + `PLAN.md` + `docs/GameBarCompanion*.md` in sync with feature/gate changes.
+4. Warning-free + `ctest 10/10` before concluding. Use monotonic `steady_clock` for timers.
+5. Reviews `review/layerN.review-YYYY-MM-DD.md` → `review/archiv/` when all FIXED. `build/`/`out/` gitignored — don't `git add`.
