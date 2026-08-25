@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/automation.hpp"
+#include "layerc/core/companion.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
 
@@ -39,8 +40,9 @@ struct PackProfile {
   std::optional<layerc::core::VisualProfile> visual_profile;
   std::optional<std::string> automation_json;
   std::optional<layerc::core::AutomationProfile> automation_profile;
+  std::optional<std::string> companion_json;
+  std::optional<layerc::core::CompanionProfile> companion_profile;
   std::vector<std::string> asset_sha256;
-
 };
 
 struct ValidatedPack {

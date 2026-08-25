@@ -1,6 +1,6 @@
-#include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
+#include "editor_window.hpp"
 
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/core/profile.hpp"
@@ -51,16 +51,18 @@ struct ImportDialogState {
 
 void set_column(const HWND list, const int index, const int width,
                 const wchar_t *text) {
-  LVCOLUMNW column{.mask = LVCF_TEXT | LVCF_WIDTH,
-                   .cx = width,
-                   .pszText = const_cast<LPWSTR>(text)};
+  LVCOLUMNW column{};
+  column.mask = LVCF_TEXT | LVCF_WIDTH;
+  column.cx = width;
+  column.pszText = const_cast<LPWSTR>(text);
   ListView_InsertColumn(list, index, &column);
 }
 
 std::size_t checked_count(const HWND list) {
   std::size_t count{};
   for (int index = 0; index < ListView_GetItemCount(list); ++index)
-    if (ListView_GetCheckState(list, index) != FALSE) ++count;
+    if (ListView_GetCheckState(list, index) != FALSE)
+      ++count;
   return count;
 }
 
@@ -68,14 +70,16 @@ void update_export_summary(const HWND window, ExportDialogState &state) {
   const HWND list = GetDlgItem(window, IDC_PACK_LIST);
   std::set<std::string, std::less<>> assets;
   for (int index = 0; index < ListView_GetItemCount(list); ++index) {
-    if (ListView_GetCheckState(list, index) == FALSE) continue;
+    if (ListView_GetCheckState(list, index) == FALSE)
+      continue;
     assets.insert(state.items[static_cast<std::size_t>(index)].assets.begin(),
                   state.items[static_cast<std::size_t>(index)].assets.end());
   }
   std::uintmax_t bytes{};
   for (const auto &hash : assets) {
     const auto found = state.asset_sizes.find(hash);
-    if (found != state.asset_sizes.end()) bytes += found->second;
+    if (found != state.asset_sizes.end())
+      bytes += found->second;
   }
   const auto count = checked_count(list);
   const auto text = std::to_wstring(count) + L" profile" +
@@ -98,36 +102,36 @@ void set_import_action_text(const HWND list, const int index,
                             const ImportItem &item) {
   const wchar_t *text = L"Import";
   if (item.conflict)
-    text = item.action == layerc::bundle::ImportAction::copy
-               ? L"Import Copy"
-               : L"Replace";
+    text = item.action == layerc::bundle::ImportAction::copy ? L"Import Copy"
+                                                             : L"Replace";
   ListView_SetItemText(list, index, 2, const_cast<LPWSTR>(text));
 }
 
-std::optional<std::filesystem::path> choose_pack_path(
-    const HWND owner, const bool save) {
+std::optional<std::filesystem::path> choose_pack_path(const HWND owner,
+                                                      const bool save) {
   std::array<wchar_t, 32'768> buffer{};
-  const auto initial =
-      layerc::platform::profile_directory() /
-      (save ? L"LayerC profiles.layercprofile" : L"");
+  const auto initial = layerc::platform::profile_directory() /
+                       (save ? L"LayerC profiles.layercprofile" : L"");
   const auto initial_text = initial.wstring();
   if (initial_text.size() < buffer.size())
     std::copy(initial_text.begin(), initial_text.end(), buffer.begin());
   constexpr wchar_t filter[] =
       L"LayerC profile packs (*.layercprofile)\0*.layercprofile\0"
       L"All files (*.*)\0*.*\0\0";
-  OPENFILENAMEW dialog{.lStructSize = sizeof(dialog),
-                       .hwndOwner = owner,
-                       .lpstrFilter = filter,
-                       .lpstrFile = buffer.data(),
-                       .nMaxFile = static_cast<DWORD>(buffer.size()),
-                       .Flags = static_cast<DWORD>(
-                           OFN_EXPLORER | OFN_PATHMUSTEXIST |
-                           (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST)),
-                       .lpstrDefExt = L"layercprofile"};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.lpstrFilter = filter;
+  dialog.lpstrFile = buffer.data();
+  dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+  dialog.Flags =
+      static_cast<DWORD>(OFN_EXPLORER | OFN_PATHMUSTEXIST |
+                         (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST));
+  dialog.lpstrDefExt = L"layercprofile";
   const BOOL chosen =
       save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
-  if (chosen == FALSE) return std::nullopt;
+  if (chosen == FALSE)
+    return std::nullopt;
   std::filesystem::path path(buffer.data());
   if (_wcsicmp(path.extension().c_str(), L".layercprofile") != 0)
     path.replace_extension(L".layercprofile");
@@ -142,11 +146,13 @@ void show_pack_error(const HWND owner, const wchar_t *title,
 
 } // namespace
 
-INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
-    const HWND window, const UINT message, const WPARAM wparam,
-    const LPARAM lparam) {
+INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
+                                                       const UINT message,
+                                                       const WPARAM wparam,
+                                                       const LPARAM lparam) {
   auto *state = bind_dialog_state<ExportDialogState>(window, message, lparam);
-  if (state == nullptr) return FALSE;
+  if (state == nullptr)
+    return FALSE;
   if (message == WM_INITDIALOG) {
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
@@ -159,10 +165,11 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
     set_column(list, 0, 430, L"Saved profile");
     state->editor->style_list_view(list, false);
     for (std::size_t index = 0; index < state->items.size(); ++index) {
-      LVITEMW item{.mask = LVIF_TEXT | LVIF_PARAM,
-                   .iItem = static_cast<int>(index),
-                   .pszText = state->items[index].label.data(),
-                   .lParam = static_cast<LPARAM>(index)};
+      LVITEMW item{};
+      item.mask = LVIF_TEXT | LVIF_PARAM;
+      item.iItem = static_cast<int>(index);
+      item.pszText = state->items[index].label.data();
+      item.lParam = static_cast<LPARAM>(index);
       ListView_InsertItem(list, &item);
       ListView_SetCheckState(list, static_cast<int>(index),
                              index == state->current_index);
@@ -192,7 +199,8 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
         if (ListView_GetCheckState(list, index) != FALSE)
           state->selected.push_back(
               state->items[static_cast<std::size_t>(index)].path);
-      if (!state->selected.empty()) EndDialog(window, IDOK);
+      if (!state->selected.empty())
+        EndDialog(window, IDOK);
       return TRUE;
     }
     case IDCANCEL:
@@ -201,9 +209,8 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
     }
   }
   if (message == WM_DRAWITEM) {
-    state->editor->draw_button(
-        *reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-        layerc::platform::EditorControlRole::button);
+    state->editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
+                               layerc::platform::EditorControlRole::button);
     return TRUE;
   }
   if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
@@ -211,11 +218,13 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(
   return FALSE;
 }
 
-INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
-    const HWND window, const UINT message, const WPARAM wparam,
-    const LPARAM lparam) {
+INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
+                                                       const UINT message,
+                                                       const WPARAM wparam,
+                                                       const LPARAM lparam) {
   auto *state = bind_dialog_state<ImportDialogState>(window, message, lparam);
-  if (state == nullptr) return FALSE;
+  if (state == nullptr)
+    return FALSE;
   if (message == WM_INITDIALOG) {
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
@@ -230,10 +239,11 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
     set_column(list, 2, 125, L"Action");
     state->editor->style_list_view(list, false);
     for (std::size_t index = 0; index < state->items.size(); ++index) {
-      LVITEMW item{.mask = LVIF_TEXT | LVIF_PARAM,
-                   .iItem = static_cast<int>(index),
-                   .pszText = state->items[index].name.data(),
-                   .lParam = static_cast<LPARAM>(index)};
+      LVITEMW item{};
+      item.mask = LVIF_TEXT | LVIF_PARAM;
+      item.iItem = static_cast<int>(index);
+      item.pszText = state->items[index].name.data();
+      item.lParam = static_cast<LPARAM>(index);
       ListView_InsertItem(list, &item);
       ListView_SetItemText(list, static_cast<int>(index), 1,
                            state->items[index].filename.data());
@@ -262,14 +272,14 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
     case IDC_PACK_TOGGLE_ACTION: {
       const HWND list = GetDlgItem(window, IDC_PACK_LIST);
       int index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
-      if (index < 0) index = ListView_GetNextItem(list, -1, LVNI_FOCUSED);
+      if (index < 0)
+        index = ListView_GetNextItem(list, -1, LVNI_FOCUSED);
       if (index >= 0) {
         auto &item = state->items[static_cast<std::size_t>(index)];
         if (item.conflict) {
-          item.action =
-              item.action == layerc::bundle::ImportAction::copy
-                  ? layerc::bundle::ImportAction::replace
-                  : layerc::bundle::ImportAction::copy;
+          item.action = item.action == layerc::bundle::ImportAction::copy
+                            ? layerc::bundle::ImportAction::replace
+                            : layerc::bundle::ImportAction::copy;
           set_import_action_text(list, index, item);
         }
       }
@@ -279,13 +289,14 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
       const HWND list = GetDlgItem(window, IDC_PACK_LIST);
       state->selected.clear();
       for (int index = 0; index < ListView_GetItemCount(list); ++index) {
-        if (ListView_GetCheckState(list, index) == FALSE) continue;
+        if (ListView_GetCheckState(list, index) == FALSE)
+          continue;
         state->selected.push_back(
             {.profile_index = static_cast<std::size_t>(index),
-             .action =
-                 state->items[static_cast<std::size_t>(index)].action});
+             .action = state->items[static_cast<std::size_t>(index)].action});
       }
-      if (!state->selected.empty()) EndDialog(window, IDOK);
+      if (!state->selected.empty())
+        EndDialog(window, IDOK);
       return TRUE;
     }
     case IDCANCEL:
@@ -294,9 +305,8 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
     }
   }
   if (message == WM_DRAWITEM) {
-    state->editor->draw_button(
-        *reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-        layerc::platform::EditorControlRole::button);
+    state->editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
+                               layerc::platform::EditorControlRole::button);
     return TRUE;
   }
   if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
@@ -305,17 +315,19 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(
 }
 
 void EditorWindow::export_profile_pack() {
-  if (dirty_ && !save_profile(false)) return;
-  ExportDialogState state{.editor = this};
+  if (dirty_ && !save_profile(false))
+    return;
+  ExportDialogState state{};
+  state.editor = this;
   state.items.reserve(entries_.size());
   for (std::size_t index = 0; index < entries_.size(); ++index) {
-    ExportItem item{.path = entries_[index].path,
-                    .label = entries_[index].label};
+    ExportItem item{};
+    item.path = entries_[index].path;
+    item.label = entries_[index].label;
     if (entries_[index].path.lexically_normal() ==
         current_path_.lexically_normal())
       state.current_index = index;
-    const auto base =
-        layerc::platform::read_profile_file(entries_[index].path);
+    const auto base = layerc::platform::read_profile_file(entries_[index].path);
     if (base.has_value()) {
       const auto parsed = layerc::core::parse_profile_json(*base);
       if (const auto *profile =
@@ -334,7 +346,8 @@ void EditorWindow::export_profile_pack() {
             std::error_code size_error;
             const auto size = std::filesystem::file_size(
                 layerc::platform::visual_asset_path(hash), size_error);
-            if (!size_error) state.asset_sizes.try_emplace(hash, size);
+            if (!size_error)
+              state.asset_sizes.try_emplace(hash, size);
           }
         }
       }
@@ -342,17 +355,19 @@ void EditorWindow::export_profile_pack() {
     state.items.push_back(std::move(item));
   }
   if (state.items.empty()) {
-    MessageBoxW(dialog_, L"There are no saved profiles to export.", L"Export Pack",
-                MB_OK | MB_ICONINFORMATION);
+    MessageBoxW(dialog_, L"There are no saved profiles to export.",
+                L"Export Pack", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (state.current_index == SIZE_MAX) state.current_index = 0;
+  if (state.current_index == SIZE_MAX)
+    state.current_index = 0;
   if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_EXPORT_PACK), dialog_,
                       &EditorWindow::export_pack_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK)
     return;
   const auto destination = choose_pack_path(dialog_, true);
-  if (!destination.has_value()) return;
+  if (!destination.has_value())
+    return;
   const auto result =
       layerc::bundle::export_profile_pack(*destination, state.selected);
   if (const auto *error = std::get_if<layerc::bundle::PackError>(&result)) {
@@ -363,9 +378,11 @@ void EditorWindow::export_profile_pack() {
 }
 
 void EditorWindow::import_profile_pack() {
-  if (!confirm_unsaved_changes()) return;
+  if (!confirm_unsaved_changes())
+    return;
   const auto source = choose_pack_path(dialog_, false);
-  if (!source.has_value()) return;
+  if (!source.has_value())
+    return;
   const auto validation = layerc::bundle::validate_profile_pack(*source);
   const auto *pack = std::get_if<layerc::bundle::ValidatedPack>(&validation);
   if (pack == nullptr) {
@@ -379,8 +396,8 @@ void EditorWindow::import_profile_pack() {
   std::error_code directory_error;
   const auto profile_directory = layerc::platform::profile_directory();
   if (std::filesystem::exists(profile_directory, directory_error)) {
-    for (std::filesystem::directory_iterator iterator(profile_directory,
-                                                         directory_error),
+    for (std::filesystem::directory_iterator
+             iterator(profile_directory, directory_error),
          end;
          !directory_error && iterator != end;
          iterator.increment(directory_error)) {
@@ -398,13 +415,15 @@ void EditorWindow::import_profile_pack() {
   }
   for (const auto &entry : entries_) {
     const auto json = layerc::platform::read_profile_file(entry.path);
-    if (!json.has_value()) continue;
+    if (!json.has_value())
+      continue;
     const auto parsed = layerc::core::parse_profile_json(*json);
-    if (const auto *profile =
-            std::get_if<layerc::core::GameProfile>(&parsed))
+    if (const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed))
       existing_ids.insert(profile->id);
   }
-  ImportDialogState state{.editor = this, .pack = pack};
+  ImportDialogState state{};
+  state.editor = this;
+  state.pack = pack;
   state.items.reserve(pack->profiles.size());
   for (const auto &profile : pack->profiles) {
     const auto suggested = layerc::bundle::resolve_suggested_profile_filename(

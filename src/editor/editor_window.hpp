@@ -248,6 +248,7 @@ private:
   void draw_checkbox(const DRAWITEMSTRUCT &) const;
   void draw_appearance_preview(const DRAWITEMSTRUCT &, HWND) const;
   LRESULT color_message(UINT, WPARAM, LPARAM) const;
+  LRESULT erase_dialog_background(HWND, WPARAM) const;
   LRESULT handle_main_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_task_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_options_message(HWND, UINT, WPARAM, LPARAM);

@@ -1,250 +1,148 @@
 # LayerC — Agent Guide and Project Memory
 
-This file is the canonical agent-facing summary of the LayerC project: what it is, how it is
-laid out, how to build and test it, the design rules that must not be broken, and the conventions
-this repository uses. `README.md` and `PLAN.md` remain the authoritative user and product/plan
-documents; when they disagree with this file, trust README/PLAN and fix this file.
+This file is the canonical agent-facing guide for LayerC: architecture, repository layout, non-negotiable design rules, build/test workflows, and coding conventions. `README.md` (user documentation) and `PLAN.md` (canonical product/plan/gates) are authoritative.
 
-## Project overview
+## Project Overview
 
-LayerC is a lightweight, open-source **Windows cooldown overlay** (Windows 10 22H2 / Windows 11 x64),
-written in dependency-free C++20 with native Win32 UIs (no Qt, no managed runtime). One process
-(`layerd.exe`) detects matched game windows, consumes input passively, runs cooldown/automation state,
-and draws click-through GDI overlay panels; a second process (`layere.exe`) is the profile editor;
-`layercal.exe` is a short-lived calibration helper; `layerworker.exe` is the demand-launched isolated
-visual-capture helper. The only vendored third-party code is miniz (ZIP) under `third_party/miniz`.
+LayerC is a lightweight, open-source **Windows cooldown overlay** (Windows 10 22H2 / Windows 11 x64) in dependency-free C++20 with native Win32 UIs (no Qt, no .NET).
 
-Versions: V1 (input+overlay), V1.1 (pixel predicates), V2.1 (template recognition), V2.2 (modular
-runtime, generic HID, profile packs, isolated visual worker), V2.3 (bounded Automation Graphs,
-cooldown recovery modes and groups), V2.4 (Game Bar companion work in progress; verify release
-status against PLAN.md and the applicable review register).
+### Core Components
+- `layerd.exe` — background daemon: passive input, cooldown/automation state machines, click-through GDI overlays.
+- `layere.exe` — native Win32 editor: profile management, live editing, automation canvas & simulator.
+- `layercal.exe` — visual calibration helper launched from LayerE.
+- `layerworker.exe` — isolated visual capture/matching worker (demand-launched).
+- `third_party/miniz` — vendored miniz 3.1.2 for deterministic ZIP profile packs (the only third-party code).
 
-**The product does not**: inject into games, read game memory, install drivers, require admin,
-evade anti-cheat, synthesize gameplay input, or do any network access/telemetry. It treats input
-purely passively. These are hard product constraints.
+### Product Invariants (Non-Negotiable)
+- **Passive input only**: never block, modify, or synthesize keyboard/mouse/controller input.
+- **No anti-cheat bypass**: no code injection, memory reading, driver installation, or admin elevation.
+- **No telemetry/network**: zero network connections (except same-package Game Bar App Service IPC).
+- **Monotonic timing**: all cooldowns and timers use monotonic clocks (`std::chrono::steady_clock`).
 
-## Repository layout
+---
 
-| Path | Contents |
+## Repository Layout
+
+| Path | Description |
 |---|---|
-| `src/core/` | Platform-neutral core: typed profile model (`types.hpp`), JSON parser/serializer, cooldown engine (recovery modes, groups), input matcher, visual/template/pixel engines, automation AST+runtime, live-edit protocol, HID/hash/utf8 utilities. Headers under `src/core/include/layerc/core/`. |
-| `src/platform/` | Win32 adapters: framed pipes, live channel, profile store + transaction journal, HID devices, text/UTF-8, visual assets, window discovery. Headers under `src/platform/include/layerc/platform/`. |
-| `src/capture/` | Window capture: WGC primary backend, Desktop Duplication fallback, bounded readback math. |
-| `src/runtime/` | Platform-neutral `DaemonKernel`, `CapabilityDemand`, `IRuntimeService`, `RuntimeServiceHost` (headers under `src/runtime/include/layerc/runtime/`). |
-| `src/daemon/` | `layerd.exe`: sessions, input/HID/XInput, overlays, visual workers, isolated-helper protocol, live editing, automation service, diagnostics. |
-| `src/editor/` | `layere.exe`: native Win32 editor (profiles, panels, cooldowns, visual calibration UI, packs, automation graph dialog + simulator). |
-| `src/calibration/` | `layercal.exe`: calibration dialog launched by LayerE. |
-| `src/bundle/` | `.layercprofile` packs: deterministic ZIP export/import/validation (miniz, LayerE-only). |
-| `src/worker/` | `layerworker.exe`: isolated visual capture/evaluation helper. |
-| `tests/` | CTest suites (see Build). `tests/test_support.*` is the canonical harness (`layerc::test::expect`). |
-| `tools/` | `lctest` fake game window, `capture_probe`, benchmark scripts (`benchmark_v11/v22/v23/latency.ps1`), automation benchmark. |
-| `examples/` | `lctest.json` (matches the lctest harness), `smoke.json` (global free-floating smoke profile). |
-| `review/` | Layer review files (`layerN.review-YYYY-MM-DD.md`) and perf reports; gitignored working docs (see Review workflow). |
-| `build/`, `out/` | Build outputs; never touched by hand, never committed. For repository analysis, ignore `build/` entirely; inspect only deployable `out/**/layer*.exe` and required adjacent runtime DLLs when EXE load/runtime behavior matters. |
+| `src/core/` | Platform-neutral core: profile models (`types.hpp`), JSON parser/serializer, cooldown engine, matcher, automation AST & runtime, live-edit protocol, hash/text/utf8 utilities. Headers in `src/core/include/layerc/core/`. |
+| `src/platform/` | Win32 adapters: named pipes, live channel, profile store + transaction journal, HID devices, visual assets, window discovery. Headers in `src/platform/include/layerc/platform/`. |
+| `src/capture/` | Capture backends: Windows Graphics Capture (primary), Desktop Duplication (fallback), aspect-preserving readback math. |
+| `src/runtime/` | Platform-neutral runtime: `DaemonKernel`, `CapabilityDemand`, `IRuntimeService`, `RuntimeServiceHost`. Headers in `src/runtime/include/layerc/runtime/`. |
+| `src/daemon/` | `layerd.exe`: session manager, input router, overlay window manager, visual worker manager, diagnostics. |
+| `src/editor/` | `layere.exe`: Win32 UI, property inspector, zoomable automation canvas, timeline simulator. |
+| `src/calibration/` | `layercal.exe`: screen region picker, color/brightness predicates, template reference editor. |
+| `src/bundle/` | `.layercprofile` packs: deterministic ZIP packaging via miniz, SHA-256 asset deduplication. |
+| `src/worker/` | `layerworker.exe`: isolated capture worker with kill-on-close Job object and 256 MiB commit limit. |
+| `src/gamebar/` | Game Bar companion: UWP C++/WinRT host (`widget/`), App Service transport, snapshot bridge. |
+| `tests/` | CTest test suites. `tests/test_support.*` provides canonical assertion helpers. |
+| `tools/` | `lctest` fake game harness, `capture_probe`, benchmark scripts (`benchmark_v11/v22/v23/latency.ps1`). |
+| `examples/` | `lctest.json` (matches `lctest.exe`), `smoke.json` (free-floating desktop test profile). |
+| `build/`, `out/` | Build & install outputs (gitignored). Never touch by hand; never commit. |
+| `review/` | Code review registers (gitignored). Archived reviews live under `review/archiv/`. |
 
-### Analysis input policy
+### Analysis Input Policy
+- Exclude `build/`, `out/`, `review/`, `.review_tmp/`, `.codewhale/`, and `.mimosa/` from broad codebase scans.
+- Default deployable executables live in `out/layerc/layer*.exe`.
+- Prefer explicit source globs (`src/**`, `tests/**`, `tools/**`, `examples/**`) over broad root queries.
 
-- `.mimosa/` is hook/checkpoint state, not product code; `.codewhale/`, `.review_tmp/`, and `review/` are agent/review working data. Exclude all of them from repository analysis.
-- Exclude `build/` completely: it contains compiler intermediates, duplicate configurations, test binaries, and packaged staging trees.
-- Treat `out/` as mixed deployment output: default to current `out/layerc/layer*.exe`; use `out/layerc-mingw/layer*.exe` plus `out/layerc-mingw/lib*.dll` only for MinGW load/dependency analysis. Older deployment variants are opt-in comparison inputs. Exclude `out/benchmarks/**`, JSON reports, Markdown/notices, and license trees.
-- Prefer explicit source globs (`src/**`, `tests/**`, `tools/**`, `examples/**`, `third_party/miniz/**`) or explicit deployment globs such as `out/layerc/layer*.exe`. Do not use a root-wide `*`/`**/*` discovery query. DSH discovery deliberately uses hidden+ignored traversal, so `.gitignore` alone does not reduce its search scope.
+---
 
-## Build, test, run
+## Build & Test Workflow
 
-Requirements: Windows 10 22H2+ / Windows 11, Visual Studio 2026 with the Desktop C++ workload, CMake 3.28+.
-MinGW builds are also supported (`mingw-ninja` preset, needs `MINGW_ROOT` and Ninja on PATH).
+Requirements: Windows 10 22H2+ / Windows 11 x64, Visual Studio 2026 (Desktop C++ workload), CMake 3.28+.
 
 ```powershell
-cmake --preset vs2026              # configure
+# Standard Debug build & tests
+cmake --preset vs2026
 cmake --build --preset vs2026-debug
-ctest --preset vs2026-debug        # all suites
-cmake --workflow --preset vs2026-release   # configure+build+test+install+ZIP in one
-cmake --install build/vs2026 --config Release --prefix out/layerc
+ctest --preset vs2026-debug
+
+# Full Release workflow (build, test, install to out/layerc, and emit portable ZIP)
+cmake --workflow --preset vs2026-release
+
+# Optional Game Bar UWP MSIX (requires UWP C++ tools)
+cmake --build --preset vs2026-release --target layerc_gamebar_msix
 ```
 
-The install stages the four executables (`layerd`, `layere`, `layercal`, `layerworker`). Close running
-LayerE/LayerD before rebuilding so their executables are not locked. MinGW builds need the matching
-runtime DLLs at deployment time (known pitfall: `libwinpthread-1.dll` resolving to Git's runtime
-instead of the UCRT64 one).
+### Key Test Suites
+- `layerc_core_tests`: profile codec, cooldown state machine, automation evaluator, replay.
+- `layerc_runtime_tests`: demand matrix, lazy service lifecycle, rollback, 100-cycle stress.
+- `layerc_capture_tests`: capture math, downsampling bounds, format conversion (headless-safe).
+- `layerc_overlay_tests`: HWND attachment, GDI rendering, capture exclusion via `lctest.exe`.
+- `layerc_platform_tests`: atomic profile store, transaction recovery, named pipe IPC security.
+- `layerc_editor_tests`: native dialog controls, undo/redo stack.
+- `layerc_bundle_tests`: deterministic ZIP packs, SHA-256 asset hashing, import conflict handling.
+- `layerc_isolated_visual_tests`: `layerworker.exe` IPC protocol, nonce auth, quarantine recovery.
+- `layerc_companion_tests`: Game Bar snapshot codec, 2s stale data timeout, sidecar persistence.
+- `layerc_automation_benchmark`: CPU automation evaluation micro-benchmark (gate: $\le 0.25\text{ ms}$ avg, $\le 2.0\text{ ms}$ max budget; run automatically via CTest).
+### Release Benchmark Gates
+Benchmark scripts in `tools/` output JSON to `out/benchmarks/` and refuse false passes:
+1. **`benchmark_v11.ps1`**: Visual recognition (gate: $\le 35\text{ MiB}$ private, $\le 50\text{ MiB}$ WS, $\le 3\%\text{ CPU}$).
+2. **`benchmark_v22.ps1`**: Modular runtime idle plateau ($\le 12\text{ MiB}$ private, $\le 20\text{ MiB}$ WS, $\le 0.2\%\text{ CPU}$, zero thread growth).
+3. **`benchmark_latency.ps1`**: Input-to-overlay latency regression ($\le 1\text{ ms}$ median / p95 vs baseline).
+4. **`benchmark_v23.ps1`**: Automation evaluator ($\le 0.25\text{ ms}$ avg, $\le 2.0\text{ ms}$ max budget).
 
-Test targets: `layerc_core_tests` (profiles, cooldowns, automation, replay), `layerc_runtime_tests`
-(capability-demand matrix, lazy ownership, rollback, 100 activation cycles), `layerc_capture_tests`
-(deterministic capture math, headless-safe), `layerc_overlay_tests` (real HWND attachment via `lctest`),
-`layerc_platform_tests` (store/transaction/peers), `layerc_editor_tests` (dialog semantics, undo/redo),
-`layerc_bundle_tests` (packs), `layerc_isolated_visual_tests` (helper protocol). Interactive capture
-tests only when configured with `-DLAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS=ON`.
+---
 
-Development: set `LAYERC_PROFILE_DIR` to load profiles from a disposable directory instead of
-`%LOCALAPPDATA%\LayerC\profiles` (e.g. `$env:LAYERC_PROFILE_DIR = "$PWD\examples"`). Run `lctest`
-as a fake game, then Shift+E in it triggers the `dash` cooldown from `examples/lctest.json`.
+## Architecture & Design Rules
 
-Release benchmarks (gates, not toys — they refuse false passes): `tools/benchmark_v11.ps1`
-(Low/Balanced visual, 35 MiB / 50 MiB / 3% gate), `benchmark_v22.ps1` (empty daemon plateau and
-recovery), `benchmark_v23.ps1` (automation activation/checkpoint/overhead, <=0.25 ms average and
-<=2 ms max evaluator budget), `benchmark_latency.ps1` (<=1 ms median/p95 input-to-overlay regression).
-Evidence lands in `out\benchmarks`.
+### 1. Demand-Driven Services (V2.2)
+- `DaemonKernel` computes an immutable `CapabilityDemand` on every session state transition.
+- `RuntimeServiceHost` allocates heavy service resources (Raw Input, WGC capture, template matcher, live edit channel) **only while an active session demands them**.
+- Opening LayerE connects the live channel but allocates **no** capture, HID, or overlay resources.
+- Idle daemon: zero capture threads, zero polling timers, event-driven wakeups.
 
-## Architecture (what every change must respect)
+### 2. Declarative Automation Graphs (V2.3)
+- Bounded rule-based engine — **never** a general-purpose scripting runtime.
+- **Hard caps**: 64 rules, 64 variables, 32 timers, 256 AST nodes (max depth 16), 512-byte string values, 2 ms evaluation deadline per root event.
+- Root events execute as one atomic transaction across all enabled graphs.
+- Persistent variables checkpoint to `profiles/_state/<id>.json` within 1s; `.layerctrace` recordings are local-only and never exported in packs.
 
-### Layering and boundaries
-- Platform-independent behavior lives in `core` and `runtime`; Win32 handles never cross into them.
-  The editor UI types never reach the daemon. `platform` adapts Win32; `capture` implements capture
-  backends; `daemon` owns process authority (sessions, cooldowns, overlays are daemon-authoritative).
-- Shared data types: `GameProfile`, `GameMatch`, `Panel`, `CooldownDefinition`, `InputChord`,
-  `GameSession`, `CooldownState`, `AutomationProfile`/`AutomationRuntime`. Use opaque IDs and
-  normalized values across process boundaries (pipes carry framed UTF-8 JSON with size limits).
-- Process boundary: LayerE and LayerD exchange versioned, length-prefixed JSON over a current-user-
-  only named pipe; peers verify sibling executable, same user/logon session, and the exact same
-  package version — mixed release binaries are rejected.
+### 3. Storage & Transactional Persistence
+- Base profile: UTF-8 JSON under `profiles/<id>.json` (schemas 1–4). Atomic replacement with `<id>.json.bak` fallback.
+- Sidecars: `_visual/` (schema 2), `_automation/` (schema 1), `_companion/` (schema 1), `_state/` (schema 1).
+- Multi-document saves commit through a crash-recoverable journal (`profile_transaction.cpp`): stage $\to$ journal $\to$ replace $\to$ commit marker $\to$ cleanup.
+- `.state` marker files (`active` / `removed`) provide authoritative sidecar removal semantics.
 
-### V2.2 modular runtime
-- `DaemonKernel` computes one immutable `CapabilityDemand` after every relevant state change;
-  `RuntimeServiceHost` instantiates `IRuntimeService`s only while a session demands them and releases
-  heavy resources in the same reconciliation cycle (no warm-cache grace period). Opening LayerE alone
-  must not construct capture/template/HID/edit-overlay resources.
-- Teardown order: producers first (visual/input), then overlays, then session state. Activation order:
-  session state, input baseline seeding, overlays, then visual capture. Failure unwinds newly
-  activated services in reverse order (see `RuntimeServiceHost::reconcile`).
-- The daemon is event-driven: no idle polling loops, no fixed-rate daemon timers for visual capture
-  (workers notify via events), no busy waits.
+### 4. Visual Capture & Template Matching
+- Windows Graphics Capture (WGC) is primary; Desktop Duplication is fallback. No WARP or GDI runtime fallbacks.
+- Readback grids are aspect-preserving and downsampled: Low (64px), Balanced (256px), Exact (full, unbenchmarked).
+- Template matching is a bounded CPU coarse-to-fine pass ($\le 4$ states, $\le 4$ references each $\le 512\times512$, $\ge 64$ opaque pixels).
+- Per-profile **Isolate capture** sandboxes WGC into `layerworker.exe` under a 256 MiB Job object.
 
-### V2.3 automation
-- Automation is a bounded declarative system, NOT a scripting runtime: no text language, loops,
-  recursion, user functions, filesystem/registry/network access, process launch, or code execution.
-- Hard caps (named constants in `automation.hpp`): 64 rules, 64 variables, 32 timers per session,
-  256 AST nodes, depth 16, 64 collection entries, 512-byte strings, 8192 node evaluations and
-  32 derived events per root, 2 ms execution budget per root; 256 KiB sidecar, 64 KiB state file,
-  4 MiB trace. Exceeding a cap fails closed with an `AutomationError`.
-- Evaluation is transactional: one root event = one ordered pass over all enabled automations,
-  priority resolves per-target conflicts, the winning set commits atomically through
-  validator+committer callbacks, and an error faults only the offending automation (re-evaluated
-  from the original snapshot); retry/reload/edit clears the fault.
-- Persistent variables are shared per profile across sessions and checkpointed atomically under
-  `profiles\_state` within 1 s of first change (final flush on teardown); machine-local state and
-  traces are never exported in packs.
+### 5. Game Bar Companion (V2.4)
+- Separate UWP C++/WinRT XAML host (`layerc-gamebar.exe`) communicating with packaged `layerd.exe` over App Service `LayerC.GameBar.v1`.
+- LayerD remains the sole authority: pushes bounded 64 KiB immutable snapshots and accepts validated preference sidecars.
+- Unpackaged desktop LayerD runs zero Game Bar code/threads.
 
-### Persistence model
-- One UTF-8 JSON file per game profile; atomic replace + `<profile>.json.bak` last-valid backup.
-  Visual data in `_visual\<profile>.json`, automation in `_automation\<profile>.json` (schema-1
-  sidecar), persistent state in `_state`. A `.state` marker file is the authoritative removal/active
-  signal for sidecars (crash-safe). Base schema 1-4; explicit Save upgrades older profiles after a
-  compatibility warning; unknown schemas/module kinds are rejected.
-- Multi-document writes (base + visual + automation) commit through one crash-recoverable journal
-  transaction (`profile_transaction.cpp`): stage, durable journal, publish, durable commit marker,
-  cleanup. Never write the profile and its sidecars in a way that can be left half-applied.
-- Profile packs: deterministic ZIP (fixed timestamps, ordered entries), validated fully before any
-  choice; limits 128 MiB archive/uncompressed, 256 entries, 64 profiles, 4 MiB per asset; rejects
-  traversal/case-collisions/duplicates/bad hashes. Conflicts default to Import Copy. Data-only and
-  unsigned.
+---
 
-### Capture and visual recognition
-- WGC primary; Desktop Duplication is a foreground-only fallback (window-intersection copy, rotation
-  transformed); no WARP/GDI fallback at runtime. Low/Balanced read back aspect-preserving 64/256 px
-  grids; Exact reads every pixel with no guarantee. One newest-frame WGC pool (older frames dropped).
-- Templates: <=4 states, <=4 references each, <=512x512, >=64 opaque pixels, flat/near-flat references
-  rejected, PNG alpha = mask; coarse-to-fine bounded matcher with fixed per-frame work budget (increase
-  stride, never unbounded work).
-- Isolated helper: per-HWND `layerworker.exe` under a kill-on-close Job (1 process, 256 MiB commit),
-  random pipe + nonce, mutual PID/path/session/version validation, 1 MiB message cap, sequence+QPC
-  staleness rejection, 500 ms heartbeat, 2 s no-progress terminate + one retry, then quarantine
-  (input/cooldowns keep working); Runtime Diagnostics can retry.
+## Code Conventions
 
-## Design rules (non-negotiable)
+- **Standard**: C++20. MSVC flags: `/W4 /permissive- /EHsc /utf-8`. MinGW flags: `-Wall -Wextra -Wpedantic`.
+- **File size limit**: keep files under $\sim 1000$ lines; split cohesive subsystems across translation units rather than sprawling.
+- **Errors**: use `std::optional` / `std::variant` with typed error structs (`ProfileError`, `AutomationError`, `PackOperationResult`); mark returns `[[nodiscard]]`.
+- **Namespaces**: `layerc::core`, `layerc::platform`, `layerc::daemon`, `layerc::editor`, `layerc::gamebar`, `layerc::runtime`.
+- **Helpers**: reuse shared primitives in `core/` (`json.cpp`, `text.cpp`, `hash.cpp`, `utf8.cpp`) — do not duplicate.
+- **JSON**: serialize via `json::append_*` primitives for byte-stable output.
+- **Threading**: daemon runs on a single main message loop; worker threads are owned and joined; shared data is mutex-guarded and value-copied at boundaries.
 
-- **Passive input**: never block, modify, or synthesize user input.
-- **Monotonic clocks** for all timers/cooldowns; wall-clock changes must not alter state.
-- **Demand-driven resources**: no service/worker/HWND/capture device allocated without an active
-  consumer; release in the same reconcile cycle; keep the daemon within the memory/CPU gates in
-  `PLAN.md` (idle <=12 MiB private / 20 MiB WS / 0.2% CPU; visual 35/50/3%).
-- **Fail closed**: invalid profiles/sidecars/messages/automations are rejected or faulted, never
-  silently guessed; two invalid sidecar copies deliberately block triggers for that profile (fail-
-  safe) while the session stays diagnosable.
-- **Bounded everything**: every parse, packet, archive, AST, trace, and queue has an explicit size/
-  count limit and rejects overflow (checked arithmetic, finite doubles, exact integers).
-- **Atomicity**: files replace atomically with durable flush; related documents move as one
-  transaction; derived events/effects commit only after the full set validates.
-- **No busy loops, no polling where an event exists**: input, capture, live channel, and automation
-  are event/wakeup-driven.
-- **Determinism**: packs, benchmarks, and replay must be reproducible (fixed ZIP times, monotonic
-  replay through the production evaluator).
-- **Incremental behavior**: live edits diff profiles (`plan_session_reconciliation`); only a cooldown
-  whose runtime definition changed is reset; sessions keep running timelines otherwise.
+---
 
-## Code conventions
+## DevOps & CI
 
-- C++20, `-Wall -Wextra -Wpedantic` (MinGW) / `/W4 /permissive- /EHsc /utf-8` (MSVC). Keep files
-  under ~1000 lines; split rather than sprawl (three new V2.3 files already exceed it — open finding).
-- Errors: `std::optional`/`std::variant` results with structured error types (`ProfileError`,
-  `AutomationError`, `PackOperationResult`); `[[nodiscard]]` on check-worthy returns. Win32 calls
-  check failures and release handles on every path.
-- `layerc::core` / `layerc::platform` / `layerc::daemon` / `layerc::editor` namespaces; internal
-  helpers in anonymous namespaces; shared canonical helpers live in `core` (`json.cpp`, `text.cpp`,
-  `hash.cpp`, `utf8.cpp`) — reuse them, do not re-implement (duplication is a standing review theme).
-- JSON output is built with the `json::append_*` primitives; keep serializers byte-stable.
-- Formatting: clang-format, 2-space indent (some legacy core files are 4-space — do not mix). Avoid
-  wholesale re-wrapping of unchanged code in feature diffs (review hygiene).
-- Threading: daemon logic stays on one message loop unless measured; worker threads are owned and
-  joined; shared state is mutex-guarded and snapshots are value-copied at boundaries.
+- **CI workflow** (`.github/workflows/ci.yml`): runs on `windows-2022` with Ninja + MSVC (`ci` preset) $\to$ build $\to$ `ctest` 9/9 $\to$ install $\to$ CPack ZIP.
+- **Dependabot** (`.github/dependabot.yml`): weekly GitHub Actions version bumps.
+- **Release workflow** (`.github/workflows/release.yml`): triggers on `v*.*.*` tags $\to$ builds Release package $\to$ creates GitHub Release with ZIP.
+- **Branch protection**: protect `main`, require `windows-msvc` CI status check, enforce linear history.
 
-## Review workflow (this repository's process)
+---
 
-- Reviews live in `review/` (gitignored working docs, not committed). Use
-  `layerN.review-YYYY-MM-DD.md` as the code-review filename convention; `layerN` is a
-  placeholder, not a current layer number. When a review is requested, inspect the
-  working tree and select the applicable consolidated register instead of relying on a
-  hardcoded pointer in this guide.
-- Findings use severity (blocker/major/medium/low/nit), category, evidence with `file:line`, and a
-  concrete remedy. Each review re-verifies prior items as **FIXED / PARTIAL / REMAINING**.
-- **Housekeeping rule**: when a review file is checked, every finding is verified against the current
-  working tree. A file whose findings are ALL fixed is moved to `review/archiv/`. A file with open
-  findings remains available and its open items are compiled — deduplicated, tagged with their source
-  such as `[LN-B1]` — into the applicable consolidated review file.
-- Release-gate status and prior-finding status live in the applicable review register. This guide
-  intentionally does not embed a current layer number, archived range, or stale fix-pass summary.
-  Re-run release gates after fix commits land.
-  The un-merged detail from the 2026-08-14 audit is in `.review_tmp/CODE_REVIEW.md`.
-- External review tooling: `reasonix.toml` is the checked-in config for the Reasonix CLI (external
-  review/delegation). Per the workflow rules below it is only used when the user explicitly asks.
-  When running Reasonix from an automated environment, beware leftover processes holding session
-  leases under `%APPDATA%\reasonix\projects\d--oursoft-layerc` — use `--copy` to escape a held
-  lease.
+## Agent Workflow Rules
 
-## Git hygiene
-
-- **Never stage or commit legacy `.codewhale/` runtime state** unless the user explicitly asks.
-- `review/`, `build/`, `out/`, `.review_tmp/` are ignored/working docs; keep them out of commits.
-- The working tree may contain uncommitted milestone WIP; verify `git status` before assuming HEAD
-  reflects the code; do not commit unrelated WIP as part of another change.
-- Keep docs in pace with milestones: `README.md` (user features, benchmarks) and `PLAN.md` (canonical
-  product/plan/gates) are updated by the same change that implements the feature.
-
-## Agent workflow rules
-
-- The primary agent implements, builds, tests, and fixes changes directly in this workspace.
-- Do not use collaboration subagents (`spawn_agent`, `followup_task`, or equivalent) for
-  implementation, review, or research. Keep implementation, review, research, builds, tests, and
-  fixes within the current primary session.
-- Do not invoke Reasonix, CodeWhale, or another external review/delegation agent unless the user
-  explicitly requests it for the current task.
-- Never stage or commit legacy `.codewhale/` runtime state unless the user explicitly requests it.
-
-## Baseline project state (recorded 2026-08-17)
-
-- V2.3 (automation core+runtime+daemon+editor, cooldown groups/recovery, schema 4, packs with
-  automation modules) is COMMITTED as LayerC 2.3.0 after the V2.3 fix pass cleared all
-  blockers; release gates verified same day: MSVC + MinGW Release builds, full CTest suites on
-  both toolchains, benchmark v22 (plateau 1.9/11.3 MiB) and v23 (13.0 us avg / 1614 us max),
-  install staging, and the `LayerC-2.3.0-windows-x64.zip` portable package.
-- Known-good areas (recently verified): transaction journal, HidResolver cache, snapshot sequencer,
-  origin-token dedup, chunked trace deltas, editor refactor shape, automation cascade deadline,
-  persistent-value sync invariants, cooldown recovery delta detection.
-- Before changing behavior in these areas, re-read the current files — line numbers in reviews drift
-  as fixes land.
-
-## References
-
-- `README.md` — user-facing features, build/benchmark instructions, protocol/security notes.
-- `PLAN.md` — canonical product plan, version gates, resource budgets, acceptance criteria.
-- `THIRD_PARTY_NOTICES.md` — vendored components (miniz).
-- `reasonix.toml` — external review CLI configuration (used only on explicit request).
-- The applicable consolidated open-finding register under `review/`; review files use the `layerN.review-YYYY-MM-DD.md` convention.
+1. Primary agent implements, builds, tests, and fixes directly in this workspace without subagent delegation.
+2. Never stage or commit `.codewhale/`, `.review_tmp/`, or `review/` working files.
+3. Keep `README.md` and `PLAN.md` in sync with feature and milestone changes.
+4. Verify tests pass (`ctest --preset vs2026-debug`) and builds remain warning-free before concluding tasks.
+5. Reviews live under `review/layerN.review-YYYY-MM-DD.md`; move to `review/archiv/` once all findings are marked FIXED.

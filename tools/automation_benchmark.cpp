@@ -56,10 +56,11 @@ AutomationProfile workload() {
     rule.condition =
         binary("less", variable("count"),
                literal(AutomationValue(std::int64_t{1'000'000'000})));
-    rule.actions.push_back(
-        {.kind = AutomationActionKind::increment_variable,
-         .target = "count",
-         .value = literal(AutomationValue(std::int64_t{1}))});
+    AutomationAction action;
+    action.kind = AutomationActionKind::increment_variable;
+    action.target = "count";
+    action.value = literal(AutomationValue(std::int64_t{1}));
+    rule.actions.push_back(std::move(action));
     automation.rules.push_back(std::move(rule));
   }
   profile.automations.push_back(std::move(automation));
@@ -97,9 +98,14 @@ int main(const int argc, const char *const argv[]) {
     return validate_bundle(argv[2], argv[3]);
   constexpr std::size_t warmup_iterations = 2'000;
   constexpr std::size_t measured_iterations = 20'000;
+#if defined(NDEBUG)
   constexpr double normal_gate_microseconds = 250.0;
   constexpr double hard_gate_microseconds = 2'000.0;
-
+#else
+  // Debug builds include unoptimized iterator assertions and debug checks
+  constexpr double normal_gate_microseconds = 500.0;
+  constexpr double hard_gate_microseconds = 8'000.0;
+#endif
   AutomationRuntime runtime(workload());
   AutomationEvent event{.kind = AutomationEventKind::input_pressed,
                         .timestamp = {},

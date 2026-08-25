@@ -4,8 +4,8 @@
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/text.hpp"
 
-#include <charconv>
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -25,8 +25,7 @@ const Value *object_root(const std::string_view source, std::string &error,
   if (const auto *parse_error =
           std::get_if<layerc::core::json::ParseError>(&storage)) {
     error = "invalid isolated visual JSON at byte " +
-            std::to_string(parse_error->offset) + ": " +
-            parse_error->message;
+            std::to_string(parse_error->offset) + ": " + parse_error->message;
     return nullptr;
   }
   const auto &root = std::get<Value>(storage);
@@ -63,9 +62,10 @@ bool string_value(const Value &root, const std::string_view name,
 bool decimal_value(const Value &root, const std::string_view name,
                    std::uint64_t &output, std::string &error) {
   std::string source;
-  if (!string_value(root, name, source, error)) return false;
-  const auto [end, code] = std::from_chars(
-      source.data(), source.data() + source.size(), output);
+  if (!string_value(root, name, source, error))
+    return false;
+  const auto [end, code] =
+      std::from_chars(source.data(), source.data() + source.size(), output);
   if (code != std::errc{} || end != source.data() + source.size()) {
     error = std::string(name) + " must be an unsigned decimal string";
     return false;
@@ -98,8 +98,7 @@ bool number_value(const Value &root, const std::string_view name,
 
 void append_packet_prefix(std::string &output, const std::string_view type) {
   output += "{\"protocolVersion\":";
-  layerc::core::json::append_unsigned(output,
-                                      isolated_visual_protocol_version);
+  layerc::core::json::append_unsigned(output, isolated_visual_protocol_version);
   output += ",\"packageVersion\":";
   layerc::core::json::append_quoted(output, layerc::core::package_version);
   output += ",\"type\":";
@@ -121,9 +120,10 @@ std::uint64_t monotonic_nanoseconds(const layerc::core::TimePoint value) {
 
 } // namespace
 
-IsolatedSnapshotDisposition IsolatedSnapshotValidator::validate(
-    VisualCaptureSnapshot &snapshot, const layerc::core::TimePoint now,
-    std::string &error) {
+IsolatedSnapshotDisposition
+IsolatedSnapshotValidator::validate(VisualCaptureSnapshot &snapshot,
+                                    const layerc::core::TimePoint now,
+                                    std::string &error) {
   if (snapshot.sequence < capture_sequence_) {
     error = "isolated capture sequence moved backwards";
     return IsolatedSnapshotDisposition::rejected;
@@ -161,8 +161,8 @@ IsolatedSnapshotDisposition IsolatedSnapshotValidator::validate(
 }
 
 bool IsolatedSnapshotSequencer::rebase(VisualCaptureSnapshot &snapshot) {
-  const bool advanced = snapshot.sequence != 0 &&
-                        snapshot.sequence != last_worker_sequence_;
+  const bool advanced =
+      snapshot.sequence != 0 && snapshot.sequence != last_worker_sequence_;
   if (advanced) {
     last_worker_sequence_ = snapshot.sequence;
     snapshot.sequence = ++capture_sequence_;
@@ -201,14 +201,16 @@ bool validate_isolated_hello(const std::string_view json,
                              std::string &error) {
   layerc::core::json::ParseResult parsed;
   const auto *root = object_root(json, error, parsed);
-  if (root == nullptr) return false;
+  if (root == nullptr)
+    return false;
   std::string type, actual_nonce, role;
   std::uint64_t process_id{};
   if (!string_value(*root, "type", type, error) || type != "hello" ||
       !string_value(*root, "nonce", actual_nonce, error) ||
       !string_value(*root, "role", role, error) ||
       !decimal_value(*root, "processId", process_id, error)) {
-    if (error.empty()) error = "invalid isolated visual hello";
+    if (error.empty())
+      error = "invalid isolated visual hello";
     return false;
   }
   if (actual_nonce != nonce || role != expected_role ||
@@ -219,8 +221,8 @@ bool validate_isolated_hello(const std::string_view json,
   return true;
 }
 
-std::string encode_isolated_configuration(
-    const IsolatedConfiguration &configuration) {
+std::string
+encode_isolated_configuration(const IsolatedConfiguration &configuration) {
   std::string output;
   append_packet_prefix(output, "configure");
   output += ",\"sequence\":";
@@ -230,7 +232,8 @@ std::string encode_isolated_configuration(
       output, static_cast<std::uint8_t>(configuration.capture_quality));
   output += ",\"requests\":[";
   for (std::size_t index = 0; index < configuration.requests.size(); ++index) {
-    if (index != 0) output.push_back(',');
+    if (index != 0)
+      output.push_back(',');
     const auto &request = configuration.requests[index];
     layerc::core::VisualProfile visual;
     visual.profile_id = "ipc";
@@ -249,16 +252,18 @@ std::string encode_isolated_configuration(
     output += ",\"assetSignatures\":[";
     for (std::size_t template_index = 0;
          template_index < request.templates.size(); ++template_index) {
-      if (template_index != 0) output.push_back(',');
+      if (template_index != 0)
+        output.push_back(',');
       output.push_back('[');
       const auto &signatures =
           request.templates[template_index].asset_signatures;
-      for (std::size_t signature_index = 0;
-           signature_index < signatures.size(); ++signature_index) {
-        if (signature_index != 0) output.push_back(',');
+      for (std::size_t signature_index = 0; signature_index < signatures.size();
+           ++signature_index) {
+        if (signature_index != 0)
+          output.push_back(',');
         const auto &signature = signatures[signature_index];
-        output += signature.present ? "{\"present\":true"
-                                    : "{\"present\":false";
+        output +=
+            signature.present ? "{\"present\":true" : "{\"present\":false";
         output += ",\"volumeSerial\":";
         append_decimal(output, signature.volume_serial);
         output += ",\"fileIndex\":";
@@ -279,7 +284,8 @@ std::string encode_isolated_configuration(
   output += "],\"exclusions\":[";
   for (std::size_t index = 0; index < configuration.exclusions.size();
        ++index) {
-    if (index != 0) output.push_back(',');
+    if (index != 0)
+      output.push_back(',');
     const auto &rect = configuration.exclusions[index];
     output.push_back('[');
     layerc::core::json::append_number(output, rect.left);
@@ -300,17 +306,19 @@ decode_isolated_configuration(const std::string_view json) {
   std::string error;
   layerc::core::json::ParseResult parsed;
   const auto *root = object_root(json, error, parsed);
-  if (root == nullptr) return IsolatedProtocolError{std::move(error)};
+  if (root == nullptr)
+    return IsolatedProtocolError{std::move(error)};
   std::string type;
   IsolatedConfiguration result;
   if (!string_value(*root, "type", type, error) || type != "configure" ||
       !decimal_value(*root, "sequence", result.sequence, error)) {
-    if (error.empty()) error = "expected isolated configure message";
+    if (error.empty())
+      error = "expected isolated configure message";
     return IsolatedProtocolError{std::move(error)};
   }
   const auto *quality = root->find("captureQuality");
-  if (quality == nullptr || !quality->is_number() ||
-      quality->as_number() < 0 || quality->as_number() > 2) {
+  if (quality == nullptr || !quality->is_number() || quality->as_number() < 0 ||
+      quality->as_number() > 2) {
     return IsolatedProtocolError{"captureQuality must be 0, 1, or 2"};
   }
   result.capture_quality =
@@ -335,11 +343,11 @@ decode_isolated_configuration(const std::string_view json) {
     const auto *visual = std::get_if<layerc::core::VisualProfile>(&decoded);
     if (visual == nullptr)
       return IsolatedProtocolError{"invalid visual evaluation request"};
-    VisualEvaluationRequest request{
-        .source_key = layerc::platform::utf8_to_wide(source_key),
-        .sample_rate_hz = visual->sample_rate_hz,
-        .quality = visual->quality,
-        .rules = visual->rules};
+    VisualEvaluationRequest request;
+    request.source_key = layerc::platform::utf8_to_wide(source_key);
+    request.sample_rate_hz = visual->sample_rate_hz;
+    request.quality = visual->quality;
+    request.rules = visual->rules;
     const auto *signature_sets = entry.find("assetSignatures");
     if (signature_sets == nullptr || !signature_sets->is_array() ||
         signature_sets->as_array().size() != visual->templates.size())
@@ -355,15 +363,15 @@ decode_isolated_configuration(const std::string_view json) {
           encoded_signatures.as_array().size() != state.references.size())
         return IsolatedProtocolError{
             "asset signatures must match template references"};
-      VisualTemplateEvaluation evaluation{.state = state};
-      evaluation.asset_signatures.reserve(
-          encoded_signatures.as_array().size());
+      VisualTemplateEvaluation evaluation;
+      evaluation.state = state;
+      evaluation.asset_signatures.reserve(encoded_signatures.as_array().size());
       for (const auto &encoded : encoded_signatures.as_array()) {
         if (!encoded.is_object())
           return IsolatedProtocolError{"asset signature must be an object"};
         VisualAssetSignature signature;
-        std::uint64_t volume_serial{}, file_index{}, file_size{},
-            write_ticks{}, change_usn{};
+        std::uint64_t volume_serial{}, file_index{}, file_size{}, write_ticks{},
+            change_usn{};
         if (!bool_value(encoded, "present", signature.present, error) ||
             !decimal_value(encoded, "volumeSerial", volume_serial, error) ||
             !decimal_value(encoded, "fileIndex", file_index, error) ||
@@ -371,8 +379,8 @@ decode_isolated_configuration(const std::string_view json) {
             !decimal_value(encoded, "lastWriteTicks", write_ticks, error) ||
             !decimal_value(encoded, "changeUsn", change_usn, error) ||
             volume_serial > std::numeric_limits<std::uint32_t>::max())
-          return IsolatedProtocolError{
-              error.empty() ? "invalid asset signature" : std::move(error)};
+          return IsolatedProtocolError{error.empty() ? "invalid asset signature"
+                                                     : std::move(error)};
         signature.volume_serial = static_cast<std::uint32_t>(volume_serial);
         signature.file_index = file_index;
         signature.file_size = file_size;
@@ -420,20 +428,20 @@ bool decode_isolated_poll(const std::string_view json, std::uint64_t &sequence,
                           std::string &error) {
   layerc::core::json::ParseResult parsed;
   const auto *root = object_root(json, error, parsed);
-  if (root == nullptr) return false;
+  if (root == nullptr)
+    return false;
   std::string type;
-  if (!string_value(*root, "type", type, error) ||
-      type != "waitSnapshot" ||
+  if (!string_value(*root, "type", type, error) || type != "waitSnapshot" ||
       !decimal_value(*root, "sequence", sequence, error)) {
-    if (error.empty()) error = "expected isolated waitSnapshot message";
+    if (error.empty())
+      error = "expected isolated waitSnapshot message";
     return false;
   }
   return true;
 }
 
-std::string encode_isolated_snapshot(
-    const std::uint64_t packet_sequence,
-    const VisualCaptureSnapshot &snapshot) {
+std::string encode_isolated_snapshot(const std::uint64_t packet_sequence,
+                                     const VisualCaptureSnapshot &snapshot) {
   std::string output;
   append_packet_prefix(output, "snapshot");
   output += ",\"sequence\":";
@@ -450,29 +458,30 @@ std::string encode_isolated_snapshot(
   layerc::core::json::append_quoted(output, snapshot.gpu_description);
   output += ",\"evaluations\":[";
   for (std::size_t index = 0; index < snapshot.evaluations.size(); ++index) {
-    if (index != 0) output.push_back(',');
+    if (index != 0)
+      output.push_back(',');
     const auto &evaluation = snapshot.evaluations[index];
     output += "{\"sourceKey\":";
     layerc::core::json::append_quoted(
         output, layerc::platform::wide_to_utf8(evaluation.source_key));
     output += ",\"sequence\":";
     append_decimal(output, evaluation.sequence);
-    output += evaluation.missing_template_assets
-                  ? ",\"missingAssets\":true"
-                  : ",\"missingAssets\":false";
+    output += evaluation.missing_template_assets ? ",\"missingAssets\":true"
+                                                 : ",\"missingAssets\":false";
     output += ",\"measurements\":[";
     for (std::size_t measurement_index = 0;
          measurement_index < evaluation.measurements.size();
          ++measurement_index) {
-      if (measurement_index != 0) output.push_back(',');
+      if (measurement_index != 0)
+        output.push_back(',');
       const auto &measurement = evaluation.measurements[measurement_index];
       output += "{\"id\":";
       layerc::core::json::append_quoted(output, measurement.observation_id);
       output += ",\"availability\":";
       layerc::core::json::append_unsigned(
           output, static_cast<std::uint8_t>(measurement.availability));
-      output += measurement.matched ? ",\"matched\":true"
-                                    : ",\"matched\":false";
+      output +=
+          measurement.matched ? ",\"matched\":true" : ",\"matched\":false";
       output += ",\"confidence\":";
       layerc::core::json::append_number(output, measurement.confidence);
       output += ",\"sampledAtNs\":";
@@ -491,14 +500,16 @@ decode_isolated_snapshot(const std::string_view json,
   std::string error;
   layerc::core::json::ParseResult parsed;
   const auto *root = object_root(json, error, parsed);
-  if (root == nullptr) return IsolatedProtocolError{std::move(error)};
+  if (root == nullptr)
+    return IsolatedProtocolError{std::move(error)};
   std::string type, gpu;
   std::uint64_t packet_sequence{}, capture_sequence{};
   if (!string_value(*root, "type", type, error) || type != "snapshot" ||
       !decimal_value(*root, "sequence", packet_sequence, error) ||
       !decimal_value(*root, "captureSequence", capture_sequence, error) ||
       !string_value(*root, "gpu", gpu, error)) {
-    if (error.empty()) error = "invalid isolated snapshot";
+    if (error.empty())
+      error = "invalid isolated snapshot";
     return IsolatedProtocolError{std::move(error)};
   }
   if (packet_sequence != expected_packet_sequence)
@@ -507,15 +518,15 @@ decode_isolated_snapshot(const std::string_view json,
   const auto *backend = root->find("backend");
   if (availability == nullptr || !availability->is_number() ||
       availability->as_number() < 0 || availability->as_number() > 5 ||
-      backend == nullptr || !backend->is_number() ||
-      backend->as_number() < 0 || backend->as_number() > 2)
+      backend == nullptr || !backend->is_number() || backend->as_number() < 0 ||
+      backend->as_number() > 2)
     return IsolatedProtocolError{"invalid isolated capture status"};
   VisualCaptureSnapshot result;
   result.sequence = capture_sequence;
-  result.result.availability = static_cast<layerc::core::CaptureAvailability>(
-      availability->as_number());
-  result.result.backend = static_cast<layerc::core::CaptureBackendKind>(
-      backend->as_number());
+  result.result.availability =
+      static_cast<layerc::core::CaptureAvailability>(availability->as_number());
+  result.result.backend =
+      static_cast<layerc::core::CaptureBackendKind>(backend->as_number());
   result.gpu_description = std::move(gpu);
   const auto *evaluations = root->find("evaluations");
   if (evaluations == nullptr || !evaluations->is_array() ||
@@ -531,10 +542,10 @@ decode_isolated_snapshot(const std::string_view json,
         !decimal_value(entry, "sequence", sequence, error) ||
         !bool_value(entry, "missingAssets", missing, error))
       return IsolatedProtocolError{std::move(error)};
-    VisualEvaluationSnapshot evaluation{
-        .source_key = layerc::platform::utf8_to_wide(source_key),
-        .sequence = sequence,
-        .missing_template_assets = missing};
+    VisualEvaluationSnapshot evaluation;
+    evaluation.source_key = layerc::platform::utf8_to_wide(source_key);
+    evaluation.sequence = sequence;
+    evaluation.missing_template_assets = missing;
     const auto *measurements = entry.find("measurements");
     if (measurements == nullptr || !measurements->is_array() ||
         measurements->as_array().size() > 8)
@@ -550,8 +561,7 @@ decode_isolated_snapshot(const std::string_view json,
                         error) ||
           !bool_value(measurement_value, "matched", matched, error) ||
           !number_value(measurement_value, "confidence", confidence, error) ||
-          !decimal_value(measurement_value, "sampledAtNs", sampled_at,
-                         error))
+          !decimal_value(measurement_value, "sampledAtNs", sampled_at, error))
         return IsolatedProtocolError{std::move(error)};
       const auto *measurement_availability =
           measurement_value.find("availability");
@@ -561,13 +571,12 @@ decode_isolated_snapshot(const std::string_view json,
           measurement_availability->as_number() > 5 || confidence < 0.0 ||
           confidence > 1.0)
         return IsolatedProtocolError{"invalid isolated measurement values"};
-      measurement.availability =
-          static_cast<layerc::core::CaptureAvailability>(
-              measurement_availability->as_number());
+      measurement.availability = static_cast<layerc::core::CaptureAvailability>(
+          measurement_availability->as_number());
       measurement.matched = matched;
       measurement.confidence = confidence;
-      measurement.sampled_at = layerc::core::TimePoint(
-          std::chrono::nanoseconds(sampled_at));
+      measurement.sampled_at =
+          layerc::core::TimePoint(std::chrono::nanoseconds(sampled_at));
       evaluation.measurements.push_back(std::move(measurement));
     }
     result.evaluations.push_back(std::move(evaluation));
@@ -589,13 +598,15 @@ bool decode_isolated_ack(const std::string_view json,
                          std::string &error) {
   layerc::core::json::ParseResult parsed;
   const auto *root = object_root(json, error, parsed);
-  if (root == nullptr) return false;
+  if (root == nullptr)
+    return false;
   std::string type;
   std::uint64_t sequence{};
   if (!string_value(*root, "type", type, error) || type != "ack" ||
       !decimal_value(*root, "sequence", sequence, error) ||
       sequence != expected_sequence) {
-    if (error.empty()) error = "invalid isolated acknowledgement";
+    if (error.empty())
+      error = "invalid isolated acknowledgement";
     return false;
   }
   return true;

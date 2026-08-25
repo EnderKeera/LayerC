@@ -1,6 +1,6 @@
-#include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
+#include "editor_window.hpp"
 
 #include <algorithm>
 #include <array>
@@ -18,20 +18,30 @@ void EditorWindow::initialize_tasks(const HWND window) {
   style_native_dialog_children(window,
                                task_font_ == nullptr ? font_ : task_font_);
   task_list_ = GetDlgItem(window, IDC_TASK_LIST);
-  ListView_SetExtendedListViewStyle(task_list_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-  const std::array<LVCOLUMNW, 3> columns{{
-      {.mask = LVCF_TEXT | LVCF_WIDTH, .cx = 145, .pszText = const_cast<LPWSTR>(L"Process")},
-      {.mask = LVCF_TEXT | LVCF_WIDTH, .cx = 335, .pszText = const_cast<LPWSTR>(L"Window")},
-      {.mask = LVCF_TEXT | LVCF_WIDTH, .cx = 80, .pszText = const_cast<LPWSTR>(L"PID")},
-  }};
+  ListView_SetExtendedListViewStyle(task_list_,
+                                    LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+  const auto make_column = [](const int width, const wchar_t *text) {
+    LVCOLUMNW column{};
+    column.mask = LVCF_TEXT | LVCF_WIDTH;
+    column.cx = width;
+    column.pszText = const_cast<LPWSTR>(text);
+    return column;
+  };
+  std::array<LVCOLUMNW, 3> columns{
+      make_column(145, L"Process"),
+      make_column(335, L"Window"),
+      make_column(80, L"PID"),
+  };
   for (int index = 0; index < static_cast<int>(columns.size()); ++index)
-    ListView_InsertColumn(task_list_, index, const_cast<LVCOLUMNW *>(&columns[static_cast<std::size_t>(index)]));
+    ListView_InsertColumn(task_list_, index,
+                          &columns[static_cast<std::size_t>(index)]);
   style_list_view(task_list_, false);
   layout_tasks(window);
 }
 
 void EditorWindow::layout_tasks(const HWND window) {
-  if (window == nullptr || task_list_ == nullptr) return;
+  if (window == nullptr || task_list_ == nullptr)
+    return;
 
   RECT client{};
   GetClientRect(window, &client);
@@ -39,9 +49,7 @@ void EditorWindow::layout_tasks(const HWND window) {
   const int height = std::max(1L, client.bottom - client.top);
   const UINT window_dpi = GetDpiForWindow(window);
   const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-  const auto scaled = [dpi](const int value) {
-    return MulDiv(value, dpi, 96);
-  };
+  const auto scaled = [dpi](const int value) { return MulDiv(value, dpi, 96); };
   const auto move = [window](const int id, const int x, const int y,
                              const int control_width,
                              const int control_height) {
@@ -78,11 +86,10 @@ void EditorWindow::layout_tasks(const HWND window) {
 
   RECT list_client{};
   GetClientRect(task_list_, &list_client);
-  const int scrollbar = GetSystemMetricsForDpi(SM_CXVSCROLL,
-                                                static_cast<UINT>(dpi));
-  const int available =
-      std::max(scaled(300), static_cast<int>(list_client.right) -
-                                   scrollbar - scaled(3));
+  const int scrollbar =
+      GetSystemMetricsForDpi(SM_CXVSCROLL, static_cast<UINT>(dpi));
+  const int available = std::max(
+      scaled(300), static_cast<int>(list_client.right) - scrollbar - scaled(3));
   const int pid_width = std::clamp(scaled(62), scaled(54), available / 4);
   const int process_width =
       std::clamp(available * 30 / 100, scaled(125), scaled(230));
@@ -90,55 +97,68 @@ void EditorWindow::layout_tasks(const HWND window) {
       std::max(scaled(130), available - process_width - pid_width);
   ListView_SetColumnWidth(task_list_, 0, process_width);
   ListView_SetColumnWidth(task_list_, 1, window_width);
-  ListView_SetColumnWidth(task_list_, 2,
-                          std::max(scaled(54),
-                                   available - process_width - window_width));
+  ListView_SetColumnWidth(
+      task_list_, 2,
+      std::max(scaled(54), available - process_width - window_width));
 }
 
 void EditorWindow::refresh_tasks() {
-  if (task_list_ == nullptr) return;
+  if (task_list_ == nullptr)
+    return;
   const HWND previous = selected_task_window();
-  task_candidates_.clear(); ListView_DeleteAllItems(task_list_);
+  task_candidates_.clear();
+  ListView_DeleteAllItems(task_list_);
   auto matching_profile = profile_;
   matching_profile.enabled = true;
   for (auto candidate : layerc::platform::enumerate_attachable_windows()) {
-    if (candidate.process_id == GetCurrentProcessId()) continue;
+    if (candidate.process_id == GetCurrentProcessId())
+      continue;
     if ((awaiting_edit_target_ || awaiting_calibration_target_) &&
         !matching_profile.game.global &&
-        !layerc::platform::profile_matches_window(candidate,
-                                                  matching_profile))
+        !layerc::platform::profile_matches_window(candidate, matching_profile))
       continue;
     task_candidates_.push_back(std::move(candidate));
     const auto &item = task_candidates_.back();
     const int row = static_cast<int>(task_candidates_.size() - 1U);
-    LVITEMW list_item{.mask = LVIF_TEXT | LVIF_PARAM, .iItem = row,
-                      .pszText = const_cast<LPWSTR>(item.executable_name.c_str()), .lParam = static_cast<LPARAM>(row)};
+    LVITEMW list_item{};
+    list_item.mask = LVIF_TEXT | LVIF_PARAM;
+    list_item.iItem = row;
+    list_item.pszText = const_cast<LPWSTR>(item.executable_name.c_str());
+    list_item.lParam = static_cast<LPARAM>(row);
     ListView_InsertItem(task_list_, &list_item);
-    ListView_SetItemText(task_list_, row, 1, const_cast<LPWSTR>(item.title.empty() ? L"(untitled)" : item.title.c_str()));
+    ListView_SetItemText(task_list_, row, 1,
+                         const_cast<LPWSTR>(item.title.empty()
+                                                ? L"(untitled)"
+                                                : item.title.c_str()));
     const auto pid = std::to_wstring(item.process_id);
     ListView_SetItemText(task_list_, row, 2, const_cast<LPWSTR>(pid.c_str()));
-    if (item.window == previous) ListView_SetItemState(task_list_, row, LVIS_SELECTED | LVIS_FOCUSED,
-                                                        LVIS_SELECTED | LVIS_FOCUSED);
+    if (item.window == previous)
+      ListView_SetItemState(task_list_, row, LVIS_SELECTED | LVIS_FOCUSED,
+                            LVIS_SELECTED | LVIS_FOCUSED);
   }
   update_task_detail();
 }
 
 HWND EditorWindow::selected_task_window() const {
-  if (task_list_ == nullptr) return nullptr;
+  if (task_list_ == nullptr)
+    return nullptr;
   const int row = ListView_GetNextItem(task_list_, -1, LVNI_SELECTED);
   return row >= 0 && static_cast<std::size_t>(row) < task_candidates_.size()
-      ? task_candidates_[static_cast<std::size_t>(row)].window : nullptr;
+             ? task_candidates_[static_cast<std::size_t>(row)].window
+             : nullptr;
 }
 
 const layerc::platform::WindowCandidate *EditorWindow::selected_task() const {
-  if (task_list_ == nullptr) return nullptr;
+  if (task_list_ == nullptr)
+    return nullptr;
   const int row = ListView_GetNextItem(task_list_, -1, LVNI_SELECTED);
   return row >= 0 && static_cast<std::size_t>(row) < task_candidates_.size()
-      ? &task_candidates_[static_cast<std::size_t>(row)] : nullptr;
+             ? &task_candidates_[static_cast<std::size_t>(row)]
+             : nullptr;
 }
 
-const layerc::platform::WindowCandidate *EditorWindow::require_selected_task(
-    const bool live_window_required) {
+const layerc::platform::WindowCandidate *
+EditorWindow::require_selected_task(const bool live_window_required) {
   const auto *candidate = selected_task();
   if (candidate != nullptr &&
       (!live_window_required || IsWindow(candidate->window)))
@@ -146,27 +166,34 @@ const layerc::platform::WindowCandidate *EditorWindow::require_selected_task(
   MessageBoxW(task_dialog_,
               candidate == nullptr
                   ? L"Select a task first."
-                  : L"The selected task has closed. Refresh the list before using a live-window action.",
+                  : L"The selected task has closed. Refresh the list before "
+                    L"using a live-window action.",
               L"LayerE", MB_OK | MB_ICONINFORMATION);
   return nullptr;
 }
 
 void EditorWindow::update_task_detail() {
-  if (task_dialog_ == nullptr) return;
+  if (task_dialog_ == nullptr)
+    return;
   const auto *candidate = selected_task();
-  set_text(GetDlgItem(task_dialog_, IDC_TASK_DETAIL), candidate == nullptr
-      ? L"Select a task to see its executable path." : candidate->executable_path);
+  set_text(GetDlgItem(task_dialog_, IDC_TASK_DETAIL),
+           candidate == nullptr ? L"Select a task to see its executable path."
+                                : candidate->executable_path);
 }
 
-void EditorWindow::apply_task(const layerc::platform::WindowCandidate &candidate) {
+void EditorWindow::apply_task(
+    const layerc::platform::WindowCandidate &candidate) {
   sync_profile_from_controls();
   profile_.game.global = false;
   profile_.game.executable_path = to_utf8(candidate.executable_path);
   profile_.game.executable_name = to_utf8(candidate.executable_name);
-  profile_.game.window_class.clear(); profile_.game.window_title.clear();
+  profile_.game.window_class.clear();
+  profile_.game.window_title.clear();
   if (profile_.name == "New Profile" || profile_.name.empty()) {
-    const auto suggested = std::filesystem::path(candidate.executable_name).stem().wstring();
-    profile_.name = to_utf8(suggested); profile_.id = safe_identifier(suggested);
+    const auto suggested =
+        std::filesystem::path(candidate.executable_name).stem().wstring();
+    profile_.name = to_utf8(suggested);
+    profile_.id = safe_identifier(suggested);
   }
   refresh_profile_controls();
   record_profile_change(ChangeKind::immediate);
@@ -180,35 +207,49 @@ void EditorWindow::use_selected_task() {
   // Attaching stores the enumerated executable matcher and does not require
   // the original HWND to remain alive between enumeration and this click.
   const auto *candidate = require_selected_task(false);
-  if (candidate == nullptr) return;
+  if (candidate == nullptr)
+    return;
   apply_task(*candidate);
 }
 
 void EditorWindow::show_tasks() {
   if (task_dialog_ == nullptr || !IsWindow(task_dialog_)) {
-    task_dialog_ = CreateDialogParamW(instance_, MAKEINTRESOURCEW(IDD_TASKS), dialog_,
-                                      &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_tasks,
-                                                              &EditorWindow::handle_task_message>,
-                                      reinterpret_cast<LPARAM>(this));
+    task_dialog_ = CreateDialogParamW(
+        instance_, MAKEINTRESOURCEW(IDD_TASKS), dialog_,
+        &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_tasks,
+                                &EditorWindow::handle_task_message>,
+        reinterpret_cast<LPARAM>(this));
   }
-  if (task_dialog_ == nullptr) { set_status(L"Could not open the task picker."); return; }
-  refresh_tasks(); set_dark_title_bar(task_dialog_);
-  (void)layerc::platform::apply_capture_exclusion(task_dialog_, capture_exclusion_);
-  ShowWindow(task_dialog_, SW_SHOWNORMAL); SetForegroundWindow(task_dialog_);
+  if (task_dialog_ == nullptr) {
+    set_status(L"Could not open the task picker.");
+    return;
+  }
+  refresh_tasks();
+  set_dark_title_bar(task_dialog_);
+  (void)layerc::platform::apply_capture_exclusion(task_dialog_,
+                                                  capture_exclusion_);
+  ShowWindow(task_dialog_, SW_SHOWNORMAL);
+  SetForegroundWindow(task_dialog_);
 }
 
 void EditorWindow::begin_picker() {
-  if (picking_) { cancel_picker(); return; }
+  if (picking_) {
+    cancel_picker();
+    return;
+  }
   picking_ = true;
   task_was_visible_ = task_dialog_ != nullptr && IsWindowVisible(task_dialog_);
-  if (task_was_visible_) ShowWindow(task_dialog_, SW_HIDE);
+  if (task_was_visible_)
+    ShowWindow(task_dialog_, SW_HIDE);
   SetFocus(dialog_);
   SetCapture(dialog_);
-  set_status(L"Pick Window active — click a game window, or press Esc to cancel.");
+  set_status(
+      L"Pick Window active — click a game window, or press Esc to cancel.");
 }
 
 void EditorWindow::finish_picker() {
-  POINT cursor{}; GetCursorPos(&cursor);
+  POINT cursor{};
+  GetCursorPos(&cursor);
   const auto candidate = layerc::platform::window_at_point(cursor);
   cancel_picker();
   if (!candidate.has_value() ||
@@ -237,24 +278,39 @@ void EditorWindow::finish_picker() {
 }
 
 void EditorWindow::cancel_picker() {
-  if (!picking_) return;
+  if (!picking_)
+    return;
   picking_ = false;
-  if (GetCapture() == dialog_) ReleaseCapture();
-  if (task_was_visible_ && task_dialog_ != nullptr) ShowWindow(task_dialog_, SW_SHOWNORMAL);
+  if (GetCapture() == dialog_)
+    ReleaseCapture();
+  if (task_was_visible_ && task_dialog_ != nullptr)
+    ShowWindow(task_dialog_, SW_SHOWNORMAL);
   task_was_visible_ = false;
 }
 
 LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
-                                          const WPARAM wparam, const LPARAM lparam) {
+                                          const WPARAM wparam,
+                                          const LPARAM lparam) {
   switch (message) {
   case WM_COMMAND:
     switch (LOWORD(wparam)) {
-    case IDC_PICK_WINDOW: begin_picker(); return TRUE;
-    case IDC_USE_TASK: use_selected_task(); return TRUE;
-    case IDC_REFRESH_TASKS: refresh_tasks(); return TRUE;
-    case IDC_EDIT_SELECTED_TASK: edit_selected_task(); return TRUE;
-    case IDC_CALIBRATE_SELECTED_TASK: calibrate_selected_task(); return TRUE;
-    default: break;
+    case IDC_PICK_WINDOW:
+      begin_picker();
+      return TRUE;
+    case IDC_USE_TASK:
+      use_selected_task();
+      return TRUE;
+    case IDC_REFRESH_TASKS:
+      refresh_tasks();
+      return TRUE;
+    case IDC_EDIT_SELECTED_TASK:
+      edit_selected_task();
+      return TRUE;
+    case IDC_CALIBRATE_SELECTED_TASK:
+      calibrate_selected_task();
+      return TRUE;
+    default:
+      break;
     }
     break;
   case WM_SIZE:
@@ -267,7 +323,8 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
       const HFONT previous = task_font_;
       task_font_ = replacement;
       style_native_dialog_children(window, task_font_);
-      if (previous != nullptr) DeleteObject(previous);
+      if (previous != nullptr)
+        DeleteObject(previous);
     }
     layout_tasks(window);
     return TRUE;
@@ -276,26 +333,32 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     const UINT window_dpi = GetDpiForWindow(window);
     const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
     auto *limits = reinterpret_cast<MINMAXINFO *>(lparam);
-    limits->ptMinTrackSize = {MulDiv(520, dpi, 96),
-                              MulDiv(260, dpi, 96)};
+    limits->ptMinTrackSize = {MulDiv(520, dpi, 96), MulDiv(260, dpi, 96)};
     return TRUE;
   }
   case WM_NOTIFY: {
     const auto *header = reinterpret_cast<const NMHDR *>(lparam);
     if (header->idFrom == IDC_TASK_LIST) {
-      if (header->code == LVN_ITEMCHANGED) update_task_detail();
+      if (header->code == LVN_ITEMCHANGED)
+        update_task_detail();
       else if (header->code == NM_DBLCLK) {
-        if (awaiting_calibration_target_) calibrate_selected_task();
-        else if (awaiting_edit_target_) edit_selected_task();
-        else use_selected_task();
-      }
-      else if (header->code == NM_CUSTOMDRAW) {
+        if (awaiting_calibration_target_)
+          calibrate_selected_task();
+        else if (awaiting_edit_target_)
+          edit_selected_task();
+        else
+          use_selected_task();
+      } else if (header->code == NM_CUSTOMDRAW) {
         auto *draw = reinterpret_cast<NMLVCUSTOMDRAW *>(lparam);
-        const auto list_colors = colors(layerc::platform::EditorControlRole::list);
-        if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+        const auto list_colors =
+            colors(layerc::platform::EditorControlRole::list);
+        if (draw->nmcd.dwDrawStage == CDDS_PREPAINT)
+          return CDRF_NOTIFYITEMDRAW;
         if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
           draw->clrText = list_colors.text;
-          draw->clrTextBk = (draw->nmcd.uItemState & CDIS_SELECTED) != 0 ? list_colors.selection : list_colors.fill;
+          draw->clrTextBk = (draw->nmcd.uItemState & CDIS_SELECTED) != 0
+                                ? list_colors.selection
+                                : list_colors.fill;
           return CDRF_NEWFONT;
         }
       }
@@ -304,14 +367,21 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
   }
   case WM_DRAWITEM: {
     const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
-    if (draw->CtlType == ODT_BUTTON) { draw_button(*draw, layerc::platform::EditorControlRole::button); return TRUE; }
+    if (draw->CtlType == ODT_BUTTON) {
+      draw_button(*draw, layerc::platform::EditorControlRole::button);
+      return TRUE;
+    }
     break;
   }
-  case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
+  case WM_CTLCOLORSTATIC:
+  case WM_CTLCOLOREDIT:
+  case WM_CTLCOLORLISTBOX:
     return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND: { RECT client{}; GetClientRect(window, &client); FillRect(reinterpret_cast<HDC>(wparam), &client,
-    brush(layerc::platform::EditorControlRole::window)); return TRUE; }
-  case WM_CLOSE: DestroyWindow(window); return TRUE;
+  case WM_ERASEBKGND:
+    return erase_dialog_background(window, wparam);
+  case WM_CLOSE:
+    DestroyWindow(window);
+    return TRUE;
   case WM_DESTROY:
     if (task_dialog_ == window) {
       task_dialog_ = nullptr;
@@ -324,7 +394,8 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
       }
     }
     return TRUE;
-  default: break;
+  default:
+    break;
   }
   return FALSE;
 }

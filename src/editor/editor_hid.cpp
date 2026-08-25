@@ -1,6 +1,6 @@
-#include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
+#include "editor_window.hpp"
 
 #include "layerc/core/hid.hpp"
 #include "layerc/platform/hid_device.hpp"
@@ -51,14 +51,13 @@ void register_devices(const HWND window, HidDialogState &state) {
   unregister_devices(state);
   for (const auto index : state.visible_devices) {
     const auto &device = state.devices[index];
-    const auto usage =
-        std::pair(device.info.usUsagePage, device.info.usUsage);
-    if (!state.registrations.insert(usage).second) continue;
-    RAWINPUTDEVICE registration{
-        .usUsagePage = usage.first,
-        .usUsage = usage.second,
-        .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-        .hwndTarget = window};
+    const auto usage = std::pair(device.info.usUsagePage, device.info.usUsage);
+    if (!state.registrations.insert(usage).second)
+      continue;
+    RAWINPUTDEVICE registration{.usUsagePage = usage.first,
+                                .usUsage = usage.second,
+                                .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                                .hwndTarget = window};
     if (RegisterRawInputDevices(&registration, 1, sizeof(registration)) ==
         FALSE)
       state.registrations.erase(usage);
@@ -70,23 +69,28 @@ void populate_devices(const HWND window, HidDialogState &state) {
   const int previous =
       static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
   const HANDLE previous_handle =
-      previous >= 0 && static_cast<std::size_t>(previous) <
-                           state.visible_devices.size()
-          ? state.devices[state.visible_devices[static_cast<std::size_t>(previous)]]
+      previous >= 0 &&
+              static_cast<std::size_t>(previous) < state.visible_devices.size()
+          ? state
+                .devices[state.visible_devices[static_cast<std::size_t>(
+                    previous)]]
                 .handle
           : nullptr;
   SendMessageW(combo, CB_RESETCONTENT, 0, 0);
   state.visible_devices.clear();
-  const bool advanced = owner_draw_checkbox_checked(
-      GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
+  const bool advanced =
+      owner_draw_checkbox_checked(GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
   int selected{};
   for (std::size_t index = 0; index < state.devices.size(); ++index) {
-    if (system_class(state.devices[index]) && !advanced) continue;
+    if (system_class(state.devices[index]) && !advanced)
+      continue;
     auto label = state.devices[index].product_name;
-    if (system_class(state.devices[index])) label += L"  [system class]";
+    if (system_class(state.devices[index]))
+      label += L"  [system class]";
     const auto row = SendMessageW(combo, CB_ADDSTRING, 0,
                                   reinterpret_cast<LPARAM>(label.c_str()));
-    if (row == CB_ERR || row == CB_ERRSPACE) continue;
+    if (row == CB_ERR || row == CB_ERRSPACE)
+      continue;
     state.visible_devices.push_back(index);
     if (state.devices[index].handle == previous_handle)
       selected = static_cast<int>(state.visible_devices.size() - 1U);
@@ -97,15 +101,15 @@ void populate_devices(const HWND window, HidDialogState &state) {
                !state.visible_devices.empty());
   if (state.visible_devices.empty())
     set_text(GetDlgItem(window, IDC_HID_SUMMARY),
-             advanced
-                 ? L"No generic HID devices are currently available."
-                 : L"No non-system HID devices are available. Advanced can expose a device-specific keyboard or mouse.");
+             advanced ? L"No generic HID devices are currently available."
+                      : L"No non-system HID devices are available. Advanced "
+                        L"can expose a device-specific keyboard or mouse.");
 }
 
-const layerc::platform::HidRawDevice *selected_device(
-    const HWND window, const HidDialogState &state) {
-  const auto row = SendMessageW(GetDlgItem(window, IDC_HID_DEVICE),
-                                CB_GETCURSEL, 0, 0);
+const layerc::platform::HidRawDevice *
+selected_device(const HWND window, const HidDialogState &state) {
+  const auto row =
+      SendMessageW(GetDlgItem(window, IDC_HID_DEVICE), CB_GETCURSEL, 0, 0);
   if (row == CB_ERR || row < 0 ||
       static_cast<std::size_t>(row) >= state.visible_devices.size())
     return nullptr;
@@ -114,7 +118,8 @@ const layerc::platform::HidRawDevice *selected_device(
 
 bool read_percent(const HWND control, const unsigned maximum, double &value) {
   const auto source = control_text(control);
-  if (source.empty()) return false;
+  if (source.empty())
+    return false;
   wchar_t *end{};
   const unsigned long parsed = wcstoul(source.c_str(), &end, 10);
   if (end == source.c_str() || end == nullptr || *end != L'\0' ||
@@ -132,9 +137,9 @@ void EditorWindow::capture_hid_binding() {
     set_status(L"Select a cooldown before capturing a HID binding.");
     return;
   }
-  HidDialogState state{.editor = this,
-                       .devices =
-                           layerc::platform::enumerate_raw_hid_devices()};
+  HidDialogState state{};
+  state.editor = this;
+  state.devices = layerc::platform::enumerate_raw_hid_devices();
   if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_HID_BINDING), dialog_,
                       &EditorWindow::hid_binding_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK ||
@@ -145,8 +150,7 @@ void EditorWindow::capture_hid_binding() {
   const auto cooldown_id = cooldown->id;
   std::size_t binding_index = SIZE_MAX;
   for (const auto &binding : profile_.bindings) {
-    if (binding.cooldown_id != cooldown_id ||
-        binding.chord.tokens.size() != 1)
+    if (binding.cooldown_id != cooldown_id || binding.chord.tokens.size() != 1)
       continue;
     const auto &token = binding.chord.tokens.front();
     if (token.device == layerc::core::InputDevice::generic_hid &&
@@ -157,10 +161,9 @@ void EditorWindow::capture_hid_binding() {
       "hid-" + safe_identifier(to_wide(cooldown_id), "control");
   std::string id = id_base;
   int suffix = 2;
-  while (std::ranges::any_of(profile_.hid_bindings,
-                             [&](const auto &candidate) {
-    const auto index = static_cast<std::size_t>(
-        &candidate - profile_.hid_bindings.data());
+  while (std::ranges::any_of(profile_.hid_bindings, [&](const auto &candidate) {
+    const auto index =
+        static_cast<std::size_t>(&candidate - profile_.hid_bindings.data());
     return candidate.id == id && index != binding_index;
   }))
     id = id_base + "-" + std::to_string(suffix++);
@@ -180,11 +183,11 @@ void EditorWindow::capture_hid_binding() {
   std::erase_if(profile_.bindings, [&](const auto &binding) {
     return binding.cooldown_id == cooldown_id;
   });
-  profile_.bindings.push_back({
-      .cooldown_id = cooldown_id,
-      .chord = layerc::core::InputChord{{{
-          layerc::core::InputDevice::generic_hid,
-          static_cast<std::uint16_t>(binding_index + 1U), 0}}}});
+  profile_.bindings.push_back(
+      {.cooldown_id = cooldown_id,
+       .chord = layerc::core::InputChord{
+           {{layerc::core::InputDevice::generic_hid,
+             static_cast<std::uint16_t>(binding_index + 1U), 0}}}});
   layerc::core::compact_hid_bindings(profile_);
   refresh_binding_controls();
   record_profile_change(ChangeKind::immediate);
@@ -193,11 +196,13 @@ void EditorWindow::capture_hid_binding() {
                  : L"HID binding captured and autosaving.");
 }
 
-INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
-    const HWND window, const UINT message, const WPARAM wparam,
-    const LPARAM lparam) {
+INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
+                                                       const UINT message,
+                                                       const WPARAM wparam,
+                                                       const LPARAM lparam) {
   auto *state = bind_dialog_state<HidDialogState>(window, message, lparam);
-  if (state == nullptr) return FALSE;
+  if (state == nullptr)
+    return FALSE;
   if (message == WM_INITDIALOG) {
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
@@ -233,8 +238,8 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
   }
   if (message == WM_INPUT && state->listening) {
     UINT size{};
-    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT,
-                        nullptr, &size, sizeof(RAWINPUTHEADER)) != 0 ||
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, nullptr,
+                        &size, sizeof(RAWINPUTHEADER)) != 0 ||
         size < sizeof(RAWINPUTHEADER) || size > 1024U * 1024U)
       return TRUE;
     std::vector<std::byte> storage(size);
@@ -270,9 +275,10 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
                    L"Idle baseline captured. Actuate exactly one control now.");
           continue;
         }
-        auto inferred = layerc::platform::infer_hid_control(
-            *device, report, baseline->second);
-        if (inferred) candidates.push_back(std::move(*inferred));
+        auto inferred = layerc::platform::infer_hid_control(*device, report,
+                                                            baseline->second);
+        if (inferred)
+          candidates.push_back(std::move(*inferred));
       }
     } else if (auto inferred =
                    layerc::platform::infer_hid_control(*device, input)) {
@@ -281,8 +287,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
     if (!candidates.empty()) {
       auto &inferred = candidates.front();
       inferred.binding.allow_system_class =
-          owner_draw_checkbox_checked(
-              GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
+          owner_draw_checkbox_checked(GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
       state->inferred = std::move(inferred);
       state->captured_device_path = device->path;
       state->listening = false;
@@ -290,11 +295,11 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
                L"Captured " + state->inferred->description +
                    L". Refine values if needed, then Use Binding.");
       set_text(GetDlgItem(window, IDC_HID_THRESHOLD),
-               std::to_wstring(static_cast<unsigned>(std::lround(
-                   state->inferred->binding.threshold * 100.0))));
+               std::to_wstring(static_cast<unsigned>(
+                   std::lround(state->inferred->binding.threshold * 100.0))));
       set_text(GetDlgItem(window, IDC_HID_HYSTERESIS),
-               std::to_wstring(static_cast<unsigned>(std::lround(
-                   state->inferred->binding.hysteresis * 100.0))));
+               std::to_wstring(static_cast<unsigned>(
+                   std::lround(state->inferred->binding.hysteresis * 100.0))));
       set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"Recapture");
       EnableWindow(GetDlgItem(window, IDC_HID_APPLY), TRUE);
     }
@@ -325,11 +330,13 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
         EnableWindow(GetDlgItem(window, IDC_HID_APPLY), FALSE);
         set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"Capture");
         set_text(GetDlgItem(window, IDC_HID_SUMMARY),
-                 L"Press Capture, leave controls idle for one report, then actuate one control.");
+                 L"Press Capture, leave controls idle for one report, then "
+                 L"actuate one control.");
       }
       return TRUE;
     case IDC_HID_CAPTURE:
-      if (selected_device(window, *state) == nullptr) return TRUE;
+      if (selected_device(window, *state) == nullptr)
+        return TRUE;
       state->listening = true;
       state->inferred.reset();
       state->captured_device_path.clear();
@@ -337,29 +344,31 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
       EnableWindow(GetDlgItem(window, IDC_HID_APPLY), FALSE);
       set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"Listening...");
       set_text(GetDlgItem(window, IDC_HID_SUMMARY),
-               L"Leave controls idle until the baseline is captured, then actuate exactly one control.");
+               L"Leave controls idle until the baseline is captured, then "
+               L"actuate exactly one control.");
       return TRUE;
     case IDC_HID_APPLY: {
-      if (!state->inferred) return TRUE;
+      if (!state->inferred)
+        return TRUE;
       double threshold{}, hysteresis{};
-      const auto slot = parse_uint(
-          control_text(GetDlgItem(window, IDC_HID_SLOT)), 0);
+      const auto slot =
+          parse_uint(control_text(GetDlgItem(window, IDC_HID_SLOT)), 0);
       if (!read_percent(GetDlgItem(window, IDC_HID_THRESHOLD), 100,
                         threshold) ||
           !read_percent(GetDlgItem(window, IDC_HID_HYSTERESIS), 49,
                         hysteresis) ||
           slot < 1 || slot > 32) {
-        MessageBoxW(window,
-                    L"Threshold must be 0-100, hysteresis 0-49, and stable slot 1-32.",
-                    L"HID binding", MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            window,
+            L"Threshold must be 0-100, hysteresis 0-49, and stable slot 1-32.",
+            L"HID binding", MB_OK | MB_ICONERROR);
         return TRUE;
       }
       const auto activation = state->inferred->binding.activation;
       if ((activation == layerc::core::HidActivationMode::axis_positive ||
            activation == layerc::core::HidActivationMode::axis_negative) &&
           hysteresis > std::min(threshold, 1.0 - threshold)) {
-        MessageBoxW(window,
-                    L"Hysteresis crosses the selected axis threshold.",
+        MessageBoxW(window, L"Hysteresis crosses the selected axis threshold.",
                     L"HID binding", MB_OK | MB_ICONERROR);
         return TRUE;
       }
@@ -368,24 +377,26 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
       state->inferred->binding.device.stable_slot =
           static_cast<std::uint16_t>(slot);
       state->inferred->binding.allow_system_class =
-          owner_draw_checkbox_checked(
-              GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
+          owner_draw_checkbox_checked(GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
       if (layerc::core::is_system_keyboard_or_mouse(
               state->inferred->binding.device) &&
           !state->inferred->binding.allow_system_class) {
-        MessageBoxW(window,
-                    L"Keyboard/mouse-class HID requires the explicit Advanced opt-in.",
-                    L"HID binding", MB_OK | MB_ICONWARNING);
+        MessageBoxW(
+            window,
+            L"Keyboard/mouse-class HID requires the explicit Advanced opt-in.",
+            L"HID binding", MB_OK | MB_ICONWARNING);
         return TRUE;
       }
       if (state->inferred->binding.allow_system_class &&
           MessageBoxW(window,
-                      L"This device may also produce normal keyboard or mouse events, so one action can be observed twice. Keep this device-specific HID binding?",
+                      L"This device may also produce normal keyboard or mouse "
+                      L"events, so one action can be observed twice. Keep this "
+                      L"device-specific HID binding?",
                       L"System-class HID warning",
                       MB_YESNO | MB_ICONWARNING) != IDYES)
         return TRUE;
-      const auto device = std::ranges::find_if(
-          state->devices, [&](const auto &candidate) {
+      const auto device =
+          std::ranges::find_if(state->devices, [&](const auto &candidate) {
             return _wcsicmp(candidate.path.c_str(),
                             state->captured_device_path.c_str()) == 0;
           });
@@ -394,7 +405,8 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
           !layerc::platform::assign_hid_stable_slot(
               state->inferred->binding.device, device->path)) {
         MessageBoxW(window,
-                    L"LayerC could not save this machine's stable device-slot assignment.",
+                    L"LayerC could not save this machine's stable device-slot "
+                    L"assignment.",
                     L"HID binding", MB_OK | MB_ICONERROR);
         return TRUE;
       }
@@ -410,14 +422,14 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(
     }
   }
   if (message == WM_DRAWITEM) {
-    state->editor->draw_button(
-        *reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-        layerc::platform::EditorControlRole::button);
+    state->editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
+                               layerc::platform::EditorControlRole::button);
     return TRUE;
   }
   if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
     return state->editor->color_message(message, wparam, lparam);
-  if (message == WM_DESTROY) unregister_devices(*state);
+  if (message == WM_DESTROY)
+    unregister_devices(*state);
   return FALSE;
 }
 

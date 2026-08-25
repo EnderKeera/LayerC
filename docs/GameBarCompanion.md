@@ -1,90 +1,60 @@
-# LayerC Game Bar Companion (v2.4)
+# LayerC Game Bar Companion (V2.4)
 
 ## Overview
 
-The Game Bar companion is an optional Xbox Game Bar extension that displays
-LayerC cooldown panel snapshots in the 8 standard panel slots plus one settings
-widget. It is **not** part of the portable ZIP; it ships only in the separate
-MSIX package. This document describes what the current source tree actually
-ships. For the authoritative release status, see `docs/GameBarCompanion.audit.md`;
-for the package layout, see `src/gamebar/README.md`.
+The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overlay as eight fixed panel slots (`PanelSlot1`–`PanelSlot8`) and a settings widget (`Settings`). It is distributed exclusively as an optional full MSIX package, not in the portable ZIP.
 
-**Key invariants** (must never be violated):
-- LayerD remains the sole source of truth for cooldown state.
-- No capture, input processing, or mutation happens in the companion.
-- The companion reconnects on LayerD/Game Bar/Explorer restart and hides stale
-  data after 2 seconds.
-- All measurements treat companion cost separately from native LayerD budgets.
+### Invariants
+- **LayerD is authoritative**: the widget does not capture frames, process input, or mutate cooldown state.
+- **Bounded & immutable**: snapshots are capped at 64 KiB and 512-byte text fields.
+- **Stale data hiding**: snapshots older than 2.0 seconds are cleared.
+- **Zero unpackaged cost**: portable desktop LayerD instantiates zero Game Bar services or threads.
 
-## 1. Data model (`src/core/include/layerc/core/companion.hpp`)
+---
 
-- `CompanionProfile` — schema-1 profile sidecar: `profileId` + a bounded set
-  of `CompanionSlotMapping` entries (0..7 slots) mapping a slot to a panel
-  `panelId`, with `pinned`, `clickThrough`, and `opacity` overrides.
-- `CompanionSessionSnapshot` — bounded immutable snapshot: `profileId`,
-  `sessionKey`, `timestampMs`, and up to 8 panels, each with up to 32 item
-  rows (cooldown id, name, icon, progress, charges, remaining time, ready,
-  color). `progress` is the fraction of the cooldown elapsed toward ready
-  (1.0 = ready, 0.0 = just triggered); `icon`/`color` and panel `visible`
-  are reserved fields the bridge does not yet populate.
-- All documents carry a 64 KiB bound and a 512-byte text bound.
+## 1. Data Model (`layerc/core/companion.hpp`)
 
-## 2. Persistence (sidecar, `src/platform/profile_store.cpp`)
+- `CompanionSlotMapping`: slot index (0..7), `panelId`, `pinned`, `clickThrough`, `opacity` ($[0.1, 1.0]$).
+- `CompanionProfile`: schema-1 sidecar containing a list of `CompanionSlotMapping` entries for a profile.
+- `CompanionSessionSnapshot`: immutable wire message with `profileId`, `sessionKey`, `timestampMs`, active `panels` (up to 8 panels $\times$ 32 items), catalog `availablePanels` (up to 64), and `preferences`.
+- `progress`: fraction elapsed toward ready ($0.0 = \text{triggered}, 1.0 = \text{ready}$).
 
-- Slot mappings persist per profile under `profiles/_companion/<profile>.json`
-  (base schema 4, companion module schema 1) through the same crash-recoverable
-  bundle transaction as base/visual/automation.
-- Saving an unrelated base/visual/automation edit preserves an existing valid
-  companion sidecar; an invalid existing sidecar fails the bundle closed.
-- Writes are validated by `layerc::core::validate_companion_profile` (duplicate
-  slot, duplicate panel, unknown panelId, out-of-range opacity).
+---
 
-## 3. Bridge (`src/gamebar/GameBarBridge.cpp`)
+## 2. Persistence (`profiles/_companion/<id>.json`)
 
-`layerc::gamebar::GameBarBridge` is a plain C++ snapshot stash: it formats an
-immutable `CompanionSessionSnapshot` from session cooldown/panel state
-(`create_session_snapshot`), keeps one latest snapshot under a mutex, and
-hides data older than the 2.0 s cutoff (`latest_snapshot` /
-`latest_snapshot_json`). It is not WinRT and owns no connection.
+- Slot mappings persist under `profiles/_companion/<id>.json` (schema 1).
+- Committed as part of the unified crash-recoverable profile transaction (base + visual + automation + companion).
+- Validation rejects duplicate slots, duplicate panels, unknown panel IDs, or invalid opacity values.
 
-## 4. Transport (`src/gamebar/GameBarTransport.cpp`, daemon-owned)
+---
 
-- The daemon owns a current-user named pipe `\\.\pipe\LayerC.GameBar.v1`
-  with a per-user SDDL ACL, `PIPE_REJECT_REMOTE_CLIENTS`, same-logon-session
-  and MSIX package-identity (`LayerC.GameBar.v1`) client authentication, and
-  overlapped I/O.
-- `GameBarRuntimeService` starts/polls/stops the transport on demand; the
-  daemon feeds it bounded, immutable framed JSON snapshots (64 KiB) when
-  demands change and on the game-scan timer (`DaemonApp::publish_companion_snapshots`).
-- Companion cost is accounted separately from the native-overlay budget.
+## 3. Daemon Bridge & Transport
 
-## 5. Host (`src/gamebar/GameBarCompanionHost.cpp`, `layerc-gamebar.exe`)
+- **`GameBarBridge`** (`src/gamebar/GameBarBridge.cpp`): formats immutable snapshots from active cooldown states, caches the latest snapshot under a mutex, and enforces the 2.0s staleness cutoff.
+- **`GameBarTransport`** (`src/gamebar/GameBarTransport.cpp`): demand-driven App Service client.
+  - Active only in the packaged MSIX build when an active game session exists.
+  - Connects to same-package App Service `LayerC.GameBar.v1`.
+  - Sends bounded snapshots on game scans/overlay updates and drains preference updates via a single wait-handle event.
+  - Reconnects with capped exponential backoff (100 ms to 2000 ms) after daemon/Game Bar/Explorer restarts.
 
-- The host is the MSIX executable. Current state: a named-pipe one-way consumer
-  that reads framed snapshots, bounds-checks them, and parses them; it verifies
-  the pipe server is a sibling `layerd.exe` from the same install before
-  consuming (mutual authentication) and reconnects with backoff. Error exits:
-  2 pipe unavailable, 3 oversized frame, 4 malformed frame, 5 connected but no
-  usable frame (one-shot), 6 server identity not trusted.
-- **Outstanding (not implemented):** Windows AppService activation factory,
-  Game Bar widget registration/rendering, and an end-to-end launch path (the
-  daemon does not launch the host and Game Bar has no activation entry point yet).
-  The host's `AppServiceConnection` construction is a package-readiness stub
-  only. Watch `docs/GameBarCompanion.audit.md` for when this closes; do not
-  describe the companion as a shipping Game Bar widget until it does.
+---
 
-## 6. MSIX skeleton (`src/gamebar/Package.appxmanifest` + CMake)
+## 4. UWP Widget Host (`layerc-gamebar.exe`)
 
-- `Package.appxmanifest` declares an App Service (`LayerC.GameBar.v1`) and
-  the package identity; MSIX staging renames it to `AppxManifest.xml`. Widget
-  registration uses the Xbox Game Bar SDK/host manifest extension, not the
-  generic Windows 10 AppX schema.
-- CMake builds `layerc-gamebar.exe` and, when `makeappx` is available,
-  assembles an unsigned `LayerC.GameBar.v1.msix`. Official distribution still
-  requires signing and Game Bar host smoke coverage on a supported Windows image.
+- Built from `src/gamebar/widget/LayerC.GameBar.vcxproj` (C++/WinRT + XAML).
+- **`App`**: handles `ms-gamebarwidget:` protocol activations and routes `PanelSlot1`–`PanelSlot8` and `Settings` to their respective XAML pages. Hosts the `LayerC.GameBar.v1` App Service endpoint.
+- **`PanelWidgetPage`**: renders cooldown progress bars, remaining time, and charge counters; honors Game Bar theme, opacity, compact mode, pinning, and click-through.
+- **`SettingsWidgetPage`**: UI to map each of the 8 slots to available panels, set opacity sliders, and toggle click-through; sends validated preference documents back to LayerD.
+- **`WidgetSnapshotHub`**: in-process snapshot bus that validates incoming JSON, fans out to widget CoreWindows, and clears stale widgets after 2.0 seconds.
 
-## Conventions summary
+---
 
-companion model -> validated sidecar -> bounded snapshot -> stale-capped bridge
--> daemon-owned named-pipe publisher -> unsigned MSIX skeleton (activation
-path outstanding).
+## 5. MSIX Packaging (`src/gamebar/Package.appxmanifest`)
+
+The package manifest registers:
+- 8 $\times$ standard panel widget extensions + 1 $\times$ settings widget extension.
+- Same-package App Service `LayerC.GameBar.v1`.
+- Full-trust process launcher for `layerd.exe`.
+- In-package proxy stubs and private Game Bar WinMD metadata (`Microsoft.Gaming.XboxGameBar.Private.winmd`).
+- Packaged binaries: `layerc-gamebar.exe`, `layerd.exe`, `layere.exe`, `layercal.exe`, `layerworker.exe`, and VC runtime DLLs.

@@ -17,6 +17,7 @@ inline constexpr std::size_t max_companion_sidecar_bytes = 64 * 1024; // 64 KiB
 inline constexpr std::size_t max_companion_snapshot_bytes = 64 * 1024;
 inline constexpr std::size_t max_companion_snapshot_panels = 8;
 inline constexpr std::size_t max_companion_snapshot_items = 32;
+inline constexpr std::size_t max_companion_available_panels = 64;
 inline constexpr std::size_t max_companion_text_bytes = 512;
 
 struct CompanionSlotMapping {
@@ -61,6 +62,12 @@ struct CompanionSnapshotItem {
 
   bool operator==(const CompanionSnapshotItem &) const = default;
 };
+struct CompanionAvailablePanel {
+  std::string panel_id;
+  std::string name;
+
+  bool operator==(const CompanionAvailablePanel &) const = default;
+};
 
 struct CompanionPanelSnapshot {
   std::string panel_id;
@@ -75,9 +82,16 @@ struct CompanionPanelSnapshot {
 
 struct CompanionSessionSnapshot {
   std::string profile_id;
+  // Opaque producer-defined runtime-instance identifier. Consumers must not
+  // parse or persist its representation.
   std::string session_key;
   std::uint64_t timestamp_ms{};
   std::vector<CompanionPanelSnapshot> panels;
+  // Full bounded panel catalog and current presentation mappings are carried
+  // with each immutable snapshot so the settings widget never reads profile
+  // files from its app container.
+  std::vector<CompanionAvailablePanel> available_panels;
+  std::vector<CompanionSlotMapping> preferences;
 
   bool operator==(const CompanionSessionSnapshot &) const = default;
 };

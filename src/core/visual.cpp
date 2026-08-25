@@ -13,6 +13,30 @@
 namespace layerc::core {
 namespace {
 
+[[nodiscard]] constexpr std::string_view
+capture_quality_name(const CaptureQuality quality) noexcept {
+  switch (quality) {
+  case CaptureQuality::low:
+    return "low";
+  case CaptureQuality::balanced:
+    return "balanced";
+  case CaptureQuality::exact:
+    return "exact";
+  }
+  return "balanced";
+}
+
+[[nodiscard]] std::optional<CaptureQuality>
+parse_capture_quality(const std::string_view name) noexcept {
+  if (name == "low")
+    return CaptureQuality::low;
+  if (name == "balanced")
+    return CaptureQuality::balanced;
+  if (name == "exact")
+    return CaptureQuality::exact;
+  return std::nullopt;
+}
+
 class Reader {
 public:
   Reader(const json::Value &root, const GameProfile &base)
@@ -42,12 +66,8 @@ public:
     if (*rate != 5 && *rate != 10 && *rate != 15)
       return error("$.sampleRateHz", "sample rate must be 5, 10, or 15 Hz");
     result.sample_rate_hz = static_cast<std::uint8_t>(*rate);
-    if (quality == "low")
-      result.quality = CaptureQuality::low;
-    else if (quality == "balanced")
-      result.quality = CaptureQuality::balanced;
-    else if (quality == "exact")
-      result.quality = CaptureQuality::exact;
+    if (auto parsed = parse_capture_quality(quality))
+      result.quality = *parsed;
     else
       return error("$.quality", "expected low, balanced, or exact");
 
@@ -686,10 +706,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
   json::append_quoted(output, profile.profile_id);
   output += ",\n  \"sampleRateHz\": " +
             std::to_string(profile.sample_rate_hz) + ",\n  \"quality\": ";
-  json::append_quoted(output, profile.quality == CaptureQuality::low
-                     ? "low"
-                     : profile.quality == CaptureQuality::exact ? "exact"
-                                                                 : "balanced");
+  json::append_quoted(output, capture_quality_name(profile.quality));
   output += ",\n  \"observations\": [\n";
   const auto observation_count =
       profile.rules.size() + profile.templates.size();
