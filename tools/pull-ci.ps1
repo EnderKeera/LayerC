@@ -23,8 +23,14 @@ $log = Join-Path $staging 'pull.log'
     [Environment]::NewLine)
 gh release download rolling --repo $Repository --dir $staging --clobber |
     Out-Null
+$extract = Join-Path $staging 'extracted'
+New-Item -ItemType Directory -Force $extract | Out-Null
 Get-ChildItem -Path $staging -Filter '*.zip' | ForEach-Object {
-    Expand-Archive -LiteralPath $_.FullName -DestinationPath $OutputPath -Force
+    Expand-Archive -LiteralPath $_.FullName -DestinationPath $extract -Force
+}
+Get-ChildItem -Path $extract -Directory | ForEach-Object {
+    Copy-Item -Path (Join-Path $_.FullName '*') -Destination $OutputPath `
+        -Recurse -Force
 }
 $exeCount = @(Get-ChildItem -Path $OutputPath -Filter '*.exe').Count
 [IO.File]::AppendAllText(
