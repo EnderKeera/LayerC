@@ -1,6 +1,6 @@
 # LayerC — Agent Guide
 
-Canonical agent guide. `README.md` (user docs) and `PLAN.md` (roadmap/gates) are authoritative. Repo state overrides memory.
+Canonical agent guide. `README.md` (user docs) is authoritative; `PLAN.md` (roadmap/gates) is a local-only document, not tracked in the public repo. Repo state overrides memory.
 
 ## Project Overview
 
@@ -33,7 +33,7 @@ Lightweight **Windows cooldown overlay** — dependency-free C++20, native Win32
 | `src/worker/` | `layerworker.exe` |
 | `src/gamebar/` | UWP C++/WinRT host `widget/` + App Service bridge. Manifest `Package.appxmanifest` |
 | `tests/` | CTest suites, `test_support.*` helpers |
-| `tools/` | `lctest` harness, `capture_probe`, `benchmark_v11/v22/v23/latency.ps1` → `out/benchmarks/` |
+| `tools/` | `lctest` harness, `capture_probe`, `benchmark_v11/v22/v23/latency.ps1` → `out/benchmarks/`; orchestrators `pull-ci.ps1` (rolling → `out/layerc`) and `push-and-test.ps1` (push → watch → pull → hardware gates) |
 | `examples/` | `lctest.json`, `smoke.json` |
 | `build/`, `out/` | Build/install outputs (gitignored, never commit). `build/` ~9 GB — delete after push |
 | `review/` | Review registers (gitignored), `review/archiv/` archived |
@@ -58,7 +58,7 @@ cmake --preset ci
 cmake --build --preset ci --parallel
 ctest --preset ci
 
-# MinGW second opinion (no UWP host)
+# MinGW optional cross-compiler check (no UWP host) — not a release gate
 cmake --workflow --preset mingw-ninja
 
 # Game Bar MSIX (needs UWP tools)
@@ -89,7 +89,7 @@ Presets: `vs2026` (VS 2026), `mingw-ninja` (MinGW-w64 + Ninja), `ci` (Ninja + `s
 3. `benchmark_latency.ps1` — input→overlay $\le 1$ ms median/p95 vs baseline
 4. `benchmark_v23.ps1` — automation: $\le 0.25$ ms avg, $\le 2.0$ ms max
 
-Run headful on integrated + discrete GPU where required; `out/benchmarks` is the evidence dir.
+Run headful on integrated + discrete GPU where required; `out/benchmarks` is the evidence dir.The V2.3 gate runs in GitHub CI; the v11/v22/latency gates run on the self-hosted bench runner (see DevOps). Run headful on integrated + discrete GPU where required; `out/benchmarks` is the evidence dir.
 
 ## Architecture Rules
 
@@ -120,8 +120,9 @@ Separate UWP XAML host (`layerc-gamebar.exe`) via App Service `LayerC.GameBar.v1
 
 ## DevOps & CI
 
-- **CI** `.github/workflows/ci.yml`: `windows-2022` + `ilammy/msvc-dev-cmd` + `seanmiddleditch/gha-setup-ninja` + `mozilla-actions/sccache-action` + `actions/cache` (`~/.cache/sccache` + `~/.nuget/packages`, key `hashFiles('**/CMakeLists.txt','**/*.cmake','src/**','third_party/**')`). Steps: `clean out/bench-*` → configure `ci` → build → `ctest 10/10` → `benchmark_v23` → install → `cpack` → upload `out/layerc` + ZIP. Never cache `build/ci` (stale `CMakeCache` breaks Ninja). Free tier: 10 GB cache, 7-day expiry.
-- **PR Agent** `.github/workflows/pr-agent.yml` + `.pr_agent.toml`: `The-PR-Agent/pr-agent@v0.43.0` on `pull_request`/`issue_comment`, `DEEPSEEK_API_KEY` + `OPENAI_API_BASE=https://api.deepseek.com`, model `deepseek-v4-flash-vision-exp` → `v4-flash`.
+- **CI** `.github/workflows/ci.yml`: `windows-2022` + `ilammy/msvc-dev-cmd` + `seanmiddleditch/gha-setup-ninja@v6` + `mozilla-actions/sccache-action` (`SCCACHE_GHA_ENABLED` — sccache keeps its own Actions cache; no manual `actions/cache`). Steps: configure `ci` → build → `ctest 10/10` → `benchmark_v23` → install → `cpack` → upload `out/layerc` + ZIP and the `layerc-windows-x64-tools` artifact → publish rolling `rolling` prerelease ZIP on every green main push (`tools/pull-ci.ps1` pulls it). Never cache `build/ci` (stale `CMakeCache` breaks Ninja). Free tier: 10 GB cache, 7-day expiry.
+- **Hardware Benchmarks** `.github/workflows/benchmarks.yml`: on green main `CI` (`workflow_run`) or manual dispatch, runs on the repo's self-hosted `[self-hosted, windows, x64, layerc-bench]` runner (this PC; register via `config.cmd \`--labels self-hosted,windows,x64,layerc-bench\`` and run `run.cmd` interactively — **not** a Windows service, the GUI gates need the interactive desktop; no local compile required). Steps: download `layerc-windows-x64-tools` artifact from the CI run → fetch `baseline-v22` release (frozen V2.2 binaries) → v22 plateau → v11 low/balanced/template → latency A/B vs baseline → upload `benchmark-evidence` (JSON → `out/benchmarks/`). Jobs wait up to 24 h for an offline runner, so it can be started on demand; `--ephemeral` supported.
+- **PR Agent** `.github/workflows/pr-agent.yml` + `.pr_agent.toml`: `The-PR-Agent/pr-agent@v0.43.0` on `pull_request` (opened/reopened/synchronize/ready_for_review) and `issue_comment`, `DEEPSEEK_API_KEY` + `OPENAI_API_BASE=https://api.deepseek.com`, model `deepseek-v4-flash-vision-exp` → `v4-flash`.
 - **Dependabot** `.github/dependabot.yml`: weekly Actions bumps.
 - **Release** `.github/workflows/release.yml`: on `v*.*.*` tags → build Release → GitHub Release + ZIP.
 - Branch protection: `main` linear, require `windows-msvc`.
