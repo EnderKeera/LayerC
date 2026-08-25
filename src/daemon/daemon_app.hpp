@@ -4,6 +4,8 @@
 #include "isolated_visual_worker.hpp"
 #include "visual_capture_worker.hpp"
 
+#include "GameBarBridge.hpp"
+#include "GameBarTransport.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/hid.hpp"
 #include "layerc/core/input_matcher.hpp"
@@ -12,8 +14,6 @@
 #include "layerc/core/runtime_instances.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/platform/live_channel.hpp"
-#include "GameBarBridge.hpp"
-#include "GameBarTransport.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 
@@ -88,6 +88,10 @@ private:
   void sync_overlay_location(HWND changed_window);
   void handle_raw_input(HRAWINPUT handle);
   void handle_hid_input(const RAWINPUT &input);
+  [[nodiscard]] bool process_hid_sample(
+      Session &session, std::size_t index,
+      const layerc::core::HidControlBinding &binding,
+      const layerc::core::HidControlSample &sample);
   void handle_hid_device_change(HANDLE device, bool arrived);
   [[nodiscard]] bool reconcile_hid_runtime();
   void quiesce_hid_runtime() noexcept;
@@ -107,6 +111,8 @@ private:
                                                     bool momentary = false);
   void update_overlays();
   void publish_companion_snapshots(layerc::core::TimePoint now);
+  void poll_gamebar_transport();
+  [[nodiscard]] bool apply_companion_preferences(std::string_view json);
   void reconcile_overlay_runtime();
   void quiesce_overlay_runtime() noexcept;
   void reconcile_visual_captures();
@@ -170,7 +176,7 @@ private:
   void on_direct_anchor(std::string_view panel_id, double anchor_x,
                         double anchor_y, bool final);
   void update_tooltip(const std::wstring &status);
-  [[nodiscard]] std::vector<Session *> foreground_sessions();
+  [[nodiscard]] std::vector<Session *> foreground_sessions() const;
   [[nodiscard]] RECT overlay_target() const;
   static void CALLBACK foreground_event_proc(HWINEVENTHOOK hook, DWORD event,
                                              HWND window, LONG object_id,
@@ -185,6 +191,7 @@ private:
   std::vector<std::unique_ptr<Session>> sessions_;
   std::vector<Session *> active_input_sessions_;
   std::array<XINPUT_STATE, XUSER_MAX_COUNT> controller_states_{};
+  [[nodiscard]] std::vector<Session *> current_companion_sessions() const;
   HWND input_foreground_{};
   HANDLE reload_event_{};
   HANDLE settings_reload_event_{};

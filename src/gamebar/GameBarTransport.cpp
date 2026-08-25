@@ -1,286 +1,125 @@
 #include "GameBarTransport.hpp"
 
-#include "layerc/core/frame.hpp"
-#include "layerc/platform/windows.hpp"
+#include "GameBarTransportState.hpp"
 
-#include <cstring>
-#include <sddl.h>
 #include <appmodel.h>
+
 #include <vector>
 
 namespace layerc::gamebar {
-namespace {
 
-PSECURITY_DESCRIPTOR current_user_descriptor() {
-  HANDLE token{};
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) == FALSE)
-    return nullptr;
-  DWORD required{};
-  (void)GetTokenInformation(token, TokenUser, nullptr, 0, &required);
-  std::vector<std::byte> storage(required);
-  PSECURITY_DESCRIPTOR descriptor{};
-  if (required != 0 &&
-      GetTokenInformation(token, TokenUser, storage.data(), required,
-                          &required) != FALSE) {
-    const auto *user = reinterpret_cast<const TOKEN_USER *>(storage.data());
-    LPWSTR sid_string{};
-    if (ConvertSidToStringSidW(user->User.Sid, &sid_string) != FALSE &&
-        sid_string != nullptr) {
-      const std::wstring sddl =
-          L"D:P(A;;GA;;;" + std::wstring(sid_string) + L")(A;;GA;;;SY)";
-      (void)ConvertStringSecurityDescriptorToSecurityDescriptorW(
-          sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr);
-      LocalFree(sid_string);
-    }
-  }
-  CloseHandle(token);
-  return descriptor;
-}
-
-bool same_session(const DWORD process_id) {
-  DWORD current{};
-  DWORD peer{};
-  return ProcessIdToSessionId(GetCurrentProcessId(), &current) != FALSE &&
-         ProcessIdToSessionId(process_id, &peer) != FALSE && current == peer;
-}
-
-bool is_gamebar_package(const HANDLE process) {
-  UINT32 length{};
-  if (GetPackageId(process, &length, nullptr) !=
-          ERROR_INSUFFICIENT_BUFFER ||
-      length < sizeof(PACKAGE_ID))
-    return false;
-  std::vector<std::byte> storage(length);
-  auto *package = reinterpret_cast<PACKAGE_ID *>(storage.data());
-  if (GetPackageId(process, &length,
-                  reinterpret_cast<BYTE *>(package)) != ERROR_SUCCESS ||
-      package->name == nullptr)
-    return false;
-  return GameBarTransport::package_name ==
-         std::wstring_view(package->name);
-}
-
-} // namespace
+GameBarTransport::GameBarTransport() = default;
 
 GameBarTransport::~GameBarTransport() { stop(); }
 
+bool GameBarTransport::is_expected_package_identity(
+    const std::wstring_view name, const std::wstring_view publisher,
+    const std::wstring_view family_name, const std::uint16_t major,
+    const std::uint16_t minor) noexcept {
+  return name == package_name && publisher == package_publisher &&
+         family_name == package_family_name && major == package_major_version &&
+         minor == package_minor_version;
+}
+
+bool GameBarTransport::current_process_is_expected_package() noexcept {
+  static const bool expected = [] {
+    UINT32 id_length{};
+    if (GetCurrentPackageId(&id_length, nullptr) != ERROR_INSUFFICIENT_BUFFER)
+      return false;
+    std::vector<std::byte> id_storage(id_length);
+    auto *id = reinterpret_cast<PACKAGE_ID *>(id_storage.data());
+    if (GetCurrentPackageId(&id_length, reinterpret_cast<BYTE *>(id)) !=
+            ERROR_SUCCESS ||
+        id->name == nullptr || id->publisher == nullptr)
+      return false;
+    UINT32 family_length{};
+    if (GetCurrentPackageFamilyName(&family_length, nullptr) !=
+        ERROR_INSUFFICIENT_BUFFER)
+      return false;
+    std::vector<wchar_t> family(family_length);
+    return GetCurrentPackageFamilyName(&family_length, family.data()) ==
+               ERROR_SUCCESS &&
+           is_expected_package_identity(id->name, id->publisher, family.data(),
+                                        id->version.Major, id->version.Minor);
+  }();
+  return expected;
+}
+
 bool GameBarTransport::start() {
-  if (started_) return true;
-  started_ = true;
-  connect_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  write_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  if (connect_event_ == nullptr || write_event_ == nullptr) {
-    set_error(GetLastError());
-    stop();
+  if (!state_)
+    state_ = std::make_shared<GameBarTransportState>();
+#if defined(_MSC_VER)
+  if (!current_process_is_expected_package()) {
+    std::lock_guard lock(state_->mutex);
+    state_->last_error =
+        L"Game Bar App Service is unavailable outside the full MSIX";
     return false;
   }
-  if (!create_server()) {
-    stop();
-    return false;
-  }
-  return true;
+#endif
+  return detail::start_app_service(state_);
 }
 
 void GameBarTransport::stop() noexcept {
-  if (pipe_ != INVALID_HANDLE_VALUE) {
-    CancelIoEx(pipe_, nullptr);
-    DisconnectNamedPipe(pipe_);
-    CloseHandle(pipe_);
-    pipe_ = INVALID_HANDLE_VALUE;
-  }
-  if (connect_event_ != nullptr) CloseHandle(connect_event_);
-  if (write_event_ != nullptr) CloseHandle(write_event_);
-  connect_event_ = nullptr;
-  write_event_ = nullptr;
-  connect_overlapped_ = {};
-  write_overlapped_ = {};
-  started_ = false;
-  connect_pending_ = false;
-  write_pending_ = false;
-  connected_ = false;
-  active_frame_.clear();
-  pending_frame_.clear();
+  if (state_)
+    detail::stop_app_service(state_);
 }
 
-void GameBarTransport::set_error(const DWORD error) {
-  last_error_ = layerc::platform::windows_error_text(error);
-}
-
-bool GameBarTransport::create_server() {
-  if (pipe_ != INVALID_HANDLE_VALUE) return true;
-  PSECURITY_DESCRIPTOR descriptor = current_user_descriptor();
-  if (descriptor == nullptr) {
-    last_error_ = L"Could not create the Game Bar current-user security descriptor.";
-    return false;
-  }
-  SECURITY_ATTRIBUTES security{.nLength = sizeof(SECURITY_ATTRIBUTES),
-                               .lpSecurityDescriptor = descriptor,
-                               .bInheritHandle = FALSE};
-  pipe_ = CreateNamedPipeW(
-      pipe_name, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
-          PIPE_REJECT_REMOTE_CLIENTS,
-      1, static_cast<DWORD>(max_frame_bytes + layerc::core::frame_header_bytes),
-      static_cast<DWORD>(max_frame_bytes + layerc::core::frame_header_bytes),
-      0, &security);
-  LocalFree(descriptor);
-  if (pipe_ == INVALID_HANDLE_VALUE) {
-    set_error(GetLastError());
-    return false;
-  }
-  ResetEvent(connect_event_);
-  connect_overlapped_ = {};
-  connect_overlapped_.hEvent = connect_event_;
-  const BOOL result = ConnectNamedPipe(pipe_, &connect_overlapped_);
-  if (result != FALSE) {
-    complete_connection();
-    return true;
-  }
-  const DWORD error = GetLastError();
-  if (error == ERROR_IO_PENDING) {
-    connect_pending_ = true;
-    return true;
-  }
-  if (error == ERROR_PIPE_CONNECTED) {
-    complete_connection();
-    return true;
-  }
-  set_error(error);
-  disconnect();
-  return false;
-}
-
-bool GameBarTransport::authenticate_client() {
-  ULONG process_id{};
-  if (GetNamedPipeClientProcessId(pipe_, &process_id) == FALSE ||
-      process_id == 0 || !same_session(process_id))
-    return false;
-  const HANDLE process =
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr) return false;
-  const bool trusted = is_gamebar_package(process);
-  CloseHandle(process);
-  return trusted;
-}
-
-void GameBarTransport::complete_connection() noexcept {
-  connect_pending_ = false;
-  if (!authenticate_client()) {
-    disconnect();
-    return;
-  }
-  connected_ = true;
-  last_error_.clear();
-  (void)continue_write();
-}
-
-void GameBarTransport::disconnect() noexcept {
-  if (pipe_ != INVALID_HANDLE_VALUE) {
-    CancelIoEx(pipe_, nullptr);
-    DisconnectNamedPipe(pipe_);
-    CloseHandle(pipe_);
-    pipe_ = INVALID_HANDLE_VALUE;
-  }
-  connect_pending_ = false;
-  write_pending_ = false;
-  connected_ = false;
-  active_frame_.clear();
+std::vector<GameBarPreferenceUpdate> GameBarTransport::poll() noexcept {
+  return state_ ? detail::poll_app_service(state_)
+                : std::vector<GameBarPreferenceUpdate>{};
 }
 
 bool GameBarTransport::publish(const std::string_view snapshot_json) {
-  if (snapshot_json.size() > max_frame_bytes) return false;
-  pending_frame_.resize(layerc::core::frame_header_bytes + snapshot_json.size());
-  layerc::core::append_frame_header(
-      pending_frame_.data(), static_cast<std::uint32_t>(snapshot_json.size()));
-  std::memcpy(pending_frame_.data() + layerc::core::frame_header_bytes,
-              snapshot_json.data(), snapshot_json.size());
-  if (!connected_) return true;
-  return continue_write();
-}
-
-bool GameBarTransport::continue_write() {
-  if (!connected_ || write_pending_) return true;
-  if (active_frame_.empty()) {
-    if (pending_frame_.empty()) return true;
-    active_frame_ = std::move(pending_frame_);
-    pending_frame_.clear();
-  }
-  ResetEvent(write_event_);
-  write_overlapped_ = {};
-  write_overlapped_.hEvent = write_event_;
-  DWORD written{};
-  const BOOL result = WriteFile(
-      pipe_, active_frame_.data(), static_cast<DWORD>(active_frame_.size()),
-      &written, &write_overlapped_);
-  if (result != FALSE) {
-    if (written != active_frame_.size()) {
-      disconnect();
+  if (!state_ || snapshot_json.empty() ||
+      snapshot_json.size() > layerc::core::max_companion_snapshot_bytes)
+    return false;
+  {
+    std::lock_guard lock(state_->mutex);
+    if (!state_->started)
       return false;
-    }
-    active_frame_.clear();
-    return continue_write();
+    state_->pending_snapshot = std::string(snapshot_json);
   }
-  const DWORD error = GetLastError();
-  if (error == ERROR_IO_PENDING) {
-    write_pending_ = true;
-    return true;
-  }
-  set_error(error);
-  disconnect();
-  return false;
+  detail::signal(state_);
+  return true;
 }
 
-void GameBarTransport::poll() noexcept {
-  if (!started_) return;
-  if (pipe_ == INVALID_HANDLE_VALUE) {
-    (void)create_server();
-    return;
-  }
-  if (connect_pending_ &&
-      WaitForSingleObject(connect_event_, 0) == WAIT_OBJECT_0) {
-    DWORD transferred{};
-    if (GetOverlappedResult(pipe_, &connect_overlapped_, &transferred,
-                            FALSE))
-      complete_connection();
-    else {
-      set_error(GetLastError());
-      disconnect();
-    }
-  }
-  if (write_pending_ &&
-      WaitForSingleObject(write_event_, 0) == WAIT_OBJECT_0) {
-    DWORD written{};
-    if (GetOverlappedResult(pipe_, &write_overlapped_, &written, FALSE) &&
-        written == active_frame_.size()) {
-      write_pending_ = false;
-      active_frame_.clear();
-      (void)continue_write();
-    } else {
-      set_error(GetLastError());
-      disconnect();
-    }
-  }
-  if (connected_) {
-    DWORD available{};
-    if (PeekNamedPipe(pipe_, nullptr, 0, nullptr, &available, nullptr) == FALSE)
-      disconnect();
-  } else if (pipe_ == INVALID_HANDLE_VALUE) {
-    (void)create_server();
-  }
+bool GameBarTransport::connected() const noexcept {
+  if (!state_)
+    return false;
+  std::lock_guard lock(state_->mutex);
+  return state_->connected;
 }
 
 HANDLE GameBarTransport::wait_handle() const noexcept {
-  if (connect_pending_) return connect_event_;
-  if (write_pending_) return write_event_;
-  return nullptr;
+  if (!state_)
+    return nullptr;
+  std::lock_guard lock(state_->mutex);
+  if (!state_->started || state_->wake_event == nullptr)
+    return nullptr;
+  return state_->wake_event->handle;
+}
+
+std::wstring GameBarTransport::last_error() const {
+  if (!state_)
+    return {};
+  std::lock_guard lock(state_->mutex);
+  return state_->last_error;
 }
 
 std::size_t GameBarTransport::resource_handle_count() const noexcept {
-  std::size_t count = 0;
-  if (pipe_ != INVALID_HANDLE_VALUE) ++count;
-  if (connect_event_ != nullptr) ++count;
-  if (write_event_ != nullptr) ++count;
-  return count;
+  if (!state_)
+    return 0U;
+  std::lock_guard lock(state_->mutex);
+  return state_->started && state_->wake_event != nullptr &&
+                 state_->wake_event->handle != nullptr
+             ? 1U
+             : 0U;
+}
+
+void GameBarTransport::complete_preference_update(
+    const std::uint64_t request_id, const bool accepted) noexcept {
+  if (state_)
+    detail::complete_preference_update(state_, request_id, accepted);
 }
 
 } // namespace layerc::gamebar

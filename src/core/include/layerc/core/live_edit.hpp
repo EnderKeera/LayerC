@@ -13,7 +13,7 @@
 namespace layerc::core {
 
 inline constexpr std::uint32_t live_protocol_version = 3;
-inline constexpr std::string_view package_version = "2.3.0";
+inline constexpr std::string_view package_version = "2.4.0";
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;
@@ -79,12 +79,12 @@ struct PixelRect {
   bool operator==(const PixelRect &) const = default;
 };
 
-[[nodiscard]] NormalizedAnchor normalized_anchor_for_drag(
-    long pointer_x, long pointer_y, long grab_offset_x, long grab_offset_y,
-    const PixelRect &target);
-[[nodiscard]] PixelRect
-overlay_rectangle(NormalizedAnchor anchor, const PixelRect &target, long width,
-                  long height);
+[[nodiscard]] NormalizedAnchor
+normalized_anchor_for_drag(long pointer_x, long pointer_y, long grab_offset_x,
+                           long grab_offset_y, const PixelRect &target);
+[[nodiscard]] PixelRect overlay_rectangle(NormalizedAnchor anchor,
+                                          const PixelRect &target, long width,
+                                          long height);
 
 enum class LiveMessageType : std::uint8_t {
   handshake,
@@ -114,10 +114,10 @@ struct LiveMessage {
   ProfileRevision revision{};
   EditSessionId edit_session{};
   std::uint64_t target_window{};
-  std::string profile_key;
-  std::string panel_id;
-  std::string profile_json;
-  std::string text;
+  std::string profile_key{};
+  std::string panel_id{};
+  std::string profile_json{};
+  std::string text{};
   double anchor_x{0.5};
   double anchor_y{0.5};
   bool direct_drag{};
@@ -129,8 +129,7 @@ struct LiveProtocolError {
 };
 
 using LiveMessageResult = std::variant<LiveMessage, LiveProtocolError>;
-using LiveFrameResult =
-    std::variant<std::vector<std::byte>, LiveProtocolError>;
+using LiveFrameResult = std::variant<std::vector<std::byte>, LiveProtocolError>;
 
 [[nodiscard]] std::string encode_live_message_json(const LiveMessage &message);
 [[nodiscard]] LiveMessageResult

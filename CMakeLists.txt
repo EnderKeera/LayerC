@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(LayerC VERSION 2.3.0 LANGUAGES C CXX)
+project(LayerC VERSION 2.4.0 LANGUAGES C CXX)
 
 option(LAYERC_BUILD_DAEMON "Build the native layerd daemon" ON)
 option(LAYERC_BUILD_EDITOR "Build the native LayerE editor" ON)
@@ -11,6 +11,16 @@ option(LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+function(layerc_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE
+            /W4 /permissive- /EHsc /utf-8)
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
 
 if(MINGW)
     # Ninja otherwise scales to every logical CPU; MinGW's C++ front end can
@@ -23,6 +33,8 @@ endif()
 add_library(layerc_core STATIC
     src/core/automation_profile.cpp
     src/core/automation_runtime.cpp
+    src/core/automation_trace.cpp
+    src/core/automation_validation.cpp
     src/core/automation_effects.cpp
     src/core/cooldown_engine.cpp
     src/core/input_matcher.cpp
@@ -46,11 +58,7 @@ add_library(layerc_core STATIC
 target_include_directories(layerc_core PUBLIC src/core/include)
 target_compile_features(layerc_core PUBLIC cxx_std_20)
 
-if(MSVC)
-    target_compile_options(layerc_core PRIVATE /W4 /permissive- /EHsc /utf-8)
-else()
-    target_compile_options(layerc_core PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+layerc_enable_warnings(layerc_core)
 
 add_library(layerc_runtime STATIC
     src/runtime/daemon_kernel.cpp
@@ -62,11 +70,7 @@ target_include_directories(layerc_runtime PUBLIC
 )
 target_link_libraries(layerc_runtime PUBLIC layerc_core)
 target_compile_features(layerc_runtime PUBLIC cxx_std_20)
-if(MSVC)
-    target_compile_options(layerc_runtime PRIVATE /W4 /permissive- /EHsc /utf-8)
-else()
-    target_compile_options(layerc_runtime PRIVATE -Wall -Wextra -Wpedantic)
-endif()
+layerc_enable_warnings(layerc_runtime)
 
 add_library(layerc_miniz STATIC
     third_party/miniz/miniz.c
@@ -117,11 +121,7 @@ if(WIN32)
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
     )
-    if(MSVC)
-        target_compile_options(layerc_windows PRIVATE /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerc_windows PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    layerc_enable_warnings(layerc_windows)
 
     add_library(layerc_capture STATIC
         src/capture/window_capture.cpp
@@ -141,15 +141,10 @@ if(WIN32)
     target_compile_definitions(layerc_capture PUBLIC
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
         WINVER=0x0A00 _WIN32_WINNT=0x0A00)
-    if(MSVC)
-        target_compile_options(layerc_capture PRIVATE
-            /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerc_capture PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
+    layerc_enable_warnings(layerc_capture)
 
     add_library(layerc_bundle STATIC
+        src/bundle/pack_detail.cpp
         src/bundle/profile_pack.cpp
     )
     target_include_directories(layerc_bundle PUBLIC
@@ -165,13 +160,7 @@ if(WIN32)
     target_compile_definitions(layerc_bundle PRIVATE
         MINIZ_NO_ZLIB_APIS
         MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
-    if(MSVC)
-        target_compile_options(layerc_bundle PRIVATE
-            /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerc_bundle PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
+    layerc_enable_warnings(layerc_bundle)
 endif()
 
 if(WIN32 AND LAYERC_BUILD_DAEMON)
@@ -196,6 +185,8 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/overlay_render.cpp
         src/gamebar/GameBarBridge.cpp
         src/gamebar/GameBarTransport.cpp
+        src/gamebar/GameBarAppServiceClient.cpp
+        src/gamebar/GameBarRetryPolicy.cpp
     )
     target_include_directories(layerd PRIVATE src/daemon src/gamebar)
     target_link_libraries(layerd PRIVATE
@@ -204,17 +195,15 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
     target_link_libraries(layerd PRIVATE psapi)
     target_link_libraries(layerd PRIVATE hid bcrypt)
     target_compile_definitions(layerd PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    layerc_enable_warnings(layerd)
     if(MSVC)
-        target_compile_options(layerd PRIVATE /W4 /permissive- /EHsc /utf-8)
+        target_link_libraries(layerd PRIVATE runtimeobject)
         target_link_libraries(layerd PRIVATE delayimp)
         target_link_options(layerd PRIVATE
             /DELAYLOAD:xinput9_1_0.dll
         )
-    else()
-        target_compile_options(layerd PRIVATE -Wall -Wextra -Wpedantic)
-        if(MINGW)
-            target_link_options(layerd PRIVATE -municode)
-        endif()
+    elseif(MINGW)
+        target_link_options(layerd PRIVATE -municode)
     endif()
     set_target_properties(layerd PROPERTIES OUTPUT_NAME "layerd")
 endif()
@@ -231,112 +220,18 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         shell32 user32 gdi32)
     target_compile_definitions(layerworker PRIVATE
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    if(MSVC)
-        target_compile_options(layerworker PRIVATE /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerworker PRIVATE -Wall -Wextra -Wpedantic)
-        if(MINGW)
-            target_link_options(layerworker PRIVATE -municode)
-        endif()
+    layerc_enable_warnings(layerworker)
+    if(MINGW)
+        target_link_options(layerworker PRIVATE -municode)
     endif()
     set_target_properties(layerworker PROPERTIES OUTPUT_NAME "layerworker")
 endif()
 
 option(LAYERC_BUILD_GAMEBAR_HOST "Build the C++/WinRT Game Bar companion host" ON)
-if(WIN32 AND LAYERC_BUILD_GAMEBAR_HOST)
-    # Discover the Windows SDK instead of pinning one version (layer21-F5):
-    # prefer the VS UCRT environment, then the newest installed SDK. When the
-    # SDK/C++-WinRT headers are missing the host is skipped gracefully so the
-    # default build never fails on a machine without the exact SDK.
-    set(LAYERC_CPPWINRT_DIR)
-    set(LAYERC_WINSDK_ROOT)
-    set(LAYERC_WINSDK_VER)
-    if(DEFINED ENV{UniversalCRTSdkDir} AND DEFINED ENV{UCRTVersion})
-        set(_cppwinrt_candidate "$ENV{UniversalCRTSdkDir}/Include/$ENV{UCRTVersion}/cppwinrt")
-        if(EXISTS "${_cppwinrt_candidate}")
-            set(LAYERC_CPPWINRT_DIR "${_cppwinrt_candidate}")
-            set(LAYERC_WINSDK_ROOT "$ENV{UniversalCRTSdkDir}")
-            set(LAYERC_WINSDK_VER "$ENV{UCRTVersion}")
-        endif()
-    endif()
-    if(NOT LAYERC_CPPWINRT_DIR)
-        foreach(_root "C:/Program Files (x86)/Windows Kits/10" "C:/Program Files/Windows Kits/10")
-            if(EXISTS "${_root}/Include")
-                file(GLOB _cppwinrt RELATIVE "${_root}/Include" "${_root}/Include/*/cppwinrt")
-                list(SORT _cppwinrt ORDER DESCENDING)
-                if(_cppwinrt)
-                    list(GET _cppwinrt 0 _top)
-                    set(LAYERC_CPPWINRT_DIR "${_root}/Include/${_top}")
-                    get_filename_component(LAYERC_WINSDK_VER "${_top}" PATH)
-                    set(LAYERC_WINSDK_ROOT "${_root}")
-                    break()
-                endif()
-            endif()
-        endforeach()
-    endif()
-    if(NOT LAYERC_CPPWINRT_DIR)
-        message(STATUS "Game Bar host disabled: Windows SDK C++/WinRT headers not found (set LAYERC_BUILD_GAMEBAR_HOST=OFF to silence)")
-    else()
-    message(STATUS "Game Bar host enabled: C++/WinRT at ${LAYERC_CPPWINRT_DIR}")
-    add_executable(layerc_gamebar_host WIN32
-        src/gamebar/GameBarCompanionHost.cpp
-        src/core/companion.cpp
-        src/core/json.cpp
-        src/core/json_value.cpp
-        src/core/utf8.cpp)
-    target_include_directories(layerc_gamebar_host PRIVATE
-        src/core/include
-        "${LAYERC_CPPWINRT_DIR}")
-    target_compile_features(layerc_gamebar_host PRIVATE cxx_std_20)
-    target_link_libraries(layerc_gamebar_host PRIVATE
-        windowsapp user32)
-    target_compile_definitions(layerc_gamebar_host PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    if(MSVC)
-        target_compile_options(layerc_gamebar_host PRIVATE /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerc_gamebar_host PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
-    set_target_properties(layerc_gamebar_host PROPERTIES OUTPUT_NAME "layerc-gamebar")
-
-    find_program(LAYERC_MAKEAPPX makeappx.exe
-        HINTS "${LAYERC_WINSDK_ROOT}/bin/${LAYERC_WINSDK_VER}/x64")
-    if(LAYERC_MAKEAPPX)
-        set(LAYERC_GAMEBAR_PACKAGE_DIR
-            "${CMAKE_CURRENT_BINARY_DIR}/gamebar-package")
-        set(LAYERC_GAMEBAR_MSIX
-            "${CMAKE_CURRENT_BINARY_DIR}/LayerC.GameBar.v1.msix")
-        add_custom_command(
-            OUTPUT "${LAYERC_GAMEBAR_MSIX}"
-            COMMAND ${CMAKE_COMMAND} -E rm -rf
-                "${LAYERC_GAMEBAR_PACKAGE_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "${LAYERC_GAMEBAR_PACKAGE_DIR}"
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "$<TARGET_FILE:layerc_gamebar_host>"
-                "${LAYERC_GAMEBAR_PACKAGE_DIR}/layerc-gamebar.exe"
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
-                "${LAYERC_GAMEBAR_PACKAGE_DIR}/AppxManifest.xml"
-            COMMAND ${CMAKE_COMMAND} -E make_directory
-                "${LAYERC_GAMEBAR_PACKAGE_DIR}/Assets"
-            COMMAND ${CMAKE_COMMAND} -E copy
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Assets/StoreLogo.png"
-                "${LAYERC_GAMEBAR_PACKAGE_DIR}/Assets/StoreLogo.png"
-            COMMAND "${LAYERC_MAKEAPPX}" pack
-                /d "${LAYERC_GAMEBAR_PACKAGE_DIR}"
-                /p "${LAYERC_GAMEBAR_MSIX}" /o
-            DEPENDS layerc_gamebar_host
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
-                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Assets/StoreLogo.png"
-            VERBATIM)
-        add_custom_target(layerc_gamebar_msix
-            DEPENDS "${LAYERC_GAMEBAR_MSIX}")
-        else()
-            message(STATUS "makeappx not found; unsigned Game Bar MSIX target is not configured")
-        endif()
-        endif()
+if(WIN32 AND MSVC AND LAYERC_BUILD_GAMEBAR_HOST)
+    include(cmake/GameBarWidget.cmake)
 endif()
+
 
 if(WIN32 AND LAYERC_BUILD_EDITOR)
     add_executable(layere WIN32
@@ -357,6 +252,8 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         src/editor/editor_live_edit.cpp
         src/editor/editor_visual.cpp
         src/editor/editor_automation.cpp
+        src/editor/editor_automation_canvas.cpp
+        src/editor/editor_automation_simulator.cpp
         src/editor/editor_packs.cpp
         src/editor/editor_diagnostics.cpp
         src/editor/editor_hid.cpp
@@ -376,13 +273,9 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         gdi32
     )
     target_compile_definitions(layere PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    if(MSVC)
-        target_compile_options(layere PRIVATE /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layere PRIVATE -Wall -Wextra -Wpedantic)
-        if(MINGW)
-            target_link_options(layere PRIVATE -municode)
-        endif()
+    layerc_enable_warnings(layere)
+    if(MINGW)
+        target_link_options(layere PRIVATE -municode)
     endif()
     set_target_properties(layere PROPERTIES OUTPUT_NAME "layere")
 endif()
@@ -400,15 +293,90 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         comctl32 dwmapi shell32 uxtheme user32 gdi32)
     target_compile_definitions(layercal PRIVATE
         UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    if(MSVC)
-        target_compile_options(layercal PRIVATE /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layercal PRIVATE -Wall -Wextra -Wpedantic)
-        if(MINGW)
-            target_link_options(layercal PRIVATE -municode)
-        endif()
+    layerc_enable_warnings(layercal)
+    if(MINGW)
+        target_link_options(layercal PRIVATE -municode)
     endif()
     set_target_properties(layercal PROPERTIES OUTPUT_NAME "layercal")
+endif()
+
+set(LAYERC_MINGW_RUNTIME_DLLS)
+set(LAYERC_MINGW_RUNTIME_COMPLETE TRUE)
+if(MINGW)
+    get_filename_component(LAYERC_MINGW_BIN_DIR
+        "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    foreach(runtime_dll IN ITEMS
+            libgcc_s_seh-1.dll
+            libstdc++-6.dll
+            libwinpthread-1.dll)
+        string(MAKE_C_IDENTIFIER "${runtime_dll}" runtime_dll_id)
+        find_file(LAYERC_${runtime_dll_id}_PATH
+            NAMES ${runtime_dll}
+            PATHS "${LAYERC_MINGW_BIN_DIR}"
+            NO_DEFAULT_PATH)
+        if(LAYERC_${runtime_dll_id}_PATH)
+            list(APPEND LAYERC_MINGW_RUNTIME_DLLS
+                "${LAYERC_${runtime_dll_id}_PATH}")
+        else()
+            set(LAYERC_MINGW_RUNTIME_COMPLETE FALSE)
+        endif()
+    endforeach()
+endif()
+
+if(TARGET layerc_gamebar_host)
+    find_program(LAYERC_MAKEAPPX makeappx.exe
+        HINTS "${LAYERC_WINSDK_ROOT}/bin/${LAYERC_WINSDK_VER}/x64")
+    file(GLOB LAYERC_MSVC_REDIST_DIRS LIST_DIRECTORIES true
+        "C:/Program Files/Microsoft Visual Studio/*/*/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT"
+        "C:/Program Files (x86)/Microsoft Visual Studio/*/*/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT")
+    list(SORT LAYERC_MSVC_REDIST_DIRS ORDER DESCENDING)
+    set(LAYERC_MSVC_REDIST_DIR)
+    foreach(_redist IN LISTS LAYERC_MSVC_REDIST_DIRS)
+        if(EXISTS "${_redist}/msvcp140.dll" AND
+           EXISTS "${_redist}/vcruntime140.dll" AND
+           EXISTS "${_redist}/vcruntime140_1.dll")
+            set(LAYERC_MSVC_REDIST_DIR "${_redist}")
+            break()
+        endif()
+    endforeach()
+    if(NOT LAYERC_MAKEAPPX)
+        message(STATUS "makeappx not found; unsigned Game Bar MSIX target is not configured")
+    elseif(NOT LAYERC_MSVC_REDIST_DIR)
+        message(STATUS "Game Bar MSIX target disabled: x64 MSVC runtime redistributables were not found")
+    elseif(NOT TARGET layerd OR NOT TARGET layere OR
+           NOT TARGET layercal OR NOT TARGET layerworker)
+        message(STATUS "Game Bar MSIX target disabled: full package requires layerd, layere, layercal, and layerworker")
+    else()
+        set(LAYERC_GAMEBAR_PACKAGE_DIR
+            "${CMAKE_CURRENT_BINARY_DIR}/gamebar-package/$<CONFIG>")
+        set(LAYERC_GAMEBAR_MSIX_DIR
+            "${CMAKE_CURRENT_BINARY_DIR}/gamebar-msix/$<CONFIG>")
+        set(LAYERC_GAMEBAR_MSIX
+            "${LAYERC_GAMEBAR_MSIX_DIR}/LayerC.GameBar.v1.msix")
+        add_custom_target(layerc_gamebar_msix
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${LAYERC_GAMEBAR_MSIX_DIR}"
+            COMMAND "${LAYERC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                -File "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/StageGameBarPackage.ps1"
+                -WidgetOutput "${LAYERC_GAMEBAR_WIDGET_OUTPUT_DIR}"
+                -Destination "${LAYERC_GAMEBAR_PACKAGE_DIR}"
+                -Manifest "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
+                -Asset "${LAYERC_GAMEBAR_WIDGET_ASSET}"
+                -GameBarPrivateWinmd "${LAYERC_GAMEBAR_NUGET_PACKAGES}/Microsoft.Gaming.XboxGameBar.7.3.2607010/private/Microsoft.Gaming.XboxGameBar.Private.winmd"
+                -DesktopRuntimeDirectory "${LAYERC_MSVC_REDIST_DIR}"
+                -LayerD "$<TARGET_FILE:layerd>"
+                -LayerE "$<TARGET_FILE:layere>"
+                -LayerCal "$<TARGET_FILE:layercal>"
+                -LayerWorker "$<TARGET_FILE:layerworker>"
+            COMMAND "${LAYERC_MAKEAPPX}" pack
+                /d "${LAYERC_GAMEBAR_PACKAGE_DIR}"
+                /p "${LAYERC_GAMEBAR_MSIX}" /o
+            BYPRODUCTS "${LAYERC_GAMEBAR_MSIX}"
+            DEPENDS layerc_gamebar_host layerd layere layercal layerworker
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/StageGameBarPackage.ps1"
+            VERBATIM)
+    endif()
 endif()
 
 if(TARGET layerd)
@@ -423,11 +391,8 @@ endif()
 if(TARGET layerworker)
     install(TARGETS layerworker RUNTIME DESTINATION . COMPONENT Runtime)
 endif()
-if(TARGET layerc_gamebar_host)
-    install(TARGETS layerc_gamebar_host RUNTIME DESTINATION gamebar COMPONENT GameBar)
-endif()
 # The portable ZIP intentionally remains desktop-only. Game Bar package
-# inputs are staged only by an explicit future MSIX packaging target.
+# inputs are staged only by the explicit layerc_gamebar_msix target.
 install(FILES
     README.md
     PLAN.md
@@ -436,23 +401,9 @@ install(FILES
 install(FILES third_party/miniz/LICENSE third_party/miniz/UPSTREAM.md
     DESTINATION licenses/miniz COMPONENT Runtime)
 
-if(MINGW)
-    get_filename_component(LAYERC_MINGW_BIN_DIR
-        "${CMAKE_CXX_COMPILER}" DIRECTORY)
-    foreach(runtime_dll IN ITEMS
-            libgcc_s_seh-1.dll
-            libstdc++-6.dll
-            libwinpthread-1.dll)
-        string(MAKE_C_IDENTIFIER "${runtime_dll}" runtime_dll_id)
-        find_file(LAYERC_${runtime_dll_id}_PATH
-            NAMES ${runtime_dll}
-            PATHS "${LAYERC_MINGW_BIN_DIR}"
-            NO_DEFAULT_PATH)
-        if(LAYERC_${runtime_dll_id}_PATH)
-            install(FILES "${LAYERC_${runtime_dll_id}_PATH}"
-                DESTINATION . COMPONENT Runtime)
-        endif()
-    endforeach()
+if(MINGW AND LAYERC_MINGW_RUNTIME_DLLS)
+    install(FILES ${LAYERC_MINGW_RUNTIME_DLLS}
+        DESTINATION . COMPONENT Runtime)
 endif()
 
 set(CPACK_GENERATOR "ZIP")
@@ -473,13 +424,7 @@ if(LAYERC_BUILD_TESTS)
         tests/test_support.cpp
     )
     target_link_libraries(layerc_runtime_tests PRIVATE layerc_runtime)
-    if(MSVC)
-        target_compile_options(layerc_runtime_tests PRIVATE
-            /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerc_runtime_tests PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
+    layerc_enable_warnings(layerc_runtime_tests)
     add_test(NAME layerc_runtime_tests COMMAND layerc_runtime_tests)
     add_executable(layerc_core_tests
         tests/core_tests.cpp
@@ -501,14 +446,9 @@ if(LAYERC_BUILD_TESTS)
     add_executable(layerc_automation_benchmark
         tools/automation_benchmark.cpp)
     target_link_libraries(layerc_automation_benchmark PRIVATE layerc_core)
-    if(MSVC)
-        target_compile_options(layerc_automation_benchmark PRIVATE
-            /W4 /permissive- /EHsc /utf-8)
-    else()
-        target_compile_options(layerc_automation_benchmark PRIVATE
-            -Wall -Wextra -Wpedantic)
-    endif()
-
+    layerc_enable_warnings(layerc_automation_benchmark)
+    add_test(NAME layerc_automation_benchmark COMMAND layerc_automation_benchmark)
+    set_tests_properties(layerc_automation_benchmark PROPERTIES TIMEOUT 30 LABELS "benchmark")
     if(WIN32)
         add_executable(layerc_capture_tests
             tests/capture_math_tests.cpp
@@ -556,11 +496,7 @@ if(LAYERC_BUILD_TESTS)
         if(MINGW)
             target_link_options(layerc_overlay_tests PRIVATE -municode)
         endif()
-        if(MSVC)
-            target_compile_options(layerc_overlay_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_overlay_tests PRIVATE -Wall -Wextra -Wpedantic)
-        endif()
+        layerc_enable_warnings(layerc_overlay_tests)
         add_dependencies(layerc_overlay_tests lctest)
         add_test(NAME layerc_overlay_tests COMMAND layerc_overlay_tests $<TARGET_FILE:lctest>)
         set_tests_properties(layerc_overlay_tests PROPERTIES
@@ -572,11 +508,7 @@ if(LAYERC_BUILD_TESTS)
             tests/test_support.cpp)
         target_link_libraries(layerc_platform_tests PRIVATE layerc_core layerc_windows)
         target_compile_definitions(layerc_platform_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        if(MSVC)
-            target_compile_options(layerc_platform_tests PRIVATE /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_platform_tests PRIVATE -Wall -Wextra -Wpedantic)
-        endif()
+        layerc_enable_warnings(layerc_platform_tests)
         add_test(NAME layerc_platform_tests COMMAND layerc_platform_tests)
         set_tests_properties(layerc_platform_tests PROPERTIES TIMEOUT 30)
 
@@ -587,13 +519,7 @@ if(LAYERC_BUILD_TESTS)
             layerc_bundle layerc_miniz)
         target_compile_definitions(layerc_bundle_tests PRIVATE
             UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        if(MSVC)
-            target_compile_options(layerc_bundle_tests PRIVATE
-                /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_bundle_tests PRIVATE
-                -Wall -Wextra -Wpedantic)
-        endif()
+        layerc_enable_warnings(layerc_bundle_tests)
         add_test(NAME layerc_bundle_tests COMMAND layerc_bundle_tests)
         set_tests_properties(layerc_bundle_tests PROPERTIES TIMEOUT 45)
 
@@ -607,13 +533,7 @@ if(LAYERC_BUILD_TESTS)
             layerc_core layerc_windows layerc_capture)
         target_compile_definitions(layerc_isolated_visual_tests PRIVATE
             UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        if(MSVC)
-            target_compile_options(layerc_isolated_visual_tests PRIVATE
-                /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_isolated_visual_tests PRIVATE
-                -Wall -Wextra -Wpedantic)
-        endif()
+        layerc_enable_warnings(layerc_isolated_visual_tests)
         add_test(NAME layerc_isolated_visual_tests
             COMMAND layerc_isolated_visual_tests)
         set_tests_properties(layerc_isolated_visual_tests PROPERTIES
@@ -624,39 +544,21 @@ if(LAYERC_BUILD_TESTS)
             tests/test_support.cpp
             src/gamebar/GameBarBridge.cpp
             src/gamebar/GameBarTransport.cpp
+            src/gamebar/GameBarAppServiceClient.cpp
+            src/gamebar/GameBarRetryPolicy.cpp
         )
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
         target_link_libraries(layerc_companion_tests PRIVATE
             layerc_core layerc_windows)
         target_compile_definitions(layerc_companion_tests PRIVATE
             UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        layerc_enable_warnings(layerc_companion_tests)
         if(MSVC)
-            target_compile_options(layerc_companion_tests PRIVATE
-                /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_companion_tests PRIVATE
-                -Wall -Wextra -Wpedantic)
+            target_link_libraries(layerc_companion_tests PRIVATE runtimeobject)
         endif()
         add_test(NAME layerc_companion_tests COMMAND layerc_companion_tests)
         set_tests_properties(layerc_companion_tests PROPERTIES TIMEOUT 30)
 
-        add_executable(layerc_gamebar_host_tests
-            tests/gamebar_host_tests.cpp)
-        target_link_libraries(layerc_gamebar_host_tests PRIVATE
-            layerc_core)
-        target_compile_definitions(layerc_gamebar_host_tests PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        if(MSVC)
-            target_compile_options(layerc_gamebar_host_tests PRIVATE
-                /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_gamebar_host_tests PRIVATE
-                -Wall -Wextra -Wpedantic)
-        endif()
-        add_test(NAME layerc_gamebar_host_tests
-            COMMAND layerc_gamebar_host_tests $<TARGET_FILE:layerc_gamebar_host>)
-        set_tests_properties(layerc_gamebar_host_tests PROPERTIES TIMEOUT 30)
-        add_dependencies(layerc_gamebar_host_tests layerc_gamebar_host)
 
         add_executable(layerc_editor_tests
             tests/editor_dialog_tests.cpp
@@ -671,13 +573,7 @@ if(LAYERC_BUILD_TESTS)
             layerc_core layerc_windows comctl32 dwmapi uxtheme user32 gdi32)
         target_compile_definitions(layerc_editor_tests PRIVATE
             UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        if(MSVC)
-            target_compile_options(layerc_editor_tests PRIVATE
-                /W4 /permissive- /EHsc /utf-8)
-        else()
-            target_compile_options(layerc_editor_tests PRIVATE
-                -Wall -Wextra -Wpedantic)
-        endif()
+        layerc_enable_warnings(layerc_editor_tests)
         add_test(NAME layerc_editor_tests COMMAND layerc_editor_tests)
         set_tests_properties(layerc_editor_tests PROPERTIES TIMEOUT 30)
         if(TARGET layere)

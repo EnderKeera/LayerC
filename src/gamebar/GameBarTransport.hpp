@@ -3,6 +3,8 @@
 #include "layerc/core/companion.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,54 +13,53 @@
 
 namespace layerc::gamebar {
 
-// Local publication endpoint used by the packaged companion. The daemon owns
-// the pipe and only publishes immutable, bounded snapshot JSON; the companion
-// never receives authority over cooldown state.
+struct GameBarTransportState;
+struct GameBarPreferenceUpdate {
+  std::uint64_t request_id{};
+  std::string json;
+};
+
+// Demand-owned App Service client used only by the packaged daemon. It sends
+// immutable bounded snapshots to the in-process UWP provider and receives
+// bounded presentation-preference documents. The widget never gains cooldown
+// authority.
 class GameBarTransport final {
 public:
-  GameBarTransport() = default;
+  GameBarTransport();
   ~GameBarTransport();
   GameBarTransport(const GameBarTransport &) = delete;
   GameBarTransport &operator=(const GameBarTransport &) = delete;
 
   [[nodiscard]] bool start();
   void stop() noexcept;
-  void poll() noexcept;
+  [[nodiscard]] std::vector<GameBarPreferenceUpdate> poll() noexcept;
   [[nodiscard]] bool publish(std::string_view snapshot_json);
-  [[nodiscard]] bool connected() const noexcept { return connected_; }
+  [[nodiscard]] bool connected() const noexcept;
   [[nodiscard]] HANDLE wait_handle() const noexcept;
-  [[nodiscard]] const std::wstring &last_error() const noexcept {
-    return last_error_;
-  }
+  [[nodiscard]] std::wstring last_error() const;
   [[nodiscard]] std::size_t resource_handle_count() const noexcept;
+  void complete_preference_update(std::uint64_t request_id,
+                                  bool accepted) noexcept;
 
-  inline static constexpr wchar_t pipe_name[] =
-      L"\\\\.\\pipe\\LayerC.GameBar.v1";
-  inline static constexpr std::wstring_view package_name =
+  inline static constexpr std::wstring_view app_service_name =
       L"LayerC.GameBar.v1";
+  inline static constexpr std::wstring_view package_name = L"LayerC.GameBar.v1";
+  // Keep in sync with Package.appxmanifest Identity (Name, Publisher) and
+  // the family derived by Windows from that identity.
+  inline static constexpr std::wstring_view package_publisher = L"CN=LayerC";
+  inline static constexpr std::wstring_view package_family_name =
+      L"LayerC.GameBar.v1_bs8jpev27s1ay";
+  inline static constexpr std::uint16_t package_major_version = 2;
+  inline static constexpr std::uint16_t package_minor_version = 4;
+
+  [[nodiscard]] static bool is_expected_package_identity(
+      std::wstring_view name, std::wstring_view publisher,
+      std::wstring_view family_name, std::uint16_t major,
+      std::uint16_t minor) noexcept;
+  [[nodiscard]] static bool current_process_is_expected_package() noexcept;
 
 private:
-  [[nodiscard]] bool create_server();
-  [[nodiscard]] bool authenticate_client();
-  void complete_connection() noexcept;
-  void disconnect() noexcept;
-  [[nodiscard]] bool continue_write();
-  void set_error(DWORD error);
-
-  static constexpr std::size_t max_frame_bytes =
-      layerc::core::max_companion_snapshot_bytes;
-  HANDLE pipe_{INVALID_HANDLE_VALUE};
-  HANDLE connect_event_{};
-  HANDLE write_event_{};
-  OVERLAPPED connect_overlapped_{};
-  OVERLAPPED write_overlapped_{};
-  bool started_{};
-  bool connect_pending_{};
-  bool write_pending_{};
-  bool connected_{};
-  std::vector<std::byte> pending_frame_;
-  std::vector<std::byte> active_frame_;
-  std::wstring last_error_;
+  std::shared_ptr<GameBarTransportState> state_;
 };
 
 } // namespace layerc::gamebar

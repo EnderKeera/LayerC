@@ -247,8 +247,7 @@ constexpr std::string_view sidecar_state_active = "active\n";
 constexpr std::string_view sidecar_state_removed = "removed\n";
 constexpr std::size_t max_sidecar_state_bytes = 32;
 
-std::filesystem::path
-sidecar_state_path(const std::filesystem::path &sidecar) {
+std::filesystem::path sidecar_state_path(const std::filesystem::path &sidecar) {
   auto state = sidecar;
   state += L".state";
   return state;
@@ -259,8 +258,7 @@ struct SidecarStateSnapshot {
   std::optional<std::string> contents;
 };
 
-SidecarStateSnapshot
-read_sidecar_state(const std::filesystem::path &sidecar) {
+SidecarStateSnapshot read_sidecar_state(const std::filesystem::path &sidecar) {
   const auto state = sidecar_state_path(sidecar);
   std::error_code error;
   const bool exists = std::filesystem::exists(state, error);
@@ -385,13 +383,17 @@ public:
       const auto state_path = sidecar_state_path(sidecar);
       if (!state.contents.has_value())
         return {.outcome = SidecarOutcome::invalid,
-                .error = {"$.state",
-                          module_message("state could not be read")},
+                .profile = std::nullopt,
+                .error = {"$.state", module_message("state could not be read")},
                 .source_path = state_path};
       if (*state.contents == sidecar_state_removed)
-        return {.outcome = SidecarOutcome::absent, .source_path = state_path};
+        return {.outcome = SidecarOutcome::absent,
+                .profile = std::nullopt,
+                .error = {},
+                .source_path = state_path};
       if (*state.contents != sidecar_state_active)
         return {.outcome = SidecarOutcome::invalid,
+                .profile = std::nullopt,
                 .error = {"$.state", module_message("state is invalid")},
                 .source_path = state_path};
     }
@@ -404,6 +406,7 @@ public:
       if (auto *profile = std::get_if<Profile>(&parsed))
         return {.outcome = SidecarOutcome::valid,
                 .profile = std::move(*profile),
+                .error = {},
                 .source_path = sidecar};
       primary_error = std::get<Error>(std::move(parsed));
     }
@@ -424,8 +427,12 @@ public:
         std::filesystem::exists(backup, backup_stat_error);
     if (!primary_exists && !backup_exists && !primary_stat_error &&
         !backup_stat_error)
-      return {.outcome = SidecarOutcome::absent, .source_path = sidecar};
+      return {.outcome = SidecarOutcome::absent,
+              .profile = std::nullopt,
+              .error = {},
+              .source_path = sidecar};
     return {.outcome = SidecarOutcome::invalid,
+            .profile = std::nullopt,
             .error = std::move(primary_error),
             .source_path = sidecar};
   }
@@ -516,7 +523,8 @@ bool write_profile_bundle(
     const auto existing = load_companion_sidecar(path, stored_profile);
     if (existing.state == CompanionSidecarState::invalid)
       return false;
-    if (existing.profile.has_value()) preserved_companion = existing.profile;
+    if (existing.profile.has_value())
+      preserved_companion = existing.profile;
   }
   const auto &effective_companion =
       companion_profile.has_value() ? companion_profile : preserved_companion;
@@ -555,13 +563,13 @@ bool write_profile_bundle(
   if (root.empty() || visual.empty() || automation.empty() || companion.empty())
     return false;
 
-  const auto bytes = [](const std::string &source) {
-    const auto *first = reinterpret_cast<const std::byte *>(source.data());
-    return std::vector<std::byte>(first, first + source.size());
-  };
-  const auto mutation = [&](const std::filesystem::path &target,
-                            const std::string &contents) {
-    return ProfileFileMutation{.target = target, .contents = bytes(contents)};
+  const auto mutation = [](const std::filesystem::path &target,
+                           const std::string &contents) {
+    const auto *first =
+        reinterpret_cast<const std::byte *>(contents.data());
+    return ProfileFileMutation{
+        .target = target,
+        .contents = std::vector<std::byte>(first, first + contents.size())};
   };
   const auto exists = [](const std::filesystem::path &target, bool &result) {
     std::error_code error;
@@ -731,20 +739,23 @@ AutomationStateLoad load_automation_state(
   if (!std::filesystem::exists(path, existence_error)) {
     if (!existence_error)
       return {};
-    return {.error = layerc::core::AutomationError{
+    return {.values = {},
+            .error = layerc::core::AutomationError{
                 "$", "automation state existence check failed"}};
   }
   const auto contents =
       read_bounded_file(path, layerc::core::max_automation_state_bytes);
   if (!contents.has_value())
-    return {.error = layerc::core::AutomationError{
+    return {.values = {},
+            .error = layerc::core::AutomationError{
                 "$", "automation state could not be read"}};
   auto parsed =
       layerc::core::parse_automation_state_json(*contents, automation_profile);
   if (auto *values =
           std::get_if<layerc::core::AutomationPersistentValues>(&parsed))
-    return {.values = std::move(*values)};
-  return {.error = std::get<layerc::core::AutomationError>(std::move(parsed))};
+    return {.values = std::move(*values), .error = std::nullopt};
+  return {.values = {},
+          .error = std::get<layerc::core::AutomationError>(std::move(parsed))};
 }
 
 bool write_automation_state(
@@ -759,6 +770,31 @@ bool write_automation_state(
       layerc::core::serialize_automation_state_json(automation_profile, values),
       false, layerc::core::max_automation_state_bytes);
 }
+bool has_stale_sidecar_markers(const std::filesystem::path &sidecar,
+                               std::error_code &out_error) noexcept {
+  auto backup = sidecar;
+  backup += L".bak";
+  const auto state = sidecar_state_path(sidecar);
+  std::error_code ec;
+  const bool sidecar_exists = std::filesystem::exists(sidecar, ec);
+  if (ec) {
+    out_error = ec;
+    return false;
+  }
+  const bool backup_exists = std::filesystem::exists(backup, ec);
+  if (ec) {
+    out_error = ec;
+    return false;
+  }
+  const bool state_exists = std::filesystem::exists(state, ec);
+  if (ec) {
+    out_error = ec;
+    return false;
+  }
+  out_error.clear();
+  return sidecar_exists || backup_exists || state_exists;
+}
+
 bool signal_profile_reload() {
   const HANDLE event =
       OpenEventW(EVENT_MODIFY_STATE, FALSE, profile_reload_event_name);

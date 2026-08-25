@@ -28,6 +28,21 @@
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/layerc-mingw",
         "LAYERC_BUILD_TESTS": "ON"
       }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI Ninja Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/ci",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER": "sccache",
+        "CMAKE_UNITY_BUILD": "ON",
+        "CMAKE_UNITY_BUILD_BATCH_SIZE": "16",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/layerc",
+        "LAYERC_BUILD_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -56,6 +71,15 @@
       "name": "mingw-ninja-install",
       "configurePreset": "mingw-ninja",
       "targets": ["install"]
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci"
+    },
+    {
+      "name": "ci-install",
+      "configurePreset": "ci",
+      "targets": ["install"]
     }
   ],
   "testPresets": [
@@ -75,6 +99,11 @@
       "name": "mingw-ninja",
       "configurePreset": "mingw-ninja",
       "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
+      "output": { "outputOnFailure": true }
     }
   ],
   "packagePresets": [
@@ -87,6 +116,11 @@
     {
       "name": "mingw-ninja",
       "configurePreset": "mingw-ninja",
+      "generators": ["ZIP"]
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci",
       "generators": ["ZIP"]
     }
   ],
@@ -111,6 +145,17 @@
         { "type": "test", "name": "mingw-ninja" },
         { "type": "build", "name": "mingw-ninja-install" },
         { "type": "package", "name": "mingw-ninja" }
+      ]
+    },
+    {
+      "name": "ci",
+      "displayName": "CI Ninja Release",
+      "steps": [
+        { "type": "configure", "name": "ci" },
+        { "type": "build", "name": "ci" },
+        { "type": "test", "name": "ci" },
+        { "type": "build", "name": "ci-install" },
+        { "type": "package", "name": "ci" }
       ]
     }
   ]

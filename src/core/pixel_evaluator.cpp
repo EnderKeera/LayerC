@@ -63,12 +63,18 @@ PixelEvaluation evaluate_pixel_rule(const PixelRule &rule,
 
   const auto region_width = right - left;
   const auto region_height = bottom - top;
-  const std::uint32_t evaluation_axis_sample_bound =
-      quality == CaptureQuality::low
-          ? 64U
-          : quality == CaptureQuality::balanced
-                ? 256U
-                : std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t evaluation_axis_sample_bound{};
+  switch (quality) {
+  case CaptureQuality::low:
+    evaluation_axis_sample_bound = 64U;
+    break;
+  case CaptureQuality::balanced:
+    evaluation_axis_sample_bound = 256U;
+    break;
+  case CaptureQuality::exact:
+    evaluation_axis_sample_bound = std::numeric_limits<std::uint32_t>::max();
+    break;
+  }
   const auto samples_x =
       std::min(region_width, evaluation_axis_sample_bound);
   const auto samples_y =

@@ -155,6 +155,60 @@ void DaemonApp::handle_hid_device_change(const HANDLE, const bool) {
   reconcile_runtime_services();
 }
 
+bool DaemonApp::process_hid_sample(
+    Session &session, const std::size_t index,
+    const layerc::core::HidControlBinding &binding,
+    const layerc::core::HidControlSample &sample) {
+  bool overlays_changed{};
+  auto &state = session.hid_states[index];
+  const bool initialized = state.initialized;
+  if (session.automation_runtime && sample.available &&
+      sample.logical_max > sample.logical_min) {
+    const double normalized =
+        sample.relative
+            ? static_cast<double>(sample.value) /
+                  std::max(
+                      1.0,
+                      std::max(
+                          std::abs(static_cast<double>(sample.logical_min)),
+                          std::abs(static_cast<double>(sample.logical_max))))
+            : (static_cast<double>(sample.value) - sample.logical_min) /
+                  static_cast<double>(sample.logical_max -
+                                      sample.logical_min);
+    const bool momentary = sample.relative;
+    if (!momentary || sample.value != 0)
+      overlays_changed = process_automation_input_value(
+          session, "hid:" + std::to_string(index + 1U), normalized,
+          layerc::core::MonotonicClock::now(), momentary);
+  }
+  const auto edge = layerc::core::evaluate_hid_control(binding, sample, state);
+  if (!edge)
+    return overlays_changed;
+
+  const layerc::core::InputToken token{
+      .device = layerc::core::InputDevice::generic_hid,
+      .code = static_cast<std::uint16_t>(index + 1U)};
+  const bool relative =
+      binding.activation ==
+          layerc::core::HidActivationMode::relative_positive ||
+      binding.activation == layerc::core::HidActivationMode::relative_negative;
+  if (!initialized && !relative) {
+    session.input.seed(token, *edge);
+    return overlays_changed;
+  }
+  overlays_changed =
+      process_input(session, {.token = token, .pressed = *edge}) ||
+      overlays_changed;
+  if (relative && *edge) {
+    overlays_changed =
+        process_input(session, {.token = token, .pressed = false}) ||
+        overlays_changed;
+    state.initialized = true;
+    state.pressed = false;
+  }
+  return overlays_changed;
+}
+
 void DaemonApp::handle_hid_input(const RAWINPUT &input) {
   if (!hid_runtime_ || active_input_sessions_.empty())
     return;
@@ -169,63 +223,6 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
     hid_runtime_->resolver.clear();
   }
   bool overlays_changed{};
-  const auto process_sample =
-      [&](Session &session, const std::size_t index,
-          const layerc::core::HidControlBinding &binding,
-          const layerc::core::HidControlSample &sample) {
-        auto &state = session.hid_states[index];
-        const bool initialized = state.initialized;
-        if (session.automation_runtime && sample.available &&
-            sample.logical_max > sample.logical_min) {
-          const double normalized =
-              sample.relative
-                  ? static_cast<double>(sample.value) /
-                        std::max(
-                            1.0,
-                            std::max(
-                                std::abs(
-                                    static_cast<double>(sample.logical_min)),
-                                std::abs(
-                                    static_cast<double>(sample.logical_max))))
-                  : (static_cast<double>(sample.value) -
-                     sample.logical_min) /
-                        static_cast<double>(sample.logical_max -
-                                            sample.logical_min);
-          const bool momentary = sample.relative;
-          if (!momentary || sample.value != 0)
-            overlays_changed =
-                process_automation_input_value(
-                    session, "hid:" + std::to_string(index + 1U),
-                    normalized, layerc::core::MonotonicClock::now(),
-                    momentary) ||
-                overlays_changed;
-        }
-        const auto edge = layerc::core::evaluate_hid_control(binding, sample,
-                                                              state);
-        if (!edge) return;
-        const layerc::core::InputToken token{
-            .device = layerc::core::InputDevice::generic_hid,
-            .code = static_cast<std::uint16_t>(index + 1U)};
-        const bool relative =
-            binding.activation ==
-                layerc::core::HidActivationMode::relative_positive ||
-            binding.activation ==
-                layerc::core::HidActivationMode::relative_negative;
-        if (!initialized && !relative) {
-          session.input.seed(token, *edge);
-          return;
-        }
-        overlays_changed =
-            process_input(session, {.token = token, .pressed = *edge}) ||
-            overlays_changed;
-        if (relative && *edge) {
-          overlays_changed =
-              process_input(session, {.token = token, .pressed = false}) ||
-              overlays_changed;
-          state.initialized = true;
-          state.pressed = false;
-        }
-      };
 
   const auto evaluate_for_sessions = [&](const auto &sample_for) {
     for (auto *session : active_input_sessions_) {
@@ -240,7 +237,9 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
           continue;
         const auto sample = sample_for(binding);
         if (sample.has_value())
-          process_sample(*session, index, binding, *sample);
+          overlays_changed =
+              process_hid_sample(*session, index, binding, *sample) ||
+              overlays_changed;
       }
     }
   };
