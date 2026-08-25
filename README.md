@@ -23,10 +23,12 @@ Installed executables land in `out/layerc/`:
 - `layercal.exe` — visual calibration helper
  - `layerworker.exe` — isolated visual capture worker (demand-launched)
 
-CI builds come from GitHub, not locally: push to `main` or open a PR and
-download the run artifacts (`out/layerc/**` + portable ZIP) from the Actions
-page. Tag `v*.*.*` to publish a durable ZIP via a GitHub Release. The local
-commands above are for iteration and debugging.
+CI builds come from GitHub, not locally: push to `main` and the pipeline
+builds, tests, benchmarks, and publishes the portable ZIP as a rolling
+prerelease (tag `rolling`). `tools/pull-ci.ps1` downloads and stages it into
+`out/layerc` — run it manually or let the scheduled task do it. Tag `v*.*.*`
+for durable tagged releases. The local commands above are for iteration and
+debugging.
 
 ### Development & Smoke Testing
 
