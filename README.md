@@ -41,19 +41,18 @@ $env:LAYERC_PROFILE_DIR = "$PWD\examples"
   - Optional Game Bar host requires **Universal Windows Platform tools** + **C++ UWP tools**
 - CMake 3.28+
 
-### Commands
-
 | Task | Command |
 |---|---|
-| Configure | `cmake --preset vs2026` |
+| Configure (VS 2026) | `cmake --preset vs2026` |
 | Build Debug | `cmake --build --preset vs2026-debug` |
 | Test Debug | `ctest --preset vs2026-debug` |
 | Build Release | `cmake --build --preset vs2026-release` |
 | Test Release | `ctest --preset vs2026-release` |
 | Install | `cmake --install build/vs2026 --config Release --prefix out/layerc` |
 | Package ZIP | `cmake --workflow --preset vs2026-release` |
-| Game Bar MSIX | `cmake --build --preset vs2026-release --target layerc_gamebar_msix` |
+| CI (Ninja+sccache+UNITY) | `cmake --preset ci` → `cmake --build --preset ci --parallel` → `ctest --preset ci` |
 | MinGW Release | `cmake --workflow --preset mingw-ninja` (needs `MINGW_ROOT` & Ninja) |
+| Game Bar MSIX | `cmake --build --preset vs2026-release --target layerc_gamebar_msix` (needs UWP tools) |
 
 ## Test Targets
 
@@ -113,11 +112,10 @@ Benchmark scripts enforce strict hard gates under `tools/` and write JSON eviden
 - Strict resource caps: 64 rules, 64 variables, 32 timers, 256 AST nodes, 2 ms execution budget per root event.
 - Live editor canvas, deterministic offline simulator, and transactional state checkpointing under `profiles/_state/`.
 
-### Xbox Game Bar Companion (V2.4 WIP)
-- Optional UWP XAML widget host (`layerc-gamebar.exe`) providing 8 panel slots + settings widget.
-- Inter-process communication via same-package `LayerC.GameBar.v1` App Service with bounded 64 KiB snapshots and 2s stale data hiding.
-- Settings persist through a dedicated `_companion` sidecar.
-
+### Xbox Game Bar Companion (V2.4)
+- UWP XAML host (`layerc-gamebar.exe`) with 8 panel slots + settings widget.
+- Same-package App Service `LayerC.GameBar.v1` with 64 KiB bounded snapshots (2s stale clear).
+- Demand-driven transport — zero cost when unpackaged; settings via `_companion` sidecar. Implementation complete; remaining gates are manual matrix/signing (see `docs/GameBarCompanion.audit.md`).
 ## Configuration Format
 
 Profiles are stored as UTF-8 JSON in `%LOCALAPPDATA%\LayerC\profiles\<name>.json`:

@@ -655,19 +655,7 @@ or V2.3. The portable ZIP continues to contain the normal desktop applications.
 A separate full MSIX packages LayerD, LayerE, LayerCal, and a C++/WinRT Xbox
 Game Bar companion.
 
-Implementation status (2026-08-24): the real UWP XAML activation path, eight
-standard widgets, settings widget, same-package App Service, transactional
-preference writeback, full-trust LayerD launch, strict snapshot/catalog codec,
-profile-pack companion modules, and unsigned x64 full-MSIX build are
-implemented. Clean MSVC and MinGW Release builds and all 9 CTest suites pass;
-the modular-runtime, automation, and input-to-overlay latency regressions pass.
-The V1.1 Low and Balanced visual runs still exceed the 35 MiB private-byte gate
-and discrete-GPU coverage remains required. An earlier loose package was
-registered and smoke-tested with `lctest` (panel data plus all eight settings
-controls), but the fresh x64 artifact still requires registration and the full
-package/Explorer restart, controller, DPI, click-through, resource, and
-fullscreen compatibility matrix. V2.4 remains **work in progress** until those
-gates pass and the official package is externally signed.
+Implementation status (2026-08-25): UWP XAML host (8 panel widgets + settings), `WidgetSnapshotHub`, App Service `LayerC.GameBar.v1`, demand-driven `GameBarTransport` (State/AppServiceClient/RetryPolicy split), bounded 64 KiB snapshots with 2s stale clear, companion sidecar (`_companion` schema 1) via transactional multi-doc save and `.layercprofile` packs, `pack_detail.*`/`SidecarKind` refactor, poll consolidation to single wait-handle drain, full-trust LayerD launch, and unsigned x64 MSIX are implemented. Clean **MSVC (ci preset, sccache+UNITY)** and **MinGW-Ninja** Release builds pass **0 warnings, 10/10 tests**; `benchmark_v23` + `benchmark_v22` + `benchmark_latency` gates pass; `benchmark_v11` Low/Balanced remains borderline (35.3–35.8 MiB vs 35.0 MiB) on integrated GPU. Earlier MSIX was registered and smoke-tested with `lctest` (8 slots + settings); current x64 artifact needs re-registration and the full restart/controller/DPI/click-through/resource/fullscreen matrix. V2.4 remains **WIP** until that matrix and external signing complete.
 
 The package declares eight fixed standard panel-widget extensions plus one
 settings widget. Each panel slot subscribes to one panel in the current
