@@ -26,9 +26,10 @@ Installed executables land in `out/layerc/`:
 CI builds come from GitHub, not locally: push to `main` and the pipeline
 builds, tests, benchmarks, and publishes the portable ZIP as a rolling
 prerelease (tag `rolling`). `tools/pull-ci.ps1` downloads and stages it into
-`out/layerc` — run it manually or let the scheduled task do it. Tag `v*.*.*`
-for durable tagged releases. The local commands above are for iteration and
-debugging.
+`out/layerc`; the benchmarks that need real hardware or a baseline (v11
+visual, v22 idle plateau, latency) run on this machine against that build.
+Tag `v*.*.*` for durable tagged releases. The local commands above are for
+iteration and debugging.
 
 ### Development & Smoke Testing
 
