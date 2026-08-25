@@ -10,6 +10,8 @@ jobs:
   windows-msvc:
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v7
 
@@ -21,8 +23,6 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
-        env:
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Configure (CI preset)
         shell: pwsh

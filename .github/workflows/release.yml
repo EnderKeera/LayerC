@@ -10,13 +10,13 @@ permissions:
 jobs:
   release:
     runs-on: windows-2022
+    env:
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - uses: actions/checkout@v7
       - uses: ilammy/msvc-dev-cmd@v1
       - uses: seanmiddleditch/gha-setup-ninja@v6
       - uses: mozilla-actions/sccache-action@v0.0.9
-        env:
-          SCCACHE_GHA_ENABLED: "true"
       - run: cmake --preset ci
       - run: cmake --build --preset ci --parallel
       - run: ctest --preset ci --output-on-failure
