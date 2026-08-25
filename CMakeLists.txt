@@ -205,7 +205,6 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
     elseif(MINGW)
         target_link_options(layerd PRIVATE -municode)
     endif()
-    set_target_properties(layerd PROPERTIES OUTPUT_NAME "layerd")
 endif()
 
 if(WIN32 AND LAYERC_BUILD_DAEMON)
@@ -224,7 +223,6 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
     if(MINGW)
         target_link_options(layerworker PRIVATE -municode)
     endif()
-    set_target_properties(layerworker PROPERTIES OUTPUT_NAME "layerworker")
 endif()
 
 option(LAYERC_BUILD_GAMEBAR_HOST "Build the C++/WinRT Game Bar companion host" ON)
@@ -277,7 +275,6 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
     if(MINGW)
         target_link_options(layere PRIVATE -municode)
     endif()
-    set_target_properties(layere PROPERTIES OUTPUT_NAME "layere")
 endif()
 
 if(WIN32 AND LAYERC_BUILD_EDITOR)
@@ -297,7 +294,6 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
     if(MINGW)
         target_link_options(layercal PRIVATE -municode)
     endif()
-    set_target_properties(layercal PROPERTIES OUTPUT_NAME "layercal")
 endif()
 
 set(LAYERC_MINGW_RUNTIME_DLLS)
@@ -395,7 +391,6 @@ endif()
 # inputs are staged only by the explicit layerc_gamebar_msix target.
 install(FILES
     README.md
-    PLAN.md
     THIRD_PARTY_NOTICES.md
     DESTINATION . COMPONENT Runtime)
 install(FILES third_party/miniz/LICENSE third_party/miniz/UPSTREAM.md
@@ -481,7 +476,6 @@ if(LAYERC_BUILD_TESTS)
         if(MINGW)
             target_link_options(lctest PRIVATE -municode)
         endif()
-        set_target_properties(lctest PROPERTIES OUTPUT_NAME "lctest")
 
         add_executable(layerc_overlay_tests
             tests/overlay_window_tests.cpp

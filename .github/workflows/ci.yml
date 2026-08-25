@@ -10,34 +10,21 @@ jobs:
   windows-msvc:
     runs-on: windows-2022
     timeout-minutes: 30
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
-      - name: Clean previous outputs
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force out/bench-stage, out/bench-control, out/ci-pull -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force out/benchmarks | Out-Null
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@master
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-
-      - name: Cache sccache and NuGet
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/sccache
-            ~/.nuget/packages
-          key: ${{ runner.os }}-ci-${{ hashFiles('**/CMakeLists.txt','**/*.cmake','src/**','third_party/**') }}
-          restore-keys: |
-            ${{ runner.os }}-ci-
-
 
       - name: Configure (CI preset)
         shell: pwsh
@@ -53,11 +40,8 @@ jobs:
 
       - name: Automated Benchmarks (CPU Evaluator)
         shell: pwsh
-        run: |
-          ctest --preset ci -R layerc_automation_benchmark --verbose --output-on-failure
-          if (Test-Path tools/benchmark_v23.ps1) {
-            pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
-          }
+        run: pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
+
       - name: Install
         shell: pwsh
         run: cmake --build --preset ci-install
@@ -68,6 +52,16 @@ jobs:
           cpack --preset ci --verbose
           Get-ChildItem -Recurse -Filter *.zip | Select-Object FullName,Length | Format-Table
 
+      - name: Publish rolling prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete rolling --yes --cleanup-tag 2>$null
+          $zip = Get-ChildItem build/ci/*.zip | Select-Object -First 1 -ExpandProperty FullName
+          gh release create rolling $zip --title "LayerC rolling build" --prerelease --notes "Rolling build of main@${{ github.sha }}" 2>&1 | Out-Null
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -77,3 +71,15 @@ jobs:
             build/ci/*.zip
             *.zip
           if-no-files-found: warn
+
+      - name: Upload benchmark tools
+        uses: actions/upload-artifact@v7
+        with:
+          name: layerc-windows-x64-tools
+          path: |
+            build/ci/layerd.exe
+            build/ci/layere.exe
+            build/ci/lctest.exe
+            build/ci/layerc_capture_probe.exe
+            build/ci/layerc_automation_benchmark.exe
+          if-no-files-found: error

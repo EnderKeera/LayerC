@@ -1,5 +1,7 @@
 /build/
 /.vs/
+# Local-only roadmap: intentionally not tracked in the public repo
+/PLAN.md
 /out/
 *.user
 *.suo
@@ -49,6 +51,8 @@ install_manifest.txt
 *.tmp
 *.log
 *.bak
+# Profile sidecar state markers (active/removed; machine-local runtime state)
+*.json.state
 *.swp
 vcpkg_installed/
 *.dwo
