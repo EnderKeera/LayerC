@@ -2,7 +2,8 @@
 
 LayerC is a lightweight, open-source Windows cooldown overlay — dependency-free C++20 core, typed JSON profiles, demand-driven input and click-through panels, opt-in visual recognition, bounded Automation Graphs, native editor, and deterministic packs.
 
-See [PLAN.md](PLAN.md) for roadmap and technical specifications.
+See the plan document (local-only; kept out of this repository) for roadmap
+and technical specifications.
 
 ## Quickstart
 
@@ -20,7 +21,12 @@ Installed executables land in `out/layerc/`:
 - `layerd.exe` — background daemon (passive input, cooldown state, overlays)
 - `layere.exe` — profile editor & calibration UI
 - `layercal.exe` — visual calibration helper
-- `layerworker.exe` — isolated visual capture worker (demand-launched)
+ - `layerworker.exe` — isolated visual capture worker (demand-launched)
+
+CI builds come from GitHub, not locally: push to `main` or open a PR and
+download the run artifacts (`out/layerc/**` + portable ZIP) from the Actions
+page. Tag `v*.*.*` to publish a durable ZIP via a GitHub Release. The local
+commands above are for iteration and debugging.
 
 ### Development & Smoke Testing
 
@@ -51,7 +57,7 @@ $env:LAYERC_PROFILE_DIR = "$PWD\examples"
 | Install | `cmake --install build/vs2026 --config Release --prefix out/layerc` |
 | Package ZIP | `cmake --workflow --preset vs2026-release` |
 | CI (Ninja+sccache+UNITY) | `cmake --preset ci` → `cmake --build --preset ci --parallel` → `ctest --preset ci` |
-| MinGW Release | `cmake --workflow --preset mingw-ninja` (needs `MINGW_ROOT` & Ninja) |
+| MinGW Release *(optional cross-check)* | `cmake --workflow --preset mingw-ninja` (needs `MINGW_ROOT` & Ninja) |
 | Game Bar MSIX | `cmake --build --preset vs2026-release --target layerc_gamebar_msix` (needs UWP tools) |
 
 ## Test Targets

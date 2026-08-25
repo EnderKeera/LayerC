@@ -12,32 +12,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - name: Clean previous outputs
-        shell: pwsh
-        run: |
-          Remove-Item -Recurse -Force out/bench-stage, out/bench-control, out/ci-pull -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force out/benchmarks | Out-Null
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@master
+        uses: seanmiddleditch/gha-setup-ninja@v6
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
         env:
           SCCACHE_GHA_ENABLED: "true"
-
-      - name: Cache sccache and NuGet
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/sccache
-            ~/.nuget/packages
-          key: ${{ runner.os }}-ci-${{ hashFiles('**/CMakeLists.txt','**/*.cmake','src/**','third_party/**') }}
-          restore-keys: |
-            ${{ runner.os }}-ci-
-
 
       - name: Configure (CI preset)
         shell: pwsh
@@ -53,11 +38,8 @@ jobs:
 
       - name: Automated Benchmarks (CPU Evaluator)
         shell: pwsh
-        run: |
-          ctest --preset ci -R layerc_automation_benchmark --verbose --output-on-failure
-          if (Test-Path tools/benchmark_v23.ps1) {
-            pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
-          }
+        run: pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
+
       - name: Install
         shell: pwsh
         run: cmake --build --preset ci-install
