@@ -19,7 +19,7 @@ jobs:
       - run: ctest --preset ci --output-on-failure
       - run: cmake --build --preset ci-install
       - run: cpack --preset ci --verbose
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             build/ci/*.zip
