@@ -62,20 +62,6 @@ public:
 
   void end_text_coalescing() noexcept { coalescing_text_ = false; }
 
-  void rebase_visual(
-      const std::optional<layerc::core::VisualProfile> &visual_profile) {
-    baseline_.visual_profile = visual_profile;
-    saved_.visual_profile = visual_profile;
-    coalescing_text_ = false;
-  }
-
-  void rebase_automation(const std::optional<layerc::core::AutomationProfile>
-                             &automation_profile) {
-    baseline_.automation_profile = automation_profile;
-    saved_.automation_profile = automation_profile;
-    coalescing_text_ = false;
-  }
-
   [[nodiscard]] bool
   is_baseline(const layerc::core::GameProfile &profile,
               const std::optional<layerc::core::VisualProfile> &visual_profile,

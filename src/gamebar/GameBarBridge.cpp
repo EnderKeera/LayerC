@@ -128,6 +128,21 @@ layerc::core::CompanionSessionSnapshot GameBarBridge::create_session_snapshot(
   build_preferences(snapshot, panels, companion);
   build_available_catalog(snapshot, panels);
   build_panel_snapshots(snapshot, panels, definitions, states, now);
+  const auto fits = [&] {
+    return layerc::core::serialize_companion_snapshot_json(snapshot)
+        .has_value();
+  };
+  if (fits())
+    return snapshot;
+
+  std::erase_if(snapshot.available_panels, [&](const auto &panel) {
+    return std::ranges::none_of(snapshot.preferences, [&](const auto &mapping) {
+      return mapping.panel_id == panel.panel_id;
+    });
+  });
+  for (auto panel = snapshot.panels.rbegin();
+       panel != snapshot.panels.rend() && !fits(); ++panel)
+    panel->items.clear();
   return snapshot;
 }
 
@@ -142,16 +157,6 @@ void GameBarBridge::clear_snapshot() noexcept {
   std::lock_guard<std::mutex> lock(mutex_);
   latest_snapshot_.reset();
   last_update_time_ = {};
-}
-
-std::optional<layerc::core::CompanionSessionSnapshot>
-GameBarBridge::latest_snapshot(const layerc::core::TimePoint now) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!latest_snapshot_.has_value())
-    return std::nullopt;
-  if (now - last_update_time_ > stale_timeout)
-    return std::nullopt;
-  return latest_snapshot_;
 }
 
 std::optional<std::string>

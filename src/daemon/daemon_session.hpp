@@ -29,15 +29,12 @@ struct ProfileSource {
   std::optional<layerc::core::VisualProfile> visual_profile;
   layerc::platform::VisualSidecarState visual_health{
       layerc::platform::VisualSidecarState::absent};
-  std::string visual_error;
   std::optional<layerc::core::AutomationProfile> automation_profile;
   layerc::platform::AutomationSidecarState automation_health{
       layerc::platform::AutomationSidecarState::absent};
-  std::string automation_error;
   std::optional<layerc::core::CompanionProfile> companion_profile;
   layerc::platform::CompanionSidecarState companion_health{
       layerc::platform::CompanionSidecarState::absent};
-  std::string companion_error;
   layerc::core::AutomationPersistentValues automation_state;
   std::optional<layerc::core::TimePoint> automation_state_due;
   layerc::core::ProfileRevision revision{};
@@ -64,7 +61,6 @@ struct SessionInit {
   layerc::platform::CompanionSidecarState companion_health{
       layerc::platform::CompanionSidecarState::absent};
   bool visual_enabled{};
-  bool capture_exclusion{};
 };
 
 struct Session {
@@ -77,8 +73,6 @@ struct Session {
 
   void clear_input_state();
   void rebuild_input_configuration();
-  void ensure_overlays(bool capture_exclusion);
-  void release_overlays() noexcept;
   void set_capture_exclusion(bool enabled);
   void apply_profile(const layerc::core::GameProfile &updated,
                      bool capture_exclusion);
@@ -93,7 +87,6 @@ struct Session {
       layerc::platform::CompanionSidecarState companion_health);
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
-  [[nodiscard]] bool has_companion_slots() const noexcept;
   [[nodiscard]] bool blocks_all_triggers() const noexcept {
     return visual_health == layerc::platform::VisualSidecarState::invalid;
   }
@@ -133,7 +126,6 @@ struct Session {
   bool uses_raw_input{};
   bool uses_hid{};
   std::string last_input_match;
-  layerc::core::TimePoint last_input_at{};
 };
 
 struct EditSession {

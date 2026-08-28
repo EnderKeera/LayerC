@@ -372,7 +372,63 @@ void CalibrationWindow::update_control_enablement() {
                                                 CB_GETCURSEL, 0, 0) == 1;
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_KEEP_INPUT), !confirmation);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_TIMEOUT), confirmation);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_UNAVAILABLE), TRUE);
+}
+
+bool CalibrationWindow::handle_command(const WPARAM wparam) {
+  const int id = LOWORD(wparam);
+  const int notification = HIWORD(wparam);
+  if ((id == IDC_CAL_PREDICATE || id == IDC_CAL_TRIGGER_MODE) &&
+      notification == CBN_SELCHANGE) {
+    update_control_enablement();
+    update_match_status();
+    return true;
+  }
+  if (id == IDC_CAL_QUALITY && notification == CBN_SELCHANGE) {
+    const auto selection =
+        SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0);
+    quality_ = selection == 0   ? layerc::core::CaptureQuality::low
+               : selection == 2 ? layerc::core::CaptureQuality::exact
+                                : layerc::core::CaptureQuality::balanced;
+    if (capture_)
+      capture_->set_quality(quality_);
+    if (fallback_snapshot_ && capture_) {
+      fallback_snapshot_ = false;
+      frame_.reset();
+      preview_pixels_.clear();
+      begin_fallback_snapshot();
+    }
+    return true;
+  }
+  if (id == IDC_CAL_SAMPLE_COLOR && notification == BN_CLICKED) {
+    sample_target_color();
+    return true;
+  }
+  if (id == IDC_CAL_CAPTURE_TEMPLATE && notification == BN_CLICKED) {
+    capture_template_reference();
+    return true;
+  }
+  if (id == IDC_CAL_IMPORT_TEMPLATE && notification == BN_CLICKED) {
+    import_template_reference();
+    return true;
+  }
+  if (id == IDC_CAL_CLEAR_TEMPLATES && notification == BN_CLICKED) {
+    clear_template_references();
+    return true;
+  }
+  if (id == IDC_CAL_EDIT_TEMPLATE_MASK && notification == BN_CLICKED) {
+    toggle_template_mask_editing();
+    return true;
+  }
+  if (id == IDC_CAL_APPLY && notification == BN_CLICKED) {
+    if (apply())
+      EndDialog(dialog_, IDOK);
+    return true;
+  }
+  if (id == IDCANCEL) {
+    EndDialog(dialog_, IDCANCEL);
+    return true;
+  }
+  return false;
 }
 
 INT_PTR CalibrationWindow::handle_message(const HWND window, const UINT message,
@@ -385,62 +441,10 @@ INT_PTR CalibrationWindow::handle_message(const HWND window, const UINT message,
       return TRUE;
     }
     break;
-  case WM_COMMAND: {
-    const int id = LOWORD(wparam);
-    const int notification = HIWORD(wparam);
-    if ((id == IDC_CAL_PREDICATE || id == IDC_CAL_TRIGGER_MODE) &&
-        notification == CBN_SELCHANGE) {
-      update_control_enablement();
-      update_match_status();
+  case WM_COMMAND:
+    if (handle_command(wparam))
       return TRUE;
-    }
-    if (id == IDC_CAL_QUALITY && notification == CBN_SELCHANGE) {
-      const auto selection =
-          SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0);
-      quality_ = selection == 0   ? layerc::core::CaptureQuality::low
-                 : selection == 2 ? layerc::core::CaptureQuality::exact
-                                  : layerc::core::CaptureQuality::balanced;
-      if (capture_)
-        capture_->set_quality(quality_);
-      if (fallback_snapshot_ && capture_) {
-        fallback_snapshot_ = false;
-        frame_.reset();
-        preview_pixels_.clear();
-        begin_fallback_snapshot();
-      }
-      return TRUE;
-    }
-    if (id == IDC_CAL_SAMPLE_COLOR && notification == BN_CLICKED) {
-      sample_target_color();
-      return TRUE;
-    }
-    if (id == IDC_CAL_CAPTURE_TEMPLATE && notification == BN_CLICKED) {
-      capture_template_reference();
-      return TRUE;
-    }
-    if (id == IDC_CAL_IMPORT_TEMPLATE && notification == BN_CLICKED) {
-      import_template_reference();
-      return TRUE;
-    }
-    if (id == IDC_CAL_CLEAR_TEMPLATES && notification == BN_CLICKED) {
-      clear_template_references();
-      return TRUE;
-    }
-    if (id == IDC_CAL_EDIT_TEMPLATE_MASK && notification == BN_CLICKED) {
-      toggle_template_mask_editing();
-      return TRUE;
-    }
-    if (id == IDC_CAL_APPLY && notification == BN_CLICKED) {
-      if (apply())
-        EndDialog(dialog_, IDOK);
-      return TRUE;
-    }
-    if (id == IDCANCEL) {
-      EndDialog(dialog_, IDCANCEL);
-      return TRUE;
-    }
     break;
-  }
   case WM_DRAWITEM: {
     const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
     if (draw->CtlID == IDC_CAL_PREVIEW) {
@@ -969,17 +973,6 @@ int CalibrationWindow::integer_control(const int id, const int fallback,
   const auto value = GetDlgItemInt(dialog_, id, &translated, FALSE);
   return translated ? std::clamp<int>(static_cast<int>(value), minimum, maximum)
                     : fallback;
-}
-
-std::wstring CalibrationWindow::control_text(const int id) const {
-  const HWND control = GetDlgItem(dialog_, id);
-  const int length = GetWindowTextLengthW(control);
-  std::wstring output(static_cast<std::size_t>(std::max(0, length)) + 1U,
-                      L'\0');
-  if (length != 0)
-    GetWindowTextW(control, output.data(), length + 1);
-  output.resize(static_cast<std::size_t>(std::max(0, length)));
-  return output;
 }
 
 void CalibrationWindow::set_control_text(const int id,

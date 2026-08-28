@@ -30,7 +30,6 @@ public:
   [[nodiscard]] bool contains(const RuntimeInstanceKey &key) const;
   void erase_profile(const std::wstring &profile_key);
   [[nodiscard]] std::size_t size() const noexcept { return active_.size(); }
-  void clear() noexcept { active_.clear(); }
 
 private:
   std::vector<RuntimeInstanceKey> active_;

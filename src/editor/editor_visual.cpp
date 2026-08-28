@@ -49,14 +49,11 @@ std::string unique_observation_id(
     const std::string_view allowed = {}) {
   const std::string base =
       requested.empty() ? "visual-observation" : std::string(requested);
-  auto used = [&](const std::string_view value) {
-    if (!allowed.empty() && value == allowed) return false;
-    return layerc::core::has_observation(profile, value);
-  };
-  std::string candidate = base;
-  for (std::size_t suffix = 2; used(candidate); ++suffix)
-    candidate = base + "-" + std::to_string(suffix);
-  return candidate;
+  return next_unique_id(
+      base, [&](const std::string_view value) {
+        if (!allowed.empty() && value == allowed) return false;
+        return layerc::core::has_observation(profile, value);
+      });
 }
 
 std::wstring visual_mode_label(const layerc::core::VisualTrigger &trigger) {

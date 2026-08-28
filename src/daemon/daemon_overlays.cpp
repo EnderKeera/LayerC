@@ -142,7 +142,7 @@ RECT DaemonApp::overlay_target() const {
 void DaemonApp::reconcile_overlay_runtime() {
   for (auto *session : active_input_sessions_) {
     if (session != nullptr)
-      session->ensure_overlays(capture_exclusion_);
+      session->overlays.ensure(session->profile, capture_exclusion_);
   }
   update_overlays();
 }
@@ -152,7 +152,7 @@ void DaemonApp::quiesce_overlay_runtime() noexcept {
     KillTimer(window_, overlay_render_timer);
   overlay_timer_running_ = false;
   for (auto &session : sessions_)
-    session->release_overlays();
+    session->overlays.release();
   if (edit_session_ != nullptr) {
     edit_session_->overlays.release();
   }

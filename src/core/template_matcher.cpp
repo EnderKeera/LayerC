@@ -25,7 +25,7 @@ std::size_t search_sample_limit(const CaptureQuality quality) noexcept {
 }
 
 double luminance(const RgbPixel pixel) noexcept {
-  return 0.2126 * pixel.red + 0.7152 * pixel.green + 0.0722 * pixel.blue;
+  return rgb_luminance(pixel.red, pixel.green, pixel.blue);
 }
 
 std::uint32_t axis_bound(const CaptureQuality quality,
@@ -49,7 +49,6 @@ struct PreparedSample {
 };
 
 struct PreparedTemplate {
-  std::string hash;
   std::vector<PreparedSample> samples;
   double mean_luma{};
   double luma_variance{};
@@ -77,7 +76,6 @@ void calculate_statistics(const std::span<const PreparedSample> samples,
 PreparedTemplate prepare_template(const TemplateImage &image,
                                   const CaptureQuality quality) {
   PreparedTemplate output;
-  output.hash = image.asset_sha256;
   const auto bound = axis_bound(quality, image);
   const double factor =
       std::min(1.0, static_cast<double>(bound) /
@@ -486,19 +484,357 @@ TemplateImage compact_template_image(const TemplateImage &image,
   return compact.valid() ? compact : image;
 }
 
+namespace {
+
+struct ReferenceSearchContext {
+  ReferenceSearchContext(
+      const TemplateState &state_value,
+      const TemplateReference &definition_value,
+      const PreparedTemplate &reference_value, PixelFrameView frame_value,
+      NormalizedRegion available_region_value,
+      std::span<const NormalizedRegion> unavailable_regions_value,
+      std::uint32_t left_value, std::uint32_t top_value,
+      std::uint32_t right_value, std::uint32_t bottom_value,
+      std::size_t total_budget, std::size_t references_remaining,
+      TemplateMatchResult &result_value);
+
+  bool run();
+
+private:
+  [[nodiscard]] std::size_t calculate_search_budget() const;
+  void keep_candidate(Candidate candidate);
+  double score_candidate(Candidate candidate, std::size_t limit,
+                         bool &exhausted);
+  bool finalize_candidate(Candidate &candidate, bool early);
+  bool search_anchors();
+  void search_coarse_grid();
+  void refine();
+  void finalize();
+
+  const TemplateState &state;
+  const TemplateReference &definition;
+  const PreparedTemplate &reference;
+  PixelFrameView frame;
+  NormalizedRegion available_region;
+  std::span<const NormalizedRegion> unavailable_regions;
+  std::uint32_t left;
+  std::uint32_t top;
+  std::uint32_t right;
+  std::uint32_t bottom;
+  TemplateMatchResult &result;
+  std::vector<RenderedSize> sizes;
+  std::vector<Candidate> candidates;
+  std::size_t reference_start;
+  std::size_t reference_budget;
+  std::size_t final_candidate_cost;
+  std::size_t search_budget;
+  std::size_t coarse_limit;
+  std::size_t refinement_limit;
+  std::size_t early_validation_work{};
+};
+
+ReferenceSearchContext::ReferenceSearchContext(
+    const TemplateState &state_value,
+    const TemplateReference &definition_value,
+    const PreparedTemplate &reference_value, const PixelFrameView frame_value,
+    const NormalizedRegion available_region_value,
+    const std::span<const NormalizedRegion> unavailable_regions_value,
+    const std::uint32_t left_value, const std::uint32_t top_value,
+    const std::uint32_t right_value, const std::uint32_t bottom_value,
+    const std::size_t total_budget,
+    const std::size_t references_remaining, TemplateMatchResult &result_value)
+    : state(state_value), definition(definition_value),
+      reference(reference_value), frame(frame_value),
+      available_region(available_region_value),
+      unavailable_regions(unavailable_regions_value), left(left_value),
+      top(top_value), right(right_value), bottom(bottom_value),
+      result(result_value),
+      sizes(rendered_sizes(state, frame, right - left, bottom - top)),
+      reference_start(result.pixel_comparisons),
+      reference_budget(result.pixel_comparisons +
+                       (total_budget > result.pixel_comparisons
+                            ? total_budget - result.pixel_comparisons
+                            : 0U) /
+                           std::max<std::size_t>(1, references_remaining)),
+      final_candidate_cost(reference.samples.size() * 2U),
+      search_budget(calculate_search_budget()),
+      coarse_limit(reference_start + search_budget * 3U / 4U),
+      refinement_limit(reference_start + search_budget) {
+  candidates.reserve(coarse_candidates);
+}
+
+std::size_t ReferenceSearchContext::calculate_search_budget() const {
+  const auto allowance = reference_budget - result.pixel_comparisons;
+  const auto reserve =
+      std::min<std::size_t>(
+          refinement_candidates,
+          final_candidate_cost == 0 ? 0
+                                    : allowance / final_candidate_cost) *
+      final_candidate_cost;
+  return reference_budget > result.pixel_comparisons + reserve
+             ? reference_budget - result.pixel_comparisons - reserve
+             : allowance / 2U;
+}
+
+void ReferenceSearchContext::keep_candidate(Candidate candidate) {
+  if (candidates.size() < coarse_candidates) {
+    candidates.push_back(std::move(candidate));
+    return;
+  }
+  const auto weakest =
+      std::ranges::min_element(candidates, {}, &Candidate::structure);
+  if (weakest != candidates.end() && candidate.structure > weakest->structure)
+    *weakest = std::move(candidate);
+}
+
+double ReferenceSearchContext::score_candidate(Candidate candidate,
+                                               const std::size_t limit,
+                                               bool &exhausted) {
+  if (result.pixel_comparisons + reference.locator_samples.size() >
+          limit + early_validation_work ||
+      result.pixel_comparisons + reference.locator_samples.size() >
+          reference_budget) {
+    exhausted = true;
+    return -1.0;
+  }
+  if (!candidate_is_available(candidate, frame, available_region,
+                              unavailable_regions))
+    return -1.0;
+  candidate.structure = locator_score(
+      reference.locator_samples, reference.locator_mean_luma,
+      reference.locator_luma_variance, frame, candidate);
+  // locator_score fuses structure and color into one pixel pass, so this is
+  // the complete coarse-stage work charge.
+  result.pixel_comparisons += reference.locator_samples.size();
+  ++result.candidates_evaluated;
+  const double score = candidate.structure;
+  keep_candidate(std::move(candidate));
+  return score;
+}
+
+bool ReferenceSearchContext::finalize_candidate(Candidate &candidate,
+                                                const bool early) {
+  if (result.pixel_comparisons + final_candidate_cost > reference_budget)
+    return false;
+  candidate.structure = structure_score(
+      reference.samples, reference.mean_luma, reference.luma_variance, frame,
+      candidate.left, candidate.top, candidate.width, candidate.height);
+  result.pixel_comparisons += reference.samples.size();
+  const double coverage =
+      color_coverage(reference, frame, candidate, state.color_tolerance);
+  result.pixel_comparisons += reference.samples.size();
+  if (early) early_validation_work += final_candidate_cost;
+  const double confidence = 0.70 * candidate.structure + 0.30 * coverage;
+  if (confidence > result.confidence) {
+    result.confidence = confidence;
+    result.reference_sha256 = definition.asset_sha256;
+  }
+  return true;
+}
+
+bool ReferenceSearchContext::search_anchors() {
+  // Find an anchor color once and project every allowed size to an origin.
+  const auto locator_cost = reference.locator_samples.size();
+  const auto coarse_budget = search_budget * 3U / 4U;
+  const auto scale_reserve =
+      std::min<std::size_t>(coarse_budget, locator_cost * sizes.size());
+  const auto anchor_budget = coarse_budget > scale_reserve
+                                 ? (coarse_budget - scale_reserve) / 2U
+                                 : 0U;
+  const auto anchor_limit = reference_start + anchor_budget;
+  const auto anchor_allowance =
+      anchor_limit > result.pixel_comparisons
+          ? anchor_limit - result.pixel_comparisons
+          : 0U;
+  const auto search_pixels =
+      static_cast<std::uint64_t>(right - left) * (bottom - top);
+  const auto anchor_step = std::max<std::uint32_t>(
+      1, anchor_allowance == 0
+             ? std::numeric_limits<std::uint32_t>::max()
+             : static_cast<std::uint32_t>(std::ceil(std::sqrt(
+                   static_cast<double>(search_pixels) /
+                   static_cast<double>(anchor_allowance)))));
+  const auto &anchor = reference.locator_samples.front();
+  const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
+  bool exhausted = anchor_allowance == 0;
+  for (std::uint32_t y = top; y < bottom && !exhausted; y += anchor_step) {
+    for (std::uint32_t x = left; x < right; x += anchor_step) {
+      if (result.pixel_comparisons + 1U >
+          anchor_limit + early_validation_work) {
+        exhausted = true;
+        break;
+      }
+      const auto pixel =
+          frame.pixels[static_cast<std::size_t>(y) * stride + x];
+      ++result.pixel_comparisons;
+      if (!color_is_near(pixel, anchor.color, state.color_tolerance)) continue;
+      for (const auto size : sizes) {
+        const auto anchor_x = static_cast<std::uint32_t>(
+            anchor.x * static_cast<float>(size.width));
+        const auto anchor_y = static_cast<std::uint32_t>(
+            anchor.y * static_cast<float>(size.height));
+        const auto candidate_left = static_cast<std::int64_t>(x) - anchor_x;
+        const auto candidate_top = static_cast<std::int64_t>(y) - anchor_y;
+        if (candidate_left < left || candidate_top < top ||
+            candidate_left + size.width > right ||
+            candidate_top + size.height > bottom)
+          continue;
+        Candidate candidate{
+            .left = static_cast<std::uint32_t>(candidate_left),
+            .top = static_cast<std::uint32_t>(candidate_top),
+            .width = size.width,
+            .height = size.height,
+            .coarse_step = anchor_step};
+        const double score =
+            score_candidate(candidate, anchor_limit, exhausted);
+        if (score >= 0.90 && early_validation_work == 0U &&
+            finalize_candidate(candidate, true) &&
+            result.confidence >= state.confidence_threshold) {
+          result.matched = true;
+          return true;
+        }
+        if (exhausted) break;
+      }
+      if (exhausted) break;
+    }
+  }
+  return false;
+}
+
+void ReferenceSearchContext::search_coarse_grid() {
+  for (std::size_t size_index = 0; size_index < sizes.size(); ++size_index) {
+    const auto size = sizes[size_index];
+    const auto positions_x = right - left - size.width + 1U;
+    const auto positions_y = bottom - top - size.height + 1U;
+    const auto remaining =
+        coarse_limit + early_validation_work > result.pixel_comparisons
+            ? coarse_limit + early_validation_work - result.pixel_comparisons
+            : 0U;
+    if (remaining < reference.locator_samples.size()) break;
+    const auto sizes_remaining = sizes.size() - size_index;
+    const auto candidate_cap = std::max<std::size_t>(
+        1, remaining /
+               (reference.locator_samples.size() *
+                std::max<std::size_t>(1, sizes_remaining)));
+    const auto total_positions =
+        static_cast<std::uint64_t>(positions_x) * positions_y;
+    const auto step = std::max<std::uint32_t>(
+        1, static_cast<std::uint32_t>(std::ceil(std::sqrt(
+               static_cast<double>(total_positions) / candidate_cap))));
+    const auto score_position = [&](const std::uint32_t x,
+                                    const std::uint32_t y,
+                                    bool &exhausted) {
+      Candidate candidate{.left = left + x,
+                          .top = top + y,
+                          .width = size.width,
+                          .height = size.height,
+                          .coarse_step = step};
+      (void)score_candidate(std::move(candidate), coarse_limit, exhausted);
+    };
+
+    bool exhausted{};
+    for (std::uint32_t y = 0; y < positions_y && !exhausted; y += step) {
+      for (std::uint32_t x = 0; x < positions_x; x += step) {
+        score_position(x, y, exhausted);
+        if (exhausted) break;
+      }
+      if (!exhausted && positions_x > 1U &&
+          (positions_x - 1U) % step != 0U)
+        score_position(positions_x - 1U, y, exhausted);
+    }
+    if (!exhausted && positions_y > 1U &&
+        (positions_y - 1U) % step != 0U) {
+      const auto last_y = positions_y - 1U;
+      for (std::uint32_t x = 0; x < positions_x; x += step) {
+        score_position(x, last_y, exhausted);
+        if (exhausted) break;
+      }
+      if (!exhausted && positions_x > 1U &&
+          (positions_x - 1U) % step != 0U)
+        score_position(positions_x - 1U, last_y, exhausted);
+    }
+  }
+}
+
+void ReferenceSearchContext::refine() {
+  // Logarithmic hill search reaches pixel precision without a full scan.
+  for (auto &candidate : candidates) {
+    auto delta = candidate.coarse_step / 2U;
+    while (delta > 0U) {
+      Candidate best = candidate;
+      for (const int y_direction : {-1, 0, 1}) {
+        for (const int x_direction : {-1, 0, 1}) {
+          if (x_direction == 0 && y_direction == 0) continue;
+          const auto maximum_left = right - candidate.width;
+          const auto maximum_top = bottom - candidate.height;
+          const auto next_left = static_cast<std::uint32_t>(
+              std::clamp<std::int64_t>(
+                  static_cast<std::int64_t>(candidate.left) +
+                      static_cast<std::int64_t>(x_direction) * delta,
+                  left, maximum_left));
+          const auto next_top = static_cast<std::uint32_t>(
+              std::clamp<std::int64_t>(
+                  static_cast<std::int64_t>(candidate.top) +
+                      static_cast<std::int64_t>(y_direction) * delta,
+                  top, maximum_top));
+          if (next_left == candidate.left && next_top == candidate.top)
+            continue;
+          if (result.pixel_comparisons + reference.search_samples.size() >
+              refinement_limit + early_validation_work)
+            break;
+          Candidate next{.left = next_left,
+                         .top = next_top,
+                         .width = candidate.width,
+                         .height = candidate.height,
+                         .coarse_step = 1};
+          if (!candidate_is_available(next, frame, available_region,
+                                      unavailable_regions))
+            continue;
+          next.structure = structure_score(
+              reference.search_samples, reference.search_mean_luma,
+              reference.search_luma_variance, frame, next.left, next.top,
+              next.width, next.height);
+          result.pixel_comparisons += reference.search_samples.size();
+          ++result.candidates_evaluated;
+          if (next.structure > best.structure) best = next;
+        }
+      }
+      candidate = best;
+      if (delta == 1U) break;
+      delta = std::max<std::uint32_t>(1, delta / 2U);
+    }
+  }
+}
+
+void ReferenceSearchContext::finalize() {
+  std::ranges::sort(candidates, std::greater{}, &Candidate::structure);
+  std::size_t finalized{};
+  for (auto &candidate : candidates) {
+    if (finalized++ >= refinement_candidates) break;
+    if (!finalize_candidate(candidate, false)) break;
+  }
+}
+
+bool ReferenceSearchContext::run() {
+  if (sizes.empty()) return false;
+  if (search_anchors()) return true;
+  search_coarse_grid();
+  refine();
+  finalize();
+  return false;
+}
+
+} // namespace
+
 class CpuTemplateMatcher::Impl {
 public:
-  TemplateMatchResult evaluate(const TemplateState &state,
-                               const std::span<const TemplateImage> images,
-                               const PixelFrameView frame,
-                               const CaptureQuality quality,
-                               const NormalizedRegion available_region,
-                               const std::span<const NormalizedRegion>
-                                   unavailable_regions) {
+  TemplateMatchResult evaluate(
+      const TemplateState &state, const std::span<const TemplateImage> images,
+      const PixelFrameView frame, const CaptureQuality quality,
+      const NormalizedRegion available_region,
+      const std::span<const NormalizedRegion> unavailable_regions) {
     TemplateMatchResult result;
     if (!frame.valid()) return result;
-    const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
-    (void)stride;
     const auto left = static_cast<std::uint32_t>(std::clamp(
         std::floor(state.search_region.x * frame.width), 0.0,
         static_cast<double>(frame.width)));
@@ -541,292 +877,11 @@ public:
           reference.locator_samples.empty())
         continue;
 
-      std::vector<Candidate> candidates;
-      candidates.reserve(coarse_candidates);
-      const auto sizes = rendered_sizes(state, frame, right - left,
-                                        bottom - top);
-      if (sizes.empty()) continue;
-      const auto references_remaining =
-          std::max<std::size_t>(1, state.references.size() -
-                                      reference_index + 1U);
-      const auto remaining_budget =
-          budget > result.pixel_comparisons
-              ? budget - result.pixel_comparisons
-              : 0U;
-      const auto reference_start = result.pixel_comparisons;
-      const auto reference_budget =
-          result.pixel_comparisons + remaining_budget / references_remaining;
-      const auto reference_allowance =
-          reference_budget - result.pixel_comparisons;
-      const auto final_candidate_cost =
-          reference.samples.size() * 2U;
-      const auto final_reserve =
-          std::min<std::size_t>(
-              refinement_candidates,
-              final_candidate_cost == 0
-                  ? 0
-                  : reference_allowance / final_candidate_cost) *
-          final_candidate_cost;
-      const auto search_budget =
-          reference_budget >
-                  result.pixel_comparisons + final_reserve
-              ? reference_budget - result.pixel_comparisons - final_reserve
-              : reference_allowance / 2U;
-      const auto coarse_budget = search_budget * 3U / 4U;
-      const auto coarse_limit = reference_start + coarse_budget;
-      const auto refinement_limit = reference_start + search_budget;
-      std::size_t early_validation_work{};
-
-      const auto keep_candidate = [&](Candidate candidate) {
-        if (candidates.size() < coarse_candidates) {
-          candidates.push_back(std::move(candidate));
-          return;
-        }
-        const auto weakest =
-            std::ranges::min_element(candidates, {}, &Candidate::structure);
-        if (weakest != candidates.end() &&
-            candidate.structure > weakest->structure)
-          *weakest = std::move(candidate);
-      };
-
-      const auto score_candidate = [&](Candidate candidate,
-                                       const std::size_t limit,
-                                       bool &exhausted) -> double {
-        if (result.pixel_comparisons + reference.locator_samples.size() >
-                limit + early_validation_work ||
-            result.pixel_comparisons + reference.locator_samples.size() >
-                reference_budget) {
-          exhausted = true;
-          return -1.0;
-        }
-        if (!candidate_is_available(candidate, frame, available_region,
-                                    unavailable_regions))
-          return -1.0;
-        candidate.structure = locator_score(
-            reference.locator_samples, reference.locator_mean_luma,
-            reference.locator_luma_variance, frame, candidate);
-        // locator_score fuses structure and color into one pixel pass, so this
-        // is the complete coarse-stage work charge.
-        result.pixel_comparisons += reference.locator_samples.size();
-        ++result.candidates_evaluated;
-        const double score = candidate.structure;
-        keep_candidate(std::move(candidate));
-        return score;
-      };
-      const auto finalize_candidate = [&](Candidate &candidate,
-                                          const bool early) {
-        if (result.pixel_comparisons + final_candidate_cost >
-            reference_budget)
-          return false;
-        candidate.structure = structure_score(
-            reference.samples, reference.mean_luma,
-            reference.luma_variance, frame, candidate.left, candidate.top,
-            candidate.width, candidate.height);
-        result.pixel_comparisons += reference.samples.size();
-        const double coverage = color_coverage(
-            reference, frame, candidate, state.color_tolerance);
-        result.pixel_comparisons += reference.samples.size();
-        if (early) early_validation_work += final_candidate_cost;
-        const double confidence =
-            0.70 * candidate.structure + 0.30 * coverage;
-        if (confidence > result.confidence) {
-          result.confidence = confidence;
-          result.reference_sha256 = definition.asset_sha256;
-        }
-        return true;
-      };
-
-      // Find an anchor color across the region once and project every
-      // pixel-distinct allowed size back to a candidate origin. Intermediate
-      // scales are therefore searchable without repeating a full positional
-      // scan for every size.
-      const auto locator_cost = reference.locator_samples.size();
-      const auto scale_reserve = std::min<std::size_t>(
-          coarse_budget, locator_cost * sizes.size());
-      const auto anchor_budget =
-          coarse_budget > scale_reserve
-              ? (coarse_budget - scale_reserve) / 2U
-              : 0U;
-      const auto anchor_limit = reference_start + anchor_budget;
-      const auto anchor_allowance =
-          anchor_limit > result.pixel_comparisons
-              ? anchor_limit - result.pixel_comparisons
-              : 0U;
-      const auto search_pixels = static_cast<std::uint64_t>(right - left) *
-                                 (bottom - top);
-      const auto anchor_step = std::max<std::uint32_t>(
-          1, anchor_allowance == 0
-                 ? std::numeric_limits<std::uint32_t>::max()
-                 : static_cast<std::uint32_t>(std::ceil(std::sqrt(
-                       static_cast<double>(search_pixels) /
-                       static_cast<double>(anchor_allowance)))));
-      const auto &anchor = reference.locator_samples.front();
-      bool anchor_exhausted = anchor_allowance == 0;
-      for (std::uint32_t y = top; y < bottom && !anchor_exhausted;
-           y += anchor_step) {
-        for (std::uint32_t x = left; x < right; x += anchor_step) {
-          if (result.pixel_comparisons + 1U >
-              anchor_limit + early_validation_work) {
-            anchor_exhausted = true;
-            break;
-          }
-          const auto pixel =
-              frame.pixels[static_cast<std::size_t>(y) * stride + x];
-          ++result.pixel_comparisons;
-          if (!color_is_near(pixel, anchor.color, state.color_tolerance))
-            continue;
-          for (const auto size : sizes) {
-            const auto anchor_x = static_cast<std::uint32_t>(
-                anchor.x * static_cast<float>(size.width));
-            const auto anchor_y = static_cast<std::uint32_t>(
-                anchor.y * static_cast<float>(size.height));
-            const auto candidate_left =
-                static_cast<std::int64_t>(x) - anchor_x;
-            const auto candidate_top =
-                static_cast<std::int64_t>(y) - anchor_y;
-            if (candidate_left < left || candidate_top < top ||
-                candidate_left + size.width > right ||
-                candidate_top + size.height > bottom)
-              continue;
-            Candidate candidate{
-                .left = static_cast<std::uint32_t>(candidate_left),
-                .top = static_cast<std::uint32_t>(candidate_top),
-                .width = size.width,
-                .height = size.height,
-                .coarse_step = anchor_step};
-            const double score = score_candidate(candidate, anchor_limit,
-                                                  anchor_exhausted);
-            // A coarse locator is only a prefilter. Validate one promising
-            // anchor candidate against the full reference immediately; return
-            // early only when that position meets the configured confidence.
-            if (score >= 0.90 && early_validation_work == 0U &&
-                finalize_candidate(candidate, true) &&
-                result.confidence >= state.confidence_threshold) {
-              result.matched = true;
-              return result;
-            }
-            if (anchor_exhausted) break;
-          }
-          if (anchor_exhausted) break;
-        }
-      }
-
-      for (std::size_t size_index = 0; size_index < sizes.size();
-           ++size_index) {
-        const auto size = sizes[size_index];
-        const auto width = size.width;
-        const auto height = size.height;
-        const auto positions_x = right - left - width + 1U;
-        const auto positions_y = bottom - top - height + 1U;
-        const auto remaining_coarse =
-            coarse_limit + early_validation_work > result.pixel_comparisons
-                ? coarse_limit + early_validation_work -
-                      result.pixel_comparisons
-                : 0U;
-        if (remaining_coarse < reference.locator_samples.size()) break;
-        const auto sizes_remaining = sizes.size() - size_index;
-        const auto candidate_cap = std::max<std::size_t>(
-            1, remaining_coarse /
-                   (reference.locator_samples.size() *
-                    std::max<std::size_t>(1, sizes_remaining)));
-        const auto total_positions =
-            static_cast<std::uint64_t>(positions_x) * positions_y;
-        const auto step = std::max<std::uint32_t>(
-            1, static_cast<std::uint32_t>(std::ceil(std::sqrt(
-                   static_cast<double>(total_positions) / candidate_cap))));
-        const auto score_position = [&](const std::uint32_t x,
-                                        const std::uint32_t y,
-                                        bool &exhausted) {
-          Candidate candidate{.left = left + x,
-                              .top = top + y,
-                              .width = width,
-                              .height = height,
-                              .coarse_step = step};
-          (void)score_candidate(std::move(candidate), coarse_limit,
-                                exhausted);
-        };
-
-        bool exhausted{};
-        for (std::uint32_t y = 0; y < positions_y && !exhausted; y += step) {
-          for (std::uint32_t x = 0; x < positions_x; x += step) {
-            score_position(x, y, exhausted);
-            if (exhausted) break;
-          }
-          if (!exhausted && positions_x > 1U &&
-              (positions_x - 1U) % step != 0U)
-            score_position(positions_x - 1U, y, exhausted);
-        }
-        if (!exhausted && positions_y > 1U &&
-            (positions_y - 1U) % step != 0U) {
-          const auto last_y = positions_y - 1U;
-          for (std::uint32_t x = 0; x < positions_x; x += step) {
-            score_position(x, last_y, exhausted);
-            if (exhausted) break;
-          }
-          if (!exhausted && positions_x > 1U &&
-              (positions_x - 1U) % step != 0U)
-            score_position(positions_x - 1U, last_y, exhausted);
-        }
-      }
-
-      // Refine each strong coarse candidate with a logarithmic hill search.
-      // This reaches pixel precision without spending the bounded budget on a
-      // full-resolution exhaustive scan.
-      for (auto &candidate : candidates) {
-        auto delta = candidate.coarse_step / 2U;
-        while (delta > 0U) {
-          Candidate best = candidate;
-          for (const int y_direction : {-1, 0, 1}) {
-            for (const int x_direction : {-1, 0, 1}) {
-              if (x_direction == 0 && y_direction == 0) continue;
-              const auto maximum_left = right - candidate.width;
-              const auto maximum_top = bottom - candidate.height;
-              const auto next_left = static_cast<std::uint32_t>(std::clamp<
-                  std::int64_t>(
-                  static_cast<std::int64_t>(candidate.left) +
-                      static_cast<std::int64_t>(x_direction) * delta,
-                  left, maximum_left));
-              const auto next_top = static_cast<std::uint32_t>(std::clamp<
-                  std::int64_t>(
-                  static_cast<std::int64_t>(candidate.top) +
-                      static_cast<std::int64_t>(y_direction) * delta,
-                  top, maximum_top));
-              if (next_left == candidate.left &&
-                  next_top == candidate.top)
-                continue;
-              if (result.pixel_comparisons +
-                      reference.search_samples.size() >
-                  refinement_limit + early_validation_work)
-                break;
-              Candidate next{.left = next_left,
-                             .top = next_top,
-                             .width = candidate.width,
-                             .height = candidate.height,
-                             .coarse_step = 1};
-              if (!candidate_is_available(next, frame, available_region,
-                                          unavailable_regions))
-                continue;
-              next.structure = structure_score(
-                  reference.search_samples, reference.search_mean_luma,
-                  reference.search_luma_variance, frame, next.left, next.top,
-                  next.width, next.height);
-              result.pixel_comparisons += reference.search_samples.size();
-              ++result.candidates_evaluated;
-              if (next.structure > best.structure) best = next;
-            }
-          }
-          candidate = best;
-          if (delta == 1U) break;
-          delta = std::max<std::uint32_t>(1, delta / 2U);
-        }
-      }
-      std::ranges::sort(candidates, std::greater{}, &Candidate::structure);
-
-      std::size_t finalized{};
-      for (auto &candidate : candidates) {
-        if (finalized++ >= refinement_candidates) break;
-        if (!finalize_candidate(candidate, false)) break;
-      }
+      ReferenceSearchContext search(
+          state, definition, reference, frame, available_region,
+          unavailable_regions, left, top, right, bottom, budget,
+          state.references.size() - reference_index + 1U, result);
+      if (search.run()) return result;
       if (result.pixel_comparisons >= budget) break;
     }
     result.matched = result.confidence >= state.confidence_threshold;

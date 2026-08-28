@@ -6,15 +6,6 @@
 namespace winrt::LayerC::GameBar::implementation {
 namespace {
 
-std::optional<std::uint32_t> panel_slot(const hstring &extension_id) {
-  constexpr std::wstring_view prefix = L"PanelSlot";
-  const std::wstring_view id(extension_id);
-  if (!id.starts_with(prefix) || id.size() != prefix.size() + 1U ||
-      id.back() < L'1' || id.back() > L'8')
-    return std::nullopt;
-  return static_cast<std::uint32_t>(id.back() - L'1');
-}
-
 hstring remaining_text(const layerc::core::CompanionSnapshotItem &item) {
   if (item.is_ready)
     return L"Ready";

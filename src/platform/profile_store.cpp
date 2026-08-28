@@ -86,18 +86,6 @@ std::filesystem::path visual_directory() {
   return profile_directory() / L"_visual";
 }
 
-std::filesystem::path automation_directory() {
-  return profile_directory() / L"_automation";
-}
-
-std::filesystem::path automation_state_directory() {
-  return profile_directory() / L"_state";
-}
-
-std::filesystem::path companion_directory() {
-  return profile_directory() / L"_companion";
-}
-
 std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path) {
   if (profile_path.filename().empty())
@@ -704,14 +692,6 @@ load_automation_sidecar(const std::filesystem::path &profile_path,
           .source_path = std::move(result.source_path)};
 }
 
-bool write_automation_sidecar(
-    const std::filesystem::path &profile_path,
-    const layerc::core::AutomationProfile &automation_profile,
-    const layerc::core::GameProfile &base_profile) {
-  return SidecarStore<AutomationSidecarCodec>{}.write(
-      automation_sidecar_path(profile_path), automation_profile, base_profile);
-}
-
 CompanionSidecarLoad
 load_companion_sidecar(const std::filesystem::path &profile_path,
                        const layerc::core::GameProfile &base_profile) {
@@ -721,14 +701,6 @@ load_companion_sidecar(const std::filesystem::path &profile_path,
           .profile = std::move(result.profile),
           .error = std::move(result.error),
           .source_path = std::move(result.source_path)};
-}
-
-bool write_companion_sidecar(
-    const std::filesystem::path &profile_path,
-    const layerc::core::CompanionProfile &companion_profile,
-    const layerc::core::GameProfile &base_profile) {
-  return SidecarStore<CompanionSidecarCodec>{}.write(
-      companion_sidecar_path(profile_path), companion_profile, base_profile);
 }
 
 AutomationStateLoad load_automation_state(

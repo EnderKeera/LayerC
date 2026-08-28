@@ -20,9 +20,6 @@ inline constexpr std::size_t isolated_visual_max_message_bytes =
 inline constexpr std::uint32_t isolated_visual_heartbeat_ms = 1'000;
 inline constexpr std::uint32_t isolated_visual_watchdog_ms = 2'000;
 static_assert(isolated_visual_heartbeat_ms < isolated_visual_watchdog_ms);
-inline constexpr std::size_t isolated_visual_max_queued_bytes =
-    4U * isolated_visual_max_message_bytes;
-
 struct IsolatedProtocolError {
   std::string message;
 };

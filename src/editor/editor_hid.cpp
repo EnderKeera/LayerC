@@ -421,16 +421,10 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
       return TRUE;
     }
   }
-  if (message == WM_DRAWITEM) {
-    state->editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-                               layerc::platform::EditorControlRole::button);
-    return TRUE;
-  }
-  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
-    return state->editor->color_message(message, wparam, lparam);
   if (message == WM_DESTROY)
     unregister_devices(*state);
-  return FALSE;
+  return state->editor->dialog_theme_message(window, message, wparam, lparam)
+      .value_or(FALSE);
 }
 
 } // namespace layerc::editor

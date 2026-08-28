@@ -288,26 +288,29 @@ PackOperationResult export_profile_pack(
                  : failure("pack file could not be written");
 }
 
-PackValidationResult
-validate_profile_pack(const std::filesystem::path &source) {
+namespace {
+
+using ArchiveValidationResult = std::variant<EntryMap, PackError>;
+
+ArchiveValidationResult
+validate_archive_entries(const std::filesystem::path &source) {
   const auto archive_bytes = read_file(source, max_pack_bytes);
   if (!archive_bytes.has_value())
-    return validation_failure("pack could not be read or exceeds 128 MiB");
+    return PackError{"pack could not be read or exceeds 128 MiB"};
 
   mz_zip_archive zip{};
   if (!mz_zip_reader_init_mem(&zip, archive_bytes->data(),
                               archive_bytes->size(), 0))
-    return validation_failure("file is not a valid ZIP archive");
+    return PackError{"file is not a valid ZIP archive"};
   const auto close_zip = [](mz_zip_archive *archive) {
     (void)mz_zip_reader_end(archive);
   };
-  std::unique_ptr<mz_zip_archive, decltype(close_zip)> zip_guard{
-      &zip, close_zip};
-  if (mz_zip_is_zip64(&zip))
-    return validation_failure("ZIP64 packs are not supported");
+  std::unique_ptr<mz_zip_archive, decltype(close_zip)> zip_guard{&zip,
+                                                                 close_zip};
+  if (mz_zip_is_zip64(&zip)) return PackError{"ZIP64 packs are not supported"};
   const auto count = mz_zip_reader_get_num_files(&zip);
   if (count == 0 || count > max_pack_entries)
-    return validation_failure("pack must contain between 1 and 256 entries");
+    return PackError{"pack must contain between 1 and 256 entries"};
 
   EntryMap entries;
   std::set<std::wstring, std::less<>> folded_paths;
@@ -315,99 +318,52 @@ validate_profile_pack(const std::filesystem::path &source) {
   for (mz_uint index = 0; index < count; ++index) {
     mz_zip_archive_file_stat stat{};
     if (!mz_zip_reader_file_stat(&zip, index, &stat))
-      return validation_failure("pack central directory is invalid");
+      return PackError{"pack central directory is invalid"};
     if (stat.m_is_directory)
-      return validation_failure("directory entries are not allowed");
+      return PackError{"directory entries are not allowed"};
     if (stat.m_is_encrypted || !stat.m_is_supported)
-      return validation_failure(
-          "encrypted or unsupported ZIP entries are not allowed");
+      return PackError{"encrypted or unsupported ZIP entries are not allowed"};
     const auto unix_mode = (stat.m_external_attr >> 16U) & 0170000U;
     if (unix_mode == 0120000U ||
         (stat.m_external_attr & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)
-      return validation_failure("symlink or reparse entries are not allowed");
+      return PackError{"symlink or reparse entries are not allowed"};
     const auto filename_size =
         mz_zip_reader_get_filename(&zip, index, nullptr, 0);
     if (filename_size <= 1U || filename_size > 4096U)
-      return validation_failure("pack entry name is empty or too long");
+      return PackError{"pack entry name is empty or too long"};
     std::string path(static_cast<std::size_t>(filename_size) - 1U, '\0');
     if (mz_zip_reader_get_filename(&zip, index, path.data(), filename_size) !=
         filename_size)
-      return validation_failure("pack entry name could not be read");
+      return PackError{"pack entry name could not be read"};
     if (!safe_entry_path(path))
-      return validation_failure("unsafe pack entry path: " + path);
+      return PackError{"unsafe pack entry path: " + path};
     const auto folded = platform::try_casefold_path(path);
     if (!folded.has_value() || !folded_paths.insert(*folded).second)
-      return validation_failure("duplicate or case-colliding pack entry: " +
-                                path);
+      return PackError{"duplicate or case-colliding pack entry: " + path};
     if (stat.m_uncomp_size > max_pack_bytes ||
         total_uncompressed > max_pack_bytes - stat.m_uncomp_size)
-      return validation_failure("pack expands beyond 128 MiB");
+      return PackError{"pack expands beyond 128 MiB"};
     total_uncompressed += stat.m_uncomp_size;
     std::vector<std::byte> bytes(static_cast<std::size_t>(stat.m_uncomp_size));
     if (!mz_zip_reader_extract_to_mem(&zip, index, bytes.data(), bytes.size(),
                                       0))
-      return validation_failure("pack entry failed CRC or decompression: " +
-                                path);
+      return PackError{"pack entry failed CRC or decompression: " + path};
     entries.emplace(std::move(path), std::move(bytes));
   }
   if (!mz_zip_validate_archive(&zip, 0))
-    return validation_failure("ZIP archive validation failed");
-  zip_guard.reset();
+    return PackError{"ZIP archive validation failed"};
+  return entries;
+}
 
-  const auto manifest_entry = entries.find("manifest.json");
-  if (manifest_entry == entries.end() ||
-      manifest_entry->second.size() > core::max_profile_json_bytes)
-    return validation_failure("manifest.json is missing or exceeds 256 KiB");
-  const auto manifest_source = as_string(manifest_entry->second);
-  const auto parsed_manifest = core::json::parse(manifest_source);
-  const auto *manifest = std::get_if<core::json::Value>(&parsed_manifest);
-  if (manifest == nullptr || !manifest->is_object() ||
-      !exact_fields(*manifest, {"schemaVersion", "kind", "producerVersion",
-                                "profiles", "assets"}))
-    return validation_failure("manifest root is invalid or has unknown fields");
-  const auto manifest_schema = required_unsigned(*manifest, "schemaVersion");
-  const auto kind = required_string(*manifest, "kind");
-  const auto producer = required_string(*manifest, "producerVersion");
-  const auto *profile_values = required(*manifest, "profiles");
-  const auto *asset_values = required(*manifest, "assets");
-  if (manifest_schema != 1U || kind != "layerc-profile-pack" ||
-      !producer.has_value() || profile_values == nullptr ||
-      !profile_values->is_array() || asset_values == nullptr ||
-      !asset_values->is_array())
-    return validation_failure(
-        "manifest identity or collection fields are invalid");
-  if (profile_values->as_array().empty() ||
-      profile_values->as_array().size() > max_pack_profiles)
-    return validation_failure(
-        "manifest must declare between 1 and 64 profiles");
+} // namespace
 
-  ValidatedPack pack;
-  pack.producer_version = *producer;
-  std::set<std::string, std::less<>> declared_paths{"manifest.json"};
-  for (const auto &value : asset_values->as_array()) {
-    if (!exact_fields(value, {"sha256", "path", "size"}))
-      return validation_failure(
-          "asset descriptor has unknown or missing fields");
-    const auto hash = required_string(value, "sha256");
-    const auto path = required_string(value, "path");
-    const auto size = required_unsigned(value, "size");
-    if (!hash.has_value() || !core::is_lowercase_sha256(*hash) ||
-        !path.has_value() || !size.has_value() ||
-        *size > max_pack_asset_bytes || *path != "assets/" + *hash + ".png")
-      return validation_failure("asset descriptor is invalid");
-    const auto found = entries.find(*path);
-    if (found == entries.end() || found->second.size() != *size ||
-        core::sha256(found->second) != *hash)
-      return validation_failure("asset size or SHA-256 mismatch: " + *hash);
-    if (!declared_paths.insert(*path).second ||
-        !pack.assets
-             .emplace(*hash, PackAsset{.sha256 = *hash, .bytes = found->second})
-             .second)
-      return validation_failure("duplicate asset declaration: " + *hash);
-  }
+namespace {
 
+PackValidationResult validate_profile_descriptors(
+    const core::json::Value &profile_values, const EntryMap &entries,
+    ValidatedPack pack, std::set<std::string, std::less<>> declared_paths) {
   std::set<std::string, std::less<>> profile_ids;
-  for (const auto &value : profile_values->as_array()) {
+  for (const auto &value : profile_values.as_array()) {
     if (!exact_fields(value,
                       {"id", "suggestedFilename", "base", "modules", "assets"}))
       return validation_failure(
@@ -578,12 +534,88 @@ validate_profile_pack(const std::filesystem::path &source) {
   return pack;
 }
 
-PackOperationResult
-import_profile_pack(const ValidatedPack &pack,
-                    const std::span<const ImportChoice> choices,
-                    const std::filesystem::path &profile_directory) {
+} // namespace
+
+PackValidationResult
+validate_profile_pack(const std::filesystem::path &source) {
+  auto archive = validate_archive_entries(source);
+  if (const auto *error = std::get_if<PackError>(&archive)) return *error;
+  auto entries = std::move(std::get<EntryMap>(archive));
+
+  const auto manifest_entry = entries.find("manifest.json");
+  if (manifest_entry == entries.end() ||
+      manifest_entry->second.size() > core::max_profile_json_bytes)
+    return validation_failure("manifest.json is missing or exceeds 256 KiB");
+  const auto manifest_source = as_string(manifest_entry->second);
+  const auto parsed_manifest = core::json::parse(manifest_source);
+  const auto *manifest = std::get_if<core::json::Value>(&parsed_manifest);
+  if (manifest == nullptr || !manifest->is_object() ||
+      !exact_fields(*manifest, {"schemaVersion", "kind", "producerVersion",
+                                "profiles", "assets"}))
+    return validation_failure("manifest root is invalid or has unknown fields");
+  const auto manifest_schema = required_unsigned(*manifest, "schemaVersion");
+  const auto kind = required_string(*manifest, "kind");
+  const auto producer = required_string(*manifest, "producerVersion");
+  const auto *profile_values = required(*manifest, "profiles");
+  const auto *asset_values = required(*manifest, "assets");
+  if (manifest_schema != 1U || kind != "layerc-profile-pack" ||
+      !producer.has_value() || profile_values == nullptr ||
+      !profile_values->is_array() || asset_values == nullptr ||
+      !asset_values->is_array())
+    return validation_failure(
+        "manifest identity or collection fields are invalid");
+  if (profile_values->as_array().empty() ||
+      profile_values->as_array().size() > max_pack_profiles)
+    return validation_failure(
+        "manifest must declare between 1 and 64 profiles");
+
+  ValidatedPack pack;
+  pack.producer_version = *producer;
+  std::set<std::string, std::less<>> declared_paths{"manifest.json"};
+  for (const auto &value : asset_values->as_array()) {
+    if (!exact_fields(value, {"sha256", "path", "size"}))
+      return validation_failure(
+          "asset descriptor has unknown or missing fields");
+    const auto hash = required_string(value, "sha256");
+    const auto path = required_string(value, "path");
+    const auto size = required_unsigned(value, "size");
+    if (!hash.has_value() || !core::is_lowercase_sha256(*hash) ||
+        !path.has_value() || !size.has_value() ||
+        *size > max_pack_asset_bytes || *path != "assets/" + *hash + ".png")
+      return validation_failure("asset descriptor is invalid");
+    const auto found = entries.find(*path);
+    if (found == entries.end() || found->second.size() != *size ||
+        core::sha256(found->second) != *hash)
+      return validation_failure("asset size or SHA-256 mismatch: " + *hash);
+    if (!declared_paths.insert(*path).second ||
+        !pack.assets
+             .emplace(*hash, PackAsset{.sha256 = *hash, .bytes = found->second})
+             .second)
+      return validation_failure("duplicate asset declaration: " + *hash);
+  }
+
+  return validate_profile_descriptors(*profile_values, entries, std::move(pack),
+                                      std::move(declared_paths));
+}
+
+namespace {
+
+struct ImportPlan {
+  std::vector<platform::ProfileFileMutation> mutations;
+  std::set<std::string, std::less<>> required_assets;
+};
+
+using ImportPlanResult = std::variant<ImportPlan, PackError>;
+
+ImportPlanResult plan_failure(std::string message) {
+  return PackError{std::move(message)};
+}
+
+ImportPlanResult build_import_plan(
+    const ValidatedPack &pack, const std::span<const ImportChoice> choices,
+    const std::filesystem::path &profile_directory) {
   if (choices.empty() || choices.size() > pack.profiles.size())
-    return failure("select at least one valid pack profile");
+    return plan_failure("select at least one valid pack profile");
 
   struct ExistingProfile {
     std::filesystem::path path;
@@ -595,7 +627,7 @@ import_profile_pack(const ValidatedPack &pack,
   std::error_code error;
   std::filesystem::create_directories(profile_directory, error);
   if (error)
-    return failure("profile directory could not be created");
+    return plan_failure("profile directory could not be created");
   for (std::filesystem::directory_iterator iterator(profile_directory, error),
        end;
        !error && iterator != end; iterator.increment(error)) {
@@ -607,7 +639,7 @@ import_profile_pack(const ValidatedPack &pack,
         platform::try_wide_to_utf8(iterator->path().filename().wstring())
             .value_or(std::string{}));
     if (!folded.has_value() || !used_filenames.insert(*folded).second)
-      return failure("profile directory contains case-colliding filenames");
+      return plan_failure("profile directory contains case-colliding filenames");
     const auto source = platform::read_profile_file(iterator->path());
     if (!source.has_value())
       continue;
@@ -616,11 +648,11 @@ import_profile_pack(const ValidatedPack &pack,
     if (profile == nullptr)
       continue;
     if (!used_ids.insert(profile->id).second)
-      return failure("profile directory contains duplicate profile IDs");
+      return plan_failure("profile directory contains duplicate profile IDs");
     existing.push_back({.path = iterator->path(), .id = profile->id});
   }
   if (error)
-    return failure("profile directory could not be enumerated");
+    return plan_failure("profile directory could not be enumerated");
 
   std::set<std::size_t> selected_indices;
   std::set<std::wstring, std::less<>> selected_targets;
@@ -656,12 +688,12 @@ import_profile_pack(const ValidatedPack &pack,
     if (choice.profile_index >= pack.profiles.size() ||
         choice.action == ImportAction::skip ||
         !selected_indices.insert(choice.profile_index).second)
-      return failure("import choices are invalid or duplicated");
+      return plan_failure("import choices are invalid or duplicated");
     auto imported = pack.profiles[choice.profile_index];
     const auto resolved_suggested =
         resolve_suggested_profile_filename(imported.suggested_filename);
     if (!resolved_suggested.has_value())
-      return failure("suggested profile filename is invalid");
+      return plan_failure("suggested profile filename is invalid");
     const auto suggested = *resolved_suggested;
 
     const auto by_id =
@@ -672,7 +704,7 @@ import_profile_pack(const ValidatedPack &pack,
         platform::try_wide_to_utf8(suggested.wstring())
             .value_or(std::string{}));
     if (!suggested_folded.has_value())
-      return failure("suggested profile filename is invalid");
+      return plan_failure("suggested profile filename is invalid");
     const auto by_filename =
         std::ranges::find_if(existing, [&](const ExistingProfile &candidate) {
           const auto folded = platform::try_casefold_path(
@@ -709,14 +741,14 @@ import_profile_pack(const ValidatedPack &pack,
     } else {
       if (by_id != existing.end() && by_filename != existing.end() &&
           by_id->path != by_filename->path)
-        return failure("profile ID and filename conflict with different files; "
+        return plan_failure("profile ID and filename conflict with different files; "
                        "import a copy instead");
       if (by_id != existing.end())
         target = by_id->path;
       else if (by_filename != existing.end())
         target = by_filename->path;
       else if (used_filenames.contains(*suggested_folded))
-        return failure("suggested filename belongs to an unreadable or invalid "
+        return plan_failure("suggested filename belongs to an unreadable or invalid "
                        "profile; import a copy instead");
       else
         target = profile_directory / suggested;
@@ -726,7 +758,7 @@ import_profile_pack(const ValidatedPack &pack,
             .value_or(std::string{}));
     if (!target_folded.has_value() ||
         !selected_targets.insert(*target_folded).second)
-      return failure(
+      return plan_failure(
           "multiple selected profiles resolve to the same output file");
     used_filenames.insert(*target_folded);
     used_ids.insert(imported.profile.id);
@@ -757,7 +789,7 @@ import_profile_pack(const ValidatedPack &pack,
     }
     const auto base_json = core::serialize_profile_json(imported.profile);
     if (!add_backup_mutation(target, core::max_profile_json_bytes))
-      return failure("existing profile could not be protected by a backup");
+      return plan_failure("existing profile could not be protected by a backup");
     mutations.push_back({.target = target, .contents = as_bytes(base_json)});
     auto stage_sidecar = [&](const std::filesystem::path &sidecar_path,
                              const auto &profile, const std::string_view kind,
@@ -823,10 +855,24 @@ import_profile_pack(const ValidatedPack &pack,
     }
   }
 
+
+  return ImportPlan{.mutations = std::move(mutations),
+                    .required_assets = std::move(required_assets)};
+}
+
+} // namespace
+
+PackOperationResult
+import_profile_pack(const ValidatedPack &pack,
+                    const std::span<const ImportChoice> choices,
+                    const std::filesystem::path &profile_directory) {
+  auto built = build_import_plan(pack, choices, profile_directory);
+  if (const auto *error = std::get_if<PackError>(&built)) return *error;
+  auto plan = std::move(std::get<ImportPlan>(built));
   // Immutable assets publish before profile documents. Existing content must
   // already match its content-addressed name.
   std::vector<platform::ProfileFileMutation> asset_mutations;
-  for (const auto &hash : required_assets) {
+  for (const auto &hash : plan.required_assets) {
     const auto found = pack.assets.find(hash);
     if (found == pack.assets.end())
       return failure("selected profile asset is missing");
@@ -845,8 +891,8 @@ import_profile_pack(const ValidatedPack &pack,
         {.target = target, .contents = found->second.bytes});
   }
   asset_mutations.insert(asset_mutations.end(),
-                         std::make_move_iterator(mutations.begin()),
-                         std::make_move_iterator(mutations.end()));
+                         std::make_move_iterator(plan.mutations.begin()),
+                         std::make_move_iterator(plan.mutations.end()));
   if (!platform::commit_profile_transaction(profile_directory, asset_mutations))
     return failure("profile-pack transaction failed and was rolled back");
   // LayerD may legitimately not be running. The committed files are the

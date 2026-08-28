@@ -143,7 +143,7 @@ std::wstring profile_list_label(const layerc::core::GameProfile &profile) {
 std::string unique_panel_id(const std::string_view base,
                             const std::vector<layerc::core::Panel> &existing,
                             const std::vector<layerc::core::Panel> *generated) {
-  const auto is_used = [&](const std::string &candidate) {
+  return next_unique_id(base, [&](const std::string_view candidate) {
     const auto contains = [&](const std::vector<layerc::core::Panel> &panels) {
       return std::any_of(panels.begin(), panels.end(),
                          [&](const layerc::core::Panel &panel) {
@@ -151,11 +151,7 @@ std::string unique_panel_id(const std::string_view base,
                          });
     };
     return contains(existing) || (generated != nullptr && contains(*generated));
-  };
-  std::string candidate(base);
-  for (std::size_t suffix = 2; is_used(candidate); ++suffix)
-    candidate = std::string(base) + "-" + std::to_string(suffix);
-  return candidate;
+  });
 }
 
 std::wstring profile_error_text(const layerc::core::ProfileError &error) {

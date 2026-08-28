@@ -83,7 +83,6 @@ public:
   void configure(std::vector<VisualEvaluationRequest> requests);
   void set_excluded_screen_rects(std::span<const RECT> rectangles);
   [[nodiscard]] VisualCaptureSnapshot snapshot() const;
-  [[nodiscard]] HWND window() const noexcept { return window_; }
   [[nodiscard]] layerc::core::CaptureQuality quality() const noexcept {
     return quality_;
   }

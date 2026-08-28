@@ -34,6 +34,13 @@ void SettingsWidgetPage::OnNavigatedFrom(
 
 void SettingsWidgetPage::render(
     std::optional<layerc::core::CompanionSessionSnapshot> snapshot) {
+  if (snapshot_.has_value() && snapshot.has_value() &&
+      snapshot_->profile_id == snapshot->profile_id &&
+      snapshot_->available_panels == snapshot->available_panels &&
+      snapshot_->preferences == snapshot->preferences) {
+    snapshot_ = std::move(snapshot);
+    return;
+  }
   snapshot_ = std::move(snapshot);
   panel_ids_.clear();
   panel_choices_.clear();
@@ -98,7 +105,7 @@ void SettingsWidgetPage::render(
 
     Windows::UI::Xaml::Controls::Slider opacity_slider;
     opacity_slider.Header(winrt::box_value(L"Panel opacity"));
-    opacity_slider.Minimum(0.1);
+    opacity_slider.Minimum(0.0);
     opacity_slider.Maximum(1.0);
     opacity_slider.StepFrequency(0.05);
     opacity_slider.Value(opacity);
@@ -108,14 +115,15 @@ void SettingsWidgetPage::render(
     SlotsHost().Children().Append(card);
   }
   StatusText().Text(L"");
-  SaveButton().IsEnabled(true);
+  SaveButton().IsEnabled(!save_pending_);
 }
 
 void SettingsWidgetPage::SaveClicked(
     Windows::Foundation::IInspectable const &,
     Windows::UI::Xaml::RoutedEventArgs const &) {
-  if (!snapshot_.has_value())
+  if (!snapshot_.has_value() || save_pending_)
     return;
+  save_pending_ = true;
   SaveButton().IsEnabled(false);
   StatusText().Text(L"Saving…");
   save();
@@ -134,6 +142,7 @@ fire_and_forget SettingsWidgetPage::save() {
     if (panel_index >= panel_ids_.size() ||
         !selected_panels.insert(panel_ids_[panel_index]).second) {
       StatusText().Text(L"Each panel can be assigned to only one slot.");
+      save_pending_ = false;
       SaveButton().IsEnabled(true);
       co_return;
     }
@@ -153,6 +162,7 @@ fire_and_forget SettingsWidgetPage::save() {
 
   const bool saved = co_await layerc::gamebar::widget::SnapshotHub::instance()
                          .save_preferences(std::move(profile));
+  save_pending_ = false;
   StatusText().Text(saved ? L"Preferences saved."
                           : L"LayerD rejected or could not save preferences.");
   SaveButton().IsEnabled(snapshot_.has_value());

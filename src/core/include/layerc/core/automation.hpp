@@ -441,7 +441,6 @@ find_overlay_property(std::string_view name) noexcept;
 struct AutomationEffect {
   AutomationActionKind kind{AutomationActionKind::set_variable};
   std::string automation_id;
-  std::string rule_id;
   std::string target;
   std::string name;
   std::string property;
@@ -506,7 +505,6 @@ public:
 
   [[nodiscard]] const AutomationProfile &profile() const noexcept;
   [[nodiscard]] std::span<const CooldownGroup> cooldown_groups() const noexcept;
-  [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] const AutomationRuntimeSnapshot &snapshot() const noexcept;
   [[nodiscard]] AutomationSessionEdges &edges() noexcept;
   [[nodiscard]] const AutomationSessionEdges &edges() const noexcept;
@@ -539,10 +537,8 @@ public:
                    std::span<const CooldownGroup> cooldown_groups = {});
   void apply_persistent_values(const AutomationPersistentValues &values);
   void retry(std::string_view automation_id);
-  void clear_session_state() noexcept;
   [[nodiscard]] bool persistent_dirty() const noexcept;
   void mark_persistent_saved() noexcept;
-  [[nodiscard]] std::string persistent_state_json() const;
   [[nodiscard]] const std::vector<AutomationTraceEntry> &trace() const noexcept;
   void set_trace_enabled(bool enabled);
   void consume_trace(std::size_t count);

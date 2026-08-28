@@ -208,14 +208,8 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
       return TRUE;
     }
   }
-  if (message == WM_DRAWITEM) {
-    state->editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-                               layerc::platform::EditorControlRole::button);
-    return TRUE;
-  }
-  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
-    return state->editor->color_message(message, wparam, lparam);
-  return FALSE;
+  return state->editor->dialog_theme_message(window, message, wparam, lparam)
+      .value_or(FALSE);
 }
 
 INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
@@ -304,14 +298,8 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
       return TRUE;
     }
   }
-  if (message == WM_DRAWITEM) {
-    state->editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-                               layerc::platform::EditorControlRole::button);
-    return TRUE;
-  }
-  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
-    return state->editor->color_message(message, wparam, lparam);
-  return FALSE;
+  return state->editor->dialog_theme_message(window, message, wparam, lparam)
+      .value_or(FALSE);
 }
 
 void EditorWindow::export_profile_pack() {

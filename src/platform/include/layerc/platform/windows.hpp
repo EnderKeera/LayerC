@@ -79,6 +79,10 @@ describe_attachable_window(HWND window);
 // authenticate same-install peers before acting on their windows or pipes.
 [[nodiscard]] bool is_sibling_process_image(DWORD process_id,
                                             const wchar_t *filename);
+// True when the given process belongs to the same Windows user as the
+// current process (token SID equality). Used to gate named-pipe and
+// helper-process trust decisions on per-user isolation.
+[[nodiscard]] bool same_user_as_current_process(HANDLE process);
 [[nodiscard]] bool
 profile_matches_window(const WindowCandidate &candidate,
                        const layerc::core::GameProfile &profile);
@@ -94,7 +98,6 @@ profile_matches_window(const WindowCandidate &candidate,
 [[nodiscard]] EditorTheme editor_theme();
 [[nodiscard]] std::uint32_t editor_accent();
 [[nodiscard]] bool set_editor_theme(EditorTheme theme);
-[[nodiscard]] bool set_editor_accent(std::uint32_t color);
 [[nodiscard]] EditorAppearanceOverrides
 editor_appearance_overrides(EditorControlRole role);
 [[nodiscard]] bool set_editor_appearance_overrides(

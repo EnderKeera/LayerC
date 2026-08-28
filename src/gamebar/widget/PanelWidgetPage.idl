@@ -4,6 +4,5 @@ namespace LayerC.GameBar
     runtimeclass PanelWidgetPage : Windows.UI.Xaml.Controls.Page
     {
         PanelWidgetPage();
-        UInt32 SlotIndex;
     }
 }

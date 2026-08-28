@@ -22,6 +22,15 @@ function(layerc_enable_warnings target)
     endif()
 endfunction()
 
+# Shared Win32 preprocessor contract: UNICODE everywhere, lean Windows
+# headers, no min/max macros. Public so static libs propagate the contract
+# to every dependent exe/test (mirrors the historical per-target block).
+function(layerc_win32 target)
+    target_compile_definitions(${target} PUBLIC
+        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    layerc_enable_warnings(${target})
+endfunction()
+
 if(MINGW)
     # Ninja otherwise scales to every logical CPU; MinGW's C++ front end can
     # exhaust memory when several Win32-heavy translation units compile at
@@ -55,6 +64,7 @@ add_library(layerc_core STATIC
     src/core/calibration.cpp
     src/core/companion.cpp
 )
+target_link_libraries(layerc_core PUBLIC bcrypt crypt32)
 target_include_directories(layerc_core PUBLIC src/core/include)
 target_compile_features(layerc_core PUBLIC cxx_std_20)
 
@@ -78,14 +88,8 @@ add_library(layerc_miniz STATIC
     third_party/miniz/miniz_tinfl.c
     third_party/miniz/miniz_zip.c
 )
-include(GenerateExportHeader)
-generate_export_header(layerc_miniz
-    BASE_NAME miniz
-    EXPORT_FILE_NAME
-        "${CMAKE_CURRENT_BINARY_DIR}/generated/miniz_export.h")
 target_include_directories(layerc_miniz PUBLIC
-    third_party/miniz
-    "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    third_party/miniz)
 target_compile_definitions(layerc_miniz PUBLIC
     MINIZ_NO_ZLIB_APIS
     MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
@@ -114,14 +118,10 @@ if(WIN32)
         layerc_core user32 advapi32 shell32 ole32 gdi32 shcore
         windowscodecs bcrypt hid)
     target_compile_definitions(layerc_windows PUBLIC
-        UNICODE
-        _UNICODE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
     )
-    layerc_enable_warnings(layerc_windows)
+    layerc_win32(layerc_windows)
 
     add_library(layerc_capture STATIC
         src/capture/window_capture.cpp
@@ -139,9 +139,8 @@ if(WIN32)
     target_link_libraries(layerc_capture PRIVATE
         d3d11 dxgi dwmapi user32 gdi32)
     target_compile_definitions(layerc_capture PUBLIC
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
         WINVER=0x0A00 _WIN32_WINNT=0x0A00)
-    layerc_enable_warnings(layerc_capture)
+    layerc_win32(layerc_capture)
 
     add_library(layerc_bundle STATIC
         src/bundle/pack_detail.cpp
@@ -155,12 +154,11 @@ if(WIN32)
         layerc_core layerc_windows)
     target_link_libraries(layerc_bundle PRIVATE layerc_miniz)
     target_compile_definitions(layerc_bundle PUBLIC
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
         WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+    layerc_win32(layerc_bundle)
     target_compile_definitions(layerc_bundle PRIVATE
         MINIZ_NO_ZLIB_APIS
         MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
-    layerc_enable_warnings(layerc_bundle)
 endif()
 
 if(WIN32 AND LAYERC_BUILD_DAEMON)
@@ -194,8 +192,7 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         shell32 user32 gdi32 xinput9_1_0)
     target_link_libraries(layerd PRIVATE psapi)
     target_link_libraries(layerd PRIVATE hid bcrypt)
-    target_compile_definitions(layerd PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    layerc_enable_warnings(layerd)
+    layerc_win32(layerd)
     if(MSVC)
         target_link_libraries(layerd PRIVATE runtimeobject)
         target_link_libraries(layerd PRIVATE delayimp)
@@ -217,9 +214,7 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
     target_link_libraries(layerworker PRIVATE
         layerc_core layerc_windows layerc_capture
         shell32 user32 gdi32)
-    target_compile_definitions(layerworker PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    layerc_enable_warnings(layerworker)
+    layerc_win32(layerworker)
     if(MINGW)
         target_link_options(layerworker PRIVATE -municode)
     endif()
@@ -270,8 +265,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         user32
         gdi32
     )
-    target_compile_definitions(layere PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    layerc_enable_warnings(layere)
+    layerc_win32(layere)
     if(MINGW)
         target_link_options(layere PRIVATE -municode)
     endif()
@@ -288,16 +282,13 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
     target_link_libraries(layercal PRIVATE
         layerc_core layerc_windows layerc_capture
         comctl32 dwmapi shell32 uxtheme user32 gdi32)
-    target_compile_definitions(layercal PRIVATE
-        UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-    layerc_enable_warnings(layercal)
+    layerc_win32(layercal)
     if(MINGW)
         target_link_options(layercal PRIVATE -municode)
     endif()
 endif()
 
 set(LAYERC_MINGW_RUNTIME_DLLS)
-set(LAYERC_MINGW_RUNTIME_COMPLETE TRUE)
 if(MINGW)
     get_filename_component(LAYERC_MINGW_BIN_DIR
         "${CMAKE_CXX_COMPILER}" DIRECTORY)
@@ -313,8 +304,6 @@ if(MINGW)
         if(LAYERC_${runtime_dll_id}_PATH)
             list(APPEND LAYERC_MINGW_RUNTIME_DLLS
                 "${LAYERC_${runtime_dll_id}_PATH}")
-        else()
-            set(LAYERC_MINGW_RUNTIME_COMPLETE FALSE)
         endif()
     endforeach()
 endif()
@@ -375,18 +364,12 @@ if(TARGET layerc_gamebar_host)
     endif()
 endif()
 
-if(TARGET layerd)
-    install(TARGETS layerd RUNTIME DESTINATION . COMPONENT Runtime)
-endif()
-if(TARGET layere)
-    install(TARGETS layere RUNTIME DESTINATION . COMPONENT Runtime)
-endif()
-if(TARGET layercal)
-    install(TARGETS layercal RUNTIME DESTINATION . COMPONENT Runtime)
-endif()
-if(TARGET layerworker)
-    install(TARGETS layerworker RUNTIME DESTINATION . COMPONENT Runtime)
-endif()
+foreach(layerc_runtime_target IN ITEMS layerd layere layercal layerworker)
+    if(TARGET ${layerc_runtime_target})
+        install(TARGETS ${layerc_runtime_target}
+            RUNTIME DESTINATION . COMPONENT Runtime)
+    endif()
+endforeach()
 # The portable ZIP intentionally remains desktop-only. Game Bar package
 # inputs are staged only by the explicit layerc_gamebar_msix target.
 install(FILES
@@ -466,13 +449,14 @@ if(LAYERC_BUILD_TESTS)
         add_executable(layerc_capture_probe tools/capture_probe.cpp)
         target_link_libraries(layerc_capture_probe PRIVATE layerc_capture)
         target_compile_definitions(layerc_capture_probe PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+            WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+        layerc_win32(layerc_capture_probe)
         if(MINGW)
             target_link_options(layerc_capture_probe PRIVATE -municode)
         endif()
 
         add_executable(lctest WIN32 tools/lctest.cpp)
-        target_compile_definitions(lctest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        layerc_win32(lctest)
         if(MINGW)
             target_link_options(lctest PRIVATE -municode)
         endif()
@@ -486,11 +470,10 @@ if(LAYERC_BUILD_TESTS)
         target_include_directories(layerc_overlay_tests PRIVATE src/daemon)
         target_link_libraries(layerc_overlay_tests PRIVATE
             layerc_core layerc_windows user32 gdi32)
-        target_compile_definitions(layerc_overlay_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+        layerc_win32(layerc_overlay_tests)
         if(MINGW)
             target_link_options(layerc_overlay_tests PRIVATE -municode)
         endif()
-        layerc_enable_warnings(layerc_overlay_tests)
         add_dependencies(layerc_overlay_tests lctest)
         add_test(NAME layerc_overlay_tests COMMAND layerc_overlay_tests $<TARGET_FILE:lctest>)
         set_tests_properties(layerc_overlay_tests PROPERTIES
@@ -499,10 +482,10 @@ if(LAYERC_BUILD_TESTS)
 
         add_executable(layerc_platform_tests
             tests/platform_live_tests.cpp
+            tests/platform_live_scenarios.cpp
             tests/test_support.cpp)
         target_link_libraries(layerc_platform_tests PRIVATE layerc_core layerc_windows)
-        target_compile_definitions(layerc_platform_tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        layerc_enable_warnings(layerc_platform_tests)
+        layerc_win32(layerc_platform_tests)
         add_test(NAME layerc_platform_tests COMMAND layerc_platform_tests)
         set_tests_properties(layerc_platform_tests PROPERTIES TIMEOUT 30)
 
@@ -511,9 +494,7 @@ if(LAYERC_BUILD_TESTS)
             tests/test_support.cpp)
         target_link_libraries(layerc_bundle_tests PRIVATE
             layerc_bundle layerc_miniz)
-        target_compile_definitions(layerc_bundle_tests PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        layerc_enable_warnings(layerc_bundle_tests)
+        layerc_win32(layerc_bundle_tests)
         add_test(NAME layerc_bundle_tests COMMAND layerc_bundle_tests)
         set_tests_properties(layerc_bundle_tests PROPERTIES TIMEOUT 45)
 
@@ -525,9 +506,7 @@ if(LAYERC_BUILD_TESTS)
             src/daemon)
         target_link_libraries(layerc_isolated_visual_tests PRIVATE
             layerc_core layerc_windows layerc_capture)
-        target_compile_definitions(layerc_isolated_visual_tests PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        layerc_enable_warnings(layerc_isolated_visual_tests)
+        layerc_win32(layerc_isolated_visual_tests)
         add_test(NAME layerc_isolated_visual_tests
             COMMAND layerc_isolated_visual_tests)
         set_tests_properties(layerc_isolated_visual_tests PROPERTIES
@@ -544,9 +523,7 @@ if(LAYERC_BUILD_TESTS)
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
         target_link_libraries(layerc_companion_tests PRIVATE
             layerc_core layerc_windows)
-        target_compile_definitions(layerc_companion_tests PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        layerc_enable_warnings(layerc_companion_tests)
+        layerc_win32(layerc_companion_tests)
         if(MSVC)
             target_link_libraries(layerc_companion_tests PRIVATE runtimeobject)
         endif()
@@ -565,9 +542,7 @@ if(LAYERC_BUILD_TESTS)
         target_include_directories(layerc_editor_tests PRIVATE src/editor)
         target_link_libraries(layerc_editor_tests PRIVATE
             layerc_core layerc_windows comctl32 dwmapi uxtheme user32 gdi32)
-        target_compile_definitions(layerc_editor_tests PRIVATE
-            UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-        layerc_enable_warnings(layerc_editor_tests)
+        layerc_win32(layerc_editor_tests)
         add_test(NAME layerc_editor_tests COMMAND layerc_editor_tests)
         set_tests_properties(layerc_editor_tests PROPERTIES TIMEOUT 30)
         if(TARGET layere)

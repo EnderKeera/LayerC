@@ -52,9 +52,6 @@ public:
     if (value_ != nullptr) value_->Release();
     value_ = replacement;
   }
-  [[nodiscard]] T *detach() noexcept {
-    return std::exchange(value_, nullptr);
-  }
 
 private:
   T *value_{};

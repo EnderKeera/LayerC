@@ -8,8 +8,6 @@
 namespace winrt::LayerC::GameBar::implementation {
 
 struct PanelWidgetPage : PanelWidgetPageT<PanelWidgetPage> {
-  std::uint32_t SlotIndex() const noexcept { return slot_index_; }
-  void SlotIndex(std::uint32_t value) noexcept { slot_index_ = value; }
   PanelWidgetPage();
 
   void

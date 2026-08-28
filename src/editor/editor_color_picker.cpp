@@ -42,23 +42,14 @@ std::optional<std::uint32_t> rgb_fields(const HWND window) {
   return (*red << 16U) | (*green << 8U) | *blue;
 }
 
-int hex_digit(const wchar_t character) {
-  if (character >= L'0' && character <= L'9') return character - L'0';
-  if (character >= L'a' && character <= L'f') return character - L'a' + 10;
-  if (character >= L'A' && character <= L'F') return character - L'A' + 10;
-  return -1;
-}
-
 std::optional<std::uint32_t> hex_value(std::wstring text) {
   if (!text.empty() && text.front() == L'#') text.erase(text.begin());
   if (text.size() != 6) return std::nullopt;
-  std::uint32_t value{};
-  for (const wchar_t character : text) {
-    const int digit = hex_digit(character);
-    if (digit < 0) return std::nullopt;
-    value = (value << 4U) | static_cast<std::uint32_t>(digit);
-  }
-  return value;
+  wchar_t *end = nullptr;
+  const auto value = std::wcstoul(text.c_str(), &end, 16);
+  if (end != text.c_str() + text.size())
+    return std::nullopt;
+  return static_cast<std::uint32_t>(value);
 }
 
 std::wstring hex_label(const std::uint32_t color) {
@@ -230,19 +221,13 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
     }
     break;
   }
-  case WM_CTLCOLORSTATIC:
-  case WM_CTLCOLOREDIT:
-  case WM_CTLCOLORLISTBOX:
-    return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND:
-    return erase_dialog_background(window, wparam);
   case WM_CLOSE:
     EndDialog(window, IDCANCEL);
     return TRUE;
   default:
     break;
   }
-  return FALSE;
+  return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
 } // namespace layerc::editor

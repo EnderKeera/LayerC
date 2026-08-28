@@ -1,4 +1,5 @@
 #include "layerc/capture/window_capture.hpp"
+#include "layerc/core/json.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -33,17 +34,6 @@ layerc::core::CaptureQuality quality_argument(const int argc,
     if (value == L"exact") return layerc::core::CaptureQuality::exact;
   }
   return layerc::core::CaptureQuality::balanced;
-}
-
-std::string escaped(const std::string_view value) {
-  std::string output;
-  output.reserve(value.size() + 8);
-  for (const char character : value) {
-    if (character == '"' || character == '\\') output.push_back('\\');
-    if (static_cast<unsigned char>(character) >= 0x20U)
-      output.push_back(character);
-  }
-  return output;
 }
 
 const char *backend_name(const layerc::core::CaptureBackendKind backend) {
@@ -109,15 +99,22 @@ int wmain(const int argc, wchar_t **argv) {
   }
   const auto gpu = capture.gpu_description();
   capture.stop();
-  std::cout << "{\"backend\":\"" << backend_name(latest.backend)
-            << "\",\"availability\":\""
-            << availability_name(latest.availability) << "\",\"gpu\":\""
-            << escaped(gpu) << "\",\"width\":"
-            << (latest.frame ? latest.frame->width : 0)
-            << ",\"height\":"
-            << (latest.frame ? latest.frame->height : 0)
-            << ",\"diagnostic\":\"" << escaped(latest.diagnostic)
-            << "\"}\n";
+  std::string output = "{\"backend\":\"";
+  output += backend_name(latest.backend);
+  output += "\",\"availability\":\"";
+  output += availability_name(latest.availability);
+  output += "\",\"gpu\":";
+  layerc::core::json::append_quoted(output, gpu);
+  output += ",\"width\":";
+  layerc::core::json::append_unsigned(output,
+                                      latest.frame ? latest.frame->width : 0);
+  output += ",\"height\":";
+  layerc::core::json::append_unsigned(output,
+                                      latest.frame ? latest.frame->height : 0);
+  output += ",\"diagnostic\":";
+  layerc::core::json::append_quoted(output, latest.diagnostic);
+  output += "}\n";
+  std::cout << output;
   return latest.availability == layerc::core::CaptureAvailability::available &&
                  latest.frame && !gpu.empty()
              ? 0

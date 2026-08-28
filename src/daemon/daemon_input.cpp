@@ -11,24 +11,6 @@
 #include <vector>
 
 namespace layerc::daemon {
-namespace {
-
-std::string_view input_device_label(const layerc::core::InputDevice device) {
-  using layerc::core::InputDevice;
-  switch (device) {
-  case InputDevice::keyboard:
-    return "keyboard";
-  case InputDevice::mouse:
-    return "mouse";
-  case InputDevice::controller:
-    return "controller";
-  case InputDevice::generic_hid:
-    return "hid";
-  }
-  return "unknown";
-}
-
-} // namespace
 
 bool DaemonApp::register_input_devices() {
   const RAWINPUTDEVICE devices[] = {
@@ -390,10 +372,9 @@ bool DaemonApp::process_input(Session &session,
   const auto triggered = session.input.process(event);
   if (!triggered.empty()) {
     session.last_input_match =
-        std::string(input_device_label(event.token.device)) + ":" +
+        std::string(layerc::core::input_device_label(event.token.device)) + ":" +
         std::to_string(event.token.code) +
         (event.pressed ? ":press" : ":release");
-    session.last_input_at = layerc::core::MonotonicClock::now();
   }
   if (session.blocks_all_triggers())
     return automation_changed;

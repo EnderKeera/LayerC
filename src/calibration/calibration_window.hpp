@@ -29,6 +29,7 @@ private:
   static LRESULT CALLBACK preview_proc(HWND, UINT, WPARAM, LPARAM, UINT_PTR,
                                        DWORD_PTR);
   INT_PTR handle_message(HWND, UINT, WPARAM, LPARAM);
+  [[nodiscard]] bool handle_command(WPARAM wparam);
   LRESULT handle_preview(HWND, UINT, WPARAM, LPARAM);
 
   bool initialize(HWND);
@@ -43,6 +44,7 @@ private:
   void sample_target_color();
   void capture_template_reference();
   void import_template_reference();
+  void install_template_reference(const layerc::core::NormalizedRegion &selected);
   void clear_template_references();
   void toggle_template_mask_editing();
   [[nodiscard]] bool finish_template_mask_editing();
@@ -54,7 +56,6 @@ private:
 
   [[nodiscard]] int integer_control(int id, int fallback, int minimum,
                                     int maximum) const;
-  [[nodiscard]] std::wstring control_text(int id) const;
   void set_control_text(int id, std::wstring_view text) const;
   [[nodiscard]] RECT preview_image_rect() const;
   [[nodiscard]] layerc::core::PixelRule current_rule_from_controls() const;

@@ -4,6 +4,5 @@ namespace LayerC.GameBar
     runtimeclass SettingsWidgetPage : Windows.UI.Xaml.Controls.Page
     {
         SettingsWidgetPage();
-        String ProfileId;
     }
 }

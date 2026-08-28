@@ -373,12 +373,6 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     }
     break;
   }
-  case WM_CTLCOLORSTATIC:
-  case WM_CTLCOLOREDIT:
-  case WM_CTLCOLORLISTBOX:
-    return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND:
-    return erase_dialog_background(window, wparam);
   case WM_CLOSE:
     DestroyWindow(window);
     return TRUE;
@@ -397,7 +391,7 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
   default:
     break;
   }
-  return FALSE;
+  return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
 } // namespace layerc::editor

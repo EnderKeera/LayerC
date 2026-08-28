@@ -130,8 +130,7 @@ std::string DaemonApp::runtime_diagnostics_json() const {
                       have_times ? file_time_value(kernel) : 0, first);
   append_number_field(output, "userTime100ns",
                       have_times ? file_time_value(user) : 0, first);
-  output += ",\"gpuAllocation\":{\"available\":false,\"reason\":\"adapter "
-            "budget telemetry unavailable\"}}";
+  output += "}";
 
   output += ",\"services\":[";
   const auto services = runtime_kernel_.services().all_stats();

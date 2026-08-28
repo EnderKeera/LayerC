@@ -246,4 +246,23 @@ LRESULT EditorWindow::erase_dialog_background(const HWND window,
   return TRUE;
 }
 
+std::optional<LRESULT>
+EditorWindow::dialog_theme_message(const HWND window, const UINT message,
+                                   const WPARAM wparam,
+                                   const LPARAM lparam) const {
+  if (message == WM_DRAWITEM) {
+    const auto &item = *reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
+    if (item.CtlType == ODT_BUTTON) {
+      draw_button(item, layerc::platform::EditorControlRole::button);
+      return TRUE;
+    }
+  } else if (message >= WM_CTLCOLORMSGBOX &&
+             message <= WM_CTLCOLORSTATIC) {
+    return color_message(message, wparam, lparam);
+  } else if (message == WM_ERASEBKGND) {
+    return erase_dialog_background(window, wparam);
+  }
+  return std::nullopt;
+}
+
 } // namespace layerc::editor

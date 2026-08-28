@@ -40,7 +40,6 @@ public:
 
   [[nodiscard]] VisualCaptureSnapshot snapshot() const;
   [[nodiscard]] IsolatedVisualStatus status() const;
-  [[nodiscard]] HWND window() const noexcept { return window_; }
 
 private:
   bool run_helper(std::string &error);

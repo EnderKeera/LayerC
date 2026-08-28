@@ -311,9 +311,9 @@ validate_companion_snapshot(const CompanionSessionSnapshot &snapshot) {
     if (std::ranges::find(preference_panels, preference.panel_id) !=
         preference_panels.end())
       return {path + ".panelId", "duplicate preference panelId"};
-    if (!std::isfinite(preference.opacity) || preference.opacity < 0.1 ||
+    if (!std::isfinite(preference.opacity) || preference.opacity < 0.0 ||
         preference.opacity > 1.0)
-      return {path + ".opacity", "opacity must be finite and within [0.1,1.0]"};
+      return {path + ".opacity", "opacity must be finite and within [0,1]"};
     preference_slots.push_back(preference.slot_index);
     preference_panels.push_back(preference.panel_id);
   }
@@ -626,10 +626,10 @@ parse_companion_snapshot_json(const std::string_view json_str) {
     const auto opacity_it = object.find("opacity");
     if (opacity_it == object.end() || !opacity_it->second.is_number() ||
         !std::isfinite(opacity_it->second.as_number()) ||
-        opacity_it->second.as_number() < 0.1 ||
+        opacity_it->second.as_number() < 0.0 ||
         opacity_it->second.as_number() > 1.0)
       return CompanionError{path + ".opacity",
-                            "opacity must be finite and within [0.1,1.0]"};
+                            "opacity must be finite and within [0,1]"};
     preference.opacity = opacity_it->second.as_number();
     snapshot.preferences.push_back(std::move(preference));
   }

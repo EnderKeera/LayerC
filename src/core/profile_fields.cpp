@@ -1,5 +1,6 @@
 #include "profile_reader.hpp"
 
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -15,19 +16,10 @@ std::optional<std::uint32_t> parse_hex_color(const std::string_view value) {
   }
 
   std::uint32_t color{};
-  for (std::size_t index = 1; index < value.size(); ++index) {
-    const auto character = value[index];
-    std::uint32_t digit{};
-    if (character >= '0' && character <= '9') {
-      digit = static_cast<std::uint32_t>(character - '0');
-    } else if (character >= 'a' && character <= 'f') {
-      digit = static_cast<std::uint32_t>(character - 'a' + 10);
-    } else if (character >= 'A' && character <= 'F') {
-      digit = static_cast<std::uint32_t>(character - 'A' + 10);
-    } else {
-      return std::nullopt;
-    }
-    color = (color << 4U) | digit;
+  const auto [tail, error] =
+      std::from_chars(value.data() + 1, value.data() + 7, color, 16);
+  if (error != std::errc{} || tail != value.data() + 7) {
+    return std::nullopt;
   }
   return color;
 }

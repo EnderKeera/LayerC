@@ -215,17 +215,6 @@ void DaemonApp::quiesce_isolated_visual_captures() noexcept {
   update_visual_status();
 }
 
-void DaemonApp::quiesce_visual_captures() noexcept {
-  visual_captures_.clear();
-  isolated_visual_captures_.clear();
-  if (visual_snapshot_event_ != nullptr)
-    CloseHandle(visual_snapshot_event_);
-  visual_snapshot_event_ = nullptr;
-  if (visual_capture_active_event_ != nullptr)
-    ResetEvent(visual_capture_active_event_);
-  update_visual_status();
-}
-
 void DaemonApp::poll_visual_captures() {
   const auto now = layerc::core::MonotonicClock::now();
   bool overlays_changed{};
@@ -257,17 +246,17 @@ void DaemonApp::poll_visual_captures() {
         }
         return changed;
       };
-  for (auto &[window, worker] : visual_captures_) {
+  // Inline and isolated workers share the per-window poll body; only the
+  // source of the snapshot (and the isolate maintain() tick) differs.
+  const auto poll_capture = [&](const HWND window, auto &worker) {
     exclusions.clear();
     for (const auto &session : sessions_) {
       if (session->is_global() || session->game_window != window)
         continue;
       session->overlays.append_screen_bounds(exclusions);
     }
-    if (!worker)
-      continue;
-    worker->set_excluded_screen_rects(exclusions);
-    const auto captured = worker->snapshot();
+    worker.set_excluded_screen_rects(exclusions);
+    const auto captured = worker.snapshot();
     if (captured.sequence != 0) {
       for (auto *session : active_input_sessions_) {
         if (session->game_window != window ||
@@ -280,7 +269,6 @@ void DaemonApp::poll_visual_captures() {
             evaluation->sequence == session->last_visual_sequence)
           continue;
         session->last_visual_sequence = evaluation->sequence;
-
         session->cooldowns.snapshot(now, session->snapshot_buffer);
         overlays_changed =
             publish_observations(*session, evaluation->measurements) ||
@@ -298,46 +286,16 @@ void DaemonApp::poll_visual_captures() {
       }
     }
     captured_snapshots.push_back(captured);
+  };
+  for (auto &[window, worker] : visual_captures_) {
+    if (worker)
+      poll_capture(window, *worker);
   }
   for (auto &[window, worker] : isolated_visual_captures_) {
-    exclusions.clear();
-    for (const auto &session : sessions_) {
-      if (session->is_global() || session->game_window != window)
-        continue;
-      session->overlays.append_screen_bounds(exclusions);
+    if (worker) {
+      worker->maintain();
+      poll_capture(window, *worker);
     }
-    worker->set_excluded_screen_rects(exclusions);
-    worker->maintain();
-    const auto captured = worker->snapshot();
-    if (captured.sequence != 0) {
-      for (auto *session : active_input_sessions_) {
-        if (session->game_window != window ||
-            !session->has_active_visual_rules())
-          continue;
-        const auto evaluation =
-            std::ranges::find(captured.evaluations, session->source_key,
-                              &VisualEvaluationSnapshot::source_key);
-        if (evaluation == captured.evaluations.end() ||
-            evaluation->sequence == session->last_visual_sequence)
-          continue;
-        session->last_visual_sequence = evaluation->sequence;
-        session->cooldowns.snapshot(now, session->snapshot_buffer);
-        overlays_changed =
-            publish_observations(*session, evaluation->measurements) ||
-            overlays_changed;
-        const auto requests = session->visual_triggers->on_measurements(
-            evaluation->measurements, session->snapshot_buffer, now);
-        for (const auto &request : requests) {
-          if (trigger_cooldown_with_automation(*session, request.cooldown_id,
-                                               now)) {
-            overlays_changed = true;
-            update_tooltip(L"LayerD - visual trigger " +
-                           layerc::platform::utf8_to_wide(request.cooldown_id));
-          }
-        }
-      }
-    }
-    captured_snapshots.push_back(captured);
   }
   if (overlays_changed)
     update_overlays();

@@ -69,14 +69,7 @@ Session::Session(SessionInit init)
                           init.companion_health);
   snapshot_buffer.reserve(profile.cooldowns.size());
   rebuild_input_configuration();
-  (void)init.capture_exclusion;
 }
-
-void Session::ensure_overlays(const bool capture_exclusion) {
-  overlays.ensure(profile, capture_exclusion);
-}
-
-void Session::release_overlays() noexcept { overlays.release(); }
 
 void Session::apply_visual_profile(
     std::optional<layerc::core::VisualProfile> updated_visual_profile,
@@ -117,11 +110,6 @@ void Session::apply_companion_profile(
   if (updated_health == layerc::platform::CompanionSidecarState::invalid)
     updated.reset();
   companion_profile = std::move(updated);
-}
-
-bool Session::has_companion_slots() const noexcept {
-  return companion_profile.has_value() && !companion_profile->slots.empty() &&
-         companion_health != layerc::platform::CompanionSidecarState::invalid;
 }
 
 bool Session::has_enabled_automations() const noexcept {
@@ -241,7 +229,6 @@ void Session::clear_input_state() {
 
 void DaemonApp::load_visual_source(ProfileSource &source) {
   source.visual_profile.reset();
-  source.visual_error.clear();
   const auto visual =
       layerc::platform::load_visual_sidecar(source.path, source.profile);
   source.visual_health = visual.state;
@@ -249,15 +236,10 @@ void DaemonApp::load_visual_source(ProfileSource &source) {
       visual.state == layerc::platform::VisualSidecarState::recovered_backup) {
     source.visual_profile = visual.profile;
   }
-  if (visual.state == layerc::platform::VisualSidecarState::recovered_backup ||
-      visual.state == layerc::platform::VisualSidecarState::invalid) {
-    source.visual_error = visual.error.message;
-  }
 }
 
 void DaemonApp::load_automation_source(ProfileSource &source) {
   source.automation_profile.reset();
-  source.automation_error.clear();
   source.automation_state.clear();
   source.automation_state_due.reset();
   const auto automation =
@@ -270,17 +252,10 @@ void DaemonApp::load_automation_source(ProfileSource &source) {
     const auto state = layerc::platform::load_automation_state(
         source.path, *source.automation_profile);
     source.automation_state = state.values;
-    if (state.error.has_value())
-      source.automation_error = state.error->message;
   }
-  if (automation.state ==
-          layerc::platform::AutomationSidecarState::recovered_backup ||
-      automation.state == layerc::platform::AutomationSidecarState::invalid)
-    source.automation_error = automation.error.message;
 }
 void DaemonApp::load_companion_source(ProfileSource &source) {
   source.companion_profile.reset();
-  source.companion_error.clear();
   const auto companion =
       layerc::platform::load_companion_sidecar(source.path, source.profile);
   source.companion_health = companion.state;
@@ -288,11 +263,6 @@ void DaemonApp::load_companion_source(ProfileSource &source) {
       companion.state ==
           layerc::platform::CompanionSidecarState::recovered_backup) {
     source.companion_profile = companion.profile;
-  }
-  if (companion.state ==
-          layerc::platform::CompanionSidecarState::recovered_backup ||
-      companion.state == layerc::platform::CompanionSidecarState::invalid) {
-    source.companion_error = companion.error.message;
   }
 }
 
@@ -485,8 +455,7 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
                       .automation_health = source.automation_health,
                       .companion_profile = source.companion_profile,
                       .companion_health = source.companion_health,
-                      .visual_enabled = visual_recognition_enabled_,
-                      .capture_exclusion = capture_exclusion_}));
+                      .visual_enabled = visual_recognition_enabled_}));
   }
 
   const bool has_enabled_profile = std::any_of(
@@ -601,8 +570,7 @@ void DaemonApp::refresh_game_windows() {
                     .automation_health = source->automation_health,
                     .companion_profile = source->companion_profile,
                     .companion_health = source->companion_health,
-                    .visual_enabled = visual_recognition_enabled_,
-                    .capture_exclusion = capture_exclusion_});
+                    .visual_enabled = visual_recognition_enabled_});
     instance->game_window = window;
     sessions_.push_back(std::move(instance));
   }
@@ -699,8 +667,28 @@ std::vector<Session *> DaemonApp::current_companion_sessions() const {
   all_sessions.reserve(sessions_.size());
   for (const auto &session : sessions_)
     all_sessions.push_back(session.get());
-  return select_companion_sessions<Session>(
-      foreground, all_sessions,
-      platform::is_gamebar_overlay_process(foreground_process_id));
+
+  const bool gamebar_foreground =
+      platform::is_gamebar_overlay_process(foreground_process_id);
+  Session *preferred{};
+  if (!gamebar_foreground) {
+    const auto game = std::ranges::find_if(
+        foreground, [](const Session *session) {
+          return session != nullptr && !session->is_global();
+        });
+    if (game != foreground.end())
+      last_game_foreground_ = (*game)->game_window;
+  } else {
+    const auto game = std::ranges::find(
+        all_sessions, last_game_foreground_, &Session::game_window);
+    if (game != all_sessions.end())
+      preferred = *game;
+  }
+  auto selected =
+      select_companion_sessions<Session>(foreground, all_sessions,
+                                         gamebar_foreground);
+  if (preferred != nullptr)
+    std::ranges::rotate(selected, std::ranges::find(selected, preferred));
+  return selected;
 }
 } // namespace layerc::daemon

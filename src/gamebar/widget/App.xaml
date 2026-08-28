@@ -4,6 +4,5 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Application.Resources>
     <SolidColorBrush x:Key="LayerCBackgroundBrush" Color="#E620252B" />
-    <SolidColorBrush x:Key="LayerCAccentBrush" Color="#FF67D5B5" />
   </Application.Resources>
 </Application>

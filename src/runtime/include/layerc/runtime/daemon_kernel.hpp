@@ -1,6 +1,5 @@
 #pragma once
 
-#include "layerc/runtime/platform_contracts.hpp"
 #include "layerc/runtime/runtime_services.hpp"
 
 #include <cstdint>
@@ -9,6 +8,13 @@
 #include <vector>
 
 namespace layerc::runtime {
+
+// Platform code creates WindowIds and keeps native handles in its adapter.
+// Runtime code may compare or persist an ID only for the lifetime of a scan.
+struct WindowId {
+  std::uint64_t opaque{};
+  auto operator<=>(const WindowId &) const = default;
+};
 
 struct SessionCapabilityRequest {
   WindowId window;

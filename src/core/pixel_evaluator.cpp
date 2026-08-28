@@ -119,9 +119,8 @@ PixelEvaluation evaluate_pixel_rule(const PixelRule &rule,
   result.average_color = (round_channel(average_red) << 16U) |
                          (round_channel(average_green) << 8U) |
                          round_channel(average_blue);
-  result.average_brightness = 0.2126 * average_red +
-                              0.7152 * average_green +
-                              0.0722 * average_blue;
+  result.average_brightness =
+      rgb_luminance(average_red, average_green, average_blue);
   result.color_coverage = static_cast<double>(covered) / count;
 
   std::visit(

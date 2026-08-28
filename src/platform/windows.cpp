@@ -135,6 +135,38 @@ bool apply_capture_exclusion(const HWND window, const bool enabled) {
                                                   : WDA_NONE) != FALSE;
 }
 
+bool same_user_as_current_process(const HANDLE process) {
+  HANDLE current_token{};
+  HANDLE other_token{};
+  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token) ==
+          FALSE ||
+      OpenProcessToken(process, TOKEN_QUERY, &other_token) == FALSE) {
+    if (current_token != nullptr) CloseHandle(current_token);
+    if (other_token != nullptr) CloseHandle(other_token);
+    return false;
+  }
+  const auto token_user = [](const HANDLE token,
+                             std::vector<std::byte> &storage) -> PSID {
+    DWORD required{};
+    (void)GetTokenInformation(token, TokenUser, nullptr, 0, &required);
+    if (required == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+      return nullptr;
+    storage.resize(required);
+    if (GetTokenInformation(token, TokenUser, storage.data(), required,
+                            &required) == FALSE)
+      return nullptr;
+    return reinterpret_cast<TOKEN_USER *>(storage.data())->User.Sid;
+  };
+  std::vector<std::byte> current_storage;
+  std::vector<std::byte> other_storage;
+  const PSID current_sid = token_user(current_token, current_storage);
+  const PSID other_sid = token_user(other_token, other_storage);
+  const bool matches = current_sid != nullptr && other_sid != nullptr &&
+                       EqualSid(current_sid, other_sid) != FALSE;
+  CloseHandle(other_token);
+  CloseHandle(current_token);
+  return matches;
+}
 UINT monitor_dpi_for_rect(const RECT &rect) {
   const HMONITOR monitor = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
   UINT dpi_x{};
@@ -159,11 +191,6 @@ EditorTheme editor_theme() {
 std::uint32_t editor_accent() {
   const auto value = read_dword(editor_accent_value);
   return value.has_value() ? (*value & 0x00FFFFFFU) : default_editor_accent;
-}
-
-bool set_editor_accent(const std::uint32_t color) {
-  const DWORD value = color & 0x00FFFFFFU;
-  return write_dword(editor_accent_value, value);
 }
 
 bool set_editor_theme(const EditorTheme theme) {
