@@ -1,14 +1,9 @@
 name: Hardware Benchmarks
 
-# Runs the V2.2 idle-plateau and input-to-overlay latency benchmarks on a
-# self-hosted Windows runner (this machine). The runner is standard: the
-# workflow itself is what wires CI-built binaries to the local hardware gates.
-#
-# Auto-start: when CI (compile + v23 gate) finishes green on main, this
-# workflow is queued automatically (GitHub sends the usual Actions
-# notification - the "autoalert"). It stays queued up to 24h until a
-# self-hosted runner matching `layerc-bench` comes online, so the runner
-# can be left turned OFF and started only when benchmarks are wanted.
+# Runs the hardware-only gates on the interactive self-hosted Windows runner.
+# A successful main CI run queues this workflow for up to 24 hours until the
+# `layerc-bench` runner comes online. Candidate scripts and binaries are both
+# pinned to that CI run's exact commit.
 
 on:
   workflow_run:
@@ -30,32 +25,48 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, windows, x64, layerc-bench]
     timeout-minutes: 30
+    env:
+      # Where pull-ci stages the rolling install on this machine. Overridable
+      # from the repository with a PULLDOWN_OUTPUT_PATH variable.
+      PULLDOWN_OUTPUT: ${{ vars.PULLDOWN_OUTPUT_PATH || 'D:\oursoft\LayerC\out\layerc' }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Resolve CI run
-        id: run
+      - name: Resolve candidate
+        id: candidate
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if ("${{ github.event_name }}" -eq "workflow_run") {
-            "runId=${{ github.event.workflow_run.id }}" |
-              Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            $id = "${{ github.event.workflow_run.id }}"
+            $sha = "${{ github.event.workflow_run.head_sha }}"
           } else {
-            $id = gh run list --workflow CI --branch main --limit 1 `
-              --json databaseId -q '.[0].databaseId'
-            "runId=$id" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            $runJson = gh run list --workflow CI --branch main --limit 1 `
+              --status success --json databaseId,headSha -q '.[0]'
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve the latest successful CI run.' }
+            if ([string]::IsNullOrWhiteSpace($runJson)) { throw 'No successful CI run found for main.' }
+            $run = $runJson | ConvertFrom-Json
+            $id = [string]$run.databaseId
+            $sha = [string]$run.headSha
           }
+          if ($id -notmatch '^[0-9]+$') { throw "Invalid CI run id: $id" }
+          if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Invalid CI head SHA: $sha" }
+          "runId=$id" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "headSha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      # The cpack ZIP is the install layout only (no lctest.exe); the
-      # benchmark-tools artifact carries layerd/layere/lctest from build\ci.
-      - name: Download CI tools (candidate)
+      - name: Checkout candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.candidate.outputs.headSha }}
+          persist-credentials: false
+
+      # The CPack ZIP is the install layout only (no lctest.exe); this artifact
+      # carries the benchmark executables from the exact CI run resolved above.
+      - name: Download CI tools
         uses: actions/download-artifact@v7
         with:
           name: layerc-windows-x64-tools
-          run-id: ${{ steps.run.outputs.runId }}
+          run-id: ${{ steps.candidate.outputs.runId }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           path: tools-build
 
       - name: Fetch V2.2 baseline
@@ -65,43 +76,70 @@ jobs:
         run: |
           gh release download baseline-v22 --repo ${{ github.repository }} `
             --dir baseline --clobber
-          Get-ChildItem baseline -Filter *.zip | ForEach-Object {
-            Expand-Archive -LiteralPath $_.FullName -DestinationPath baseline -Force
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to download the V2.2 baseline release.' }
+          $archives = @(Get-ChildItem baseline -Filter *.zip -File)
+          if ($archives.Count -ne 1) { throw "Expected one baseline ZIP, found $($archives.Count)." }
+          Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath baseline -Force
+
+      # Visual recognition captures the real screen through lctest's window.
+      # The runner must use the interactive desktop (run.cmd, not a service).
+      # Pulldown runs on the same runner, so a green main CI refreshes the
+      # local install unattended — no manual/LLM step between push and a
+      # ready out/layerc. Gates still run afterwards against the candidate
+      # tools, not the staged install. Best-effort: on the very first commit
+      # publish-rolling may not have created the release yet, which must not
+      # block the gates.
+      - name: Pulldown (stage rolling install)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          try {
+            & .\tools\pull-ci.ps1 `
+              -Repository ${{ github.repository }} `
+              -OutputPath $env:PULLDOWN_OUTPUT
+          } catch {
+            Write-Warning "Pulldown skipped: $($_.Exception.Message)"
           }
 
-      - name: Plateau benchmark (V2.2)
+      - name: Run hardware benchmarks
         shell: pwsh
         run: |
-          & .\tools\benchmark_v22.ps1 -BuildDirectory (Resolve-Path tools-build)
+          # This dedicated interactive runner is also the LayerC dev box. Take
+          # ownership of its project daemon before the isolated benchmark suite;
+          # each benchmark cleans up the LayerD instance it starts.
+          foreach ($daemon in @(Get-Process -Name layerd -ErrorAction SilentlyContinue)) {
+            Write-Host "Stopping existing LayerD process $($daemon.Id)."
+            Stop-Process -Id $daemon.Id -Force
+            if (-not $daemon.WaitForExit(5000)) {
+              throw "LayerD process $($daemon.Id) did not stop."
+            }
+          }
+          & .\tools\run-hardware-benchmarks.ps1 `
+            -CandidateBuildDirectory (Resolve-Path tools-build) `
+            -BaselineBuildDirectory (Resolve-Path baseline)
 
-      # Visual recognition: captures the real screen through lctest's window
-      # (needs the interactive desktop - run.cmd, not a service).
-      - name: Visual benchmark low (V1.1 pixel)
-        shell: pwsh
-        run: |
-          & .\tools\benchmark_v11.ps1 -BuildDirectory (Resolve-Path tools-build) -Quality low
-
-      - name: Visual benchmark balanced (V1.1 pixel)
-        shell: pwsh
-        run: |
-          & .\tools\benchmark_v11.ps1 -BuildDirectory (Resolve-Path tools-build) -Quality balanced
-
-      - name: Visual benchmark template (V2.1)
-        shell: pwsh
-        run: |
-          & .\tools\benchmark_v11.ps1 -BuildDirectory (Resolve-Path tools-build) -Quality balanced -Workload v21-template
-
-      - name: Latency benchmark (vs V2.2 baseline)
-        shell: pwsh
-        run: |
-          & .\tools\benchmark_latency.ps1 `
-            -BaselineBuildDirectory (Resolve-Path baseline) `
-            -CandidateBuildDirectory (Resolve-Path tools-build)
-
-      - name: Upload evidence
+      - name: Upload benchmark evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-evidence
-          path: |
-            out/benchmarks/*.json
-          if-no-files-found: error
+          path: out/benchmarks/*.json
+          if-no-files-found: warn
+
+      # This runner IS the dev box, so mirror the evidence into the working
+      # tree's out/benchmarks so the local session sees the latest gate results
+      # without downloading the artifact. Best-effort — never affects the run.
+      - name: Mirror evidence to dev checkout
+        if: always()
+        shell: pwsh
+        run: |
+          $src = Join-Path $env:GITHUB_WORKSPACE 'out\benchmarks'
+          $dst = $env:PULLDOWN_OUTPUT | Split-Path -Parent | Join-Path -ChildPath 'benchmarks'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          if (Test-Path $src) {
+            Copy-Item (Join-Path $src '*.json') $dst -Force
+            Write-Host "Mirrored $((Get-ChildItem $src -Filter *.json).Count) JSON(s) to $dst"
+          } else {
+            Write-Warning "Mirror skipped: src=$src dst=$dst"
+          }

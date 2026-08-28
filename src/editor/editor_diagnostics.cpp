@@ -94,15 +94,9 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
       return TRUE;
     }
   }
-  if (message == WM_DRAWITEM) {
-    editor->draw_button(*reinterpret_cast<DRAWITEMSTRUCT *>(lparam),
-                        layerc::platform::EditorControlRole::button);
-    return TRUE;
-  }
-  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
-    return editor->color_message(message, wparam, lparam);
   if (message == WM_DESTROY) editor->diagnostics_dialog_ = nullptr;
-  return FALSE;
+  return editor->dialog_theme_message(window, message, wparam, lparam)
+      .value_or(FALSE);
 }
 
 } // namespace layerc::editor

@@ -10,11 +10,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repository = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
-    $BuildDirectory = Join-Path $repository 'build\mingw-preset'
-}
-$BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
+. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+$context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
+    -OutputPath $OutputPath -OutputStem 'v22-modular-idle' `
+    -TemporaryStem 'LayerC-v22-benchmark'
+$BuildDirectory = $context.BuildDirectory
+$OutputPath = $context.OutputPath
+$temporary = $context.Temporary
+$profileDirectory = $context.ProfileDirectory
+$utf8 = $context.Utf8
 foreach ($name in @('layerd.exe', 'layere.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
         throw "Missing $name in $BuildDirectory. Build Release first."
@@ -23,56 +27,11 @@ foreach ($name in @('layerd.exe', 'layere.exe')) {
 if (Get-Process -Name layerd, layere -ErrorAction SilentlyContinue) {
     throw 'Close existing LayerD and LayerE processes before running the isolated V2.2 benchmark.'
 }
-
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $outputDirectory = Join-Path $repository 'out\benchmarks'
-    [IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
-    $OutputPath = Join-Path $outputDirectory "v22-modular-idle-$stamp.json"
-}
-$OutputPath = [IO.Path]::GetFullPath($OutputPath)
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
-$temporary = Join-Path ([IO.Path]::GetTempPath()) "LayerC-v22-benchmark-$PID-$stamp"
-$profileDirectory = Join-Path $temporary 'profiles'
 [IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
-$utf8 = New-Object System.Text.UTF8Encoding($false)
-
-function Measure-Plateau([Diagnostics.Process]$Process, [int]$Seconds) {
-    $private = [Collections.Generic.List[long]]::new()
-    $working = [Collections.Generic.List[long]]::new()
-    [int]$maxThreads = 0
-    [int]$maxHandles = 0
-    $Process.Refresh()
-    $startCpu = $Process.TotalProcessorTime.TotalMilliseconds
-    $clock = [Diagnostics.Stopwatch]::StartNew()
-    while ($clock.Elapsed.TotalSeconds -lt $Seconds -and -not $Process.HasExited) {
-        $Process.Refresh()
-        $private.Add($Process.PrivateMemorySize64)
-        $working.Add($Process.WorkingSet64)
-        $maxThreads = [Math]::Max($maxThreads, $Process.Threads.Count)
-        $maxHandles = [Math]::Max($maxHandles, $Process.HandleCount)
-        Start-Sleep -Milliseconds 250
-    }
-    if ($Process.HasExited -or $private.Count -eq 0) {
-        throw 'LayerD exited during the V2.2 resource measurement.'
-    }
-    $Process.Refresh()
-    $elapsedMs = [Math]::Max(1.0, $clock.Elapsed.TotalMilliseconds)
-    $cpuMs = $Process.TotalProcessorTime.TotalMilliseconds - $startCpu
-    $sortedPrivate = @($private | Sort-Object)
-    $sortedWorking = @($working | Sort-Object)
-    $middle = [int][Math]::Floor($sortedPrivate.Count / 2)
-    return [ordered]@{
-        durationSeconds = [Math]::Round($clock.Elapsed.TotalSeconds, 3)
-        averageCpuPercent = [Math]::Round(
-            $cpuMs / $elapsedMs / [Environment]::ProcessorCount * 100.0, 3)
-        medianPrivateMiB = [Math]::Round($sortedPrivate[$middle] / 1MB, 3)
-        maxPrivateMiB = [Math]::Round(($sortedPrivate | Measure-Object -Maximum).Maximum / 1MB, 3)
-        medianWorkingSetMiB = [Math]::Round($sortedWorking[$middle] / 1MB, 3)
-        maxWorkingSetMiB = [Math]::Round(($sortedWorking | Measure-Object -Maximum).Maximum / 1MB, 3)
-        maxThreadCount = $maxThreads
-        maxHandleCount = $maxHandles
-    }
+$measure = @{
+    Seconds = $DurationSeconds
+    FailureMessage = 'LayerD exited during the V2.2 resource measurement.'
 }
 
 $oldProfileDirectory = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR', 'Process')
@@ -84,7 +43,7 @@ try {
         -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
-    $baseline = Measure-Plateau $daemon $DurationSeconds
+    $baseline = Measure-LayerCPlateau -Process $daemon @measure
 
     $editor = Start-Process -FilePath (Join-Path $BuildDirectory 'layere.exe') `
         -WorkingDirectory $BuildDirectory -PassThru
@@ -96,7 +55,7 @@ try {
     }
     if ($editor.MainWindowHandle -eq 0) { throw 'LayerE did not create its main window.' }
     Start-Sleep -Seconds $WarmupSeconds
-    $editorOpen = Measure-Plateau $daemon $DurationSeconds
+    $editorOpen = Measure-LayerCPlateau -Process $daemon @measure
 
     [void]$editor.CloseMainWindow()
     if (-not $editor.WaitForExit(5000)) {
@@ -104,7 +63,7 @@ try {
         [void]$editor.WaitForExit(5000)
     }
     Start-Sleep -Seconds $WarmupSeconds
-    $afterClose = Measure-Plateau $daemon $DurationSeconds
+    $afterClose = Measure-LayerCPlateau -Process $daemon @measure
 
     $privateDelta = $editorOpen.medianPrivateMiB - $baseline.medianPrivateMiB
     $workingDelta = $editorOpen.medianWorkingSetMiB - $baseline.medianWorkingSetMiB

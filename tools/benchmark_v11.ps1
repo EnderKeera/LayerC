@@ -16,6 +16,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+
 if (-not ('LayerCBenchmarkNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -36,55 +38,6 @@ public static class LayerCBenchmarkNative {
 '@
 }
 
-function Set-BenchmarkForeground(
-    [System.Diagnostics.Process]$Target,
-    [object]$Activator) {
-    $Target.Refresh()
-    $window = $Target.MainWindowHandle
-    if ($window -eq [IntPtr]::Zero) { return $false }
-
-    [void][LayerCBenchmarkNative]::ShowWindowAsync($window, 9) # SW_RESTORE
-    [void]$Activator.AppActivate($Target.Id)
-
-    $currentThread = [LayerCBenchmarkNative]::GetCurrentThreadId()
-    $foreground = [LayerCBenchmarkNative]::GetForegroundWindow()
-    [uint32]$ignoredProcess = 0
-    $foregroundThread = if ($foreground -ne [IntPtr]::Zero) {
-        [LayerCBenchmarkNative]::GetWindowThreadProcessId(
-            $foreground, [ref]$ignoredProcess)
-    } else { 0 }
-    [uint32]$targetProcess = 0
-    $targetThread = [LayerCBenchmarkNative]::GetWindowThreadProcessId(
-        $window, [ref]$targetProcess)
-
-    $attachedForeground = $foregroundThread -ne 0 -and
-        $foregroundThread -ne $currentThread -and
-        [LayerCBenchmarkNative]::AttachThreadInput(
-            $currentThread, $foregroundThread, $true)
-    $attachedTarget = $targetThread -ne 0 -and
-        $targetThread -ne $currentThread -and
-        [LayerCBenchmarkNative]::AttachThreadInput(
-            $currentThread, $targetThread, $true)
-    try {
-        [void][LayerCBenchmarkNative]::BringWindowToTop($window)
-        [void][LayerCBenchmarkNative]::SetForegroundWindow($window)
-    } finally {
-        if ($attachedTarget) {
-            [void][LayerCBenchmarkNative]::AttachThreadInput(
-                $currentThread, $targetThread, $false)
-        }
-        if ($attachedForeground) {
-            [void][LayerCBenchmarkNative]::AttachThreadInput(
-                $currentThread, $foregroundThread, $false)
-        }
-    }
-
-    $foregroundRoot = [LayerCBenchmarkNative]::GetAncestor(
-        [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
-    $targetRoot = [LayerCBenchmarkNative]::GetAncestor($window, 2)
-    return $foregroundRoot -eq $targetRoot
-}
-
 function Ensure-BenchmarkForeground(
     [System.Diagnostics.Process]$Target,
     [object]$Activator) {
@@ -92,7 +45,7 @@ function Ensure-BenchmarkForeground(
     $root = [LayerCBenchmarkNative]::GetAncestor(
         [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
     if ($root -eq $Target.MainWindowHandle) { return $true }
-    return Set-BenchmarkForeground $Target $Activator
+    return Set-BenchmarkForeground $Target $Activator ([LayerCBenchmarkNative])
 }
 
 function Assert-BenchmarkMeasurementActive(
@@ -103,7 +56,7 @@ function Assert-BenchmarkMeasurementActive(
     $root = [LayerCBenchmarkNative]::GetAncestor(
         [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
     if ($root -ne $Target.MainWindowHandle) {
-        [void](Set-BenchmarkForeground $Target $Activator)
+        [void](Set-BenchmarkForeground $Target $Activator ([LayerCBenchmarkNative]))
         throw 'Benchmark sample interrupted: the fixture lost foreground.'
     }
     if ($null -eq $CaptureEvent -or -not $CaptureEvent.WaitOne(0)) {
@@ -476,7 +429,7 @@ try {
     }
     if ($game.MainWindowHandle -eq 0) { throw 'lctest did not create its window.' }
     $activator = New-Object -ComObject WScript.Shell
-    [void](Set-BenchmarkForeground $game $activator)
+    [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
     Start-Sleep -Milliseconds 300
 
     $probeOutput = Join-Path $temporary 'probe.json'
@@ -488,7 +441,7 @@ try {
     # Windows PowerShell 5 can leave ExitCode unset for a redirected
     # Start-Process unless its native handle is materialized before waiting.
     $probeHandle = $probe.Handle
-    [void](Set-BenchmarkForeground $game $activator)
+    [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
     $probe.WaitForExit()
     $probe.Refresh()
     $probeExitCode = $probe.ExitCode
@@ -513,7 +466,7 @@ try {
         # client. Keep the fixture foreground while LayerD starts and performs
         # its first window scan; a one-shot AppActivate is racy with shell
         # focus changes during process startup.
-        [void](Set-BenchmarkForeground $game $activator)
+        [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
         if ($null -eq $captureEvent) {
             try {
                 $captureEvent = [Threading.EventWaitHandle]::OpenExisting('Local\LayerC.LayerD.VisualCaptureActive')
@@ -530,7 +483,7 @@ try {
     }
     if ($Workload -eq 'v21-template') {
         for ($attempt = 0; $attempt -lt 50 -and -not $templateMatchVerified; ++$attempt) {
-            [void](Set-BenchmarkForeground $game $activator)
+            [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
             $overlay = [LayerCBenchmarkNative]::FindWindow(
                 'LayerDOverlayWindow', 'LayerD Overlay')
             $templateMatchVerified =

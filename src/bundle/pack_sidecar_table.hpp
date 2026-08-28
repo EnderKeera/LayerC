@@ -11,11 +11,6 @@ namespace layerc::bundle::detail {
 
 enum class SidecarKind { visual, automation, companion };
 
-struct ModuleLimits {
-  std::size_t maximum_size;
-  std::uint64_t maximum_schema;
-};
-
 struct SidecarDesc {
   SidecarKind type;
   std::string_view kind;
@@ -39,12 +34,6 @@ sidecar_desc_for_kind(const std::string_view kind) {
   for (const auto &desc : kSidecars)
     if (desc.kind == kind)
       return desc;
-  return std::nullopt;
-}
-
-inline std::optional<ModuleLimits> module_limits(const std::string_view kind) {
-  if (auto desc = sidecar_desc_for_kind(kind))
-    return ModuleLimits{desc->max_bytes, desc->max_schema};
   return std::nullopt;
 }
 

@@ -10,6 +10,12 @@
 #include <initializer_list>
 #include <optional>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include <windows.h>
+
 namespace layerc::core {
 namespace {
 
@@ -30,144 +36,82 @@ find_cooldown(const std::vector<CooldownDefinition> &definitions,
 }
 
 std::string base64_encode(const std::string_view source) {
-  constexpr char alphabet[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string output;
-  output.reserve(((source.size() + 2U) / 3U) * 4U);
-  for (std::size_t offset = 0; offset < source.size(); offset += 3U) {
-    const auto first = static_cast<unsigned char>(source[offset]);
-    const auto second = offset + 1U < source.size()
-                            ? static_cast<unsigned char>(source[offset + 1U])
-                            : 0U;
-    const auto third = offset + 2U < source.size()
-                           ? static_cast<unsigned char>(source[offset + 2U])
-                           : 0U;
-    const std::uint32_t value = (static_cast<std::uint32_t>(first) << 16U) |
-                                (static_cast<std::uint32_t>(second) << 8U) |
-                                static_cast<std::uint32_t>(third);
-    output.push_back(alphabet[(value >> 18U) & 0x3FU]);
-    output.push_back(alphabet[(value >> 12U) & 0x3FU]);
-    output.push_back(
-        offset + 1U < source.size() ? alphabet[(value >> 6U) & 0x3FU] : '=');
-    output.push_back(offset + 2U < source.size() ? alphabet[value & 0x3FU]
-                                                 : '=');
-  }
+  if (source.empty())
+    return {};
+  DWORD output_size{};
+  if (CryptBinaryToStringA(
+          reinterpret_cast<const BYTE *>(source.data()),
+          static_cast<DWORD>(source.size()),
+          CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr,
+          &output_size) == FALSE ||
+      output_size == 0)
+    return {};
+  std::string output(output_size, '\0');
+  if (CryptBinaryToStringA(
+          reinterpret_cast<const BYTE *>(source.data()),
+          static_cast<DWORD>(source.size()),
+          CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, output.data(),
+          &output_size) == FALSE)
+    return {};
+  output.resize(output_size);
   return output;
 }
 
 std::optional<std::string> base64_decode(const std::string_view source) {
   if (source.size() % 4U != 0)
     return std::nullopt;
-  const auto value_of = [](const char character) -> int {
-    if (character >= 'A' && character <= 'Z')
-      return character - 'A';
-    if (character >= 'a' && character <= 'z')
-      return character - 'a' + 26;
-    if (character >= '0' && character <= '9')
-      return character - '0' + 52;
-    if (character == '+')
-      return 62;
-    if (character == '/')
-      return 63;
-    return -1;
-  };
-  std::string output;
-  output.reserve(source.size() / 4U * 3U);
-  for (std::size_t offset = 0; offset < source.size(); offset += 4U) {
-    const bool last = offset + 4U == source.size();
-    const bool pad_two = source[offset + 2U] == '=';
-    const bool pad_three = source[offset + 3U] == '=';
-    if ((!last && (pad_two || pad_three)) || (pad_two && !pad_three))
-      return std::nullopt;
-    const int first = value_of(source[offset]);
-    const int second = value_of(source[offset + 1U]);
-    const int third = pad_two ? 0 : value_of(source[offset + 2U]);
-    const int fourth = pad_three ? 0 : value_of(source[offset + 3U]);
-    if (first < 0 || second < 0 || third < 0 || fourth < 0)
-      return std::nullopt;
-    const std::uint32_t value = (static_cast<std::uint32_t>(first) << 18U) |
-                                (static_cast<std::uint32_t>(second) << 12U) |
-                                (static_cast<std::uint32_t>(third) << 6U) |
-                                static_cast<std::uint32_t>(fourth);
-    output.push_back(static_cast<char>((value >> 16U) & 0xFFU));
-    if (!pad_two)
-      output.push_back(static_cast<char>((value >> 8U) & 0xFFU));
-    if (!pad_three)
-      output.push_back(static_cast<char>(value & 0xFFU));
-  }
+  DWORD output_size{};
+  if (CryptStringToBinaryA(source.data(), static_cast<DWORD>(source.size()),
+                           CRYPT_STRING_BASE64, nullptr, &output_size, nullptr,
+                           nullptr) == FALSE)
+    return std::nullopt;
+  std::string output(output_size, '\0');
+  if (CryptStringToBinaryA(source.data(), static_cast<DWORD>(source.size()),
+                           CRYPT_STRING_BASE64,
+                           reinterpret_cast<BYTE *>(output.data()),
+                           &output_size, nullptr, nullptr) == FALSE)
+    return std::nullopt;
+  output.resize(output_size);
   return output;
 }
 
+// Must stay in LiveMessageType declaration order so message_type_name can
+// index it directly; parse_message_type scans it by name.
+static constexpr std::pair<std::string_view, LiveMessageType> k_message_names[] = {
+    {"handshake", LiveMessageType::handshake},
+    {"committedProfile", LiveMessageType::committed_profile},
+    {"beginEdit", LiveMessageType::begin_edit},
+    {"liveProfile", LiveMessageType::live_profile},
+    {"selectPanel", LiveMessageType::select_panel},
+    {"anchorChanged", LiveMessageType::anchor_changed},
+    {"setDirectDrag", LiveMessageType::set_direct_drag},
+    {"endEdit", LiveMessageType::end_edit},
+    {"heartbeat", LiveMessageType::heartbeat},
+    {"runtimeStatus", LiveMessageType::runtime_status},
+    {"diagnosticsRequest", LiveMessageType::diagnostics_request},
+    {"diagnosticsReply", LiveMessageType::diagnostics_reply},
+    {"retryVisual", LiveMessageType::retry_visual},
+    {"automationTraceSubscribe", LiveMessageType::automation_trace_subscribe},
+    {"automationTraceUnsubscribe",
+     LiveMessageType::automation_trace_unsubscribe},
+    {"automationTraceEvent", LiveMessageType::automation_trace_event},
+    {"retryAutomation", LiveMessageType::retry_automation},
+    {"ack", LiveMessageType::acknowledgement},
+    {"error", LiveMessageType::error},
+};
+
 std::string_view message_type_name(const LiveMessageType type) {
-  switch (type) {
-  case LiveMessageType::handshake:
-    return "handshake";
-  case LiveMessageType::committed_profile:
-    return "committedProfile";
-  case LiveMessageType::begin_edit:
-    return "beginEdit";
-  case LiveMessageType::live_profile:
-    return "liveProfile";
-  case LiveMessageType::select_panel:
-    return "selectPanel";
-  case LiveMessageType::anchor_changed:
-    return "anchorChanged";
-  case LiveMessageType::set_direct_drag:
-    return "setDirectDrag";
-  case LiveMessageType::end_edit:
-    return "endEdit";
-  case LiveMessageType::heartbeat:
-    return "heartbeat";
-  case LiveMessageType::runtime_status:
-    return "runtimeStatus";
-  case LiveMessageType::diagnostics_request:
-    return "diagnosticsRequest";
-  case LiveMessageType::diagnostics_reply:
-    return "diagnosticsReply";
-  case LiveMessageType::retry_visual:
-    return "retryVisual";
-  case LiveMessageType::automation_trace_subscribe:
-    return "automationTraceSubscribe";
-  case LiveMessageType::automation_trace_unsubscribe:
-    return "automationTraceUnsubscribe";
-  case LiveMessageType::automation_trace_event:
-    return "automationTraceEvent";
-  case LiveMessageType::retry_automation:
-    return "retryAutomation";
-  case LiveMessageType::acknowledgement:
-    return "ack";
-  case LiveMessageType::error:
-    return "error";
-  }
-  return "error";
+  const auto index = static_cast<std::size_t>(type);
+  return index < std::size(k_message_names) ? k_message_names[index].first
+                                            : "error";
 }
 
 std::optional<LiveMessageType> parse_message_type(const std::string_view name) {
-  static constexpr std::pair<std::string_view, LiveMessageType> names[] = {
-      {"handshake", LiveMessageType::handshake},
-      {"committedProfile", LiveMessageType::committed_profile},
-      {"beginEdit", LiveMessageType::begin_edit},
-      {"liveProfile", LiveMessageType::live_profile},
-      {"selectPanel", LiveMessageType::select_panel},
-      {"anchorChanged", LiveMessageType::anchor_changed},
-      {"setDirectDrag", LiveMessageType::set_direct_drag},
-      {"endEdit", LiveMessageType::end_edit},
-      {"heartbeat", LiveMessageType::heartbeat},
-      {"runtimeStatus", LiveMessageType::runtime_status},
-      {"diagnosticsRequest", LiveMessageType::diagnostics_request},
-      {"diagnosticsReply", LiveMessageType::diagnostics_reply},
-      {"retryVisual", LiveMessageType::retry_visual},
-      {"automationTraceSubscribe", LiveMessageType::automation_trace_subscribe},
-      {"automationTraceUnsubscribe",
-       LiveMessageType::automation_trace_unsubscribe},
-      {"automationTraceEvent", LiveMessageType::automation_trace_event},
-      {"retryAutomation", LiveMessageType::retry_automation},
-      {"ack", LiveMessageType::acknowledgement},
-      {"error", LiveMessageType::error},
-  };
   const auto found = std::ranges::find_if(
-      names, [&](const auto &entry) { return entry.first == name; });
-  return found == std::end(names) ? std::nullopt : std::optional(found->second);
+      k_message_names,
+      [&](const auto &entry) { return entry.first == name; });
+  return found == std::end(k_message_names) ? std::nullopt
+                                            : std::optional(found->second);
 }
 
 bool string_field(const json::Value &root, const std::string_view name,

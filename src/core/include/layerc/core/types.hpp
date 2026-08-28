@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace layerc::core {
@@ -19,6 +20,21 @@ enum class InputDevice : std::uint8_t {
     controller,
     generic_hid,
 };
+
+[[nodiscard]] constexpr std::string_view
+input_device_label(const InputDevice device) noexcept {
+    switch (device) {
+    case InputDevice::keyboard:
+        return "keyboard";
+    case InputDevice::mouse:
+        return "mouse";
+    case InputDevice::controller:
+        return "controller";
+    case InputDevice::generic_hid:
+        return "hid";
+    }
+    return "unknown";
+}
 
 struct InputToken {
     InputDevice device{InputDevice::keyboard};

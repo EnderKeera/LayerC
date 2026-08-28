@@ -10,13 +10,6 @@ namespace {
 
 constexpr std::wstring_view app_service_name = L"LayerC.GameBar.v1";
 constexpr std::wstring_view settings_extension = L"Settings";
-constexpr std::wstring_view panel_prefix = L"PanelSlot";
-
-bool is_panel_extension(const std::wstring_view id) {
-  return id.starts_with(panel_prefix) &&
-         id.size() == panel_prefix.size() + 1U && id.back() >= L'1' &&
-         id.back() <= L'8';
-}
 
 } // namespace
 

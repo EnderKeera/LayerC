@@ -2,6 +2,7 @@
 #include "visual_capture_worker.hpp"
 
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/windows.hpp"
 #include "layerc/core/json.hpp"
 
 #include <array>
@@ -57,60 +58,6 @@ std::optional<Integer> decimal(const std::wstring &source) {
   return result;
 }
 
-bool same_user_as_current_process(const HANDLE process) {
-  HANDLE current_token{}, parent_token{};
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token) ==
-          FALSE ||
-      OpenProcessToken(process, TOKEN_QUERY, &parent_token) == FALSE) {
-    if (current_token != nullptr) CloseHandle(current_token);
-    if (parent_token != nullptr) CloseHandle(parent_token);
-    return false;
-  }
-  const auto sid = [](const HANDLE token,
-                      std::vector<std::byte> &storage) -> PSID {
-    DWORD required{};
-    (void)GetTokenInformation(token, TokenUser, nullptr, 0, &required);
-    if (required == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-      return nullptr;
-    storage.resize(required);
-    if (GetTokenInformation(token, TokenUser, storage.data(), required,
-                            &required) == FALSE)
-      return nullptr;
-    return reinterpret_cast<TOKEN_USER *>(storage.data())->User.Sid;
-  };
-  std::vector<std::byte> current_storage, parent_storage;
-  const PSID current_sid = sid(current_token, current_storage);
-  const PSID parent_sid = sid(parent_token, parent_storage);
-  const bool equal = current_sid != nullptr && parent_sid != nullptr &&
-                     EqualSid(current_sid, parent_sid) != FALSE;
-  CloseHandle(parent_token);
-  CloseHandle(current_token);
-  return equal;
-}
-
-bool is_sibling_daemon(const HANDLE process) {
-  std::array<wchar_t, 32'768> current{};
-  const DWORD current_length = GetModuleFileNameW(
-      nullptr, current.data(), static_cast<DWORD>(current.size()));
-  if (current_length == 0 || current_length >= current.size()) return false;
-  const auto expected =
-      std::filesystem::path(std::wstring_view(current.data(), current_length))
-          .parent_path() /
-      L"layerd.exe";
-  std::array<wchar_t, 32'768> actual{};
-  DWORD actual_length = static_cast<DWORD>(actual.size());
-  if (QueryFullProcessImageNameW(process, 0, actual.data(), &actual_length) ==
-          FALSE ||
-      actual_length == 0)
-    return false;
-  std::error_code error;
-  const bool equivalent = std::filesystem::equivalent(
-      expected,
-      std::filesystem::path(std::wstring_view(actual.data(), actual_length)),
-      error);
-  return !error && equivalent;
-}
-
 int worker_main(const std::wstring &pipe_name, const std::string &nonce,
                 const DWORD parent_process_id, const HWND target_window) {
   if (pipe_name.empty() || nonce.size() != 48 || parent_process_id == 0 ||
@@ -139,8 +86,10 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
       parent != nullptr &&
       ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
       ProcessIdToSessionId(parent_process_id, &parent_session) != FALSE &&
-      current_session == parent_session && same_user_as_current_process(parent) &&
-      is_sibling_daemon(parent);
+      current_session == parent_session &&
+      layerc::platform::same_user_as_current_process(parent) &&
+      layerc::platform::is_sibling_process_image(parent_process_id,
+                                                 L"layerd.exe");
   if (parent != nullptr) CloseHandle(parent);
   if (!trusted) {
     CloseHandle(pipe);

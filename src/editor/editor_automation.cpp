@@ -104,8 +104,6 @@ EditorWindow::EditorWindow()
 
 EditorWindow::~EditorWindow() = default;
 
-void EditorWindow::open_automation_editor() { automation_editor_->open(); }
-
 void EditorWindow::load_current_automation_profile() {
   automation_profile_.reset();
   automation_sidecar_state_ = layerc::platform::AutomationSidecarState::absent;
@@ -722,120 +720,122 @@ void AutomationEditor::validate_json(const HWND dialog) {
                       reinterpret_cast<LPARAM>(line.c_str()));
 }
 
+bool AutomationEditor::handle_command(const HWND dialog,
+                                      const WPARAM wparam) {
+  const int id = LOWORD(wparam);
+  const int notification = HIWORD(wparam);
+  switch (id) {
+  case IDC_AUTOMATION_LIST:
+    if (notification == LBN_SELCHANGE) {
+      graph_rule_ = -1;
+      graph_action_ = -1;
+      refresh(dialog);
+    }
+    return true;
+  case IDC_AUTOMATION_PRESETS:
+    if (notification == LBN_DBLCLK)
+      add_basic(dialog);
+    return true;
+  case IDC_AUTOMATION_CANVAS:
+    if (notification == STN_CLICKED)
+      select_canvas_node(dialog);
+    return true;
+  case IDC_AUTOMATION_APPLY_NODE:
+    apply_node_properties(dialog);
+    return true;
+  case IDC_AUTOMATION_DELETE_NODE:
+    delete_canvas_node(dialog);
+    return true;
+  case IDC_AUTOMATION_ADD_PRESET:
+    add_basic(dialog);
+    return true;
+  case IDC_AUTOMATION_REMOVE:
+    remove_selected(dialog);
+    return true;
+  case IDC_AUTOMATION_ENABLED:
+    if (notification == BN_CLICKED && owner_.automation_profile_) {
+      const int selected = selected_index(dialog);
+      if (selected >= 0) {
+        owner_.automation_profile_->automations[static_cast<std::size_t>(selected)]
+            .enabled = owner_draw_checkbox_checked(
+            GetDlgItem(dialog, IDC_AUTOMATION_ENABLED));
+        owner_.record_profile_change(EditorWindow::ChangeKind::immediate);
+        refresh(dialog);
+      }
+    }
+    return true;
+  case IDC_AUTOMATION_NAME:
+    if (notification == EN_KILLFOCUS && owner_.automation_profile_) {
+      const int selected = selected_index(dialog);
+      if (selected >= 0) {
+        owner_.automation_profile_->automations[static_cast<std::size_t>(selected)]
+            .name =
+            to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_NAME)));
+        owner_.record_profile_change(EditorWindow::ChangeKind::text);
+      }
+      refresh(dialog);
+    }
+    return true;
+  case IDC_AUTOMATION_APPLY:
+    (void)apply_json(dialog);
+    return true;
+  case IDC_AUTOMATION_ADD_NODE:
+    add_palette_node(dialog);
+    return true;
+  case IDC_AUTOMATION_VALIDATE:
+    validate_json(dialog);
+    return true;
+  case IDC_AUTOMATION_ZOOM_OUT:
+    graph_zoom_ = std::max(50, graph_zoom_ - 25);
+    refresh_graph(dialog);
+    return true;
+  case IDC_AUTOMATION_ZOOM_IN:
+    graph_zoom_ = std::min(200, graph_zoom_ + 25);
+    refresh_graph(dialog);
+    return true;
+  case IDC_AUTOMATION_TRACE_LOAD:
+    load_trace(dialog);
+    return true;
+  case IDC_AUTOMATION_SIM_ADD:
+    add_simulator_event(dialog);
+    return true;
+  case IDC_AUTOMATION_SIM_RESET:
+    reset_simulator(dialog);
+    return true;
+  case IDC_AUTOMATION_SIM_STEP:
+    step_simulator(dialog);
+    return true;
+  case IDC_AUTOMATION_SIM_PLAY:
+    play_simulator(dialog, !simulator_playing_);
+    return true;
+  case IDC_AUTOMATION_TRACE:
+    if (notification == BN_CLICKED)
+      set_trace(dialog, owner_draw_checkbox_checked(
+                            GetDlgItem(dialog, IDC_AUTOMATION_TRACE)));
+    return true;
+  case IDC_AUTOMATION_SAVE_TRACE:
+    save_trace(dialog);
+    return true;
+  case IDC_AUTOMATION_RETRY:
+    retry_selected(dialog);
+    return true;
+  case IDOK:
+  case IDCANCEL:
+    if (trace_enabled_)
+      set_trace(dialog, false);
+    dialog_ = nullptr;
+    EndDialog(dialog, id);
+    return true;
+  default:
+    return false;
+  }
+}
+
 LRESULT AutomationEditor::handle_message(const HWND window, const UINT message,
                                          const WPARAM wparam,
                                          const LPARAM lparam) {
-  if (message == WM_COMMAND) {
-    const int id = LOWORD(wparam);
-    const int notification = HIWORD(wparam);
-    switch (id) {
-    case IDC_AUTOMATION_LIST:
-      if (notification == LBN_SELCHANGE) {
-        graph_rule_ = -1;
-        graph_action_ = -1;
-        refresh(window);
-      }
-      return TRUE;
-    case IDC_AUTOMATION_PRESETS:
-      if (notification == LBN_DBLCLK)
-        add_basic(window);
-      return TRUE;
-    case IDC_AUTOMATION_CANVAS:
-      if (notification == STN_CLICKED)
-        select_canvas_node(window);
-      return TRUE;
-    case IDC_AUTOMATION_APPLY_NODE:
-      apply_node_properties(window);
-      return TRUE;
-    case IDC_AUTOMATION_DELETE_NODE:
-      delete_canvas_node(window);
-      return TRUE;
-    case IDC_AUTOMATION_ADD_PRESET:
-      add_basic(window);
-      return TRUE;
-    case IDC_AUTOMATION_REMOVE:
-      remove_selected(window);
-      return TRUE;
-    case IDC_AUTOMATION_ENABLED:
-      if (notification == BN_CLICKED && owner_.automation_profile_) {
-        const int selected = selected_index(window);
-        if (selected >= 0) {
-          owner_.automation_profile_
-              ->automations[static_cast<std::size_t>(selected)]
-              .enabled = owner_draw_checkbox_checked(
-              GetDlgItem(window, IDC_AUTOMATION_ENABLED));
-          owner_.record_profile_change(EditorWindow::ChangeKind::immediate);
-          refresh(window);
-        }
-      }
-      return TRUE;
-    case IDC_AUTOMATION_NAME:
-      if (notification == EN_KILLFOCUS && owner_.automation_profile_) {
-        const int selected = selected_index(window);
-        if (selected >= 0) {
-          owner_.automation_profile_
-              ->automations[static_cast<std::size_t>(selected)]
-              .name =
-              to_utf8(control_text(GetDlgItem(window, IDC_AUTOMATION_NAME)));
-          owner_.record_profile_change(EditorWindow::ChangeKind::text);
-        }
-        refresh(window);
-      }
-      return TRUE;
-    case IDC_AUTOMATION_APPLY:
-      (void)apply_json(window);
-      return TRUE;
-    case IDC_AUTOMATION_ADD_NODE:
-      add_palette_node(window);
-      return TRUE;
-    case IDC_AUTOMATION_VALIDATE:
-      validate_json(window);
-      return TRUE;
-    case IDC_AUTOMATION_ZOOM_OUT:
-      graph_zoom_ = std::max(50, graph_zoom_ - 25);
-      refresh_graph(window);
-      return TRUE;
-    case IDC_AUTOMATION_ZOOM_IN:
-      graph_zoom_ = std::min(200, graph_zoom_ + 25);
-      refresh_graph(window);
-      return TRUE;
-    case IDC_AUTOMATION_TRACE_LOAD:
-      load_trace(window);
-      return TRUE;
-    case IDC_AUTOMATION_SIM_ADD:
-      add_simulator_event(window);
-      return TRUE;
-    case IDC_AUTOMATION_SIM_RESET:
-      reset_simulator(window);
-      return TRUE;
-    case IDC_AUTOMATION_SIM_STEP:
-      step_simulator(window);
-      return TRUE;
-    case IDC_AUTOMATION_SIM_PLAY:
-      play_simulator(window, !simulator_playing_);
-      return TRUE;
-    case IDC_AUTOMATION_TRACE:
-      if (notification == BN_CLICKED)
-        set_trace(window, owner_draw_checkbox_checked(
-                              GetDlgItem(window, IDC_AUTOMATION_TRACE)));
-      return TRUE;
-    case IDC_AUTOMATION_SAVE_TRACE:
-      save_trace(window);
-      return TRUE;
-    case IDC_AUTOMATION_RETRY:
-      retry_selected(window);
-      return TRUE;
-    case IDOK:
-    case IDCANCEL:
-      if (trace_enabled_)
-        set_trace(window, false);
-      dialog_ = nullptr;
-      EndDialog(window, id);
-      return TRUE;
-    default:
-      break;
-    }
-  }
+  if (message == WM_COMMAND && handle_command(window, wparam))
+    return TRUE;
   if (message == WM_TIMER && wparam == automation_simulator_timer) {
     step_simulator(window);
     return TRUE;
@@ -849,17 +849,17 @@ LRESULT AutomationEditor::handle_message(const HWND window, const UINT message,
     else if (item.CtlType == ODT_LISTBOX)
       owner_.draw_list_box_item(item);
     else
-      owner_.draw_button(item, layerc::platform::EditorControlRole::button);
+      return owner_.dialog_theme_message(window, message, wparam, lparam)
+          .value_or(FALSE);
     return TRUE;
   }
-  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC)
-    return owner_.color_message(message, wparam, lparam);
   if (message == WM_DESTROY) {
     KillTimer(window, automation_simulator_timer);
     simulator_playing_ = false;
     dialog_ = nullptr;
   }
-  return FALSE;
+  return owner_.dialog_theme_message(window, message, wparam, lparam)
+      .value_or(FALSE);
 }
 
 } // namespace layerc::editor

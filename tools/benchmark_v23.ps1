@@ -11,11 +11,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repository = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
-    $BuildDirectory = Join-Path $repository 'build\mingw-preset'
-}
-$BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
+. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+$context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
+    -OutputPath $OutputPath -OutputStem 'v23-automation' `
+    -TemporaryStem 'LayerC-v23-benchmark'
+$BuildDirectory = $context.BuildDirectory
+$OutputPath = $context.OutputPath
+$temporary = $context.Temporary
+$profileDirectory = $context.ProfileDirectory
+$utf8 = $context.Utf8
 foreach ($name in @('layerd.exe', 'layerc_automation_benchmark.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
         throw "Missing $name in $BuildDirectory. Build Release with tests first."
@@ -24,22 +28,16 @@ foreach ($name in @('layerd.exe', 'layerc_automation_benchmark.exe')) {
 if (Get-Process -Name layerd -ErrorAction SilentlyContinue) {
     throw 'Close the existing LayerD process before running the V2.3 benchmark.'
 }
-
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $outputDirectory = Join-Path $repository 'out\benchmarks'
-    [IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
-    $OutputPath = Join-Path $outputDirectory "v23-automation-$stamp.json"
-}
-$OutputPath = [IO.Path]::GetFullPath($OutputPath)
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
-$temporary = Join-Path ([IO.Path]::GetTempPath()) "LayerC-v23-benchmark-$PID-$stamp"
-$profileDirectory = Join-Path $temporary 'profiles'
 $automationDirectory = Join-Path $profileDirectory '_automation'
 $stateDirectory = Join-Path $profileDirectory '_state'
 [IO.Directory]::CreateDirectory($automationDirectory) | Out-Null
 [IO.Directory]::CreateDirectory($stateDirectory) | Out-Null
-$utf8 = New-Object System.Text.UTF8Encoding($false)
+$measure = @{
+    Seconds = $DurationSeconds
+    SampleIntervalMilliseconds = 200
+    FailureMessage = 'LayerD exited during the V2.3 resource measurement.'
+}
 
 function Wait-AutomationActive {
     for ($attempt = 0; $attempt -lt 120; ++$attempt) {
@@ -56,39 +54,6 @@ function Wait-AutomationActive {
         }
     }
     return $false
-}
-
-function Measure-Plateau([Diagnostics.Process]$Process, [int]$Seconds) {
-    $private = [Collections.Generic.List[long]]::new()
-    $working = [Collections.Generic.List[long]]::new()
-    [int]$maxThreads = 0
-    $Process.Refresh()
-    $startCpu = $Process.TotalProcessorTime.TotalMilliseconds
-    $clock = [Diagnostics.Stopwatch]::StartNew()
-    while ($clock.Elapsed.TotalSeconds -lt $Seconds -and -not $Process.HasExited) {
-        $Process.Refresh()
-        $private.Add($Process.PrivateMemorySize64)
-        $working.Add($Process.WorkingSet64)
-        $maxThreads = [Math]::Max($maxThreads, $Process.Threads.Count)
-        Start-Sleep -Milliseconds 200
-    }
-    if ($Process.HasExited -or $private.Count -eq 0) {
-        throw 'LayerD exited during the V2.3 resource measurement.'
-    }
-    $Process.Refresh()
-    $elapsedMs = [Math]::Max(1.0, $clock.Elapsed.TotalMilliseconds)
-    $cpuMs = $Process.TotalProcessorTime.TotalMilliseconds - $startCpu
-    $sortedPrivate = @($private | Sort-Object)
-    $sortedWorking = @($working | Sort-Object)
-    $middle = [int][Math]::Floor($sortedPrivate.Count / 2)
-    return [ordered]@{
-        durationSeconds = [Math]::Round($clock.Elapsed.TotalSeconds, 3)
-        averageCpuPercent = [Math]::Round(
-            $cpuMs / $elapsedMs / [Environment]::ProcessorCount * 100.0, 3)
-        medianPrivateMiB = [Math]::Round($sortedPrivate[$middle] / 1MB, 3)
-        medianWorkingSetMiB = [Math]::Round($sortedWorking[$middle] / 1MB, 3)
-        maxThreadCount = $maxThreads
-    }
 }
 
 $profilePath = Join-Path $profileDirectory 'automation-benchmark.json'
@@ -164,7 +129,7 @@ try {
         -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
-    $withoutAutomation = Measure-Plateau $daemon $DurationSeconds
+    $withoutAutomation = Measure-LayerCPlateau -Process $daemon @measure
 
     Stop-Process -Id $daemon.Id -Force
     [void]$daemon.WaitForExit(5000)
@@ -197,7 +162,7 @@ try {
         throw 'LayerD did not checkpoint the persistent tick; refusing a persistence false pass.'
     }
     Start-Sleep -Seconds $WarmupSeconds
-    $withAutomation = Measure-Plateau $daemon $DurationSeconds
+    $withAutomation = Measure-LayerCPlateau -Process $daemon @measure
 
     Stop-Process -Id $daemon.Id -Force
     [void]$daemon.WaitForExit(5000)
@@ -207,7 +172,7 @@ try {
         -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited after automation was disabled." }
-    $afterDisable = Measure-Plateau $daemon $DurationSeconds
+    $afterDisable = Measure-LayerCPlateau -Process $daemon @measure
 
     $microJson = & (Join-Path $BuildDirectory 'layerc_automation_benchmark.exe')
     if ($LASTEXITCODE -ne 0) { throw 'The automation evaluator benchmark failed.' }

@@ -1,3 +1,4 @@
+#include "automation_editor.hpp"
 #include "editor_app.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_window.hpp"
@@ -115,8 +116,8 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   const int work_height = static_cast<int>(work.bottom - work.top);
   const UINT window_dpi = GetDpiForWindow(dialog_);
   const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-  const int width = std::max(1, std::min(MulDiv(1210, dpi, 96), work_width));
-  const int height = std::max(1, std::min(MulDiv(760, dpi, 96), work_height));
+  const int width = std::clamp(MulDiv(1210, dpi, 96), 1, work_width);
+  const int height = std::clamp(MulDiv(760, dpi, 96), 1, work_height);
   const int left =
       static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
   const int top =
@@ -199,60 +200,8 @@ void EditorWindow::initialize(const HWND window) {
   set_status(L"Ready — connecting to LayerD.");
 }
 
-LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
-                                          const WPARAM wparam,
-                                          const LPARAM lparam) {
-  switch (message) {
-  case WM_SIZE:
-    layout();
-    return TRUE;
-  case WM_DPICHANGED: {
-    apply_suggested_dpi_rect(window, lparam);
-    const UINT dpi = HIWORD(wparam);
-    const HFONT old_font = font_;
-    const HFONT new_font = create_editor_font(dpi);
-    if (new_font != nullptr) {
-      font_ = new_font;
-      style_dialog_children(window);
-      if (old_font != nullptr)
-        DeleteObject(old_font);
-    }
-    rebuild_profile_check_hit_images();
-    layout();
-    return TRUE;
-  }
-  case WM_TIMER:
-    if (wparam == autosave_timer) {
-      (void)flush_autosave(false);
-      return TRUE;
-    }
-    if (wparam == live_channel_timer) {
-      poll_live_channel();
-      return TRUE;
-    }
-    break;
-  case WM_GETMINMAXINFO: {
-    const UINT window_dpi = GetDpiForWindow(window);
-    const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-    MONITORINFO monitor{};
-    monitor.cbSize = sizeof(monitor);
-    if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
-                        &monitor) != FALSE) {
-      const int work_width = monitor.rcWork.right - monitor.rcWork.left;
-      const int work_height = monitor.rcWork.bottom - monitor.rcWork.top;
-      const int geometry_dpi =
-          std::max(80, std::min({dpi, MulDiv(work_width, 96, 1080),
-                                 MulDiv(work_height, 96, 700)}));
-      reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
-          std::min(work_width, MulDiv(1080, geometry_dpi, 96)),
-          std::min(work_height, MulDiv(700, geometry_dpi, 96))};
-    } else {
-      reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
-          MulDiv(1080, dpi, 96), MulDiv(700, dpi, 96)};
-    }
-    return TRUE;
-  }
-  case WM_COMMAND: {
+std::optional<LRESULT> EditorWindow::handle_main_command(
+    const WPARAM wparam) {
     const int id = LOWORD(wparam);
     const auto notification = HIWORD(wparam);
     if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID || id == IDC_BAR_WIDTH ||
@@ -338,7 +287,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       open_runtime_diagnostics();
       return TRUE;
     case IDM_FILE_AUTOMATION:
-      open_automation_editor();
+      automation_editor_->open();
       return TRUE;
     case IDM_FILE_SPLIT_BARS:
       split_independent_bars();
@@ -406,9 +355,11 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       }
       return TRUE;
     }
-    break;
-  }
-  case WM_NOTIFY: {
+  return std::nullopt;
+}
+
+std::optional<LRESULT> EditorWindow::handle_main_notify(
+    const LPARAM lparam) {
     const auto *header = reinterpret_cast<const NMHDR *>(lparam);
     if (header->idFrom == IDC_PROFILE_LIST) {
       if (header->code == NM_CLICK) {
@@ -446,9 +397,11 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
         }
       }
     }
-    break;
-  }
-  case WM_DRAWITEM: {
+  return std::nullopt;
+}
+
+std::optional<LRESULT> EditorWindow::handle_main_draw_item(
+    const LPARAM lparam) {
     const auto *draw = reinterpret_cast<const DRAWITEMSTRUCT *>(lparam);
     if (draw->CtlType == ODT_LISTVIEW && draw->CtlID == IDC_PROFILE_LIST) {
       draw_profile_item(*draw);
@@ -459,7 +412,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       return TRUE;
     }
     if (draw->CtlType != ODT_BUTTON)
-      break;
+      return std::nullopt;
     const int id = static_cast<int>(draw->CtlID);
     if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY || id == IDC_DIRECT_DRAG ||
         id == IDC_VISUAL_ENABLED || id == IDC_VISUAL_ISOLATED) {
@@ -484,12 +437,72 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
                 overlay_color);
     return TRUE;
   }
-  case WM_CTLCOLORSTATIC:
-  case WM_CTLCOLOREDIT:
-  case WM_CTLCOLORLISTBOX:
-    return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND:
-    return erase_dialog_background(window, wparam);
+
+LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
+                                          const WPARAM wparam,
+                                          const LPARAM lparam) {
+  switch (message) {
+  case WM_SIZE:
+    layout();
+    return TRUE;
+  case WM_DPICHANGED: {
+    apply_suggested_dpi_rect(window, lparam);
+    const UINT dpi = HIWORD(wparam);
+    const HFONT old_font = font_;
+    const HFONT new_font = create_editor_font(dpi);
+    if (new_font != nullptr) {
+      font_ = new_font;
+      style_dialog_children(window);
+      if (old_font != nullptr)
+        DeleteObject(old_font);
+    }
+    rebuild_profile_check_hit_images();
+    layout();
+    return TRUE;
+  }
+  case WM_TIMER:
+    if (wparam == autosave_timer) {
+      (void)flush_autosave(false);
+      return TRUE;
+    }
+    if (wparam == live_channel_timer) {
+      poll_live_channel();
+      return TRUE;
+    }
+    break;
+  case WM_GETMINMAXINFO: {
+    const UINT window_dpi = GetDpiForWindow(window);
+    const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
+    MONITORINFO monitor{};
+    monitor.cbSize = sizeof(monitor);
+    if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                        &monitor) != FALSE) {
+      const int work_width = monitor.rcWork.right - monitor.rcWork.left;
+      const int work_height = monitor.rcWork.bottom - monitor.rcWork.top;
+      const int geometry_dpi =
+          std::max(80, std::min({dpi, MulDiv(work_width, 96, 1080),
+                                 MulDiv(work_height, 96, 700)}));
+      reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
+          std::min(work_width, MulDiv(1080, geometry_dpi, 96)),
+          std::min(work_height, MulDiv(700, geometry_dpi, 96))};
+    } else {
+      reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
+          MulDiv(1080, dpi, 96), MulDiv(700, dpi, 96)};
+    }
+    return TRUE;
+  }
+  case WM_COMMAND:
+    if (const auto result = handle_main_command(wparam))
+      return *result;
+    break;
+  case WM_NOTIFY:
+    if (const auto result = handle_main_notify(lparam))
+      return *result;
+    break;
+  case WM_DRAWITEM:
+    if (const auto result = handle_main_draw_item(lparam))
+      return *result;
+    break;
   case WM_LBUTTONUP:
     if (picking_) {
       finish_picker();
@@ -548,7 +561,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   default:
     break;
   }
-  return FALSE;
+  return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
 int EditorApp::run(const HINSTANCE instance, const int show_command) {

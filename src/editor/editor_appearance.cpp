@@ -231,16 +231,10 @@ LRESULT EditorWindow::handle_options_message(const HWND window,
     }
     break;
   }
-  case WM_CTLCOLORSTATIC:
-  case WM_CTLCOLOREDIT:
-  case WM_CTLCOLORLISTBOX:
-    return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND:
-    return erase_dialog_background(window, wparam);
   default:
     break;
   }
-  return FALSE;
+  return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
 LRESULT EditorWindow::handle_appearance_message(const HWND window,
@@ -291,16 +285,10 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
     }
     break;
   }
-  case WM_CTLCOLORSTATIC:
-  case WM_CTLCOLOREDIT:
-  case WM_CTLCOLORLISTBOX:
-    return color_message(message, wparam, lparam);
-  case WM_ERASEBKGND:
-    return erase_dialog_background(window, wparam);
   default:
     break;
   }
-  return FALSE;
+  return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
 } // namespace layerc::editor

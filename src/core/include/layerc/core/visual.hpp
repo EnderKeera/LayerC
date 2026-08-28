@@ -22,12 +22,6 @@ enum class CaptureQuality : std::uint8_t {
   exact,
 };
 
-enum class PixelPredicateKind : std::uint8_t {
-  average_color,
-  brightness,
-  color_coverage,
-};
-
 enum class BrightnessComparison : std::uint8_t {
   above,
   below,
@@ -188,14 +182,5 @@ observation_stable_samples(const VisualProfile &profile,
 [[nodiscard]] PixelRepeatPolicy
 observation_repeat_policy(const VisualProfile &profile,
                           std::string_view id) noexcept;
-
-[[nodiscard]] constexpr PixelPredicateKind
-predicate_kind(const PixelPredicate &predicate) noexcept {
-  if (std::holds_alternative<AverageColorPredicate>(predicate))
-    return PixelPredicateKind::average_color;
-  if (std::holds_alternative<BrightnessPredicate>(predicate))
-    return PixelPredicateKind::brightness;
-  return PixelPredicateKind::color_coverage;
-}
 
 } // namespace layerc::core

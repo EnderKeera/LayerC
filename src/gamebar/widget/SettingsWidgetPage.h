@@ -7,8 +7,6 @@ namespace winrt::LayerC::GameBar::implementation {
 
 struct SettingsWidgetPage : SettingsWidgetPageT<SettingsWidgetPage> {
   SettingsWidgetPage();
-  hstring ProfileId() const noexcept { return profile_id_; }
-  void ProfileId(hstring const &value) { profile_id_ = value; }
 
   void
   OnNavigatedTo(Windows::UI::Xaml::Navigation::NavigationEventArgs const &args);
@@ -22,6 +20,7 @@ private:
   fire_and_forget save();
 
   std::uint64_t subscription_{};
+  bool save_pending_{};
   std::optional<layerc::core::CompanionSessionSnapshot> snapshot_;
   std::vector<std::string> panel_ids_;
   std::vector<Windows::UI::Xaml::Controls::ComboBox> panel_choices_;

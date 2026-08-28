@@ -199,7 +199,8 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
       continue;
     }
 
-    if (repeat_policy(trigger.observation_id) == PixelRepeatPolicy::edge) {
+    if (observation_repeat_policy(profile_, trigger.observation_id) ==
+        PixelRepeatPolicy::edge) {
       if (trigger_state.edge_armed) {
         output.push_back(
             {trigger.cooldown_id, VisualTriggerSource::pixel_edge});
@@ -229,11 +230,6 @@ bool VisualTriggerEngine::observation_exists(
 std::uint8_t VisualTriggerEngine::stable_samples(
     const std::string_view id) const {
   return observation_stable_samples(profile_, id);
-}
-
-PixelRepeatPolicy VisualTriggerEngine::repeat_policy(
-    const std::string_view id) const {
-  return observation_repeat_policy(profile_, id);
 }
 
 const VisualTrigger *

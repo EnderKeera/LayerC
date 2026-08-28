@@ -118,7 +118,6 @@ private:
   void reconcile_visual_captures();
   void quiesce_inline_visual_captures() noexcept;
   void quiesce_isolated_visual_captures() noexcept;
-  void quiesce_visual_captures() noexcept;
   void reconcile_automation_runtime();
   void quiesce_automation_runtime() noexcept;
   void retire_automation_session(Session &session, layerc::core::TimePoint now);
@@ -192,6 +191,7 @@ private:
   std::vector<Session *> active_input_sessions_;
   std::array<XINPUT_STATE, XUSER_MAX_COUNT> controller_states_{};
   [[nodiscard]] std::vector<Session *> current_companion_sessions() const;
+  mutable HWND last_game_foreground_{};
   HWND input_foreground_{};
   HANDLE reload_event_{};
   HANDLE settings_reload_event_{};

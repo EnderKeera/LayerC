@@ -32,6 +32,17 @@ layerc::core::NormalizedRegion expanded_template_search_region(
 
 } // namespace
 
+void CalibrationWindow::install_template_reference(
+    const layerc::core::NormalizedRegion &selected) {
+  template_state_.expected_width = selected.width;
+  template_state_.expected_height = selected.height;
+  template_state_.search_region = expanded_template_search_region(selected);
+  rule_.region = template_state_.search_region;
+  template_matcher_.clear();
+  refresh_template_reference_label();
+  update_match_status();
+}
+
 void CalibrationWindow::capture_template_reference() {
   if (!frame_) {
     MessageBoxW(dialog_, L"Wait for a captured frame first.", L"LayerC",
@@ -110,14 +121,8 @@ void CalibrationWindow::capture_template_reference() {
     template_state_.references.push_back(asset->reference);
     template_images_.push_back(asset->image);
   }
-  template_state_.expected_width = region.width;
-  template_state_.expected_height = region.height;
-  template_state_.search_region = expanded_template_search_region(region);
-  rule_.region = template_state_.search_region;
-  template_matcher_.clear();
-  refresh_template_reference_label();
+  install_template_reference(rule_.region);
   InvalidateRect(preview_, nullptr, FALSE);
-  update_match_status();
 }
 
 void CalibrationWindow::import_template_reference() {
@@ -155,14 +160,7 @@ void CalibrationWindow::import_template_reference() {
     template_state_.references.push_back(asset->reference);
     template_images_.push_back(asset->image);
   }
-  const auto selected = rule_.region;
-  template_state_.expected_width = selected.width;
-  template_state_.expected_height = selected.height;
-  template_state_.search_region = expanded_template_search_region(selected);
-  rule_.region = template_state_.search_region;
-  template_matcher_.clear();
-  refresh_template_reference_label();
-  update_match_status();
+  install_template_reference(rule_.region);
 }
 
 void CalibrationWindow::clear_template_references() {

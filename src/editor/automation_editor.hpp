@@ -29,6 +29,7 @@ public:
 private:
   void initialize(HWND dialog);
   [[nodiscard]] LRESULT handle_message(HWND, UINT, WPARAM, LPARAM);
+  [[nodiscard]] bool handle_command(HWND dialog, WPARAM wparam);
   void refresh(HWND dialog);
   void refresh_graph(HWND dialog);
   void refresh_node_properties(HWND dialog);

@@ -15,14 +15,9 @@ inline constexpr wchar_t profile_reload_event_name[] =
     L"Local\\LayerC.LayerD.ProfileReload";
 inline constexpr wchar_t automation_active_event_name[] =
     L"Local\\LayerC.LayerD.AutomationActive.v1";
-inline constexpr wchar_t companion_active_event_name[] =
-    L"Local\\LayerC.LayerD.CompanionActive.v1";
 
 [[nodiscard]] std::filesystem::path profile_directory();
 [[nodiscard]] std::filesystem::path visual_directory();
-[[nodiscard]] std::filesystem::path automation_directory();
-[[nodiscard]] std::filesystem::path automation_state_directory();
-[[nodiscard]] std::filesystem::path companion_directory();
 [[nodiscard]] std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path
@@ -93,10 +88,6 @@ struct AutomationSidecarLoad {
 [[nodiscard]] AutomationSidecarLoad
 load_automation_sidecar(const std::filesystem::path &profile_path,
                         const layerc::core::GameProfile &base_profile);
-[[nodiscard]] bool write_automation_sidecar(
-    const std::filesystem::path &profile_path,
-    const layerc::core::AutomationProfile &automation_profile,
-    const layerc::core::GameProfile &base_profile);
 
 enum class CompanionSidecarState {
   absent,
@@ -115,10 +106,6 @@ struct CompanionSidecarLoad {
 [[nodiscard]] CompanionSidecarLoad
 load_companion_sidecar(const std::filesystem::path &profile_path,
                        const layerc::core::GameProfile &base_profile);
-[[nodiscard]] bool write_companion_sidecar(
-    const std::filesystem::path &profile_path,
-    const layerc::core::CompanionProfile &companion_profile,
-    const layerc::core::GameProfile &base_profile);
 
 struct AutomationStateLoad {
   layerc::core::AutomationPersistentValues values;

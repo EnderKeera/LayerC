@@ -170,7 +170,6 @@ public:
   }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult
   reconcile(const layerc::runtime::CapabilityDemand &) override {
-    app_.reconcile_visual_captures();
     return {};
   }
   void quiesce() noexcept override { app_.quiesce_isolated_visual_captures(); }

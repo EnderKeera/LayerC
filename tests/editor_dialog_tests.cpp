@@ -201,11 +201,9 @@ int main() {
   passed &= expect(
       history.record(pending_base, committed_visual, no_automation, false),
       "a committed visual-only action should enter combined history");
-  history.rebase_visual(committed_visual);
   passed &= expect(
       history.is_dirty(pending_base, committed_visual, no_automation, true),
-      "committing a visual-only action must not mark a pending base edit "
-      "saved");
+      "pending base and visual edits must stay dirty until an explicit save");
   const auto base_undo =
       history.undo(pending_base, committed_visual, no_automation);
   passed &= expect(

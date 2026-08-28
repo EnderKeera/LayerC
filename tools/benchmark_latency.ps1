@@ -30,6 +30,8 @@ if (Get-Process -Name layerd, lctest -ErrorAction SilentlyContinue) {
     throw 'Close existing LayerD and lctest processes before the latency benchmark.'
 }
 
+. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+
 if (-not ('LayerCLatencyNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -51,54 +53,6 @@ public static class LayerCLatencyNative {
 '@
 }
 
-function Set-BenchmarkForeground(
-    [Diagnostics.Process]$Target,
-    [object]$Activator) {
-    $Target.Refresh()
-    $window = $Target.MainWindowHandle
-    if ($window -eq [IntPtr]::Zero) { return $false }
-
-    [void][LayerCLatencyNative]::ShowWindowAsync($window, 9)
-    [void]$Activator.AppActivate($Target.Id)
-
-    $currentThread = [LayerCLatencyNative]::GetCurrentThreadId()
-    $foreground = [LayerCLatencyNative]::GetForegroundWindow()
-    [uint32]$ignoredProcess = 0
-    $foregroundThread = if ($foreground -ne [IntPtr]::Zero) {
-        [LayerCLatencyNative]::GetWindowThreadProcessId(
-            $foreground, [ref]$ignoredProcess)
-    } else { 0 }
-    [uint32]$targetProcess = 0
-    $targetThread = [LayerCLatencyNative]::GetWindowThreadProcessId(
-        $window, [ref]$targetProcess)
-
-    $attachedForeground = $foregroundThread -ne 0 -and
-        $foregroundThread -ne $currentThread -and
-        [LayerCLatencyNative]::AttachThreadInput(
-            $currentThread, $foregroundThread, $true)
-    $attachedTarget = $targetThread -ne 0 -and
-        $targetThread -ne $currentThread -and
-        [LayerCLatencyNative]::AttachThreadInput(
-            $currentThread, $targetThread, $true)
-    try {
-        [void][LayerCLatencyNative]::BringWindowToTop($window)
-        [void][LayerCLatencyNative]::SetForegroundWindow($window)
-    } finally {
-        if ($attachedTarget) {
-            [void][LayerCLatencyNative]::AttachThreadInput(
-                $currentThread, $targetThread, $false)
-        }
-        if ($attachedForeground) {
-            [void][LayerCLatencyNative]::AttachThreadInput(
-                $currentThread, $foregroundThread, $false)
-        }
-    }
-
-    $foregroundRoot = [LayerCLatencyNative]::GetAncestor(
-        [LayerCLatencyNative]::GetForegroundWindow(), 2)
-    $targetRoot = [LayerCLatencyNative]::GetAncestor($window, 2)
-    return $foregroundRoot -eq $targetRoot
-}
 function Send-TriggerChord {
     $scanCode = 0x0008 # KEYEVENTF_SCANCODE
     $keyUp = 0x0002
@@ -124,7 +78,7 @@ function Measure-Version([string]$BuildDirectory, [Diagnostics.Process]$Game) {
         for ($attempt = 0; $attempt -lt 80; ++$attempt) {
             if ($daemon.HasExited) { throw "LayerD exited with code $($daemon.ExitCode)." }
             $Game.Refresh()
-            $foreground = Set-BenchmarkForeground $Game $activator
+            $foreground = Set-BenchmarkForeground $Game $activator ([LayerCLatencyNative])
             # Overlay HWNDs are created lazily on the first visible cooldown.
             # Warm the real Raw Input path after giving profile/window matching
             # time to settle; the timed samples below begin only after it hides.
@@ -146,7 +100,7 @@ function Measure-Version([string]$BuildDirectory, [Diagnostics.Process]$Game) {
             if ([LayerCLatencyNative]::IsWindowVisible($overlay)) {
                 throw 'Overlay did not return to its ready-hidden state.'
             }
-            if (-not (Set-BenchmarkForeground $Game $activator)) {
+            if (-not (Set-BenchmarkForeground $Game $activator ([LayerCLatencyNative]))) {
                 throw 'Benchmark sample interrupted: lctest lost foreground.'
             }
             $clock = [Diagnostics.Stopwatch]::StartNew()

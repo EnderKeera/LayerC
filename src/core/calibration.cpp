@@ -2,6 +2,7 @@
 
 #include "layerc/core/json.hpp"
 
+#include <charconv>
 #include <cmath>
 #include <limits>
 
@@ -47,18 +48,12 @@ bool decimal_u64(const json::Value &root, const std::string_view name,
   std::string text;
   if (!string_field(root, name, text, failure, true) || text.empty())
     return false;
-  std::uint64_t value{};
-  for (const char character : text) {
-    if (character < '0' || character > '9' ||
-        value > (std::numeric_limits<std::uint64_t>::max() -
-                 static_cast<unsigned>(character - '0')) /
-                    10U) {
-      failure = std::string(name) + " is outside the supported range";
-      return false;
-    }
-    value = value * 10U + static_cast<unsigned>(character - '0');
+  const auto [tail, error] =
+      std::from_chars(text.data(), text.data() + text.size(), output);
+  if (error != std::errc{} || tail != text.data() + text.size()) {
+    failure = std::string(name) + " is outside the supported range";
+    return false;
   }
-  output = value;
   return true;
 }
 

@@ -21,6 +21,13 @@ struct RgbPixel {
   bool operator==(const RgbPixel &) const = default;
 };
 
+// Shared Rec. 709 luma coefficients used by the template matcher's sample
+// preparation and the pixel evaluator's brightness predicate.
+[[nodiscard]] inline double rgb_luminance(double red, double green,
+                                          double blue) noexcept {
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+};
+
 struct PixelFrameView {
   std::span<const RgbPixel> pixels;
   std::uint32_t width{};
@@ -111,7 +118,6 @@ private:
 
   [[nodiscard]] bool observation_exists(std::string_view id) const;
   [[nodiscard]] std::uint8_t stable_samples(std::string_view id) const;
-  [[nodiscard]] PixelRepeatPolicy repeat_policy(std::string_view id) const;
   [[nodiscard]] const VisualTrigger *
   find_trigger(std::string_view cooldown_id) const;
   [[nodiscard]] bool measurement_is_fresh(const RuleState &state,

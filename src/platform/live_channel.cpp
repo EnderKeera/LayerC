@@ -17,41 +17,6 @@ HANDLE make_event() {
   return CreateEventW(nullptr, TRUE, FALSE, nullptr);
 }
 
-bool same_user_as_current_process(const HANDLE process) {
-  HANDLE current_token{};
-  HANDLE server_token{};
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token) ==
-          FALSE ||
-      OpenProcessToken(process, TOKEN_QUERY, &server_token) == FALSE) {
-    if (current_token != nullptr) CloseHandle(current_token);
-    if (server_token != nullptr) CloseHandle(server_token);
-    return false;
-  }
-
-  const auto token_user = [](const HANDLE token,
-                             std::vector<std::byte> &storage) -> PSID {
-    DWORD required{};
-    (void)GetTokenInformation(token, TokenUser, nullptr, 0, &required);
-    if (required == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
-      return nullptr;
-    storage.resize(required);
-    if (GetTokenInformation(token, TokenUser, storage.data(), required,
-                            &required) == FALSE)
-      return nullptr;
-    return reinterpret_cast<TOKEN_USER *>(storage.data())->User.Sid;
-  };
-
-  std::vector<std::byte> current_storage;
-  std::vector<std::byte> server_storage;
-  const PSID current_sid = token_user(current_token, current_storage);
-  const PSID server_sid = token_user(server_token, server_storage);
-  const bool matches = current_sid != nullptr && server_sid != nullptr &&
-                       EqualSid(current_sid, server_sid) != FALSE;
-  CloseHandle(server_token);
-  CloseHandle(current_token);
-  return matches;
-}
-
 bool is_sibling_image(const HANDLE process, const wchar_t *const filename) {
   std::array<wchar_t, 32'768> editor_path{};
   const DWORD editor_length = GetModuleFileNameW(

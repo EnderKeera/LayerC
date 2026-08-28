@@ -28,20 +28,6 @@ void append_color(std::string &output, const std::uint32_t color) {
   output.push_back('"');
 }
 
-std::string_view device_name(const InputDevice device) {
-  switch (device) {
-  case InputDevice::keyboard:
-    return "keyboard";
-  case InputDevice::mouse:
-    return "mouse";
-  case InputDevice::controller:
-    return "controller";
-  case InputDevice::generic_hid:
-    return "hid";
-  }
-  return "keyboard";
-}
-
 std::string_view retrigger_name(const RetriggerPolicy policy) {
   return policy == RetriggerPolicy::restart ? "restart" : "ignore";
 }
@@ -362,7 +348,7 @@ std::string serialize_profile_json(const GameProfile &profile) {
       append_indent(output, 8);
       output += "{\n";
       append_key(output, 10, "device");
-      json::append_quoted(output, device_name(token.device));
+      json::append_quoted(output, input_device_label(token.device));
       if (token.device == InputDevice::generic_hid) {
         output += ",\n";
         append_key(output, 10, "bindingId");

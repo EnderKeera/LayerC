@@ -100,11 +100,13 @@ else()
         COMMAND "${CMAKE_VS_MSBUILD_COMMAND}"
             "${LAYERC_GAMEBAR_WIDGET_PROJECT}" /t:Restore
             /p:RestorePackagesConfig=true
+            "/p:WindowsTargetPlatformVersion=${LAYERC_WINSDK_VER}"
             "/p:SolutionDir=${LAYERC_GAMEBAR_NUGET_ROOT}/"
             "/p:RestorePackagesPath=${LAYERC_GAMEBAR_NUGET_PACKAGES}"
         COMMAND "${CMAKE_VS_MSBUILD_COMMAND}"
             "${LAYERC_GAMEBAR_WIDGET_PROJECT}" /t:Build
             "/p:Configuration=$<CONFIG>" /p:Platform=x64
+            "/p:WindowsTargetPlatformVersion=${LAYERC_WINSDK_VER}"
             "/p:LayerCNuGetRoot=${LAYERC_GAMEBAR_NUGET_PACKAGES}"
             "/p:LayerCGameBarAsset=${LAYERC_GAMEBAR_WIDGET_ASSET}"
             "/p:OutDir=${LAYERC_GAMEBAR_WIDGET_OUTPUT_DIR}/"

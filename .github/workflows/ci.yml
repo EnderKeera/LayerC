@@ -6,16 +6,30 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Validate GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.12
+
   windows-msvc:
+    needs: workflow-lint
     runs-on: windows-2022
     timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -38,6 +52,10 @@ jobs:
         shell: pwsh
         run: ctest --preset ci --output-on-failure
 
+      - name: Automated Benchmarks (Idle Plateau)
+        shell: pwsh
+        run: pwsh -File tools/benchmark_v22.ps1 -BuildDirectory build/ci
+
       - name: Automated Benchmarks (CPU Evaluator)
         shell: pwsh
         run: pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
@@ -52,25 +70,23 @@ jobs:
           cpack --preset ci --verbose
           Get-ChildItem -Recurse -Filter *.zip | Select-Object FullName,Length | Format-Table
 
-      - name: Publish rolling prerelease
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release delete rolling --yes --cleanup-tag 2>$null
-          $zip = Get-ChildItem build/ci/*.zip | Select-Object -First 1 -ExpandProperty FullName
-          gh release create rolling $zip --title "LayerC rolling build" --prerelease --notes "Rolling build of main@${{ github.sha }}" 2>&1 | Out-Null
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: layerc-windows-x64
           path: |
             out/layerc/**
+            out/benchmarks/*.json
             build/ci/*.zip
             *.zip
-          if-no-files-found: warn
+          if-no-files-found: error
+
+      - name: Upload rolling package
+        uses: actions/upload-artifact@v7
+        with:
+          name: layerc-rolling-package
+          path: build/ci/*.zip
+          if-no-files-found: error
 
       - name: Upload benchmark tools
         uses: actions/upload-artifact@v7
@@ -83,3 +99,55 @@ jobs:
             build/ci/layerc_capture_probe.exe
             build/ci/layerc_automation_benchmark.exe
           if-no-files-found: error
+
+  publish-rolling:
+    needs: windows-msvc
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      # gh release resolves owner/repo from the git remote; without a checkout
+      # (download-artifact alone) there is no .git, so gh fails with "not a git
+      # repository". Check out the ref so gh can resolve the repo identity.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Download rolling package
+        uses: actions/download-artifact@v7
+        with:
+          name: layerc-rolling-package
+          path: release-input
+
+      - name: Publish rolling prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find release-input -type f -name '*.zip' -print)
+          if [[ ${#packages[@]} -ne 1 ]]; then
+            echo "Expected one rolling package, found ${#packages[@]}." >&2
+            exit 1
+          fi
+
+          asset='release-input/layerc-windows-x64.zip'
+          mv "${packages[0]}" "$asset"
+          notes="Rolling build of main@${GITHUB_SHA}"
+
+          if gh release view rolling >/dev/null 2>&1; then
+            gh release upload rolling "$asset" --clobber
+            while IFS= read -r old_asset; do
+              if [[ -n "$old_asset" && "$old_asset" != 'layerc-windows-x64.zip' ]]; then
+                gh release delete-asset rolling "$old_asset" --yes
+              fi
+            done < <(gh release view rolling --json assets --jq '.assets[].name')
+            gh release edit rolling --target "$GITHUB_SHA" \
+              --title 'LayerC rolling build' --prerelease --notes "$notes"
+          else
+            gh release create rolling "$asset" --target "$GITHUB_SHA" \
+              --title 'LayerC rolling build' --prerelease --notes "$notes"
+          fi

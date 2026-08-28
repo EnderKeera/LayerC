@@ -31,14 +31,7 @@ void draw_rounded_rectangle(HDC dc, const RECT &rectangle, const int radius,
 }
 
 void append_unsigned(std::wstring &output, std::uint64_t value) {
-  std::array<wchar_t, 32> digits{};
-  auto *end = digits.data() + digits.size();
-  auto *cursor = end;
-  do {
-    *--cursor = static_cast<wchar_t>(L'0' + value % 10U);
-    value /= 10U;
-  } while (value != 0);
-  output.append(cursor, end);
+  output += std::to_wstring(value);
 }
 
 } // namespace

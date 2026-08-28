@@ -48,22 +48,12 @@ template_image_has_structure(const TemplateImage &image) noexcept;
 [[nodiscard]] TemplateImage
 compact_template_image(const TemplateImage &image, CaptureQuality quality);
 
-class ITemplateMatcher {
-public:
-  virtual ~ITemplateMatcher() = default;
-  [[nodiscard]] virtual TemplateMatchResult
-  evaluate(const TemplateState &state, std::span<const TemplateImage> references,
-           PixelFrameView frame, CaptureQuality quality,
-           NormalizedRegion available_region = {0.0, 0.0, 1.0, 1.0},
-           std::span<const NormalizedRegion> unavailable_regions = {}) = 0;
-};
-
 // Bounded masked CPU matcher used by LayerD and LayerCal. The implementation
 // caches quality-specific reference samples by verified content hash.
-class CpuTemplateMatcher final : public ITemplateMatcher {
+class CpuTemplateMatcher final {
 public:
   CpuTemplateMatcher();
-  ~CpuTemplateMatcher() override;
+  ~CpuTemplateMatcher();
   CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept;
   CpuTemplateMatcher &operator=(CpuTemplateMatcher &&) noexcept;
   CpuTemplateMatcher(const CpuTemplateMatcher &) = delete;
@@ -73,7 +63,7 @@ public:
   evaluate(const TemplateState &state, std::span<const TemplateImage> references,
            PixelFrameView frame, CaptureQuality quality,
            NormalizedRegion available_region = {0.0, 0.0, 1.0, 1.0},
-           std::span<const NormalizedRegion> unavailable_regions = {}) override;
+           std::span<const NormalizedRegion> unavailable_regions = {});
   void clear();
 
 private:

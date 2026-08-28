@@ -1,32 +1,11 @@
 # Game Bar Companion Audit & Release Status
 
 ## Current Status (V2.4 WIP)
+Implemented per `docs/GameBarCompanion.md` §§1-5 (host, activation, IPC, widgets, bus, manifest, transport, persistence).
 
-The end-to-end Xbox Game Bar companion implementation is complete:
-- **Host**: `src/gamebar/widget/LayerC.GameBar.vcxproj` builds a native C++/WinRT UWP XAML host (`layerc-gamebar.exe`).
-- **Activation**: `App::OnActivated` routes `PanelSlot1`–`PanelSlot8` and `Settings` protocol activations to their XAML pages.
-- **IPC**: `App::OnBackgroundActivated` hosts same-package `LayerC.GameBar.v1` App Service with LayerD as the authoritative client.
-- **Widgets**: `PanelWidgetPage` renders cooldown timelines and charges; `SettingsWidgetPage` manages slot mappings and opacity/click-through preferences.
-- **Snapshot Bus**: `WidgetSnapshotHub` validates bounded JSON, fans out to widget CoreWindows, and clears stale data after 2.0 seconds.
-- **Manifest**: `Package.appxmanifest` registers 8 standard widgets, 1 settings widget, the App Service, full-trust LayerD launcher, and Game Bar private WinMD proxy stubs.
-- **Transport**: `GameBarTransport` uses asynchronous App Service operations, reconnect backoff (100–2000 ms), and no-op zero-handle behavior when unpackaged.
-- **Persistence**: Companion sidecars (`profiles/_companion/<id>.json`) round-trip through atomic multi-document profile transactions and `.layercprofile` packs.
+## Verification Completed (2026-08-24)
 
----
-
-## Verification Completed (2026-08-24 / 2026-08-25)
-
-- MSVC 2026 Release build and full CTest suite passed (**0 warnings, 10/10 tests**).
-- MinGW Release workflow passed (**0 warnings, 10/10 tests**).
-- CI `ci` preset builds with `sccache` + `UNITY_BUILD` and caches `~/.cache/sccache` + `~/.nuget/packages` (no `build/ci` cache).
-- `layerc_gamebar_msix` target builds the UWP host and packages unsigned `LayerC.GameBar.v1.msix` with all 5 binaries, VC runtime, and Game Bar SDK metadata.
-- Automated tests cover 8-slot snapshots, sidecar transactions, catalog/preference bounds, 2s stale expiry, and package identity.
-- V2.2 modular runtime benchmark passed (2.16 MiB private, 11.5 MiB WS, 0% CPU baseline).
-- V2.3 automation evaluator benchmark passed (11.33 us average, 1151 us maximum).
-- Latency benchmark passed (-0.27 ms median, -1.29 ms p95 regression vs baseline).
-- GitHub Actions CI workflow operational on `windows-2022` (`ci` preset with Ninja + MSVC dev environment).
-
----
+MSVC+MinGW Release 10/10, `layerc_gamebar_msix` unsigned MSIX, V2.2/V2.3/latency gates passed (2.16 MiB private / 11.5 MiB WS / 11.33 µs avg), CI `ci`+sccache+UNITY.
 
 ## Remaining Release Gates
 

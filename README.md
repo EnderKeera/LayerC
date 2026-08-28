@@ -2,13 +2,15 @@
 
 LayerC is a lightweight, open-source Windows cooldown overlay — dependency-free C++20 core, typed JSON profiles, demand-driven input and click-through panels, opt-in visual recognition, bounded Automation Graphs, native editor, and deterministic packs.
 
-See the plan document (local-only; kept out of this repository) for roadmap
-and technical specifications.
-
 ## Quickstart
 
+The gate is CI on push. A main push → `actionlint` → `ci` preset (Ninja+sccache+UNITY) → CTest + `benchmark_v22` + `benchmark_v23` → package → `publish-rolling`. Hardware gates (`tools/run-hardware-benchmarks.ps1` on self-hosted `layerc-bench` — desktop with real GPU/display) auto-mirror evidence to `out/benchmarks` and staged install to `out/layerc`. No local build/benchmark needed for a normal push — see `AGENTS.md` for presets.
+
+To iterate and debug locally, build once with the presets below, then run the
+binaries from the build output:
+
 ```powershell
-# Configure and build Debug + run tests
+# Configure and build Debug + run tests (local iteration only)
 cmake --preset vs2026
 cmake --build --preset vs2026-debug
 ctest --preset vs2026-debug
@@ -21,20 +23,9 @@ Installed executables land in `out/layerc/`:
 - `layerd.exe` — background daemon (passive input, cooldown state, overlays)
 - `layere.exe` — profile editor & calibration UI
 - `layercal.exe` — visual calibration helper
- - `layerworker.exe` — isolated visual capture worker (demand-launched)
+- `layerworker.exe` — isolated visual capture worker (demand-launched)
 
-CI builds come from GitHub, not locally: push to `main` and the pipeline
-builds, tests, benchmarks, and publishes the portable ZIP as a rolling
-prerelease (tag `rolling`). `tools/pull-ci.ps1` downloads and stages it into
-`out/layerc`; the benchmarks that need real hardware or a baseline (v11
-visual, v22 idle plateau, latency) run automatically on this machine via the `Hardware Benchmarks` workflow
-(`.github/workflows/benchmarks.yml`) on the repo's self-hosted `layerc-bench`
-runner: it pulls the CI-built `layerc-windows-x64-tools` artifact and the
-frozen `baseline-v22` reference release, runs the gates unattended, and
-uploads the JSON evidence. `tools/push-and-test.ps1` does the whole loop from
-the command line. Nothing needs to be compiled locally for the release gates;
-Tag `v*.*.*` for durable tagged releases. The local commands above are for
-iteration and debugging.
+CI artifacts and hardware evidence are mirrored to your working tree automatically; no download needed. Intervention only on gate failure or to start the runner (`run.cmd` interactive, never service). `tools/pull-ci.ps1` / `tools/push-and-test.ps1` are manual fallbacks; tag `v*.*.*` for durable releases. Local builds are for iteration only — never a gate.
 
 ### Development & Smoke Testing
 
@@ -64,7 +55,7 @@ $env:LAYERC_PROFILE_DIR = "$PWD\examples"
 | Test Release | `ctest --preset vs2026-release` |
 | Install | `cmake --install build/vs2026 --config Release --prefix out/layerc` |
 | Package ZIP | `cmake --workflow --preset vs2026-release` |
-| CI (Ninja+sccache+UNITY) | `cmake --preset ci` → `cmake --build --preset ci --parallel` → `ctest --preset ci` |
+| CI (actionlint + Ninja+sccache+UNITY) | `actionlint` → `cmake --preset ci` → `cmake --build --preset ci --parallel` → `ctest --preset ci` |
 | MinGW Release *(optional cross-check)* | `cmake --workflow --preset mingw-ninja` (needs `MINGW_ROOT` & Ninja) |
 | Game Bar MSIX | `cmake --build --preset vs2026-release --target layerc_gamebar_msix` (needs UWP tools) |
 
@@ -84,32 +75,34 @@ $env:LAYERC_PROFILE_DIR = "$PWD\examples"
 | `layerc_automation_benchmark` | CPU automation evaluation micro-benchmark ($\le 0.25\text{ ms}$ avg, $\le 2.0\text{ ms}$ max budget) |
 ## Release Benchmarks
 
-Benchmark scripts enforce strict hard gates under `tools/` and write JSON evidence to `out/benchmarks/`:
+Benchmark scripts enforce strict hard gates under `tools/` and write JSON evidence to
+`out/benchmarks/`. The V2.2 idle plateau and V2.3 CPU gates run in CI. The hardware-only
+gates (V1.1 visual, V2.1 template, latency) run automatically on the interactive
+`layerc-bench` runner — the workflow pins the checkout and artifact to one CI commit,
+uploads evidence as
+`benchmark-evidence` even when a gate fails, and mirrors the JSON into your working tree's
+`out/benchmarks/`.
 
-The V2.3 gate runs in GitHub CI (`ci.yml`). The V1.1/V2.1 visual, V2.2 idle plateau, and latency gates run on
-this machine through the `Hardware Benchmarks` workflow (`.github/workflows/benchmarks.yml`) on the repo's
-self-hosted `layerc-bench` runner — it downloads the CI `layerc-windows-x64-tools` artifact and the
-`baseline-v22` reference release, runs the gates unattended, and uploads the JSON evidence as
-`benchmark-evidence`. Manual one-offs stage the same inputs first:
+To run the same hardware gates **manually** (e.g. the runner is offline, or you want to
+drive it yourself), authenticate `gh`, check out the CI run's `headSha`, and stage its
+exact inputs:
 
 ```powershell
 gh run download <run-id> -n layerc-windows-x64-tools -D out\bench-stage
 gh release download baseline-v22 -D out\baseline --clobber
+$baselineZip = Get-ChildItem out\baseline -Filter *.zip -File
+if ($baselineZip.Count -ne 1) { throw "Expected one baseline ZIP." }
+Expand-Archive $baselineZip.FullName -DestinationPath out\baseline -Force
 
-# V1.1 / V2.1 Visual Recognition (gate: <=35 MiB private, <=50 MiB WS, <=3% CPU)
-.\tools\benchmark_v11.ps1 -BuildDirectory .\out\bench-stage -Quality low
-.\tools\benchmark_v11.ps1 -BuildDirectory .\out\bench-stage -Quality balanced
-.\tools\benchmark_v11.ps1 -BuildDirectory .\out\bench-stage -Workload v21-template -Quality balanced
+.\tools\run-hardware-benchmarks.ps1 `
+  -CandidateBuildDirectory .\out\bench-stage `
+  -BaselineBuildDirectory .\out\baseline
 
-# V2.2 Modular Runtime (empty-profile plateau <=12 MiB private, <=20 MiB WS, 0% CPU)
-.\tools\benchmark_v22.ps1 -BuildDirectory .\out\bench-stage
+# Optional visual-only pass (no baseline required)
+.\tools\run-hardware-benchmarks.ps1 `
+  -CandidateBuildDirectory .\out\bench-stage -VisualOnly
 
-# Input-to-Overlay Latency (gate: <=1 ms median / p95 regression vs baseline)
-.\tools\benchmark_latency.ps1 `
-  -BaselineBuildDirectory .\out\baseline `
-  -CandidateBuildDirectory .\out\bench-stage
-
-# V2.3 Automation Evaluator (gate: <=0.25 ms avg, <=2.0 ms max)
+# V2.3 CPU evaluator only
 .\tools\benchmark_v23.ps1 -BuildDirectory .\out\bench-stage
 ```
 

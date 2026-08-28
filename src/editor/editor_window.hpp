@@ -63,6 +63,16 @@ safe_identifier(std::wstring_view text, std::string_view fallback = "profile");
 [[nodiscard]] layerc::core::GameProfile make_new_profile();
 [[nodiscard]] std::wstring
 profile_list_label(const layerc::core::GameProfile &profile);
+// Smallest "<base>" then "<base>-<n>" id unused by the predicate; shared by
+// panel and observation id generation.
+template <typename IsUsed>
+[[nodiscard]] std::string
+next_unique_id(const std::string_view base, IsUsed &&is_used) {
+  std::string candidate(base);
+  for (std::size_t suffix = 2; is_used(candidate); ++suffix)
+    candidate = std::string(base) + "-" + std::to_string(suffix);
+  return candidate;
+}
 [[nodiscard]] std::string
 unique_panel_id(std::string_view base,
                 const std::vector<layerc::core::Panel> &existing,
@@ -135,7 +145,6 @@ private:
   void refresh_binding_controls();
   void load_current_visual_profile();
   void load_current_automation_profile();
-  void open_automation_editor();
   void refresh_visual_controls();
   void calibrate_visual();
   void calibrate_selected_task();
@@ -249,6 +258,11 @@ private:
   void draw_appearance_preview(const DRAWITEMSTRUCT &, HWND) const;
   LRESULT color_message(UINT, WPARAM, LPARAM) const;
   LRESULT erase_dialog_background(HWND, WPARAM) const;
+  [[nodiscard]] std::optional<LRESULT>
+  dialog_theme_message(HWND, UINT, WPARAM, LPARAM) const;
+  [[nodiscard]] std::optional<LRESULT> handle_main_command(WPARAM);
+  [[nodiscard]] std::optional<LRESULT> handle_main_notify(LPARAM);
+  [[nodiscard]] std::optional<LRESULT> handle_main_draw_item(LPARAM);
   LRESULT handle_main_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_task_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_options_message(HWND, UINT, WPARAM, LPARAM);

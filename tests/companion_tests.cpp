@@ -2,6 +2,7 @@
 #include "../src/gamebar/GameBarBridge.hpp"
 #include "../src/gamebar/GameBarTransport.hpp"
 #include "layerc/core/companion.hpp"
+#include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/windows.hpp"
 #include "test_support.hpp"
@@ -132,13 +133,23 @@ static void test_companion_snapshot_bridge() {
   layerc::test::expect(unpacked == snapshot,
                        "snapshot settings metadata round trips exactly");
 
+  snapshot.preferences.front().opacity = 0.0;
+  const auto transparent = serialize_companion_snapshot_json(snapshot);
+  layerc::test::expect(transparent.has_value(),
+                       "zero-opacity snapshot preference serializes");
+  const auto transparent_parsed = parse_companion_snapshot_json(*transparent);
+  layerc::test::expect(
+      std::holds_alternative<CompanionSessionSnapshot>(transparent_parsed) &&
+          std::get<CompanionSessionSnapshot>(transparent_parsed) == snapshot,
+      "zero-opacity snapshot preference round trips exactly");
+
   // Test bridge stale cutoff
   GameBarBridge bridge;
   bridge.update_snapshot(snapshot);
-  layerc::test::expect(bridge.latest_snapshot(now).has_value(),
+  layerc::test::expect(bridge.latest_snapshot_json(now).has_value(),
                        "snapshot valid at now");
   layerc::test::expect(
-      !bridge.latest_snapshot(now + std::chrono::milliseconds(2500))
+      !bridge.latest_snapshot_json(now + std::chrono::milliseconds(2500))
            .has_value(),
       "snapshot stale after 2.5s");
 }
@@ -183,6 +194,68 @@ static void test_companion_snapshot_bounds_and_session_identity() {
   layerc::test::expect(
       serialize_companion_snapshot_json(maximum_id_snapshot).has_value(),
       "session key remains bounded for a maximum-length profile ID");
+}
+
+static void test_bridge_truncates_worst_case_snapshot() {
+  const auto bounded = [](std::string value, const char fill) {
+    value.resize(max_companion_text_bytes, fill);
+    return value;
+  };
+  const auto item_text = [](std::string value, const char fill) {
+    value.resize(max_companion_text_bytes / 2U, fill);
+    return value;
+  };
+
+  GameProfile base_profile;
+  base_profile.id = "worst-case";
+  base_profile.name = "Worst case";
+  base_profile.game.global = true;
+  std::vector<CooldownDefinition> definitions;
+  for (std::size_t index = 0; index < max_companion_snapshot_items; ++index) {
+    definitions.push_back(
+        {.id = item_text("cooldown-" + std::to_string(index) + "-", 'c'),
+         .name = item_text("Cooldown " + std::to_string(index) + " ", 'n'),
+         .duration = std::chrono::seconds(1)});
+  }
+  base_profile.cooldowns = definitions;
+  base_profile.bindings.push_back(
+      {.cooldown_id = definitions.front().id,
+       .chord = {.tokens = {{.device = InputDevice::keyboard, .code = 1}}}});
+
+  CompanionProfile companion;
+  companion.profile_id = base_profile.id;
+  for (std::size_t index = 0; index < max_companion_available_panels;
+       ++index) {
+    Panel panel;
+    panel.id = bounded("panel-" + std::to_string(index) + "-", 'p');
+    panel.name = bounded("Panel " + std::to_string(index) + " ", 'n');
+    if (index < max_companion_slots) {
+      for (const auto &definition : definitions)
+        panel.cooldown_ids.push_back(definition.id);
+      companion.slots.push_back(
+          {.slot_index = static_cast<std::uint32_t>(index),
+           .panel_id = panel.id});
+    } else {
+      panel.cooldown_ids.push_back(definitions.front().id);
+    }
+    base_profile.panels.push_back(std::move(panel));
+  }
+
+  const auto profile_json = serialize_profile_json(base_profile);
+  layerc::test::expect(
+      profile_json.size() <= max_profile_json_bytes &&
+          std::holds_alternative<GameProfile>(parse_profile_json(profile_json)) &&
+          validate_companion_profile(companion, base_profile).message.empty(),
+      "worst-case bridge input is accepted by the profile boundaries");
+
+  const auto snapshot = GameBarBridge::create_session_snapshot(
+      base_profile.id, "session", base_profile.panels, definitions, {},
+      companion, MonotonicClock::now());
+  layerc::test::expect(
+      snapshot.available_panels.size() == max_companion_slots &&
+          !snapshot.panels.empty() && snapshot.panels.back().items.empty() &&
+          serialize_companion_snapshot_json(snapshot).has_value(),
+      "bridge preserves mapped metadata and truncates live data to 64 KiB");
 }
 
 static void test_all_eight_slots_persist_and_publish() {
@@ -446,6 +519,7 @@ int main() {
   test_companion_json_roundtrip();
   test_companion_snapshot_bridge();
   test_companion_snapshot_bounds_and_session_identity();
+  test_bridge_truncates_worst_case_snapshot();
   test_all_eight_slots_persist_and_publish();
   test_companion_package_identity();
   test_companion_snapshot_rejects_malformed_input();

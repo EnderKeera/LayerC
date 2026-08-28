@@ -32,9 +32,6 @@ public:
 
   void update_snapshot(layerc::core::CompanionSessionSnapshot snapshot);
   void clear_snapshot() noexcept;
-  [[nodiscard]] std::optional<layerc::core::CompanionSessionSnapshot>
-  latest_snapshot(
-      layerc::core::TimePoint now = layerc::core::MonotonicClock::now()) const;
   [[nodiscard]] std::optional<std::string> latest_snapshot_json(
       layerc::core::TimePoint now = layerc::core::MonotonicClock::now()) const;
 
