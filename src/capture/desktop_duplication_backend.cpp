@@ -53,12 +53,12 @@ public:
     monitor_ = MonitorFromRect(&window_bounds, MONITOR_DEFAULTTONEAREST);
 
     ComPtr<IDXGIFactory1> factory;
-    auto result = CreateDXGIFactory1(IID_PPV_ARGS(factory.put()));
+    auto result = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     if (FAILED(result))
       return fail("DXGI factory creation failed", result);
     for (UINT adapter_index = 0; !output_; ++adapter_index) {
       ComPtr<IDXGIAdapter1> candidate_adapter;
-      result = factory->EnumAdapters1(adapter_index, candidate_adapter.put());
+      result = factory->EnumAdapters1(adapter_index, candidate_adapter.ReleaseAndGetAddressOf());
       if (result == DXGI_ERROR_NOT_FOUND)
         break;
       if (FAILED(result))
@@ -66,7 +66,7 @@ public:
       for (UINT output_index = 0;; ++output_index) {
         ComPtr<IDXGIOutput> candidate_output;
         result = candidate_adapter->EnumOutputs(output_index,
-                                                candidate_output.put());
+                                                candidate_output.ReleaseAndGetAddressOf());
         if (result == DXGI_ERROR_NOT_FOUND)
           break;
         if (FAILED(result))
@@ -87,14 +87,14 @@ public:
       stop_resources();
       return false;
     }
-    if (!create_hardware_device(adapter_.get(), d3d_, error_)) {
+    if (!create_hardware_device(adapter_.Get(), d3d_, error_)) {
       stop_resources();
       return false;
     }
     ComPtr<IDXGIOutput1> output1;
-    result = output_->QueryInterface(IID_PPV_ARGS(output1.put()));
+    result = output_->QueryInterface(IID_PPV_ARGS(&output1));
     if (SUCCEEDED(result))
-      result = output1->DuplicateOutput(d3d_.device.get(), duplication_.put());
+      result = output1->DuplicateOutput(d3d_.device.Get(), duplication_.ReleaseAndGetAddressOf());
     if (FAILED(result))
       return fail("Desktop Duplication start failed", result);
     started_ = true;
@@ -134,7 +134,7 @@ public:
     DXGI_OUTDUPL_FRAME_INFO information{};
     ComPtr<IDXGIResource> resource;
     auto result =
-        duplication_->AcquireNextFrame(0, &information, resource.put());
+        duplication_->AcquireNextFrame(0, &information, resource.ReleaseAndGetAddressOf());
     if (result == DXGI_ERROR_WAIT_TIMEOUT)
       return current_result();
     if (result == DXGI_ERROR_ACCESS_LOST) {
@@ -158,7 +158,7 @@ public:
     }
 
     ComPtr<ID3D11Texture2D> texture;
-    result = resource->QueryInterface(IID_PPV_ARGS(texture.put()));
+    result = resource->QueryInterface(IID_PPV_ARGS(&texture));
     if (FAILED(result)) {
       (void)duplication_->ReleaseFrame();
       return unavailable("Desktop Duplication texture failed: " +
@@ -207,7 +207,7 @@ public:
         static_cast<double>(logical_copy_width) / window_width,
         static_cast<double>(logical_copy_height) / window_height};
     auto captured = readback_.read(
-        d3d_, texture.get(), source, window_width, window_height, destination_x,
+        d3d_, texture.Get(), source, window_width, window_height, destination_x,
         destination_y, available, output_rotation_, quality_, now, error_);
     (void)duplication_->ReleaseFrame();
     if (!captured)
@@ -242,9 +242,9 @@ public:
 
 private:
   void stop_resources() {
-    duplication_.reset();
-    output_.reset();
-    adapter_.reset();
+    duplication_.Reset();
+    output_.Reset();
+    adapter_.Reset();
     readback_.reset();
     d3d_ = {};
     monitor_ = nullptr;

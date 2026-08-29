@@ -240,6 +240,13 @@ void EditorWindow::refresh_visual_controls() {
 
 bool EditorWindow::save_visual_profile() {
   if (!visual_profile_ || current_path_.empty()) return false;
+  if (!draft_controls_valid()) {
+    MessageBoxW(dialog_,
+                L"Finish the invalid profile field before committing visual "
+                L"recognition.",
+                L"Visual save failed", MB_OK | MB_ICONERROR);
+    return false;
+  }
   // A visual action is an immediate commit. Synchronize and validate the base
   // controls as part of the same bundle so its on-disk ID/cooldowns can never
   // lag the sidecar being published.
@@ -249,7 +256,8 @@ bool EditorWindow::save_visual_profile() {
   const auto *validated = std::get_if<layerc::core::GameProfile>(&parsed);
   if (validated == nullptr) {
     MessageBoxW(dialog_,
-                L"Finish the invalid profile field before committing visual recognition.",
+                L"Finish the invalid profile field before committing visual "
+                L"recognition.",
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -390,7 +398,7 @@ bool EditorWindow::launch_calibration(const HWND target) {
       return false;
     if (!layerc::platform::set_visual_capture_notice_acknowledged(true)) {
       MessageBoxW(dialog_, L"Could not save the visual capture acknowledgement.",
-                  L"LayerE", MB_OK | MB_ICONWARNING);
+                  L"LayerC Editor", MB_OK | MB_ICONWARNING);
       return false;
     }
   }
@@ -404,7 +412,8 @@ bool EditorWindow::launch_calibration(const HWND target) {
           .parent_path() /
       L"layercal.exe";
   if (!std::filesystem::exists(child)) {
-    MessageBoxW(dialog_, L"layercal.exe is missing beside LayerE.",
+    MessageBoxW(dialog_,
+                L"layercal.exe is missing beside LayerC Editor.",
                 L"Calibration unavailable", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -605,13 +614,17 @@ bool EditorWindow::launch_calibration(const HWND target) {
 
   if (request_timed_out) {
     MessageBoxW(dialog_,
-                L"LayerCal did not begin reading its bounded request within five seconds and was stopped. The editor remained responsive and no calibration changes were applied.",
+                L"LayerC Calibration did not begin reading its bounded "
+                L"request within five seconds and was stopped. The editor "
+                L"remained responsive and no calibration changes were "
+                L"applied.",
                 L"Calibration channel timed out", MB_OK | MB_ICONERROR);
     return false;
   }
   if (calibration_timed_out) {
     MessageBoxW(dialog_,
-                L"LayerCal exceeded the 30-minute safety limit and was stopped. No calibration changes were applied.",
+                L"LayerC Calibration exceeded the 30-minute safety limit "
+                L"and was stopped. No calibration changes were applied.",
                 L"Calibration timed out", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -664,7 +677,8 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
       candidate_profile->triggers.size() != 1 ||
       candidate_profile->triggers.front().cooldown_id != cooldown->id) {
     MessageBoxW(dialog_,
-                L"LayerCal returned an invalid result. No profile data was changed.",
+                L"LayerC Calibration returned an invalid result. No profile "
+                L"data was changed.",
                 L"Calibration rejected", MB_OK | MB_ICONERROR);
     return false;
   }

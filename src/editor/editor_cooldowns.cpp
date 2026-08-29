@@ -39,6 +39,25 @@ std::wstring key_name_for_scan_code(const std::uint16_t code) {
   return label;
 }
 
+std::wstring duration_seconds_text(const layerc::core::Milliseconds duration) {
+  const auto milliseconds = duration.count();
+  std::wstring result = std::to_wstring(milliseconds / 1000);
+  const auto remainder = milliseconds % 1000;
+  if (remainder != 0) {
+    wchar_t fraction[5]{};
+    swprintf_s(fraction, L".%03lld", static_cast<long long>(remainder));
+    result += fraction;
+    while (result.back() == L'0')
+      result.pop_back();
+  }
+  return result;
+}
+
+std::wstring cooldown_label(const layerc::core::CooldownDefinition &cooldown) {
+  return to_wide(cooldown.name) + L"  —  " +
+         duration_seconds_text(cooldown.duration) + L" s";
+}
+
 void sync_bar_panels(
     layerc::core::GameProfile &profile,
     const std::optional<std::string_view> added = std::nullopt) {
@@ -122,10 +141,15 @@ void EditorWindow::refresh_profile_controls() {
   syncing_ = true;
   set_text(GetDlgItem(dialog_, IDC_PROFILE_NAME), to_wide(profile_.name));
   set_text(GetDlgItem(dialog_, IDC_PROFILE_ID), to_wide(profile_.id));
+  set_owner_draw_checkbox(
+      GetDlgItem(dialog_, IDC_APPLICATION_EXACT_PATH),
+      !profile_.game.executable_path.empty());
   const auto application =
-      profile_.game.executable_path.empty()
-          ? L"Choose a task from Detected Tasks or Pick Window."
-          : to_wide(profile_.game.executable_path);
+      !profile_.game.executable_path.empty()
+          ? to_wide(profile_.game.executable_path)
+          : !profile_.game.executable_name.empty()
+                ? to_wide(profile_.game.executable_name)
+                : L"Choose a running application.";
   set_text(application_path_, application);
   refresh_cooldown_list();
   refresh_bar_list();
@@ -136,11 +160,7 @@ void EditorWindow::refresh_profile_controls() {
 void EditorWindow::refresh_cooldown_list(const int selection) {
   SendMessageW(cooldown_list_, LB_RESETCONTENT, 0, 0);
   for (std::size_t index = 0; index < profile_.cooldowns.size(); ++index) {
-    const auto &cooldown = profile_.cooldowns[index];
-    const auto label =
-        to_wide(cooldown.name) + L"  —  " +
-        std::to_wstring(cooldown.duration.count() / 1000) + L"." +
-        std::to_wstring((cooldown.duration.count() % 1000) / 100) + L" s";
+    const auto label = cooldown_label(profile_.cooldowns[index]);
     const auto item = SendMessageW(cooldown_list_, LB_ADDSTRING, 0,
                                    reinterpret_cast<LPARAM>(label.c_str()));
     if (item != LB_ERR && item != LB_ERRSPACE)
@@ -154,6 +174,32 @@ void EditorWindow::refresh_cooldown_list(const int selection) {
             selection, 0, static_cast<int>(profile_.cooldowns.size()) - 1)),
         0);
   refresh_binding_controls();
+}
+
+void EditorWindow::refresh_selected_cooldown_label() {
+  const LRESULT row = SendMessageW(cooldown_list_, LB_GETCURSEL, 0, 0);
+  if (row == LB_ERR)
+    return;
+  const LRESULT data =
+      SendMessageW(cooldown_list_, LB_GETITEMDATA, static_cast<WPARAM>(row), 0);
+  if (data == LB_ERR || data < 0 ||
+      static_cast<std::size_t>(data) >= profile_.cooldowns.size())
+    return;
+  const auto label =
+      cooldown_label(profile_.cooldowns[static_cast<std::size_t>(data)]);
+  const bool was_syncing = syncing_;
+  syncing_ = true;
+  SendMessageW(cooldown_list_, LB_DELETESTRING, static_cast<WPARAM>(row), 0);
+  const LRESULT inserted = SendMessageW(
+      cooldown_list_, LB_INSERTSTRING, static_cast<WPARAM>(row),
+      reinterpret_cast<LPARAM>(label.c_str()));
+  if (inserted != LB_ERR && inserted != LB_ERRSPACE) {
+    SendMessageW(cooldown_list_, LB_SETITEMDATA,
+                 static_cast<WPARAM>(inserted), data);
+    SendMessageW(cooldown_list_, LB_SETCURSEL,
+                 static_cast<WPARAM>(inserted), 0);
+  }
+  syncing_ = was_syncing;
 }
 
 layerc::core::CooldownDefinition *EditorWindow::selected_cooldown() {
@@ -170,18 +216,59 @@ layerc::core::CooldownDefinition *EditorWindow::selected_cooldown() {
 
 void EditorWindow::refresh_binding_controls() {
   const auto *cooldown = selected_cooldown();
+  const bool has_selection = cooldown != nullptr;
+  const bool was_syncing = syncing_;
+  syncing_ = true;
   const HWND binding = GetDlgItem(dialog_, IDC_COOLDOWN_BINDING);
   const HWND capture = GetDlgItem(dialog_, IDC_CAPTURE_BINDING);
-  const HWND capture_hid = GetDlgItem(dialog_, IDC_CAPTURE_HID);
-  EnableWindow(binding, cooldown != nullptr);
-  EnableWindow(capture, cooldown != nullptr);
-  EnableWindow(capture_hid, cooldown != nullptr);
+  for (const int id : {IDC_COOLDOWN_NAME, IDC_COOLDOWN_DURATION,
+                       IDC_COOLDOWN_ID, IDC_COOLDOWN_CHARGES,
+                       IDC_COOLDOWN_RETRIGGER, IDC_COOLDOWN_RECOVERY,
+                       IDC_COOLDOWN_GROUPS, IDC_COOLDOWN_BINDING,
+                       IDC_CAPTURE_BINDING, IDC_CAPTURE_HID})
+    EnableWindow(GetDlgItem(dialog_, id), has_selection);
   set_text(capture, capturing_binding_ ? L"Press key..." : L"Capture key");
-  refresh_visual_controls();
-  if (cooldown == nullptr) {
+  if (!has_selection) {
+    for (const int id : {IDC_COOLDOWN_NAME, IDC_COOLDOWN_DURATION,
+                         IDC_COOLDOWN_ID, IDC_COOLDOWN_CHARGES,
+                         IDC_COOLDOWN_GROUPS})
+      set_text(GetDlgItem(dialog_, id), L"");
+    SendMessageW(GetDlgItem(dialog_, IDC_COOLDOWN_RETRIGGER), CB_SETCURSEL,
+                 static_cast<WPARAM>(-1), 0);
+    SendMessageW(GetDlgItem(dialog_, IDC_COOLDOWN_RECOVERY), CB_SETCURSEL,
+                 static_cast<WPARAM>(-1), 0);
     set_text(binding, L"Select a cooldown");
+    syncing_ = was_syncing;
+    refresh_visual_controls();
     return;
   }
+
+  set_text(GetDlgItem(dialog_, IDC_COOLDOWN_NAME), to_wide(cooldown->name));
+  set_text(GetDlgItem(dialog_, IDC_COOLDOWN_DURATION),
+           duration_seconds_text(cooldown->duration));
+  set_text(GetDlgItem(dialog_, IDC_COOLDOWN_ID), to_wide(cooldown->id));
+  set_text(GetDlgItem(dialog_, IDC_COOLDOWN_CHARGES),
+           std::to_wstring(cooldown->max_charges));
+  SendMessageW(GetDlgItem(dialog_, IDC_COOLDOWN_RETRIGGER), CB_SETCURSEL,
+               static_cast<WPARAM>(cooldown->retrigger), 0);
+  SendMessageW(GetDlgItem(dialog_, IDC_COOLDOWN_RECOVERY), CB_SETCURSEL,
+               static_cast<WPARAM>(cooldown->recovery), 0);
+  std::wstring groups;
+  for (const auto &group : profile_.cooldown_groups) {
+    if (std::ranges::find(group.cooldown_ids, cooldown->id) ==
+        group.cooldown_ids.end())
+      continue;
+    if (!groups.empty())
+      groups += L", ";
+    groups += to_wide(group.name.empty() ? group.id : group.name);
+    groups += group.mode == layerc::core::CooldownGroupMode::shared_pool
+                  ? L" (shared pool)"
+                  : L" (trigger propagation)";
+  }
+  set_text(GetDlgItem(dialog_, IDC_COOLDOWN_GROUPS),
+           groups.empty() ? L"None" : groups);
+  syncing_ = was_syncing;
+  refresh_visual_controls();
   if (capturing_binding_) {
     set_text(binding, L"Press a key (Esc cancels)");
     return;
@@ -339,7 +426,8 @@ void EditorWindow::add_cooldown() {
 
 void EditorWindow::remove_cooldown() {
   if (profile_.cooldowns.size() <= 1) {
-    MessageBoxW(dialog_, L"A profile needs at least one cooldown.", L"LayerE",
+    MessageBoxW(dialog_, L"A profile needs at least one cooldown.",
+                L"LayerC Editor",
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -350,7 +438,7 @@ void EditorWindow::remove_cooldown() {
                                           static_cast<WPARAM>(row), 0);
   if (data == LB_ERR || data < 0 ||
       static_cast<std::size_t>(data) >= profile_.cooldowns.size()) {
-    MessageBoxW(dialog_, L"Select a cooldown to remove.", L"LayerE",
+    MessageBoxW(dialog_, L"Select a cooldown to remove.", L"LayerC Editor",
                 MB_OK | MB_ICONINFORMATION);
     return;
   }

@@ -33,6 +33,7 @@ struct ExportDialogState {
   std::map<std::string, std::uintmax_t, std::less<>> asset_sizes;
   std::size_t current_index{SIZE_MAX};
   std::vector<std::filesystem::path> selected;
+  HFONT font{};
 };
 
 struct ImportItem {
@@ -47,6 +48,7 @@ struct ImportDialogState {
   const layerc::bundle::ValidatedPack *pack{};
   std::vector<ImportItem> items;
   std::vector<layerc::bundle::ImportChoice> selected;
+  HFONT font{};
 };
 
 void set_column(const HWND list, const int index, const int width,
@@ -56,6 +58,122 @@ void set_column(const HWND list, const int index, const int width,
   column.cx = width;
   column.pszText = const_cast<LPWSTR>(text);
   ListView_InsertColumn(list, index, &column);
+}
+
+int dialog_dpi(const HWND window) {
+  const UINT dpi = GetDpiForWindow(window);
+  return dpi == 0 ? 96 : static_cast<int>(dpi);
+}
+
+void move_dialog_item(const HWND window, const int id, const int x,
+                      const int y, const int width, const int height) {
+  if (const HWND control = GetDlgItem(window, id); control != nullptr)
+    MoveWindow(control, x, y, std::max(1, width), std::max(1, height), TRUE);
+}
+
+void fit_pack_columns(const HWND list, const bool import, const int dpi) {
+  if (list == nullptr)
+    return;
+  const HWND header = ListView_GetHeader(list);
+  RECT client{};
+  GetClientRect(header == nullptr ? list : header, &client);
+  const auto scaled = [dpi](const int value) { return MulDiv(value, dpi, 96); };
+  const int available =
+      std::max(1, static_cast<int>(client.right - client.left) - scaled(2));
+  if (!import) {
+    ListView_SetColumnWidth(list, 0, available);
+    return;
+  }
+  const int action_width =
+      std::min(scaled(120), std::max(scaled(88), available / 5));
+  const int remaining = std::max(2, available - action_width);
+  const int profile_width = std::max(1, remaining * 45 / 100);
+  ListView_SetColumnWidth(list, 0, profile_width);
+  ListView_SetColumnWidth(list, 1,
+                          std::max(1, remaining - profile_width));
+  ListView_SetColumnWidth(list, 2, action_width);
+}
+
+void layout_pack_dialog(const HWND window, const bool import) {
+  RECT client{};
+  GetClientRect(window, &client);
+  const int width = std::max(1, static_cast<int>(client.right - client.left));
+  const int height = std::max(1, static_cast<int>(client.bottom - client.top));
+  const int dpi = dialog_dpi(window);
+  const auto scaled = [dpi](const int value) { return MulDiv(value, dpi, 96); };
+
+  const int margin = scaled(12);
+  const int gap = scaled(8);
+  const int intro_height = scaled(30);
+  const int button_height = scaled(25);
+  const int action_top = height - margin - button_height;
+  const int selection_top = action_top - gap - button_height;
+  const int list_top = margin + intro_height + gap;
+  move_dialog_item(window, IDC_PACK_INTRO, margin, margin, width - margin * 2,
+                   intro_height);
+  move_dialog_item(window, IDC_PACK_LIST, margin, list_top, width - margin * 2,
+                   selection_top - gap - list_top);
+
+  int left = margin;
+  move_dialog_item(window, IDC_PACK_SELECT_ALL, left, selection_top, scaled(84),
+                   button_height);
+  left += scaled(92);
+  if (import) {
+    move_dialog_item(window, IDC_PACK_TOGGLE_ACTION, left, selection_top,
+                     scaled(142), button_height);
+    left += scaled(150);
+  }
+  move_dialog_item(window, IDC_PACK_SUMMARY, left,
+                   selection_top + scaled(5), width - margin - left,
+                   scaled(18));
+
+  const int cancel_width = scaled(80);
+  const int confirm_width = scaled(88);
+  move_dialog_item(window, IDCANCEL, width - margin - cancel_width, action_top,
+                   cancel_width, button_height);
+  move_dialog_item(window, IDC_PACK_CONFIRM,
+                   width - margin - cancel_width - gap - confirm_width,
+                   action_top, confirm_width, button_height);
+  fit_pack_columns(GetDlgItem(window, IDC_PACK_LIST), import, dpi);
+}
+
+bool handle_pack_window_message(const HWND window, const UINT message,
+                                const WPARAM wparam, const LPARAM lparam,
+                                const bool import, HFONT &font) {
+  if (message == WM_SIZE) {
+    layout_pack_dialog(window, import);
+    return true;
+  }
+  if (message == WM_DPICHANGED) {
+    apply_suggested_dpi_rect(window, lparam);
+    const HFONT replacement = create_editor_font(HIWORD(wparam));
+    if (replacement != nullptr) {
+      const HFONT previous = font;
+      font = replacement;
+      style_native_dialog_children(window, font);
+      if (previous != nullptr)
+        DeleteObject(previous);
+    }
+    layout_pack_dialog(window, import);
+    return true;
+  }
+  if (message == WM_GETMINMAXINFO) {
+    const int dpi = dialog_dpi(window);
+    auto *limits = reinterpret_cast<MINMAXINFO *>(lparam);
+    limits->ptMinTrackSize = {
+        MulDiv(import ? 620 : 520, dpi, 96),
+        MulDiv(import ? 360 : 330, dpi, 96),
+    };
+    return true;
+  }
+  if (message == WM_DESTROY) {
+    if (font != nullptr) {
+      DeleteObject(font);
+      font = nullptr;
+    }
+    return true;
+  }
+  return false;
 }
 
 std::size_t checked_count(const HWND list) {
@@ -157,12 +275,16 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
         window, state->editor->capture_exclusion_);
-    state->editor->style_dialog_children(window);
+    state->font = create_editor_font(GetDpiForWindow(window));
+    if (state->font != nullptr)
+      style_native_dialog_children(window, state->font);
+    else
+      state->editor->style_dialog_children(window);
     const HWND list = GetDlgItem(window, IDC_PACK_LIST);
     ListView_SetExtendedListViewStyle(
         list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
                   LVS_EX_LABELTIP);
-    set_column(list, 0, 430, L"Saved profile");
+    set_column(list, 0, 1, L"Saved profile");
     state->editor->style_list_view(list, false);
     for (std::size_t index = 0; index < state->items.size(); ++index) {
       LVITEMW item{};
@@ -175,6 +297,7 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
                              index == state->current_index);
     }
     update_export_summary(window, *state);
+    layout_pack_dialog(window, false);
     return TRUE;
   }
   if (message == WM_NOTIFY &&
@@ -208,6 +331,9 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
       return TRUE;
     }
   }
+  if (handle_pack_window_message(window, message, wparam, lparam, false,
+                                 state->font))
+    return TRUE;
   return state->editor->dialog_theme_message(window, message, wparam, lparam)
       .value_or(FALSE);
 }
@@ -223,14 +349,18 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
     set_dark_title_bar(window);
     (void)layerc::platform::apply_capture_exclusion(
         window, state->editor->capture_exclusion_);
-    state->editor->style_dialog_children(window);
+    state->font = create_editor_font(GetDpiForWindow(window));
+    if (state->font != nullptr)
+      style_native_dialog_children(window, state->font);
+    else
+      state->editor->style_dialog_children(window);
     const HWND list = GetDlgItem(window, IDC_PACK_LIST);
     ListView_SetExtendedListViewStyle(
         list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
                   LVS_EX_LABELTIP);
-    set_column(list, 0, 245, L"Profile");
-    set_column(list, 1, 190, L"Suggested file");
-    set_column(list, 2, 125, L"Action");
+    set_column(list, 0, 1, L"Profile");
+    set_column(list, 1, 1, L"Suggested file");
+    set_column(list, 2, 1, L"Action");
     state->editor->style_list_view(list, false);
     for (std::size_t index = 0; index < state->items.size(); ++index) {
       LVITEMW item{};
@@ -246,6 +376,7 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
       ListView_SetCheckState(list, static_cast<int>(index), TRUE);
     }
     update_import_summary(window);
+    layout_pack_dialog(window, true);
     return TRUE;
   }
   if (message == WM_NOTIFY &&
@@ -298,6 +429,9 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
       return TRUE;
     }
   }
+  if (handle_pack_window_message(window, message, wparam, lparam, true,
+                                 state->font))
+    return TRUE;
   return state->editor->dialog_theme_message(window, message, wparam, lparam)
       .value_or(FALSE);
 }

@@ -99,9 +99,9 @@ template <typename T> void close_inspectable(ComPtr<T> &value) {
     return;
   ComPtr<wgc_abi::Closable> closable;
   if (SUCCEEDED(
-          value->QueryInterface(wgc_abi::iid_closable, closable.put_void())))
+          value->QueryInterface(wgc_abi::iid_closable, &closable)))
     (void)closable->Close();
-  value.reset();
+  value.Reset();
 }
 
 void pin_graphics_capture_runtime() {
@@ -138,14 +138,14 @@ public:
     }
 
     ComPtr<IDXGIDevice> dxgi_device;
-    auto result = d3d_.device->QueryInterface(IID_PPV_ARGS(dxgi_device.put()));
+    auto result = d3d_.device->QueryInterface(IID_PPV_ARGS(&dxgi_device));
     ComPtr<IInspectable> inspectable_device;
     if (SUCCEEDED(result))
-      result = runtime_->create_d3d_device(dxgi_device.get(),
-                                           inspectable_device.put());
+      result = runtime_->create_d3d_device(dxgi_device.Get(),
+                                           inspectable_device.ReleaseAndGetAddressOf());
     if (SUCCEEDED(result))
       result = inspectable_device->QueryInterface(wgc_abi::iid_direct3d_device,
-                                                  direct3d_device_.put_void());
+                                                  &direct3d_device_);
     if (FAILED(result))
       return fail("D3D11 WinRT interop failed", result);
 
@@ -156,11 +156,11 @@ public:
     if (SUCCEEDED(result))
       result =
           runtime_->get_factory(item_class, wgc_abi::iid_capture_item_interop,
-                                item_factory.put_void());
+                                &item_factory);
     runtime_->delete_string(item_class);
     if (SUCCEEDED(result))
       result = item_factory->CreateForWindow(window_, wgc_abi::iid_capture_item,
-                                             item_.put_void());
+                                             &item_);
     if (FAILED(result))
       return fail("WGC window item creation failed", result);
 
@@ -176,17 +176,17 @@ public:
     if (SUCCEEDED(result))
       result = runtime_->get_factory(pool_class,
                                      wgc_abi::iid_capture_frame_pool_statics2,
-                                     pool_factory.put_void());
+                                     &pool_factory);
     runtime_->delete_string(pool_class);
     if (SUCCEEDED(result))
       // LayerC consumes only the newest frame at 5-15 Hz. One pool buffer is
       // sufficient for that drop-old-frames contract and avoids retaining a
       // second full-size game texture in the daemon's capture session.
       result = pool_factory->CreateFreeThreaded(
-          direct3d_device_.get(), wgc_abi::pixel_format_bgra8_unorm, 1, size,
-          pool_.put());
+          direct3d_device_.Get(), wgc_abi::pixel_format_bgra8_unorm, 1, size,
+          pool_.ReleaseAndGetAddressOf());
     if (SUCCEEDED(result))
-      result = pool_->CreateCaptureSession(item_.get(), session_.put());
+      result = pool_->CreateCaptureSession(item_.Get(), session_.ReleaseAndGetAddressOf());
     if (SUCCEEDED(result))
       result = session_->StartCapture();
     if (FAILED(result))
@@ -203,8 +203,8 @@ public:
     started_ = false;
     close_inspectable(session_);
     close_inspectable(pool_);
-    item_.reset();
-    direct3d_device_.reset();
+    item_.Reset();
+    direct3d_device_.Reset();
     readback_.reset();
     last_frame_.reset();
     d3d_ = {};
@@ -224,7 +224,7 @@ public:
     ComPtr<wgc_abi::CaptureFrame> newest;
     for (;;) {
       ComPtr<wgc_abi::CaptureFrame> frame;
-      const auto result = pool_->TryGetNextFrame(frame.put());
+      const auto result = pool_->TryGetNextFrame(frame.ReleaseAndGetAddressOf());
       if (FAILED(result)) {
         error_ = "WGC frame retrieval failed: " + hresult_message(result);
         return {.availability = core::CaptureAvailability::unavailable,
@@ -242,12 +242,12 @@ public:
       ComPtr<wgc_abi::DxgiInterfaceAccess> access;
       ComPtr<ID3D11Texture2D> texture;
       wgc_abi::SizeInt32 content{};
-      auto result = newest->get_Surface(surface.put());
+      auto result = newest->get_Surface(surface.ReleaseAndGetAddressOf());
       if (SUCCEEDED(result))
         result = surface->QueryInterface(wgc_abi::iid_dxgi_interface_access,
-                                         access.put_void());
+                                         &access);
       if (SUCCEEDED(result))
-        result = access->GetInterface(IID_PPV_ARGS(texture.put()));
+        result = access->GetInterface(IID_PPV_ARGS(&texture));
       if (SUCCEEDED(result))
         result = newest->get_ContentSize(&content);
       if (FAILED(result) || content.width <= 0 || content.height <= 0) {
@@ -259,13 +259,13 @@ public:
       }
       if (content.width != pool_size_.width ||
           content.height != pool_size_.height) {
-        texture.reset();
-        access.reset();
-        surface.reset();
-        newest.reset();
+        texture.Reset();
+        access.Reset();
+        surface.Reset();
+        newest.Reset();
         readback_.reset();
         const auto resized =
-            pool_->Recreate(direct3d_device_.get(),
+            pool_->Recreate(direct3d_device_.Get(),
                             wgc_abi::pixel_format_bgra8_unorm, 1, content);
         if (FAILED(resized)) {
           error_ = "WGC frame-pool resize failed: " + hresult_message(resized);
@@ -291,7 +291,7 @@ public:
           description.Height, static_cast<std::uint32_t>(content.height));
       const D3D11_BOX source{0, 0, 0, width, height, 1};
       auto captured =
-          readback_.read(d3d_, texture.get(), source, width, height, 0, 0,
+          readback_.read(d3d_, texture.Get(), source, width, height, 0, 0,
                          {0.0, 0.0, 1.0, 1.0}, OutputRotation::identity,
                          quality_, now, error_);
       if (!captured)

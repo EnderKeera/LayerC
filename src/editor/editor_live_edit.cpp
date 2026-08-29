@@ -87,7 +87,12 @@ void EditorWindow::schedule_autosave(const bool immediate) {
 
 bool EditorWindow::draft_controls_valid() const {
   if (control_text(GetDlgItem(dialog_, IDC_PROFILE_NAME)).empty() ||
-      control_text(GetDlgItem(dialog_, IDC_PROFILE_ID)).empty())
+      control_text(GetDlgItem(dialog_, IDC_PROFILE_ID)).empty() ||
+      control_text(GetDlgItem(dialog_, IDC_COOLDOWN_NAME)).empty() ||
+      !parse_duration_ms(
+          control_text(GetDlgItem(dialog_, IDC_COOLDOWN_DURATION))) ||
+      !bounded_decimal(
+          control_text(GetDlgItem(dialog_, IDC_COOLDOWN_CHARGES)), 1, 99))
     return false;
   if (bar_controls_panel_ < profile_.panels.size()) {
     if (!bounded_decimal(control_text(GetDlgItem(dialog_, IDC_BAR_WIDTH)), 40,
@@ -213,7 +218,9 @@ void EditorWindow::poll_live_channel() {
       pending_edit_deadline_ = 0;
       set_status(L"Live editing is unavailable — restart LayerD to update its protocol version.");
       MessageBoxW(dialog_,
-                  L"LayerD did not expose the live-edit service. Exit the older LayerD from its tray icon, then try Edit on Window again.",
+                  L"LayerD did not expose the live-edit service. Exit the "
+                  L"older LayerD from its tray icon, then try Position on "
+                  L"Window again.",
                   L"Restart LayerD", MB_OK | MB_ICONINFORMATION);
     }
   }
@@ -247,9 +254,7 @@ void EditorWindow::handle_live_message(
   }
   if (message.type == layerc::core::LiveMessageType::diagnostics_reply) {
     runtime_diagnostics_json_ = message.text;
-    if (diagnostics_dialog_ != nullptr && IsWindow(diagnostics_dialog_))
-      set_text(GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_TEXT),
-               to_wide(runtime_diagnostics_json_));
+    refresh_runtime_diagnostics_dialog();
     return;
   }
   if (automation_editor_->handle_live_message(message)) return;
@@ -412,7 +417,8 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
   DWORD target_process_id{};
   GetWindowThreadProcessId(target, &target_process_id);
   if (target_process_id == 0 || target_process_id == GetCurrentProcessId()) {
-    set_status(L"LayerE cannot attach edit overlays to its own windows.");
+    set_status(
+        L"LayerC Editor cannot attach edit overlays to its own windows.");
     return;
   }
   if (!confirm_v2_upgrade()) {
@@ -437,7 +443,7 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
   direct_drag_notice_shown_ = false;
   set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_DIRECT_DRAG), false);
   EnableWindow(GetDlgItem(dialog_, IDC_DIRECT_DRAG), TRUE);
-  set_text(GetDlgItem(dialog_, IDC_ATTACH_LEFT), L"End Edit");
+  set_text(GetDlgItem(dialog_, IDC_POSITION_ON_WINDOW), L"End Positioning");
   const auto *panel = selected_bar();
   ++revision_;
   (void)live_channel_.send({
@@ -473,7 +479,8 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
   awaiting_edit_target_ = false;
   set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_DIRECT_DRAG), false);
   EnableWindow(GetDlgItem(dialog_, IDC_DIRECT_DRAG), FALSE);
-  set_text(GetDlgItem(dialog_, IDC_ATTACH_LEFT), L"Edit on Window");
+  set_text(GetDlgItem(dialog_, IDC_POSITION_ON_WINDOW),
+           L"Position on Window");
   if (!status.empty()) set_status(status);
 }
 

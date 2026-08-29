@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <system_error>
 
 namespace layerc::capture {
 namespace {
@@ -63,7 +64,7 @@ bool create_hardware_device(IDXGIAdapter *adapter, D3dDevice &output,
   const auto result = D3D11CreateDevice(
       adapter, driver, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, requested,
       static_cast<UINT>(std::size(requested)), D3D11_SDK_VERSION,
-      output.device.put(), &selected, output.context.put());
+      output.device.ReleaseAndGetAddressOf(), &selected, output.context.ReleaseAndGetAddressOf());
   if (FAILED(result)) {
     error = "hardware D3D11 device creation failed: " +
             hresult_message(result);
@@ -71,9 +72,9 @@ bool create_hardware_device(IDXGIAdapter *adapter, D3dDevice &output,
   }
 
   ComPtr<IDXGIDevice> dxgi_device;
-  if (SUCCEEDED(output.device->QueryInterface(IID_PPV_ARGS(dxgi_device.put())))) {
+  if (SUCCEEDED(output.device->QueryInterface(IID_PPV_ARGS(&dxgi_device)))) {
     ComPtr<IDXGIAdapter> actual_adapter;
-    if (SUCCEEDED(dxgi_device->GetAdapter(actual_adapter.put()))) {
+    if (SUCCEEDED(dxgi_device->GetAdapter(actual_adapter.ReleaseAndGetAddressOf()))) {
       DXGI_ADAPTER_DESC description{};
       if (SUCCEEDED(actual_adapter->GetDesc(&description)))
         output.description =
@@ -140,7 +141,7 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
     staging_description_.ArraySize = 1;
     const auto created =
         device.device->CreateTexture2D(&staging_description_, nullptr,
-                                       staging_.put());
+                                       staging_.ReleaseAndGetAddressOf());
     if (FAILED(created)) {
       error = "capture readback texture creation failed: " +
               hresult_message(created);
@@ -159,7 +160,7 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
             output_extent));
   };
   if (!bounded_readback) {
-    device.context->CopySubresourceRegion(staging_.get(), 0, 0, 0, 0,
+    device.context->CopySubresourceRegion(staging_.Get(), 0, 0, 0, 0,
                                           texture, 0, &source);
   } else {
     // A CPU-readable full-window texture dominates the Low/Balanced memory
@@ -180,7 +181,7 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
         const D3D11_BOX column{source.left + source_x, source.top, 0,
                                source.left + source_x + 1U, source.bottom, 1};
         device.context->CopySubresourceRegion(
-            staging_.get(), 0, output_y, 0, 0, texture, 0, &column);
+            staging_.Get(), 0, output_y, 0, 0, texture, 0, &column);
       } else {
         const auto source_y =
             rotation == OutputRotation::rotate180
@@ -189,13 +190,13 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
         const D3D11_BOX row{source.left, source.top + source_y, 0,
                             source.right, source.top + source_y + 1U, 1};
         device.context->CopySubresourceRegion(
-            staging_.get(), 0, 0, output_y, 0, texture, 0, &row);
+            staging_.Get(), 0, 0, output_y, 0, texture, 0, &row);
       }
     }
   }
   D3D11_MAPPED_SUBRESOURCE mapped{};
   const auto mapped_result =
-      device.context->Map(staging_.get(), 0, D3D11_MAP_READ, 0, &mapped);
+      device.context->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
   if (FAILED(mapped_result)) {
     error = "capture readback map failed: " + hresult_message(mapped_result);
     return {};
@@ -270,7 +271,7 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
                  tone_map_channel(half_to_float(value[1])),
                  tone_map_channel(half_to_float(value[2]))};
       } else {
-        device.context->Unmap(staging_.get(), 0);
+        device.context->Unmap(staging_.Get(), 0);
         error = "capture texture format is unsupported";
         return {};
       }
@@ -278,26 +279,18 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
                      output_x] = pixel;
     }
   }
-  device.context->Unmap(staging_.get(), 0);
+  device.context->Unmap(staging_.Get(), 0);
   return output;
 }
 
 void TextureReadback::reset() {
-  staging_.reset();
+  staging_.Reset();
   staging_description_ = {};
 }
 
 std::string hresult_message(const HRESULT result) {
-  wchar_t *message{};
-  const auto length = FormatMessageW(
-      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-          FORMAT_MESSAGE_IGNORE_INSERTS,
-      nullptr, static_cast<DWORD>(result), 0,
-      reinterpret_cast<wchar_t *>(&message), 0, nullptr);
-  std::string output;
-  if (length != 0 && message != nullptr)
-    output = layerc::platform::wide_to_utf8(message);
-  if (message != nullptr) LocalFree(message);
+  std::string output =
+      std::system_category().message(static_cast<int>(result));
   while (!output.empty() &&
          (output.back() == '\r' || output.back() == '\n' || output.back() == ' '))
     output.pop_back();

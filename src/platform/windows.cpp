@@ -16,17 +16,28 @@ constexpr wchar_t settings_registry_key[] = L"Software\\LayerC";
 constexpr wchar_t capture_exclusion_value[] = L"ExcludeFromCapture";
 constexpr wchar_t visual_recognition_value[] = L"VisualRecognitionEnabled";
 constexpr wchar_t visual_capture_notice_value[] = L"VisualCaptureNoticeSeen";
+constexpr wchar_t editor_appearance_value[] = L"EditorAppearance";
 constexpr wchar_t editor_theme_value[] = L"EditorTheme";
 constexpr wchar_t editor_accent_value[] = L"EditorAccent";
 constexpr wchar_t editor_appearance_prefix[] = L"EditorAppearance.";
-constexpr std::uint32_t default_editor_accent = 0xE0A15AU;
 constexpr DWORD capture_exclusion_affinity = 0x00000011;
+constexpr std::uint32_t editor_appearance_version = 1;
+
+struct StoredEditorAppearance {
+  std::uint32_t version{};
+  std::uint32_t theme{};
+  std::uint32_t accent{};
+  std::uint32_t reserved{};
+  std::array<EditorAppearanceOverrides,
+             static_cast<std::size_t>(EditorControlRole::count)>
+      overrides{};
+};
 constexpr std::uint32_t all_editor_appearance_fields =
     editor_fill | editor_text | editor_border | editor_hover |
     editor_selection | editor_disabled;
 
 bool is_known_editor_theme(const DWORD value) {
-  return value <= static_cast<DWORD>(EditorTheme::plum);
+  return value <= static_cast<DWORD>(EditorTheme::dark);
 }
 
 bool is_known_editor_control_role(const EditorControlRole role) {
@@ -79,6 +90,64 @@ bool write_dword(const wchar_t *name, const DWORD value) {
 
 bool write_bool_dword(const wchar_t *name, const bool enabled) {
   return write_dword(name, enabled ? 1U : 0U);
+}
+
+EditorAppearanceOverrides
+read_legacy_editor_overrides(const EditorControlRole role) {
+  EditorAppearanceOverrides overrides{};
+  DWORD size = sizeof(overrides);
+  const auto value_name = editor_appearance_value_name(role);
+  const HKEY key = open_layerc_key(KEY_QUERY_VALUE, false);
+  if (key == nullptr)
+    return {};
+  const LSTATUS result =
+      RegGetValueW(key, nullptr, value_name.c_str(), RRF_RT_REG_BINARY, nullptr,
+                   &overrides, &size);
+  RegCloseKey(key);
+  if (result != ERROR_SUCCESS || size != sizeof(overrides))
+    return {};
+  overrides.fields &= all_editor_appearance_fields;
+  return overrides;
+}
+
+EditorAppearanceSettings legacy_editor_appearance() {
+  EditorAppearanceSettings settings;
+  if (const auto theme = read_dword(editor_theme_value);
+      theme.has_value() &&
+      *theme <= static_cast<DWORD>(EditorTheme::plum)) {
+    settings.theme = static_cast<EditorTheme>(*theme);
+  }
+  if (const auto accent = read_dword(editor_accent_value); accent.has_value())
+    settings.accent = *accent & 0x00FFFFFFU;
+  for (std::size_t index = 0; index < settings.overrides.size(); ++index)
+    settings.overrides[index] = read_legacy_editor_overrides(
+        static_cast<EditorControlRole>(index));
+  return settings;
+}
+
+std::optional<EditorAppearanceSettings> read_editor_appearance() {
+  StoredEditorAppearance stored{};
+  DWORD size = sizeof(stored);
+  const HKEY key = open_layerc_key(KEY_QUERY_VALUE, false);
+  if (key == nullptr)
+    return std::nullopt;
+  const LSTATUS result =
+      RegGetValueW(key, nullptr, editor_appearance_value, RRF_RT_REG_BINARY,
+                   nullptr, &stored, &size);
+  RegCloseKey(key);
+  if (result != ERROR_SUCCESS || size != sizeof(stored) ||
+      stored.version != editor_appearance_version ||
+      !is_known_editor_theme(stored.theme))
+    return std::nullopt;
+
+  EditorAppearanceSettings settings{
+      .theme = static_cast<EditorTheme>(stored.theme),
+      .accent = stored.accent & 0x00FFFFFFU,
+      .overrides = stored.overrides,
+  };
+  for (auto &overrides : settings.overrides)
+    overrides.fields &= all_editor_appearance_fields;
+  return settings;
 }
 
 } // namespace
@@ -180,81 +249,76 @@ UINT monitor_dpi_for_rect(const RECT &rect) {
   return system_dpi == 0 ? 96U : system_dpi;
 }
 
-EditorTheme editor_theme() {
-  const auto value = read_dword(editor_theme_value);
-  if (!value.has_value() || !is_known_editor_theme(*value)) {
-    return EditorTheme::copper;
-  }
-  return static_cast<EditorTheme>(*value);
+EditorAppearanceSettings editor_appearance() {
+  const auto settings = read_editor_appearance();
+  if (settings.has_value())
+    return *settings;
+  // One-time migration: write the versioned blob back so the per-value legacy
+  // reads below never run again on this machine (barring registry failure).
+  const auto legacy = legacy_editor_appearance();
+  (void)set_editor_appearance(legacy);
+  return legacy;
 }
 
-std::uint32_t editor_accent() {
-  const auto value = read_dword(editor_accent_value);
-  return value.has_value() ? (*value & 0x00FFFFFFU) : default_editor_accent;
+bool set_editor_appearance(const EditorAppearanceSettings &settings) {
+  const auto theme = static_cast<std::uint32_t>(settings.theme);
+  if (!is_known_editor_theme(theme))
+    return false;
+
+  StoredEditorAppearance stored{
+      .version = editor_appearance_version,
+      .theme = theme,
+      .accent = settings.accent & 0x00FFFFFFU,
+      .overrides = settings.overrides,
+  };
+  for (auto &overrides : stored.overrides)
+    overrides.fields &= all_editor_appearance_fields;
+
+  const HKEY key = open_layerc_key(KEY_SET_VALUE, true);
+  if (key == nullptr)
+    return false;
+  const LSTATUS written = RegSetValueExW(
+      key, editor_appearance_value, 0, REG_BINARY,
+      reinterpret_cast<const BYTE *>(&stored), sizeof(stored));
+  RegCloseKey(key);
+  return written == ERROR_SUCCESS;
 }
+
+EditorTheme editor_theme() { return editor_appearance().theme; }
+
+std::uint32_t editor_accent() { return editor_appearance().accent; }
 
 bool set_editor_theme(const EditorTheme theme) {
-  const DWORD value = static_cast<DWORD>(theme);
-  if (!is_known_editor_theme(value)) {
-    return false;
-  }
-  return write_dword(editor_theme_value, value);
+  auto settings = editor_appearance();
+  settings.theme = theme;
+  return set_editor_appearance(settings);
 }
 
 EditorAppearanceOverrides
 editor_appearance_overrides(const EditorControlRole role) {
-  if (!is_known_editor_control_role(role)) {
+  if (!is_known_editor_control_role(role))
     return {};
-  }
-  EditorAppearanceOverrides overrides{};
-  DWORD size = sizeof(overrides);
-  const auto value_name = editor_appearance_value_name(role);
-  const HKEY key = open_layerc_key(KEY_QUERY_VALUE, false);
-  if (key == nullptr)
-    return {};
-  const LSTATUS result =
-      RegGetValueW(key, nullptr, value_name.c_str(), RRF_RT_REG_BINARY, nullptr,
-                   &overrides, &size);
-  RegCloseKey(key);
-  if (result != ERROR_SUCCESS || size != sizeof(overrides)) {
-    return {};
-  }
-  overrides.fields &= all_editor_appearance_fields;
-  return overrides;
+  return editor_appearance().overrides[static_cast<std::size_t>(role)];
 }
 
 bool set_editor_appearance_overrides(
     const EditorControlRole role,
     const EditorAppearanceOverrides &source_overrides) {
-  if (!is_known_editor_control_role(role)) {
+  if (!is_known_editor_control_role(role))
     return false;
-  }
-  EditorAppearanceOverrides overrides = source_overrides;
-  overrides.fields &= all_editor_appearance_fields;
-  const auto value_name = editor_appearance_value_name(role);
-  const HKEY key = open_layerc_key(KEY_SET_VALUE, true);
-  if (key == nullptr)
-    return false;
-  LSTATUS written = ERROR_SUCCESS;
-  if (overrides.fields == 0) {
-    written = RegDeleteValueW(key, value_name.c_str());
-    if (written == ERROR_FILE_NOT_FOUND) {
-      written = ERROR_SUCCESS;
-    }
-  } else {
-    written = RegSetValueExW(key, value_name.c_str(), 0, REG_BINARY,
-                             reinterpret_cast<const BYTE *>(&overrides),
-                             sizeof(overrides));
-  }
-  RegCloseKey(key);
-  return written == ERROR_SUCCESS;
+  auto settings = editor_appearance();
+  settings.overrides[static_cast<std::size_t>(role)] = source_overrides;
+  return set_editor_appearance(settings);
 }
 
 bool reset_editor_appearance_overrides(const EditorControlRole role,
                                        const std::uint32_t fields) {
-  auto overrides = editor_appearance_overrides(role);
-  overrides.fields &= ~(fields & all_editor_appearance_fields);
-  return set_editor_appearance_overrides(role, overrides);
+  if (!is_known_editor_control_role(role))
+    return false;
+  auto settings = editor_appearance();
+  settings.overrides[static_cast<std::size_t>(role)].fields &=
+      ~(fields & all_editor_appearance_fields);
+  return set_editor_appearance(settings);
 }
 
 bool signal_settings_reload() {

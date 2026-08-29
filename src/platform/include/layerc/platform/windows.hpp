@@ -2,6 +2,8 @@
 
 #include "layerc/core/types.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -23,6 +25,8 @@ enum class EditorTheme : std::uint32_t {
   copper = 0,
   teal = 1,
   plum = 2,
+  system = 3,
+  dark = 4,
 };
 
 // These roles intentionally map to native control families rather than a
@@ -60,6 +64,17 @@ struct EditorAppearanceOverrides {
   std::uint32_t disabled{};
 };
 
+struct EditorAppearanceSettings {
+  EditorTheme theme{EditorTheme::copper};
+  std::uint32_t accent{};
+  std::array<EditorAppearanceOverrides,
+             static_cast<std::size_t>(EditorControlRole::count)>
+      overrides{};
+};
+
+static_assert(EditorAppearanceSettings{}.overrides.size() ==
+              static_cast<std::size_t>(EditorControlRole::count));
+
 struct WindowCandidate {
   HWND window{};
   DWORD process_id{};
@@ -95,6 +110,9 @@ profile_matches_window(const WindowCandidate &candidate,
 [[nodiscard]] bool set_visual_capture_notice_acknowledged(bool acknowledged);
 [[nodiscard]] bool apply_capture_exclusion(HWND window, bool enabled);
 [[nodiscard]] UINT monitor_dpi_for_rect(const RECT &rect);
+[[nodiscard]] EditorAppearanceSettings editor_appearance();
+[[nodiscard]] bool
+set_editor_appearance(const EditorAppearanceSettings &settings);
 [[nodiscard]] EditorTheme editor_theme();
 [[nodiscard]] std::uint32_t editor_accent();
 [[nodiscard]] bool set_editor_theme(EditorTheme theme);

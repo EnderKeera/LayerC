@@ -11,9 +11,39 @@
 #include <commctrl.h>
 #include <windows.h>
 namespace layerc::editor {
+
+namespace {
+
+void show_task_actions_menu(const HWND window) {
+  const HMENU menu = CreatePopupMenu();
+  if (menu == nullptr)
+    return;
+  AppendMenuW(menu, MF_STRING, IDC_EDIT_SELECTED_TASK,
+              L"&Position on Window");
+  AppendMenuW(menu, MF_STRING, IDC_CALIBRATE_SELECTED_TASK,
+              L"&Calibrate Visual");
+  RECT anchor{};
+  const HWND button = GetDlgItem(window, IDC_TASK_ACTIONS);
+  if (button != nullptr && GetWindowRect(button, &anchor) != FALSE) {
+    const UINT command = static_cast<UINT>(TrackPopupMenu(
+        menu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+        anchor.left, anchor.bottom, 0, window, nullptr));
+    if (command != 0U)
+      SendMessageW(window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+  }
+  DestroyMenu(menu);
+}
+
+} // namespace
+
 void EditorWindow::initialize_tasks(const HWND window) {
   task_dialog_ = window;
-  task_font_ = create_editor_font(GetDpiForWindow(window));
+  const UINT window_dpi = GetDpiForWindow(window);
+  const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
+  SetWindowPos(window, nullptr, 0, 0, MulDiv(760, dpi, 96),
+               MulDiv(360, dpi, 96),
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  task_font_ = create_editor_font(static_cast<UINT>(dpi));
   set_dark_title_bar(window);
   style_native_dialog_children(window,
                                task_font_ == nullptr ? font_ : task_font_);
@@ -79,8 +109,7 @@ void EditorWindow::layout_tasks(const HWND window) {
   move_button(IDC_PICK_WINDOW, 84);
   move_button(IDC_USE_TASK, 110);
   move_button(IDC_REFRESH_TASKS, 64);
-  move_button(IDC_EDIT_SELECTED_TASK, 102);
-  move_button(IDC_CALIBRATE_SELECTED_TASK, 110);
+  move_button(IDC_TASK_ACTIONS, 68);
   move(IDC_TASK_DETAIL, margin, button_top + button_height + gap, list_width,
        detail_height);
 
@@ -168,7 +197,7 @@ EditorWindow::require_selected_task(const bool live_window_required) {
                   ? L"Select a task first."
                   : L"The selected task has closed. Refresh the list before "
                     L"using a live-window action.",
-              L"LayerE", MB_OK | MB_ICONINFORMATION);
+              L"LayerC Editor", MB_OK | MB_ICONINFORMATION);
   return nullptr;
 }
 
@@ -176,6 +205,9 @@ void EditorWindow::update_task_detail() {
   if (task_dialog_ == nullptr)
     return;
   const auto *candidate = selected_task();
+  const BOOL enabled = candidate == nullptr ? FALSE : TRUE;
+  EnableWindow(GetDlgItem(task_dialog_, IDC_USE_TASK), enabled);
+  EnableWindow(GetDlgItem(task_dialog_, IDC_TASK_ACTIONS), enabled);
   set_text(GetDlgItem(task_dialog_, IDC_TASK_DETAIL),
            candidate == nullptr ? L"Select a task to see its executable path."
                                 : candidate->executable_path);
@@ -185,7 +217,10 @@ void EditorWindow::apply_task(
     const layerc::platform::WindowCandidate &candidate) {
   sync_profile_from_controls();
   profile_.game.global = false;
-  profile_.game.executable_path = to_utf8(candidate.executable_path);
+  const bool exact_path = owner_draw_checkbox_checked(
+      GetDlgItem(dialog_, IDC_APPLICATION_EXACT_PATH));
+  profile_.game.executable_path =
+      exact_path ? to_utf8(candidate.executable_path) : std::string{};
   profile_.game.executable_name = to_utf8(candidate.executable_name);
   profile_.game.window_class.clear();
   profile_.game.window_title.clear();
@@ -199,8 +234,10 @@ void EditorWindow::apply_task(
   record_profile_change(ChangeKind::immediate);
   update_task_detail();
   set_status(current_path_.empty()
-                 ? L"Task selected — Save once to create the profile."
-                 : L"Task selected — autosaving the durable matcher.");
+                 ? L"Application selected — Save once to create the profile."
+                 : exact_path
+                       ? L"Application selected — matching its exact path."
+                       : L"Application selected — matching by executable name.");
 }
 
 void EditorWindow::use_selected_task() {
@@ -303,6 +340,9 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     case IDC_REFRESH_TASKS:
       refresh_tasks();
       return TRUE;
+    case IDC_TASK_ACTIONS:
+      show_task_actions_menu(window);
+      return TRUE;
     case IDC_EDIT_SELECTED_TASK:
       edit_selected_task();
       return TRUE;
@@ -339,6 +379,14 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
   case WM_NOTIFY: {
     const auto *header = reinterpret_cast<const NMHDR *>(lparam);
     if (header->idFrom == IDC_TASK_LIST) {
+      if (header->code == LVN_GETEMPTYMARKUP) {
+        auto *markup = reinterpret_cast<NMLVEMPTYMARKUP *>(lparam);
+        markup->dwFlags = EMF_CENTERED;
+        lstrcpynW(markup->szMarkup, L"No eligible windows detected.",
+                  static_cast<int>(sizeof(markup->szMarkup) /
+                                   sizeof(markup->szMarkup[0])));
+        return TRUE;
+      }
       if (header->code == LVN_ITEMCHANGED)
         update_task_detail();
       else if (header->code == NM_DBLCLK) {

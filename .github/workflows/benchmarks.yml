@@ -1,7 +1,8 @@
 name: Hardware Benchmarks
 
-# Runs the hardware-only gates on the interactive self-hosted Windows runner.
-# A successful main CI run queues this workflow for up to 24 hours until the
+# Runs post-merge hardware regression monitoring on the interactive
+# self-hosted Windows runner. A successful main CI run queues this workflow
+# for up to 24 hours until the
 # `layerc-bench` runner comes online. Candidate scripts and binaries are both
 # pinned to that CI run's exact commit.
 
@@ -54,7 +55,7 @@ jobs:
           "headSha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Checkout candidate
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ steps.candidate.outputs.headSha }}
           persist-credentials: false
@@ -62,7 +63,7 @@ jobs:
       # The CPack ZIP is the install layout only (no lctest.exe); this artifact
       # carries the benchmark executables from the exact CI run resolved above.
       - name: Download CI tools
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: layerc-windows-x64-tools
           run-id: ${{ steps.candidate.outputs.runId }}
@@ -70,6 +71,7 @@ jobs:
           path: tools-build
 
       - name: Fetch V2.2 baseline
+        id: baseline
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,6 +82,20 @@ jobs:
           $archives = @(Get-ChildItem baseline -Filter *.zip -File)
           if ($archives.Count -ne 1) { throw "Expected one baseline ZIP, found $($archives.Count)." }
           Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath baseline -Force
+          $baselineRoot = (Resolve-Path baseline).Path
+          if (-not (Test-Path -LiteralPath (Join-Path $baselineRoot 'layerd.exe') -PathType Leaf)) {
+            $candidates = @(
+              Get-ChildItem -LiteralPath $baselineRoot -Directory |
+                Where-Object {
+                  Test-Path -LiteralPath (Join-Path $_.FullName 'layerd.exe') -PathType Leaf
+                }
+            )
+            if ($candidates.Count -ne 1) {
+              throw "Expected one baseline root containing layerd.exe under $baselineRoot; found $($candidates.Count)."
+            }
+            $baselineRoot = $candidates[0].FullName
+          }
+          "buildRoot=$baselineRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       # Visual recognition captures the real screen through lctest's window.
       # The runner must use the interactive desktop (run.cmd, not a service).
@@ -88,7 +104,7 @@ jobs:
       # ready out/layerc. Gates still run afterwards against the candidate
       # tools, not the staged install. Best-effort: on the very first commit
       # publish-rolling may not have created the release yet, which must not
-      # block the gates.
+      # block monitoring.
       - name: Pulldown (stage rolling install)
         shell: pwsh
         env:
@@ -104,6 +120,8 @@ jobs:
 
       - name: Run hardware benchmarks
         shell: pwsh
+        env:
+          BASELINE_BUILD_ROOT: ${{ steps.baseline.outputs.buildRoot }}
         run: |
           # This dedicated interactive runner is also the LayerC dev box. Take
           # ownership of its project daemon before the isolated benchmark suite;
@@ -117,11 +135,11 @@ jobs:
           }
           & .\tools\run-hardware-benchmarks.ps1 `
             -CandidateBuildDirectory (Resolve-Path tools-build) `
-            -BaselineBuildDirectory (Resolve-Path baseline)
+            -BaselineBuildDirectory (Resolve-Path -LiteralPath $env:BASELINE_BUILD_ROOT)
 
       - name: Upload benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: benchmark-evidence
           path: out/benchmarks/*.json

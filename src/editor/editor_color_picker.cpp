@@ -1,6 +1,7 @@
 #include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
+#include "layerc/platform/native_theme.hpp"
 
 #include <array>
 #include <cerrno>
@@ -15,11 +16,16 @@
 namespace layerc::editor {
 namespace {
 
+namespace theme = layerc::platform;
+
 constexpr std::array<std::uint32_t, 24> color_palette{
-    0x1B1F24, 0x282D34, 0x4B525C, 0x9CA3AD, 0xE9E4DD, 0xF1F5F7,
-    0xD88E4B, 0xE0A15A, 0xE85D5D, 0xF08A5D, 0xE7C84B, 0x8BC34A,
-    0x4FCB83, 0x5AB6AA, 0x50BAC8, 0x5DADE2, 0x4B7BEC, 0x6C5CE7,
-    0x9B72E8, 0xB382E2, 0xD65DB1, 0xF06292, 0x8D6E63, 0x607D8B,
+    theme::copper_theme.background, theme::copper_theme.panel,
+    theme::copper_theme.border, theme::copper_theme.muted,
+    theme::copper_theme.text, 0xF1F5F7,
+    theme::copper_theme.accent, 0xE0A15A, 0xE85D5D, 0xF08A5D, 0xE7C84B,
+    0x8BC34A, 0x4FCB83, theme::teal_theme.accent, 0x50BAC8, 0x5DADE2,
+    0x4B7BEC, 0x6C5CE7, 0x9B72E8, theme::plum_theme.accent, 0xD65DB1,
+    0xF06292, 0x8D6E63, 0x607D8B,
 };
 
 std::optional<std::uint32_t> channel_value(const HWND window, const int id) {

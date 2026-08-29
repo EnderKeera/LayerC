@@ -8,7 +8,7 @@ param(
   [Parameter(Mandatory = $true)] [string]$LayerD,
   [Parameter(Mandatory = $true)] [string]$LayerE,
   [Parameter(Mandatory = $true)] [string]$LayerCal,
-  [Parameter(Mandatory = $true)] [string]$LayerWorker
+  [Parameter(Mandatory = $true)] [string]$LayerW
 )
 
 $ErrorActionPreference = 'Stop'
@@ -54,4 +54,4 @@ Copy-Item -Force $LayerD (Join-Path $Destination 'layerd.exe')
 Copy-Item -Force $GameBarPrivateWinmd (Join-Path $Destination 'Microsoft.Gaming.XboxGameBar.Private.winmd')
 Copy-Item -Force $LayerE (Join-Path $Destination 'layere.exe')
 Copy-Item -Force $LayerCal (Join-Path $Destination 'layercal.exe')
-Copy-Item -Force $LayerWorker (Join-Path $Destination 'layerworker.exe')
+Copy-Item -Force $LayerW (Join-Path $Destination 'layerw.exe')
