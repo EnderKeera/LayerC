@@ -4,7 +4,7 @@
 IDD_CALIBRATION DIALOGEX 0, 0, 800, 510
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN
 EXSTYLE WS_EX_APPWINDOW
-CAPTION "LayerC Visual Calibration"
+CAPTION "LayerC Calibration"
 FONT 9, "Segoe UI"
 BEGIN
   LTEXT "Drag on the preview to select the region to watch.", -1, 12, 10, 510, 12

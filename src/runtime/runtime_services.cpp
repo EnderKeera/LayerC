@@ -13,6 +13,40 @@ std::uint32_t saturating_add(const std::uint32_t left,
   return left + right;
 }
 
+// Generic IRuntimeService built from a descriptor's callbacks. Owns no state
+// beyond the descriptor copy, so the wrong-capability class of factory bugs
+// is structurally impossible.
+class CallbackService final : public IRuntimeService {
+public:
+  explicit CallbackService(const RuntimeServiceDescriptor &descriptor)
+      : capability_(descriptor.capability), context_(descriptor.context),
+        reconcile_(descriptor.reconcile), quiesce_(descriptor.quiesce),
+        resources_(descriptor.resources) {}
+
+  [[nodiscard]] Capability capability() const noexcept override {
+    return capability_;
+  }
+
+  [[nodiscard]] ServiceReconcileResult
+  reconcile(const CapabilityDemand &) override {
+    return reconcile_(context_);
+  }
+
+  void quiesce() noexcept override { quiesce_(context_); }
+
+  [[nodiscard]] RuntimeResourceStats
+  resources() const noexcept override {
+    return resources_(context_);
+  }
+
+private:
+  Capability capability_;
+  void *context_;
+  ServiceReconcileFn reconcile_;
+  ServiceQuiesceFn quiesce_;
+  ServiceResourcesFn resources_;
+};
+
 } // namespace
 
 std::string_view capability_name(const Capability capability) noexcept {
@@ -118,25 +152,16 @@ bool RuntimeServiceHost::reconcile(
 
     if (!slot.service) {
       const auto *descriptor = descriptor_for(capability, descriptors);
-      if (descriptor == nullptr || descriptor->create == nullptr) {
+      if (descriptor == nullptr || descriptor->reconcile == nullptr ||
+          descriptor->quiesce == nullptr || descriptor->resources == nullptr) {
         slot.stats.state = ServiceState::faulted;
         slot.stats.resources = {};
         ++slot.stats.fault_count;
-        slot.stats.last_error = "required service has no factory";
+        slot.stats.last_error = "required service descriptor is incomplete";
         success = false;
         continue;
       }
-      slot.service = descriptor->create(descriptor->context);
-      if (!slot.service || slot.service->capability() != capability) {
-        if (slot.service) slot.service->quiesce();
-        slot.service.reset();
-        slot.stats.state = ServiceState::faulted;
-        slot.stats.resources = {};
-        ++slot.stats.fault_count;
-        slot.stats.last_error = "service factory returned the wrong capability";
-        success = false;
-        continue;
-      }
+      slot.service = std::make_unique<CallbackService>(*descriptor);
       ++slot.stats.activation_count;
       slot.stats.last_activation = now;
       activated_this_pass.push_back(slot_index);

@@ -4,7 +4,7 @@ LayerC is a lightweight, open-source Windows cooldown overlay — dependency-fre
 
 ## Quickstart
 
-The gate is CI on push. A main push → `actionlint` → `ci` preset (Ninja+sccache+UNITY) → CTest + `benchmark_v22` + `benchmark_v23` → package → `publish-rolling`. Hardware gates (`tools/run-hardware-benchmarks.ps1` on self-hosted `layerc-bench` — desktop with real GPU/display) auto-mirror evidence to `out/benchmarks` and staged install to `out/layerc`. No local build/benchmark needed for a normal push — see `AGENTS.md` for presets.
+The gate is CI on push. A main push → `actionlint` → `ci` preset (Ninja+sccache+UNITY) → CTest + `benchmark_v22` + `benchmark_v23` → package → `publish-rolling`. Post-merge hardware regression monitoring (`tools/run-hardware-benchmarks.ps1` on self-hosted `layerc-bench` — desktop with real GPU/display) auto-mirrors evidence to `out/benchmarks` and the staged install to `out/layerc`. See `AGENTS.md` for focused local checks and presets.
 
 To iterate and debug locally, build once with the presets below, then run the
 binaries from the build output:
@@ -23,9 +23,9 @@ Installed executables land in `out/layerc/`:
 - `layerd.exe` — background daemon (passive input, cooldown state, overlays)
 - `layere.exe` — profile editor & calibration UI
 - `layercal.exe` — visual calibration helper
-- `layerworker.exe` — isolated visual capture worker (demand-launched)
+- `layerw.exe` — isolated visual capture worker (demand-launched)
 
-CI artifacts and hardware evidence are mirrored to your working tree automatically; no download needed. Intervention only on gate failure or to start the runner (`run.cmd` interactive, never service). `tools/pull-ci.ps1` / `tools/push-and-test.ps1` are manual fallbacks; tag `v*.*.*` for durable releases. Local builds are for iteration only — never a gate.
+CI artifacts and post-merge hardware evidence are mirrored to your working tree automatically; no download needed. Intervention is only needed on a monitoring failure or to start the runner (`run.cmd` interactive, never service). `tools/pull-ci.ps1` / `tools/push-and-test.ps1` are manual fallbacks; tag `v*.*.*` for durable releases. Local builds are for focused iteration, not the release gate.
 
 ### Development & Smoke Testing
 
@@ -70,20 +70,19 @@ $env:LAYERC_PROFILE_DIR = "$PWD\examples"
 | `layerc_platform_tests` | Profile store, atomic transactions, backups, named pipe IPC, peer authentication |
 | `layerc_editor_tests` | Editor dialog semantics, theme consistency, undo/redo history |
 | `layerc_bundle_tests` | `.layercprofile` deterministic ZIP export/import, SHA-256 asset deduplication |
-| `layerc_isolated_visual_tests` | `layerworker.exe` handshake, IPC protocol, message bounds, quarantine behavior |
+| `layerc_isolated_visual_tests` | `layerw.exe` handshake, IPC protocol, message bounds, quarantine behavior |
 | `layerc_companion_tests` | Game Bar companion sidecar, snapshot serialization, 2s stale expiration |
 | `layerc_automation_benchmark` | CPU automation evaluation micro-benchmark ($\le 0.25\text{ ms}$ avg, $\le 2.0\text{ ms}$ max budget) |
 ## Release Benchmarks
 
-Benchmark scripts enforce strict hard gates under `tools/` and write JSON evidence to
-`out/benchmarks/`. The V2.2 idle plateau and V2.3 CPU gates run in CI. The hardware-only
-gates (V1.1 visual, V2.1 template, latency) run automatically on the interactive
-`layerc-bench` runner — the workflow pins the checkout and artifact to one CI commit,
-uploads evidence as
-`benchmark-evidence` even when a gate fails, and mirrors the JSON into your working tree's
-`out/benchmarks/`.
+Benchmark scripts enforce strict thresholds under `tools/` and write JSON evidence to
+`out/benchmarks/`. The V2.2 idle plateau and V2.3 CPU gates run in required CI. The
+hardware-only checks (V1.1 visual, V2.1 template, latency) run automatically as
+post-merge regression monitoring on the interactive `layerc-bench` runner. The workflow
+pins the checkout and artifact to one CI commit, uploads `benchmark-evidence` even when a
+check fails, and mirrors the JSON into your working tree's `out/benchmarks/`.
 
-To run the same hardware gates **manually** (e.g. the runner is offline, or you want to
+To run the same hardware checks **manually** (e.g. the runner is offline, or you want to
 drive it yourself), authenticate `gh`, check out the CI run's `headSha`, and stage its
 exact inputs:
 
@@ -116,7 +115,7 @@ Expand-Archive $baselineZip.FullName -DestinationPath out\baseline -Force
 ### Visual Recognition (V1.1 – V2.1)
 - Opt-in per cooldown: numeric predicates (color, brightness, coverage) and template matching (PNG references with alpha masks).
 - Windows Graphics Capture (WGC) primary, Desktop Duplication fallback. Aspect-preserving downsampled readback grids (64px Low, 256px Balanced).
-- Optional per-profile **Isolate capture** launches a separate sandboxed `layerworker.exe` (256 MiB job limit, kill-on-close).
+- Optional per-profile **Isolate capture** launches a separate sandboxed `layerw.exe` (256 MiB job limit, kill-on-close).
 
 ### Modular Demand-Driven Runtime (V2.2)
 - Zero idle resources: input, HID, overlays, visual capture, and live edit services instantiate only when demanded by an active session.
@@ -126,12 +125,18 @@ Expand-Archive $baselineZip.FullName -DestinationPath out\baseline -Force
 ### Declarative Automation Graphs (V2.3)
 - Bounded rule-based state graphs reacting to input, visual triggers, cooldowns, timers, and variables.
 - Strict resource caps: 64 rules, 64 variables, 32 timers, 256 AST nodes, 2 ms execution budget per root event.
-- Live editor canvas, deterministic offline simulator, and transactional state checkpointing under `profiles/_state/`.
+- Live rule-list editor, deterministic offline simulator, and transactional state checkpointing under `profiles/_state/`.
 
 ### Xbox Game Bar Companion (V2.4)
 - UWP XAML host (`layerc-gamebar.exe`) with 8 panel slots + settings widget.
 - Same-package App Service `LayerC.GameBar.v1` with 64 KiB bounded snapshots (2s stale clear).
 - Demand-driven transport — zero cost when unpackaged; settings via `_companion` sidecar. Implementation complete; remaining gates are manual matrix/signing (see `docs/GameBarCompanion.audit.md`).
+
+### Editor QoL & Resilient Game Matching (V2.5)
+- Native menu bar, DPI-aware themed dialogs, preset-first appearance controls, and runtime diagnostics with visual-capture retry.
+- Progressive automation editing, inline cooldown edits, improved task selection, and reflowed profile-pack dialogs.
+- Executable-name-first game matching survives installs moving; exact-path matching remains an Advanced opt-in.
+
 ## Configuration Format
 
 Profiles are stored as UTF-8 JSON in `%LOCALAPPDATA%\LayerC\profiles\<name>.json`:

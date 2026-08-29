@@ -1,12 +1,16 @@
 #include "../src/calibration/calibration_resource.h"
+#include "appearance_draft.hpp"
+#include "editor_automation_internal.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <optional>
 #include <string>
+#include <variant>
 
 #include <commctrl.h>
 #include <windows.h>
@@ -29,6 +33,30 @@ INT_PTR CALLBACK test_dialog_proc(const HWND window, const UINT message,
 }
 
 using layerc::test::expect;
+
+bool menu_has_command(const HMENU menu, const UINT command) {
+  return menu != nullptr &&
+         GetMenuState(menu, command, MF_BYCOMMAND) != static_cast<UINT>(-1);
+}
+
+std::wstring menu_caption(const HMENU menu, const int position) {
+  wchar_t text[32]{};
+  const int length =
+      GetMenuStringW(menu, static_cast<UINT>(position), text,
+                     static_cast<int>(sizeof(text) / sizeof(text[0])),
+                     MF_BYPOSITION);
+  return length > 0 ? std::wstring(text, static_cast<std::size_t>(length))
+                    : std::wstring{};
+}
+
+RECT child_rect(const HWND dialog, const int id) {
+  RECT result{};
+  const HWND child = GetDlgItem(dialog, id);
+  if (child != nullptr && GetWindowRect(child, &result) != FALSE)
+    MapWindowPoints(HWND_DESKTOP, dialog,
+                    reinterpret_cast<POINT *>(&result), 2);
+  return result;
+}
 
 } // namespace
 
@@ -281,6 +309,191 @@ int main() {
              "the editor should warn only when a valid source predates its "
              "current schema");
 
+  layerc::platform::EditorAppearanceSettings initial_appearance;
+  initial_appearance.theme = layerc::platform::EditorTheme::copper;
+  initial_appearance.accent = 0xD88E4BU;
+  layerc::editor::AppearanceDraft appearance_draft;
+  appearance_draft.begin(initial_appearance);
+  appearance_draft.staged().theme = layerc::platform::EditorTheme::teal;
+  appearance_draft.staged().overrides.front().fields =
+      layerc::platform::editor_fill;
+  appearance_draft.cancel();
+  passed &= expect(
+      appearance_draft.staged().theme == initial_appearance.theme &&
+          appearance_draft.staged().overrides.front().fields == 0,
+      "cancelling appearance edits should restore the persisted settings");
+
+  appearance_draft.staged().theme = layerc::platform::EditorTheme::plum;
+  bool save_received_staged{};
+  passed &= expect(
+      appearance_draft.apply(
+          [&save_received_staged](
+              const layerc::platform::EditorAppearanceSettings &settings) {
+            save_received_staged =
+                settings.theme == layerc::platform::EditorTheme::plum;
+            return true;
+          }) &&
+          save_received_staged,
+      "applying appearance edits should persist the complete staged value");
+  appearance_draft.staged().theme = layerc::platform::EditorTheme::dark;
+  passed &= expect(
+      !appearance_draft.apply(
+          [](const layerc::platform::EditorAppearanceSettings &) {
+            return false;
+          }),
+      "a failed appearance save should report failure");
+  appearance_draft.cancel();
+  passed &= expect(
+      appearance_draft.staged().theme == layerc::platform::EditorTheme::plum,
+      "a failed appearance save should preserve the last persisted settings");
+
+  const auto literal_is_true = [](const layerc::core::AutomationExpression &value) {
+    const auto *literal = std::get_if<bool>(&value.literal.storage);
+    return value.kind == layerc::core::ExpressionKind::literal &&
+           literal != nullptr && *literal;
+  };
+  const auto literal_is_one_second =
+      [](const layerc::core::AutomationExpression &value) {
+        const auto *literal =
+            std::get_if<layerc::core::DurationValue>(&value.literal.storage);
+        return value.kind == layerc::core::ExpressionKind::literal &&
+               literal != nullptr &&
+               literal->value == layerc::core::Milliseconds(1'000);
+      };
+
+  const auto blank = layerc::editor::make_automation_preset(
+      layerc::editor::AutomationPreset::blank, "blank-id", "unused-cooldown",
+      "unused-panel");
+  passed &= expect(blank.id == "blank-id" && blank.name == "New automation" &&
+                       blank.enabled && blank.rules.empty(),
+                   "the blank automation preset should contain no rules");
+
+  const auto input = layerc::editor::make_automation_preset(
+      layerc::editor::AutomationPreset::input_cooldown, "input-id",
+      "dash-cooldown");
+  passed &= expect(input.id == "input-id" && input.name == "Input cooldown" &&
+                       input.enabled && input.rules.size() == 1,
+                   "the input preset should create one enabled automation");
+  if (input.rules.size() == 1) {
+    const auto &rule = input.rules.front();
+    passed &= expect(
+        rule.id == "on-input" &&
+            rule.event == layerc::core::AutomationEventKind::input_pressed &&
+            rule.source_filter == "keyboard:18" && rule.actions.size() == 1,
+        "the input preset should listen for the default keyboard input");
+    if (rule.actions.size() == 1)
+      passed &= expect(
+          rule.actions.front().kind ==
+                  layerc::core::AutomationActionKind::trigger_cooldown &&
+              rule.actions.front().target == "dash-cooldown",
+          "the input preset should trigger the selected cooldown");
+  }
+
+  const auto timer = layerc::editor::make_automation_preset(
+      layerc::editor::AutomationPreset::repeating_session_timer, "timer-id",
+      "pulse-cooldown");
+  passed &= expect(timer.id == "timer-id" &&
+                       timer.name == "Repeating session timer" &&
+                       timer.enabled && timer.rules.size() == 2,
+                   "the timer preset should create start and tick rules");
+  if (timer.rules.size() == 2) {
+    const auto &start = timer.rules[0];
+    const auto &tick = timer.rules[1];
+    passed &= expect(
+        start.id == "start-timer" &&
+            start.event == layerc::core::AutomationEventKind::session_started &&
+            start.actions.size() == 1 && tick.id == "on-timer" &&
+            tick.event == layerc::core::AutomationEventKind::timer_fired &&
+            tick.source_filter == "timer-id-timer" &&
+            tick.actions.size() == 1,
+        "the timer preset should connect session start to its timer event");
+    if (start.actions.size() == 1)
+      passed &= expect(
+          start.actions.front().kind ==
+                  layerc::core::AutomationActionKind::create_timer &&
+              start.actions.front().target == "timer-id-timer" &&
+              start.actions.front().repeating &&
+              literal_is_one_second(start.actions.front().value),
+          "the timer preset should create a repeating one-second timer");
+    if (tick.actions.size() == 1)
+      passed &= expect(
+          tick.actions.front().kind ==
+                  layerc::core::AutomationActionKind::trigger_cooldown &&
+              tick.actions.front().target == "pulse-cooldown",
+          "the timer preset should trigger the selected cooldown on each tick");
+  }
+
+  const auto overlay = layerc::editor::make_automation_preset(
+      layerc::editor::AutomationPreset::ready_overlay_pulse, "overlay-id",
+      "ready-cooldown", "main-panel");
+  passed &= expect(overlay.id == "overlay-id" &&
+                       overlay.name == "Ready overlay pulse" &&
+                       overlay.enabled && overlay.rules.size() == 1,
+                   "the overlay preset should create one enabled automation");
+  if (overlay.rules.size() == 1) {
+    const auto &rule = overlay.rules.front();
+    passed &= expect(
+        rule.id == "on-ready" &&
+            rule.event == layerc::core::AutomationEventKind::cooldown_ready &&
+            rule.source_filter == "ready-cooldown" &&
+            rule.actions.size() == 1,
+        "the overlay preset should listen for the selected cooldown becoming ready");
+    if (rule.actions.size() == 1) {
+      const auto &action = rule.actions.front();
+      passed &= expect(
+          action.kind ==
+                  layerc::core::AutomationActionKind::set_overlay_override &&
+              action.target == "main-panel" &&
+              action.name == "overlay-id-ready" &&
+              action.property == "visible" && literal_is_true(action.value) &&
+              literal_is_one_second(action.secondary),
+          "the overlay preset should show the panel for one second");
+    }
+  }
+
+  const auto edited_duration = layerc::editor::parse_duration_ms(L"7.25");
+  passed &= expect(
+      edited_duration == layerc::core::Milliseconds(7'250) &&
+          !layerc::editor::parse_duration_ms(L"0").has_value() &&
+          !layerc::editor::parse_duration_ms(L"-1").has_value(),
+      "cooldown duration editing should accept positive decimals and reject "
+      "non-positive values");
+  layerc::core::GameProfile persisted_profile;
+  persisted_profile.id = "cooldown-edit";
+  persisted_profile.name = "Cooldown edit";
+  persisted_profile.game.executable_name = "game.exe";
+  persisted_profile.cooldowns.push_back(
+      {.id = "ability",
+       .name = "Ability",
+       .duration = std::chrono::seconds(5),
+       .max_charges = 1,
+       .retrigger = layerc::core::RetriggerPolicy::ignore});
+  persisted_profile.panels.push_back(
+      {.id = "main",
+       .name = "Main",
+       .style = layerc::core::PanelStyle::bar,
+       .bar = {},
+       .anchor_x = 0.5,
+       .anchor_y = 0.75,
+       .cooldown_ids = {"ability"}});
+  persisted_profile.bindings.push_back(
+      {.cooldown_id = "ability",
+       .chord = layerc::core::InputChord{{{
+           layerc::core::InputDevice::keyboard, 0x12, 0}}}});
+  persisted_profile.cooldowns.front().name = "Edited Ability";
+  if (edited_duration.has_value())
+    persisted_profile.cooldowns.front().duration = *edited_duration;
+  const auto reloaded_result = layerc::core::parse_profile_json(
+      layerc::core::serialize_profile_json(persisted_profile));
+  const auto *reloaded_profile =
+      std::get_if<layerc::core::GameProfile>(&reloaded_result);
+  passed &= expect(
+      reloaded_profile != nullptr && !reloaded_profile->cooldowns.empty() &&
+          reloaded_profile->cooldowns.front().name == "Edited Ability" &&
+          reloaded_profile->cooldowns.front().duration ==
+              layerc::core::Milliseconds(7'250),
+      "edited cooldown name and duration should survive save and reload");
+
   const HWND editor_dialog = CreateDialogParamW(
       instance, MAKEINTRESOURCEW(IDD_EDITOR), nullptr, &test_dialog_proc, 0);
   passed &= expect(editor_dialog != nullptr,
@@ -288,6 +501,64 @@ int main() {
   if (editor_dialog != nullptr) {
     layerc::editor::style_native_dialog_children(
         editor_dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    const HMENU editor_menu = GetMenu(editor_dialog);
+    const HMENU file_menu = GetSubMenu(editor_menu, 0);
+    const HMENU edit_menu = GetSubMenu(editor_menu, 1);
+    const HMENU tools_menu = GetSubMenu(editor_menu, 2);
+    const HMENU help_menu = GetSubMenu(editor_menu, 3);
+    passed &= expect(
+        GetMenuItemCount(editor_menu) == 4 &&
+            menu_caption(editor_menu, 0) == L"&File" &&
+            menu_caption(editor_menu, 1) == L"&Edit" &&
+            menu_caption(editor_menu, 2) == L"&Tools" &&
+            menu_caption(editor_menu, 3) == L"&Help",
+        "the editor should expose native File, Edit, Tools, and Help menus");
+    passed &= expect(
+        menu_has_command(file_menu, IDM_FILE_NEW) &&
+            menu_has_command(file_menu, IDM_FILE_IMPORT_PACK) &&
+            menu_has_command(file_menu, IDM_FILE_EXPORT_PACK) &&
+            menu_has_command(edit_menu, IDM_EDIT_UNDO) &&
+            menu_has_command(edit_menu, IDM_EDIT_REDO) &&
+            menu_has_command(tools_menu, IDM_FILE_OPTIONS) &&
+            menu_has_command(tools_menu, IDM_TOOLS_APPEARANCE) &&
+            menu_has_command(tools_menu, IDM_FILE_AUTOMATION) &&
+            menu_has_command(help_menu, IDM_FILE_RUNTIME_DIAGNOSTICS) &&
+            menu_has_command(help_menu, IDM_HELP_ABOUT),
+        "native menus should retain every V2.5 command launcher");
+    passed &= expect(
+        GetDlgItem(editor_dialog, IDC_CHOOSE_APPLICATION) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_ADVANCED) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_PROFILE_ID) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_APPLICATION_EXACT_PATH) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_COOLDOWN_NAME) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_COOLDOWN_DURATION) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_POSITION_ON_WINDOW) != nullptr,
+        "the main resource should expose application, cooldown, advanced, and "
+        "window-position controls");
+    const RECT application_field =
+        child_rect(editor_dialog, IDC_APPLICATION_PATH);
+    const RECT choose_application =
+        child_rect(editor_dialog, IDC_CHOOSE_APPLICATION);
+    const RECT visual_status =
+        child_rect(editor_dialog, IDC_VISUAL_RUNTIME_STATUS);
+    const RECT preview = child_rect(editor_dialog, IDC_PREVIEW);
+    const RECT position =
+        child_rect(editor_dialog, IDC_POSITION_ON_WINDOW);
+    passed &= expect(
+        application_field.right <= choose_application.left &&
+            application_field.top < choose_application.bottom &&
+            choose_application.top < application_field.bottom,
+        "Choose Running Application should remain beside the application "
+        "field");
+    passed &= expect(
+        visual_status.bottom <= preview.top && position.bottom <= preview.top &&
+            position.left >= preview.left && position.right <= preview.right,
+        "Visual Trigger and Position on Window should remain above Preview");
+    passed &= expect(
+        (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_COOLDOWN_DURATION),
+                           GWL_STYLE) &
+         ES_NUMBER) == 0,
+        "cooldown duration should allow validated decimal seconds");
     const HWND assignment = GetDlgItem(editor_dialog, IDC_VISUAL_ENABLED);
     const HWND isolated = GetDlgItem(editor_dialog, IDC_VISUAL_ISOLATED);
     const auto assignment_type =
@@ -312,15 +583,92 @@ int main() {
     DestroyWindow(editor_dialog);
   }
 
+  const HWND appearance_dialog =
+      CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_APPEARANCE), nullptr,
+                         &test_dialog_proc, 0);
+  passed &= expect(
+      appearance_dialog != nullptr &&
+          GetDlgItem(appearance_dialog, IDC_THEME_PRESET) != nullptr &&
+          GetDlgItem(appearance_dialog, IDC_APPEARANCE_ADVANCED) != nullptr &&
+          GetDlgItem(appearance_dialog, IDC_APPEARANCE_RESET_ALL) != nullptr &&
+          GetDlgItem(appearance_dialog, IDC_APPEARANCE_APPLY) != nullptr,
+      "Appearance should expose preset-first controls and staged actions");
+  if (appearance_dialog != nullptr) {
+    layerc::editor::style_native_dialog_children(
+        appearance_dialog,
+        static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    const HWND advanced =
+        GetDlgItem(appearance_dialog, IDC_APPEARANCE_ADVANCED);
+    passed &= expect(
+        (GetWindowLongPtrW(advanced, GWL_STYLE) & BS_TYPEMASK) ==
+            BS_AUTOCHECKBOX,
+        "advanced appearance overrides must retain native checkbox behavior");
+    SendMessageW(advanced, BM_SETCHECK, BST_UNCHECKED, 0);
+    SendMessageW(advanced, BM_CLICK, 0, 0);
+    passed &= expect(SendMessageW(advanced, BM_GETCHECK, 0, 0) == BST_CHECKED,
+                     "advanced appearance should toggle through BM_CLICK");
+    passed &= expect(
+        LOWORD(SendMessageW(appearance_dialog, DM_GETDEFID, 0, 0)) == IDOK,
+        "OK should remain the Appearance default action");
+    DestroyWindow(appearance_dialog);
+  }
+
+  const HWND tasks_dialog =
+      CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_TASKS), nullptr,
+                         &test_dialog_proc, 0);
+  passed &= expect(
+      tasks_dialog != nullptr &&
+          (GetWindowLongPtrW(tasks_dialog, GWL_STYLE) & WS_THICKFRAME) != 0 &&
+          GetDlgItem(tasks_dialog, IDC_TASK_LIST) != nullptr &&
+          GetDlgItem(tasks_dialog, IDC_PICK_WINDOW) != nullptr &&
+          GetDlgItem(tasks_dialog, IDC_USE_TASK) != nullptr &&
+          GetDlgItem(tasks_dialog, IDC_REFRESH_TASKS) != nullptr &&
+          GetDlgItem(tasks_dialog, IDC_TASK_ACTIONS) != nullptr,
+      "Detected Tasks should remain resizable with all primary actions "
+      "visible");
+  if (tasks_dialog != nullptr)
+    DestroyWindow(tasks_dialog);
+
+  for (const int resource : {IDD_EXPORT_PACK, IDD_IMPORT_PACK}) {
+    const HWND pack_dialog =
+        CreateDialogParamW(instance, MAKEINTRESOURCEW(resource), nullptr,
+                           &test_dialog_proc, 0);
+    passed &= expect(
+        pack_dialog != nullptr &&
+            (GetWindowLongPtrW(pack_dialog, GWL_STYLE) & WS_THICKFRAME) != 0 &&
+            GetDlgItem(pack_dialog, IDC_PACK_INTRO) != nullptr &&
+            GetDlgItem(pack_dialog, IDC_PACK_LIST) != nullptr &&
+            GetDlgItem(pack_dialog, IDC_PACK_CONFIRM) != nullptr,
+        "pack dialogs should expose responsive list and action resources");
+    if (pack_dialog != nullptr) {
+      RECT client{};
+      GetClientRect(pack_dialog, &client);
+      const RECT list = child_rect(pack_dialog, IDC_PACK_LIST);
+      const RECT confirm = child_rect(pack_dialog, IDC_PACK_CONFIRM);
+      passed &= expect(
+          (list.right - list.left) * 5 >= (client.right - client.left) * 4 &&
+              list.bottom < confirm.top,
+          "pack list should consume available width without covering actions");
+      DestroyWindow(pack_dialog);
+    }
+  }
+
   const HWND automation_dialog =
       CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_AUTOMATION), nullptr,
                          &test_dialog_proc, 0);
   passed &= expect(
       automation_dialog != nullptr &&
           GetDlgItem(automation_dialog, IDC_AUTOMATION_LIST) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_PRESETS) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_VIEW) != nullptr &&
           GetDlgItem(automation_dialog, IDC_AUTOMATION_PALETTE) != nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_CANVAS) != nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_PROPERTIES) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_NODES) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_RULE_ID) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_ACTION_KIND) !=
+              nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_ADD_NODE) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_APPLY_NODE) != nullptr &&
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_DELETE_NODE) != nullptr &&
           GetDlgItem(automation_dialog, IDC_AUTOMATION_VALIDATION) != nullptr &&
           GetDlgItem(automation_dialog, IDC_AUTOMATION_JSON) != nullptr &&
           GetDlgItem(automation_dialog, IDC_AUTOMATION_SIM_EVENT) != nullptr &&
@@ -330,15 +678,9 @@ int main() {
               nullptr &&
           GetDlgItem(automation_dialog, IDC_AUTOMATION_SIM_ASSERTIONS) !=
               nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_PRESETS) != nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_RULE_ID) != nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_EVENT) != nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_ACTION_KIND) !=
-              nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_APPLY_NODE) != nullptr &&
-          GetDlgItem(automation_dialog, IDC_AUTOMATION_DELETE_NODE) != nullptr,
-      "the native V2.3 editor should expose graph, validation, and simulator "
-      "controls");
+          GetDlgItem(automation_dialog, IDC_AUTOMATION_PROPERTIES) == nullptr,
+      "Automation should provide Basic, Simulator, and Advanced JSON controls "
+      "through one View selector without the removed graph properties pane");
   if (automation_dialog != nullptr) {
     layerc::editor::style_native_dialog_children(
         automation_dialog,
@@ -363,16 +705,19 @@ int main() {
         expect(SendMessageW(enabled, BM_GETCHECK, 0, 0) == BST_CHECKED &&
                    SendMessageW(trace, BM_GETCHECK, 0, 0) == BST_CHECKED,
                "themed automation checkboxes should toggle through BM_CLICK");
+    const auto hierarchy_style = GetWindowLongPtrW(
+        GetDlgItem(automation_dialog, IDC_AUTOMATION_NODES), GWL_STYLE);
     passed &= expect(
-        (GetWindowLongPtrW(GetDlgItem(automation_dialog, IDC_AUTOMATION_CANVAS),
-                           GWL_STYLE) &
-         SS_TYPEMASK) == SS_OWNERDRAW,
-        "the automation graph canvas should remain owner-drawn");
+        (hierarchy_style & LBS_NOTIFY) != 0 &&
+            (hierarchy_style &
+             (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) == 0,
+        "the Basic Rule to Actions hierarchy should remain a native notifying "
+        "list");
     passed &= expect(
-        (GetWindowLongPtrW(GetDlgItem(automation_dialog, IDC_AUTOMATION_CANVAS),
+        (GetWindowLongPtrW(GetDlgItem(automation_dialog, IDC_AUTOMATION_VIEW),
                            GWL_STYLE) &
-         SS_NOTIFY) != 0,
-        "the automation graph canvas should report node-selection clicks");
+         CBS_DROPDOWNLIST) == CBS_DROPDOWNLIST,
+        "the Automation View selector should remain a native dropdown list");
     passed &= expect(
         (GetWindowLongPtrW(GetDlgItem(automation_dialog, IDC_AUTOMATION_JSON),
                            GWL_STYLE) &
@@ -413,15 +758,34 @@ int main() {
                          nullptr, &test_dialog_proc, 0);
   passed &= expect(
       diagnostics_dialog != nullptr &&
+          (GetWindowLongPtrW(diagnostics_dialog, GWL_STYLE) & WS_THICKFRAME) !=
+              0 &&
+          GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_SUMMARY) != nullptr &&
+          GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_RAW_TOGGLE) !=
+              nullptr &&
           GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_TEXT) != nullptr &&
           GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_REFRESH) != nullptr &&
           GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_COPY) != nullptr &&
           GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_RETRY_VISUAL) !=
               nullptr,
-      "runtime diagnostics should expose one-shot refresh, copy, and helper "
-      "retry controls");
-  if (diagnostics_dialog != nullptr)
+      "runtime diagnostics should expose resizable summary, raw JSON, copy, "
+      "and contextual retry controls");
+  if (diagnostics_dialog != nullptr) {
+    layerc::editor::style_native_dialog_children(
+        diagnostics_dialog,
+        static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
+    passed &= expect(
+        (GetWindowLongPtrW(
+             GetDlgItem(diagnostics_dialog, IDC_DIAGNOSTICS_RAW_TOGGLE),
+             GWL_STYLE) &
+         BS_TYPEMASK) == BS_AUTOCHECKBOX,
+        "the raw diagnostics disclosure should retain native checkbox "
+        "behavior");
+    passed &= expect(
+        LOWORD(SendMessageW(diagnostics_dialog, DM_GETDEFID, 0, 0)) == IDOK,
+        "Close should remain the Runtime Diagnostics default action");
     DestroyWindow(diagnostics_dialog);
+  }
 
   const HWND calibration_dialog =
       CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr,

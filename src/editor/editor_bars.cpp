@@ -74,10 +74,10 @@ void EditorWindow::refresh_bar_controls() {
     set_text(GetDlgItem(dialog_, IDC_POSITION_STATUS), panel->cooldown_ids.size() > 1
       ? L"Legacy grouped bar. Split it to give each cooldown its own position."
       : L"Drag the selected bar in the preview to save normalized position.");
-    set_text(GetDlgItem(dialog_, IDC_BAR_FILL), color_label(L"Fill", panel->bar.fill_color));
-    set_text(GetDlgItem(dialog_, IDC_BAR_BACKGROUND), color_label(L"Background", panel->bar.background_color));
-    set_text(GetDlgItem(dialog_, IDC_BAR_BORDER), color_label(L"Border", panel->bar.border_color));
-    set_text(GetDlgItem(dialog_, IDC_BAR_TEXT), color_label(L"Text", panel->bar.text_color));
+    set_text(GetDlgItem(dialog_, IDC_BAR_FILL), L"Fill");
+    set_text(GetDlgItem(dialog_, IDC_BAR_BACKGROUND), L"BG");
+    set_text(GetDlgItem(dialog_, IDC_BAR_BORDER), L"Border");
+    set_text(GetDlgItem(dialog_, IDC_BAR_TEXT), L"Text");
   } else set_text(GetDlgItem(dialog_, IDC_POSITION_STATUS), L"Add a cooldown to create a bar.");
   syncing_ = false;
   InvalidateRect(preview_, nullptr, TRUE);

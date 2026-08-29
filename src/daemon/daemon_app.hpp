@@ -40,16 +40,6 @@ public:
   int run(HINSTANCE instance, int show_command);
 
 private:
-  class InputRuntimeService;
-  class LiveEditRuntimeService;
-  class OverlayRuntimeService;
-  class VisualRuntimeService;
-  class TemplateRuntimeService;
-  class IsolatedVisualRuntimeService;
-  class HidRuntimeService;
-  class AutomationRuntimeService;
-  class GameBarRuntimeService;
-
   static constexpr UINT tray_message = WM_APP + 1;
   static constexpr UINT_PTR game_scan_timer = 1;
   static constexpr UINT_PTR input_poll_timer = 2;
@@ -151,11 +141,6 @@ private:
                                     layerc::core::TimePoint now);
   void reconcile_runtime_services();
   [[nodiscard]] layerc::runtime::CapabilityDemand runtime_demand() const;
-  // One factory for every runtime service class: each wraps a DaemonApp&
-  // and is instantiated with its Capability's implementation class.
-  template <typename ServiceT>
-  [[nodiscard]] static std::unique_ptr<layerc::runtime::IRuntimeService>
-  create_runtime_service(void *context);
   void poll_visual_captures();
   void maintain_isolated_visual_captures();
   void retry_quarantined_visual_helpers();

@@ -57,4 +57,4 @@ The package manifest registers:
 - Same-package App Service `LayerC.GameBar.v1`.
 - Full-trust process launcher for `layerd.exe`.
 - In-package proxy stubs and private Game Bar WinMD metadata (`Microsoft.Gaming.XboxGameBar.Private.winmd`).
-- Packaged binaries: `layerc-gamebar.exe`, `layerd.exe`, `layere.exe`, `layercal.exe`, `layerworker.exe`, and VC runtime DLLs.
+- Packaged binaries: `layerc-gamebar.exe`, `layerd.exe`, `layere.exe`, `layercal.exe`, `layerw.exe`, and VC runtime DLLs.

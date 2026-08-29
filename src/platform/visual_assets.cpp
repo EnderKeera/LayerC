@@ -16,26 +16,13 @@
 
 #include <windows.h>
 #include <objidl.h>
+#include <wrl/client.h>
 #include <wincodec.h>
 
 namespace layerc::platform {
 namespace {
 
-template <typename T> class ComHolder {
-public:
-  ~ComHolder() {
-    if (value_ != nullptr) value_->Release();
-  }
-  ComHolder() = default;
-  ComHolder(const ComHolder &) = delete;
-  ComHolder &operator=(const ComHolder &) = delete;
-  [[nodiscard]] T *get() const noexcept { return value_; }
-  [[nodiscard]] T **put() noexcept { return &value_; }
-  [[nodiscard]] T *operator->() const noexcept { return value_; }
-
-private:
-  T *value_{};
-};
+using Microsoft::WRL::ComPtr;
 
 class ComScope {
 public:
@@ -152,33 +139,33 @@ std::variant<layerc::core::TemplateImage, VisualAssetError>
 decode_png(std::vector<std::uint8_t> &bytes) {
   ComScope com;
   if (!com.usable()) return failure("COM initialization failed");
-  ComHolder<IWICImagingFactory> factory;
+  ComPtr<IWICImagingFactory> factory;
   if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
                               CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(factory.put()))))
+                              IID_PPV_ARGS(&factory))))
     return failure("Windows Imaging Component is unavailable");
-  ComHolder<IWICStream> stream;
-  if (FAILED(factory->CreateStream(stream.put())) ||
+  ComPtr<IWICStream> stream;
+  if (FAILED(factory->CreateStream(stream.ReleaseAndGetAddressOf())) ||
       FAILED(stream->InitializeFromMemory(
           bytes.data(), static_cast<DWORD>(bytes.size()))))
     return failure("PNG input stream could not be opened");
-  ComHolder<IWICBitmapDecoder> decoder;
+  ComPtr<IWICBitmapDecoder> decoder;
   if (FAILED(factory->CreateDecoderFromStream(
-          stream.get(), nullptr, WICDecodeMetadataCacheOnLoad,
-          decoder.put())))
+          stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad,
+          decoder.ReleaseAndGetAddressOf())))
     return failure("asset is not a supported PNG image");
-  ComHolder<IWICBitmapFrameDecode> frame;
-  if (FAILED(decoder->GetFrame(0, frame.put())))
+  ComPtr<IWICBitmapFrameDecode> frame;
+  if (FAILED(decoder->GetFrame(0, frame.ReleaseAndGetAddressOf())))
     return failure("PNG has no decodable first frame");
   UINT width{};
   UINT height{};
   if (FAILED(frame->GetSize(&width, &height)) || width == 0 || height == 0 ||
       width > 512 || height > 512)
     return failure("template dimensions must be between 1 and 512 pixels");
-  ComHolder<IWICFormatConverter> converter;
-  if (FAILED(factory->CreateFormatConverter(converter.put())) ||
+  ComPtr<IWICFormatConverter> converter;
+  if (FAILED(factory->CreateFormatConverter(converter.ReleaseAndGetAddressOf())) ||
       FAILED(converter->Initialize(
-          frame.get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone,
+          frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone,
           nullptr, 0.0, WICBitmapPaletteTypeCustom)))
     return failure("PNG could not be converted to RGBA");
   const auto stride = static_cast<UINT>(width * 4U);
@@ -209,23 +196,23 @@ encode_png(const layerc::core::TemplateImage &image) {
     return failure("template pixels or alpha mask are invalid");
   ComScope com;
   if (!com.usable()) return failure("COM initialization failed");
-  ComHolder<IWICImagingFactory> factory;
+  ComPtr<IWICImagingFactory> factory;
   if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
                               CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(factory.put()))))
+                              IID_PPV_ARGS(&factory))))
     return failure("Windows Imaging Component is unavailable");
-  ComHolder<IStream> stream;
-  if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, stream.put())))
+  ComPtr<IStream> stream;
+  if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, stream.ReleaseAndGetAddressOf())))
     return failure("PNG output stream could not be created");
-  ComHolder<IWICBitmapEncoder> encoder;
+  ComPtr<IWICBitmapEncoder> encoder;
   if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr,
-                                    encoder.put())) ||
-      FAILED(encoder->Initialize(stream.get(), WICBitmapEncoderNoCache)))
+                                    encoder.ReleaseAndGetAddressOf())) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)))
     return failure("PNG encoder could not be initialized");
-  ComHolder<IWICBitmapFrameEncode> frame;
-  ComHolder<IPropertyBag2> properties;
-  if (FAILED(encoder->CreateNewFrame(frame.put(), properties.put())) ||
-      FAILED(frame->Initialize(properties.get())) ||
+  ComPtr<IWICBitmapFrameEncode> frame;
+  ComPtr<IPropertyBag2> properties;
+  if (FAILED(encoder->CreateNewFrame(frame.ReleaseAndGetAddressOf(), properties.ReleaseAndGetAddressOf())) ||
+      FAILED(frame->Initialize(properties.Get())) ||
       FAILED(frame->SetSize(image.width, image.height)))
     return failure("PNG frame could not be initialized");
   WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
@@ -246,7 +233,7 @@ encode_png(const layerc::core::TemplateImage &image) {
       FAILED(frame->Commit()) || FAILED(encoder->Commit()))
     return failure("PNG pixels could not be encoded");
   HGLOBAL memory{};
-  if (FAILED(GetHGlobalFromStream(stream.get(), &memory)) || memory == nullptr)
+  if (FAILED(GetHGlobalFromStream(stream.Get(), &memory)) || memory == nullptr)
     return failure("encoded PNG could not be read");
   STATSTG statistics{};
   if (FAILED(stream->Stat(&statistics, STATFLAG_NONAME)) ||

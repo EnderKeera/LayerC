@@ -42,6 +42,8 @@ endif()
 add_library(layerc_core STATIC
     src/core/automation_profile.cpp
     src/core/automation_runtime.cpp
+    src/core/automation_runtime_effects.cpp
+    src/core/automation_runtime_evaluation.cpp
     src/core/automation_trace.cpp
     src/core/automation_validation.cpp
     src/core/automation_effects.cpp
@@ -100,6 +102,7 @@ set_target_properties(layerc_miniz PROPERTIES
 if(WIN32)
     add_library(layerc_windows STATIC
         src/platform/windows.cpp
+        src/platform/native_theme.cpp
         src/platform/window_discovery.cpp
         src/platform/text.cpp
         src/platform/profile_store.cpp
@@ -116,7 +119,7 @@ if(WIN32)
     )
     target_link_libraries(layerc_windows PUBLIC
         layerc_core user32 advapi32 shell32 ole32 gdi32 shcore
-        windowscodecs bcrypt hid)
+        windowscodecs bcrypt hid comctl32 dwmapi uxtheme)
     target_compile_definitions(layerc_windows PUBLIC
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
@@ -205,18 +208,18 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
 endif()
 
 if(WIN32 AND LAYERC_BUILD_DAEMON)
-    add_executable(layerworker WIN32
+    add_executable(layerw WIN32
         src/worker/main.cpp
         src/daemon/visual_capture_worker.cpp
         src/daemon/isolated_visual_protocol.cpp
     )
-    target_include_directories(layerworker PRIVATE src/daemon)
-    target_link_libraries(layerworker PRIVATE
+    target_include_directories(layerw PRIVATE src/daemon)
+    target_link_libraries(layerw PRIVATE
         layerc_core layerc_windows layerc_capture
         shell32 user32 gdi32)
-    layerc_win32(layerworker)
+    layerc_win32(layerw)
     if(MINGW)
-        target_link_options(layerworker PRIVATE -municode)
+        target_link_options(layerw PRIVATE -municode)
     endif()
 endif()
 
@@ -245,7 +248,9 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
         src/editor/editor_live_edit.cpp
         src/editor/editor_visual.cpp
         src/editor/editor_automation.cpp
-        src/editor/editor_automation_canvas.cpp
+        src/editor/editor_automation_layout.cpp
+        src/editor/editor_automation_presets.cpp
+        src/editor/editor_automation_nodes.cpp
         src/editor/editor_automation_simulator.cpp
         src/editor/editor_packs.cpp
         src/editor/editor_diagnostics.cpp
@@ -275,6 +280,7 @@ if(WIN32 AND LAYERC_BUILD_EDITOR)
     add_executable(layercal WIN32
         src/calibration/main.cpp
         src/calibration/calibration_window.cpp
+        src/calibration/calibration_capture.cpp
         src/calibration/calibration_templates.cpp
         src/calibration/calibration_resources.rc
     )
@@ -329,8 +335,8 @@ if(TARGET layerc_gamebar_host)
     elseif(NOT LAYERC_MSVC_REDIST_DIR)
         message(STATUS "Game Bar MSIX target disabled: x64 MSVC runtime redistributables were not found")
     elseif(NOT TARGET layerd OR NOT TARGET layere OR
-           NOT TARGET layercal OR NOT TARGET layerworker)
-        message(STATUS "Game Bar MSIX target disabled: full package requires layerd, layere, layercal, and layerworker")
+           NOT TARGET layercal OR NOT TARGET layerw)
+        message(STATUS "Game Bar MSIX target disabled: full package requires layerd, layere, layercal, and layerw")
     else()
         set(LAYERC_GAMEBAR_PACKAGE_DIR
             "${CMAKE_CURRENT_BINARY_DIR}/gamebar-package/$<CONFIG>")
@@ -352,19 +358,19 @@ if(TARGET layerc_gamebar_host)
                 -LayerD "$<TARGET_FILE:layerd>"
                 -LayerE "$<TARGET_FILE:layere>"
                 -LayerCal "$<TARGET_FILE:layercal>"
-                -LayerWorker "$<TARGET_FILE:layerworker>"
+                -LayerW "$<TARGET_FILE:layerw>"
             COMMAND "${LAYERC_MAKEAPPX}" pack
                 /d "${LAYERC_GAMEBAR_PACKAGE_DIR}"
                 /p "${LAYERC_GAMEBAR_MSIX}" /o
             BYPRODUCTS "${LAYERC_GAMEBAR_MSIX}"
-            DEPENDS layerc_gamebar_host layerd layere layercal layerworker
+            DEPENDS layerc_gamebar_host layerd layere layercal layerw
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/StageGameBarPackage.ps1"
             VERBATIM)
     endif()
 endif()
 
-foreach(layerc_runtime_target IN ITEMS layerd layere layercal layerworker)
+foreach(layerc_runtime_target IN ITEMS layerd layere layercal layerw)
     if(TARGET ${layerc_runtime_target})
         install(TARGETS ${layerc_runtime_target}
             RUNTIME DESTINATION . COMPONENT Runtime)
@@ -534,8 +540,10 @@ if(LAYERC_BUILD_TESTS)
         add_executable(layerc_editor_tests
             tests/editor_dialog_tests.cpp
             tests/test_support.cpp
+            src/editor/editor_controls.cpp
             src/editor/editor_theme.cpp
             src/editor/editor_schema.cpp
+            src/editor/editor_automation_presets.cpp
             src/editor/editor_resources.rc
             src/calibration/calibration_resources.rc
         )

@@ -2,112 +2,99 @@
 #include "test_support.hpp"
 
 #include <iostream>
-#include <memory>
 #include <string>
 #include <vector>
 
 namespace {
 
 using layerc::test::expect;
+using layerc::runtime::Capability;
+using layerc::runtime::CapabilityDemand;
+using layerc::runtime::RuntimeResourceStats;
+using layerc::runtime::RuntimeServiceDescriptor;
+using layerc::runtime::ServiceReconcileResult;
 
 struct FakeContext {
-  layerc::runtime::Capability capability{layerc::runtime::Capability::visual};
-  int constructed{};
+  Capability capability{Capability::visual};
   int reconciled{};
   int quiesced{};
   bool fail{};
-  std::vector<layerc::runtime::Capability> *quiesce_order{};
+  std::vector<Capability> *quiesce_order{};
 };
 
-class FakeService final : public layerc::runtime::IRuntimeService {
-public:
-  explicit FakeService(FakeContext &context) : context_(context) {
-    ++context_.constructed;
-  }
+ServiceReconcileResult fake_reconcile(void *const context) {
+  auto &fake = *static_cast<FakeContext *>(context);
+  ++fake.reconciled;
+  return fake.fail ? ServiceReconcileResult{false, "test fault"}
+                   : ServiceReconcileResult{};
+}
 
-  [[nodiscard]] layerc::runtime::Capability
-  capability() const noexcept override {
-    return context_.capability;
-  }
+void fake_quiesce(void *const context) noexcept {
+  auto &fake = *static_cast<FakeContext *>(context);
+  ++fake.quiesced;
+  if (fake.quiesce_order != nullptr)
+    fake.quiesce_order->push_back(fake.capability);
+}
 
-  [[nodiscard]] layerc::runtime::ServiceReconcileResult
-  reconcile(const layerc::runtime::CapabilityDemand &demand) override {
-    ++context_.reconciled;
-    consumers_ = demand.consumers(context_.capability);
-    return context_.fail
-               ? layerc::runtime::ServiceReconcileResult{false, "test fault"}
-               : layerc::runtime::ServiceReconcileResult{};
-  }
+RuntimeResourceStats fake_resources(void *) noexcept {
+  return {.threads = 1, .capture_sessions = 1};
+}
 
-  void quiesce() noexcept override {
-    ++context_.quiesced;
-    if (context_.quiesce_order != nullptr)
-      context_.quiesce_order->push_back(context_.capability);
-  }
-
-  [[nodiscard]] layerc::runtime::RuntimeResourceStats
-  resources() const noexcept override {
-    return {.threads = 1, .handles = consumers_, .capture_sessions = 1};
-  }
-
-private:
-  FakeContext &context_;
-  std::uint32_t consumers_{};
-};
-
-std::unique_ptr<layerc::runtime::IRuntimeService> make_fake(void *context) {
-  return std::make_unique<FakeService>(*static_cast<FakeContext *>(context));
+[[nodiscard]] RuntimeServiceDescriptor fake_descriptor(
+    FakeContext &context, const Capability capability) {
+  context.capability = capability;
+  return {.capability = capability,
+          .context = &context,
+          .reconcile = &fake_reconcile,
+          .quiesce = &fake_quiesce,
+          .resources = &fake_resources};
 }
 
 void demand_counts_saturate() {
-  layerc::runtime::CapabilityDemand demand;
-  demand.add(layerc::runtime::Capability::input, 2);
-  demand.add(layerc::runtime::Capability::input, 3);
-  expect(demand.consumers(layerc::runtime::Capability::input) == 5,
+  CapabilityDemand demand;
+  demand.add(Capability::input, 2);
+  demand.add(Capability::input, 3);
+  expect(demand.consumers(Capability::input) == 5,
          "capability consumers should accumulate");
-  expect(demand.required(layerc::runtime::Capability::input),
+  expect(demand.required(Capability::input),
          "non-zero demand should be required");
   expect(!demand.empty(), "non-zero demand should not be empty");
-  demand.set(layerc::runtime::Capability::input, 0);
+  demand.set(Capability::input, 0);
   expect(demand.empty(), "cleared demand should be empty");
 }
 
 void host_is_lazy_and_idempotent() {
   FakeContext context;
-  const layerc::runtime::RuntimeServiceDescriptor descriptor{
-      .capability = layerc::runtime::Capability::visual,
-      .create = &make_fake,
-      .context = &context};
+  const auto descriptor = fake_descriptor(context, Capability::visual);
   layerc::runtime::RuntimeServiceHost host;
-  layerc::runtime::CapabilityDemand demand;
+  CapabilityDemand demand;
 
   expect(host.reconcile(demand, {&descriptor, 1}),
          "empty demand should reconcile");
-  expect(context.constructed == 0, "empty demand must not construct a service");
+  expect(context.reconciled == 0, "empty demand must not run a service");
 
-  demand.set(layerc::runtime::Capability::visual, 2);
+  demand.set(Capability::visual, 2);
   expect(host.reconcile(demand, {&descriptor, 1}),
          "active demand should reconcile");
-  expect(context.constructed == 1 && context.reconciled == 1,
-         "first demand should construct and reconcile once");
+  expect(context.reconciled == 1, "first demand should reconcile once");
+
   expect(host.reconcile(demand, {&descriptor, 1}),
          "repeated demand should reconcile");
-  expect(context.constructed == 1 && context.reconciled == 2,
+  expect(context.reconciled == 2 &&
+             host.stats(Capability::visual).activation_count == 1,
          "repeated demand must reuse the service");
 
-  const auto stats = host.stats(layerc::runtime::Capability::visual);
+  const auto stats = host.stats(Capability::visual);
   expect(stats.state == layerc::runtime::ServiceState::active &&
-             stats.consumers == 2 && stats.resources.threads == 1 &&
-             stats.resources.handles == 2,
+             stats.consumers == 2 && stats.resources.threads == 1,
          "active statistics should reflect service resources");
 
-  demand.set(layerc::runtime::Capability::visual, 0);
+  demand.set(Capability::visual, 0);
   expect(host.reconcile(demand, {&descriptor, 1}),
          "zero demand should quiesce successfully");
-  expect(context.quiesced == 1 &&
-             host.find(layerc::runtime::Capability::visual) == nullptr,
+  expect(context.quiesced == 1 && host.find(Capability::visual) == nullptr,
          "zero demand must quiesce and destroy the service");
-  expect(host.stats(layerc::runtime::Capability::visual).state ==
+  expect(host.stats(Capability::visual).state ==
              layerc::runtime::ServiceState::absent,
          "quiesced service should report absent");
 }
@@ -115,117 +102,118 @@ void host_is_lazy_and_idempotent() {
 void faults_release_the_service() {
   FakeContext context;
   context.fail = true;
-  const layerc::runtime::RuntimeServiceDescriptor descriptor{
-      .capability = layerc::runtime::Capability::visual,
-      .create = &make_fake,
-      .context = &context};
+  const auto descriptor = fake_descriptor(context, Capability::visual);
   layerc::runtime::RuntimeServiceHost host;
-  layerc::runtime::CapabilityDemand demand;
-  demand.set(layerc::runtime::Capability::visual, 1);
+  CapabilityDemand demand;
+  demand.set(Capability::visual, 1);
 
   expect(!host.reconcile(demand, {&descriptor, 1}),
          "service failure should fail reconciliation");
-  const auto stats = host.stats(layerc::runtime::Capability::visual);
-  expect(context.quiesced == 1 &&
-             host.find(layerc::runtime::Capability::visual) == nullptr,
+  const auto stats = host.stats(Capability::visual);
+  expect(context.quiesced == 1 && host.find(Capability::visual) == nullptr,
          "failed service should be quiesced and destroyed");
   expect(stats.state == layerc::runtime::ServiceState::faulted &&
              stats.fault_count == 1 && stats.last_error == "test fault",
          "failure diagnostics should be retained");
 }
 
+void incomplete_descriptor_faults() {
+  FakeContext context;
+  const auto descriptor = RuntimeServiceDescriptor{
+      .capability = Capability::visual,
+      .context = &context,
+      .reconcile = &fake_reconcile,
+      .quiesce = nullptr,
+      .resources = &fake_resources};
+  layerc::runtime::RuntimeServiceHost host;
+  CapabilityDemand demand;
+  demand.set(Capability::visual, 1);
+
+  expect(!host.reconcile(demand, {&descriptor, 1}),
+         "an incomplete descriptor should fail reconciliation");
+  expect(context.reconciled == 0 && context.quiesced == 0,
+         "an incomplete descriptor must not run any callback");
+  const auto stats = host.stats(Capability::visual);
+  expect(stats.state == layerc::runtime::ServiceState::faulted &&
+             stats.last_error == "required service descriptor is incomplete",
+         "incomplete descriptor should be diagnosable");
+}
+
 void later_fault_rolls_back_new_dependencies() {
   FakeContext input;
-  input.capability = layerc::runtime::Capability::input;
   FakeContext visual;
-  visual.capability = layerc::runtime::Capability::visual;
   visual.fail = true;
-  const layerc::runtime::RuntimeServiceDescriptor descriptors[] = {
-      {.capability = layerc::runtime::Capability::input,
-       .create = &make_fake,
-       .context = &input},
-      {.capability = layerc::runtime::Capability::visual,
-       .create = &make_fake,
-       .context = &visual}};
+  const RuntimeServiceDescriptor descriptors[] = {
+      fake_descriptor(input, Capability::input),
+      fake_descriptor(visual, Capability::visual)};
   layerc::runtime::RuntimeServiceHost host;
-  layerc::runtime::CapabilityDemand demand;
-  demand.set(layerc::runtime::Capability::input, 1);
-  demand.set(layerc::runtime::Capability::visual, 1);
+  CapabilityDemand demand;
+  demand.set(Capability::input, 1);
+  demand.set(Capability::visual, 1);
 
   expect(!host.reconcile(demand, descriptors),
          "a later service fault should fail the capability transition");
   expect(input.quiesced == 1 && visual.quiesced == 1 &&
-             host.find(layerc::runtime::Capability::input) == nullptr &&
-             host.find(layerc::runtime::Capability::visual) == nullptr,
+             host.find(Capability::input) == nullptr &&
+             host.find(Capability::visual) == nullptr,
          "newly activated dependencies should roll back with the failed tier");
-  expect(host.stats(layerc::runtime::Capability::visual).state ==
+  expect(host.stats(Capability::visual).state ==
                  layerc::runtime::ServiceState::faulted &&
-             host.stats(layerc::runtime::Capability::input).state ==
+             host.stats(Capability::input).state ==
                  layerc::runtime::ServiceState::absent,
          "the root fault should remain diagnosable after dependency rollback");
 
   visual.fail = false;
-  expect(host.reconcile(demand, descriptors) && input.constructed == 2 &&
-             visual.constructed == 2,
+  expect(host.reconcile(demand, descriptors) &&
+             host.stats(Capability::input).activation_count == 2 &&
+             host.stats(Capability::visual).activation_count == 2,
          "a corrected demand should retry every rolled-back capability");
 }
 
 void teardown_is_reverse_ordered() {
-  std::vector<layerc::runtime::Capability> order;
+  std::vector<Capability> order;
   FakeContext input;
-  input.capability = layerc::runtime::Capability::input;
   input.quiesce_order = &order;
   FakeContext visual;
-  visual.capability = layerc::runtime::Capability::visual;
   visual.quiesce_order = &order;
-  const layerc::runtime::RuntimeServiceDescriptor descriptors[] = {
-      {.capability = layerc::runtime::Capability::input,
-       .create = &make_fake,
-       .context = &input},
-      {.capability = layerc::runtime::Capability::visual,
-       .create = &make_fake,
-       .context = &visual}};
+  const RuntimeServiceDescriptor descriptors[] = {
+      fake_descriptor(input, Capability::input),
+      fake_descriptor(visual, Capability::visual)};
   layerc::runtime::RuntimeServiceHost host;
-  layerc::runtime::CapabilityDemand demand;
-  demand.set(layerc::runtime::Capability::input, 1);
-  demand.set(layerc::runtime::Capability::visual, 1);
-  expect(host.reconcile(demand, descriptors),
-         "multiple services should activate");
+  CapabilityDemand demand;
+  demand.set(Capability::input, 1);
+  demand.set(Capability::visual, 1);
+  expect(host.reconcile(demand, descriptors), "multiple services should activate");
   demand = {};
-  expect(host.reconcile(demand, descriptors),
-         "multiple services should quiesce");
-  expect(order.size() == 2 && order[0] == layerc::runtime::Capability::visual &&
-             order[1] == layerc::runtime::Capability::input,
+  expect(host.reconcile(demand, descriptors), "multiple services should quiesce");
+  expect(order.size() == 2 && order[0] == Capability::visual &&
+             order[1] == Capability::input,
          "services should quiesce in reverse dependency order");
 }
 
 void repeated_activation_has_bounded_ownership() {
   FakeContext context;
-  const layerc::runtime::RuntimeServiceDescriptor descriptor{
-      .capability = layerc::runtime::Capability::visual,
-      .create = &make_fake,
-      .context = &context};
+  const auto descriptor = fake_descriptor(context, Capability::visual);
   layerc::runtime::RuntimeServiceHost host;
-  layerc::runtime::CapabilityDemand demand;
+  CapabilityDemand demand;
   for (int cycle = 0; cycle < 100; ++cycle) {
-    demand.set(layerc::runtime::Capability::visual, 1);
+    demand.set(Capability::visual, 1);
     expect(host.reconcile(demand, {&descriptor, 1}),
            "activation cycle should succeed");
-    demand.set(layerc::runtime::Capability::visual, 0);
+    demand.set(Capability::visual, 0);
     expect(host.reconcile(demand, {&descriptor, 1}),
            "quiescence cycle should succeed");
   }
-  const auto stats = host.stats(layerc::runtime::Capability::visual);
-  expect(context.constructed == 100 && context.quiesced == 100,
+  const auto stats = host.stats(Capability::visual);
+  expect(context.reconciled == 100 && context.quiesced == 100,
          "every activation should have one matching quiescence");
   expect(stats.activation_count == 100 &&
              stats.state == layerc::runtime::ServiceState::absent &&
-             stats.resources == layerc::runtime::RuntimeResourceStats{},
+             stats.resources == RuntimeResourceStats{},
          "inactive lifecycle statistics should retain counts but no resources");
 }
 
 void demand_matrix_is_explicit() {
-  using layerc::runtime::Capability;
   using layerc::runtime::SessionCapabilityRequest;
   const auto calculate = [](std::initializer_list<SessionCapabilityRequest> s,
                             const bool editor = false,
@@ -292,58 +280,45 @@ void demand_matrix_is_explicit() {
 
 struct ReentrantContext {
   layerc::runtime::DaemonKernel *kernel{};
-  const layerc::runtime::RuntimeServiceDescriptor *descriptor{};
+  const RuntimeServiceDescriptor *descriptor{};
   bool notified{};
   int quiesced{};
 };
 
-class ReentrantService final : public layerc::runtime::IRuntimeService {
-public:
-  explicit ReentrantService(ReentrantContext &context) : context_(context) {}
-  [[nodiscard]] layerc::runtime::Capability
-  capability() const noexcept override {
-    return layerc::runtime::Capability::visual;
+ServiceReconcileResult reentrant_reconcile(void *const context) {
+  auto &reentrant = *static_cast<ReentrantContext *>(context);
+  if (!reentrant.notified) {
+    reentrant.notified = true;
+    CapabilityDemand cleared;
+    (void)reentrant.kernel->reconcile(cleared, {reentrant.descriptor, 1});
   }
-  [[nodiscard]] layerc::runtime::ServiceReconcileResult
-  reconcile(const layerc::runtime::CapabilityDemand &) override {
-    if (!context_.notified) {
-      context_.notified = true;
-      layerc::runtime::CapabilityDemand cleared;
-      (void)context_.kernel->reconcile(cleared, {context_.descriptor, 1});
-    }
-    return {};
-  }
-  void quiesce() noexcept override { ++context_.quiesced; }
-  [[nodiscard]] layerc::runtime::RuntimeResourceStats
-  resources() const noexcept override {
-    return {.threads = 1};
-  }
+  return {};
+}
 
-private:
-  ReentrantContext &context_;
-};
+void reentrant_quiesce(void *const context) noexcept {
+  ++static_cast<ReentrantContext *>(context)->quiesced;
+}
 
-std::unique_ptr<layerc::runtime::IRuntimeService>
-make_reentrant(void *context) {
-  return std::make_unique<ReentrantService>(
-      *static_cast<ReentrantContext *>(context));
+RuntimeResourceStats reentrant_resources(void *) noexcept {
+  return {.threads = 1};
 }
 
 void kernel_serializes_reentrant_demand() {
   layerc::runtime::DaemonKernel kernel;
   ReentrantContext context{.kernel = &kernel};
-  const layerc::runtime::RuntimeServiceDescriptor descriptor{
-      .capability = layerc::runtime::Capability::visual,
-      .create = &make_reentrant,
-      .context = &context};
+  const auto descriptor = RuntimeServiceDescriptor{
+      .capability = Capability::visual,
+      .context = &context,
+      .reconcile = &reentrant_reconcile,
+      .quiesce = &reentrant_quiesce,
+      .resources = &reentrant_resources};
   context.descriptor = &descriptor;
-  layerc::runtime::CapabilityDemand demand;
-  demand.set(layerc::runtime::Capability::visual, 1);
+  CapabilityDemand demand;
+  demand.set(Capability::visual, 1);
   expect(kernel.reconcile(demand, {&descriptor, 1}),
          "kernel should serialize a notification raised during reconcile");
   expect(context.notified && context.quiesced == 1 && kernel.demand().empty() &&
-             kernel.services().find(layerc::runtime::Capability::visual) ==
-                 nullptr &&
+             kernel.services().find(Capability::visual) == nullptr &&
              kernel.demand_generation() == 2,
          "latest reentrant demand should win and release the active service");
 }
@@ -354,6 +329,7 @@ int main() {
   demand_counts_saturate();
   host_is_lazy_and_idempotent();
   faults_release_the_service();
+  incomplete_descriptor_faults();
   later_fault_rolls_back_new_dependencies();
   teardown_is_reverse_ordered();
   repeated_activation_has_bounded_ownership();

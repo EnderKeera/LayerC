@@ -553,8 +553,7 @@ bool write_profile_bundle(
 
   const auto mutation = [](const std::filesystem::path &target,
                            const std::string &contents) {
-    const auto *first =
-        reinterpret_cast<const std::byte *>(contents.data());
+    const auto *first = reinterpret_cast<const std::byte *>(contents.data());
     return ProfileFileMutation{
         .target = target,
         .contents = std::vector<std::byte>(first, first + contents.size())};
@@ -565,31 +564,47 @@ bool write_profile_bundle(
     return !error;
   };
 
-  const auto visual_backup = backup_path(visual);
-  const auto automation_backup = backup_path(automation);
-  const auto companion_backup = backup_path(companion);
-  const auto visual_marker = sidecar_state_path(visual);
-  const auto automation_marker = sidecar_state_path(automation);
-  const auto companion_marker = sidecar_state_path(companion);
-  bool visual_exists{};
-  bool visual_backup_exists{};
-  bool visual_marker_exists{};
-  bool automation_exists{};
-  bool automation_backup_exists{};
-  bool automation_marker_exists{};
-  bool companion_exists{};
-  bool companion_backup_exists{};
-  bool companion_marker_exists{};
-  if (!exists(visual, visual_exists) ||
-      !exists(visual_backup, visual_backup_exists) ||
-      !exists(visual_marker, visual_marker_exists) ||
-      !exists(automation, automation_exists) ||
-      !exists(automation_backup, automation_backup_exists) ||
-      !exists(automation_marker, automation_marker_exists) ||
-      !exists(companion, companion_exists) ||
-      !exists(companion_backup, companion_backup_exists) ||
-      !exists(companion_marker, companion_marker_exists))
-    return false;
+  struct SidecarPlan {
+    std::filesystem::path sidecar;
+    std::filesystem::path backup;
+    std::filesystem::path marker;
+    std::optional<std::string> contents;
+    bool sidecar_exists{};
+    bool backup_exists{};
+    bool marker_exists{};
+  };
+  std::array<SidecarPlan, 3> sidecars{{
+      {.sidecar = visual,
+       .backup = backup_path(visual),
+       .marker = sidecar_state_path(visual),
+       .contents =
+           visual_profile.has_value()
+               ? std::optional{layerc::core::serialize_visual_profile_json(
+                     *visual_profile)}
+               : std::nullopt},
+      {.sidecar = automation,
+       .backup = backup_path(automation),
+       .marker = sidecar_state_path(automation),
+       .contents =
+           automation_profile.has_value()
+               ? std::optional{layerc::core::serialize_automation_profile_json(
+                     *automation_profile)}
+               : std::nullopt},
+      {.sidecar = companion,
+       .backup = backup_path(companion),
+       .marker = sidecar_state_path(companion),
+       .contents =
+           effective_companion.has_value()
+               ? std::optional{layerc::core::serialize_companion_profile_json(
+                     *effective_companion)}
+               : std::nullopt},
+  }};
+  for (auto &sidecar : sidecars) {
+    if (!exists(sidecar.sidecar, sidecar.sidecar_exists) ||
+        !exists(sidecar.backup, sidecar.backup_exists) ||
+        !exists(sidecar.marker, sidecar.marker_exists))
+      return false;
+  }
 
   std::vector<ProfileFileMutation> mutations;
   mutations.reserve(12);
@@ -603,42 +618,17 @@ bool write_profile_bundle(
 
   // Recovery copies are published first. If one is locked or unwritable, the
   // journal rolls back before the new base can become authoritative.
-  if (visual_profile.has_value()) {
-    const auto contents =
-        layerc::core::serialize_visual_profile_json(*visual_profile);
-    mutations.push_back(mutation(visual_backup, contents));
-    mutations.push_back(mutation(visual, contents));
-    mutations.push_back(
-        mutation(visual_marker, std::string(sidecar_state_active)));
-  } else if (visual_exists || visual_backup_exists || visual_marker_exists) {
-    mutations.push_back(
-        mutation(visual_marker, std::string(sidecar_state_removed)));
-  }
-
-  if (automation_profile.has_value()) {
-    const auto contents =
-        layerc::core::serialize_automation_profile_json(*automation_profile);
-    mutations.push_back(mutation(automation_backup, contents));
-    mutations.push_back(mutation(automation, contents));
-    mutations.push_back(
-        mutation(automation_marker, std::string(sidecar_state_active)));
-  } else if (automation_exists || automation_backup_exists ||
-             automation_marker_exists) {
-    mutations.push_back(
-        mutation(automation_marker, std::string(sidecar_state_removed)));
-  }
-
-  if (effective_companion.has_value()) {
-    const auto contents =
-        layerc::core::serialize_companion_profile_json(*effective_companion);
-    mutations.push_back(mutation(companion_backup, contents));
-    mutations.push_back(mutation(companion, contents));
-    mutations.push_back(
-        mutation(companion_marker, std::string(sidecar_state_active)));
-  } else if (companion_exists || companion_backup_exists ||
-             companion_marker_exists) {
-    mutations.push_back(
-        mutation(companion_marker, std::string(sidecar_state_removed)));
+  for (const auto &sidecar : sidecars) {
+    if (sidecar.contents.has_value()) {
+      mutations.push_back(mutation(sidecar.backup, *sidecar.contents));
+      mutations.push_back(mutation(sidecar.sidecar, *sidecar.contents));
+      mutations.push_back(
+          mutation(sidecar.marker, std::string(sidecar_state_active)));
+    } else if (sidecar.sidecar_exists || sidecar.backup_exists ||
+               sidecar.marker_exists) {
+      mutations.push_back(
+          mutation(sidecar.marker, std::string(sidecar_state_removed)));
+    }
   }
 
   mutations.push_back(
@@ -649,17 +639,11 @@ bool write_profile_bundle(
   // A durable removed marker is authoritative. Physical deletion is only
   // cleanup, so a sharing violation cannot reactivate a stale module or turn a
   // committed bundle into a reported failure.
-  if (!visual_profile.has_value()) {
-    (void)DeleteFileW(visual.c_str());
-    (void)DeleteFileW(visual_backup.c_str());
-  }
-  if (!automation_profile.has_value()) {
-    (void)DeleteFileW(automation.c_str());
-    (void)DeleteFileW(automation_backup.c_str());
-  }
-  if (!effective_companion.has_value()) {
-    (void)DeleteFileW(companion.c_str());
-    (void)DeleteFileW(companion_backup.c_str());
+  for (const auto &sidecar : sidecars) {
+    if (!sidecar.contents.has_value()) {
+      (void)DeleteFileW(sidecar.sidecar.c_str());
+      (void)DeleteFileW(sidecar.backup.c_str());
+    }
   }
   return true;
 }

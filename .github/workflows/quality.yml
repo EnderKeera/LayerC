@@ -1,0 +1,31 @@
+name: Windows Quality
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+      - uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67 # v6
+      - name: Configure non-unity analysis build
+        shell: pwsh
+        run: >-
+          cmake -S . -B build/quality -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_UNITY_BUILD=OFF
+          -DCMAKE_CXX_FLAGS=/analyze
+          -DLAYERC_BUILD_TESTS=ON
+      - name: Build with MSVC analysis
+        shell: pwsh
+        run: cmake --build build/quality --parallel
