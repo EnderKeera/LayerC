@@ -18,7 +18,7 @@ function Assert-NativeSuccess {
 
 function Test-InstallRoot {
     param([Parameter(Mandatory = $true)][string]$Path)
-    foreach ($name in @('layerd.exe', 'layere.exe', 'layercal.exe', 'layerworker.exe')) {
+    foreach ($name in @('layerd.exe', 'layere.exe', 'layercal.exe', 'layerw.exe')) {
         if (-not (Test-Path -LiteralPath (Join-Path $Path $name) -PathType Leaf)) {
             return $false
         }

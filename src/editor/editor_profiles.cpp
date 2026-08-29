@@ -20,6 +20,25 @@ void EditorWindow::sync_profile_from_controls() {
     return;
   profile_.name = to_utf8(control_text(GetDlgItem(dialog_, IDC_PROFILE_NAME)));
   profile_.id = to_utf8(control_text(GetDlgItem(dialog_, IDC_PROFILE_ID)));
+  if (auto *cooldown = selected_cooldown(); cooldown != nullptr) {
+    cooldown->name =
+        to_utf8(control_text(GetDlgItem(dialog_, IDC_COOLDOWN_NAME)));
+    if (const auto duration = parse_duration_ms(
+            control_text(GetDlgItem(dialog_, IDC_COOLDOWN_DURATION))))
+      cooldown->duration = *duration;
+    cooldown->max_charges = parse_uint(
+        control_text(GetDlgItem(dialog_, IDC_COOLDOWN_CHARGES)),
+        cooldown->max_charges);
+    const auto retrigger = SendMessageW(
+        GetDlgItem(dialog_, IDC_COOLDOWN_RETRIGGER), CB_GETCURSEL, 0, 0);
+    if (retrigger >= 0 && retrigger <= 1)
+      cooldown->retrigger =
+          static_cast<layerc::core::RetriggerPolicy>(retrigger);
+    const auto recovery = SendMessageW(
+        GetDlgItem(dialog_, IDC_COOLDOWN_RECOVERY), CB_GETCURSEL, 0, 0);
+    if (recovery >= 0 && recovery <= 2)
+      cooldown->recovery = static_cast<layerc::core::RecoveryMode>(recovery);
+  }
   if (visual_profile_)
     visual_profile_->profile_id = profile_.id;
   if (automation_profile_)
@@ -38,6 +57,13 @@ void EditorWindow::sync_profile_from_controls() {
 }
 
 bool EditorWindow::validate_profile() {
+  if (!draft_controls_valid()) {
+    MessageBoxW(dialog_,
+                L"Finish the invalid field. Cooldown duration must be greater "
+                L"than 0 and no more than 86400 seconds.",
+                L"Profile is incomplete", MB_OK | MB_ICONWARNING);
+    return false;
+  }
   sync_profile_from_controls();
   const auto parsed = layerc::core::parse_profile_json(
       layerc::core::serialize_profile_json(profile_));
@@ -350,14 +376,16 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
 bool EditorWindow::choose_save_path(std::filesystem::path &path) {
   const auto directory = layerc::platform::profile_directory();
   if (directory.empty()) {
-    MessageBoxW(dialog_, L"The profiles directory is unavailable.", L"LayerE",
+    MessageBoxW(dialog_, L"The profiles directory is unavailable.",
+                L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return false;
   }
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error) {
-    MessageBoxW(dialog_, L"Could not create the profiles directory.", L"LayerE",
+    MessageBoxW(dialog_, L"Could not create the profiles directory.",
+                L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return false;
   }
@@ -451,7 +479,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
       return false;
     if (error) {
       MessageBoxW(dialog_, L"Could not inspect the profile destination.",
-                  L"LayerE", MB_OK | MB_ICONERROR);
+                  L"LayerC Editor", MB_OK | MB_ICONERROR);
       return false;
     }
   }
@@ -484,7 +512,8 @@ bool EditorWindow::save_profile(const bool force_save_as) {
 
 void EditorWindow::delete_profile() {
   if (current_path_.empty()) {
-    MessageBoxW(dialog_, L"Save this profile before deleting it.", L"LayerE",
+    MessageBoxW(dialog_, L"Save this profile before deleting it.",
+                L"LayerC Editor",
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -504,7 +533,7 @@ void EditorWindow::delete_profile() {
   }
   if (!recycle_profile_bundle(current_path_)) {
     MessageBoxW(dialog_, L"Could not move the profile to the Recycle Bin.",
-                L"LayerE", MB_OK | MB_ICONERROR);
+                L"LayerC Editor", MB_OK | MB_ICONERROR);
     return;
   }
   end_edit_on_window();
@@ -528,7 +557,8 @@ void EditorWindow::open_profiles_folder() {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error || directory.empty()) {
-    MessageBoxW(dialog_, L"Could not open the profiles folder.", L"LayerE",
+    MessageBoxW(dialog_, L"Could not open the profiles folder.",
+                L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return;
   }
@@ -536,34 +566,4 @@ void EditorWindow::open_profiles_folder() {
                 SW_SHOWNORMAL);
 }
 
-void EditorWindow::show_file_menu() {
-  const HMENU menu = LoadMenuW(instance_, MAKEINTRESOURCEW(IDR_EDITOR_MENU));
-  const HMENU popup = menu == nullptr ? nullptr : GetSubMenu(menu, 0);
-  if (popup == nullptr) {
-    if (menu != nullptr)
-      DestroyMenu(menu);
-    set_status(L"Could not open the File menu.");
-    return;
-  }
-  const bool has_grouped_bars =
-      std::any_of(profile_.panels.begin(), profile_.panels.end(),
-                  [](const layerc::core::Panel &panel) {
-                    return panel.style == layerc::core::PanelStyle::bar &&
-                           panel.cooldown_ids.size() > 1;
-                  });
-  EnableMenuItem(popup, IDM_FILE_SPLIT_BARS,
-                 MF_BYCOMMAND | (has_grouped_bars ? MF_ENABLED : MF_GRAYED));
-  EnableMenuItem(popup, IDM_EDIT_UNDO,
-                 MF_BYCOMMAND | (history_.can_undo() ? MF_ENABLED : MF_GRAYED));
-  EnableMenuItem(popup, IDM_EDIT_REDO,
-                 MF_BYCOMMAND | (history_.can_redo() ? MF_ENABLED : MF_GRAYED));
-  RECT button{};
-  GetWindowRect(GetDlgItem(dialog_, IDC_FILE_MENU), &button);
-  SetForegroundWindow(dialog_);
-  TrackPopupMenuEx(
-      popup, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON | TPM_RIGHTBUTTON,
-      button.left, button.bottom, dialog_, nullptr);
-  PostMessageW(dialog_, WM_NULL, 0, 0);
-  DestroyMenu(menu);
-}
 } // namespace layerc::editor

@@ -81,7 +81,7 @@ if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
 }
 $BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
 $required = @('layerd.exe', 'lctest.exe', 'layerc_capture_probe.exe')
-if ($Isolated) { $required += 'layerworker.exe' }
+if ($Isolated) { $required += 'layerw.exe' }
 foreach ($name in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
         throw "Missing $name in $BuildDirectory. Build Release with tests enabled first."
@@ -519,7 +519,7 @@ try {
                  $stableHelperObservations -lt 5; ++$attempt) {
                 [void](Ensure-BenchmarkForeground $game $activator)
                 $candidate = Get-CimInstance Win32_Process `
-                    -Filter "Name='layerworker.exe'" |
+                    -Filter "Name='layerw.exe'" |
                     Where-Object {
                         [uint32]$_.ParentProcessId -eq [uint32]$daemon.Id
                     } |
@@ -547,7 +547,7 @@ try {
                 }
             }
             if ($null -eq $helper -or $stableHelperObservations -lt 5) {
-                throw 'Isolated benchmark did not observe a stable owned layerworker.exe.'
+                throw 'Isolated benchmark did not observe a stable owned layerw.exe.'
             }
         }
         try {
@@ -563,7 +563,7 @@ try {
             $interrupted = $message.StartsWith(
                 'Benchmark sample interrupted:') -or
                 ($Isolated -and $message -match
-                    '^Runtime process layerworker .* exited with code 995 ')
+                    '^Runtime process layerw .* exited with code 995 ')
             if (-not $interrupted -or
                 $measurementAttempts -ge $maximumMeasurementAttempts) {
                 throw
@@ -627,7 +627,7 @@ try {
         thresholds = $thresholds
         passed = $gatePassed
         note = if ($Isolated) {
-            'Combined LayerD plus its owned layerworker. Run both low and balanced on integrated and discrete GPUs.'
+            'Combined LayerD plus its owned layerw. Run both low and balanced on integrated and discrete GPUs.'
         } else {
             'Run both low and balanced on at least one integrated-GPU and one discrete-GPU system. Exact is intentionally outside this gate.'
         }

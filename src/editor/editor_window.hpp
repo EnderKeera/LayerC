@@ -1,5 +1,6 @@
 #pragma once
 
+#include "appearance_draft.hpp"
 #include "editor_history.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/calibration.hpp"
@@ -7,6 +8,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/windows.hpp"
 
@@ -24,14 +26,7 @@
 
 namespace layerc::editor {
 
-struct RoleColors {
-  COLORREF fill{};
-  COLORREF text{};
-  COLORREF border{};
-  COLORREF hover{};
-  COLORREF selection{};
-  COLORREF disabled{};
-};
+using RoleColors = layerc::platform::NativeThemeColors;
 
 struct ProfileCheckboxMetrics {
   int image_size{};
@@ -42,17 +37,14 @@ struct ProfileCheckboxMetrics {
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
-[[nodiscard]] RoleColors
-resolved_colors(layerc::platform::EditorTheme theme, std::uint32_t accent,
-                layerc::platform::EditorControlRole role);
 [[nodiscard]] COLORREF color_ref(std::uint32_t color);
 [[nodiscard]] std::uint32_t rgb_value(COLORREF color);
 [[nodiscard]] std::wstring to_wide(std::string_view text);
 [[nodiscard]] std::string to_utf8(std::wstring_view text);
 [[nodiscard]] std::wstring control_text(HWND control);
 void set_text(HWND control, std::wstring_view text);
-void enable_native_dark_mode();
-void set_dark_title_bar(HWND window);
+using layerc::platform::enable_native_dark_mode;
+using layerc::platform::set_dark_title_bar;
 void style_native_dialog_children(HWND dialog, HFONT font);
 [[nodiscard]] HFONT create_editor_font(UINT dpi);
 void apply_suggested_dpi_rect(HWND window, LPARAM lparam);
@@ -81,11 +73,11 @@ unique_panel_id(std::string_view base,
 profile_error_text(const layerc::core::ProfileError &error);
 [[nodiscard]] std::uint32_t parse_uint(std::wstring_view text,
                                        std::uint32_t fallback);
+[[nodiscard]] std::optional<layerc::core::Milliseconds>
+parse_duration_ms(std::wstring_view seconds);
 [[nodiscard]] bool source_uses_legacy_base_schema(std::string_view json);
 [[nodiscard]] bool source_uses_legacy_visual_schema(std::string_view json);
 [[nodiscard]] bool confirm_schema_upgrade(HWND owner);
-[[nodiscard]] std::wstring color_label(const wchar_t *label,
-                                       std::uint32_t value);
 void erase_visual_assignment(layerc::core::VisualProfile &visual,
                              std::string_view cooldown_id);
 void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
@@ -121,7 +113,12 @@ private:
 
   [[nodiscard]] RoleColors
   colors(layerc::platform::EditorControlRole role) const {
-    return resolved_colors(theme_, accent_, role);
+    const auto &appearance = appearance_.staged();
+    if (appearance_open_)
+      return layerc::platform::native_theme_colors(
+          appearance.theme, appearance.accent, role,
+          appearance.overrides[static_cast<std::size_t>(role)]);
+    return layerc::platform::native_theme_colors(theme_, accent_, role);
   }
   void initialize(HWND);
   void initialize_tasks(HWND);
@@ -141,6 +138,7 @@ private:
 
   void refresh_profile_controls();
   void refresh_cooldown_list(int selection = 0);
+  void refresh_selected_cooldown_label();
   [[nodiscard]] layerc::core::CooldownDefinition *selected_cooldown();
   void refresh_binding_controls();
   void load_current_visual_profile();
@@ -178,7 +176,7 @@ private:
   void import_profile_pack();
   void open_runtime_diagnostics();
   void request_runtime_diagnostics();
-  void show_file_menu();
+  void refresh_runtime_diagnostics_dialog();
   void edit_on_window();
   void begin_edit_on_window(HWND target);
   void end_edit_on_window(std::wstring_view status = {},
@@ -239,6 +237,7 @@ private:
   void sync_current_profile_entry();
 
   void open_options();
+  void open_appearance();
   void apply_options(HWND);
   [[nodiscard]] layerc::platform::EditorControlRole appearance_role(HWND) const;
   static std::uint32_t *
@@ -249,6 +248,8 @@ private:
   void refresh_appearance_controls(HWND);
   void choose_appearance_color(HWND, std::uint32_t);
   void reset_appearance(HWND);
+  void reset_all_appearance(HWND);
+  [[nodiscard]] bool apply_appearance(HWND);
 
   void draw_button(const DRAWITEMSTRUCT &, layerc::platform::EditorControlRole,
                    std::optional<COLORREF> fill = std::nullopt) const;
@@ -286,6 +287,7 @@ private:
   HIMAGELIST profile_check_hit_images_{};
   HFONT font_{};
   HFONT task_font_{};
+  HFONT diagnostics_font_{};
   std::array<HBRUSH, static_cast<std::size_t>(
                          layerc::platform::EditorControlRole::count)>
       brushes_{};
@@ -303,10 +305,13 @@ private:
   std::filesystem::path current_path_;
   layerc::platform::EditorTheme theme_{layerc::platform::EditorTheme::copper};
   std::uint32_t accent_{0xD88E4BU};
+  AppearanceDraft appearance_;
+  bool appearance_open_{};
   bool capture_exclusion_{true};
   bool legacy_base_schema_{};
   bool legacy_visual_schema_{};
   bool v2_upgrade_acknowledged_{};
+  bool advanced_visible_{};
   bool dirty_{};
   bool syncing_{};
   bool picking_{};

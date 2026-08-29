@@ -4,58 +4,14 @@
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <wrl/client.h>
 
 #include <cstdint>
 #include <string>
-#include <utility>
 
 namespace layerc::capture {
 
-template <typename T> class ComPtr {
-public:
-  ComPtr() = default;
-  explicit ComPtr(T *value) : value_(value) {}
-  ~ComPtr() { reset(); }
-  ComPtr(const ComPtr &other) : value_(other.value_) {
-    if (value_ != nullptr) value_->AddRef();
-  }
-  ComPtr &operator=(const ComPtr &other) {
-    if (this == &other) return *this;
-    reset();
-    value_ = other.value_;
-    if (value_ != nullptr) value_->AddRef();
-    return *this;
-  }
-  ComPtr(ComPtr &&other) noexcept
-      : value_(std::exchange(other.value_, nullptr)) {}
-  ComPtr &operator=(ComPtr &&other) noexcept {
-    if (this != &other) {
-      reset();
-      value_ = std::exchange(other.value_, nullptr);
-    }
-    return *this;
-  }
-
-  [[nodiscard]] T *get() const noexcept { return value_; }
-  [[nodiscard]] T **put() noexcept {
-    reset();
-    return &value_;
-  }
-  [[nodiscard]] void **put_void() noexcept {
-    return reinterpret_cast<void **>(put());
-  }
-  [[nodiscard]] T *operator->() const noexcept { return value_; }
-  [[nodiscard]] explicit operator bool() const noexcept {
-    return value_ != nullptr;
-  }
-  void reset(T *replacement = nullptr) noexcept {
-    if (value_ != nullptr) value_->Release();
-    value_ = replacement;
-  }
-
-private:
-  T *value_{};
-};
+using Microsoft::WRL::ComPtr;
 
 struct D3dDevice {
   ComPtr<ID3D11Device> device;
