@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <optional>
 
 #include <commctrl.h>
@@ -37,8 +38,8 @@ std::wstring editor_single_instance_name() {
 }
 
 // "#32770" is the shared system dialog class: FindWindowW alone would match
-// any application's dialog titled LayerE. Only raise a window owned by a
-// process from this install.
+// any application's dialog titled LayerC Editor. Only raise a window owned by
+// a process from this install.
 void raise_existing_editor() {
   struct Context {
     HWND found{};
@@ -57,7 +58,7 @@ void raise_existing_editor() {
         std::array<wchar_t, 32> title{};
         const int length = GetWindowTextW(window, title.data(),
                                           static_cast<int>(title.size()));
-        if (length <= 0 || wcscmp(title.data(), L"LayerE") != 0)
+        if (length <= 0 || wcscmp(title.data(), L"LayerC Editor") != 0)
           return TRUE;
         DWORD process_id{};
         GetWindowThreadProcessId(window, &process_id);
@@ -83,7 +84,8 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   if (!layerc::platform::recover_profile_transactions(
           layerc::platform::profile_directory())) {
     MessageBoxW(nullptr,
-                L"LayerE could not recover an interrupted profile import. "
+                L"LayerC Editor could not recover an interrupted profile "
+                L"import. "
                 L"Resolve the _transactions directory before editing profiles.",
                 L"LayerC profile recovery", MB_OK | MB_ICONERROR);
     return 1;
@@ -116,8 +118,8 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   const int work_height = static_cast<int>(work.bottom - work.top);
   const UINT window_dpi = GetDpiForWindow(dialog_);
   const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-  const int width = std::clamp(MulDiv(1210, dpi, 96), 1, work_width);
-  const int height = std::clamp(MulDiv(760, dpi, 96), 1, work_height);
+  const int width = std::max(1, std::min(MulDiv(1210, dpi, 96), work_width));
+  const int height = std::max(1, std::min(MulDiv(760, dpi, 96), work_height));
   const int left =
       static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
   const int top =
@@ -169,6 +171,14 @@ void EditorWindow::initialize(const HWND window) {
   preview_ = GetDlgItem(dialog_, IDC_PREVIEW);
   status_ = GetDlgItem(dialog_, IDC_STATUS);
   application_path_ = GetDlgItem(dialog_, IDC_APPLICATION_PATH);
+  advanced_visible_ = false;
+  set_owner_draw_checkbox(GetDlgItem(dialog_, IDC_ADVANCED), false);
+  for (const wchar_t *label : {L"Ignore", L"Restart"})
+    SendMessageW(GetDlgItem(dialog_, IDC_COOLDOWN_RETRIGGER), CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(label));
+  for (const wchar_t *label : {L"Single", L"Sequential", L"Parallel"})
+    SendMessageW(GetDlgItem(dialog_, IDC_COOLDOWN_RECOVERY), CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(label));
   ListView_SetExtendedListViewStyle(profile_list_,
                                     LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES |
                                         LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
@@ -204,12 +214,58 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
     const WPARAM wparam) {
     const int id = LOWORD(wparam);
     const auto notification = HIWORD(wparam);
-    if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID || id == IDC_BAR_WIDTH ||
+    if (id == IDC_PROFILE_NAME || id == IDC_PROFILE_ID ||
+        id == IDC_COOLDOWN_NAME || id == IDC_COOLDOWN_DURATION ||
+        id == IDC_COOLDOWN_CHARGES || id == IDC_BAR_WIDTH ||
         id == IDC_BAR_HEIGHT) {
       if (!syncing_ && notification == EN_CHANGE) {
         sync_profile_from_controls();
+        if (id == IDC_COOLDOWN_NAME || id == IDC_COOLDOWN_DURATION)
+          refresh_selected_cooldown_label();
         record_profile_change(ChangeKind::text);
         InvalidateRect(preview_, nullptr, TRUE);
+      }
+      return TRUE;
+    }
+    if ((id == IDC_COOLDOWN_RETRIGGER || id == IDC_COOLDOWN_RECOVERY) &&
+        notification == CBN_SELCHANGE) {
+      sync_profile_from_controls();
+      record_profile_change(ChangeKind::immediate);
+      return TRUE;
+    }
+    if (id == IDC_ADVANCED && notification == BN_CLICKED) {
+      advanced_visible_ =
+          owner_draw_checkbox_checked(GetDlgItem(dialog_, IDC_ADVANCED));
+      InvalidateRect(GetDlgItem(dialog_, IDC_ADVANCED), nullptr, TRUE);
+      layout();
+      return TRUE;
+    }
+    if (id == IDC_APPLICATION_EXACT_PATH &&
+        notification == BN_CLICKED) {
+      const bool exact = owner_draw_checkbox_checked(
+          GetDlgItem(dialog_, IDC_APPLICATION_EXACT_PATH));
+      InvalidateRect(GetDlgItem(dialog_, IDC_APPLICATION_EXACT_PATH), nullptr,
+                     TRUE);
+      if (!exact && !profile_.game.executable_path.empty()) {
+        sync_profile_from_controls();
+        if (profile_.game.executable_name.empty()) {
+          profile_.game.executable_name = to_utf8(
+              std::filesystem::path(to_wide(profile_.game.executable_path))
+                  .filename()
+                  .wstring());
+        }
+        profile_.game.executable_path.clear();
+        set_text(application_path_,
+                 profile_.game.executable_name.empty()
+                     ? L"Choose a running application."
+                     : to_wide(profile_.game.executable_name));
+        record_profile_change(ChangeKind::immediate);
+      } else if (exact && profile_.game.executable_path.empty()) {
+        MessageBoxW(dialog_,
+                    L"Choose a running application to capture its exact "
+                    L"executable path.",
+                    L"Exact path matching", MB_OK | MB_ICONINFORMATION);
+        show_tasks();
       }
       return TRUE;
     }
@@ -238,7 +294,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
           owner_draw_checkbox_checked(GetDlgItem(dialog_, IDC_VISUAL_ISOLATED));
       if (isolated &&
           MessageBoxW(dialog_,
-                      L"Isolated capture starts one bounded layerworker.exe "
+                      L"Isolated capture starts one bounded layerw.exe "
                       L"for this game window while visual recognition is "
                       L"active. It improves crash containment but uses "
                       L"additional process memory. Continue?",
@@ -256,9 +312,6 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       return TRUE;
     }
     switch (id) {
-    case IDC_FILE_MENU:
-      show_file_menu();
-      return TRUE;
     case IDM_FILE_NEW:
       new_profile();
       return TRUE;
@@ -268,14 +321,17 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
     case IDM_FILE_SAVE_AS:
       (void)save_profile(true);
       return TRUE;
-    case IDC_ATTACH_LEFT:
+    case IDC_POSITION_ON_WINDOW:
       edit_on_window();
       return TRUE;
-    case IDC_SHOW_TASKS_LEFT:
+    case IDC_CHOOSE_APPLICATION:
       show_tasks();
       return TRUE;
     case IDM_FILE_OPTIONS:
       open_options();
+      return TRUE;
+    case IDM_TOOLS_APPEARANCE:
+      open_appearance();
       return TRUE;
     case IDM_FILE_EXPORT_PACK:
       export_profile_pack();
@@ -288,6 +344,12 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       return TRUE;
     case IDM_FILE_AUTOMATION:
       automation_editor_->open();
+      return TRUE;
+    case IDM_HELP_ABOUT:
+      MessageBoxW(dialog_,
+                  L"LayerC Editor\n\nCreate and edit LayerC cooldown "
+                  L"profiles using passive input only.",
+                  L"About LayerC Editor", MB_OK | MB_ICONINFORMATION);
       return TRUE;
     case IDM_FILE_SPLIT_BARS:
       split_independent_bars();
@@ -414,8 +476,10 @@ std::optional<LRESULT> EditorWindow::handle_main_draw_item(
     if (draw->CtlType != ODT_BUTTON)
       return std::nullopt;
     const int id = static_cast<int>(draw->CtlID);
-    if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY || id == IDC_DIRECT_DRAG ||
-        id == IDC_VISUAL_ENABLED || id == IDC_VISUAL_ISOLATED) {
+    if (id == IDC_SHOW_TEXT || id == IDC_HIDE_READY ||
+        id == IDC_DIRECT_DRAG || id == IDC_VISUAL_ENABLED ||
+        id == IDC_VISUAL_ISOLATED || id == IDC_ADVANCED ||
+        id == IDC_APPLICATION_EXACT_PATH) {
       draw_checkbox(*draw);
       return TRUE;
     }
@@ -430,10 +494,7 @@ std::optional<LRESULT> EditorWindow::handle_main_draw_item(
       else if (id == IDC_BAR_TEXT)
         overlay_color = color_ref(panel->bar.text_color);
     }
-    const bool toolbar = id == IDC_FILE_MENU;
-    draw_button(*draw,
-                toolbar ? layerc::platform::EditorControlRole::toolbar
-                        : layerc::platform::EditorControlRole::button,
+    draw_button(*draw, layerc::platform::EditorControlRole::button,
                 overlay_color);
     return TRUE;
   }
@@ -495,6 +556,26 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     if (const auto result = handle_main_command(wparam))
       return *result;
     break;
+  case WM_INITMENUPOPUP: {
+    const HMENU popup = reinterpret_cast<HMENU>(wparam);
+    const bool has_grouped_bars =
+        std::ranges::any_of(profile_.panels,
+                            [](const layerc::core::Panel &panel) {
+                              return panel.style ==
+                                         layerc::core::PanelStyle::bar &&
+                                     panel.cooldown_ids.size() > 1;
+                            });
+    EnableMenuItem(popup, IDM_FILE_SPLIT_BARS,
+                   MF_BYCOMMAND |
+                       (has_grouped_bars ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(popup, IDM_EDIT_UNDO,
+                   MF_BYCOMMAND |
+                       (history_.can_undo() ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(popup, IDM_EDIT_REDO,
+                   MF_BYCOMMAND |
+                       (history_.can_redo() ? MF_ENABLED : MF_GRAYED));
+    return TRUE;
+  }
   case WM_NOTIFY:
     if (const auto result = handle_main_notify(lparam))
       return *result;
@@ -569,8 +650,9 @@ int EditorApp::run(const HINSTANCE instance, const int show_command) {
   const HANDLE single_instance =
       CreateMutexW(nullptr, TRUE, mutex_name.c_str());
   if (single_instance == nullptr) {
-    MessageBoxW(nullptr, L"LayerE could not create its single-instance guard.",
-                L"LayerE", MB_OK | MB_ICONERROR);
+    MessageBoxW(nullptr,
+                L"LayerC Editor could not create its single-instance guard.",
+                L"LayerC Editor", MB_OK | MB_ICONERROR);
     return 1;
   }
   if (GetLastError() == ERROR_ALREADY_EXISTS) {

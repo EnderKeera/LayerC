@@ -386,6 +386,36 @@ int wmain(const int argc, wchar_t *argv[]) {
               "selected process matcher should match the target")) {
     return 1;
   }
+  auto relocated_candidate = *candidate;
+  relocated_candidate.executable_name = L"lctest.exe";
+  relocated_candidate.executable_path = L"D:\\Games\\Current\\lctest.exe";
+  if (!expect(layerc::platform::profile_matches_window(relocated_candidate,
+                                                       matching_profile),
+              "name-based application matching should survive a path change")) {
+    return 1;
+  }
+  matching_profile.game.executable_path =
+      "D:\\Games\\Current\\lctest.exe";
+  if (!expect(layerc::platform::profile_matches_window(relocated_candidate,
+                                                       matching_profile),
+              "exact-path matching should accept the selected executable")) {
+    return 1;
+  }
+  auto same_name_elsewhere = relocated_candidate;
+  same_name_elsewhere.executable_path = L"E:\\Games\\Moved\\lctest.exe";
+  if (!expect(!layerc::platform::profile_matches_window(same_name_elsewhere,
+                                                        matching_profile),
+              "exact-path matching should disambiguate identical names")) {
+    return 1;
+  }
+  matching_profile.game.executable_name.clear();
+  if (!expect(layerc::platform::profile_matches_window(relocated_candidate,
+                                                       matching_profile),
+              "existing path-only profiles should retain their behavior")) {
+    return 1;
+  }
+  matching_profile.game.executable_name = "lctest.exe";
+  matching_profile.game.executable_path.clear();
   matching_profile.game.window_title = "LayerC test title that cannot match";
   if (!expect(!layerc::platform::profile_matches_window(*candidate,
                                                         matching_profile),

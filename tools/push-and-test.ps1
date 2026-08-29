@@ -1,15 +1,19 @@
 #Requires -Version 5.1
-# Push the current branch, wait for CI on that exact commit, download its
-# binaries and the frozen V2.2 baseline, then run the local hardware gates.
+# Push the current branch, wait for CI on that exact commit, then optionally
+# download its binaries and run the local hardware checks.
 [CmdletBinding()]
 param(
     [string]$Branch = 'main',
     [string]$BaselineBuildDirectory = '',
     [switch]$NoPush,
+    [switch]$WatchOnly,
     [switch]$VisualOnly
 )
 
 $ErrorActionPreference = 'Stop'
+if ($WatchOnly) {
+    $NoPush = $true
+}
 $root = Split-Path -Parent $PSScriptRoot
 $candidateDirectory = Join-Path $root 'out\bench-stage'
 
@@ -93,6 +97,9 @@ $runId = [string]$run.databaseId
 Write-Host "==> waiting for CI run $runId"
 gh run watch $runId --exit-status
 Assert-NativeSuccess "CI run $runId"
+if ($WatchOnly) {
+    return
+}
 
 Write-Host "==> downloading CI binaries into $candidateDirectory"
 Remove-Item -LiteralPath $candidateDirectory -Recurse -Force -ErrorAction SilentlyContinue

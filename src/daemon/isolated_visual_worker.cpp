@@ -246,7 +246,7 @@ IsolatedVisualStatus IsolatedVisualWorker::status() const {
 }
 
 bool IsolatedVisualWorker::run_helper(std::string &error) {
-  const auto helper = sibling_path(L"layerworker.exe");
+  const auto helper = sibling_path(L"layerw.exe");
   const auto nonce = random_hex();
   const auto suffix = random_hex();
   if (helper.empty() || nonce.empty() || suffix.empty()) {
@@ -315,7 +315,7 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
                      &process) == FALSE) {
     CloseHandle(job);
     CloseHandle(pipe);
-    error = "could not launch layerworker.exe";
+    error = "could not launch layerw.exe";
     return false;
   }
   // Publish ownership before validation or ResumeThread. stop() can run from
@@ -352,13 +352,13 @@ bool IsolatedVisualWorker::run_helper(std::string &error) {
 
   const BOOL connected = ConnectNamedPipe(pipe, nullptr);
   if (connected == FALSE && GetLastError() != ERROR_PIPE_CONNECTED) {
-    error = "layerworker did not connect to its owned pipe";
+    error = "layerw did not connect to its owned pipe";
     terminate_owned_helper(ERROR_BROKEN_PIPE);
   } else {
     ULONG client_pid{};
     if (GetNamedPipeClientProcessId(pipe, &client_pid) == FALSE ||
         client_pid != process.dwProcessId) {
-      error = "isolated pipe client PID did not match layerworker";
+      error = "isolated pipe client PID did not match layerw";
       terminate_owned_helper(ERROR_ACCESS_DENIED);
     }
   }

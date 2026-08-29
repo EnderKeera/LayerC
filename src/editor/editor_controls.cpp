@@ -4,6 +4,7 @@
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cwchar>
 #include <string>
@@ -60,10 +61,20 @@ std::uint32_t parse_uint(const std::wstring_view text, const std::uint32_t fallb
              ? static_cast<std::uint32_t>(parsed) : fallback;
 }
 
-std::wstring color_label(const wchar_t *label, const std::uint32_t value) {
-  wchar_t text[64]{};
-  swprintf_s(text, L"%ls  #%06X", label, value & 0x00FFFFFFU);
-  return text;
+std::optional<layerc::core::Milliseconds>
+parse_duration_ms(const std::wstring_view seconds) {
+  if (seconds.empty())
+    return std::nullopt;
+  const std::wstring value(seconds);
+  wchar_t *end{};
+  const double parsed = wcstod(value.c_str(), &end);
+  if (end == value.c_str() || end == nullptr || *end != L'\0' ||
+      !std::isfinite(parsed) || parsed <= 0.0 || parsed > 86'400.0)
+    return std::nullopt;
+  const auto milliseconds = std::llround(parsed * 1000.0);
+  if (milliseconds < 1 || milliseconds > 86'400'000)
+    return std::nullopt;
+  return layerc::core::Milliseconds(milliseconds);
 }
 
 } // namespace layerc::editor

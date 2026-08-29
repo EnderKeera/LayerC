@@ -93,13 +93,19 @@ public:
   [[nodiscard]] virtual RuntimeResourceStats resources() const noexcept = 0;
 };
 
-using RuntimeServiceFactory =
-    std::unique_ptr<IRuntimeService> (*)(void *context);
+// One generic runtime service shape: capability + opaque owner context with
+// three callbacks. Owners (the daemon) supply captureless functions that cast
+// the context back to their own type.
+using ServiceReconcileFn = ServiceReconcileResult (*)(void *context);
+using ServiceQuiesceFn = void (*)(void *context) noexcept;
+using ServiceResourcesFn = RuntimeResourceStats (*)(void *context) noexcept;
 
 struct RuntimeServiceDescriptor {
   Capability capability{Capability::input};
-  RuntimeServiceFactory create{};
   void *context{};
+  ServiceReconcileFn reconcile{};
+  ServiceQuiesceFn quiesce{};
+  ServiceResourcesFn resources{};
 };
 
 class RuntimeServiceHost {

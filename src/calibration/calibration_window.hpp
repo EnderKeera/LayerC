@@ -5,6 +5,7 @@
 #include "layerc/core/template_matcher.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
+#include "layerc/platform/native_theme.hpp"
 
 #include <memory>
 #include <optional>
@@ -24,6 +25,16 @@ public:
   }
 
 private:
+  struct Palette {
+    COLORREF background{};
+    COLORREF panel{};
+    COLORREF input{};
+    COLORREF border{};
+    COLORREF text{};
+    COLORREF muted{};
+    COLORREF selection{};
+  };
+
   static constexpr UINT_PTR capture_timer = 1;
   static INT_PTR CALLBACK dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static LRESULT CALLBACK preview_proc(HWND, UINT, WPARAM, LPARAM, UINT_PTR,
@@ -33,6 +44,7 @@ private:
   LRESULT handle_preview(HWND, UINT, WPARAM, LPARAM);
 
   bool initialize(HWND);
+  void initialize_palette();
   void initialize_controls();
   void update_control_enablement();
   void update_capture();
@@ -78,7 +90,10 @@ private:
   HWND dialog_{};
   HWND preview_{};
   HWND target_window_{};
+  Palette palette_{};
+  layerc::platform::NativeThemeColors button_colors_{};
   HBRUSH background_brush_{};
+  HBRUSH panel_brush_{};
   HBRUSH input_brush_{};
   HFONT font_{};
   std::unique_ptr<layerc::capture::WindowCaptureSession> capture_;
