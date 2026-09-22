@@ -4,8 +4,8 @@
 
 #include <dwmapi.h>
 
-#include <algorithm>
-#include <cmath>
+#include <array>
+#include <optional>
 #include <utility>
 
 namespace layerc::capture {
@@ -20,59 +20,25 @@ bool capture_window_bounds(const HWND window, RECT &bounds) noexcept {
          bounds.right > bounds.left && bounds.bottom > bounds.top;
 }
 
-bool frame_is_nearly_black(const CaptureFrame &frame) noexcept {
-  if (frame.pixels.empty())
-    return true;
-  std::size_t bright{};
-  std::size_t sampled{};
-  const auto sample = [&](const std::size_t index) {
-    if (index >= frame.pixels.size())
-      return;
-    const auto pixel = frame.pixels[index];
-    if (pixel.red > 3 || pixel.green > 3 || pixel.blue > 3)
-      ++bright;
-    ++sampled;
-  };
+namespace {
 
-  const auto step = std::max<std::size_t>(1, frame.pixels.size() / 4'096U);
-  for (std::size_t index = 0; index < frame.pixels.size(); index += step) {
-    sample(index);
-  }
+// Ordered backend ladder: WGC first, Desktop Duplication only as a declared
+// fallback. switch_to indexes this list so poll() never special-cases identity.
+constexpr std::array<core::CaptureBackendKind, 2> backend_order{{
+    core::CaptureBackendKind::windows_graphics_capture,
+    core::CaptureBackendKind::desktop_duplication,
+}};
 
-  const auto expected_pixels =
-      static_cast<std::uint64_t>(frame.width) * frame.height;
-  if (frame.width != 0 && frame.height != 0 &&
-      expected_pixels <= frame.pixels.size()) {
-    const std::size_t width = frame.width;
-    const std::size_t height = frame.height;
-    const std::size_t perimeter = height == 1 ? width
-                                  : width == 1
-                                      ? height
-                                      : 2U * width + 2U * (height - 2U);
-    const auto border_step = std::max<std::size_t>(1, perimeter / 1'024U);
-    for (std::size_t offset = 0; offset < perimeter; offset += border_step) {
-      std::size_t x{};
-      std::size_t y{};
-      if (height == 1) {
-        x = offset;
-      } else if (width == 1) {
-        y = offset;
-      } else if (offset < width) {
-        x = offset;
-      } else if (offset < width + height - 2U) {
-        x = width - 1U;
-        y = offset - width + 1U;
-      } else if (offset < 2U * width + height - 2U) {
-        x = 2U * width + height - 3U - offset;
-        y = height - 1U;
-      } else {
-        y = perimeter - offset;
-      }
-      sample(y * width + x);
-    }
+std::optional<std::size_t>
+backend_index(const core::CaptureBackendKind kind) noexcept {
+  for (std::size_t index = 0; index < backend_order.size(); ++index) {
+    if (backend_order[index] == kind)
+      return index;
   }
-  return bright * 1'000U < sampled * 5U;
+  return std::nullopt;
 }
+
+} // namespace
 
 class WindowCaptureSession::Impl {
 public:
@@ -81,28 +47,27 @@ public:
 
   bool start() {
     stop();
-    backend_ = make_wgc_backend(window_);
-    if (backend_->start()) {
-      backend_->set_quality(options_.quality);
-      apply_exclusions();
+    if (start_backend(make_backend(backend_order[0]))) {
+      active_index_ = 0;
       return true;
     }
     const auto wgc_error = backend_->last_error();
     backend_.reset();
-    if (!options_.allow_desktop_duplication) {
+    if (!options_.allow_desktop_duplication ||
+        backend_order.size() < 2) {
       error_ = wgc_error;
       return false;
     }
-    backend_ = make_desktop_duplication_backend(window_);
-    if (!backend_->start()) {
+    if (!start_backend(make_backend(backend_order[1]))) {
       error_ = "WGC: " + wgc_error +
-               "; Desktop Duplication: " + backend_->last_error();
+               "; Desktop Duplication: " +
+               (backend_ ? backend_->last_error()
+                         : std::string("backend unavailable"));
       backend_.reset();
       return false;
     }
-    backend_->set_quality(options_.quality);
+    active_index_ = 1;
     fallback_reason_ = wgc_error;
-    apply_exclusions();
     return true;
   }
 
@@ -110,8 +75,10 @@ public:
     if (backend_)
       backend_->stop();
     backend_.reset();
+    active_index_ = 0;
     error_.clear();
     fallback_reason_.clear();
+    health_.reset();
   }
 
   CapturePollResult poll(const core::TimePoint now, const bool foreground) {
@@ -121,35 +88,17 @@ public:
               .diagnostic = error_.empty() ? "capture is not started" : error_,
               .frame = {}};
     auto result = backend_->poll(now, foreground);
-    if (result.availability == core::CaptureAvailability::unavailable &&
-        result.backend == core::CaptureBackendKind::windows_graphics_capture &&
-        options_.allow_desktop_duplication && IsWindow(window_)) {
-      fallback_reason_ = result.diagnostic;
-      backend_->stop();
-      backend_ = make_desktop_duplication_backend(window_);
-      if (backend_->start()) {
-        backend_->set_quality(options_.quality);
-        apply_exclusions();
-        return {.availability = foreground
-                                    ? core::CaptureAvailability::starting
-                                    : core::CaptureAvailability::inactive,
-                .backend = core::CaptureBackendKind::desktop_duplication,
-                .diagnostic = "WGC became unavailable (" + fallback_reason_ +
-                              "); Desktop Duplication fallback is starting",
-                .frame = {}};
-      }
-      error_ = "WGC: " + fallback_reason_ +
-               "; Desktop Duplication: " + backend_->last_error();
-      backend_.reset();
-      return {.availability = core::CaptureAvailability::unavailable,
-              .backend = core::CaptureBackendKind::none,
-              .diagnostic = error_,
-              .frame = {}};
+    if (result.recovery == CaptureRecovery::restart_backend)
+      return switch_to(result.backend, std::move(result.diagnostic), foreground);
+    if (result.availability == core::CaptureAvailability::unavailable) {
+      if (const auto next = next_backend(result.backend);
+          next.has_value() && IsWindow(window_))
+        return switch_to(*next, std::move(result.diagnostic), foreground);
     }
     if (result.backend == core::CaptureBackendKind::desktop_duplication &&
         !fallback_reason_.empty())
       result.diagnostic += "; WGC fallback reason: " + fallback_reason_;
-    return result;
+    return health_.observe(std::move(result));
   }
 
   void set_exclusions(const std::span<const RECT> rectangles) {
@@ -159,6 +108,7 @@ public:
 
   void set_quality(const core::CaptureQuality quality) {
     options_.quality = quality;
+    health_.reset();
     if (backend_)
       backend_->set_quality(quality);
   }
@@ -171,6 +121,78 @@ public:
   }
 
 private:
+  std::unique_ptr<CaptureBackend> make_backend(
+      const core::CaptureBackendKind kind) {
+    switch (kind) {
+    case core::CaptureBackendKind::windows_graphics_capture:
+      return make_wgc_backend(window_);
+    case core::CaptureBackendKind::desktop_duplication:
+      return make_desktop_duplication_backend(window_);
+    case core::CaptureBackendKind::none:
+      break;
+    }
+    return nullptr;
+  }
+
+  std::optional<core::CaptureBackendKind>
+  next_backend(const core::CaptureBackendKind current) const noexcept {
+    const auto index = backend_index(current);
+    if (!index.has_value() || *index + 1 >= backend_order.size() ||
+        !options_.allow_desktop_duplication)
+      return std::nullopt;
+    return backend_order[*index + 1];
+  }
+
+  bool start_backend(std::unique_ptr<CaptureBackend> backend) {
+    backend_ = std::move(backend);
+    if (!backend_ || !backend_->start()) return false;
+    backend_->set_quality(options_.quality);
+    apply_exclusions();
+    health_.reset();
+    error_.clear();
+    return true;
+  }
+
+  // Single transition path for both WGC→DD fallback and same-backend restart.
+  CapturePollResult switch_to(const core::CaptureBackendKind kind,
+                              std::string reason, const bool foreground) {
+    const auto previous =
+        backend_ ? backend_->kind() : core::CaptureBackendKind::none;
+    const bool is_fallback =
+        previous == core::CaptureBackendKind::windows_graphics_capture &&
+        previous != kind;
+    if (is_fallback)
+      fallback_reason_ = reason;
+
+    backend_->stop();
+    const auto index = backend_index(kind);
+    if (index.has_value() && start_backend(make_backend(kind))) {
+      active_index_ = *index;
+      return health_.observe(
+          {.availability = foreground ? core::CaptureAvailability::starting
+                                      : core::CaptureAvailability::inactive,
+           .backend = kind,
+           .diagnostic =
+               is_fallback
+                   ? "WGC became unavailable (" + fallback_reason_ +
+                         "); Desktop Duplication fallback is starting"
+                   : reason + "; capture session restarted",
+           .frame = {}});
+    }
+    error_ = is_fallback ? ("WGC: " + fallback_reason_ +
+                            "; Desktop Duplication: " + backend_->last_error())
+                         : (reason + "; restart failed: " +
+                            (backend_ ? backend_->last_error()
+                                      : std::string("backend unavailable")));
+    backend_.reset();
+    active_index_ = 0;
+    return health_.observe(
+        {.availability = core::CaptureAvailability::unavailable,
+         .backend = core::CaptureBackendKind::none,
+         .diagnostic = error_,
+         .frame = {}});
+  }
+
   void apply_exclusions() {
     if (backend_)
       backend_->set_excluded_screen_rects(excluded_);
@@ -179,9 +201,11 @@ private:
   HWND window_{};
   CaptureOptions options_;
   std::unique_ptr<CaptureBackend> backend_;
+  std::size_t active_index_{};
   std::vector<RECT> excluded_;
   std::string error_;
   std::string fallback_reason_;
+  CaptureHealthTracker health_;
 };
 
 WindowCaptureSession::WindowCaptureSession(const HWND window,
@@ -213,79 +237,12 @@ std::string WindowCaptureSession::gpu_description() const {
   return impl_->gpu_description();
 }
 
-bool region_is_available(
-    const core::NormalizedRegion &rule_region,
-    const core::NormalizedRegion &available_region) noexcept {
-  constexpr double epsilon = 1e-9;
-  return rule_region.x >= available_region.x - epsilon &&
-         rule_region.y >= available_region.y - epsilon &&
-         rule_region.x + rule_region.width <=
-             available_region.x + available_region.width + epsilon &&
-         rule_region.y + rule_region.height <=
-             available_region.y + available_region.height + epsilon;
-}
-
-bool region_is_available(const core::NormalizedRegion &rule_region,
-                         const CaptureFrame &frame) noexcept {
-  if (!region_is_available(rule_region, frame.available_region))
-    return false;
-  constexpr double epsilon = 1e-9;
-  return std::ranges::none_of(
-      frame.unavailable_regions, [&](const core::NormalizedRegion &excluded) {
-        return rule_region.x < excluded.x + excluded.width - epsilon &&
-               rule_region.x + rule_region.width > excluded.x + epsilon &&
-               rule_region.y < excluded.y + excluded.height - epsilon &&
-               rule_region.y + rule_region.height > excluded.y + epsilon;
-      });
-}
-
-PixelBounds transform_output_crop(const PixelBounds logical_crop,
-                                  const std::uint32_t logical_output_width,
-                                  const std::uint32_t logical_output_height,
-                                  const OutputRotation rotation) noexcept {
-  switch (rotation) {
-  case OutputRotation::rotate90:
-    return {logical_crop.top, logical_output_width - logical_crop.right,
-            logical_crop.bottom, logical_output_width - logical_crop.left};
-  case OutputRotation::rotate180:
-    return {logical_output_width - logical_crop.right,
-            logical_output_height - logical_crop.bottom,
-            logical_output_width - logical_crop.left,
-            logical_output_height - logical_crop.top};
-  case OutputRotation::rotate270:
-    return {logical_output_height - logical_crop.bottom, logical_crop.left,
-            logical_output_height - logical_crop.top, logical_crop.right};
-  case OutputRotation::identity:
-  default:
-    return logical_crop;
-  }
-}
-
-std::pair<std::uint32_t, std::uint32_t>
-capture_sample_dimensions(const std::uint32_t width, const std::uint32_t height,
-                          const core::CaptureQuality quality) noexcept {
-  if (width == 0 || height == 0)
-    return {0, 0};
-  std::uint32_t limit{};
-  switch (quality) {
-  case core::CaptureQuality::low:
-    limit = 64U;
-    break;
-  case core::CaptureQuality::balanced:
-    limit = 256U;
-    break;
-  case core::CaptureQuality::exact:
-    limit = 0U;
-    break;
-  }
-  if (limit == 0 || (width <= limit && height <= limit))
-    return {width, height};
-  const double scale = std::min(static_cast<double>(limit) / width,
-                                static_cast<double>(limit) / height);
-  return {std::max<std::uint32_t>(
-              1, static_cast<std::uint32_t>(std::lround(width * scale))),
-          std::max<std::uint32_t>(
-              1, static_cast<std::uint32_t>(std::lround(height * scale)))};
+CapturePoll poll_window_capture(const core::WindowId window,
+                                WindowCaptureSession &session,
+                                const core::TimePoint now,
+                                const bool target_is_foreground) {
+  return normalize_capture_poll(
+      window, session.poll(now, target_is_foreground));
 }
 
 } // namespace layerc::capture

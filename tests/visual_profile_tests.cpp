@@ -204,6 +204,15 @@ void test_calibration_protocol() {
              decode_calibration_response(
                  R"({"protocolVersion":1,"applied":true,"visualJson":"","error":""})")),
          "an applied calibration response must contain a rule assignment");
+  for (const auto packet : {
+           R"({"protocolVersion":1,"targetWindow":"","cooldownId":"dash","profileJson":""})",
+           R"({"protocolVersion":1,"targetWindow":"1","cooldownId":"","profileJson":""})"}) {
+    const auto invalid = decode_calibration_request(packet);
+    const auto *error = std::get_if<CalibrationProtocolError>(&invalid);
+    expect(error != nullptr && !error->message.empty() &&
+               error->message.starts_with("$."),
+           "empty required calibration fields must retain a useful field diagnostic");
+  }
 }
 
 } // namespace layerc::test

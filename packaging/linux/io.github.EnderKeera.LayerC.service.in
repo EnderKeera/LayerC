@@ -1,0 +1,20 @@
+# Optional LayerC user-session unit (V2.6.0). Installed only with
+# -DLAYERC_INSTALL_SYSTEMD_USER_UNIT=ON and never auto-enabled: start it with
+#   systemctl --user start io.github.EnderKeera.LayerC.service
+# Direct foreground launch of layerd is the baseline and behaves equivalently.
+# Type=simple: layerd stays in the foreground, handles SIGTERM gracefully,
+# and needs no PID file, socket activation or libsystemd.
+
+[Unit]
+Description=LayerC cooldown overlay daemon
+Documentation=https://github.com/EnderKeera/LayerC
+
+[Service]
+Type=simple
+ExecStart=@LAYERC_SYSTEMD_BINDIR@/layerd
+UMask=0077
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

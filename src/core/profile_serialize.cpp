@@ -1,380 +1,231 @@
 #include "layerc/core/profile.hpp"
+
 #include "layerc/core/json.hpp"
+#include "layerc/core/profile_wire.hpp"
+#include "profile_keys.hpp"
 
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 namespace layerc::core {
 namespace {
+namespace keys = profile_keys;
+using json::Value;
 
-void append_indent(std::string &output, const int count) {
-  output.append(static_cast<std::size_t>(count), ' ');
+std::pair<std::string, Value> member(const std::string_view key, Value value) {
+  return {std::string(key), std::move(value)};
+}
+Value integer(const std::int64_t value) {
+  return Value(value);
+}
+Value text(const std::string_view value) {
+  return Value(std::string(value));
+}
+std::string color_text(const std::uint32_t color) {
+  std::string quoted;
+  json::append_color_quoted(quoted, color);
+  return quoted.substr(1, quoted.size() - 2);
 }
 
-void append_key(std::string &output, const int indent,
-                const std::string_view key) {
-  append_indent(output, indent);
-  json::append_quoted(output, key);
-  output += ": ";
+template <typename Enum, std::size_t Size>
+std::string_view wire_name(
+    const std::array<EnumWireEntry<Enum>, Size> &entries, const Enum value) {
+  return profile_wire::name(entries, value).value_or(std::string_view{});
 }
 
-void append_color(std::string &output, const std::uint32_t color) {
-  constexpr std::string_view hex = "0123456789ABCDEF";
-  output.push_back('"');
-  output.push_back('#');
-  for (int shift = 20; shift >= 0; shift -= 4) {
-    output.push_back(hex[(color >> static_cast<unsigned>(shift)) & 0xFU]);
+Value game_section(const GameMatch &game) {
+  return Value(Value::Object{
+      member(keys::global, Value(game.global)),
+      member(keys::executable_path, text(game.executable_path)),
+      member(keys::executable_name, text(game.executable_name)),
+      member(keys::window_class, text(game.window_class)),
+      member(keys::window_title, text(game.window_title)),
+  });
+}
+Value modules_section(const std::vector<ProfileModule> &modules) {
+  Value::Array result;
+  result.reserve(modules.size());
+  for (const auto &module : modules) {
+    const auto *wire = profile_wire::module(module.kind);
+    result.emplace_back(Value::Object{
+        member(keys::kind, text(wire == nullptr ? std::string_view{}
+                                                : wire->name)),
+        member(keys::schema_version, integer(module.schema_version)),
+    });
   }
-  output.push_back('"');
+  return Value(std::move(result));
 }
-
-std::string_view retrigger_name(const RetriggerPolicy policy) {
-  return policy == RetriggerPolicy::restart ? "restart" : "ignore";
+Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns) {
+  Value::Array result;
+  result.reserve(cooldowns.size());
+  for (const auto &cooldown : cooldowns)
+    result.emplace_back(Value::Object{
+        member(keys::id, text(cooldown.id)),
+        member(keys::name, text(cooldown.name)),
+        member(keys::duration_ms, integer(cooldown.duration.count())),
+        member(keys::max_charges, integer(cooldown.max_charges)),
+        member(keys::retrigger,
+               text(wire_name(profile_wire::retrigger, cooldown.retrigger))),
+        member(keys::recovery,
+               text(wire_name(profile_wire::recovery, cooldown.recovery))),
+    });
+  return Value(std::move(result));
 }
-std::string_view recovery_name(const RecoveryMode mode) {
-  switch (mode) {
-  case RecoveryMode::single:
-    return "single";
-  case RecoveryMode::sequential:
-    return "sequential";
-  case RecoveryMode::parallel:
-    return "parallel";
+Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
+  Value::Array result;
+  result.reserve(groups.size());
+  for (const auto &group : groups) {
+    Value::Array ids;
+    ids.reserve(group.cooldown_ids.size());
+    for (const auto &id : group.cooldown_ids) ids.push_back(text(id));
+    Value::Object object{
+        member(keys::id, text(group.id)),
+        member(keys::name, text(group.name)),
+        member(keys::mode, text(wire_name(profile_wire::group_mode, group.mode))),
+        member(keys::cooldowns, Value(std::move(ids))),
+    };
+    if (group.mode == CooldownGroupMode::shared_pool) {
+      object.insert(member(
+          keys::duration_ms,
+          integer(group.duration.count())));
+      object.insert(member(keys::max_charges, integer(group.max_charges)));
+      object.insert(member(
+          keys::recovery,
+          text(wire_name(profile_wire::recovery, group.recovery))));
+      object.insert(member(keys::retrigger,
+                           text(wire_name(profile_wire::retrigger,
+                                          group.retrigger))));
+    }
+    result.emplace_back(std::move(object));
   }
-  return "single";
+  return Value(std::move(result));
 }
-
-std::string_view group_mode_name(const CooldownGroupMode mode) {
-  return mode == CooldownGroupMode::shared_pool ? "sharedPool"
-                                                : "triggerPropagation";
-}
-
-std::string_view layout_name(const PanelLayout layout) {
-  switch (layout) {
-  case PanelLayout::row:
-    return "row";
-  case PanelLayout::column:
-    return "column";
-  case PanelLayout::grid:
-    return "grid";
+Value hid_bindings_section(const std::vector<HidControlBinding> &bindings) {
+  Value::Array result;
+  result.reserve(bindings.size());
+  for (const auto &binding : bindings) {
+    Value::Object device{
+        member(keys::vid, integer(binding.device.vendor_id)),
+        member(keys::pid, integer(binding.device.product_id)),
+        member(keys::version, integer(binding.device.version)),
+        member(keys::usage_page, integer(binding.device.usage_page)),
+        member(keys::usage, integer(binding.device.usage)),
+        member(keys::descriptor_hash, text(binding.device.descriptor_hash)),
+        member(keys::stable_slot, integer(binding.device.stable_slot)),
+    };
+    if (!binding.device.serial.empty())
+      device.insert(member(keys::serial, text(binding.device.serial)));
+    Value::Object control{
+        member(keys::report_id, integer(binding.report_id)),
+        member(keys::usage_page, integer(binding.usage_page)),
+        member(keys::usage, integer(binding.usage)),
+        member(keys::link_collection, integer(binding.link_collection)),
+        member(keys::activation,
+               text(wire_name(profile_wire::hid_activation,
+                              binding.activation))),
+        member(keys::value,
+               Value(static_cast<std::int64_t>(binding.discrete_value))),
+        member(keys::threshold, Value(binding.threshold)),
+        member(keys::hysteresis, Value(binding.hysteresis)),
+    };
+    result.emplace_back(Value::Object{
+        member(keys::id, text(binding.id)),
+        member(keys::device, Value(std::move(device))),
+        member(keys::control, Value(std::move(control))),
+        member(keys::allow_system_class, Value(binding.allow_system_class)),
+    });
   }
-  return "row";
+  return Value(std::move(result));
 }
-
-std::string_view style_name(const PanelStyle style) {
-  return style == PanelStyle::bar ? "bar" : "card";
-}
-
-std::string_view hid_activation_name(const HidActivationMode activation) {
-  switch (activation) {
-  case HidActivationMode::button:
-    return "button";
-  case HidActivationMode::equals:
-    return "equals";
-  case HidActivationMode::axis_positive:
-    return "axisPositive";
-  case HidActivationMode::axis_negative:
-    return "axisNegative";
-  case HidActivationMode::relative_positive:
-    return "relativePositive";
-  case HidActivationMode::relative_negative:
-    return "relativeNegative";
+Value panels_section(const std::vector<Panel> &panels) {
+  Value::Array result;
+  result.reserve(panels.size());
+  for (const auto &panel : panels) {
+    Value::Array cooldowns;
+    cooldowns.reserve(panel.cooldown_ids.size());
+    for (const auto &id : panel.cooldown_ids) cooldowns.push_back(text(id));
+    Value::Object bar{
+        member(keys::width, integer(panel.bar.width)),
+        member(keys::height, integer(panel.bar.height)),
+        member(keys::fill_color, text(color_text(panel.bar.fill_color))),
+        member(keys::background_color,
+               text(color_text(panel.bar.background_color))),
+        member(keys::border_color, text(color_text(panel.bar.border_color))),
+        member(keys::text_color, text(color_text(panel.bar.text_color))),
+        member(keys::show_text, Value(panel.bar.show_text)),
+        member(keys::hide_when_ready, Value(panel.bar.hide_when_ready)),
+    };
+    result.emplace_back(Value::Object{
+        member(keys::id, text(panel.id)),
+        member(keys::name, text(panel.name)),
+        member(keys::layout,
+               text(wire_name(profile_wire::panel_layout, panel.layout))),
+        member(keys::style,
+               text(wire_name(profile_wire::panel_style, panel.style))),
+        member(keys::bar, Value(std::move(bar))),
+        member(keys::anchor_x, Value(panel.anchor_x)),
+        member(keys::anchor_y, Value(panel.anchor_y)),
+        member(keys::cooldowns, Value(std::move(cooldowns))),
+    });
   }
-  return "button";
+  return Value(std::move(result));
 }
-
-void append_bool(std::string &output, const bool value) {
-  output += value ? "true" : "false";
+Value bindings_section(const GameProfile &profile) {
+  Value::Array result;
+  result.reserve(profile.bindings.size());
+  for (const auto &binding : profile.bindings) {
+    Value::Array chord;
+    chord.reserve(binding.chord.tokens.size());
+    for (const auto &token : binding.chord.tokens) {
+      Value::Object object{
+          member(keys::device, text(input_device_label(token.device))),
+      };
+      if (token.device == InputDevice::generic_hid) {
+        const auto id = token.code > 0 && token.code <= profile.hid_bindings.size()
+                            ? profile.hid_bindings[token.code - 1U].id
+                            : std::string{};
+        object.insert(member(keys::binding_id, text(id)));
+      } else {
+        object.insert(member(keys::code, integer(token.code)));
+        if (token.device == InputDevice::controller)
+          object.insert(
+              member(keys::controller_index, integer(token.controller_index)));
+      }
+      chord.emplace_back(std::move(object));
+    }
+    result.emplace_back(Value::Object{
+        member(keys::cooldown_id, text(binding.cooldown_id)),
+        member(keys::chord, Value(std::move(chord))),
+    });
+  }
+  return Value(std::move(result));
 }
 
 } // namespace
 
 std::string serialize_profile_json(const GameProfile &profile) {
+  Value root(Value::Object{
+      member(keys::schema_version, integer(profile_schema_version)),
+      member(keys::id, text(profile.id)),
+      member(keys::name, text(profile.name)),
+      member(keys::enabled, Value(profile.enabled)),
+      member(keys::game, game_section(profile.game)),
+      member(keys::visual_runtime,
+             text(wire_name(profile_wire::visual_runtime,
+                            profile.visual_runtime))),
+      member(keys::modules, modules_section(profile.modules)),
+      member(keys::cooldowns, cooldowns_section(profile.cooldowns)),
+      member(keys::cooldown_groups,
+             cooldown_groups_section(profile.cooldown_groups)),
+      member(keys::hid_bindings, hid_bindings_section(profile.hid_bindings)),
+      member(keys::panels, panels_section(profile.panels)),
+      member(keys::bindings, bindings_section(profile)),
+  });
   std::string output;
-  output.reserve(2048);
-  output += "{\n";
-  append_key(output, 2, "schemaVersion");
-  json::append_unsigned(output, 4);
-  output += ",\n";
-  append_key(output, 2, "id");
-  json::append_quoted(output, profile.id);
-  output += ",\n";
-  append_key(output, 2, "name");
-  json::append_quoted(output, profile.name);
-  output += ",\n";  append_key(output, 2, "enabled");
-  append_bool(output, profile.enabled);
-  output += ",\n";
-
-  append_key(output, 2, "game");
-  output += "{\n";
-  append_key(output, 4, "global");
-  append_bool(output, profile.game.global);
-  output += ",\n";
-  append_key(output, 4, "executablePath");
-  json::append_quoted(output, profile.game.executable_path);
-  output += ",\n";
-  append_key(output, 4, "executableName");
-  json::append_quoted(output, profile.game.executable_name);
-  output += ",\n";
-  append_key(output, 4, "windowClass");
-  json::append_quoted(output, profile.game.window_class);
-  output += ",\n";
-  append_key(output, 4, "windowTitle");
-  json::append_quoted(output, profile.game.window_title);
-  output += "\n  },\n";
-
-  append_key(output, 2, "visualRuntime");
-  json::append_quoted(output, profile.visual_runtime == VisualRuntime::isolated
-                                 ? "isolated"
-                                 : "inline");
-  output += ",\n";
-  append_key(output, 2, "modules");
-  output += "[";
-  for (std::size_t index = 0; index < profile.modules.size(); ++index) {
-    if (index != 0) output += ", ";
-    output += "{\"kind\":\"";
-    if (profile.modules[index].kind == ProfileModuleKind::automation) {
-      output += "automation";
-    } else if (profile.modules[index].kind == ProfileModuleKind::companion) {
-      output += "companion";
-    } else {
-      output += "visual";
-    }
-    output += "\",\"schemaVersion\":";
-    json::append_unsigned(output, profile.modules[index].schema_version);
-    output += "}";
-  }
-  output += "],\n";
-
-  append_key(output, 2, "cooldowns");
-  output += "[\n";
-  for (std::size_t index = 0; index < profile.cooldowns.size(); ++index) {
-    const auto &cooldown = profile.cooldowns[index];
-    append_indent(output, 4);
-    output += "{\n";
-    append_key(output, 6, "id");
-    json::append_quoted(output, cooldown.id);
-    output += ",\n";
-    append_key(output, 6, "name");
-    json::append_quoted(output, cooldown.name);
-    output += ",\n";
-    append_key(output, 6, "durationMs");
-    json::append_unsigned(
-        output, static_cast<std::uint64_t>(cooldown.duration.count()));
-    output += ",\n";
-    append_key(output, 6, "maxCharges");
-    json::append_unsigned(output, cooldown.max_charges);
-    output += ",\n";
-    append_key(output, 6, "retrigger");
-    json::append_quoted(output, retrigger_name(cooldown.retrigger));
-    output += ",\n";
-    append_key(output, 6, "recovery");
-    json::append_quoted(output, recovery_name(cooldown.recovery));
-    output += "\n    }";
-    output += index + 1 == profile.cooldowns.size() ? "\n" : ",\n";
-  }
-  output += "  ],\n";
-
-  append_key(output, 2, "cooldownGroups");
-  output += "[\n";
-  for (std::size_t index{}; index < profile.cooldown_groups.size(); ++index) {
-    const auto &group = profile.cooldown_groups[index];
-    output += "    {\n";
-    append_key(output, 6, "id");
-    json::append_quoted(output, group.id);
-    output += ",\n";
-    append_key(output, 6, "name");
-    json::append_quoted(output, group.name);
-    output += ",\n";
-    append_key(output, 6, "mode");
-    json::append_quoted(output, group_mode_name(group.mode));
-    output += ",\n";
-    append_key(output, 6, "cooldowns");
-    output += "[";
-    for (std::size_t member{}; member < group.cooldown_ids.size(); ++member) {
-      if (member != 0) output += ", ";
-      json::append_quoted(output, group.cooldown_ids[member]);
-    }
-    output += "]";
-    if (group.mode == CooldownGroupMode::shared_pool) {
-      output += ",\n";
-      append_key(output, 6, "durationMs");
-      json::append_unsigned(
-          output, static_cast<std::uint64_t>(group.duration.count()));
-      output += ",\n";
-      append_key(output, 6, "maxCharges");
-      json::append_unsigned(output, group.max_charges);
-      output += ",\n";
-      append_key(output, 6, "recovery");
-      json::append_quoted(output, recovery_name(group.recovery));
-      output += ",\n";
-      append_key(output, 6, "retrigger");
-      json::append_quoted(output, retrigger_name(group.retrigger));
-    }
-    output += "\n    }";
-    output += index + 1U == profile.cooldown_groups.size() ? "\n" : ",\n";
-  }
-  output += "  ],\n";
-  append_key(output, 2, "hidBindings");
-  output += "[\n";
-  for (std::size_t index = 0; index < profile.hid_bindings.size(); ++index) {
-    const auto &binding = profile.hid_bindings[index];
-    output += "    {\n";
-    append_key(output, 6, "id");
-    json::append_quoted(output, binding.id);
-    output += ",\n";
-    append_key(output, 6, "device");
-    output += "{\"vid\":";
-    json::append_unsigned(output, binding.device.vendor_id);
-    output += ",\"pid\":";
-    json::append_unsigned(output, binding.device.product_id);
-    output += ",\"version\":";
-    json::append_unsigned(output, binding.device.version);
-    output += ",\"usagePage\":";
-    json::append_unsigned(output, binding.device.usage_page);
-    output += ",\"usage\":";
-    json::append_unsigned(output, binding.device.usage);
-    output += ",\"descriptorHash\":";
-    json::append_quoted(output, binding.device.descriptor_hash);
-    if (!binding.device.serial.empty()) {
-      output += ",\"serial\":";
-      json::append_quoted(output, binding.device.serial);
-    }
-    output += ",\"stableSlot\":";
-    json::append_unsigned(output, binding.device.stable_slot);
-    output += "},\n";
-    append_key(output, 6, "control");
-    output += "{\"reportId\":";
-    json::append_unsigned(output, binding.report_id);
-    output += ",\"usagePage\":";
-    json::append_unsigned(output, binding.usage_page);
-    output += ",\"usage\":";
-    json::append_unsigned(output, binding.usage);
-    output += ",\"linkCollection\":";
-    json::append_unsigned(output, binding.link_collection);
-    output += ",\"activation\":";
-    json::append_quoted(output, hid_activation_name(binding.activation));
-    output += ",\"value\":";
-    json::append_number(output, binding.discrete_value);
-    output += ",\"threshold\":";
-    json::append_number(output, binding.threshold);
-    output += ",\"hysteresis\":";
-    json::append_number(output, binding.hysteresis);
-    output += "},\n";
-    append_key(output, 6, "allowSystemClass");
-    append_bool(output, binding.allow_system_class);
-    output += "\n    }";
-    output += index + 1U == profile.hid_bindings.size() ? "\n" : ",\n";
-  }
-  output += "  ],\n";
-
-  append_key(output, 2, "panels");
-  output += "[\n";
-  for (std::size_t index = 0; index < profile.panels.size(); ++index) {
-    const auto &panel = profile.panels[index];
-    append_indent(output, 4);
-    output += "{\n";
-    append_key(output, 6, "id");
-    json::append_quoted(output, panel.id);
-    output += ",\n";
-    append_key(output, 6, "name");
-    json::append_quoted(output, panel.name);
-    output += ",\n";
-    append_key(output, 6, "layout");
-    json::append_quoted(output, layout_name(panel.layout));
-    output += ",\n";
-    append_key(output, 6, "style");
-    json::append_quoted(output, style_name(panel.style));
-    output += ",\n";
-    append_key(output, 6, "bar");
-    output += "{\n";
-    append_key(output, 8, "width");
-    json::append_unsigned(output, panel.bar.width);
-    output += ",\n";
-    append_key(output, 8, "height");
-    json::append_unsigned(output, panel.bar.height);
-    output += ",\n";
-    append_key(output, 8, "fillColor");
-    append_color(output, panel.bar.fill_color);
-    output += ",\n";
-    append_key(output, 8, "backgroundColor");
-    append_color(output, panel.bar.background_color);
-    output += ",\n";
-    append_key(output, 8, "borderColor");
-    append_color(output, panel.bar.border_color);
-    output += ",\n";
-    append_key(output, 8, "textColor");
-    append_color(output, panel.bar.text_color);
-    output += ",\n";
-    append_key(output, 8, "showText");
-    append_bool(output, panel.bar.show_text);
-    output += ",\n";
-    append_key(output, 8, "hideWhenReady");
-    append_bool(output, panel.bar.hide_when_ready);
-    output += "\n      },\n";
-    append_key(output, 6, "anchorX");
-    json::append_number(output, panel.anchor_x);
-    output += ",\n";
-    append_key(output, 6, "anchorY");
-    json::append_number(output, panel.anchor_y);
-    output += ",\n";
-    append_key(output, 6, "cooldowns");
-    output += "[";
-    for (std::size_t cooldown_index = 0;
-         cooldown_index < panel.cooldown_ids.size(); ++cooldown_index) {
-      if (cooldown_index != 0) {
-        output += ", ";
-      }
-      json::append_quoted(output, panel.cooldown_ids[cooldown_index]);
-    }
-    output += "]\n    }";
-    output += index + 1 == profile.panels.size() ? "\n" : ",\n";
-  }
-  output += "  ],\n";
-
-  append_key(output, 2, "bindings");
-  output += "[\n";
-  for (std::size_t index = 0; index < profile.bindings.size(); ++index) {
-    const auto &binding = profile.bindings[index];
-    append_indent(output, 4);
-    output += "{\n";
-    append_key(output, 6, "cooldownId");
-    json::append_quoted(output, binding.cooldown_id);
-    output += ",\n";
-    append_key(output, 6, "chord");
-    output += "[\n";
-    for (std::size_t token_index = 0; token_index < binding.chord.tokens.size();
-         ++token_index) {
-      const auto &token = binding.chord.tokens[token_index];
-      append_indent(output, 8);
-      output += "{\n";
-      append_key(output, 10, "device");
-      json::append_quoted(output, input_device_label(token.device));
-      if (token.device == InputDevice::generic_hid) {
-        output += ",\n";
-        append_key(output, 10, "bindingId");
-        if (token.code > 0 &&
-            token.code <= profile.hid_bindings.size())
-          json::append_quoted(output,
-                              profile.hid_bindings[token.code - 1U].id);
-        else
-          json::append_quoted(output, "");
-      } else {
-        output += ",\n";
-        append_key(output, 10, "code");
-        json::append_unsigned(output, token.code);
-        if (token.device == InputDevice::controller) {
-          output += ",\n";
-          append_key(output, 10, "controllerIndex");
-          json::append_unsigned(output, token.controller_index);
-        }
-      }
-      output += "\n        }";
-      output += token_index + 1 == binding.chord.tokens.size() ? "\n" : ",\n";
-    }
-    output += "      ]\n    }";
-    output += index + 1 == profile.bindings.size() ? "\n" : ",\n";
-  }
-  output += "  ]\n}\n";
+  output.reserve(2'048);
+  json::append_value(output, root, 2);
+  output += "\r\n";
   return output;
 }
 

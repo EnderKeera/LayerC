@@ -5,11 +5,19 @@
 #include <functional>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace layerc::core {
+
+[[nodiscard]] std::string cooldown_status_text(
+    const CooldownDefinition &definition, const CooldownState &state,
+    TimePoint now);
+[[nodiscard]] double cooldown_progress(const CooldownDefinition &definition,
+                                       const CooldownState &state,
+                                       TimePoint now) noexcept;
 
 // Transparent hashing lets the engine look entries up by string_view without
 // constructing temporary std::string keys on the per-trigger hot path.

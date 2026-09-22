@@ -16,27 +16,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
-
-if (-not ('LayerCBenchmarkNative' -as [type])) {
-    Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-public static class LayerCBenchmarkNative {
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window, uint flags);
-    [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr window, int command);
-    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr window);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string className, string windowName);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
-    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
-    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
-}
-'@
-}
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 
 function Ensure-BenchmarkForeground(
     [System.Diagnostics.Process]$Target,
@@ -45,7 +25,7 @@ function Ensure-BenchmarkForeground(
     $root = [LayerCBenchmarkNative]::GetAncestor(
         [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
     if ($root -eq $Target.MainWindowHandle) { return $true }
-    return Set-BenchmarkForeground $Target $Activator ([LayerCBenchmarkNative])
+    return Set-BenchmarkForeground $Target $Activator
 }
 
 function Assert-BenchmarkMeasurementActive(
@@ -56,7 +36,7 @@ function Assert-BenchmarkMeasurementActive(
     $root = [LayerCBenchmarkNative]::GetAncestor(
         [LayerCBenchmarkNative]::GetForegroundWindow(), 2) # GA_ROOT
     if ($root -ne $Target.MainWindowHandle) {
-        [void](Set-BenchmarkForeground $Target $Activator ([LayerCBenchmarkNative]))
+        [void](Set-BenchmarkForeground $Target $Activator)
         throw 'Benchmark sample interrupted: the fixture lost foreground.'
     }
     if ($null -eq $CaptureEvent -or -not $CaptureEvent.WaitOne(0)) {
@@ -75,11 +55,19 @@ function Wait-BenchmarkWarmup(
     }
 }
 
-$repository = Split-Path -Parent $PSScriptRoot
-if ([string]::IsNullOrWhiteSpace($BuildDirectory)) {
-    $BuildDirectory = Join-Path $repository 'build\vs2026\Release'
-}
-$BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
+$workloadTag = $Workload -replace '-', '_'
+if ($Isolated) { $workloadTag += '_isolated' }
+$context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
+    -OutputPath $OutputPath -OutputStem "$workloadTag-$Quality" `
+    -TemporaryStem 'LayerC-visual-benchmark' `
+    -DefaultBuildDirectory 'build\vs2026\Release'
+$repository = $context.Repository
+$BuildDirectory = $context.BuildDirectory
+$OutputPath = $context.OutputPath
+$temporary = $context.Temporary
+$profileDirectory = $context.ProfileDirectory
+$utf8 = $context.Utf8
+
 $required = @('layerd.exe', 'lctest.exe', 'layerc_capture_probe.exe')
 if ($Isolated) { $required += 'layerw.exe' }
 foreach ($name in $required) {
@@ -91,22 +79,8 @@ if (Get-Process -Name layerd -ErrorAction SilentlyContinue) {
     throw 'Close the existing LayerD instance before running an isolated benchmark.'
 }
 
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $outputDirectory = Join-Path $repository 'out\benchmarks'
-    [IO.Directory]::CreateDirectory($outputDirectory) | Out-Null
-    $workloadTag = $Workload -replace '-', '_'
-    if ($Isolated) { $workloadTag += '_isolated' }
-    $OutputPath = Join-Path $outputDirectory "$workloadTag-$Quality-$stamp.json"
-}
-$OutputPath = [IO.Path]::GetFullPath($OutputPath)
-[IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
-
-$temporary = Join-Path ([IO.Path]::GetTempPath()) "LayerC-visual-benchmark-$PID-$stamp"
-$profileDirectory = Join-Path $temporary 'profiles'
 $visualDirectory = Join-Path $profileDirectory '_visual'
 [IO.Directory]::CreateDirectory($visualDirectory) | Out-Null
-$utf8 = New-Object System.Text.UTF8Encoding($false)
 $profilePath = Join-Path $profileDirectory 'lctest.json'
 $visualPath = Join-Path $visualDirectory 'lctest.json'
 if ($Workload -eq 'v11-pixel') {
@@ -429,7 +403,7 @@ try {
     }
     if ($game.MainWindowHandle -eq 0) { throw 'lctest did not create its window.' }
     $activator = New-Object -ComObject WScript.Shell
-    [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
+    [void](Set-BenchmarkForeground $game $activator)
     Start-Sleep -Milliseconds 300
 
     $probeOutput = Join-Path $temporary 'probe.json'
@@ -441,7 +415,7 @@ try {
     # Windows PowerShell 5 can leave ExitCode unset for a redirected
     # Start-Process unless its native handle is materialized before waiting.
     $probeHandle = $probe.Handle
-    [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
+    [void](Set-BenchmarkForeground $game $activator)
     $probe.WaitForExit()
     $probe.Refresh()
     $probeExitCode = $probe.ExitCode
@@ -466,7 +440,7 @@ try {
         # client. Keep the fixture foreground while LayerD starts and performs
         # its first window scan; a one-shot AppActivate is racy with shell
         # focus changes during process startup.
-        [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
+        [void](Set-BenchmarkForeground $game $activator)
         if ($null -eq $captureEvent) {
             try {
                 $captureEvent = [Threading.EventWaitHandle]::OpenExisting('Local\LayerC.LayerD.VisualCaptureActive')
@@ -483,7 +457,7 @@ try {
     }
     if ($Workload -eq 'v21-template') {
         for ($attempt = 0; $attempt -lt 50 -and -not $templateMatchVerified; ++$attempt) {
-            [void](Set-BenchmarkForeground $game $activator ([LayerCBenchmarkNative]))
+            [void](Set-BenchmarkForeground $game $activator)
             $overlay = [LayerCBenchmarkNative]::FindWindow(
                 'LayerDOverlayWindow', 'LayerD Overlay')
             $templateMatchVerified =
@@ -603,36 +577,28 @@ try {
             adapterRamMiB = if ($null -ne $_.AdapterRAM) { [Math]::Round([uint64]$_.AdapterRAM / 1MB, 1) } else { $null }
         }
     })
-    $result = [ordered]@{
-        schemaVersion = 1
-        measuredAt = (Get-Date).ToUniversalTime().ToString('o')
+    $data = [ordered]@{
         workload = $Workload
         isolated = [bool]$Isolated
         quality = $Quality
         sampleRateHz = 15
         templateStates = if ($Workload -eq 'v21-template') { 4 } else { 0 }
         referencesPerTemplate = if ($Workload -eq 'v21-template') { 4 } else { 0 }
-        host = [ordered]@{
-            computerName = $env:COMPUTERNAME
-            os = [Environment]::OSVersion.VersionString
-            logicalProcessors = [Environment]::ProcessorCount
-            gpuAdapters = $adapters
-        }
         captureProbe = $captureProbe
         daemonCaptureVerified = $daemonCaptureVerified
         templateMatchVerified = $templateMatchVerified
         measurementAttempts = $measurementAttempts
         runtime = $measurement
         layerd = if ($Isolated) { $null } else { $measurement }
-        thresholds = $thresholds
-        passed = $gatePassed
         note = if ($Isolated) {
             'Combined LayerD plus its owned layerw. Run both low and balanced on integrated and discrete GPUs.'
         } else {
             'Run both low and balanced on at least one integrated-GPU and one discrete-GPU system. Exact is intentionally outside this gate.'
         }
     }
-    [IO.File]::WriteAllText($OutputPath, ($result | ConvertTo-Json -Depth 8), $utf8)
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+        -Thresholds $thresholds -Passed $gatePassed -Depth 8 `
+        -HostData ([ordered]@{ gpuAdapters = $adapters })
     $result | ConvertTo-Json -Depth 8
     if (-not $gatePassed) { exit 1 }
 } finally {

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <filesystem>
 #include <variant>
+#include <vector>
 
 #include <commdlg.h>
 
@@ -44,7 +45,8 @@ void CalibrationWindow::install_template_reference(
 }
 
 void CalibrationWindow::capture_template_reference() {
-  if (!frame_) {
+  const auto &frame = preview_.frame();
+  if (!frame) {
     MessageBoxW(dialog_, L"Wait for a captured frame first.", L"LayerC",
                 MB_OK | MB_ICONINFORMATION);
     return;
@@ -57,17 +59,17 @@ void CalibrationWindow::capture_template_reference() {
   }
   const auto &region = rule_.region;
   const auto left = static_cast<std::uint32_t>(std::clamp(
-      std::floor(region.x * frame_->width), 0.0,
-      static_cast<double>(frame_->width)));
+      std::floor(region.x * frame->width), 0.0,
+      static_cast<double>(frame->width)));
   const auto top = static_cast<std::uint32_t>(std::clamp(
-      std::floor(region.y * frame_->height), 0.0,
-      static_cast<double>(frame_->height)));
+      std::floor(region.y * frame->height), 0.0,
+      static_cast<double>(frame->height)));
   const auto right = static_cast<std::uint32_t>(std::clamp(
-      std::ceil((region.x + region.width) * frame_->width), 0.0,
-      static_cast<double>(frame_->width)));
+      std::ceil((region.x + region.width) * frame->width), 0.0,
+      static_cast<double>(frame->width)));
   const auto bottom = static_cast<std::uint32_t>(std::clamp(
-      std::ceil((region.y + region.height) * frame_->height), 0.0,
-      static_cast<double>(frame_->height)));
+      std::ceil((region.y + region.height) * frame->height), 0.0,
+      static_cast<double>(frame->height)));
   if (right <= left || bottom <= top ||
       static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U) {
     MessageBoxW(dialog_,
@@ -101,7 +103,7 @@ void CalibrationWindow::capture_template_reference() {
                               source_width /
                               (static_cast<std::uint64_t>(image.width) * 2U)));
       image.pixels[static_cast<std::size_t>(y) * image.width + x] =
-          frame_->pixels[static_cast<std::size_t>(source_y) * frame_->width +
+          frame->pixels[static_cast<std::size_t>(source_y) * frame->width +
                          source_x];
     }
   }
@@ -122,7 +124,7 @@ void CalibrationWindow::capture_template_reference() {
     template_images_.push_back(asset->image);
   }
   install_template_reference(rule_.region);
-  InvalidateRect(preview_, nullptr, FALSE);
+  preview_.invalidate();
 }
 
 void CalibrationWindow::import_template_reference() {
@@ -132,7 +134,7 @@ void CalibrationWindow::import_template_reference() {
                 L"Template reference limit", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  std::array<wchar_t, 32'768> path{};
+  std::vector<wchar_t> path(32'768);
   OPENFILENAMEW picker{};
   picker.lStructSize = sizeof(OPENFILENAMEW);
   picker.hwndOwner = dialog_;
@@ -164,9 +166,7 @@ void CalibrationWindow::import_template_reference() {
 }
 
 void CalibrationWindow::clear_template_references() {
-  mask_editing_ = false;
-  mask_changed_ = false;
-  mask_preview_pixels_.clear();
+  mask_editor_.clear();
   template_state_.references.clear();
   template_images_.clear();
   template_matcher_.clear();
@@ -175,7 +175,7 @@ void CalibrationWindow::clear_template_references() {
 }
 
 void CalibrationWindow::toggle_template_mask_editing() {
-  if (mask_editing_) {
+  if (mask_editor_.editing()) {
     (void)finish_template_mask_editing();
     return;
   }
@@ -185,23 +185,22 @@ void CalibrationWindow::toggle_template_mask_editing() {
                 L"Mask unavailable", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  mask_editing_ = true;
-  mask_changed_ = false;
+  mask_editor_.begin(template_images_.back());
   SetDlgItemTextW(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK, L"Done");
-  refresh_template_mask_preview();
+  preview_.invalidate();
   update_control_enablement();
   update_match_status();
 }
 
 bool CalibrationWindow::finish_template_mask_editing() {
-  if (!mask_editing_) return true;
+  if (!mask_editor_.editing()) return true;
   auto &image = template_images_.back();
   if (!image.valid()) {
     MessageBoxW(dialog_, L"Keep at least 64 opaque pixels in the template mask.",
                 L"Mask is too small", MB_OK | MB_ICONWARNING);
     return false;
   }
-  if (mask_changed_) {
+  if (mask_editor_.changed()) {
     auto stored = layerc::platform::store_template_asset(image);
     const auto *asset =
         std::get_if<layerc::platform::ImportedTemplateAsset>(&stored);
@@ -228,68 +227,29 @@ bool CalibrationWindow::finish_template_mask_editing() {
     image = asset->image;
     template_matcher_.clear();
   }
-  mask_editing_ = false;
-  mask_changed_ = false;
-  mask_preview_pixels_.clear();
+  mask_editor_.finish();
   SetDlgItemTextW(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK, L"Mask...");
   refresh_template_reference_label();
   update_control_enablement();
-  InvalidateRect(preview_, nullptr, FALSE);
+  preview_.invalidate();
   refresh_preview_frame();
   return true;
 }
 
 void CalibrationWindow::refresh_template_mask_preview() {
-  if (!mask_editing_ || template_images_.empty()) return;
-  const auto &image = template_images_.back();
-  mask_preview_pixels_.resize(image.pixels.size());
-  for (std::uint32_t y = 0; y < image.height; ++y) {
-    for (std::uint32_t x = 0; x < image.width; ++x) {
-      const auto index = static_cast<std::size_t>(y) * image.width + x;
-      const auto pixel = image.pixels[index];
-      if (image.alpha[index] == 0) {
-        mask_preview_pixels_[index] =
-            ((x / 12U) + (y / 12U)) % 2U == 0U ? 0x3A3F46U : 0x24282DU;
-      } else {
-        mask_preview_pixels_[index] =
-            pixel.blue | (static_cast<std::uint32_t>(pixel.green) << 8U) |
-            (static_cast<std::uint32_t>(pixel.red) << 16U);
-      }
-    }
-  }
-  InvalidateRect(preview_, nullptr, FALSE);
+  if (template_images_.empty())
+    return;
+  mask_editor_.refresh(template_images_.back());
+  preview_.invalidate();
 }
 
-void CalibrationWindow::update_template_mask(POINT point, const bool opaque) {
-  if (!mask_editing_ || template_images_.empty()) return;
-  const auto bounds = preview_image_rect();
-  if (point.x < bounds.left || point.x >= bounds.right ||
-      point.y < bounds.top || point.y >= bounds.bottom)
+void CalibrationWindow::update_template_mask(const POINT point,
+                                             const bool opaque) {
+  if (template_images_.empty())
     return;
-  auto &image = template_images_.back();
-  const auto x = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(point.x - bounds.left) * image.width /
-      std::max<LONG>(1, bounds.right - bounds.left));
-  const auto y = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(point.y - bounds.top) * image.height /
-      std::max<LONG>(1, bounds.bottom - bounds.top));
-  const int radius = std::max<int>(1, std::min(image.width, image.height) / 32);
-  for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
-    for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
-      if (offset_x * offset_x + offset_y * offset_y > radius * radius)
-        continue;
-      const int target_x = static_cast<int>(x) + offset_x;
-      const int target_y = static_cast<int>(y) + offset_y;
-      if (target_x < 0 || target_y < 0 ||
-          target_x >= static_cast<int>(image.width) ||
-          target_y >= static_cast<int>(image.height))
-        continue;
-      image.alpha[static_cast<std::size_t>(target_y) * image.width +
-                  target_x] = opaque ? 255 : 0;
-    }
-  }
-  mask_changed_ = true;
-  refresh_template_mask_preview();
+  if (mask_editor_.update(template_images_.back(), point, preview_image_rect(),
+                          opaque))
+    preview_.invalidate();
 }
 
 } // namespace layerc::calibration

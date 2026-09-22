@@ -172,8 +172,26 @@ void test_live_protocol_framing() {
   expect(message != nullptr && message->revision == source.revision &&
              message->target_window == source.target_window &&
              message->profile_key == source.profile_key &&
+             message->profile_json == source.profile_json &&
              message->anchor_y == source.anchor_y,
-         "live JSON should preserve UTF-8 and 64-bit identifiers exactly");
+         "live JSON should preserve UTF-8, profile bytes, and 64-bit identifiers exactly");
+
+  for (const auto &payload : {std::string{}, std::string{"f"},
+                              std::string{"fo"}, std::string{"foo"},
+                              std::string{"\0\xff", 2}}) {
+    auto payload_message = source;
+    payload_message.profile_json = payload;
+    const auto round_trip =
+        decode_live_message_json(encode_live_message_json(payload_message));
+    const auto *decoded_payload = std::get_if<LiveMessage>(&round_trip);
+    expect(decoded_payload != nullptr &&
+               decoded_payload->profile_json == payload,
+           "portable base64 should round-trip every padding case and binary bytes");
+  }
+
+  expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
+             R"({"protocolVersion":3,"type":"committedProfile","revision":"0","profileKey":"x","profileBase64":"A==="})")),
+         "invalid base64 padding should be rejected");
 
   const LiveMessage status{.type = LiveMessageType::runtime_status,
                            .text = "Visual recognition: WGC active"};
@@ -268,6 +286,31 @@ void test_live_protocol_framing() {
   decoder.clear();
   expect(decoder.buffered_bytes() == 0 && decoder.reserved_bytes() == 0,
          "disconnect cleanup should release decoder capacity");
+
+  FrameDecoder framing(4, 12);
+  const std::byte small_frame[]{std::byte{2}, std::byte{}, std::byte{},
+                               std::byte{}, std::byte{'o'}, std::byte{'k'}};
+  framing.feed(small_frame);
+  framing.feed(std::span(small_frame).first(4));
+  expect(framing.next_frame() == "ok" && !framing.next_frame(),
+         "the shared decoder drains complete frames before a partial tail");
+  framing.feed(std::span(small_frame).subspan(4));
+  expect(framing.next_frame() == "ok" && framing.buffered_bytes() == 0,
+         "a compacted partial tail must complete without retained consumed bytes");
+  const std::byte invalid_length[]{std::byte{5}, std::byte{}, std::byte{}, std::byte{}};
+  framing.feed(invalid_length);
+  expect(!framing.next_frame() &&
+             framing.fault() == FrameDecoder::Fault::frame_too_large &&
+             framing.reserved_bytes() == 0,
+         "oversized frames release storage and fault before reading payloads");
+  framing.feed(small_frame);
+  expect(!framing.next_frame(), "framing faults remain sticky until reset");
+  framing.clear();
+  const std::byte flood[13]{};
+  framing.feed(flood);
+  expect(framing.fault() == FrameDecoder::Fault::buffer_too_large &&
+             framing.reserved_bytes() == 0,
+         "a buffer flood is rejected before allocating storage");
 }
 
 void test_live_placement_math() {

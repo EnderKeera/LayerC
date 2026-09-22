@@ -1,16 +1,24 @@
 #pragma once
 
 #include "appearance_draft.hpp"
+#include "automation_editor.hpp"
+#include "dialog_layout.hpp"
 #include "editor_history.hpp"
+#include "editor_state.hpp"
+#include "editor_profile_fields.hpp"
+#include "editor_text.hpp"
+#include "editor_util.hpp"
+#include "profile_document.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/calibration.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
+#include "layerc/platform/editor_appearance.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/profile_store.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <commctrl.h>
 #include <windows.h>
@@ -20,71 +28,18 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+namespace layerc::platform {
+struct VisualAssetGcReport;
+}
+
 namespace layerc::editor {
 
-using RoleColors = layerc::platform::NativeThemeColors;
-
-struct ProfileCheckboxMetrics {
-  int image_size{};
-  int inset{};
-  int pen_width{};
-};
-
-void set_owner_draw_checkbox(HWND control, bool checked);
-[[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
-[[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
-[[nodiscard]] COLORREF color_ref(std::uint32_t color);
-[[nodiscard]] std::uint32_t rgb_value(COLORREF color);
-[[nodiscard]] std::wstring to_wide(std::string_view text);
-[[nodiscard]] std::string to_utf8(std::wstring_view text);
-[[nodiscard]] std::wstring control_text(HWND control);
-void set_text(HWND control, std::wstring_view text);
-using layerc::platform::enable_native_dark_mode;
-using layerc::platform::set_dark_title_bar;
-void style_native_dialog_children(HWND dialog, HFONT font);
-[[nodiscard]] HFONT create_editor_font(UINT dpi);
-void apply_suggested_dpi_rect(HWND window, LPARAM lparam);
-[[nodiscard]] bool start_daemon();
-[[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
-[[nodiscard]] std::string
-safe_identifier(std::wstring_view text, std::string_view fallback = "profile");
-[[nodiscard]] layerc::core::GameProfile make_new_profile();
-[[nodiscard]] std::wstring
-profile_list_label(const layerc::core::GameProfile &profile);
-// Smallest "<base>" then "<base>-<n>" id unused by the predicate; shared by
-// panel and observation id generation.
-template <typename IsUsed>
-[[nodiscard]] std::string
-next_unique_id(const std::string_view base, IsUsed &&is_used) {
-  std::string candidate(base);
-  for (std::size_t suffix = 2; is_used(candidate); ++suffix)
-    candidate = std::string(base) + "-" + std::to_string(suffix);
-  return candidate;
-}
-[[nodiscard]] std::string
-unique_panel_id(std::string_view base,
-                const std::vector<layerc::core::Panel> &existing,
-                const std::vector<layerc::core::Panel> *generated = nullptr);
-[[nodiscard]] std::wstring
-profile_error_text(const layerc::core::ProfileError &error);
-[[nodiscard]] std::uint32_t parse_uint(std::wstring_view text,
-                                       std::uint32_t fallback);
-[[nodiscard]] std::optional<layerc::core::Milliseconds>
-parse_duration_ms(std::wstring_view seconds);
-[[nodiscard]] bool source_uses_legacy_base_schema(std::string_view json);
-[[nodiscard]] bool source_uses_legacy_visual_schema(std::string_view json);
-[[nodiscard]] bool confirm_schema_upgrade(HWND owner);
-void erase_visual_assignment(layerc::core::VisualProfile &visual,
-                             std::string_view cooldown_id);
-void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
-                                  std::string_view observation_id);
-class AutomationEditor;
-
-class EditorWindow {
+class EditorWindow : private AutomationHost {
 public:
   EditorWindow();
   ~EditorWindow();
@@ -92,16 +47,49 @@ public:
   int run(HINSTANCE instance, int show_command);
 
 private:
-  friend class AutomationEditor;
+  [[nodiscard]] ProfileDocument &document() noexcept override {
+    return document_;
+  }
+  void mark_changed(const DocumentChangeKind kind) override {
+    record_profile_change(kind);
+  }
+  [[nodiscard]] HINSTANCE instance() const noexcept override {
+    return shell_.instance();
+  }
+  [[nodiscard]] HWND owner_window() const noexcept override {
+    return shell_.window();
+  }
+  [[nodiscard]] HFONT owner_font() const noexcept override {
+    return shell_.font();
+  }
+  [[nodiscard]] bool capture_exclusion_enabled() const noexcept override {
+    return shell_.capture_exclusion();
+  }
+  void draw_owner_list_item(const DRAWITEMSTRUCT &item) const override {
+    draw_list_box_item(item);
+  }
+  [[nodiscard]] std::optional<LRESULT>
+  owner_theme_message(const HWND window, const UINT message,
+                      const WPARAM wparam, const LPARAM lparam) const override {
+    return dialog_theme_message(window, message, wparam, lparam);
+  }
+  [[nodiscard]] bool live_connected() const noexcept override {
+    return live_edit_.channel().connected();
+  }
+  [[nodiscard]] bool live_authenticated() const noexcept override {
+    return live_edit_.package_authenticated();
+  }
+  void advance_live_revision() noexcept override { ++live_edit_.revision(); }
+  [[nodiscard]] layerc::core::ProfileRevision
+  live_revision() const noexcept override {
+    return live_edit_.revision();
+  }
+  void send_live(const layerc::core::LiveMessage &message) override {
+    (void)live_edit_.channel().send(message);
+  }
 
   static constexpr UINT_PTR autosave_timer = 10;
   static constexpr UINT_PTR live_channel_timer = 11;
-  struct ProfileEntry {
-    std::filesystem::path path;
-    std::wstring label;
-    bool enabled{true};
-  };
-
 
   static INT_PTR CALLBACK export_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK import_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
@@ -113,12 +101,11 @@ private:
 
   [[nodiscard]] RoleColors
   colors(layerc::platform::EditorControlRole role) const {
-    const auto &appearance = appearance_.staged();
-    if (appearance_open_)
-      return layerc::platform::native_theme_colors(
-          appearance.theme, appearance.accent, role,
-          appearance.overrides[static_cast<std::size_t>(role)]);
-    return layerc::platform::native_theme_colors(theme_, accent_, role);
+    const auto &appearance = appearance_editor_.draft().staged();
+    return layerc::platform::native_theme_colors(
+        appearance_editor_.open() ? appearance.theme : appearance_editor_.theme(),
+        appearance_editor_.open() ? appearance.accent : appearance_editor_.accent(), role,
+        appearance.overrides[static_cast<std::size_t>(role)]);
   }
   void initialize(HWND);
   void initialize_tasks(HWND);
@@ -131,9 +118,9 @@ private:
   void refresh_theme();
   void layout();
   void layout_tasks(HWND);
-  void set_status(std::wstring_view text) { set_text(status_, text); }
+  void set_status(std::wstring_view text) { set_text(shell_.status(), text); }
   [[nodiscard]] HBRUSH brush(layerc::platform::EditorControlRole role) const {
-    return brushes_[static_cast<std::size_t>(role)];
+    return appearance_editor_.brushes()[static_cast<std::size_t>(role)];
   }
 
   void refresh_profile_controls();
@@ -149,12 +136,42 @@ private:
   bool launch_calibration(HWND target);
   [[nodiscard]] bool merge_calibration_result(std::string_view visual_json);
   [[nodiscard]] bool save_visual_profile();
+  void report_visual_asset_gc(
+      const layerc::platform::VisualAssetGcReport &report);
   void set_visual_assignment_enabled(bool enabled);
   void remove_visual_assignment();
+  // Single document-commit policy shared by explicit save, autosave, and
+  // immediate visual actions. Loaded state (absent/valid/recovered/invalid)
+  // is separate from mutation intent: an unreadable module (invalid with no
+  // parsed profile) must block the commit so a nullopt never becomes an
+  // explicit removal request that discards recovery bytes and backups.
+  [[nodiscard]] bool can_commit_document_bundle() const;
+  [[nodiscard]] bool commit_document_bundle(const std::filesystem::path &destination);
+  // serialize → parse → reassign, keeping sidecar profile ids aligned.
+  // Nullopt when the profile round-trips cleanly.
+  [[nodiscard]] std::optional<layerc::core::ProfileError> normalize_for_commit();
+  // Shared pipeline: draft → sync → normalize → upgrade → can_commit → write.
+  [[nodiscard]] CommitResult
+  commit_bundle(const std::filesystem::path &path,
+                const CommitOptions &options = {});
+  // Staged one-field edits (row enablement): normalize the prepared bundle and
+  // write it without re-reading document controls.
+  [[nodiscard]] CommitResult
+  commit_bundle(const std::filesystem::path &path,
+                layerc::core::GameProfile &profile,
+                std::optional<layerc::core::VisualProfile> &visual,
+                std::optional<layerc::core::AutomationProfile> &automation,
+                bool upgrade_needed, const CommitOptions &options = {});
+  // Shared postlude: dirty/legacy/rebase/timer/notify. A path that is not the
+  // open document only notifies so a row edit cannot clear its dirty state.
+  void mark_committed(const CommitOptions &options = {});
+  void mark_committed(const std::filesystem::path &path,
+                      const layerc::core::GameProfile &profile,
+                      const CommitOptions &options = {});
   void begin_binding_capture();
   void capture_hid_binding();
   void cancel_binding_capture(std::wstring_view status = {});
-  void assign_binding_key(LPARAM key_data);
+  void assign_binding_chord(std::span<const std::uint16_t> scan_codes);
   void refresh_bar_list(std::size_t preferred_panel = SIZE_MAX);
   void refresh_bar_controls();
   void sync_profile_from_controls();
@@ -208,7 +225,7 @@ private:
   void update_color_picker_from_hex(HWND);
   [[nodiscard]] bool draw_color_picker_item(const DRAWITEMSTRUCT &) const;
 
-  [[nodiscard]] double preview_aspect_ratio() const;
+  [[nodiscard]] SIZE preview_target_size() const;
   [[nodiscard]] RECT preview_canvas() const;
   [[nodiscard]] RECT bar_preview_rect(const layerc::core::Panel &,
                                       const RECT &) const;
@@ -217,7 +234,7 @@ private:
   void update_dragged_bar(POINT, bool final = false);
   void finalize_dragged_bar();
 
-  enum class ChangeKind { text, immediate, drag };
+  using ChangeKind = DocumentChangeKind;
   void record_profile_change(ChangeKind kind);
   void schedule_autosave(bool immediate);
   [[nodiscard]] bool flush_autosave(bool allow_upgrade_prompt = true);
@@ -270,77 +287,15 @@ private:
   LRESULT handle_appearance_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_color_picker_message(HWND, UINT, WPARAM, LPARAM);
 
-  HINSTANCE instance_{};
-  HWND dialog_{};
-  HWND task_dialog_{};
-  HWND profile_list_{};
-  HWND cooldown_list_{};
-  HWND bar_list_{};
-  HWND preview_{};
-  HWND status_{};
-  std::wstring visual_runtime_status_{L"Visual recognition: connecting"};
-  HWND diagnostics_dialog_{};
-  std::string runtime_diagnostics_json_;
+  EditorShell shell_;
+  ProfileDocument document_;
+  CooldownEditor cooldown_editor_;
+  PanelPreview panel_preview_;
+  AppearanceEditor appearance_editor_;
+  TaskPicker task_picker_;
+  PackDialogs pack_dialogs_;
+  LiveEditSession live_edit_;
   std::unique_ptr<AutomationEditor> automation_editor_;
-  HWND application_path_{};
-  HWND task_list_{};
-  HIMAGELIST profile_check_hit_images_{};
-  HFONT font_{};
-  HFONT task_font_{};
-  HFONT diagnostics_font_{};
-  std::array<HBRUSH, static_cast<std::size_t>(
-                         layerc::platform::EditorControlRole::count)>
-      brushes_{};
-  std::vector<ProfileEntry> entries_;
-  std::vector<layerc::platform::WindowCandidate> task_candidates_;
-  layerc::core::GameProfile profile_;
-  std::optional<layerc::core::VisualProfile> visual_profile_;
-  std::optional<layerc::core::AutomationProfile> automation_profile_;
-  layerc::platform::AutomationSidecarState automation_sidecar_state_{
-      layerc::platform::AutomationSidecarState::absent};
-  std::string automation_sidecar_error_;
-  layerc::platform::VisualSidecarState visual_sidecar_state_{
-      layerc::platform::VisualSidecarState::absent};
-  std::string visual_sidecar_error_;
-  std::filesystem::path current_path_;
-  layerc::platform::EditorTheme theme_{layerc::platform::EditorTheme::copper};
-  std::uint32_t accent_{0xD88E4BU};
-  AppearanceDraft appearance_;
-  bool appearance_open_{};
-  bool capture_exclusion_{true};
-  bool legacy_base_schema_{};
-  bool legacy_visual_schema_{};
-  bool v2_upgrade_acknowledged_{};
-  bool advanced_visible_{};
-  bool dirty_{};
-  bool syncing_{};
-  bool picking_{};
-  bool task_was_visible_{};
-  bool dragging_bar_{};
-  bool bar_drag_moved_{};
-  POINT bar_drag_start_{};
-  POINT bar_drag_offset_{};
-  bool capturing_binding_{};
-  std::uint32_t picker_color_{};
-  bool picker_syncing_{};
-  std::size_t bar_controls_panel_{SIZE_MAX};
-  layerc::platform::NamedPipeEditorDaemonChannel live_channel_{
-      layerc::platform::NamedPipeEditorDaemonChannel::Role::client};
-  layerc::core::ProfileRevision revision_{};
-  layerc::core::ProfileRevision peer_revision_{};
-  layerc::core::EditSessionId edit_session_id_{};
-  HWND edit_target_{};
-  HWND pending_edit_target_{};
-  ULONGLONG pending_edit_deadline_{};
-  bool direct_drag_enabled_{};
-  bool direct_drag_notice_shown_{};
-  bool awaiting_edit_target_{};
-  bool awaiting_calibration_target_{};
-  ULONGLONG last_live_drag_send_{};
-  ULONGLONG last_heartbeat_send_{};
-  UINT live_timer_interval_{100};
-  bool live_package_authenticated_{};
-  EditorProfileHistory history_;
 };
 
 } // namespace layerc::editor

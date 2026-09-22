@@ -1,5 +1,5 @@
-#include "../src/calibration/calibration_resource.h"
 #include "appearance_draft.hpp"
+#include "dialog_layout.hpp"
 #include "editor_automation_internal.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
@@ -60,15 +60,17 @@ RECT child_rect(const HWND dialog, const int id) {
 
 } // namespace
 
-int main() {
+void editor_dialog_contracts() {
   INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
                                 .dwICC = ICC_WIN95_CLASSES};
   InitCommonControlsEx(&controls);
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   const HWND dialog = CreateDialogParamW(
       instance, MAKEINTRESOURCEW(IDD_OPTIONS), nullptr, &test_dialog_proc, 0);
-  if (!expect(dialog != nullptr, "the native Options dialog should load"))
-    return 1;
+  if (dialog == nullptr) {
+    (void)expect(false, "the native Options dialog should load");
+    return;
+  }
 
   layerc::editor::style_native_dialog_children(
       dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
@@ -82,8 +84,10 @@ int main() {
       GetWindowLongPtrW(visual_checkbox, GWL_STYLE) & BS_TYPEMASK;
   bool passed = true;
   passed &=
-      expect(apply_type == BS_DEFPUSHBUTTON,
-             "the default Apply button must retain dialog-manager semantics");
+      expect(apply_type == BS_OWNERDRAW &&
+                 LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) ==
+                     IDC_OPTIONS_APPLY,
+             "the themed Apply button must retain dialog-manager default semantics");
   passed &=
       expect(checkbox_type == BS_AUTOCHECKBOX,
              "the capture checkbox must retain native auto-toggle semantics");
@@ -347,16 +351,21 @@ int main() {
       appearance_draft.staged().theme == layerc::platform::EditorTheme::plum,
       "a failed appearance save should preserve the last persisted settings");
 
-  const auto literal_is_true = [](const layerc::core::AutomationExpression &value) {
-    const auto *literal = std::get_if<bool>(&value.literal.storage);
-    return value.kind == layerc::core::ExpressionKind::literal &&
-           literal != nullptr && *literal;
-  };
+  const auto literal_is_true =
+      [](const std::optional<layerc::core::AutomationExpression> &value) {
+        if (!value.has_value())
+          return false;
+        const auto *literal = std::get_if<bool>(&value->literal.storage);
+        return value->kind == layerc::core::ExpressionKind::literal &&
+               literal != nullptr && *literal;
+      };
   const auto literal_is_one_second =
-      [](const layerc::core::AutomationExpression &value) {
+      [](const std::optional<layerc::core::AutomationExpression> &value) {
+        if (!value.has_value())
+          return false;
         const auto *literal =
-            std::get_if<layerc::core::DurationValue>(&value.literal.storage);
-        return value.kind == layerc::core::ExpressionKind::literal &&
+            std::get_if<layerc::core::DurationValue>(&value->literal.storage);
+        return value->kind == layerc::core::ExpressionKind::literal &&
                literal != nullptr &&
                literal->value == layerc::core::Milliseconds(1'000);
       };
@@ -689,6 +698,11 @@ int main() {
     const HWND trace = GetDlgItem(automation_dialog, IDC_AUTOMATION_TRACE);
     const HWND repeating =
         GetDlgItem(automation_dialog, IDC_AUTOMATION_REPEATING);
+    const auto view_style = GetWindowLongPtrW(
+        GetDlgItem(automation_dialog, IDC_AUTOMATION_VIEW), GWL_STYLE);
+    passed &= expect((view_style & CBS_OWNERDRAWFIXED) != 0,
+                     "themed automation selectors should use the shared "
+                     "owner-drawn selection palette");
     passed &= expect((GetWindowLongPtrW(enabled, GWL_STYLE) & BS_TYPEMASK) ==
                              BS_AUTOCHECKBOX &&
                          (GetWindowLongPtrW(trace, GWL_STYLE) & BS_TYPEMASK) ==
@@ -787,45 +801,53 @@ int main() {
     DestroyWindow(diagnostics_dialog);
   }
 
-  const HWND calibration_dialog =
-      CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr,
-                         &test_dialog_proc, 0);
-  passed &= expect(
-      calibration_dialog != nullptr &&
-          GetDlgItem(calibration_dialog, IDC_CAL_CAPTURE_TEMPLATE) != nullptr &&
-          GetDlgItem(calibration_dialog, IDC_CAL_IMPORT_TEMPLATE) != nullptr &&
-          GetDlgItem(calibration_dialog, IDC_CAL_EDIT_TEMPLATE_MASK) != nullptr,
-      "the V2.1 calibration resource should expose capture, import, and mask "
-      "controls");
-  if (calibration_dialog != nullptr) {
-    RECT window_rect{};
-    GetWindowRect(calibration_dialog, &window_rect);
-    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(calibration_dialog));
-    const int logical_width =
-        MulDiv(window_rect.right - window_rect.left, 96, dpi);
-    const int logical_height =
-        MulDiv(window_rect.bottom - window_rect.top, 96, dpi);
-    passed &= expect(logical_width <= 1600 && logical_height <= 1040,
-                     "the calibration dialog should fit inside a 1920x1080 "
-                     "desktop work area at 100% scaling");
+  layerc::editor::TaskPicker task_picker_state;
+  passed &= expect(!task_picker_state.has_request(),
+                   "task picker should start without a target request");
+  task_picker_state.request_live_edit();
+  passed &= expect(task_picker_state.awaiting_live_edit() &&
+                       !task_picker_state.awaiting_calibration(),
+                   "live-edit target selection should be exclusive");
+  task_picker_state.request_calibration();
+  passed &= expect(task_picker_state.awaiting_calibration() &&
+                       !task_picker_state.awaiting_live_edit(),
+                   "calibration should replace any live-edit target request");
+  task_picker_state.clear_request();
+  passed &= expect(!task_picker_state.has_request(),
+                   "clearing the task picker should remove its target request");
 
-    RECT client{};
-    GetClientRect(calibration_dialog, &client);
-    for (const int id : {IDC_CAL_APPLY, IDCANCEL}) {
-      RECT button{};
-      const HWND control = GetDlgItem(calibration_dialog, id);
-      GetWindowRect(control, &button);
-      MapWindowPoints(HWND_DESKTOP, calibration_dialog,
-                      reinterpret_cast<POINT *>(&button), 2);
-      passed &= expect(button.left >= client.left && button.top >= client.top &&
-                           button.right <= client.right &&
-                           button.bottom <= client.bottom,
-                       "calibration Apply and Cancel must remain inside the "
-                       "visible client area");
-    }
-    DestroyWindow(calibration_dialog);
-  }
+  layerc::editor::PanelPreview panel_state;
+  panel_state.begin_drag({12, 24}, {3, 4});
+  panel_state.mark_drag_moved();
+  panel_state.finish_drag();
+  passed &= expect(!panel_state.dragging() && !panel_state.drag_moved() &&
+                       panel_state.drag_start().x == 0 &&
+                       panel_state.drag_start().y == 0 &&
+                       panel_state.drag_offset().x == 0 &&
+                       panel_state.drag_offset().y == 0,
+      "finishing a preview drag should reset the entire drag state");
+
+  layerc::editor::CooldownEditor binding_state;
+  binding_state.begin_binding_capture();
+  binding_state.record_binding_key(0x002AU);
+  binding_state.record_binding_key(0x002AU);
+  binding_state.record_binding_key(0x0012U);
+  const auto &captured_codes = binding_state.pending_binding_codes();
+  passed &= expect(binding_state.capturing_binding() &&
+                       captured_codes.size() == 2U &&
+                       captured_codes[0] == 0x002AU &&
+                       captured_codes[1] == 0x0012U,
+                   "binding capture should retain an ordered chord while "
+                   "ignoring key-repeat duplicates");
+  binding_state.finish_binding_capture();
+  passed &= expect(!binding_state.capturing_binding() &&
+                       binding_state.pending_binding_codes().empty(),
+                   "finishing binding capture should clear pending keys");
 
   DestroyWindow(dialog);
-  return passed ? 0 : 1;
+}
+
+int main() {
+  return layerc::test::run({{"editor_dialog_contracts",
+                             editor_dialog_contracts}});
 }

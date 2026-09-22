@@ -411,10 +411,11 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
       .event = AutomationEventKind::session_started,
       .actions = {{.kind = AutomationActionKind::set_variable,
                    .target = "count",
-                   .value = {.kind = ExpressionKind::binary,
-                             .operation = "divide",
-                             .arguments = {literal(AutomationValue(1.0)),
-                                           literal(AutomationValue(0.0))}}}}};
+                   .value = AutomationExpression{
+                       .kind = ExpressionKind::binary,
+                       .operation = "divide",
+                       .arguments = {literal(AutomationValue(1.0)),
+                                     literal(AutomationValue(0.0))}}}}};
   AutomationRule healthy{
       .id = "healthy",
       .event = AutomationEventKind::session_started,

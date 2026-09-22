@@ -27,12 +27,20 @@ void VisualTriggerEngine::reconfigure(const VisualProfile &profile) {
   profile_ = profile;
   rules_.clear();
   triggers_.clear();
+  trigger_indices_.clear();
   rules_.reserve(profile_.rules.size() + profile_.templates.size());
   triggers_.reserve(profile_.triggers.size());
-  for (const auto &rule : profile_.rules) rules_.try_emplace(rule.id);
-  for (const auto &state : profile_.templates) rules_.try_emplace(state.id);
-  for (const auto &trigger : profile_.triggers)
+  trigger_indices_.reserve(profile_.triggers.size());
+  for (const auto &rule : profile_.rules)
+    rules_.try_emplace(rule.id, RuleState{.stable_samples = rule.stable_samples});
+  for (const auto &state : profile_.templates)
+    rules_.try_emplace(
+        state.id, RuleState{.stable_samples = state.stable_samples});
+  for (std::size_t index{}; index < profile_.triggers.size(); ++index) {
+    const auto &trigger = profile_.triggers[index];
     triggers_.try_emplace(trigger.cooldown_id);
+    trigger_indices_.try_emplace(trigger.cooldown_id, index);
+  }
 }
 
 void VisualTriggerEngine::set_visual_enabled(const bool enabled) {
@@ -44,7 +52,8 @@ void VisualTriggerEngine::set_visual_enabled(const bool enabled) {
 void VisualTriggerEngine::clear_transient_state() {
   for (auto &[id, state] : rules_) {
     (void)id;
-    state = {};
+    const auto stable_samples = state.stable_samples;
+    state = RuleState{.stable_samples = stable_samples};
   }
   for (auto &[id, state] : triggers_) {
     (void)id;
@@ -70,10 +79,8 @@ VisualTriggerEngine::on_input(const std::string_view cooldown_id,
     if (trigger->keep_input)
       return {{std::string(cooldown_id), VisualTriggerSource::direct_input}};
     const auto rule = rules_.find(trigger->observation_id);
-    if (trigger->unavailable_policy ==
-            CaptureUnavailablePolicy::trigger_from_input &&
-        (rule == rules_.end() || !rule->second.has_sample ||
-         rule->second.availability != CaptureAvailability::available))
+    if (classify(*trigger, rule == rules_.end() ? nullptr : &rule->second,
+                 now) == ConfirmationDecision::fallback)
       return {{trigger->cooldown_id,
                VisualTriggerSource::capture_fallback}};
     return {};
@@ -81,23 +88,19 @@ VisualTriggerEngine::on_input(const std::string_view cooldown_id,
 
   auto &trigger_state = triggers_.at(trigger->cooldown_id);
   const auto rule = rules_.find(trigger->observation_id);
-  if (rule != rules_.end() && measurement_is_fresh(rule->second, now) &&
-      rule->second.availability == CaptureAvailability::available &&
-      rule->second.stable_match) {
+  const auto decision = classify(
+      *trigger, rule == rules_.end() ? nullptr : &rule->second, now);
+  if (decision == ConfirmationDecision::confirmed) {
     trigger_state.pending_confirmation = false;
     return {{trigger->cooldown_id, VisualTriggerSource::input_confirmed}};
   }
 
-  if (trigger->unavailable_policy ==
-          CaptureUnavailablePolicy::trigger_from_input &&
-      (rule == rules_.end() || !rule->second.has_sample ||
-       rule->second.availability != CaptureAvailability::available)) {
+  if (decision == ConfirmationDecision::fallback) {
     trigger_state.pending_confirmation = false;
     return {{trigger->cooldown_id, VisualTriggerSource::capture_fallback}};
   }
 
-  if (rule != rules_.end() && rule->second.has_sample &&
-      is_terminal_unavailable(rule->second.availability)) {
+  if (decision == ConfirmationDecision::terminal) {
     trigger_state.pending_confirmation = false;
     return {};
   }
@@ -118,8 +121,7 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
 
   for (const auto &measurement : measurements) {
     const auto found = rules_.find(measurement.observation_id);
-    if (!observation_exists(measurement.observation_id) ||
-        found == rules_.end())
+    if (found == rules_.end())
       continue;
     auto &state = found->second;
     state.availability = measurement.availability;
@@ -139,18 +141,15 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
     }
     if (measurement.matched) {
       state.nonmatching_samples = 0;
-      if (state.matching_samples < stable_samples(measurement.observation_id))
+      if (state.matching_samples < state.stable_samples)
         ++state.matching_samples;
-      if (state.matching_samples >=
-          stable_samples(measurement.observation_id))
+      if (state.matching_samples >= state.stable_samples)
         state.stable_match = true;
     } else {
       state.matching_samples = 0;
-      if (state.nonmatching_samples <
-          stable_samples(measurement.observation_id))
+      if (state.nonmatching_samples < state.stable_samples)
         ++state.nonmatching_samples;
-      if (state.nonmatching_samples >=
-          stable_samples(measurement.observation_id))
+      if (state.nonmatching_samples >= state.stable_samples)
         state.stable_match = false;
     }
   }
@@ -159,8 +158,7 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
     if (!trigger.enabled) continue;
     auto &trigger_state = triggers_.at(trigger.cooldown_id);
     const auto rule_it = rules_.find(trigger.observation_id);
-    if (rule_it == rules_.end() ||
-        !observation_exists(trigger.observation_id))
+    if (rule_it == rules_.end())
       continue;
     const auto &rule_state = rule_it->second;
 
@@ -170,19 +168,14 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
         trigger_state.pending_confirmation = false;
         continue;
       }
-      if (rule_state.has_sample &&
-          rule_state.availability != CaptureAvailability::available &&
-          trigger.unavailable_policy ==
-              CaptureUnavailablePolicy::trigger_from_input) {
+      const auto decision = classify(trigger, &rule_state, now);
+      if (decision == ConfirmationDecision::fallback) {
         trigger_state.pending_confirmation = false;
         output.push_back(
             {trigger.cooldown_id, VisualTriggerSource::capture_fallback});
-      } else if (rule_state.has_sample &&
-                 is_terminal_unavailable(rule_state.availability)) {
+      } else if (decision == ConfirmationDecision::terminal) {
         trigger_state.pending_confirmation = false;
-      } else if (measurement_is_fresh(rule_state, now) &&
-                 rule_state.availability == CaptureAvailability::available &&
-                 rule_state.stable_match) {
+      } else if (decision == ConfirmationDecision::confirmed) {
         trigger_state.pending_confirmation = false;
         output.push_back(
             {trigger.cooldown_id, VisualTriggerSource::input_confirmed});
@@ -222,23 +215,33 @@ std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
   return output;
 }
 
-bool VisualTriggerEngine::observation_exists(
-    const std::string_view id) const {
-  return has_observation(profile_, id);
-}
-
-std::uint8_t VisualTriggerEngine::stable_samples(
-    const std::string_view id) const {
-  return observation_stable_samples(profile_, id);
-}
-
 const VisualTrigger *
 VisualTriggerEngine::find_trigger(const std::string_view cooldown_id) const {
-  const auto found = std::ranges::find_if(
-      profile_.triggers, [&](const VisualTrigger &trigger) {
-        return trigger.cooldown_id == cooldown_id;
-      });
-  return found == profile_.triggers.end() ? nullptr : &*found;
+  const auto found = trigger_indices_.find(std::string(cooldown_id));
+  return found == trigger_indices_.end() ? nullptr
+                                         : &profile_.triggers[found->second];
+}
+
+VisualTriggerEngine::ConfirmationDecision VisualTriggerEngine::classify(
+    const VisualTrigger &trigger, const RuleState *state,
+    const TimePoint now) const {
+  if (state == nullptr || !state->has_sample) {
+    return trigger.unavailable_policy ==
+                   CaptureUnavailablePolicy::trigger_from_input
+               ? ConfirmationDecision::fallback
+               : ConfirmationDecision::wait;
+  }
+  if (state->availability != CaptureAvailability::available) {
+    if (trigger.unavailable_policy ==
+        CaptureUnavailablePolicy::trigger_from_input)
+      return ConfirmationDecision::fallback;
+    return is_terminal_unavailable(state->availability)
+               ? ConfirmationDecision::terminal
+               : ConfirmationDecision::wait;
+  }
+  return measurement_is_fresh(*state, now) && state->stable_match
+             ? ConfirmationDecision::confirmed
+             : ConfirmationDecision::wait;
 }
 
 bool VisualTriggerEngine::measurement_is_fresh(const RuleState &state,

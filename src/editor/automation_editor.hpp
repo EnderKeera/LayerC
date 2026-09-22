@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dialog_layout.hpp"
+#include "profile_document.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/live_edit.hpp"
 
@@ -7,16 +9,37 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace layerc::editor {
 
-class EditorWindow;
+class AutomationHost {
+public:
+  virtual ~AutomationHost() = default;
+
+  [[nodiscard]] virtual ProfileDocument &document() noexcept = 0;
+  virtual void mark_changed(DocumentChangeKind kind) = 0;
+  [[nodiscard]] virtual HINSTANCE instance() const noexcept = 0;
+  [[nodiscard]] virtual HWND owner_window() const noexcept = 0;
+  [[nodiscard]] virtual HFONT owner_font() const noexcept = 0;
+  [[nodiscard]] virtual bool capture_exclusion_enabled() const noexcept = 0;
+  virtual void draw_owner_list_item(const DRAWITEMSTRUCT &item) const = 0;
+  [[nodiscard]] virtual std::optional<LRESULT>
+  owner_theme_message(HWND window, UINT message, WPARAM wparam,
+                      LPARAM lparam) const = 0;
+  [[nodiscard]] virtual bool live_connected() const noexcept = 0;
+  [[nodiscard]] virtual bool live_authenticated() const noexcept = 0;
+  virtual void advance_live_revision() noexcept = 0;
+  [[nodiscard]] virtual layerc::core::ProfileRevision
+  live_revision() const noexcept = 0;
+  virtual void send_live(const layerc::core::LiveMessage &message) = 0;
+};
 
 class AutomationEditor final {
 public:
-  explicit AutomationEditor(EditorWindow &owner) noexcept;
+  explicit AutomationEditor(AutomationHost &owner) noexcept;
   ~AutomationEditor();
 
   AutomationEditor(const AutomationEditor &) = delete;
@@ -54,9 +77,9 @@ private:
   void retry_selected(HWND dialog);
   [[nodiscard]] int selected_index(HWND dialog) const;
 
-  EditorWindow &owner_;
+  AutomationHost &owner_;
   HWND dialog_{};
-  HFONT font_{};
+  DialogChrome chrome_;
   std::string trace_json_;
   std::string trace_display_;
   std::vector<layerc::core::AutomationEvent> trace_events_;

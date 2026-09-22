@@ -17,6 +17,11 @@ namespace layerc::platform {
 inline constexpr wchar_t live_edit_pipe_name[] =
     L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3";
 
+// True for the authenticated live-edit peer or the sibling LayerC editor image.
+// The product image name stays at the authentication / launch boundary.
+[[nodiscard]] bool is_layerc_editor_process(DWORD process_id,
+                                            DWORD authenticated_editor_id);
+
 class NamedPipeEditorDaemonChannel final {
 public:
   enum class Role { server, client };

@@ -1,5 +1,5 @@
 #include "layerc/core/live_edit.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 #include "overlay_window.hpp"
 #include "test_support.hpp"
 
@@ -105,7 +105,7 @@ int run_on_private_desktop(const wchar_t *const test_target) {
     return 77;
   }
 
-  std::array<wchar_t, 32'768> executable{};
+  std::vector<wchar_t> executable(32'768);
   const DWORD length = GetModuleFileNameW(
       nullptr, executable.data(), static_cast<DWORD>(executable.size()));
   if (length == 0 || length >= executable.size()) {
@@ -164,7 +164,7 @@ bool rectangles_near(const RECT &left, const layerc::core::PixelRect &right,
 
 } // namespace
 
-int wmain(const int argc, wchar_t *argv[]) {
+int run_overlay_window_tests(const int argc, wchar_t *argv[]) {
   if (argc == 2)
     return run_on_private_desktop(argv[1]);
   if (argc != 3 || std::wcscmp(argv[1], L"--desktop-child") != 0) {
@@ -207,11 +207,9 @@ int wmain(const int argc, wchar_t *argv[]) {
       .anchor_y = 0.75,
       .cooldown_ids = {"dash"},
   };
-  const std::vector<layerc::daemon::OverlayCooldown> cooldowns{{
-      .id = "dash",
-      .name = L"Dash",
-      .duration = std::chrono::seconds(5),
-  }};
+  layerc::core::CooldownDefinition cooldown{
+      .id = "dash", .name = "Dash", .duration = std::chrono::seconds(5)};
+  const std::vector<layerc::core::CooldownDefinition> cooldowns{cooldown};
   layerc::daemon::OverlayWindow overlay(panel, cooldowns);
   overlay.show_on_rect(target_rect);
 
@@ -319,8 +317,9 @@ int wmain(const int argc, wchar_t *argv[]) {
       WS_EX_TOOLWINDOW, L"STATIC", L"LayerC overlay z-order test",
       WS_OVERLAPPEDWINDOW | WS_VISIBLE, work_area.left + 80, work_area.top + 80,
       480, 320, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-  if (!expect(unrelated != nullptr,
-              "an unrelated foreground window should be available")) {
+  if (unrelated == nullptr) {
+    (void)expect(false,
+                 "an unrelated foreground window should be available");
     return 1;
   }
   SetWindowPos(unrelated, HWND_TOP, work_area.left + 80, work_area.top + 80,
@@ -434,4 +433,15 @@ int wmain(const int argc, wchar_t *argv[]) {
                 "overlay should remain hit-test transparent")
              ? 0
              : 1;
+}
+
+int wmain(const int argc, wchar_t *argv[]) {
+  return layerc::test::run({{"overlay_window_tests", [argc, argv] {
+                              const int result =
+                                  run_overlay_window_tests(argc, argv);
+                              if (result == 77) layerc::test::skip();
+                              layerc::test::expect(
+                                  result == 0,
+                                  "the overlay program should succeed");
+                            }}});
 }

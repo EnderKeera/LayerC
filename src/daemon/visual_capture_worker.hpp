@@ -1,97 +1,48 @@
 #pragma once
 
-#include "layerc/capture/window_capture.hpp"
-#include "layerc/core/template_matcher.hpp"
+#include "visual_capture_host.hpp"
 
 #include <atomic>
 #include <condition_variable>
-#include <cstdint>
-#include <memory>
 #include <mutex>
 #include <span>
 #include <thread>
-#include <string>
 #include <vector>
 
 namespace layerc::daemon {
 
-struct VisualAssetSignature {
-  bool present{};
-  std::uint32_t volume_serial{};
-  std::uint64_t file_index{};
-  std::uint64_t file_size{};
-  std::uint64_t last_write_ticks{};
-  // NTFS change-journal USN: any write to the file bumps it, so a
-  // replacement that preserves size and timestamp (and even reuses the file
-  // index) still invalidates the cached decode. Zero on volumes without a
-  // journal, where the metadata fields above remain the fallback.
-  std::uint64_t change_usn{};
-
-  bool operator==(const VisualAssetSignature &) const = default;
-};
-
-struct VisualTemplateEvaluation {
-  layerc::core::TemplateState state;
-  // File identity plus metadata plus journal USN detects atomic replacement
-  // even when a repair preserves size and timestamp. Cryptographic
-  // verification and PNG decoding remain isolated on the worker thread.
-  std::vector<VisualAssetSignature> asset_signatures;
-  // Populated only in the worker''s private request copy.
-  std::shared_ptr<const std::vector<layerc::core::TemplateImage>> references;
-  bool assets_available{true};
-
-  bool operator==(const VisualTemplateEvaluation &other) const noexcept {
-    return state == other.state && asset_signatures == other.asset_signatures;
-  }
-};
-
-struct VisualEvaluationRequest {
-  std::wstring source_key;
-  std::uint8_t sample_rate_hz{10};
-  layerc::core::CaptureQuality quality{
-      layerc::core::CaptureQuality::balanced};
-  std::vector<layerc::core::PixelRule> rules;
-  std::vector<VisualTemplateEvaluation> templates;
-
-  bool operator==(const VisualEvaluationRequest &) const = default;
-};
-
-struct VisualEvaluationSnapshot {
-  std::wstring source_key;
-  std::uint64_t sequence{};
-  bool missing_template_assets{};
-  std::vector<layerc::core::ObservationMeasurement> measurements;
-};
-
-struct VisualCaptureSnapshot {
-  std::uint64_t sequence{};
-  layerc::capture::CapturePollResult result;
-  std::string gpu_description;
-  std::vector<VisualEvaluationSnapshot> evaluations;
-};
-
-class VisualCaptureWorker {
+class VisualCaptureWorker final : public VisualCaptureHost {
 public:
-  VisualCaptureWorker(HWND window, layerc::core::CaptureQuality quality,
-                      HANDLE snapshot_event = nullptr);
-  ~VisualCaptureWorker();
+  explicit VisualCaptureWorker(HWND window, HANDLE snapshot_event = nullptr);
+  ~VisualCaptureWorker() override;
   VisualCaptureWorker(const VisualCaptureWorker &) = delete;
   VisualCaptureWorker &operator=(const VisualCaptureWorker &) = delete;
 
-  void start();
-  void stop();
-  void configure(std::vector<VisualEvaluationRequest> requests);
-  void set_excluded_screen_rects(std::span<const RECT> rectangles);
-  [[nodiscard]] VisualCaptureSnapshot snapshot() const;
-  [[nodiscard]] layerc::core::CaptureQuality quality() const noexcept {
-    return quality_;
+  void start() override;
+  void stop() noexcept override;
+  void configure(std::vector<VisualEvaluationRequest> requests,
+                 layerc::core::CaptureQuality quality) override;
+  void set_excluded_screen_rects(
+      std::span<const RECT> rectangles) override;
+  [[nodiscard]] VisualCaptureSnapshot snapshot() const override;
+  [[nodiscard]] VisualCaptureHostStatus status() const override;
+  [[nodiscard]] layerc::core::VisualRuntime runtime() const noexcept override {
+    return layerc::core::VisualRuntime::inline_process;
   }
 
 private:
+  struct RunState;
+  void apply_pending_configuration(RunState &state);
+  void evaluate_requests(
+      RunState &state, const layerc::capture::CapturePollResult &result,
+      layerc::core::TimePoint now);
+  void publish_latest(const RunState &state,
+                      layerc::capture::CapturePollResult result);
   void run();
 
   HWND window_{};
-  layerc::core::CaptureQuality quality_{};
+  std::atomic<layerc::core::CaptureQuality> quality_{
+      layerc::core::CaptureQuality::balanced};
   HANDLE snapshot_event_{}; // non-owning, owned by VisualService
   std::atomic_bool stopping_{};
   std::atomic_uint8_t sample_rate_hz_{10};

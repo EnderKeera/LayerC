@@ -133,13 +133,6 @@ NativeThemeColors native_theme_colors(
   return colors;
 }
 
-NativeThemeColors native_theme_colors(const EditorTheme theme,
-                                      const std::uint32_t accent,
-                                      const EditorControlRole role) {
-  return native_theme_colors(theme, accent, role,
-                             editor_appearance_overrides(role));
-}
-
 void enable_native_dark_mode() {
   const HMODULE module = uxtheme_module();
   if (module == nullptr)
@@ -181,7 +174,7 @@ void style_native_dialog_children(const HWND dialog, const HFONT font,
     if (wcscmp(class_name.data(), L"Button") == 0) {
       const auto style = GetWindowLongPtrW(child, GWL_STYLE);
       const auto button_type = style & static_cast<LONG_PTR>(BS_TYPEMASK);
-      if (button_type == BS_PUSHBUTTON) {
+      if (button_type == BS_PUSHBUTTON || button_type == BS_DEFPUSHBUTTON) {
         SetWindowLongPtrW(child, GWL_STYLE,
                           (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) |
                               BS_OWNERDRAW);
@@ -192,6 +185,17 @@ void style_native_dialog_children(const HWND dialog, const HFONT font,
         SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
       }
     } else if (wcscmp(class_name.data(), L"ComboBox") == 0) {
+      if (owner_draw_list_boxes) {
+        const auto style = GetWindowLongPtrW(child, GWL_STYLE);
+        SetWindowLongPtrW(child, GWL_STYLE,
+                          style | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS);
+        const UINT dpi = GetDpiForWindow(dialog);
+        const auto item_height = static_cast<LPARAM>(
+            MulDiv(20, dpi == 0 ? 96 : static_cast<int>(dpi), 96));
+        SendMessageW(child, CB_SETITEMHEIGHT, 0, item_height);
+        SendMessageW(child, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1),
+                     item_height);
+      }
       SetWindowTheme(child, L"DarkMode_CFD", nullptr);
     } else if (wcscmp(class_name.data(), L"ListBox") == 0) {
       if (owner_draw_list_boxes) {
@@ -231,11 +235,12 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
   const HBRUSH background = CreateSolidBrush(fill);
   FillRect(draw.hDC, &draw.rcItem, background);
   DeleteObject(background);
+  const bool default_action = (draw.itemState & ODS_DEFAULT) != 0;
   const HPEN pen =
-      CreatePen(PS_SOLID, pressed ? 2 : 1,
+      CreatePen(PS_SOLID, pressed || default_action ? 2 : 1,
                 disabled ? colors.disabled
-                : pressed ? colors.selection
-                          : colors.border);
+                : pressed || default_action ? colors.selection
+                                            : colors.border);
   const HGDIOBJ previous_pen = SelectObject(draw.hDC, pen);
   const HGDIOBJ previous_brush =
       SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));

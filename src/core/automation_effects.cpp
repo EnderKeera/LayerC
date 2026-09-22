@@ -1,6 +1,7 @@
 #include "layerc/core/automation.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/profile_wire.hpp"
 
 #include <optional>
 #include <variant>
@@ -23,37 +24,32 @@ void apply_layout(Panel &panel, const AutomationValue &value) noexcept {
   const auto *text = std::get_if<std::string>(&value.storage);
   if (text == nullptr)
     return;
-  if (*text == "row")
-    panel.layout = PanelLayout::row;
-  else if (*text == "column")
-    panel.layout = PanelLayout::column;
-  else if (*text == "grid")
-    panel.layout = PanelLayout::grid;
+  if (const auto layout =
+          profile_wire::parse(profile_wire::panel_layout, *text))
+    panel.layout = *layout;
 }
 
+// Bounds live on OverlayPropertySpec and are enforced by overlay_value_valid
+// before apply runs; these mutate only.
 void apply_width(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *integer = std::get_if<std::int64_t>(&value.storage);
-  if (integer != nullptr && *integer >= 40 && *integer <= 1'200)
+  if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
     panel.bar.width = static_cast<std::uint32_t>(*integer);
 }
 
 void apply_height(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *integer = std::get_if<std::int64_t>(&value.storage);
-  if (integer != nullptr && *integer >= 16 && *integer <= 240)
+  if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
     panel.bar.height = static_cast<std::uint32_t>(*integer);
 }
 
 template <std::uint32_t BarAppearance::*Field>
 void apply_color(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *integer = std::get_if<std::int64_t>(&value.storage);
-  if (integer != nullptr && *integer >= 0 && *integer <= 0xFFFFFF)
+  if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
     panel.bar.*Field = static_cast<std::uint32_t>(*integer);
 }
 
 template <double Panel::*Field>
 void apply_anchor(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *number = std::get_if<double>(&value.storage);
-  if (number != nullptr && *number >= 0.0 && *number <= 1.0)
+  if (const auto *number = std::get_if<double>(&value.storage))
     panel.*Field = *number;
 }
 
@@ -74,7 +70,7 @@ constexpr OverlayPropertySpec overlay_properties[] = {
      .apply = nullptr},
     {.name = "layout",
      .type = AutomationValueType::string,
-     .string_choices = {"row", "column", "grid"},
+     .panel_layout = true,
      .apply = apply_layout},
     {.name = "width",
      .type = AutomationValueType::integer,
@@ -137,10 +133,9 @@ bool overlay_value_valid(const OverlayPropertySpec &spec,
     const auto *text = std::get_if<std::string>(&value.storage);
     if (text == nullptr)
       return false;
-    if (spec.string_choices[0].empty())
+    if (!spec.panel_layout)
       return text->size() <= max_automation_string_bytes;
-    return *text == spec.string_choices[0] || *text == spec.string_choices[1] ||
-           *text == spec.string_choices[2];
+    return profile_wire::parse(profile_wire::panel_layout, *text).has_value();
   }
   case AutomationValueType::integer: {
     const auto *integer = std::get_if<std::int64_t>(&value.storage);

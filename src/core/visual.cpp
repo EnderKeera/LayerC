@@ -1,7 +1,7 @@
 #include "layerc/core/visual.hpp"
 #include "layerc/core/hash.hpp"
 
-#include "layerc/core/json.hpp"
+#include "layerc/core/json_reader.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -45,24 +45,24 @@ public:
   VisualResult read() {
     if (!root_.is_object()) return error("$", "visual root must be an object");
     const auto version = integer(root_, "schemaVersion", "$", 1, 2);
-    if (!version) return error_;
+    if (!version) return failure();
     if (*version == 1) {
       if (!fields(root_, {"schemaVersion", "profileId", "sampleRateHz",
                           "quality", "rules", "triggers"}, "$"))
-        return error_;
+        return failure();
     } else if (!fields(root_, {"schemaVersion", "profileId", "sampleRateHz",
                                "quality", "observations", "triggers"}, "$")) {
-      return error_;
+      return failure();
     }
 
     VisualProfile result;
     if (!version || !string(root_, "profileId", "$", result.profile_id))
-      return error_;
+      return failure();
     // Schema 1 is migrated in memory. Every subsequent save emits schema 2.
     result.schema_version = 2;
     const auto rate = integer(root_, "sampleRateHz", "$", 5, 15);
     std::string quality;
-    if (!rate || !string(root_, "quality", "$", quality)) return error_;
+    if (!rate || !string(root_, "quality", "$", quality)) return failure();
     if (*rate != 5 && *rate != 10 && *rate != 15)
       return error("$.sampleRateHz", "sample rate must be 5, 10, or 15 Hz");
     result.sample_rate_hz = static_cast<std::uint8_t>(*rate);
@@ -73,30 +73,30 @@ public:
 
     if (*version == 1) {
       const auto *rules = array(root_, "rules", "$", true);
-      if (rules == nullptr) return error_;
+      if (rules == nullptr) return failure();
       if (rules->size() > max_pixel_rules)
         return error("$.rules", "at most four pixel rules are supported");
       for (std::size_t index = 0; index < rules->size(); ++index) {
         if (!read_legacy_rule((*rules)[index], index, result.rules))
-          return error_;
+          return failure();
       }
     } else {
       const auto *observations = array(root_, "observations", "$", true);
-      if (observations == nullptr) return error_;
+      if (observations == nullptr) return failure();
       if (observations->size() > max_pixel_rules + max_template_states)
         return error("$.observations",
                      "at most eight visual observations are supported");
       for (std::size_t index = 0; index < observations->size(); ++index) {
         if (!read_observation((*observations)[index], index, result))
-          return error_;
+          return failure();
       }
     }
 
     const auto *triggers = array(root_, "triggers", "$", true);
-    if (triggers == nullptr) return error_;
+    if (triggers == nullptr) return failure();
     for (std::size_t index = 0; index < triggers->size(); ++index) {
       if (!read_trigger((*triggers)[index], index, *version, result.triggers))
-        return error_;
+        return failure();
     }
     const auto validation = validate_visual_profile(result, base_);
     if (!validation.message.empty()) return validation;
@@ -240,8 +240,9 @@ private:
       return false;
 
     const auto *region = object(value, "searchRegion", path);
-    if (region == nullptr ||
-        !fields(*region, {"x", "y", "width", "height"},
+    if (region == nullptr)
+      return false;
+    if (!fields(*region, {"x", "y", "width", "height"},
                 path + ".searchRegion"))
       return false;
     const auto x = number(*region, "x", path + ".searchRegion", 0.0, 1.0);
@@ -254,8 +255,9 @@ private:
     state.search_region = {*x, *y, *width, *height};
 
     const auto *expected = object(value, "expectedSize", path);
-    if (expected == nullptr ||
-        !fields(*expected, {"width", "height"}, path + ".expectedSize"))
+    if (expected == nullptr)
+      return false;
+    if (!fields(*expected, {"width", "height"}, path + ".expectedSize"))
       return false;
     const auto expected_width =
         number(*expected, "width", path + ".expectedSize", 0.000001, 1.0);
@@ -375,149 +377,58 @@ private:
   bool fields(const json::Value &value,
               const std::initializer_list<std::string_view> allowed,
               const std::string &path) {
-    if (!value.is_object()) return set(path, "expected object");
-    for (const auto &[key, ignored] : value.as_object()) {
-      (void)ignored;
-      if (std::ranges::find(allowed, key) == allowed.end())
-        return set(path + "." + key, "unknown field");
-    }
-    return true;
+    return fields_.exact_fields(value, allowed, path);
   }
-
   const json::Value *object(const json::Value &parent, std::string_view key,
                             const std::string &path) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      set(path + "." + std::string(key), "required value is missing");
-      return nullptr;
-    }
-    if (!value->is_object()) {
-      set(path + "." + std::string(key), "expected object");
-      return nullptr;
-    }
-    return value;
+    return fields_.object(parent, key, path, json::Required::yes);
   }
-
-  const json::Value::Array *array(const json::Value &parent,
-                                  std::string_view key,
+  const json::Value::Array *array(const json::Value &parent, std::string_view key,
                                   const std::string &path, bool required) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      if (required) set(path + "." + std::string(key), "required value is missing");
-      return nullptr;
-    }
-    if (!value->is_array()) {
-      set(path + "." + std::string(key), "expected array");
-      return nullptr;
-    }
-    return &value->as_array();
+    return fields_.array(parent, key, path,
+                         required ? json::Required::yes : json::Required::no);
   }
-
   bool string(const json::Value &parent, std::string_view key,
-              const std::string &path, std::string &output) {
-    const auto *value = parent.find(key);
-    if (value == nullptr || !value->is_string() || value->as_string().empty())
-      return set(path + "." + std::string(key),
-                 "expected non-empty string");
-    output = value->as_string();
-    return true;
+               const std::string &path, std::string &output) {
+    return fields_.string(parent, key, path, output, json::Required::yes,
+                          json::EmptyString::reject);
   }
-
   bool boolean(const json::Value &parent, std::string_view key,
-               const std::string &path, bool &output, bool fallback) {
-    const auto *value = parent.find(key);
-    if (value == nullptr) {
-      output = fallback;
-      return true;
-    }
-    if (!value->is_bool())
-      return set(path + "." + std::string(key), "expected boolean");
-    output = value->as_bool();
-    return true;
+                const std::string &path, bool &output, bool fallback) {
+    output = fallback;
+    return fields_.boolean(parent, key, path, output, json::Required::no);
   }
-
-  std::optional<std::int64_t>
-  integer(const json::Value &parent, std::string_view key,
-          const std::string &path, std::int64_t minimum,
-          std::int64_t maximum) {
-    const auto *value = parent.find(key);
-    if (value == nullptr || !value->is_number()) {
-      set(path + "." + std::string(key), "expected integer");
-      return std::nullopt;
-    }
-    const double number = value->as_number();
-    if (!std::isfinite(number) || std::floor(number) != number ||
-        number < static_cast<double>(minimum) ||
-        number > static_cast<double>(maximum)) {
-      set(path + "." + std::string(key),
-          "integer is outside the supported range");
-      return std::nullopt;
-    }
-    return static_cast<std::int64_t>(number);
+  std::optional<std::int64_t> integer(const json::Value &parent, std::string_view key,
+                                      const std::string &path,
+                                      std::int64_t minimum, std::int64_t maximum) {
+    return fields_.integer(parent, key, path, minimum, maximum, json::Required::yes);
   }
-
   std::optional<double> number(const json::Value &parent, std::string_view key,
-                               const std::string &path, double minimum,
-                               double maximum) {
-    const auto *value = parent.find(key);
-    if (value == nullptr || !value->is_number() ||
-        !std::isfinite(value->as_number()) || value->as_number() < minimum ||
-        value->as_number() > maximum) {
-      set(path + "." + std::string(key),
-          "number is outside the supported range");
-      return std::nullopt;
-    }
-    return value->as_number();
+                               const std::string &path, double minimum, double maximum) {
+    return fields_.number(parent, key, path, minimum, maximum, json::Required::yes);
   }
-
-  std::optional<std::uint32_t>
-  color(const json::Value &parent, std::string_view key,
-        const std::string &path) {
-    const auto *value = parent.find(key);
-    if (value == nullptr || !value->is_string() ||
-        value->as_string().size() != 7 || value->as_string().front() != '#') {
-      set(path + "." + std::string(key), "expected #RRGGBB color");
-      return std::nullopt;
-    }
-    std::uint32_t result{};
-    for (const char character : value->as_string().substr(1)) {
-      result <<= 4U;
-      if (character >= '0' && character <= '9')
-        result |= static_cast<std::uint32_t>(character - '0');
-      else if (character >= 'a' && character <= 'f')
-        result |= static_cast<std::uint32_t>(character - 'a' + 10);
-      else if (character >= 'A' && character <= 'F')
-        result |= static_cast<std::uint32_t>(character - 'A' + 10);
-      else {
-        set(path + "." + std::string(key), "expected #RRGGBB color");
-        return std::nullopt;
-      }
-    }
-    return result;
+  std::optional<std::uint32_t> color(const json::Value &parent, std::string_view key,
+                                     const std::string &path) {
+    return fields_.color(parent, key, path, json::Required::yes);
   }
-
+  VisualError failure() const {
+    return {fields_.error().path, fields_.error().message};
+  }
   VisualError error(std::string path, std::string message) {
     return {.path = std::move(path), .message = std::move(message)};
   }
   bool set(std::string path, std::string message) {
-    if (error_.message.empty()) error_ = error(std::move(path), std::move(message));
-    return false;
+    return fields_.fail(std::move(path), std::move(message));
   }
 
   const json::Value &root_;
   const GameProfile &base_;
-  VisualError error_;
+  json::Reader fields_;
 };
 
-void color_text(std::string &output, std::uint32_t color) {
-  constexpr std::string_view hex = "0123456789ABCDEF";
-  output += "\"#";
-  for (int shift = 20; shift >= 0; shift -= 4)
-    output.push_back(hex[(color >> static_cast<unsigned>(shift)) & 0xFU]);
-  output.push_back('"');
-}
+} // namespace
 
-bool valid_region(const NormalizedRegion &region) {
+bool valid_normalized_region(const NormalizedRegion &region) noexcept {
   return std::isfinite(region.x) && std::isfinite(region.y) &&
          std::isfinite(region.width) && std::isfinite(region.height) &&
          region.x >= 0.0 && region.y >= 0.0 && region.width > 0.0 &&
@@ -525,8 +436,6 @@ bool valid_region(const NormalizedRegion &region) {
          region.x + region.width <= 1.0 + 1e-12 &&
          region.y + region.height <= 1.0 + 1e-12;
 }
-
-} // namespace
 
 VisualError validate_visual_profile(const VisualProfile &profile,
                                     const GameProfile &base_profile) {
@@ -556,7 +465,7 @@ VisualError validate_visual_profile(const VisualProfile &profile,
       return invalid(path, "rule id and name are required");
     if (!observation_ids.insert(rule.id).second)
       return invalid(path + ".id", "duplicate visual observation id");
-    if (!valid_region(rule.region))
+    if (!valid_normalized_region(rule.region))
       return invalid(path + ".region",
                      "normalized region must be positive and remain in frame");
     if (rule.stable_samples < 1 || rule.stable_samples > 15)
@@ -579,7 +488,7 @@ VisualError validate_visual_profile(const VisualProfile &profile,
       return invalid(path, "template id and name are required");
     if (!observation_ids.insert(state.id).second)
       return invalid(path + ".id", "duplicate visual observation id");
-    if (!valid_region(state.search_region))
+    if (!valid_normalized_region(state.search_region))
       return invalid(path + ".searchRegion",
                      "normalized search region must remain in frame");
     if (!std::isfinite(state.expected_width) ||
@@ -696,7 +605,12 @@ VisualResult parse_visual_profile_json(const std::string_view source,
     return VisualError{"$", "invalid JSON at byte " +
                                 std::to_string(error->offset) + ": " +
                                 error->message};
-  return Reader(std::get<json::Value>(parsed), base_profile).read();
+  return parse_visual_profile_value(std::get<json::Value>(parsed), base_profile);
+}
+
+VisualResult parse_visual_profile_value(const json::Value &root,
+                                        const GameProfile &base_profile) {
+  return Reader(root, base_profile).read();
 }
 
 std::string serialize_visual_profile_json(const VisualProfile &profile) {
@@ -726,7 +640,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
           using T = std::decay_t<decltype(predicate)>;
           if constexpr (std::is_same_v<T, AverageColorPredicate>) {
             output += "\"type\": \"averageColor\", \"target\": ";
-            color_text(output, predicate.target_color);
+            json::append_color_quoted(output, predicate.target_color);
             output += ", \"tolerance\": " +
                       std::to_string(predicate.tolerance);
           } else if constexpr (std::is_same_v<T, BrightnessPredicate>) {
@@ -738,7 +652,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
                       std::to_string(predicate.threshold);
           } else {
             output += "\"type\": \"colorCoverage\", \"target\": ";
-            color_text(output, predicate.target_color);
+            json::append_color_quoted(output, predicate.target_color);
             output += ", \"tolerance\": " +
                       std::to_string(predicate.tolerance) +
                       ", \"minimumPercent\": ";
@@ -800,7 +714,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
     output += ",\n      \"observationId\": ";
     json::append_quoted(output, trigger.observation_id);
     output += ",\n      \"enabled\": ";
-    output += trigger.enabled ? "true" : "false";
+    json::append_bool(output, trigger.enabled);
     output += ",\n      \"mode\": \"" +
               std::string(trigger.mode == VisualTriggerMode::pixel_only
                               ? "pixelOnly"
@@ -808,7 +722,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
               "\"";
     if (trigger.mode == VisualTriggerMode::pixel_only) {
       output += ",\n      \"keepInput\": ";
-      output += trigger.keep_input ? "true" : "false";
+      json::append_bool(output, trigger.keep_input);
     } else {
       output += ",\n      \"confirmationTimeoutMs\": " +
                 std::to_string(trigger.confirmation_timeout.count());

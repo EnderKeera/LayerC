@@ -34,8 +34,8 @@ std::optional<HANDLE> handle_argument(const int argc, wchar_t **argv,
 
 } // namespace
 
-int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR,
-                    const int show_command) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
+                    _In_ LPWSTR, _In_ int show_command) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   int argc{};
   wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);

@@ -18,7 +18,7 @@ snapshot(const std::uint64_t capture_sequence,
   value.sequence = capture_sequence;
   value.gpu_description = "test GPU";
   value.evaluations.push_back({
-      .source_key = L"profile.json",
+      .source_key = "profile.json",
       .sequence = evaluation_sequence,
       .measurements = {{.observation_id = "ready",
                         .matched = true,
@@ -57,14 +57,14 @@ void handshake_is_mutually_bound() {
 
 void configuration_and_packet_sequences_round_trip() {
   using namespace layerc::daemon;
-  expect(isolated_visual_heartbeat_ms < isolated_visual_watchdog_ms,
-         "isolated helper heartbeats must leave watchdog scheduling margin");
+  static_assert(isolated_visual_heartbeat_ms < isolated_visual_watchdog_ms,
+                "isolated helper heartbeats must leave watchdog scheduling margin");
   IsolatedConfiguration configuration;
   configuration.sequence = 9'007'199'254'740'993ULL;
   configuration.capture_quality = layerc::core::CaptureQuality::low;
   configuration.exclusions.push_back({1, 2, 30, 40});
   VisualEvaluationRequest request;
-  request.source_key = L"profile.json";
+  request.source_key = "profile.json";
   layerc::core::TemplateState state{.id = "ready",
                                     .name = "Ready",
                                     .search_region = {0.0, 0.0, 1.0, 1.0},
@@ -106,21 +106,44 @@ void configuration_and_packet_sequences_round_trip() {
          "out-of-order acknowledgement should be rejected");
 }
 
+void inbound_messages_decode_in_one_pass() {
+  using namespace layerc::daemon;
+  IsolatedConfiguration configuration;
+  configuration.sequence = 7;
+  configuration.capture_quality = layerc::core::CaptureQuality::exact;
+  auto message = decode_isolated_message(
+      encode_isolated_configuration(configuration));
+  const auto *decoded =
+      std::get_if<IsolatedConfiguration>(&message);
+  expect(decoded != nullptr && decoded->sequence == 7 &&
+             decoded->requests.empty(),
+         "configure packets should decode through the single-parse entry");
+
+  message = decode_isolated_message(encode_isolated_poll(99));
+  const auto *poll = std::get_if<IsolatedPoll>(&message);
+  expect(poll != nullptr && poll->sequence == 99,
+         "waitSnapshot packets should decode through the single-parse entry");
+
+  message = decode_isolated_message(encode_isolated_ack(1));
+  expect(std::holds_alternative<IsolatedProtocolError>(message),
+         "non-inbound packet types should be rejected by the helper decoder");
+}
+
 void worker_sequences_survive_quality_epochs() {
   using namespace layerc::daemon;
   const auto now = layerc::core::MonotonicClock::now();
-  IsolatedSnapshotSequencer sequencer;
+  IsolatedSnapshotValidator validator;
   auto low = snapshot(1, 1, now);
-  expect(sequencer.rebase(low) && low.sequence == 1 &&
+  expect(validator.rebase(low) && low.sequence == 1 &&
              low.evaluations.front().sequence == 1,
          "the first worker epoch should publish sequence one");
   auto duplicate = snapshot(1, 1, now);
-  expect(!sequencer.rebase(duplicate) && duplicate.sequence == 1 &&
+  expect(!validator.rebase(duplicate) && duplicate.sequence == 1 &&
              duplicate.evaluations.front().sequence == 1,
          "duplicate worker snapshots should preserve protocol sequences");
-  sequencer.begin_worker_epoch();
+  validator.begin_worker_epoch();
   auto balanced = snapshot(1, 1, now);
-  expect(sequencer.rebase(balanced) && balanced.sequence == 2 &&
+  expect(validator.rebase(balanced) && balanced.sequence == 2 &&
              balanced.evaluations.front().sequence == 2,
          "quality-driven worker replacement must keep protocol sequences "
          "monotonic");
@@ -170,12 +193,11 @@ void snapshots_reject_replay_and_staleness() {
 } // namespace
 
 int main() {
-  handshake_is_mutually_bound();
-  configuration_and_packet_sequences_round_trip();
-  worker_sequences_survive_quality_epochs();
-  snapshots_reject_replay_and_staleness();
-  if (layerc::test::failures != 0)
-    return 1;
-  std::cout << "isolated visual protocol tests passed\n";
-  return 0;
+  return layerc::test::run({
+      {"handshake_is_mutually_bound", handshake_is_mutually_bound},
+      {"configuration_and_packet_sequences_round_trip", configuration_and_packet_sequences_round_trip},
+      {"inbound_messages_decode_in_one_pass", inbound_messages_decode_in_one_pass},
+      {"worker_sequences_survive_quality_epochs", worker_sequences_survive_quality_epochs},
+      {"snapshots_reject_replay_and_staleness", snapshots_reject_replay_and_staleness},
+  });
 }

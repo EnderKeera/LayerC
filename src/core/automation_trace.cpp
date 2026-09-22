@@ -2,7 +2,6 @@
 #include "layerc/core/automation.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/core/live_edit.hpp"
-#include "utf8.hpp"
 
 #include <algorithm>
 #include <cmath>

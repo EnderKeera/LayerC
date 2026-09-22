@@ -1,6 +1,6 @@
 #include "layerc/core/json.hpp"
 
-#include "utf8.hpp"
+#include "layerc/core/utf8.hpp"
 
 #include <charconv>
 #include <cmath>
@@ -149,7 +149,7 @@ private:
         while (position_ < source_.size()) {
             const char current = source_[position_++];
             if (current == '"') {
-                if (!detail::is_valid_utf8(result)) {
+                if (!is_valid_utf8(result)) {
                     fail("invalid UTF-8 in string");
                     return {};
                 }

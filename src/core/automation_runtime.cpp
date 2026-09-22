@@ -1,6 +1,6 @@
 #include "automation_runtime_impl.hpp"
 
-#include "utf8.hpp"
+#include "layerc/core/utf8.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -83,11 +83,11 @@ AutomationRuntime::process(const AutomationEvent &root,
                            const EffectCommitter &committer) {
   AutomationEvaluationResult result;
   if (root.source_id.size() > max_automation_string_bytes ||
-      !detail::is_valid_utf8(root.source_id) ||
+      !is_valid_utf8(root.source_id) ||
       root.fields.size() > max_automation_collection_entries ||
       !std::ranges::all_of(root.fields, [](const auto &field) {
         return field.first.size() <= max_automation_string_bytes &&
-               detail::is_valid_utf8(field.first) &&
+               is_valid_utf8(field.first) &&
                automation_value_valid(field.second);
       })) {
     result.error = {"$event", "source event exceeds automation bounds"};

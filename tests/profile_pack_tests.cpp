@@ -190,7 +190,7 @@ bool rewrite_zip(const std::filesystem::path &source,
 
 } // namespace
 
-int main() {
+void profile_pack_contracts() {
   bool passed = true;
   const auto root =
       std::filesystem::temp_directory_path() /
@@ -202,8 +202,8 @@ int main() {
   std::filesystem::create_directories(source, error);
   std::filesystem::create_directories(imported, error);
   if (error) {
-    std::cerr << "FAIL: temporary directories could not be created\n";
-    return 1;
+    (void)expect(false, "profile-pack temporary directories should be created");
+    return;
   }
 
   std::wstring previous_profile_dir;
@@ -337,9 +337,9 @@ int main() {
         std::ranges::find(validated->profiles, std::string("first"),
                           [](const auto &entry) { return entry.profile.id; });
     passed &= expect(first != validated->profiles.end() &&
-                         first->automation_profile.has_value() &&
-                         first->companion_profile.has_value() &&
-                         *first->companion_profile == first_companion,
+                         first->automation.has_value() &&
+                         first->companion.has_value() &&
+                         first->companion->profile == first_companion,
                      "automation and companion definitions should be included "
                      "in a profile pack");
   }
@@ -400,6 +400,24 @@ int main() {
                          layerc::bundle::import_profile_pack(
                              *validated, copy_choice, imported)),
                      "Import Copy should succeed beside existing profiles");
+    const auto copy_preview = layerc::bundle::preview_profile_import(
+        *validated, copy_choice, imported);
+    passed &= expect(!copy_preview.error && copy_preview.entries.size() == 1,
+                     "Copy preview should resolve the next available destination");
+    if (!copy_preview.error && copy_preview.entries.size() == 1) {
+      const auto target = copy_preview.entries.front().target;
+      auto reviewed_choice = copy_choice;
+      reviewed_choice.front().expected_target = target;
+      reviewed_choice.front().require_absent = true;
+      passed &= expect(write_text(target, "new occupant"),
+                       "a destination can become occupied after preview");
+      passed &= expect(std::holds_alternative<layerc::bundle::PackError>(
+                           layerc::bundle::import_profile_pack(
+                               *validated, reviewed_choice, imported)) &&
+                           read_text(target) == "new occupant",
+                       "a changed Copy destination must fail without overwriting it");
+      std::filesystem::remove(target, error);
+    }
     bool found_copy{};
     bool found_companion_copy{};
     for (const auto &entry : std::filesystem::directory_iterator(imported)) {
@@ -428,12 +446,20 @@ int main() {
         found_copy && found_companion_copy,
         "Import Copy should regenerate both base and companion profile IDs");
 
+    const auto preview_root = root / "preview-must-not-create";
+    const auto preview = layerc::bundle::preview_profile_import(*validated, false, preview_root);
+    passed &= expect(!preview.error && !preview.entries.empty() &&
+                         !std::filesystem::exists(preview_root),
+                     "import preview must resolve destinations without creating the store");
     const auto conflict_root = root / "conflicts";
     const auto invalid_target = conflict_root / "existing.JSON";
     passed &= expect(write_text(invalid_target, "{invalid-profile"),
                      "invalid conflict fixture should be created");
     auto nested_pack = *validated;
     nested_pack.profiles.front().suggested_filename = "folder/existing.json";
+    const auto invalid_preview = layerc::bundle::preview_profile_import(nested_pack, false, conflict_root);
+    passed &= expect(invalid_preview.error.has_value(),
+                     "preview must reject the same unreadable filename collision as commit");
     const std::array replace_nested{layerc::bundle::ImportChoice{
         .profile_index = 0, .action = layerc::bundle::ImportAction::replace}};
     passed &= expect(std::holds_alternative<layerc::bundle::PackError>(
@@ -506,6 +532,43 @@ int main() {
                            layerc::bundle::validate_profile_pack(unsupported)),
                    "unsupported manifest schemas should be rejected");
 
+  auto invalid_field_manifest = original_manifest;
+  const auto filename_key = invalid_field_manifest.find("\"suggestedFilename\":");
+  if (filename_key != std::string::npos) {
+    const auto begin = invalid_field_manifest.find('"', filename_key + 20);
+    const auto end = invalid_field_manifest.find('"', begin + 1);
+    if (begin != std::string::npos && end != std::string::npos)
+      invalid_field_manifest.replace(begin, end - begin + 1, "null");
+  }
+  const auto invalid_field = root / "invalid-field.layercprofile";
+  passed &= expect(
+      filename_key != std::string::npos &&
+          rewrite_zip(pack_one, invalid_field,
+                      {.replace_path = "manifest.json",
+                       .replacement = invalid_field_manifest}),
+      "a malformed nested manifest field should be written");
+  const auto invalid_field_result = layerc::bundle::validate_profile_pack(invalid_field);
+  const auto *field_error = std::get_if<layerc::bundle::PackError>(&invalid_field_result);
+  passed &= expect(
+      field_error != nullptr &&
+          field_error->message.find("$.profiles[0].suggestedFilename") != std::string::npos,
+      "bundle field validation should retain the full descriptor path");
+
+  auto overflow_manifest = original_manifest;
+  if (schema != std::string::npos)
+    overflow_manifest.replace(schema, 18, "\"schemaVersion\":18446744073709551616");
+  const auto overflow_path = root / "overflow-field.layercprofile";
+  passed &= expect(rewrite_zip(pack_one, overflow_path,
+                              {.replace_path = "manifest.json",
+                               .replacement = overflow_manifest}),
+                   "an overflowing manifest integer should be written");
+  const auto overflow_result = layerc::bundle::validate_profile_pack(overflow_path);
+  const auto *overflow_error = std::get_if<layerc::bundle::PackError>(&overflow_result);
+  passed &= expect(
+      overflow_error != nullptr &&
+          overflow_error->message.find("$.schemaVersion") != std::string::npos,
+      "bundle integers beyond uint64 must fail before a narrowing conversion");
+
   const auto missing_module = root / "missing-module.layercprofile";
   passed &=
       expect(rewrite_zip(pack_one, missing_module,
@@ -537,8 +600,9 @@ int main() {
       write_text(recovery_target, "new") &&
           write_text(uncommitted / "backup" / "0.bin", "old") &&
           write_text(uncommitted / "journal.json",
-                     "{\"schemaVersion\":1,\"operations\":[{\"target\":"
-                     "\"recovery.json\",\"existed\":true}]}\n") &&
+                     "{\"schemaVersion\":2,\"operations\":[{\"root\":"
+                     "\"config\",\"target\":\"recovery.json\","
+                     "\"existed\":true}]}\n") &&
           std::holds_alternative<std::monostate>(
               layerc::bundle::recover_profile_pack_transactions(imported)) &&
           read_text(recovery_target) == "old",
@@ -549,8 +613,9 @@ int main() {
       write_text(recovery_target, "published") &&
           write_text(committed / "backup" / "0.bin", "old") &&
           write_text(committed / "journal.json",
-                     "{\"schemaVersion\":1,\"operations\":[{\"target\":"
-                     "\"recovery.json\",\"existed\":true}]}\n") &&
+                     "{\"schemaVersion\":2,\"operations\":[{\"root\":"
+                     "\"config\",\"target\":\"recovery.json\","
+                     "\"existed\":true}]}\n") &&
           write_text(committed / "committed", "committed\n") &&
           std::holds_alternative<std::monostate>(
               layerc::bundle::recover_profile_pack_transactions(imported)) &&
@@ -564,5 +629,9 @@ int main() {
     SetEnvironmentVariableW(L"LAYERC_PROFILE_DIR",
                             previous_profile_dir.c_str());
   std::filesystem::remove_all(root, error);
-  return passed ? 0 : 1;
+  (void)passed;
+}
+
+int main() {
+  return layerc::test::run({{"profile_pack_contracts", profile_pack_contracts}});
 }

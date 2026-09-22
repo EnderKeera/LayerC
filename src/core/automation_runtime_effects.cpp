@@ -43,11 +43,7 @@ std::string runtime_effect_key(const AutomationEffect &effect) {
 
 bool runtime_effect_precedes(const AutomationEffect &left,
                              const AutomationEffect &right) {
-  if (left.priority != right.priority)
-    return left.priority > right.priority;
-  if (left.automation_order != right.automation_order)
-    return left.automation_order < right.automation_order;
-  return left.rule_order < right.rule_order;
+  return effect_order_precedes(left.order, right.order);
 }
 
 std::vector<std::string> AutomationRuntime::Impl::propagated_cooldowns(
@@ -134,7 +130,8 @@ bool AutomationRuntime::Impl::apply_internal(
       const auto *right = std::get_if<std::int64_t>(&effect.value.storage);
       const auto sum = right == nullptr ? std::optional<std::int64_t>{}
                                         : checked_integer_binary(*integer_value,
-                                                                 *right, "add");
+                                                                 *right,
+                                                                 detail::AutomationOpcode::add);
       if (!sum.has_value()) {
         error = {"$runtime", "integer increment overflow"};
         return false;
@@ -267,9 +264,7 @@ bool AutomationRuntime::Impl::apply_internal(
          .property = effect.property,
          .value = effect.value,
          .expires_at = expiry,
-         .priority = effect.priority,
-         .automation_order = effect.automation_order,
-         .rule_order = effect.rule_order});
+         .order = effect.order});
     return true;
   }
   case AutomationActionKind::clear_overlay_override:
@@ -334,36 +329,33 @@ bool AutomationRuntime::Impl::apply_internal(
 }
 
 std::optional<std::string> AutomationRuntime::Impl::commit_batch(
-    const AutomationRuntimeSnapshot &root_snapshot,
-    const std::vector<AutomationEvent> &queue,
-    const std::map<std::string, AutomationEffect, std::less<>> &winners,
-    const EffectValidator &validator, const EffectCommitter &committer,
-    AutomationEvaluationResult &result, AutomationError &fault) {
-  for (const auto &[key, effect] : winners) {
+    EvaluationStage &stage, const EffectValidator &validator,
+    const EffectCommitter &committer) {
+  for (const auto &[key, effect] : stage.winners) {
     (void)key;
     if (faulted.contains(effect.automation_id))
       continue;
     if (validator && !validator(effect)) {
       const AutomationError rejection{
           "$runtime", "transaction validation rejected an action"};
-      fault = rejection;
+      stage.fault = rejection;
       return effect.automation_id;
     }
-    result.effects.push_back(effect);
+    stage.result.effects.push_back(effect);
   }
-  std::ranges::sort(result.effects, runtime_effect_precedes);
-  AutomationRuntimeSnapshot committed_state = root_snapshot;
-  for (const auto &effect : result.effects) {
+  std::ranges::sort(stage.result.effects, runtime_effect_precedes);
+  AutomationRuntimeSnapshot committed_state = stage.root_snapshot;
+  for (const auto &effect : stage.result.effects) {
     std::vector<AutomationEvent> ignored;
     AutomationError apply_error;
     if (!apply_internal(effect, effect.timestamp, committed_state, apply_error,
                         ignored)) {
-      fault = apply_error;
+      stage.fault = apply_error;
       return effect.automation_id;
     }
   }
-  if (committer && !committer(result.effects)) {
-    result.error = AutomationError{
+  if (committer && !committer(stage.result.effects)) {
+    stage.result.error = AutomationError{
         "$runtime", "transaction commit rejected the action batch"};
     return std::nullopt;
   }
@@ -379,8 +371,8 @@ std::optional<std::string> AutomationRuntime::Impl::commit_batch(
         persistent_dirty = true;
       }
     }
-  result.derived_events.assign(queue.begin() + 1, queue.end());
-  result.committed = true;
+  stage.result.derived_events.assign(stage.queue.begin() + 1, stage.queue.end());
+  stage.result.committed = true;
   return std::nullopt;
 }
 } // namespace layerc::core

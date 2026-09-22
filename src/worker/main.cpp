@@ -2,7 +2,7 @@
 #include "visual_capture_worker.hpp"
 
 #include "layerc/platform/framed_pipe.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 #include "layerc/core/json.hpp"
 
 #include <array>
@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include <shellapi.h>
@@ -120,74 +121,62 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
     CloseHandle(pipe);
     return 10;
   }
-  layerc::core::CaptureQuality quality{};
   std::uint64_t last_configuration_sequence{};
-  layerc::daemon::IsolatedSnapshotSequencer snapshot_sequencer;
+  layerc::daemon::IsolatedSnapshotValidator snapshot_validator;
   while (true) {
     auto packet = layerc::platform::read_framed_pipe(
         pipe, layerc::daemon::isolated_visual_max_message_bytes);
     if (!packet) break;
-    const auto parsed = layerc::core::json::parse(packet.payload);
-    const auto *root = std::get_if<layerc::core::json::Value>(&parsed);
-    const auto *type = root == nullptr ? nullptr : root->find("type");
-    if (type == nullptr || !type->is_string()) break;
-    if (type->as_string() == "configure") {
-      auto decoded =
-          layerc::daemon::decode_isolated_configuration(packet.payload);
-      const auto *configuration =
-          std::get_if<layerc::daemon::IsolatedConfiguration>(&decoded);
-      if (configuration == nullptr ||
-          configuration->sequence <= last_configuration_sequence)
-        break;
-      if (configuration->requests.empty()) {
-        worker.reset();
-        ResetEvent(capture_event);
-        snapshot_sequencer.begin_worker_epoch();
-      } else {
-        if (!worker || quality != configuration->capture_quality) {
-          worker.reset();
-          ResetEvent(capture_event);
-          worker = std::make_unique<layerc::daemon::VisualCaptureWorker>(
-              target_window, configuration->capture_quality, capture_event);
-          quality = configuration->capture_quality;
-          snapshot_sequencer.begin_worker_epoch();
-          worker->configure(configuration->requests);
-          worker->set_excluded_screen_rects(configuration->exclusions);
-          worker->start();
-        } else {
-          worker->configure(configuration->requests);
-          worker->set_excluded_screen_rects(configuration->exclusions);
-        }
-      }
-      last_configuration_sequence = configuration->sequence;
-      if (!layerc::platform::write_framed_pipe(
-              pipe,
-              layerc::daemon::encode_isolated_ack(
-                  configuration->sequence),
-              layerc::daemon::isolated_visual_max_message_bytes, error))
-        break;
-      continue;
+    auto message = layerc::daemon::decode_isolated_message(packet.payload);
+    if (const auto *protocol_error =
+            std::get_if<layerc::daemon::IsolatedProtocolError>(&message)) {
+      (void)protocol_error;
+      break;
     }
-    if (type->as_string() == "waitSnapshot") {
-      std::uint64_t sequence{};
-      if (!layerc::daemon::decode_isolated_poll(packet.payload, sequence,
-                                                error))
-        break;
+    if (const auto *poll =
+            std::get_if<layerc::daemon::IsolatedPoll>(&message)) {
       const DWORD wait = WaitForSingleObject(
           capture_event, layerc::daemon::isolated_visual_heartbeat_ms);
       if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT) break;
       auto snapshot = worker == nullptr
                           ? layerc::daemon::VisualCaptureSnapshot{}
                           : worker->snapshot();
-      (void)snapshot_sequencer.rebase(snapshot);
+      (void)snapshot_validator.rebase(snapshot);
       if (!layerc::platform::write_framed_pipe(
               pipe,
-              layerc::daemon::encode_isolated_snapshot(sequence, snapshot),
+              layerc::daemon::encode_isolated_snapshot(poll->sequence,
+                                                       snapshot),
               layerc::daemon::isolated_visual_max_message_bytes, error))
         break;
       continue;
     }
-    break;
+    const auto *configuration =
+        std::get_if<layerc::daemon::IsolatedConfiguration>(&message);
+    if (configuration == nullptr ||
+        configuration->sequence <= last_configuration_sequence)
+      break;
+    if (configuration->requests.empty()) {
+      worker.reset();
+      ResetEvent(capture_event);
+      snapshot_validator.begin_worker_epoch();
+    } else {
+      if (!worker) {
+        ResetEvent(capture_event);
+        worker = std::make_unique<layerc::daemon::VisualCaptureWorker>(
+            target_window, capture_event);
+        snapshot_validator.begin_worker_epoch();
+      }
+      worker->configure(configuration->requests,
+                        configuration->capture_quality);
+      worker->set_excluded_screen_rects(configuration->exclusions);
+      worker->start();
+    }
+    last_configuration_sequence = configuration->sequence;
+    if (!layerc::platform::write_framed_pipe(
+            pipe,
+            layerc::daemon::encode_isolated_ack(configuration->sequence),
+            layerc::daemon::isolated_visual_max_message_bytes, error))
+      break;
   }
   worker.reset();
   CloseHandle(capture_event);
@@ -197,7 +186,7 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
 
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
   int argc{};
   wchar_t **argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   if (argv == nullptr) return 1;

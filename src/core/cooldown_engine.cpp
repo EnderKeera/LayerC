@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <ranges>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 namespace layerc::core {
 namespace {
@@ -23,7 +25,45 @@ earliest_deadline(const std::vector<TimePoint> &deadlines) noexcept {
   return *std::ranges::min_element(deadlines);
 }
 
+// Single owner for "time until charged" so the label and progress bar
+// cannot disagree about the remaining time.
+[[nodiscard]] Milliseconds remaining_ms(const CooldownState &state,
+                                        const TimePoint now) noexcept {
+  if (!state.next_charge_at.has_value()) return Milliseconds::zero();
+  return std::max(
+      Milliseconds::zero(),
+      std::chrono::duration_cast<Milliseconds>(*state.next_charge_at - now));
+}
+
 } // namespace
+
+std::string cooldown_status_text(const CooldownDefinition &definition,
+                                 const CooldownState &state,
+                                 const TimePoint now) {
+  std::string label = definition.name;
+  if (state.next_charge_at.has_value()) {
+    const auto remaining = remaining_ms(state, now);
+    const auto tenths = (remaining.count() + 99) / 100;
+    label += "  " + std::to_string(tenths / 10) + "." +
+             std::to_string(tenths % 10) + "s";
+  } else {
+    label += "  READY";
+  }
+  if (state.max_charges > 1)
+    label += "  [" + std::to_string(state.available_charges) + "]";
+  return label;
+}
+
+double cooldown_progress(const CooldownDefinition &definition,
+                         const CooldownState &state,
+                         const TimePoint now) noexcept {
+  if (!state.next_charge_at.has_value()) return 1.0;
+  if (definition.duration <= Milliseconds::zero()) return 0.0;
+  const auto remaining = remaining_ms(state, now);
+  return std::clamp(static_cast<double>(remaining.count()) /
+                        static_cast<double>(definition.duration.count()),
+                    0.0, 1.0);
+}
 
 CooldownEngine::CooldownEngine(
     const std::span<const CooldownDefinition> definitions,
@@ -146,7 +186,10 @@ std::vector<std::string> CooldownEngine::trigger_many_with_propagation(
   std::unordered_set<std::string> expanded_members;
 
   for (std::size_t index{}; index < pending.size(); ++index) {
-    const auto &id = pending[index];
+    // Copy the work item: expanding pending below may reallocate the queue
+    // and invalidate any reference into it (overlapping propagation groups
+    // such as {a,b} and {a,c} trigger this reliably under ASan).
+    const auto id = pending[index];
     auto *entry = entry_for(id);
     if (entry == nullptr || !visited_entries.insert(entry).second)
       continue;

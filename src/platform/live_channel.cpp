@@ -1,10 +1,10 @@
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/text.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/win32_error.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <array>
-#include <filesystem>
 #include <span>
 #include <vector>
 
@@ -17,41 +17,14 @@ HANDLE make_event() {
   return CreateEventW(nullptr, TRUE, FALSE, nullptr);
 }
 
-bool is_sibling_image(const HANDLE process, const wchar_t *const filename) {
-  std::array<wchar_t, 32'768> editor_path{};
-  const DWORD editor_length = GetModuleFileNameW(
-      nullptr, editor_path.data(), static_cast<DWORD>(editor_path.size()));
-  if (editor_length == 0 || editor_length >= editor_path.size()) return false;
-
-  std::array<wchar_t, 32'768> server_path{};
-  DWORD server_length = static_cast<DWORD>(server_path.size());
-  if (QueryFullProcessImageNameW(process, 0, server_path.data(),
-                                 &server_length) == FALSE ||
-      server_length == 0)
-    return false;
-
-  const auto expected =
-      std::filesystem::path(
-          std::wstring_view(editor_path.data(), editor_length))
-          .parent_path() /
-      filename;
-  const auto actual = std::filesystem::path(
-      std::wstring_view(server_path.data(), server_length));
-  std::error_code error;
-  const bool equivalent = std::filesystem::equivalent(expected, actual, error);
-  return !error && equivalent;
-}
-
 } // namespace
 
-bool is_sibling_process_image(const DWORD process_id,
-                              const wchar_t *filename) {
-  const HANDLE process =
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr) return false;
-  const bool sibling = is_sibling_image(process, filename);
-  CloseHandle(process);
-  return sibling;
+bool is_layerc_editor_process(const DWORD process_id,
+                              const DWORD authenticated_editor_id) {
+  if (process_id == 0) return false;
+  if (authenticated_editor_id != 0 && process_id == authenticated_editor_id)
+    return true;
+  return is_sibling_process_image(process_id, L"layere.exe");
 }
 
 NamedPipeEditorDaemonChannel::NamedPipeEditorDaemonChannel(
@@ -204,9 +177,9 @@ bool NamedPipeEditorDaemonChannel::verify_peer_identity(
     return false;
   }
   const bool trusted_user = same_user_as_current_process(peer_process);
-  const bool trusted_image = expected_peer_process_id_ != 0 ||
-                             is_sibling_image(peer_process, sibling_image);
   CloseHandle(peer_process);
+  const bool trusted_image = expected_peer_process_id_ != 0 ||
+                             is_sibling_process_image(peer_pid, sibling_image);
   if (!trusted_user || !trusted_image) {
     last_error_ = std::wstring(untrusted_error);
     return false;

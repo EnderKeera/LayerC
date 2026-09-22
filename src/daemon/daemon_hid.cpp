@@ -20,7 +20,7 @@ struct TopLevelUsage {
 
 } // namespace
 
-struct DaemonApp::HidRuntimeState {
+struct HidRuntimeState {
   using Device = layerc::platform::HidRawDevice;
   std::map<HANDLE, Device, std::less<>> devices;
   std::set<TopLevelUsage> registered_usages;
@@ -29,14 +29,28 @@ struct DaemonApp::HidRuntimeState {
   bool devices_dirty{true};
 };
 
+InputRuntime::~InputRuntime() = default;
+
+HidRuntimeState &InputRuntime::ensure_hid() {
+  if (!hid_)
+    hid_ = std::make_unique<HidRuntimeState>();
+  return *hid_;
+}
+
+void InputRuntime::reset_hid() noexcept {
+  hid_.reset();
+}
+
 DaemonApp::~DaemonApp() = default;
-DaemonApp::DaemonApp() = default;
+DaemonApp::DaemonApp()
+    : runtime_services_(this, capability_policies()),
+      runtime_kernel_(runtime_services_.registry()) {}
 
 bool DaemonApp::reconcile_hid_runtime() {
-  if (!hid_runtime_) hid_runtime_ = std::make_unique<HidRuntimeState>();
+  (void)input_runtime_.ensure_hid();
   std::set<TopLevelUsage> required;
   std::vector<layerc::core::HidDeviceSelector> active_selectors;
-  for (const auto *session : active_input_sessions_) {
+  for (const auto *session : session_registry_.active_inputs()) {
     if (session == nullptr) continue;
     for (const auto &binding : session->profile.hid_bindings) {
       if (std::ranges::find(active_selectors, binding.device) ==
@@ -48,18 +62,18 @@ bool DaemonApp::reconcile_hid_runtime() {
       required.insert({binding.device.usage_page, binding.device.usage});
     }
   }
-  hid_runtime_->resolver.retain(active_selectors);
+  input_runtime_.hid()->resolver.retain(active_selectors);
   const bool selector_set_changed =
-      active_selectors.size() != hid_runtime_->active_selectors.size() ||
+      active_selectors.size() != input_runtime_.hid()->active_selectors.size() ||
       std::ranges::any_of(active_selectors, [&](const auto &selector) {
-        return std::ranges::find(hid_runtime_->active_selectors, selector) ==
-               hid_runtime_->active_selectors.end();
+        return std::ranges::find(input_runtime_.hid()->active_selectors, selector) ==
+               input_runtime_.hid()->active_selectors.end();
       });
   const bool usage_set_changed =
-      required != hid_runtime_->registered_usages;
+      required != input_runtime_.hid()->registered_usages;
 
   std::set<TopLevelUsage> retained;
-  for (const auto &usage : hid_runtime_->registered_usages) {
+  for (const auto &usage : input_runtime_.hid()->registered_usages) {
     if (required.contains(usage)) {
       retained.insert(usage);
       continue;
@@ -95,57 +109,54 @@ bool DaemonApp::reconcile_hid_runtime() {
   } else {
     retained.insert(added.begin(), added.end());
   }
-  hid_runtime_->registered_usages = std::move(retained);
+  input_runtime_.hid()->registered_usages = std::move(retained);
 
   if (!registration_ok) return false;
-  hid_runtime_->active_selectors = std::move(active_selectors);
+  input_runtime_.hid()->active_selectors = std::move(active_selectors);
   if (selector_set_changed || usage_set_changed)
-    hid_runtime_->devices_dirty = true;
+    input_runtime_.hid()->devices_dirty = true;
 
-  if (hid_runtime_->devices_dirty) {
-    hid_runtime_->devices.clear();
+  if (input_runtime_.hid()->devices_dirty) {
+    input_runtime_.hid()->devices.clear();
     for (auto &device : layerc::platform::enumerate_raw_hid_devices())
-      hid_runtime_->devices.emplace(device.handle, std::move(device));
-    hid_runtime_->resolver.clear();
-    hid_runtime_->devices_dirty = false;
+      input_runtime_.hid()->devices.emplace(device.handle, std::move(device));
+    input_runtime_.hid()->resolver.clear();
+    input_runtime_.hid()->devices_dirty = false;
   }
   return true;
 }
 
-layerc::runtime::RuntimeResourceStats
-DaemonApp::hid_runtime_resources() const noexcept {
-  if (!hid_runtime_) return {};
+layerc::runtime::RuntimeResourceStats InputRuntime::hid_resources() const
+    noexcept {
+  if (!hid()) return {};
   return {
-      .objects = 1U +
-                 static_cast<std::uint32_t>(hid_runtime_->devices.size()) +
-                 static_cast<std::uint32_t>(
-                     hid_runtime_->registered_usages.size()) +
-                 static_cast<std::uint32_t>(
-                     hid_runtime_->resolver.size()),
+      .objects = 1U + static_cast<std::uint32_t>(hid()->devices.size()) +
+                 static_cast<std::uint32_t>(hid()->registered_usages.size()) +
+                 static_cast<std::uint32_t>(hid()->resolver.size()),
   };
 }
 
 void DaemonApp::quiesce_hid_runtime() noexcept {
-  if (!hid_runtime_) return;
-  for (const auto &usage : hid_runtime_->registered_usages) {
+  if (!input_runtime_.hid()) return;
+  for (const auto &usage : input_runtime_.hid()->registered_usages) {
     RAWINPUTDEVICE remove{.usUsagePage = usage.page,
                           .usUsage = usage.usage,
                           .dwFlags = RIDEV_REMOVE,
                           .hwndTarget = nullptr};
     (void)RegisterRawInputDevices(&remove, 1, sizeof(remove));
   }
-  for (auto &session : sessions_) {
+  for (auto &session : session_registry_.sessions()) {
     session->hid_states.clear();
     session->clear_input_state();
   }
-  hid_runtime_.reset();
+  input_runtime_.reset_hid();
 }
 
 void DaemonApp::handle_hid_device_change(const HANDLE, const bool) {
-  if (!hid_runtime_) return;
-  hid_runtime_->devices_dirty = true;
-  hid_runtime_->resolver.clear();
-  for (auto &session : sessions_) {
+  if (!input_runtime_.hid()) return;
+  input_runtime_.hid()->devices_dirty = true;
+  input_runtime_.hid()->resolver.clear();
+  for (auto &session : session_registry_.sessions()) {
     session->hid_states.assign(session->profile.hid_bindings.size(), {});
     session->clear_input_state();
   }
@@ -210,30 +221,30 @@ bool DaemonApp::process_hid_sample(
 }
 
 void DaemonApp::handle_hid_input(const RAWINPUT &input) {
-  if (!hid_runtime_ || active_input_sessions_.empty())
+  if (!input_runtime_.hid() || session_registry_.active_inputs().empty())
     return;
-  auto device = hid_runtime_->devices.find(input.header.hDevice);
-  if (device == hid_runtime_->devices.end()) {
+  auto device = input_runtime_.hid()->devices.find(input.header.hDevice);
+  if (device == input_runtime_.hid()->devices.end()) {
     auto loaded =
         layerc::platform::load_raw_hid_device(input.header.hDevice);
     if (!loaded) return;
-    device = hid_runtime_->devices
+    device = input_runtime_.hid()->devices
                  .emplace(input.header.hDevice, std::move(*loaded))
                  .first;
-    hid_runtime_->resolver.clear();
+    input_runtime_.hid()->resolver.clear();
   }
   bool overlays_changed{};
 
   const auto evaluate_for_sessions = [&](const auto &sample_for) {
-    for (auto *session : active_input_sessions_) {
+    for (auto *session : session_registry_.active_inputs()) {
       if (session == nullptr || !session->uses_hid) continue;
       if (session->hid_states.size() != session->profile.hid_bindings.size())
         session->hid_states.assign(session->profile.hid_bindings.size(), {});
       for (std::size_t index = 0;
            index < session->profile.hid_bindings.size(); ++index) {
         const auto &binding = session->profile.hid_bindings[index];
-        if (!hid_runtime_->resolver.resolves_to(
-                device->second, binding.device, hid_runtime_->devices))
+        if (!input_runtime_.hid()->resolver.resolves_to(
+                device->second, binding.device, input_runtime_.hid()->devices))
           continue;
         const auto sample = sample_for(binding);
         if (sample.has_value())

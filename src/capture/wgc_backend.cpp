@@ -209,7 +209,6 @@ public:
     last_frame_.reset();
     d3d_ = {};
     runtime_.reset();
-    black_frames_ = 0;
     pool_size_ = {};
   }
 
@@ -276,7 +275,6 @@ public:
         }
         pool_size_ = content;
         last_frame_.reset();
-        black_frames_ = 0;
         return {.availability = core::CaptureAvailability::starting,
                 .backend = kind(),
                 .diagnostic = "WGC target size changed; frame pool recreated",
@@ -299,23 +297,14 @@ public:
                 .backend = kind(),
                 .diagnostic = error_,
                 .frame = {}};
-      if (frame_is_nearly_black(*captured))
-        ++black_frames_;
-      else
-        black_frames_ = 0;
       last_frame_ = std::move(captured);
     }
 
-    const auto availability =
-        black_frames_ >= 30 ? core::CaptureAvailability::protected_or_black
-        : last_frame_       ? core::CaptureAvailability::available
-                            : core::CaptureAvailability::starting;
+    const auto availability = last_frame_ ? core::CaptureAvailability::available
+                                          : core::CaptureAvailability::starting;
     return {.availability = availability,
             .backend = kind(),
-            .diagnostic =
-                availability == core::CaptureAvailability::protected_or_black
-                    ? "WGC returned persistent black frames"
-                    : std::string{},
+            .diagnostic = {},
             .frame = last_frame_};
   }
 
@@ -325,7 +314,6 @@ public:
       return;
     quality_ = quality;
     last_frame_.reset();
-    black_frames_ = 0;
   }
   core::CaptureBackendKind kind() const noexcept override {
     return core::CaptureBackendKind::windows_graphics_capture;
@@ -350,7 +338,6 @@ private:
   TextureReadback readback_;
   std::shared_ptr<CaptureFrame> last_frame_;
   std::string error_;
-  std::uint32_t black_frames_{};
   wgc_abi::SizeInt32 pool_size_{};
   core::CaptureQuality quality_{core::CaptureQuality::balanced};
   bool started_{};

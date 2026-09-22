@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include <commdlg.h>
 #include <windows.h>
@@ -22,7 +23,7 @@ using namespace std::chrono_literals;
 
 std::optional<std::filesystem::path> choose_trace_path(const HWND owner,
                                                        const bool save) {
-  std::array<wchar_t, 32'768> buffer{};
+  std::vector<wchar_t> buffer(32'768);
   if (save)
     wcscpy_s(buffer.data(), buffer.size(), L"automation.layerctrace");
   OPENFILENAMEW dialog{};
@@ -144,7 +145,7 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_PLAY), L"Play");
   const auto parsed = layerc::core::parse_automation_profile_json(
       to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_JSON))),
-      owner_.profile_);
+      owner_.document().profile());
   const auto *graph = std::get_if<layerc::core::AutomationProfile>(&parsed);
   if (graph == nullptr) {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
@@ -156,7 +157,7 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
   }
   simulator_ = std::make_unique<layerc::core::AutomationRuntime>(
       *graph, layerc::core::AutomationPersistentValues{},
-      owner_.profile_.cooldown_groups);
+      owner_.document().profile().cooldown_groups);
   simulator_->set_trace_enabled(true);
   simulator_index_ = 0;
   if (simulator_events_.empty()) {
@@ -164,6 +165,7 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
     event.kind = layerc::core::AutomationEventKind::session_started;
     event.timestamp = layerc::core::TimePoint{};
     event.origin_token = 1;
+    trace_events_.push_back(event);
     simulator_events_.push_back(std::move(event));
   }
   update_simulator_view(dialog);
@@ -347,10 +349,10 @@ bool AutomationEditor::handle_live_message(
 void AutomationEditor::restore_live_subscription() {
   if (!trace_enabled_)
     return;
-  ++owner_.revision_;
-  (void)owner_.live_channel_.send({
+  owner_.advance_live_revision();
+  (void)owner_.send_live({
       .type = layerc::core::LiveMessageType::automation_trace_subscribe,
-      .revision = owner_.revision_,
+      .revision = owner_.live_revision(),
   });
 }
 void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
@@ -361,8 +363,8 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
     trace_events_.clear();
     trace_display_ = "Waiting for authenticated LayerD events...";
   }
-  if (!owner_.live_channel_.connected() ||
-      !owner_.live_package_authenticated_) {
+  if (!owner_.live_connected() ||
+      !owner_.live_authenticated()) {
     trace_display_ =
         "LayerD is not authenticated; start or restart LayerD and try again.";
     set_text(GetDlgItem(dialog, IDC_AUTOMATION_TRACE_TEXT),
@@ -371,13 +373,13 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
     set_owner_draw_checkbox(GetDlgItem(dialog, IDC_AUTOMATION_TRACE), false);
     return;
   }
-  ++owner_.revision_;
+  owner_.advance_live_revision();
   layerc::core::LiveMessage message;
   message.type =
       enabled ? layerc::core::LiveMessageType::automation_trace_subscribe
               : layerc::core::LiveMessageType::automation_trace_unsubscribe;
-  message.revision = owner_.revision_;
-  (void)owner_.live_channel_.send(message);
+  message.revision = owner_.live_revision();
+  (void)owner_.send_live(message);
 }
 
 void AutomationEditor::save_trace(const HWND dialog) {
@@ -405,21 +407,21 @@ void AutomationEditor::save_trace(const HWND dialog) {
 }
 
 void AutomationEditor::retry_selected(const HWND dialog) {
-  if (!owner_.automation_profile_)
+  if (!owner_.document().automation())
     return;
   const int selected = selected_index(dialog);
   if (selected < 0 || static_cast<std::size_t>(selected) >=
-                          owner_.automation_profile_->automations.size())
+                          owner_.document().automation()->automations.size())
     return;
-  ++owner_.revision_;
+  owner_.advance_live_revision();
   layerc::core::LiveMessage message;
   message.type = layerc::core::LiveMessageType::retry_automation;
-  message.revision = owner_.revision_;
+  message.revision = owner_.live_revision();
   message.profile_key =
-      to_utf8(layerc::platform::canonical_profile_key(owner_.current_path_));
-  message.text = owner_.automation_profile_
+      layerc::platform::canonical_profile_key(owner_.document().path());
+  message.text = owner_.document().automation()
                      ->automations[static_cast<std::size_t>(selected)]
                      .id;
-  (void)owner_.live_channel_.send(message);
+  (void)owner_.send_live(message);
 }
 } // namespace layerc::editor
