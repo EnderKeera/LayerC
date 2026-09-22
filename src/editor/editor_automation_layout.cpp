@@ -92,24 +92,23 @@ void AutomationEditor::layout(const HWND dialog) const {
   move(IDC_AUTOMATION_PRESET_LABEL, left, top + scaled(3), scaled(65),
        label_height);
   left += scaled(65);
-  move(IDC_AUTOMATION_PRESETS, left, top, scaled(110), control_height);
-  left += scaled(110) + gap;
+  move(IDC_AUTOMATION_PRESETS, left, top, scaled(220), control_height);
+  left += scaled(220) + gap;
   move(IDC_AUTOMATION_ADD_PRESET, left, top, scaled(54), control_height);
   left += scaled(60);
   move(IDC_AUTOMATION_REMOVE, left, top, scaled(58), control_height);
   left += scaled(66);
   move(IDC_AUTOMATION_ENABLED, left, top + scaled(2), scaled(70),
        label_height);
-  left += scaled(78);
-  move(IDC_AUTOMATION_VIEW_LABEL, left, top + scaled(3), scaled(32),
+  const int view_top = top + control_height + gap;
+  move(IDC_AUTOMATION_VIEW_LABEL, margin, view_top + scaled(3), scaled(40),
        label_height);
-  left += scaled(32);
-  move(IDC_AUTOMATION_VIEW, left, top, scaled(100), control_height);
+  move(IDC_AUTOMATION_VIEW, margin + scaled(40), view_top, scaled(150), control_height);
 
   const int close_top = height - margin - control_height;
   move(IDOK, width - margin - scaled(72), close_top, scaled(72),
        control_height);
-  const int workspace_top = top + control_height + gap;
+  const int workspace_top = view_top + control_height + gap;
   const int workspace_bottom = close_top - gap;
 
   if (view_ == 0) {

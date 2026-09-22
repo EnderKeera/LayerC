@@ -1,12 +1,13 @@
 #include "layerc/runtime/daemon_kernel.hpp"
 
 #include <algorithm>
+#include <vector>
 
 namespace layerc::runtime {
 
 CapabilityDemand calculate_capability_demand(
     const std::span<const SessionCapabilityRequest> sessions,
-    const bool editor_connected, const bool edit_overlay_active) noexcept {
+    const bool edit_overlay_active) {
   CapabilityDemand demand;
   std::vector<WindowId> isolated_windows;
   for (const auto &session : sessions) {
@@ -28,29 +29,25 @@ CapabilityDemand calculate_capability_demand(
       continue;
     const bool isolated = std::ranges::find(isolated_windows, session.window) !=
                           isolated_windows.end();
-    if (isolated) {
-      demand.add(Capability::isolated_visual);
-    } else {
-      demand.add(Capability::visual);
-      if (session.templates)
-        demand.add(Capability::template_evaluation);
-    }
+    demand.add_visual_consumer(
+        {session.window, session.profile_id,
+         isolated ? core::VisualRuntime::isolated
+                  : core::VisualRuntime::inline_process});
   }
-  if (editor_connected)
-    demand.add(Capability::live_edit);
   if (edit_overlay_active)
     demand.add(Capability::overlay);
   return demand;
 }
 
+DaemonKernel::DaemonKernel(const RuntimeServiceRegistry services) noexcept
+    : services_(services) {}
+
 bool DaemonKernel::reconcile(
     CapabilityDemand demand,
-    const std::span<const RuntimeServiceDescriptor> descriptors,
     const core::TimePoint now) {
   if (reconciling_) {
     pending_ = PendingReconcile{
         .demand = std::move(demand),
-        .descriptors = {descriptors.begin(), descriptors.end()},
         .now = now};
     return true;
   }
@@ -59,15 +56,13 @@ bool DaemonKernel::reconcile(
   bool success = true;
   PendingReconcile current{
       .demand = std::move(demand),
-      .descriptors = {descriptors.begin(), descriptors.end()},
       .now = now};
   do {
     if (demand_ != current.demand) {
       demand_ = current.demand;
       ++demand_generation_;
     }
-    success = services_.reconcile(demand_, current.descriptors, current.now) &&
-              success;
+    success = services_.reconcile(demand_, current.now) && success;
     if (!pending_)
       break;
     current = std::move(*pending_);

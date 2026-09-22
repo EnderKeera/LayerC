@@ -2,6 +2,8 @@
 #include "test_support.hpp"
 
 #include "layerc/core/automation.hpp"
+#include "layerc/core/automation_session.hpp"
+#include "layerc/core/cooldown_engine.hpp"
 
 #include <algorithm>
 #include <array>
@@ -106,6 +108,47 @@ AutomationExpression boolean_tree(const std::size_t depth) {
 } // namespace
 
 void test_automation_expression_and_action_contract() {
+  {
+    auto base = contract_base();
+    base.cooldown_groups.back().duration = 5s;
+    CooldownEngine engine(base.cooldowns, base.cooldown_groups);
+    const std::array effects{
+        AutomationEffect{.kind = AutomationActionKind::trigger_cooldown, .target = "dash"},
+        AutomationEffect{.kind = AutomationActionKind::reduce_cooldown_next, .target = "blink"}};
+    expect(!commit_automation_cooldown_effects(
+               engine, effects, base.cooldowns, base.cooldown_groups, TimePoint{}, 1),
+           "a rejected later effect must leave all cooldowns untouched");
+    expect(engine.remaining("dash", TimePoint{}) == 0ms,
+           "failed atomic effect commit must not consume an earlier charge");
+    expect(!validate_automation_cooldown_effect(
+               AutomationEffect{.kind = AutomationActionKind::set_overlay_override},
+               base.cooldowns, base.cooldown_groups),
+           "cooldown validation must reject effects from other domains");
+    AutomationProfile graph;
+    graph.profile_id = base.id;
+    AutomationRuntime runtime(graph);
+    expect(!next_automation_deadline(runtime, {}).has_value(),
+           "idle automation must have no deadline");
+    const std::array states{CooldownState{.next_charge_at = TimePoint{} + 100ms}};
+    expect(next_automation_deadline(runtime, states, TimePoint{} + 200ms) ==
+               TimePoint{} + 100ms,
+           "charge recovery must precede a later checkpoint");
+    expect(next_automation_deadline(runtime, states, TimePoint{} + 50ms) ==
+               TimePoint{} + 50ms,
+           "an earlier checkpoint must precede charge recovery");
+    graph.automations = {{.id = "overlay", .name = "Overlay",
+      .rules = {{.id = "start", .event = AutomationEventKind::session_started,
+        .actions = {{.kind = AutomationActionKind::set_overlay_override,
+          .target = "main", .name = "temporary", .property = "visible",
+          .value = literal(AutomationValue(false)),
+          .secondary = literal(AutomationValue(DurationValue{25ms}))}}}}}};
+    AutomationRuntime overlay_runtime(graph);
+    expect(overlay_runtime.process({.kind = AutomationEventKind::session_started}).committed,
+           "overlay expiry fixture should commit");
+    expect(next_automation_deadline(overlay_runtime, states) == TimePoint{} + 25ms,
+           "overlay expiry must schedule a wakeup without any runtime timer");
+  }
+
   const auto boolean = [&](AutomationExpression expression) {
     return evaluate(std::move(expression), AutomationValueType::boolean,
                     AutomationValue(false));

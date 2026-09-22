@@ -4,6 +4,7 @@
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/hash.hpp"
 #include "layerc/core/json.hpp"
+#include "layerc/core/json_reader.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/runtime_instances.hpp"
 
@@ -11,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -29,8 +31,19 @@ void test_sha256_helpers() {
          "SHA-256 should match the standard abc vector");
   const std::string exact_block(64, 'a');
   expect(digest(exact_block) ==
-             "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
-         "SHA-256 should clear the padding block after exactly 64 input bytes");
+              "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
+          "SHA-256 should clear the padding block after exactly 64 input bytes");
+  // Independent .NET SHA256 known answers for padding/block boundaries.
+  const std::pair<std::size_t, std::string_view> boundaries[]{
+      {55, "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"},
+      {56, "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"},
+      {57, "f13b2d724659eb3bf47f2dd6af1accc87b81f09f59f2b75e5c0bed6589dfe8c6"},
+      {63, "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34"},
+      {65, "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0"},
+  };
+  for (const auto &[length, expected] : boundaries)
+    expect(digest(std::string(length, 'a')) == expected,
+           "SHA-256 must preserve length and padding across block boundaries");
   constexpr std::string_view multi_block =
       "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
       "hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
@@ -50,21 +63,21 @@ void test_sha256_helpers() {
 void test_runtime_instance_tracking() {
   using namespace layerc::core;
   RuntimeInstanceTracker tracker;
-  const RuntimeInstanceKey first{.profile_key = L"game-profile", .window = 101};
-  const RuntimeInstanceKey second{.profile_key = L"game-profile", .window = 202};
+  const RuntimeInstanceKey first{.profile_key = "game-profile", .window = {101}};
+  const RuntimeInstanceKey second{.profile_key = "game-profile", .window = {202}};
   const RuntimeInstanceKey same_window_other_profile{
-      .profile_key = L"game-profile-copy", .window = 202};
+      .profile_key = "game-profile-copy", .window = {202}};
 
   const auto added =
       tracker.reconcile({first, second, same_window_other_profile});
   expect(added.added.size() == 3 && added.removed.empty() &&
              tracker.size() == 3,
          "matching profiles and windows should create independent runtime instances");
-  const auto foreground_second = tracker.foreground(202);
+  const auto foreground_second = tracker.foreground({202});
   expect(foreground_second.size() == 2 &&
              std::all_of(foreground_second.begin(), foreground_second.end(),
                          [](const RuntimeInstanceKey &key) {
-                           return key.window == 202;
+                           return key.window == WindowId{202};
                          }),
          "foreground input should route to every profile matching the foreground window");
 
@@ -84,17 +97,17 @@ void test_runtime_instance_tracking() {
 
   const auto removed = tracker.reconcile({second, same_window_other_profile});
   expect(removed.removed.size() == 1 && removed.removed.front() == first &&
-             tracker.size() == 2 && tracker.foreground(101).empty(),
+             tracker.size() == 2 && tracker.foreground({101}).empty(),
          "closing or minimizing a matched window should retire its runtime instance");
 
   const auto launcher_exit = tracker.reconcile({});
   expect(launcher_exit.removed.size() == 2 && tracker.size() == 0,
          "a launcher transition with no matching windows should retire all instances");
-  const RuntimeInstanceKey restarted{.profile_key = L"game-profile",
-                                     .window = 303};
+  const RuntimeInstanceKey restarted{.profile_key = "game-profile",
+                                     .window = {303}};
   const auto game_restart = tracker.reconcile({restarted});
   expect(game_restart.added == std::vector<RuntimeInstanceKey>{restarted} &&
-             tracker.foreground(303) ==
+             tracker.foreground({303}) ==
                  std::vector<RuntimeInstanceKey>{restarted},
          "a restarted game process should create a fresh routable instance");
   RuntimeInstanceTracker daemon_restart;
@@ -103,6 +116,14 @@ void test_runtime_instance_tracking() {
          "a daemon restart should reconstruct instances from current matches");
 }
 void test_json_unicode_and_errors() {
+  const std::string source = R"({"n":9223372036854775807,"a":[true,null,"x\\ny"],"empty":{}})";
+  const auto pretty_document = layerc::core::json::format(source);
+  expect(pretty_document.find("\r\n  ") != std::string::npos &&
+             pretty_document.find("9223372036854775807") != std::string::npos &&
+             layerc::core::json::format(pretty_document) == pretty_document,
+         "JSON formatting preserves exact integers and is idempotent");
+  expect(layerc::core::json::format("{broken") == "{broken",
+         "JSON formatting must preserve invalid editable source");
   using namespace layerc::core::json;
 
   auto result = parse(R"json({"name":"Layer\u0043","value":1.5})json");
@@ -142,18 +163,30 @@ void test_json_unicode_and_errors() {
                                    quoted_special.size()),
          "shared JSON formatting should escape strings and preserve UTF-8");
 
-  std::string non_finite = "[";
-  append_number(non_finite, std::numeric_limits<double>::quiet_NaN());
-  non_finite.push_back(',');
-  append_number(non_finite, std::numeric_limits<double>::infinity());
-  non_finite.push_back(']');
-  const auto non_finite_result = parse(non_finite);
-  const auto *non_finite_value = std::get_if<Value>(&non_finite_result);
-  expect(non_finite_value != nullptr && non_finite_value->is_array() &&
-             non_finite_value->as_array().size() == 2 &&
-             non_finite_value->as_array()[0].as_number() == 0.0 &&
-             non_finite_value->as_array()[1].as_number() == 0.0,
-         "non-finite values should retain valid JSON syntax through the safe numeric fallback");
+  const auto rejects_number = [](const double value) {
+    std::string output = "prefix";
+    try {
+      append_number(output, value);
+    } catch (const std::invalid_argument &) {
+      return output == "prefix";
+    }
+    return false;
+  };
+  expect(rejects_number(std::numeric_limits<double>::quiet_NaN()) &&
+             rejects_number(std::numeric_limits<double>::infinity()),
+         "non-finite values should be rejected without mutating JSON output");
+
+  std::string nested_non_finite = "prefix";
+  bool nested_rejected = false;
+  try {
+    append_value(nested_non_finite,
+                 Value(Value::Array{Value(1.0),
+                                    Value(std::numeric_limits<double>::infinity())}));
+  } catch (const std::invalid_argument &) {
+    nested_rejected = true;
+  }
+  expect(nested_rejected && nested_non_finite == "prefix",
+         "generic JSON emission should roll back a partially emitted invalid tree");
 
   // Integral JSON tokens keep exact int64 storage: values beyond the 2^53
   // double mantissa round-trip exactly instead of silently rounding.
@@ -170,6 +203,72 @@ void test_json_unicode_and_errors() {
              exact_value->find("big")->is_number() &&
              exact_value->find("big")->as_number() == 9'007'199'254'740'993.0,
          "integral JSON should parse to exact int64 storage usable as number");
+}
+
+void test_json_field_reader() {
+  using namespace layerc::core::json;
+  const auto document = parse(
+      R"({"empty":"","text":"four","enabled":true,"color":"#aB09fF","badColor":"#12xy45","integer":9223372036854775807,"real":1.0,"fraction":1.5,"overflow":9223372036854775808.0,"unsigned":"18446744073709551615","negative":-1,"extra":null})");
+  const auto &root = std::get<Value>(document);
+  Reader reader;
+  std::string text = "default";
+  bool enabled = false;
+  expect(reader.string(root, "missing", "$", text, Required::no, EmptyString::reject) &&
+             text == "default" &&
+             reader.string(root, "empty", "$", text, Required::yes, EmptyString::allow) &&
+             text.empty() &&
+             reader.boolean(root, "enabled", "$", enabled, Required::yes) && enabled &&
+             reader.integer(root, "missing", "$", 0, 10, Required::no, 3) == 3 &&
+             reader.color(root, "color", "$", Required::yes) == 0xAB09FFU,
+         "explicit optional and empty policies preserve defaults and shared color syntax");
+  expect(reader.integer(root, "integer", "$", 0, INT64_MAX, Required::yes) == INT64_MAX &&
+             reader.integer(root, "real", "$", 0, 2, Required::yes) == 1,
+         "numeric policy preserves exact int64 tokens and accepts small integral decimals");
+  const auto failure = [&](const std::string_view key, auto operation) {
+    Reader invalid;
+    expect(!operation(invalid), "invalid field must fail validation");
+    const auto first = invalid.error().describe();
+    invalid.fail("$.later", "must not replace the first error");
+    expect(invalid.error().path == "$.nested." + std::string(key) &&
+               !first.empty() && invalid.error().describe() == first,
+           "field failures retain the first complete nested path");
+  };
+  failure("empty", [&](Reader &r) {
+    return r.string(root, "empty", "$.nested", text, Required::yes, EmptyString::reject);
+  });
+  failure("missing", [&](Reader &r) {
+    return r.string(root, "missing", "$.nested", text, Required::yes, EmptyString::allow);
+  });
+  failure("text", [&](Reader &r) {
+    return r.string(root, "text", "$.nested", text, Required::yes, EmptyString::allow, 3);
+  });
+  for (const auto key : {"fraction", "overflow"})
+    failure(key, [&](Reader &r) {
+      return r.integer(root, key, "$.nested", INT64_MIN, INT64_MAX, Required::yes);
+    });
+  failure("real", [&](Reader &r) {
+    return r.integer(root, "real", "$.nested", 0, 2, Required::yes, 0,
+                     IntegerEncoding::integer_token);
+  });
+  failure("badColor", [&](Reader &r) {
+    return r.color(root, "badColor", "$.nested", Required::yes);
+  });
+  failure("negative", [&](Reader &r) {
+    return r.unsigned_integer(root, "negative", "$.nested", UINT64_MAX, Required::yes);
+  });
+  expect(read_unsigned(*root.find("unsigned"), IntegerEncoding::decimal_string) == UINT64_MAX &&
+             !read_unsigned(*root.find("unsigned"), IntegerEncoding::number) &&
+             !read_unsigned(*root.find("integer"), IntegerEncoding::decimal_string) &&
+             !read_integer(Value(std::numeric_limits<double>::infinity())) &&
+             !read_integer(Value(std::numeric_limits<double>::quiet_NaN())),
+         "integer encodings are explicit and reject lossy or non-finite conversions");
+  Reader unknown;
+  expect(!unknown.exact_fields(root, {"empty"}, "$") && !unknown.error().path.empty(),
+         "strict schemas diagnose unknown keys");
+  Reader wrong_root;
+  expect(!wrong_root.object(Value(nullptr), "child", "$", Required::no) &&
+             wrong_root.error().path == "$",
+         "an optional field still requires an object parent");
 }
 
 void test_json_nesting_limit() {

@@ -140,7 +140,7 @@ void EditorWindow::capture_hid_binding() {
   HidDialogState state{};
   state.editor = this;
   state.devices = layerc::platform::enumerate_raw_hid_devices();
-  if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_HID_BINDING), dialog_,
+  if (DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_HID_BINDING), shell_.window(),
                       &EditorWindow::hid_binding_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK ||
       !state.inferred)
@@ -149,49 +149,49 @@ void EditorWindow::capture_hid_binding() {
   auto captured = std::move(state.inferred->binding);
   const auto cooldown_id = cooldown->id;
   std::size_t binding_index = SIZE_MAX;
-  for (const auto &binding : profile_.bindings) {
+  for (const auto &binding : document_.profile().bindings) {
     if (binding.cooldown_id != cooldown_id || binding.chord.tokens.size() != 1)
       continue;
     const auto &token = binding.chord.tokens.front();
     if (token.device == layerc::core::InputDevice::generic_hid &&
-        token.code != 0 && token.code <= profile_.hid_bindings.size())
+        token.code != 0 && token.code <= document_.profile().hid_bindings.size())
       binding_index = token.code - 1U;
   }
   const auto id_base =
       "hid-" + safe_identifier(to_wide(cooldown_id), "control");
   std::string id = id_base;
   int suffix = 2;
-  while (std::ranges::any_of(profile_.hid_bindings, [&](const auto &candidate) {
+  while (std::ranges::any_of(document_.profile().hid_bindings, [&](const auto &candidate) {
     const auto index =
-        static_cast<std::size_t>(&candidate - profile_.hid_bindings.data());
+        static_cast<std::size_t>(&candidate - document_.profile().hid_bindings.data());
     return candidate.id == id && index != binding_index;
   }))
     id = id_base + "-" + std::to_string(suffix++);
   captured.id = std::move(id);
   if (binding_index == SIZE_MAX) {
-    if (profile_.hid_bindings.size() >= 128) {
-      MessageBoxW(dialog_,
+    if (document_.profile().hid_bindings.size() >= 128) {
+      MessageBoxW(shell_.window(),
                   L"This profile already has the maximum 128 HID bindings.",
                   L"HID binding", MB_OK | MB_ICONERROR);
       return;
     }
-    binding_index = profile_.hid_bindings.size();
-    profile_.hid_bindings.push_back(std::move(captured));
+    binding_index = document_.profile().hid_bindings.size();
+    document_.profile().hid_bindings.push_back(std::move(captured));
   } else {
-    profile_.hid_bindings[binding_index] = std::move(captured);
+    document_.profile().hid_bindings[binding_index] = std::move(captured);
   }
-  std::erase_if(profile_.bindings, [&](const auto &binding) {
+  std::erase_if(document_.profile().bindings, [&](const auto &binding) {
     return binding.cooldown_id == cooldown_id;
   });
-  profile_.bindings.push_back(
+  document_.profile().bindings.push_back(
       {.cooldown_id = cooldown_id,
        .chord = layerc::core::InputChord{
            {{layerc::core::InputDevice::generic_hid,
              static_cast<std::uint16_t>(binding_index + 1U), 0}}}});
-  layerc::core::compact_hid_bindings(profile_);
+  layerc::core::compact_hid_bindings(document_.profile());
   refresh_binding_controls();
   record_profile_change(ChangeKind::immediate);
-  set_status(current_path_.empty()
+  set_status(document_.path().empty()
                  ? L"HID binding captured — Save once to create the profile."
                  : L"HID binding captured and autosaving.");
 }
@@ -204,9 +204,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    set_dark_title_bar(window);
-    (void)layerc::platform::apply_capture_exclusion(
-        window, state->editor->capture_exclusion_);
+    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion());
     state->editor->style_dialog_children(window);
     set_owner_draw_checkbox(GetDlgItem(window, IDC_HID_SYSTEM_CLASS), false);
     set_text(GetDlgItem(window, IDC_HID_THRESHOLD), L"50");

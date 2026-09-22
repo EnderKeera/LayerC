@@ -34,14 +34,13 @@ void SettingsWidgetPage::OnNavigatedFrom(
 
 void SettingsWidgetPage::render(
     std::optional<layerc::core::CompanionSessionSnapshot> snapshot) {
-  if (snapshot_.has_value() && snapshot.has_value() &&
-      snapshot_->profile_id == snapshot->profile_id &&
-      snapshot_->available_panels == snapshot->available_panels &&
-      snapshot_->preferences == snapshot->preferences) {
-    snapshot_ = std::move(snapshot);
-    return;
-  }
+  const bool unchanged = snapshot_.has_value() && snapshot.has_value() &&
+                         snapshot_->profile_id == snapshot->profile_id &&
+                         snapshot_->available_panels == snapshot->available_panels &&
+                         snapshot_->preferences == snapshot->preferences;
   snapshot_ = std::move(snapshot);
+  if (unchanged)
+    return;
   panel_ids_.clear();
   panel_choices_.clear();
   click_through_choices_.clear();

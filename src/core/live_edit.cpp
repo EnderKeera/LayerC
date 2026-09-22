@@ -1,20 +1,17 @@
 #include "layerc/core/live_edit.hpp"
 
+#include "layerc/core/base64.hpp"
+#include "layerc/core/enum_wire.hpp"
 #include "layerc/core/frame.hpp"
-#include "layerc/core/json.hpp"
+#include "layerc/core/json_reader.hpp"
 
 #include <algorithm>
-#include <charconv>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <optional>
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#include <windows.h>
 
 namespace layerc::core {
 namespace {
@@ -35,157 +32,40 @@ find_cooldown(const std::vector<CooldownDefinition> &definitions,
   return found == definitions.end() ? nullptr : &*found;
 }
 
-std::string base64_encode(const std::string_view source) {
-  if (source.empty())
-    return {};
-  DWORD output_size{};
-  if (CryptBinaryToStringA(
-          reinterpret_cast<const BYTE *>(source.data()),
-          static_cast<DWORD>(source.size()),
-          CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr,
-          &output_size) == FALSE ||
-      output_size == 0)
-    return {};
-  std::string output(output_size, '\0');
-  if (CryptBinaryToStringA(
-          reinterpret_cast<const BYTE *>(source.data()),
-          static_cast<DWORD>(source.size()),
-          CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, output.data(),
-          &output_size) == FALSE)
-    return {};
-  output.resize(output_size);
-  return output;
-}
-
-std::optional<std::string> base64_decode(const std::string_view source) {
-  if (source.size() % 4U != 0)
-    return std::nullopt;
-  DWORD output_size{};
-  if (CryptStringToBinaryA(source.data(), static_cast<DWORD>(source.size()),
-                           CRYPT_STRING_BASE64, nullptr, &output_size, nullptr,
-                           nullptr) == FALSE)
-    return std::nullopt;
-  std::string output(output_size, '\0');
-  if (CryptStringToBinaryA(source.data(), static_cast<DWORD>(source.size()),
-                           CRYPT_STRING_BASE64,
-                           reinterpret_cast<BYTE *>(output.data()),
-                           &output_size, nullptr, nullptr) == FALSE)
-    return std::nullopt;
-  output.resize(output_size);
-  return output;
-}
-
-// Must stay in LiveMessageType declaration order so message_type_name can
-// index it directly; parse_message_type scans it by name.
-static constexpr std::pair<std::string_view, LiveMessageType> k_message_names[] = {
-    {"handshake", LiveMessageType::handshake},
-    {"committedProfile", LiveMessageType::committed_profile},
-    {"beginEdit", LiveMessageType::begin_edit},
-    {"liveProfile", LiveMessageType::live_profile},
-    {"selectPanel", LiveMessageType::select_panel},
-    {"anchorChanged", LiveMessageType::anchor_changed},
-    {"setDirectDrag", LiveMessageType::set_direct_drag},
-    {"endEdit", LiveMessageType::end_edit},
-    {"heartbeat", LiveMessageType::heartbeat},
-    {"runtimeStatus", LiveMessageType::runtime_status},
-    {"diagnosticsRequest", LiveMessageType::diagnostics_request},
-    {"diagnosticsReply", LiveMessageType::diagnostics_reply},
-    {"retryVisual", LiveMessageType::retry_visual},
-    {"automationTraceSubscribe", LiveMessageType::automation_trace_subscribe},
-    {"automationTraceUnsubscribe",
-     LiveMessageType::automation_trace_unsubscribe},
-    {"automationTraceEvent", LiveMessageType::automation_trace_event},
-    {"retryAutomation", LiveMessageType::retry_automation},
-    {"ack", LiveMessageType::acknowledgement},
-    {"error", LiveMessageType::error},
+static constexpr std::array k_message_names{
+    EnumWireEntry{LiveMessageType::handshake, "handshake"},
+    EnumWireEntry{LiveMessageType::committed_profile, "committedProfile"},
+    EnumWireEntry{LiveMessageType::begin_edit, "beginEdit"},
+    EnumWireEntry{LiveMessageType::live_profile, "liveProfile"},
+    EnumWireEntry{LiveMessageType::select_panel, "selectPanel"},
+    EnumWireEntry{LiveMessageType::anchor_changed, "anchorChanged"},
+    EnumWireEntry{LiveMessageType::set_direct_drag, "setDirectDrag"},
+    EnumWireEntry{LiveMessageType::end_edit, "endEdit"},
+    EnumWireEntry{LiveMessageType::heartbeat, "heartbeat"},
+    EnumWireEntry{LiveMessageType::runtime_status, "runtimeStatus"},
+    EnumWireEntry{LiveMessageType::diagnostics_request, "diagnosticsRequest"},
+    EnumWireEntry{LiveMessageType::diagnostics_reply, "diagnosticsReply"},
+    EnumWireEntry{LiveMessageType::retry_visual, "retryVisual"},
+    EnumWireEntry{LiveMessageType::automation_trace_subscribe,
+                  "automationTraceSubscribe"},
+    EnumWireEntry{LiveMessageType::automation_trace_unsubscribe,
+                  "automationTraceUnsubscribe"},
+    EnumWireEntry{LiveMessageType::automation_trace_event,
+                  "automationTraceEvent"},
+    EnumWireEntry{LiveMessageType::retry_automation, "retryAutomation"},
+    EnumWireEntry{LiveMessageType::acknowledgement, "ack"},
+    EnumWireEntry{LiveMessageType::error, "error"},
 };
 
 std::string_view message_type_name(const LiveMessageType type) {
-  const auto index = static_cast<std::size_t>(type);
-  return index < std::size(k_message_names) ? k_message_names[index].first
-                                            : "error";
+  return enum_wire_name<LiveMessageType>(k_message_names, type)
+      .value_or("error");
 }
 
 std::optional<LiveMessageType> parse_message_type(const std::string_view name) {
-  const auto found = std::ranges::find_if(
-      k_message_names,
-      [&](const auto &entry) { return entry.first == name; });
-  return found == std::end(k_message_names) ? std::nullopt
-                                            : std::optional(found->second);
+  return parse_enum_wire<LiveMessageType>(k_message_names, name);
 }
 
-bool string_field(const json::Value &root, const std::string_view name,
-                  std::string &output, std::string &error) {
-  const auto *value = root.find(name);
-  if (value == nullptr)
-    return true;
-  if (!value->is_string()) {
-    error = std::string(name) + " must be a string";
-    return false;
-  }
-  output = value->as_string();
-  return true;
-}
-
-bool bool_field(const json::Value &root, const std::string_view name,
-                bool &output, std::string &error) {
-  const auto *value = root.find(name);
-  if (value == nullptr)
-    return true;
-  if (!value->is_bool()) {
-    error = std::string(name) + " must be a boolean";
-    return false;
-  }
-  output = value->as_bool();
-  return true;
-}
-
-bool double_field(const json::Value &root, const std::string_view name,
-                  double &output, std::string &error) {
-  const auto *value = root.find(name);
-  if (value == nullptr)
-    return true;
-  if (!value->is_number() || !std::isfinite(value->as_number())) {
-    error = std::string(name) + " must be a finite number";
-    return false;
-  }
-  output = value->as_number();
-  return true;
-}
-
-template <typename Integer>
-bool decimal_string_field(const json::Value &root, const std::string_view name,
-                          Integer &output, std::string &error) {
-  const auto *value = root.find(name);
-  if (value == nullptr)
-    return true;
-  if (!value->is_string()) {
-    error = std::string(name) + " must be a decimal string";
-    return false;
-  }
-  const auto &source = value->as_string();
-  Integer parsed{};
-  const auto [end, code] =
-      std::from_chars(source.data(), source.data() + source.size(), parsed);
-  if (code != std::errc{} || end != source.data() + source.size()) {
-    error = std::string(name) + " must be an unsigned decimal string";
-    return false;
-  }
-  output = parsed;
-  return true;
-}
-
-bool require_fields(const json::Value &root,
-                    const std::initializer_list<std::string_view> names,
-                    std::string &error) {
-  for (const auto name : names) {
-    if (root.find(name) != nullptr)
-      continue;
-    error = std::string(name) + " is required";
-    return false;
-  }
-  return true;
-}
 
 } // namespace
 
@@ -362,52 +242,52 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
 
   LiveMessage message;
   message.type = *parsed_type;
-  std::string error;
-  if (!require_fields(root, {"revision"}, error))
-    return LiveProtocolError{std::move(error)};
+  json::Reader fields;
+  if (!fields.required_fields(root, {"revision"}, "$"))
+    return LiveProtocolError{fields.error().describe()};
   switch (message.type) {
   case LiveMessageType::handshake:
-    if (!require_fields(root, {"text"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"text"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::committed_profile:
-    if (!require_fields(root, {"profileKey", "profileBase64"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"profileKey", "profileBase64"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::begin_edit:
-    if (!require_fields(root,
+    if (!fields.required_fields(root,
                         {"editSession", "targetWindow", "profileKey", "panelId",
                          "profileBase64"},
-                        error))
-      return LiveProtocolError{std::move(error)};
+                        "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::live_profile:
-    if (!require_fields(root, {"editSession", "profileBase64"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"editSession", "profileBase64"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::select_panel:
-    if (!require_fields(root, {"editSession", "panelId"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"editSession", "panelId"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::anchor_changed:
-    if (!require_fields(
+    if (!fields.required_fields(
             root, {"editSession", "panelId", "anchorX", "anchorY", "final"},
-            error))
-      return LiveProtocolError{std::move(error)};
+            "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::set_direct_drag:
-    if (!require_fields(root, {"editSession", "directDrag"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"editSession", "directDrag"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::end_edit:
   case LiveMessageType::heartbeat:
-    if (!require_fields(root, {"editSession"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"editSession"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::runtime_status:
   case LiveMessageType::diagnostics_reply:
-    if (!require_fields(root, {"text"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"text"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::diagnostics_request:
   case LiveMessageType::retry_visual:
@@ -415,40 +295,54 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
   case LiveMessageType::automation_trace_unsubscribe:
     break;
   case LiveMessageType::automation_trace_event:
-    if (!require_fields(root, {"profileKey", "text"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"profileKey", "text"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::retry_automation:
-    if (!require_fields(root, {"profileKey", "text"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"profileKey", "text"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   case LiveMessageType::acknowledgement:
   case LiveMessageType::error:
-    if (!require_fields(root, {"text"}, error))
-      return LiveProtocolError{std::move(error)};
+    if (!fields.required_fields(root, {"text"}, "$"))
+      return LiveProtocolError{fields.error().describe()};
     break;
   }
   std::string encoded_profile;
-  if (!decimal_string_field(root, "revision", message.revision, error) ||
-      !decimal_string_field(root, "editSession", message.edit_session, error) ||
-      !decimal_string_field(root, "targetWindow", message.target_window,
-                            error) ||
-      !string_field(root, "profileKey", message.profile_key, error) ||
-      !string_field(root, "panelId", message.panel_id, error) ||
-      !string_field(root, "profileBase64", encoded_profile, error) ||
-      !string_field(root, "text", message.text, error) ||
-      !double_field(root, "anchorX", message.anchor_x, error) ||
-      !double_field(root, "anchorY", message.anchor_y, error) ||
-      !bool_field(root, "directDrag", message.direct_drag, error) ||
-      !bool_field(root, "final", message.final, error))
-    return LiveProtocolError{std::move(error)};
+  const auto revision = fields.unsigned_integer(
+      root, "revision", "$", std::numeric_limits<std::uint64_t>::max(),
+      json::Required::yes, 0, json::IntegerEncoding::decimal_string);
+  const auto session = fields.unsigned_integer(
+      root, "editSession", "$", std::numeric_limits<std::uint64_t>::max(),
+      json::Required::no, message.edit_session, json::IntegerEncoding::decimal_string);
+  const auto window = fields.unsigned_integer(
+      root, "targetWindow", "$", std::numeric_limits<std::uint64_t>::max(),
+      json::Required::no, message.target_window, json::IntegerEncoding::decimal_string);
+  const auto anchor_x = fields.number(root, "anchorX", "$", 0.0, 1.0,
+                                      json::Required::no, message.anchor_x);
+  const auto anchor_y = fields.number(root, "anchorY", "$", 0.0, 1.0,
+                                      json::Required::no, message.anchor_y);
+  if (!revision || !session || !window || !anchor_x || !anchor_y ||
+      !fields.string(root, "profileKey", "$", message.profile_key,
+                     json::Required::no, json::EmptyString::allow) ||
+      !fields.string(root, "panelId", "$", message.panel_id,
+                     json::Required::no, json::EmptyString::allow) ||
+      !fields.string(root, "profileBase64", "$", encoded_profile,
+                     json::Required::no, json::EmptyString::allow) ||
+      !fields.string(root, "text", "$", message.text,
+                     json::Required::no, json::EmptyString::allow) ||
+      !fields.boolean(root, "directDrag", "$", message.direct_drag, json::Required::no) ||
+      !fields.boolean(root, "final", "$", message.final, json::Required::no))
+    return LiveProtocolError{fields.error().describe()};
+  message.revision = *revision;
+  message.edit_session = *session;
+  message.target_window = *window;
+  message.anchor_x = *anchor_x;
+  message.anchor_y = *anchor_y;
   const auto decoded_profile = base64_decode(encoded_profile);
   if (!decoded_profile.has_value())
     return LiveProtocolError{"profileBase64 is invalid"};
   message.profile_json = *decoded_profile;
-  if (message.anchor_x < 0.0 || message.anchor_x > 1.0 ||
-      message.anchor_y < 0.0 || message.anchor_y > 1.0)
-    return LiveProtocolError{"anchor coordinates must be normalized"};
   return message;
 }
 
@@ -466,34 +360,16 @@ LiveFrameResult encode_live_frame(const LiveMessage &message) {
 
 std::vector<LiveMessageResult>
 LiveFrameDecoder::push(const std::span<const std::byte> bytes) {
-  if (bytes.size() > max_live_buffer_bytes ||
-      buffer_.size() > max_live_buffer_bytes - bytes.size()) {
-    clear();
-    return {LiveProtocolError{"live frame buffer exceeds the 4 MiB limit"}};
-  }
-  buffer_.insert(buffer_.end(), bytes.begin(), bytes.end());
+  decoder_.feed(bytes);
   std::vector<LiveMessageResult> results;
-  std::size_t consumed{};
-  while (buffer_.size() - consumed >= frame_header_bytes) {
-    const std::uint32_t length =
-        read_frame_header(buffer_.data() + consumed);
-    if (length > max_live_message_bytes) {
-      results.emplace_back(
-          LiveProtocolError{"live frame exceeds the 512 KiB limit"});
-      clear();
-      return results;
-    }
-    if (buffer_.size() - consumed < frame_header_bytes + length)
-      break;
-    const auto *payload = reinterpret_cast<const char *>(
-        buffer_.data() + consumed + frame_header_bytes);
-    results.push_back(
-        decode_live_message_json(std::string_view(payload, length)));
-    consumed += frame_header_bytes + length;
-  }
-  if (consumed != 0) {
-    buffer_.erase(buffer_.begin(),
-                  buffer_.begin() + static_cast<std::ptrdiff_t>(consumed));
+  while (const auto payload = decoder_.next_frame())
+    results.push_back(decode_live_message_json(*payload));
+  if (decoder_.fault() != FrameDecoder::Fault::none) {
+    results.emplace_back(LiveProtocolError{
+        decoder_.fault() == FrameDecoder::Fault::buffer_too_large
+            ? "live frame buffer exceeds the 4 MiB limit"
+            : "live frame exceeds the 512 KiB limit"});
+    clear();
   }
   return results;
 }

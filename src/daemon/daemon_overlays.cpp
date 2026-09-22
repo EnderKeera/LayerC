@@ -1,7 +1,7 @@
 #include "daemon_app.hpp"
 
 #include "layerc/platform/text.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <map>
@@ -10,15 +10,6 @@
 
 namespace layerc::daemon {
 namespace {
-
-bool override_precedes(const layerc::core::OverlayPropertyOverride &left,
-                       const layerc::core::OverlayPropertyOverride &right) {
-  if (left.priority != right.priority)
-    return left.priority > right.priority;
-  if (left.automation_order != right.automation_order)
-    return left.automation_order < right.automation_order;
-  return left.rule_order < right.rule_order;
-}
 
 void apply_property(layerc::core::Panel &panel, std::optional<bool> &visible,
                     std::optional<std::wstring> &text,
@@ -58,7 +49,8 @@ void apply_automation_overrides(Session &session) {
       if (item.panel_id != panel.id)
         continue;
       const auto found = winners.find(item.property);
-      if (found == winners.end() || override_precedes(item, *found->second))
+      if (found == winners.end() ||
+          layerc::core::overlay_override_precedes(item, *found->second))
         winners[item.property] = &item;
     }
     for (const auto &[property, item] : winners) {
@@ -71,25 +63,13 @@ void apply_automation_overrides(Session &session) {
 
 } // namespace
 
-void CALLBACK DaemonApp::foreground_event_proc(
-    const HWINEVENTHOOK hook, const DWORD event, const HWND window,
-    const LONG object_id, const LONG child_id, const DWORD event_thread,
-    const DWORD event_time) {
-  (void)hook;
-  (void)child_id;
-  (void)event_thread;
-  (void)event_time;
-  if (foreground_hook_target_ == nullptr) {
-    return;
-  }
-  if (event == EVENT_SYSTEM_FOREGROUND) {
-    foreground_hook_target_->sync_foreground_state();
-  } else if (event == EVENT_OBJECT_DESTROY && object_id == OBJID_WINDOW) {
-    foreground_hook_target_->refresh_game_windows();
-  } else if (event == EVENT_OBJECT_LOCATIONCHANGE &&
-             object_id == OBJID_WINDOW) {
-    foreground_hook_target_->sync_overlay_location(window);
-  }
+void DaemonApp::on_overlay_event(const DWORD event, const HWND window) {
+  if (event == EVENT_SYSTEM_FOREGROUND)
+    sync_foreground_state();
+  else if (event == EVENT_OBJECT_DESTROY)
+    refresh_game_windows();
+  else if (event == EVENT_OBJECT_LOCATIONCHANGE)
+    sync_overlay_location(window);
 }
 
 void DaemonApp::sync_overlay_location(const HWND changed_window) {
@@ -103,14 +83,14 @@ void DaemonApp::sync_overlay_location(const HWND changed_window) {
   }
   const HWND foreground_root = GetAncestor(GetForegroundWindow(), GA_ROOT);
   const bool affects_runtime = std::any_of(
-      sessions_.begin(), sessions_.end(),
+      session_registry_.sessions().begin(), session_registry_.sessions().end(),
       [&](const std::unique_ptr<Session> &session) {
         return (!session->is_global() &&
                 session->game_window == changed_root) ||
                (session->is_global() && changed_root == foreground_root);
       });
   const bool affects_edit =
-      edit_session_ != nullptr && edit_session_->target == changed_root;
+      live_edit_host_.session() != nullptr && live_edit_host_.session()->target == changed_root;
   if (affects_runtime || affects_edit) {
     update_overlays();
     update_edit_overlays();
@@ -140,7 +120,7 @@ RECT DaemonApp::overlay_target() const {
 }
 
 void DaemonApp::reconcile_overlay_runtime() {
-  for (auto *session : active_input_sessions_) {
+  for (auto *session : session_registry_.active_inputs()) {
     if (session != nullptr)
       session->overlays.ensure(session->profile, capture_exclusion_);
   }
@@ -148,13 +128,13 @@ void DaemonApp::reconcile_overlay_runtime() {
 }
 
 void DaemonApp::quiesce_overlay_runtime() noexcept {
-  if (overlay_timer_running_ && window_ != nullptr)
+  if (overlay_runtime_.timer_running() && window_ != nullptr)
     KillTimer(window_, overlay_render_timer);
-  overlay_timer_running_ = false;
-  for (auto &session : sessions_)
+  overlay_runtime_.set_timer_running(false);
+  for (auto &session : session_registry_.sessions())
     session->overlays.release();
-  if (edit_session_ != nullptr) {
-    edit_session_->overlays.release();
+  if (live_edit_host_.session() != nullptr) {
+    live_edit_host_.session()->overlays.release();
   }
 }
 
@@ -163,11 +143,11 @@ void DaemonApp::update_overlays() {
   publish_companion_snapshots(now);
   bool has_running_cooldown{};
 
-  for (auto &session : sessions_) {
+  for (auto &session : session_registry_.sessions()) {
     apply_automation_overrides(*session);
-    const bool hidden_for_edit = edit_session_ != nullptr &&
+    const bool hidden_for_edit = live_edit_host_.session() != nullptr &&
                                  !session->is_global() &&
-                                 session->game_window == edit_session_->target;
+                                 session->game_window == live_edit_host_.session()->target;
     const bool attached_window_invalid =
         !session->is_global() &&
         (session->game_window == nullptr || !IsWindow(session->game_window) ||
@@ -175,8 +155,8 @@ void DaemonApp::update_overlays() {
          IsIconic(session->game_window));
     const bool input_active =
         !session->is_global() ||
-        std::find(active_input_sessions_.begin(), active_input_sessions_.end(),
-                  session.get()) != active_input_sessions_.end();
+        std::find(session_registry_.active_inputs().begin(), session_registry_.active_inputs().end(),
+                  session.get()) != session_registry_.active_inputs().end();
     if (hidden_for_edit || attached_window_invalid || !input_active) {
       session->overlays.hide();
       continue;
@@ -197,23 +177,25 @@ void DaemonApp::update_overlays() {
       session->overlays.render_for(session->game_window, states, now);
   }
 
-  if (has_running_cooldown && !overlay_timer_running_) {
+  sync_visual_exclusions();
+
+  if (has_running_cooldown && !overlay_runtime_.timer_running()) {
     SetTimer(window_, overlay_render_timer, 16, nullptr);
-    overlay_timer_running_ = true;
-  } else if (!has_running_cooldown && overlay_timer_running_) {
+    overlay_runtime_.set_timer_running(true);
+  } else if (!has_running_cooldown && overlay_runtime_.timer_running()) {
     KillTimer(window_, overlay_render_timer);
-    overlay_timer_running_ = false;
+    overlay_runtime_.set_timer_running(false);
   }
 }
 
 void DaemonApp::publish_companion_snapshots(const layerc::core::TimePoint now) {
-  if (gamebar_transport_.wait_handle() == nullptr) {
-    gamebar_bridge_.clear_snapshot();
+  if (companion_host_.transport().wait_handle() == nullptr) {
+    companion_host_.bridge().clear_snapshot();
     return;
   }
   const auto foreground = current_companion_sessions();
   if (foreground.empty()) {
-    gamebar_bridge_.clear_snapshot();
+    companion_host_.bridge().clear_snapshot();
   } else {
     auto *session = foreground.front();
     if (session != nullptr) {
@@ -224,22 +206,22 @@ void DaemonApp::publish_companion_snapshots(const layerc::core::TimePoint now) {
           layerc::gamebar::GameBarBridge::create_session_snapshot(
               session->profile.id, session_key, session->profile.panels,
               session->profile.cooldowns, session->snapshot_buffer,
-              session->companion_profile, now);
-      gamebar_bridge_.update_snapshot(snapshot);
-      if (const auto json = gamebar_bridge_.latest_snapshot_json(now);
+              session->modules.companion.profile, now);
+      companion_host_.bridge().update_snapshot(snapshot);
+      if (const auto json = companion_host_.bridge().latest_snapshot_json(now);
           json.has_value())
-        (void)gamebar_transport_.publish(*json);
+        (void)companion_host_.transport().publish(*json);
     } else {
-      gamebar_bridge_.clear_snapshot();
+      companion_host_.bridge().clear_snapshot();
     }
   }
 }
 
 void DaemonApp::poll_gamebar_transport() {
   bool reload_needed{};
-  for (auto &update : gamebar_transport_.poll()) {
+  for (auto &update : companion_host_.transport().poll()) {
     const bool accepted = apply_companion_preferences(update.json);
-    gamebar_transport_.complete_preference_update(update.request_id, accepted);
+    companion_host_.transport().complete_preference_update(update.request_id, accepted);
     reload_needed = reload_needed || accepted;
   }
   if (reload_needed)
@@ -247,23 +229,18 @@ void DaemonApp::poll_gamebar_transport() {
 }
 
 bool DaemonApp::apply_companion_preferences(const std::string_view json) {
-  for (const auto &source : profile_sources_) {
+  for (const auto &source : session_registry_.sources()) {
     const auto parsed =
         layerc::core::parse_companion_profile_json(json, source.profile);
     const auto *profile = std::get_if<layerc::core::CompanionProfile>(&parsed);
     if (profile == nullptr)
       continue;
-    if (source.visual_health == layerc::platform::VisualSidecarState::invalid ||
-        source.visual_health ==
-            layerc::platform::VisualSidecarState::recovered_backup ||
-        source.automation_health ==
-            layerc::platform::AutomationSidecarState::invalid ||
-        source.automation_health ==
-            layerc::platform::AutomationSidecarState::recovered_backup)
+    if (!layerc::platform::may_write_primary(source.modules.visual.state) ||
+        !layerc::platform::may_write_primary(source.modules.automation.state))
       return false;
     if (!layerc::platform::write_profile_bundle(
-            source.path, source.profile, source.visual_profile,
-            source.automation_profile, *profile))
+            source.path, source.profile, source.modules.visual.profile,
+            source.modules.automation.profile, *profile))
       return false;
     return true;
   }

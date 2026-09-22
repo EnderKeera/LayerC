@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace layerc::core {
+namespace json { class Value; }
 
 inline constexpr std::size_t max_automation_json_bytes = 256U * 1024U;
 inline constexpr std::size_t max_automation_state_bytes = 64U * 1024U;
@@ -219,6 +220,15 @@ struct AutomationExpression {
   bool operator==(const AutomationExpression &) const = default;
 };
 
+// Where an action's side effects land. Internal actions mutate only runtime
+// state; cooldown actions commit through the engine adapter; overlay actions
+// publish presentation overrides.
+enum class AutomationEffectDomain : std::uint8_t {
+  internal,
+  cooldown_engine,
+  overlay,
+};
+
 enum class AutomationActionKind : std::uint8_t {
   set_variable,
   increment_variable,
@@ -238,6 +248,169 @@ enum class AutomationActionKind : std::uint8_t {
   clear_overlay_override,
 };
 
+inline constexpr std::size_t automation_action_kind_count =
+    static_cast<std::size_t>(AutomationActionKind::clear_overlay_override) + 1;
+
+// How an action uses its secondary expression. One table drives parse,
+// validate, serialize, and runtime so secondary rules cannot drift.
+enum class ActionSecondaryPolicy : std::uint8_t {
+  none,
+  required_string_key,
+  optional_duration,
+};
+
+// What an action's target string must name in the base profile (or, for
+// timers/overrides, a free-form automation id).
+enum class ActionTargetRole : std::uint8_t {
+  variable_any,
+  variable_numeric,
+  variable_list,
+  variable_map,
+  cooldown,
+  cooldown_group,
+  timer_id,
+  panel,
+  override_name,
+};
+
+// Constraint on the evaluated primary value, beyond accepts_value.
+enum class ActionValuePolicy : std::uint8_t {
+  none,
+  match_variable,
+  match_numeric_variable,
+  any,
+  string_key,
+  duration_or_integer,
+  overlay_property,
+};
+
+struct AutomationActionSpec {
+  AutomationActionKind kind;
+  std::string_view wire_name;
+  std::string_view display_name;
+  bool accepts_value;
+  AutomationEffectDomain domain;
+  ActionSecondaryPolicy secondary;
+  ActionTargetRole target;
+  ActionValuePolicy value;
+  bool allows_repeating{};
+  bool requires_name{};
+  bool requires_property{};
+};
+
+inline constexpr std::array automation_action_specs{
+    AutomationActionSpec{AutomationActionKind::set_variable, "setVariable",
+                         "Set variable", true,
+                         AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::variable_any,
+                         ActionValuePolicy::match_variable},
+    AutomationActionSpec{AutomationActionKind::increment_variable,
+                         "incrementVariable", "Increment variable", true,
+                         AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::variable_numeric,
+                         ActionValuePolicy::match_numeric_variable},
+    AutomationActionSpec{AutomationActionKind::append_list, "appendList",
+                         "Append list", true,
+                         AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::variable_list,
+                         ActionValuePolicy::any},
+    AutomationActionSpec{AutomationActionKind::set_map_entry, "setMapEntry",
+                         "Set map entry", true,
+                         AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::required_string_key,
+                         ActionTargetRole::variable_map,
+                         ActionValuePolicy::any},
+    AutomationActionSpec{AutomationActionKind::erase_map_entry, "eraseMapEntry",
+                         "Erase map entry", true,
+                         AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::variable_map,
+                         ActionValuePolicy::string_key},
+    AutomationActionSpec{AutomationActionKind::trigger_cooldown,
+                         "triggerCooldown", "Trigger cooldown", false,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown, ActionValuePolicy::none},
+    AutomationActionSpec{AutomationActionKind::reset_cooldown, "resetCooldown",
+                         "Reset cooldown", false,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown, ActionValuePolicy::none},
+    AutomationActionSpec{AutomationActionKind::reduce_cooldown_next,
+                         "reduceCooldownNext", "Reduce next recovery", true,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown,
+                         ActionValuePolicy::duration_or_integer},
+    AutomationActionSpec{AutomationActionKind::reduce_cooldown_all,
+                         "reduceCooldownAll", "Reduce all recoveries", true,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown,
+                         ActionValuePolicy::duration_or_integer},
+    AutomationActionSpec{AutomationActionKind::refund_cooldown,
+                         "refundCooldown", "Refund cooldown", false,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown, ActionValuePolicy::none},
+    AutomationActionSpec{AutomationActionKind::trigger_group, "triggerGroup",
+                         "Trigger group", false,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown_group,
+                         ActionValuePolicy::none},
+    AutomationActionSpec{AutomationActionKind::reset_group, "resetGroup",
+                         "Reset group", false,
+                         AutomationEffectDomain::cooldown_engine,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::cooldown_group,
+                         ActionValuePolicy::none},
+    AutomationActionSpec{AutomationActionKind::create_timer, "createTimer",
+                         "Create timer", true, AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::timer_id,
+                         ActionValuePolicy::duration_or_integer, true},
+    AutomationActionSpec{AutomationActionKind::cancel_timer, "cancelTimer",
+                         "Cancel timer", false, AutomationEffectDomain::internal,
+                         ActionSecondaryPolicy::none,
+                         ActionTargetRole::timer_id, ActionValuePolicy::none},
+    AutomationActionSpec{
+        AutomationActionKind::set_overlay_override, "setOverlayOverride",
+        "Set overlay override", true, AutomationEffectDomain::overlay,
+        ActionSecondaryPolicy::optional_duration, ActionTargetRole::panel,
+        ActionValuePolicy::overlay_property, false, true, true},
+    AutomationActionSpec{
+        AutomationActionKind::clear_overlay_override, "clearOverlayOverride",
+        "Clear overlay override", false, AutomationEffectDomain::overlay,
+        ActionSecondaryPolicy::none, ActionTargetRole::override_name,
+        ActionValuePolicy::none},
+};
+static_assert(automation_action_specs.size() == automation_action_kind_count);
+
+[[nodiscard]] constexpr const AutomationActionSpec *
+automation_action_spec(const AutomationActionKind kind) noexcept {
+  for (const auto &spec : automation_action_specs)
+    if (spec.kind == kind) return &spec;
+  return nullptr;
+}
+
+[[nodiscard]] constexpr std::optional<std::string_view>
+automation_action_name(const AutomationActionKind kind) noexcept {
+  const auto *spec = automation_action_spec(kind);
+  return spec == nullptr ? std::nullopt
+                         : std::optional<std::string_view>(spec->wire_name);
+}
+
+[[nodiscard]] constexpr std::optional<AutomationActionKind>
+parse_automation_action_name(const std::string_view name) noexcept {
+  for (const auto &spec : automation_action_specs)
+    if (spec.wire_name == name) return spec.kind;
+  return std::nullopt;
+}
+
 struct AutomationAction {
   AutomationActionKind kind{AutomationActionKind::set_variable};
   std::string target;
@@ -245,8 +418,10 @@ struct AutomationAction {
   // session-local layer and can later be cleared explicitly by this name.
   std::string name;
   std::string property;
-  AutomationExpression value;
-  AutomationExpression secondary;
+  // Absent when the action's spec does not accept that argument. Replaces the
+  // old null-literal sentinel so illegal states are unrepresentable.
+  std::optional<AutomationExpression> value;
+  std::optional<AutomationExpression> secondary;
   bool repeating{};
 
   bool operator==(const AutomationAction &) const = default;
@@ -257,62 +432,14 @@ struct AutomationAction {
 // this one classifier).
 [[nodiscard]] constexpr bool
 action_accepts_value(const AutomationActionKind kind) noexcept {
-  switch (kind) {
-  case AutomationActionKind::set_variable:
-  case AutomationActionKind::increment_variable:
-  case AutomationActionKind::append_list:
-  case AutomationActionKind::set_map_entry:
-  case AutomationActionKind::erase_map_entry:
-  case AutomationActionKind::reduce_cooldown_next:
-  case AutomationActionKind::reduce_cooldown_all:
-  case AutomationActionKind::create_timer:
-  case AutomationActionKind::set_overlay_override:
-    return true;
-  case AutomationActionKind::trigger_cooldown:
-  case AutomationActionKind::reset_cooldown:
-  case AutomationActionKind::refund_cooldown:
-  case AutomationActionKind::trigger_group:
-  case AutomationActionKind::reset_group:
-  case AutomationActionKind::cancel_timer:
-  case AutomationActionKind::clear_overlay_override:
-    return false;
-  }
-  return false;
+  const auto *spec = automation_action_spec(kind);
+  return spec != nullptr && spec->accepts_value;
 }
-
-// Where an action's side effects land. Internal actions mutate only runtime
-// state; cooldown actions commit through the engine adapter; overlay actions
-// publish presentation overrides.
-enum class AutomationEffectDomain : std::uint8_t {
-  internal,
-  cooldown_engine,
-  overlay,
-};
 
 [[nodiscard]] constexpr AutomationEffectDomain
 effect_domain(const AutomationActionKind kind) noexcept {
-  switch (kind) {
-  case AutomationActionKind::trigger_cooldown:
-  case AutomationActionKind::reset_cooldown:
-  case AutomationActionKind::reduce_cooldown_next:
-  case AutomationActionKind::reduce_cooldown_all:
-  case AutomationActionKind::refund_cooldown:
-  case AutomationActionKind::trigger_group:
-  case AutomationActionKind::reset_group:
-    return AutomationEffectDomain::cooldown_engine;
-  case AutomationActionKind::set_overlay_override:
-  case AutomationActionKind::clear_overlay_override:
-    return AutomationEffectDomain::overlay;
-  case AutomationActionKind::set_variable:
-  case AutomationActionKind::increment_variable:
-  case AutomationActionKind::append_list:
-  case AutomationActionKind::set_map_entry:
-  case AutomationActionKind::erase_map_entry:
-  case AutomationActionKind::create_timer:
-  case AutomationActionKind::cancel_timer:
-    return AutomationEffectDomain::internal;
-  }
-  return AutomationEffectDomain::internal;
+  const auto *spec = automation_action_spec(kind);
+  return spec == nullptr ? AutomationEffectDomain::internal : spec->domain;
 }
 
 struct AutomationRule {
@@ -376,6 +503,9 @@ parse_automation_value_json(std::string_view source,
 [[nodiscard]] AutomationProfileResult
 parse_automation_profile_json(std::string_view source,
                               const GameProfile &base_profile);
+// For a bounded document already accepted by json::parse (including UTF-8).
+[[nodiscard]] AutomationProfileResult parse_automation_profile_value(
+    const json::Value &root, const GameProfile &base_profile);
 [[nodiscard]] AutomationError
 validate_automation_profile(const AutomationProfile &profile,
                             const GameProfile &base_profile);
@@ -400,6 +530,27 @@ struct AutomationTimer {
   bool repeating{};
 };
 
+struct EffectOrder {
+  std::int32_t priority{};
+  std::size_t automation_order{};
+  std::size_t rule_order{};
+
+  bool operator==(const EffectOrder &) const = default;
+};
+
+// Canonical winner ordering: highest priority wins, ties break by automation
+// order, then rule order. Shared by runtime effects and overlay overrides so
+// platforms cannot pick different winners for equal-priority rules.
+[[nodiscard]] constexpr bool
+effect_order_precedes(const EffectOrder &left,
+                      const EffectOrder &right) noexcept {
+  if (left.priority != right.priority)
+    return left.priority > right.priority;
+  if (left.automation_order != right.automation_order)
+    return left.automation_order < right.automation_order;
+  return left.rule_order < right.rule_order;
+}
+
 struct OverlayPropertyOverride {
   std::string name;
   std::string owner_automation;
@@ -407,12 +558,20 @@ struct OverlayPropertyOverride {
   std::string property;
   AutomationValue value;
   std::optional<TimePoint> expires_at;
-  std::int32_t priority{};
-  std::size_t automation_order{};
-  std::size_t rule_order{};
+  EffectOrder order{};
 
   bool operator==(const OverlayPropertyOverride &) const = default;
+
+  [[nodiscard]] constexpr const EffectOrder &effect_order() const noexcept {
+    return order;
+  }
 };
+
+[[nodiscard]] inline bool overlay_override_precedes(
+    const OverlayPropertyOverride &left,
+    const OverlayPropertyOverride &right) noexcept {
+  return effect_order_precedes(left.order, right.order);
+}
 
 // Canonical domain of presentation properties automation may override. One
 // registry drives static validation (property name and value type), the
@@ -428,8 +587,8 @@ struct OverlayPropertySpec {
   // overlay renderer owns their application.
   bool panel_visibility{};
   bool panel_text{};
-  // Allowed string values (layout); entries empty for free bounded text.
-  std::array<std::string_view, 3> string_choices{};
+  // True when the value is drawn from profile_wire::panel_layout.
+  bool panel_layout{};
   void (*apply)(Panel &, const AutomationValue &) noexcept;
 };
 
@@ -448,9 +607,11 @@ struct AutomationEffect {
   AutomationValue value;
   AutomationValue secondary;
   bool repeating{};
-  std::int32_t priority{};
-  std::size_t automation_order{};
-  std::size_t rule_order{};
+  EffectOrder order{};
+
+  [[nodiscard]] constexpr const EffectOrder &effect_order() const noexcept {
+    return order;
+  }
 };
 
 struct AutomationTraceEntry {

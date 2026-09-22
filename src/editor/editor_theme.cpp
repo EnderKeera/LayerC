@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "dialog_layout.hpp"
 
 #include "layerc/platform/native_theme.hpp"
 
@@ -9,41 +10,18 @@
 
 namespace layerc::editor {
 
-ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
-  const int dpi = source_dpi == 0 ? 96 : static_cast<int>(source_dpi);
-  return {
-      .image_size = std::max(1, MulDiv(16, dpi, 96)),
-      .inset = std::max(1, MulDiv(2, dpi, 96)),
-      .pen_width = std::max(1, MulDiv(2, dpi, 96)),
-  };
-}
-
-void set_owner_draw_checkbox(const HWND control, const bool checked) {
-  if (control == nullptr)
-    return;
-  SendMessageW(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
-  InvalidateRect(control, nullptr, TRUE);
-}
-
-bool owner_draw_checkbox_checked(const HWND control) {
-  return control != nullptr &&
-         SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
-}
-
-COLORREF color_ref(const std::uint32_t color) {
-  return layerc::platform::native_color_ref(color);
-}
-
-std::uint32_t rgb_value(const COLORREF color) {
-  return layerc::platform::native_rgb_value(color);
-}
-
 void style_native_dialog_children(const HWND dialog, const HFONT font) {
   layerc::platform::style_native_dialog_children(dialog, font, true);
 }
 
+void apply_dialog_chrome(const HWND window, const bool capture_exclusion) {
+  layerc::platform::set_dark_title_bar(window);
+  // Best-effort: capture exclusion is a no-op where the DWM API is missing.
+  (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion);
+}
+
 void EditorWindow::style_dialog_children(const HWND dialog) const {
-  style_native_dialog_children(dialog, font_);
+  style_native_dialog_children(dialog, shell_.font());
 }
 
 void EditorWindow::style_list_view(const HWND list,
@@ -67,9 +45,9 @@ void EditorWindow::style_list_view(const HWND list,
 }
 
 void EditorWindow::rebuild_profile_check_hit_images() {
-  if (profile_list_ == nullptr)
+  if (shell_.profile_list() == nullptr)
     return;
-  const auto metrics = profile_checkbox_metrics(GetDpiForWindow(profile_list_));
+  const auto metrics = profile_checkbox_metrics(GetDpiForWindow(shell_.profile_list()));
   const HIMAGELIST images = ImageList_Create(
       metrics.image_size, metrics.image_size, ILC_COLOR32 | ILC_MASK, 2, 0);
   if (images == nullptr)
@@ -90,14 +68,14 @@ void EditorWindow::rebuild_profile_check_hit_images() {
   }
   DeleteObject(transparent);
 
-  (void)ListView_SetImageList(profile_list_, images, LVSIL_STATE);
-  if (profile_check_hit_images_ != nullptr)
-    ImageList_Destroy(profile_check_hit_images_);
-  profile_check_hit_images_ = images;
+  (void)ListView_SetImageList(shell_.profile_list(), images, LVSIL_STATE);
+  if (shell_.profile_check_hit_images() != nullptr)
+    ImageList_Destroy(shell_.profile_check_hit_images());
+  shell_.profile_check_hit_images() = images;
 }
 
 void EditorWindow::rebuild_brushes() {
-  for (auto &brush_value : brushes_) {
+  for (auto &brush_value : appearance_editor_.brushes()) {
     if (brush_value != nullptr)
       DeleteObject(brush_value);
     brush_value = nullptr;
@@ -107,28 +85,28 @@ void EditorWindow::rebuild_brushes() {
        static_cast<std::uint32_t>(layerc::platform::EditorControlRole::count);
        ++index) {
     const auto role = static_cast<layerc::platform::EditorControlRole>(index);
-    brushes_[index] = CreateSolidBrush(colors(role).fill);
+    appearance_editor_.brushes()[index] = CreateSolidBrush(colors(role).fill);
   }
 }
 
 void EditorWindow::refresh_theme() {
   rebuild_brushes();
-  style_list_view(profile_list_, true);
+  style_list_view(shell_.profile_list(), true);
   rebuild_profile_check_hit_images();
-  style_list_view(task_list_, false);
-  if (dialog_ != nullptr) {
-    DrawMenuBar(dialog_);
-    InvalidateRect(dialog_, nullptr, TRUE);
+  style_list_view(task_picker_.list(), false);
+  if (shell_.window() != nullptr) {
+    DrawMenuBar(shell_.window());
+    InvalidateRect(shell_.window(), nullptr, TRUE);
     EnumChildWindows(
-        dialog_,
+        shell_.window(),
         [](HWND child, LPARAM) -> BOOL {
           InvalidateRect(child, nullptr, TRUE);
           return TRUE;
         },
         0);
   }
-  if (task_dialog_ != nullptr)
-    InvalidateRect(task_dialog_, nullptr, TRUE);
+  if (task_picker_.window() != nullptr)
+    InvalidateRect(task_picker_.window(), nullptr, TRUE);
 }
 
 } // namespace layerc::editor

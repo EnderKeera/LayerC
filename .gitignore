@@ -2,6 +2,7 @@
 /.vs/
 # Local-only roadmap: intentionally not tracked in the public repo
 /PLAN.md
+/PLAN-v26-linux.md
 /out/
 *.user
 *.suo

@@ -5,39 +5,37 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <vector>
 
 namespace layerc::runtime {
 
 // Platform code creates WindowIds and keeps native handles in its adapter.
 // Runtime code may compare or persist an ID only for the lifetime of a scan.
-struct WindowId {
-  std::uint64_t opaque{};
-  auto operator<=>(const WindowId &) const = default;
-};
+// The struct itself lives in core (a leaf handle, not kernel policy) so the
+// capture layer does not link the runtime for it.
+using WindowId = core::WindowId;
 
 struct SessionCapabilityRequest {
   WindowId window;
   bool active{};
   bool global{};
   bool visual{};
-  bool templates{};
   bool generic_hid{};
   bool isolated_visual{};
+  std::string profile_id;
 };
 
 [[nodiscard]] CapabilityDemand
 calculate_capability_demand(std::span<const SessionCapabilityRequest> sessions,
-                            bool editor_connected,
-                            bool edit_overlay_active) noexcept;
+                            bool edit_overlay_active);
 
 // Platform-neutral authority for immutable capability demand and first-party
 // service ownership. Native adapters remain outside this class.
 class DaemonKernel {
 public:
+  explicit DaemonKernel(RuntimeServiceRegistry services = {}) noexcept;
+
   [[nodiscard]] bool
   reconcile(CapabilityDemand demand,
-            std::span<const RuntimeServiceDescriptor> descriptors,
             core::TimePoint now = core::MonotonicClock::now());
   void quiesce(core::TimePoint now = core::MonotonicClock::now()) noexcept;
 
@@ -55,7 +53,6 @@ public:
 private:
   struct PendingReconcile {
     CapabilityDemand demand;
-    std::vector<RuntimeServiceDescriptor> descriptors;
     core::TimePoint now;
   };
 

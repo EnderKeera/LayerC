@@ -8,23 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repositoryRoot = Split-Path -Parent $scriptRoot
-
-function Assert-NativeSuccess {
-    param([Parameter(Mandatory = $true)][string]$Operation)
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Operation failed with exit code $LASTEXITCODE."
-    }
-}
-
-function Test-InstallRoot {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    foreach ($name in @('layerd.exe', 'layere.exe', 'layercal.exe', 'layerw.exe')) {
-        if (-not (Test-Path -LiteralPath (Join-Path $Path $name) -PathType Leaf)) {
-            return $false
-        }
-    }
-    return $true
-}
+Import-Module (Join-Path $scriptRoot 'LayerC.Tools.psm1') -Force
 
 if ([string]::IsNullOrWhiteSpace($Repository)) {
     $Repository = gh repo view --json nameWithOwner -q .nameWithOwner
@@ -71,19 +55,8 @@ try {
     }
     Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $extract
 
-    $installRoot = $null
-    if (Test-InstallRoot $extract) {
-        $installRoot = $extract
-    } else {
-        $candidates = @(
-            Get-ChildItem -LiteralPath $extract -Directory |
-                Where-Object { Test-InstallRoot $_.FullName }
-        )
-        if ($candidates.Count -ne 1) {
-            throw "Expected one LayerC install root, found $($candidates.Count)."
-        }
-        $installRoot = $candidates[0].FullName
-    }
+    $installRoot = Resolve-LayerCBuildRoot -Path $extract `
+        -RequiredExecutables @('layerd.exe', 'layere.exe', 'layercal.exe', 'layerw.exe')
 
     if (Test-Path -LiteralPath $OutputPath) {
         Move-Item -LiteralPath $OutputPath -Destination $backup

@@ -2,6 +2,8 @@
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
+#include "layerc/platform/platform_events.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -121,38 +123,47 @@ double contrast_ratio(const COLORREF first, const COLORREF second) {
 
 void EditorWindow::open_options() {
   DialogBoxParamW(
-      instance_, MAKEINTRESOURCEW(IDD_OPTIONS), dialog_,
+      shell_.instance(), MAKEINTRESOURCEW(IDD_OPTIONS), shell_.window(),
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_options,
                               &EditorWindow::handle_options_message>,
       reinterpret_cast<LPARAM>(this));
 }
 
 void EditorWindow::open_appearance() {
-  appearance_.begin(layerc::platform::editor_appearance());
-  appearance_open_ = true;
+  const auto loaded = layerc::platform::read_editor_appearance();
+  if (loaded.failed()) {
+    MessageBoxW(shell_.window(), L"Could not read the editor appearance settings.",
+                L"LayerC Editor", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  appearance_editor_.draft().begin(loaded.value.value_or(
+      layerc::platform::EditorAppearanceSettings{}));
+  appearance_editor_.open() = true;
   refresh_theme();
   DialogBoxParamW(
-      instance_, MAKEINTRESOURCEW(IDD_APPEARANCE), dialog_,
+      shell_.instance(), MAKEINTRESOURCEW(IDD_APPEARANCE), shell_.window(),
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_appearance,
                               &EditorWindow::handle_appearance_message>,
       reinterpret_cast<LPARAM>(this));
-  appearance_open_ = false;
-  appearance_.cancel();
-  const auto saved = layerc::platform::editor_appearance();
-  theme_ = saved.theme;
-  accent_ = saved.accent;
+  appearance_editor_.open() = false;
+  appearance_editor_.draft().cancel();
+  appearance_editor_.theme() = appearance_editor_.draft().staged().theme;
+  appearance_editor_.accent() = appearance_editor_.draft().staged().accent;
   refresh_theme();
 }
 
 void EditorWindow::initialize_options(const HWND window) {
-  set_dark_title_bar(window);
+  apply_dialog_chrome(window, shell_.capture_exclusion());
   style_dialog_children(window);
-  (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion_);
+  const auto visual = layerc::platform::read_visual_recognition_setting();
+  if (visual.failed())
+    MessageBoxW(window, L"Could not read the visual-recognition setting.",
+                L"LayerC Editor", MB_OK | MB_ICONWARNING);
   CheckDlgButton(window, IDC_VISUAL_MASTER,
-                 layerc::platform::visual_recognition_enabled() ? BST_CHECKED
-                                                                : BST_UNCHECKED);
+                 visual.value.value_or(visual.missing()) ? BST_CHECKED
+                                                         : BST_UNCHECKED);
   CheckDlgButton(window, IDC_CAPTURE_PRIVACY,
-                 capture_exclusion_ ? BST_CHECKED : BST_UNCHECKED);
+                 shell_.capture_exclusion() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(window, IDC_OPTIONS_ADVANCED, BST_UNCHECKED);
   ShowWindow(GetDlgItem(window, IDC_CAPTURE_PRIVACY), SW_HIDE);
 }
@@ -162,8 +173,9 @@ void EditorWindow::apply_options(const HWND window) {
       IsDlgButtonChecked(window, IDC_CAPTURE_PRIVACY) == BST_CHECKED;
   const bool visual =
       IsDlgButtonChecked(window, IDC_VISUAL_MASTER) == BST_CHECKED;
-  bool saved = layerc::platform::set_capture_exclusion_enabled(capture);
-  if (!layerc::platform::set_visual_recognition_enabled(visual))
+  bool saved = static_cast<bool>(
+      layerc::platform::write_capture_exclusion_setting(capture));
+  if (!layerc::platform::write_visual_recognition_setting(visual))
     saved = false;
   if (!saved) {
     MessageBoxW(window, L"Could not save the selected options.",
@@ -171,12 +183,12 @@ void EditorWindow::apply_options(const HWND window) {
     return;
   }
 
-  capture_exclusion_ = capture;
-  (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion_);
-  (void)layerc::platform::apply_capture_exclusion(dialog_, capture_exclusion_);
-  if (task_dialog_ != nullptr && IsWindow(task_dialog_))
-    (void)layerc::platform::apply_capture_exclusion(task_dialog_,
-                                                    capture_exclusion_);
+  shell_.capture_exclusion() = capture;
+  (void)layerc::platform::apply_capture_exclusion(window, shell_.capture_exclusion());
+  (void)layerc::platform::apply_capture_exclusion(shell_.window(), shell_.capture_exclusion());
+  if (task_picker_.window() != nullptr && IsWindow(task_picker_.window()))
+    (void)layerc::platform::apply_capture_exclusion(task_picker_.window(),
+                                                    shell_.capture_exclusion());
   (void)layerc::platform::signal_settings_reload();
   set_status(L"Options saved.");
 }
@@ -196,9 +208,8 @@ EditorWindow::appearance_role(const HWND window) const {
 }
 
 void EditorWindow::initialize_appearance(const HWND window) {
-  set_dark_title_bar(window);
+  apply_dialog_chrome(window, shell_.capture_exclusion());
   style_dialog_children(window);
-  (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion_);
 
   const HWND preset = GetDlgItem(window, IDC_THEME_PRESET);
   for (const auto &entry : appearance_presets) {
@@ -208,7 +219,7 @@ void EditorWindow::initialize_appearance(const HWND window) {
       SendMessageW(preset, CB_SETITEMDATA, static_cast<WPARAM>(row),
                    static_cast<LPARAM>(entry.theme));
   }
-  select_appearance_preset(window, appearance_.staged().theme);
+  select_appearance_preset(window, appearance_editor_.draft().staged().theme);
 
   const HWND tree = GetDlgItem(window, IDC_APPEARANCE_TREE);
   const std::array<
@@ -251,7 +262,7 @@ EditorWindow::appearance_color(const HWND window,
   if (entry == nullptr)
     return std::nullopt;
   const auto role = appearance_role(window);
-  const auto &appearance = appearance_.staged();
+  const auto &appearance = appearance_editor_.draft().staged();
   return layerc::platform::native_theme_colors(appearance.theme,
                                                appearance.accent, role,
                                                appearance.overrides[static_cast<std::size_t>(role)])
@@ -267,7 +278,7 @@ void EditorWindow::choose_appearance_color(const HWND window,
                                            const std::uint32_t field) {
   const auto role = appearance_role(window);
   const auto index = static_cast<std::size_t>(role);
-  auto &appearance = appearance_.staged();
+  auto &appearance = appearance_editor_.draft().staged();
   const auto current = appearance_color(window, field);
   if (!current)
     return;
@@ -285,14 +296,14 @@ void EditorWindow::choose_appearance_color(const HWND window,
 
 void EditorWindow::reset_appearance(const HWND window) {
   const auto index = static_cast<std::size_t>(appearance_role(window));
-  auto &appearance = appearance_.staged();
+  auto &appearance = appearance_editor_.draft().staged();
   appearance.overrides[index].fields &= ~appearance_all_fields;
   refresh_theme();
   refresh_appearance_controls(window);
 }
 
 void EditorWindow::reset_all_appearance(const HWND window) {
-  auto &appearance = appearance_.staged();
+  auto &appearance = appearance_editor_.draft().staged();
   appearance.theme = layerc::platform::EditorTheme::copper;
   for (auto &overrides : appearance.overrides)
     overrides = {};
@@ -302,31 +313,66 @@ void EditorWindow::reset_all_appearance(const HWND window) {
 }
 
 bool EditorWindow::apply_appearance(const HWND window) {
-  const auto &appearance = appearance_.staged();
+  const auto &appearance = appearance_editor_.draft().staged();
   for (std::size_t index = 0; index < appearance.overrides.size(); ++index) {
     const auto role =
         static_cast<layerc::platform::EditorControlRole>(index);
     const auto role_colors = layerc::platform::native_theme_colors(
         appearance.theme, appearance.accent, role, appearance.overrides[index]);
-    if (contrast_ratio(role_colors.text, role_colors.fill) < 4.5 ||
-        contrast_ratio(role_colors.disabled, role_colors.fill) < 3.0) {
-      MessageBoxW(
-          window,
-          L"Text must have at least 4.5:1 contrast and disabled text at least "
-          L"3:1 contrast against each control fill.",
-          L"LayerC Editor", MB_OK | MB_ICONWARNING);
+    struct ContrastPair {
+      const wchar_t *name;
+      COLORREF foreground;
+      COLORREF background;
+      double minimum;
+      int control;
+    };
+    const std::array pairs{
+        ContrastPair{L"Text / Fill", role_colors.text, role_colors.fill, 4.5, IDC_APPEARANCE_TEXT},
+        ContrastPair{L"Disabled / Fill", role_colors.disabled, role_colors.fill, 3.0, IDC_APPEARANCE_DISABLED},
+        ContrastPair{L"Text / Hover", role_colors.text, role_colors.hover, 4.5, IDC_APPEARANCE_HOVER},
+        ContrastPair{L"Text / Selection", role_colors.text, role_colors.selection, 4.5, IDC_APPEARANCE_SELECTION}};
+    for (const auto &pair : pairs) {
+      using Role = layerc::platform::EditorControlRole;
+      if (pair.control == IDC_APPEARANCE_HOVER &&
+          role != Role::button && role != Role::checkbox) continue;
+      if (pair.control == IDC_APPEARANCE_SELECTION &&
+          role != Role::button && role != Role::checkbox &&
+          role != Role::list && role != Role::sidebar) continue;
+      const auto ratio = contrast_ratio(pair.foreground, pair.background);
+      if (ratio >= pair.minimum) continue;
+      const HWND roles = GetDlgItem(window, IDC_APPEARANCE_TREE);
+      std::wstring role_name;
+      const auto count = SendMessageW(roles, LB_GETCOUNT, 0, 0);
+      for (LRESULT row = 0; row < count; ++row) {
+        if (SendMessageW(roles, LB_GETITEMDATA, row, 0) != static_cast<LRESULT>(role)) continue;
+        SendMessageW(roles, LB_SETCURSEL, row, 0);
+        const auto length = SendMessageW(roles, LB_GETTEXTLEN, row, 0);
+        if (length != LB_ERR) {
+          role_name.resize(static_cast<std::size_t>(length) + 1);
+          SendMessageW(roles, LB_GETTEXT, row, reinterpret_cast<LPARAM>(role_name.data()));
+          role_name.resize(static_cast<std::size_t>(length));
+        }
+        break;
+      }
+      refresh_appearance_controls(window);
+      const auto message = role_name + L": " + pair.name + L" contrast is " +
+          std::to_wstring(ratio).substr(0, 4) + L":1; at least " +
+          std::to_wstring(pair.minimum).substr(0, 3) +
+          L":1 is required. Adjust this override or use Reset selected.";
+      MessageBoxW(window, message.c_str(), L"LayerC Editor", MB_OK | MB_ICONWARNING);
+      SetFocus(GetDlgItem(window, pair.control));
       return false;
     }
   }
 
-  if (!appearance_.apply(layerc::platform::set_editor_appearance)) {
+  if (!appearance_editor_.draft().apply(layerc::platform::write_editor_appearance)) {
     MessageBoxW(window, L"Could not save the selected appearance.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
     return false;
   }
 
-  theme_ = appearance.theme;
-  accent_ = appearance.accent;
+  appearance_editor_.theme() = appearance.theme;
+  appearance_editor_.accent() = appearance.accent;
   (void)layerc::platform::signal_settings_reload();
   refresh_theme();
   set_status(L"Appearance saved.");
@@ -374,7 +420,7 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
             window, IDC_THEME_PRESET, CB_GETITEMDATA,
             static_cast<WPARAM>(selection), 0);
         if (theme != CB_ERR)
-          appearance_.staged().theme =
+          appearance_editor_.draft().staged().theme =
               static_cast<layerc::platform::EditorTheme>(theme);
       }
       refresh_theme();

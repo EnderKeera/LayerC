@@ -1,5 +1,8 @@
 # miniz 3.1.2
 
+This is a provenance record for the vendored snapshot; it is not project or
+agent guidance.
+
 Upstream: https://github.com/richgel999/miniz
 
 Tag: 3.1.2

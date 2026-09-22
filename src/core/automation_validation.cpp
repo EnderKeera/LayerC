@@ -3,7 +3,7 @@
 #include "automation_json.hpp"
 #include "automation_ops.hpp"
 #include "automation_profile_internal.hpp"
-#include "utf8.hpp"
+#include "layerc/core/utf8.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -35,19 +35,31 @@ bool group_exists(const GameProfile &profile, std::string_view id) {
                              [&](const auto &item) { return item.id == id; });
 }
 
+struct AstBudget {
+  std::size_t nodes{};
+
+  [[nodiscard]] bool consume(const std::string &path,
+                             const std::size_t depth,
+                             AutomationError &error) {
+    if (++nodes > max_automation_nodes_per_rule) {
+      error = {path, "rule exceeds 256 AST nodes"};
+      return false;
+    }
+    if (depth > max_automation_ast_depth) {
+      error = {path, "expression depth exceeds 16"};
+      return false;
+    }
+    return true;
+  }
+};
+
 bool validate_expression_tree(
     const AutomationExpression &expression,
     const std::map<std::string, AutomationValueType, std::less<>> &variables,
-    const std::string &path, std::size_t &nodes, const std::size_t depth,
+    const std::string &path, AstBudget &budget, const std::size_t depth,
     std::optional<AutomationValueType> &result, AutomationError &error) {
-  if (++nodes > max_automation_nodes_per_rule) {
-    error = {path, "rule exceeds 256 AST nodes"};
+  if (!budget.consume(path, depth, error))
     return false;
-  }
-  if (depth > max_automation_ast_depth) {
-    error = {path, "expression depth exceeds 16"};
-    return false;
-  }
   const auto fail = [&](std::string message) {
     error = {path, std::move(message)};
     return false;
@@ -73,7 +85,7 @@ bool validate_expression_tree(
   case ExpressionKind::event_field:
     if (!expression.arguments.empty() || expression.reference.empty() ||
         expression.reference.size() > max_automation_string_bytes ||
-        !detail::is_valid_utf8(expression.reference))
+        !is_valid_utf8(expression.reference))
       return fail("invalid event field reference");
     if (expression.reference == "sourceId")
       result = AutomationValueType::string;
@@ -98,7 +110,7 @@ bool validate_expression_tree(
   for (std::size_t index{}; index < expression.arguments.size(); ++index)
     if (!validate_expression_tree(expression.arguments[index], variables,
                                   path + ".args[" + std::to_string(index) + "]",
-                                  nodes, depth + 1U, arguments[index], error))
+                                  budget, depth + 1U, arguments[index], error))
       return false;
 
   const auto known = [&](const std::size_t index,
@@ -141,12 +153,6 @@ bool validate_expression_tree(
 using VariableTypes =
     std::map<std::string, AutomationValueType, std::less<>>;
 
-bool is_null_expression(const AutomationExpression &expression) {
-  return expression.kind == ExpressionKind::literal &&
-         expression.arguments.empty() &&
-         std::holds_alternative<std::nullptr_t>(expression.literal.storage);
-}
-
 bool is_compatible_type(const std::optional<AutomationValueType> actual,
                         const AutomationValueType expected) {
   return !actual.has_value() || *actual == expected ||
@@ -154,146 +160,144 @@ bool is_compatible_type(const std::optional<AutomationValueType> actual,
           *actual == AutomationValueType::integer);
 }
 
+bool duration_like(const std::optional<AutomationValueType> type) {
+  return type.has_value() &&
+         (*type == AutomationValueType::duration ||
+          *type == AutomationValueType::integer);
+}
+
 AutomationError validate_action(const AutomationAction &action,
                                 const GameProfile &base,
                                 const VariableTypes &variables,
-                                const std::string &path, std::size_t &nodes) {
+                                const std::string &path, AstBudget &budget) {
+  const auto *spec = automation_action_spec(action.kind);
+  if (spec == nullptr)
+    return {path + ".type", "unsupported automation action"};
   const auto target_path = path + ".target";
-  const bool requires_value = action_accepts_value(action.kind);
-  const bool has_secondary = !is_null_expression(action.secondary);
+  const bool has_value = action.value.has_value();
+  const bool has_secondary = action.secondary.has_value();
   std::optional<AutomationValueType> value_type_result;
   std::optional<AutomationValueType> secondary_type;
   AutomationError expression_error;
-  if (requires_value) {
-    if (!validate_expression_tree(action.value, variables, path + ".value",
-                                  nodes, 1, value_type_result,
+  if (spec->accepts_value) {
+    if (!action.value.has_value())
+      return {path + ".value", "this action requires a value"};
+    if (!validate_expression_tree(*action.value, variables, path + ".value",
+                                  budget, 1, value_type_result,
                                   expression_error))
       return expression_error;
-  } else if (!is_null_expression(action.value)) {
+  } else if (has_value) {
     return {path + ".value", "this action does not accept a value"};
   }
-  if (has_secondary &&
-      !validate_expression_tree(action.secondary, variables,
-                                path + ".secondary", nodes, 1, secondary_type,
-                                expression_error))
-    return expression_error;
-  if (action.repeating && action.kind != AutomationActionKind::create_timer)
-    return {path + ".repeating", "only createTimer accepts repeating"};
-
-  const auto variable = variables.find(action.target);
-  switch (action.kind) {
-  case AutomationActionKind::set_variable:
-    if (variable == variables.end())
-      return {target_path, "unknown variable ID"};
-    if (!is_compatible_type(value_type_result, variable->second))
-      return {path + ".value",
-              "assignment type does not match the variable"};
+  switch (spec->secondary) {
+  case ActionSecondaryPolicy::none:
     if (has_secondary)
-      return {path + ".secondary", "setVariable does not accept secondary"};
+      return {path + ".secondary", std::string(spec->wire_name) +
+                                       " does not accept secondary"};
     break;
-  case AutomationActionKind::increment_variable:
-    if (variable == variables.end())
-      return {target_path, "unknown variable ID"};
-    if (!numeric_type(variable->second) ||
-        !is_compatible_type(value_type_result, variable->second))
-      return {path + ".value",
-              "incrementVariable must preserve the variable type"};
-    if (has_secondary)
-      return {path + ".secondary",
-              "incrementVariable does not accept secondary"};
-    break;
-  case AutomationActionKind::append_list:
-    if (variable == variables.end() ||
-        variable->second != AutomationValueType::list)
-      return {target_path, "appendList requires a list variable"};
-    if (has_secondary)
-      return {path + ".secondary", "appendList does not accept secondary"};
-    break;
-  case AutomationActionKind::set_map_entry:
-    if (variable == variables.end() ||
-        variable->second != AutomationValueType::map)
-      return {target_path, "setMapEntry requires a map variable"};
+  case ActionSecondaryPolicy::required_string_key:
     if (!has_secondary ||
-        !is_compatible_type(secondary_type, AutomationValueType::string))
-      return {path + ".secondary", "setMapEntry requires a string key"};
+        !validate_expression_tree(*action.secondary, variables,
+                                  path + ".secondary", budget, 1,
+                                  secondary_type, expression_error))
+      return has_secondary ? expression_error
+                           : AutomationError{path + ".secondary",
+                                             std::string(spec->wire_name) +
+                                                 " requires a string key"};
+    if (!is_compatible_type(secondary_type, AutomationValueType::string))
+      return {path + ".secondary", std::string(spec->wire_name) +
+                                       " requires a string key"};
     break;
-  case AutomationActionKind::erase_map_entry:
-    if (variable == variables.end() ||
-        variable->second != AutomationValueType::map)
-      return {target_path, "eraseMapEntry requires a map variable"};
-    if (!is_compatible_type(value_type_result, AutomationValueType::string))
-      return {path + ".value", "eraseMapEntry requires a string key"};
-    if (has_secondary)
-      return {path + ".secondary",
-              "eraseMapEntry does not accept secondary"};
+  case ActionSecondaryPolicy::optional_duration:
+    if (has_secondary) {
+      if (!validate_expression_tree(*action.secondary, variables,
+                                    path + ".secondary", budget, 1,
+                                    secondary_type, expression_error))
+        return expression_error;
+      if (secondary_type.has_value() && !duration_like(secondary_type))
+        return {path + ".secondary", "overlay expiry must be a duration"};
+    }
     break;
-  case AutomationActionKind::trigger_cooldown:
-  case AutomationActionKind::reset_cooldown:
-  case AutomationActionKind::refund_cooldown:
-    if (!cooldown_exists(base, action.target))
-      return {target_path, "unknown cooldown ID"};
-    if (has_secondary)
-      return {path + ".secondary",
-              "cooldown action does not accept secondary"};
-    break;
-  case AutomationActionKind::reduce_cooldown_next:
-  case AutomationActionKind::reduce_cooldown_all:
-    if (!cooldown_exists(base, action.target))
-      return {target_path, "unknown cooldown ID"};
-    if (value_type_result.has_value() &&
-        *value_type_result != AutomationValueType::duration &&
-        *value_type_result != AutomationValueType::integer)
-      return {path + ".value", "cooldown reduction requires a duration"};
-    if (has_secondary)
-      return {path + ".secondary",
-              "cooldown reduction does not accept secondary"};
-    break;
-  case AutomationActionKind::trigger_group:
-  case AutomationActionKind::reset_group:
-    if (!group_exists(base, action.target))
-      return {target_path, "unknown cooldown group ID"};
-    if (has_secondary)
-      return {path + ".secondary", "group action does not accept secondary"};
-    break;
-  case AutomationActionKind::create_timer:
-    if (!detail::valid_automation_id(action.target))
-      return {target_path, "invalid timer ID"};
-    if (value_type_result.has_value() &&
-        *value_type_result != AutomationValueType::duration &&
-        *value_type_result != AutomationValueType::integer)
-      return {path + ".value", "createTimer requires a duration"};
-    if (has_secondary)
-      return {path + ".secondary", "createTimer does not accept secondary"};
-    break;
-  case AutomationActionKind::cancel_timer:
-    if (!detail::valid_automation_id(action.target))
-      return {target_path, "invalid timer ID"};
-    if (has_secondary)
-      return {path + ".secondary", "cancelTimer does not accept secondary"};
-    break;
-  case AutomationActionKind::set_overlay_override: {
-    if (!panel_exists(base, action.target))
-      return {target_path, "unknown panel ID"};
-    if (!detail::valid_automation_id(action.name))
-      return {path + ".name", "overlay overrides require a valid name"};
+  }
+  if (action.repeating && !spec->allows_repeating)
+    return {path + ".repeating", "only createTimer accepts repeating"};
+  if (spec->requires_name && !detail::valid_automation_id(action.name))
+    return {path + ".name", "overlay overrides require a valid name"};
+  if (spec->requires_property) {
     const auto property_type = overlay_property_type(action.property);
     if (!property_type.has_value())
       return {path + ".property", "unsupported overlay property"};
     if (!is_compatible_type(value_type_result, *property_type))
       return {path + ".value",
               "overlay value does not match the property type"};
-    if (has_secondary && secondary_type.has_value() &&
-        *secondary_type != AutomationValueType::duration &&
-        *secondary_type != AutomationValueType::integer)
-      return {path + ".secondary", "overlay expiry must be a duration"};
-    break;
   }
-  case AutomationActionKind::clear_overlay_override:
+
+  const auto variable = variables.find(action.target);
+  switch (spec->target) {
+  case ActionTargetRole::variable_any:
+    if (variable == variables.end())
+      return {target_path, "unknown variable ID"};
+    if (!is_compatible_type(value_type_result, variable->second))
+      return {path + ".value",
+              "assignment type does not match the variable"};
+    break;
+  case ActionTargetRole::variable_numeric:
+    if (variable == variables.end())
+      return {target_path, "unknown variable ID"};
+    if (!numeric_type(variable->second) ||
+        !is_compatible_type(value_type_result, variable->second))
+      return {path + ".value",
+              "incrementVariable must preserve the variable type"};
+    break;
+  case ActionTargetRole::variable_list:
+    if (variable == variables.end() ||
+        variable->second != AutomationValueType::list)
+      return {target_path, "appendList requires a list variable"};
+    break;
+  case ActionTargetRole::variable_map:
+    if (variable == variables.end() ||
+        variable->second != AutomationValueType::map)
+      return {target_path, std::string(spec->wire_name) +
+                               " requires a map variable"};
+    break;
+  case ActionTargetRole::cooldown:
+    if (!cooldown_exists(base, action.target))
+      return {target_path, "unknown cooldown ID"};
+    break;
+  case ActionTargetRole::cooldown_group:
+    if (!group_exists(base, action.target))
+      return {target_path, "unknown cooldown group ID"};
+    break;
+  case ActionTargetRole::timer_id:
+    if (!detail::valid_automation_id(action.target))
+      return {target_path, "invalid timer ID"};
+    break;
+  case ActionTargetRole::panel:
+    if (!panel_exists(base, action.target))
+      return {target_path, "unknown panel ID"};
+    break;
+  case ActionTargetRole::override_name:
     if (!detail::valid_automation_id(action.target))
       return {target_path, "invalid overlay override name"};
-    if (has_secondary)
-      return {path + ".secondary",
-              "clearOverlayOverride does not accept secondary"};
+    break;
+  }
+
+  switch (spec->value) {
+  case ActionValuePolicy::none:
+  case ActionValuePolicy::any:
+  case ActionValuePolicy::match_variable:
+  case ActionValuePolicy::match_numeric_variable:
+  case ActionValuePolicy::overlay_property:
+    break;
+  case ActionValuePolicy::string_key:
+    if (!is_compatible_type(value_type_result, AutomationValueType::string))
+      return {path + ".value", std::string(spec->wire_name) +
+                                   " requires a string key"};
+    break;
+  case ActionValuePolicy::duration_or_integer:
+    if (value_type_result.has_value() && !duration_like(value_type_result))
+      return {path + ".value", std::string(spec->wire_name) +
+                                   " requires a duration"};
     break;
   }
   return {};
@@ -345,7 +349,7 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
         !automation_ids.insert(automation.id).second)
       return {automation_path + ".id", "duplicate or invalid automation ID"};
     if (automation.name.size() > max_automation_string_bytes ||
-        !detail::is_valid_utf8(automation.name))
+        !is_valid_utf8(automation.name))
       return {automation_path + ".name",
               "name must be valid UTF-8 within 512 bytes"};
     total_rules += automation.rules.size();
@@ -364,18 +368,18 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
       if (rule.priority < -1'000'000 || rule.priority > 1'000'000)
         return {path + ".priority", "priority must be a bounded integer"};
       if (rule.source_filter.size() > max_automation_string_bytes ||
-          !detail::is_valid_utf8(rule.source_filter))
+          !is_valid_utf8(rule.source_filter))
         return {path + ".source",
                 "source must be valid UTF-8 within 512 bytes"};
       if (rule.actions.empty() ||
           rule.actions.size() > max_automation_actions_per_rule)
         return {path + ".actions", "rules require 1 through 32 actions"};
 
-      std::size_t nodes{};
+      AstBudget budget;
       AutomationError expression_error;
       std::optional<AutomationValueType> condition_type;
       if (!validate_expression_tree(rule.condition, variables,
-                                    path + ".condition", nodes, 1,
+                                    path + ".condition", budget, 1,
                                     condition_type, expression_error))
         return expression_error;
       if (condition_type.has_value() &&
@@ -388,7 +392,7 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
         const auto action_path =
             path + ".actions[" + std::to_string(action_index) + "]";
         if (auto error = validate_action(rule.actions[action_index], base,
-                                         variables, action_path, nodes);
+                                         variables, action_path, budget);
             !error.message.empty())
           return error;
       }

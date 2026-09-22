@@ -22,19 +22,38 @@
 
 namespace layerc::daemon {
 
+template <typename Profile> struct ModuleSidecar {
+  std::optional<Profile> profile;
+  layerc::platform::ModuleSidecarState state{
+      layerc::platform::ModuleSidecarState::absent};
+
+  [[nodiscard]] bool usable() const noexcept {
+    return layerc::platform::is_usable(state) && profile.has_value();
+  }
+
+  bool operator==(const ModuleSidecar &) const = default;
+};
+
+struct ProfileModules {
+  ModuleSidecar<layerc::core::VisualProfile> visual;
+  ModuleSidecar<layerc::core::AutomationProfile> automation;
+  ModuleSidecar<layerc::core::CompanionProfile> companion;
+
+  bool operator==(const ProfileModules &) const = default;
+};
+
+struct SessionInit {
+  layerc::core::GameProfile profile;
+  std::string source_key;
+  ProfileModules modules;
+  bool visual_enabled{};
+};
+
 struct ProfileSource {
-  std::wstring key;
+  std::string key;
   std::filesystem::path path;
   layerc::core::GameProfile profile;
-  std::optional<layerc::core::VisualProfile> visual_profile;
-  layerc::platform::VisualSidecarState visual_health{
-      layerc::platform::VisualSidecarState::absent};
-  std::optional<layerc::core::AutomationProfile> automation_profile;
-  layerc::platform::AutomationSidecarState automation_health{
-      layerc::platform::AutomationSidecarState::absent};
-  std::optional<layerc::core::CompanionProfile> companion_profile;
-  layerc::platform::CompanionSidecarState companion_health{
-      layerc::platform::CompanionSidecarState::absent};
+  ProfileModules modules;
   layerc::core::AutomationPersistentValues automation_state;
   std::optional<layerc::core::TimePoint> automation_state_due;
   layerc::core::ProfileRevision revision{};
@@ -44,23 +63,8 @@ struct ProfileSource {
   // sidecar can change on disk while the base profile stays identical, so
   // the base revision alone is not enough.
   layerc::core::ProfileRevision automation_revision{};
-};
 
-// Everything a Session is constructed from; named fields keep the construction
-// inputs readable and order-independent at call sites.
-struct SessionInit {
-  layerc::core::GameProfile profile;
-  std::wstring source_key;
-  std::optional<layerc::core::VisualProfile> visual_profile;
-  layerc::platform::VisualSidecarState visual_health{
-      layerc::platform::VisualSidecarState::absent};
-  std::optional<layerc::core::AutomationProfile> automation_profile;
-  layerc::platform::AutomationSidecarState automation_health{
-      layerc::platform::AutomationSidecarState::absent};
-  std::optional<layerc::core::CompanionProfile> companion_profile;
-  layerc::platform::CompanionSidecarState companion_health{
-      layerc::platform::CompanionSidecarState::absent};
-  bool visual_enabled{};
+  [[nodiscard]] SessionInit to_session_init(bool visual_enabled) const;
 };
 
 struct Session {
@@ -75,48 +79,38 @@ struct Session {
   void rebuild_input_configuration();
   void set_capture_exclusion(bool enabled);
   void apply_profile(const layerc::core::GameProfile &updated,
-                     bool capture_exclusion);
+                     bool capture_exclusion, layerc::core::TimePoint now);
   void apply_visual_profile(
-      std::optional<layerc::core::VisualProfile> visual_profile,
-      layerc::platform::VisualSidecarState visual_health, bool visual_enabled);
+      ModuleSidecar<layerc::core::VisualProfile> visual, bool visual_enabled);
   void apply_automation_profile(
-      std::optional<layerc::core::AutomationProfile> automation_profile,
-      layerc::platform::AutomationSidecarState automation_health);
+      ModuleSidecar<layerc::core::AutomationProfile> automation);
   void apply_companion_profile(
-      std::optional<layerc::core::CompanionProfile> companion_profile,
-      layerc::platform::CompanionSidecarState companion_health);
+      ModuleSidecar<layerc::core::CompanionProfile> companion);
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
   [[nodiscard]] bool blocks_all_triggers() const noexcept {
-    return visual_health == layerc::platform::VisualSidecarState::invalid;
+    return modules.visual.state ==
+           layerc::platform::ModuleSidecarState::invalid;
   }
   [[nodiscard]] bool is_global() const noexcept { return profile.game.global; }
   [[nodiscard]] bool requires_input_polling() const noexcept {
     return uses_controller || !global_keyboard.empty();
   }
 
-  std::wstring source_key;
+  std::string source_key;
   layerc::core::GameProfile profile;
   OverlayCollection overlays;
   layerc::core::CooldownEngine cooldowns;
   layerc::core::InputMatcher input;
-  std::optional<layerc::core::VisualProfile> visual_profile;
+  ProfileModules modules;
   std::unique_ptr<layerc::core::VisualTriggerEngine> visual_triggers;
-  std::optional<layerc::core::AutomationProfile> automation_profile;
   std::unique_ptr<layerc::core::AutomationRuntime> automation_runtime;
-  std::optional<layerc::core::CompanionProfile> companion_profile;
-  layerc::platform::CompanionSidecarState companion_health{
-      layerc::platform::CompanionSidecarState::absent};
   // The source automation_revision the runtime was created or last
   // reconfigured against; reconcile compares this instead of deep-comparing
   // profiles on every state change.
   layerc::core::ProfileRevision automation_revision{};
   std::vector<layerc::core::OverlayPropertyOverride>
       applied_overlay_overrides;
-  layerc::platform::AutomationSidecarState automation_health{
-      layerc::platform::AutomationSidecarState::absent};
-  layerc::platform::VisualSidecarState visual_health{
-      layerc::platform::VisualSidecarState::absent};
   std::uint64_t last_visual_sequence{};
   std::vector<layerc::core::CooldownState> snapshot_buffer;
   std::vector<PolledKeyState> global_keyboard;
@@ -132,7 +126,7 @@ struct EditSession {
   layerc::core::EditSessionId id{};
   layerc::core::ProfileRevision revision{};
   layerc::core::ProfileRevision outbound_revision{};
-  std::wstring source_key;
+  std::string source_key;
   layerc::core::GameProfile profile;
   std::string selected_panel;
   HWND target{};

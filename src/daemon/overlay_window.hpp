@@ -1,6 +1,6 @@
 #pragma once
 
-#include "layerc/core/types.hpp"
+#include "layerc/core/panel_geometry.hpp"
 
 #include <memory>
 #include <optional>
@@ -14,22 +14,13 @@
 
 namespace layerc::daemon {
 
-struct OverlayCooldown {
-  std::string id;
-  std::wstring name;
-  layerc::core::Milliseconds duration{};
-};
-
-[[nodiscard]] std::vector<OverlayCooldown> make_overlay_cooldowns(
-    std::span<const layerc::core::CooldownDefinition> definitions);
-
 class OverlayWindow {
 public:
   using DragCallback =
       std::function<void(std::string_view, double, double, bool)>;
 
   OverlayWindow(const layerc::core::Panel &panel,
-                std::span<const OverlayCooldown> cooldowns);
+                std::span<const layerc::core::CooldownDefinition> cooldowns);
   ~OverlayWindow();
 
   OverlayWindow(const OverlayWindow &) = delete;
@@ -39,7 +30,7 @@ public:
   void show_on_rect(const RECT &target);
   void set_capture_exclusion(bool enabled);
   void update_snapshot(const layerc::core::Panel &panel,
-                       std::span<const OverlayCooldown> cooldowns);
+                       std::span<const layerc::core::CooldownDefinition> cooldowns);
   void set_session_override(std::optional<bool> visible,
                             std::optional<std::wstring> text);
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
@@ -56,10 +47,6 @@ public:
               layerc::core::TimePoint now);
 
 private:
-  static constexpr LONG item_width = 78;
-  static constexpr LONG item_height = 72;
-  static constexpr LONG spacing = 6;
-  static constexpr LONG padding = 6;
   static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                       LPARAM lparam);
   bool create_window();
@@ -75,7 +62,7 @@ private:
   void clear_window_state();
 
   layerc::core::Panel panel_;
-  std::vector<OverlayCooldown> cooldowns_;
+  std::vector<layerc::core::CooldownDefinition> cooldowns_;
   std::vector<std::size_t> cooldown_indices_;
   std::wstring label_buffer_;
   HWND window_{};

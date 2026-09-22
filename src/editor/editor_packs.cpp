@@ -1,3 +1,4 @@
+#include "dialog_layout.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
@@ -14,6 +15,7 @@
 #include <set>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -33,7 +35,7 @@ struct ExportDialogState {
   std::map<std::string, std::uintmax_t, std::less<>> asset_sizes;
   std::size_t current_index{SIZE_MAX};
   std::vector<std::filesystem::path> selected;
-  HFONT font{};
+  DialogChrome chrome;
 };
 
 struct ImportItem {
@@ -48,7 +50,8 @@ struct ImportDialogState {
   const layerc::bundle::ValidatedPack *pack{};
   std::vector<ImportItem> items;
   std::vector<layerc::bundle::ImportChoice> selected;
-  HFONT font{};
+  DialogChrome chrome;
+  bool updating{true};
 };
 
 void set_column(const HWND list, const int index, const int width,
@@ -60,24 +63,13 @@ void set_column(const HWND list, const int index, const int width,
   ListView_InsertColumn(list, index, &column);
 }
 
-int dialog_dpi(const HWND window) {
-  const UINT dpi = GetDpiForWindow(window);
-  return dpi == 0 ? 96 : static_cast<int>(dpi);
-}
-
-void move_dialog_item(const HWND window, const int id, const int x,
-                      const int y, const int width, const int height) {
-  if (const HWND control = GetDlgItem(window, id); control != nullptr)
-    MoveWindow(control, x, y, std::max(1, width), std::max(1, height), TRUE);
-}
-
 void fit_pack_columns(const HWND list, const bool import, const int dpi) {
   if (list == nullptr)
     return;
   const HWND header = ListView_GetHeader(list);
   RECT client{};
   GetClientRect(header == nullptr ? list : header, &client);
-  const auto scaled = [dpi](const int value) { return MulDiv(value, dpi, 96); };
+  const auto scaled = [dpi](const int value) { return dpi_scaled(value, dpi); };
   const int available =
       std::max(1, static_cast<int>(client.right - client.left) - scaled(2));
   if (!import) {
@@ -99,8 +91,8 @@ void layout_pack_dialog(const HWND window, const bool import) {
   GetClientRect(window, &client);
   const int width = std::max(1, static_cast<int>(client.right - client.left));
   const int height = std::max(1, static_cast<int>(client.bottom - client.top));
-  const int dpi = dialog_dpi(window);
-  const auto scaled = [dpi](const int value) { return MulDiv(value, dpi, 96); };
+  const int dpi = window_base_dpi(window);
+  const auto scaled = [dpi](const int value) { return dpi_scaled(value, dpi); };
 
   const int margin = scaled(12);
   const int gap = scaled(8);
@@ -109,29 +101,29 @@ void layout_pack_dialog(const HWND window, const bool import) {
   const int action_top = height - margin - button_height;
   const int selection_top = action_top - gap - button_height;
   const int list_top = margin + intro_height + gap;
-  move_dialog_item(window, IDC_PACK_INTRO, margin, margin, width - margin * 2,
+  move_control(window, IDC_PACK_INTRO, margin, margin, width - margin * 2,
                    intro_height);
-  move_dialog_item(window, IDC_PACK_LIST, margin, list_top, width - margin * 2,
+  move_control(window, IDC_PACK_LIST, margin, list_top, width - margin * 2,
                    selection_top - gap - list_top);
 
   int left = margin;
-  move_dialog_item(window, IDC_PACK_SELECT_ALL, left, selection_top, scaled(84),
+  move_control(window, IDC_PACK_SELECT_ALL, left, selection_top, scaled(84),
                    button_height);
   left += scaled(92);
   if (import) {
-    move_dialog_item(window, IDC_PACK_TOGGLE_ACTION, left, selection_top,
+    move_control(window, IDC_PACK_TOGGLE_ACTION, left, selection_top,
                      scaled(142), button_height);
     left += scaled(150);
   }
-  move_dialog_item(window, IDC_PACK_SUMMARY, left,
+  move_control(window, IDC_PACK_SUMMARY, left,
                    selection_top + scaled(5), width - margin - left,
                    scaled(18));
 
   const int cancel_width = scaled(80);
   const int confirm_width = scaled(88);
-  move_dialog_item(window, IDCANCEL, width - margin - cancel_width, action_top,
+  move_control(window, IDCANCEL, width - margin - cancel_width, action_top,
                    cancel_width, button_height);
-  move_dialog_item(window, IDC_PACK_CONFIRM,
+  move_control(window, IDC_PACK_CONFIRM,
                    width - margin - cancel_width - gap - confirm_width,
                    action_top, confirm_width, button_height);
   fit_pack_columns(GetDlgItem(window, IDC_PACK_LIST), import, dpi);
@@ -139,38 +131,22 @@ void layout_pack_dialog(const HWND window, const bool import) {
 
 bool handle_pack_window_message(const HWND window, const UINT message,
                                 const WPARAM wparam, const LPARAM lparam,
-                                const bool import, HFONT &font) {
+                                const bool import, DialogChrome &chrome) {
   if (message == WM_SIZE) {
     layout_pack_dialog(window, import);
     return true;
   }
   if (message == WM_DPICHANGED) {
-    apply_suggested_dpi_rect(window, lparam);
-    const HFONT replacement = create_editor_font(HIWORD(wparam));
-    if (replacement != nullptr) {
-      const HFONT previous = font;
-      font = replacement;
-      style_native_dialog_children(window, font);
-      if (previous != nullptr)
-        DeleteObject(previous);
-    }
+    (void)chrome.on_dpi_changed(HIWORD(wparam), lparam);
     layout_pack_dialog(window, import);
     return true;
   }
   if (message == WM_GETMINMAXINFO) {
-    const int dpi = dialog_dpi(window);
-    auto *limits = reinterpret_cast<MINMAXINFO *>(lparam);
-    limits->ptMinTrackSize = {
-        MulDiv(import ? 620 : 520, dpi, 96),
-        MulDiv(import ? 360 : 330, dpi, 96),
-    };
+    chrome.on_minimum_size(lparam, import ? 620 : 520, import ? 360 : 330);
     return true;
   }
   if (message == WM_DESTROY) {
-    if (font != nullptr) {
-      DeleteObject(font);
-      font = nullptr;
-    }
+    chrome.on_destroy();
     return true;
   }
   return false;
@@ -208,12 +184,41 @@ void update_export_summary(const HWND window, ExportDialogState &state) {
   EnableWindow(GetDlgItem(window, IDC_PACK_CONFIRM), count != 0);
 }
 
-void update_import_summary(const HWND window) {
-  const auto count = checked_count(GetDlgItem(window, IDC_PACK_LIST));
-  const auto text = std::to_wstring(count) + L" profile" +
-                    (count == 1 ? L"" : L"s") + L" selected";
+void update_import_summary(const HWND window, ImportDialogState &state) {
+  if (state.updating) return;
+  state.updating = true;
+  const HWND list = GetDlgItem(window, IDC_PACK_LIST);
+  state.selected.clear();
+  for (std::size_t index = 0; index < state.items.size(); ++index) {
+    if (ListView_GetCheckState(list, static_cast<int>(index)))
+      state.selected.push_back({.profile_index = index,
+                                .action = state.items[index].action});
+  }
+  std::wstring text = std::to_wstring(state.selected.size()) + L" profiles selected";
+  bool valid = !state.selected.empty();
+  if (valid) {
+    const auto preview = layerc::bundle::preview_profile_import(
+        *state.pack, state.selected, layerc::platform::profile_directory());
+    valid = !preview.error.has_value();
+    if (preview.error) {
+      text = layerc::platform::utf8_to_wide(preview.error->message);
+    } else {
+      for (std::size_t index = 0; index < preview.entries.size(); ++index) {
+        const auto &entry = preview.entries[index];
+        auto &choice = state.selected[index];
+        choice.expected_target = entry.target;
+        choice.require_absent = choice.action == layerc::bundle::ImportAction::copy ||
+                                !entry.collides;
+        auto &item = state.items[entry.profile_index];
+        item.filename = entry.target.filename().wstring();
+        ListView_SetItemText(list, static_cast<int>(entry.profile_index), 1,
+                            item.filename.data());
+      }
+    }
+  }
   SetWindowTextW(GetDlgItem(window, IDC_PACK_SUMMARY), text.c_str());
-  EnableWindow(GetDlgItem(window, IDC_PACK_CONFIRM), count != 0);
+  EnableWindow(GetDlgItem(window, IDC_PACK_CONFIRM), valid);
+  state.updating = false;
 }
 
 void set_import_action_text(const HWND list, const int index,
@@ -227,10 +232,9 @@ void set_import_action_text(const HWND list, const int index,
 
 std::optional<std::filesystem::path> choose_pack_path(const HWND owner,
                                                       const bool save) {
-  std::array<wchar_t, 32'768> buffer{};
-  const auto initial = layerc::platform::profile_directory() /
-                       (save ? L"LayerC profiles.layercprofile" : L"");
-  const auto initial_text = initial.wstring();
+  std::vector<wchar_t> buffer(32'768);
+  const auto initial_directory = layerc::platform::profile_directory().wstring();
+  const std::wstring initial_text = save ? L"LayerC profiles.layercprofile" : L"";
   if (initial_text.size() < buffer.size())
     std::copy(initial_text.begin(), initial_text.end(), buffer.begin());
   constexpr wchar_t filter[] =
@@ -241,15 +245,23 @@ std::optional<std::filesystem::path> choose_pack_path(const HWND owner,
   dialog.hwndOwner = owner;
   dialog.lpstrFilter = filter;
   dialog.lpstrFile = buffer.data();
+  dialog.lpstrInitialDir = initial_directory.c_str();
   dialog.nMaxFile = static_cast<DWORD>(buffer.size());
   dialog.Flags =
-      static_cast<DWORD>(OFN_EXPLORER | OFN_PATHMUSTEXIST |
+      static_cast<DWORD>(OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR |
                          (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST));
   dialog.lpstrDefExt = L"layercprofile";
   const BOOL chosen =
       save ? GetSaveFileNameW(&dialog) : GetOpenFileNameW(&dialog);
-  if (chosen == FALSE)
+  if (chosen == FALSE) {
+    const auto error = CommDlgExtendedError();
+    if (error != 0) {
+      const auto message = L"Could not open the profile pack chooser (error " +
+                           std::to_wstring(error) + L").";
+      MessageBoxW(owner, message.c_str(), L"Profile pack", MB_OK | MB_ICONERROR);
+    }
     return std::nullopt;
+  }
   std::filesystem::path path(buffer.data());
   if (_wcsicmp(path.extension().c_str(), L".layercprofile") != 0)
     path.replace_extension(L".layercprofile");
@@ -272,13 +284,8 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    set_dark_title_bar(window);
-    (void)layerc::platform::apply_capture_exclusion(
-        window, state->editor->capture_exclusion_);
-    state->font = create_editor_font(GetDpiForWindow(window));
-    if (state->font != nullptr)
-      style_native_dialog_children(window, state->font);
-    else
+    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion());
+    if (!state->chrome.attach(window))
       state->editor->style_dialog_children(window);
     const HWND list = GetDlgItem(window, IDC_PACK_LIST);
     ListView_SetExtendedListViewStyle(
@@ -332,7 +339,7 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
     }
   }
   if (handle_pack_window_message(window, message, wparam, lparam, false,
-                                 state->font))
+                                 state->chrome))
     return TRUE;
   return state->editor->dialog_theme_message(window, message, wparam, lparam)
       .value_or(FALSE);
@@ -346,20 +353,15 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    set_dark_title_bar(window);
-    (void)layerc::platform::apply_capture_exclusion(
-        window, state->editor->capture_exclusion_);
-    state->font = create_editor_font(GetDpiForWindow(window));
-    if (state->font != nullptr)
-      style_native_dialog_children(window, state->font);
-    else
+    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion());
+    if (!state->chrome.attach(window))
       state->editor->style_dialog_children(window);
     const HWND list = GetDlgItem(window, IDC_PACK_LIST);
     ListView_SetExtendedListViewStyle(
         list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER |
                   LVS_EX_LABELTIP);
     set_column(list, 0, 1, L"Profile");
-    set_column(list, 1, 1, L"Suggested file");
+    set_column(list, 1, 1, L"Destination file");
     set_column(list, 2, 1, L"Action");
     state->editor->style_list_view(list, false);
     for (std::size_t index = 0; index < state->items.size(); ++index) {
@@ -375,14 +377,17 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
                              state->items[index]);
       ListView_SetCheckState(list, static_cast<int>(index), TRUE);
     }
-    update_import_summary(window);
+    state->updating = false;
+    update_import_summary(window, *state);
     layout_pack_dialog(window, true);
     return TRUE;
   }
   if (message == WM_NOTIFY &&
       reinterpret_cast<NMHDR *>(lparam)->idFrom == IDC_PACK_LIST &&
       reinterpret_cast<NMHDR *>(lparam)->code == LVN_ITEMCHANGED) {
-    update_import_summary(window);
+    const auto *change = reinterpret_cast<NMLISTVIEW *>(lparam);
+    if (((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) != 0)
+      update_import_summary(window, *state);
     return TRUE;
   }
   if (message == WM_COMMAND) {
@@ -391,7 +396,7 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
       const HWND list = GetDlgItem(window, IDC_PACK_LIST);
       for (int index = 0; index < ListView_GetItemCount(list); ++index)
         ListView_SetCheckState(list, index, TRUE);
-      update_import_summary(window);
+      update_import_summary(window, *state);
       return TRUE;
     }
     case IDC_PACK_TOGGLE_ACTION: {
@@ -406,21 +411,14 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
                             ? layerc::bundle::ImportAction::replace
                             : layerc::bundle::ImportAction::copy;
           set_import_action_text(list, index, item);
+          update_import_summary(window, *state);
         }
       }
       return TRUE;
     }
     case IDC_PACK_CONFIRM: {
-      const HWND list = GetDlgItem(window, IDC_PACK_LIST);
-      state->selected.clear();
-      for (int index = 0; index < ListView_GetItemCount(list); ++index) {
-        if (ListView_GetCheckState(list, index) == FALSE)
-          continue;
-        state->selected.push_back(
-            {.profile_index = static_cast<std::size_t>(index),
-             .action = state->items[static_cast<std::size_t>(index)].action});
-      }
-      if (!state->selected.empty())
+      if (!state->selected.empty() &&
+          IsWindowEnabled(GetDlgItem(window, IDC_PACK_CONFIRM)))
         EndDialog(window, IDOK);
       return TRUE;
     }
@@ -430,32 +428,32 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
     }
   }
   if (handle_pack_window_message(window, message, wparam, lparam, true,
-                                 state->font))
+                                 state->chrome))
     return TRUE;
   return state->editor->dialog_theme_message(window, message, wparam, lparam)
       .value_or(FALSE);
 }
 
 void EditorWindow::export_profile_pack() {
-  if (dirty_ && !save_profile(false))
+  if (document_.dirty() && !save_profile(false))
     return;
   ExportDialogState state{};
   state.editor = this;
-  state.items.reserve(entries_.size());
-  for (std::size_t index = 0; index < entries_.size(); ++index) {
+  state.items.reserve(shell_.profiles().size());
+  for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
     ExportItem item{};
-    item.path = entries_[index].path;
-    item.label = entries_[index].label;
-    if (entries_[index].path.lexically_normal() ==
-        current_path_.lexically_normal())
+    item.path = shell_.profiles()[index].path;
+    item.label = shell_.profiles()[index].label;
+    if (shell_.profiles()[index].path.lexically_normal() ==
+        document_.path().lexically_normal())
       state.current_index = index;
-    const auto base = layerc::platform::read_profile_file(entries_[index].path);
+    const auto base = layerc::platform::read_profile_file(shell_.profiles()[index].path);
     if (base.has_value()) {
       const auto parsed = layerc::core::parse_profile_json(*base);
       if (const auto *profile =
               std::get_if<layerc::core::GameProfile>(&parsed)) {
         const auto visual = layerc::platform::load_visual_sidecar(
-            entries_[index].path, *profile);
+            shell_.profiles()[index].path, *profile);
         if (visual.state == layerc::platform::VisualSidecarState::valid &&
             visual.profile.has_value()) {
           for (const auto &definition : visual.profile->templates)
@@ -477,23 +475,23 @@ void EditorWindow::export_profile_pack() {
     state.items.push_back(std::move(item));
   }
   if (state.items.empty()) {
-    MessageBoxW(dialog_, L"There are no saved profiles to export.",
+    MessageBoxW(shell_.window(), L"There are no saved profiles to export.",
                 L"Export Pack", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (state.current_index == SIZE_MAX)
     state.current_index = 0;
-  if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_EXPORT_PACK), dialog_,
+  if (DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_EXPORT_PACK), shell_.window(),
                       &EditorWindow::export_pack_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK)
     return;
-  const auto destination = choose_pack_path(dialog_, true);
+  const auto destination = choose_pack_path(shell_.window(), true);
   if (!destination.has_value())
     return;
   const auto result =
       layerc::bundle::export_profile_pack(*destination, state.selected);
   if (const auto *error = std::get_if<layerc::bundle::PackError>(&result)) {
-    show_pack_error(dialog_, L"Profile pack export failed", *error);
+    show_pack_error(shell_.window(), L"Profile pack export failed", *error);
     return;
   }
   set_status(L"Profile pack exported.");
@@ -502,78 +500,49 @@ void EditorWindow::export_profile_pack() {
 void EditorWindow::import_profile_pack() {
   if (!confirm_unsaved_changes())
     return;
-  const auto source = choose_pack_path(dialog_, false);
+  const auto source = choose_pack_path(shell_.window(), false);
   if (!source.has_value())
     return;
   const auto validation = layerc::bundle::validate_profile_pack(*source);
   const auto *pack = std::get_if<layerc::bundle::ValidatedPack>(&validation);
   if (pack == nullptr) {
-    show_pack_error(dialog_, L"Profile pack validation failed",
+    show_pack_error(shell_.window(), L"Profile pack validation failed",
                     std::get<layerc::bundle::PackError>(validation));
     return;
   }
 
-  std::set<std::string, std::less<>> existing_ids;
-  std::set<std::wstring, std::less<>> existing_files;
-  std::error_code directory_error;
   const auto profile_directory = layerc::platform::profile_directory();
-  if (std::filesystem::exists(profile_directory, directory_error)) {
-    for (std::filesystem::directory_iterator
-             iterator(profile_directory, directory_error),
-         end;
-         !directory_error && iterator != end;
-         iterator.increment(directory_error)) {
-      if (!iterator->is_regular_file(directory_error) || directory_error)
-        continue;
-      if (_wcsicmp(iterator->path().extension().c_str(), L".json") == 0)
-        existing_files.insert(layerc::platform::lower_copy(
-            iterator->path().filename().wstring()));
-    }
-  }
-  if (directory_error) {
-    MessageBoxW(dialog_, L"The profiles folder could not be enumerated.",
-                L"Import Pack", MB_OK | MB_ICONERROR);
+  std::vector<layerc::bundle::ImportChoice> copy_choices;
+  for (std::size_t index = 0; index < pack->profiles.size(); ++index)
+    copy_choices.push_back({.profile_index = index,
+                            .action = layerc::bundle::ImportAction::copy});
+  const auto preview = layerc::bundle::preview_profile_import(
+      *pack, copy_choices, profile_directory);
+  if (preview.error) {
+    show_pack_error(shell_.window(), L"Import preview failed", *preview.error);
     return;
-  }
-  for (const auto &entry : entries_) {
-    const auto json = layerc::platform::read_profile_file(entry.path);
-    if (!json.has_value())
-      continue;
-    const auto parsed = layerc::core::parse_profile_json(*json);
-    if (const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed))
-      existing_ids.insert(profile->id);
   }
   ImportDialogState state{};
   state.editor = this;
   state.pack = pack;
   state.items.reserve(pack->profiles.size());
-  for (const auto &profile : pack->profiles) {
-    const auto suggested = layerc::bundle::resolve_suggested_profile_filename(
-        profile.suggested_filename);
-    if (!suggested.has_value()) {
-      MessageBoxW(dialog_, L"The pack contains an invalid suggested filename.",
-                  L"Import Pack", MB_OK | MB_ICONERROR);
-      return;
-    }
-    const auto filename = suggested->wstring();
-    const bool conflict =
-        existing_ids.contains(profile.profile.id) ||
-        existing_files.contains(layerc::platform::lower_copy(filename));
+  for (const auto &entry : preview.entries) {
+    const auto &profile = pack->profiles[entry.profile_index];
     state.items.push_back(
         {.name = layerc::platform::utf8_to_wide(profile.profile.name),
-         .filename = filename,
-         .conflict = conflict,
-         .action = conflict ? layerc::bundle::ImportAction::copy
-                            : layerc::bundle::ImportAction::replace});
+         .filename = entry.target.filename().wstring(),
+         .conflict = entry.collides,
+         .action = entry.collides ? layerc::bundle::ImportAction::copy
+                                  : layerc::bundle::ImportAction::replace});
   }
-  if (DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_IMPORT_PACK), dialog_,
+  if (DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_IMPORT_PACK), shell_.window(),
                       &EditorWindow::import_pack_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK)
     return;
   const auto result = layerc::bundle::import_profile_pack(
       *pack, state.selected, layerc::platform::profile_directory());
   if (const auto *error = std::get_if<layerc::bundle::PackError>(&result)) {
-    show_pack_error(dialog_, L"Profile pack import failed", *error);
+    show_pack_error(shell_.window(), L"Profile pack import failed", *error);
     return;
   }
   reload_profile_list({}, true);

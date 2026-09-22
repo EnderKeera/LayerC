@@ -12,11 +12,17 @@ permissions:
 
 jobs:
   pr-agent:
-    if: ${{ github.event.sender.type != 'Bot' }}
+    # PR events always review; comment events only answer explicit bot
+    # commands so a plain "lgtm" never spawns an LLM run.
+    if: ${{ github.event.sender.type != 'Bot' && (github.event_name == 'pull_request' || contains(github.event.comment.body, '/review') || contains(github.event.comment.body, '/ask') || contains(github.event.comment.body, '/describe')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: The-PR-Agent/pr-agent@4ebd5c5333c6ef21509e7304d27969eb825e6f22 # v0.43.0
         env:
+          # OPENAI_* are this action's fixed input names; both are routed to
+          # DeepSeek's OpenAI-compatible endpoint, not to OpenAI.
           OPENAI_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_BASE: https://api.deepseek.com
+          config.model: deepseek-chat
+          config.fallback_models: '["deepseek-chat"]'

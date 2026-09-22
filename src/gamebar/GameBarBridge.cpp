@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <utility>
+#include <variant>
 
 namespace layerc::gamebar {
 namespace {
@@ -129,8 +131,8 @@ layerc::core::CompanionSessionSnapshot GameBarBridge::create_session_snapshot(
   build_available_catalog(snapshot, panels);
   build_panel_snapshots(snapshot, panels, definitions, states, now);
   const auto fits = [&] {
-    return layerc::core::serialize_companion_snapshot_json(snapshot)
-        .has_value();
+    return std::holds_alternative<std::string>(
+        layerc::core::serialize_companion_snapshot_json(snapshot));
   };
   if (fits())
     return snapshot;
@@ -166,7 +168,11 @@ GameBarBridge::latest_snapshot_json(const layerc::core::TimePoint now) const {
     return std::nullopt;
   if (now - last_update_time_ > stale_timeout)
     return std::nullopt;
-  return layerc::core::serialize_companion_snapshot_json(*latest_snapshot_);
+  auto serialized =
+      layerc::core::serialize_companion_snapshot_json(*latest_snapshot_);
+  if (auto *json = std::get_if<std::string>(&serialized))
+    return std::move(*json);
+  return std::nullopt;
 }
 
 } // namespace layerc::gamebar

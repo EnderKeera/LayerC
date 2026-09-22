@@ -4,7 +4,7 @@
 #include "automation_ops.hpp"
 #include "automation_profile_internal.hpp"
 #include "layerc/core/json.hpp"
-#include "utf8.hpp"
+#include "layerc/core/utf8.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -22,65 +22,6 @@ using detail::numeric_type;
 using detail::parse_automation_event_name;
 using json::Value;
 
-std::optional<AutomationValueType> parse_type(std::string_view text) {
-  return detail::parse_automation_value_type_name(text);
-}
-std::string_view action_name(AutomationActionKind kind) {
-  switch (kind) {
-  case AutomationActionKind::set_variable:
-    return "setVariable";
-  case AutomationActionKind::increment_variable:
-    return "incrementVariable";
-  case AutomationActionKind::append_list:
-    return "appendList";
-  case AutomationActionKind::set_map_entry:
-    return "setMapEntry";
-  case AutomationActionKind::erase_map_entry:
-    return "eraseMapEntry";
-  case AutomationActionKind::trigger_cooldown:
-    return "triggerCooldown";
-  case AutomationActionKind::reset_cooldown:
-    return "resetCooldown";
-  case AutomationActionKind::reduce_cooldown_next:
-    return "reduceCooldownNext";
-  case AutomationActionKind::reduce_cooldown_all:
-    return "reduceCooldownAll";
-  case AutomationActionKind::refund_cooldown:
-    return "refundCooldown";
-  case AutomationActionKind::trigger_group:
-    return "triggerGroup";
-  case AutomationActionKind::reset_group:
-    return "resetGroup";
-  case AutomationActionKind::create_timer:
-    return "createTimer";
-  case AutomationActionKind::cancel_timer:
-    return "cancelTimer";
-  case AutomationActionKind::set_overlay_override:
-    return "setOverlayOverride";
-  case AutomationActionKind::clear_overlay_override:
-    return "clearOverlayOverride";
-  }
-  return "setVariable";
-}
-std::optional<AutomationActionKind> parse_action(std::string_view text) {
-  for (auto kind :
-       {AutomationActionKind::set_variable,
-        AutomationActionKind::increment_variable,
-        AutomationActionKind::append_list, AutomationActionKind::set_map_entry,
-        AutomationActionKind::erase_map_entry,
-        AutomationActionKind::trigger_cooldown,
-        AutomationActionKind::reset_cooldown,
-        AutomationActionKind::reduce_cooldown_next,
-        AutomationActionKind::reduce_cooldown_all,
-        AutomationActionKind::refund_cooldown,
-        AutomationActionKind::trigger_group, AutomationActionKind::reset_group,
-        AutomationActionKind::create_timer, AutomationActionKind::cancel_timer,
-        AutomationActionKind::set_overlay_override,
-        AutomationActionKind::clear_overlay_override})
-    if (action_name(kind) == text)
-      return kind;
-  return std::nullopt;
-}
 void append_tagged_value(std::string &out, const AutomationValue &value);
 
 void append_value(std::string &out, const AutomationValue &value) {
@@ -90,7 +31,7 @@ void append_value(std::string &out, const AutomationValue &value) {
         if constexpr (std::is_same_v<T, std::nullptr_t>)
           out += "null";
         else if constexpr (std::is_same_v<T, bool>)
-          out += entry ? "true" : "false";
+          json::append_bool(out, entry);
         else if constexpr (std::is_same_v<T, std::int64_t>) {
           detail::append_exact_integer(out, entry);
         } else if constexpr (std::is_same_v<T, double>)
@@ -148,36 +89,30 @@ AutomationValueType infer_type(const Value &value) {
 }
 std::optional<AutomationValue>
 read_value(const Value &value, AutomationValueType type, AutomationError &error,
-           const std::string &path, std::size_t depth = 0);
+           const std::string &path);
 
 std::optional<AutomationValue> read_nested_value(const Value &value,
                                                  AutomationError &error,
-                                                 const std::string &path,
-                                                 const std::size_t depth) {
+                                                 const std::string &path) {
   if (value.is_object() && value.as_object().size() == 2U) {
     const auto *tag = value.find("$type");
     const auto *payload = value.find("$value");
     if (tag != nullptr && tag->is_string() && payload != nullptr) {
-      const auto type = parse_type(tag->as_string());
+  const auto type = detail::parse_automation_value_type_name(tag->as_string());
       if (!type.has_value()) {
         error = {path + ".$type", "unsupported nested value type"};
         return std::nullopt;
       }
-      return read_value(*payload, *type, error, path + ".$value", depth);
+      return read_value(*payload, *type, error, path + ".$value");
     }
   }
-  return read_value(value, infer_type(value), error, path, depth);
+  return read_value(value, infer_type(value), error, path);
 }
 
 std::optional<AutomationValue> read_value(const Value &value,
-                                          const AutomationValueType type,
-                                          AutomationError &error,
-                                          const std::string &path,
-                                          const std::size_t depth) {
-  if (depth > max_automation_ast_depth) {
-    error = {path, "value nesting exceeds 16"};
-    return std::nullopt;
-  }
+                                           const AutomationValueType type,
+                                           AutomationError &error,
+                                           const std::string &path) {
   switch (type) {
   case AutomationValueType::null_value:
     if (value.is_null())
@@ -196,31 +131,26 @@ std::optional<AutomationValue> read_value(const Value &value,
       return AutomationValue(value.as_number());
     break;
   case AutomationValueType::duration:
-    if (value.is_number() && std::isfinite(value.as_number()) &&
-        std::floor(value.as_number()) == value.as_number() &&
-        value.as_number() >= 0 && value.as_number() <= 86'400'000)
-      return AutomationValue(DurationValue{
-          Milliseconds(static_cast<std::int64_t>(value.as_number()))});
+    if (const auto integer = json::read_integer(
+            value, json::IntegerEncoding::number_or_string))
+      return AutomationValue(DurationValue{Milliseconds(*integer)});
     break;
   case AutomationValueType::confidence:
-    if (value.is_number() && std::isfinite(value.as_number()) &&
-        value.as_number() >= 0 && value.as_number() <= 1)
+    if (value.is_number() && std::isfinite(value.as_number()))
       return AutomationValue(ConfidenceValue{value.as_number()});
     break;
   case AutomationValueType::string:
-    if (value.is_string() &&
-        value.as_string().size() <= max_automation_string_bytes)
+    if (value.is_string())
       return AutomationValue(value.as_string());
     break;
   case AutomationValueType::list:
-    if (value.is_array() &&
-        value.as_array().size() <= max_automation_collection_entries) {
+    if (value.is_array()) {
       AutomationList result;
       result.reserve(value.as_array().size());
       for (std::size_t i{}; i < value.as_array().size(); ++i) {
         auto child =
             read_nested_value(value.as_array()[i], error,
-                              path + "[" + std::to_string(i) + "]", depth + 1);
+                              path + "[" + std::to_string(i) + "]");
         if (!child)
           return std::nullopt;
         result.push_back(std::move(*child));
@@ -229,15 +159,10 @@ std::optional<AutomationValue> read_value(const Value &value,
     }
     break;
   case AutomationValueType::map:
-    if (value.is_object() &&
-        value.as_object().size() <= max_automation_collection_entries) {
+    if (value.is_object()) {
       AutomationMap result;
       for (const auto &[key, raw] : value.as_object()) {
-        if (key.size() > max_automation_string_bytes) {
-          error = {path, "map key exceeds 512 UTF-8 bytes"};
-          return std::nullopt;
-        }
-        auto child = read_nested_value(raw, error, path + "." + key, depth + 1);
+        auto child = read_nested_value(raw, error, path + "." + key);
         if (!child)
           return std::nullopt;
         result.emplace(key, std::move(*child));
@@ -254,6 +179,7 @@ struct Parser {
   const Value &root;
   const GameProfile &base;
   AutomationError error;
+  json::Reader fields{};
   bool fail(std::string path, std::string message) {
     if (error.message.empty())
       error = {std::move(path), std::move(message)};
@@ -261,44 +187,29 @@ struct Parser {
   }
   const Value *required(const Value &parent, std::string_view key,
                         const std::string &path) {
-    const auto *value = parent.find(key);
+    const auto *value = fields.field(parent, key, path, json::Required::yes);
     if (!value)
-      fail(path + "." + std::string(key), "required value is missing");
+      fail(fields.error().path, fields.error().message);
     return value;
   }
   bool string(const Value &parent, std::string_view key,
               const std::string &path, std::string &out,
               bool optional = false) {
-    const auto *value = parent.find(key);
-    if (!value && optional)
-      return true;
-    if (!value || !value->is_string())
-      return fail(path + "." + std::string(key), "expected string");
-    if (value->as_string().size() > max_automation_string_bytes)
-      return fail(path + "." + std::string(key),
-                  "string exceeds 512 UTF-8 bytes");
-    out = value->as_string();
-    return true;
+    return fields.string(parent, key, path, out,
+                         optional ? json::Required::no : json::Required::yes,
+                         json::EmptyString::allow) ||
+           fail(fields.error().path, fields.error().message);
   }
   bool boolean(const Value &parent, std::string_view key,
                const std::string &path, bool &out, bool optional = false) {
-    const auto *value = parent.find(key);
-    if (!value && optional)
-      return true;
-    if (!value || !value->is_bool())
-      return fail(path + "." + std::string(key), "expected Boolean");
-    out = value->as_bool();
-    return true;
+    return fields.boolean(parent, key, path, out,
+                          optional ? json::Required::no : json::Required::yes) ||
+           fail(fields.error().path, fields.error().message);
   }
   bool expression(const Value &value, AutomationExpression &out,
-                  const std::string &path, std::size_t &nodes,
-                  std::size_t depth) {
+                  const std::string &path) {
     out = AutomationExpression{};
 
-    if (++nodes > max_automation_nodes_per_rule)
-      return fail(path, "rule exceeds 256 AST nodes");
-    if (depth > max_automation_ast_depth)
-      return fail(path, "expression depth exceeds 16");
     if (!value.is_object())
       return fail(path, "expression must be an object");
     std::string op;
@@ -309,7 +220,7 @@ struct Parser {
       std::string declared;
       if (!string(value, "valueType", path, declared))
         return false;
-      const auto type = parse_type(declared);
+    const auto type = detail::parse_automation_value_type_name(declared);
       const auto *literal = required(value, "value", path);
       if (!type || !literal)
         return fail(path, "literal requires a supported valueType and value");
@@ -332,10 +243,8 @@ struct Parser {
       if (!target || !key)
         return false;
       out.arguments.resize(2);
-      return expression(*target, out.arguments[0], path + ".target", nodes,
-                        depth + 1) &&
-             expression(*key, out.arguments[1], path + ".key", nodes,
-                        depth + 1);
+      return expression(*target, out.arguments[0], path + ".target") &&
+             expression(*key, out.arguments[1], path + ".key");
     }
     const auto *spec = detail::find_automation_op(op);
     if (spec == nullptr)
@@ -351,19 +260,18 @@ struct Parser {
     out.arguments.resize(args->as_array().size());
     for (std::size_t i{}; i < out.arguments.size(); ++i)
       if (!expression(args->as_array()[i], out.arguments[i],
-                      path + ".args[" + std::to_string(i) + "]", nodes,
-                      depth + 1))
+                      path + ".args[" + std::to_string(i) + "]"))
         return false;
     return true;
   }
   bool action(const Value &value, AutomationAction &out,
-              const std::string &path, std::size_t &nodes) {
+              const std::string &path) {
     if (!value.is_object())
       return fail(path, "action must be an object");
     std::string kind;
     if (!string(value, "type", path, kind))
       return false;
-    const auto parsed = parse_action(kind);
+    const auto parsed = parse_automation_action_name(kind);
     if (!parsed)
       return fail(path + ".type", "unsupported automation action");
     out.kind = *parsed;
@@ -372,12 +280,18 @@ struct Parser {
         !string(value, "property", path, out.property, true) ||
         !boolean(value, "repeating", path, out.repeating, true))
       return false;
-    if (const auto *raw = value.find("value"))
-      if (!expression(*raw, out.value, path + ".value", nodes, 1))
+    if (const auto *raw = value.find("value")) {
+      AutomationExpression parsed_value;
+      if (!expression(*raw, parsed_value, path + ".value"))
         return false;
-    if (const auto *raw = value.find("secondary"))
-      if (!expression(*raw, out.secondary, path + ".secondary", nodes, 1))
+      out.value = std::move(parsed_value);
+    }
+    if (const auto *raw = value.find("secondary")) {
+      AutomationExpression parsed_secondary;
+      if (!expression(*raw, parsed_secondary, path + ".secondary"))
         return false;
+      out.secondary = std::move(parsed_secondary);
+    }
     return true;
   }
   AutomationProfileResult parse() {
@@ -423,8 +337,6 @@ struct Parser {
       return AutomationError{"$.variables", "expected array"};
     if (!automations || !automations->is_array())
       return AutomationError{"$.automations", "expected array"};
-    if (variables->as_array().size() > max_automation_variables)
-      return AutomationError{"$.variables", "at most 64 variables are allowed"};
     std::set<std::string, std::less<>> variable_ids;
     for (std::size_t i{}; i < variables->as_array().size(); ++i) {
       const auto path = "$.variables[" + std::to_string(i) + "]";
@@ -443,7 +355,7 @@ struct Parser {
       if (!string(entry, "type", path, declared) ||
           !boolean(entry, "persistent", path, variable.persistent, true))
         return error;
-      const auto type = parse_type(declared);
+    const auto type = detail::parse_automation_value_type_name(declared);
       if (!type || *type == AutomationValueType::null_value)
         return AutomationError{path + ".type",
                                "variables require a non-null supported type"};
@@ -458,7 +370,6 @@ struct Parser {
       profile.variables.push_back(std::move(variable));
     }
     std::set<std::string, std::less<>> automation_ids;
-    std::size_t total_rules{};
     for (std::size_t ai{}; ai < automations->as_array().size(); ++ai) {
       const auto path = "$.automations[" + std::to_string(ai) + "]";
       const auto &entry = automations->as_array()[ai];
@@ -478,9 +389,6 @@ struct Parser {
       const auto *rules = required(entry, "rules", path);
       if (!rules || !rules->is_array())
         return AutomationError{path + ".rules", "expected array"};
-      total_rules += rules->as_array().size();
-      if (total_rules > max_automation_rules)
-        return AutomationError{"$.automations", "at most 64 rules are allowed"};
       std::set<std::string, std::less<>> rule_ids;
       for (std::size_t ri{}; ri < rules->as_array().size(); ++ri) {
         const auto rule_path = path + ".rules[" + std::to_string(ri) + "]";
@@ -513,22 +421,16 @@ struct Parser {
                                    "priority must be a bounded integer"};
           rule.priority = static_cast<std::int32_t>(priority->as_number());
         }
-        std::size_t nodes{};
         if (const auto *condition = entry_rule.find("condition"))
-          if (!expression(*condition, rule.condition, rule_path + ".condition",
-                          nodes, 1))
+          if (!expression(*condition, rule.condition, rule_path + ".condition"))
             return error;
         const auto *actions = required(entry_rule, "actions", rule_path);
         if (!actions || !actions->is_array())
           return AutomationError{rule_path + ".actions", "expected array"};
-        if (actions->as_array().empty() ||
-            actions->as_array().size() > max_automation_actions_per_rule)
-          return AutomationError{rule_path + ".actions",
-                                 "rules require 1 through 32 actions"};
         rule.actions.resize(actions->as_array().size());
         for (std::size_t i{}; i < rule.actions.size(); ++i)
           if (!action(actions->as_array()[i], rule.actions[i],
-                      rule_path + ".actions[" + std::to_string(i) + "]", nodes))
+                      rule_path + ".actions[" + std::to_string(i) + "]"))
             return error;
         automation.rules.push_back(std::move(rule));
       }
@@ -592,7 +494,7 @@ bool automation_value_valid_impl(const AutomationValue &value,
            confidence->value <= 1.0;
   if (const auto *string = std::get_if<std::string>(&value.storage))
     return string->size() <= max_automation_string_bytes &&
-           detail::is_valid_utf8(*string);
+           is_valid_utf8(*string);
   if (const auto *list = std::get_if<AutomationList>(&value.storage))
     return list->size() <= max_automation_collection_entries &&
            std::ranges::all_of(*list, [&](const auto &child) {
@@ -602,7 +504,7 @@ bool automation_value_valid_impl(const AutomationValue &value,
     return map->size() <= max_automation_collection_entries &&
            std::ranges::all_of(*map, [&](const auto &entry) {
              return entry.first.size() <= max_automation_string_bytes &&
-                    detail::is_valid_utf8(entry.first) &&
+                    is_valid_utf8(entry.first) &&
                     automation_value_valid_impl(entry.second, depth + 1U);
            });
   return true;
@@ -631,8 +533,7 @@ parse_automation_value_json(const std::string_view source,
     return AutomationError{"$@" + std::to_string(parse_error->offset),
                            parse_error->message};
   AutomationError error;
-  auto value =
-      read_value(std::get<Value>(parsed), expected_type, error, "$", 0);
+  auto value = read_value(std::get<Value>(parsed), expected_type, error, "$");
   if (!value.has_value())
     return error;
   return std::move(*value);
@@ -645,7 +546,11 @@ AutomationProfileResult parse_automation_profile_json(std::string_view source,
   if (const auto *error = std::get_if<json::ParseError>(&parsed))
     return AutomationError{"$@" + std::to_string(error->offset),
                            error->message};
-  return Parser{std::get<Value>(parsed), base, {}}.parse();
+  return parse_automation_profile_value(std::get<Value>(parsed), base);
+}
+AutomationProfileResult parse_automation_profile_value(const json::Value &root,
+                                                       const GameProfile &base) {
+  return Parser{root, base, {}}.parse();
 }
 std::string
 serialize_automation_profile_json(const AutomationProfile &profile) {
@@ -669,7 +574,7 @@ serialize_automation_profile_json(const AutomationProfile &profile) {
     out += ",\"type\":";
     json::append_quoted(out, automation_value_type_name(variable.type));
     out += ",\"persistent\":";
-    out += variable.persistent ? "true" : "false";
+    json::append_bool(out, variable.persistent);
     out += ",\"default\":";
     append_value(out, variable.default_value);
     out.push_back('}');
@@ -686,7 +591,7 @@ serialize_automation_profile_json(const AutomationProfile &profile) {
     out += ",\"name\":";
     json::append_quoted(out, automation.name);
     out += ",\"enabled\":";
-    out += automation.enabled ? "true" : "false";
+    json::append_bool(out, automation.enabled);
     out += ",\"rules\":[";
     for (std::size_t ri{}; ri < automation.rules.size(); ++ri) {
       if (ri)
@@ -716,7 +621,8 @@ serialize_automation_profile_json(const AutomationProfile &profile) {
           out.push_back(',');
         const auto &action = rule.actions[xi];
         out += "{\"type\":";
-        json::append_quoted(out, action_name(action.kind));
+        json::append_quoted(
+            out, automation_action_name(action.kind).value_or(std::string_view{}));
         out += ",\"target\":";
         json::append_quoted(out, action.target);
         if (!action.name.empty()) {
@@ -729,15 +635,13 @@ serialize_automation_profile_json(const AutomationProfile &profile) {
         }
         if (action.repeating)
           out += ",\"repeating\":true";
-        if (action_accepts_value(action.kind)) {
+        if (action.value.has_value()) {
           out += ",\"value\":";
-          append_expression(out, action.value);
+          append_expression(out, *action.value);
         }
-        if (action.secondary.kind != ExpressionKind::literal ||
-            !std::holds_alternative<std::nullptr_t>(
-                action.secondary.literal.storage)) {
+        if (action.secondary.has_value()) {
           out += ",\"secondary\":";
-          append_expression(out, action.secondary);
+          append_expression(out, *action.secondary);
         }
         out.push_back('}');
       }

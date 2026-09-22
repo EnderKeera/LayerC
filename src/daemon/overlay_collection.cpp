@@ -28,7 +28,7 @@ void OverlayCollection::ensure(const layerc::core::GameProfile &profile,
 void OverlayCollection::rebuild(const layerc::core::GameProfile &profile,
                                 const bool capture_exclusion,
                                 const OverlayEditMode *const edit_mode) {
-  cooldowns_ = make_overlay_cooldowns(profile.cooldowns);
+  cooldowns_ = profile.cooldowns;
   std::vector<std::unique_ptr<OverlayWindow>> next;
   next.reserve(profile.panels.size());
   for (const auto &panel : profile.panels) {

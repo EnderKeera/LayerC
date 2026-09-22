@@ -105,7 +105,6 @@ public:
   void stop() override {
     started_ = false;
     last_frame_.reset();
-    black_frames_ = 0;
     stop_resources();
   }
 
@@ -124,12 +123,8 @@ public:
       return unavailable("capture target bounds are unavailable");
     const auto monitor =
         MonitorFromRect(&window_bounds, MONITOR_DEFAULTTONEAREST);
-    if (monitor != monitor_) {
-      if (!start())
-        return unavailable(error_);
-      if (!capture_window_bounds(window_, window_bounds))
-        return unavailable("capture target bounds are unavailable");
-    }
+    if (monitor != monitor_)
+      return recovery_required("capture target moved to another output");
 
     DXGI_OUTDUPL_FRAME_INFO information{};
     ComPtr<IDXGIResource> resource;
@@ -138,23 +133,12 @@ public:
     if (result == DXGI_ERROR_WAIT_TIMEOUT)
       return current_result();
     if (result == DXGI_ERROR_ACCESS_LOST) {
-      if (!start())
-        return unavailable(error_);
-      return {.availability = core::CaptureAvailability::starting,
-              .backend = kind(),
-              .diagnostic = std::string(fallback_warning),
-              .frame = {}};
+      return recovery_required("Desktop Duplication access was lost");
     }
     if (FAILED(result)) {
       const auto failure =
           "Desktop Duplication frame failed: " + hresult_message(result);
-      if (!start())
-        return unavailable(failure + "; restart failed: " + error_);
-      return {.availability = core::CaptureAvailability::starting,
-              .backend = kind(),
-              .diagnostic = failure + "; capture session restarted; " +
-                            std::string(fallback_warning),
-              .frame = {}};
+      return recovery_required(failure);
     }
 
     ComPtr<ID3D11Texture2D> texture;
@@ -213,11 +197,6 @@ public:
     if (!captured)
       return unavailable(error_);
 
-    // Detect protected/black capture before masking LayerC's own pixels.
-    if (frame_is_nearly_black(*captured))
-      ++black_frames_;
-    else
-      black_frames_ = 0;
     apply_excluded_rectangles(*captured, window_bounds);
     last_frame_ = std::move(captured);
     return current_result();
@@ -232,7 +211,6 @@ public:
       return;
     quality_ = quality;
     last_frame_.reset();
-    black_frames_ = 0;
   }
   core::CaptureBackendKind kind() const noexcept override {
     return core::CaptureBackendKind::desktop_duplication;
@@ -269,17 +247,23 @@ private:
             .frame = {}};
   }
 
-  CapturePollResult current_result() const {
-    const auto availability =
-        black_frames_ >= 30 ? core::CaptureAvailability::protected_or_black
-        : last_frame_       ? core::CaptureAvailability::available
-                            : core::CaptureAvailability::starting;
-    auto diagnostic = std::string(fallback_warning);
-    if (availability == core::CaptureAvailability::protected_or_black)
-      diagnostic += "; persistent black frames detected";
-    return {.availability = availability,
+  CapturePollResult recovery_required(std::string diagnostic) const {
+    if (!diagnostic.empty()) diagnostic += "; ";
+    diagnostic += fallback_warning;
+    return {.availability = core::CaptureAvailability::starting,
             .backend = kind(),
             .diagnostic = std::move(diagnostic),
+            .frame = {},
+            .phase = CapturePhase::starting,
+            .recovery = CaptureRecovery::restart_backend};
+  }
+
+  CapturePollResult current_result() const {
+    const auto availability = last_frame_ ? core::CaptureAvailability::available
+                                          : core::CaptureAvailability::starting;
+    return {.availability = availability,
+            .backend = kind(),
+            .diagnostic = std::string(fallback_warning),
             .frame = last_frame_};
   }
 
@@ -340,7 +324,6 @@ private:
   std::shared_ptr<CaptureFrame> last_frame_;
   std::vector<RECT> excluded_;
   std::string error_;
-  std::uint32_t black_frames_{};
   core::CaptureQuality quality_{core::CaptureQuality::balanced};
   bool started_{};
 };

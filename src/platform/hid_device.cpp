@@ -1,4 +1,5 @@
 #include "layerc/platform/hid_device.hpp"
+#include "layerc/platform/settings_store.hpp"
 
 #include "layerc/core/hash.hpp"
 #include "layerc/platform/text.hpp"
@@ -373,46 +374,20 @@ std::optional<layerc::core::HidControlSample> sample_hid_control(
 
 std::optional<std::wstring>
 read_hid_stable_slot(const layerc::core::HidDeviceSelector &selector) {
-  HKEY key{};
-  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\LayerC\\HidSlots", 0,
-                    KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
-    return std::nullopt;
   const auto name = stable_slot_value_name(selector);
-  DWORD type{}, bytes{};
-  auto code = RegQueryValueExW(key, name.c_str(), nullptr, &type, nullptr,
-                               &bytes);
-  if (code != ERROR_SUCCESS || type != REG_SZ || bytes < sizeof(wchar_t) ||
-      bytes > 64U * 1024U) {
-    RegCloseKey(key);
+  auto value = read_layerc_registry_string(name, 32U * 1024U, L"HidSlots");
+  if (!value.value || value.value->empty())
     return std::nullopt;
-  }
-  std::wstring value(bytes / sizeof(wchar_t), L'\0');
-  code = RegQueryValueExW(key, name.c_str(), nullptr, &type,
-                          reinterpret_cast<BYTE *>(value.data()), &bytes);
-  RegCloseKey(key);
-  if (code != ERROR_SUCCESS) return std::nullopt;
-  while (!value.empty() && value.back() == L'\0') value.pop_back();
-  return value.empty() ? std::nullopt
-                       : std::optional<std::wstring>{std::move(value)};
+  return std::move(*value.value);
 }
 
 bool assign_hid_stable_slot(
     const layerc::core::HidDeviceSelector &selector,
     const std::wstring_view device_path) {
   if (device_path.empty()) return false;
-  HKEY key{};
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\LayerC\\HidSlots", 0,
-                      nullptr, 0, KEY_SET_VALUE, nullptr, &key,
-                      nullptr) != ERROR_SUCCESS)
-    return false;
   const auto name = stable_slot_value_name(selector);
-  const auto bytes = static_cast<DWORD>((device_path.size() + 1U) *
-                                        sizeof(wchar_t));
-  const auto code = RegSetValueExW(
-      key, name.c_str(), 0, REG_SZ,
-      reinterpret_cast<const BYTE *>(device_path.data()), bytes);
-  RegCloseKey(key);
-  return code == ERROR_SUCCESS;
+  return static_cast<bool>(
+      write_layerc_registry_string(name, device_path, L"HidSlots"));
 }
 
 } // namespace layerc::platform

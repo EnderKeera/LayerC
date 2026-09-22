@@ -26,11 +26,14 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, windows, x64, layerc-bench]
     timeout-minutes: 30
-    env:
-      # Where pull-ci stages the rolling install on this machine. Overridable
-      # from the repository with a PULLDOWN_OUTPUT_PATH variable.
-      PULLDOWN_OUTPUT: ${{ vars.PULLDOWN_OUTPUT_PATH || 'D:\oursoft\LayerC\out\layerc' }}
     steps:
+      - name: Checkout resolver for manual run
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
       - name: Resolve candidate
         id: candidate
         shell: pwsh
@@ -40,19 +43,13 @@ jobs:
           if ("${{ github.event_name }}" -eq "workflow_run") {
             $id = "${{ github.event.workflow_run.id }}"
             $sha = "${{ github.event.workflow_run.head_sha }}"
+            if ($id -notmatch '^[0-9]+$') { throw "Invalid CI run id: $id" }
+            if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Invalid CI head SHA: $sha" }
+            "runId=$id" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "headSha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           } else {
-            $runJson = gh run list --workflow CI --branch main --limit 1 `
-              --status success --json databaseId,headSha -q '.[0]'
-            if ($LASTEXITCODE -ne 0) { throw 'Unable to resolve the latest successful CI run.' }
-            if ([string]::IsNullOrWhiteSpace($runJson)) { throw 'No successful CI run found for main.' }
-            $run = $runJson | ConvertFrom-Json
-            $id = [string]$run.databaseId
-            $sha = [string]$run.headSha
+            & .\tools\resolve-ci-candidate.ps1 -Branch main -Workflow CI
           }
-          if ($id -notmatch '^[0-9]+$') { throw "Invalid CI run id: $id" }
-          if ($sha -notmatch '^[0-9a-fA-F]{40}$') { throw "Invalid CI head SHA: $sha" }
-          "runId=$id" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "headSha=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Checkout candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -76,62 +73,34 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          Import-Module .\tools\LayerC.Tools.psm1 -Force
           gh release download baseline-v22 --repo ${{ github.repository }} `
             --dir baseline --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Unable to download the V2.2 baseline release.' }
           $archives = @(Get-ChildItem baseline -Filter *.zip -File)
           if ($archives.Count -ne 1) { throw "Expected one baseline ZIP, found $($archives.Count)." }
           Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath baseline -Force
-          $baselineRoot = (Resolve-Path baseline).Path
-          if (-not (Test-Path -LiteralPath (Join-Path $baselineRoot 'layerd.exe') -PathType Leaf)) {
-            $candidates = @(
-              Get-ChildItem -LiteralPath $baselineRoot -Directory |
-                Where-Object {
-                  Test-Path -LiteralPath (Join-Path $_.FullName 'layerd.exe') -PathType Leaf
-                }
-            )
-            if ($candidates.Count -ne 1) {
-              throw "Expected one baseline root containing layerd.exe under $baselineRoot; found $($candidates.Count)."
-            }
-            $baselineRoot = $candidates[0].FullName
-          }
+          $baselineRoot = Resolve-LayerCBuildRoot -Path (Resolve-Path baseline).Path `
+            -RequiredExecutables @('layerd.exe')
           "buildRoot=$baselineRoot" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       # Visual recognition captures the real screen through lctest's window.
-      # The runner must use the interactive desktop (run.cmd, not a service).
-      # Pulldown runs on the same runner, so a green main CI refreshes the
-      # local install unattended — no manual/LLM step between push and a
-      # ready out/layerc. Gates still run afterwards against the candidate
-      # tools, not the staged install. Best-effort: on the very first commit
-      # publish-rolling may not have created the release yet, which must not
-      # block monitoring.
-      - name: Pulldown (stage rolling install)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          try {
-            & .\tools\pull-ci.ps1 `
-              -Repository ${{ github.repository }} `
-              -OutputPath $env:PULLDOWN_OUTPUT
-          } catch {
-            Write-Warning "Pulldown skipped: $($_.Exception.Message)"
-          }
-
+      # The runner must use the interactive desktop (run.cmd, not a service)
+      # and be quiescent: no LayerD/LayerE may be running. CI never kills
+      # foreign processes; it fails listing the owning PIDs instead. Local
+      # sync of the rolling install stays a manual `tools/pull-ci.ps1` step.
       - name: Run hardware benchmarks
         shell: pwsh
         env:
           BASELINE_BUILD_ROOT: ${{ steps.baseline.outputs.buildRoot }}
         run: |
-          # This dedicated interactive runner is also the LayerC dev box. Take
-          # ownership of its project daemon before the isolated benchmark suite;
-          # each benchmark cleans up the LayerD instance it starts.
-          foreach ($daemon in @(Get-Process -Name layerd -ErrorAction SilentlyContinue)) {
-            Write-Host "Stopping existing LayerD process $($daemon.Id)."
-            Stop-Process -Id $daemon.Id -Force
-            if (-not $daemon.WaitForExit(5000)) {
-              throw "LayerD process $($daemon.Id) did not stop."
-            }
+          # Quiescent-box gate: benchmarks start their own LayerD instances,
+          # so a foreign daemon would corrupt the measurement. Never kill it
+          # from CI — fail with the owning PIDs and let the box owner decide.
+          $owners = @(Get-Process -Name layerd, layere -ErrorAction SilentlyContinue)
+          if ($owners.Count -ne 0) {
+            $pids = ($owners | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', '
+            throw "Box is not quiescent (running: $pids). Stop them before benchmarking."
           }
           & .\tools\run-hardware-benchmarks.ps1 `
             -CandidateBuildDirectory (Resolve-Path tools-build) `
@@ -144,20 +113,3 @@ jobs:
           name: benchmark-evidence
           path: out/benchmarks/*.json
           if-no-files-found: warn
-
-      # This runner IS the dev box, so mirror the evidence into the working
-      # tree's out/benchmarks so the local session sees the latest gate results
-      # without downloading the artifact. Best-effort — never affects the run.
-      - name: Mirror evidence to dev checkout
-        if: always()
-        shell: pwsh
-        run: |
-          $src = Join-Path $env:GITHUB_WORKSPACE 'out\benchmarks'
-          $dst = $env:PULLDOWN_OUTPUT | Split-Path -Parent | Join-Path -ChildPath 'benchmarks'
-          New-Item -ItemType Directory -Force -Path $dst | Out-Null
-          if (Test-Path $src) {
-            Copy-Item (Join-Path $src '*.json') $dst -Force
-            Write-Host "Mirrored $((Get-ChildItem $src -Filter *.json).Count) JSON(s) to $dst"
-          } else {
-            Write-Warning "Mirror skipped: src=$src dst=$dst"
-          }

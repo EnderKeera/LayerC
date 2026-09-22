@@ -75,8 +75,8 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 
 } // namespace
 
-int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR,
-                    const int show_command) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
+                    _In_ LPWSTR, _In_ int show_command) {
   const WNDCLASSW definition{
       .lpfnWndProc = window_proc,
       .hInstance = instance,

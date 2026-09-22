@@ -5,7 +5,8 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/editor_appearance.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,7 @@
 namespace layerc::calibration {
 namespace {
 
+
 std::wstring color_text(const std::uint32_t color) {
   wchar_t buffer[16]{};
   swprintf_s(buffer, L"#%06X", color & 0xFFFFFFU);
@@ -33,6 +35,22 @@ bool contains_binding(const layerc::core::GameProfile &profile,
   });
 }
 
+// Combo-box indices are 0=first choice, 1=second, 2=third; CB_ERR (-1) and any
+// unexpected value fall back to the middle default, matching the historical
+// nested-ternary behavior.
+std::uint8_t sample_rate_from_combobox(const LRESULT index) {
+  if (index == 0) return 5;
+  if (index == 2) return 15;
+  return 10;
+}
+
+layerc::core::CaptureQuality capture_quality_from_combobox(
+    const LRESULT index) {
+  if (index == 0) return layerc::core::CaptureQuality::low;
+  if (index == 2) return layerc::core::CaptureQuality::exact;
+  return layerc::core::CaptureQuality::balanced;
+}
+
 } // namespace
 
 CalibrationWindow::CalibrationWindow(layerc::core::CalibrationRequest request)
@@ -41,6 +59,11 @@ CalibrationWindow::CalibrationWindow(layerc::core::CalibrationRequest request)
 int CalibrationWindow::run(const HINSTANCE instance, const int show_command) {
   (void)show_command;
   instance_ = instance;
+  const auto migration = layerc::platform::migrate_editor_appearance();
+  if (!migration) {
+    MessageBoxW(nullptr, L"Could not migrate the editor appearance settings.",
+                L"LayerC Calibration", MB_OK | MB_ICONWARNING);
+  }
   layerc::platform::enable_native_dark_mode();
   const auto result =
       DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr,
@@ -199,8 +222,8 @@ bool CalibrationWindow::initialize(const HWND window) {
                   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                   DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
   layerc::platform::style_native_dialog_children(dialog_, font_);
-  preview_ = GetDlgItem(dialog_, IDC_CAL_PREVIEW);
-  SetWindowSubclass(preview_, &preview_proc, 1,
+  preview_.attach(GetDlgItem(dialog_, IDC_CAL_PREVIEW));
+  SetWindowSubclass(preview_.window(), &preview_proc, 1,
                     reinterpret_cast<DWORD_PTR>(this));
   initialize_controls();
   set_control_text(IDC_CAL_TARGET,
@@ -218,7 +241,9 @@ bool CalibrationWindow::initialize(const HWND window) {
 }
 
 void CalibrationWindow::initialize_palette() {
-  const auto appearance = layerc::platform::editor_appearance();
+  const auto loaded = layerc::platform::read_editor_appearance();
+  const auto appearance = loaded.value.value_or(
+      layerc::platform::EditorAppearanceSettings{});
   const auto colors = [&](const layerc::platform::EditorControlRole role) {
     return layerc::platform::native_theme_colors(
         appearance.theme, appearance.accent, role,
@@ -239,14 +264,12 @@ void CalibrationWindow::initialize_palette() {
 }
 
 void CalibrationWindow::initialize_controls() {
-  const auto add = [&](const int id, const wchar_t *text_value) {
+  const auto add = [&](const int id, const std::wstring_view text_value) {
     SendDlgItemMessageW(dialog_, id, CB_ADDSTRING, 0,
-                        reinterpret_cast<LPARAM>(text_value));
+                        reinterpret_cast<LPARAM>(text_value.data()));
   };
-  add(IDC_CAL_PREDICATE, L"Average color near target");
-  add(IDC_CAL_PREDICATE, L"Brightness threshold");
-  add(IDC_CAL_PREDICATE, L"Target color coverage");
-  add(IDC_CAL_PREDICATE, L"Template match");
+  for (const auto &mode_spec : calibration_modes())
+    add(IDC_CAL_PREDICATE, mode_spec.label);
   add(IDC_CAL_COMPARISON, L"Above");
   add(IDC_CAL_COMPARISON, L"Below");
   add(IDC_CAL_REPEAT, L"Edge");
@@ -262,13 +285,13 @@ void CalibrationWindow::initialize_controls() {
   add(IDC_CAL_QUALITY, L"Balanced");
   add(IDC_CAL_QUALITY, L"Exact");
 
-  int predicate_index{};
+  CalibrationMode selected_mode = CalibrationMode::average_color;
   int tolerance = 16;
   int threshold = 128;
   int comparison{};
   int minimum_percent = 50;
   if (!template_state_.references.empty()) {
-    predicate_index = 3;
+    selected_mode = CalibrationMode::template_match;
     tolerance = template_state_.color_tolerance;
   } else if (const auto *average =
                  std::get_if<layerc::core::AverageColorPredicate>(
@@ -277,7 +300,7 @@ void CalibrationWindow::initialize_controls() {
   } else if (const auto *brightness =
                  std::get_if<layerc::core::BrightnessPredicate>(
                      &rule_.predicate)) {
-    predicate_index = 1;
+    selected_mode = CalibrationMode::brightness;
     threshold = brightness->threshold;
     comparison =
         brightness->comparison == layerc::core::BrightnessComparison::below ? 1
@@ -285,17 +308,18 @@ void CalibrationWindow::initialize_controls() {
   } else if (const auto *coverage =
                  std::get_if<layerc::core::ColorCoveragePredicate>(
                      &rule_.predicate)) {
-    predicate_index = 2;
+    selected_mode = CalibrationMode::coverage;
     tolerance = coverage->tolerance;
     minimum_percent =
         static_cast<int>(std::lround(coverage->minimum_fraction * 100.0));
   }
-  SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE, CB_SETCURSEL, predicate_index,
-                      0);
+  SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE, CB_SETCURSEL,
+                      calibration_mode_index(selected_mode), 0);
   SendDlgItemMessageW(dialog_, IDC_CAL_COMPARISON, CB_SETCURSEL, comparison, 0);
   SendDlgItemMessageW(
       dialog_, IDC_CAL_REPEAT, CB_SETCURSEL,
-      (predicate_index == 3 ? template_state_.repeat : rule_.repeat) ==
+      (selected_mode == CalibrationMode::template_match ? template_state_.repeat
+                                                        : rule_.repeat) ==
               layerc::core::PixelRepeatPolicy::when_fully_ready
           ? 1
           : 0,
@@ -328,9 +352,10 @@ void CalibrationWindow::initialize_controls() {
   set_control_text(IDC_CAL_THRESHOLD, std::to_wstring(threshold));
   set_control_text(IDC_CAL_MINIMUM_PERCENT, std::to_wstring(minimum_percent));
   set_control_text(IDC_CAL_STABLE_SAMPLES,
-                   std::to_wstring(predicate_index == 3
-                                       ? template_state_.stable_samples
-                                       : rule_.stable_samples));
+                   std::to_wstring(
+                       selected_mode == CalibrationMode::template_match
+                           ? template_state_.stable_samples
+                           : rule_.stable_samples));
   set_control_text(IDC_CAL_CONFIDENCE,
                    std::to_wstring(static_cast<int>(std::lround(
                        template_state_.confidence_threshold * 100.0))));
@@ -344,17 +369,20 @@ void CalibrationWindow::initialize_controls() {
 }
 
 void CalibrationWindow::update_control_enablement() {
-  const auto predicate = static_cast<int>(
-      SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE, CB_GETCURSEL, 0, 0));
-  const bool color_predicate = predicate == 0 || predicate == 2;
-  const bool template_predicate = predicate == 3;
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_PREDICATE), !mask_editing_);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_SAMPLE_COLOR), color_predicate);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_COLOR_VALUE), color_predicate);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_TOLERANCE), color_predicate);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_COMPARISON), predicate == 1);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_THRESHOLD), predicate == 1);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_MINIMUM_PERCENT), predicate == 2);
+  const auto &mode_spec = calibration_mode_spec(mode());
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_PREDICATE), !mask_editor_.editing());
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_SAMPLE_COLOR),
+               mode_spec.color_controls);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_COLOR_VALUE),
+               mode_spec.color_controls);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_TOLERANCE),
+               mode_spec.color_controls);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_COMPARISON),
+               mode_spec.brightness_controls);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_THRESHOLD),
+               mode_spec.brightness_controls);
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_MINIMUM_PERCENT),
+               mode_spec.coverage_controls);
   constexpr std::array template_controls{
       IDC_CAL_TEMPLATE_GROUP,    IDC_CAL_CAPTURE_TEMPLATE,
       IDC_CAL_IMPORT_TEMPLATE,   IDC_CAL_TEMPLATE_REFERENCES,
@@ -363,17 +391,17 @@ void CalibrationWindow::update_control_enablement() {
       IDC_CAL_SCALE_LABEL,       IDC_CAL_TEMPLATE_HELP,
       IDC_CAL_EDIT_TEMPLATE_MASK};
   for (const int id : template_controls)
-    ShowWindow(GetDlgItem(dialog_, id), template_predicate ? SW_SHOW : SW_HIDE);
+    ShowWindow(GetDlgItem(dialog_, id), mode_spec.template_controls ? SW_SHOW : SW_HIDE);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_CLEAR_TEMPLATES),
-               template_predicate && !mask_editing_ &&
+               mode_spec.template_controls && !mask_editor_.editing() &&
                    !template_state_.references.empty());
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_CAPTURE_TEMPLATE),
-               template_predicate && !mask_editing_);
+               mode_spec.template_controls && !mask_editor_.editing());
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_IMPORT_TEMPLATE),
-               template_predicate && !mask_editing_);
+               mode_spec.template_controls && !mask_editor_.editing());
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK),
-               template_predicate &&
-                   (mask_editing_ || (template_images_.size() ==
+               mode_spec.template_controls &&
+                   (mask_editor_.editing() || (template_images_.size() ==
                                           template_state_.references.size() &&
                                       !template_images_.empty())));
 
@@ -402,8 +430,7 @@ bool CalibrationWindow::handle_command(const WPARAM wparam) {
       capture_->set_quality(quality_);
     if (fallback_snapshot_ && capture_) {
       fallback_snapshot_ = false;
-      frame_.reset();
-      preview_pixels_.clear();
+      preview_.clear_frame();
       begin_fallback_snapshot();
     }
     return true;
@@ -506,8 +533,8 @@ INT_PTR CalibrationWindow::handle_message(const HWND window, const UINT message,
     KillTimer(window, capture_timer);
     if (capture_)
       capture_->stop();
-    if (preview_ != nullptr)
-      RemoveWindowSubclass(preview_, &preview_proc, 1);
+    if (preview_.window() != nullptr)
+      RemoveWindowSubclass(preview_.window(), &preview_proc, 1);
     if (font_ != nullptr)
       DeleteObject(font_);
     if (input_brush_ != nullptr)
@@ -527,46 +554,45 @@ LRESULT CalibrationWindow::handle_preview(const HWND window, const UINT message,
                                           const WPARAM wparam,
                                           const LPARAM lparam) {
   (void)wparam;
-  POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+  const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
   switch (message) {
   case WM_LBUTTONDOWN:
   case WM_RBUTTONDOWN:
-    if (mask_editing_) {
-      dragging_ = true;
-      mask_opaque_ = message == WM_RBUTTONDOWN;
+    if (mask_editor_.editing()) {
+      preview_.begin_drag(point);
+      mask_editor_.set_brush_opaque(message == WM_RBUTTONDOWN);
       SetCapture(window);
-      update_template_mask(point, mask_opaque_);
+      update_template_mask(point, mask_editor_.brush_opaque());
       return 0;
     }
     if (message == WM_RBUTTONDOWN)
       return 0;
-    dragging_ = true;
-    drag_start_ = point;
+    preview_.begin_drag(point);
     SetCapture(window);
     update_region_from_pointer(point, false);
     return 0;
   case WM_MOUSEMOVE:
-    if (dragging_) {
-      if (mask_editing_)
-        update_template_mask(point, mask_opaque_);
+    if (preview_.dragging()) {
+      if (mask_editor_.editing())
+        update_template_mask(point, mask_editor_.brush_opaque());
       else
         update_region_from_pointer(point, false);
     }
     return 0;
   case WM_LBUTTONUP:
   case WM_RBUTTONUP:
-    if (dragging_) {
-      if (mask_editing_)
-        update_template_mask(point, mask_opaque_);
+    if (preview_.dragging()) {
+      if (mask_editor_.editing())
+        update_template_mask(point, mask_editor_.brush_opaque());
       else if (message == WM_LBUTTONUP)
         update_region_from_pointer(point, true);
-      dragging_ = false;
+      preview_.finish_drag();
       if (GetCapture() == window)
         ReleaseCapture();
     }
     return 0;
   case WM_CAPTURECHANGED:
-    dragging_ = false;
+    preview_.finish_drag();
     return 0;
   default:
     return 0;
@@ -574,7 +600,8 @@ LRESULT CalibrationWindow::handle_preview(const HWND window, const UINT message,
 }
 
 void CalibrationWindow::sample_target_color() {
-  if (!frame_) {
+  const auto &frame = preview_.frame();
+  if (!frame) {
     MessageBoxW(dialog_, L"Wait for a captured frame first.", L"LayerC",
                 MB_OK | MB_ICONINFORMATION);
     return;
@@ -582,7 +609,7 @@ void CalibrationWindow::sample_target_color() {
   auto sample = rule_;
   sample.predicate = layerc::core::AverageColorPredicate{0, 255};
   const auto evaluation =
-      layerc::core::evaluate_pixel_rule(sample, frame_->view(), quality_);
+      layerc::core::evaluate_pixel_rule(sample, frame->view(), quality_);
   if (evaluation.sampled_pixels == 0)
     return;
   target_color_ = evaluation.average_color;
@@ -590,9 +617,11 @@ void CalibrationWindow::sample_target_color() {
   update_match_status();
 }
 
-bool CalibrationWindow::template_mode() const {
-  return dialog_ != nullptr && SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE,
-                                                   CB_GETCURSEL, 0, 0) == 3;
+CalibrationMode CalibrationWindow::mode() const {
+  return dialog_ == nullptr
+             ? CalibrationMode::average_color
+             : calibration_mode_from_index(SendDlgItemMessageW(
+                   dialog_, IDC_CAL_PREDICATE, CB_GETCURSEL, 0, 0));
 }
 
 layerc::core::TemplateState
@@ -633,9 +662,8 @@ layerc::core::PixelRule CalibrationWindow::current_rule_from_controls() const {
       SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0) == 1
           ? layerc::core::PixelRepeatPolicy::when_fully_ready
           : layerc::core::PixelRepeatPolicy::edge;
-  const auto predicate =
-      SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE, CB_GETCURSEL, 0, 0);
-  if (predicate == 1) {
+  switch (mode()) {
+  case CalibrationMode::brightness:
     rule.predicate = layerc::core::BrightnessPredicate{
         static_cast<std::uint8_t>(
             integer_control(IDC_CAL_THRESHOLD, 128, 0, 255)),
@@ -643,29 +671,34 @@ layerc::core::PixelRule CalibrationWindow::current_rule_from_controls() const {
                 1
             ? layerc::core::BrightnessComparison::below
             : layerc::core::BrightnessComparison::above};
-  } else if (predicate == 2) {
+    break;
+  case CalibrationMode::coverage:
     rule.predicate = layerc::core::ColorCoveragePredicate{
         target_color_,
         static_cast<std::uint8_t>(
             integer_control(IDC_CAL_TOLERANCE, 16, 0, 255)),
         integer_control(IDC_CAL_MINIMUM_PERCENT, 50, 0, 100) / 100.0};
-  } else {
+    break;
+  case CalibrationMode::average_color:
+  case CalibrationMode::template_match:
     rule.predicate = layerc::core::AverageColorPredicate{
         target_color_, static_cast<std::uint8_t>(
                            integer_control(IDC_CAL_TOLERANCE, 16, 0, 255))};
+    break;
   }
   return rule;
 }
 
 void CalibrationWindow::update_match_status(const bool force) {
-  if (mask_editing_) {
+  if (mask_editor_.editing()) {
     set_control_text(IDC_CAL_MATCH, L"Editing alpha mask — left drag ignores "
                                     L"pixels; right drag restores them.");
     return;
   }
-  if (!frame_)
+  const auto &frame = preview_.frame();
+  if (!frame)
     return;
-  if (template_mode()) {
+  if (mode() == CalibrationMode::template_match) {
     if (template_state_.references.empty()) {
       set_control_text(IDC_CAL_MATCH,
                        L"Capture or import at least one template reference.");
@@ -685,8 +718,15 @@ void CalibrationWindow::update_match_status(const bool force) {
     // responsive while still refreshing live status twice per second.
     next_template_match_at_ = now + 500;
     const auto state = current_template_from_controls();
-    const auto result = template_matcher_.evaluate(state, template_images_,
-                                                   frame_->view(), quality_);
+    const auto result = template_matcher_.evaluate(
+        state, template_images_, frame->view(), quality_,
+        frame->available_region, frame->unavailable_regions);
+    if (!result.search_region_available) {
+      set_control_text(
+          IDC_CAL_MATCH,
+          L"Template search region is outside the capturable window area.");
+      return;
+    }
     std::wstring status =
         result.matched ? L"TEMPLATE MATCHED" : L"Template not matched";
     status += L"\nConfidence " +
@@ -698,7 +738,7 @@ void CalibrationWindow::update_match_status(const bool force) {
   }
   const auto rule = current_rule_from_controls();
   const auto result =
-      layerc::core::evaluate_pixel_rule(rule, frame_->view(), quality_);
+      layerc::core::evaluate_pixel_rule(rule, frame->view(), quality_);
   std::wstring status = result.matched ? L"MATCHED now" : L"Not matched now";
   status += L"\nAverage " + color_text(result.average_color) +
             L", brightness " +
@@ -714,7 +754,7 @@ void CalibrationWindow::update_match_status(const bool force) {
 bool CalibrationWindow::apply() {
   if (!finish_template_mask_editing())
     return false;
-  const bool use_template = template_mode();
+  const bool use_template = mode() == CalibrationMode::template_match;
   if (use_template) {
     template_state_ = current_template_from_controls();
     template_state_.id = trigger_.observation_id;
@@ -739,12 +779,10 @@ bool CalibrationWindow::apply() {
   }
   const auto rate_index =
       SendDlgItemMessageW(dialog_, IDC_CAL_SAMPLE_RATE, CB_GETCURSEL, 0, 0);
-  sample_rate_hz_ = rate_index == 0 ? 5 : rate_index == 2 ? 15 : 10;
+  sample_rate_hz_ = sample_rate_from_combobox(rate_index);
   const auto quality_index =
       SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0);
-  quality_ = quality_index == 0   ? layerc::core::CaptureQuality::low
-             : quality_index == 2 ? layerc::core::CaptureQuality::exact
-                                  : layerc::core::CaptureQuality::balanced;
+  quality_ = capture_quality_from_combobox(quality_index);
   if (quality_ == layerc::core::CaptureQuality::exact &&
       MessageBoxW(
           dialog_,

@@ -1,10 +1,12 @@
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 
+#include "layerc/core/game_match.hpp"
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <vector>
 
 namespace layerc::platform {
 namespace {
@@ -20,7 +22,7 @@ std::wstring process_path_for_window(const HWND window, DWORD &process_id) {
     return {};
   }
 
-  std::array<wchar_t, 32'768> path{};
+  std::vector<wchar_t> path(32'768);
   DWORD length = static_cast<DWORD>(path.size());
   const BOOL succeeded =
       QueryFullProcessImageNameW(process, 0, path.data(), &length);
@@ -140,44 +142,25 @@ std::optional<WindowCandidate> window_at_point(const POINT point) {
 
 bool profile_matches_window(const WindowCandidate &candidate,
                             const layerc::core::GameProfile &profile) {
-  if (!profile.enabled || profile.game.global ||
-      candidate.executable_path.empty()) {
+  if (!profile.enabled) return false;
+  // Windows filesystems compare case-insensitively: the shared policy folds
+  // the executable path (exact_path=false). Enumeration stays here; the
+  // matching rules live in core::candidate_matches_game.
+  const auto executable_path = try_wide_to_utf8(candidate.executable_path);
+  const auto executable_name = try_wide_to_utf8(candidate.executable_name);
+  const auto window_class = try_wide_to_utf8(candidate.window_class);
+  const auto title = try_wide_to_utf8(candidate.title);
+  if (!executable_path.has_value() || !executable_name.has_value() ||
+      !window_class.has_value() || !title.has_value())
     return false;
-  }
-
-  const auto expected_path_text =
-      try_utf8_to_wide(profile.game.executable_path);
-  const auto expected_name_text =
-      try_utf8_to_wide(profile.game.executable_name);
-  const auto expected_class_text =
-      try_utf8_to_wide(profile.game.window_class);
-  const auto expected_title_text =
-      try_utf8_to_wide(profile.game.window_title);
-  if (!expected_path_text.has_value() || !expected_name_text.has_value() ||
-      !expected_class_text.has_value() || !expected_title_text.has_value())
-    return false;
-
-  const auto process_path = lower_copy(candidate.executable_path);
-  const auto expected_path = lower_copy(*expected_path_text);
-  if (!expected_path.empty() && process_path != expected_path) {
-    return false;
-  }
-
-  const auto expected_name = lower_copy(*expected_name_text);
-  if (!expected_name.empty() &&
-      lower_copy(candidate.executable_name) != expected_name) {
-    return false;
-  }
-
-  const auto expected_class = lower_copy(*expected_class_text);
-  if (!expected_class.empty() &&
-      lower_copy(candidate.window_class) != expected_class) {
-    return false;
-  }
-
-  const auto expected_title = lower_copy(*expected_title_text);
-  return expected_title.empty() ||
-         lower_copy(candidate.title).find(expected_title) != std::wstring::npos;
+  const layerc::core::MatchCandidate fields{
+      .executable_name = *executable_name,
+      .executable_path = *executable_path,
+      .class_name = *window_class,
+      .title = *title,
+      .active = false};
+  return layerc::core::candidate_matches_game(fields, profile.game,
+                                               /*exact_path=*/false);
 }
 
 } // namespace layerc::platform

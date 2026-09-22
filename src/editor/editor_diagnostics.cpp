@@ -4,6 +4,7 @@
 #include "editor_resource.h"
 
 #include "layerc/core/json.hpp"
+#include "layerc/runtime/diagnostics.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -22,68 +23,6 @@ struct DiagnosticsView {
   std::wstring summary;
   bool retry_visual{};
 };
-
-std::string pretty_json_whitespace(const std::string_view source) {
-  std::string output;
-  output.reserve(source.size() + source.size() / 2U);
-  int indent{};
-  bool in_string{};
-  bool escaped{};
-  const auto new_line = [&] {
-    output.push_back('\n');
-    output.append(static_cast<std::size_t>(indent) * 2U, ' ');
-  };
-
-  for (const char character : source) {
-    if (in_string) {
-      output.push_back(character);
-      if (escaped)
-        escaped = false;
-      else if (character == '\\')
-        escaped = true;
-      else if (character == '"')
-        in_string = false;
-      continue;
-    }
-    if (std::isspace(static_cast<unsigned char>(character)) != 0)
-      continue;
-    switch (character) {
-    case '"':
-      in_string = true;
-      output.push_back(character);
-      break;
-    case '{':
-    case '[':
-      output.push_back(character);
-      ++indent;
-      new_line();
-      break;
-    case '}':
-    case ']': {
-      indent = std::max(0, indent - 1);
-      const char opening = character == '}' ? '{' : '[';
-      const auto previous = output.find_last_not_of(" \t\r\n");
-      if (previous != std::string::npos && output[previous] == opening)
-        output.resize(previous + 1U);
-      else
-        new_line();
-      output.push_back(character);
-      break;
-    }
-    case ',':
-      output.push_back(character);
-      new_line();
-      break;
-    case ':':
-      output += ": ";
-      break;
-    default:
-      output.push_back(character);
-      break;
-    }
-  }
-  return output;
-}
 
 DiagnosticsView diagnostics_view(const std::string_view source,
                                  const bool connected,
@@ -110,57 +49,43 @@ DiagnosticsView diagnostics_view(const std::string_view source,
     return view;
   }
 
-  const auto parsed = layerc::core::json::parse(source);
-  const auto *root = std::get_if<layerc::core::json::Value>(&parsed);
-  if (root == nullptr || !root->is_object()) {
+  const auto parsed = layerc::runtime::parse_runtime_diagnostics_json(source);
+  const auto *diagnostics =
+      std::get_if<layerc::runtime::RuntimeDiagnostics>(&parsed);
+  if (diagnostics == nullptr) {
+    const auto &error = std::get<layerc::core::json::FieldError>(parsed);
     view.summary += L"\r\nActive profile: Unavailable"
                     L"\r\nIsolated visual worker: Unavailable"
-                    L"\r\nLast error: Diagnostics snapshot is not valid JSON";
+                    L"\r\nLast error: Invalid diagnostics snapshot (";
+    view.summary += to_wide(error.describe());
+    view.summary += L")";
     return view;
   }
 
   std::string profile_id;
-  if (const auto *sessions = root->find("sessions");
-      sessions != nullptr && sessions->is_array()) {
-    for (const auto &session : sessions->as_array()) {
-      if (!session.is_object())
-        continue;
-      const auto *id = session.find("profileId");
-      if (id == nullptr || !id->is_string())
-        continue;
-      const auto *foreground = session.find("foreground");
-      const bool is_foreground = foreground != nullptr &&
-                                 foreground->is_bool() && foreground->as_bool();
-      if (profile_id.empty() || is_foreground)
-        profile_id = id->as_string();
-      if (is_foreground)
-        break;
-    }
+  for (const auto &session : diagnostics->sessions) {
+    if (profile_id.empty() || session.foreground)
+      profile_id = session.profile_id;
+    if (session.foreground)
+      break;
   }
   view.summary += L"\r\nActive profile: ";
   view.summary += profile_id.empty() ? L"None" : to_wide(profile_id);
 
-  std::size_t helper_count{};
-  std::size_t running_count{};
-  std::size_t quarantined_count{};
+  const auto helper_count = diagnostics->helpers.size();
+  const auto running_count =
+      static_cast<std::size_t>(std::ranges::count(
+          diagnostics->helpers, true,
+          &layerc::runtime::HelperDiagnostics::running));
+  const auto quarantined_count =
+      static_cast<std::size_t>(std::ranges::count(
+          diagnostics->helpers, true,
+          &layerc::runtime::HelperDiagnostics::quarantined));
   std::string last_error;
-  if (const auto *helpers = root->find("isolatedHelpers");
-      helpers != nullptr && helpers->is_array()) {
-    for (const auto &helper : helpers->as_array()) {
-      if (!helper.is_object())
-        continue;
-      ++helper_count;
-      const auto *running = helper.find("running");
-      if (running != nullptr && running->is_bool() && running->as_bool())
-        ++running_count;
-      const auto *quarantined = helper.find("quarantined");
-      if (quarantined != nullptr && quarantined->is_bool() &&
-          quarantined->as_bool())
-        ++quarantined_count;
-      const auto *error = helper.find("lastError");
-      if (last_error.empty() && error != nullptr && error->is_string() &&
-          !error->as_string().empty())
-        last_error = error->as_string();
+  for (const auto &helper : diagnostics->helpers) {
+    if (!helper.last_error.empty()) {
+      last_error = helper.last_error;
+      break;
     }
   }
   view.retry_visual = quarantined_count != 0U;
@@ -180,28 +105,17 @@ DiagnosticsView diagnostics_view(const std::string_view source,
   }
 
   if (last_error.empty()) {
-    if (const auto *services = root->find("services");
-        services != nullptr && services->is_array()) {
-      for (const auto &service : services->as_array()) {
-        if (!service.is_object())
-          continue;
-        const auto *error = service.find("lastError");
-        if (error != nullptr && error->is_string() &&
-            !error->as_string().empty()) {
-          last_error = error->as_string();
-          break;
-        }
-      }
-    }
+    const auto failed = std::ranges::find_if(
+        diagnostics->services, [](const layerc::runtime::RuntimeServiceStats &service) {
+          return !service.last_error.empty();
+        });
+    if (failed != diagnostics->services.end())
+      last_error = failed->last_error;
   }
-  if (last_error.empty()) {
-    const auto *transport = root->find("gameBarTransport");
-    const auto *error = transport != nullptr && transport->is_object()
-                            ? transport->find("lastError")
-                            : nullptr;
-    if (error != nullptr && error->is_string())
-      last_error = error->as_string();
-  }
+  if (last_error.empty())
+    last_error = diagnostics->gamebar.last_error;
+  if (last_error.empty())
+    last_error = diagnostics->settings.last_error;
   view.summary += L"\r\nLast error: ";
   view.summary += last_error.empty() ? L"None reported" : to_wide(last_error);
   return view;
@@ -273,48 +187,48 @@ void copy_raw_json(const HWND owner, const std::string_view source) {
 } // namespace
 
 void EditorWindow::refresh_runtime_diagnostics_dialog() {
-  if (diagnostics_dialog_ == nullptr || !IsWindow(diagnostics_dialog_))
+  if (pack_dialogs_.diagnostics_window() == nullptr || !IsWindow(pack_dialogs_.diagnostics_window()))
     return;
 
-  const bool connected = live_channel_.connected();
-  const auto view = diagnostics_view(runtime_diagnostics_json_, connected,
-                                     live_package_authenticated_);
-  set_text(GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_SUMMARY),
+  const bool connected = live_edit_.channel().connected();
+  const auto view = diagnostics_view(pack_dialogs_.runtime_diagnostics_json(), connected,
+                                     live_edit_.package_authenticated());
+  set_text(GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_SUMMARY),
            view.summary);
 
-  const bool have_snapshot = !runtime_diagnostics_json_.empty();
+  const bool have_snapshot = !pack_dialogs_.runtime_diagnostics_json().empty();
   const HWND toggle =
-      GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_RAW_TOGGLE);
+      GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_RAW_TOGGLE);
   EnableWindow(toggle, have_snapshot ? TRUE : FALSE);
   const bool show_raw =
       have_snapshot && SendMessageW(toggle, BM_GETCHECK, 0, 0) == BST_CHECKED;
-  const HWND raw = GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_TEXT);
+  const HWND raw = GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_TEXT);
   set_text(raw, have_snapshot
-                    ? to_wide(pretty_json_whitespace(runtime_diagnostics_json_))
+                    ? to_wide(layerc::core::json::format(pack_dialogs_.runtime_diagnostics_json()))
                     : std::wstring{});
   ShowWindow(raw, show_raw ? SW_SHOW : SW_HIDE);
-  EnableWindow(GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_COPY),
+  EnableWindow(GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_COPY),
                have_snapshot ? TRUE : FALSE);
-  ShowWindow(GetDlgItem(diagnostics_dialog_, IDC_DIAGNOSTICS_RETRY_VISUAL),
-             view.retry_visual && connected && live_package_authenticated_
+  ShowWindow(GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_RETRY_VISUAL),
+             view.retry_visual && connected && live_edit_.package_authenticated()
                  ? SW_SHOW
                  : SW_HIDE);
-  layout_diagnostics_dialog(diagnostics_dialog_);
+  layout_diagnostics_dialog(pack_dialogs_.diagnostics_window());
 }
 
 void EditorWindow::request_runtime_diagnostics() {
   refresh_runtime_diagnostics_dialog();
-  if (!live_channel_.connected() || !live_package_authenticated_)
+  if (!live_edit_.channel().connected() || !live_edit_.package_authenticated())
     return;
-  ++revision_;
-  (void)live_channel_.send({
+  ++live_edit_.revision();
+  (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::diagnostics_request,
-      .revision = revision_,
+      .revision = live_edit_.revision(),
   });
 }
 
 void EditorWindow::open_runtime_diagnostics() {
-  DialogBoxParamW(instance_, MAKEINTRESOURCEW(IDD_RUNTIME_DIAGNOSTICS), dialog_,
+  DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_RUNTIME_DIAGNOSTICS), shell_.window(),
                   &EditorWindow::diagnostics_dialog_proc,
                   reinterpret_cast<LPARAM>(this));
 }
@@ -326,16 +240,12 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
   if (editor == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    editor->diagnostics_dialog_ = window;
+    editor->pack_dialogs_.diagnostics_window() = window;
     const int dpi = window_base_dpi(window);
     resize_to_logical_size(window, 760, 460);
-    set_dark_title_bar(window);
-    (void)layerc::platform::apply_capture_exclusion(
-        window, editor->capture_exclusion_);
-    editor->diagnostics_font_ = create_editor_font(static_cast<UINT>(dpi));
-    style_native_dialog_children(
-        window, editor->diagnostics_font_ == nullptr ? editor->font_
-                                                     : editor->diagnostics_font_);
+    apply_dialog_chrome(window, editor->shell_.capture_exclusion());
+    if (!editor->pack_dialogs_.diagnostics_chrome().attach(window, static_cast<UINT>(dpi)))
+      editor->style_dialog_children(window);
     SendDlgItemMessageW(window, IDC_DIAGNOSTICS_RAW_TOGGLE, BM_SETCHECK,
                         BST_CHECKED, 0);
     editor->request_runtime_diagnostics();
@@ -346,20 +256,12 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     return TRUE;
   }
   if (message == WM_DPICHANGED) {
-    apply_suggested_dpi_rect(window, lparam);
-    const HFONT replacement = create_editor_font(HIWORD(wparam));
-    if (replacement != nullptr) {
-      const HFONT previous = editor->diagnostics_font_;
-      editor->diagnostics_font_ = replacement;
-      style_native_dialog_children(window, replacement);
-      if (previous != nullptr)
-        DeleteObject(previous);
-    }
+    (void)editor->pack_dialogs_.diagnostics_chrome().on_dpi_changed(HIWORD(wparam), lparam);
     layout_diagnostics_dialog(window);
     return TRUE;
   }
   if (message == WM_GETMINMAXINFO) {
-    apply_minimum_track_size(window, lparam, 520, 320);
+    editor->pack_dialogs_.diagnostics_chrome().on_minimum_size(lparam, 520, 320);
     return TRUE;
   }
   if (message == WM_COMMAND) {
@@ -371,20 +273,20 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
       editor->refresh_runtime_diagnostics_dialog();
       return TRUE;
     case IDC_DIAGNOSTICS_RETRY_VISUAL:
-      if (!editor->live_channel_.connected() ||
-          !editor->live_package_authenticated_) {
+      if (!editor->live_edit_.channel().connected() ||
+          !editor->live_edit_.package_authenticated()) {
         editor->request_runtime_diagnostics();
         return TRUE;
       }
-      ++editor->revision_;
-      (void)editor->live_channel_.send({
+      ++editor->live_edit_.revision();
+      (void)editor->live_edit_.channel().send({
           .type = layerc::core::LiveMessageType::retry_visual,
-          .revision = editor->revision_,
+          .revision = editor->live_edit_.revision(),
       });
       editor->request_runtime_diagnostics();
       return TRUE;
     case IDC_DIAGNOSTICS_COPY:
-      copy_raw_json(window, editor->runtime_diagnostics_json_);
+      copy_raw_json(window, editor->pack_dialogs_.runtime_diagnostics_json());
       return TRUE;
     case IDOK:
     case IDCANCEL:
@@ -393,11 +295,8 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     }
   }
   if (message == WM_DESTROY) {
-    editor->diagnostics_dialog_ = nullptr;
-    if (editor->diagnostics_font_ != nullptr) {
-      DeleteObject(editor->diagnostics_font_);
-      editor->diagnostics_font_ = nullptr;
-    }
+    editor->pack_dialogs_.diagnostics_window() = nullptr;
+    editor->pack_dialogs_.diagnostics_chrome().on_destroy();
     return TRUE;
   }
   return editor->dialog_theme_message(window, message, wparam, lparam)

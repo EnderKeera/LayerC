@@ -34,12 +34,27 @@ void test_cooldown_charges() {
   auto state = engine.snapshot(start + 4s).front();
   expect(state.available_charges == 0,
          "charges should remain empty before first recharge");
+  expect(cooldown_status_text(definitions.front(), state, start + 4s) ==
+                 "Dash  1.0s  [0]" &&
+             cooldown_progress(definitions.front(), state, start + 4s) > 0.19 &&
+             cooldown_progress(definitions.front(), state, start + 4s) < 0.21,
+         "running cooldown status should share label and progress formatting");
   state = engine.snapshot(start + 5s).front();
   expect(state.available_charges == 1,
          "first charge should recover after duration");
   state = engine.snapshot(start + 10s).front();
   expect(state.available_charges == 2 && !state.next_charge_at.has_value(),
          "sequential charges should fully recover");
+  expect(cooldown_status_text(definitions.front(), state, start + 10s) ==
+                 "Dash  READY  [2]" &&
+             cooldown_progress(definitions.front(), state, start + 10s) == 1.0,
+         "ready cooldown status should be complete");
+
+  auto zero_duration = definitions.front();
+  zero_duration.duration = Milliseconds::zero();
+  state.next_charge_at = start + 1s;
+  expect(cooldown_progress(zero_duration, state, start) == 0.0,
+         "running zero-duration cooldown progress should be empty");
 }
 
 void test_non_stacking_cooldown() {
@@ -241,6 +256,48 @@ void test_cooldown_recovery_modes_and_groups() {
              }),
          "a direct cooldown trigger should transitively fan through every "
          "overlapping propagation group exactly once");
+
+  // F5 regression: overlapping groups {a,b} + {a,c} reallocates the work
+  // queue while the current item is live; a reference into the queue dangles
+  // (ASan heap-use-after-free). Cyclic groups must also terminate.
+  const std::vector<CooldownDefinition> overlap_definitions{
+      {.id = "a", .name = "A", .duration = 3s},
+      {.id = "b", .name = "B", .duration = 3s},
+      {.id = "c", .name = "C", .duration = 3s}};
+  const std::vector<CooldownGroup> overlap_groups{
+      {.id = "g1",
+       .name = "G1",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"a", "b"}},
+      {.id = "g2",
+       .name = "G2",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"a", "c"}}};
+  CooldownEngine overlapping(overlap_definitions, overlap_groups);
+  const auto overlap_triggered =
+      overlapping.trigger_with_propagation("a", start, 101);
+  expect(overlap_triggered.size() == 3,
+         "overlapping propagation groups sharing the seed must trigger "
+         "every member exactly once without reading a reallocated queue");
+  const std::vector<CooldownGroup> cyclic_groups{
+      {.id = "c1",
+       .name = "C1",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"a", "b"}},
+      {.id = "c2",
+       .name = "C2",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"b", "c"}},
+      {.id = "c3",
+       .name = "C3",
+       .mode = CooldownGroupMode::trigger_propagation,
+       .cooldown_ids = {"c", "a"}}};
+  CooldownEngine cyclic(overlap_definitions, cyclic_groups);
+  const auto cyclic_triggered =
+      cyclic.trigger_with_propagation("b", start, 102);
+  expect(cyclic_triggered.size() == 3,
+         "cyclic propagation groups must terminate with every member "
+         "triggered exactly once");
 }
 void test_snapshot_reuse() {
   using namespace std::chrono_literals;

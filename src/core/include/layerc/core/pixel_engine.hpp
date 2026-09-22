@@ -101,6 +101,7 @@ public:
 
 private:
   struct RuleState {
+    std::uint8_t stable_samples{1};
     std::uint8_t matching_samples{};
     std::uint8_t nonmatching_samples{};
     bool stable_match{};
@@ -116,10 +117,18 @@ private:
     TimePoint confirmation_deadline{};
   };
 
-  [[nodiscard]] bool observation_exists(std::string_view id) const;
-  [[nodiscard]] std::uint8_t stable_samples(std::string_view id) const;
+  enum class ConfirmationDecision : std::uint8_t {
+    wait,
+    confirmed,
+    fallback,
+    terminal,
+  };
+
   [[nodiscard]] const VisualTrigger *
   find_trigger(std::string_view cooldown_id) const;
+  [[nodiscard]] ConfirmationDecision
+  classify(const VisualTrigger &trigger, const RuleState *state,
+           TimePoint now) const;
   [[nodiscard]] bool measurement_is_fresh(const RuleState &state,
                                           TimePoint now) const;
   [[nodiscard]] static bool is_terminal_unavailable(
@@ -129,6 +138,7 @@ private:
   bool enabled_{true};
   std::unordered_map<std::string, RuleState> rules_;
   std::unordered_map<std::string, TriggerState> triggers_;
+  std::unordered_map<std::string, std::size_t> trigger_indices_;
 };
 
 } // namespace layerc::core

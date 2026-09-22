@@ -11,7 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 $context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
     -OutputPath $OutputPath -OutputStem 'v23-automation' `
     -TemporaryStem 'LayerC-v23-benchmark'
@@ -198,10 +198,7 @@ try {
         $recoveredPrivate -le $thresholds.disabledMaxPrivateDeltaMiB -and
         $recoveredWorking -le $thresholds.disabledMaxWorkingSetDeltaMiB -and
         [bool]$micro.passed
-    $result = [ordered]@{
-        schemaVersion = 1
-        packageVersion = '2.3.0'
-        measuredAt = (Get-Date).ToUniversalTime().ToString('o')
+    $data = [ordered]@{
         buildDirectory = $BuildDirectory
         automationServiceActivationVerified = $activated
         persistentCheckpointVerified = $checkpointed
@@ -216,10 +213,9 @@ try {
             disabledWorkingSetMiB = [Math]::Round($recoveredWorking, 3)
         }
         evaluator = $micro
-        thresholds = $thresholds
-        passed = $passed
     }
-    [IO.File]::WriteAllText($OutputPath, ($result | ConvertTo-Json -Depth 8), $utf8)
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+        -Thresholds $thresholds -Passed $passed -Depth 8
     $result | ConvertTo-Json -Depth 8
     if (-not $passed) { exit 1 }
 } finally {

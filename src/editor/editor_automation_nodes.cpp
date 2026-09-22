@@ -40,51 +40,17 @@ std::wstring event_label(const layerc::core::AutomationEventKind kind) {
 }
 
 std::wstring action_label(const layerc::core::AutomationActionKind kind) {
-  using layerc::core::AutomationActionKind;
-  switch (kind) {
-  case AutomationActionKind::set_variable:
-    return L"Set variable";
-  case AutomationActionKind::increment_variable:
-    return L"Increment variable";
-  case AutomationActionKind::append_list:
-    return L"Append list";
-  case AutomationActionKind::set_map_entry:
-    return L"Set map entry";
-  case AutomationActionKind::erase_map_entry:
-    return L"Erase map entry";
-  case AutomationActionKind::trigger_cooldown:
-    return L"Trigger cooldown";
-  case AutomationActionKind::reset_cooldown:
-    return L"Reset cooldown";
-  case AutomationActionKind::reduce_cooldown_next:
-    return L"Reduce next recovery";
-  case AutomationActionKind::reduce_cooldown_all:
-    return L"Reduce all recoveries";
-  case AutomationActionKind::refund_cooldown:
-    return L"Refund cooldown";
-  case AutomationActionKind::trigger_group:
-    return L"Trigger group";
-  case AutomationActionKind::reset_group:
-    return L"Reset group";
-  case AutomationActionKind::create_timer:
-    return L"Create timer";
-  case AutomationActionKind::cancel_timer:
-    return L"Cancel timer";
-  case AutomationActionKind::set_overlay_override:
-    return L"Set overlay override";
-  case AutomationActionKind::clear_overlay_override:
-    return L"Clear overlay override";
-  }
-  return L"Internal action";
+  const auto *spec = layerc::core::automation_action_spec(kind);
+  return spec == nullptr ? L"Invalid action" : to_wide(spec->display_name);
 }
 
 void AutomationEditor::refresh_nodes(const HWND dialog) {
   const int selected = selected_index(dialog);
   const auto *definition =
-      owner_.automation_profile_ && selected >= 0 &&
+      owner_.document().automation() && selected >= 0 &&
               static_cast<std::size_t>(selected) <
-                  owner_.automation_profile_->automations.size()
-          ? &owner_.automation_profile_
+                  owner_.document().automation()->automations.size()
+          ? &owner_.document().automation()
                  ->automations[static_cast<std::size_t>(selected)]
           : nullptr;
   if (definition == nullptr || node_rule_ < 0 ||
@@ -148,9 +114,9 @@ void AutomationEditor::refresh_nodes(const HWND dialog) {
   SendDlgItemMessageW(dialog, IDC_AUTOMATION_VALIDATION, LB_RESETCONTENT, 0, 0);
   std::wstring validation = L"No automation module";
   validation_has_error_ = false;
-  if (owner_.automation_profile_) {
+  if (owner_.document().automation()) {
     const auto error = layerc::core::validate_automation_profile(
-        *owner_.automation_profile_, owner_.profile_);
+        *owner_.document().automation(), owner_.document().profile());
     validation_has_error_ = !error.message.empty();
     validation = validation_has_error_
                      ? to_wide(error.path + ": " + error.message)

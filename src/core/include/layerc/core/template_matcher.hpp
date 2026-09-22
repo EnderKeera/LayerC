@@ -4,9 +4,9 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace layerc::core {
@@ -36,6 +36,29 @@ struct TemplateMatchResult {
   std::size_t pixel_comparisons{};
 };
 
+namespace detail {
+
+struct TemplateMatcherSample {
+  float x{};
+  float y{};
+  RgbPixel color;
+  float luma{};
+};
+
+struct TemplateMatcherReference {
+  std::vector<TemplateMatcherSample> samples;
+  double mean_luma{};
+  double luma_variance{};
+  std::vector<TemplateMatcherSample> search_samples;
+  double search_mean_luma{};
+  double search_luma_variance{};
+  std::vector<TemplateMatcherSample> locator_samples;
+  double locator_mean_luma{};
+  double locator_luma_variance{};
+};
+
+} // namespace detail
+
 // Flat and near-flat images do not carry enough spatial information to locate
 // an element. They are rejected instead of matching an arbitrary same-colored
 // area elsewhere in the search region.
@@ -52,23 +75,22 @@ compact_template_image(const TemplateImage &image, CaptureQuality quality);
 // caches quality-specific reference samples by verified content hash.
 class CpuTemplateMatcher final {
 public:
-  CpuTemplateMatcher();
-  ~CpuTemplateMatcher();
-  CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept;
-  CpuTemplateMatcher &operator=(CpuTemplateMatcher &&) noexcept;
+  CpuTemplateMatcher() = default;
+  ~CpuTemplateMatcher() = default;
+  CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept = default;
+  CpuTemplateMatcher &operator=(CpuTemplateMatcher &&) noexcept = default;
   CpuTemplateMatcher(const CpuTemplateMatcher &) = delete;
   CpuTemplateMatcher &operator=(const CpuTemplateMatcher &) = delete;
 
   [[nodiscard]] TemplateMatchResult
   evaluate(const TemplateState &state, std::span<const TemplateImage> references,
            PixelFrameView frame, CaptureQuality quality,
-           NormalizedRegion available_region = {0.0, 0.0, 1.0, 1.0},
-           std::span<const NormalizedRegion> unavailable_regions = {});
+           NormalizedRegion available_region,
+           std::span<const NormalizedRegion> unavailable_regions);
   void clear();
 
 private:
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+  std::unordered_map<std::string, detail::TemplateMatcherReference> prepared_;
 };
 
 } // namespace layerc::core

@@ -41,24 +41,8 @@ std::size_t comparison_budget(const CaptureQuality quality) noexcept {
   return 8U * 1024U * 1024U;
 }
 
-struct PreparedSample {
-  float x{};
-  float y{};
-  RgbPixel color;
-  float luma{};
-};
-
-struct PreparedTemplate {
-  std::vector<PreparedSample> samples;
-  double mean_luma{};
-  double luma_variance{};
-  std::vector<PreparedSample> search_samples;
-  double search_mean_luma{};
-  double search_luma_variance{};
-  std::vector<PreparedSample> locator_samples;
-  double locator_mean_luma{};
-  double locator_luma_variance{};
-};
+using PreparedSample = detail::TemplateMatcherSample;
+using PreparedTemplate = detail::TemplateMatcherReference;
 
 void calculate_statistics(const std::span<const PreparedSample> samples,
                           double &mean_luma, double &luma_variance) {
@@ -159,11 +143,10 @@ PreparedTemplate prepare_template(const TemplateImage &image,
   calculate_statistics(output.search_samples, output.search_mean_luma,
                        output.search_luma_variance);
   output.locator_samples.reserve(locator_sample_count);
+  static_assert(locator_sample_count > 1);
   for (std::size_t index = 0; index < locator_sample_count; ++index) {
-    const auto source = locator_sample_count == 1
-                            ? output.search_samples.size() / 2U
-                            : index * (output.search_samples.size() - 1U) /
-                                  (locator_sample_count - 1U);
+    const auto source = index * (output.search_samples.size() - 1U) /
+                        (locator_sample_count - 1U);
     output.locator_samples.push_back(
         output.search_samples[std::min(source,
                                        output.search_samples.size() - 1U)]);
@@ -826,90 +809,66 @@ bool ReferenceSearchContext::run() {
 
 } // namespace
 
-class CpuTemplateMatcher::Impl {
-public:
-  TemplateMatchResult evaluate(
-      const TemplateState &state, const std::span<const TemplateImage> images,
-      const PixelFrameView frame, const CaptureQuality quality,
-      const NormalizedRegion available_region,
-      const std::span<const NormalizedRegion> unavailable_regions) {
-    TemplateMatchResult result;
-    if (!frame.valid()) return result;
-    const auto left = static_cast<std::uint32_t>(std::clamp(
-        std::floor(state.search_region.x * frame.width), 0.0,
-        static_cast<double>(frame.width)));
-    const auto top = static_cast<std::uint32_t>(std::clamp(
-        std::floor(state.search_region.y * frame.height), 0.0,
-        static_cast<double>(frame.height)));
-    const auto right = static_cast<std::uint32_t>(std::clamp(
-        std::ceil((state.search_region.x + state.search_region.width) *
-                  frame.width),
-        0.0, static_cast<double>(frame.width)));
-    const auto bottom = static_cast<std::uint32_t>(std::clamp(
-        std::ceil((state.search_region.y + state.search_region.height) *
-                  frame.height),
-        0.0, static_cast<double>(frame.height)));
-    if (right <= left || bottom <= top) return result;
-    const NormalizedRegion search_region{
-        static_cast<double>(left) / frame.width,
-        static_cast<double>(top) / frame.height,
-        static_cast<double>(right - left) / frame.width,
-        static_cast<double>(bottom - top) / frame.height};
-    result.search_region_available =
-        regions_overlap(search_region, available_region);
-
-    const auto budget = comparison_budget(quality);
-    std::size_t reference_index{};
-    for (const auto &definition : state.references) {
-      ++reference_index;
-      const auto image = std::ranges::find(
-          images, definition.asset_sha256, &TemplateImage::asset_sha256);
-      if (image == images.end() || !image->valid()) continue;
-      const auto key = definition.asset_sha256 + ":" +
-                       std::to_string(static_cast<unsigned>(quality));
-      auto [prepared_it, inserted] = prepared_.try_emplace(key);
-      if (inserted) {
-        const auto compact = compact_template_image(*image, quality);
-        prepared_it->second = prepare_template(compact, quality);
-      }
-      const auto &reference = prepared_it->second;
-      if (reference.samples.empty() || reference.search_samples.empty() ||
-          reference.locator_samples.empty())
-        continue;
-
-      ReferenceSearchContext search(
-          state, definition, reference, frame, available_region,
-          unavailable_regions, left, top, right, bottom, budget,
-          state.references.size() - reference_index + 1U, result);
-      if (search.run()) return result;
-      if (result.pixel_comparisons >= budget) break;
-    }
-    result.matched = result.confidence >= state.confidence_threshold;
-    return result;
-  }
-
-  void clear() { prepared_.clear(); }
-
-private:
-  std::unordered_map<std::string, PreparedTemplate> prepared_;
-};
-
-CpuTemplateMatcher::CpuTemplateMatcher() : impl_(std::make_unique<Impl>()) {}
-CpuTemplateMatcher::~CpuTemplateMatcher() = default;
-CpuTemplateMatcher::CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept =
-    default;
-CpuTemplateMatcher &
-CpuTemplateMatcher::operator=(CpuTemplateMatcher &&) noexcept = default;
-
 TemplateMatchResult CpuTemplateMatcher::evaluate(
-    const TemplateState &state, const std::span<const TemplateImage> references,
+    const TemplateState &state, const std::span<const TemplateImage> images,
     const PixelFrameView frame, const CaptureQuality quality,
     const NormalizedRegion available_region,
     const std::span<const NormalizedRegion> unavailable_regions) {
-  return impl_->evaluate(state, references, frame, quality, available_region,
-                         unavailable_regions);
+  TemplateMatchResult result;
+  if (!frame.valid()) return result;
+  const auto left = static_cast<std::uint32_t>(std::clamp(
+      std::floor(state.search_region.x * frame.width), 0.0,
+      static_cast<double>(frame.width)));
+  const auto top = static_cast<std::uint32_t>(std::clamp(
+      std::floor(state.search_region.y * frame.height), 0.0,
+      static_cast<double>(frame.height)));
+  const auto right = static_cast<std::uint32_t>(std::clamp(
+      std::ceil((state.search_region.x + state.search_region.width) *
+                frame.width),
+      0.0, static_cast<double>(frame.width)));
+  const auto bottom = static_cast<std::uint32_t>(std::clamp(
+      std::ceil((state.search_region.y + state.search_region.height) *
+                frame.height),
+      0.0, static_cast<double>(frame.height)));
+  if (right <= left || bottom <= top) return result;
+  const NormalizedRegion search_region{
+      static_cast<double>(left) / frame.width,
+      static_cast<double>(top) / frame.height,
+      static_cast<double>(right - left) / frame.width,
+      static_cast<double>(bottom - top) / frame.height};
+  result.search_region_available =
+      regions_overlap(search_region, available_region);
+
+  const auto budget = comparison_budget(quality);
+  std::size_t reference_index{};
+  for (const auto &definition : state.references) {
+    ++reference_index;
+    const auto image = std::ranges::find(
+        images, definition.asset_sha256, &TemplateImage::asset_sha256);
+    if (image == images.end() || !image->valid()) continue;
+    const auto key = definition.asset_sha256 + ":" +
+                     std::to_string(static_cast<unsigned>(quality));
+    auto [prepared_it, inserted] = prepared_.try_emplace(key);
+    if (inserted) {
+      const auto compact = compact_template_image(*image, quality);
+      prepared_it->second = prepare_template(compact, quality);
+    }
+    const auto &reference = prepared_it->second;
+    if (reference.samples.empty() || reference.search_samples.empty() ||
+        reference.locator_samples.empty())
+      continue;
+
+    ReferenceSearchContext search(
+        state, definition, reference, frame, available_region,
+        unavailable_regions, left, top, right, bottom, budget,
+        state.references.size() - reference_index + 1U, result);
+    if (search.run()) return result;
+    if (result.pixel_comparisons >= budget) break;
+  }
+  result.matched = result.confidence >= state.confidence_threshold;
+  return result;
 }
 
-void CpuTemplateMatcher::clear() { impl_->clear(); }
+void CpuTemplateMatcher::clear() { prepared_.clear(); }
 
 } // namespace layerc::core

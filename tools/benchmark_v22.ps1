@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 $context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
     -OutputPath $OutputPath -OutputStem 'v22-modular-idle' `
     -TemporaryStem 'LayerC-v22-benchmark'
@@ -88,15 +88,7 @@ try {
         $threadDelta -le $thresholds.editorMaxThreadDelta -and
         $recoveredPrivateDelta -le $thresholds.closeMaxPrivateDeltaMiB -and
         $recoveredWorkingDelta -le $thresholds.closeMaxWorkingSetDeltaMiB
-    $result = [ordered]@{
-        schemaVersion = 1
-        packageVersion = '2.2.0'
-        measuredAt = (Get-Date).ToUniversalTime().ToString('o')
-        host = [ordered]@{
-            computerName = $env:COMPUTERNAME
-            os = [Environment]::OSVersion.VersionString
-            logicalProcessors = [Environment]::ProcessorCount
-        }
+    $data = [ordered]@{
         buildDirectory = $BuildDirectory
         baseline = $baseline
         editorOpen = $editorOpen
@@ -108,11 +100,10 @@ try {
             recoveredPrivateMiB = [Math]::Round($recoveredPrivateDelta, 3)
             recoveredWorkingSetMiB = [Math]::Round($recoveredWorkingDelta, 3)
         }
-        thresholds = $thresholds
-        passed = $passed
         note = 'Empty profile directory. LayerE is opened without edit mode; RuntimeService demand-matrix tests verify no visual, template, HID, edit-overlay, timer, or worker ownership.'
     }
-    [IO.File]::WriteAllText($OutputPath, ($result | ConvertTo-Json -Depth 7), $utf8)
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+        -Thresholds $thresholds -Passed $passed -Depth 7
     $result | ConvertTo-Json -Depth 7
     if (-not $passed) { exit 1 }
 } finally {

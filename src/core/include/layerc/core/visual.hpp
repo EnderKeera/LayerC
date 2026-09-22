@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace layerc::core {
+namespace json { class Value; }
 
 inline constexpr std::size_t max_visual_json_bytes = 256U * 1024U;
 inline constexpr std::size_t max_pixel_rules = 4;
@@ -46,6 +47,8 @@ enum class CaptureBackendKind : std::uint8_t {
   none,
   windows_graphics_capture,
   desktop_duplication,
+  x11_composite,
+  x11_full_frame,
 };
 
 enum class CaptureAvailability : std::uint8_t {
@@ -57,6 +60,15 @@ enum class CaptureAvailability : std::uint8_t {
   outside_output,
 };
 
+// Inclusive underlying maxima for schema and wire validation of these enums.
+// Callers compare against these names instead of magic ordinals.
+inline constexpr std::uint8_t capture_quality_max =
+    static_cast<std::uint8_t>(CaptureQuality::exact);
+inline constexpr std::uint8_t capture_backend_max =
+    static_cast<std::uint8_t>(CaptureBackendKind::x11_full_frame);
+inline constexpr std::uint8_t capture_availability_max =
+    static_cast<std::uint8_t>(CaptureAvailability::outside_output);
+
 struct NormalizedRegion {
   double x{};
   double y{};
@@ -65,6 +77,12 @@ struct NormalizedRegion {
 
   bool operator==(const NormalizedRegion &) const = default;
 };
+
+// Finite, nonempty, and within the 0..1 frame (inclusive, 1e-12 tolerance).
+// Shared by profile validation and the calibration CLI so the accepted
+// region set stays identical in both paths.
+[[nodiscard]] bool
+valid_normalized_region(const NormalizedRegion &region) noexcept;
 
 struct AverageColorPredicate {
   std::uint32_t target_color{};
@@ -163,6 +181,10 @@ using VisualResult = std::variant<VisualProfile, VisualError>;
 [[nodiscard]] VisualResult
 parse_visual_profile_json(std::string_view source,
                           const GameProfile &base_profile);
+// For a bounded document already accepted by json::parse (including UTF-8).
+[[nodiscard]] VisualResult parse_visual_profile_value(
+    const json::Value &root, const GameProfile &base_profile);
+
 [[nodiscard]] std::string
 serialize_visual_profile_json(const VisualProfile &profile);
 [[nodiscard]] VisualError
