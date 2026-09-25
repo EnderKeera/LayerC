@@ -24,6 +24,14 @@ struct DiagnosticsView {
   bool retry_visual{};
 };
 
+// First non-empty last_error among items, or empty when none reported one.
+template <typename Items>
+std::string first_last_error(const Items &items) {
+  const auto found = std::ranges::find_if(
+      items, [](const auto &item) { return !item.last_error.empty(); });
+  return found == std::ranges::end(items) ? std::string{} : found->last_error;
+}
+
 DiagnosticsView diagnostics_view(const std::string_view source,
                                  const bool connected,
                                  const bool authenticated) {
@@ -81,13 +89,6 @@ DiagnosticsView diagnostics_view(const std::string_view source,
       static_cast<std::size_t>(std::ranges::count(
           diagnostics->helpers, true,
           &layerc::runtime::HelperDiagnostics::quarantined));
-  std::string last_error;
-  for (const auto &helper : diagnostics->helpers) {
-    if (!helper.last_error.empty()) {
-      last_error = helper.last_error;
-      break;
-    }
-  }
   view.retry_visual = quarantined_count != 0U;
   view.summary += L"\r\nIsolated visual worker: ";
   if (helper_count == 0U) {
@@ -104,14 +105,9 @@ DiagnosticsView diagnostics_view(const std::string_view source,
                     std::to_wstring(helper_count) + L" running)";
   }
 
-  if (last_error.empty()) {
-    const auto failed = std::ranges::find_if(
-        diagnostics->services, [](const layerc::runtime::RuntimeServiceStats &service) {
-          return !service.last_error.empty();
-        });
-    if (failed != diagnostics->services.end())
-      last_error = failed->last_error;
-  }
+  std::string last_error = first_last_error(diagnostics->helpers);
+  if (last_error.empty())
+    last_error = first_last_error(diagnostics->services);
   if (last_error.empty())
     last_error = diagnostics->gamebar.last_error;
   if (last_error.empty())
@@ -126,41 +122,38 @@ void layout_diagnostics_dialog(const HWND window) {
   GetClientRect(window, &client);
   const int width = std::max(1, static_cast<int>(client.right - client.left));
   const int height = std::max(1, static_cast<int>(client.bottom - client.top));
-  const int dpi = window_base_dpi(window);
-  const auto scaled = [dpi](const int value) { return dpi_scaled(value, dpi); };
-  const int margin = scaled(12);
-  const int gap = scaled(8);
-  const int intro_height = scaled(34);
-  const int summary_height = scaled(76);
-  const int toggle_height = scaled(22);
-  const int button_height = scaled(25);
+  const DialogLayout ui(window, window_base_dpi(window));
+  const int margin = ui.scaled(12);
+  const int gap = ui.scaled(8);
+  const int intro_height = ui.scaled(34);
+  const int summary_height = ui.scaled(76);
+  const int toggle_height = ui.scaled(22);
+  const int button_height = ui.scaled(25);
   const int summary_top = margin + intro_height + gap;
   const int toggle_top = summary_top + summary_height + gap;
   const int raw_top = toggle_top + toggle_height + gap;
   const int button_top = height - margin - button_height;
 
-  move_control(window, IDC_DIAGNOSTICS_INTRO, margin, margin,
-                        width - margin * 2, intro_height);
-  move_control(window, IDC_DIAGNOSTICS_SUMMARY, margin, summary_top,
-                        width - margin * 2, summary_height);
-  move_control(window, IDC_DIAGNOSTICS_RAW_TOGGLE, margin, toggle_top,
-                        scaled(130), toggle_height);
-  move_control(window, IDC_DIAGNOSTICS_TEXT, margin, raw_top,
-                        width - margin * 2,
-                        std::max(1, button_top - gap - raw_top));
+  ui.move(IDC_DIAGNOSTICS_INTRO, margin, margin,
+          width - margin * 2, intro_height);
+  ui.move(IDC_DIAGNOSTICS_SUMMARY, margin, summary_top,
+          width - margin * 2, summary_height);
+  ui.move(IDC_DIAGNOSTICS_RAW_TOGGLE, margin, toggle_top,
+          ui.scaled(130), toggle_height);
+  ui.move(IDC_DIAGNOSTICS_TEXT, margin, raw_top,
+          width - margin * 2,
+          std::max(1, button_top - gap - raw_top));
 
   int left = margin;
-  const auto move_button = [&](const int id, const int logical_width) {
-    move_control(window, id, left, button_top, scaled(logical_width),
-                          button_height);
-    left += scaled(logical_width) + gap;
-  };
-  move_button(IDC_DIAGNOSTICS_REFRESH, 112);
-  move_button(IDC_DIAGNOSTICS_COPY, 104);
+  ui.next_button(IDC_DIAGNOSTICS_REFRESH, left, button_top, 112,
+                 button_height, gap);
+  ui.next_button(IDC_DIAGNOSTICS_COPY, left, button_top, 104, button_height,
+                 gap);
   if (IsWindowVisible(GetDlgItem(window, IDC_DIAGNOSTICS_RETRY_VISUAL)) != FALSE)
-    move_button(IDC_DIAGNOSTICS_RETRY_VISUAL, 92);
-  move_control(window, IDOK, width - margin - scaled(72), button_top,
-                        scaled(72), button_height);
+    ui.next_button(IDC_DIAGNOSTICS_RETRY_VISUAL, left, button_top, 92,
+                   button_height, gap);
+  ui.move(IDOK, width - margin - ui.scaled(72), button_top,
+          ui.scaled(72), button_height);
 }
 
 void copy_raw_json(const HWND owner, const std::string_view source) {
@@ -187,40 +180,39 @@ void copy_raw_json(const HWND owner, const std::string_view source) {
 } // namespace
 
 void EditorWindow::refresh_runtime_diagnostics_dialog() {
-  if (pack_dialogs_.diagnostics_window() == nullptr || !IsWindow(pack_dialogs_.diagnostics_window()))
+  const HWND dialog = pack_dialogs_.diagnostics_window();
+  if (dialog == nullptr || !IsWindow(dialog))
     return;
 
+  const auto &snapshot = pack_dialogs_.runtime_diagnostics_json();
   const bool connected = live_edit_.channel().connected();
-  const auto view = diagnostics_view(pack_dialogs_.runtime_diagnostics_json(), connected,
+  const auto view = diagnostics_view(snapshot, connected,
                                      live_edit_.package_authenticated());
-  set_text(GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_SUMMARY),
-           view.summary);
+  set_text(GetDlgItem(dialog, IDC_DIAGNOSTICS_SUMMARY), view.summary);
 
-  const bool have_snapshot = !pack_dialogs_.runtime_diagnostics_json().empty();
-  const HWND toggle =
-      GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_RAW_TOGGLE);
+  const bool have_snapshot = !snapshot.empty();
+  const HWND toggle = GetDlgItem(dialog, IDC_DIAGNOSTICS_RAW_TOGGLE);
   EnableWindow(toggle, have_snapshot ? TRUE : FALSE);
   const bool show_raw =
       have_snapshot && SendMessageW(toggle, BM_GETCHECK, 0, 0) == BST_CHECKED;
-  const HWND raw = GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_TEXT);
-  set_text(raw, have_snapshot
-                    ? to_wide(layerc::core::json::format(pack_dialogs_.runtime_diagnostics_json()))
-                    : std::wstring{});
+  const HWND raw = GetDlgItem(dialog, IDC_DIAGNOSTICS_TEXT);
+  set_text(raw, have_snapshot ? to_wide(layerc::core::json::format(snapshot))
+                              : std::wstring{});
   ShowWindow(raw, show_raw ? SW_SHOW : SW_HIDE);
-  EnableWindow(GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_COPY),
+  EnableWindow(GetDlgItem(dialog, IDC_DIAGNOSTICS_COPY),
                have_snapshot ? TRUE : FALSE);
-  ShowWindow(GetDlgItem(pack_dialogs_.diagnostics_window(), IDC_DIAGNOSTICS_RETRY_VISUAL),
+  ShowWindow(GetDlgItem(dialog, IDC_DIAGNOSTICS_RETRY_VISUAL),
              view.retry_visual && connected && live_edit_.package_authenticated()
                  ? SW_SHOW
                  : SW_HIDE);
-  layout_diagnostics_dialog(pack_dialogs_.diagnostics_window());
+  layout_diagnostics_dialog(dialog);
 }
 
 void EditorWindow::request_runtime_diagnostics() {
   refresh_runtime_diagnostics_dialog();
   if (!live_edit_.channel().connected() || !live_edit_.package_authenticated())
     return;
-  ++live_edit_.revision();
+  live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::diagnostics_request,
       .revision = live_edit_.revision(),
@@ -278,7 +270,7 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
         editor->request_runtime_diagnostics();
         return TRUE;
       }
-      ++editor->live_edit_.revision();
+      editor->live_edit_.advance_revision();
       (void)editor->live_edit_.channel().send({
           .type = layerc::core::LiveMessageType::retry_visual,
           .revision = editor->live_edit_.revision(),

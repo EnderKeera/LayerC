@@ -8,9 +8,8 @@
 
 namespace {
 
-using layerc::daemon::CapabilityPolicy;
-using layerc::daemon::CapabilityService;
-using layerc::daemon::CapabilityServices;
+using layerc::daemon::every_capability;
+using layerc::daemon::OwnedCapabilityServices;
 using layerc::runtime::Capability;
 using layerc::runtime::CapabilityDemand;
 using layerc::runtime::RuntimeResourceStats;
@@ -21,6 +20,7 @@ constexpr std::size_t slot(const Capability capability) noexcept {
   return static_cast<std::size_t>(capability);
 }
 
+// Records every typed dispatch so the adapters can be checked for routing.
 struct FakeOwner {
   std::array<ServiceReconcileResult, layerc::runtime::capability_count> results{};
   std::array<RuntimeResourceStats, layerc::runtime::capability_count> owned{};
@@ -30,159 +30,29 @@ struct FakeOwner {
   std::array<std::uint32_t, layerc::runtime::capability_count>
       observed_consumers{};
   mutable Capability last_capability{Capability::count};
-};
 
-std::span<const CapabilityPolicy> fake_policies() {
-  static constexpr std::array<CapabilityPolicy,
-                              layerc::runtime::capability_count>
-      policies{{
-          {Capability::input,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::input)];
-             self.observed_consumers[slot(Capability::input)] =
-                 demand.consumers(Capability::input);
-             self.last_capability = Capability::input;
-             return self.results[slot(Capability::input)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::input)];
-             self.last_capability = Capability::input;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::input)];
-             self.last_capability = Capability::input;
-             return self.owned[slot(Capability::input)];
-           }},
-          {Capability::generic_hid,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::generic_hid)];
-             self.observed_consumers[slot(Capability::generic_hid)] =
-                 demand.consumers(Capability::generic_hid);
-             self.last_capability = Capability::generic_hid;
-             return self.results[slot(Capability::generic_hid)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::generic_hid)];
-             self.last_capability = Capability::generic_hid;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::generic_hid)];
-             self.last_capability = Capability::generic_hid;
-             return self.owned[slot(Capability::generic_hid)];
-           }},
-          {Capability::overlay,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::overlay)];
-             self.observed_consumers[slot(Capability::overlay)] =
-                 demand.consumers(Capability::overlay);
-             self.last_capability = Capability::overlay;
-             return self.results[slot(Capability::overlay)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::overlay)];
-             self.last_capability = Capability::overlay;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::overlay)];
-             self.last_capability = Capability::overlay;
-             return self.owned[slot(Capability::overlay)];
-           }},
-          {Capability::visual,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::visual)];
-             self.observed_consumers[slot(Capability::visual)] =
-                 demand.consumers(Capability::visual);
-             self.last_capability = Capability::visual;
-             return self.results[slot(Capability::visual)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::visual)];
-             self.last_capability = Capability::visual;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::visual)];
-             self.last_capability = Capability::visual;
-             return self.owned[slot(Capability::visual)];
-           }},
-          {Capability::isolated_visual,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::isolated_visual)];
-             self.observed_consumers[slot(Capability::isolated_visual)] =
-                 demand.consumers(Capability::isolated_visual);
-             self.last_capability = Capability::isolated_visual;
-             return self.results[slot(Capability::isolated_visual)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::isolated_visual)];
-             self.last_capability = Capability::isolated_visual;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::isolated_visual)];
-             self.last_capability = Capability::isolated_visual;
-             return self.owned[slot(Capability::isolated_visual)];
-           }},
-          {Capability::automation,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::automation)];
-             self.observed_consumers[slot(Capability::automation)] =
-                 demand.consumers(Capability::automation);
-             self.last_capability = Capability::automation;
-             return self.results[slot(Capability::automation)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::automation)];
-             self.last_capability = Capability::automation;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::automation)];
-             self.last_capability = Capability::automation;
-             return self.owned[slot(Capability::automation)];
-           }},
-          {Capability::gamebar,
-           [](void *owner, const CapabilityDemand &demand) {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.reconcile_calls[slot(Capability::gamebar)];
-             self.observed_consumers[slot(Capability::gamebar)] =
-                 demand.consumers(Capability::gamebar);
-             self.last_capability = Capability::gamebar;
-             return self.results[slot(Capability::gamebar)];
-           },
-           [](void *owner) noexcept {
-             auto &self = *static_cast<FakeOwner *>(owner);
-             ++self.quiesce_calls[slot(Capability::gamebar)];
-             self.last_capability = Capability::gamebar;
-           },
-           [](const void *owner) noexcept {
-             auto &self = *static_cast<const FakeOwner *>(owner);
-             ++self.resource_calls[slot(Capability::gamebar)];
-             self.last_capability = Capability::gamebar;
-             return self.owned[slot(Capability::gamebar)];
-           }},
-      }};
-  return policies;
-}
+  ServiceReconcileResult reconcile_capability(const Capability capability,
+                                              const CapabilityDemand &demand) {
+    ++reconcile_calls[slot(capability)];
+    observed_consumers[slot(capability)] = demand.consumers(capability);
+    last_capability = capability;
+    return results[slot(capability)];
+  }
+  void quiesce_capability(const Capability capability) noexcept {
+    ++quiesce_calls[slot(capability)];
+    last_capability = capability;
+  }
+  RuntimeResourceStats
+  capability_resources(const Capability capability) const noexcept {
+    ++resource_calls[slot(capability)];
+    last_capability = capability;
+    return owned[slot(capability)];
+  }
+};
 
 void adapters_preserve_capability_identity_and_results() {
   FakeOwner owner;
-  CapabilityServices services(&owner, fake_policies());
+  OwnedCapabilityServices<FakeOwner> services(owner, every_capability());
   const auto registry = services.registry();
 
   for (std::size_t index = 0; index < registry.size(); ++index) {
@@ -221,29 +91,24 @@ void adapters_preserve_capability_identity_and_results() {
     expect(owner.reconcile_calls[index] == 1 &&
                owner.resource_calls[index] == 1 &&
                owner.quiesce_calls[index] == 1,
-           "each adapter operation should cross the policy exactly once");
+           "each adapter operation should reach the owner exactly once");
   }
 }
 
-void missing_policy_leaves_slot_unregistered() {
+void unserved_capability_stays_unregistered() {
   FakeOwner owner;
-  const std::array<CapabilityPolicy, 1> partial{{
-      {Capability::input,
-       [](void *, const CapabilityDemand &) { return ServiceReconcileResult{}; },
-       [](void *) noexcept {},
-       [](const void *) noexcept { return RuntimeResourceStats{}; }},
-  }};
-  CapabilityServices services(&owner, partial);
+  const std::array<Capability, 1> served{{Capability::input}};
+  OwnedCapabilityServices<FakeOwner> services(owner, served);
   const auto registry = services.registry();
   expect(registry[slot(Capability::input)] != nullptr,
-         "a provided policy should register its capability");
+         "a served capability should be registered");
   for (std::size_t index = 1; index < registry.size(); ++index)
     expect(registry[index] == nullptr,
-           "a missing policy should leave its capability unregistered");
+           "an unserved capability should stay unregistered");
 }
 
 } // namespace
 
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(adapters_preserve_capability_identity_and_results),
-    LAYERC_TEST_CASE(missing_policy_leaves_slot_unregistered))
+    LAYERC_TEST_CASE(unserved_capability_stays_unregistered))

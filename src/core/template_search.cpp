@@ -1,9 +1,10 @@
-#include "layerc/core/template_matcher.hpp"
+#include "template_matcher_internal.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,149 +13,19 @@
 namespace layerc::core {
 namespace {
 
-constexpr std::size_t minimum_mask_pixels = 64;
 constexpr std::size_t refinement_candidates = 8;
 constexpr std::size_t coarse_candidates = 32;
-constexpr std::size_t locator_sample_count = 3;
-constexpr double minimum_template_luma_variance = 4.0;
-
-std::size_t search_sample_limit(const CaptureQuality quality) noexcept {
-  if (quality == CaptureQuality::low) return 128;
-  if (quality == CaptureQuality::balanced) return 256;
-  return 512;
-}
 
 double luminance(const RgbPixel pixel) noexcept {
   return rgb_luminance(pixel.red, pixel.green, pixel.blue);
 }
 
-std::uint32_t axis_bound(const CaptureQuality quality,
-                         const TemplateImage &image) noexcept {
-  if (quality == CaptureQuality::low) return 32;
-  if (quality == CaptureQuality::balanced) return 64;
-  return std::max(image.width, image.height);
-}
-
 std::size_t comparison_budget(const CaptureQuality quality) noexcept {
-  if (quality == CaptureQuality::low) return 512U * 1024U;
-  if (quality == CaptureQuality::balanced) return 1024U * 1024U;
-  return 8U * 1024U * 1024U;
+  return quality_profile(quality).comparisons;
 }
 
 using PreparedSample = detail::TemplateMatcherSample;
 using PreparedTemplate = detail::TemplateMatcherReference;
-
-void calculate_statistics(const std::span<const PreparedSample> samples,
-                          double &mean_luma, double &luma_variance) {
-  mean_luma = 0.0;
-  luma_variance = 0.0;
-  if (samples.empty()) return;
-  for (const auto &sample : samples) mean_luma += sample.luma;
-  mean_luma /= samples.size();
-  for (const auto &sample : samples) {
-    const auto delta = sample.luma - mean_luma;
-    luma_variance += delta * delta;
-  }
-}
-
-PreparedTemplate prepare_template(const TemplateImage &image,
-                                  const CaptureQuality quality) {
-  PreparedTemplate output;
-  const auto bound = axis_bound(quality, image);
-  const double factor =
-      std::min(1.0, static_cast<double>(bound) /
-                        std::max(image.width, image.height));
-  const auto samples_x = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(image.width * factor)));
-  const auto samples_y = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(image.height * factor)));
-  output.samples.reserve(static_cast<std::size_t>(samples_x) * samples_y);
-  for (std::uint32_t row = 0; row < samples_y; ++row) {
-    const auto source_y = std::min(
-        image.height - 1,
-        static_cast<std::uint32_t>(
-            (static_cast<std::uint64_t>(row) * 2U + 1U) * image.height /
-            (static_cast<std::uint64_t>(samples_y) * 2U)));
-    for (std::uint32_t column = 0; column < samples_x; ++column) {
-      const auto source_x = std::min(
-          image.width - 1,
-          static_cast<std::uint32_t>(
-              (static_cast<std::uint64_t>(column) * 2U + 1U) * image.width /
-              (static_cast<std::uint64_t>(samples_x) * 2U)));
-      const auto index = static_cast<std::size_t>(source_y) * image.width +
-                         source_x;
-      if (image.alpha[index] == 0) continue;
-      const auto pixel = image.pixels[index];
-      output.samples.push_back(
-          {static_cast<float>((static_cast<double>(column) + 0.5) / samples_x),
-           static_cast<float>((static_cast<double>(row) + 0.5) / samples_y),
-           pixel, static_cast<float>(luminance(pixel))});
-    }
-  }
-
-  // A thin alpha mask can fall between every downsample cell. Preserve useful
-  // masked references by falling back to a bounded scan of opaque source
-  // pixels rather than incorrectly treating the template as empty.
-  if (output.samples.size() < minimum_mask_pixels) {
-    output.samples.clear();
-    const auto maximum_samples =
-        static_cast<std::size_t>(bound) * static_cast<std::size_t>(bound);
-    const auto opaque = static_cast<std::size_t>(std::count_if(
-        image.alpha.begin(), image.alpha.end(),
-        [](const std::uint8_t value) { return value != 0; }));
-    const auto keep_every =
-        std::max<std::size_t>(1, (opaque + maximum_samples - 1) /
-                                    std::max<std::size_t>(1, maximum_samples));
-    std::size_t seen{};
-    for (std::uint32_t y = 0; y < image.height; ++y) {
-      for (std::uint32_t x = 0; x < image.width; ++x) {
-        const auto index = static_cast<std::size_t>(y) * image.width + x;
-        if (image.alpha[index] == 0 || seen++ % keep_every != 0) continue;
-        const auto pixel = image.pixels[index];
-        output.samples.push_back(
-            {static_cast<float>((static_cast<double>(x) + 0.5) / image.width),
-             static_cast<float>((static_cast<double>(y) + 0.5) / image.height),
-             pixel, static_cast<float>(luminance(pixel))});
-      }
-    }
-  }
-
-  if (output.samples.empty()) return output;
-  calculate_statistics(output.samples, output.mean_luma,
-                        output.luma_variance);
-  if (output.luma_variance / output.samples.size() <
-      minimum_template_luma_variance) {
-    output.samples.clear();
-    return output;
-  }
-  const auto limit = search_sample_limit(quality);
-  if (output.samples.size() <= limit) {
-    output.search_samples = output.samples;
-  } else {
-    output.search_samples.reserve(limit);
-    for (std::size_t index = 0; index < limit; ++index) {
-      const auto source = std::min(
-          output.samples.size() - 1,
-          (index * output.samples.size() + output.samples.size() / 2U) /
-              limit);
-      output.search_samples.push_back(output.samples[source]);
-    }
-  }
-  calculate_statistics(output.search_samples, output.search_mean_luma,
-                       output.search_luma_variance);
-  output.locator_samples.reserve(locator_sample_count);
-  static_assert(locator_sample_count > 1);
-  for (std::size_t index = 0; index < locator_sample_count; ++index) {
-    const auto source = index * (output.search_samples.size() - 1U) /
-                        (locator_sample_count - 1U);
-    output.locator_samples.push_back(
-        output.search_samples[std::min(source,
-                                       output.search_samples.size() - 1U)]);
-  }
-  calculate_statistics(output.locator_samples, output.locator_mean_luma,
-                       output.locator_luma_variance);
-  return output;
-}
 
 struct Candidate {
   double structure{};
@@ -165,152 +36,23 @@ struct Candidate {
   std::uint32_t coarse_step{1};
 };
 
-double structure_score(const std::span<const PreparedSample> samples,
-                       const double reference_mean,
-                       const double reference_variance,
-                       const PixelFrameView frame, const std::uint32_t left,
-                       const std::uint32_t top, const std::uint32_t width,
-                       const std::uint32_t height) {
-  const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
-  double target_sum{};
-  double target_square_sum{};
-  double covariance{};
-  for (const auto &sample : samples) {
-    const auto x = std::min(
-        frame.width - 1,
-        left + static_cast<std::uint32_t>(sample.x * width));
-    const auto y = std::min(
-        frame.height - 1,
-        top + static_cast<std::uint32_t>(sample.y * height));
-    const auto target =
-        luminance(frame.pixels[static_cast<std::size_t>(y) * stride + x]);
-    target_sum += target;
-    target_square_sum += target * target;
-    covariance += (sample.luma - reference_mean) * target;
-  }
-  const double count = static_cast<double>(samples.size());
+// Maps a Pearson-like correlation of luminance samples to a [0,1] similarity.
+// Degenerate (near-constant) references fall back to mean-distance scoring.
+double structure_similarity(const double reference_mean,
+                            const double reference_variance,
+                            const double target_sum,
+                            const double target_square_sum,
+                            const double covariance, const double count) {
   const double target_mean = target_sum / count;
   const double target_variance =
       std::max(0.0, target_square_sum - count * target_mean * target_mean);
   if (reference_variance <= 1e-9)
     return std::clamp(
-        1.0 - std::abs(reference_mean - target_mean) / 255.0, 0.0,
-        1.0);
+        1.0 - std::abs(reference_mean - target_mean) / 255.0, 0.0, 1.0);
   if (target_variance <= 1e-9) return 0.0;
   const double correlation =
       covariance / std::sqrt(reference_variance * target_variance);
   return std::clamp((correlation + 1.0) * 0.5, 0.0, 1.0);
-}
-
-bool regions_overlap(const NormalizedRegion &left,
-                     const NormalizedRegion &right) noexcept {
-  constexpr double epsilon = 1e-12;
-  return left.x < right.x + right.width - epsilon &&
-         left.x + left.width > right.x + epsilon &&
-         left.y < right.y + right.height - epsilon &&
-         left.y + left.height > right.y + epsilon;
-}
-
-bool candidate_is_available(
-    const Candidate &candidate, const PixelFrameView frame,
-    const NormalizedRegion available_region,
-    const std::span<const NormalizedRegion> unavailable_regions) noexcept {
-  constexpr double epsilon = 1e-12;
-  const NormalizedRegion region{
-      static_cast<double>(candidate.left) / frame.width,
-      static_cast<double>(candidate.top) / frame.height,
-      static_cast<double>(candidate.width) / frame.width,
-      static_cast<double>(candidate.height) / frame.height};
-  if (region.x + epsilon < available_region.x ||
-      region.y + epsilon < available_region.y ||
-      region.x + region.width >
-          available_region.x + available_region.width + epsilon ||
-      region.y + region.height >
-          available_region.y + available_region.height + epsilon)
-    return false;
-  return std::ranges::none_of(unavailable_regions, [&](const auto &excluded) {
-    return regions_overlap(region, excluded);
-  });
-}
-
-double color_coverage(const PreparedTemplate &reference,
-                      const PixelFrameView frame, const Candidate &candidate,
-                      const std::uint8_t tolerance) {
-  const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
-  std::size_t matching{};
-  for (const auto &sample : reference.samples) {
-    const auto x = std::min(
-        frame.width - 1,
-        candidate.left +
-            static_cast<std::uint32_t>(sample.x * candidate.width));
-    const auto y = std::min(
-        frame.height - 1,
-        candidate.top +
-            static_cast<std::uint32_t>(sample.y * candidate.height));
-    const auto target =
-        frame.pixels[static_cast<std::size_t>(y) * stride + x];
-    const auto within = [tolerance](const std::uint8_t left,
-                                    const std::uint8_t right) {
-      return std::abs(static_cast<int>(left) - static_cast<int>(right)) <=
-             tolerance;
-    };
-    if (within(target.red, sample.color.red) &&
-        within(target.green, sample.color.green) &&
-        within(target.blue, sample.color.blue))
-      ++matching;
-  }
-  return static_cast<double>(matching) / reference.samples.size();
-}
-
-double locator_score(const std::span<const PreparedSample> samples,
-                     const double reference_mean,
-                     const double reference_variance,
-                     const PixelFrameView frame,
-                     const Candidate &candidate) {
-  const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
-  double target_sum{};
-  double target_square_sum{};
-  double covariance{};
-  double difference{};
-  for (const auto &sample : samples) {
-    const auto x = std::min(
-        frame.width - 1,
-        candidate.left +
-            static_cast<std::uint32_t>(sample.x * candidate.width));
-    const auto y = std::min(
-        frame.height - 1,
-        candidate.top +
-            static_cast<std::uint32_t>(sample.y * candidate.height));
-    const auto target =
-        frame.pixels[static_cast<std::size_t>(y) * stride + x];
-    const auto target_luma = luminance(target);
-    target_sum += target_luma;
-    target_square_sum += target_luma * target_luma;
-    covariance += (sample.luma - reference_mean) * target_luma;
-    difference +=
-        std::abs(static_cast<int>(target.red) - sample.color.red) +
-        std::abs(static_cast<int>(target.green) - sample.color.green) +
-        std::abs(static_cast<int>(target.blue) - sample.color.blue);
-  }
-  const double count = static_cast<double>(samples.size());
-  const double target_mean = target_sum / count;
-  const double target_variance =
-      std::max(0.0, target_square_sum - count * target_mean * target_mean);
-  double structure{};
-  if (reference_variance <= 1e-9) {
-    structure = std::clamp(
-        1.0 - std::abs(reference_mean - target_mean) / 255.0, 0.0, 1.0);
-  } else if (target_variance > 1e-9) {
-    structure = std::clamp(
-        (covariance / std::sqrt(reference_variance * target_variance) + 1.0) *
-            0.5,
-        0.0, 1.0);
-  }
-  const auto color = std::clamp(
-      1.0 - difference /
-                (count * 3.0 * 255.0),
-      0.0, 1.0);
-  return 0.5 * structure + 0.5 * color;
 }
 
 bool color_is_near(const RgbPixel left, const RgbPixel right,
@@ -321,6 +63,96 @@ bool color_is_near(const RgbPixel left, const RgbPixel right,
   };
   return within(left.red, right.red) && within(left.green, right.green) &&
          within(left.blue, right.blue);
+}
+
+template <typename Visit>
+void for_each_target_sample(const std::span<const PreparedSample> samples,
+                            const PixelFrameView frame,
+                            const Candidate &candidate, Visit &&visit) {
+  const auto stride = frame.stride();
+  for (const auto &sample : samples) {
+    const auto x = std::min(frame.width - 1,
+        candidate.left + static_cast<std::uint32_t>(sample.x * candidate.width));
+    const auto y = std::min(frame.height - 1,
+        candidate.top + static_cast<std::uint32_t>(sample.y * candidate.height));
+    visit(sample, frame.pixels[static_cast<std::size_t>(y) * stride + x]);
+  }
+}
+
+double structure_score(const std::span<const PreparedSample> samples,
+                       const double reference_mean,
+                       const double reference_variance,
+                       const PixelFrameView frame, const std::uint32_t left,
+                       const std::uint32_t top, const std::uint32_t width,
+                       const std::uint32_t height) {
+  double target_sum{};
+  double target_square_sum{};
+  double covariance{};
+  for_each_target_sample(samples, frame, {0.0, left, top, width, height},
+                         [&](const auto &sample, const auto pixel) {
+    const auto target = luminance(pixel);
+    target_sum += target;
+    target_square_sum += target * target;
+    covariance += (sample.luma - reference_mean) * target;
+  });
+  return structure_similarity(reference_mean, reference_variance, target_sum,
+                              target_square_sum, covariance,
+                              static_cast<double>(samples.size()));
+}
+
+bool candidate_is_available(
+    const Candidate &candidate, const PixelFrameView frame,
+    const NormalizedRegion available_region,
+    const std::span<const NormalizedRegion> unavailable_regions) noexcept {
+  const NormalizedRegion region{
+      static_cast<double>(candidate.left) / frame.width,
+      static_cast<double>(candidate.top) / frame.height,
+      static_cast<double>(candidate.width) / frame.width,
+      static_cast<double>(candidate.height) / frame.height};
+  if (!contains(available_region, region)) return false;
+  return std::ranges::none_of(unavailable_regions, [&](const auto &excluded) {
+    return overlaps(region, excluded);
+  });
+}
+
+double color_coverage(const PreparedTemplate &reference,
+                      const PixelFrameView frame, const Candidate &candidate,
+                      const std::uint8_t tolerance) {
+  std::size_t matching{};
+  for_each_target_sample(reference.samples, frame, candidate,
+                         [&](const auto &sample, const auto target) {
+    if (color_is_near(target, sample.color, tolerance)) ++matching;
+  });
+  return static_cast<double>(matching) / reference.samples.size();
+}
+
+double locator_score(const std::span<const PreparedSample> samples,
+                     const double reference_mean,
+                     const double reference_variance,
+                     const PixelFrameView frame,
+                     const Candidate &candidate) {
+  double target_sum{};
+  double target_square_sum{};
+  double covariance{};
+  double difference{};
+  for_each_target_sample(samples, frame, candidate,
+                         [&](const auto &sample, const auto target) {
+    const auto target_luma = luminance(target);
+    target_sum += target_luma;
+    target_square_sum += target_luma * target_luma;
+    covariance += (sample.luma - reference_mean) * target_luma;
+    difference +=
+        std::abs(static_cast<int>(target.red) - sample.color.red) +
+        std::abs(static_cast<int>(target.green) - sample.color.green) +
+        std::abs(static_cast<int>(target.blue) - sample.color.blue);
+  });
+  const double count = static_cast<double>(samples.size());
+  const double structure =
+      structure_similarity(reference_mean, reference_variance, target_sum,
+                           target_square_sum, covariance, count);
+  const auto color = std::clamp(
+      1.0 - difference / (count * 3.0 * 255.0), 0.0, 1.0);
+  return 0.5 * structure + 0.5 * color;
 }
 
 struct RenderedSize {
@@ -382,90 +214,6 @@ std::vector<RenderedSize> rendered_sizes(
 }
 
 } // namespace
-
-bool TemplateImage::valid() const noexcept {
-  if (width == 0 || height == 0 || width > 512 || height > 512 ||
-      pixels.size() != static_cast<std::size_t>(width) * height ||
-      alpha.size() != pixels.size())
-    return false;
-  return static_cast<std::size_t>(std::count_if(
-             alpha.begin(), alpha.end(),
-             [](const std::uint8_t value) { return value != 0; })) >=
-         minimum_mask_pixels;
-}
-
-bool template_image_has_structure(const TemplateImage &image) noexcept {
-  if (!image.valid()) return false;
-  double mean{};
-  double squared_delta{};
-  std::size_t count{};
-  for (std::size_t index = 0; index < image.pixels.size(); ++index) {
-    if (image.alpha[index] == 0) continue;
-    ++count;
-    const double value = luminance(image.pixels[index]);
-    const double delta = value - mean;
-    mean += delta / static_cast<double>(count);
-    squared_delta += delta * (value - mean);
-  }
-  return count >= minimum_mask_pixels &&
-         squared_delta / static_cast<double>(count) >=
-             minimum_template_luma_variance;
-}
-
-TemplateImage compact_template_image(const TemplateImage &image,
-                                     const CaptureQuality quality) {
-  if (!image.valid() || quality == CaptureQuality::exact) return image;
-  const auto bound = axis_bound(quality, image);
-  if (std::max(image.width, image.height) <= bound) return image;
-  const double factor = static_cast<double>(bound) /
-                        std::max(image.width, image.height);
-  TemplateImage compact;
-  compact.asset_sha256 = image.asset_sha256;
-  compact.width = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(image.width * factor)));
-  compact.height = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(image.height * factor)));
-  const auto count = static_cast<std::size_t>(compact.width) * compact.height;
-  compact.pixels.resize(count);
-  compact.alpha.assign(count, 0);
-  std::vector<std::uint64_t> red(count);
-  std::vector<std::uint64_t> green(count);
-  std::vector<std::uint64_t> blue(count);
-  std::vector<std::uint32_t> samples(count);
-  for (std::uint32_t y = 0; y < image.height; ++y) {
-    const auto target_y = std::min(
-        compact.height - 1,
-        static_cast<std::uint32_t>(static_cast<std::uint64_t>(y) *
-                                   compact.height / image.height));
-    for (std::uint32_t x = 0; x < image.width; ++x) {
-      const auto source = static_cast<std::size_t>(y) * image.width + x;
-      if (image.alpha[source] == 0) continue;
-      const auto target_x = std::min(
-          compact.width - 1,
-          static_cast<std::uint32_t>(static_cast<std::uint64_t>(x) *
-                                     compact.width / image.width));
-      const auto target =
-          static_cast<std::size_t>(target_y) * compact.width + target_x;
-      red[target] += image.pixels[source].red;
-      green[target] += image.pixels[source].green;
-      blue[target] += image.pixels[source].blue;
-      compact.alpha[target] = std::max(compact.alpha[target],
-                                       image.alpha[source]);
-      ++samples[target];
-    }
-  }
-  for (std::size_t index = 0; index < count; ++index) {
-    if (samples[index] == 0) continue;
-    compact.pixels[index] = {
-        static_cast<std::uint8_t>(red[index] / samples[index]),
-        static_cast<std::uint8_t>(green[index] / samples[index]),
-        static_cast<std::uint8_t>(blue[index] / samples[index])};
-  }
-  // Very sparse masks can collapse below the 64-sample safety floor. Retain
-  // the original only for that exceptional reference so matching remains
-  // correct rather than silently weakening its alpha mask.
-  return compact.valid() ? compact : image;
-}
 
 namespace {
 
@@ -638,7 +386,7 @@ bool ReferenceSearchContext::search_anchors() {
                    static_cast<double>(search_pixels) /
                    static_cast<double>(anchor_allowance)))));
   const auto &anchor = reference.locator_samples.front();
-  const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
+  const auto stride = frame.stride();
   bool exhausted = anchor_allowance == 0;
   for (std::uint32_t y = top; y < bottom && !exhausted; y += anchor_step) {
     for (std::uint32_t x = left; x < right; x += anchor_step) {
@@ -809,27 +557,26 @@ bool ReferenceSearchContext::run() {
 
 } // namespace
 
+struct CpuTemplateMatcher::Impl {
+  std::unordered_map<std::string, detail::TemplateMatcherReference> prepared;
+};
+
+CpuTemplateMatcher::CpuTemplateMatcher() : impl_(std::make_unique<Impl>()) {}
+CpuTemplateMatcher::~CpuTemplateMatcher() = default;
+CpuTemplateMatcher::CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept = default;
+CpuTemplateMatcher &CpuTemplateMatcher::operator=(CpuTemplateMatcher &&) noexcept = default;
+
 TemplateMatchResult CpuTemplateMatcher::evaluate(
     const TemplateState &state, const std::span<const TemplateImage> images,
     const PixelFrameView frame, const CaptureQuality quality,
     const NormalizedRegion available_region,
     const std::span<const NormalizedRegion> unavailable_regions) {
+  if (!impl_) impl_ = std::make_unique<Impl>();
   TemplateMatchResult result;
   if (!frame.valid()) return result;
-  const auto left = static_cast<std::uint32_t>(std::clamp(
-      std::floor(state.search_region.x * frame.width), 0.0,
-      static_cast<double>(frame.width)));
-  const auto top = static_cast<std::uint32_t>(std::clamp(
-      std::floor(state.search_region.y * frame.height), 0.0,
-      static_cast<double>(frame.height)));
-  const auto right = static_cast<std::uint32_t>(std::clamp(
-      std::ceil((state.search_region.x + state.search_region.width) *
-                frame.width),
-      0.0, static_cast<double>(frame.width)));
-  const auto bottom = static_cast<std::uint32_t>(std::clamp(
-      std::ceil((state.search_region.y + state.search_region.height) *
-                frame.height),
-      0.0, static_cast<double>(frame.height)));
+  const auto &region = state.search_region;
+  const auto [left, top, right, bottom] =
+      to_pixel_bounds(region, frame.width, frame.height);
   if (right <= left || bottom <= top) return result;
   const NormalizedRegion search_region{
       static_cast<double>(left) / frame.width,
@@ -837,7 +584,7 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
       static_cast<double>(right - left) / frame.width,
       static_cast<double>(bottom - top) / frame.height};
   result.search_region_available =
-      regions_overlap(search_region, available_region);
+      overlaps(search_region, available_region);
 
   const auto budget = comparison_budget(quality);
   std::size_t reference_index{};
@@ -848,10 +595,10 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
     if (image == images.end() || !image->valid()) continue;
     const auto key = definition.asset_sha256 + ":" +
                      std::to_string(static_cast<unsigned>(quality));
-    auto [prepared_it, inserted] = prepared_.try_emplace(key);
+    auto [prepared_it, inserted] = impl_->prepared.try_emplace(key);
     if (inserted) {
       const auto compact = compact_template_image(*image, quality);
-      prepared_it->second = prepare_template(compact, quality);
+      prepared_it->second = detail::prepare_template(compact, quality);
     }
     const auto &reference = prepared_it->second;
     if (reference.samples.empty() || reference.search_samples.empty() ||
@@ -869,6 +616,8 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
   return result;
 }
 
-void CpuTemplateMatcher::clear() { prepared_.clear(); }
+void CpuTemplateMatcher::clear() {
+  if (impl_) impl_->prepared.clear();
+}
 
 } // namespace layerc::core

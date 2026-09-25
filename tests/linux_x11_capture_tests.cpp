@@ -513,17 +513,14 @@ int run_linux_x11_capture_tests(const int argc, char **argv) {
   XFreeGC(raw, gc);
   XSync(raw, False);
 
-  std::printf("x11 capture tests: %s\n", passed ? "PASS" : "FAIL");
   return passed ? 0 : 1;
 }
 
 int main(const int argc, char **argv) {
-  return layerc::test::run({{"linux_x11_capture_tests", [argc, argv] {
-                              const int result =
-                                  run_linux_x11_capture_tests(argc, argv);
-                              if (result == skip_code) layerc::test::skip();
-                              layerc::test::expect(
-                                  result == 0,
-                                  "the X11 capture program should succeed");
-                            }}});
+  return layerc::test::run({{"composite_damage_and_direct_capture", [argc, argv] {
+    layerc::test::require_x11();
+    const int result = run_linux_x11_capture_tests(argc, argv);
+    if (result == skip_code) layerc::test::skip();
+    layerc::test::expect(result == 0, "the X11 capture program should succeed");
+  }}});
 }

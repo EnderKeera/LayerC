@@ -26,6 +26,9 @@ struct WindowCandidate {
 [[nodiscard]] std::optional<WindowCandidate>
 describe_attachable_window(HWND window);
 [[nodiscard]] std::optional<WindowCandidate> window_at_point(POINT point);
+// `filename` next to the current executable; empty if the module path is
+// unavailable.
+[[nodiscard]] std::filesystem::path sibling_image_path(const wchar_t *filename);
 // True when the process image path is equivalent to `expected`.
 [[nodiscard]] bool process_image_equals(HANDLE process,
                                         const std::filesystem::path &expected);

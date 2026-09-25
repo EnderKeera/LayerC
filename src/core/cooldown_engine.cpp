@@ -27,12 +27,13 @@ earliest_deadline(const std::vector<TimePoint> &deadlines) noexcept {
 
 // Single owner for "time until charged" so the label and progress bar
 // cannot disagree about the remaining time.
-[[nodiscard]] Milliseconds remaining_ms(const CooldownState &state,
-                                        const TimePoint now) noexcept {
-  if (!state.next_charge_at.has_value()) return Milliseconds::zero();
+[[nodiscard]] Milliseconds
+remaining_ms(const std::optional<TimePoint> &next_charge_at,
+             const TimePoint now) noexcept {
+  if (!next_charge_at.has_value()) return Milliseconds::zero();
   return std::max(
       Milliseconds::zero(),
-      std::chrono::duration_cast<Milliseconds>(*state.next_charge_at - now));
+      std::chrono::duration_cast<Milliseconds>(*next_charge_at - now));
 }
 
 } // namespace
@@ -42,7 +43,7 @@ std::string cooldown_status_text(const CooldownDefinition &definition,
                                  const TimePoint now) {
   std::string label = definition.name;
   if (state.next_charge_at.has_value()) {
-    const auto remaining = remaining_ms(state, now);
+    const auto remaining = remaining_ms(state.next_charge_at, now);
     const auto tenths = (remaining.count() + 99) / 100;
     label += "  " + std::to_string(tenths / 10) + "." +
              std::to_string(tenths % 10) + "s";
@@ -59,7 +60,7 @@ double cooldown_progress(const CooldownDefinition &definition,
                          const TimePoint now) noexcept {
   if (!state.next_charge_at.has_value()) return 1.0;
   if (definition.duration <= Milliseconds::zero()) return 0.0;
-  const auto remaining = remaining_ms(state, now);
+  const auto remaining = remaining_ms(state.next_charge_at, now);
   return std::clamp(static_cast<double>(remaining.count()) /
                         static_cast<double>(definition.duration.count()),
                     0.0, 1.0);
@@ -193,10 +194,11 @@ std::vector<std::string> CooldownEngine::trigger_many_with_propagation(
     auto *entry = entry_for(id);
     if (entry == nullptr || !visited_entries.insert(entry).second)
       continue;
-    if (origin_token != 0 && entry->last_trigger_origin == origin_token)
-      continue;
-    if (origin_token != 0)
+    if (origin_token != 0) {
+      if (entry->last_trigger_origin == origin_token)
+        continue;
       entry->last_trigger_origin = origin_token;
+    }
     if (!trigger_entry(*entry, now))
       continue;
 
@@ -371,11 +373,7 @@ CooldownEngine::remaining(const std::string_view cooldown_id,
   if (entry == nullptr)
     return std::nullopt;
   update_entry(*entry, now);
-  if (!entry->next_charge_at)
-    return Milliseconds::zero();
-  return std::max(
-      Milliseconds::zero(),
-      std::chrono::duration_cast<Milliseconds>(*entry->next_charge_at - now));
+  return remaining_ms(entry->next_charge_at, now);
 }
 
 void CooldownEngine::update_entry(Entry &entry, const TimePoint now) {
@@ -387,11 +385,7 @@ void CooldownEngine::update_entry(Entry &entry, const TimePoint now) {
     entry.available_charges = std::min(
         entry.definition.max_charges,
         entry.available_charges + static_cast<std::uint32_t>(recovered));
-    if (entry.recovery_deadlines.empty()) {
-      entry.next_charge_at.reset();
-    } else {
-      entry.next_charge_at = earliest_deadline(entry.recovery_deadlines);
-    }
+    entry.next_charge_at = earliest_deadline(entry.recovery_deadlines);
     return;
   }
 

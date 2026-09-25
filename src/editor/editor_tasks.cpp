@@ -75,53 +75,50 @@ void EditorWindow::layout_tasks(const HWND window) {
   const int width = std::max(1L, client.right - client.left);
   const int height = std::max(1L, client.bottom - client.top);
   const int dpi = window_base_dpi(window);
-  const auto scaled = [dpi](const int value) { return dpi_scaled(value, dpi); };
-  const auto move = [window](const int id, const int x, const int y,
-                             const int control_width,
-                             const int control_height) {
-    move_control(window, id, x, y, control_width, control_height);
-  };
+  const DialogLayout ui(window, dpi);
 
-  const int margin = scaled(9);
-  const int list_top = scaled(31);
-  const int button_height = scaled(23);
-  const int detail_height = scaled(18);
-  const int gap = scaled(8);
+  const int margin = ui.scaled(9);
+  const int list_top = ui.scaled(31);
+  const int button_height = ui.scaled(23);
+  const int detail_height = ui.scaled(18);
+  const int gap = ui.scaled(8);
   const int button_top =
-      std::max(list_top + scaled(80),
+      std::max(list_top + ui.scaled(80),
                height - margin - detail_height - gap - button_height);
   const int list_width = std::max(1, width - margin * 2);
-  move(IDC_TASK_LIST, margin, list_top, list_width,
-       std::max(scaled(80), button_top - gap - list_top));
+  ui.move(IDC_TASK_LIST, margin, list_top, list_width,
+          std::max(ui.scaled(80), button_top - gap - list_top));
 
   int button_left = margin;
+  // Advances by scaled(width + 7), not scaled(width) + gap.
   const auto move_button = [&](const int id, const int button_width) {
-    move(id, button_left, button_top, scaled(button_width), button_height);
-    button_left += scaled(button_width + 7);
+    ui.move(id, button_left, button_top, ui.scaled(button_width),
+            button_height);
+    button_left += ui.scaled(button_width + 7);
   };
   move_button(IDC_PICK_WINDOW, 84);
   move_button(IDC_USE_TASK, 110);
   move_button(IDC_REFRESH_TASKS, 64);
   move_button(IDC_TASK_ACTIONS, 68);
-  move(IDC_TASK_DETAIL, margin, button_top + button_height + gap, list_width,
-       detail_height);
+  ui.move(IDC_TASK_DETAIL, margin, button_top + button_height + gap, list_width,
+          detail_height);
 
   RECT list_client{};
   GetClientRect(task_picker_.list(), &list_client);
   const int scrollbar =
       GetSystemMetricsForDpi(SM_CXVSCROLL, static_cast<UINT>(dpi));
   const int available = std::max(
-      scaled(300), static_cast<int>(list_client.right) - scrollbar - scaled(3));
-  const int pid_width = std::clamp(scaled(62), scaled(54), available / 4);
+      ui.scaled(300), static_cast<int>(list_client.right) - scrollbar - ui.scaled(3));
+  const int pid_width = std::clamp(ui.scaled(62), ui.scaled(54), available / 4);
   const int process_width =
-      std::clamp(available * 30 / 100, scaled(125), scaled(230));
+      std::clamp(available * 30 / 100, ui.scaled(125), ui.scaled(230));
   const int window_width =
-      std::max(scaled(130), available - process_width - pid_width);
+      std::max(ui.scaled(130), available - process_width - pid_width);
   ListView_SetColumnWidth(task_picker_.list(), 0, process_width);
   ListView_SetColumnWidth(task_picker_.list(), 1, window_width);
   ListView_SetColumnWidth(
       task_picker_.list(), 2,
-      std::max(scaled(54), available - process_width - window_width));
+      std::max(ui.scaled(54), available - process_width - window_width));
 }
 
 void EditorWindow::refresh_tasks() {
@@ -162,12 +159,8 @@ void EditorWindow::refresh_tasks() {
 }
 
 HWND EditorWindow::selected_task_window() const {
-  if (task_picker_.list() == nullptr)
-    return nullptr;
-  const int row = ListView_GetNextItem(task_picker_.list(), -1, LVNI_SELECTED);
-  return row >= 0 && static_cast<std::size_t>(row) < task_picker_.candidates().size()
-             ? task_picker_.candidates()[static_cast<std::size_t>(row)].window
-             : nullptr;
+  const auto *candidate = selected_task();
+  return candidate == nullptr ? nullptr : candidate->window;
 }
 
 const layerc::platform::WindowCandidate *EditorWindow::selected_task() const {
@@ -265,8 +258,8 @@ void EditorWindow::begin_picker() {
     cancel_picker();
     return;
   }
-  task_picker_.picking() = true;
-  task_picker_.was_visible() = task_picker_.window() != nullptr && IsWindowVisible(task_picker_.window());
+  task_picker_.begin_pick(task_picker_.window() != nullptr &&
+                          IsWindowVisible(task_picker_.window()));
   if (task_picker_.was_visible())
     ShowWindow(task_picker_.window(), SW_HIDE);
   SetFocus(shell_.window());
@@ -293,13 +286,12 @@ void EditorWindow::finish_picker() {
       set_status(L"The picked window does not match this profile.");
       return;
     }
-    if (task_picker_.awaiting_calibration()) {
-      task_picker_.clear_request();
+    const bool calibrate = task_picker_.awaiting_calibration();
+    task_picker_.clear_request();
+    if (calibrate)
       launch_calibration(candidate->window);
-    } else {
-      task_picker_.clear_request();
+    else
       begin_edit_on_window(candidate->window);
-    }
     return;
   }
   apply_task(*candidate);
@@ -308,12 +300,11 @@ void EditorWindow::finish_picker() {
 void EditorWindow::cancel_picker() {
   if (!task_picker_.picking())
     return;
-  task_picker_.picking() = false;
   if (GetCapture() == shell_.window())
     ReleaseCapture();
   if (task_picker_.was_visible() && task_picker_.window() != nullptr)
     ShowWindow(task_picker_.window(), SW_SHOWNORMAL);
-  task_picker_.was_visible() = false;
+  task_picker_.end_pick();
 }
 
 LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,

@@ -70,6 +70,9 @@ void DaemonApp::on_overlay_event(const DWORD event, const HWND window) {
     refresh_game_windows();
   else if (event == EVENT_OBJECT_LOCATIONCHANGE)
     sync_overlay_location(window);
+  // WinEvents also arrive inside modal loops (tray menu), which bypass the
+  // run-loop flush.
+  flush_overlays();
 }
 
 void DaemonApp::sync_overlay_location(const HWND changed_window) {
@@ -92,7 +95,7 @@ void DaemonApp::sync_overlay_location(const HWND changed_window) {
   const bool affects_edit =
       live_edit_host_.session() != nullptr && live_edit_host_.session()->target == changed_root;
   if (affects_runtime || affects_edit) {
-    update_overlays();
+    mark_overlays_dirty();
     update_edit_overlays();
   }
 }
@@ -124,7 +127,7 @@ void DaemonApp::reconcile_overlay_runtime() {
     if (session != nullptr)
       session->overlays.ensure(session->profile, capture_exclusion_);
   }
-  update_overlays();
+  mark_overlays_dirty();
 }
 
 void DaemonApp::quiesce_overlay_runtime() noexcept {
@@ -138,7 +141,19 @@ void DaemonApp::quiesce_overlay_runtime() noexcept {
   }
 }
 
-void DaemonApp::update_overlays() {
+void DaemonApp::mark_overlays_dirty() noexcept { overlays_dirty_ = true; }
+
+void DaemonApp::flush_overlays() {
+  if (!overlays_dirty_)
+    return;
+  overlays_dirty_ = false;
+  // WM_DESTROY quiesces the runtime; never render after that.
+  if (shutting_down_)
+    return;
+  render_overlays();
+}
+
+void DaemonApp::render_overlays() {
   const auto now = layerc::core::MonotonicClock::now();
   publish_companion_snapshots(now);
   bool has_running_cooldown{};
@@ -189,32 +204,21 @@ void DaemonApp::update_overlays() {
 }
 
 void DaemonApp::publish_companion_snapshots(const layerc::core::TimePoint now) {
-  if (companion_host_.transport().wait_handle() == nullptr) {
-    companion_host_.bridge().clear_snapshot();
+  if (companion_host_.transport().wait_handle() == nullptr)
     return;
-  }
   const auto foreground = current_companion_sessions();
-  if (foreground.empty()) {
-    companion_host_.bridge().clear_snapshot();
-  } else {
-    auto *session = foreground.front();
-    if (session != nullptr) {
-      session->cooldowns.snapshot(now, session->snapshot_buffer);
-      const auto session_key =
-          layerc::platform::window_session_key(session->game_window);
-      const auto snapshot =
-          layerc::gamebar::GameBarBridge::create_session_snapshot(
-              session->profile.id, session_key, session->profile.panels,
-              session->profile.cooldowns, session->snapshot_buffer,
-              session->modules.companion.profile, now);
-      companion_host_.bridge().update_snapshot(snapshot);
-      if (const auto json = companion_host_.bridge().latest_snapshot_json(now);
-          json.has_value())
-        (void)companion_host_.transport().publish(*json);
-    } else {
-      companion_host_.bridge().clear_snapshot();
-    }
-  }
+  auto *session = foreground.empty() ? nullptr : foreground.front();
+  if (session == nullptr)
+    return;
+  session->cooldowns.snapshot(now, session->snapshot_buffer);
+  const auto session_key =
+      layerc::platform::window_session_key(session->game_window);
+  const auto json = layerc::core::build_companion_snapshot(
+      session->profile.id, session_key, session->profile.panels,
+      session->profile.cooldowns, session->snapshot_buffer,
+      session->modules.companion.profile, now);
+  if (!json.empty())
+    (void)companion_host_.transport().publish(json);
 }
 
 void DaemonApp::poll_gamebar_transport() {
@@ -238,11 +242,9 @@ bool DaemonApp::apply_companion_preferences(const std::string_view json) {
     if (!layerc::platform::may_write_primary(source.modules.visual.state) ||
         !layerc::platform::may_write_primary(source.modules.automation.state))
       return false;
-    if (!layerc::platform::write_profile_bundle(
-            source.path, source.profile, source.modules.visual.profile,
-            source.modules.automation.profile, *profile))
-      return false;
-    return true;
+    return layerc::platform::write_profile_bundle(
+        source.path, source.profile, source.modules.visual.profile,
+        source.modules.automation.profile, *profile);
   }
   return false;
 }

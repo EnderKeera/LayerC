@@ -16,11 +16,7 @@ HWND field_control(const ProfileFieldContext &context, const int id) {
 
 bool bounded_decimal(const std::wstring &text, const std::uint32_t minimum,
                      const std::uint32_t maximum) {
-  if (text.empty()) return false;
-  wchar_t *parsed_end{};
-  const unsigned long parsed = wcstoul(text.c_str(), &parsed_end, 10);
-  return parsed_end != text.c_str() && parsed_end != nullptr &&
-         *parsed_end == L'\0' && parsed >= minimum && parsed <= maximum;
+  return parse_bounded(text, minimum, maximum).has_value();
 }
 
 bool field_owner_available(const ProfileFieldContext &context,
@@ -38,191 +34,267 @@ bool field_owner_available(const ProfileFieldContext &context,
 
 const std::array kProfileFields{
     ProfileFieldBinding{
-        IDC_PROFILE_NAME, EN_CHANGE, ProfileFieldOwner::profile,
-        ProfileFieldChange::text, false, true,
-        +[](ProfileFieldContext &context) {
-          context.profile.name =
-              to_utf8(control_text(field_control(context, IDC_PROFILE_NAME)));
-        },
-        +[](const ProfileFieldContext &context) {
-          set_text(field_control(context, IDC_PROFILE_NAME),
-                   to_wide(context.profile.name));
-        },
-        +[](const ProfileFieldContext &context) {
-          return !control_text(field_control(context, IDC_PROFILE_NAME)).empty();
-        }},
+        .control_id = IDC_PROFILE_NAME,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::profile,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.profile.name =
+                  to_utf8(control_text(field_control(context, IDC_PROFILE_NAME)));
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              set_text(field_control(context, IDC_PROFILE_NAME),
+                       to_wide(context.profile.name));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return !control_text(field_control(context, IDC_PROFILE_NAME))
+                          .empty();
+            }},
     ProfileFieldBinding{
-        IDC_PROFILE_ID, EN_CHANGE, ProfileFieldOwner::profile,
-        ProfileFieldChange::text, false, true,
-        +[](ProfileFieldContext &context) {
-          context.profile.id =
-              to_utf8(control_text(field_control(context, IDC_PROFILE_ID)));
-        },
-        +[](const ProfileFieldContext &context) {
-          set_text(field_control(context, IDC_PROFILE_ID),
-                   to_wide(context.profile.id));
-        },
-        +[](const ProfileFieldContext &context) {
-          return !control_text(field_control(context, IDC_PROFILE_ID)).empty();
-        }},
+        .control_id = IDC_PROFILE_ID,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::profile,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.profile.id =
+                  to_utf8(control_text(field_control(context, IDC_PROFILE_ID)));
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              set_text(field_control(context, IDC_PROFILE_ID),
+                       to_wide(context.profile.id));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return !control_text(field_control(context, IDC_PROFILE_ID))
+                          .empty();
+            }},
     ProfileFieldBinding{
-        IDC_COOLDOWN_NAME, EN_CHANGE, ProfileFieldOwner::cooldown,
-        ProfileFieldChange::text, true, true,
-        +[](ProfileFieldContext &context) {
-          context.cooldown->name =
-              to_utf8(control_text(field_control(context, IDC_COOLDOWN_NAME)));
-        },
-        +[](const ProfileFieldContext &context) {
-          set_text(field_control(context, IDC_COOLDOWN_NAME),
-                   context.cooldown == nullptr ? L""
-                                               : to_wide(context.cooldown->name));
-        },
-        +[](const ProfileFieldContext &context) {
-          return context.cooldown != nullptr &&
-                 !control_text(field_control(context, IDC_COOLDOWN_NAME)).empty();
-        }},
+        .control_id = IDC_COOLDOWN_NAME,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::cooldown,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = true,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.cooldown->name =
+                  to_utf8(control_text(field_control(context, IDC_COOLDOWN_NAME)));
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              set_text(field_control(context, IDC_COOLDOWN_NAME),
+                       context.cooldown == nullptr ? L""
+                                                   : to_wide(context.cooldown->name));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return context.cooldown != nullptr &&
+                     !control_text(field_control(context, IDC_COOLDOWN_NAME))
+                          .empty();
+            }},
     ProfileFieldBinding{
-        IDC_COOLDOWN_DURATION, EN_CHANGE, ProfileFieldOwner::cooldown,
-        ProfileFieldChange::text, true, true,
-        +[](ProfileFieldContext &context) {
-          if (const auto duration = parse_duration_ms(
-                  control_text(field_control(context, IDC_COOLDOWN_DURATION))))
-            context.cooldown->duration = *duration;
-        },
-        +[](const ProfileFieldContext &context) {
-          set_text(field_control(context, IDC_COOLDOWN_DURATION),
-                   context.cooldown == nullptr
-                       ? L""
-                       : duration_seconds_text(context.cooldown->duration));
-        },
-        +[](const ProfileFieldContext &context) {
-          return context.cooldown != nullptr &&
-                 parse_duration_ms(control_text(
-                     field_control(context, IDC_COOLDOWN_DURATION)))
-                     .has_value();
-        }},
-    ProfileFieldBinding{
-        IDC_COOLDOWN_CHARGES, EN_CHANGE, ProfileFieldOwner::cooldown,
-        ProfileFieldChange::text, false, true,
-        +[](ProfileFieldContext &context) {
-          context.cooldown->max_charges = parse_uint(
-              control_text(field_control(context, IDC_COOLDOWN_CHARGES)),
-              context.cooldown->max_charges);
-        },
-        +[](const ProfileFieldContext &context) {
-          set_text(field_control(context, IDC_COOLDOWN_CHARGES),
-                   context.cooldown == nullptr
-                       ? L""
-                       : std::to_wstring(context.cooldown->max_charges));
-        },
-        +[](const ProfileFieldContext &context) {
-          return context.cooldown != nullptr &&
-                 bounded_decimal(
-                     control_text(field_control(context, IDC_COOLDOWN_CHARGES)),
-                     1, 99);
-        }},
-    ProfileFieldBinding{
-        IDC_COOLDOWN_RETRIGGER, CBN_SELCHANGE, ProfileFieldOwner::cooldown,
-        ProfileFieldChange::immediate, false, false,
-        +[](ProfileFieldContext &context) {
-          const auto selection = SendMessageW(
-              field_control(context, IDC_COOLDOWN_RETRIGGER), CB_GETCURSEL, 0, 0);
-          if (selection >= 0 && selection <= 1)
-            context.cooldown->retrigger =
-                static_cast<layerc::core::RetriggerPolicy>(selection);
-        },
-        +[](const ProfileFieldContext &context) {
-          SendMessageW(field_control(context, IDC_COOLDOWN_RETRIGGER),
-                       CB_SETCURSEL,
+        .control_id = IDC_COOLDOWN_DURATION,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::cooldown,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = true,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              if (const auto duration = parse_duration_ms(
+                      control_text(field_control(context, IDC_COOLDOWN_DURATION))))
+                context.cooldown->duration = *duration;
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              set_text(field_control(context, IDC_COOLDOWN_DURATION),
                        context.cooldown == nullptr
-                           ? static_cast<WPARAM>(-1)
-                           : static_cast<WPARAM>(context.cooldown->retrigger),
-                       0);
-        },
-        +[](const ProfileFieldContext &) { return true; }},
+                           ? L""
+                           : duration_seconds_text(context.cooldown->duration));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return context.cooldown != nullptr &&
+                     parse_duration_ms(control_text(
+                         field_control(context, IDC_COOLDOWN_DURATION)))
+                         .has_value();
+            }},
     ProfileFieldBinding{
-        IDC_COOLDOWN_RECOVERY, CBN_SELCHANGE, ProfileFieldOwner::cooldown,
-        ProfileFieldChange::immediate, false, false,
-        +[](ProfileFieldContext &context) {
-          const auto selection = SendMessageW(
-              field_control(context, IDC_COOLDOWN_RECOVERY), CB_GETCURSEL, 0, 0);
-          if (selection >= 0 && selection <= 2)
-            context.cooldown->recovery =
-                static_cast<layerc::core::RecoveryMode>(selection);
-        },
-        +[](const ProfileFieldContext &context) {
-          SendMessageW(field_control(context, IDC_COOLDOWN_RECOVERY),
-                       CB_SETCURSEL,
+        .control_id = IDC_COOLDOWN_CHARGES,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::cooldown,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.cooldown->max_charges = parse_uint(
+                  control_text(field_control(context, IDC_COOLDOWN_CHARGES)),
+                  context.cooldown->max_charges);
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              set_text(field_control(context, IDC_COOLDOWN_CHARGES),
                        context.cooldown == nullptr
-                           ? static_cast<WPARAM>(-1)
-                           : static_cast<WPARAM>(context.cooldown->recovery),
-                       0);
-        },
-        +[](const ProfileFieldContext &) { return true; }},
+                           ? L""
+                           : std::to_wstring(context.cooldown->max_charges));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return context.cooldown != nullptr &&
+                     bounded_decimal(
+                         control_text(field_control(context, IDC_COOLDOWN_CHARGES)),
+                         1, 99);
+            }},
     ProfileFieldBinding{
-        IDC_BAR_WIDTH, EN_CHANGE, ProfileFieldOwner::panel,
-        ProfileFieldChange::text, false, true,
-        +[](ProfileFieldContext &context) {
-          context.panel->bar.width = parse_uint(
-              control_text(field_control(context, IDC_BAR_WIDTH)),
-              context.panel->bar.width);
-        },
-        +[](const ProfileFieldContext &context) {
-          if (context.panel != nullptr)
-            set_text(field_control(context, IDC_BAR_WIDTH),
-                     std::to_wstring(context.panel->bar.width));
-        },
-        +[](const ProfileFieldContext &context) {
-          return context.panel == nullptr ||
-                 bounded_decimal(
-                     control_text(field_control(context, IDC_BAR_WIDTH)), 40,
-                     1200);
-        }},
+        .control_id = IDC_COOLDOWN_RETRIGGER,
+        .notification = CBN_SELCHANGE,
+        .owner = ProfileFieldOwner::cooldown,
+        .change = ProfileFieldChange::immediate,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = false,
+        .read =
+            +[](ProfileFieldContext &context) {
+              const auto selection = SendMessageW(
+                  field_control(context, IDC_COOLDOWN_RETRIGGER), CB_GETCURSEL, 0, 0);
+              if (selection >= 0 && selection <= 1)
+                context.cooldown->retrigger =
+                    static_cast<layerc::core::RetriggerPolicy>(selection);
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              SendMessageW(field_control(context, IDC_COOLDOWN_RETRIGGER),
+                           CB_SETCURSEL,
+                           context.cooldown == nullptr
+                               ? static_cast<WPARAM>(-1)
+                               : static_cast<WPARAM>(context.cooldown->retrigger),
+                           0);
+            },
+        .valid = +[](const ProfileFieldContext &) { return true; }},
     ProfileFieldBinding{
-        IDC_BAR_HEIGHT, EN_CHANGE, ProfileFieldOwner::panel,
-        ProfileFieldChange::text, false, true,
-        +[](ProfileFieldContext &context) {
-          context.panel->bar.height = parse_uint(
-              control_text(field_control(context, IDC_BAR_HEIGHT)),
-              context.panel->bar.height);
-        },
-        +[](const ProfileFieldContext &context) {
-          if (context.panel != nullptr)
-            set_text(field_control(context, IDC_BAR_HEIGHT),
-                     std::to_wstring(context.panel->bar.height));
-        },
-        +[](const ProfileFieldContext &context) {
-          return context.panel == nullptr ||
-                 bounded_decimal(
-                     control_text(field_control(context, IDC_BAR_HEIGHT)), 16,
-                     240);
-        }},
+        .control_id = IDC_COOLDOWN_RECOVERY,
+        .notification = CBN_SELCHANGE,
+        .owner = ProfileFieldOwner::cooldown,
+        .change = ProfileFieldChange::immediate,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = false,
+        .read =
+            +[](ProfileFieldContext &context) {
+              const auto selection = SendMessageW(
+                  field_control(context, IDC_COOLDOWN_RECOVERY), CB_GETCURSEL, 0, 0);
+              if (selection >= 0 && selection <= 2)
+                context.cooldown->recovery =
+                    static_cast<layerc::core::RecoveryMode>(selection);
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              SendMessageW(field_control(context, IDC_COOLDOWN_RECOVERY),
+                           CB_SETCURSEL,
+                           context.cooldown == nullptr
+                               ? static_cast<WPARAM>(-1)
+                               : static_cast<WPARAM>(context.cooldown->recovery),
+                           0);
+            },
+        .valid = +[](const ProfileFieldContext &) { return true; }},
     ProfileFieldBinding{
-        IDC_SHOW_TEXT, BN_CLICKED, ProfileFieldOwner::panel,
-        ProfileFieldChange::immediate, false, true,
-        +[](ProfileFieldContext &context) {
-          context.panel->bar.show_text =
-              owner_draw_checkbox_checked(field_control(context, IDC_SHOW_TEXT));
-        },
-        +[](const ProfileFieldContext &context) {
-          if (context.panel != nullptr)
-            set_owner_draw_checkbox(field_control(context, IDC_SHOW_TEXT),
-                                    context.panel->bar.show_text);
-        },
-        +[](const ProfileFieldContext &) { return true; }},
+        .control_id = IDC_BAR_WIDTH,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::panel,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.panel->bar.width = parse_uint(
+                  control_text(field_control(context, IDC_BAR_WIDTH)),
+                  context.panel->bar.width);
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              if (context.panel != nullptr)
+                set_text(field_control(context, IDC_BAR_WIDTH),
+                         std::to_wstring(context.panel->bar.width));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return context.panel == nullptr ||
+                     bounded_decimal(
+                         control_text(field_control(context, IDC_BAR_WIDTH)), 40,
+                         1200);
+            }},
     ProfileFieldBinding{
-        IDC_HIDE_READY, BN_CLICKED, ProfileFieldOwner::panel,
-        ProfileFieldChange::immediate, false, true,
-        +[](ProfileFieldContext &context) {
-          context.panel->bar.hide_when_ready =
-              owner_draw_checkbox_checked(field_control(context, IDC_HIDE_READY));
-        },
-        +[](const ProfileFieldContext &context) {
-          if (context.panel != nullptr)
-            set_owner_draw_checkbox(field_control(context, IDC_HIDE_READY),
-                                    context.panel->bar.hide_when_ready);
-        },
-        +[](const ProfileFieldContext &) { return true; }},
+        .control_id = IDC_BAR_HEIGHT,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::panel,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.panel->bar.height = parse_uint(
+                  control_text(field_control(context, IDC_BAR_HEIGHT)),
+                  context.panel->bar.height);
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              if (context.panel != nullptr)
+                set_text(field_control(context, IDC_BAR_HEIGHT),
+                         std::to_wstring(context.panel->bar.height));
+            },
+        .valid =
+            +[](const ProfileFieldContext &context) {
+              return context.panel == nullptr ||
+                     bounded_decimal(
+                         control_text(field_control(context, IDC_BAR_HEIGHT)), 16,
+                         240);
+            }},
+    ProfileFieldBinding{
+        .control_id = IDC_SHOW_TEXT,
+        .notification = BN_CLICKED,
+        .owner = ProfileFieldOwner::panel,
+        .change = ProfileFieldChange::immediate,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.panel->bar.show_text =
+                  owner_draw_checkbox_checked(field_control(context, IDC_SHOW_TEXT));
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              if (context.panel != nullptr)
+                set_owner_draw_checkbox(field_control(context, IDC_SHOW_TEXT),
+                                        context.panel->bar.show_text);
+            },
+        .valid = +[](const ProfileFieldContext &) { return true; }},
+    ProfileFieldBinding{
+        .control_id = IDC_HIDE_READY,
+        .notification = BN_CLICKED,
+        .owner = ProfileFieldOwner::panel,
+        .change = ProfileFieldChange::immediate,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              context.panel->bar.hide_when_ready =
+                  owner_draw_checkbox_checked(field_control(context, IDC_HIDE_READY));
+            },
+        .write =
+            +[](const ProfileFieldContext &context) {
+              if (context.panel != nullptr)
+                set_owner_draw_checkbox(field_control(context, IDC_HIDE_READY),
+                                        context.panel->bar.hide_when_ready);
+            },
+        .valid = +[](const ProfileFieldContext &) { return true; }},
 };
 
 } // namespace

@@ -6,6 +6,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
+#include "layerc/runtime/diagnostics.hpp"
 
 #include <cstddef>
 #include <map>
@@ -34,52 +35,12 @@ namespace layerc::daemon {
   return result;
 }
 
-struct X11ExtensionStatus {
-  bool available{};
-  int major{};
-  int minor{};
-};
-
-struct X11StatusSnapshot {
-  bool connected{};
-  X11ExtensionStatus xi2;
-  X11ExtensionStatus shape;
-  X11ExtensionStatus randr;
-  X11ExtensionStatus composite;
-  X11ExtensionStatus damage;
-  X11ExtensionStatus xfixes;
-  bool ewmh{};
-  std::string reason;
-};
-
-enum class CapabilityAvailability : std::uint8_t {
-  unavailable,
-  degraded,
-  active,
-  inactive,
-};
-
-[[nodiscard]] constexpr std::string_view
-availability_name(CapabilityAvailability availability) noexcept {
-  switch (availability) {
-  case CapabilityAvailability::unavailable: return "unavailable";
-  case CapabilityAvailability::degraded: return "degraded";
-  case CapabilityAvailability::active: return "active";
-  case CapabilityAvailability::inactive: return "inactive";
-  }
-  return "unavailable";
-}
-
-struct CapabilityStatus {
-  layerc::runtime::Capability capability{};
-  CapabilityAvailability availability{CapabilityAvailability::unavailable};
-  std::vector<std::string> reasons;
-};
-
-struct LinuxStatusSnapshot {
-  X11StatusSnapshot x11;
-  std::vector<CapabilityStatus> capabilities;
-};
+using layerc::runtime::X11ExtensionStatus;
+using layerc::runtime::X11StatusSnapshot;
+using layerc::runtime::CapabilityAvailability;
+using layerc::runtime::CapabilityStatus;
+using layerc::runtime::LinuxStatusSnapshot;
+using layerc::runtime::availability_name;
 
 struct CapabilityReasons {
   std::span<const std::string> input;

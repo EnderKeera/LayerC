@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -50,6 +51,12 @@ public:
   void restore_live_subscription();
 
 private:
+  // Outcome of mutate_automation; rejected and invalid edits both restore the
+  // pre-edit snapshot.
+  enum class Mutation { committed, rejected, invalid };
+  // Returns the rejection text for a refused edit, or nullopt once applied.
+  using AutomationEdit = std::function<std::optional<std::wstring>()>;
+
   void initialize(HWND dialog);
   [[nodiscard]] LRESULT handle_message(HWND, UINT, WPARAM, LPARAM);
   [[nodiscard]] bool handle_command(HWND dialog, WPARAM wparam);
@@ -76,6 +83,11 @@ private:
   void save_trace(HWND dialog);
   void retry_selected(HWND dialog);
   [[nodiscard]] int selected_index(HWND dialog) const;
+  [[nodiscard]] layerc::core::AutomationDefinition *selected_automation(HWND dialog) const;
+  [[nodiscard]] layerc::core::AutomationRule *selected_rule(HWND dialog) const;
+  [[nodiscard]] layerc::core::AutomationAction *selected_action(HWND dialog) const;
+  [[nodiscard]] Mutation mutate_automation(HWND dialog, const wchar_t *title,
+                                           const AutomationEdit &edit);
 
   AutomationHost &owner_;
   HWND dialog_{};
@@ -93,6 +105,7 @@ private:
   bool validation_has_error_{};
   bool trace_enabled_{};
   bool simulator_playing_{};
+  bool advanced_expression_displayed_{};
 };
 
 } // namespace layerc::editor

@@ -2,6 +2,7 @@
 
 #include "layerc/core/frame.hpp"
 #include "layerc/core/json.hpp"
+#include "layerc/platform/profile_file_guard.hpp"
 
 #include <fcntl.h>
 #include <poll.h>
@@ -43,32 +44,37 @@ bool socket_addr(const std::string &path, ::sockaddr_un &address) {
   return true;
 }
 
+using Clock = std::chrono::steady_clock;
+
+[[nodiscard]] bool poll_until(int fd, short events, Clock::time_point deadline) {
+  while (Clock::now() < deadline) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - Clock::now());
+    ::pollfd watch{.fd = fd, .events = events, .revents = 0};
+    const int ready = ::poll(&watch, 1, static_cast<int>(
+        std::max<std::int64_t>(1, std::min<std::int64_t>(remaining.count(), 100))));
+    if (ready < 0 && errno == EINTR) continue;
+    if (ready < 0 || (watch.revents & (POLLNVAL | POLLERR)) != 0)
+      return false;
+    if (ready > 0) return (watch.revents & events) != 0;
+  }
+  return false;
+}
+
 [[nodiscard]] bool write_all(int fd, std::string_view data, int timeout_ms,
                              std::string &error) {
-  // Bounded by a monotonic deadline, not a round count: each EAGAIN waits
-  // only the time left (at most one poll slice), so a slow peer gets the
-  // full control_write_timeout but no more.
-  constexpr int poll_slice_ms = 100;
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(timeout_ms);
+  const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
   while (!data.empty()) {
     const ssize_t sent = ::send(fd, data.data(), data.size(), MSG_NOSIGNAL);
     if (sent > 0) {
       data.remove_prefix(static_cast<std::size_t>(sent));
       continue;
     }
+    if (sent < 0 && errno == EINTR) continue;
     if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      const auto remaining = std::chrono::duration_cast<
-          std::chrono::milliseconds>(deadline -
-                                     std::chrono::steady_clock::now());
-      if (remaining.count() <= 0) {
-        error = "control peer did not accept the full frame";
-        return false;
-      }
-      ::pollfd watch{.fd = fd, .events = POLLOUT, .revents = 0};
-      (void)::poll(&watch, 1, static_cast<int>(std::min<std::int64_t>(
-                                       remaining.count(), poll_slice_ms)));
-      continue;
+      if (poll_until(fd, POLLOUT, deadline)) continue;
+      error = "control peer did not accept the full frame";
+      return false;
     }
     error = "control write failed";
     return false;
@@ -97,19 +103,27 @@ std::string encode_control_request(const ControlCommand command) {
   return out;
 }
 
+namespace {
+
+// Requests and responses share the LayerC.Control v1 envelope.
+[[nodiscard]] bool has_control_envelope(const layerc::core::json::Value &value) {
+  if (!value.is_object()) return false;
+  const auto *proto = value.find("proto");
+  const auto *version = value.find("v");
+  return proto != nullptr && proto->is_string() &&
+         proto->as_string() == control_protocol_name && version != nullptr &&
+         version->is_integer() &&
+         version->as_integer() ==
+             static_cast<std::int64_t>(control_protocol_version);
+}
+
+} // namespace
+
 std::optional<ControlCommand> parse_control_request(std::string_view json_text) {
   const auto parsed = layerc::core::json::parse(json_text);
   const auto *value = std::get_if<layerc::core::json::Value>(&parsed);
-  if (value == nullptr || !value->is_object()) return std::nullopt;
-  const auto *proto = value->find("proto");
-  const auto *version = value->find("v");
+  if (value == nullptr || !has_control_envelope(*value)) return std::nullopt;
   const auto *command = value->find("cmd");
-  if (proto == nullptr || !proto->is_string() ||
-      proto->as_string() != control_protocol_name)
-    return std::nullopt;
-  if (version == nullptr || !version->is_integer() ||
-      version->as_integer() != static_cast<std::int64_t>(control_protocol_version))
-    return std::nullopt;
   if (command == nullptr || !command->is_string()) return std::nullopt;
   return parse_control_command(command->as_string());
 }
@@ -131,6 +145,21 @@ std::string encode_control_response(const bool ok, std::string_view error,
   }
   out += "}";
   return out;
+}
+
+std::optional<ControlResponse>
+decode_control_response(const std::string_view json_text) {
+  const auto parsed = layerc::core::json::parse(json_text);
+  const auto *value = std::get_if<layerc::core::json::Value>(&parsed);
+  if (value == nullptr || !has_control_envelope(*value)) return std::nullopt;
+  const auto *ok = value->find("ok");
+  if (ok == nullptr || !ok->is_bool()) return std::nullopt;
+  ControlResponse response{.ok = ok->as_bool(), .error = {}};
+  if (const auto *error = value->find("error"); error != nullptr) {
+    if (!error->is_string()) return std::nullopt;
+    response.error = error->as_string();
+  }
+  return response;
 }
 
 std::optional<std::string> control_socket_path(std::string &warning) {
@@ -181,18 +210,8 @@ std::optional<ControlListener> ControlListener::open(std::string &error,
 
   // Owner-only runtime directory; never accept a symlink or a directory
   // owned by somebody else, and surface the fallback decision.
-  if (::mkdir(directory.c_str(), 0700) != 0 && errno != EEXIST) {
-    error = "could not create control directory";
-    return std::nullopt;
-  }
-  struct stat status {};
-  if (::lstat(directory.c_str(), &status) != 0) {
-    error = "control directory is not inspectable";
-    return std::nullopt;
-  }
-  if (S_ISLNK(status.st_mode) || !S_ISDIR(status.st_mode) ||
-      status.st_uid != ::geteuid() ||
-      (status.st_mode & 0777U) != 0700U) {
+  if (!ensure_owned_directory(directory,
+                              OwnedDirectoryPolicy::require_private)) {
     error = "control directory is not owner-only";
     return std::nullopt;
   }
@@ -203,7 +222,16 @@ std::optional<ControlListener> ControlListener::open(std::string &error,
     return std::nullopt;
   }
   struct stat socket_status {};
-  if (::lstat(path->c_str(), &socket_status) == 0) {
+  const int path_status = ::lstat(path->c_str(), &socket_status);
+  if (path_status != 0 && errno != ENOENT) {
+    error = "could not inspect the control socket";
+    return std::nullopt;
+  }
+  if (path_status == 0) {
+    if (!S_ISSOCK(socket_status.st_mode) || socket_status.st_uid != ::geteuid()) {
+      error = "the control socket path is not an owned socket";
+      return std::nullopt;
+    }
     // Probe before unlink: refuse while a live daemon answers, and only
     // then treat the inode as stale.
     const int probe = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -291,7 +319,11 @@ std::optional<int> control_connect(std::string &error) {
     error = "the LayerC daemon is not reachable";
     return std::nullopt;
   }
-  (void)::fcntl(fd, F_SETFL, O_NONBLOCK);
+  if (::fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
+    (void)::close(fd);
+    error = "could not make the control client nonblocking";
+    return std::nullopt;
+  }
   return fd;
 }
 
@@ -306,21 +338,18 @@ control_roundtrip(std::string_view request_json, std::string &error) {
   }
   ControlFramer framer;
   std::array<char, 4096> chunk{};
-  for (int rounds = 0; rounds < 50; ++rounds) { // 5 s ceiling
-    ::pollfd watch{.fd = *fd, .events = POLLIN, .revents = 0};
-    if (::poll(&watch, 1, 100) > 0) {
-      const ssize_t received =
-          ::read(*fd, chunk.data(), chunk.size());
-      if (received > 0) {
-        framer.feed(std::string_view{chunk.data(),
-                                     static_cast<std::size_t>(received)});
-        if (auto payload = framer.next_frame(); payload.has_value()) {
-          (void)::close(*fd);
-          return payload;
-        }
-      } else if (received == 0) {
-        break; // closed before a full frame
-      }
+  const auto deadline = Clock::now() + std::chrono::seconds(5);
+  while (poll_until(*fd, POLLIN, deadline)) {
+    const ssize_t received = ::read(*fd, chunk.data(), chunk.size());
+    if (received < 0 && (errno == EINTR || errno == EAGAIN ||
+                         errno == EWOULDBLOCK))
+      continue;
+    if (received <= 0) break; // closed or failed before a full frame
+    framer.feed(std::string_view{chunk.data(),
+                                 static_cast<std::size_t>(received)});
+    if (auto payload = framer.next_frame(); payload.has_value()) {
+      (void)::close(*fd);
+      return payload;
     }
     if (framer.fault() != ControlFramer::Fault::none) break;
   }

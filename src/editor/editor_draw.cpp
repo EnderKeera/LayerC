@@ -32,13 +32,8 @@ RECT paint_checkbox(const HDC dc, const RECT bounds,
       : state.pressed || state.checked ? colors.selection
       : state.hot                       ? colors.hover
                                         : colors.fill;
-  const HBRUSH fill = CreateSolidBrush(fill_color);
-  FillRect(dc, &box, fill);
-  DeleteObject(fill);
-  const HBRUSH border =
-      CreateSolidBrush(state.disabled ? colors.disabled : colors.border);
-  FrameRect(dc, &box, border);
-  DeleteObject(border);
+  fill_solid_rect(dc, box, fill_color);
+  frame_solid_rect(dc, box, state.disabled ? colors.disabled : colors.border);
   if (state.checked) {
     const HPEN tick = CreatePen(PS_SOLID, metrics.pen_width,
                                state.disabled ? colors.disabled : colors.text);
@@ -68,10 +63,8 @@ void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
   const auto list_colors = colors(layerc::platform::EditorControlRole::list);
   const bool selected = (draw.itemState & ODS_SELECTED) != 0;
   const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
-  const HBRUSH background = CreateSolidBrush(selected ? list_colors.selection
-                                                       : list_colors.fill);
-  FillRect(draw.hDC, &draw.rcItem, background);
-  DeleteObject(background);
+  fill_solid_rect(draw.hDC, draw.rcItem,
+                  selected ? list_colors.selection : list_colors.fill);
   if (draw.itemID != static_cast<UINT>(-1)) {
     const bool combo = draw.CtlType == ODT_COMBOBOX;
     const UINT length_message = combo ? CB_GETLBTEXTLEN : LB_GETTEXTLEN;
@@ -97,9 +90,7 @@ void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
   if ((draw.itemState & ODS_FOCUS) != 0) {
     RECT focus = draw.rcItem;
     InflateRect(&focus, -1, -1);
-    const HBRUSH focus_brush = CreateSolidBrush(list_colors.border);
-    FrameRect(draw.hDC, &focus, focus_brush);
-    DeleteObject(focus_brush);
+    frame_solid_rect(draw.hDC, focus, list_colors.border);
   }
 }
 void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
@@ -111,10 +102,8 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
   RECT client{};
   GetClientRect(draw.hwndItem, &client);
   row.right = client.right;
-  const HBRUSH background =
-      CreateSolidBrush(selected ? list_colors.selection : list_colors.fill);
-  FillRect(draw.hDC, &row, background);
-  DeleteObject(background);
+  fill_solid_rect(draw.hDC, row,
+                  selected ? list_colors.selection : list_colors.fill);
 
   if (draw.itemID != static_cast<UINT>(-1)) {
     const auto index = static_cast<std::size_t>(draw.itemID);
@@ -153,9 +142,7 @@ void EditorWindow::draw_checkbox(const DRAWITEMSTRUCT &draw) const {
       colors(layerc::platform::EditorControlRole::checkbox);
   const bool checked = owner_draw_checkbox_checked(draw.hwndItem);
   const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
-  const HBRUSH background = CreateSolidBrush(role_colors.fill);
-  FillRect(draw.hDC, &draw.rcItem, background);
-  DeleteObject(background);
+  fill_solid_rect(draw.hDC, draw.rcItem, role_colors.fill);
   const auto metrics =
       profile_checkbox_metrics(GetDpiForWindow(draw.hwndItem));
   const CheckboxState state{
@@ -183,24 +170,15 @@ void EditorWindow::draw_checkbox(const DRAWITEMSTRUCT &draw) const {
 void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw, const HWND window) const {
   const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font());
   const auto role_colors = colors(appearance_role(window));
-  const HBRUSH background = CreateSolidBrush(role_colors.fill); FillRect(draw.hDC, &draw.rcItem, background); DeleteObject(background);
+  fill_solid_rect(draw.hDC, draw.rcItem, role_colors.fill);
   RECT button{draw.rcItem.left + 16, draw.rcItem.top + 16, draw.rcItem.left + 145, draw.rcItem.top + 48};
-  const HBRUSH button_fill = CreateSolidBrush(role_colors.hover); FillRect(draw.hDC, &button, button_fill); DeleteObject(button_fill);
-  const HPEN border = CreatePen(PS_SOLID, 1, role_colors.border);
-  const HGDIOBJ previous_pen = SelectObject(draw.hDC, border);
-  const HGDIOBJ previous_brush =
-      SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));
-  Rectangle(draw.hDC, button.left, button.top, button.right, button.bottom);
-  SelectObject(draw.hDC, previous_brush);
-  SelectObject(draw.hDC, previous_pen);
-  DeleteObject(border);
+  fill_solid_rect(draw.hDC, button, role_colors.hover);
+  outline_rect(draw.hDC, button, 1, role_colors.border);
   SetBkMode(draw.hDC, TRANSPARENT);
   SetTextColor(draw.hDC, role_colors.text);
   DrawTextW(draw.hDC, L"Preview control", -1, &button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
   RECT selected{button.right + 24, button.top, button.right + 112, button.bottom};
-  const HBRUSH selection = CreateSolidBrush(role_colors.selection);
-  FillRect(draw.hDC, &selected, selection);
-  DeleteObject(selection);
+  fill_solid_rect(draw.hDC, selected, role_colors.selection);
   SetTextColor(draw.hDC, role_colors.text);
   DrawTextW(draw.hDC, L"Selected", -1, &selected,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE);

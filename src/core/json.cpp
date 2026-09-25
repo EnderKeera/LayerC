@@ -6,7 +6,6 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
-#include <stdexcept>
 #include <utility>
 
 namespace layerc::core::json {
@@ -47,17 +46,12 @@ private:
             case 'f': return parse_literal("false", Value(false));
             case '"': return Value(parse_string());
             case '[':
-                if (depth >= kMaximumNestingDepth) {
-                    fail("maximum nesting depth exceeded");
-                    return {};
-                }
-                return parse_array(depth + 1);
             case '{':
                 if (depth >= kMaximumNestingDepth) {
                     fail("maximum nesting depth exceeded");
                     return {};
                 }
-                return parse_object(depth + 1);
+                return peek('[') ? parse_array(depth + 1) : parse_object(depth + 1);
             default:
                 if (source_[position_] == '-' || is_digit(source_[position_])) {
                     return parse_number();
@@ -92,9 +86,7 @@ private:
                 fail("expected digit in number");
                 return {};
             }
-            while (has_digit()) {
-                ++position_;
-            }
+            skip_digits();
         }
         if (peek('.')) {
             ++position_;
@@ -102,9 +94,7 @@ private:
                 fail("expected digit after decimal point");
                 return {};
             }
-            while (has_digit()) {
-                ++position_;
-            }
+            skip_digits();
         }
         if (peek('e') || peek('E')) {
             ++position_;
@@ -115,9 +105,7 @@ private:
                 fail("expected digit in exponent");
                 return {};
             }
-            while (has_digit()) {
-                ++position_;
-            }
+            skip_digits();
         }
 
         const auto text = source_.substr(start, position_ - start);
@@ -331,6 +319,12 @@ private:
 
     [[nodiscard]] bool has_digit() const {
         return position_ < source_.size() && is_digit(source_[position_]);
+    }
+
+    void skip_digits() {
+        while (has_digit()) {
+            ++position_;
+        }
     }
 
     static bool is_digit(const char character) {

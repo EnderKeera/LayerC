@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/companion.hpp"
+#include "layerc/core/version.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -49,8 +50,8 @@ public:
   inline static constexpr std::wstring_view package_publisher = L"CN=LayerC";
   inline static constexpr std::wstring_view package_family_name =
       L"LayerC.GameBar.v1_bs8jpev27s1ay";
-  inline static constexpr std::uint16_t package_major_version = 2;
-  inline static constexpr std::uint16_t package_minor_version = 4;
+  inline static constexpr std::uint16_t package_major_version = core::product_version_major;
+  inline static constexpr std::uint16_t package_minor_version = core::product_version_minor;
 
   [[nodiscard]] static bool is_expected_package_identity(
       std::wstring_view name, std::wstring_view publisher,

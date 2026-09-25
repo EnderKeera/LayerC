@@ -1,7 +1,7 @@
 #include "daemon_app.hpp"
 
 #include "layerc/platform/text.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
 #include <string>
@@ -17,15 +17,37 @@ bool observation_enabled(const layerc::core::VisualProfile &profile,
   });
 }
 
+VisualEvaluationRequest build_visual_request(const Session &session) {
+  const auto &visual = *session.modules.visual.profile;
+  VisualEvaluationRequest request;
+  request.source_key = session.source_key;
+  request.sample_rate_hz = visual.sample_rate_hz;
+  request.quality = visual.quality;
+  for (const auto &rule : visual.rules) {
+    if (observation_enabled(visual, rule.id))
+      request.rules.push_back(rule);
+  }
+  for (const auto &state : visual.templates) {
+    if (!observation_enabled(visual, state.id))
+      continue;
+    VisualTemplateEvaluation evaluation;
+    evaluation.state = state;
+    evaluation.asset_signatures.reserve(state.references.size());
+    for (const auto &reference : state.references) {
+      evaluation.asset_signatures.push_back(
+          layerc::platform::asset_signature(reference.asset_sha256));
+    }
+    request.templates.push_back(std::move(evaluation));
+  }
+  return request;
+}
+
 } // namespace
 
 void DaemonApp::reconcile_visual_captures(
     const layerc::runtime::CapabilityDemand &demand,
     const layerc::core::VisualRuntime runtime) {
-  struct DesiredCapture {
-    std::vector<VisualEvaluationRequest> requests;
-  };
-  std::unordered_map<HWND, DesiredCapture> desired;
+  std::unordered_map<HWND, std::vector<VisualEvaluationRequest>> desired;
   for (const auto &consumer : demand.visual_consumers()) {
     if (consumer.runtime != runtime) continue;
     const auto found = std::ranges::find_if(session_registry_.sessions(), [&](const auto &session) {
@@ -36,28 +58,7 @@ void DaemonApp::reconcile_visual_captures(
     if (found == session_registry_.sessions().end() || !(*found)->modules.visual.profile)
       continue;
     const auto *session = found->get();
-    VisualEvaluationRequest request;
-    request.source_key = session->source_key;
-    request.sample_rate_hz = session->modules.visual.profile->sample_rate_hz;
-    request.quality = session->modules.visual.profile->quality;
-    for (const auto &rule : session->modules.visual.profile->rules) {
-      if (observation_enabled(*session->modules.visual.profile, rule.id))
-        request.rules.push_back(rule);
-    }
-    for (const auto &state : session->modules.visual.profile->templates) {
-      if (!observation_enabled(*session->modules.visual.profile, state.id))
-        continue;
-      VisualTemplateEvaluation evaluation;
-      evaluation.state = state;
-      evaluation.asset_signatures.reserve(state.references.size());
-      for (const auto &reference : state.references) {
-        evaluation.asset_signatures.push_back(
-            layerc::platform::asset_signature(reference.asset_sha256));
-      }
-      request.templates.push_back(std::move(evaluation));
-    }
-    auto &capture = desired[session->game_window];
-    capture.requests.push_back(std::move(request));
+    desired[session->game_window].push_back(build_visual_request(*session));
   }
 
   if (!desired.empty())
@@ -68,11 +69,11 @@ void DaemonApp::reconcile_visual_captures(
     if (wanted != desired.end()) return entry.second->runtime() != runtime;
     return entry.second->runtime() == runtime;
   });
-  for (auto &[window, capture] : desired) {
-    if (capture.requests.empty())
+  for (auto &[window, requests] : desired) {
+    if (requests.empty())
       continue;
     const auto quality =
-        std::ranges::max(capture.requests, {}, &VisualEvaluationRequest::quality)
+        std::ranges::max(requests, {}, &VisualEvaluationRequest::quality)
             .quality;
     auto &worker = visual_capture_runtime_.captures()[window];
     const bool created = worker == nullptr;
@@ -84,7 +85,7 @@ void DaemonApp::reconcile_visual_captures(
         worker =
             std::make_unique<VisualCaptureWorker>(window, visual_capture_runtime_.snapshot_event());
     }
-    worker->configure(std::move(capture.requests), quality);
+    worker->configure(std::move(requests), quality);
     if (created)
       worker->start();
   }
@@ -127,33 +128,8 @@ void DaemonApp::sync_visual_exclusions() {
 
 void DaemonApp::poll_visual_captures() {
   const auto now = layerc::core::MonotonicClock::now();
-  bool overlays_changed{};
   std::vector<VisualCaptureSnapshot> captured_snapshots;
   captured_snapshots.reserve(visual_capture_runtime_.captures().size());
-  const auto publish_observations =
-      [&](Session &session,
-          const std::span<const layerc::core::ObservationMeasurement>
-              measurements) {
-        bool changed{};
-        if (!session.automation_runtime)
-          return changed;
-        for (const auto &measurement : measurements) {
-          auto event = automation_event(
-              layerc::core::AutomationEventKind::visual_observation,
-              measurement.observation_id, now);
-          event.fields.emplace(
-              "available", layerc::core::AutomationValue(
-                               measurement.availability ==
-                               layerc::core::CaptureAvailability::available));
-          event.fields.emplace(
-              "matched", layerc::core::AutomationValue(measurement.matched));
-          event.fields.emplace("confidence", layerc::core::AutomationValue(
-                                                 layerc::core::ConfidenceValue{
-                                                     measurement.confidence}));
-          changed = process_automation_event(session, event) || changed;
-        }
-        return changed;
-      };
   const auto poll_capture = [&](const HWND window, auto &worker) {
     const auto captured = worker.snapshot();
     if (captured.sequence != 0) {
@@ -168,19 +144,17 @@ void DaemonApp::poll_visual_captures() {
             evaluation->sequence == session->last_visual_sequence)
           continue;
         session->last_visual_sequence = evaluation->sequence;
-        session->cooldowns.snapshot(now, session->snapshot_buffer);
-        overlays_changed =
-            publish_observations(*session, evaluation->measurements) ||
-            overlays_changed;
-        const auto requests = session->visual_triggers->on_measurements(
-            evaluation->measurements, session->snapshot_buffer, now);
-        for (const auto &request : requests) {
-          if (trigger_cooldown_with_automation(*session, request.cooldown_id,
-                                               now)) {
-            overlays_changed = true;
-            update_tooltip(L"LayerD - visual trigger " +
-                           layerc::platform::utf8_to_wide(request.cooldown_id));
-          }
+        const auto result = session->layerc::core::AutomationSession::
+            feed_measurements(evaluation->measurements, session->profile, now);
+        if (result.changed)
+          mark_overlays_dirty();
+        if (!result.triggered.empty())
+          update_tooltip(L"LayerD - visual trigger " +
+                         layerc::platform::utf8_to_wide(result.triggered.back()));
+        if (session->automation_runtime) {
+          publish_automation_trace(*session);
+          synchronize_automation_state(*session, now);
+          schedule_automation_timer();
         }
       }
     }
@@ -190,8 +164,6 @@ void DaemonApp::poll_visual_captures() {
     if (worker)
       poll_capture(window, *worker);
   }
-  if (overlays_changed)
-    update_overlays();
   publish_visual_status(captured_snapshots);
 }
 

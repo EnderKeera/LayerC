@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/types.hpp"
+#include "layerc/core/enum_wire.hpp"
 
 #include <array>
 #include <cstddef>
@@ -104,99 +105,57 @@ struct AutomationEvent {
   AutomationMap fields;
 };
 
-// Wire-name vocabulary shared by the profile serializer, the trace format,
-// packs, and editor UIs. One table per concept; nothing re-declares these.
+// Wire-name vocabulary shared by the profile serializer, trace, packs and UIs.
+inline constexpr std::array automation_event_wire{
+    EnumWireEntry{AutomationEventKind::input_pressed, "inputPressed"},
+    EnumWireEntry{AutomationEventKind::input_released, "inputReleased"},
+    EnumWireEntry{AutomationEventKind::input_value_changed, "inputValueChanged"},
+    EnumWireEntry{AutomationEventKind::visual_observation, "visualObservation"},
+    EnumWireEntry{AutomationEventKind::cooldown_triggered, "cooldownTriggered"},
+    EnumWireEntry{AutomationEventKind::cooldown_ready, "cooldownReady"},
+    EnumWireEntry{AutomationEventKind::group_triggered, "groupTriggered"},
+    EnumWireEntry{AutomationEventKind::group_ready, "groupReady"},
+    EnumWireEntry{AutomationEventKind::session_started, "sessionStarted"},
+    EnumWireEntry{AutomationEventKind::session_stopping, "sessionStopping"},
+    EnumWireEntry{AutomationEventKind::variable_changed, "variableChanged"},
+    EnumWireEntry{AutomationEventKind::timer_fired, "timerFired"}};
+inline constexpr std::array automation_value_type_wire{
+    EnumWireEntry{AutomationValueType::null_value, "null"},
+    EnumWireEntry{AutomationValueType::boolean, "bool"},
+    EnumWireEntry{AutomationValueType::integer, "int"},
+    EnumWireEntry{AutomationValueType::number, "number"},
+    EnumWireEntry{AutomationValueType::duration, "duration"},
+    EnumWireEntry{AutomationValueType::confidence, "confidence"},
+    EnumWireEntry{AutomationValueType::string, "string"},
+    EnumWireEntry{AutomationValueType::list, "list"},
+    EnumWireEntry{AutomationValueType::map, "map"}};
+
 [[nodiscard]] inline std::string_view
 automation_event_name(const AutomationEventKind kind) {
-  switch (kind) {
-  case AutomationEventKind::input_pressed:
-    return "inputPressed";
-  case AutomationEventKind::input_released:
-    return "inputReleased";
-  case AutomationEventKind::input_value_changed:
-    return "inputValueChanged";
-  case AutomationEventKind::visual_observation:
-    return "visualObservation";
-  case AutomationEventKind::cooldown_triggered:
-    return "cooldownTriggered";
-  case AutomationEventKind::cooldown_ready:
-    return "cooldownReady";
-  case AutomationEventKind::group_triggered:
-    return "groupTriggered";
-  case AutomationEventKind::group_ready:
-    return "groupReady";
-  case AutomationEventKind::session_started:
-    return "sessionStarted";
-  case AutomationEventKind::session_stopping:
-    return "sessionStopping";
-  case AutomationEventKind::variable_changed:
-    return "variableChanged";
-  case AutomationEventKind::timer_fired:
-    return "timerFired";
-  }
-  return "sessionStarted";
+  return enum_wire_name(automation_event_wire, kind).value_or("sessionStarted");
 }
 
-// Canonical presentation order of event kinds; editors derive combo boxes
-// and simulator indices from this one list.
-inline constexpr std::array automation_event_kinds{
-    AutomationEventKind::input_pressed,
-    AutomationEventKind::input_released,
-    AutomationEventKind::input_value_changed,
-    AutomationEventKind::visual_observation,
-    AutomationEventKind::cooldown_triggered,
-    AutomationEventKind::cooldown_ready,
-    AutomationEventKind::group_triggered,
-    AutomationEventKind::group_ready,
-    AutomationEventKind::session_started,
-    AutomationEventKind::session_stopping,
-    AutomationEventKind::variable_changed,
-    AutomationEventKind::timer_fired};
+// Canonical presentation order; kept as a derived array for editor indices.
+inline constexpr auto automation_event_kinds = [] {
+  std::array<AutomationEventKind, automation_event_wire.size()> kinds{};
+  for (std::size_t i = 0; i < kinds.size(); ++i)
+    kinds[i] = automation_event_wire[i].value;
+  return kinds;
+}();
 
 [[nodiscard]] inline std::optional<AutomationEventKind>
 parse_automation_event_name(const std::string_view name) {
-  for (const auto kind : automation_event_kinds)
-    if (automation_event_name(kind) == name)
-      return kind;
-  return std::nullopt;
+  return parse_enum_wire(automation_event_wire, name);
 }
 
 [[nodiscard]] inline std::string_view
 automation_value_type_name(const AutomationValueType type) {
-  switch (type) {
-  case AutomationValueType::null_value:
-    return "null";
-  case AutomationValueType::boolean:
-    return "bool";
-  case AutomationValueType::integer:
-    return "int";
-  case AutomationValueType::number:
-    return "number";
-  case AutomationValueType::duration:
-    return "duration";
-  case AutomationValueType::confidence:
-    return "confidence";
-  case AutomationValueType::string:
-    return "string";
-  case AutomationValueType::list:
-    return "list";
-  case AutomationValueType::map:
-    return "map";
-  }
-  return "null";
+  return enum_wire_name(automation_value_type_wire, type).value_or("null");
 }
 
 [[nodiscard]] inline std::optional<AutomationValueType>
 parse_automation_value_type_name(const std::string_view name) {
-  for (const auto type :
-       {AutomationValueType::null_value, AutomationValueType::boolean,
-        AutomationValueType::integer, AutomationValueType::number,
-        AutomationValueType::duration, AutomationValueType::confidence,
-        AutomationValueType::string, AutomationValueType::list,
-        AutomationValueType::map})
-    if (automation_value_type_name(type) == name)
-      return type;
-  return std::nullopt;
+  return parse_enum_wire(automation_value_type_wire, name);
 }
 
 

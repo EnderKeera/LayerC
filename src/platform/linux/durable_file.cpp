@@ -1,6 +1,6 @@
 #include "layerc/platform/durable_file.hpp"
+#include "../durable_file_internal.hpp"
 
-#include <atomic>
 #include <cerrno>
 #include <cstdint>
 #include <utility>
@@ -12,18 +12,22 @@
 namespace layerc::platform {
 namespace {
 
-std::atomic_uint64_t stage_sequence{};
-
-void flush_parent_best_effort(const std::filesystem::path &path) {
-  const auto parent = path.parent_path();
-  const int descriptor =
-      ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (descriptor < 0) return;
-  (void)::fsync(descriptor);
-  ::close(descriptor);
+// Publication only ever replaces a regular file. rename(2) would silently
+// replace a symlink itself (and fails on a directory anyway); refuse both so
+// behaviour matches read_durable_file's O_NOFOLLOW and the Windows
+// reparse-point refusal. An absent destination is fine.
+bool publishable_destination(const std::filesystem::path &destination) {
+  struct stat status {};
+  if (::lstat(destination.c_str(), &status) != 0)
+    return errno == ENOENT || errno == ENOTDIR;
+  return !S_ISDIR(status.st_mode) && !S_ISLNK(status.st_mode);
 }
 
 } // namespace
+
+std::uint64_t detail::durable_process_id() noexcept {
+  return static_cast<std::uint64_t>(::getpid());
+}
 
 FileReadResult read_durable_file(const std::filesystem::path &path,
                                  const std::size_t maximum_bytes) {
@@ -87,16 +91,11 @@ bool create_durable_file(const std::filesystem::path &path,
   return success;
 }
 
-bool publish_durable_file(const std::filesystem::path &stage,
-                          const std::filesystem::path &destination) {
-  return publish_durable_file_checked(stage, destination) !=
-         DurablePublishOutcome::failed;
-}
-
 DurablePublishOutcome publish_durable_file_checked(
     const std::filesystem::path &stage,
     const std::filesystem::path &destination) {
-  if (::rename(stage.c_str(), destination.c_str()) != 0)
+  if (!publishable_destination(destination) ||
+      ::rename(stage.c_str(), destination.c_str()) != 0)
     return DurablePublishOutcome::failed;
   // Publication has committed once rename succeeds. A directory fsync failure
   // may weaken crash durability, but reporting failure would invite rollback of
@@ -105,10 +104,6 @@ DurablePublishOutcome publish_durable_file_checked(
   return fsync_parent_checked(destination)
              ? DurablePublishOutcome::published_durable
              : DurablePublishOutcome::published_unconfirmed;
-}
-
-bool fsync_parent_checked(const std::filesystem::path &path) noexcept {
-  return fsync_directory_checked(path.parent_path());
 }
 
 bool fsync_directory_checked(const std::filesystem::path &directory) noexcept {
@@ -123,18 +118,10 @@ bool fsync_directory_checked(const std::filesystem::path &directory) noexcept {
 
 bool remove_durable_file(const std::filesystem::path &path) {
   if (::unlink(path.c_str()) != 0 && errno != ENOENT) return false;
-  flush_parent_best_effort(path);
-  return true;
-}
-
-std::filesystem::path
-unique_durable_stage_path(const std::filesystem::path &destination) {
-  auto stage = destination;
-  stage += "." + std::to_string(::getpid()) + "." +
-           std::to_string(
-               stage_sequence.fetch_add(1, std::memory_order_relaxed)) +
-           ".tmp";
-  return stage;
+  // The removal is only durable once the parent entry is flushed. A false
+  // result here means the file may already be gone; callers that need the
+  // barrier (profile transaction deletes) treat it as a failed delete.
+  return fsync_parent_checked(path);
 }
 
 } // namespace layerc::platform

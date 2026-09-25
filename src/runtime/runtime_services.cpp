@@ -2,15 +2,23 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 namespace layerc::runtime {
 namespace {
 
-std::uint32_t saturating_add(const std::uint32_t left,
-                             const std::uint32_t right) noexcept {
-  if (right > std::numeric_limits<std::uint32_t>::max() - left)
-    return std::numeric_limits<std::uint32_t>::max();
+template <typename Unsigned>
+Unsigned saturating_add(const Unsigned left, const Unsigned right) noexcept {
+  if (right > std::numeric_limits<Unsigned>::max() - left)
+    return std::numeric_limits<Unsigned>::max();
   return left + right;
+}
+
+void mark_faulted(RuntimeServiceStats &stats, std::string error) {
+  stats.state = ServiceState::faulted;
+  stats.resources = {};
+  ++stats.fault_count;
+  stats.last_error = std::move(error);
 }
 
 } // namespace
@@ -68,10 +76,7 @@ RuntimeResourceStats::operator+=(const RuntimeResourceStats &other) noexcept {
   capture_sessions = saturating_add(capture_sessions, other.capture_sessions);
   queues = saturating_add(queues, other.queues);
   decoded_assets = saturating_add(decoded_assets, other.decoded_assets);
-  if (other.cache_bytes > std::numeric_limits<std::uint64_t>::max() - cache_bytes)
-    cache_bytes = std::numeric_limits<std::uint64_t>::max();
-  else
-    cache_bytes += other.cache_bytes;
+  cache_bytes = saturating_add(cache_bytes, other.cache_bytes);
   return *this;
 }
 
@@ -112,11 +117,10 @@ bool RuntimeServiceHost::reconcile(
   // Retire in reverse order before reconciling active services so capture or
   // other producers cannot deliver into an input/session dependency that has
   // already been torn down.
-  for (auto slot = slots_.rbegin(); slot != slots_.rend(); ++slot) {
-    const auto slot_index = static_cast<std::size_t>(
-        std::distance(slot, slots_.rend()) - 1);
+  for (std::size_t slot_index = slots_.size(); slot_index-- > 0;) {
     const auto capability = static_cast<Capability>(slot_index);
-    if (demand.consumers(capability) == 0) quiesce_slot(*slot, now);
+    if (demand.consumers(capability) == 0)
+      quiesce_slot(slots_[slot_index], now);
   }
   for (std::size_t slot_index = 0; slot_index < slots_.size(); ++slot_index) {
     auto &slot = slots_[slot_index];
@@ -128,10 +132,7 @@ bool RuntimeServiceHost::reconcile(
     if (consumers == 0) continue;
 
     if (slot.service == nullptr) {
-      slot.stats.state = ServiceState::faulted;
-      slot.stats.resources = {};
-      ++slot.stats.fault_count;
-      slot.stats.last_error = "required runtime service is unavailable";
+      mark_faulted(slot.stats, "required runtime service is unavailable");
       success = false;
       continue;
     }
@@ -144,13 +145,10 @@ bool RuntimeServiceHost::reconcile(
     if (!result.success) {
       slot.service->quiesce();
       slot.active = false;
-      slot.stats.state = ServiceState::faulted;
-      slot.stats.resources = {};
-      ++slot.stats.fault_count;
       slot.stats.last_quiescence = now;
-      slot.stats.last_error = result.error.empty()
-                                  ? "service reconciliation failed"
-                                  : result.error;
+      mark_faulted(slot.stats, result.error.empty()
+                                   ? "service reconciliation failed"
+                                   : result.error);
       success = false;
       continue;
     }
@@ -177,8 +175,8 @@ void RuntimeServiceHost::quiesce_slot(Slot &slot,
 }
 
 void RuntimeServiceHost::quiesce_all(const core::TimePoint now) noexcept {
-  for (auto slot = slots_.rbegin(); slot != slots_.rend(); ++slot)
-    quiesce_slot(*slot, now);
+  for (std::size_t slot_index = slots_.size(); slot_index-- > 0;)
+    quiesce_slot(slots_[slot_index], now);
 }
 
 IRuntimeService *RuntimeServiceHost::find(const Capability capability) noexcept {

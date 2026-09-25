@@ -3,11 +3,13 @@
 
 #include "layerc/core/json.hpp"
 #include "layerc/platform/profile_store.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -20,26 +22,43 @@
 namespace layerc::editor {
 namespace {
 
-bool source_schema_before(const std::string_view source,
-                          const double current_schema) {
-  const auto parsed = layerc::core::json::parse(source);
-  const auto *root = std::get_if<layerc::core::json::Value>(&parsed);
-  if (root == nullptr || !root->is_object())
-    return false;
-  const auto *version = root->find("schemaVersion");
-  return version != nullptr && version->is_number() &&
-         version->as_number() < current_schema;
+bool document_needs_schema_upgrade(const ProfileDocument &document) {
+  return (document.legacy_base_schema() || document.legacy_visual_schema()) &&
+         !document.upgrade_acknowledged();
+}
+
+bool is_document_path(const ProfileDocument &document,
+                      const std::filesystem::path &path) {
+  return !document.path().empty() &&
+         layerc::platform::canonical_profile_key(path) ==
+             layerc::platform::canonical_profile_key(document.path());
+}
+
+std::filesystem::path default_profile_filename(
+    const layerc::core::GameProfile &profile) {
+  return layerc::platform::profile_store_filename(profile.id);
+}
+
+void show_invalid_field_message(const HWND owner) {
+  const auto limit = std::chrono::duration_cast<std::chrono::seconds>(
+      layerc::core::max_cooldown_duration);
+  const std::wstring message =
+      L"Finish the invalid field. Cooldown duration must be greater than 0 "
+      L"and no more than " +
+      std::to_wstring(limit.count()) + L" seconds.";
+  MessageBoxW(owner, message.c_str(), L"Profile is incomplete",
+              MB_OK | MB_ICONWARNING);
+}
+
+void show_sidecar_repair_message(const HWND owner) {
+  MessageBoxW(owner,
+              L"Repair the invalid sidecar with Calibrate before "
+              L"saving this profile. This prevents an unrelated base edit "
+              L"from silently discarding recovery data.",
+              L"Sidecar needs repair", MB_OK | MB_ICONWARNING);
 }
 
 } // namespace
-
-bool source_uses_legacy_base_schema(const std::string_view source) {
-  return source_schema_before(source, 4.0);
-}
-
-bool source_uses_legacy_visual_schema(const std::string_view source) {
-  return source_schema_before(source, 2.0);
-}
 
 bool confirm_schema_upgrade(const HWND owner) {
   return MessageBoxW(
@@ -62,10 +81,7 @@ void EditorWindow::sync_profile_from_controls() {
 
 bool EditorWindow::validate_profile() {
   if (!draft_controls_valid()) {
-    MessageBoxW(shell_.window(),
-                L"Finish the invalid field. Cooldown duration must be greater "
-                L"than 0 and no more than 86400 seconds.",
-                L"Profile is incomplete", MB_OK | MB_ICONWARNING);
+    show_invalid_field_message(shell_.window());
     return false;
   }
   sync_profile_from_controls();
@@ -83,7 +99,7 @@ bool EditorWindow::confirm_v2_upgrade() {
     return true;
   if (!confirm_schema_upgrade(shell_.window()))
     return false;
-  document_.upgrade_acknowledged() = true;
+  document_.acknowledge_upgrade();
   return true;
 }
 
@@ -103,17 +119,10 @@ void EditorWindow::new_profile(const bool confirm) {
     return;
   end_edit_on_window();
   document_.profile() = make_new_profile();
-  document_.visual().reset();
-  document_.automation().reset();
-  document_.automation_state() = layerc::platform::AutomationSidecarState::absent;
-  document_.automation_error().clear();
-  document_.visual_state() = layerc::platform::VisualSidecarState::absent;
-  document_.visual_error().clear();
-  document_.legacy_base_schema() = false;
-  document_.legacy_visual_schema() = false;
-  document_.upgrade_acknowledged() = false;
+  document_.clear_sidecars();
+  document_.clear_legacy_schemas();
   document_.path().clear();
-  document_.dirty() = true;
+  document_.set_dirty(true);
   reset_history();
   refresh_profile_controls();
   set_status(
@@ -122,7 +131,9 @@ void EditorWindow::new_profile(const bool confirm) {
 void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
                                        const bool open_selection) {
   shell_.profiles().clear();
-  shell_.syncing() = true;
+  int selected = -1;
+  {
+  auto sync = shell_.sync_scope();
   ListView_DeleteAllItems(shell_.profile_list());
   const auto directory = layerc::platform::profile_directory();
   const auto scan = layerc::platform::scan_profile_directory(directory);
@@ -136,7 +147,6 @@ void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
             [](const ProfileEntry &left, const ProfileEntry &right) {
               return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
             });
-  int selected = -1;
   for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
     LVITEMW item{};
     item.mask = LVIF_TEXT | LVIF_PARAM;
@@ -155,7 +165,7 @@ void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
   if (selected >= 0)
     ListView_SetItemState(shell_.profile_list(), selected, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
-  shell_.syncing() = false;
+  }
   if (open_selection && selected >= 0)
     open_profile_row(selected, false);
   else if (shell_.profiles().empty() && document_.path().empty())
@@ -167,7 +177,7 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
     return;
   const auto target_path = shell_.profiles()[static_cast<std::size_t>(row)].path;
   const auto select_path = [&](const std::filesystem::path &path) {
-    shell_.syncing() = true;
+    auto sync = shell_.sync_scope();
     ListView_SetItemState(shell_.profile_list(), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
       if (shell_.profiles()[index].path.lexically_normal() != path.lexically_normal())
@@ -178,33 +188,24 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
       ListView_EnsureVisible(shell_.profile_list(), static_cast<int>(index), FALSE);
       break;
     }
-    shell_.syncing() = false;
   };
   if (confirm && !confirm_unsaved_changes()) {
     select_path(document_.path());
     return;
   }
 
-  const auto contents = layerc::platform::read_profile_file(target_path);
-  if (!contents.has_value()) {
+  auto loaded = layerc::platform::load_profile_bundle(target_path);
+  if (auto *error = std::get_if<layerc::platform::ProfileBundleLoadError>(&loaded)) {
     select_path(document_.path());
-    set_status(L"Could not read the selected profile.");
+    set_status(*error == layerc::platform::ProfileBundleLoadError::unreadable
+                   ? L"Could not read the selected profile."
+                   : L"The selected profile is invalid.");
     return;
   }
-  const auto parsed = layerc::core::parse_profile_json(*contents);
-  const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
-  if (profile == nullptr) {
-    select_path(document_.path());
-    set_status(L"The selected profile is invalid.");
-    return;
-  }
-  document_.profile() = *profile;
-  document_.legacy_base_schema() = source_uses_legacy_base_schema(*contents);
-  document_.upgrade_acknowledged() = false;
-  document_.path() = target_path;
-  load_current_visual_profile();
-  load_current_automation_profile();
-  document_.dirty() = false;
+  document_.assign_bundle(
+      target_path, std::get<layerc::platform::ProfileBundleLoad>(std::move(loaded)));
+  refresh_visual_controls();
+  document_.set_dirty(false);
   end_edit_on_window();
   reset_history();
   select_path(target_path);
@@ -220,10 +221,8 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   if (entry.enabled == enabled)
     return;
   const auto restore_checkbox = [&] {
-    const bool was_syncing = shell_.syncing();
-    shell_.syncing() = true;
+    auto sync = shell_.sync_scope();
     ListView_SetCheckState(shell_.profile_list(), row, entry.enabled);
-    shell_.syncing() = was_syncing;
   };
   const bool is_current =
       layerc::platform::canonical_profile_key(entry.path) ==
@@ -253,51 +252,31 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     stored_profile = document_.profile();
     stored_visual = document_.visual();
     stored_automation = document_.automation();
-    upgrade_needed =
-        (document_.legacy_base_schema() || document_.legacy_visual_schema()) &&
-        !document_.upgrade_acknowledged();
+    upgrade_needed = document_needs_schema_upgrade(document_);
   } else {
-    const auto contents = layerc::platform::read_profile_file(entry.path);
-    if (!contents.has_value()) {
-      restore_checkbox();
-      set_status(L"Could not update the selected profile.");
-      return;
+    auto loaded = layerc::platform::load_profile_bundle(entry.path);
+    const wchar_t *failure = nullptr;
+    if (const auto *error =
+            std::get_if<layerc::platform::ProfileBundleLoadError>(&loaded)) {
+      failure = *error == layerc::platform::ProfileBundleLoadError::unreadable
+                    ? L"Could not update the selected profile."
+                    : L"Could not update an invalid profile.";
+    } else {
+      auto &bundle = std::get<layerc::platform::ProfileBundleLoad>(loaded);
+      if (bundle.visual.state == layerc::platform::VisualSidecarState::invalid)
+        failure = L"Could not update a profile with an invalid visual sidecar.";
+      else if (bundle.automation.state ==
+               layerc::platform::AutomationSidecarState::invalid)
+        failure = L"Could not update a profile with an invalid automation sidecar.";
+      stored_profile = std::move(bundle.profile);
+      stored_visual = std::move(bundle.visual.profile);
+      stored_automation = std::move(bundle.automation.profile);
+      upgrade_needed = bundle.legacy_base_schema || bundle.legacy_visual_schema;
     }
-    auto parsed = layerc::core::parse_profile_json(*contents);
-    const auto *stored = std::get_if<layerc::core::GameProfile>(&parsed);
-    if (stored == nullptr) {
+    if (failure != nullptr) {
       restore_checkbox();
-      set_status(L"Could not update an invalid profile.");
+      set_status(failure);
       return;
-    }
-    stored_profile = *stored;
-    const auto visual =
-        layerc::platform::load_visual_sidecar(entry.path, stored_profile);
-    if (visual.state == layerc::platform::VisualSidecarState::invalid) {
-      restore_checkbox();
-      set_status(L"Could not update a profile with an invalid visual sidecar.");
-      return;
-    }
-    stored_visual = visual.profile;
-    const auto automation =
-        layerc::platform::load_automation_sidecar(entry.path, stored_profile);
-    if (automation.state == layerc::platform::AutomationSidecarState::invalid) {
-      restore_checkbox();
-      set_status(
-          L"Could not update a profile with an invalid automation sidecar.");
-      return;
-    }
-    stored_automation = automation.profile;
-    const bool legacy_base = source_uses_legacy_base_schema(*contents);
-    upgrade_needed = legacy_base;
-    if (!visual.source_path.empty()) {
-      const auto visual_contents =
-          layerc::platform::read_sidecar_text(
-              visual.source_path, layerc::core::max_visual_json_bytes);
-      const bool legacy_visual =
-          visual_contents.has_value() &&
-          source_uses_legacy_visual_schema(*visual_contents);
-      upgrade_needed = upgrade_needed || legacy_visual;
     }
   }
   stored_profile.enabled = enabled;
@@ -312,29 +291,25 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     set_status(L"Profile enablement was not changed.");
     return;
   case CommitResult::blocked_by_sidecar:
-  case CommitResult::write_failed:
     restore_checkbox();
     set_status(L"Could not save the profile enablement change.");
+    return;
+  case CommitResult::write_failed:
+    restore_checkbox();
+    set_status(write_failure_message());
     return;
   }
   entry.enabled = enabled;
   entry.label = profile_list_label(stored_profile);
-  const bool was_syncing = shell_.syncing();
-  shell_.syncing() = true;
-  ListView_SetItemText(shell_.profile_list(), row, 0, entry.label.data());
-  shell_.syncing() = was_syncing;
+  {
+    auto sync = shell_.sync_scope();
+    ListView_SetItemText(shell_.profile_list(), row, 0, entry.label.data());
+  }
   if (is_current) {
     document_.visual() = stored_visual;
     document_.automation() = stored_automation;
-    if (document_.automation()) {
-      document_.automation_state() =
-          layerc::platform::AutomationSidecarState::valid;
-      document_.automation_error().clear();
-    }
-    if (document_.visual()) {
-      document_.visual_state() = layerc::platform::VisualSidecarState::valid;
-      document_.visual_error().clear();
-    }
+    document_.mark_visual_edited();
+    document_.mark_automation_edited();
     const bool enablement_changes = document_.profile() != stored_profile;
     if (enablement_changes) {
       (void)document_.history().record(stored_profile, document_.visual(),
@@ -367,11 +342,9 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
     return false;
   }
 
-  const auto initial_filename =
-      path.empty()
-          ? std::filesystem::path(
-                to_wide(safe_identifier(to_wide(document_.profile().id))) + L".json")
-          : path.filename();
+  const auto initial_filename = path.empty()
+                                    ? default_profile_filename(document_.profile())
+                                    : path.filename();
   auto initial_path = directory / initial_filename;
   const auto initial_directory = directory.wstring();
   for (;;) {
@@ -425,11 +398,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
   // Shared document-commit gate: every UI entry point blocks on invalid
   // modules so unrelated edits never discard recovery data.
   if (!can_commit_document_bundle()) {
-    MessageBoxW(shell_.window(),
-                L"Repair the invalid sidecar with Calibrate before "
-                L"saving this profile. This prevents an unrelated base edit "
-                L"from silently discarding recovery data.",
-                L"Sidecar needs repair", MB_OK | MB_ICONWARNING);
+    show_sidecar_repair_message(shell_.window());
     return false;
   }
   auto destination = document_.path();
@@ -438,7 +407,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
       return false;
   } else if (destination.empty()) {
     destination = layerc::platform::profile_directory() /
-                  (to_wide(safe_identifier(to_wide(document_.profile().id))) + L".json");
+                  default_profile_filename(document_.profile());
     std::error_code error;
     if (std::filesystem::exists(destination, error) &&
         MessageBoxW(
@@ -456,24 +425,15 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     break;
   case CommitResult::invalid_fields:
   case CommitResult::invalid_profile:
-    MessageBoxW(shell_.window(),
-                L"Finish the invalid field. Cooldown duration must be greater "
-                L"than 0 and no more than 86400 seconds.",
-                L"Profile is incomplete", MB_OK | MB_ICONWARNING);
+    show_invalid_field_message(shell_.window());
     return false;
   case CommitResult::upgrade_declined:
     return false;
   case CommitResult::blocked_by_sidecar:
-    MessageBoxW(shell_.window(),
-                L"Repair the invalid sidecar with Calibrate before "
-                L"saving this profile. This prevents an unrelated base edit "
-                L"from silently discarding recovery data.",
-                L"Sidecar needs repair", MB_OK | MB_ICONWARNING);
+    show_sidecar_repair_message(shell_.window());
     return false;
   case CommitResult::write_failed:
-    MessageBoxW(shell_.window(),
-                L"Could not save a consistent profile and visual-sidecar "
-                L"bundle. The previous valid bundle was preserved.",
+    MessageBoxW(shell_.window(), write_failure_message().c_str(),
                 L"Profile save failed", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -511,13 +471,8 @@ void EditorWindow::delete_profile() {
   }
   end_edit_on_window();
   document_.path().clear();
-  document_.dirty() = false;
-  document_.visual().reset();
-  document_.automation().reset();
-  document_.automation_state() = layerc::platform::AutomationSidecarState::absent;
-  document_.automation_error().clear();
-  document_.visual_state() = layerc::platform::VisualSidecarState::absent;
-  document_.visual_error().clear();
+  document_.set_dirty(false);
+  document_.clear_sidecars();
   (void)layerc::platform::signal_profile_reload();
   reload_profile_list(safe_remaining, true);
   set_status(safe_remaining.empty() ? L"Profile moved to the Recycle Bin."
@@ -554,11 +509,18 @@ bool EditorWindow::can_commit_document_bundle() const {
   return true;
 }
 
-bool EditorWindow::commit_document_bundle(
+layerc::platform::ProfileWriteResult EditorWindow::commit_document_bundle(
     const std::filesystem::path &destination) {
-  if (destination.empty() || !can_commit_document_bundle()) return false;
+  if (destination.empty() || !can_commit_document_bundle())
+    return {layerc::platform::ProfileWriteError::invalid_input};
   return layerc::platform::write_profile_bundle(
       destination, document_.profile(), document_.visual(), document_.automation());
+}
+
+std::wstring EditorWindow::write_failure_message() const {
+  return L"Profile write failed: " +
+         to_wide(layerc::platform::profile_write_error_text(
+             last_write_error_.value_or(layerc::platform::ProfileWriteError::io_failed)));
 }
 
 namespace {
@@ -575,11 +537,6 @@ std::optional<layerc::core::ProfileError> normalize_profile_bundle(
   if (visual) visual->profile_id = profile.id;
   if (automation) automation->profile_id = profile.id;
   return std::nullopt;
-}
-
-bool document_needs_schema_upgrade(const ProfileDocument &document) {
-  return (document.legacy_base_schema() || document.legacy_visual_schema()) &&
-         !document.upgrade_acknowledged();
 }
 
 } // namespace
@@ -599,7 +556,9 @@ CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
       return CommitResult::upgrade_declined;
   }
   if (!can_commit_document_bundle()) return CommitResult::blocked_by_sidecar;
-  if (!commit_document_bundle(path)) return CommitResult::write_failed;
+  const auto write = commit_document_bundle(path);
+  last_write_error_ = write.error();
+  if (!write) return CommitResult::write_failed;
   return CommitResult::ok;
 }
 
@@ -610,19 +569,19 @@ CommitResult EditorWindow::commit_bundle(
     const bool upgrade_needed, const CommitOptions &options) {
   if (upgrade_needed) {
     if (!options.prompt_upgrade) return CommitResult::upgrade_declined;
-    const bool committing_document =
-        !document_.path().empty() &&
-        layerc::platform::canonical_profile_key(path) ==
-            layerc::platform::canonical_profile_key(document_.path());
-    if (!(committing_document ? confirm_v2_upgrade()
+    if (!(is_document_path(document_, path) ? confirm_v2_upgrade()
                               : confirm_schema_upgrade(shell_.window())))
       return CommitResult::upgrade_declined;
   }
   if (normalize_profile_bundle(profile, visual, automation).has_value())
     return CommitResult::invalid_profile;
-  if (path.empty() ||
-      !layerc::platform::write_profile_bundle(path, profile, visual, automation))
-    return CommitResult::write_failed;
+  const auto write = path.empty()
+                         ? layerc::platform::ProfileWriteResult{
+                               layerc::platform::ProfileWriteError::invalid_input}
+                         : layerc::platform::write_profile_bundle(
+                               path, profile, visual, automation);
+  last_write_error_ = write.error();
+  if (!write) return CommitResult::write_failed;
   return CommitResult::ok;
 }
 
@@ -633,15 +592,9 @@ void EditorWindow::mark_committed(const CommitOptions &options) {
 void EditorWindow::mark_committed(const std::filesystem::path &path,
                                   const layerc::core::GameProfile &profile,
                                   const CommitOptions &options) {
-  const bool is_document =
-      !document_.path().empty() &&
-      layerc::platform::canonical_profile_key(path) ==
-          layerc::platform::canonical_profile_key(document_.path());
-  if (is_document) {
-    document_.dirty() = false;
-    document_.legacy_base_schema() = false;
-    document_.legacy_visual_schema() = false;
-    document_.upgrade_acknowledged() = false;
+  if (is_document_path(document_, path)) {
+    document_.set_dirty(false);
+    document_.clear_legacy_schemas();
     document_.history().rebase(document_.profile(), document_.visual(),
                                document_.automation());
     KillTimer(shell_.window(), autosave_timer);

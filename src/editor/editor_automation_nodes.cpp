@@ -45,22 +45,11 @@ std::wstring action_label(const layerc::core::AutomationActionKind kind) {
 }
 
 void AutomationEditor::refresh_nodes(const HWND dialog) {
-  const int selected = selected_index(dialog);
-  const auto *definition =
-      owner_.document().automation() && selected >= 0 &&
-              static_cast<std::size_t>(selected) <
-                  owner_.document().automation()->automations.size()
-          ? &owner_.document().automation()
-                 ->automations[static_cast<std::size_t>(selected)]
-          : nullptr;
-  if (definition == nullptr || node_rule_ < 0 ||
-      static_cast<std::size_t>(node_rule_) >= definition->rules.size()) {
+  const auto *definition = selected_automation(dialog);
+  if (selected_rule(dialog) == nullptr) {
     node_rule_ = -1;
     node_action_ = -1;
-  } else if (node_action_ >= 0 &&
-             static_cast<std::size_t>(node_action_) >=
-                 definition->rules[static_cast<std::size_t>(node_rule_)]
-                     .actions.size()) {
+  } else if (node_action_ >= 0 && selected_action(dialog) == nullptr) {
     node_action_ = -1;
   }
 

@@ -60,15 +60,17 @@ public:
     return true;
   }
 
-  HRESULT create_string(const wchar_t *value, HSTRING *output) const {
-    return create_string_(value, static_cast<UINT32>(wcslen(value)), output);
-  }
-  void delete_string(HSTRING value) const {
-    if (value != nullptr)
-      (void)delete_string_(value);
-  }
-  HRESULT get_factory(HSTRING name, REFIID iid, void **output) const {
-    return get_factory_(name, iid, output);
+  template <typename T>
+  HRESULT get_factory(const wchar_t *class_name, REFIID iid,
+                      ComPtr<T> &output) const {
+    HSTRING name{};
+    auto result = create_string_(
+        class_name, static_cast<UINT32>(wcslen(class_name)), &name);
+    if (SUCCEEDED(result))
+      result = get_factory_(name, iid, &output);
+    if (name != nullptr)
+      (void)delete_string_(name);
+    return result;
   }
   HRESULT create_d3d_device(IDXGIDevice *device, IInspectable **output) const {
     return create_device_(device, output);
@@ -127,12 +129,12 @@ public:
   bool start() override {
     stop();
     if (!IsWindow(window_)) {
-      error_ = "capture target is no longer available";
+      slot_.set_error("capture target is no longer available");
       return false;
     }
     runtime_ = std::make_unique<WinRtRuntime>();
-    if (!runtime_->initialize(error_) ||
-        !create_hardware_device(nullptr, d3d_, error_)) {
+    if (!runtime_->initialize(slot_.error_output()) ||
+        !create_hardware_device(nullptr, d3d_, slot_.error_output())) {
       stop();
       return false;
     }
@@ -149,15 +151,10 @@ public:
     if (FAILED(result))
       return fail("D3D11 WinRT interop failed", result);
 
-    HSTRING item_class{};
-    result = runtime_->create_string(
-        L"Windows.Graphics.Capture.GraphicsCaptureItem", &item_class);
     ComPtr<wgc_abi::CaptureItemInterop> item_factory;
-    if (SUCCEEDED(result))
-      result =
-          runtime_->get_factory(item_class, wgc_abi::iid_capture_item_interop,
-                                &item_factory);
-    runtime_->delete_string(item_class);
+    result = runtime_->get_factory(
+        L"Windows.Graphics.Capture.GraphicsCaptureItem",
+        wgc_abi::iid_capture_item_interop, item_factory);
     if (SUCCEEDED(result))
       result = item_factory->CreateForWindow(window_, wgc_abi::iid_capture_item,
                                              &item_);
@@ -169,15 +166,10 @@ public:
     if (FAILED(result) || size.width <= 0 || size.height <= 0)
       return fail("WGC target size is unavailable", result);
 
-    HSTRING pool_class{};
-    result = runtime_->create_string(
-        L"Windows.Graphics.Capture.Direct3D11CaptureFramePool", &pool_class);
     ComPtr<wgc_abi::CaptureFramePoolStatics2> pool_factory;
-    if (SUCCEEDED(result))
-      result = runtime_->get_factory(pool_class,
-                                     wgc_abi::iid_capture_frame_pool_statics2,
-                                     &pool_factory);
-    runtime_->delete_string(pool_class);
+    result = runtime_->get_factory(
+        L"Windows.Graphics.Capture.Direct3D11CaptureFramePool",
+        wgc_abi::iid_capture_frame_pool_statics2, pool_factory);
     if (SUCCEEDED(result))
       // LayerC consumes only the newest frame at 5-15 Hz. One pool buffer is
       // sufficient for that drop-old-frames contract and avoids retaining a
@@ -194,42 +186,35 @@ public:
     pin_graphics_capture_runtime();
 
     pool_size_ = size;
-    started_ = true;
-    error_.clear();
+    slot_.set_started(true);
+    slot_.clear_error();
     return true;
   }
 
   void stop() override {
-    started_ = false;
+    slot_.set_started(false);
     close_inspectable(session_);
     close_inspectable(pool_);
     item_.Reset();
     direct3d_device_.Reset();
     readback_.reset();
-    last_frame_.reset();
+    slot_.clear_frame();
     d3d_ = {};
     runtime_.reset();
     pool_size_ = {};
   }
 
   CapturePollResult poll(const core::TimePoint now, bool) override {
-    if (!started_ || !IsWindow(window_))
-      return {.availability = core::CaptureAvailability::unavailable,
-              .backend = kind(),
-              .diagnostic =
-                  IsWindow(window_) ? error_ : "capture target closed",
-              .frame = {}};
+    if (!slot_.started() || !IsWindow(window_))
+      return slot_.unavailable(IsWindow(window_) ? slot_.last_error() : "capture target closed");
 
     ComPtr<wgc_abi::CaptureFrame> newest;
     for (;;) {
       ComPtr<wgc_abi::CaptureFrame> frame;
       const auto result = pool_->TryGetNextFrame(frame.ReleaseAndGetAddressOf());
       if (FAILED(result)) {
-        error_ = "WGC frame retrieval failed: " + hresult_message(result);
-        return {.availability = core::CaptureAvailability::unavailable,
-                .backend = kind(),
-                .diagnostic = error_,
-                .frame = {}};
+        slot_.set_error("WGC frame retrieval failed: " + hresult_message(result));
+        return slot_.unavailable(slot_.last_error());
       }
       if (!frame)
         break;
@@ -250,11 +235,8 @@ public:
       if (SUCCEEDED(result))
         result = newest->get_ContentSize(&content);
       if (FAILED(result) || content.width <= 0 || content.height <= 0) {
-        error_ = "WGC frame surface failed: " + hresult_message(result);
-        return {.availability = core::CaptureAvailability::unavailable,
-                .backend = kind(),
-                .diagnostic = error_,
-                .frame = {}};
+        slot_.set_error("WGC frame surface failed: " + hresult_message(result));
+        return slot_.unavailable(slot_.last_error());
       }
       if (content.width != pool_size_.width ||
           content.height != pool_size_.height) {
@@ -267,14 +249,11 @@ public:
             pool_->Recreate(direct3d_device_.Get(),
                             wgc_abi::pixel_format_bgra8_unorm, 1, content);
         if (FAILED(resized)) {
-          error_ = "WGC frame-pool resize failed: " + hresult_message(resized);
-          return {.availability = core::CaptureAvailability::unavailable,
-                  .backend = kind(),
-                  .diagnostic = error_,
-                  .frame = {}};
+          slot_.set_error("WGC frame-pool resize failed: " + hresult_message(resized));
+          return slot_.unavailable(slot_.last_error());
         }
         pool_size_ = content;
-        last_frame_.reset();
+        slot_.clear_frame();
         return {.availability = core::CaptureAvailability::starting,
                 .backend = kind(),
                 .diagnostic = "WGC target size changed; frame pool recreated",
@@ -291,39 +270,30 @@ public:
       auto captured =
           readback_.read(d3d_, texture.Get(), source, width, height, 0, 0,
                          {0.0, 0.0, 1.0, 1.0}, OutputRotation::identity,
-                         quality_, now, error_);
+                         slot_.quality(), now, slot_.error_output());
       if (!captured)
-        return {.availability = core::CaptureAvailability::unavailable,
-                .backend = kind(),
-                .diagnostic = error_,
-                .frame = {}};
-      last_frame_ = std::move(captured);
+        return slot_.unavailable(slot_.last_error());
+      slot_.publish(std::move(captured));
     }
 
-    const auto availability = last_frame_ ? core::CaptureAvailability::available
-                                          : core::CaptureAvailability::starting;
-    return {.availability = availability,
-            .backend = kind(),
-            .diagnostic = {},
-            .frame = last_frame_};
+    return slot_.current();
   }
 
   void set_excluded_screen_rects(std::span<const RECT>) override {}
   void set_quality(const core::CaptureQuality quality) override {
-    if (quality_ == quality)
-      return;
-    quality_ = quality;
-    last_frame_.reset();
+    slot_.set_quality(quality);
   }
   core::CaptureBackendKind kind() const noexcept override {
     return core::CaptureBackendKind::windows_graphics_capture;
   }
   std::string gpu_description() const override { return d3d_.description; }
-  std::string last_error() const override { return error_; }
+  std::string last_error() const override {
+    return slot_.last_error();
+  }
 
 private:
   bool fail(const char *prefix, const HRESULT result) {
-    error_ = std::string(prefix) + ": " + hresult_message(result);
+    slot_.set_error(std::string(prefix) + ": " + hresult_message(result));
     stop();
     return false;
   }
@@ -336,11 +306,8 @@ private:
   ComPtr<wgc_abi::CaptureFramePool> pool_;
   ComPtr<wgc_abi::CaptureSession> session_;
   TextureReadback readback_;
-  std::shared_ptr<CaptureFrame> last_frame_;
-  std::string error_;
+  BackendFrameSlot slot_{core::CaptureBackendKind::windows_graphics_capture};
   wgc_abi::SizeInt32 pool_size_{};
-  core::CaptureQuality quality_{core::CaptureQuality::balanced};
-  bool started_{};
 };
 
 } // namespace

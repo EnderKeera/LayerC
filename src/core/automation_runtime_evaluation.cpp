@@ -146,23 +146,22 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
     return a.ri < b.ri;
   });
   for (const auto &match : matches) {
-    if (MonotonicClock::now() > stage.deadline) {
-      const AutomationError timeout{"$runtime",
-                                    "automation execution exceeded 2 ms"};
+    // Record the error against this rule and fault its automation so the
+    // outer process() can retry from the original snapshot.
+    const auto fault_match = [&](const AutomationError &failure)
+        -> std::optional<std::string> {
       add_trace(event, match.automation->id, match.rule->id, "error",
-                timeout.message);
-      stage.fault = timeout;
+                failure.message);
+      stage.fault = failure;
       return match.automation->id;
-    }
+    };
+    if (MonotonicClock::now() > stage.deadline)
+      return fault_match({"$runtime", "automation execution exceeded 2 ms"});
     AutomationError error;
     auto condition = eval(match.rule->condition, event, stage.root_snapshot,
                           stage.result.node_evaluations, error);
-    if (!condition) {
-      add_trace(event, match.automation->id, match.rule->id, "error",
-                error.message);
-      stage.fault = error;
-      return match.automation->id;
-    }
+    if (!condition)
+      return fault_match(error);
     if (!truthy(*condition)) {
       add_trace(event, match.automation->id, match.rule->id, "condition",
                 "false");
@@ -171,6 +170,18 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
     stage.fired.insert(fired_key(match.ai, match.ri));
     add_trace(event, match.automation->id, match.rule->id, "condition", "true");
     bool rule_fault{};
+    const auto eval_into =
+        [&](const std::optional<AutomationExpression> &source,
+            AutomationValue &output) {
+          if (!source.has_value())
+            return true;
+          auto value = eval(*source, event, stage.root_snapshot,
+                            stage.result.node_evaluations, error);
+          if (!value)
+            return false;
+          output = std::move(*value);
+          return true;
+        };
     std::vector<AutomationEffect> candidate;
     for (const auto &action : match.rule->actions) {
       AutomationEffect effect;
@@ -182,32 +193,15 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
       effect.timestamp = event.timestamp;
       effect.repeating = action.repeating;
       effect.order = {match.rule->priority, match.ai, match.ri};
-      if (action.value.has_value()) {
-        auto value = eval(*action.value, event, stage.root_snapshot,
-                          stage.result.node_evaluations, error);
-        if (!value) {
-          rule_fault = true;
-          break;
-        }
-        effect.value = std::move(*value);
-      }
-      if (action.secondary.has_value()) {
-        auto secondary = eval(*action.secondary, event, stage.root_snapshot,
-                              stage.result.node_evaluations, error);
-        if (!secondary) {
-          rule_fault = true;
-          break;
-        }
-        effect.secondary = std::move(*secondary);
+      if (!eval_into(action.value, effect.value) ||
+          !eval_into(action.secondary, effect.secondary)) {
+        rule_fault = true;
+        break;
       }
       candidate.push_back(std::move(effect));
     }
-    if (rule_fault) {
-      add_trace(event, match.automation->id, match.rule->id, "error",
-                error.message);
-      stage.fault = error;
-      return match.automation->id;
-    }
+    if (rule_fault)
+      return fault_match(error);
     auto candidate_state = stage.staged;
     auto candidate_winners = stage.winners;
     std::vector<AutomationEvent> candidate_derived;
@@ -229,22 +223,13 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
         candidate_derived.push_back(std::move(next));
       }
     }
-    if (rule_fault) {
-      add_trace(event, match.automation->id, match.rule->id, "error",
-                error.message);
-      stage.fault = error;
-      return match.automation->id;
-    }
+    if (rule_fault)
+      return fault_match(error);
     const auto derived_count = stage.queue.size() - 1U;
     if (candidate_derived.size() >
-        max_automation_derived_events - derived_count) {
-      const AutomationError cap_fault{"$runtime",
-                                      "root event exceeded 32 derived events"};
-      add_trace(event, match.automation->id, match.rule->id, "error",
-                cap_fault.message);
-      stage.fault = cap_fault;
-      return match.automation->id;
-    }
+        max_automation_derived_events - derived_count)
+      return fault_match(
+          {"$runtime", "root event exceeded 32 derived events"});
     stage.staged = std::move(candidate_state);
     stage.winners = std::move(candidate_winners);
     for (auto &next : candidate_derived)

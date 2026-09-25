@@ -15,7 +15,16 @@
 #include <windows.h>
 
 namespace layerc::editor {
+namespace {
 
+// Do not publish an in-memory schema-v3 migration before the user has
+// approved making that one-way disk upgrade.
+bool live_publish_allowed(const ProfileDocument &document) {
+  return (!document.legacy_base_schema() && !document.legacy_visual_schema()) ||
+         document.upgrade_acknowledged();
+}
+
+} // namespace
 
 void EditorWindow::reset_history() {
   document_.history().reset(document_.profile(), document_.visual(), document_.automation());
@@ -31,13 +40,11 @@ void EditorWindow::sync_current_profile_entry() {
       continue;
     entry.enabled = document_.profile().enabled;
     entry.label = profile_list_label(document_.profile());
-    const bool was_syncing = shell_.syncing();
-    shell_.syncing() = true;
+    auto sync = shell_.sync_scope();
     ListView_SetItemText(shell_.profile_list(), static_cast<int>(index), 0,
                          entry.label.data());
     ListView_SetCheckState(shell_.profile_list(), static_cast<int>(index),
                            entry.enabled);
-    shell_.syncing() = was_syncing;
     InvalidateRect(shell_.profile_list(), nullptr, TRUE);
     return;
   }
@@ -47,20 +54,16 @@ void EditorWindow::record_profile_change(const ChangeKind kind) {
   if (shell_.syncing()) return;
   if (document_.history().is_baseline(document_.profile(), document_.visual(), document_.automation())) {
     if (!draft_controls_valid()) {
-      document_.dirty() = true;
+      document_.set_dirty(true);
       schedule_autosave(false);
     }
     return;
   }
   (void)document_.history().record(document_.profile(), document_.visual(), document_.automation(),
                         kind == ChangeKind::text);
-  document_.dirty() = true;
+  document_.set_dirty(true);
   schedule_autosave(kind != ChangeKind::text);
-  // Do not publish an in-memory schema-v3 migration before the user has
-  // approved making that one-way disk upgrade.
-  if ((!document_.legacy_base_schema() && !document_.legacy_visual_schema()) ||
-      document_.upgrade_acknowledged())
-    send_live_profile();
+  if (live_publish_allowed(document_)) send_live_profile();
 }
 
 void EditorWindow::schedule_autosave(const bool immediate) {
@@ -114,7 +117,7 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
     set_status(L"Not autosaved — repair the invalid sidecar first.");
     break;
   case CommitResult::write_failed:
-    set_status(L"Autosave failed — the last consistent profile bundle remains active.");
+    set_status(write_failure_message());
     break;
   }
   return false;
@@ -123,7 +126,7 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
 void EditorWindow::notify_profile_committed(
     const std::filesystem::path &path,
     const layerc::core::GameProfile &profile) {
-  ++live_edit_.revision();
+  live_edit_.advance_revision();
   if (live_edit_.channel().connected() && live_edit_.package_authenticated()) {
     (void)live_edit_.channel().send({
         .type = layerc::core::LiveMessageType::committed_profile,
@@ -147,7 +150,7 @@ void EditorWindow::poll_live_channel() {
     handle_live_message(std::get<layerc::core::LiveMessage>(result));
   }
   if (live_edit_.channel().take_connection_changed()) {
-    live_edit_.package_authenticated() = false;
+    live_edit_.set_package_authenticated(false);
     if (live_edit_.channel().connected()) {
       (void)live_edit_.channel().send({
           .type = layerc::core::LiveMessageType::handshake,
@@ -178,7 +181,7 @@ void EditorWindow::poll_live_channel() {
   const ULONGLONG now = GetTickCount64();
   if (live_edit_.package_authenticated() && live_edit_.session_id() != 0 &&
       now - live_edit_.last_heartbeat_send() >= 250) {
-    live_edit_.last_heartbeat_send() = now;
+    live_edit_.note_heartbeat_send(now);
     (void)live_edit_.channel().send({
         .type = layerc::core::LiveMessageType::heartbeat,
         .revision = live_edit_.revision(),
@@ -190,7 +193,7 @@ void EditorWindow::poll_live_channel() {
   }
   const UINT desired_interval = live_edit_.channel().connected() ? 16U : 100U;
   if (desired_interval != live_edit_.timer_interval()) {
-    live_edit_.timer_interval() = desired_interval;
+    live_edit_.set_timer_interval(desired_interval);
     SetTimer(shell_.window(), live_channel_timer, live_edit_.timer_interval(), nullptr);
   }
 }
@@ -236,7 +239,7 @@ void EditorWindow::handle_live_message(
         set_status(L"Connected LayerD is not from the current LayerC package.");
         return;
       }
-      live_edit_.package_authenticated() = true;
+      live_edit_.set_package_authenticated(true);
       set_status(L"Ready — authenticated matching LayerD connection.");
       automation_editor_->restore_live_subscription();
 
@@ -254,11 +257,10 @@ void EditorWindow::handle_live_message(
   if (layerc::core::revision_decision(message.revision, live_edit_.peer_revision()) !=
       layerc::core::RevisionDecision::accept)
     return;
-  live_edit_.peer_revision() = message.revision;
-  const auto panel = std::ranges::find_if(
-      document_.profile().panels, [&](const layerc::core::Panel &candidate) {
-        return candidate.id == message.panel_id;
-      });
+  live_edit_.observe_peer(message.revision);
+  const auto panel = std::ranges::find(document_.profile().panels,
+                                       message.panel_id,
+                                       &layerc::core::Panel::id);
   if (panel == document_.profile().panels.end()) return;
   panel->anchor_x = message.anchor_x;
   panel->anchor_y = message.anchor_y;
@@ -274,7 +276,7 @@ void EditorWindow::send_live_profile() {
   if (!std::holds_alternative<layerc::core::GameProfile>(
           layerc::core::parse_profile_json(serialized)))
     return;
-  ++live_edit_.revision();
+  live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::live_profile,
       .revision = live_edit_.revision(),
@@ -288,8 +290,8 @@ void EditorWindow::send_live_anchor(const bool final) {
   if (live_edit_.session_id() == 0 || panel == nullptr) return;
   const ULONGLONG now = GetTickCount64();
   if (!final && now - live_edit_.last_drag_send() < 16) return;
-  live_edit_.last_drag_send() = now;
-  ++live_edit_.revision();
+  live_edit_.note_drag_send(now);
+  live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::anchor_changed,
       .revision = live_edit_.revision(),
@@ -302,12 +304,10 @@ void EditorWindow::send_live_anchor(const bool final) {
 }
 
 void EditorWindow::select_bar_by_id(const std::string_view panel_id) {
-  for (std::size_t index = 0; index < document_.profile().panels.size(); ++index) {
-    if (document_.profile().panels[index].id == panel_id) {
-      refresh_bar_list(index);
-      return;
-    }
-  }
+  const auto &panels = document_.profile().panels;
+  const auto found = std::ranges::find(panels, panel_id, &layerc::core::Panel::id);
+  if (found != panels.end())
+    refresh_bar_list(static_cast<std::size_t>(found - panels.begin()));
 }
 
 void EditorWindow::edit_on_window() {
@@ -391,7 +391,7 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
   EnableWindow(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), TRUE);
   set_text(GetDlgItem(shell_.window(), IDC_POSITION_ON_WINDOW), L"End Positioning");
   const auto *panel = selected_bar();
-  ++live_edit_.revision();
+  live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::begin_edit,
       .revision = live_edit_.revision(),
@@ -401,7 +401,7 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
       .panel_id = panel == nullptr ? std::string{} : panel->id,
       .profile_json = layerc::core::serialize_profile_json(document_.profile()),
   });
-  live_edit_.last_heartbeat_send() = GetTickCount64();
+  live_edit_.note_heartbeat_send(GetTickCount64());
   set_status(L"Starting mirrored on-window editing; game overlay stays click-through.");
 }
 
@@ -433,13 +433,11 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled,
                   L"Enable Direct Drag", MB_OKCANCEL | MB_ICONINFORMATION) !=
           IDOK) {
     set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), false);
-    InvalidateRect(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), nullptr, TRUE);
     return;
   }
-  if (enabled) live_edit_.direct_drag_notice_shown() = true;
-  live_edit_.direct_drag_enabled() = enabled;
+  live_edit_.set_direct_drag(enabled);
   set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), enabled);
-  ++live_edit_.revision();
+  live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::set_direct_drag,
       .revision = live_edit_.revision(),
@@ -466,14 +464,13 @@ void EditorWindow::apply_history_snapshot(EditorProfileSnapshot snapshot) {
   document_.profile() = std::move(snapshot.profile);
   document_.visual() = std::move(snapshot.visual_profile);
   document_.automation() = std::move(snapshot.automation_profile);
-  document_.dirty() = document_.history().is_dirty(document_.profile(), document_.visual(), document_.automation(),
-                             !document_.path().empty());
+  document_.set_dirty(document_.history().is_dirty(
+      document_.profile(), document_.visual(), document_.automation(),
+      !document_.path().empty()));
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);
-  if ((!document_.legacy_base_schema() && !document_.legacy_visual_schema()) ||
-      document_.upgrade_acknowledged())
-    send_live_profile();
+  if (live_publish_allowed(document_)) send_live_profile();
 }
 
 } // namespace layerc::editor

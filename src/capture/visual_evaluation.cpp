@@ -4,7 +4,6 @@
 
 namespace layerc::capture {
 
-// One pixel observation evaluated against a capture result.
 core::ObservationMeasurement evaluate_pixel_measurement(
     const core::PixelRule &rule, const VisualEvaluationContext &context) {
   const auto &capture = context.capture;
@@ -26,8 +25,6 @@ core::ObservationMeasurement evaluate_pixel_measurement(
           .sampled_at = context.sampled_at};
 }
 
-// One template observation evaluated against a capture result with
-// caller-prepared references.
 core::ObservationMeasurement evaluate_template_measurement(
     const core::TemplateState &state,
     const std::span<const core::TemplateImage> references,

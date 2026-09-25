@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <utility>
 
 namespace layerc::platform {
@@ -42,10 +43,8 @@ X11OverlayRect panel_rect(const X11OverlayFrame &frame) {
   const int dpi = frame.dpi;
   const auto geometry =
       layerc::core::panel_geometry(frame.panel, frame.bars.size());
-  int width = scaled_pixels(geometry.size.width, dpi);
-  int height = scaled_pixels(geometry.size.height, dpi);
-  width = std::max(width, 1);
-  height = std::max(height, 1);
+  const int width = std::max(scaled_pixels(geometry.size.width, dpi), 1);
+  const int height = std::max(scaled_pixels(geometry.size.height, dpi), 1);
   X11OverlayRect rect;
   rect.width = width;
   rect.height = height;
@@ -67,41 +66,32 @@ X11OverlayWindow::X11OverlayWindow(const X11Display &display,
     : display_(&display), window_(window) {}
 
 X11OverlayWindow::X11OverlayWindow(X11OverlayWindow &&other) noexcept
-    : display_(other.display_), window_(other.window_), gc_(other.gc_),
-      font_set_(other.font_set_), font_set_tried_(other.font_set_tried_),
-      rect_(other.rect_), visible_(other.visible_),
-      truecolor_(other.truecolor_), red_mask_(other.red_mask_),
-      green_mask_(other.green_mask_), blue_mask_(other.blue_mask_),
-      colormap_pixels_(std::move(other.colormap_pixels_)) {
-  other.display_ = nullptr;
-  other.window_ = 0;
-  other.gc_ = nullptr;
-  other.font_set_ = nullptr;
-  other.visible_ = false;
-  other.truecolor_ = false;
-}
+    : display_(std::exchange(other.display_, nullptr)),
+      window_(std::exchange(other.window_, 0)),
+      gc_(std::exchange(other.gc_, nullptr)),
+      font_set_(std::exchange(other.font_set_, nullptr)),
+      font_set_tried_(other.font_set_tried_), rect_(other.rect_),
+      visible_(std::exchange(other.visible_, false)),
+      truecolor_(std::exchange(other.truecolor_, false)),
+      red_mask_(other.red_mask_), green_mask_(other.green_mask_),
+      blue_mask_(other.blue_mask_),
+      colormap_pixels_(std::move(other.colormap_pixels_)) {}
 
 X11OverlayWindow &X11OverlayWindow::operator=(X11OverlayWindow &&other) noexcept {
   if (this != &other) {
     destroy();
-    display_ = other.display_;
-    window_ = other.window_;
-    gc_ = other.gc_;
-    font_set_ = other.font_set_;
+    display_ = std::exchange(other.display_, nullptr);
+    window_ = std::exchange(other.window_, 0);
+    gc_ = std::exchange(other.gc_, nullptr);
+    font_set_ = std::exchange(other.font_set_, nullptr);
     font_set_tried_ = other.font_set_tried_;
     rect_ = other.rect_;
-    visible_ = other.visible_;
-    truecolor_ = other.truecolor_;
+    visible_ = std::exchange(other.visible_, false);
+    truecolor_ = std::exchange(other.truecolor_, false);
     red_mask_ = other.red_mask_;
     green_mask_ = other.green_mask_;
     blue_mask_ = other.blue_mask_;
     colormap_pixels_ = std::move(other.colormap_pixels_);
-    other.truecolor_ = false;
-    other.display_ = nullptr;
-    other.window_ = 0;
-    other.gc_ = nullptr;
-    other.font_set_ = nullptr;
-    other.visible_ = false;
   }
   return *this;
 }
@@ -117,12 +107,8 @@ void X11OverlayWindow::destroy() noexcept {
     if (gc_ != nullptr) XFreeGC(raw, gc_);
     X11ErrorTrap trap{raw};
     if (!colormap_pixels_.empty()) {
-      std::vector<unsigned long> pixels;
-      pixels.reserve(colormap_pixels_.size());
-      for (const auto &[rgb, pixel] : colormap_pixels_) {
-        (void)rgb;
-        pixels.push_back(pixel);
-      }
+      const auto allocated = colormap_pixels_ | std::views::values;
+      std::vector<unsigned long> pixels(allocated.begin(), allocated.end());
       XFreeColors(raw, DefaultColormap(raw, DefaultScreen(raw)),
                   pixels.data(), static_cast<int>(pixels.size()), 0);
     }

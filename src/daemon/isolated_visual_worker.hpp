@@ -5,7 +5,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <filesystem>
 #include <mutex>
 #include <span>
 #include <string>
@@ -38,10 +37,6 @@ public:
   [[nodiscard]] DWORD process_id() const noexcept;
 
 private:
-  [[nodiscard]] bool validate_and_resume(const std::filesystem::path &helper,
-                                         HANDLE thread,
-                                         const std::atomic_bool &stopping,
-                                         std::string &error);
   [[nodiscard]] bool connect_and_authenticate(std::string_view nonce,
                                               std::string &error);
 
@@ -69,6 +64,14 @@ public:
            std::string &error);
 
 private:
+  // Returns false on pipe/protocol failure (error is filled).
+  [[nodiscard]] bool exchange_configuration(
+      HANDLE pipe, std::uint64_t &applied_revision,
+      std::atomic_uint64_t &last_progress_ms, std::string &error);
+  [[nodiscard]] bool poll_snapshot(HANDLE pipe, std::uint64_t &packet_sequence,
+                                   std::atomic_uint64_t &last_progress_ms,
+                                   HANDLE snapshot_event, std::string &error);
+
   mutable std::mutex mutex_;
   std::uint64_t configuration_revision_{};
   std::vector<VisualEvaluationRequest> requests_;

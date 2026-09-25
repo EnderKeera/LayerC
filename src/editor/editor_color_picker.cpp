@@ -4,9 +4,7 @@
 #include "layerc/platform/native_theme.hpp"
 
 #include <array>
-#include <cerrno>
 #include <cstdint>
-#include <cstdlib>
 #include <cwchar>
 #include <optional>
 #include <string>
@@ -52,14 +50,7 @@ constexpr std::array<PaletteColor, 24> color_palette{
 };
 
 std::optional<std::uint32_t> channel_value(const HWND window, const int id) {
-  const auto text = control_text(GetDlgItem(window, id));
-  if (text.empty()) return std::nullopt;
-  errno = 0;
-  wchar_t *end{};
-  const unsigned long value = std::wcstoul(text.c_str(), &end, 10);
-  if (errno != 0 || end == text.c_str() || *end != L'\0' || value > 255)
-    return std::nullopt;
-  return static_cast<std::uint32_t>(value);
+  return parse_bounded(control_text(GetDlgItem(window, id)), 0, 255);
 }
 
 std::optional<std::uint32_t> rgb_fields(const HWND window) {
@@ -74,11 +65,7 @@ std::optional<std::uint32_t> rgb_fields(const HWND window) {
 std::optional<std::uint32_t> hex_value(std::wstring text) {
   if (!text.empty() && text.front() == L'#') text.erase(text.begin());
   if (text.size() != 6) return std::nullopt;
-  wchar_t *end = nullptr;
-  const auto value = std::wcstoul(text.c_str(), &end, 16);
-  if (end != text.c_str() + text.size())
-    return std::nullopt;
-  return static_cast<std::uint32_t>(value);
+  return parse_bounded(text, 0, 0xFFFFFFU, 16);
 }
 
 std::wstring hex_label(const std::uint32_t color) {
@@ -100,7 +87,7 @@ void invalidate_picker(const HWND window) {
 } // namespace
 
 bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
-  appearance_editor_.picker_color() = value & 0xFFFFFFU;
+  appearance_editor_.set_picker_color(value);
   const INT_PTR result = DialogBoxParamW(
       shell_.instance(), MAKEINTRESOURCEW(IDD_COLOR_PICKER), owner,
       &dispatch_member_dialog<EditorWindow,
@@ -122,10 +109,11 @@ void EditorWindow::initialize_color_picker(const HWND window) {
 }
 
 void EditorWindow::refresh_color_picker(const HWND window) {
-  appearance_editor_.picker_syncing() = true;
-  refresh_color_picker_rgb(window);
-  set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
-  appearance_editor_.picker_syncing() = false;
+  {
+    auto sync = appearance_editor_.picker_sync_scope();
+    refresh_color_picker_rgb(window);
+    set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
+  }
   invalidate_picker(window);
 }
 
@@ -142,10 +130,11 @@ void EditorWindow::update_color_picker_from_rgb(const HWND window) {
   if (appearance_editor_.picker_syncing()) return;
   const auto value = rgb_fields(window);
   if (!value.has_value()) return;
-  appearance_editor_.picker_color() = *value;
-  appearance_editor_.picker_syncing() = true;
-  set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
-  appearance_editor_.picker_syncing() = false;
+  appearance_editor_.set_picker_color(*value);
+  {
+    auto sync = appearance_editor_.picker_sync_scope();
+    set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
+  }
   invalidate_picker(window);
 }
 
@@ -153,10 +142,11 @@ void EditorWindow::update_color_picker_from_hex(const HWND window) {
   if (appearance_editor_.picker_syncing()) return;
   const auto value = hex_value(control_text(GetDlgItem(window, IDC_COLOR_HEX)));
   if (!value.has_value()) return;
-  appearance_editor_.picker_color() = *value;
-  appearance_editor_.picker_syncing() = true;
-  refresh_color_picker_rgb(window);
-  appearance_editor_.picker_syncing() = false;
+  appearance_editor_.set_picker_color(*value);
+  {
+    auto sync = appearance_editor_.picker_sync_scope();
+    refresh_color_picker_rgb(window);
+  }
   invalidate_picker(window);
 }
 
@@ -175,30 +165,16 @@ bool EditorWindow::draw_color_picker_item(const DRAWITEMSTRUCT &draw) const {
   }
 
   const auto role_colors = colors(layerc::platform::EditorControlRole::button);
-  const HBRUSH background = CreateSolidBrush(role_colors.fill);
-  FillRect(draw.hDC, &draw.rcItem, background);
-  DeleteObject(background);
+  fill_solid_rect(draw.hDC, draw.rcItem, role_colors.fill);
   RECT sample = draw.rcItem;
   InflateRect(&sample, -3, -3);
-  const HBRUSH sample_brush = CreateSolidBrush(color_ref(*color));
-  FillRect(draw.hDC, &sample, sample_brush);
-  DeleteObject(sample_brush);
-  const HPEN border = CreatePen(PS_SOLID, selected ? 2 : 1,
-                               selected ? role_colors.selection
-                                        : role_colors.border);
-  const HGDIOBJ previous_pen = SelectObject(draw.hDC, border);
-  const HGDIOBJ previous_brush =
-      SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));
-  Rectangle(draw.hDC, sample.left, sample.top, sample.right, sample.bottom);
-  SelectObject(draw.hDC, previous_brush);
-  SelectObject(draw.hDC, previous_pen);
-  DeleteObject(border);
+  fill_solid_rect(draw.hDC, sample, color_ref(*color));
+  outline_rect(draw.hDC, sample, selected ? 2 : 1,
+               selected ? role_colors.selection : role_colors.border);
   if ((draw.itemState & ODS_FOCUS) != 0) {
     RECT focus = draw.rcItem;
     InflateRect(&focus, -1, -1);
-    const HBRUSH focus_brush = CreateSolidBrush(role_colors.text);
-    FrameRect(draw.hDC, &focus, focus_brush);
-    DeleteObject(focus_brush);
+    frame_solid_rect(draw.hDC, focus, role_colors.text);
   }
   return true;
 }
@@ -213,8 +189,8 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
     const int notification = HIWORD(wparam);
     if (id >= IDC_COLOR_SWATCH_FIRST && id <= IDC_COLOR_SWATCH_LAST &&
         notification == BN_CLICKED) {
-      appearance_editor_.picker_color() =
-          color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)].value;
+      appearance_editor_.set_picker_color(
+          color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)].value);
       refresh_color_picker(window);
       return TRUE;
     }
@@ -237,7 +213,7 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
                     L"Invalid color", MB_OK | MB_ICONWARNING);
         return TRUE;
       }
-      appearance_editor_.picker_color() = *rgb;
+      appearance_editor_.set_picker_color(*rgb);
       EndDialog(window, IDOK);
       return TRUE;
     }

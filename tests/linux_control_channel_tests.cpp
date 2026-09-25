@@ -35,25 +35,11 @@ std::string make_frame(std::string_view payload) {
   return framed;
 }
 
-std::filesystem::path g_root;
-
 } // namespace
 
-void linux_control_channel_contracts() {
+void control_framer_contracts() {
   using layerc::test::expect;
   bool passed = true;
-
-  g_root = std::filesystem::temp_directory_path() /
-           ("layerc-control-" + std::to_string(::getpid()));
-  std::error_code error;
-  std::filesystem::remove_all(g_root, error);
-  std::filesystem::create_directories(g_root / "runtime", error);
-  if (error) {
-    (void)expect(false, "control-channel test root should be created");
-    return;
-  }
-  (void)::setenv("XDG_RUNTIME_DIR",
-                 (g_root / "runtime").string().c_str(), 1);
 
   // Framer: partial bytes, multi-frame coalescing, and sticky bounds faults.
   {
@@ -91,6 +77,12 @@ void linux_control_channel_contracts() {
                      "undrained buffers above 4 MiB must fault");
   }
 
+  (void)passed;
+}
+
+void control_protocol_contracts() {
+  using layerc::test::expect;
+  bool passed = true;
   // Protocol codec: strict LayerC.Control v1 envelope.
   {
     const auto request = control::encode_control_request(
@@ -120,6 +112,22 @@ void linux_control_channel_contracts() {
                          value->find("payload") != nullptr &&
                          value->find("payload")->find("pid") != nullptr,
                      "responses must carry ok + payload");
+    const auto decoded = control::decode_control_response(response);
+    passed &= expect(decoded.has_value() && decoded->ok &&
+                         decoded->error.empty(),
+                     "decode mirrors an encoded success response");
+    const auto decoded_failure = control::decode_control_response(
+        control::encode_control_response(false, "nope", {}));
+    passed &= expect(decoded_failure.has_value() && !decoded_failure->ok &&
+                         decoded_failure->error == "nope",
+                     "decode mirrors an encoded failure and its error text");
+    passed &= expect(
+        !control::decode_control_response(R"({"ok":true})").has_value() &&
+            !control::decode_control_response(
+                 R"({"proto":"LayerC.Control","v":2,"ok":true})")
+                 .has_value() &&
+            !control::decode_control_response("not json").has_value(),
+        "decode rejects responses outside the v1 envelope");
     const auto failure =
         control::encode_control_response(false, "nope", {});
     const auto parsed_failure = layerc::core::json::parse(failure);
@@ -132,6 +140,12 @@ void linux_control_channel_contracts() {
                      "error responses must carry ok=false + error");
   }
 
+  (void)passed;
+}
+
+void control_dispatch_contracts() {
+  using layerc::test::expect;
+  bool passed = true;
   // Daemon dispatch: status/reload ack, stop flag, and rejection paths.
   {
     layerc::runtime::DaemonKernel kernel;
@@ -195,6 +209,19 @@ void linux_control_channel_contracts() {
                      "malformed requests must be rejected");
   }
 
+  (void)passed;
+}
+
+void control_socket_contracts() {
+  using layerc::test::expect;
+  bool passed = true;
+  const layerc::test::TempDirectory directory("layerc-control");
+  const auto root = directory.path();
+  std::filesystem::create_directories(root / "runtime");
+  const layerc::test::ScopedEnvironment runtime("XDG_RUNTIME_DIR", root / "runtime");
+  if (!expect(runtime.applied(), "control-channel test runtime should be set"))
+    return;
+
   // Socket path resolution: XDG first, owner-checked /tmp fallback.
   {
     std::string warning;
@@ -203,18 +230,20 @@ void linux_control_channel_contracts() {
                          path->ends_with("/layerc/control.sock") &&
                          warning.empty(),
                      "XDG_RUNTIME_DIR should yield the layerc control socket");
-    (void)::unsetenv("XDG_RUNTIME_DIR");
-    warning.clear();
-    const auto fallback = control::control_socket_path(warning);
-    const std::string expected =
-        "/tmp/layerc-" + std::to_string(static_cast<long>(::geteuid())) +
-        "/control.sock";
-    passed &= expect(fallback == std::optional<std::string>{expected} &&
-                         !warning.empty(),
-                     "missing XDG_RUNTIME_DIR should warn about the "
-                     "/tmp/layerc-<uid> fallback");
-    (void)::setenv("XDG_RUNTIME_DIR",
-                   (g_root / "runtime").string().c_str(), 1);
+    {
+      const layerc::test::ScopedEnvironment unset_runtime("XDG_RUNTIME_DIR",
+                                                         std::nullopt);
+      passed &= expect(unset_runtime.applied(), "runtime should be cleared");
+      warning.clear();
+      const auto fallback = control::control_socket_path(warning);
+      const std::string expected =
+          "/tmp/layerc-" + std::to_string(static_cast<long>(::geteuid())) +
+          "/control.sock";
+      passed &= expect(fallback == std::optional<std::string>{expected} &&
+                           !warning.empty(),
+                       "missing XDG_RUNTIME_DIR should warn about the "
+                       "/tmp/layerc-<uid> fallback");
+    }
   }
 
   // Live listener: busy rejection, accepted peer, full request/response.
@@ -269,7 +298,7 @@ void linux_control_channel_contracts() {
             request_json = server_framer.next_frame().value_or(std::string{});
           }
           layerc::runtime::DaemonKernel kernel;
-    (void)kernel.reconcile(kernel.demand());
+          (void)kernel.reconcile(kernel.demand());
           const auto response = layerc::daemon::handle_control_request(
               request_json, kernel);
           passed &= expect(!request_json.empty() &&
@@ -378,11 +407,12 @@ void linux_control_channel_contracts() {
   // Hostile parent directory: a pre-created non-owner-only socket directory
   // (the exact unit the fallback protects) is refused.
   {
-    auto hostile = g_root / "hostile";
-    std::error_code ignored;
-    std::filesystem::create_directories(hostile / "layerc", ignored);
+    const auto hostile = root / "hostile";
+    std::filesystem::create_directories(hostile / "layerc");
     (void)::chmod((hostile / "layerc").c_str(), 0755);
-    (void)::setenv("XDG_RUNTIME_DIR", hostile.string().c_str(), 1);
+    const layerc::test::ScopedEnvironment hostile_runtime("XDG_RUNTIME_DIR",
+                                                            hostile);
+    passed &= expect(hostile_runtime.applied(), "hostile runtime should be set");
     std::string error;
     std::string warning;
     passed &= expect(
@@ -391,11 +421,11 @@ void linux_control_channel_contracts() {
         "a non-owner-only runtime directory must be refused");
   }
 
-  std::filesystem::remove_all(g_root, error);
   (void)passed;
 }
 
-int main() {
-  return layerc::test::run(
-      {{"linux_control_channel_contracts", linux_control_channel_contracts}});
-}
+LAYERC_TEST_MAIN(
+    LAYERC_TEST_CASE(control_framer_contracts),
+    LAYERC_TEST_CASE(control_protocol_contracts),
+    LAYERC_TEST_CASE(control_dispatch_contracts),
+    LAYERC_TEST_CASE(control_socket_contracts))

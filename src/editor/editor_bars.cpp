@@ -103,11 +103,11 @@ void EditorWindow::refresh_bar_list(const std::size_t preferred_panel) {
 }
 
 void EditorWindow::refresh_bar_controls() {
-  shell_.syncing() = true;
+  auto sync = shell_.sync_scope();
   const auto *panel = selected_bar();
-  panel_preview_.controls_panel() = panel == nullptr
+  panel_preview_.set_controls_panel(panel == nullptr
                             ? SIZE_MAX
-                            : static_cast<std::size_t>(panel - document_.profile().panels.data());
+                            : static_cast<std::size_t>(panel - document_.profile().panels.data()));
   for (const auto &binding : profile_field_bindings())
     if (binding.owner == ProfileFieldOwner::panel)
       EnableWindow(GetDlgItem(shell_.window(), binding.control_id), panel != nullptr);
@@ -127,7 +127,6 @@ void EditorWindow::refresh_bar_controls() {
     set_text(GetDlgItem(shell_.window(), IDC_BAR_BORDER), L"Border");
     set_text(GetDlgItem(shell_.window(), IDC_BAR_TEXT), L"Text");
   } else set_text(GetDlgItem(shell_.window(), IDC_POSITION_STATUS), L"Add a cooldown to create a bar.");
-  shell_.syncing() = false;
   InvalidateRect(panel_preview_.window(), nullptr, TRUE);
 }
 
@@ -232,14 +231,11 @@ void EditorWindow::paint_preview(const HWND window) {
   const HGDIOBJ previous_font = SelectObject(dc, shell_.font());
   const auto preview_colors = colors(layerc::platform::EditorControlRole::preview);
   RECT client{}; GetClientRect(window, &client);
-  const HBRUSH fill = CreateSolidBrush(preview_colors.fill); FillRect(dc, &client, fill); DeleteObject(fill);
+  fill_solid_rect(dc, client, preview_colors.fill);
   const RECT canvas = preview_canvas();
-  const HBRUSH canvas_fill = CreateSolidBrush(colors(layerc::platform::EditorControlRole::window).fill);
-  FillRect(dc, &canvas, canvas_fill); DeleteObject(canvas_fill);
-  const HPEN canvas_pen = CreatePen(PS_SOLID, 1, preview_colors.border);
-  const HGDIOBJ old_pen = SelectObject(dc, canvas_pen); const HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-  Rectangle(dc, canvas.left, canvas.top, canvas.right, canvas.bottom);
-  SelectObject(dc, old_brush); SelectObject(dc, old_pen); DeleteObject(canvas_pen);
+  fill_solid_rect(dc, canvas,
+                  colors(layerc::platform::EditorControlRole::window).fill);
+  outline_rect(dc, canvas, 1, preview_colors.border);
   const auto *selected = selected_bar();
   const auto target = preview_target_size();
   for (const auto &panel : document_.profile().panels) {
@@ -283,11 +279,8 @@ void EditorWindow::paint_preview(const HWND window) {
       DeleteObject(border);
 
       if (draw_fill && fill_rect.right > fill_rect.left) {
-        const RECT progress = preview_rect(fill_rect, placement);
-        const HBRUSH progress_fill =
-            CreateSolidBrush(color_ref(panel.bar.fill_color));
-        FillRect(dc, &progress, progress_fill);
-        DeleteObject(progress_fill);
+        fill_solid_rect(dc, preview_rect(fill_rect, placement),
+                        color_ref(panel.bar.fill_color));
       }
       if (panel.style == layerc::core::PanelStyle::bar &&
           !panel.bar.show_text)

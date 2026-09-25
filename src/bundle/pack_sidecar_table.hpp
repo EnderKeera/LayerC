@@ -3,6 +3,7 @@
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/durable_file.hpp"
 
 #include <array>
 #include <cstddef>
@@ -57,7 +58,7 @@ struct VisualSidecarTraits {
     return layerc::platform::load_visual_sidecar(path, base);
   }
   static auto read(const std::filesystem::path &path) {
-    return layerc::platform::read_sidecar_text(
+    return layerc::platform::read_durable_text(
         path, layerc::core::max_visual_json_bytes);
   }
   static auto parse(const layerc::core::json::Value &root,
@@ -67,6 +68,7 @@ struct VisualSidecarTraits {
   static auto serialize(const Profile &profile) {
     return layerc::core::serialize_visual_profile_json(profile);
   }
+  static std::vector<std::string> assets(const Profile &profile);
 };
 
 struct AutomationSidecarTraits {
@@ -76,7 +78,7 @@ struct AutomationSidecarTraits {
     return layerc::platform::load_automation_sidecar(path, base);
   }
   static auto read(const std::filesystem::path &path) {
-    return layerc::platform::read_sidecar_text(
+    return layerc::platform::read_durable_text(
         path, layerc::core::max_automation_json_bytes);
   }
   static auto parse(const layerc::core::json::Value &root,
@@ -86,6 +88,7 @@ struct AutomationSidecarTraits {
   static auto serialize(const Profile &profile) {
     return layerc::core::serialize_automation_profile_json(profile);
   }
+  static std::vector<std::string> assets(const Profile &) { return {}; }
 };
 
 struct CompanionSidecarTraits {
@@ -95,7 +98,7 @@ struct CompanionSidecarTraits {
     return layerc::platform::load_companion_sidecar(path, base);
   }
   static auto read(const std::filesystem::path &path) {
-    return layerc::platform::read_sidecar_text(
+    return layerc::platform::read_durable_text(
         path, layerc::core::max_companion_sidecar_bytes);
   }
   static auto parse(const layerc::core::json::Value &root,
@@ -105,6 +108,7 @@ struct CompanionSidecarTraits {
   static auto serialize(const Profile &profile) {
     return layerc::core::serialize_companion_profile_json(profile);
   }
+  static std::vector<std::string> assets(const Profile &) { return {}; }
 };
 
 // This is the only SidecarKind dispatch. Consumers supply one typed operation;

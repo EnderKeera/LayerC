@@ -1,0 +1,10 @@
+#pragma once
+
+#include <cstdint>
+#include <string_view>
+
+namespace layerc::core {
+inline constexpr std::string_view product_version = "@PROJECT_VERSION@";
+inline constexpr std::uint16_t product_version_major = @PROJECT_VERSION_MAJOR@;
+inline constexpr std::uint16_t product_version_minor = @PROJECT_VERSION_MINOR@;
+} // namespace layerc::core

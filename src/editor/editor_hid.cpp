@@ -117,15 +117,10 @@ selected_device(const HWND window, const HidDialogState &state) {
 }
 
 bool read_percent(const HWND control, const unsigned maximum, double &value) {
-  const auto source = control_text(control);
-  if (source.empty())
+  const auto parsed = parse_bounded(control_text(control), 0, maximum);
+  if (!parsed)
     return false;
-  wchar_t *end{};
-  const unsigned long parsed = wcstoul(source.c_str(), &end, 10);
-  if (end == source.c_str() || end == nullptr || *end != L'\0' ||
-      parsed > maximum)
-    return false;
-  value = static_cast<double>(parsed) / 100.0;
+  value = static_cast<double>(*parsed) / 100.0;
   return true;
 }
 
@@ -159,15 +154,14 @@ void EditorWindow::capture_hid_binding() {
   }
   const auto id_base =
       "hid-" + safe_identifier(to_wide(cooldown_id), "control");
-  std::string id = id_base;
-  int suffix = 2;
-  while (std::ranges::any_of(document_.profile().hid_bindings, [&](const auto &candidate) {
-    const auto index =
-        static_cast<std::size_t>(&candidate - document_.profile().hid_bindings.data());
-    return candidate.id == id && index != binding_index;
-  }))
-    id = id_base + "-" + std::to_string(suffix++);
-  captured.id = std::move(id);
+  captured.id = next_unique_id(id_base, [&](const std::string_view id) {
+    return std::ranges::any_of(document_.profile().hid_bindings,
+                               [&](const auto &candidate) {
+      const auto index = static_cast<std::size_t>(
+          &candidate - document_.profile().hid_bindings.data());
+      return candidate.id == id && index != binding_index;
+    });
+  });
   if (binding_index == SIZE_MAX) {
     if (document_.profile().hid_bindings.size() >= 128) {
       MessageBoxW(shell_.window(),

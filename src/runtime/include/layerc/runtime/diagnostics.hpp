@@ -65,6 +65,51 @@ struct RuntimeDiagnostics {
   bool operator==(const RuntimeDiagnostics &) const = default;
 };
 
+// Linux's native probe/availability extension is typed but has no X11 handles.
+// It is emitted alongside the shared runtime diagnostics snapshot.
+struct X11ExtensionStatus {
+  bool available{};
+  int major{};
+  int minor{};
+};
+struct X11StatusSnapshot {
+  bool connected{};
+  X11ExtensionStatus xi2;
+  X11ExtensionStatus shape;
+  X11ExtensionStatus randr;
+  X11ExtensionStatus composite;
+  X11ExtensionStatus damage;
+  X11ExtensionStatus xfixes;
+  bool ewmh{};
+  std::string reason;
+};
+enum class CapabilityAvailability : std::uint8_t {
+  unavailable, degraded, active, inactive,
+};
+[[nodiscard]] constexpr std::string_view
+availability_name(CapabilityAvailability availability) noexcept {
+  switch (availability) {
+  case CapabilityAvailability::unavailable: return "unavailable";
+  case CapabilityAvailability::degraded: return "degraded";
+  case CapabilityAvailability::active: return "active";
+  case CapabilityAvailability::inactive: return "inactive";
+  }
+  return "unavailable";
+}
+struct CapabilityStatus {
+  Capability capability{};
+  CapabilityAvailability availability{CapabilityAvailability::unavailable};
+  std::vector<std::string> reasons;
+};
+struct LinuxStatusSnapshot {
+  X11StatusSnapshot x11;
+  std::vector<CapabilityStatus> capabilities;
+};
+
+// Appends Linux/X11 probes and availability to the shared diagnostics JSON.
+[[nodiscard]] std::string serialize_linux_status_json(
+    const RuntimeDiagnostics &diagnostics, const LinuxStatusSnapshot &linux);
+
 using RuntimeDiagnosticsResult =
     std::variant<RuntimeDiagnostics, core::json::FieldError>;
 [[nodiscard]] std::string

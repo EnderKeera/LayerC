@@ -22,11 +22,13 @@ Value integer(const std::int64_t value) {
 Value text(const std::string_view value) {
   return Value(std::string(value));
 }
-std::string color_text(const std::uint32_t color) {
-  std::string quoted;
-  json::append_color_quoted(quoted, color);
-  return quoted.substr(1, quoted.size() - 2);
+Value text_list(const std::vector<std::string> &values) {
+  Value::Array result;
+  result.reserve(values.size());
+  for (const auto &value : values) result.push_back(text(value));
+  return Value(std::move(result));
 }
+using json::color_text;
 
 template <typename Enum, std::size_t Size>
 std::string_view wire_name(
@@ -76,14 +78,11 @@ Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
   Value::Array result;
   result.reserve(groups.size());
   for (const auto &group : groups) {
-    Value::Array ids;
-    ids.reserve(group.cooldown_ids.size());
-    for (const auto &id : group.cooldown_ids) ids.push_back(text(id));
     Value::Object object{
         member(keys::id, text(group.id)),
         member(keys::name, text(group.name)),
         member(keys::mode, text(wire_name(profile_wire::group_mode, group.mode))),
-        member(keys::cooldowns, Value(std::move(ids))),
+        member(keys::cooldowns, text_list(group.cooldown_ids)),
     };
     if (group.mode == CooldownGroupMode::shared_pool) {
       object.insert(member(
@@ -142,9 +141,6 @@ Value panels_section(const std::vector<Panel> &panels) {
   Value::Array result;
   result.reserve(panels.size());
   for (const auto &panel : panels) {
-    Value::Array cooldowns;
-    cooldowns.reserve(panel.cooldown_ids.size());
-    for (const auto &id : panel.cooldown_ids) cooldowns.push_back(text(id));
     Value::Object bar{
         member(keys::width, integer(panel.bar.width)),
         member(keys::height, integer(panel.bar.height)),
@@ -166,7 +162,7 @@ Value panels_section(const std::vector<Panel> &panels) {
         member(keys::bar, Value(std::move(bar))),
         member(keys::anchor_x, Value(panel.anchor_x)),
         member(keys::anchor_y, Value(panel.anchor_y)),
-        member(keys::cooldowns, Value(std::move(cooldowns))),
+        member(keys::cooldowns, text_list(panel.cooldown_ids)),
     });
   }
   return Value(std::move(result));

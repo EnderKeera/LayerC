@@ -1,9 +1,16 @@
+#include "layerc/core/profile.hpp"
+#include "layerc/platform/bounded_helper.hpp"
+#include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/hid_device.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/window_query.hpp"
 #include "platform_live_scenarios.hpp"
 #include "test_support.hpp"
+#include "visual_asset_load_contract.hpp"
 
 #include <array>
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -58,47 +65,76 @@ int run_authenticated_peer(const bool server, const std::wstring &pipe_name) {
   return 1;
 }
 
+void visual_asset_contract_case() {
+  layerc::test::TempDirectory temp("LayerC-asset-contract");
+  expect(std::filesystem::exists(temp.path()),
+         "asset contract directory should be created");
+  layerc::test::visual_asset_load_contract(temp.path());
+}
 
-} // namespace
+void pipe_name_contract() {
+  expect(std::wstring_view(layerc::platform::live_edit_pipe_name) ==
+             L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3",
+         "the tested production pipe name should match the protocol contract");
+}
 
-int main(const int argc, char *argv[]) {
-  if (argc == 3 && (std::string_view(argv[1]) == "--auth-server" ||
-                    std::string_view(argv[1]) == "--auth-client")) {
-    const std::string pipe_utf8(argv[2]);
-    return run_authenticated_peer(
-        std::string_view(argv[1]) == "--auth-server",
-        std::wstring(pipe_utf8.begin(), pipe_utf8.end()));
+void bounded_helper_failure() {
+  // A forced Job-assignment failure must terminate the still-suspended child.
+  std::array<wchar_t, 32'768> image_path{};
+  const DWORD image_length = GetModuleFileNameW(
+      nullptr, image_path.data(), static_cast<DWORD>(image_path.size()));
+  expect(image_length != 0 && image_length < image_path.size(),
+         "the bounded-helper test image path should be available");
+  if (image_length != 0 && image_length < image_path.size()) {
+    layerc::platform::OwnedHandle observed;
+    layerc::platform::HelperLaunchOptions options;
+    options.fail_assignment_for_test = [&](HANDLE process) {
+      HANDLE duplicate{};
+      if (DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(),
+                          &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS) != FALSE)
+        observed.reset(duplicate);
+      return true;
+    };
+    const std::filesystem::path image(image_path.data());
+    const auto launched = layerc::platform::launch_bounded_helper(
+        image, L"\"" + image.wstring() + L"\" --bounded-helper-probe", options);
+    const auto *failure =
+        std::get_if<layerc::platform::HelperLaunchError>(&launched);
+    DWORD exit_code{};
+    expect(failure != nullptr &&
+               failure->step == layerc::platform::HelperLaunchStep::assign_job &&
+               observed.valid() &&
+               WaitForSingleObject(observed.get(), 2'000) == WAIT_OBJECT_0 &&
+               GetExitCodeProcess(observed.get(), &exit_code) != FALSE &&
+               exit_code == ERROR_ACCESS_DENIED,
+           "Job assignment failure must stop the suspended helper before it runs");
   }
-  return layerc::test::run({{"platform_live_contract", [] {
-    bool passed = true;
-  passed &= expect(
-      std::wstring_view(layerc::platform::live_edit_pipe_name) ==
-          L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3",
-      "the tested production pipe name should match the protocol contract");
-  passed &= run_profile_platform_scenarios();
+}
+
+void pipe_server_spoof() {
   const std::wstring spoof_pipe_name =
       L"\\\\.\\pipe\\LayerC.PlatformSpoofTest." +
       std::to_wstring(GetCurrentProcessId()) + L"." +
       std::to_wstring(GetTickCount64());
-  {
-    const auto spoof_server =
-        std::make_unique<layerc::platform::NamedPipeEditorDaemonChannel>(
-        layerc::platform::NamedPipeEditorDaemonChannel::Role::server,
-        spoof_pipe_name);
-    const auto guarded_client =
-        std::make_unique<layerc::platform::NamedPipeEditorDaemonChannel>(
-        layerc::platform::NamedPipeEditorDaemonChannel::Role::client,
-        spoof_pipe_name, GetCurrentProcessId() + 1U);
-    for (int attempt = 0; attempt < 50; ++attempt) {
-      (void)guarded_client->poll();
-      (void)spoof_server->poll();
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    passed &= expect(!guarded_client->connected() &&
-                         !guarded_client->last_error().empty(),
-                     "the client should reject an unexpected pipe server PID");
+  const auto spoof_server =
+      std::make_unique<layerc::platform::NamedPipeEditorDaemonChannel>(
+          layerc::platform::NamedPipeEditorDaemonChannel::Role::server,
+          spoof_pipe_name);
+  const auto guarded_client =
+      std::make_unique<layerc::platform::NamedPipeEditorDaemonChannel>(
+          layerc::platform::NamedPipeEditorDaemonChannel::Role::client,
+          spoof_pipe_name, GetCurrentProcessId() + 1U);
+  for (int attempt = 0; attempt < 50; ++attempt) {
+    (void)guarded_client->poll();
+    (void)spoof_server->poll();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+  expect(!guarded_client->connected() &&
+             !guarded_client->last_error().empty(),
+         "the client should reject an unexpected pipe server PID");
+}
 
+void named_pipe_round_trip() {
   const std::wstring pipe_name = L"\\\\.\\pipe\\LayerC.PlatformTest." +
                                  std::to_wstring(GetCurrentProcessId()) + L"." +
                                  std::to_wstring(GetTickCount64());
@@ -111,9 +147,8 @@ int main(const int argc, char *argv[]) {
           layerc::platform::NamedPipeEditorDaemonChannel::Role::client,
           pipe_name, GetCurrentProcessId());
   std::array<HANDLE, 3> wait_handles{};
-  passed &=
-      expect(server->wait_handles(wait_handles) == 1,
-             "a listening server should expose one waitable connect event");
+  expect(server->wait_handles(wait_handles) == 1,
+         "a listening server should expose one waitable connect event");
   for (int attempt = 0;
        attempt < 1000 && (!server->connected() || !client->connected());
        ++attempt) {
@@ -121,20 +156,17 @@ int main(const int argc, char *argv[]) {
     (void)server->poll();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  passed &= expect(server->connected() && client->connected(),
-                   "same-user overlapped pipe peers should connect");
-  passed &= expect(server->wait_handles(wait_handles) >= 1,
-                   "a connected server should expose waitable overlapped I/O");
-  passed &=
-      expect(server->peer_process_id() == GetCurrentProcessId() &&
-                 client->peer_process_id() == GetCurrentProcessId(),
-             "both authenticated channel ends should retain the peer PID");
-  passed &= expect(client->send({
-                       .type = layerc::core::LiveMessageType::handshake,
+  expect(server->connected() && client->connected(),
+         "same-user overlapped pipe peers should connect");
+  expect(server->wait_handles(wait_handles) >= 1,
+         "a connected server should expose waitable overlapped I/O");
+  expect(server->peer_process_id() == GetCurrentProcessId() &&
+             client->peer_process_id() == GetCurrentProcessId(),
+         "both authenticated channel ends should retain the peer PID");
+  expect(client->send({.type = layerc::core::LiveMessageType::handshake,
                        .revision = 77,
-                       .text = "platform-test",
-                   }),
-                   "client should queue a live message");
+                       .text = "platform-test"}),
+         "client should queue a live message");
 
   bool server_received{};
   for (int attempt = 0; attempt < 1000 && !server_received; ++attempt) {
@@ -146,9 +178,130 @@ int main(const int argc, char *argv[]) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  passed &= expect(server_received,
-                   "framed UTF-8 messages should cross the named pipe");
+  expect(server_received, "framed UTF-8 messages should cross the named pipe");
+}
 
-    (void)passed;
-  }}});
+void hid_sampling() {
+  layerc::platform::HidRawDevice system_keyboard{};
+  system_keyboard.handle = reinterpret_cast<HANDLE>(0x1234);
+  system_keyboard.raw_type = RIM_TYPEKEYBOARD;
+  RAWINPUT keyboard_input{};
+  keyboard_input.header.dwType = RIM_TYPEKEYBOARD;
+  keyboard_input.header.hDevice = system_keyboard.handle;
+  keyboard_input.data.keyboard.MakeCode = 0x36;
+  layerc::core::HidControlBinding system_key{};
+  system_key.usage_page = 0x07;
+  system_key.usage = 0x36;
+  system_key.activation = layerc::core::HidActivationMode::button;
+  system_key.allow_system_class = true;
+  const auto key_down = layerc::platform::sample_hid_control(
+      system_keyboard, system_key, keyboard_input);
+  keyboard_input.data.keyboard.Flags = RI_KEY_BREAK;
+  const auto key_up = layerc::platform::sample_hid_control(
+      system_keyboard, system_key, keyboard_input);
+  expect(key_down.has_value() && key_down->button_active &&
+             key_up.has_value() && !key_up->button_active,
+         "Advanced system keyboard bindings should retain "
+         "device-specific press and release samples");
+
+  layerc::platform::HidRawDevice system_mouse{};
+  system_mouse.handle = reinterpret_cast<HANDLE>(0x5678);
+  system_mouse.raw_type = RIM_TYPEMOUSE;
+  RAWINPUT mouse_input{};
+  mouse_input.header.dwType = RIM_TYPEMOUSE;
+  mouse_input.header.hDevice = system_mouse.handle;
+  mouse_input.data.mouse.lLastX = 4;
+  layerc::core::HidControlBinding relative_mouse{};
+  relative_mouse.usage_page = 0x01;
+  relative_mouse.usage = 0x30;
+  relative_mouse.activation =
+      layerc::core::HidActivationMode::relative_positive;
+  relative_mouse.allow_system_class = true;
+  const auto first_movement = layerc::platform::sample_hid_control(
+      system_mouse, relative_mouse, mouse_input);
+  const auto second_movement = layerc::platform::sample_hid_control(
+      system_mouse, relative_mouse, mouse_input);
+  expect(first_movement.has_value() && second_movement.has_value() &&
+             first_movement->relative && first_movement->value == 4,
+         "each successive relative system-mouse report should remain "
+         "an independently available movement sample");
+
+  const std::array<std::byte, 2> report_bytes{std::byte{0x7f}, std::byte{0x20}};
+  layerc::platform::HidRawDevice reportless_device{};
+  expect(layerc::platform::effective_hid_report_id(reportless_device,
+                                                    report_bytes) == 0,
+         "report-ID-less collections should persist report ID zero "
+         "instead of the first data byte");
+  reportless_device.uses_report_ids = true;
+  expect(layerc::platform::effective_hid_report_id(reportless_device,
+                                                    report_bytes) == 0x7f,
+         "collections with report IDs should preserve the leading report ID");
+}
+
+void framed_calibration_pipe() {
+  HANDLE framed_read{};
+  HANDLE framed_write{};
+  expect(CreatePipe(&framed_read, &framed_write, nullptr, 4'096) != FALSE,
+         "anonymous calibration test pipe should be created");
+  if (framed_read != nullptr && framed_write != nullptr) {
+    std::string framed_error;
+    expect(layerc::platform::write_framed_pipe(
+               framed_write, "{\"calibration\":true}", 1'024, framed_error),
+           "bounded calibration frame should be written");
+    const auto framed = layerc::platform::read_framed_pipe(framed_read, 1'024);
+    expect(framed && framed.payload == "{\"calibration\":true}",
+           "bounded calibration frame should be read exactly");
+    CloseHandle(framed_write);
+    CloseHandle(framed_read);
+  }
+}
+
+void window_matcher_policy() {
+  layerc::platform::WindowCandidate candidate{.title = L"Game Window",
+                                               .executable_path =
+                                                   L"C:\\Games\\I.EXE",
+                                               .executable_name = L"I.EXE",
+                                               .window_class = L"GameClass"};
+  layerc::core::GameProfile matcher_profile;
+  matcher_profile.game.executable_name = "i.exe";
+  expect(layerc::platform::profile_matches_window(candidate, matcher_profile),
+         "window matching should use locale-invariant case folding");
+  matcher_profile.game.executable_name = std::string(1, '\xFF');
+  matcher_profile.game.window_title = "Game";
+  expect(!layerc::platform::profile_matches_window(candidate, matcher_profile),
+         "invalid UTF-8 matcher fields must reject instead of weakening to "
+         "title-only matching");
+}
+
+} // namespace
+
+int main(const int argc, char *argv[]) {
+  if (argc == 3 && (std::string_view(argv[1]) == "--auth-server" ||
+                    std::string_view(argv[1]) == "--auth-client")) {
+    const std::string pipe_utf8(argv[2]);
+    return run_authenticated_peer(
+        std::string_view(argv[1]) == "--auth-server",
+        std::wstring(pipe_utf8.begin(), pipe_utf8.end()));
+  }
+  namespace live = layerc::test::platform_live;
+  return layerc::test::run({
+      LAYERC_TEST_CASE(visual_asset_contract_case),
+      LAYERC_TEST_CASE(pipe_name_contract),
+      LAYERC_TEST_CASE(live::platform_transactions),
+      LAYERC_TEST_CASE(hid_sampling),
+      LAYERC_TEST_CASE(live::platform_visual_assets),
+      LAYERC_TEST_CASE(live::platform_sibling_authentication),
+      LAYERC_TEST_CASE(live::platform_profile_writes),
+      LAYERC_TEST_CASE(live::platform_visual_sidecar_recovery),
+      LAYERC_TEST_CASE(live::platform_atomic_temporary_collision),
+      LAYERC_TEST_CASE(live::platform_bundle_recovery),
+      LAYERC_TEST_CASE(live::platform_automation_state_recovery),
+      LAYERC_TEST_CASE(framed_calibration_pipe),
+      LAYERC_TEST_CASE(live::platform_relative_profile_write),
+      LAYERC_TEST_CASE(window_matcher_policy),
+      LAYERC_TEST_CASE(live::platform_corrupt_profile_recovery),
+      LAYERC_TEST_CASE(bounded_helper_failure),
+      LAYERC_TEST_CASE(pipe_server_spoof),
+      LAYERC_TEST_CASE(named_pipe_round_trip),
+  });
 }

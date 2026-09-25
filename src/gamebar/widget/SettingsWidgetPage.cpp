@@ -11,16 +11,9 @@ SettingsWidgetPage::SettingsWidgetPage() { InitializeComponent(); }
 
 void SettingsWidgetPage::OnNavigatedTo(
     Windows::UI::Xaml::Navigation::NavigationEventArgs const &) {
-  const auto dispatcher = Dispatcher();
-  subscription_ = layerc::gamebar::widget::SnapshotHub::instance().subscribe(
-      [dispatcher, weak = get_weak()](
-          std::optional<layerc::core::CompanionSessionSnapshot> snapshot) {
-        (void)dispatcher.RunAsync(
-            Windows::UI::Core::CoreDispatcherPriority::Normal,
-            [weak, snapshot = std::move(snapshot)]() mutable {
-              if (const auto self = weak.get())
-                self->render(std::move(snapshot));
-            });
+  subscription_ = layerc::gamebar::widget::subscribe_on_dispatcher(
+      Dispatcher(), get_weak(), [](const auto &self, auto snapshot) {
+        self->render(std::move(snapshot));
       });
 }
 

@@ -21,7 +21,11 @@
             "sources": [
                 {
                     "type": "dir",
-                    "path": "../.."
+                    "path": "../..",
+                    "skip": [
+                        ".git", ".codegraph", "build", "build-linux",
+                        "out", "review", ".review_tmp", ".codewhale", ".mimosa"
+                    ]
                 }
             ]
         }

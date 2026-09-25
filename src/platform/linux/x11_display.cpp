@@ -83,66 +83,36 @@ X11Extension query_xi2(Display *display) noexcept {
   return {true, major, minor, opcode, event, error};
 }
 
-X11Extension query_shape(Display *display) noexcept {
-  int major{};
-  int minor{};
+// Signature shared by the extension and version queries below (Xlib's Bool
+// and Status are both int).
+using IntPairQuery = int (*)(Display *, int *, int *);
+
+// Extension located by name: XQueryExtension also reports its opcode.
+X11Extension query_named(Display *display, const char *name,
+                         const IntPairQuery query_version) noexcept {
   int opcode{};
   int event{};
   int error{};
-  if (XQueryExtension(display, "SHAPE", &opcode, &event, &error) == False)
+  if (XQueryExtension(display, name, &opcode, &event, &error) == False)
     return {};
+  int major{};
+  int minor{};
   X11ErrorTrap trap{display};
-  if (XShapeQueryVersion(display, &major, &minor) == False || !trap.ok())
+  if (query_version(display, &major, &minor) == False || !trap.ok())
     return {};
   return {true, major, minor, opcode, event, error};
 }
 
-X11Extension query_randr(Display *display) noexcept {
-  int major{};
-  int minor{};
-  int opcode{};
+// Extension located through its client library: event/error bases only.
+X11Extension query_library(Display *display, const IntPairQuery query_extension,
+                           const IntPairQuery query_version) noexcept {
   int event{};
   int error{};
-  if (XQueryExtension(display, "RANDR", &opcode, &event, &error) == False)
-    return {};
-  X11ErrorTrap trap{display};
-  if (XRRQueryVersion(display, &major, &minor) == False || !trap.ok())
-    return {};
-  return {true, major, minor, opcode, event, error};
-}
-
-X11Extension query_composite(Display *display) noexcept {
-  int event{};
-  int error{};
-  if (XCompositeQueryExtension(display, &event, &error) == False) return {};
+  if (query_extension(display, &event, &error) == False) return {};
   int major{};
   int minor{};
   X11ErrorTrap trap{display};
-  if (XCompositeQueryVersion(display, &major, &minor) == False || !trap.ok())
-    return {};
-  return {true, major, minor, 0, event, error};
-}
-
-X11Extension query_damage(Display *display) noexcept {
-  int event{};
-  int error{};
-  if (XDamageQueryExtension(display, &event, &error) == False) return {};
-  int major{};
-  int minor{};
-  X11ErrorTrap trap{display};
-  if (XDamageQueryVersion(display, &major, &minor) == False || !trap.ok())
-    return {};
-  return {true, major, minor, 0, event, error};
-}
-
-X11Extension query_xfixes(Display *display) noexcept {
-  int event{};
-  int error{};
-  if (XFixesQueryExtension(display, &event, &error) == False) return {};
-  int major{};
-  int minor{};
-  X11ErrorTrap trap{display};
-  if (XFixesQueryVersion(display, &major, &minor) == False || !trap.ok())
+  if (query_version(display, &major, &minor) == False || !trap.ok())
     return {};
   return {true, major, minor, 0, event, error};
 }
@@ -176,11 +146,14 @@ X11Probe probe_display(Display *display, ::Window root) noexcept {
   X11Probe probe;
   probe.connected = true;
   probe.xi2 = query_xi2(display);
-  probe.shape = query_shape(display);
-  probe.randr = query_randr(display);
-  probe.composite = query_composite(display);
-  probe.damage = query_damage(display);
-  probe.xfixes = query_xfixes(display);
+  probe.shape = query_named(display, "SHAPE", &XShapeQueryVersion);
+  probe.randr = query_named(display, "RANDR", &XRRQueryVersion);
+  probe.composite = query_library(display, &XCompositeQueryExtension,
+                                  &XCompositeQueryVersion);
+  probe.damage =
+      query_library(display, &XDamageQueryExtension, &XDamageQueryVersion);
+  probe.xfixes =
+      query_library(display, &XFixesQueryExtension, &XFixesQueryVersion);
   probe.ewmh = query_ewmh(display, root);
   return probe;
 }
@@ -214,21 +187,21 @@ std::vector<std::string> X11Probe::unavailable() const {
     reasons.push_back("x11: no display available ($DISPLAY unset or unreachable)");
     return reasons;
   }
-  if (auto reason = extension_reason("xi2", xi2, 2, 0); !reason.empty())
-    reasons.push_back(reason);
-  if (auto reason = extension_reason("shape", shape, 1, 0); !reason.empty())
-    reasons.push_back(reason);
-  if (auto reason = extension_reason("randr", randr, 1, 2); !reason.empty())
-    reasons.push_back(reason);
-  if (auto reason = extension_reason("composite", composite, 0, 2);
-      !reason.empty())
-    reasons.push_back(reason);
-  if (auto reason = extension_reason("damage", damage, 1, 0);
-      !reason.empty())
-    reasons.push_back(reason);
-  if (auto reason = extension_reason("xfixes", xfixes, 2, 0);
-      !reason.empty())
-    reasons.push_back(reason);
+  struct Requirement {
+    std::string_view name;
+    const X11Extension &extension;
+    int major;
+    int minor;
+  };
+  const Requirement requirements[] = {
+      {"xi2", xi2, 2, 0},           {"shape", shape, 1, 0},
+      {"randr", randr, 1, 2},       {"composite", composite, 0, 2},
+      {"damage", damage, 1, 0},     {"xfixes", xfixes, 2, 0},
+  };
+  for (const auto &[name, extension, major, minor] : requirements)
+    if (auto reason = extension_reason(name, extension, major, minor);
+        !reason.empty())
+      reasons.push_back(std::move(reason));
   if (!ewmh)
     reasons.push_back(
         "ewmh: no _NET_SUPPORTING_WM_CHECK on the root window (window "

@@ -24,7 +24,15 @@ private:
   bool read_panels(GameProfile &profile);
   bool read_modules(GameProfile &profile, std::uint32_t source_schema);
   bool read_hid_bindings(GameProfile &profile, std::uint32_t source_schema);
+  bool read_hid_device(const json::Value &device, const std::string &path,
+                       HidDeviceSelector &out);
+  bool read_hid_control(const json::Value &control, const std::string &path,
+                        HidControlBinding &out);
   bool read_bindings(GameProfile &profile);
+  bool read_chord_token(const json::Value &token_value,
+                        const std::string &token_path,
+                        std::set<InputToken> &tokens,
+                        InputBinding &binding);
 
   const json::Value &root_;
   std::set<std::string, std::less<>> cooldown_ids_;

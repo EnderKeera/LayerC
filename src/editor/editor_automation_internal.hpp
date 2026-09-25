@@ -4,11 +4,22 @@
 
 #include <windows.h>
 
+#include <array>
+#include <cstddef>
 #include <string>
+#include <utility>
 
 namespace layerc::editor {
 
 inline constexpr UINT_PTR automation_simulator_timer = 94'001;
+
+[[nodiscard]] inline layerc::core::AutomationExpression
+literal(layerc::core::AutomationValue value) {
+  layerc::core::AutomationExpression expression;
+  expression.kind = layerc::core::ExpressionKind::literal;
+  expression.literal = std::move(value);
+  return expression;
+}
 
 enum class AutomationPreset {
   blank,
@@ -20,6 +31,66 @@ enum class AutomationPreset {
 [[nodiscard]] layerc::core::AutomationDefinition make_automation_preset(
     AutomationPreset preset, std::string automation_id,
     std::string cooldown_id = {}, std::string panel_id = {});
+
+enum class AutomationPaletteNode {
+  input_rule,
+  timer_rule,
+  trigger_action,
+  timer_action,
+  overlay_action,
+  flag_variable,
+};
+
+enum class AutomationPaletteTarget { rule, action, variable };
+
+struct AutomationPaletteEntry {
+  const wchar_t *label;
+  AutomationPaletteNode node;
+  AutomationPaletteTarget target;
+  bool requires_cooldown;
+  bool requires_panel;
+};
+
+// IDC_AUTOMATION_PALETTE items, in combo order.
+inline constexpr std::array automation_palette{
+    AutomationPaletteEntry{L"Event: input pressed",
+                           AutomationPaletteNode::input_rule,
+                           AutomationPaletteTarget::rule, true, false},
+    AutomationPaletteEntry{L"Event: timer fired",
+                           AutomationPaletteNode::timer_rule,
+                           AutomationPaletteTarget::rule, true, false},
+    AutomationPaletteEntry{L"Action: trigger cooldown",
+                           AutomationPaletteNode::trigger_action,
+                           AutomationPaletteTarget::action, true, false},
+    AutomationPaletteEntry{L"Action: create timer",
+                           AutomationPaletteNode::timer_action,
+                           AutomationPaletteTarget::action, true, false},
+    AutomationPaletteEntry{L"Action: overlay visibility",
+                           AutomationPaletteNode::overlay_action,
+                           AutomationPaletteTarget::action, true, true},
+    AutomationPaletteEntry{L"Variable: Boolean",
+                           AutomationPaletteNode::flag_variable,
+                           AutomationPaletteTarget::variable, false, false},
+};
+
+[[nodiscard]] inline const AutomationPaletteEntry *
+automation_palette_entry(const LRESULT index) noexcept {
+  return index < 0 || static_cast<std::size_t>(index) >=
+                          automation_palette.size()
+             ? nullptr
+             : &automation_palette[static_cast<std::size_t>(index)];
+}
+
+[[nodiscard]] layerc::core::AutomationRule
+make_palette_rule(AutomationPaletteNode node, std::string rule_id,
+                  const std::string &cooldown_id);
+// existing_actions numbers generated timer and overlay names.
+[[nodiscard]] layerc::core::AutomationAction
+make_palette_action(AutomationPaletteNode node, std::size_t existing_actions,
+                    const std::string &cooldown_id,
+                    const std::string &panel_id);
+[[nodiscard]] layerc::core::AutomationVariable
+make_palette_variable(std::string variable_id);
 
 [[nodiscard]] inline constexpr LPARAM automation_tree_item_data(
     const int rule, const int action) noexcept {

@@ -23,6 +23,13 @@ read_exact_unsigned(const json::Value &value) {
   return json::read_unsigned(value, json::IntegerEncoding::number_or_string);
 }
 
+// Automation sidecars, values, state, and traces parse through
+// json::parse_bounded, which reports syntax errors at "$@<byte offset>".
+[[nodiscard]] inline AutomationError
+json_parse_error(const json::FieldError &error) {
+  return AutomationError{error.path, error.message};
+}
+
 // The wire-name vocabulary lives in the public automation.hpp; these
 // aliases keep the detail:: call sites in the serializer and runtime working.
 using layerc::core::automation_event_kinds;

@@ -47,7 +47,7 @@ public:
     stop();
     RECT window_bounds{};
     if (!IsWindow(window_) || !capture_window_bounds(window_, window_bounds)) {
-      error_ = "capture target is no longer available";
+      slot_.set_error("capture target is no longer available");
       return false;
     }
     monitor_ = MonitorFromRect(&window_bounds, MONITOR_DEFAULTTONEAREST);
@@ -83,11 +83,11 @@ public:
       }
     }
     if (!adapter_ || !output_) {
-      error_ = "the target monitor has no DXGI output";
+      slot_.set_error("the target monitor has no DXGI output");
       stop_resources();
       return false;
     }
-    if (!create_hardware_device(adapter_.Get(), d3d_, error_)) {
+    if (!create_hardware_device(adapter_.Get(), d3d_, slot_.error_output())) {
       stop_resources();
       return false;
     }
@@ -97,21 +97,21 @@ public:
       result = output1->DuplicateOutput(d3d_.device.Get(), duplication_.ReleaseAndGetAddressOf());
     if (FAILED(result))
       return fail("Desktop Duplication start failed", result);
-    started_ = true;
-    error_.clear();
+    slot_.set_started(true);
+    slot_.clear_error();
     return true;
   }
 
   void stop() override {
-    started_ = false;
-    last_frame_.reset();
+    slot_.set_started(false);
+    slot_.clear_frame();
     stop_resources();
   }
 
   CapturePollResult poll(const core::TimePoint now,
                          const bool foreground) override {
-    if (!started_ || !IsWindow(window_))
-      return unavailable(IsWindow(window_) ? error_ : "capture target closed");
+    if (!slot_.started() || !IsWindow(window_))
+      return unavailable(IsWindow(window_) ? slot_.last_error() : "capture target closed");
     if (!foreground)
       return {.availability = core::CaptureAvailability::inactive,
               .backend = kind(),
@@ -132,14 +132,11 @@ public:
         duplication_->AcquireNextFrame(0, &information, resource.ReleaseAndGetAddressOf());
     if (result == DXGI_ERROR_WAIT_TIMEOUT)
       return current_result();
-    if (result == DXGI_ERROR_ACCESS_LOST) {
+    if (result == DXGI_ERROR_ACCESS_LOST)
       return recovery_required("Desktop Duplication access was lost");
-    }
-    if (FAILED(result)) {
-      const auto failure =
-          "Desktop Duplication frame failed: " + hresult_message(result);
-      return recovery_required(failure);
-    }
+    if (FAILED(result))
+      return recovery_required("Desktop Duplication frame failed: " +
+                               hresult_message(result));
 
     ComPtr<ID3D11Texture2D> texture;
     result = resource->QueryInterface(IID_PPV_ARGS(&texture));
@@ -192,13 +189,13 @@ public:
         static_cast<double>(logical_copy_height) / window_height};
     auto captured = readback_.read(
         d3d_, texture.Get(), source, window_width, window_height, destination_x,
-        destination_y, available, output_rotation_, quality_, now, error_);
+        destination_y, available, output_rotation_, slot_.quality(), now, slot_.error_output());
     (void)duplication_->ReleaseFrame();
     if (!captured)
-      return unavailable(error_);
+      return unavailable(slot_.last_error());
 
     apply_excluded_rectangles(*captured, window_bounds);
-    last_frame_ = std::move(captured);
+    slot_.publish(std::move(captured));
     return current_result();
   }
 
@@ -207,16 +204,15 @@ public:
     excluded_.assign(rectangles.begin(), rectangles.end());
   }
   void set_quality(const core::CaptureQuality quality) override {
-    if (quality_ == quality)
-      return;
-    quality_ = quality;
-    last_frame_.reset();
+    slot_.set_quality(quality);
   }
   core::CaptureBackendKind kind() const noexcept override {
     return core::CaptureBackendKind::desktop_duplication;
   }
   std::string gpu_description() const override { return d3d_.description; }
-  std::string last_error() const override { return error_; }
+  std::string last_error() const override {
+    return slot_.last_error();
+  }
 
 private:
   void stop_resources() {
@@ -231,40 +227,34 @@ private:
   }
 
   bool fail(const char *prefix, const HRESULT result) {
-    error_ = std::string(prefix) + ": " + hresult_message(result);
-    started_ = false;
+    slot_.set_error(std::string(prefix) + ": " + hresult_message(result));
+    slot_.set_started(false);
     stop_resources();
     return false;
   }
 
-  CapturePollResult unavailable(std::string diagnostic) const {
+  static std::string with_fallback_warning(std::string diagnostic) {
     if (!diagnostic.empty())
       diagnostic += "; ";
     diagnostic += fallback_warning;
-    return {.availability = core::CaptureAvailability::unavailable,
-            .backend = kind(),
-            .diagnostic = std::move(diagnostic),
-            .frame = {}};
+    return diagnostic;
+  }
+
+  CapturePollResult unavailable(std::string diagnostic) const {
+    return slot_.unavailable(with_fallback_warning(std::move(diagnostic)));
   }
 
   CapturePollResult recovery_required(std::string diagnostic) const {
-    if (!diagnostic.empty()) diagnostic += "; ";
-    diagnostic += fallback_warning;
     return {.availability = core::CaptureAvailability::starting,
             .backend = kind(),
-            .diagnostic = std::move(diagnostic),
+            .diagnostic = with_fallback_warning(std::move(diagnostic)),
             .frame = {},
             .phase = CapturePhase::starting,
             .recovery = CaptureRecovery::restart_backend};
   }
 
   CapturePollResult current_result() const {
-    const auto availability = last_frame_ ? core::CaptureAvailability::available
-                                          : core::CaptureAvailability::starting;
-    return {.availability = availability,
-            .backend = kind(),
-            .diagnostic = std::string(fallback_warning),
-            .frame = last_frame_};
+    return slot_.current(std::string(fallback_warning));
   }
 
   void apply_excluded_rectangles(CaptureFrame &frame,
@@ -273,6 +263,16 @@ private:
         std::max<LONG>(1, window_bounds.right - window_bounds.left);
     const auto window_height =
         std::max<LONG>(1, window_bounds.bottom - window_bounds.top);
+    // Floor for left/top and ceiling for right/bottom so partially covered
+    // edge pixels are excluded rather than left visible.
+    const auto scale_to_frame = [](const LONG offset, const LONG extent,
+                                   const std::uint32_t frame_extent,
+                                   const bool round_up) {
+      auto scaled = static_cast<std::int64_t>(offset) * frame_extent;
+      if (round_up) scaled += extent - 1;
+      return static_cast<std::uint32_t>(
+          std::clamp<std::int64_t>(scaled / extent, 0, frame_extent));
+    };
     for (const auto &excluded : excluded_) {
       const auto overlap = intersect_rect(excluded, window_bounds);
       if (overlap.right <= overlap.left || overlap.bottom <= overlap.top)
@@ -283,26 +283,18 @@ private:
            static_cast<double>(overlap.top - window_bounds.top) / window_height,
            static_cast<double>(overlap.right - overlap.left) / window_width,
            static_cast<double>(overlap.bottom - overlap.top) / window_height});
-      const auto left = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
-          static_cast<std::int64_t>(overlap.left - window_bounds.left) *
-              frame.width / window_width,
-          0, frame.width));
-      const auto top = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
-          static_cast<std::int64_t>(overlap.top - window_bounds.top) *
-              frame.height / window_height,
-          0, frame.height));
-      const auto right = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
-          (static_cast<std::int64_t>(overlap.right - window_bounds.left) *
-               frame.width +
-           window_width - 1) /
-              window_width,
-          0, frame.width));
-      const auto bottom = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
-          (static_cast<std::int64_t>(overlap.bottom - window_bounds.top) *
-               frame.height +
-           window_height - 1) /
-              window_height,
-          0, frame.height));
+      const auto left =
+          scale_to_frame(overlap.left - window_bounds.left, window_width,
+                         frame.width, false);
+      const auto top =
+          scale_to_frame(overlap.top - window_bounds.top, window_height,
+                         frame.height, false);
+      const auto right =
+          scale_to_frame(overlap.right - window_bounds.left, window_width,
+                         frame.width, true);
+      const auto bottom =
+          scale_to_frame(overlap.bottom - window_bounds.top, window_height,
+                         frame.height, true);
       for (auto y = top; y < bottom; ++y)
         std::fill(frame.pixels.begin() +
                       static_cast<std::size_t>(y) * frame.width + left,
@@ -321,11 +313,8 @@ private:
   ComPtr<IDXGIOutputDuplication> duplication_;
   D3dDevice d3d_;
   TextureReadback readback_;
-  std::shared_ptr<CaptureFrame> last_frame_;
+  BackendFrameSlot slot_{core::CaptureBackendKind::desktop_duplication};
   std::vector<RECT> excluded_;
-  std::string error_;
-  core::CaptureQuality quality_{core::CaptureQuality::balanced};
-  bool started_{};
 };
 
 } // namespace

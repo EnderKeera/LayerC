@@ -8,6 +8,7 @@
 #include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/editor_appearance.hpp"
 #include "layerc/platform/settings_store.hpp"
+#include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_error.hpp"
 #include "layerc/platform/window_query.hpp"
 
@@ -113,13 +114,19 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   }
   const auto transaction_scope = layerc::platform::profile_transaction_scope(
       layerc::platform::profile_directory());
-  if (!transaction_scope.has_value() ||
-      !layerc::platform::recover_profile_transactions(*transaction_scope)) {
-    MessageBoxW(nullptr,
-                L"LayerC Editor could not recover an interrupted profile "
-                L"import. "
-                L"Resolve the _transactions directory before editing profiles.",
-                L"LayerC profile recovery", MB_OK | MB_ICONERROR);
+  const auto recovered =
+      transaction_scope.has_value()
+          ? layerc::platform::recover_profile_transactions(*transaction_scope)
+          : layerc::platform::ProfileWriteResult{
+                layerc::platform::ProfileWriteError::scope_rejected};
+  if (const auto error = recovered.error(); error.has_value()) {
+    const auto message =
+        L"LayerC Editor could not recover an interrupted profile import (" +
+        layerc::platform::utf8_to_wide(
+            layerc::platform::profile_write_error_text(*error)) +
+        L"). Resolve the _transactions directory before editing profiles.";
+    MessageBoxW(nullptr, message.c_str(), L"LayerC profile recovery",
+                MB_OK | MB_ICONERROR);
     return 1;
   }
   enable_native_dark_mode();
@@ -148,10 +155,9 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
   const int work_width = static_cast<int>(work.right - work.left);
   const int work_height = static_cast<int>(work.bottom - work.top);
-  const UINT window_dpi = GetDpiForWindow(shell_.window());
-  const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
-  const int width = std::max(1, std::min(MulDiv(1210, dpi, 96), work_width));
-  const int height = std::max(1, std::min(MulDiv(760, dpi, 96), work_height));
+  const int dpi = window_base_dpi(shell_.window());
+  const int width = std::max(1, std::min(dpi_scaled(1210, dpi), work_width));
+  const int height = std::max(1, std::min(dpi_scaled(760, dpi), work_height));
   const int left =
       static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
   const int top =
@@ -190,8 +196,8 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
 void EditorWindow::initialize(const HWND window) {
   shell_.window() = window;
   shell_.font() = create_editor_font(GetDpiForWindow(window));
-  appearance_editor_.theme() = appearance_editor_.draft().staged().theme;
-  appearance_editor_.accent() = appearance_editor_.draft().staged().accent;
+  appearance_editor_.set_appearance(appearance_editor_.draft().staged().theme,
+                                    appearance_editor_.draft().staged().accent);
   apply_dialog_chrome(shell_.window(), shell_.capture_exclusion());
   style_dialog_children(shell_.window());
   rebuild_brushes();
@@ -231,8 +237,8 @@ void EditorWindow::initialize(const HWND window) {
   }
   layout();
   reload_profile_list({}, true);
-  live_edit_.revision() = (static_cast<std::uint64_t>(GetTickCount64()) << 16U) |
-              static_cast<std::uint64_t>(GetCurrentProcessId());
+  live_edit_.set_revision((static_cast<std::uint64_t>(GetTickCount64()) << 16U) |
+              static_cast<std::uint64_t>(GetCurrentProcessId()));
   EnableWindow(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), FALSE);
   set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), false);
   (void)start_daemon();
@@ -299,7 +305,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
     if (id == IDC_DIRECT_DRAG && notification == BN_CLICKED) {
       const bool enabled =
           owner_draw_checkbox_checked(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG));
-      set_direct_drag_enabled(enabled, enabled);
+      set_direct_drag_enabled(enabled, /*show_notice=*/enabled);
       InvalidateRect(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), nullptr, TRUE);
       return TRUE;
     }
@@ -425,7 +431,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       refresh_bar_controls();
       if (live_edit_.session_id() != 0) {
         if (const auto *panel = selected_bar(); panel != nullptr) {
-          ++live_edit_.revision();
+          live_edit_.advance_revision();
           (void)live_edit_.channel().send({
               .type = layerc::core::LiveMessageType::select_panel,
               .revision = live_edit_.revision(),
@@ -451,11 +457,9 @@ std::optional<LRESULT> EditorWindow::handle_main_notify(
         if (row >= 0 && (hit.flags & LVHT_ONITEMSTATEICON) != 0 &&
             static_cast<std::size_t>(row) < shell_.profiles().size()) {
           const bool enabled = !shell_.profiles()[static_cast<std::size_t>(row)].enabled;
-          const bool was_syncing = shell_.syncing();
-          shell_.syncing() = true;
+          auto sync = shell_.sync_scope();
           ListView_SetCheckState(shell_.profile_list(), row, enabled);
           save_profile_enabled(row, enabled);
-          shell_.syncing() = was_syncing;
           return TRUE;
         }
       } else if (header->code == LVN_ITEMCHANGED) {
@@ -551,8 +555,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     }
     break;
   case WM_GETMINMAXINFO: {
-    const UINT window_dpi = GetDpiForWindow(window);
-    const int dpi = window_dpi == 0 ? 96 : static_cast<int>(window_dpi);
+    const int dpi = window_base_dpi(window);
     MONITORINFO monitor{};
     monitor.cbSize = sizeof(monitor);
     if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
@@ -566,7 +569,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
           std::min(work_height, dpi_scaled(700, layout_dpi))};
     } else {
       reinterpret_cast<MINMAXINFO *>(lparam)->ptMinTrackSize = {
-          MulDiv(1080, dpi, 96), MulDiv(700, dpi, 96)};
+          dpi_scaled(1080, dpi), dpi_scaled(700, dpi)};
     }
     return TRUE;
   }
@@ -583,15 +586,13 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
                                          layerc::core::PanelStyle::bar &&
                                      panel.cooldown_ids.size() > 1;
                             });
-    EnableMenuItem(popup, IDM_FILE_SPLIT_BARS,
-                   MF_BYCOMMAND |
-                       (has_grouped_bars ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(popup, IDM_EDIT_UNDO,
-                   MF_BYCOMMAND |
-                       (document_.history().can_undo() ? MF_ENABLED : MF_GRAYED));
-    EnableMenuItem(popup, IDM_EDIT_REDO,
-                   MF_BYCOMMAND |
-                       (document_.history().can_redo() ? MF_ENABLED : MF_GRAYED));
+    const auto enable_item = [popup](const UINT item, const bool enabled) {
+      EnableMenuItem(popup, item,
+                     MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
+    };
+    enable_item(IDM_FILE_SPLIT_BARS, has_grouped_bars);
+    enable_item(IDM_EDIT_UNDO, document_.history().can_undo());
+    enable_item(IDM_EDIT_REDO, document_.history().can_redo());
     return TRUE;
   }
   case WM_NOTIFY:
@@ -651,10 +652,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
         DeleteObject(brush_value);
       brush_value = nullptr;
     }
-    if (shell_.font() != nullptr) {
-      DeleteObject(shell_.font());
-      shell_.font() = nullptr;
-    }
+    destroy_dialog_font(shell_.font());
     PostQuitMessage(0);
     return TRUE;
   default:

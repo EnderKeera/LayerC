@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <system_error>
 
 namespace layerc::capture {
@@ -47,6 +48,42 @@ std::uint8_t tone_map_channel(const float linear) {
                         : 1.055F * std::pow(mapped, 1.0F / 2.4F) - 0.055F;
   return static_cast<std::uint8_t>(
       std::clamp(std::lround(srgb * 255.0F), 0L, 255L));
+}
+
+std::uint32_t sampled_coordinate(const std::uint32_t index,
+                                 const std::uint32_t source_extent,
+                                 const std::uint32_t output_extent) {
+  return std::min<std::uint32_t>(
+      source_extent - 1U,
+      static_cast<std::uint32_t>(
+          (static_cast<std::uint64_t>(index) * source_extent +
+           source_extent / 2U) /
+          output_extent));
+}
+
+std::optional<core::RgbPixel> decode_pixel(const DXGI_FORMAT format,
+                                           const std::byte *row,
+                                           const std::uint32_t source_x) {
+  if (format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+      format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) {
+    const auto *value = reinterpret_cast<const std::uint8_t *>(row) +
+                        static_cast<std::size_t>(source_x) * 4U;
+    return core::RgbPixel{value[2], value[1], value[0]};
+  }
+  if (format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+      format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) {
+    const auto *value = reinterpret_cast<const std::uint8_t *>(row) +
+                        static_cast<std::size_t>(source_x) * 4U;
+    return core::RgbPixel{value[0], value[1], value[2]};
+  }
+  if (format == DXGI_FORMAT_R16G16B16A16_FLOAT) {
+    const auto *value = reinterpret_cast<const std::uint16_t *>(row) +
+                        static_cast<std::size_t>(source_x) * 4U;
+    return core::RgbPixel{tone_map_channel(half_to_float(value[0])),
+                          tone_map_channel(half_to_float(value[1])),
+                          tone_map_channel(half_to_float(value[2]))};
+  }
+  return std::nullopt;
 }
 
 } // namespace
@@ -119,12 +156,14 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
       bounded_readback &&
       (rotation == OutputRotation::rotate90 ||
        rotation == OutputRotation::rotate270);
-  const auto staging_width =
-      bounded_readback ? (copy_columns ? output_height : copy_width)
-                       : copy_width;
-  const auto staging_height =
-      bounded_readback ? (copy_columns ? copy_height : output_height)
-                       : copy_height;
+  auto staging_width = copy_width;
+  auto staging_height = copy_height;
+  if (bounded_readback) {
+    if (copy_columns)
+      staging_width = output_height;
+    else
+      staging_height = output_height;
+  }
 
   if (!staging_ || staging_description_.Width != staging_width ||
       staging_description_.Height != staging_height ||
@@ -149,16 +188,6 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
     }
   }
 
-  const auto sampled_coordinate = [](const std::uint32_t index,
-                                     const std::uint32_t source_extent,
-                                     const std::uint32_t output_extent) {
-    return std::min<std::uint32_t>(
-        source_extent - 1U,
-        static_cast<std::uint32_t>(
-            (static_cast<std::uint64_t>(index) * source_extent +
-             source_extent / 2U) /
-            output_extent));
-  };
   if (!bounded_readback) {
     device.context->CopySubresourceRegion(staging_.Get(), 0, 0, 0, 0,
                                           texture, 0, &source);
@@ -252,31 +281,15 @@ std::shared_ptr<CaptureFrame> TextureReadback::read(
       }
       const auto *row = static_cast<const std::byte *>(mapped.pData) +
                         static_cast<std::size_t>(source_y) * mapped.RowPitch;
-      core::RgbPixel pixel{};
-      if (source_description.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
-          source_description.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) {
-        const auto *value = reinterpret_cast<const std::uint8_t *>(row) +
-                            static_cast<std::size_t>(source_x) * 4U;
-        pixel = {value[2], value[1], value[0]};
-      } else if (source_description.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
-                 source_description.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) {
-        const auto *value = reinterpret_cast<const std::uint8_t *>(row) +
-                            static_cast<std::size_t>(source_x) * 4U;
-        pixel = {value[0], value[1], value[2]};
-      } else if (source_description.Format ==
-                 DXGI_FORMAT_R16G16B16A16_FLOAT) {
-        const auto *value = reinterpret_cast<const std::uint16_t *>(row) +
-                            static_cast<std::size_t>(source_x) * 4U;
-        pixel = {tone_map_channel(half_to_float(value[0])),
-                 tone_map_channel(half_to_float(value[1])),
-                 tone_map_channel(half_to_float(value[2]))};
-      } else {
+      const auto pixel =
+          decode_pixel(source_description.Format, row, source_x);
+      if (!pixel) {
         device.context->Unmap(staging_.Get(), 0);
         error = "capture texture format is unsupported";
         return {};
       }
       output->pixels[static_cast<std::size_t>(output_y) * output_width +
-                     output_x] = pixel;
+                     output_x] = *pixel;
     }
   }
   device.context->Unmap(staging_.Get(), 0);

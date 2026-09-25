@@ -65,6 +65,7 @@ void append_quoted(std::string &output, std::string_view text);
 // Shared by the profile and visual serializers so the hex casing, width,
 // and quoting stay byte-stable in one place.
 void append_color_quoted(std::string &output, std::uint32_t color);
+[[nodiscard]] std::string color_text(std::uint32_t color);
 // Appends "true" or "false" for a boolean field. Shared by the serializers so
 // the spelling stays byte-stable in one place.
 void append_bool(std::string &output, bool value);

@@ -103,6 +103,8 @@ struct RuntimeServiceStats {
 
 struct ServiceReconcileResult {
   bool success{true};
+  // On failure: the fault reason. On success: a non-empty value reports a
+  // degraded-but-active service and is kept as the slot's last_error.
   std::string error;
 };
 

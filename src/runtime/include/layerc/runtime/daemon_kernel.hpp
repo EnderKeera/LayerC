@@ -21,6 +21,8 @@ struct SessionCapabilityRequest {
   bool visual{};
   bool generic_hid{};
   bool isolated_visual{};
+  bool automation{};
+  bool companion{};
   std::string profile_id;
 };
 

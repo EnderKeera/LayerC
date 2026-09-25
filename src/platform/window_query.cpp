@@ -14,6 +14,8 @@ namespace {
 
 constexpr DWORD capture_exclusion_affinity = 0x00000011;
 
+} // namespace
+
 std::filesystem::path sibling_image_path(const wchar_t *filename) {
   std::vector<wchar_t> module(32'768);
   const DWORD length = GetModuleFileNameW(nullptr, module.data(),
@@ -24,8 +26,6 @@ std::filesystem::path sibling_image_path(const wchar_t *filename) {
              .parent_path() /
          filename;
 }
-
-} // namespace
 
 bool process_image_equals(const HANDLE process,
                           const std::filesystem::path &expected) {

@@ -38,6 +38,12 @@ backend_index(const core::CaptureBackendKind kind) noexcept {
   return std::nullopt;
 }
 
+// One message for a ladder whose declared fallback also failed.
+std::string ladder_error(const std::string &first_error,
+                         const std::string &fallback_error) {
+  return "WGC: " + first_error + "; Desktop Duplication: " + fallback_error;
+}
+
 } // namespace
 
 class WindowCaptureSession::Impl {
@@ -47,27 +53,22 @@ public:
 
   bool start() {
     stop();
-    if (start_backend(make_backend(backend_order[0]))) {
-      active_index_ = 0;
+    const auto first = backend_order.front();
+    if (start_backend(make_backend(first)))
       return true;
-    }
-    const auto wgc_error = backend_->last_error();
+    const auto first_error = backend_error();
     backend_.reset();
-    if (!options_.allow_desktop_duplication ||
-        backend_order.size() < 2) {
-      error_ = wgc_error;
+    const auto fallback = next_backend(first);
+    if (!fallback.has_value()) {
+      error_ = first_error;
       return false;
     }
-    if (!start_backend(make_backend(backend_order[1]))) {
-      error_ = "WGC: " + wgc_error +
-               "; Desktop Duplication: " +
-               (backend_ ? backend_->last_error()
-                         : std::string("backend unavailable"));
+    if (!start_backend(make_backend(*fallback))) {
+      error_ = ladder_error(first_error, backend_error());
       backend_.reset();
       return false;
     }
-    active_index_ = 1;
-    fallback_reason_ = wgc_error;
+    fallback_reason_ = first_error;
     return true;
   }
 
@@ -75,7 +76,6 @@ public:
     if (backend_)
       backend_->stop();
     backend_.reset();
-    active_index_ = 0;
     error_.clear();
     fallback_reason_.clear();
     health_.reset();
@@ -113,6 +113,7 @@ public:
       backend_->set_quality(quality);
   }
 
+  HWND window() const noexcept { return window_; }
   core::CaptureBackendKind kind() const noexcept {
     return backend_ ? backend_->kind() : core::CaptureBackendKind::none;
   }
@@ -121,6 +122,11 @@ public:
   }
 
 private:
+  std::string backend_error() const {
+    return backend_ ? backend_->last_error()
+                    : std::string("backend unavailable");
+  }
+
   std::unique_ptr<CaptureBackend> make_backend(
       const core::CaptureBackendKind kind) {
     switch (kind) {
@@ -129,6 +135,8 @@ private:
     case core::CaptureBackendKind::desktop_duplication:
       return make_desktop_duplication_backend(window_);
     case core::CaptureBackendKind::none:
+    case core::CaptureBackendKind::x11_composite:
+    case core::CaptureBackendKind::x11_full_frame:
       break;
     }
     return nullptr;
@@ -165,27 +173,26 @@ private:
       fallback_reason_ = reason;
 
     backend_->stop();
-    const auto index = backend_index(kind);
-    if (index.has_value() && start_backend(make_backend(kind))) {
-      active_index_ = *index;
+    if (backend_index(kind).has_value() && start_backend(make_backend(kind))) {
+      std::string diagnostic;
+      if (is_fallback)
+        diagnostic = "WGC became unavailable (" + fallback_reason_ +
+                     "); Desktop Duplication fallback is starting";
+      else
+        diagnostic = reason + "; capture session restarted";
       return health_.observe(
           {.availability = foreground ? core::CaptureAvailability::starting
                                       : core::CaptureAvailability::inactive,
            .backend = kind,
-           .diagnostic =
-               is_fallback
-                   ? "WGC became unavailable (" + fallback_reason_ +
-                         "); Desktop Duplication fallback is starting"
-                   : reason + "; capture session restarted",
+           .diagnostic = std::move(diagnostic),
            .frame = {}});
     }
-    error_ = is_fallback ? ("WGC: " + fallback_reason_ +
-                            "; Desktop Duplication: " + backend_->last_error())
-                         : (reason + "; restart failed: " +
-                            (backend_ ? backend_->last_error()
-                                      : std::string("backend unavailable")));
+    const auto restart_error = backend_error();
+    if (is_fallback)
+      error_ = ladder_error(fallback_reason_, restart_error);
+    else
+      error_ = reason + "; restart failed: " + restart_error;
     backend_.reset();
-    active_index_ = 0;
     return health_.observe(
         {.availability = core::CaptureAvailability::unavailable,
          .backend = core::CaptureBackendKind::none,
@@ -201,7 +208,6 @@ private:
   HWND window_{};
   CaptureOptions options_;
   std::unique_ptr<CaptureBackend> backend_;
-  std::size_t active_index_{};
   std::vector<RECT> excluded_;
   std::string error_;
   std::string fallback_reason_;
@@ -219,9 +225,11 @@ WindowCaptureSession::operator=(WindowCaptureSession &&) noexcept = default;
 
 bool WindowCaptureSession::start() { return impl_->start(); }
 void WindowCaptureSession::stop() { impl_->stop(); }
-CapturePollResult WindowCaptureSession::poll(const core::TimePoint now,
-                                             const bool foreground) {
-  return impl_->poll(now, foreground);
+CapturePoll WindowCaptureSession::poll(const core::TimePoint now,
+                                       const bool foreground) {
+  return normalize_capture_poll(
+      {reinterpret_cast<std::uintptr_t>(impl_->window())},
+      impl_->poll(now, foreground));
 }
 void WindowCaptureSession::set_excluded_screen_rects(
     const std::span<const RECT> rectangles) {
@@ -235,14 +243,6 @@ core::CaptureBackendKind WindowCaptureSession::backend() const noexcept {
 }
 std::string WindowCaptureSession::gpu_description() const {
   return impl_->gpu_description();
-}
-
-CapturePoll poll_window_capture(const core::WindowId window,
-                                WindowCaptureSession &session,
-                                const core::TimePoint now,
-                                const bool target_is_foreground) {
-  return normalize_capture_poll(
-      window, session.poll(now, target_is_foreground));
 }
 
 } // namespace layerc::capture

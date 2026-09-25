@@ -242,6 +242,17 @@ void demand_matrix_is_explicit() {
   expect(calculate({}).empty(), "no game should demand no service");
   expect(calculate({{.window = {1}, .active = false, .profile_id = "idle"}}).empty(),
          "a background non-global game should demand no service");
+  auto background = calculate({{.window = {1},
+                                .active = false,
+                                .automation = true,
+                                .companion = true,
+                                .profile_id = "background"}});
+  expect(background.consumers(Capability::automation) == 1 &&
+             background.consumers(Capability::gamebar) == 1 &&
+             !background.required(Capability::input) &&
+             !background.required(Capability::overlay),
+         "background automation and companion sessions keep only their "
+         "own services demanded");
 
   auto demand =
       calculate({{.window = {1}, .active = true, .profile_id = "foreground"}});

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/types.hpp"
+#include "layerc/core/version.hpp"
 #include "layerc/core/frame.hpp"
 
 #include <cstddef>
@@ -14,7 +15,7 @@
 namespace layerc::core {
 
 inline constexpr std::uint32_t live_protocol_version = 3;
-inline constexpr std::string_view package_version = "2.4.0";
+inline constexpr std::string_view package_version = product_version;
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;

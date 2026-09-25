@@ -1,6 +1,5 @@
 #include "daemon_host.hpp"
 
-#include "layerc/core/json.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
@@ -15,37 +14,6 @@
 
 namespace layerc::daemon {
 namespace {
-
-namespace json = layerc::core::json;
-
-void append_resource(std::string &out, std::string_view name,
-                     std::uint64_t value, json::Join &join) {
-  join(out);
-  json::append_quoted(out, name);
-  out += ":";
-  json::append_unsigned(out, value);
-}
-
-void append_x11_extension(std::string &out, std::string_view name,
-                          const X11ExtensionStatus &extension,
-                          std::string_view connection_reason) {
-  out += ",";
-  json::append_quoted(out, name);
-  out += ":{\"available\":";
-  json::append_bool(out, extension.available);
-  if (extension.available) {
-    out += ",\"major\":";
-    json::append_unsigned(out, static_cast<std::uint64_t>(extension.major));
-    out += ",\"minor\":";
-    json::append_unsigned(out, static_cast<std::uint64_t>(extension.minor));
-  } else {
-    out += ",\"reason\":";
-    json::append_quoted(
-        out, connection_reason.empty() ? "extension_missing"
-                                       : connection_reason);
-  }
-  out += "}";
-}
 
 // One typed gate per capability. Orchestration (demand) is separated from
 // business logic (platform/session gates): each row supplies its primary
@@ -73,48 +41,32 @@ void resolve_availability(LinuxStatusSnapshot &linux,
   const auto status = std::ranges::find(linux.capabilities, gate.capability,
                                         &CapabilityStatus::capability);
   if (status == linux.capabilities.end()) return;
-  const auto unavailable = [&] {
-    status->availability = CapabilityAvailability::unavailable;
-    status->reasons = {"extension_missing"};
+  const auto set = [&](const CapabilityAvailability availability,
+                       const std::string_view reason) {
+    status->availability = availability;
+    status->reasons = {std::string(reason)};
   };
-  const auto inactive = [&] {
-    status->availability = CapabilityAvailability::inactive;
-    status->reasons = {"not_demanded"};
-  };
-  status->reasons.clear();
   // Platform vs demand order differs per row (see platform_first), but the
   // remaining cascade — session health, then the secondary gate, then
   // active — is shared, so a new capability adds a table row, not a block.
-  if (gate.platform_first && !gate.platform_available) {
-    unavailable();
-    return;
-  }
-  if (demand.consumers(gate.capability) == 0) {
-    inactive();
-    return;
-  }
-  if (!gate.platform_available) {
-    // Demand-first rows only land here when demanded: isolated_visual is
-    // unavailable on Linux regardless of demand, with its own token.
-    status->availability = CapabilityAvailability::unavailable;
-    status->reasons = {std::string(gate.secondary_reason)};
-    return;
-  }
-  if (!gate.session_errors.empty()) {
-    // The primary gate held, so a non-empty error list means individual
-    // sessions failed — a degraded capability, not a platform without
-    // support. "platform_unsupported" stays reserved for the
-    // never-implementable rows.
-    status->availability = CapabilityAvailability::degraded;
-    status->reasons = {std::string(gate.session_reason)};
-    return;
-  }
-  if (!gate.secondary_available) {
-    status->availability = CapabilityAvailability::degraded;
-    status->reasons = {std::string(gate.secondary_reason)};
-    return;
-  }
+  if (gate.platform_first && !gate.platform_available)
+    return set(CapabilityAvailability::unavailable, "extension_missing");
+  if (demand.consumers(gate.capability) == 0)
+    return set(CapabilityAvailability::inactive, "not_demanded");
+  // Demand-first rows only land here when demanded: isolated_visual is
+  // unavailable on Linux regardless of demand, with its own token.
+  if (!gate.platform_available)
+    return set(CapabilityAvailability::unavailable, gate.secondary_reason);
+  // The primary gate held, so a non-empty error list means individual
+  // sessions failed — a degraded capability, not a platform without
+  // support. "platform_unsupported" stays reserved for the
+  // never-implementable rows.
+  if (!gate.session_errors.empty())
+    return set(CapabilityAvailability::degraded, gate.session_reason);
+  if (!gate.secondary_available)
+    return set(CapabilityAvailability::degraded, gate.secondary_reason);
   status->availability = CapabilityAvailability::active;
+  status->reasons.clear();
 }
 
 } // namespace
@@ -168,111 +120,12 @@ void derive_capability_status(
 
 std::string status_payload_json(const layerc::runtime::DaemonKernel &kernel,
                                 const LinuxStatusSnapshot &linux) {
-  std::string out{"{"};
-  out += "\"pid\":";
-  json::append_unsigned(out, static_cast<std::uint64_t>(::getpid()));
-
-  out += ",\"x11\":{\"connected\":";
-  json::append_bool(out, linux.x11.connected);
-  if (!linux.x11.reason.empty()) {
-    out += ",\"reason\":";
-    json::append_quoted(out, linux.x11.reason);
-  }
-  append_x11_extension(out, "xi2", linux.x11.xi2, linux.x11.reason);
-  append_x11_extension(out, "shape", linux.x11.shape, linux.x11.reason);
-  append_x11_extension(out, "randr", linux.x11.randr, linux.x11.reason);
-  append_x11_extension(out, "composite", linux.x11.composite,
-                       linux.x11.reason);
-  append_x11_extension(out, "damage", linux.x11.damage, linux.x11.reason);
-  append_x11_extension(out, "xfixes", linux.x11.xfixes, linux.x11.reason);
-  out += ",\"ewmh\":{\"available\":";
-  json::append_bool(out, linux.x11.ewmh);
-  if (!linux.x11.ewmh) {
-    out += ",\"reason\":";
-    json::append_quoted(
-        out, linux.x11.reason.empty() ? "extension_missing"
-                                     : linux.x11.reason);
-  }
-  out += "}}";
-
-  out += ",\"capabilities\":[";
-  json::Join capability_join;
-  for (const auto &status : linux.capabilities) {
-    capability_join(out);
-    out += "{\"capability\":";
-    json::append_quoted(out,
-                        layerc::runtime::capability_name(status.capability));
-    out += ",\"availability\":";
-    json::append_quoted(out, availability_name(status.availability));
-    const auto stats = kernel.services().stats(status.capability);
-    out += ",\"state\":";
-    json::append_quoted(out, layerc::runtime::service_state_name(stats.state));
-    out += ",\"consumers\":";
-    json::append_unsigned(out, stats.consumers);
-    out += ",\"reasons\":[";
-    json::Join reason_join;
-    for (const auto &reason : status.reasons) {
-      reason_join(out);
-      json::append_quoted(out, reason);
-    }
-    out += "]}";
-  }
-  out += "]";
-
-  out += ",\"demand\":{";
-  json::Join demand_join;
-  for (std::size_t index = 0; index < layerc::runtime::capability_count;
-       ++index) {
-    const auto capability = static_cast<layerc::runtime::Capability>(index);
-    const auto consumers = kernel.demand().consumers(capability);
-    if (consumers == 0) continue;
-    demand_join(out);
-    json::append_quoted(out, layerc::runtime::capability_name(capability));
-    out += ":";
-    json::append_unsigned(out, consumers);
-  }
-
-  out += "},\"services\":[";
+  layerc::runtime::RuntimeDiagnostics diagnostics;
+  diagnostics.process.pid = static_cast<std::uint32_t>(::getpid());
   const auto stats = kernel.services().all_stats();
-  json::Join service_join;
-  for (const auto &entry : stats) {
-    if (entry.consumers == 0 &&
-        entry.state == layerc::runtime::ServiceState::absent)
-      continue;
-    service_join(out);
-    out += "{\"capability\":";
-    json::append_quoted(out,
-                        layerc::runtime::capability_name(entry.capability));
-    out += ",\"state\":";
-    json::append_quoted(
-        out, layerc::runtime::service_state_name(entry.state));
-    out += ",\"consumers\":";
-    json::append_unsigned(out, entry.consumers);
-    out += ",\"faults\":";
-    json::append_unsigned(out, entry.fault_count);
-    if (!entry.last_error.empty()) {
-      out += ",\"error\":";
-      json::append_quoted(out, entry.last_error);
-    }
-    out += "}";
-  }
-
-  out += "],\"resources\":{";
-  const auto resources = kernel.services().aggregate_resources();
-  json::Join resource_join;
-  append_resource(out, "threads", resources.threads, resource_join);
-  append_resource(out, "timers", resources.timers, resource_join);
-  append_resource(out, "handles", resources.handles, resource_join);
-  append_resource(out, "windows", resources.windows, resource_join);
-  append_resource(out, "objects", resources.objects, resource_join);
-  append_resource(out, "captureSessions", resources.capture_sessions,
-                  resource_join);
-  append_resource(out, "queues", resources.queues, resource_join);
-  append_resource(out, "decodedAssets", resources.decoded_assets,
-                  resource_join);
-  append_resource(out, "cacheBytes", resources.cache_bytes, resource_join);
-  out += "}}";
-  return out;
+  diagnostics.services.assign(stats.begin(), stats.end());
+  diagnostics.aggregate_resources = kernel.services().aggregate_resources();
+  return layerc::runtime::serialize_linux_status_json(diagnostics, linux);
 }
 
 std::vector<layerc::platform::StoredProfile>

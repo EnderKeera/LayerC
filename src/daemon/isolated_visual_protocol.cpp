@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace layerc::daemon {
 namespace {
@@ -19,6 +20,15 @@ using layerc::core::json::Value;
 
 // Counters and identifiers travel as JSON integer tokens (full int64 range).
 inline constexpr auto wire_integer = IntegerEncoding::integer_token;
+
+// Required counter/identifier field, read as a wire integer token.
+std::optional<std::uint64_t> wire_unsigned(
+    Reader &reader, const Value &parent, const std::string_view key,
+    const std::string &path,
+    const std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max()) {
+  return reader.unsigned_integer(parent, key, path, maximum, Required::yes, 0,
+                                 wire_integer);
+}
 
 std::string reader_error(const Reader &reader) {
   const auto described = reader.error().describe();
@@ -87,12 +97,156 @@ void append_visual_profile_object(std::string &output,
   output += encoded;
 }
 
+std::optional<VisualAssetSignature>
+decode_asset_signature(const Value &encoded, Reader &reader,
+                       const std::string &item_path, std::string &error) {
+  if (!encoded.is_object()) {
+    error = item_path + ": asset signature must be an object";
+    return std::nullopt;
+  }
+  VisualAssetSignature signature;
+  if (!reader.boolean(encoded, "present", item_path, signature.present,
+                      Required::yes)) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  const auto volume_serial =
+      wire_unsigned(reader, encoded, "volumeSerial", item_path,
+                    std::numeric_limits<std::uint32_t>::max());
+  const auto file_index =
+      wire_unsigned(reader, encoded, "fileIndex", item_path);
+  const auto file_size = wire_unsigned(reader, encoded, "fileSize", item_path);
+  const auto write_ticks =
+      wire_unsigned(reader, encoded, "lastWriteTicks", item_path);
+  const auto change_usn =
+      wire_unsigned(reader, encoded, "changeUsn", item_path);
+  if (!volume_serial || !file_index || !file_size || !write_ticks ||
+      !change_usn) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  signature.volume_serial = static_cast<std::uint32_t>(*volume_serial);
+  signature.file_index = *file_index;
+  signature.file_size = *file_size;
+  signature.last_write_ticks = *write_ticks;
+  signature.change_usn = *change_usn;
+  return signature;
+}
+
+std::optional<VisualTemplateEvaluation>
+decode_template_evaluation(const Value &encoded_signatures,
+                           layerc::core::TemplateState state, Reader &reader,
+                           const std::string &signature_path,
+                           std::string &error) {
+  if (!encoded_signatures.is_array()) {
+    error = signature_path + ": expected an array of signatures";
+    return std::nullopt;
+  }
+  const auto &signature_list = encoded_signatures.as_array();
+  if (signature_list.size() != state.references.size()) {
+    error = "asset signatures must match template references";
+    return std::nullopt;
+  }
+  VisualTemplateEvaluation evaluation;
+  evaluation.state = std::move(state);
+  evaluation.asset_signatures.reserve(signature_list.size());
+  for (std::size_t signature_index = 0; signature_index < signature_list.size();
+       ++signature_index) {
+    const auto item_path =
+        signature_path + "[" + std::to_string(signature_index) + "]";
+    auto signature = decode_asset_signature(signature_list[signature_index],
+                                            reader, item_path, error);
+    if (!signature)
+      return std::nullopt;
+    evaluation.asset_signatures.push_back(*signature);
+  }
+  return evaluation;
+}
+
+std::optional<VisualEvaluationRequest>
+decode_visual_request(const Value &entry, Reader &reader,
+                      const std::string &path, std::string &error) {
+  if (!entry.is_object()) {
+    error = path + ": request must be an object";
+    return std::nullopt;
+  }
+  std::string source_key;
+  if (!reader.string(entry, "sourceKey", path, source_key, Required::yes,
+                     EmptyString::reject)) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  const auto *visual_value =
+      reader.object(entry, "visualProfile", path, Required::yes);
+  if (visual_value == nullptr) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  layerc::core::GameProfile base;
+  base.id = "ipc";
+  const auto decoded =
+      layerc::core::parse_visual_profile_value(*visual_value, base);
+  const auto *visual = std::get_if<layerc::core::VisualProfile>(&decoded);
+  if (visual == nullptr) {
+    error = "invalid visual evaluation request";
+    return std::nullopt;
+  }
+  VisualEvaluationRequest request;
+  request.source_key = std::move(source_key);
+  request.sample_rate_hz = visual->sample_rate_hz;
+  request.quality = visual->quality;
+  request.rules = visual->rules;
+  const auto *signature_sets =
+      reader.array(entry, "assetSignatures", path, Required::yes);
+  if (signature_sets == nullptr) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  if (signature_sets->size() != visual->templates.size()) {
+    error = "assetSignatures must match the visual template count";
+    return std::nullopt;
+  }
+  request.templates.reserve(visual->templates.size());
+  for (std::size_t template_index = 0;
+       template_index < visual->templates.size(); ++template_index) {
+    const auto signature_path = path + ".assetSignatures[" +
+                                std::to_string(template_index) + "]";
+    auto evaluation = decode_template_evaluation(
+        (*signature_sets)[template_index], visual->templates[template_index],
+        reader, signature_path, error);
+    if (!evaluation)
+      return std::nullopt;
+    request.templates.push_back(std::move(*evaluation));
+  }
+  return request;
+}
+
+std::optional<RECT> decode_exclusion_rect(const Value &entry,
+                                          const std::string &path,
+                                          std::string &error) {
+  if (!entry.is_array() || entry.as_array().size() != 4) {
+    error = path + ": exclusion must contain four coordinates";
+    return std::nullopt;
+  }
+  RECT rect{};
+  long *coordinates[] = {&rect.left, &rect.top, &rect.right, &rect.bottom};
+  for (std::size_t coordinate = 0; coordinate < 4; ++coordinate) {
+    const auto &value = entry.as_array()[coordinate];
+    if (!value.is_number() || !std::isfinite(value.as_number()) ||
+        value.as_number() < std::numeric_limits<long>::min() ||
+        value.as_number() > std::numeric_limits<long>::max()) {
+      error = path + ": invalid exclusion coordinate";
+      return std::nullopt;
+    }
+    *coordinates[coordinate] = static_cast<long>(value.as_number());
+  }
+  return rect;
+}
+
 IsolatedInboundMessage decode_configure_message(const Value &root,
                                                 Reader &reader) {
   IsolatedConfiguration result;
-  const auto sequence = reader.unsigned_integer(
-      root, "sequence", "$", std::numeric_limits<std::uint64_t>::max(),
-      Required::yes, 0, wire_integer);
+  const auto sequence = wire_unsigned(reader, root, "sequence", "$");
   const auto quality = reader.integer(
       root, "captureQuality", "$", 0, layerc::core::capture_quality_max,
       Required::yes);
@@ -105,100 +259,14 @@ IsolatedInboundMessage decode_configure_message(const Value &root,
   if (requests->size() > 64)
     return IsolatedProtocolError{"requests must be an array of at most 64"};
   result.requests.reserve(requests->size());
+  std::string error;
   for (std::size_t index = 0; index < requests->size(); ++index) {
-    const auto &entry = (*requests)[index];
     const auto path = "$.requests[" + std::to_string(index) + "]";
-    if (!entry.is_object())
-      return IsolatedProtocolError{path + ": request must be an object"};
-    std::string source_key;
-    if (!reader.string(entry, "sourceKey", path, source_key, Required::yes,
-                       EmptyString::reject))
-      return IsolatedProtocolError{reader_error(reader)};
-    const auto *visual_value =
-        reader.object(entry, "visualProfile", path, Required::yes);
-    if (visual_value == nullptr)
-      return IsolatedProtocolError{reader_error(reader)};
-    layerc::core::GameProfile base;
-    base.id = "ipc";
-    const auto decoded =
-        layerc::core::parse_visual_profile_value(*visual_value, base);
-    const auto *visual = std::get_if<layerc::core::VisualProfile>(&decoded);
-    if (visual == nullptr)
-      return IsolatedProtocolError{"invalid visual evaluation request"};
-    VisualEvaluationRequest request;
-    request.source_key = std::move(source_key);
-    request.sample_rate_hz = visual->sample_rate_hz;
-    request.quality = visual->quality;
-    request.rules = visual->rules;
-    const auto *signature_sets =
-        reader.array(entry, "assetSignatures", path, Required::yes);
-    if (signature_sets == nullptr)
-      return IsolatedProtocolError{reader_error(reader)};
-    if (signature_sets->size() != visual->templates.size())
-      return IsolatedProtocolError{
-          "assetSignatures must match the visual template count"};
-    request.templates.reserve(visual->templates.size());
-    for (std::size_t template_index = 0;
-         template_index < visual->templates.size(); ++template_index) {
-      const auto &state = visual->templates[template_index];
-      const auto &encoded_signatures = (*signature_sets)[template_index];
-      const auto signature_path = path + ".assetSignatures[" +
-                                  std::to_string(template_index) + "]";
-      if (!encoded_signatures.is_array())
-        return IsolatedProtocolError{signature_path +
-                                     ": expected an array of signatures"};
-      if (encoded_signatures.as_array().size() != state.references.size())
-        return IsolatedProtocolError{
-            "asset signatures must match template references"};
-      VisualTemplateEvaluation evaluation;
-      evaluation.state = state;
-      evaluation.asset_signatures.reserve(encoded_signatures.as_array().size());
-      for (std::size_t signature_index = 0;
-           signature_index < encoded_signatures.as_array().size();
-           ++signature_index) {
-        const auto &encoded = encoded_signatures.as_array()[signature_index];
-        const auto item_path = signature_path + "[" +
-                               std::to_string(signature_index) + "]";
-        if (!encoded.is_object())
-          return IsolatedProtocolError{
-              item_path + ": asset signature must be an object"};
-        VisualAssetSignature signature;
-        if (!reader.boolean(encoded, "present", item_path, signature.present,
-                            Required::yes))
-          return IsolatedProtocolError{reader_error(reader)};
-        const auto volume_serial = reader.unsigned_integer(
-            encoded, "volumeSerial", item_path,
-            std::numeric_limits<std::uint32_t>::max(), Required::yes, 0,
-            wire_integer);
-        const auto file_index = reader.unsigned_integer(
-            encoded, "fileIndex", item_path,
-            std::numeric_limits<std::uint64_t>::max(), Required::yes, 0,
-            wire_integer);
-        const auto file_size = reader.unsigned_integer(
-            encoded, "fileSize", item_path,
-            std::numeric_limits<std::uint64_t>::max(), Required::yes, 0,
-            wire_integer);
-        const auto write_ticks = reader.unsigned_integer(
-            encoded, "lastWriteTicks", item_path,
-            std::numeric_limits<std::uint64_t>::max(), Required::yes, 0,
-            wire_integer);
-        const auto change_usn = reader.unsigned_integer(
-            encoded, "changeUsn", item_path,
-            std::numeric_limits<std::uint64_t>::max(), Required::yes, 0,
-            wire_integer);
-        if (!volume_serial || !file_index || !file_size || !write_ticks ||
-            !change_usn)
-          return IsolatedProtocolError{reader_error(reader)};
-        signature.volume_serial = static_cast<std::uint32_t>(*volume_serial);
-        signature.file_index = *file_index;
-        signature.file_size = *file_size;
-        signature.last_write_ticks = *write_ticks;
-        signature.change_usn = *change_usn;
-        evaluation.asset_signatures.push_back(signature);
-      }
-      request.templates.push_back(std::move(evaluation));
-    }
-    result.requests.push_back(std::move(request));
+    auto request =
+        decode_visual_request((*requests)[index], reader, path, error);
+    if (!request)
+      return IsolatedProtocolError{error};
+    result.requests.push_back(std::move(*request));
   }
   const auto *exclusions = reader.array(root, "exclusions", "$", Required::yes);
   if (exclusions == nullptr)
@@ -206,32 +274,19 @@ IsolatedInboundMessage decode_configure_message(const Value &root,
   if (exclusions->size() > 128)
     return IsolatedProtocolError{"exclusions must be an array of at most 128"};
   for (std::size_t index = 0; index < exclusions->size(); ++index) {
-    const auto &entry = (*exclusions)[index];
     const auto path = "$.exclusions[" + std::to_string(index) + "]";
-    if (!entry.is_array() || entry.as_array().size() != 4)
-      return IsolatedProtocolError{
-          path + ": exclusion must contain four coordinates"};
-    RECT rect{};
-    long *coordinates[] = {&rect.left, &rect.top, &rect.right, &rect.bottom};
-    for (std::size_t coordinate = 0; coordinate < 4; ++coordinate) {
-      const auto &value = entry.as_array()[coordinate];
-      if (!value.is_number() || !std::isfinite(value.as_number()) ||
-          value.as_number() < std::numeric_limits<long>::min() ||
-          value.as_number() > std::numeric_limits<long>::max())
-        return IsolatedProtocolError{path + ": invalid exclusion coordinate"};
-      *coordinates[coordinate] = static_cast<long>(value.as_number());
-    }
-    if (rect.right > rect.left && rect.bottom > rect.top)
-      result.exclusions.push_back(rect);
+    auto rect = decode_exclusion_rect((*exclusions)[index], path, error);
+    if (!rect)
+      return IsolatedProtocolError{error};
+    if (rect->right > rect->left && rect->bottom > rect->top)
+      result.exclusions.push_back(*rect);
   }
   return result;
 }
 
 IsolatedInboundMessage decode_poll_message(const Value &root, Reader &reader) {
   IsolatedPoll poll;
-  const auto sequence = reader.unsigned_integer(
-      root, "sequence", "$", std::numeric_limits<std::uint64_t>::max(),
-      Required::yes, 0, wire_integer);
+  const auto sequence = wire_unsigned(reader, root, "sequence", "$");
   if (!sequence)
     return IsolatedProtocolError{reader_error(reader)};
   poll.sequence = *sequence;
@@ -335,9 +390,8 @@ bool validate_isolated_hello(const std::string_view json,
       reader.string(*root, "role", "$", role, Required::yes,
                     EmptyString::reject);
   const auto process_id =
-      reader.unsigned_integer(*root, "processId", "$",
-                              std::numeric_limits<std::uint32_t>::max(),
-                              Required::yes, 0, wire_integer);
+      wire_unsigned(reader, *root, "processId", "$",
+                    std::numeric_limits<std::uint32_t>::max());
   if (!hello_fields_ok || !process_id) {
     error = reader_error(reader);
     return false;
@@ -353,6 +407,38 @@ bool validate_isolated_hello(const std::string_view json,
   }
   return true;
 }
+
+namespace {
+
+void append_asset_signature(std::string &output,
+                            const VisualAssetSignature &signature) {
+  output += signature.present ? "{\"present\":true" : "{\"present\":false";
+  output += ",\"volumeSerial\":";
+  layerc::core::json::append_unsigned(output, signature.volume_serial);
+  output += ",\"fileIndex\":";
+  layerc::core::json::append_unsigned(output, signature.file_index);
+  output += ",\"fileSize\":";
+  layerc::core::json::append_unsigned(output, signature.file_size);
+  output += ",\"lastWriteTicks\":";
+  layerc::core::json::append_unsigned(output, signature.last_write_ticks);
+  output += ",\"changeUsn\":";
+  layerc::core::json::append_unsigned(output, signature.change_usn);
+  output.push_back('}');
+}
+
+void append_exclusion_rect(std::string &output, const RECT &rect) {
+  output.push_back('[');
+  layerc::core::json::append_number(output, rect.left);
+  output.push_back(',');
+  layerc::core::json::append_number(output, rect.top);
+  output.push_back(',');
+  layerc::core::json::append_number(output, rect.right);
+  output.push_back(',');
+  layerc::core::json::append_number(output, rect.bottom);
+  output.push_back(']');
+}
+
+} // namespace
 
 std::string
 encode_isolated_configuration(const IsolatedConfiguration &configuration) {
@@ -392,19 +478,7 @@ encode_isolated_configuration(const IsolatedConfiguration &configuration) {
            ++signature_index) {
         if (signature_index != 0)
           output.push_back(',');
-        const auto &signature = signatures[signature_index];
-        output += signature.present ? "{\"present\":true" : "{\"present\":false";
-        output += ",\"volumeSerial\":";
-        layerc::core::json::append_unsigned(output, signature.volume_serial);
-        output += ",\"fileIndex\":";
-        layerc::core::json::append_unsigned(output, signature.file_index);
-        output += ",\"fileSize\":";
-        layerc::core::json::append_unsigned(output, signature.file_size);
-        output += ",\"lastWriteTicks\":";
-        layerc::core::json::append_unsigned(output, signature.last_write_ticks);
-        output += ",\"changeUsn\":";
-        layerc::core::json::append_unsigned(output, signature.change_usn);
-        output.push_back('}');
+        append_asset_signature(output, signatures[signature_index]);
       }
       output.push_back(']');
     }
@@ -416,16 +490,7 @@ encode_isolated_configuration(const IsolatedConfiguration &configuration) {
        ++index) {
     if (index != 0)
       output.push_back(',');
-    const auto &rect = configuration.exclusions[index];
-    output.push_back('[');
-    layerc::core::json::append_number(output, rect.left);
-    output.push_back(',');
-    layerc::core::json::append_number(output, rect.top);
-    output.push_back(',');
-    layerc::core::json::append_number(output, rect.right);
-    output.push_back(',');
-    layerc::core::json::append_number(output, rect.bottom);
-    output.push_back(']');
+    append_exclusion_rect(output, configuration.exclusions[index]);
   }
   output += "]}";
   return output;
@@ -538,6 +603,91 @@ std::string encode_isolated_snapshot(const std::uint64_t packet_sequence,
   return output;
 }
 
+namespace {
+
+std::optional<layerc::core::ObservationMeasurement>
+decode_measurement(const Value &measurement_value, Reader &reader,
+                   const std::string &measurement_path, std::string &error) {
+  if (!measurement_value.is_object()) {
+    error = measurement_path + ": measurement must be an object";
+    return std::nullopt;
+  }
+  layerc::core::ObservationMeasurement measurement;
+  bool matched{};
+  if (!reader.string(measurement_value, "id", measurement_path,
+                     measurement.observation_id, Required::yes,
+                     EmptyString::reject) ||
+      !reader.boolean(measurement_value, "matched", measurement_path, matched,
+                      Required::yes)) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  const auto sampled_at =
+      wire_unsigned(reader, measurement_value, "sampledAtNs", measurement_path);
+  const auto confidence = reader.number(measurement_value, "confidence",
+                                        measurement_path, 0.0, 1.0,
+                                        Required::yes);
+  const auto measurement_availability = reader.integer(
+      measurement_value, "availability", measurement_path, 0,
+      layerc::core::capture_availability_max, Required::yes);
+  if (!sampled_at || !confidence || !measurement_availability) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  measurement.availability =
+      static_cast<layerc::core::CaptureAvailability>(*measurement_availability);
+  measurement.matched = matched;
+  measurement.confidence = *confidence;
+  measurement.sampled_at =
+      layerc::core::TimePoint(std::chrono::nanoseconds(*sampled_at));
+  return measurement;
+}
+
+std::optional<VisualEvaluationSnapshot>
+decode_evaluation(const Value &entry, Reader &reader, const std::string &path,
+                  std::string &error) {
+  if (!entry.is_object()) {
+    error = path + ": isolated evaluation must be an object";
+    return std::nullopt;
+  }
+  std::string source_key;
+  bool missing{};
+  if (!reader.string(entry, "sourceKey", path, source_key, Required::yes,
+                     EmptyString::reject) ||
+      !reader.boolean(entry, "missingAssets", path, missing, Required::yes)) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  const auto sequence = wire_unsigned(reader, entry, "sequence", path);
+  const auto *measurements =
+      reader.array(entry, "measurements", path, Required::yes);
+  if (!sequence || measurements == nullptr) {
+    error = reader_error(reader);
+    return std::nullopt;
+  }
+  if (measurements->size() > 8) {
+    error = "invalid isolated measurements";
+    return std::nullopt;
+  }
+  VisualEvaluationSnapshot evaluation;
+  evaluation.source_key = std::move(source_key);
+  evaluation.sequence = *sequence;
+  evaluation.missing_template_assets = missing;
+  for (std::size_t measurement_index = 0;
+       measurement_index < measurements->size(); ++measurement_index) {
+    const auto measurement_path =
+        path + ".measurements[" + std::to_string(measurement_index) + "]";
+    auto measurement = decode_measurement((*measurements)[measurement_index],
+                                          reader, measurement_path, error);
+    if (!measurement)
+      return std::nullopt;
+    evaluation.measurements.push_back(std::move(*measurement));
+  }
+  return evaluation;
+}
+
+} // namespace
+
 IsolatedSnapshotResult
 decode_isolated_snapshot(const std::string_view json,
                          const std::uint64_t expected_packet_sequence) {
@@ -553,12 +703,9 @@ decode_isolated_snapshot(const std::string_view json,
                      EmptyString::allow)) {
     return IsolatedProtocolError{reader_error(reader)};
   }
-  const auto packet_sequence = reader.unsigned_integer(
-      *root, "sequence", "$", std::numeric_limits<std::uint64_t>::max(),
-      Required::yes, 0, wire_integer);
-  const auto capture_sequence = reader.unsigned_integer(
-      *root, "captureSequence", "$", std::numeric_limits<std::uint64_t>::max(),
-      Required::yes, 0, wire_integer);
+  const auto packet_sequence = wire_unsigned(reader, *root, "sequence", "$");
+  const auto capture_sequence =
+      wire_unsigned(reader, *root, "captureSequence", "$");
   const auto availability = reader.integer(
       *root, "availability", "$", 0, layerc::core::capture_availability_max,
       Required::yes);
@@ -586,69 +733,14 @@ decode_isolated_snapshot(const std::string_view json,
   result.result.backend =
       static_cast<layerc::core::CaptureBackendKind>(*backend);
   result.gpu_description = std::move(gpu);
+  std::string error;
   for (std::size_t index = 0; index < evaluations->size(); ++index) {
-    const auto &entry = (*evaluations)[index];
     const auto path = "$.evaluations[" + std::to_string(index) + "]";
-    if (!entry.is_object())
-      return IsolatedProtocolError{
-          path + ": isolated evaluation must be an object"};
-    std::string source_key;
-    bool missing{};
-    if (!reader.string(entry, "sourceKey", path, source_key, Required::yes,
-                       EmptyString::reject) ||
-        !reader.boolean(entry, "missingAssets", path, missing, Required::yes))
-      return IsolatedProtocolError{reader_error(reader)};
-    const auto sequence = reader.unsigned_integer(
-        entry, "sequence", path, std::numeric_limits<std::uint64_t>::max(),
-        Required::yes, 0, wire_integer);
-    const auto *measurements =
-        reader.array(entry, "measurements", path, Required::yes);
-    if (!sequence || measurements == nullptr)
-      return IsolatedProtocolError{reader_error(reader)};
-    if (measurements->size() > 8)
-      return IsolatedProtocolError{"invalid isolated measurements"};
-    VisualEvaluationSnapshot evaluation;
-    evaluation.source_key = std::move(source_key);
-    evaluation.sequence = *sequence;
-    evaluation.missing_template_assets = missing;
-    for (std::size_t measurement_index = 0;
-         measurement_index < measurements->size(); ++measurement_index) {
-      const auto &measurement_value = (*measurements)[measurement_index];
-      const auto measurement_path =
-          path + ".measurements[" + std::to_string(measurement_index) + "]";
-      if (!measurement_value.is_object())
-        return IsolatedProtocolError{
-            measurement_path + ": measurement must be an object"};
-      layerc::core::ObservationMeasurement measurement;
-      bool matched{};
-      if (!reader.string(measurement_value, "id", measurement_path,
-                         measurement.observation_id, Required::yes,
-                         EmptyString::reject) ||
-          !reader.boolean(measurement_value, "matched", measurement_path,
-                          matched, Required::yes))
-        return IsolatedProtocolError{reader_error(reader)};
-      const auto sampled_at = reader.unsigned_integer(
-          measurement_value, "sampledAtNs", measurement_path,
-          std::numeric_limits<std::uint64_t>::max(), Required::yes, 0,
-          wire_integer);
-      const auto confidence =
-          reader.number(measurement_value, "confidence", measurement_path, 0.0,
-                        1.0, Required::yes);
-      const auto measurement_availability = reader.integer(
-          measurement_value, "availability", measurement_path, 0,
-          layerc::core::capture_availability_max, Required::yes);
-      if (!sampled_at || !confidence || !measurement_availability)
-        return IsolatedProtocolError{reader_error(reader)};
-      measurement.availability =
-          static_cast<layerc::core::CaptureAvailability>(
-              *measurement_availability);
-      measurement.matched = matched;
-      measurement.confidence = *confidence;
-      measurement.sampled_at =
-          layerc::core::TimePoint(std::chrono::nanoseconds(*sampled_at));
-      evaluation.measurements.push_back(std::move(measurement));
-    }
-    result.evaluations.push_back(std::move(evaluation));
+    auto evaluation =
+        decode_evaluation((*evaluations)[index], reader, path, error);
+    if (!evaluation)
+      return IsolatedProtocolError{error};
+    result.evaluations.push_back(std::move(*evaluation));
   }
   return result;
 }
@@ -675,9 +767,7 @@ bool decode_isolated_ack(const std::string_view json,
   std::string type;
   const auto type_ok = reader.string(*root, "type", "$", type, Required::yes,
                                      EmptyString::reject);
-  const auto sequence = reader.unsigned_integer(
-      *root, "sequence", "$", std::numeric_limits<std::uint64_t>::max(),
-      Required::yes, 0, wire_integer);
+  const auto sequence = wire_unsigned(reader, *root, "sequence", "$");
   if (!type_ok || !sequence) {
     error = reader_error(reader);
     return false;

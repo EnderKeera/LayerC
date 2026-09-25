@@ -102,6 +102,14 @@ bool AutomationRuntime::Impl::apply_internal(
     event.fields.emplace("value", after);
     derived.push_back(std::move(event));
   };
+  const auto emit = [&](const AutomationEventKind kind,
+                        const std::string &source_id) {
+    derived.push_back({.kind = kind,
+                       .timestamp = now,
+                       .source_id = source_id,
+                       .origin_token = 0,
+                       .fields = {}});
+  };
   switch (effect.kind) {
   case AutomationActionKind::set_variable:
     if (variable == target.variables.end() ||
@@ -128,10 +136,11 @@ bool AutomationRuntime::Impl::apply_internal(
     if (const auto *integer_value =
             std::get_if<std::int64_t>(&before.storage)) {
       const auto *right = std::get_if<std::int64_t>(&effect.value.storage);
-      const auto sum = right == nullptr ? std::optional<std::int64_t>{}
-                                        : checked_integer_binary(*integer_value,
-                                                                 *right,
-                                                                 detail::AutomationOpcode::add);
+      const auto sum =
+          right == nullptr
+              ? std::optional<std::int64_t>{}
+              : checked_integer_binary(*integer_value, *right,
+                                       detail::AutomationOpcode::add);
       if (!sum.has_value()) {
         error = {"$runtime", "integer increment overflow"};
         return false;
@@ -162,8 +171,11 @@ bool AutomationRuntime::Impl::apply_internal(
     } else if (const auto *confidence_value =
                    std::get_if<ConfidenceValue>(&before.storage)) {
       const auto *right = std::get_if<ConfidenceValue>(&effect.value.storage);
-      const double sum =
-          right == nullptr ? -1.0 : confidence_value->value + right->value;
+      if (right == nullptr) {
+        error = {"$runtime", "confidence increment is out of range"};
+        return false;
+      }
+      const double sum = confidence_value->value + right->value;
       if (!std::isfinite(sum) || sum < 0.0 || sum > 1.0) {
         error = {"$runtime", "confidence increment is out of range"};
         return false;
@@ -282,46 +294,22 @@ bool AutomationRuntime::Impl::apply_internal(
     // "the trigger action was issued", not "a charge was consumed".
     const std::array<std::string, 1> seed{effect.target};
     for (const auto &id : propagated_cooldowns(seed))
-      derived.push_back({.kind = AutomationEventKind::cooldown_triggered,
-                         .timestamp = now,
-                         .source_id = id,
-                         .origin_token = 0,
-                         .fields = {}});
+      emit(AutomationEventKind::cooldown_triggered, id);
     return true;
   }
   case AutomationActionKind::reset_cooldown:
     for (const auto &id : reset_cooldowns(effect.target))
-      derived.push_back({.kind = AutomationEventKind::cooldown_ready,
-                         .timestamp = now,
-                         .source_id = id,
-                         .origin_token = 0,
-                         .fields = {}});
+      emit(AutomationEventKind::cooldown_ready, id);
     return true;
   case AutomationActionKind::trigger_group:
-    derived.push_back({.kind = AutomationEventKind::group_triggered,
-                       .timestamp = now,
-                       .source_id = effect.target,
-                       .origin_token = 0,
-                       .fields = {}});
+    emit(AutomationEventKind::group_triggered, effect.target);
     for (const auto &id : group_cooldowns(effect.target, true))
-      derived.push_back({.kind = AutomationEventKind::cooldown_triggered,
-                         .timestamp = now,
-                         .source_id = id,
-                         .origin_token = 0,
-                         .fields = {}});
+      emit(AutomationEventKind::cooldown_triggered, id);
     return true;
   case AutomationActionKind::reset_group:
-    derived.push_back({.kind = AutomationEventKind::group_ready,
-                       .timestamp = now,
-                       .source_id = effect.target,
-                       .origin_token = 0,
-                       .fields = {}});
+    emit(AutomationEventKind::group_ready, effect.target);
     for (const auto &id : group_cooldowns(effect.target, false))
-      derived.push_back({.kind = AutomationEventKind::cooldown_ready,
-                         .timestamp = now,
-                         .source_id = id,
-                         .origin_token = 0,
-                         .fields = {}});
+      emit(AutomationEventKind::cooldown_ready, id);
     return true;
   default:
     return true;
@@ -331,8 +319,8 @@ bool AutomationRuntime::Impl::apply_internal(
 std::optional<std::string> AutomationRuntime::Impl::commit_batch(
     EvaluationStage &stage, const EffectValidator &validator,
     const EffectCommitter &committer) {
-  for (const auto &[key, effect] : stage.winners) {
-    (void)key;
+  for (const auto &winner : stage.winners) {
+    const auto &effect = winner.second;
     if (faulted.contains(effect.automation_id))
       continue;
     if (validator && !validator(effect)) {
@@ -371,6 +359,7 @@ std::optional<std::string> AutomationRuntime::Impl::commit_batch(
         persistent_dirty = true;
       }
     }
+  // queue[0] is the root event; only later entries are derived.
   stage.result.derived_events.assign(stage.queue.begin() + 1, stage.queue.end());
   stage.result.committed = true;
   return std::nullopt;

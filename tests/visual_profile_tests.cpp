@@ -29,6 +29,22 @@ layerc::core::GameProfile visual_base_profile() {
 
 void test_visual_profile_parser() {
   using namespace layerc::core;
+  const NormalizedRegion full{0.0, 0.0, 1.0, 1.0};
+  const NormalizedRegion inside{0.25, 0.25, 0.5, 0.5};
+  const NormalizedRegion disjoint{0.75, 0.0, 0.25, 0.25};
+  expect(contains(full, inside) && !contains(inside, full) &&
+             !overlaps(inside, disjoint),
+         "shared normalized geometry distinguishes containment from contact");
+  const NormalizedRegion almost_inside{-region_geometry_epsilon / 2, 0.0,
+                                        0.5, 0.5};
+  expect(contains(full, almost_inside) &&
+             overlaps(inside, {0.75 - 2 * region_geometry_epsilon, 0.25,
+                                0.25, 0.5}),
+         "shared geometry applies one tolerance at both boundaries");
+  const auto [left, top, right, bottom] =
+      to_pixel_bounds({0.15, 0.25, 0.5, 0.5}, 10, 8);
+  expect(left == 1 && top == 2 && right == 7 && bottom == 6,
+         "shared pixel bounds floor low edges and ceil high edges");
   auto base = visual_base_profile();
   VisualProfile profile;
   profile.profile_id = base.id;
@@ -59,6 +75,17 @@ void test_visual_profile_parser() {
        .unavailable_policy = CaptureUnavailablePolicy::trigger_from_input});
 
   const auto serialized = serialize_visual_profile_json(profile);
+  const auto syntax_error = parse_visual_profile_json("{]", base);
+  expect(std::holds_alternative<VisualError>(syntax_error) &&
+             std::get<VisualError>(syntax_error).path == "$@1",
+         "visual syntax errors retain their byte offset in the path");
+  VisualProfile empty;
+  empty.profile_id = "game";
+  expect(serialize_visual_profile_json(empty) ==
+             "{\n  \"schemaVersion\": 2,\n  \"profileId\": \"game\",\n"
+             "  \"sampleRateHz\": 10,\n  \"quality\": \"balanced\",\n"
+             "  \"observations\": [\n  ],\n  \"triggers\": [\n  ]\n}\n",
+         "visual sidecar empty-array layout is byte-stable");
   const auto parsed = parse_visual_profile_json(serialized, base);
   expect(std::holds_alternative<VisualProfile>(parsed) &&
              std::get<VisualProfile>(parsed) == profile,
@@ -136,8 +163,32 @@ void test_visual_profile_parser() {
                  template_profile,
          "template observations should round-trip all bounded matching settings");
 
+  // Parsed schema-2 observations retain their original source indices, even
+  // when mixed pixel/template entries are stored in separate vectors.
+  VisualProfile mixed = template_profile;
+  mixed.rules.push_back(profile.rules.front());
+  mixed.templates.front().references.front().asset_sha256 = std::string(64, 'A');
+  const auto mixed_error = parse_visual_profile_json(
+      serialize_visual_profile_json(mixed), base);
+  expect(std::holds_alternative<VisualError>(mixed_error) &&
+             std::get<VisualError>(mixed_error).path ==
+                 "$.observations[1].references[0].asset",
+         "semantic template errors cite the original observation index");
+  // Direct validation of an in-memory (always schema-2) profile cites the
+  // serialized $.observations position: pixel rules first, then templates.
+  VisualProfile duplicate = template_profile;
+  duplicate.rules.push_back(profile.rules.front());
+  duplicate.templates.front().id = duplicate.rules.front().id;
+  const auto duplicate_error = validate_visual_profile(duplicate, base);
+  expect(duplicate_error.path == "$.observations[1].id" &&
+             duplicate_error.message == "duplicate visual observation id",
+         "validator errors cite schema-2 observation paths without a mapper");
+  VisualProfile crowded = template_profile;
+  crowded.templates.resize(max_template_states + 1, template_profile.templates.front());
+  expect(validate_visual_profile(crowded, base).path == "$.observations",
+         "observation count errors cite the schema-2 observations array");
   template_profile.templates.front().references.front().asset_sha256 =
-      std::string(64, 'A');
+       std::string(64, 'A');
   expect(!validate_visual_profile(template_profile, base).message.empty(),
          "template references should reject noncanonical asset hashes");
 

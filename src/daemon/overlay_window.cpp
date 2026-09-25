@@ -307,6 +307,16 @@ LRESULT CALLBACK OverlayWindow::window_proc(const HWND window,
     return 1;
   }
   if (overlay != nullptr && overlay->direct_drag_) {
+    // Screen-space cursor for this message; any movement away from the press
+    // point marks the drag as moved.
+    const auto tracked_drag_point = [&] {
+      POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      ClientToScreen(window, &point);
+      if (point.x != overlay->drag_start_.x ||
+          point.y != overlay->drag_start_.y)
+        overlay->drag_moved_ = true;
+      return point;
+    };
     if (message == WM_LBUTTONDOWN) {
       POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ClientToScreen(window, &point);
@@ -324,18 +334,12 @@ LRESULT CALLBACK OverlayWindow::window_proc(const HWND window,
       return 0;
     }
     if (message == WM_MOUSEMOVE && overlay->dragging_) {
-      POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      ClientToScreen(window, &point);
-      if (point.x != overlay->drag_start_.x || point.y != overlay->drag_start_.y)
-        overlay->drag_moved_ = true;
+      const POINT point = tracked_drag_point();
       if (overlay->drag_moved_) overlay->update_drag(point, false);
       return 0;
     }
     if (message == WM_LBUTTONUP && overlay->dragging_) {
-      POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      ClientToScreen(window, &point);
-      if (point.x != overlay->drag_start_.x || point.y != overlay->drag_start_.y)
-        overlay->drag_moved_ = true;
+      const POINT point = tracked_drag_point();
       if (overlay->drag_moved_) overlay->update_drag(point, true);
       overlay->dragging_ = false;
       overlay->drag_moved_ = false;

@@ -53,9 +53,11 @@ struct AstBudget {
   }
 };
 
+using VariableTypes =
+    std::map<std::string, AutomationValueType, std::less<>>;
+
 bool validate_expression_tree(
-    const AutomationExpression &expression,
-    const std::map<std::string, AutomationValueType, std::less<>> &variables,
+    const AutomationExpression &expression, const VariableTypes &variables,
     const std::string &path, AstBudget &budget, const std::size_t depth,
     std::optional<AutomationValueType> &result, AutomationError &error) {
   if (!budget.consume(path, depth, error))
@@ -150,9 +152,6 @@ bool validate_expression_tree(
   return true;
 }
 
-using VariableTypes =
-    std::map<std::string, AutomationValueType, std::less<>>;
-
 bool is_compatible_type(const std::optional<AutomationValueType> actual,
                         const AutomationValueType expected) {
   return !actual.has_value() || *actual == expected ||
@@ -176,14 +175,14 @@ AutomationError validate_action(const AutomationAction &action,
   const auto target_path = path + ".target";
   const bool has_value = action.value.has_value();
   const bool has_secondary = action.secondary.has_value();
-  std::optional<AutomationValueType> value_type_result;
+  std::optional<AutomationValueType> primary_type;
   std::optional<AutomationValueType> secondary_type;
   AutomationError expression_error;
   if (spec->accepts_value) {
-    if (!action.value.has_value())
+    if (!has_value)
       return {path + ".value", "this action requires a value"};
     if (!validate_expression_tree(*action.value, variables, path + ".value",
-                                  budget, 1, value_type_result,
+                                  budget, 1, primary_type,
                                   expression_error))
       return expression_error;
   } else if (has_value) {
@@ -196,14 +195,13 @@ AutomationError validate_action(const AutomationAction &action,
                                        " does not accept secondary"};
     break;
   case ActionSecondaryPolicy::required_string_key:
-    if (!has_secondary ||
-        !validate_expression_tree(*action.secondary, variables,
+    if (!has_secondary)
+      return {path + ".secondary", std::string(spec->wire_name) +
+                                       " requires a string key"};
+    if (!validate_expression_tree(*action.secondary, variables,
                                   path + ".secondary", budget, 1,
                                   secondary_type, expression_error))
-      return has_secondary ? expression_error
-                           : AutomationError{path + ".secondary",
-                                             std::string(spec->wire_name) +
-                                                 " requires a string key"};
+      return expression_error;
     if (!is_compatible_type(secondary_type, AutomationValueType::string))
       return {path + ".secondary", std::string(spec->wire_name) +
                                        " requires a string key"};
@@ -227,7 +225,7 @@ AutomationError validate_action(const AutomationAction &action,
     const auto property_type = overlay_property_type(action.property);
     if (!property_type.has_value())
       return {path + ".property", "unsupported overlay property"};
-    if (!is_compatible_type(value_type_result, *property_type))
+    if (!is_compatible_type(primary_type, *property_type))
       return {path + ".value",
               "overlay value does not match the property type"};
   }
@@ -237,7 +235,7 @@ AutomationError validate_action(const AutomationAction &action,
   case ActionTargetRole::variable_any:
     if (variable == variables.end())
       return {target_path, "unknown variable ID"};
-    if (!is_compatible_type(value_type_result, variable->second))
+    if (!is_compatible_type(primary_type, variable->second))
       return {path + ".value",
               "assignment type does not match the variable"};
     break;
@@ -245,7 +243,7 @@ AutomationError validate_action(const AutomationAction &action,
     if (variable == variables.end())
       return {target_path, "unknown variable ID"};
     if (!numeric_type(variable->second) ||
-        !is_compatible_type(value_type_result, variable->second))
+        !is_compatible_type(primary_type, variable->second))
       return {path + ".value",
               "incrementVariable must preserve the variable type"};
     break;
@@ -290,12 +288,12 @@ AutomationError validate_action(const AutomationAction &action,
   case ActionValuePolicy::overlay_property:
     break;
   case ActionValuePolicy::string_key:
-    if (!is_compatible_type(value_type_result, AutomationValueType::string))
+    if (!is_compatible_type(primary_type, AutomationValueType::string))
       return {path + ".value", std::string(spec->wire_name) +
                                    " requires a string key"};
     break;
   case ActionValuePolicy::duration_or_integer:
-    if (value_type_result.has_value() && !duration_like(value_type_result))
+    if (primary_type.has_value() && !duration_like(primary_type))
       return {path + ".value", std::string(spec->wire_name) +
                                    " requires a duration"};
     break;

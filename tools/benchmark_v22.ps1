@@ -24,9 +24,8 @@ foreach ($name in @('layerd.exe', 'layere.exe')) {
         throw "Missing $name in $BuildDirectory. Build Release first."
     }
 }
-if (Get-Process -Name layerd, layere -ErrorAction SilentlyContinue) {
-    throw 'Close existing LayerD and LayerE processes before running the isolated V2.2 benchmark.'
-}
+Assert-LayerCQuiescent -ProcessNames layerd, layere `
+    -FailureMessage 'Close existing LayerD and LayerE processes before running the isolated V2.2 benchmark.'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
 [IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
 $measure = @{
@@ -38,9 +37,8 @@ $oldProfileDirectory = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR
 $daemon = $null
 $editor = $null
 try {
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $profileDirectory, 'Process')
-    $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+    Enter-LayerCProfileSandbox -ProfileDirectory $profileDirectory
+    $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
     $baseline = Measure-LayerCPlateau -Process $daemon @measure
@@ -107,16 +105,8 @@ try {
     $result | ConvertTo-Json -Depth 7
     if (-not $passed) { exit 1 }
 } finally {
-    if ($null -ne $editor -and -not $editor.HasExited) {
-        Stop-Process -Id $editor.Id -Force -ErrorAction SilentlyContinue
-        [void]$editor.WaitForExit(5000)
-    }
-    if ($null -ne $daemon -and -not $daemon.HasExited) {
-        Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue
-        [void]$daemon.WaitForExit(5000)
-    }
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $oldProfileDirectory, 'Process')
-    if (Test-Path -LiteralPath $temporary) {
-        Remove-Item -LiteralPath $temporary -Recurse -Force
-    }
+    Stop-LayerCBenchmarkProcess -Process $editor
+    Stop-LayerCBenchmarkProcess -Process $daemon
+    Exit-LayerCProfileSandbox -PreviousDirectory $oldProfileDirectory `
+        -TemporaryDirectory $temporary
 }

@@ -25,11 +25,12 @@ namespace layerc::editor {
 namespace {
 using namespace std::chrono_literals;
 
-std::string
-unique_automation_id(const layerc::core::AutomationProfile &profile) {
-  for (std::size_t suffix = profile.automations.size() + 1;; ++suffix) {
-    const auto id = "automation-" + std::to_string(suffix);
-    if (std::ranges::none_of(profile.automations,
+// First "<prefix>-<n>" id unused by items, counting up from items.size() + 1.
+template <typename Items>
+std::string numbered_unique_id(const std::string &prefix, const Items &items) {
+  for (std::size_t suffix = items.size() + 1U;; ++suffix) {
+    auto id = prefix + "-" + std::to_string(suffix);
+    if (std::ranges::none_of(items,
                              [&](const auto &item) { return item.id == id; }))
       return id;
   }
@@ -44,19 +45,15 @@ automation_label(const layerc::core::AutomationDefinition &automation) {
   return result;
 }
 
-layerc::core::AutomationExpression
-literal(layerc::core::AutomationValue value) {
-  layerc::core::AutomationExpression expression;
-  expression.kind = layerc::core::ExpressionKind::literal;
-  expression.literal = std::move(value);
-  return expression;
-}
-
 // One list with the core wire format: combo order, label lookup, and the
 // simulator all index the same canonical ordering.
 constexpr auto &automation_event_kinds = layerc::core::automation_event_kinds;
 
 constexpr auto &automation_actions = layerc::core::automation_action_specs;
+
+// Display-only placeholder for a non-literal action value; editing state is
+// tracked by AutomationEditor::advanced_expression_displayed_.
+constexpr wchar_t kAdvancedExpressionText[] = L"<Advanced expression>";
 
 std::optional<layerc::core::AutomationValueType>
 action_value_type(const layerc::core::AutomationAction &action,
@@ -122,10 +119,14 @@ present_json_error(const std::string_view source,
   std::size_t next_bytes{};
   if (byte_offset < source.size()) {
     const auto lead = static_cast<unsigned char>(source[byte_offset]);
-    next_bytes = lead < 0x80U ? 1U
-                 : (lead & 0xE0U) == 0xC0U ? 2U
-                 : (lead & 0xF0U) == 0xE0U ? 3U
-                                           : 4U;
+    if (lead < 0x80U)
+      next_bytes = 1U;
+    else if ((lead & 0xE0U) == 0xC0U)
+      next_bytes = 2U;
+    else if ((lead & 0xF0U) == 0xE0U)
+      next_bytes = 3U;
+    else
+      next_bytes = 4U;
     next_bytes = std::min(next_bytes, source.size() - byte_offset);
   }
   const auto selected = to_wide(source.substr(byte_offset, next_bytes)).size();
@@ -158,24 +159,72 @@ EditorWindow::EditorWindow()
 EditorWindow::~EditorWindow() = default;
 
 void EditorWindow::load_current_automation_profile() {
-  document_.automation().reset();
-  document_.automation_state() = layerc::platform::AutomationSidecarState::absent;
-  document_.automation_error().clear();
-  if (document_.path().empty())
-    return;
-
-  auto loaded =
-      layerc::platform::load_automation_sidecar(document_.path(), document_.profile());
-  document_.automation_state() = loaded.state;
-  document_.automation_error() = loaded.error.message;
-  if (loaded.profile)
-    document_.automation() = std::move(loaded.profile);
+  document_.set_automation(
+      document_.path().empty()
+          ? layerc::platform::AutomationSidecarLoad{}
+          : layerc::platform::load_automation_sidecar(document_.path(),
+                                                      document_.profile()));
 }
 
 int AutomationEditor::selected_index(const HWND dialog) const {
   const auto selected =
       SendDlgItemMessageW(dialog, IDC_AUTOMATION_LIST, CB_GETCURSEL, 0, 0);
-  return selected == CB_ERR ? -1 : static_cast<int>(selected);
+  const auto &profile = owner_.document().automation();
+  return selected == CB_ERR || selected < 0 || !profile ||
+                 static_cast<std::size_t>(selected) >= profile->automations.size()
+             ? -1
+             : static_cast<int>(selected);
+}
+
+layerc::core::AutomationDefinition *
+AutomationEditor::selected_automation(const HWND dialog) const {
+  const int index = selected_index(dialog);
+  return index < 0 ? nullptr
+                   : &owner_.document().automation()
+                          ->automations[static_cast<std::size_t>(index)];
+}
+
+layerc::core::AutomationRule *
+AutomationEditor::selected_rule(const HWND dialog) const {
+  auto *automation = selected_automation(dialog);
+  return automation && node_rule_ >= 0 &&
+                 static_cast<std::size_t>(node_rule_) < automation->rules.size()
+             ? &automation->rules[static_cast<std::size_t>(node_rule_)]
+             : nullptr;
+}
+
+layerc::core::AutomationAction *
+AutomationEditor::selected_action(const HWND dialog) const {
+  auto *rule = selected_rule(dialog);
+  return rule && node_action_ >= 0 &&
+                 static_cast<std::size_t>(node_action_) < rule->actions.size()
+             ? &rule->actions[static_cast<std::size_t>(node_action_)]
+             : nullptr;
+}
+
+AutomationEditor::Mutation
+AutomationEditor::mutate_automation(const HWND dialog, const wchar_t *title,
+                                    const AutomationEdit &edit) {
+  auto &profile = owner_.document().automation();
+  if (!profile)
+    return Mutation::rejected;
+  auto before = *profile;
+  if (const auto rejection = edit()) {
+    *profile = std::move(before);
+    MessageBoxW(dialog, rejection->c_str(), title, MB_OK | MB_ICONWARNING);
+    return Mutation::rejected;
+  }
+  const auto validation = layerc::core::validate_automation_profile(
+      *profile, owner_.document().profile());
+  if (!validation.message.empty()) {
+    *profile = std::move(before);
+    MessageBoxW(dialog,
+                to_wide(validation.path + ": " + validation.message).c_str(),
+                title, MB_OK | MB_ICONWARNING);
+    return Mutation::invalid;
+  }
+  owner_.mark_changed(DocumentChangeKind::immediate);
+  return Mutation::committed;
 }
 
 void AutomationEditor::refresh(const HWND dialog) {
@@ -196,10 +245,7 @@ void AutomationEditor::refresh(const HWND dialog) {
   const int selected = count == 0 ? -1 : std::clamp(preferred, 0, count - 1);
   if (selected >= 0)
     SendDlgItemMessageW(dialog, IDC_AUTOMATION_LIST, CB_SETCURSEL, selected, 0);
-  const auto *definition =
-      selected >= 0 ? &owner_.document().automation()
-                           ->automations[static_cast<std::size_t>(selected)]
-                    : nullptr;
+  const auto *definition = selected_automation(dialog);
   set_owner_draw_checkbox(GetDlgItem(dialog, IDC_AUTOMATION_ENABLED),
                           definition != nullptr && definition->enabled);
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_NAME),
@@ -227,24 +273,9 @@ void AutomationEditor::refresh(const HWND dialog) {
 }
 
 void AutomationEditor::refresh_node_properties(const HWND dialog) {
-  const int automation_index = selected_index(dialog);
-  const auto *automation =
-      owner_.document().automation() && automation_index >= 0 &&
-              static_cast<std::size_t>(automation_index) <
-                  owner_.document().automation()->automations.size()
-          ? &owner_.document().automation()
-                 ->automations[static_cast<std::size_t>(automation_index)]
-          : nullptr;
-  const auto *rule =
-      automation != nullptr && node_rule_ >= 0 &&
-              static_cast<std::size_t>(node_rule_) < automation->rules.size()
-          ? &automation->rules[static_cast<std::size_t>(node_rule_)]
-          : nullptr;
-  const auto *action =
-      rule != nullptr && node_action_ >= 0 &&
-              static_cast<std::size_t>(node_action_) < rule->actions.size()
-          ? &rule->actions[static_cast<std::size_t>(node_action_)]
-          : nullptr;
+  const auto *rule = selected_rule(dialog);
+  const auto *action = selected_action(dialog);
+  advanced_expression_displayed_ = false;
   const bool selected = rule != nullptr;
   for (const int id :
        {IDC_AUTOMATION_RULE_ID, IDC_AUTOMATION_EVENT, IDC_AUTOMATION_SOURCE,
@@ -274,10 +305,12 @@ void AutomationEditor::refresh_node_properties(const HWND dialog) {
     return;
   }
 
-  set_text(GetDlgItem(dialog, IDC_AUTOMATION_NODE_KIND),
-           action == nullptr ? L"Event rule"
-                             : L"Action " + std::to_wstring(node_action_ + 1) +
-                                   L" in selected rule");
+  if (action == nullptr)
+    set_text(GetDlgItem(dialog, IDC_AUTOMATION_NODE_KIND), L"Event rule");
+  else
+    set_text(GetDlgItem(dialog, IDC_AUTOMATION_NODE_KIND),
+             L"Action " + std::to_wstring(node_action_ + 1) +
+                 L" in selected rule");
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_RULE_ID), to_wide(rule->id));
   const auto event = std::ranges::find(automation_event_kinds, rule->event);
   SendDlgItemMessageW(dialog, IDC_AUTOMATION_EVENT, CB_SETCURSEL,
@@ -310,12 +343,19 @@ void AutomationEditor::refresh_node_properties(const HWND dialog) {
                                 automation_actions.begin(), kind)),
                       0);
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_TARGET), to_wide(action->target));
-  set_text(
-      GetDlgItem(dialog, IDC_AUTOMATION_VALUE),
+  std::wstring value_text;
+  if (action->value.has_value()) {
+    if (action->value->kind == layerc::core::ExpressionKind::literal)
+      value_text =
+          to_wide(layerc::core::automation_value_json(action->value->literal));
+    else
+      value_text = kAdvancedExpressionText;
+  }
+  set_text(GetDlgItem(dialog, IDC_AUTOMATION_VALUE), value_text);
+  // Set after set_text: its EN_CHANGE clears the flag.
+  advanced_expression_displayed_ =
       action->value.has_value() &&
-              action->value->kind == layerc::core::ExpressionKind::literal
-          ? to_wide(layerc::core::automation_value_json(action->value->literal))
-          : (action->value.has_value() ? L"<Advanced expression>" : L""));
+      action->value->kind != layerc::core::ExpressionKind::literal;
   set_owner_draw_checkbox(GetDlgItem(dialog, IDC_AUTOMATION_REPEATING),
                           action->repeating);
   InvalidateRect(GetDlgItem(dialog, IDC_AUTOMATION_REPEATING), nullptr, TRUE);
@@ -337,115 +377,85 @@ void AutomationEditor::select_node(const HWND dialog) {
 }
 
 void AutomationEditor::apply_node_properties(const HWND dialog) {
-  const int automation_index = selected_index(dialog);
-  if (!owner_.document().automation() || automation_index < 0 || node_rule_ < 0 ||
-      static_cast<std::size_t>(automation_index) >=
-          owner_.document().automation()->automations.size())
+  if (selected_rule(dialog) == nullptr)
     return;
-  auto before = *owner_.document().automation();
-  auto &automation =
-      owner_.document().automation()
-          ->automations[static_cast<std::size_t>(automation_index)];
-  if (static_cast<std::size_t>(node_rule_) >= automation.rules.size())
-    return;
-  auto &rule = automation.rules[static_cast<std::size_t>(node_rule_)];
-  rule.id = to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_RULE_ID)));
-  const int event_index = static_cast<int>(
-      SendDlgItemMessageW(dialog, IDC_AUTOMATION_EVENT, CB_GETCURSEL, 0, 0));
-  if (event_index >= 0 &&
-      static_cast<std::size_t>(event_index) < automation_event_kinds.size())
-    rule.event = automation_event_kinds[static_cast<std::size_t>(event_index)];
-  rule.source_filter =
-      to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SOURCE)));
-  rule.priority =
-      _wtoi(control_text(GetDlgItem(dialog, IDC_AUTOMATION_PRIORITY)).c_str());
+  const auto result = mutate_automation(
+      dialog, L"Node properties", [&]() -> std::optional<std::wstring> {
+        auto &rule = *selected_rule(dialog);
+        rule.id =
+            to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_RULE_ID)));
+        const int event_index = static_cast<int>(SendDlgItemMessageW(
+            dialog, IDC_AUTOMATION_EVENT, CB_GETCURSEL, 0, 0));
+        if (event_index >= 0 && static_cast<std::size_t>(event_index) <
+                                    automation_event_kinds.size())
+          rule.event =
+              automation_event_kinds[static_cast<std::size_t>(event_index)];
+        rule.source_filter =
+            to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SOURCE)));
+        rule.priority = _wtoi(
+            control_text(GetDlgItem(dialog, IDC_AUTOMATION_PRIORITY)).c_str());
 
-  if (node_action_ >= 0 &&
-      static_cast<std::size_t>(node_action_) < rule.actions.size()) {
-    auto &action = rule.actions[static_cast<std::size_t>(node_action_)];
-    const int kind_index = static_cast<int>(SendDlgItemMessageW(
-        dialog, IDC_AUTOMATION_ACTION_KIND, CB_GETCURSEL, 0, 0));
-    if (kind_index >= 0 &&
-        static_cast<std::size_t>(kind_index) < automation_actions.size())
-      action.kind =
-          automation_actions[static_cast<std::size_t>(kind_index)].kind;
-    action.target =
-        to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_TARGET)));
-    action.repeating =
-        action.kind == layerc::core::AutomationActionKind::create_timer &&
-        owner_draw_checkbox_checked(
-            GetDlgItem(dialog, IDC_AUTOMATION_REPEATING));
-    const auto expected =
-        action_value_type(action, *owner_.document().automation());
-    const auto value_source =
-        to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_VALUE)));
-    if (expected.has_value() && value_source != "<Advanced expression>") {
-      if (value_source.empty()) {
-        *owner_.document().automation() = std::move(before);
-        MessageBoxW(dialog, L"This action requires a typed JSON value.",
-                    L"Node properties", MB_OK | MB_ICONWARNING);
-        return;
-      }
-      const auto parsed =
-          layerc::core::parse_automation_value_json(value_source, *expected);
-      const auto *value = std::get_if<layerc::core::AutomationValue>(&parsed);
-      if (value == nullptr) {
-        const auto &error = std::get<layerc::core::AutomationError>(parsed);
-        *owner_.document().automation() = std::move(before);
-        MessageBoxW(dialog, to_wide(error.path + ": " + error.message).c_str(),
-                    L"Node properties", MB_OK | MB_ICONWARNING);
-        return;
-      }
-      action.value = literal(*value);
-    }
-  }
-  const auto validation = layerc::core::validate_automation_profile(
-      *owner_.document().automation(), owner_.document().profile());
-  if (!validation.message.empty()) {
-    *owner_.document().automation() = std::move(before);
-    MessageBoxW(dialog,
-                to_wide(validation.path + ": " + validation.message).c_str(),
-                L"Node properties", MB_OK | MB_ICONWARNING);
+        auto *action = selected_action(dialog);
+        if (action == nullptr)
+          return std::nullopt;
+        const int kind_index = static_cast<int>(SendDlgItemMessageW(
+            dialog, IDC_AUTOMATION_ACTION_KIND, CB_GETCURSEL, 0, 0));
+        if (kind_index >= 0 &&
+            static_cast<std::size_t>(kind_index) < automation_actions.size())
+          action->kind =
+              automation_actions[static_cast<std::size_t>(kind_index)].kind;
+        action->target =
+            to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_TARGET)));
+        action->repeating =
+            action->kind == layerc::core::AutomationActionKind::create_timer &&
+            owner_draw_checkbox_checked(
+                GetDlgItem(dialog, IDC_AUTOMATION_REPEATING));
+        const auto expected =
+            action_value_type(*action, *owner_.document().automation());
+        if (!expected.has_value() || advanced_expression_displayed_)
+          return std::nullopt;
+        const auto value_source =
+            to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_VALUE)));
+        if (value_source.empty())
+          return L"This action requires a typed JSON value.";
+        const auto parsed =
+            layerc::core::parse_automation_value_json(value_source, *expected);
+        const auto *value = std::get_if<layerc::core::AutomationValue>(&parsed);
+        if (value == nullptr) {
+          const auto &error = std::get<layerc::core::AutomationError>(parsed);
+          return to_wide(error.path + ": " + error.message);
+        }
+        action->value = literal(*value);
+        return std::nullopt;
+      });
+  // A refused value keeps the typed field text; committed and invalid edits
+  // reload the properties from the profile.
+  if (result != Mutation::rejected)
     refresh(dialog);
-    return;
-  }
-  owner_.mark_changed(DocumentChangeKind::immediate);
-  refresh(dialog);
 }
 
 void AutomationEditor::delete_node(const HWND dialog) {
   const int automation_index = selected_index(dialog);
-  if (!owner_.document().automation() || automation_index < 0 || node_rule_ < 0 ||
-      static_cast<std::size_t>(automation_index) >=
-          owner_.document().automation()->automations.size())
+  auto *automation = selected_automation(dialog);
+  auto *rule = selected_rule(dialog);
+  if (automation == nullptr || rule == nullptr)
     return;
-  auto &automation =
-      owner_.document().automation()
-          ->automations[static_cast<std::size_t>(automation_index)];
-  if (static_cast<std::size_t>(node_rule_) >= automation.rules.size())
-    return;
-  auto &rule = automation.rules[static_cast<std::size_t>(node_rule_)];
-  if (node_action_ >= 0 &&
-      static_cast<std::size_t>(node_action_) < rule.actions.size()) {
-    rule.actions.erase(rule.actions.begin() + node_action_);
-    if (rule.actions.empty())
-      automation.rules.erase(automation.rules.begin() + node_rule_);
+  if (selected_action(dialog) != nullptr) {
+    rule->actions.erase(rule->actions.begin() + node_action_);
+    if (rule->actions.empty())
+      automation->rules.erase(automation->rules.begin() + node_rule_);
   } else {
-    automation.rules.erase(automation.rules.begin() + node_rule_);
+    automation->rules.erase(automation->rules.begin() + node_rule_);
   }
   node_rule_ = -1;
   node_action_ = -1;
-  if (automation.rules.empty()) {
-    owner_.document().automation()->automations.erase(
-        owner_.document().automation()->automations.begin() + automation_index);
-    if (owner_.document().automation()->automations.empty() &&
-        owner_.document().automation()->variables.empty())
-      owner_.document().automation().reset();
+  if (automation->rules.empty()) {
+    auto &profile = owner_.document().automation();
+    profile->automations.erase(profile->automations.begin() + automation_index);
+    if (profile->automations.empty() && profile->variables.empty())
+      profile.reset();
   }
-  owner_.document().automation_state() =
-      owner_.document().automation()
-          ? layerc::platform::AutomationSidecarState::valid
-          : layerc::platform::AutomationSidecarState::absent;
+  owner_.document().mark_automation_edited();
   owner_.mark_changed(DocumentChangeKind::immediate);
   refresh(dialog);
 }
@@ -484,11 +494,9 @@ void AutomationEditor::initialize(const HWND dialog) {
   }
 
   const HWND palette = GetDlgItem(dialog, IDC_AUTOMATION_PALETTE);
-  for (const wchar_t *entry :
-       {L"Event: input pressed", L"Event: timer fired",
-        L"Action: trigger cooldown", L"Action: create timer",
-        L"Action: overlay visibility", L"Variable: Boolean"})
-    SendMessageW(palette, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry));
+  for (const auto &entry : automation_palette)
+    SendMessageW(palette, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(entry.label));
   SendMessageW(palette, CB_SETCURSEL, 0, 0);
   const HWND event = GetDlgItem(dialog, IDC_AUTOMATION_SIM_EVENT);
   for (const auto kind : automation_event_kinds) {
@@ -540,7 +548,8 @@ void AutomationEditor::add_basic(const HWND dialog) {
     owner_.document().automation() = std::move(created);
   }
 
-  const auto id = unique_automation_id(*owner_.document().automation());
+  const auto id = numbered_unique_id(
+      "automation", owner_.document().automation()->automations);
   const auto cooldown_id = owner_.document().profile().cooldowns.empty()
                                ? std::string{}
                                : owner_.document().profile().cooldowns.front().id;
@@ -549,8 +558,7 @@ void AutomationEditor::add_basic(const HWND dialog) {
                             : owner_.document().profile().panels.front().id;
   owner_.document().automation()->automations.push_back(make_automation_preset(
       static_cast<AutomationPreset>(preset), id, cooldown_id, panel_id));
-  owner_.document().automation_state() =
-      layerc::platform::AutomationSidecarState::valid;
+  owner_.document().mark_automation_edited();
   owner_.mark_changed(DocumentChangeKind::immediate);
   refresh(dialog);
   SendDlgItemMessageW(dialog, IDC_AUTOMATION_LIST, CB_SETCURSEL,
@@ -562,136 +570,81 @@ void AutomationEditor::add_basic(const HWND dialog) {
   refresh(dialog);
 }
 void AutomationEditor::add_palette_node(const HWND dialog) {
-  if (!owner_.document().automation() || selected_index(dialog) < 0) {
+  const int selected = selected_index(dialog);
+  if (selected < 0) {
     add_basic(dialog);
     return;
   }
-  const int selected = selected_index(dialog);
-  auto before = *owner_.document().automation();
-  auto &automation = owner_.document().automation()
-                         ->automations[static_cast<std::size_t>(selected)];
-  const int palette = static_cast<int>(
+  const auto *entry = automation_palette_entry(
       SendDlgItemMessageW(dialog, IDC_AUTOMATION_PALETTE, CB_GETCURSEL, 0, 0));
-  if (palette >= 0 && palette <= 4 && owner_.document().profile().cooldowns.empty()) {
+  if (entry == nullptr)
+    return;
+  const auto &profile = owner_.document().profile();
+  if (entry->requires_cooldown && profile.cooldowns.empty()) {
     MessageBoxW(dialog, L"This node requires at least one cooldown.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (palette >= 2 && palette <= 4 &&
-      (node_rule_ < 0 || static_cast<std::size_t>(node_rule_) >=
-                              automation.rules.size())) {
+  const bool adds_action = entry->target == AutomationPaletteTarget::action;
+  if (adds_action && selected_rule(dialog) == nullptr) {
     MessageBoxW(dialog, L"Select a rule before adding an action.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (palette == 0 || palette == 1) {
-    layerc::core::AutomationRule rule;
-    for (std::size_t suffix = automation.rules.size() + 1U;; ++suffix) {
-      rule.id = "rule-" + std::to_string(suffix);
-      if (std::ranges::none_of(automation.rules, [&](const auto &item) {
-            return item.id == rule.id;
-          }))
-        break;
-    }
-    rule.event = palette == 0 ? layerc::core::AutomationEventKind::input_pressed
-                              : layerc::core::AutomationEventKind::timer_fired;
-    rule.source_filter = palette == 0 ? "keyboard:18" : "pulse";
-    layerc::core::AutomationAction action;
-    action.kind = palette == 0
-                      ? layerc::core::AutomationActionKind::trigger_cooldown
-                      : layerc::core::AutomationActionKind::reset_cooldown;
-    action.target = owner_.document().profile().cooldowns.front().id;
-    rule.actions.push_back(std::move(action));
-    automation.rules.push_back(std::move(rule));
-  } else if (palette == 2) {
-    auto &rule = automation.rules[static_cast<std::size_t>(node_rule_)];
-    layerc::core::AutomationAction action;
-    action.kind = layerc::core::AutomationActionKind::trigger_cooldown;
-    action.target = owner_.document().profile().cooldowns.front().id;
-    rule.actions.push_back(std::move(action));
-  } else if (palette == 3) {
-    auto &rule = automation.rules[static_cast<std::size_t>(node_rule_)];
-    layerc::core::AutomationAction action;
-    action.kind = layerc::core::AutomationActionKind::create_timer;
-    action.target = "pulse-" + std::to_string(rule.actions.size() + 1U);
-    action.value =
-        literal(layerc::core::AutomationValue(layerc::core::DurationValue{1s}));
-    rule.actions.push_back(std::move(action));
-  } else if (palette == 4) {
-    if (owner_.document().profile().panels.empty()) {
-      MessageBoxW(dialog, L"Overlay nodes require at least one panel.",
-                  L"Automation", MB_OK | MB_ICONINFORMATION);
-      return;
-    }
-    auto &rule = automation.rules[static_cast<std::size_t>(node_rule_)];
-    layerc::core::AutomationAction action;
-    action.kind = layerc::core::AutomationActionKind::set_overlay_override;
-    action.target = owner_.document().profile().panels.front().id;
-    action.name =
-        "visibility-" + std::to_string(rule.actions.size() + 1U);
-    action.property = "visible";
-    action.value = literal(layerc::core::AutomationValue(true));
-    action.secondary =
-        literal(layerc::core::AutomationValue(layerc::core::DurationValue{1s}));
-    rule.actions.push_back(std::move(action));
-  } else if (palette == 5) {
-    std::string id;
-    for (std::size_t suffix = owner_.document().automation()->variables.size() + 1U;
-         ; ++suffix) {
-      id = "flag-" + std::to_string(suffix);
-      if (std::ranges::none_of(owner_.document().automation()->variables,
-                               [&](const auto &item) { return item.id == id; }))
-        break;
-    }
-    owner_.document().automation()->variables.push_back(
-        {.id = id,
-         .type = layerc::core::AutomationValueType::boolean,
-         .default_value = layerc::core::AutomationValue(false)});
-  } else {
+  if (entry->requires_panel && profile.panels.empty()) {
+    MessageBoxW(dialog, L"Overlay nodes require at least one panel.",
+                L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  const auto validation = layerc::core::validate_automation_profile(
-      *owner_.document().automation(), owner_.document().profile());
-  if (!validation.message.empty()) {
-    *owner_.document().automation() = std::move(before);
-    MessageBoxW(dialog,
-                to_wide(validation.path + ": " + validation.message).c_str(),
-                L"Node could not be added", MB_OK | MB_ICONWARNING);
+  const auto cooldown_id =
+      profile.cooldowns.empty() ? std::string{} : profile.cooldowns.front().id;
+  const auto panel_id =
+      profile.panels.empty() ? std::string{} : profile.panels.front().id;
+  const auto result = mutate_automation(
+      dialog, L"Node could not be added", [&]() -> std::optional<std::wstring> {
+        auto &automation = *selected_automation(dialog);
+        if (entry->target == AutomationPaletteTarget::rule) {
+          automation.rules.push_back(make_palette_rule(
+              entry->node, numbered_unique_id("rule", automation.rules),
+              cooldown_id));
+        } else if (adds_action) {
+          auto &rule = *selected_rule(dialog);
+          rule.actions.push_back(make_palette_action(
+              entry->node, rule.actions.size(), cooldown_id, panel_id));
+        } else {
+          auto &variables = owner_.document().automation()->variables;
+          variables.push_back(
+              make_palette_variable(numbered_unique_id("flag", variables)));
+        }
+        return std::nullopt;
+      });
+  if (result != Mutation::committed)
     return;
+  if (entry->target == AutomationPaletteTarget::rule) {
+    if (const auto *automation = selected_automation(dialog)) {
+      node_rule_ = static_cast<int>(automation->rules.size()) - 1;
+      node_action_ = -1;
+    }
+  } else if (adds_action) {
+    if (const auto *rule = selected_rule(dialog))
+      node_action_ = static_cast<int>(rule->actions.size()) - 1;
   }
-  if (palette == 0 || palette == 1) {
-    node_rule_ = static_cast<int>(automation.rules.size()) - 1;
-    node_action_ = -1;
-  } else if (palette >= 2 && palette <= 4) {
-    node_action_ = static_cast<int>(
-                        automation.rules[static_cast<std::size_t>(node_rule_)]
-                            .actions.size()) -
-                    1;
-  }
-  owner_.mark_changed(DocumentChangeKind::immediate);
   refresh(dialog);
   SendDlgItemMessageW(dialog, IDC_AUTOMATION_LIST, CB_SETCURSEL, selected, 0);
   refresh(dialog);
 }
 
 void AutomationEditor::remove_selected(const HWND dialog) {
-  if (!owner_.document().automation())
-    return;
   const int selected = selected_index(dialog);
-  if (selected < 0 || static_cast<std::size_t>(selected) >=
-                          owner_.document().automation()->automations.size())
+  if (selected < 0)
     return;
-  owner_.document().automation()->automations.erase(
-      owner_.document().automation()->automations.begin() + selected);
+  auto &profile = owner_.document().automation();
+  profile->automations.erase(profile->automations.begin() + selected);
   node_rule_ = -1;
   node_action_ = -1;
-  if (owner_.document().automation()->automations.empty() &&
-      owner_.document().automation()->variables.empty())
-    owner_.document().automation().reset();
-  owner_.document().automation_state() =
-      owner_.document().automation()
-          ? layerc::platform::AutomationSidecarState::valid
-          : layerc::platform::AutomationSidecarState::absent;
+  if (profile->automations.empty() && profile->variables.empty())
+    profile.reset();
+  owner_.document().mark_automation_edited();
   owner_.mark_changed(DocumentChangeKind::immediate);
   refresh(dialog);
 }
@@ -713,9 +666,7 @@ bool AutomationEditor::apply_json(const HWND dialog) {
   owner_.document().automation() = *profile;
   node_rule_ = -1;
   node_action_ = -1;
-  owner_.document().automation_state() =
-      layerc::platform::AutomationSidecarState::valid;
-  owner_.document().automation_error().clear();
+  owner_.document().mark_automation_edited();
   owner_.mark_changed(DocumentChangeKind::immediate);
   refresh(dialog);
   return true;
@@ -769,6 +720,12 @@ bool AutomationEditor::handle_command(const HWND dialog,
       layout(dialog);
     }
     return true;
+  case IDC_AUTOMATION_VALUE:
+    // Any edit replaces the advanced-expression placeholder with typed input.
+    // Not consumed, so default dialog handling is unchanged.
+    if (notification == EN_CHANGE)
+      advanced_expression_displayed_ = false;
+    return false;
   case IDC_AUTOMATION_APPLY_NODE:
     apply_node_properties(dialog);
     return true;
@@ -782,11 +739,9 @@ bool AutomationEditor::handle_command(const HWND dialog,
     remove_selected(dialog);
     return true;
   case IDC_AUTOMATION_ENABLED:
-    if (notification == BN_CLICKED && owner_.document().automation()) {
-      const int selected = selected_index(dialog);
-      if (selected >= 0) {
-        owner_.document().automation()->automations[static_cast<std::size_t>(selected)]
-            .enabled = owner_draw_checkbox_checked(
+    if (notification == BN_CLICKED) {
+      if (auto *selected = selected_automation(dialog)) {
+        selected->enabled = owner_draw_checkbox_checked(
             GetDlgItem(dialog, IDC_AUTOMATION_ENABLED));
         owner_.mark_changed(DocumentChangeKind::immediate);
         refresh(dialog);
@@ -795,10 +750,8 @@ bool AutomationEditor::handle_command(const HWND dialog,
     return true;
   case IDC_AUTOMATION_NAME:
     if (notification == EN_KILLFOCUS && owner_.document().automation()) {
-      const int selected = selected_index(dialog);
-      if (selected >= 0) {
-        owner_.document().automation()->automations[static_cast<std::size_t>(selected)]
-            .name =
+      if (auto *selected = selected_automation(dialog)) {
+        selected->name =
             to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_NAME)));
         owner_.mark_changed(DocumentChangeKind::text);
       }

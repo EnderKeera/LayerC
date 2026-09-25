@@ -44,18 +44,17 @@ void append_trace_value(std::string &output, const AutomationValue &value) {
   output += ",\"value\":";
   if (const auto *list = std::get_if<AutomationList>(&value.storage)) {
     output.push_back('[');
-    for (std::size_t index{}; index < list->size(); ++index) {
-      if (index != 0)
-        output.push_back(',');
-      append_trace_value(output, (*list)[index]);
+    json::Join join;
+    for (const auto &child : *list) {
+      join(output);
+      append_trace_value(output, child);
     }
     output.push_back(']');
   } else if (const auto *map = std::get_if<AutomationMap>(&value.storage)) {
     output.push_back('{');
-    std::size_t index{};
+    json::Join join;
     for (const auto &[key, child] : *map) {
-      if (index++ != 0)
-        output.push_back(',');
+      join(output);
       json::append_quoted(output, key);
       output.push_back(':');
       append_trace_value(output, child);
@@ -89,42 +88,47 @@ std::optional<AutomationValue> read_trace_value(const json::Value &entry,
     error = {path, std::move(message)};
     return std::nullopt;
   };
-  const auto &name = type->as_string();
-  if (name == "null")
+  const auto declared_type =
+      detail::parse_automation_value_type_name(type->as_string());
+  if (!declared_type.has_value())
+    return fail("unsupported trace value type");
+  switch (*declared_type) {
+  case AutomationValueType::null_value:
     return value->is_null() ? std::optional(AutomationValue{})
                             : fail("expected null");
-  if (name == "bool")
+  case AutomationValueType::boolean:
     return value->is_bool() ? std::optional(AutomationValue(value->as_bool()))
                             : fail("expected Boolean");
-  if (name == "int" || name == "duration") {
+  case AutomationValueType::integer:
+  case AutomationValueType::duration: {
     const auto parsed_integer = detail::read_exact_integer(*value);
     if (!parsed_integer.has_value())
       return fail("expected exact signed integer");
     const auto integer = *parsed_integer;
-    if (name == "duration") {
+    if (*declared_type == AutomationValueType::duration) {
       if (integer < 0)
         return fail("duration cannot be negative");
       return AutomationValue(DurationValue{Milliseconds(integer)});
     }
     return AutomationValue(integer);
   }
-  if (name == "number" || name == "confidence") {
+  case AutomationValueType::number:
+  case AutomationValueType::confidence: {
     if (!value->is_number() || !std::isfinite(value->as_number()))
       return fail("expected finite number");
-    if (name == "confidence") {
+    if (*declared_type == AutomationValueType::confidence) {
       if (value->as_number() < 0.0 || value->as_number() > 1.0)
         return fail("confidence must be between 0 and 1");
       return AutomationValue(ConfidenceValue{value->as_number()});
     }
     return AutomationValue(value->as_number());
   }
-  if (name == "string") {
+  case AutomationValueType::string:
     if (!value->is_string() ||
         value->as_string().size() > max_automation_string_bytes)
       return fail("expected bounded string");
     return AutomationValue(value->as_string());
-  }
-  if (name == "list") {
+  case AutomationValueType::list: {
     if (!value->is_array() ||
         value->as_array().size() > max_automation_collection_entries)
       return fail("expected bounded list");
@@ -140,7 +144,7 @@ std::optional<AutomationValue> read_trace_value(const json::Value &entry,
     }
     return AutomationValue(std::move(list));
   }
-  if (name == "map") {
+  case AutomationValueType::map: {
     if (!value->is_object() ||
         value->as_object().size() > max_automation_collection_entries)
       return fail("expected bounded map");
@@ -156,53 +160,57 @@ std::optional<AutomationValue> read_trace_value(const json::Value &entry,
     }
     return AutomationValue(std::move(map));
   }
+  }
   return fail("unsupported trace value type");
 }
 
+void append_trace_entry(std::string &output,
+                        const AutomationTraceEntry &entry) {
+  output += "{\"sequence\":";
+  detail::append_exact_unsigned(output, entry.sequence);
+  output += ",\"timeMs\":";
+  detail::append_exact_unsigned(
+      output, static_cast<std::uint64_t>(
+                  std::max<std::int64_t>(0, entry.timestamp.count())));
+  output += ",\"automation\":";
+  json::append_quoted(output, entry.automation_id);
+  output += ",\"rule\":";
+  json::append_quoted(output, entry.rule_id);
+  output += ",\"phase\":";
+  json::append_quoted(output, entry.phase);
+  output += ",\"detail\":";
+  json::append_quoted(output, entry.detail);
+  if (!entry.source_event.has_value()) {
+    output.push_back('}');
+    return;
+  }
+  output += ",\"event\":";
+  json::append_quoted(output,
+                      detail::automation_event_name(entry.source_event->kind));
+  output += ",\"source\":";
+  json::append_quoted(output, entry.source_event->source_id);
+  output += ",\"origin\":";
+  detail::append_exact_unsigned(output, entry.source_event->origin_token);
+  output += ",\"fields\":{";
+  json::Join join;
+  for (const auto &[name, value] : entry.source_event->fields) {
+    join(output);
+    json::append_quoted(output, name);
+    output.push_back(':');
+    append_trace_value(output, value);
+  }
+  output += "}}";
+}
 } // namespace
 
 std::string
 export_layerc_trace(const std::span<const AutomationTraceEntry> entries) {
   std::string output =
       "{\"schemaVersion\":1,\"kind\":\"layerctrace\",\"entries\":[";
-  for (std::size_t index{}; index < entries.size(); ++index) {
-    if (index != 0)
-      output.push_back(',');
-    const auto &entry = entries[index];
-    output += "{\"sequence\":";
-    detail::append_exact_unsigned(output, entry.sequence);
-    output += ",\"timeMs\":";
-    detail::append_exact_unsigned(
-        output, static_cast<std::uint64_t>(
-                    std::max<std::int64_t>(0, entry.timestamp.count())));
-    output += ",\"automation\":";
-    json::append_quoted(output, entry.automation_id);
-    output += ",\"rule\":";
-    json::append_quoted(output, entry.rule_id);
-    output += ",\"phase\":";
-    json::append_quoted(output, entry.phase);
-    output += ",\"detail\":";
-    json::append_quoted(output, entry.detail);
-    if (entry.source_event.has_value()) {
-      output += ",\"event\":";
-      json::append_quoted(
-          output, detail::automation_event_name(entry.source_event->kind));
-      output += ",\"source\":";
-      json::append_quoted(output, entry.source_event->source_id);
-      output += ",\"origin\":";
-      detail::append_exact_unsigned(output, entry.source_event->origin_token);
-      output += ",\"fields\":{";
-      std::size_t field_index{};
-      for (const auto &[name, value] : entry.source_event->fields) {
-        if (field_index++ != 0)
-          output.push_back(',');
-        json::append_quoted(output, name);
-        output.push_back(':');
-        append_trace_value(output, value);
-      }
-      output.push_back('}');
-    }
-    output.push_back('}');
+  json::Join join;
+  for (const auto &entry : entries) {
+    join(output);
+    append_trace_entry(output, entry);
   }
   output += "]}\n";
   return output;
@@ -233,10 +241,9 @@ live_trace_prefix_count(const LiveMessage &base_message,
 AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
   if (source.size() > max_automation_trace_bytes)
     return AutomationError{"$", "trace exceeds the 4 MiB limit"};
-  const auto parsed = json::parse(source);
-  if (const auto *parse_error = std::get_if<json::ParseError>(&parsed))
-    return AutomationError{"$@" + std::to_string(parse_error->offset),
-                           parse_error->message};
+  const auto parsed = json::parse_bounded(source, max_automation_trace_bytes);
+  if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
+    return detail::json_parse_error(*parse_error);
   const auto &root = std::get<json::Value>(parsed);
   const auto *schema = root.is_object() ? root.find("schemaVersion") : nullptr;
   const auto *kind = root.is_object() ? root.find("kind") : nullptr;
@@ -271,15 +278,18 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
     const auto origin_value = origin == nullptr
                                   ? std::optional<std::uint64_t>{}
                                   : detail::read_exact_unsigned(*origin);
-    if (event_name_value == nullptr || !event_name_value->is_string() ||
-        !time_value.has_value() ||
-        *time_value > static_cast<std::uint64_t>(
-                          std::numeric_limits<std::int64_t>::max()) ||
-        source_id == nullptr || !source_id->is_string() ||
-        source_id->as_string().size() > max_automation_string_bytes ||
-        !origin_value.has_value() || fields == nullptr ||
-        !fields->is_object() ||
-        fields->as_object().size() > max_automation_collection_entries)
+    const auto source_entry_valid = [&] {
+      return event_name_value != nullptr && event_name_value->is_string() &&
+             time_value.has_value() &&
+             *time_value <= static_cast<std::uint64_t>(
+                               std::numeric_limits<std::int64_t>::max()) &&
+             source_id != nullptr && source_id->is_string() &&
+             source_id->as_string().size() <= max_automation_string_bytes &&
+             origin_value.has_value() && fields != nullptr &&
+             fields->is_object() &&
+             fields->as_object().size() <= max_automation_collection_entries;
+    };
+    if (!source_entry_valid())
       return AutomationError{path, "invalid source trace entry"};
     const auto event_kind =
         detail::parse_automation_event_name(event_name_value->as_string());

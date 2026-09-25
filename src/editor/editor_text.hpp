@@ -15,6 +15,11 @@ namespace layerc::editor {
 [[nodiscard]] std::string to_utf8(std::wstring_view text);
 [[nodiscard]] std::wstring control_text(HWND control);
 void set_text(HWND control, std::wstring_view text);
+// Digits only: signs, whitespace, prefixes and out-of-range values are
+// rejected, so "-1" or "-FFFFF" can never wrap into a large unsigned value.
+[[nodiscard]] std::optional<std::uint32_t>
+parse_bounded(std::wstring_view text, std::uint32_t minimum,
+              std::uint32_t maximum, int base = 10);
 [[nodiscard]] std::uint32_t parse_uint(std::wstring_view text,
                                        std::uint32_t fallback);
 [[nodiscard]] std::optional<layerc::core::Milliseconds>

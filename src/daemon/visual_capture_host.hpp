@@ -2,8 +2,9 @@
 
 #include "layerc/capture/window_capture.hpp"
 #include "layerc/core/template_matcher.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -13,6 +14,17 @@
 namespace layerc::daemon {
 
 using VisualAssetSignature = layerc::platform::VisualAssetSignature;
+
+// Exclusion lists compare field-wise; RECT has no operator==.
+[[nodiscard]] inline bool same_rectangles(
+    const std::span<const RECT> left,
+    const std::span<const RECT> right) noexcept {
+  return std::equal(left.begin(), left.end(), right.begin(), right.end(),
+                    [](const RECT &a, const RECT &b) {
+                      return a.left == b.left && a.top == b.top &&
+                             a.right == b.right && a.bottom == b.bottom;
+                    });
+}
 
 struct VisualTemplateEvaluation {
   layerc::core::TemplateState state;

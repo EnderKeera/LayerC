@@ -49,6 +49,10 @@ else()
     message(STATUS "Game Bar UWP widget host enabled")
     set(LAYERC_GAMEBAR_WIDGET_ROOT
         "${CMAKE_CURRENT_BINARY_DIR}/gamebar-widget")
+    set(LAYERC_GAMEBAR_MANIFEST
+        "${LAYERC_GAMEBAR_WIDGET_ROOT}/Package.appxmanifest")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/Package.appxmanifest"
+        "${LAYERC_GAMEBAR_MANIFEST}" @ONLY)
     set(LAYERC_GAMEBAR_NUGET_ROOT
         "${LAYERC_GAMEBAR_WIDGET_ROOT}/nuget")
     set(LAYERC_GAMEBAR_NUGET_PACKAGES
@@ -61,6 +65,29 @@ else()
         "${LAYERC_GAMEBAR_WIDGET_ROOT}/$<CONFIG>/Assets/StoreLogo.png")
     set(LAYERC_GAMEBAR_WIDGET_PROJECT
         "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/widget/LayerC.GameBar.vcxproj")
+    # Verify the MSBuild core compilation inputs against the dependency list.
+    # A missing source must fail configuration, not just a future widget link.
+    set(LAYERC_GAMEBAR_WIDGET_CORE_SOURCES
+        src/core/companion.cpp
+        src/core/json.cpp
+        src/core/json_reader.cpp
+        src/core/json_value.cpp
+        src/core/utf8.cpp)
+    file(STRINGS "${LAYERC_GAMEBAR_WIDGET_PROJECT}" _widget_core_items
+        REGEX "ClCompile Include=.*core")
+    set(_widget_project_core_sources)
+    foreach(_item IN LISTS _widget_core_items)
+        string(REPLACE "\\" "/" _item "${_item}")
+        if(_item MATCHES "core/([a-z_0-9]+[.]cpp)")
+            list(APPEND _widget_project_core_sources "src/core/${CMAKE_MATCH_1}")
+        endif()
+    endforeach()
+    set(_widget_expected_core_sources ${LAYERC_GAMEBAR_WIDGET_CORE_SOURCES})
+    list(SORT _widget_expected_core_sources)
+    list(SORT _widget_project_core_sources)
+    if(NOT _widget_expected_core_sources STREQUAL _widget_project_core_sources)
+        message(FATAL_ERROR "Game Bar widget core sources differ between cmake/GameBarWidget.cmake and ${LAYERC_GAMEBAR_WIDGET_PROJECT}: expected ${_widget_expected_core_sources}, found ${_widget_project_core_sources}")
+    endif()
     set(LAYERC_GAMEBAR_WIDGET_SOURCES
         src/gamebar/widget/App.cpp
         src/gamebar/widget/App.h
@@ -82,10 +109,7 @@ else()
         src/gamebar/Package.appxmanifest
         src/gamebar/DecodeBase64Asset.ps1
         src/gamebar/Assets/StoreLogo.png.base64
-        src/core/companion.cpp
-        src/core/json.cpp
-        src/core/json_value.cpp
-        src/core/utf8.cpp)
+        ${LAYERC_GAMEBAR_WIDGET_CORE_SOURCES})
     add_custom_command(
         OUTPUT "${LAYERC_GAMEBAR_WIDGET_MARKER}"
         COMMAND ${CMAKE_COMMAND} -E make_directory
@@ -103,12 +127,16 @@ else()
             "/p:WindowsTargetPlatformVersion=${LAYERC_WINSDK_VER}"
             "/p:SolutionDir=${LAYERC_GAMEBAR_NUGET_ROOT}/"
             "/p:RestorePackagesPath=${LAYERC_GAMEBAR_NUGET_PACKAGES}"
+            "/p:LayerCGameBarManifest=${LAYERC_GAMEBAR_MANIFEST}"
+            "/p:LayerCGeneratedInclude=${LAYERC_GENERATED_INCLUDE_DIR}"
         COMMAND "${CMAKE_VS_MSBUILD_COMMAND}"
             "${LAYERC_GAMEBAR_WIDGET_PROJECT}" /t:Build
             "/p:Configuration=$<CONFIG>" /p:Platform=x64
             "/p:WindowsTargetPlatformVersion=${LAYERC_WINSDK_VER}"
             "/p:LayerCNuGetRoot=${LAYERC_GAMEBAR_NUGET_PACKAGES}"
             "/p:LayerCGameBarAsset=${LAYERC_GAMEBAR_WIDGET_ASSET}"
+            "/p:LayerCGameBarManifest=${LAYERC_GAMEBAR_MANIFEST}"
+            "/p:LayerCGeneratedInclude=${LAYERC_GENERATED_INCLUDE_DIR}"
             "/p:OutDir=${LAYERC_GAMEBAR_WIDGET_OUTPUT_DIR}/"
             "/p:IntDir=${LAYERC_GAMEBAR_WIDGET_ROOT}/$<CONFIG>/obj/"
             /p:GenerateAppxPackageOnBuild=false

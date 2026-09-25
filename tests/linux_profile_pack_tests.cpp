@@ -6,7 +6,6 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -14,8 +13,6 @@
 #include <string>
 #include <variant>
 #include <vector>
-
-#include <unistd.h>
 
 namespace {
 
@@ -80,21 +77,16 @@ std::vector<std::byte> read_all(const std::filesystem::path &path) {
 } // namespace
 
 void linux_profile_pack_contracts() {
-  const auto root = std::filesystem::temp_directory_path() /
-                    ("layerc-linux-pack-" + std::to_string(::getpid()));
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
-  std::filesystem::create_directories(root, error);
-  if (error) {
-    (void)expect(false, "profile-pack test root should be created");
+  const layerc::test::TempDirectory temp("layerc-linux-pack");
+  const auto &root = temp.path();
+  const layerc::test::ScopedEnvironment home("HOME", root);
+  const layerc::test::ScopedEnvironment config_home("XDG_CONFIG_HOME",
+                                                  root / "config");
+  const layerc::test::ScopedEnvironment data_home("XDG_DATA_HOME",
+                                                root / "data");
+  if (!expect(home.applied() && config_home.applied() && data_home.applied(),
+              "profile-pack test environment should be applied"))
     return;
-  }
-
-  const auto config = (root / "config").string();
-  const auto data = (root / "data").string();
-  (void)::setenv("HOME", root.c_str(), 1);
-  (void)::setenv("XDG_CONFIG_HOME", config.c_str(), 1);
-  (void)::setenv("XDG_DATA_HOME", data.c_str(), 1);
 
   const auto roots = layerc::platform::profile_store_roots();
   const auto profile_path = roots.config_profiles / "linux-pack.json";
@@ -142,6 +134,7 @@ void linux_profile_pack_contracts() {
   passed &= expect(validated != nullptr && validated->profiles.size() == 2,
                    "Linux profile pack should validate");
 
+  std::error_code error;
   std::filesystem::remove_all(roots.config_profiles, error);
   error.clear();
   std::filesystem::remove_all(roots.data_profiles, error);
@@ -160,15 +153,19 @@ void linux_profile_pack_contracts() {
                              *validated, choices, roots.config_profiles)),
                      "validated pack should import across XDG roots");
     const auto before = read_all(profile_path);
+    std::vector<layerc::bundle::ImportChoice> replace_all;
+    for (std::size_t index = 0; index < validated->profiles.size(); ++index)
+      replace_all.push_back({.profile_index = index,
+                             .action = layerc::bundle::ImportAction::replace});
     const auto preview = layerc::bundle::preview_profile_import(
-        *validated, true, roots.config_profiles);
+        *validated, replace_all, roots.config_profiles);
     passed &= expect(!preview.error.has_value(),
                      "an all-existing keep-existing preview is valid");
-    std::vector<layerc::bundle::ImportChoice> skipped;
-    for (const auto &entry : preview.entries) {
-      passed &= expect(entry.skipped, "existing profiles should be skipped");
-      skipped.push_back({.profile_index = entry.profile_index,
-                         .action = layerc::bundle::ImportAction::skip});
+    auto skipped = preview.choices;
+    for (std::size_t index = 0; index < preview.entries.size(); ++index) {
+      passed &= expect(preview.entries[index].collides,
+                       "existing profiles should be reported as collisions");
+      skipped[index].action = layerc::bundle::ImportAction::skip;
     }
     passed &= expect(!layerc::bundle::validate_import_choices(
                           *validated, skipped, roots.config_profiles).has_value(),
@@ -228,7 +225,6 @@ void linux_profile_pack_contracts() {
                            layerc::platform::VisualSidecarState::valid,
                    "a later writer can reactivate retained sidecars");
 
-  std::filesystem::remove_all(root, error);
   (void)passed;
 }
 

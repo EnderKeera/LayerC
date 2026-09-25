@@ -122,19 +122,19 @@ X11VisualService::poll(const std::span<InputSession> sessions,
                        const TimePoint now) {
   std::vector<std::string> triggered;
   capture_diagnostics_.clear();
+  const auto due = [now](const auto &evaluation) {
+    return evaluation.next_sample == TimePoint{} ||
+           now >= evaluation.next_sample;
+  };
   for (auto &target : targets_) {
-    bool due{};
-    for (const auto &evaluation : target.evaluations)
-      due = due || evaluation.next_sample == TimePoint{} ||
-            now >= evaluation.next_sample;
-    if (!due || !target.capture) continue;
+    if (!std::ranges::any_of(target.evaluations, due) || !target.capture)
+      continue;
 
     auto capture = target.capture->poll(now).result;
     if (!capture.diagnostic.empty())
       append_unique(capture_diagnostics_, capture.diagnostic);
     for (auto &evaluation : target.evaluations) {
-      if (evaluation.next_sample != TimePoint{} && now < evaluation.next_sample)
-        continue;
+      if (!due(evaluation)) continue;
       std::vector<ObservationMeasurement> measurements;
       measurements.reserve(evaluation.profile.rules.size() +
                            evaluation.templates.size());

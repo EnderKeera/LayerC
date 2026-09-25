@@ -34,6 +34,11 @@ void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
 [[nodiscard]] COLORREF color_ref(std::uint32_t color);
 [[nodiscard]] std::uint32_t rgb_value(COLORREF color);
+// Fill or frame a rectangle through a temporary solid brush, or outline it
+// with a temporary pen, restoring the DC's selected objects.
+void fill_solid_rect(HDC dc, const RECT &rect, COLORREF color);
+void frame_solid_rect(HDC dc, const RECT &rect, COLORREF color);
+void outline_rect(HDC dc, const RECT &rect, int pen_width, COLORREF color);
 [[nodiscard]] bool start_daemon();
 [[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
 [[nodiscard]] std::string
@@ -58,8 +63,6 @@ unique_panel_id(std::string_view base,
                 const std::vector<layerc::core::Panel> *generated = nullptr);
 [[nodiscard]] std::wstring
 profile_error_text(const layerc::core::ProfileError &error);
-[[nodiscard]] bool source_uses_legacy_base_schema(std::string_view json);
-[[nodiscard]] bool source_uses_legacy_visual_schema(std::string_view json);
 [[nodiscard]] bool confirm_schema_upgrade(HWND owner);
 void erase_visual_assignment(layerc::core::VisualProfile &visual,
                              std::string_view cooldown_id);

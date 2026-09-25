@@ -1,11 +1,7 @@
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/platform_events.hpp"
+#include "profile_store_layout.hpp"
 
-#include "layerc/core/hash.hpp"
-#include "layerc/core/utf8.hpp"
-
-#include <algorithm>
-#include <array>
 #include <vector>
 
 #include <shlobj.h>
@@ -33,51 +29,14 @@ std::filesystem::path profile_directory() {
   return directory / L"LayerC" / L"profiles";
 }
 
-std::filesystem::path visual_directory() {
-  return profile_directory() / L"_visual";
+ProfileStoreRoots profile_layout_roots(
+    const std::filesystem::path &profile_path) {
+  const auto parent = profile_path.parent_path();
+  return {.config_profiles = parent, .data_profiles = parent, .store = parent};
 }
 
-std::filesystem::path
-profile_data_directory(const std::filesystem::path &profile_path) {
-  return profile_path.parent_path();
-}
-
-std::filesystem::path profile_visual_asset_path(
-    const std::filesystem::path &profile_path, const std::string_view sha256) {
-  if (profile_path.empty() || !layerc::core::is_lowercase_sha256(sha256))
-    return {};
-  return profile_path.parent_path() / L"_visual" / L"assets" /
-         (std::wstring(sha256.begin(), sha256.end()) + L".png");
-}
-
-std::filesystem::path
-visual_sidecar_path(const std::filesystem::path &profile_path) {
-  if (profile_path.filename().empty()) return {};
-  return profile_path.parent_path() / L"_visual" / profile_path.filename();
-}
-
-std::filesystem::path
-automation_sidecar_path(const std::filesystem::path &profile_path) {
-  if (profile_path.filename().empty()) return {};
-  return profile_path.parent_path() / L"_automation" / profile_path.filename();
-}
-
-std::filesystem::path
-automation_state_path(const std::filesystem::path &profile_path) {
-  if (profile_path.filename().empty()) return {};
-  auto filename = profile_path.filename();
-  filename += L".automation-state.json";
-  return profile_path.parent_path() / L"_state" / filename;
-}
-
-std::filesystem::path
-companion_sidecar_path(const std::filesystem::path &profile_path) {
-  if (profile_path.filename().empty()) return {};
-  return profile_path.parent_path() / L"_companion" / profile_path.filename();
-}
-
-std::string canonical_profile_key(const std::filesystem::path &path) {
-  if (path.empty()) return {};
+std::filesystem::path profile_layout_final_path(
+    const std::filesystem::path &path) {
   std::wstring resolved;
   const HANDLE file =
       CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
@@ -96,30 +55,11 @@ std::string canonical_profile_key(const std::filesystem::path &path) {
     }
     CloseHandle(file);
   }
-
-  if (resolved.empty()) {
-    std::error_code error;
-    auto normalized = std::filesystem::weakly_canonical(path, error);
-    if (error) {
-      error.clear();
-      normalized = std::filesystem::absolute(path, error);
-    }
-    resolved = (error ? path.lexically_normal() : normalized.lexically_normal())
-                   .wstring();
-  }
-  std::replace(resolved.begin(), resolved.end(), L'/', L'\\');
-  const auto encoded = layerc::core::try_wide_to_utf8(resolved);
-  if (!encoded.has_value()) return {};
-  return layerc::core::try_casefold_utf8(*encoded).value_or(std::string{});
+  return resolved.empty() ? std::filesystem::path{} : std::filesystem::path(resolved);
 }
 
 bool signal_profile_reload() {
-  const HANDLE event =
-      OpenEventW(EVENT_MODIFY_STATE, FALSE, profile_reload_event_name);
-  if (event == nullptr) return false;
-  const BOOL signaled = SetEvent(event);
-  CloseHandle(event);
-  return signaled != FALSE;
+  return signal_named_event(profile_reload_event_name);
 }
 
 } // namespace layerc::platform

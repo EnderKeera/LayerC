@@ -88,7 +88,8 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
   if (message.type == LiveMessageType::retry_visual) {
     for (auto &[window, worker] : visual_capture_runtime_.captures()) {
       (void)window;
-      worker->retry();
+      if (worker)
+        worker->retry();
     }
     reconcile_runtime_services();
     send_live_reply(LiveMessageType::acknowledgement, message,
@@ -131,64 +132,11 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
     return;
   }
   if (message.type == LiveMessageType::committed_profile) {
-    const auto parsed = layerc::core::parse_profile_json(message.profile_json);
-    const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
-    const auto &key = message.profile_key;
-    if (profile == nullptr || key.empty()) {
-      send_live_reply(LiveMessageType::error, message,
-                      "committed profile is invalid");
-      return;
-    }
-    const auto current = std::ranges::find_if(
-        session_registry_.sources(),
-        [&](const ProfileSource &source) { return source.key == key; });
-    if (current != session_registry_.sources().end() &&
-        (layerc::core::revision_decision(message.revision, current->revision) ==
-             layerc::core::RevisionDecision::stale ||
-         (layerc::core::revision_decision(message.revision,
-                                          current->revision) ==
-              layerc::core::RevisionDecision::duplicate &&
-          *profile == current->profile))) {
-      if (*profile == current->profile) {
-        send_live_reply(LiveMessageType::acknowledgement, message,
-                        "profile already applied");
-        return;
-      }
-      send_live_reply(LiveMessageType::error, message,
-                      "stale committed profile revision");
-      return;
-    }
-    apply_profile_update(key, *profile, message.revision);
-    if (live_edit_host_.session() != nullptr && live_edit_host_.session()->source_key == key &&
-        message.revision >= live_edit_host_.session()->revision) {
-      live_edit_host_.session()->profile = *profile;
-      live_edit_host_.session()->revision = message.revision;
-      rebuild_edit_overlays();
-    }
-    send_live_reply(LiveMessageType::acknowledgement, message,
-                    "profile applied");
+    handle_committed_profile(message);
     return;
   }
   if (message.type == LiveMessageType::begin_edit) {
-    const auto parsed = layerc::core::parse_profile_json(message.profile_json);
-    const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
-    const auto &source_key = message.profile_key;
-    const auto target = reinterpret_cast<HWND>(
-        static_cast<std::uintptr_t>(message.target_window));
-    DWORD target_process_id{};
-    if (target != nullptr)
-      GetWindowThreadProcessId(target, &target_process_id);
-    if (profile == nullptr || message.edit_session == 0 || source_key.empty() ||
-        target == nullptr || !IsWindow(target) || IsIconic(target) ||
-        target_process_id == 0 || target_process_id == GetCurrentProcessId() ||
-        target_process_id == live_edit_host_.channel().peer_process_id()) {
-      send_live_reply(LiveMessageType::error, message,
-                      "edit target or profile is invalid");
-      return;
-    }
-    begin_edit_session(message, *profile);
-    send_live_reply(LiveMessageType::acknowledgement, message,
-                    "edit session started");
+    handle_begin_edit(message);
     return;
   }
 
@@ -254,6 +202,74 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
   }
 }
 
+void DaemonApp::handle_committed_profile(
+    const layerc::core::LiveMessage &message) {
+  using layerc::core::LiveMessageType;
+  const auto parsed = layerc::core::parse_profile_json(message.profile_json);
+  const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
+  const auto &key = message.profile_key;
+  if (profile == nullptr || key.empty()) {
+    send_live_reply(LiveMessageType::error, message,
+                    "committed profile is invalid");
+    return;
+  }
+  const auto current = std::ranges::find_if(
+      session_registry_.sources(),
+      [&](const ProfileSource &source) { return source.key == key; });
+  if (current != session_registry_.sources().end()) {
+    const auto decision = layerc::core::revision_decision(message.revision,
+                                                          current->revision);
+    const bool duplicate_match =
+        decision == layerc::core::RevisionDecision::duplicate &&
+        *profile == current->profile;
+    if (decision == layerc::core::RevisionDecision::stale ||
+        duplicate_match) {
+      if (*profile == current->profile) {
+        send_live_reply(LiveMessageType::acknowledgement, message,
+                        "profile already applied");
+        return;
+      }
+      send_live_reply(LiveMessageType::error, message,
+                      "stale committed profile revision");
+      return;
+    }
+  }
+  apply_profile_update(key, *profile, message.revision);
+  if (live_edit_host_.session() != nullptr &&
+      live_edit_host_.session()->source_key == key &&
+      message.revision >= live_edit_host_.session()->revision) {
+    live_edit_host_.session()->profile = *profile;
+    live_edit_host_.session()->revision = message.revision;
+    rebuild_edit_overlays();
+  }
+  send_live_reply(LiveMessageType::acknowledgement, message,
+                  "profile applied");
+}
+
+void DaemonApp::handle_begin_edit(const layerc::core::LiveMessage &message) {
+  using layerc::core::LiveMessageType;
+  const auto parsed = layerc::core::parse_profile_json(message.profile_json);
+  const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
+  const auto &source_key = message.profile_key;
+  const auto target = reinterpret_cast<HWND>(
+      static_cast<std::uintptr_t>(message.target_window));
+  DWORD target_process_id{};
+  if (target != nullptr)
+    GetWindowThreadProcessId(target, &target_process_id);
+  // Reject own/editor processes and invalid targets before opening a session.
+  if (profile == nullptr || message.edit_session == 0 || source_key.empty() ||
+      target == nullptr || !IsWindow(target) || IsIconic(target) ||
+      target_process_id == 0 || target_process_id == GetCurrentProcessId() ||
+      target_process_id == live_edit_host_.channel().peer_process_id()) {
+    send_live_reply(LiveMessageType::error, message,
+                    "edit target or profile is invalid");
+    return;
+  }
+  begin_edit_session(message, *profile);
+  send_live_reply(LiveMessageType::acknowledgement, message,
+                  "edit session started");
+}
+
 void DaemonApp::begin_edit_session(const layerc::core::LiveMessage &message,
                                    layerc::core::GameProfile profile) {
   end_edit_session();
@@ -269,7 +285,7 @@ void DaemonApp::begin_edit_session(const layerc::core::LiveMessage &message,
   live_edit_host_.session() = std::move(session);
   rebuild_edit_overlays();
   sync_foreground_state();
-  update_overlays();
+  mark_overlays_dirty();
 }
 
 void DaemonApp::rebuild_edit_overlays() {
@@ -300,15 +316,15 @@ void DaemonApp::rebuild_edit_overlays() {
 void DaemonApp::update_edit_overlays() {
   if (live_edit_host_.session() == nullptr)
     return;
-  if (live_edit_host_.session()->target == nullptr || !IsWindow(live_edit_host_.session()->target) ||
-      !IsWindowVisible(live_edit_host_.session()->target) ||
-      IsIconic(live_edit_host_.session()->target)) {
+  auto &session = *live_edit_host_.session();
+  if (session.target == nullptr || !IsWindow(session.target) ||
+      !IsWindowVisible(session.target) || IsIconic(session.target)) {
     end_edit_session("target closed or minimized");
     return;
   }
   const auto now = layerc::core::MonotonicClock::now();
-  live_edit_host_.session()->overlays.render_for(live_edit_host_.session()->target,
-                                     live_edit_host_.session()->preview_states, now, true);
+  session.overlays.render_for(session.target, session.preview_states, now,
+                              true);
 }
 
 void DaemonApp::on_direct_anchor(const std::string_view panel_id,
@@ -358,7 +374,7 @@ void DaemonApp::end_edit_session(const std::string_view reason) {
   if (shutting_down_)
     return;
   sync_foreground_state();
-  update_overlays();
+  mark_overlays_dirty();
   if (!reason.empty())
     update_tooltip(L"LayerD - " + layerc::platform::utf8_to_wide(reason));
 }

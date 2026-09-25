@@ -7,14 +7,38 @@ namespace layerc::calibration {
 namespace {
 
 constexpr std::array kCalibrationModes{
-    CalibrationModeSpec{CalibrationMode::average_color,
-                        L"Average color near target", true, false, false, false},
-    CalibrationModeSpec{CalibrationMode::brightness, L"Brightness threshold",
-                        false, true, false, false},
-    CalibrationModeSpec{CalibrationMode::coverage, L"Target color coverage",
-                        true, false, true, false},
-    CalibrationModeSpec{CalibrationMode::template_match, L"Template match",
-                        false, false, false, true},
+    CalibrationModeSpec{
+        .mode = CalibrationMode::average_color,
+        .label = L"Average color near target",
+        .color_controls = true,
+        .brightness_controls = false,
+        .coverage_controls = false,
+        .template_controls = false,
+    },
+    CalibrationModeSpec{
+        .mode = CalibrationMode::brightness,
+        .label = L"Brightness threshold",
+        .color_controls = false,
+        .brightness_controls = true,
+        .coverage_controls = false,
+        .template_controls = false,
+    },
+    CalibrationModeSpec{
+        .mode = CalibrationMode::coverage,
+        .label = L"Target color coverage",
+        .color_controls = true,
+        .brightness_controls = false,
+        .coverage_controls = true,
+        .template_controls = false,
+    },
+    CalibrationModeSpec{
+        .mode = CalibrationMode::template_match,
+        .label = L"Template match",
+        .color_controls = false,
+        .brightness_controls = false,
+        .coverage_controls = false,
+        .template_controls = true,
+    },
 };
 
 } // namespace

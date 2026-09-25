@@ -119,26 +119,16 @@ bool frame_is_nearly_black(const CaptureFrame &frame) noexcept {
 bool region_is_available(
     const core::NormalizedRegion &rule_region,
     const core::NormalizedRegion &available_region) noexcept {
-  constexpr double epsilon = 1e-9;
-  return rule_region.x >= available_region.x - epsilon &&
-         rule_region.y >= available_region.y - epsilon &&
-         rule_region.x + rule_region.width <=
-             available_region.x + available_region.width + epsilon &&
-         rule_region.y + rule_region.height <=
-             available_region.y + available_region.height + epsilon;
+  return core::contains(available_region, rule_region);
 }
 
 bool region_is_available(const core::NormalizedRegion &rule_region,
                          const CaptureFrame &frame) noexcept {
   if (!region_is_available(rule_region, frame.available_region))
     return false;
-  constexpr double epsilon = 1e-9;
   return std::ranges::none_of(
       frame.unavailable_regions, [&](const core::NormalizedRegion &excluded) {
-        return rule_region.x < excluded.x + excluded.width - epsilon &&
-               rule_region.x + rule_region.width > excluded.x + epsilon &&
-               rule_region.y < excluded.y + excluded.height - epsilon &&
-               rule_region.y + rule_region.height > excluded.y + epsilon;
+        return core::overlaps(rule_region, excluded);
       });
 }
 

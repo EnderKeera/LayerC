@@ -4,11 +4,13 @@
 #include "layerc/core/automation.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
+#include "layerc/platform/profile_bundle_load.hpp"
 #include "layerc/platform/profile_store.hpp"
 
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace layerc::editor {
 
@@ -62,28 +64,17 @@ public:
     return automation_;
   }
 
-  [[nodiscard]] layerc::platform::VisualSidecarState &visual_state() noexcept {
-    return visual_state_;
-  }
   [[nodiscard]] layerc::platform::VisualSidecarState
   visual_state() const noexcept {
     return visual_state_;
   }
-  [[nodiscard]] std::string &visual_error() noexcept { return visual_error_; }
   [[nodiscard]] const std::string &visual_error() const noexcept {
     return visual_error_;
   }
 
-  [[nodiscard]] layerc::platform::AutomationSidecarState &
-  automation_state() noexcept {
-    return automation_state_;
-  }
   [[nodiscard]] layerc::platform::AutomationSidecarState
   automation_state() const noexcept {
     return automation_state_;
-  }
-  [[nodiscard]] std::string &automation_error() noexcept {
-    return automation_error_;
   }
   [[nodiscard]] const std::string &automation_error() const noexcept {
     return automation_error_;
@@ -93,29 +84,69 @@ public:
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;
   }
-  [[nodiscard]] bool &legacy_base_schema() noexcept {
-    return legacy_base_schema_;
-  }
   [[nodiscard]] bool legacy_base_schema() const noexcept {
     return legacy_base_schema_;
-  }
-  [[nodiscard]] bool &legacy_visual_schema() noexcept {
-    return legacy_visual_schema_;
   }
   [[nodiscard]] bool legacy_visual_schema() const noexcept {
     return legacy_visual_schema_;
   }
-  [[nodiscard]] bool &upgrade_acknowledged() noexcept {
-    return upgrade_acknowledged_;
-  }
+  void acknowledge_upgrade() noexcept { upgrade_acknowledged_ = true; }
   [[nodiscard]] bool upgrade_acknowledged() const noexcept {
     return upgrade_acknowledged_;
   }
-  [[nodiscard]] bool &dirty() noexcept { return dirty_; }
+  void set_dirty(const bool dirty) noexcept { dirty_ = dirty; }
   [[nodiscard]] bool dirty() const noexcept { return dirty_; }
   [[nodiscard]] EditorProfileHistory &history() noexcept { return history_; }
   [[nodiscard]] const EditorProfileHistory &history() const noexcept {
     return history_;
+  }
+
+  // Sidecar value, state, and error move together so no caller can leave a
+  // valid state beside a stale error or an invalid state beside a value.
+  void set_visual(layerc::platform::VisualSidecarLoad loaded, const bool legacy) {
+    visual_ = std::move(loaded.profile);
+    visual_state_ = loaded.state;
+    visual_error_ = std::move(loaded.error.message);
+    legacy_visual_schema_ = legacy;
+  }
+  void set_automation(layerc::platform::AutomationSidecarLoad loaded) {
+    automation_ = std::move(loaded.profile);
+    automation_state_ = loaded.state;
+    automation_error_ = std::move(loaded.error.message);
+  }
+  // After an in-memory edit the sidecar is valid when present, else absent.
+  void mark_visual_edited() {
+    visual_state_ = visual_ ? layerc::platform::VisualSidecarState::valid
+                            : layerc::platform::VisualSidecarState::absent;
+    visual_error_.clear();
+  }
+  void mark_automation_edited() {
+    automation_state_ = automation_
+                            ? layerc::platform::AutomationSidecarState::valid
+                            : layerc::platform::AutomationSidecarState::absent;
+    automation_error_.clear();
+  }
+  void clear_sidecars() {
+    set_visual({}, false);
+    set_automation({});
+  }
+  void set_legacy_base_schema(const bool legacy) noexcept {
+    legacy_base_schema_ = legacy;
+  }
+  // The document was rewritten in the current schemas.
+  void clear_legacy_schemas() noexcept {
+    legacy_base_schema_ = false;
+    legacy_visual_schema_ = false;
+    upgrade_acknowledged_ = false;
+  }
+  void assign_bundle(std::filesystem::path path,
+                     layerc::platform::ProfileBundleLoad bundle) {
+    profile_ = std::move(bundle.profile);
+    path_ = std::move(path);
+    set_visual(std::move(bundle.visual), bundle.legacy_visual_schema);
+    set_automation(std::move(bundle.automation));
+    legacy_base_schema_ = bundle.legacy_base_schema;
+    upgrade_acknowledged_ = false;
   }
 
 private:

@@ -9,8 +9,8 @@ gate details.
 
 Linux V2.6 is implemented in this tree but remains **pre-release**: package
 metadata still reports 2.4.0 and the physical GNOME Xorg/KDE X11 evidence below
-has not been archived. Container CI verifies the automated Linux suites; it is
-not a substitute for the native and Flatpak hardware checklist.
+has not been archived. CI verifies headless, Xvfb, installed-native, and Flatpak
+runtime behavior; it is not a substitute for the hardware checklist.
 
 | Surface | State | Boundary |
 | --- | --- | --- |
@@ -52,6 +52,7 @@ X side buttons 6/7 map to 4/5.
 Gamepads are the gamepad-class devices XI2 exposes (buttons plus at least two
 axes, no scroll class, no pointer-like name); when none is visible the daemon
 logs that controller bindings stay inactive instead of failing silently.
+Unclassified button-only devices are ignored rather than treated as mice.
 
 ### Overlays
 
@@ -65,9 +66,11 @@ extension the overlay stays hidden and the daemon publishes
 
 Overlays are painted with plain rectangles — no compositor, no toolkit. Bars
 fill from the left and drain towards ready; a bar panel also honours
-`hideWhenReady` and unmaps itself. While an overlay is mapped the daemon arms a
-100 ms repaint deadline and nothing else: once every panel is hidden or no
-session is active, the loop blocks again.
+`hideWhenReady` and unmaps itself. Only active sessions get overlay targets.
+Automation can force a ready bar visible, hide any panel, or replace its text.
+While an overlay is mapped the daemon arms a 100 ms repaint deadline and
+nothing else: once every panel is hidden or no session is active, the loop
+blocks again.
 
 The monitor scale comes from RandR physical size (clamped to 72–288 dpi, 96
 when a server reports nothing usable), matching the Windows `MulDiv`-style
@@ -149,6 +152,12 @@ The harness refuses non-X11 sessions, never synthesizes input, records the
 status/capture/resource artifacts under `out/benchmarks/v26-linux/`, and
 requires an explicit operator pass for the visibility, click-through, hotplug,
 recovery, and visual-transition checks that cannot be proved automatically.
+Set `LAYERC_RUN_AUTOMATION=1` to run and bind the reusable automated gate before
+the physical checklist, or point `LAYERC_AUTOMATION_SUMMARY` at an existing
+commit-matched `summary.json`. Release collection can set
+`LAYERC_REQUIRE_AUTOMATION=1`; this rejects an unbound physical run and
+requires clean automated and physical source trees. It still never marks any
+manual observation as passed.
 
 ## Building
 
@@ -156,9 +165,7 @@ Requires a C++20 compiler, CMake 3.28+, Ninja (or make). The full X11/Xvfb
 path on Debian or Ubuntu uses:
 
 ```sh
-sudo apt-get install g++ cmake ninja-build xvfb xauth libx11-dev libxi-dev \
-    libxext-dev libxrandr-dev libxcomposite-dev libxdamage-dev \
-    libxfixes-dev libxtst-dev
+xargs -a tools/linux-deps.txt sudo apt-get install --no-install-recommends
 ```
 
 `libxtst-dev` is test-only; without the other X11 development packages LayerC
@@ -174,6 +181,45 @@ ctest --test-dir build --output-on-failure   # portable + Linux suites
 Linux builds `layerd`, `layerctl`, and `layercal` when the required X11
 libraries are present. The graphical editor, capture worker, and Game Bar host
 remain Windows-only targets.
+
+### Complete automated gate
+
+`tools/run-linux-tests.sh` is the reusable gate used by CI and physical-evidence
+preflight. It keeps generated state in explicit build/evidence directories:
+
+```sh
+bash tools/run-linux-tests.sh \
+    --build-dir build/linux-automation \
+    --evidence-dir out/linux-automation/local \
+    --flatpak auto
+```
+
+The native stages use private XDG roots. The complete CI gate runs on
+disposable workers and performs the following:
+
+- configures, builds, installs, and runs the portable/core/Linux suites with no
+  display;
+- runs the five required X11 tracking, input, overlay, capture, and visual
+  suites under Xvfb, failing if one is absent or skipped;
+- starts the installed `layerd`, drives installed `layerctl`, and exercises
+  installed `layercal` against a controlled Xvfb fixture window using private
+  `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_RUNTIME_DIR`;
+- records CTest JUnit, registration and validation summaries, daemon logs,
+  status snapshots, PPM/JSON captures, process resources, environment/tool
+  versions, the exact Git commit and dirty state, plus SHA-256 checksums;
+- builds, installs, and runtime-smokes the Flatpak when `flatpak-builder` and
+  the 25.08 Platform/SDK are installed. The runner redirects its user install
+  and HOME/XDG paths; this is best-effort on a shared host, so use a disposable
+  user or CI worker for Flatpak evidence. Flatpak staging stays under
+  `build/flatpak-automation.*`, which the manifest excludes from its source copy.
+  `auto` records unavailable coverage explicitly; `required` (also selected by
+  `LAYERC_RELEASE_EVIDENCE=1`) fails instead. Release mode also requires a clean
+  source tree before and after the gate.
+
+`tools/ci-linux.sh <image> [evidence-directory]` runs the same gate in a
+read-only source mount. Its build is container-local while the evidence mount
+survives container teardown. An `off` Flatpak policy is recorded as `not-run`,
+never as a pass; the dedicated Ubuntu Flatpak CI job supplies required coverage.
 
 ## Storage and IPC paths
 
@@ -286,21 +332,25 @@ from the native store/socket. Host shell redirection is the file bridge in
 and out of the sandbox. Flatpak PID isolation can hide host executable paths;
 matching degrades to title/class and never broadens silently.
 
-A real `flatpak-builder` build and daemon/control/X11 smoke run requires a
-Linux desktop box and is part of the hardware evidence checklist above, not
-container CI.
+CI builds the manifest and runs daemon/control/X11 smoke under Xvfb. A physical
+desktop is still required for real compositor, pointer, monitor, and GPU
+observations; automated Flatpak success does not satisfy that checklist.
 
 ## CI and release boundary
 
-The `.github/workflows/ci.yml` Linux matrix runs `tools/ci-linux.sh` — the same
-script a local shell with docker can run — to configure, build, and run every
-registered CTest suite under Xvfb in digest-pinned `debian:stable` and
-`ubuntu:24.04` containers (the tags are display labels). The repo is mounted
-read-only and the build lives in a container-only path, so the checkout never
-collects build output. The workflow fails when a registered test is skipped
-or when no test cases report at all.
+The `.github/workflows/ci.yml` Linux matrix runs `tools/ci-linux.sh` in
+digest-pinned `debian:stable` and `ubuntu:24.04` containers (the tags are display
+labels). Headless and Xvfb suites are separate, required suite names are checked
+against CTest registration and JUnit, and installed-native smoke is part of each
+job. The repo is read-only; structured evidence is uploaded from a separate
+writable mount. A dedicated Ubuntu job installs the Freedesktop 25.08 runtime
+and SDK and runs the same gate with Flatpak coverage required.
 
-This matrix is the automated Linux compatibility gate. `windows-msvc` remains
-the required package/release job and produces the Windows ZIP. Native Linux and
-Flatpak builds, physical input/click-through checks, and GNOME Xorg/KDE X11
-capture evidence are intentionally manual and remain pending until archived.
+These jobs are the automated Linux compatibility gate. `windows-msvc` remains
+the package job and produces the Windows ZIP. Physical input/click-through,
+real-monitor/driver behavior, and GNOME Xorg/KDE X11 native plus Flatpak
+evidence remain manual and pending until separately archived.
+
+The runner boundaries are intentionally extensible: future Gamescope and
+Wayland lanes can reuse the evidence schema and runtime smoke contract, but no
+such backend or compatibility claim is part of V2.6.
