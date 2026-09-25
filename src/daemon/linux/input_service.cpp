@@ -133,22 +133,21 @@ InputSession::InputSession(
 
 void InputSession::checkpoint_automation_state(const TimePoint now,
                                                const bool force) {
-  if (automation_runtime && automation_runtime->persistent_dirty())
+  if (!automation_runtime) return;
+  if (automation_runtime->persistent_dirty())
     layerc::core::automation_checkpoint_arm(automation_state_due, now);
-  if (!automation_runtime || !layerc::core::automation_checkpoint_ready(
-                                 automation_state_due, now, force)) return;
-  const auto written = layerc::platform::write_automation_state(
+  const auto written = layerc::platform::checkpoint_automation_state(
       source_path, automation_runtime->profile(),
-      automation_runtime->snapshot().persistent_values);
-  if (const auto error = written.error(); error.has_value())
+      automation_runtime->snapshot().persistent_values, automation_state_due,
+      now, force);
+  if (!written.has_value()) return;
+  if (const auto error = written->error(); error.has_value())
     automation_faults.push_back(
         std::string("automation checkpoint failed (") +
         layerc::platform::profile_write_error_text(*error) +
         "): " + source_path.string());
   else
     automation_runtime->mark_persistent_saved();
-  layerc::core::automation_checkpoint_report(automation_state_due, now,
-                                             written);
 }
 
 std::vector<std::string>

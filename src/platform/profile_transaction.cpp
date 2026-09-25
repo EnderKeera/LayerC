@@ -1,6 +1,7 @@
 #include "layerc/platform/profile_transaction.hpp"
 
 #include "layerc/core/json.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -105,14 +106,12 @@ bool durable_write_replacing(const std::filesystem::path &path,
 
 bool durable_write_new(const std::filesystem::path &path,
                        const std::string_view text) {
-  return durable_write_new(
-      path, std::as_bytes(std::span(text.data(), text.size())));
+  return durable_write_new(path, layerc::core::text_bytes(text));
 }
 
 bool durable_write_replacing(const std::filesystem::path &path,
                              const std::string_view text) {
-  return durable_write_replacing(
-      path, std::as_bytes(std::span(text.data(), text.size())));
+  return durable_write_replacing(path, layerc::core::text_bytes(text));
 }
 
 bool copy_durable(const std::filesystem::path &source,

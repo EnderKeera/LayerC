@@ -3,7 +3,9 @@
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/profile_wire.hpp"
 
+#include <map>
 #include <optional>
+#include <string_view>
 #include <variant>
 
 namespace layerc::core {
@@ -107,6 +109,34 @@ find_overlay_property(const std::string_view name) noexcept {
     if (spec.name == name)
       return &spec;
   return nullptr;
+}
+
+ResolvedPanelOverrides
+resolve_panel_overrides(const Panel &base,
+                        const std::span<const OverlayPropertyOverride> overrides) {
+  std::map<std::string_view, const OverlayPropertyOverride *> winners;
+  for (const auto &item : overrides) {
+    if (item.panel_id != base.id) continue;
+    const auto found = winners.find(item.property);
+    if (found == winners.end() ||
+        overlay_override_precedes(item, *found->second))
+      winners[item.property] = &item;
+  }
+  ResolvedPanelOverrides result{.panel = base};
+  for (const auto &[property, item] : winners) {
+    const auto *spec = find_overlay_property(property);
+    if (spec == nullptr) continue;
+    if (spec->panel_visibility) {
+      if (const auto *visible = std::get_if<bool>(&item->value.storage))
+        result.visible = *visible;
+    } else if (spec->panel_text) {
+      if (const auto *text = std::get_if<std::string>(&item->value.storage))
+        result.text = *text;
+    } else if (spec->apply != nullptr) {
+      spec->apply(result.panel, item->value);
+    }
+  }
+  return result;
 }
 
 bool overlay_value_valid(const OverlayPropertySpec &spec,

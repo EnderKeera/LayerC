@@ -1,9 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace layerc::core {
 
@@ -21,6 +24,21 @@ try_casefold_utf8(std::string_view text);
 // dash for every other run, and `fallback` when nothing remains.
 [[nodiscard]] std::string slugify(std::string_view text,
                                   std::string_view fallback);
+
+// Durable files and frames carry bytes; stored formats are text.
+[[nodiscard]] inline std::span<const std::byte>
+text_bytes(const std::string_view text) noexcept {
+  return std::as_bytes(std::span(text.data(), text.size()));
+}
+[[nodiscard]] inline std::vector<std::byte>
+owned_bytes(const std::string_view text) {
+  const auto bytes = text_bytes(text);
+  return {bytes.begin(), bytes.end()};
+}
+[[nodiscard]] inline std::string as_text(const std::span<const std::byte> bytes) {
+  if (bytes.empty()) return {};
+  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
+}
 
 namespace detail {
 

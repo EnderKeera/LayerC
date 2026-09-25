@@ -59,7 +59,7 @@ void append_source_fields(std::string &output, const std::string_view path,
   core::json::append_unsigned(output, json.size());
   output += ",\"sha256\":";
   core::json::append_quoted(
-      output, core::sha256(std::as_bytes(std::span(json.data(), json.size()))));
+      output, core::sha256(core::text_bytes(json)));
 }
 
 void append_module(std::string &output, bool &first,
@@ -76,11 +76,6 @@ void append_module(std::string &output, bool &first,
 }
 
 } // namespace
-
-std::string as_string(const std::span<const std::byte> bytes) {
-  if (bytes.empty()) return {};
-  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-}
 
 namespace {
 

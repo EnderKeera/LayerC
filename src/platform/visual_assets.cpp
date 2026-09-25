@@ -2,6 +2,7 @@
 
 #include "layerc/core/hash.hpp"
 #include "layerc/core/profile.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
@@ -126,8 +127,7 @@ bool collect_active_asset_references(std::vector<std::string> &references,
         return false;
       }
       if (backup.has_value()) {
-        const std::string backup_json(
-            reinterpret_cast<const char *>(backup->data()), backup->size());
+        const auto backup_json = layerc::core::as_text(*backup);
         auto parsed_backup = layerc::core::parse_visual_profile_json(
             backup_json, stored.profile);
         if (const auto *backup_profile =
@@ -271,16 +271,13 @@ bool delete_asset_file(const std::filesystem::path &path,
 
 } // namespace
 
-// The store-wide asset directory is the one the shared layout assigns to a
-// profile stored directly in profile_directory().
+// The Windows store is unified: every profile shares one asset directory.
 std::filesystem::path visual_asset_directory() {
-  return profile_visual_asset_directory(profile_directory() /
-                                        L"asset.profile.json");
+  return unified_visual_asset_directory(profile_directory());
 }
 
 std::filesystem::path visual_asset_path(const std::string_view sha256_value) {
-  return profile_visual_asset_path(profile_directory() / L"asset.profile.json",
-                                   sha256_value);
+  return visual_asset_file(visual_asset_directory(), sha256_value);
 }
 
 VisualAssetSignature asset_signature(const std::string_view hash) {

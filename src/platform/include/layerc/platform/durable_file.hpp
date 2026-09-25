@@ -1,5 +1,7 @@
 #pragma once
 
+#include "layerc/core/utf8.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -46,9 +48,7 @@ read_durable_text(const std::filesystem::path &path,
                   const std::size_t maximum_bytes) {
   auto result = read_durable_file(path, maximum_bytes);
   if (!result.has_value()) return std::nullopt;
-  if (result->empty()) return std::string{};
-  return std::string(reinterpret_cast<const char *>(result->data()),
-                     result->size());
+  return layerc::core::as_text(*result);
 }
 
 // Creates a new owner-only file and fails if the path already exists.

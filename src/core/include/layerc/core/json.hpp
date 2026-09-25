@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -66,6 +67,9 @@ void append_quoted(std::string &output, std::string_view text);
 // and quoting stay byte-stable in one place.
 void append_color_quoted(std::string &output, std::uint32_t color);
 [[nodiscard]] std::string color_text(std::uint32_t color);
+// Inverse of color_text: "#RRGGBB" in either hex case, otherwise nullopt.
+[[nodiscard]] std::optional<std::uint32_t>
+parse_color_text(std::string_view text) noexcept;
 // Appends "true" or "false" for a boolean field. Shared by the serializers so
 // the spelling stays byte-stable in one place.
 void append_bool(std::string &output, bool value);

@@ -33,35 +33,13 @@ void set_text(const HWND control, const std::wstring_view text) {
     SetWindowTextW(control, std::wstring(text).c_str());
 }
 
-namespace {
-// std::from_chars has no wide overload. Numeric text is ASCII, so narrowing is
-// exact once every non-ASCII code unit has been rejected.
-std::optional<std::string> ascii_text(const std::wstring_view text) {
-  std::string narrow;
-  narrow.reserve(text.size());
-  for (const wchar_t character : text) {
-    if (character > 0x7F)
-      return std::nullopt;
-    narrow.push_back(static_cast<char>(character));
-  }
-  return narrow;
-}
-} // namespace
-
 std::optional<std::uint32_t> parse_bounded(const std::wstring_view text,
                                            const std::uint32_t minimum,
                                            const std::uint32_t maximum,
                                            const int base) {
-  const auto source = ascii_text(text);
-  if (!source)
-    return std::nullopt;
-  const auto &narrow = *source;
-  std::uint32_t parsed{};
-  const auto [end, code] = std::from_chars(
-      narrow.data(), narrow.data() + narrow.size(), parsed, base);
-  if (narrow.empty() || code != std::errc{} ||
-      end != narrow.data() + narrow.size() || parsed < minimum ||
-      parsed > maximum)
+  const auto parsed =
+      layerc::platform::parse_integer<std::uint32_t>(text, base);
+  if (!parsed || *parsed < minimum || *parsed > maximum)
     return std::nullopt;
   return parsed;
 }
@@ -75,7 +53,7 @@ std::optional<layerc::core::Milliseconds>
 parse_duration_ms(const std::wstring_view seconds) {
   if (seconds.empty())
     return std::nullopt;
-  const auto source = ascii_text(seconds);
+  const auto source = layerc::platform::ascii_narrow(seconds);
   if (!source)
     return std::nullopt;
   double parsed{};

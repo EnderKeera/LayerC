@@ -111,6 +111,15 @@ std::string color_text(std::uint32_t color) {
     return text;
 }
 
+std::optional<std::uint32_t> parse_color_text(const std::string_view text) noexcept {
+    if (text.size() != 7 || text.front() != '#') return std::nullopt;
+    const auto *const last = text.data() + text.size();
+    std::uint32_t color{};
+    const auto [tail, code] = std::from_chars(text.data() + 1, last, color, 16);
+    if (code != std::errc{} || tail != last) return std::nullopt;
+    return color;
+}
+
 void append_color_quoted(std::string &output, std::uint32_t color) {
     append_quoted(output, color_text(color));
 }

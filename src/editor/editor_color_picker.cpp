@@ -1,11 +1,12 @@
 #include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
+#include "layerc/core/json.hpp"
 #include "layerc/platform/native_theme.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <array>
 #include <cstdint>
-#include <cwchar>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -63,15 +64,13 @@ std::optional<std::uint32_t> rgb_fields(const HWND window) {
 }
 
 std::optional<std::uint32_t> hex_value(std::wstring text) {
-  if (!text.empty() && text.front() == L'#') text.erase(text.begin());
-  if (text.size() != 6) return std::nullopt;
-  return parse_bounded(text, 0, 0xFFFFFFU, 16);
+  if (text.empty() || text.front() != L'#') text.insert(text.begin(), L'#');
+  const auto narrow = layerc::platform::ascii_narrow(text);
+  return narrow ? layerc::core::json::parse_color_text(*narrow) : std::nullopt;
 }
 
 std::wstring hex_label(const std::uint32_t color) {
-  std::array<wchar_t, 8> buffer{};
-  std::swprintf(buffer.data(), buffer.size(), L"#%06X", color & 0xFFFFFFU);
-  return buffer.data();
+  return layerc::platform::utf8_to_wide(layerc::core::json::color_text(color));
 }
 
 std::wstring swatch_label(const PaletteColor &color) {

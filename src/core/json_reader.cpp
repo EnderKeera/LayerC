@@ -197,14 +197,8 @@ Reader::color(const Value &parent, const std::string_view key, const std::string
               const Required required, const std::uint32_t fallback) {
   const auto *value = field(parent, key, path, required);
   if (!value) return ok() ? std::optional(fallback) : std::nullopt;
-  if (value->is_string()) {
-    const auto &source = value->as_string();
-    if (source.size() == 7 && source.front() == '#') {
-      std::uint32_t result{};
-      const auto [tail, code] = std::from_chars(source.data() + 1, source.data() + 7, result, 16);
-      if (code == std::errc{} && tail == source.data() + 7) return result;
-    }
-  }
+  if (value->is_string())
+    if (const auto color = parse_color_text(value->as_string())) return color;
   fail(path + "." + std::string(key), "expected #RRGGBB color string");
   return std::nullopt;
 }

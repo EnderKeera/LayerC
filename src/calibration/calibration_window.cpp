@@ -2,6 +2,7 @@
 
 #include "calibration_resource.h"
 
+#include "layerc/core/json.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets_windows.hpp"
@@ -11,7 +12,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cwchar>
 #include <variant>
 
 #include <commctrl.h>
@@ -23,9 +23,7 @@ namespace {
 
 
 std::wstring color_text(const std::uint32_t color) {
-  wchar_t buffer[16]{};
-  swprintf_s(buffer, L"#%06X", color & 0xFFFFFFU);
-  return buffer;
+  return layerc::platform::utf8_to_wide(layerc::core::json::color_text(color));
 }
 
 bool contains_binding(const layerc::core::GameProfile &profile,

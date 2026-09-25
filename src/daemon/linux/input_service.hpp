@@ -125,9 +125,6 @@ public:
   }
   [[nodiscard]] std::vector<std::string> unavailable() const;
 
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
-    return layerc::runtime::Capability::input;
-  }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
       const layerc::runtime::CapabilityDemand &demand) override;
   void quiesce() noexcept override;
@@ -145,9 +142,6 @@ public:
   explicit X11AutomationService(X11SessionRegistry &registry) noexcept
       : registry_(registry) {}
 
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
-    return layerc::runtime::Capability::automation;
-  }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
       const layerc::runtime::CapabilityDemand &demand) override;
   void quiesce() noexcept override;

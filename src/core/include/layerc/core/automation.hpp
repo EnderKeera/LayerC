@@ -172,13 +172,30 @@ enum class ExpressionKind : std::uint8_t {
 
 struct AutomationExpression {
   ExpressionKind kind{ExpressionKind::literal};
-  std::string operation;
-  std::string reference;
-  AutomationValue literal;
-  std::vector<AutomationExpression> arguments;
+  std::string operation{};
+  std::string reference{};
+  AutomationValue literal{};
+  std::vector<AutomationExpression> arguments{};
 
   bool operator==(const AutomationExpression &) const = default;
 };
+
+// Builders for code-authored expressions (editor presets, fixtures, tools).
+namespace expr {
+[[nodiscard]] inline AutomationExpression literal(AutomationValue value) {
+  return {.kind = ExpressionKind::literal, .literal = std::move(value)};
+}
+[[nodiscard]] inline AutomationExpression variable(std::string id) {
+  return {.kind = ExpressionKind::variable, .reference = std::move(id)};
+}
+[[nodiscard]] inline AutomationExpression
+binary(std::string operation, AutomationExpression left,
+       AutomationExpression right) {
+  return {.kind = ExpressionKind::binary,
+          .operation = std::move(operation),
+          .arguments = {std::move(left), std::move(right)}};
+}
+} // namespace expr
 
 // Where an action's side effects land. Internal actions mutate only runtime
 // state; cooldown actions commit through the engine adapter; overlay actions
@@ -557,6 +574,18 @@ struct OverlayPropertySpec {
 find_overlay_property(std::string_view name) noexcept;
 [[nodiscard]] bool overlay_value_valid(const OverlayPropertySpec &spec,
                                        const AutomationValue &value) noexcept;
+
+// One panel after its winning overrides: Panel-field properties are applied
+// to `panel`; the session-level visibility and text layers are returned for
+// the platform renderer.
+struct ResolvedPanelOverrides {
+  Panel panel;
+  std::optional<bool> visible{};
+  std::optional<std::string> text{};
+};
+[[nodiscard]] ResolvedPanelOverrides
+resolve_panel_overrides(const Panel &base,
+                        std::span<const OverlayPropertyOverride> overrides);
 
 struct AutomationEffect {
   AutomationActionKind kind{AutomationActionKind::set_variable};

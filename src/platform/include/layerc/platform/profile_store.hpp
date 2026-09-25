@@ -52,6 +52,13 @@ struct ProfileStoreRoots {
 profile_data_directory(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path
 profile_visual_asset_directory(const std::filesystem::path &profile_path);
+// The asset directory every profile of a unified store directory shares.
+[[nodiscard]] std::filesystem::path
+unified_visual_asset_directory(const std::filesystem::path &profile_directory);
+// `<directory>/<sha256>.png`, or empty for an empty directory or invalid hash.
+[[nodiscard]] std::filesystem::path
+visual_asset_file(const std::filesystem::path &directory,
+                  std::string_view sha256);
 [[nodiscard]] std::filesystem::path profile_visual_asset_path(
     const std::filesystem::path &profile_path, std::string_view sha256);
 [[nodiscard]] std::filesystem::path
@@ -123,15 +130,12 @@ scan_profile_directory(const std::filesystem::path &directory);
     const std::optional<layerc::core::CompanionProfile> &companion_profile =
         std::nullopt);
 
-// Like write_profile_bundle, but fails atomically if the base profile already
-// exists when the transaction lock is acquired.
-[[nodiscard]] ProfileWriteResult write_profile_bundle_create_only(
-    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
-    const std::optional<layerc::core::VisualProfile> &visual_profile,
-    const std::optional<layerc::core::AutomationProfile> &automation_profile =
-        std::nullopt,
-    const std::optional<layerc::core::CompanionProfile> &companion_profile =
-        std::nullopt);
+// Like write_profile_bundle for a base profile without module sidecars, but
+// fails atomically if the base profile already exists when the transaction
+// lock is acquired.
+[[nodiscard]] ProfileWriteResult
+write_profile_bundle_create_only(const std::filesystem::path &path,
+                                 const layerc::core::GameProfile &profile);
 
 enum class ModuleSidecarState {
   absent,
@@ -197,6 +201,15 @@ struct AutomationStateLoad {
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values);
+// The checkpoint policy every automation host shares: when `due` is ready
+// (or `force`), write the state and report the outcome into `due`. Returns
+// the write result, or nullopt when no checkpoint was due.
+[[nodiscard]] std::optional<ProfileWriteResult> checkpoint_automation_state(
+    const std::filesystem::path &profile_path,
+    const layerc::core::AutomationProfile &automation_profile,
+    const layerc::core::AutomationPersistentValues &values,
+    std::optional<layerc::core::TimePoint> &due, layerc::core::TimePoint now,
+    bool force = false);
 
 struct SidecarMarkerInspection {
   bool present{};

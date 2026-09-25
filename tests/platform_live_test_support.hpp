@@ -6,9 +6,7 @@
 
 #include <cstddef>
 #include <filesystem>
-#include <optional>
 #include <string>
-#include <string_view>
 
 #include <windows.h>
 
@@ -19,10 +17,6 @@ namespace layerc::test::platform_live {
 [[nodiscard]] core::AutomationProfile
 test_automation_profile(const std::string &profile_id = "store-test");
 
-[[nodiscard]] bool write_test_file(const std::filesystem::path &path,
-                                   std::string_view contents);
-[[nodiscard]] std::optional<std::string>
-read_test_file(const std::filesystem::path &path);
 [[nodiscard]] bool launch_auth_peer(const std::filesystem::path &executable,
                                     const wchar_t *mode,
                                     const std::wstring &pipe_name,

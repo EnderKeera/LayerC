@@ -2,12 +2,12 @@
 #include "visual_capture_worker.hpp"
 
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_handle.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "layerc/core/json.hpp"
 
 #include <array>
-#include <charconv>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -41,22 +41,6 @@ std::optional<std::string> ascii_hex(const std::wstring &source) {
     if (!hex) return std::nullopt;
     result.push_back(static_cast<char>(value));
   }
-  return result;
-}
-
-template <typename Integer>
-std::optional<Integer> decimal(const std::wstring &source) {
-  std::string narrow;
-  narrow.reserve(source.size());
-  for (const wchar_t value : source) {
-    if (value < L'0' || value > L'9') return std::nullopt;
-    narrow.push_back(static_cast<char>(value));
-  }
-  Integer result{};
-  const auto [end, error] = std::from_chars(
-      narrow.data(), narrow.data() + narrow.size(), result);
-  if (error != std::errc{} || end != narrow.data() + narrow.size())
-    return std::nullopt;
   return result;
 }
 
@@ -183,9 +167,13 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
   const auto nonce_ascii = nonce ? ascii_hex(*nonce) : std::nullopt;
   const auto parent_text = argument_value(argc, argv, L"parent");
   const auto window_text = argument_value(argc, argv, L"window");
-  const auto parent = parent_text ? decimal<DWORD>(*parent_text) : std::nullopt;
+  const auto parent = parent_text
+                          ? layerc::platform::parse_integer<DWORD>(*parent_text)
+                          : std::nullopt;
   const auto window_value =
-      window_text ? decimal<std::uintptr_t>(*window_text) : std::nullopt;
+      window_text
+          ? layerc::platform::parse_integer<std::uintptr_t>(*window_text)
+          : std::nullopt;
   const int result = pipe && nonce_ascii && parent && window_value
                           ? worker_main(
                                 *pipe, *nonce_ascii, *parent,

@@ -16,9 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
 #include <string>
-#include <system_error>
 #include <variant>
 #include <vector>
 
@@ -97,16 +95,6 @@ struct FixtureColor {
                 static_cast<std::uint8_t>((color.green + 128U) / 257U),
                 static_cast<std::uint8_t>((color.blue + 128U) / 257U)};
   return result.rgb == requested;
-}
-
-[[nodiscard]] bool write_template(const std::filesystem::path &path) {
-  std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error) return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(reinterpret_cast<const char *>(template_png.data()),
-               static_cast<std::streamsize>(template_png.size()));
-  return output.good();
 }
 
 [[nodiscard]] layerc::core::GameProfile profile_fixture() {
@@ -195,7 +183,11 @@ int run_linux_x11_visual_tests() {
   const auto profile_path = roots.config_profiles / "visual-fixture.json";
   const auto asset_path =
       layerc::platform::profile_visual_asset_path(profile_path, template_sha);
-  passed &= expect(write_template(asset_path),
+  passed &= expect(layerc::test::write_file(
+                       asset_path,
+                       std::string_view(
+                           reinterpret_cast<const char *>(template_png.data()),
+                           template_png.size())),
                    "the canonical PNG fixture is profile-local");
   const auto loaded = layerc::platform::load_profile_template_asset(
       profile_path, template_sha);

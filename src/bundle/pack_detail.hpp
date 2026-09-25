@@ -3,6 +3,7 @@
 #include "pack_sidecar_table.hpp"
 
 #include "layerc/core/json_reader.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/core/visual.hpp"
 
 #include <cstddef>
@@ -32,11 +33,6 @@ inline std::string pack_limit_message() {
          " MiB uncompressed";
 }
 
-inline std::vector<std::byte> owned_bytes(const std::string_view source) {
-  const auto bytes = std::as_bytes(std::span(source.data(), source.size()));
-  return {bytes.begin(), bytes.end()};
-}
-
 // "128 MiB" / "256 KiB": the user-facing spelling of a byte limit.
 inline std::string size_limit_text(const std::size_t bytes) {
   constexpr std::size_t mib = 1024U * 1024U;
@@ -44,7 +40,6 @@ inline std::string size_limit_text(const std::size_t bytes) {
                            : std::to_string(bytes / 1024U) + " KiB";
 }
 
-std::string as_string(std::span<const std::byte> bytes);
 bool safe_entry_path(std::string_view path);
 std::filesystem::path
 asset_path_for_profile(const std::filesystem::path &profile_path,

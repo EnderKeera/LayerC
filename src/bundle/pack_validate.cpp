@@ -24,7 +24,7 @@ namespace layerc::bundle {
 namespace json = core::json;
 namespace {
 
-using detail::as_string;
+using core::as_text;
 using detail::EntryMap;
 using detail::kSidecars;
 using detail::pack_error;
@@ -158,7 +158,7 @@ SourceResult read_source_descriptor(
   const auto *entry = verified_entry(entries, *name, *size, *hash);
   if (entry == nullptr || !declared_paths.insert(*name).second)
     return SourceError::entry;
-  auto text = as_string(*entry);
+  auto text = as_text(*entry);
   auto parsed = json::parse(text);
   auto *root = std::get_if<json::Value>(&parsed);
   if (!root) return SourceError::json;
@@ -316,7 +316,7 @@ validate_profile_pack(const std::filesystem::path &source) {
       manifest_entry->second.size() > core::max_profile_json_bytes)
     return invalid("manifest.json is missing or exceeds " +
                    detail::size_limit_text(core::max_profile_json_bytes));
-  const auto manifest_source = as_string(manifest_entry->second);
+  const auto manifest_source = as_text(manifest_entry->second);
   const auto parsed_manifest = core::json::parse(manifest_source);
   const auto *manifest = std::get_if<core::json::Value>(&parsed_manifest);
   if (manifest == nullptr || !manifest->is_object() ||

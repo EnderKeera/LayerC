@@ -1,6 +1,8 @@
 #include "layerc/platform/profile_store.hpp"
 
+#include "layerc/core/automation_session.hpp"
 #include "layerc/core/profile.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
 #include "layerc/platform/profile_transaction.hpp"
@@ -15,10 +17,7 @@
 namespace layerc::platform {
 namespace {
 
-std::string as_text(const std::span<const std::byte> bytes) {
-  if (bytes.empty()) return {};
-  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-}
+using layerc::core::as_text;
 
 std::filesystem::path sidecar_state_path(const std::filesystem::path &sidecar) {
   auto state = sidecar;
@@ -29,10 +28,8 @@ std::filesystem::path sidecar_state_path(const std::filesystem::path &sidecar) {
 [[nodiscard]] ProfileFileMutation
 text_mutation(const std::filesystem::path &target,
               const std::string_view contents) {
-  const auto *first = reinterpret_cast<const std::byte *>(contents.data());
-  return ProfileFileMutation{
-      .target = target,
-      .contents = std::vector<std::byte>(first, first + contents.size())};
+  return ProfileFileMutation{.target = target,
+                             .contents = layerc::core::owned_bytes(contents)};
 }
 
 } // namespace
@@ -326,9 +323,9 @@ namespace {
 struct BundleInputs {
   std::filesystem::path path;
   layerc::core::GameProfile profile;
-  std::optional<layerc::core::VisualProfile> visual;
-  std::optional<layerc::core::AutomationProfile> automation;
-  std::optional<layerc::core::CompanionProfile> companion;
+  std::optional<layerc::core::VisualProfile> visual{};
+  std::optional<layerc::core::AutomationProfile> automation{};
+  std::optional<layerc::core::CompanionProfile> companion{};
   bool create_only{};
 };
 
@@ -550,17 +547,11 @@ ProfileWriteResult write_profile_bundle(
                                     .create_only = false});
 }
 
-ProfileWriteResult write_profile_bundle_create_only(
-    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
-    const std::optional<layerc::core::VisualProfile> &visual_profile,
-    const std::optional<layerc::core::AutomationProfile> &automation_profile,
-    const std::optional<layerc::core::CompanionProfile> &companion_profile) {
-  return write_profile_bundle_impl({.path = path,
-                                    .profile = profile,
-                                    .visual = visual_profile,
-                                    .automation = automation_profile,
-                                    .companion = companion_profile,
-                                    .create_only = true});
+ProfileWriteResult
+write_profile_bundle_create_only(const std::filesystem::path &path,
+                                 const layerc::core::GameProfile &profile) {
+  return write_profile_bundle_impl(
+      {.path = path, .profile = profile, .create_only = true});
 }
 
 VisualSidecarLoad
@@ -632,6 +623,20 @@ ProfileWriteResult write_automation_state(
   // store's transaction roots with bundle saves and startup recovery.
   return commit_profile_transaction(profile_path.parent_path(), mutations);
 }
+
+std::optional<ProfileWriteResult> checkpoint_automation_state(
+    const std::filesystem::path &profile_path,
+    const layerc::core::AutomationProfile &automation_profile,
+    const layerc::core::AutomationPersistentValues &values,
+    std::optional<layerc::core::TimePoint> &due,
+    const layerc::core::TimePoint now, const bool force) {
+  if (!layerc::core::automation_checkpoint_ready(due, now, force))
+    return std::nullopt;
+  auto written = write_automation_state(profile_path, automation_profile, values);
+  layerc::core::automation_checkpoint_report(due, now, written);
+  return written;
+}
+
 SidecarMarkerInspection
 inspect_sidecar_markers(const std::filesystem::path &sidecar) noexcept {
   const std::array paths{

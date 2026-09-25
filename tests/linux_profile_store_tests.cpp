@@ -1,4 +1,5 @@
 #include "layerc/core/profile.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
 #include "layerc/platform/profile_transaction.hpp"
@@ -39,14 +40,9 @@ std::filesystem::path fault_ancestor;
 int failures_remaining{};
 int injected_failures{};
 
+using layerc::core::owned_bytes;
 using layerc::test::read_file;
 using layerc::test::write_file;
-
-std::vector<std::byte> bytes(const std::string_view source) {
-  const auto *const first =
-      reinterpret_cast<const std::byte *>(source.data());
-  return {first, first + source.size()};
-}
 
 void test_bounded_file_read_statuses() {
   const layerc::test::TempDirectory temporary("layerc-store-test");
@@ -192,7 +188,8 @@ void test_transaction_validation_and_locking() {
          "transaction roots should be created");
 
   const layerc::platform::ProfileFileMutation outside = {
-      .target = temporary.path() / "outside.json", .contents = bytes("x")};
+      .target = temporary.path() / "outside.json",
+      .contents = owned_bytes("x")};
   expect(layerc::platform::commit_profile_transaction(roots,
                                                       std::span(&outside, 1))
                  .error() == layerc::platform::ProfileWriteError::scope_rejected,
@@ -203,7 +200,7 @@ void test_transaction_validation_and_locking() {
          "an empty transaction should report invalid input");
   const layerc::platform::ProfileFileMutation create = {
       .target = roots.config_profiles / "create-only.json",
-      .contents = bytes("first")};
+      .contents = owned_bytes("first")};
   expect(static_cast<bool>(layerc::platform::commit_profile_transaction(
              roots, std::span(&create, 1))),
          "the first create-only write should publish");
@@ -215,7 +212,7 @@ void test_transaction_validation_and_locking() {
          "a create-only write over an existing file should report target_exists");
   const layerc::platform::ProfileFileMutation traversal = {
       .target = roots.config_profiles / ".." / "escape.json",
-      .contents = bytes("x")};
+      .contents = owned_bytes("x")};
   expect(!layerc::platform::commit_profile_transaction(
              roots, std::span(&traversal, 1)),
          "transaction traversal should be rejected");
@@ -226,14 +223,14 @@ void test_transaction_validation_and_locking() {
   std::filesystem::create_directory_symlink(temporary.path() / "outside-data",
                                             symlink_parent, error);
   const layerc::platform::ProfileFileMutation escaped = {
-      .target = symlink_parent / "asset.bin", .contents = bytes("x")};
+      .target = symlink_parent / "asset.bin", .contents = owned_bytes("x")};
   expect(!error && !layerc::platform::commit_profile_transaction(
                        roots, std::span(&escaped, 1)),
          "transaction symlink escape should be rejected");
 
   const auto target = roots.config_profiles / "locked.json";
   const layerc::platform::ProfileFileMutation mutation = {
-      .target = target, .contents = bytes("new")};
+      .target = target, .contents = owned_bytes("new")};
   const auto lock_path = roots.store / "lock";
   const int lock = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
   expect(lock >= 0 && ::flock(lock, LOCK_EX | LOCK_NB) == 0,
@@ -278,7 +275,7 @@ void test_corrupt_journal_self_heals() {
 
   const auto target = roots.config_profiles / "recovered.json";
   const layerc::platform::ProfileFileMutation mutation = {
-      .target = target, .contents = bytes("committed")};
+      .target = target, .contents = owned_bytes("committed")};
   expect(layerc::platform::commit_profile_transaction(roots,
                                                        std::span(&mutation, 1)) &&
              read_file(target) == "committed",
@@ -293,7 +290,7 @@ void test_precreated_stage_symlink_is_rejected() {
 
   std::error_code error;
   std::filesystem::create_symlink(victim, stage, error);
-  const auto replacement = bytes("replaced");
+  const auto replacement = owned_bytes("replaced");
   expect(!error &&
              !layerc::platform::create_durable_file(stage, replacement) &&
              read_file(victim) == "untouched",
@@ -320,7 +317,7 @@ void test_concurrent_create_only_has_one_winner() {
       ::close(gate[0]);
       const layerc::platform::ProfileFileMutation mutation = {
           .target = target,
-          .contents = bytes(contents[index]),
+          .contents = owned_bytes(contents[index]),
           .must_be_absent = true};
       _exit(layerc::platform::commit_profile_transaction(
                 roots, std::span(&mutation, 1))
@@ -365,12 +362,12 @@ void test_cross_root_publish_and_recovery() {
   const auto visual = roots.data_profiles / "game" / "visual.json";
   const auto automation = roots.data_profiles / "game" / "automation.json";
   const std::array mutations{
-      layerc::platform::ProfileFileMutation{.target = profile,
-                                            .contents = bytes("new-profile")},
-      layerc::platform::ProfileFileMutation{.target = visual,
-                                            .contents = bytes("new-visual")},
       layerc::platform::ProfileFileMutation{
-          .target = automation, .contents = bytes("new-automation")},
+          .target = profile, .contents = owned_bytes("new-profile")},
+      layerc::platform::ProfileFileMutation{
+          .target = visual, .contents = owned_bytes("new-visual")},
+      layerc::platform::ProfileFileMutation{
+          .target = automation, .contents = owned_bytes("new-automation")},
   };
 
   for (std::size_t publish_count = 1; publish_count <= mutations.size();
@@ -418,7 +415,7 @@ void test_directory_durability_failures() {
          "durability fixture roots should be created");
   const auto target = roots.config_profiles / "durable.json";
   const layerc::platform::ProfileFileMutation mutation{
-      .target = target, .contents = bytes("new")};
+      .target = target, .contents = owned_bytes("new")};
   fault_target = target;
   fault_ancestor = roots.store.parent_path();
   const auto inject = [](const DirectoryFault fault, const int remaining = -1) {

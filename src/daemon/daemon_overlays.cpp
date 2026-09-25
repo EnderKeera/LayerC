@@ -4,29 +4,11 @@
 #include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
-#include <map>
 #include <optional>
 #include <string>
 
 namespace layerc::daemon {
 namespace {
-
-void apply_property(layerc::core::Panel &panel, std::optional<bool> &visible,
-                    std::optional<std::wstring> &text,
-                    const layerc::core::OverlayPropertyOverride &item) {
-  const auto *spec = layerc::core::find_overlay_property(item.property);
-  if (spec == nullptr)
-    return;
-  if (spec->panel_visibility) {
-    if (const auto *boolean = std::get_if<bool>(&item.value.storage))
-      visible = *boolean;
-  } else if (spec->panel_text) {
-    if (const auto *string = std::get_if<std::string>(&item.value.storage))
-      text = layerc::platform::utf8_to_wide(*string);
-  } else if (spec->apply != nullptr) {
-    spec->apply(panel, item.value);
-  }
-}
 
 void apply_automation_overrides(Session &session) {
   static const std::vector<layerc::core::OverlayPropertyOverride> empty;
@@ -39,25 +21,13 @@ void apply_automation_overrides(Session &session) {
   session.applied_overlay_overrides = overrides;
 
   for (const auto &base_panel : session.profile.panels) {
-    auto panel = base_panel;
-    std::optional<bool> visible;
+    const auto resolved =
+        layerc::core::resolve_panel_overrides(base_panel, overrides);
     std::optional<std::wstring> text;
-    std::map<std::string, const layerc::core::OverlayPropertyOverride *,
-             std::less<>>
-        winners;
-    for (const auto &item : overrides) {
-      if (item.panel_id != panel.id)
-        continue;
-      const auto found = winners.find(item.property);
-      if (found == winners.end() ||
-          layerc::core::overlay_override_precedes(item, *found->second))
-        winners[item.property] = &item;
-    }
-    for (const auto &[property, item] : winners) {
-      (void)property;
-      apply_property(panel, visible, text, *item);
-    }
-    session.overlays.apply_session_override(panel, visible, std::move(text));
+    if (resolved.text.has_value())
+      text = layerc::platform::utf8_to_wide(*resolved.text);
+    session.overlays.apply_session_override(resolved.panel, resolved.visible,
+                                            std::move(text));
   }
 }
 

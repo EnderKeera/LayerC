@@ -24,9 +24,6 @@ using layerc::runtime::ServiceReconcileResult;
 
 class NoopInputService final : public IRuntimeService {
 public:
-  [[nodiscard]] Capability capability() const noexcept override {
-    return Capability::input;
-  }
   [[nodiscard]] ServiceReconcileResult
   reconcile(const CapabilityDemand &) override {
     return {};

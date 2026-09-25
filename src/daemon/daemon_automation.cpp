@@ -93,21 +93,13 @@ void DaemonApp::quiesce_automation_runtime() noexcept {
     synchronize_automation_state(*session, now);
     session->automation_runtime.reset();
   }
-  for (auto &source : session_registry_.sources) {
-    // Shutdown flush: force bypasses the debounce deadline; the outcome
-    // reporters keep the retry discipline identical to the timer path.
-    if (!source.modules.automation.profile.has_value() ||
-        !layerc::core::automation_checkpoint_ready(
-            source.automation_state_due,
-            layerc::core::MonotonicClock::now(), /*force=*/true))
-      continue;
-    const bool stored = layerc::platform::write_automation_state(
-            source.path, *source.modules.automation.profile,
-            source.automation_state);
-    layerc::core::automation_checkpoint_report(
-        source.automation_state_due, layerc::core::MonotonicClock::now(),
-        stored);
-  }
+  // Shutdown flush: force bypasses the debounce deadline.
+  for (auto &source : session_registry_.sources)
+    if (source.modules.automation.profile.has_value())
+      (void)layerc::platform::checkpoint_automation_state(
+          source.path, *source.modules.automation.profile,
+          source.automation_state, source.automation_state_due,
+          layerc::core::MonotonicClock::now(), /*force=*/true);
   automation_runtime_host_.publish_activity(false);
 }
 
@@ -122,12 +114,11 @@ void DaemonApp::retire_automation_session(Session &session,
   const auto source = std::ranges::find(session_registry_.sources, session.source_key,
                                         &ProfileSource::key);
   if (source != session_registry_.sources.end() &&
-      source->automation_state_due.has_value() &&
-      source->modules.automation.profile.has_value() &&
-      layerc::platform::write_automation_state(
-          source->path, *source->modules.automation.profile,
-          source->automation_state))
-    source->automation_state_due.reset();
+      source->modules.automation.profile.has_value())
+    (void)layerc::platform::checkpoint_automation_state(
+        source->path, *source->modules.automation.profile,
+        source->automation_state, source->automation_state_due, now,
+        /*force=*/true);
   session.automation_runtime.reset();
   session.applied_overlay_overrides.clear();
 }
@@ -146,17 +137,18 @@ void DaemonApp::schedule_automation_timer() {
         (!next.has_value() || *source.automation_state_due < *next))
       next = source.automation_state_due;
   }
-  if (automation_runtime_host_.timer_running) {
-    KillTimer(window_, automation_timer);
+  if (!next.has_value()) {
+    if (automation_runtime_host_.timer_running)
+      KillTimer(window_, automation_timer);
     automation_runtime_host_.timer_running = false;
-  }
-  if (!next.has_value())
     return;
+  }
   const auto remaining =
       std::max(Milliseconds(1), std::chrono::ceil<Milliseconds>(*next - now));
   const auto delay = static_cast<UINT>(std::min<std::int64_t>(
       remaining.count(), std::numeric_limits<UINT>::max()));
-  automation_runtime_host_.timer_running = 
+  // SetTimer replaces a running timer with the same id.
+  automation_runtime_host_.timer_running =
       SetTimer(window_, automation_timer, delay, nullptr) != 0;
 }
 void DaemonApp::poll_automation_timer() {
@@ -173,16 +165,13 @@ void DaemonApp::poll_automation_timer() {
     synchronize_automation_state(*session, now);
   }
   for (auto &source : session_registry_.sources) {
-    if (!source.modules.automation.profile.has_value() ||
-        !layerc::core::automation_checkpoint_ready(
-            source.automation_state_due, now))
+    if (!source.modules.automation.profile.has_value())
       continue;
-    const bool stored = layerc::platform::write_automation_state(
-            source.path, *source.modules.automation.profile,
-            source.automation_state);
-    layerc::core::automation_checkpoint_report(source.automation_state_due,
-                                                now, stored);
-    if (stored) acknowledge_automation_state(source);
+    const auto stored = layerc::platform::checkpoint_automation_state(
+        source.path, *source.modules.automation.profile,
+        source.automation_state, source.automation_state_due, now);
+    if (stored.has_value() && *stored)
+      acknowledge_automation_state(source);
   }
   schedule_automation_timer();
 }
