@@ -4,18 +4,7 @@
 #include <utility>
 
 namespace layerc::editor {
-namespace {
 using namespace std::chrono_literals;
-
-layerc::core::AutomationExpression
-literal(layerc::core::AutomationValue value) {
-  layerc::core::AutomationExpression expression;
-  expression.kind = layerc::core::ExpressionKind::literal;
-  expression.literal = std::move(value);
-  return expression;
-}
-
-} // namespace
 
 layerc::core::AutomationDefinition make_automation_preset(
     const AutomationPreset preset, std::string automation_id,
@@ -86,6 +75,62 @@ layerc::core::AutomationDefinition make_automation_preset(
     break;
   }
   return definition;
+}
+
+layerc::core::AutomationRule make_palette_rule(const AutomationPaletteNode node,
+                                               std::string rule_id,
+                                               const std::string &cooldown_id) {
+  const bool from_input = node == AutomationPaletteNode::input_rule;
+  layerc::core::AutomationRule rule;
+  rule.id = std::move(rule_id);
+  rule.event = from_input ? layerc::core::AutomationEventKind::input_pressed
+                          : layerc::core::AutomationEventKind::timer_fired;
+  rule.source_filter = from_input ? "keyboard:18" : "pulse";
+  layerc::core::AutomationAction action;
+  action.kind = from_input
+                    ? layerc::core::AutomationActionKind::trigger_cooldown
+                    : layerc::core::AutomationActionKind::reset_cooldown;
+  action.target = cooldown_id;
+  rule.actions.push_back(std::move(action));
+  return rule;
+}
+
+layerc::core::AutomationAction
+make_palette_action(const AutomationPaletteNode node,
+                    const std::size_t existing_actions,
+                    const std::string &cooldown_id,
+                    const std::string &panel_id) {
+  layerc::core::AutomationAction action;
+  const auto ordinal = std::to_string(existing_actions + 1U);
+  switch (node) {
+  case AutomationPaletteNode::timer_action:
+    action.kind = layerc::core::AutomationActionKind::create_timer;
+    action.target = "pulse-" + ordinal;
+    action.value =
+        literal(layerc::core::AutomationValue(layerc::core::DurationValue{1s}));
+    break;
+  case AutomationPaletteNode::overlay_action:
+    action.kind = layerc::core::AutomationActionKind::set_overlay_override;
+    action.target = panel_id;
+    action.name = "visibility-" + ordinal;
+    action.property = "visible";
+    action.value = literal(layerc::core::AutomationValue(true));
+    action.secondary =
+        literal(layerc::core::AutomationValue(layerc::core::DurationValue{1s}));
+    break;
+  case AutomationPaletteNode::trigger_action:
+  default:
+    action.kind = layerc::core::AutomationActionKind::trigger_cooldown;
+    action.target = cooldown_id;
+    break;
+  }
+  return action;
+}
+
+layerc::core::AutomationVariable make_palette_variable(std::string variable_id) {
+  return {.id = std::move(variable_id),
+          .type = layerc::core::AutomationValueType::boolean,
+          .default_value = layerc::core::AutomationValue(false)};
 }
 
 } // namespace layerc::editor

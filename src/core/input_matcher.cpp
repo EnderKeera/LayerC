@@ -3,17 +3,24 @@
 #include <algorithm>
 
 namespace layerc::core {
+namespace {
+
+void record_press(std::set<InputToken> &pressed, const InputToken &token,
+                  const bool is_pressed) {
+  if (is_pressed)
+    pressed.insert(token);
+  else
+    pressed.erase(token);
+}
+
+} // namespace
 
 InputMatcher::InputMatcher(const std::span<const InputBinding> bindings)
     : bindings_(bindings.begin(), bindings.end()),
       active_(bindings_.size(), false) {}
 
 std::vector<std::string> InputMatcher::process(const InputEvent &event) {
-  if (event.pressed) {
-    pressed_.insert(event.token);
-  } else {
-    pressed_.erase(event.token);
-  }
+  record_press(pressed_, event.token, event.pressed);
 
   std::vector<std::string> triggered;
   for (std::size_t index = 0; index < bindings_.size(); ++index) {
@@ -39,10 +46,7 @@ void InputMatcher::replace_bindings(
 }
 
 void InputMatcher::seed(const InputToken &token, const bool pressed) {
-  if (pressed)
-    pressed_.insert(token);
-  else
-    pressed_.erase(token);
+  record_press(pressed_, token, pressed);
   for (std::size_t index = 0; index < bindings_.size(); ++index)
     active_[index] = chord_pressed(bindings_[index].chord);
 }

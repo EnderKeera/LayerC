@@ -4,12 +4,11 @@
 #include "layerc/platform/native_theme.hpp"
 
 #include <array>
-#include <cerrno>
 #include <cstdint>
-#include <cstdlib>
 #include <cwchar>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include <windows.h>
 
@@ -18,25 +17,40 @@ namespace {
 
 namespace theme = layerc::platform;
 
-constexpr std::array<std::uint32_t, 24> color_palette{
-    theme::copper_theme.background, theme::copper_theme.panel,
-    theme::copper_theme.border, theme::copper_theme.muted,
-    theme::copper_theme.text, 0xF1F5F7,
-    theme::copper_theme.accent, 0xE0A15A, 0xE85D5D, 0xF08A5D, 0xE7C84B,
-    0x8BC34A, 0x4FCB83, theme::teal_theme.accent, 0x50BAC8, 0x5DADE2,
-    0x4B7BEC, 0x6C5CE7, 0x9B72E8, theme::plum_theme.accent, 0xD65DB1,
-    0xF06292, 0x8D6E63, 0x607D8B,
+struct PaletteColor {
+  std::uint32_t value;
+  std::wstring_view name;
+};
+
+constexpr std::array<PaletteColor, 24> color_palette{
+    PaletteColor{theme::copper_theme.background, L"Graphite"},
+    PaletteColor{theme::copper_theme.panel, L"Charcoal"},
+    PaletteColor{theme::copper_theme.border, L"Slate"},
+    PaletteColor{theme::copper_theme.muted, L"Silver"},
+    PaletteColor{theme::copper_theme.text, L"Warm white"},
+    PaletteColor{0xF1F5F7, L"Ice white"},
+    PaletteColor{theme::copper_theme.accent, L"Copper"},
+    PaletteColor{0xE0A15A, L"Amber"},
+    PaletteColor{0xE85D5D, L"Red"},
+    PaletteColor{0xF08A5D, L"Coral"},
+    PaletteColor{0xE7C84B, L"Gold"},
+    PaletteColor{0x8BC34A, L"Lime"},
+    PaletteColor{0x4FCB83, L"Green"},
+    PaletteColor{theme::teal_theme.accent, L"Seafoam"},
+    PaletteColor{0x50BAC8, L"Teal"},
+    PaletteColor{0x5DADE2, L"Sky blue"},
+    PaletteColor{0x4B7BEC, L"Blue"},
+    PaletteColor{0x6C5CE7, L"Indigo"},
+    PaletteColor{0x9B72E8, L"Violet"},
+    PaletteColor{theme::plum_theme.accent, L"Plum"},
+    PaletteColor{0xD65DB1, L"Magenta"},
+    PaletteColor{0xF06292, L"Pink"},
+    PaletteColor{0x8D6E63, L"Brown"},
+    PaletteColor{0x607D8B, L"Blue gray"},
 };
 
 std::optional<std::uint32_t> channel_value(const HWND window, const int id) {
-  const auto text = control_text(GetDlgItem(window, id));
-  if (text.empty()) return std::nullopt;
-  errno = 0;
-  wchar_t *end{};
-  const unsigned long value = std::wcstoul(text.c_str(), &end, 10);
-  if (errno != 0 || end == text.c_str() || *end != L'\0' || value > 255)
-    return std::nullopt;
-  return static_cast<std::uint32_t>(value);
+  return parse_bounded(control_text(GetDlgItem(window, id)), 0, 255);
 }
 
 std::optional<std::uint32_t> rgb_fields(const HWND window) {
@@ -51,17 +65,17 @@ std::optional<std::uint32_t> rgb_fields(const HWND window) {
 std::optional<std::uint32_t> hex_value(std::wstring text) {
   if (!text.empty() && text.front() == L'#') text.erase(text.begin());
   if (text.size() != 6) return std::nullopt;
-  wchar_t *end = nullptr;
-  const auto value = std::wcstoul(text.c_str(), &end, 16);
-  if (end != text.c_str() + text.size())
-    return std::nullopt;
-  return static_cast<std::uint32_t>(value);
+  return parse_bounded(text, 0, 0xFFFFFFU, 16);
 }
 
 std::wstring hex_label(const std::uint32_t color) {
   std::array<wchar_t, 8> buffer{};
   std::swprintf(buffer.data(), buffer.size(), L"#%06X", color & 0xFFFFFFU);
   return buffer.data();
+}
+
+std::wstring swatch_label(const PaletteColor &color) {
+  return std::wstring(color.name) + L", " + hex_label(color.value);
 }
 
 void invalidate_picker(const HWND window) {
@@ -73,61 +87,66 @@ void invalidate_picker(const HWND window) {
 } // namespace
 
 bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
-  picker_color_ = value & 0xFFFFFFU;
+  appearance_editor_.set_picker_color(value);
   const INT_PTR result = DialogBoxParamW(
-      instance_, MAKEINTRESOURCEW(IDD_COLOR_PICKER), owner,
+      shell_.instance(), MAKEINTRESOURCEW(IDD_COLOR_PICKER), owner,
       &dispatch_member_dialog<EditorWindow,
                               &EditorWindow::initialize_color_picker,
                               &EditorWindow::handle_color_picker_message>,
       reinterpret_cast<LPARAM>(this));
   if (result != IDOK) return false;
-  value = picker_color_;
+  value = appearance_editor_.picker_color();
   return true;
 }
 
 void EditorWindow::initialize_color_picker(const HWND window) {
-  set_dark_title_bar(window);
+  apply_dialog_chrome(window, shell_.capture_exclusion());
   style_dialog_children(window);
-  (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion_);
+  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
+    set_text(GetDlgItem(window, id), swatch_label(
+             color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)]));
   refresh_color_picker(window);
 }
 
 void EditorWindow::refresh_color_picker(const HWND window) {
-  picker_syncing_ = true;
-  refresh_color_picker_rgb(window);
-  set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(picker_color_));
-  picker_syncing_ = false;
+  {
+    auto sync = appearance_editor_.picker_sync_scope();
+    refresh_color_picker_rgb(window);
+    set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
+  }
   invalidate_picker(window);
 }
 
 void EditorWindow::refresh_color_picker_rgb(const HWND window) {
   set_text(GetDlgItem(window, IDC_COLOR_RED),
-           std::to_wstring((picker_color_ >> 16U) & 0xFFU));
+           std::to_wstring((appearance_editor_.picker_color() >> 16U) & 0xFFU));
   set_text(GetDlgItem(window, IDC_COLOR_GREEN),
-           std::to_wstring((picker_color_ >> 8U) & 0xFFU));
+           std::to_wstring((appearance_editor_.picker_color() >> 8U) & 0xFFU));
   set_text(GetDlgItem(window, IDC_COLOR_BLUE),
-           std::to_wstring(picker_color_ & 0xFFU));
+           std::to_wstring(appearance_editor_.picker_color() & 0xFFU));
 }
 
 void EditorWindow::update_color_picker_from_rgb(const HWND window) {
-  if (picker_syncing_) return;
+  if (appearance_editor_.picker_syncing()) return;
   const auto value = rgb_fields(window);
   if (!value.has_value()) return;
-  picker_color_ = *value;
-  picker_syncing_ = true;
-  set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(picker_color_));
-  picker_syncing_ = false;
+  appearance_editor_.set_picker_color(*value);
+  {
+    auto sync = appearance_editor_.picker_sync_scope();
+    set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
+  }
   invalidate_picker(window);
 }
 
 void EditorWindow::update_color_picker_from_hex(const HWND window) {
-  if (picker_syncing_) return;
+  if (appearance_editor_.picker_syncing()) return;
   const auto value = hex_value(control_text(GetDlgItem(window, IDC_COLOR_HEX)));
   if (!value.has_value()) return;
-  picker_color_ = *value;
-  picker_syncing_ = true;
-  refresh_color_picker_rgb(window);
-  picker_syncing_ = false;
+  appearance_editor_.set_picker_color(*value);
+  {
+    auto sync = appearance_editor_.picker_sync_scope();
+    refresh_color_picker_rgb(window);
+  }
   invalidate_picker(window);
 }
 
@@ -136,40 +155,26 @@ bool EditorWindow::draw_color_picker_item(const DRAWITEMSTRUCT &draw) const {
   std::optional<std::uint32_t> color;
   bool selected{};
   if (id >= IDC_COLOR_SWATCH_FIRST && id <= IDC_COLOR_SWATCH_LAST) {
-    color = color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)];
-    selected = *color == picker_color_;
+    color = color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)].value;
+    selected = *color == appearance_editor_.picker_color();
   } else if (id == IDC_COLOR_PREVIEW) {
-    color = picker_color_;
+    color = appearance_editor_.picker_color();
     selected = true;
   } else {
     return false;
   }
 
   const auto role_colors = colors(layerc::platform::EditorControlRole::button);
-  const HBRUSH background = CreateSolidBrush(role_colors.fill);
-  FillRect(draw.hDC, &draw.rcItem, background);
-  DeleteObject(background);
+  fill_solid_rect(draw.hDC, draw.rcItem, role_colors.fill);
   RECT sample = draw.rcItem;
   InflateRect(&sample, -3, -3);
-  const HBRUSH sample_brush = CreateSolidBrush(color_ref(*color));
-  FillRect(draw.hDC, &sample, sample_brush);
-  DeleteObject(sample_brush);
-  const HPEN border = CreatePen(PS_SOLID, selected ? 2 : 1,
-                               selected ? role_colors.selection
-                                        : role_colors.border);
-  const HGDIOBJ previous_pen = SelectObject(draw.hDC, border);
-  const HGDIOBJ previous_brush =
-      SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));
-  Rectangle(draw.hDC, sample.left, sample.top, sample.right, sample.bottom);
-  SelectObject(draw.hDC, previous_brush);
-  SelectObject(draw.hDC, previous_pen);
-  DeleteObject(border);
+  fill_solid_rect(draw.hDC, sample, color_ref(*color));
+  outline_rect(draw.hDC, sample, selected ? 2 : 1,
+               selected ? role_colors.selection : role_colors.border);
   if ((draw.itemState & ODS_FOCUS) != 0) {
     RECT focus = draw.rcItem;
     InflateRect(&focus, -1, -1);
-    const HBRUSH focus_brush = CreateSolidBrush(role_colors.text);
-    FrameRect(draw.hDC, &focus, focus_brush);
-    DeleteObject(focus_brush);
+    frame_solid_rect(draw.hDC, focus, role_colors.text);
   }
   return true;
 }
@@ -184,8 +189,8 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
     const int notification = HIWORD(wparam);
     if (id >= IDC_COLOR_SWATCH_FIRST && id <= IDC_COLOR_SWATCH_LAST &&
         notification == BN_CLICKED) {
-      picker_color_ =
-          color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)];
+      appearance_editor_.set_picker_color(
+          color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)].value);
       refresh_color_picker(window);
       return TRUE;
     }
@@ -208,7 +213,7 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
                     L"Invalid color", MB_OK | MB_ICONWARNING);
         return TRUE;
       }
-      picker_color_ = *rgb;
+      appearance_editor_.set_picker_color(*rgb);
       EndDialog(window, IDOK);
       return TRUE;
     }

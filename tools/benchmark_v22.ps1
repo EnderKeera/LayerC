@@ -10,7 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 $context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
     -OutputPath $OutputPath -OutputStem 'v22-modular-idle' `
     -TemporaryStem 'LayerC-v22-benchmark'
@@ -24,9 +24,8 @@ foreach ($name in @('layerd.exe', 'layere.exe')) {
         throw "Missing $name in $BuildDirectory. Build Release first."
     }
 }
-if (Get-Process -Name layerd, layere -ErrorAction SilentlyContinue) {
-    throw 'Close existing LayerD and LayerE processes before running the isolated V2.2 benchmark.'
-}
+Assert-LayerCQuiescent -ProcessNames layerd, layere `
+    -FailureMessage 'Close existing LayerD and LayerE processes before running the isolated V2.2 benchmark.'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
 [IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
 $measure = @{
@@ -38,9 +37,8 @@ $oldProfileDirectory = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR
 $daemon = $null
 $editor = $null
 try {
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $profileDirectory, 'Process')
-    $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+    Enter-LayerCProfileSandbox -ProfileDirectory $profileDirectory
+    $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
     $baseline = Measure-LayerCPlateau -Process $daemon @measure
@@ -88,15 +86,7 @@ try {
         $threadDelta -le $thresholds.editorMaxThreadDelta -and
         $recoveredPrivateDelta -le $thresholds.closeMaxPrivateDeltaMiB -and
         $recoveredWorkingDelta -le $thresholds.closeMaxWorkingSetDeltaMiB
-    $result = [ordered]@{
-        schemaVersion = 1
-        packageVersion = '2.2.0'
-        measuredAt = (Get-Date).ToUniversalTime().ToString('o')
-        host = [ordered]@{
-            computerName = $env:COMPUTERNAME
-            os = [Environment]::OSVersion.VersionString
-            logicalProcessors = [Environment]::ProcessorCount
-        }
+    $data = [ordered]@{
         buildDirectory = $BuildDirectory
         baseline = $baseline
         editorOpen = $editorOpen
@@ -108,24 +98,15 @@ try {
             recoveredPrivateMiB = [Math]::Round($recoveredPrivateDelta, 3)
             recoveredWorkingSetMiB = [Math]::Round($recoveredWorkingDelta, 3)
         }
-        thresholds = $thresholds
-        passed = $passed
         note = 'Empty profile directory. LayerE is opened without edit mode; RuntimeService demand-matrix tests verify no visual, template, HID, edit-overlay, timer, or worker ownership.'
     }
-    [IO.File]::WriteAllText($OutputPath, ($result | ConvertTo-Json -Depth 7), $utf8)
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+        -Thresholds $thresholds -Passed $passed -Depth 7
     $result | ConvertTo-Json -Depth 7
     if (-not $passed) { exit 1 }
 } finally {
-    if ($null -ne $editor -and -not $editor.HasExited) {
-        Stop-Process -Id $editor.Id -Force -ErrorAction SilentlyContinue
-        [void]$editor.WaitForExit(5000)
-    }
-    if ($null -ne $daemon -and -not $daemon.HasExited) {
-        Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue
-        [void]$daemon.WaitForExit(5000)
-    }
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $oldProfileDirectory, 'Process')
-    if (Test-Path -LiteralPath $temporary) {
-        Remove-Item -LiteralPath $temporary -Recurse -Force
-    }
+    Stop-LayerCBenchmarkProcess -Process $editor
+    Stop-LayerCBenchmarkProcess -Process $daemon
+    Exit-LayerCProfileSandbox -PreviousDirectory $oldProfileDirectory `
+        -TemporaryDirectory $temporary
 }

@@ -11,7 +11,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'benchmark_common.ps1')
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 $context = New-LayerCBenchmarkContext -BuildDirectory $BuildDirectory `
     -OutputPath $OutputPath -OutputStem 'v23-automation' `
     -TemporaryStem 'LayerC-v23-benchmark'
@@ -25,9 +25,8 @@ foreach ($name in @('layerd.exe', 'layerc_automation_benchmark.exe')) {
         throw "Missing $name in $BuildDirectory. Build Release with tests first."
     }
 }
-if (Get-Process -Name layerd -ErrorAction SilentlyContinue) {
-    throw 'Close the existing LayerD process before running the V2.3 benchmark.'
-}
+Assert-LayerCQuiescent -ProcessNames layerd `
+    -FailureMessage 'Close the existing LayerD process before running the V2.3 benchmark.'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null
 $automationDirectory = Join-Path $profileDirectory '_automation'
 $stateDirectory = Join-Path $profileDirectory '_state'
@@ -124,9 +123,8 @@ $oldProfileDirectory = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR
 $daemon = $null
 try {
     [IO.File]::WriteAllText($profilePath, $baseWithoutAutomation, $utf8)
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $profileDirectory, 'Process')
-    $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+    Enter-LayerCProfileSandbox -ProfileDirectory $profileDirectory
+    $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited during warmup with code $($daemon.ExitCode)." }
     $withoutAutomation = Measure-LayerCPlateau -Process $daemon @measure
@@ -141,8 +139,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'The disposable V2.3 benchmark bundle is invalid.'
     }
-    $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+    $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
     $activated = Wait-AutomationActive
     if (-not $activated) {
         throw 'LayerD did not activate AutomationService; refusing an idle-service false pass.'
@@ -168,8 +165,7 @@ try {
     [void]$daemon.WaitForExit(5000)
     $daemon = $null
     [IO.File]::WriteAllText($profilePath, $baseWithoutAutomation, $utf8)
-    $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+    $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
     Start-Sleep -Seconds $WarmupSeconds
     if ($daemon.HasExited) { throw "LayerD exited after automation was disabled." }
     $afterDisable = Measure-LayerCPlateau -Process $daemon @measure
@@ -190,7 +186,7 @@ try {
         disabledMaxPrivateDeltaMiB = 1.0
         disabledMaxWorkingSetDeltaMiB = 2.0
         normalAverageMicroseconds = 250.0
-        hardMaximumMicroseconds = 2000.0
+        hardP99Microseconds = 2000.0
     }
     $passed = $privateDelta -le $thresholds.automationMaxPrivateDeltaMiB -and
         $workingDelta -le $thresholds.automationMaxWorkingSetDeltaMiB -and
@@ -198,10 +194,7 @@ try {
         $recoveredPrivate -le $thresholds.disabledMaxPrivateDeltaMiB -and
         $recoveredWorking -le $thresholds.disabledMaxWorkingSetDeltaMiB -and
         [bool]$micro.passed
-    $result = [ordered]@{
-        schemaVersion = 1
-        packageVersion = '2.3.0'
-        measuredAt = (Get-Date).ToUniversalTime().ToString('o')
+    $data = [ordered]@{
         buildDirectory = $BuildDirectory
         automationServiceActivationVerified = $activated
         persistentCheckpointVerified = $checkpointed
@@ -216,21 +209,16 @@ try {
             disabledWorkingSetMiB = [Math]::Round($recoveredWorking, 3)
         }
         evaluator = $micro
-        thresholds = $thresholds
-        passed = $passed
     }
-    [IO.File]::WriteAllText($OutputPath, ($result | ConvertTo-Json -Depth 8), $utf8)
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+        -Thresholds $thresholds -Passed $passed -Depth 8
     $result | ConvertTo-Json -Depth 8
     if (-not $passed) { exit 1 }
 } finally {
-    if ($null -ne $daemon -and -not $daemon.HasExited) {
-        Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue
-        [void]$daemon.WaitForExit(5000)
-    }
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $oldProfileDirectory, 'Process')
+    Stop-LayerCBenchmarkProcess -Process $daemon
+    Exit-LayerCProfileSandbox -PreviousDirectory $oldProfileDirectory `
+        -TemporaryDirectory $temporary -KeepTemporary:$KeepTemporary
     if ($KeepTemporary) {
         Write-Warning "Preserved V2.3 benchmark files at $temporary"
-    } elseif (Test-Path -LiteralPath $temporary) {
-        Remove-Item -LiteralPath $temporary -Recurse -Force
     }
 }

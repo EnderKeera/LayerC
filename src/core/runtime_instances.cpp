@@ -20,7 +20,7 @@ RuntimeInstanceTracker::reconcile(std::vector<RuntimeInstanceKey> desired) {
 }
 
 std::vector<RuntimeInstanceKey>
-RuntimeInstanceTracker::foreground(const std::uintptr_t window) const {
+RuntimeInstanceTracker::foreground(const WindowId window) const {
   std::vector<RuntimeInstanceKey> matches;
   std::copy_if(active_.begin(), active_.end(), std::back_inserter(matches),
                [window](const RuntimeInstanceKey &key) {
@@ -33,7 +33,7 @@ bool RuntimeInstanceTracker::contains(const RuntimeInstanceKey &key) const {
   return std::binary_search(active_.begin(), active_.end(), key);
 }
 
-void RuntimeInstanceTracker::erase_profile(const std::wstring &profile_key) {
+void RuntimeInstanceTracker::erase_profile(const std::string &profile_key) {
   std::erase_if(active_, [&](const RuntimeInstanceKey &key) {
     return key.profile_key == profile_key;
   });

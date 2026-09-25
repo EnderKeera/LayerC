@@ -17,6 +17,11 @@ namespace layerc::platform {
 inline constexpr wchar_t live_edit_pipe_name[] =
     L"\\\\.\\pipe\\LayerC.LayerD.LiveEdit.v3";
 
+// True for the authenticated live-edit peer or the sibling LayerC editor image.
+// The product image name stays at the authentication / launch boundary.
+[[nodiscard]] bool is_layerc_editor_process(DWORD process_id,
+                                            DWORD authenticated_editor_id);
+
 class NamedPipeEditorDaemonChannel final {
 public:
   enum class Role { server, client };
@@ -46,8 +51,16 @@ public:
 private:
   bool create_server_pipe();
   bool connect_client();
-  bool authenticate_server();
-  bool authenticate_client();
+  struct PeerSpec {
+    bool server;
+    const wchar_t *image;
+    const wchar_t *identity_error;
+    const wchar_t *unexpected_error;
+    const wchar_t *session_error;
+    const wchar_t *authenticate_error;
+    const wchar_t *untrusted_error;
+  };
+  bool authenticate_peer(const PeerSpec &spec);
   bool verify_peer_identity(DWORD peer_pid, const wchar_t *sibling_image,
                             std::wstring_view session_error,
                             std::wstring_view authenticate_error,
@@ -55,11 +68,22 @@ private:
   void complete_connection();
   void start_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void continue_write();
+  // One poll step each: finish a pending overlapped I/O if its event is
+  // signaled, then continue the read/write state machine. Return false after
+  // a disconnect so the caller can re-arm the server once.
+  bool service_connect();
+  bool service_write();
+  bool service_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void disconnect(DWORD error);
   void close_handles();
   void set_error(DWORD error);
 
   static constexpr std::size_t io_buffer_size = 64U * 1024U;
+  static constexpr std::size_t max_messages_per_poll = 64;
+  void queue_decoded(std::vector<layerc::core::LiveMessageResult> decoded,
+                     std::vector<layerc::core::LiveMessageResult> &messages);
+  void drain_messages(std::vector<layerc::core::LiveMessageResult> &messages);
+  std::deque<layerc::core::LiveMessageResult> pending_messages_;
   Role role_;
   std::wstring pipe_name_;
   DWORD expected_peer_process_id_{};

@@ -28,7 +28,7 @@ bool DaemonApp::register_input_devices() {
 }
 
 void DaemonApp::unregister_input_devices() noexcept {
-  if (!raw_input_registered_)
+  if (!input_runtime_.raw_input_registered())
     return;
   const RAWINPUTDEVICE devices[] = {
       {.usUsagePage = 0x01,
@@ -42,12 +42,12 @@ void DaemonApp::unregister_input_devices() noexcept {
   };
   (void)RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
                                 sizeof(RAWINPUTDEVICE));
-  raw_input_registered_ = false;
+  input_runtime_.set_raw_input_registered(false);
 }
 
 void DaemonApp::reconcile_input_runtime() {
   const bool needs_system_hid =
-      std::ranges::any_of(active_input_sessions_, [](const Session *session) {
+      std::ranges::any_of(session_registry_.active_inputs(), [](const Session *session) {
         return session != nullptr &&
                std::ranges::any_of(
                    session->profile.hid_bindings, [](const auto &binding) {
@@ -57,41 +57,41 @@ void DaemonApp::reconcile_input_runtime() {
                    });
       });
   const bool needs_raw_input =
-      std::ranges::any_of(active_input_sessions_,
+      std::ranges::any_of(session_registry_.active_inputs(),
                           [](const Session *session) {
                             return session != nullptr &&
                                    session->uses_raw_input;
                           }) ||
       needs_system_hid;
-  if (needs_raw_input && !raw_input_registered_)
-    raw_input_registered_ = register_input_devices();
+  if (needs_raw_input && !input_runtime_.raw_input_registered())
+    input_runtime_.set_raw_input_registered(register_input_devices());
   else if (!needs_raw_input)
     unregister_input_devices();
 
   const bool needs_polling =
-      std::ranges::any_of(active_input_sessions_, [](const Session *session) {
+      std::ranges::any_of(session_registry_.active_inputs(), [](const Session *session) {
         return session != nullptr && session->requires_input_polling();
       });
-  if (needs_polling && !input_timer_running_) {
+  if (needs_polling && !input_runtime_.timer_running()) {
     SetTimer(window_, input_poll_timer, 16, nullptr);
-    input_timer_running_ = true;
-  } else if (!needs_polling && input_timer_running_) {
+    input_runtime_.set_timer_running(true);
+  } else if (!needs_polling && input_runtime_.timer_running()) {
     KillTimer(window_, input_poll_timer);
-    input_timer_running_ = false;
-    controller_states_ = {};
-    for (auto &session : sessions_)
+    input_runtime_.set_timer_running(false);
+    input_runtime_.reset_controllers();
+    for (auto &session : session_registry_.sessions())
       session->clear_input_state();
   }
 }
 
 void DaemonApp::quiesce_input_runtime() noexcept {
-  if (input_timer_running_ && window_ != nullptr)
+  if (input_runtime_.timer_running() && window_ != nullptr)
     KillTimer(window_, input_poll_timer);
-  input_timer_running_ = false;
+  input_runtime_.set_timer_running(false);
   unregister_input_devices();
-  controller_states_ = {};
-  input_foreground_ = nullptr;
-  for (auto &session : sessions_)
+  input_runtime_.reset_controllers();
+  session_registry_.set_input_foreground(nullptr);
+  for (auto &session : session_registry_.sessions())
     session->clear_input_state();
 }
 
@@ -115,7 +115,7 @@ void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
   }
 
   const auto &input = *reinterpret_cast<const RAWINPUT *>(buffer);
-  if (hid_runtime_)
+  if (input_runtime_.hid())
     handle_hid_input(input);
   if (input.header.dwType == RIM_TYPEKEYBOARD) {
     const auto &keyboard = input.data.keyboard;
@@ -152,29 +152,25 @@ void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
 }
 
 void DaemonApp::poll_input_devices() {
-  if (active_input_sessions_.empty())
+  if (session_registry_.active_inputs().empty())
     return;
-  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != input_foreground_) {
+  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != session_registry_.input_foreground()) {
     sync_foreground_state();
     return;
   }
-  bool changed{};
-  for (auto *session : active_input_sessions_) {
+  for (auto *session : session_registry_.active_inputs()) {
     if (session->is_global()) {
-      changed = poll_global_keyboard(*session) || changed;
+      poll_global_keyboard(*session);
     }
   }
   if (std::any_of(
-          active_input_sessions_.begin(), active_input_sessions_.end(),
+          session_registry_.active_inputs().begin(), session_registry_.active_inputs().end(),
           [](const Session *session) { return session->uses_controller; })) {
     poll_controllers();
   }
-  if (changed)
-    update_overlays();
 }
 
-bool DaemonApp::poll_global_keyboard(Session &session) {
-  bool changed{};
+void DaemonApp::poll_global_keyboard(Session &session) {
   for (auto &key : session.global_keyboard) {
     const UINT scan = static_cast<UINT>(key.token.code);
     const UINT virtual_key = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
@@ -185,12 +181,9 @@ bool DaemonApp::poll_global_keyboard(Session &session) {
     const bool was_pressed = key.pressed;
     key.pressed = pressed;
     if (pressed != was_pressed) {
-      changed =
-          process_input(session, {.token = key.token, .pressed = pressed}) ||
-          changed;
+      process_input(session, {.token = key.token, .pressed = pressed});
     }
   }
-  return changed;
 }
 
 void DaemonApp::seed_controller_states() {
@@ -199,7 +192,7 @@ void DaemonApp::seed_controller_states() {
     if (XInputGetState(index, &state) != ERROR_SUCCESS) {
       state = {};
     }
-    controller_states_[index] = state;
+    input_runtime_.controllers()[index] = state;
   }
 }
 void DaemonApp::poll_controllers() {
@@ -208,7 +201,8 @@ void DaemonApp::poll_controllers() {
     if (XInputGetState(index, &state) != ERROR_SUCCESS) {
       state = {};
     }
-    const WORD previous = controller_states_[index].Gamepad.wButtons;
+    auto &previous_state = input_runtime_.controllers()[index];
+    const WORD previous = previous_state.Gamepad.wButtons;
     const WORD current = state.Gamepad.wButtons;
     for (unsigned bit = 0; bit < 16; ++bit) {
       const WORD mask = static_cast<WORD>(1U << bit);
@@ -233,9 +227,9 @@ void DaemonApp::poll_controllers() {
              .pressed = new_pressed});
       }
     };
-    emit_trigger(controller_states_[index].Gamepad.bLeftTrigger,
+    emit_trigger(previous_state.Gamepad.bLeftTrigger,
                  state.Gamepad.bLeftTrigger, 17);
-    emit_trigger(controller_states_[index].Gamepad.bRightTrigger,
+    emit_trigger(previous_state.Gamepad.bRightTrigger,
                  state.Gamepad.bRightTrigger, 18);
 
     const auto now = layerc::core::MonotonicClock::now();
@@ -246,59 +240,44 @@ void DaemonApp::poll_controllers() {
     const auto trigger = [](const BYTE value) {
       return static_cast<double>(value) / 255.0;
     };
-    bool automation_changed{};
-    for (auto *session : active_input_sessions_) {
+    const auto prefix = "controller:" + std::to_string(index) + ":";
+    struct AnalogAxis {
+      const char *name;
+      double value;
+    };
+    const AnalogAxis axes[] = {
+        {"leftX", stick(state.Gamepad.sThumbLX)},
+        {"leftY", stick(state.Gamepad.sThumbLY)},
+        {"rightX", stick(state.Gamepad.sThumbRX)},
+        {"rightY", stick(state.Gamepad.sThumbRY)},
+        {"leftTrigger", trigger(state.Gamepad.bLeftTrigger)},
+        {"rightTrigger", trigger(state.Gamepad.bRightTrigger)},
+    };
+    for (auto *session : session_registry_.active_inputs()) {
       if (session == nullptr || !session->automation_runtime)
         continue;
-      const auto prefix = "controller:" + std::to_string(index) + ":";
-      automation_changed =
-          process_automation_input_value(*session, prefix + "leftX",
-                                         stick(state.Gamepad.sThumbLX), now) ||
-          automation_changed;
-      automation_changed =
-          process_automation_input_value(*session, prefix + "leftY",
-                                         stick(state.Gamepad.sThumbLY), now) ||
-          automation_changed;
-      automation_changed =
-          process_automation_input_value(*session, prefix + "rightX",
-                                         stick(state.Gamepad.sThumbRX), now) ||
-          automation_changed;
-      automation_changed =
-          process_automation_input_value(*session, prefix + "rightY",
-                                         stick(state.Gamepad.sThumbRY), now) ||
-          automation_changed;
-      automation_changed = process_automation_input_value(
-                               *session, prefix + "leftTrigger",
-                               trigger(state.Gamepad.bLeftTrigger), now) ||
-                           automation_changed;
-      automation_changed = process_automation_input_value(
-                               *session, prefix + "rightTrigger",
-                               trigger(state.Gamepad.bRightTrigger), now) ||
-                           automation_changed;
+      for (const auto &axis : axes)
+        process_automation_input_value(*session, prefix + axis.name,
+                                       axis.value, now);
     }
-    if (automation_changed)
-      update_overlays();
-    controller_states_[index] = state;
+    previous_state = state;
   }
 }
 
 void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
-  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != input_foreground_)
+  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != session_registry_.input_foreground())
     sync_foreground_state();
-  if (active_input_sessions_.empty())
+  if (session_registry_.active_inputs().empty())
     return;
-  bool changed{};
-  for (auto *session : active_input_sessions_)
-    changed = process_input(*session, event) || changed;
-  if (changed)
-    update_overlays();
+  for (auto *session : session_registry_.active_inputs())
+    process_input(*session, event);
 }
 
-bool DaemonApp::process_automation_input_value(
+void DaemonApp::process_automation_input_value(
     Session &session, std::string source, double value,
     const layerc::core::TimePoint now, const bool momentary) {
   if (!session.automation_runtime || !std::isfinite(value))
-    return false;
+    return;
   const auto &profile = session.automation_runtime->profile();
   const bool demanded =
       std::ranges::any_of(profile.automations, [&](const auto &automation) {
@@ -311,7 +290,7 @@ bool DaemonApp::process_automation_input_value(
                });
       });
   if (!demanded)
-    return false;
+    return;
 
   if (std::abs(value) < profile.continuous_input.deadzone)
     value = 0.0;
@@ -324,78 +303,54 @@ bool DaemonApp::process_automation_input_value(
   const auto last = edges.input_emitted.find(source);
   if (last != edges.input_emitted.end() &&
       now - last->second < minimum_interval)
-    return false;
-  if (momentary) {
+    return;
+  const auto emit_value = [&](const double previous_value) {
     edges.input_emitted[source] = now;
     auto event = automation_event(
         layerc::core::AutomationEventKind::input_value_changed,
         std::move(source), now);
-    event.fields.emplace("previous", layerc::core::AutomationValue(0.0));
+    event.fields.emplace("previous",
+                         layerc::core::AutomationValue(previous_value));
     event.fields.emplace("value", layerc::core::AutomationValue(value));
-    return process_automation_event(session, event);
+    process_automation_event(session, event);
+  };
+  if (momentary) {
+    emit_value(0.0);
+    return;
   }
   const auto previous = edges.input_values.find(source);
   if (previous == edges.input_values.end()) {
     edges.input_values.emplace(std::move(source), value);
-    return false;
+    return;
   }
   if (std::abs(value - previous->second) <
       profile.continuous_input.change_threshold)
-    return false;
+    return;
 
   const double old_value = previous->second;
   previous->second = value;
-  edges.input_emitted[source] = now;
-  auto event = automation_event(
-      layerc::core::AutomationEventKind::input_value_changed,
-      std::move(source), now);
-  event.fields.emplace("previous", layerc::core::AutomationValue(old_value));
-  event.fields.emplace("value", layerc::core::AutomationValue(value));
-  return process_automation_event(session, event);
+  emit_value(old_value);
 }
-bool DaemonApp::process_input(Session &session,
+void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
-  bool automation_changed{};
-  if (session.automation_runtime) {
-    const auto device = std::string(input_device_label(event.token.device));
-    auto source = device + ":" + std::to_string(event.token.code);
-    if (event.token.device == layerc::core::InputDevice::controller)
-      source += ":" + std::to_string(event.token.controller_index);
-    automation_changed = process_automation_event(
-        session,
-        automation_event(event.pressed
-                             ? layerc::core::AutomationEventKind::input_pressed
-                             : layerc::core::AutomationEventKind::input_released,
-                         std::move(source),
-                         layerc::core::MonotonicClock::now()));
-  }
-  const auto triggered = session.input.process(event);
-  if (!triggered.empty()) {
+  const auto now = layerc::core::MonotonicClock::now();
+  const auto result = session.feed_input(session.input, event,
+                                         session.profile, now);
+  if (result.changed)
+    mark_overlays_dirty();
+  if (result.matched)
     session.last_input_match =
         std::string(layerc::core::input_device_label(event.token.device)) + ":" +
         std::to_string(event.token.code) +
         (event.pressed ? ":press" : ":release");
+  if (!result.triggered.empty())
+    update_tooltip(L"LayerD - triggered " +
+                   layerc::platform::utf8_to_wide(result.triggered.back()));
+  if (session.automation_runtime) {
+    publish_automation_trace(session);
+    synchronize_automation_state(session, now);
+    schedule_automation_timer();
   }
-  if (session.blocks_all_triggers())
-    return automation_changed;
-  const auto now = layerc::core::MonotonicClock::now();
-  bool changed{automation_changed};
-  for (const auto &cooldown_id : triggered) {
-    std::vector<layerc::core::VisualTriggerRequest> requests;
-    if (session.visual_triggers)
-      requests = session.visual_triggers->on_input(cooldown_id, now);
-    else
-      requests.push_back(
-          {cooldown_id, layerc::core::VisualTriggerSource::direct_input});
-    for (const auto &request : requests) {
-      if (trigger_cooldown_with_automation(session, request.cooldown_id, now)) {
-        changed = true;
-        update_tooltip(L"LayerD - triggered " +
-                       layerc::platform::utf8_to_wide(request.cooldown_id));
-      }
-    }
-  }
-  return changed;
 }
 
 } // namespace layerc::daemon

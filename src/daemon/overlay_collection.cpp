@@ -3,6 +3,16 @@
 #include <algorithm>
 
 namespace layerc::daemon {
+namespace {
+
+auto find_panel_window(std::vector<std::unique_ptr<OverlayWindow>> &windows,
+                       const std::string_view panel_id) {
+  return std::ranges::find_if(windows, [&](const auto &candidate) {
+    return candidate != nullptr && candidate->panel_id() == panel_id;
+  });
+}
+
+} // namespace
 
 std::size_t OverlayCollection::window_count() const noexcept {
   return static_cast<std::size_t>(std::ranges::count_if(
@@ -28,14 +38,11 @@ void OverlayCollection::ensure(const layerc::core::GameProfile &profile,
 void OverlayCollection::rebuild(const layerc::core::GameProfile &profile,
                                 const bool capture_exclusion,
                                 const OverlayEditMode *const edit_mode) {
-  cooldowns_ = make_overlay_cooldowns(profile.cooldowns);
+  cooldowns_ = profile.cooldowns;
   std::vector<std::unique_ptr<OverlayWindow>> next;
   next.reserve(profile.panels.size());
   for (const auto &panel : profile.panels) {
-    const auto found = std::ranges::find_if(
-        windows_, [&](const auto &candidate) {
-          return candidate != nullptr && candidate->panel_id() == panel.id;
-        });
+    const auto found = find_panel_window(windows_, panel.id);
     std::unique_ptr<OverlayWindow> overlay;
     if (found == windows_.end())
       overlay = std::make_unique<OverlayWindow>(panel, cooldowns_);
@@ -55,20 +62,14 @@ void OverlayCollection::rebuild(const layerc::core::GameProfile &profile,
 }
 
 void OverlayCollection::update_panel(const layerc::core::Panel &panel) {
-  const auto found = std::ranges::find_if(
-      windows_, [&](const auto &candidate) {
-        return candidate != nullptr && candidate->panel_id() == panel.id;
-      });
+  const auto found = find_panel_window(windows_, panel.id);
   if (found != windows_.end()) (*found)->update_snapshot(panel, cooldowns_);
 }
 
 void OverlayCollection::apply_session_override(
     const layerc::core::Panel &panel, const std::optional<bool> visible,
     std::optional<std::wstring> text) {
-  const auto found = std::ranges::find_if(
-      windows_, [&](const auto &candidate) {
-        return candidate != nullptr && candidate->panel_id() == panel.id;
-      });
+  const auto found = find_panel_window(windows_, panel.id);
   if (found == windows_.end()) return;
   (*found)->update_snapshot(panel, cooldowns_);
   (*found)->set_session_override(visible, std::move(text));

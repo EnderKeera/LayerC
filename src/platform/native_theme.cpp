@@ -133,13 +133,6 @@ NativeThemeColors native_theme_colors(
   return colors;
 }
 
-NativeThemeColors native_theme_colors(const EditorTheme theme,
-                                      const std::uint32_t accent,
-                                      const EditorControlRole role) {
-  return native_theme_colors(theme, accent, role,
-                             editor_appearance_overrides(role));
-}
-
 void enable_native_dark_mode() {
   const HMODULE module = uxtheme_module();
   if (module == nullptr)
@@ -170,6 +163,64 @@ void set_dark_title_bar(const HWND window) {
                               sizeof(enabled));
 }
 
+namespace {
+
+void style_button_child(const HWND child) {
+  const auto style = GetWindowLongPtrW(child, GWL_STYLE);
+  const auto button_type = style & static_cast<LONG_PTR>(BS_TYPEMASK);
+  if (button_type != BS_PUSHBUTTON && button_type != BS_DEFPUSHBUTTON) {
+    SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
+    return;
+  }
+  SetWindowLongPtrW(child, GWL_STYLE,
+                    (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) |
+                        BS_OWNERDRAW);
+  SetWindowPos(child, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+}
+
+LPARAM dialog_item_height(const HWND dialog, const int height_at_96_dpi) {
+  const UINT dpi = GetDpiForWindow(dialog);
+  return static_cast<LPARAM>(
+      MulDiv(height_at_96_dpi, dpi == 0 ? 96 : static_cast<int>(dpi), 96));
+}
+
+void style_combo_child(const HWND dialog, const HWND child,
+                       const bool owner_draw_list_boxes) {
+  if (owner_draw_list_boxes) {
+    const auto style = GetWindowLongPtrW(child, GWL_STYLE);
+    SetWindowLongPtrW(child, GWL_STYLE,
+                      style | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS);
+    const auto item_height = dialog_item_height(dialog, 20);
+    SendMessageW(child, CB_SETITEMHEIGHT, 0, item_height);
+    SendMessageW(child, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1),
+                 item_height);
+  }
+  SetWindowTheme(child, L"DarkMode_CFD", nullptr);
+}
+
+void style_listbox_child(const HWND dialog, const HWND child,
+                         const bool owner_draw_list_boxes) {
+  if (owner_draw_list_boxes) {
+    const auto style = GetWindowLongPtrW(child, GWL_STYLE);
+    SetWindowLongPtrW(child, GWL_STYLE,
+                      style | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS);
+    SendMessageW(child, LB_SETITEMHEIGHT, 0, dialog_item_height(dialog, 18));
+  }
+  SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
+}
+
+void style_listview_child(const HWND child) {
+  SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
+  if (const HWND header = ListView_GetHeader(child); header != nullptr)
+    SetWindowTheme(header, L"DarkMode_ItemsView", nullptr);
+  if (const HWND tooltip = ListView_GetToolTips(child); tooltip != nullptr)
+    SetWindowTheme(tooltip, L"DarkMode_Explorer", nullptr);
+}
+
+} // namespace
+
 void style_native_dialog_children(const HWND dialog, const HFONT font,
                                   const bool owner_draw_list_boxes) {
   for (HWND child = GetWindow(dialog, GW_CHILD); child != nullptr;
@@ -179,37 +230,13 @@ void style_native_dialog_children(const HWND dialog, const HFONT font,
     GetClassNameW(child, class_name.data(),
                   static_cast<int>(class_name.size()));
     if (wcscmp(class_name.data(), L"Button") == 0) {
-      const auto style = GetWindowLongPtrW(child, GWL_STYLE);
-      const auto button_type = style & static_cast<LONG_PTR>(BS_TYPEMASK);
-      if (button_type == BS_PUSHBUTTON) {
-        SetWindowLongPtrW(child, GWL_STYLE,
-                          (style & ~static_cast<LONG_PTR>(BS_TYPEMASK)) |
-                              BS_OWNERDRAW);
-        SetWindowPos(child, nullptr, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
-                         SWP_FRAMECHANGED);
-      } else {
-        SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
-      }
+      style_button_child(child);
     } else if (wcscmp(class_name.data(), L"ComboBox") == 0) {
-      SetWindowTheme(child, L"DarkMode_CFD", nullptr);
+      style_combo_child(dialog, child, owner_draw_list_boxes);
     } else if (wcscmp(class_name.data(), L"ListBox") == 0) {
-      if (owner_draw_list_boxes) {
-        const auto style = GetWindowLongPtrW(child, GWL_STYLE);
-        SetWindowLongPtrW(child, GWL_STYLE,
-                          style | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS);
-        const UINT dpi = GetDpiForWindow(dialog);
-        SendMessageW(child, LB_SETITEMHEIGHT, 0,
-                     static_cast<LPARAM>(MulDiv(
-                         18, dpi == 0 ? 96 : static_cast<int>(dpi), 96)));
-      }
-      SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
+      style_listbox_child(dialog, child, owner_draw_list_boxes);
     } else if (wcscmp(class_name.data(), WC_LISTVIEWW) == 0) {
-      SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
-      if (const HWND header = ListView_GetHeader(child); header != nullptr)
-        SetWindowTheme(header, L"DarkMode_ItemsView", nullptr);
-      if (const HWND tooltip = ListView_GetToolTips(child); tooltip != nullptr)
-        SetWindowTheme(tooltip, L"DarkMode_Explorer", nullptr);
+      style_listview_child(child);
     } else if (wcscmp(class_name.data(), L"Edit") == 0 ||
                wcscmp(class_name.data(), L"ScrollBar") == 0 ||
                wcscmp(class_name.data(), TOOLTIPS_CLASSW) == 0) {
@@ -224,18 +251,24 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
   const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
   const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
   const bool hot = (draw.itemState & ODS_HOTLIGHT) != 0;
-  const COLORREF fill = disabled ? colors.fill
-                        : pressed ? colors.selection
-                        : hot     ? colors.hover
-                                  : colors.fill;
+  COLORREF fill = colors.fill;
+  if (!disabled) {
+    if (pressed)
+      fill = colors.selection;
+    else if (hot)
+      fill = colors.hover;
+  }
   const HBRUSH background = CreateSolidBrush(fill);
   FillRect(draw.hDC, &draw.rcItem, background);
   DeleteObject(background);
-  const HPEN pen =
-      CreatePen(PS_SOLID, pressed ? 2 : 1,
-                disabled ? colors.disabled
-                : pressed ? colors.selection
-                          : colors.border);
+  const bool default_action = (draw.itemState & ODS_DEFAULT) != 0;
+  const bool emphasized = pressed || default_action;
+  COLORREF outline = colors.border;
+  if (disabled)
+    outline = colors.disabled;
+  else if (emphasized)
+    outline = colors.selection;
+  const HPEN pen = CreatePen(PS_SOLID, emphasized ? 2 : 1, outline);
   const HGDIOBJ previous_pen = SelectObject(draw.hDC, pen);
   const HGDIOBJ previous_brush =
       SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));

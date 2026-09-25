@@ -85,7 +85,8 @@ int wmain(const int argc, wchar_t **argv) {
   for (std::uint64_t attempt = 0; attempt < attempts; ++attempt) {
     const bool foreground =
         GetAncestor(GetForegroundWindow(), GA_ROOT) == window;
-    latest = capture.poll(layerc::core::MonotonicClock::now(), foreground);
+    latest =
+        capture.poll(layerc::core::MonotonicClock::now(), foreground).result;
     if (latest.availability ==
             layerc::core::CaptureAvailability::available &&
         latest.frame)

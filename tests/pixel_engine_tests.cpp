@@ -135,7 +135,8 @@ void test_template_matching() {
   const auto flat_result = flat_matcher.evaluate(
       flat_state, std::span<const TemplateImage>(&flat, 1),
       PixelFrameView{flat_frame, frame_axis, frame_axis, 0},
-      CaptureQuality::balanced);
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>{});
   expect(!flat_result.matched && flat_result.search_region_available &&
              flat_result.candidates_evaluated == 0,
          "flat references must fail closed without being mislabeled as outside captured output");
@@ -154,7 +155,8 @@ void test_template_matching() {
   const auto matched = matcher.evaluate(
       state, std::span<const TemplateImage>(&reference, 1),
       PixelFrameView{pixels, frame_axis, frame_axis, 0},
-      CaptureQuality::exact);
+      CaptureQuality::exact, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>{});
   expect(matched.matched && matched.confidence >= 0.98 &&
              matched.reference_sha256 == reference.asset_sha256,
          "template matching should find a masked reference in its search region");
@@ -165,7 +167,8 @@ void test_template_matching() {
   const auto rejected = matcher.evaluate(
       state, std::span<const TemplateImage>(&reference, 1),
       PixelFrameView{pixels, frame_axis, frame_axis, 0},
-      CaptureQuality::balanced);
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>{});
   expect(!rejected.matched,
          "template matching should reject a structurally and chromatically different frame");
 
@@ -256,7 +259,8 @@ void test_template_matching() {
   const auto intermediate_scale = off_grid_matcher.evaluate(
       intermediate_scale_state, std::span<const TemplateImage>(&off_grid, 1),
       PixelFrameView{search_pixels, search_width, search_height, 0},
-      CaptureQuality::balanced);
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>{});
   if (!intermediate_scale.matched || intermediate_scale.confidence < 0.98 ||
       intermediate_scale.pixel_comparisons > 1024U * 1024U) {
     std::cerr << "intermediate-scale confidence="
@@ -302,7 +306,8 @@ void test_template_matching() {
   const auto outside = off_grid_matcher.evaluate(
       outside_state, std::span<const TemplateImage>(&off_grid, 1),
       PixelFrameView{search_pixels, search_width, search_height, 0},
-      CaptureQuality::balanced, different_output);
+      CaptureQuality::balanced, different_output,
+      std::span<const NormalizedRegion>{});
   expect(!outside.search_region_available && outside.candidates_evaluated == 0,
          "only a search region outside the supplied capture output should report outside-output status");
 }
@@ -343,6 +348,19 @@ void test_visual_trigger_state_machine() {
                     start + 600ms)
                  .size() == 1,
          "a stable false interval should rearm the pixel edge");
+
+  engine.set_visual_enabled(false);
+  engine.set_visual_enabled(true);
+  expect(engine.on_measurements(
+                    std::vector{measurement(true, start + 700ms)}, ready,
+                    start + 700ms)
+             .empty(),
+         "toggling visual input should preserve the configured stability count");
+  expect(engine.on_measurements(
+                    std::vector{measurement(true, start + 800ms)}, ready,
+                    start + 800ms)
+                 .size() == 1,
+         "a reset engine should fire after the configured stability count");
 
   profile = visual_profile(VisualTriggerMode::confirm_input);
   VisualTriggerEngine confirm(profile);

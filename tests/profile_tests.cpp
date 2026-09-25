@@ -2,6 +2,7 @@
 #include "test_support.hpp"
 
 #include "layerc/core/profile.hpp"
+#include "layerc/core/panel_geometry.hpp"
 
 #include <chrono>
 #include <string>
@@ -222,6 +223,8 @@ void test_profile_serialization() {
              round_tripped->bindings.front().chord.tokens.size() == 1 &&
              round_tripped->bindings.front().chord.tokens.front().code == 69,
          "serializer should preserve bindings");
+  expect(serialize_profile_json(*round_tripped) == serialized,
+         "serializer should emit byte-stable JSON after a round trip");
 }
 void test_profile_enabled_and_independent_bar_placement() {
   using namespace layerc::core;
@@ -353,6 +356,37 @@ void test_profile_schema3_hid() {
   expect(std::holds_alternative<ProfileError>(
              parse_profile_json(unknown_module)),
          "schema 3 should reject unknown module kinds");
+}
+
+void test_panel_geometry() {
+  using namespace layerc::core;
+  Panel bar{.style = PanelStyle::bar};
+  const auto grouped = panel_geometry(bar, 2);
+  expect(grouped.size == PanelSize{272, 86} && grouped.items.size() == 2 &&
+             grouped.items[0] == PanelRect{6, 6, 266, 40} &&
+             grouped.items[1] == PanelRect{6, 46, 266, 80},
+         "bar panels should share padding, spacing, and item geometry");
+  const auto grouped_bar = bar_geometry(bar, 0, 2, 0.5);
+  expect(grouped_bar.grouped &&
+             grouped_bar.outline == PanelRect{6, 6, 266, 40} &&
+             grouped_bar.fill == PanelRect{8, 8, 136, 38},
+         "grouped bar fill should use the shared inset and progress track");
+  const auto single_bar = bar_geometry(bar, 0, 1, 0.5);
+  expect(!single_bar.grouped &&
+             single_bar.outline == PanelRect{6, 6, 136, 40} &&
+             single_bar.text == PanelRect{14, 8, 128, 38},
+         "single bar shape and text hit area should share progress geometry");
+
+  Panel cards{.layout = PanelLayout::grid, .style = PanelStyle::card};
+  const auto grid = panel_geometry(cards, 5);
+  expect(grid.size == PanelSize{258, 162} && grid.items.size() == 5 &&
+             grid.items[4] == PanelRect{90, 84, 168, 156},
+         "grid preview and overlays should use one square layout");
+  cards.layout = PanelLayout::column;
+  const auto column = panel_geometry(cards, 3);
+  expect(column.size == PanelSize{90, 240} &&
+             column.items[2] == PanelRect{6, 162, 84, 234},
+         "column layout should place every card on one vertical axis");
 }
 
 } // namespace layerc::test

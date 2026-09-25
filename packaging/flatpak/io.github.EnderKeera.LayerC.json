@@ -1,0 +1,33 @@
+{
+    "app-id": "io.github.EnderKeera.LayerC",
+    "runtime": "org.freedesktop.Platform",
+    "runtime-version": "25.08",
+    "sdk": "org.freedesktop.Sdk",
+    "command": "layerd",
+    "separate-locales": false,
+    "finish-args": [ "--socket=x11" ],
+    "modules": [
+        {
+            "name": "layerc",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=release",
+                "-DLAYERC_BUILD_TESTS=OFF",
+                "-DLAYERC_BUILD_EDITOR=OFF",
+                "-DLAYERC_BUILD_GAMEBAR_HOST=OFF",
+                "-DLAYERC_INSTALL_SYSTEMD_USER_UNIT=OFF"
+            ],
+            "cleanup": [ "/include", "/lib" ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../..",
+                    "skip": [
+                        ".git", ".codegraph", "build", "build-linux",
+                        "out", "review", ".review_tmp", ".codewhale", ".mimosa"
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -8,7 +8,8 @@
 
 namespace layerc::gamebar {
 
-GameBarTransport::GameBarTransport() = default;
+GameBarTransport::GameBarTransport()
+    : state_(std::make_shared<GameBarTransportState>()) {}
 
 GameBarTransport::~GameBarTransport() { stop(); }
 
@@ -46,13 +47,11 @@ bool GameBarTransport::current_process_is_expected_package() noexcept {
 }
 
 bool GameBarTransport::start() {
-  if (!state_)
-    state_ = std::make_shared<GameBarTransportState>();
 #if defined(_MSC_VER)
   if (!current_process_is_expected_package()) {
     std::lock_guard lock(state_->mutex);
-    state_->last_error =
-        L"Game Bar App Service is unavailable outside the full MSIX";
+    state_->enter(GameBarTransportState::Link::stopped,
+                  L"Game Bar App Service is unavailable outside the full MSIX");
     return false;
   }
 #endif
@@ -60,66 +59,58 @@ bool GameBarTransport::start() {
 }
 
 void GameBarTransport::stop() noexcept {
-  if (state_)
-    detail::stop_app_service(state_);
+  detail::stop_app_service(state_);
 }
 
 std::vector<GameBarPreferenceUpdate> GameBarTransport::poll() noexcept {
-  return state_ ? detail::poll_app_service(state_)
-                : std::vector<GameBarPreferenceUpdate>{};
+  return detail::poll_app_service(state_);
 }
 
 bool GameBarTransport::publish(const std::string_view snapshot_json) {
-  if (!state_ || snapshot_json.empty() ||
+  if (snapshot_json.empty() ||
       snapshot_json.size() > layerc::core::max_companion_snapshot_bytes)
     return false;
   {
     std::lock_guard lock(state_->mutex);
-    if (!state_->started)
+    if (state_->link == GameBarTransportState::Link::stopped)
       return false;
     state_->pending_snapshot = std::string(snapshot_json);
   }
-  detail::signal(state_);
+  detail::raise_wake_event(state_);
   return true;
 }
 
 bool GameBarTransport::connected() const noexcept {
-  if (!state_)
-    return false;
   std::lock_guard lock(state_->mutex);
-  return state_->connected;
+  return state_->link == GameBarTransportState::Link::connected ||
+         state_->link == GameBarTransportState::Link::sending;
 }
 
 HANDLE GameBarTransport::wait_handle() const noexcept {
-  if (!state_)
-    return nullptr;
   std::lock_guard lock(state_->mutex);
-  if (!state_->started || state_->wake_event == nullptr)
+  if (state_->link == GameBarTransportState::Link::stopped ||
+      state_->wake_event == nullptr)
     return nullptr;
   return state_->wake_event->handle;
 }
 
 std::wstring GameBarTransport::last_error() const {
-  if (!state_)
-    return {};
   std::lock_guard lock(state_->mutex);
   return state_->last_error;
 }
 
 std::size_t GameBarTransport::resource_handle_count() const noexcept {
-  if (!state_)
-    return 0U;
   std::lock_guard lock(state_->mutex);
-  return state_->started && state_->wake_event != nullptr &&
-                 state_->wake_event->handle != nullptr
-             ? 1U
-             : 0U;
+  if (state_->link == GameBarTransportState::Link::stopped ||
+      state_->wake_event == nullptr ||
+      state_->wake_event->handle == nullptr)
+    return 0U;
+  return 1U;
 }
 
 void GameBarTransport::complete_preference_update(
     const std::uint64_t request_id, const bool accepted) noexcept {
-  if (state_)
-    detail::complete_preference_update(state_, request_id, accepted);
+  detail::complete_preference_update(state_, request_id, accepted);
 }
 
 } // namespace layerc::gamebar

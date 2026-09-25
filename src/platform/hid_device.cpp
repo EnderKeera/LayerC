@@ -1,12 +1,11 @@
 #include "layerc/platform/hid_device.hpp"
+#include "layerc/platform/settings_store.hpp"
 
 #include "layerc/core/hash.hpp"
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstring>
 #include <cwchar>
 #include <limits>
 
@@ -79,10 +78,21 @@ std::optional<std::string> system_descriptor_hash(const RID_DEVICE_INFO &info) {
       description.size()));
 }
 
+// HidP_* take the preparsed blob through a non-const pointer but only read it.
+PHIDP_PREPARSED_DATA preparsed_data(const std::vector<std::byte> &preparsed) {
+  return reinterpret_cast<PHIDP_PREPARSED_DATA>(
+      const_cast<std::byte *>(preparsed.data()));
+}
+
+layerc::core::HidControlSample unavailable_sample() {
+  layerc::core::HidControlSample sample;
+  sample.available = false;
+  return sample;
+}
+
 bool uses_report_ids(const std::vector<std::byte> &preparsed,
                      const HIDP_CAPS &caps) {
-  auto *data = reinterpret_cast<PHIDP_PREPARSED_DATA>(
-      const_cast<std::byte *>(preparsed.data()));
+  auto *data = preparsed_data(preparsed);
   USHORT button_count = caps.NumberInputButtonCaps;
   std::vector<HIDP_BUTTON_CAPS> buttons(button_count);
   if (button_count != 0 &&
@@ -114,10 +124,8 @@ find_value_caps(const HidRawDevice &device,
   USHORT count = device.caps.NumberInputValueCaps;
   std::vector<HIDP_VALUE_CAPS> values(count);
   if (count == 0 ||
-      HidP_GetValueCaps(
-          HidP_Input, values.data(), &count,
-          reinterpret_cast<PHIDP_PREPARSED_DATA>(
-              const_cast<std::byte *>(device.preparsed.data()))) !=
+      HidP_GetValueCaps(HidP_Input, values.data(), &count,
+                        preparsed_data(device.preparsed)) !=
           HIDP_STATUS_SUCCESS)
     return std::nullopt;
   values.resize(count);
@@ -256,15 +264,11 @@ layerc::core::HidControlSample sample_hid_control(
     const HidRawDevice &device,
     const layerc::core::HidControlBinding &binding,
     const std::span<const std::byte> report) {
-  layerc::core::HidControlSample sample;
   if (report.empty() ||
       (device.uses_report_ids && binding.report_id != 0 &&
-       effective_hid_report_id(device, report) != binding.report_id)) {
-    sample.available = false;
-    return sample;
-  }
-  auto *preparsed = reinterpret_cast<PHIDP_PREPARSED_DATA>(
-      const_cast<std::byte *>(device.preparsed.data()));
+       effective_hid_report_id(device, report) != binding.report_id))
+    return unavailable_sample();
+  auto *preparsed = preparsed_data(device.preparsed);
   auto *report_data =
       reinterpret_cast<PCHAR>(const_cast<std::byte *>(report.data()));
   const auto report_size = static_cast<ULONG>(report.size());
@@ -276,11 +280,10 @@ layerc::core::HidControlSample sample_hid_control(
         HidP_GetUsages(HidP_Input, binding.usage_page,
                        binding.link_collection, usages.data(), &count,
                        preparsed, report_data, report_size) !=
-            HIDP_STATUS_SUCCESS) {
-      sample.available = false;
-      return sample;
-    }
+            HIDP_STATUS_SUCCESS)
+      return unavailable_sample();
     usages.resize(count);
+    layerc::core::HidControlSample sample;
     sample.button_active =
         std::ranges::find(usages, binding.usage) != usages.end();
     return sample;
@@ -289,15 +292,11 @@ layerc::core::HidControlSample sample_hid_control(
   if (HidP_GetUsageValue(HidP_Input, binding.usage_page,
                          binding.link_collection, binding.usage, &raw,
                          preparsed, report_data, report_size) !=
-      HIDP_STATUS_SUCCESS) {
-    sample.available = false;
-    return sample;
-  }
+      HIDP_STATUS_SUCCESS)
+    return unavailable_sample();
   const auto caps = find_value_caps(device, binding);
-  if (!caps) {
-    sample.available = false;
-    return sample;
-  }
+  if (!caps) return unavailable_sample();
+  layerc::core::HidControlSample sample;
   sample.value = detail::signed_hid_value(raw, *caps);
   sample.logical_min = caps->LogicalMin;
   sample.logical_max = caps->LogicalMax;
@@ -373,46 +372,20 @@ std::optional<layerc::core::HidControlSample> sample_hid_control(
 
 std::optional<std::wstring>
 read_hid_stable_slot(const layerc::core::HidDeviceSelector &selector) {
-  HKEY key{};
-  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\LayerC\\HidSlots", 0,
-                    KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
-    return std::nullopt;
   const auto name = stable_slot_value_name(selector);
-  DWORD type{}, bytes{};
-  auto code = RegQueryValueExW(key, name.c_str(), nullptr, &type, nullptr,
-                               &bytes);
-  if (code != ERROR_SUCCESS || type != REG_SZ || bytes < sizeof(wchar_t) ||
-      bytes > 64U * 1024U) {
-    RegCloseKey(key);
+  auto value = read_layerc_registry_string(name, 32U * 1024U, L"HidSlots");
+  if (!value.value || value.value->empty())
     return std::nullopt;
-  }
-  std::wstring value(bytes / sizeof(wchar_t), L'\0');
-  code = RegQueryValueExW(key, name.c_str(), nullptr, &type,
-                          reinterpret_cast<BYTE *>(value.data()), &bytes);
-  RegCloseKey(key);
-  if (code != ERROR_SUCCESS) return std::nullopt;
-  while (!value.empty() && value.back() == L'\0') value.pop_back();
-  return value.empty() ? std::nullopt
-                       : std::optional<std::wstring>{std::move(value)};
+  return std::move(*value.value);
 }
 
 bool assign_hid_stable_slot(
     const layerc::core::HidDeviceSelector &selector,
     const std::wstring_view device_path) {
   if (device_path.empty()) return false;
-  HKEY key{};
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\LayerC\\HidSlots", 0,
-                      nullptr, 0, KEY_SET_VALUE, nullptr, &key,
-                      nullptr) != ERROR_SUCCESS)
-    return false;
   const auto name = stable_slot_value_name(selector);
-  const auto bytes = static_cast<DWORD>((device_path.size() + 1U) *
-                                        sizeof(wchar_t));
-  const auto code = RegSetValueExW(
-      key, name.c_str(), 0, REG_SZ,
-      reinterpret_cast<const BYTE *>(device_path.data()), bytes);
-  RegCloseKey(key);
-  return code == ERROR_SUCCESS;
+  return static_cast<bool>(
+      write_layerc_registry_string(name, device_path, L"HidSlots"));
 }
 
 } // namespace layerc::platform

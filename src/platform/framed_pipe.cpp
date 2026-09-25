@@ -1,4 +1,5 @@
 #include "layerc/platform/framed_pipe.hpp"
+#include "io_chunk_size.hpp"
 
 #include "layerc/core/frame.hpp"
 
@@ -18,10 +19,9 @@ bool write_all(const HANDLE pipe, const void *data, std::size_t size,
                std::string &error) {
   const auto *bytes = static_cast<const std::byte *>(data);
   while (size != 0) {
-    const auto chunk = static_cast<DWORD>(std::min<std::size_t>(
-        size, std::numeric_limits<DWORD>::max()));
     DWORD written{};
-    if (WriteFile(pipe, bytes, chunk, &written, nullptr) == FALSE ||
+    if (WriteFile(pipe, bytes, io_chunk_size(size), &written, nullptr) ==
+            FALSE ||
         written == 0) {
       error = "framed pipe write failed";
       return false;
@@ -36,10 +36,9 @@ bool read_all(const HANDLE pipe, void *data, std::size_t size,
               std::string &error) {
   auto *bytes = static_cast<std::byte *>(data);
   while (size != 0) {
-    const auto chunk = static_cast<DWORD>(std::min<std::size_t>(
-        size, std::numeric_limits<DWORD>::max()));
     DWORD read{};
-    if (ReadFile(pipe, bytes, chunk, &read, nullptr) == FALSE || read == 0) {
+    if (ReadFile(pipe, bytes, io_chunk_size(size), &read, nullptr) == FALSE ||
+        read == 0) {
       error = "framed pipe closed before its frame completed";
       return false;
     }

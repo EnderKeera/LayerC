@@ -31,45 +31,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+      - name: Setup Windows build tools
+        uses: ./.github/actions/setup-windows-build
 
-      - name: Setup Ninja
-        uses: seanmiddleditch/gha-setup-ninja@3b1f8f94a2f8254bd26914c4ab9474d4f0015f67 # v6
+      - name: Build, test, and package
+        uses: ./.github/actions/build-package
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-
-      - name: Configure (CI preset)
-        shell: pwsh
-        run: cmake --preset ci
-
-      - name: Build
-        shell: pwsh
-        run: cmake --build --preset ci --parallel
-
-      - name: Test
-        shell: pwsh
-        run: ctest --preset ci --output-on-failure
-
-      - name: Automated Benchmarks (Idle Plateau)
-        shell: pwsh
-        run: pwsh -File tools/benchmark_v22.ps1 -BuildDirectory build/ci
-
-      - name: Automated Benchmarks (CPU Evaluator)
-        shell: pwsh
-        run: pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
-
-      - name: Install
-        shell: pwsh
-        run: cmake --build --preset ci-install
-
-      - name: Package (ZIP)
-        shell: pwsh
-        run: |
-          cpack --preset ci --verbose
-          Get-ChildItem -Recurse -Filter *.zip | Select-Object FullName,Length | Format-Table
-
+      # Artifact contract: layerc-windows-x64 is the full debug bundle
+      # (install layout + benchmark evidence + package ZIP).
+      # benchmarks.yml and push-and-test.ps1 consume
+      # layerc-windows-x64-tools; only publish-rolling consumes
+      # layerc-rolling-package.
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -78,7 +50,6 @@ jobs:
             out/layerc/**
             out/benchmarks/*.json
             build/ci/*.zip
-            *.zip
           if-no-files-found: error
 
       - name: Upload rolling package
@@ -100,8 +71,110 @@ jobs:
             build/ci/layerc_automation_benchmark.exe
           if-no-files-found: error
 
+  windows-analyze:
+    needs: workflow-lint
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Windows build tools
+        uses: ./.github/actions/setup-windows-build
+
+      - name: Configure non-unity MSVC analysis build
+        shell: pwsh
+        run: >-
+          cmake -S . -B build/analyze -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_UNITY_BUILD=OFF
+          -DLAYERC_BUILD_TESTS=ON
+          -DLAYERC_MSVC_ANALYZE=ON
+
+      # Keep going so one run reports every analysis finding.
+      - name: Build with MSVC analysis
+        shell: pwsh
+        run: cmake --build build/analyze --parallel 2 -- -k 0
+
+      - name: Run analyzed tests
+        shell: pwsh
+        run: ctest --test-dir build/analyze --output-on-failure --no-tests=error
+
+  linux:
+    needs: workflow-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debian:stable
+            artifact: debian-stable
+            image: debian@sha256:7fa362f5e7c036d7f45621a6c721c03493cdcb5889adfcd65587759e34fe4c6f
+          - name: ubuntu:24.04
+            artifact: ubuntu-24.04
+            image: ubuntu@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+    name: Linux (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Logic lives in tools/ci-linux.sh so the same gate runs locally.
+      - name: Build and test (${{ matrix.name }})
+        shell: bash
+        run: >-
+          bash tools/ci-linux.sh "${{ matrix.image }}"
+          "out/linux-ci/${{ matrix.artifact }}"
+
+      - name: Upload Linux evidence (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-linux-${{ matrix.artifact }}-evidence
+          path: out/linux-ci/${{ matrix.artifact }}/**
+          if-no-files-found: warn
+
+  linux-flatpak:
+    needs: workflow-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux and Flatpak build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          mapfile -t packages < tools/linux-deps.txt
+          sudo apt-get install -y --no-install-recommends \
+            "${packages[@]}" flatpak flatpak-builder elfutils
+          sudo flatpak remote-add --system --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y flathub \
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+
+      - name: Run required Flatpak and native smoke
+        shell: bash
+        run: >-
+          bash tools/run-linux-tests.sh
+          --build-dir build/linux-flatpak-ci
+          --evidence-dir out/linux-flatpak-ci
+          --flatpak required
+
+      - name: Upload Flatpak evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-linux-flatpak-evidence
+          path: out/linux-flatpak-ci/**
+          if-no-files-found: warn
+
   publish-rolling:
-    needs: windows-msvc
+    needs: [windows-msvc, windows-analyze, linux, linux-flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -126,28 +199,4 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mapfile -t packages < <(find release-input -type f -name '*.zip' -print)
-          if [[ ${#packages[@]} -ne 1 ]]; then
-            echo "Expected one rolling package, found ${#packages[@]}." >&2
-            exit 1
-          fi
-
-          asset='release-input/layerc-windows-x64.zip'
-          mv "${packages[0]}" "$asset"
-          notes="Rolling build of main@${GITHUB_SHA}"
-
-          if gh release view rolling >/dev/null 2>&1; then
-            gh release upload rolling "$asset" --clobber
-            while IFS= read -r old_asset; do
-              if [[ -n "$old_asset" && "$old_asset" != 'layerc-windows-x64.zip' ]]; then
-                gh release delete-asset rolling "$old_asset" --yes
-              fi
-            done < <(gh release view rolling --json assets --jq '.assets[].name')
-            gh release edit rolling --target "$GITHUB_SHA" \
-              --title 'LayerC rolling build' --prerelease --notes "$notes"
-          else
-            gh release create rolling "$asset" --target "$GITHUB_SHA" \
-              --title 'LayerC rolling build' --prerelease --notes "$notes"
-          fi
+        run: bash tools/publish-rolling.sh release-input

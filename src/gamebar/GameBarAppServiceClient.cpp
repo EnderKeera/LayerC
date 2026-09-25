@@ -13,6 +13,11 @@ namespace {
 
 #if defined(_MSC_VER)
 using namespace winrt::Windows::ApplicationModel::AppService;
+using Link = GameBarTransportState::Link;
+
+[[nodiscard]] bool connected(const GameBarTransportState &state) noexcept {
+  return state.link == Link::connected || state.link == Link::sending;
+}
 
 struct ClientResources {
   AppServiceConnection connection{nullptr};
@@ -21,8 +26,24 @@ struct ClientResources {
   decltype(GameBarTransportState::send_operation) send_operation{nullptr};
   winrt::event_token request_token{};
   winrt::event_token closed_token{};
-  std::vector<GameBarTransportState::PreferenceResponse> responses;
+  std::vector<GameBarTransportState::PreferenceResponse> pending_responses;
 };
+
+// Generation is bumped on every start/stop; connection_epoch is bumped on
+// every open. Callbacks must ignore completions from a torn-down cycle.
+[[nodiscard]] bool
+is_active_generation(const GameBarTransportState &state,
+                     const std::uint64_t generation) noexcept {
+  return state.link != Link::stopped && state.generation == generation;
+}
+
+[[nodiscard]] bool
+is_active_connection(const GameBarTransportState &state,
+                     const std::uint64_t generation,
+                     const std::uint64_t connection_epoch) noexcept {
+  return is_active_generation(state, generation) &&
+         state.connection_epoch == connection_epoch;
+}
 
 std::wstring hresult_message(const winrt::hresult code) {
   try {
@@ -30,6 +51,14 @@ std::wstring hresult_message(const winrt::hresult code) {
   } catch (...) {
     return L"Game Bar App Service operation failed";
   }
+}
+
+std::wstring open_failure_message(const AppServiceConnectionStatus result,
+                                  const winrt::hresult error_code) {
+  if (result == AppServiceConnectionStatus::Unknown)
+    return hresult_message(error_code);
+  return L"Game Bar App Service open failed (status " +
+         std::to_wstring(static_cast<unsigned>(result)) + L")";
 }
 
 winrt::fire_and_forget send_preference_response(AppServiceRequest request,
@@ -52,15 +81,12 @@ ClientResources release_client_locked(GameBarTransportState &state) {
   resources.send_operation = std::move(state.send_operation);
   resources.request_token = std::exchange(state.request_token, {});
   resources.closed_token = std::exchange(state.closed_token, {});
-  resources.responses.reserve(state.preference_responses.size());
-  for (auto &[request_id, response] : state.preference_responses) {
-    (void)request_id;
-    resources.responses.push_back(std::move(response));
-  }
+  resources.pending_responses.reserve(state.preference_responses.size());
+  for (auto &entry : state.preference_responses)
+    resources.pending_responses.push_back(std::move(entry.second));
   state.preference_responses.clear();
-  state.connected = false;
-  state.opening = false;
-  state.sending = false;
+  if (state.link != Link::stopped)
+    state.enter(Link::idle);
   return resources;
 }
 
@@ -78,9 +104,32 @@ void cleanup_client(ClientResources resources) noexcept {
     }
   } catch (...) {
   }
-  for (auto &response : resources.responses)
+  for (auto &response : resources.pending_responses)
     send_preference_response(std::move(response.first),
                              std::move(response.second), false);
+}
+
+[[nodiscard]] bool queue_preference_update(
+    const std::weak_ptr<GameBarTransportState> &weak_state,
+    const std::uint64_t generation, const std::uint64_t connection_epoch,
+    std::string utf8, AppServiceRequest request, AppServiceDeferral deferral) {
+  const auto state = weak_state.lock();
+  if (!state)
+    return false;
+  {
+    std::lock_guard lock(state->mutex);
+    if (!connected(*state) ||
+        !is_active_connection(*state, generation, connection_epoch) ||
+        state->preference_updates.size() >= max_pending_preference_updates)
+      return false;
+    const auto request_id = state->next_preference_request_id++;
+    state->preference_updates.push_back(
+        {.request_id = request_id, .json = std::move(utf8)});
+    state->preference_responses.emplace(
+        request_id, std::pair{std::move(request), std::move(deferral)});
+  }
+  raise_wake_event(state);
+  return true;
 }
 
 void handle_preference_request(std::weak_ptr<GameBarTransportState> weak_state,
@@ -88,7 +137,6 @@ void handle_preference_request(std::weak_ptr<GameBarTransportState> weak_state,
                                const std::uint64_t connection_epoch,
                                AppServiceRequestReceivedEventArgs args) {
   const auto deferral = args.GetDeferral();
-  bool queued{};
   try {
     const auto message = args.Request().Message();
     const auto kind =
@@ -97,31 +145,66 @@ void handle_preference_request(std::weak_ptr<GameBarTransportState> weak_state,
         winrt::unbox_value_or<winrt::hstring>(message.TryLookup(L"json"), L"");
     const auto utf8 = winrt::to_string(json);
     if (kind == L"preferences" && !utf8.empty() &&
-        utf8.size() <= layerc::core::max_companion_sidecar_bytes) {
-      if (const auto state = weak_state.lock()) {
-        {
-          std::lock_guard lock(state->mutex);
-          if (state->started && state->connected &&
-              state->generation == generation &&
-              state->connection_epoch == connection_epoch &&
-              state->preference_updates.size() <
-                  max_pending_preference_updates) {
-            const auto request_id = state->next_preference_request_id++;
-            state->preference_updates.push_back(
-                {.request_id = request_id, .json = utf8});
-            state->preference_responses.emplace(
-                request_id, std::pair{args.Request(), deferral});
-            queued = true;
-          }
-        }
-        if (queued)
-          signal(state);
-      }
-    }
+        utf8.size() <= layerc::core::max_companion_sidecar_bytes &&
+        queue_preference_update(weak_state, generation, connection_epoch, utf8,
+                                args.Request(), deferral))
+      return;
   } catch (...) {
   }
-  if (!queued)
-    send_preference_response(args.Request(), deferral, false);
+  send_preference_response(args.Request(), deferral, false);
+}
+
+void handle_service_closed(
+    const std::shared_ptr<GameBarTransportState> &state,
+    const std::uint64_t generation, const std::uint64_t connection_epoch,
+    const AppServiceClosedStatus status) {
+  {
+    std::lock_guard lock(state->mutex);
+    if (!is_active_connection(*state, generation, connection_epoch))
+      return;
+    state->retry.needed = true;
+    ++state->connection_epoch; // Ignore a send completion from the closed link.
+    state->enter(Link::idle, L"Game Bar App Service closed (status " +
+                                 std::to_wstring(static_cast<unsigned>(status)) + L")");
+  }
+  raise_wake_event(state);
+}
+
+void apply_open_result(const std::shared_ptr<GameBarTransportState> &state,
+                       const std::uint64_t generation,
+                       const std::uint64_t connection_epoch,
+                       const AppServiceConnectionStatus result,
+                       const winrt::hresult error_code) {
+  {
+    std::lock_guard lock(state->mutex);
+    if (!is_active_connection(*state, generation, connection_epoch))
+      return;
+    state->open_operation = nullptr;
+    if (result == AppServiceConnectionStatus::Success) {
+      state->retry.delay_ms = 100;
+      state->enter(Link::connected, L"");
+    } else {
+      state->retry.needed = true;
+      state->enter(Link::idle, open_failure_message(result, error_code));
+    }
+  }
+  raise_wake_event(state);
+}
+
+// A WinRT call on the active link threw: drop to idle and schedule a retry.
+// A superseded generation or connection epoch is left untouched.
+void fail_active_connection(const std::shared_ptr<GameBarTransportState> &state,
+                            const std::uint64_t generation,
+                            const std::uint64_t connection_epoch,
+                            std::wstring message) {
+  {
+    std::lock_guard lock(state->mutex);
+    if (is_active_connection(*state, generation, connection_epoch)) {
+      state->retry.needed = true;
+      state->enter(Link::idle, std::move(message));
+    }
+  }
+  raise_wake_event(state);
 }
 
 void begin_open(const std::shared_ptr<GameBarTransportState> &state) {
@@ -133,7 +216,7 @@ void begin_open(const std::shared_ptr<GameBarTransportState> &state) {
   try {
     {
       std::lock_guard lock(state->mutex);
-      if (!state->started || state->opening || state->connected)
+      if (state->link != Link::idle)
         return;
       generation = state->generation;
       connection_epoch = ++state->connection_epoch;
@@ -154,24 +237,13 @@ void begin_open(const std::shared_ptr<GameBarTransportState> &state) {
             const auto locked = weak_state.lock();
             if (!locked)
               return;
-            {
-              std::lock_guard lock(locked->mutex);
-              if (!locked->started || locked->generation != generation ||
-                  locked->connection_epoch != connection_epoch)
-                return;
-              locked->connected = false;
-              locked->sending = false;
-              locked->retry_needed = true;
-              locked->last_error =
-                  L"Game Bar App Service closed (status " +
-                  std::to_wstring(static_cast<unsigned>(args.Status())) + L")";
-            }
-            signal(locked);
+            handle_service_closed(locked, generation, connection_epoch,
+                                  args.Status());
           });
       operation = connection.OpenAsync();
       state->connection = connection;
       state->open_operation = operation;
-      state->opening = true;
+      state->enter(Link::opening);
     }
     operation.Completed([weak_state = std::weak_ptr(state), generation,
                          connection_epoch](const auto &completed,
@@ -188,38 +260,37 @@ void begin_open(const std::shared_ptr<GameBarTransportState> &state) {
           error_code = error.code();
         }
       }
-      {
-        std::lock_guard lock(locked->mutex);
-        if (!locked->started || locked->generation != generation ||
-            locked->connection_epoch != connection_epoch)
-          return;
-        locked->opening = false;
-        locked->open_operation = nullptr;
-        locked->connected = result == AppServiceConnectionStatus::Success;
-        if (locked->connected) {
-          locked->retry_ms = 100;
-          locked->last_error.clear();
-        } else {
-          locked->retry_needed = true;
-          locked->last_error =
-              result == AppServiceConnectionStatus::Unknown
-                  ? hresult_message(error_code)
-                  : L"Game Bar App Service open failed (status " +
-                        std::to_wstring(static_cast<unsigned>(result)) + L")";
-        }
-      }
-      signal(locked);
+      apply_open_result(locked, generation, connection_epoch, result,
+                        error_code);
     });
   } catch (const winrt::hresult_error &error) {
-    {
-      std::lock_guard lock(state->mutex);
-      state->opening = false;
-      state->connected = false;
-      state->retry_needed = true;
-      state->last_error = std::wstring(error.message());
-    }
-    signal(state);
+    fail_active_connection(state, generation, connection_epoch,
+                           std::wstring(error.message()));
   }
+}
+
+void apply_send_result(const std::shared_ptr<GameBarTransportState> &state,
+                       const std::uint64_t generation,
+                       const std::uint64_t connection_epoch,
+                       const bool transport_ok, const bool accepted,
+                       std::wstring error_text) {
+  {
+    std::lock_guard lock(state->mutex);
+    if (!is_active_connection(*state, generation, connection_epoch))
+      return;
+    state->send_operation = nullptr;
+    if (!transport_ok) {
+      state->retry.needed = true;
+      state->enter(Link::idle, error_text.empty()
+                                   ? L"Game Bar snapshot send failed"
+                                   : std::move(error_text));
+    } else if (!accepted) {
+      state->enter(Link::connected, L"Game Bar widget rejected a snapshot");
+    } else {
+      state->enter(Link::connected, L"");
+    }
+  }
+  raise_wake_event(state);
 }
 
 void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
@@ -229,7 +300,7 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
   std::uint64_t connection_epoch{};
   {
     std::lock_guard lock(state->mutex);
-    if (!state->started || !state->connected || state->sending ||
+    if (state->link != Link::connected ||
         !state->pending_snapshot.has_value())
       return;
     generation = state->generation;
@@ -237,7 +308,7 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
     connection = state->connection;
     payload = std::move(*state->pending_snapshot);
     state->pending_snapshot.reset();
-    state->sending = true;
+    state->enter(Link::sending);
   }
 
   try {
@@ -247,8 +318,7 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
     const auto operation = connection.SendMessageAsync(message);
     {
       std::lock_guard lock(state->mutex);
-      if (!state->started || state->generation != generation ||
-          state->connection_epoch != connection_epoch)
+      if (!is_active_connection(*state, generation, connection_epoch))
         return;
       state->send_operation = operation;
     }
@@ -272,39 +342,12 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
           error_text = std::wstring(error.message());
         }
       }
-      {
-        std::lock_guard lock(locked->mutex);
-        if (!locked->started || locked->generation != generation ||
-            locked->connection_epoch != connection_epoch)
-          return;
-        locked->sending = false;
-        locked->send_operation = nullptr;
-        if (!transport_ok) {
-          locked->connected = false;
-          locked->retry_needed = true;
-          locked->last_error = error_text.empty()
-                                   ? L"Game Bar snapshot send failed"
-                                   : std::move(error_text);
-        } else if (!accepted) {
-          locked->last_error = L"Game Bar widget rejected a snapshot";
-        } else {
-          locked->last_error.clear();
-        }
-      }
-      signal(locked);
+      apply_send_result(locked, generation, connection_epoch, transport_ok,
+                        accepted, std::move(error_text));
     });
   } catch (const winrt::hresult_error &error) {
-    {
-      std::lock_guard lock(state->mutex);
-      if (state->started && state->generation == generation &&
-          state->connection_epoch == connection_epoch) {
-        state->sending = false;
-        state->connected = false;
-        state->retry_needed = true;
-        state->last_error = std::wstring(error.message());
-      }
-    }
-    signal(state);
+    fail_active_connection(state, generation, connection_epoch,
+                           std::wstring(error.message()));
   }
 }
 #endif
@@ -314,16 +357,17 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
 bool start_app_service(const std::shared_ptr<GameBarTransportState> &state) {
 #if !defined(_MSC_VER)
   std::lock_guard lock(state->mutex);
-  state->last_error = L"Game Bar App Service requires the MSVC package build";
+  state->enter(GameBarTransportState::Link::stopped,
+               L"Game Bar App Service requires the MSVC package build");
   return false;
 #else
   {
     std::lock_guard lock(state->mutex);
-    if (state->started)
+    if (state->link != Link::stopped)
       return true;
     const HRESULT apartment = RoInitialize(RO_INIT_MULTITHREADED);
     if (FAILED(apartment) && apartment != RPC_E_CHANGED_MODE) {
-      state->last_error = L"WinRT apartment initialization failed";
+      state->enter(Link::stopped, L"WinRT apartment initialization failed");
       return false;
     }
     state->apartment_initialized = SUCCEEDED(apartment);
@@ -333,16 +377,16 @@ bool start_app_service(const std::shared_ptr<GameBarTransportState> &state) {
         RoUninitialize();
         state->apartment_initialized = false;
       }
-      state->last_error = L"Game Bar wake event could not be created";
+      state->enter(Link::stopped, L"Game Bar wake event could not be created");
       return false;
     }
     state->wake_event = std::move(wake);
-    state->started = true;
+    state->enter(Link::idle);
     ++state->generation;
-    state->retry_ready = true;
-    state->retry_ms = 100;
+    state->retry.ready = true;
+    state->retry.delay_ms = 100;
   }
-  signal(state);
+  raise_wake_event(state);
   return true;
 #endif
 }
@@ -356,22 +400,17 @@ void stop_app_service(
   std::shared_ptr<GameBarWakeEvent> wake;
   {
     std::lock_guard lock(state->mutex);
-    if (!state->started)
+    if (state->link == GameBarTransportState::Link::stopped)
       return;
-    state->started = false;
     ++state->generation;
-    state->retry_ready = false;
-    state->retry_needed = false;
+    state->retry = {};
     state->pending_snapshot.reset();
     state->preference_updates.clear();
 #if defined(_MSC_VER)
     resources = release_client_locked(*state);
     uninitialize = std::exchange(state->apartment_initialized, false);
-#else
-    state->connected = false;
-    state->opening = false;
-    state->sending = false;
 #endif
+    state->enter(GameBarTransportState::Link::stopped);
     wake = std::move(state->wake_event);
   }
 #if defined(_MSC_VER)
@@ -400,11 +439,11 @@ poll_app_service(const std::shared_ptr<GameBarTransportState> &state) noexcept {
     std::lock_guard lock(state->mutex);
     if (state->wake_event != nullptr && state->wake_event->handle != nullptr)
       ResetEvent(state->wake_event->handle);
-    if (!state->started)
+    if (state->link == GameBarTransportState::Link::stopped)
       return updates;
 #if defined(_MSC_VER)
-    if (state->retry_needed) {
-      state->retry_needed = false;
+    if (state->retry.needed) {
+      state->retry.needed = false;
       failed_resources = release_client_locked(*state);
       state->preference_updates.clear();
       schedule_retry_locked(state);
@@ -416,11 +455,11 @@ poll_app_service(const std::shared_ptr<GameBarTransportState> &state) noexcept {
       state->preference_updates.pop_front();
     }
 #if defined(_MSC_VER)
-    if (state->retry_ready) {
-      state->retry_ready = false;
+    if (state->retry.ready) {
+      state->retry.ready = false;
       open = true;
     }
-    send = state->connected && !state->sending &&
+    send = state->link == Link::connected &&
            state->pending_snapshot.has_value();
 #endif
   }

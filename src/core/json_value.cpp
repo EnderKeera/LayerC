@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace layerc::core::json {
@@ -60,11 +61,9 @@ void append_unsigned(std::string &output, std::uint64_t value) {
     output.push_back('0');
 }
 
-void append_number(std::string &output, double value) {
-    if (!std::isfinite(value)) {
-        output += "0.0";
-        return;
-    }
+void append_number(std::string &output, const double value) {
+    if (!std::isfinite(value))
+        throw std::invalid_argument("JSON numbers must be finite");
     std::array<char, 64> buffer;
     const auto converted = std::to_chars(
         buffer.data(), buffer.data() + buffer.size(), value,
@@ -74,7 +73,7 @@ void append_number(std::string &output, double value) {
         return;
     }
     assert(false && "the fixed double JSON buffer is too small");
-    output += "0.0";
+    throw std::runtime_error("failed to format JSON number");
 }
 
 void append_quoted(std::string &output, std::string_view text) {
@@ -101,6 +100,82 @@ void append_quoted(std::string &output, std::string_view text) {
         }
     }
     output.push_back('"');
+}
+
+std::string color_text(std::uint32_t color) {
+    constexpr std::string_view hex = "0123456789ABCDEF";
+    std::string text = "#000000";
+    for (int shift = 20, index = 1; shift >= 0; shift -= 4, ++index)
+        text[static_cast<std::size_t>(index)] =
+            hex[(color >> static_cast<unsigned>(shift)) & 0xFU];
+    return text;
+}
+
+void append_color_quoted(std::string &output, std::uint32_t color) {
+    append_quoted(output, color_text(color));
+}
+
+void append_bool(std::string &output, bool value) {
+    output += value ? "true" : "false";
+}
+
+namespace {
+void emit_value(std::string &output, const Value &value, const unsigned indent,
+                const unsigned depth) {
+  const auto newline = [&](unsigned level) {
+    if (indent) {
+      output += "\r\n";
+      output.append(static_cast<std::size_t>(level) * indent, ' ');
+    }
+  };
+  if (value.is_null()) output += "null";
+  else if (value.is_bool()) append_bool(output, value.as_bool());
+  else if (value.is_integer()) output += std::to_string(value.as_integer());
+  else if (value.is_number()) append_number(output, value.as_number());
+  else if (value.is_string()) append_quoted(output, value.as_string());
+  else if (value.is_array()) {
+    output += '[';
+    Join join;
+    for (const auto &item : value.as_array()) {
+      join(output);
+      newline(depth + 1);
+      emit_value(output, item, indent, depth + 1);
+    }
+    if (!value.as_array().empty()) newline(depth);
+    output += ']';
+  } else {
+    output += '{';
+    Join join;
+    for (const auto &[key, item] : value.as_object()) {
+      join(output);
+      newline(depth + 1);
+      append_quoted(output, key);
+      output += indent ? ": " : ":";
+      emit_value(output, item, indent, depth + 1);
+    }
+    if (!value.as_object().empty()) newline(depth);
+    output += '}';
+  }
+}
+} // namespace
+
+void append_value(std::string &output, const Value &value, const unsigned indent) {
+  const auto original_size = output.size();
+  try {
+    emit_value(output, value, indent, 0);
+  } catch (...) {
+    output.resize(original_size);
+    throw;
+  }
+}
+
+std::string format(const std::string_view source) {
+  const auto parsed = parse(source);
+  const auto *value = std::get_if<Value>(&parsed);
+  if (!value) return std::string(source);
+  std::string output;
+  append_value(output, *value, 2);
+  return output;
 }
 
 } // namespace layerc::core::json

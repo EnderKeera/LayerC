@@ -5,11 +5,11 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace layerc::runtime {
 
@@ -18,9 +18,7 @@ enum class Capability : std::uint8_t {
   generic_hid,
   overlay,
   visual,
-  template_evaluation,
   isolated_visual,
-  live_edit,
   automation,
   gamebar,
   count,
@@ -31,6 +29,13 @@ inline constexpr std::size_t capability_count =
 
 [[nodiscard]] std::string_view capability_name(Capability capability) noexcept;
 
+struct VisualConsumer {
+  core::WindowId window;
+  std::string profile_id;
+  core::VisualRuntime runtime{core::VisualRuntime::inline_process};
+  bool operator==(const VisualConsumer &) const = default;
+};
+
 class CapabilityDemand {
 public:
   void add(Capability capability, std::uint32_t consumers = 1) noexcept;
@@ -38,10 +43,16 @@ public:
   [[nodiscard]] std::uint32_t consumers(Capability capability) const noexcept;
   [[nodiscard]] bool required(Capability capability) const noexcept;
   [[nodiscard]] bool empty() const noexcept;
+  // Selection and shared-window routing are decided once by the kernel's
+  // demand calculation, then consumed unchanged by native capture owners.
+  void add_visual_consumer(VisualConsumer consumer);
+  [[nodiscard]] std::span<const VisualConsumer>
+  visual_consumers() const noexcept { return visual_consumers_; }
   bool operator==(const CapabilityDemand &) const = default;
 
 private:
   std::array<std::uint32_t, capability_count> consumers_{};
+  std::vector<VisualConsumer> visual_consumers_;
 };
 
 struct RuntimeResourceStats {
@@ -65,6 +76,18 @@ enum class ServiceState : std::uint8_t {
   faulted,
 };
 
+// Single owner for the ServiceState -> string mapping shared by the Windows
+// and Linux daemon diagnostics (previously two identical local copies).
+[[nodiscard]] inline const char *
+service_state_name(const ServiceState state) noexcept {
+  switch (state) {
+  case ServiceState::absent: return "absent";
+  case ServiceState::active: return "active";
+  case ServiceState::faulted: return "faulted";
+  }
+  return "unknown";
+}
+
 struct RuntimeServiceStats {
   Capability capability{Capability::input};
   ServiceState state{ServiceState::absent};
@@ -75,10 +98,13 @@ struct RuntimeServiceStats {
   std::optional<core::TimePoint> last_activation;
   std::optional<core::TimePoint> last_quiescence;
   std::string last_error;
+  bool operator==(const RuntimeServiceStats &) const = default;
 };
 
 struct ServiceReconcileResult {
   bool success{true};
+  // On failure: the fault reason. On success: a non-empty value reports a
+  // degraded-but-active service and is kept as the slot's last_error.
   std::string error;
 };
 
@@ -93,33 +119,28 @@ public:
   [[nodiscard]] virtual RuntimeResourceStats resources() const noexcept = 0;
 };
 
-// One generic runtime service shape: capability + opaque owner context with
-// three callbacks. Owners (the daemon) supply captureless functions that cast
-// the context back to their own type.
-using ServiceReconcileFn = ServiceReconcileResult (*)(void *context);
-using ServiceQuiesceFn = void (*)(void *context) noexcept;
-using ServiceResourcesFn = RuntimeResourceStats (*)(void *context) noexcept;
-
-struct RuntimeServiceDescriptor {
-  Capability capability{Capability::input};
-  void *context{};
-  ServiceReconcileFn reconcile{};
-  ServiceQuiesceFn quiesce{};
-  ServiceResourcesFn resources{};
-};
+using RuntimeServiceRegistry =
+    std::array<IRuntimeService *, capability_count>;
 
 class RuntimeServiceHost {
 public:
-  RuntimeServiceHost() = default;
+  // Registered services and their dependencies must outlive the host.
+  explicit RuntimeServiceHost(RuntimeServiceRegistry services = {}) noexcept;
   ~RuntimeServiceHost();
   RuntimeServiceHost(const RuntimeServiceHost &) = delete;
   RuntimeServiceHost &operator=(const RuntimeServiceHost &) = delete;
 
-  [[nodiscard]] bool reconcile(
-      const CapabilityDemand &demand,
-      std::span<const RuntimeServiceDescriptor> descriptors,
-      core::TimePoint now = core::MonotonicClock::now());
+  [[nodiscard]] bool
+  reconcile(const CapabilityDemand &demand,
+            core::TimePoint now = core::MonotonicClock::now());
   void quiesce_all(core::TimePoint now = core::MonotonicClock::now()) noexcept;
+
+  // Resources without an independent demand lifecycle (for example an
+  // authenticated control-channel handle) belong in this ledger rather than
+  // pretending to be a runtime service.
+  void set_resource_ledger(RuntimeResourceStats resources) noexcept {
+    resource_ledger_ = resources;
+  }
 
   [[nodiscard]] IRuntimeService *find(Capability capability) noexcept;
   [[nodiscard]] const IRuntimeService *find(Capability capability) const noexcept;
@@ -130,17 +151,16 @@ public:
 
 private:
   struct Slot {
-    std::unique_ptr<IRuntimeService> service;
+    IRuntimeService *service{};
+    bool active{};
     RuntimeServiceStats stats;
   };
 
   [[nodiscard]] static std::size_t index(Capability capability) noexcept;
-  [[nodiscard]] static const RuntimeServiceDescriptor *
-  descriptor_for(Capability capability,
-                 std::span<const RuntimeServiceDescriptor> descriptors) noexcept;
   void quiesce_slot(Slot &slot, core::TimePoint now) noexcept;
 
   std::array<Slot, capability_count> slots_{};
+  RuntimeResourceStats resource_ledger_{};
 };
 
 } // namespace layerc::runtime

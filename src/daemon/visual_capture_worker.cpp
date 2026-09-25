@@ -1,9 +1,11 @@
 #include "visual_capture_worker.hpp"
 
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/capture/visual_evaluation.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <type_traits>
@@ -67,6 +69,27 @@ using PixelMeasurementCache =
     std::unordered_map<PixelMeasurementKey, CachedPixelMeasurement,
                        PixelMeasurementKeyHash>;
 
+struct ReferenceSetKey {
+  std::vector<std::string> hashes;
+  layerc::core::CaptureQuality quality{};
+
+  bool operator==(const ReferenceSetKey &) const = default;
+};
+
+struct ReferenceSetKeyHash {
+  std::size_t operator()(const ReferenceSetKey &key) const noexcept {
+    std::size_t seed = static_cast<std::size_t>(key.quality);
+    for (const auto &hash : key.hashes)
+      hash_combine(seed, std::hash<std::string>{}(hash));
+    return seed;
+  }
+};
+
+struct ReferenceSet {
+  std::shared_ptr<const std::vector<layerc::core::TemplateImage>> images;
+  bool available{};
+};
+
 std::pair<layerc::core::CaptureAvailability, bool> evaluate_once(
     const layerc::core::PixelRule &rule,
     const layerc::capture::CapturePollResult &capture,
@@ -79,18 +102,10 @@ std::pair<layerc::core::CaptureAvailability, bool> evaluate_once(
   if (cached != cache.end())
     return {cached->second.availability, cached->second.matched};
 
-  auto availability = capture.availability;
-  bool matched{};
-  if (availability == layerc::core::CaptureAvailability::available &&
-      capture.frame) {
-    if (!layerc::capture::region_is_available(rule.region, *capture.frame)) {
-      availability = layerc::core::CaptureAvailability::outside_output;
-    } else {
-      matched = layerc::core::evaluate_pixel_rule(
-                    rule, capture.frame->view(), quality)
-                    .matched;
-    }
-  }
+  const auto measurement = layerc::capture::evaluate_pixel_measurement(
+      rule, {capture, quality, layerc::core::TimePoint{}});
+  const auto availability = measurement.availability;
+  const auto matched = measurement.matched;
   cache.emplace(key, CachedPixelMeasurement{.availability = availability,
                                              .matched = matched});
   return {availability, matched};
@@ -99,9 +114,8 @@ std::pair<layerc::core::CaptureAvailability, bool> evaluate_once(
 } // namespace
 
 VisualCaptureWorker::VisualCaptureWorker(
-    const HWND window, const layerc::core::CaptureQuality quality,
-    const HANDLE snapshot_event)
-    : window_(window), quality_(quality), snapshot_event_(snapshot_event) {}
+    const HWND window, const HANDLE snapshot_event)
+    : window_(window), snapshot_event_(snapshot_event) {}
 VisualCaptureWorker::~VisualCaptureWorker() { stop(); }
 
 void VisualCaptureWorker::start() {
@@ -110,14 +124,15 @@ void VisualCaptureWorker::start() {
   thread_ = std::thread(&VisualCaptureWorker::run, this);
 }
 
-void VisualCaptureWorker::stop() {
+void VisualCaptureWorker::stop() noexcept {
   stopping_.store(true, std::memory_order_release);
   wake_.notify_all();
   if (thread_.joinable()) thread_.join();
 }
 
 void VisualCaptureWorker::configure(
-    std::vector<VisualEvaluationRequest> requests) {
+    std::vector<VisualEvaluationRequest> requests,
+    const layerc::core::CaptureQuality quality) {
   std::uint8_t maximum_rate{5};
   for (auto &request : requests) {
     request.sample_rate_hz = static_cast<std::uint8_t>(
@@ -127,8 +142,10 @@ void VisualCaptureWorker::configure(
   bool changed{};
   {
     const std::scoped_lock lock(mutex_);
-    if (requests_ != requests) {
+    if (requests_ != requests ||
+        quality_.load(std::memory_order_relaxed) != quality) {
       requests_ = std::move(requests);
+      quality_.store(quality, std::memory_order_relaxed);
       ++request_revision_;
       latest_.evaluations.clear();
       sample_rate_hz_.store(maximum_rate, std::memory_order_release);
@@ -140,23 +157,13 @@ void VisualCaptureWorker::configure(
 
 void VisualCaptureWorker::set_excluded_screen_rects(
     const std::span<const RECT> rectangles) {
-  bool changed{};
   {
     const std::scoped_lock lock(mutex_);
-    changed = rectangles.size() != exclusions_.size() ||
-              !std::equal(rectangles.begin(), rectangles.end(),
-                          exclusions_.begin(), exclusions_.end(),
-                          [](const RECT &left, const RECT &right) {
-                            return left.left == right.left &&
-                                   left.top == right.top &&
-                                   left.right == right.right &&
-                                   left.bottom == right.bottom;
-                          });
-    if (!changed) return;
+    if (same_rectangles(rectangles, exclusions_)) return;
     exclusions_.assign(rectangles.begin(), rectangles.end());
     ++exclusion_revision_;
   }
-  if (changed) wake_.notify_all();
+  wake_.notify_all();
 }
 
 VisualCaptureSnapshot VisualCaptureWorker::snapshot() const {
@@ -164,174 +171,185 @@ VisualCaptureSnapshot VisualCaptureWorker::snapshot() const {
   return latest_;
 }
 
-void VisualCaptureWorker::run() {
+VisualCaptureHostStatus VisualCaptureWorker::status() const {
+  return {.running = thread_.joinable() &&
+                     !stopping_.load(std::memory_order_acquire),
+          .quarantined = false,
+          .fault_count = 0,
+          .helper_process_id = 0,
+          .last_error = {}};
+}
+
+struct VisualCaptureWorker::RunState {
   struct EvaluationState {
     layerc::core::TimePoint next_sample{};
     VisualEvaluationSnapshot snapshot;
   };
 
-  layerc::capture::WindowCaptureSession capture(
-      window_, {.allow_desktop_duplication = true, .quality = quality_});
-  (void)capture.start();
+  RunState(const HWND window, const layerc::core::CaptureQuality quality)
+      : applied_quality(quality),
+        capture(window,
+                {.allow_desktop_duplication = true, .quality = quality}) {}
+
+  layerc::core::CaptureQuality applied_quality;
+  layerc::capture::WindowCaptureSession capture;
   std::uint64_t applied_exclusion_revision =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t applied_request_revision =
       std::numeric_limits<std::uint64_t>::max();
   std::uint64_t capture_sequence{};
   std::vector<VisualEvaluationRequest> requests;
-  std::unordered_map<std::wstring, EvaluationState> evaluations;
+  std::unordered_map<std::string, EvaluationState> evaluations;
   layerc::core::CpuTemplateMatcher template_matcher;
-  while (!stopping_.load(std::memory_order_acquire)) {
-    std::vector<RECT> exclusions;
-    bool exclusions_changed{};
-    bool requests_changed{};
-    {
-      const std::scoped_lock lock(mutex_);
-      if (applied_exclusion_revision != exclusion_revision_) {
-        exclusions = exclusions_;
-        applied_exclusion_revision = exclusion_revision_;
-        exclusions_changed = true;
-      }
-      if (applied_request_revision != request_revision_) {
-        requests = requests_;
-        applied_request_revision = request_revision_;
-        evaluations.clear();
-        requests_changed = true;
-      }
-    }
-    if (exclusions_changed)
-      capture.set_excluded_screen_rects(exclusions);
-    if (requests_changed) {
-      template_matcher.clear();
-      struct ReferenceSet {
-        std::shared_ptr<const std::vector<layerc::core::TemplateImage>> images;
-        bool available{};
-      };
-      std::unordered_map<std::string, ReferenceSet> reference_sets;
-      for (auto &request : requests) {
-        for (auto &evaluation : request.templates) {
-          std::string reference_key =
-              std::to_string(static_cast<unsigned>(request.quality));
-          for (const auto &definition : evaluation.state.references) {
-            reference_key.push_back(':');
-            reference_key += definition.asset_sha256;
-          }
-          if (const auto cached = reference_sets.find(reference_key);
-              cached != reference_sets.end()) {
-            evaluation.references = cached->second.images;
-            evaluation.assets_available = cached->second.available;
-            continue;
-          }
-          auto references =
-              std::make_shared<std::vector<layerc::core::TemplateImage>>();
-          references->reserve(evaluation.state.references.size());
-          evaluation.assets_available = true;
-          for (const auto &definition : evaluation.state.references) {
-            auto loaded = layerc::platform::load_template_asset(
-                definition.asset_sha256);
-            auto *image =
-                std::get_if<layerc::core::TemplateImage>(&loaded);
-            if (image == nullptr) {
-              evaluation.assets_available = false;
-              references->clear();
-              break;
-            }
-            references->push_back(layerc::core::compact_template_image(
-                *image, request.quality));
-          }
-          evaluation.references = references;
-          reference_sets.emplace(
-              std::move(reference_key),
-              ReferenceSet{.images = std::move(references),
-                           .available = evaluation.assets_available});
-        }
-      }
-    }
+};
 
+void VisualCaptureWorker::apply_pending_configuration(RunState &state) {
+  std::vector<RECT> exclusions;
+  bool exclusions_changed{};
+  bool requests_changed{};
+  auto requested_quality = state.applied_quality;
+  {
+    const std::scoped_lock lock(mutex_);
+    if (state.applied_exclusion_revision != exclusion_revision_) {
+      exclusions = exclusions_;
+      state.applied_exclusion_revision = exclusion_revision_;
+      exclusions_changed = true;
+    }
+    if (state.applied_request_revision != request_revision_) {
+      state.requests = requests_;
+      requested_quality = quality_.load(std::memory_order_relaxed);
+      state.applied_request_revision = request_revision_;
+      state.evaluations.clear();
+      requests_changed = true;
+    }
+  }
+  if (exclusions_changed)
+    state.capture.set_excluded_screen_rects(exclusions);
+  if (!requests_changed)
+    return;
+  if (requested_quality != state.applied_quality) {
+    state.capture.set_quality(requested_quality);
+    state.applied_quality = requested_quality;
+  }
+  state.template_matcher.clear();
+  std::unordered_map<ReferenceSetKey, ReferenceSet, ReferenceSetKeyHash>
+      reference_sets;
+  for (auto &request : state.requests) {
+    for (auto &evaluation : request.templates) {
+      ReferenceSetKey reference_key{.hashes = {}, .quality = request.quality};
+      reference_key.hashes.reserve(evaluation.state.references.size());
+      for (const auto &definition : evaluation.state.references)
+        reference_key.hashes.push_back(definition.asset_sha256);
+      if (const auto cached = reference_sets.find(reference_key);
+          cached != reference_sets.end()) {
+        evaluation.references = cached->second.images;
+        evaluation.assets_available = cached->second.available;
+        continue;
+      }
+      auto references =
+          std::make_shared<std::vector<layerc::core::TemplateImage>>();
+      references->reserve(evaluation.state.references.size());
+      evaluation.assets_available = true;
+      for (const auto &definition : evaluation.state.references) {
+        auto loaded =
+            layerc::platform::load_template_asset(definition.asset_sha256);
+        auto *image = std::get_if<layerc::core::TemplateImage>(&loaded);
+        if (image == nullptr) {
+          evaluation.assets_available = false;
+          references->clear();
+          break;
+        }
+        references->push_back(layerc::core::compact_template_image(
+            *image, request.quality));
+      }
+      evaluation.references = references;
+      reference_sets.emplace(
+          std::move(reference_key),
+          ReferenceSet{.images = std::move(references),
+                       .available = evaluation.assets_available});
+    }
+  }
+}
+
+void VisualCaptureWorker::evaluate_requests(
+    RunState &run, const layerc::capture::CapturePollResult &result,
+    const layerc::core::TimePoint now) {
+  PixelMeasurementCache measurement_cache;
+  measurement_cache.reserve(run.requests.size() *
+                            layerc::core::max_pixel_rules);
+  for (const auto &request : run.requests) {
+    auto &state = run.evaluations[request.source_key];
+    if (state.next_sample != layerc::core::TimePoint{} &&
+        now < state.next_sample)
+      continue;
+    state.snapshot.source_key = request.source_key;
+    state.snapshot.sequence = run.capture_sequence;
+    state.snapshot.missing_template_assets = false;
+    state.snapshot.measurements.clear();
+    state.snapshot.measurements.reserve(request.rules.size() +
+                                        request.templates.size());
+    for (const auto &rule : request.rules) {
+      const auto [availability, matched] =
+          evaluate_once(rule, result, request.quality, measurement_cache);
+      state.snapshot.measurements.push_back(
+          {.observation_id = rule.id,
+           .availability = availability,
+           .matched = matched,
+           .confidence = matched ? 1.0 : 0.0,
+           .sampled_at = now});
+    }
+    for (const auto &evaluation : request.templates) {
+      const std::span<const layerc::core::TemplateImage> references =
+          evaluation.references
+              ? std::span{evaluation.references->data(),
+                          evaluation.references->size()}
+              : std::span<const layerc::core::TemplateImage>{};
+      state.snapshot.measurements.push_back(
+          layerc::capture::evaluate_template_measurement(
+              evaluation.state, references, evaluation.assets_available,
+              {result, request.quality, now}, run.template_matcher));
+      if (!evaluation.assets_available || !evaluation.references ||
+          evaluation.references->size() != evaluation.state.references.size())
+        state.snapshot.missing_template_assets = true;
+    }
+    state.next_sample =
+        now + std::chrono::milliseconds(1'000 / request.sample_rate_hz);
+  }
+}
+
+void VisualCaptureWorker::publish_latest(
+    const RunState &state, layerc::capture::CapturePollResult result) {
+  {
+    const std::scoped_lock lock(mutex_);
+    latest_.sequence = state.capture_sequence;
+    latest_.result = std::move(result);
+    latest_.gpu_description = state.capture.gpu_description();
+    latest_.evaluations.clear();
+    if (state.applied_request_revision == request_revision_) {
+      latest_.evaluations.reserve(state.evaluations.size());
+      for (const auto &[key, evaluation] : state.evaluations) {
+        (void)key;
+        if (evaluation.snapshot.sequence != 0)
+          latest_.evaluations.push_back(evaluation.snapshot);
+      }
+    }
+  }
+  if (snapshot_event_ != nullptr)
+    SetEvent(snapshot_event_);
+}
+
+void VisualCaptureWorker::run() {
+  RunState state(window_, quality_.load(std::memory_order_acquire));
+  (void)state.capture.start();
+  while (!stopping_.load(std::memory_order_acquire)) {
+    apply_pending_configuration(state);
     const auto now = layerc::core::MonotonicClock::now();
     const bool foreground =
         GetAncestor(GetForegroundWindow(), GA_ROOT) == window_;
-    auto result = capture.poll(now, foreground);
-    ++capture_sequence;
-    PixelMeasurementCache measurement_cache;
-    measurement_cache.reserve(requests.size() *
-                              layerc::core::max_pixel_rules);
-    for (const auto &request : requests) {
-      auto &state = evaluations[request.source_key];
-      if (state.next_sample != layerc::core::TimePoint{} &&
-          now < state.next_sample)
-        continue;
-      state.snapshot.source_key = request.source_key;
-      state.snapshot.sequence = capture_sequence;
-      state.snapshot.missing_template_assets = false;
-      state.snapshot.measurements.clear();
-      state.snapshot.measurements.reserve(request.rules.size() +
-                                          request.templates.size());
-      for (const auto &rule : request.rules) {
-        const auto [availability, matched] = evaluate_once(
-            rule, result, request.quality, measurement_cache);
-        state.snapshot.measurements.push_back(
-            {.observation_id = rule.id,
-             .availability = availability,
-             .matched = matched,
-              .confidence = matched ? 1.0 : 0.0,
-              .sampled_at = {}});
-      }
-      for (const auto &evaluation : request.templates) {
-        auto availability = result.availability;
-        bool matched{};
-        double confidence{};
-        if (!evaluation.assets_available || !evaluation.references ||
-            evaluation.references->size() !=
-                evaluation.state.references.size()) {
-          availability = layerc::core::CaptureAvailability::unavailable;
-          state.snapshot.missing_template_assets = true;
-        } else if (availability ==
-                       layerc::core::CaptureAvailability::available &&
-                   result.frame) {
-          const auto match = template_matcher.evaluate(
-              evaluation.state, *evaluation.references,
-              result.frame->view(), request.quality,
-              result.frame->available_region,
-              result.frame->unavailable_regions);
-          if (!match.search_region_available) {
-            availability =
-                layerc::core::CaptureAvailability::outside_output;
-          } else {
-            matched = match.matched;
-            confidence = match.confidence;
-          }
-        }
-        state.snapshot.measurements.push_back(
-            {.observation_id = evaluation.state.id,
-             .availability = availability,
-             .matched = matched,
-             .confidence = confidence,
-             .sampled_at = {}});
-      }
-      const auto evaluated_at = layerc::core::MonotonicClock::now();
-      for (auto &measurement : state.snapshot.measurements)
-        measurement.sampled_at = evaluated_at;
-      state.next_sample =
-          evaluated_at +
-          std::chrono::milliseconds(1'000 / request.sample_rate_hz);
-    }
-    {
-      const std::scoped_lock lock(mutex_);
-      latest_.sequence = capture_sequence;
-      latest_.result = std::move(result);
-      latest_.gpu_description = capture.gpu_description();
-      latest_.evaluations.clear();
-      if (applied_request_revision == request_revision_) {
-        latest_.evaluations.reserve(evaluations.size());
-        for (const auto &[key, state] : evaluations) {
-          (void)key;
-          if (state.snapshot.sequence != 0)
-            latest_.evaluations.push_back(state.snapshot);
-        }
-      }
-    }
-    if (snapshot_event_ != nullptr) SetEvent(snapshot_event_);
+    auto result = state.capture.poll(now, foreground).result;
+    ++state.capture_sequence;
+    evaluate_requests(state, result, now);
+    publish_latest(state, std::move(result));
 
     const auto rate = std::max<std::uint8_t>(
         1, sample_rate_hz_.load(std::memory_order_acquire));
@@ -339,11 +357,11 @@ void VisualCaptureWorker::run() {
     std::unique_lock lock(mutex_);
     wake_.wait_for(lock, interval, [&] {
       return stopping_.load(std::memory_order_acquire) ||
-             request_revision_ != applied_request_revision ||
-             exclusion_revision_ != applied_exclusion_revision;
+             request_revision_ != state.applied_request_revision ||
+             exclusion_revision_ != state.applied_exclusion_revision;
     });
   }
-  capture.stop();
+  state.capture.stop();
 }
 
 } // namespace layerc::daemon

@@ -30,6 +30,8 @@ struct AutomationRuntime::Impl {
 
   void consume_timer_firing(std::string_view id, TimePoint now);
   void make_trace_room();
+  [[nodiscard]] std::optional<AutomationTraceEntry>
+  begin_trace(const AutomationEvent &event);
   void add_source_trace(const AutomationEvent &event);
   void add_trace(const AutomationEvent &event, std::string automation,
                  std::string rule, std::string phase, std::string detail);
@@ -48,23 +50,25 @@ struct AutomationRuntime::Impl {
                       AutomationRuntimeSnapshot &target, AutomationError &error,
                       std::vector<AutomationEvent> &derived) const;
 
+  struct EvaluationStage {
+    AutomationRuntimeSnapshot root_snapshot;
+    AutomationRuntimeSnapshot staged;
+    std::vector<AutomationEvent> queue;
+    std::set<std::uint64_t> fired;
+    std::map<std::string, AutomationEffect, std::less<>> winners;
+    TimePoint deadline;
+    AutomationEvaluationResult &result;
+    AutomationError &fault;
+  };
+
   // Returns the automation to fault and retry after a transactional failure;
   // nullopt means the attempt committed, rejected, or hit a cap.
   [[nodiscard]] std::optional<std::string>
   evaluate_event(const AutomationEvent &root, const AutomationEvent &event,
-                 const AutomationRuntimeSnapshot &root_snapshot,
-                 AutomationRuntimeSnapshot &staged,
-                 std::vector<AutomationEvent> &queue,
-                 std::set<std::uint64_t> &fired,
-                 std::map<std::string, AutomationEffect, std::less<>> &winners,
-                 TimePoint deadline, AutomationEvaluationResult &result,
-                 AutomationError &fault);
-  [[nodiscard]] std::optional<std::string> commit_batch(
-      const AutomationRuntimeSnapshot &root_snapshot,
-      const std::vector<AutomationEvent> &queue,
-      const std::map<std::string, AutomationEffect, std::less<>> &winners,
-      const EffectValidator &validator, const EffectCommitter &committer,
-      AutomationEvaluationResult &result, AutomationError &fault);
+                 EvaluationStage &stage);
+  [[nodiscard]] std::optional<std::string>
+  commit_batch(EvaluationStage &stage, const EffectValidator &validator,
+               const EffectCommitter &committer);
   [[nodiscard]] std::optional<std::string>
   evaluate(const AutomationEvent &root, const EffectValidator &validator,
            const EffectCommitter &committer, TimePoint deadline,

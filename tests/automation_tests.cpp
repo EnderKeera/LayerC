@@ -146,6 +146,16 @@ void test_automation_profile_round_trip() {
              parse_automation_profile_json(json, wrong_base)),
          "automation sidecars must match their base profile ID");
 
+  // Like the other sidecars, automation rejects unknown fields so a misspelt
+  // optional key cannot silently fall back to its default.
+  auto misspelt = json;
+  misspelt.replace(misspelt.find("\"priority\":"), 11, "\"priorty\":");
+  const auto misspelt_result = parse_automation_profile_json(misspelt, base);
+  expect(std::holds_alternative<AutomationError>(misspelt_result) &&
+             std::get<AutomationError>(misspelt_result).path ==
+                 "$.automations[0].rules[0].priorty",
+         "automation sidecars reject unknown fields at their source path");
+
   auto invalid = source;
   invalid.automations.front().rules.front().actions.front().target = "missing";
   expect(!validate_automation_profile(invalid, base).message.empty(),
@@ -411,10 +421,11 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
       .event = AutomationEventKind::session_started,
       .actions = {{.kind = AutomationActionKind::set_variable,
                    .target = "count",
-                   .value = {.kind = ExpressionKind::binary,
-                             .operation = "divide",
-                             .arguments = {literal(AutomationValue(1.0)),
-                                           literal(AutomationValue(0.0))}}}}};
+                   .value = AutomationExpression{
+                       .kind = ExpressionKind::binary,
+                       .operation = "divide",
+                       .arguments = {literal(AutomationValue(1.0)),
+                                     literal(AutomationValue(0.0))}}}}};
   AutomationRule healthy{
       .id = "healthy",
       .event = AutomationEventKind::session_started,

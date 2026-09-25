@@ -1,6 +1,7 @@
 #include "layerc/core/automation.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/profile_wire.hpp"
 
 #include <optional>
 #include <variant>
@@ -8,52 +9,32 @@
 namespace layerc::core {
 namespace {
 
-void apply_show_text(Panel &panel, const AutomationValue &value) noexcept {
+// Bounds live on OverlayPropertySpec and are enforced by overlay_value_valid
+// before apply runs; these mutate only.
+template <bool BarAppearance::*Field>
+void apply_bar_flag(Panel &panel, const AutomationValue &value) noexcept {
   if (const auto *boolean = std::get_if<bool>(&value.storage))
-    panel.bar.show_text = *boolean;
-}
-
-void apply_hide_when_ready(Panel &panel,
-                           const AutomationValue &value) noexcept {
-  if (const auto *boolean = std::get_if<bool>(&value.storage))
-    panel.bar.hide_when_ready = *boolean;
+    panel.bar.*Field = *boolean;
 }
 
 void apply_layout(Panel &panel, const AutomationValue &value) noexcept {
   const auto *text = std::get_if<std::string>(&value.storage);
   if (text == nullptr)
     return;
-  if (*text == "row")
-    panel.layout = PanelLayout::row;
-  else if (*text == "column")
-    panel.layout = PanelLayout::column;
-  else if (*text == "grid")
-    panel.layout = PanelLayout::grid;
-}
-
-void apply_width(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *integer = std::get_if<std::int64_t>(&value.storage);
-  if (integer != nullptr && *integer >= 40 && *integer <= 1'200)
-    panel.bar.width = static_cast<std::uint32_t>(*integer);
-}
-
-void apply_height(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *integer = std::get_if<std::int64_t>(&value.storage);
-  if (integer != nullptr && *integer >= 16 && *integer <= 240)
-    panel.bar.height = static_cast<std::uint32_t>(*integer);
+  if (const auto layout =
+          profile_wire::parse(profile_wire::panel_layout, *text))
+    panel.layout = *layout;
 }
 
 template <std::uint32_t BarAppearance::*Field>
-void apply_color(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *integer = std::get_if<std::int64_t>(&value.storage);
-  if (integer != nullptr && *integer >= 0 && *integer <= 0xFFFFFF)
+void apply_bar_integer(Panel &panel, const AutomationValue &value) noexcept {
+  if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
     panel.bar.*Field = static_cast<std::uint32_t>(*integer);
 }
 
 template <double Panel::*Field>
 void apply_anchor(Panel &panel, const AutomationValue &value) noexcept {
-  const auto *number = std::get_if<double>(&value.storage);
-  if (number != nullptr && *number >= 0.0 && *number <= 1.0)
+  if (const auto *number = std::get_if<double>(&value.storage))
     panel.*Field = *number;
 }
 
@@ -64,48 +45,48 @@ constexpr OverlayPropertySpec overlay_properties[] = {
      .apply = nullptr},
     {.name = "showText",
      .type = AutomationValueType::boolean,
-     .apply = apply_show_text},
+     .apply = apply_bar_flag<&BarAppearance::show_text>},
     {.name = "hideWhenReady",
      .type = AutomationValueType::boolean,
-     .apply = apply_hide_when_ready},
+     .apply = apply_bar_flag<&BarAppearance::hide_when_ready>},
     {.name = "text",
      .type = AutomationValueType::string,
      .panel_text = true,
      .apply = nullptr},
     {.name = "layout",
      .type = AutomationValueType::string,
-     .string_choices = {"row", "column", "grid"},
+     .panel_layout = true,
      .apply = apply_layout},
     {.name = "width",
      .type = AutomationValueType::integer,
      .min_value = 40,
      .max_value = 1'200,
-     .apply = apply_width},
+     .apply = apply_bar_integer<&BarAppearance::width>},
     {.name = "height",
      .type = AutomationValueType::integer,
      .min_value = 16,
      .max_value = 240,
-     .apply = apply_height},
+     .apply = apply_bar_integer<&BarAppearance::height>},
     {.name = "fillColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::fill_color>},
+     .apply = apply_bar_integer<&BarAppearance::fill_color>},
     {.name = "backgroundColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::background_color>},
+     .apply = apply_bar_integer<&BarAppearance::background_color>},
     {.name = "borderColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::border_color>},
+     .apply = apply_bar_integer<&BarAppearance::border_color>},
     {.name = "textColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::text_color>},
+     .apply = apply_bar_integer<&BarAppearance::text_color>},
     {.name = "anchorX",
      .type = AutomationValueType::number,
      .min_value = 0.0,
@@ -137,10 +118,9 @@ bool overlay_value_valid(const OverlayPropertySpec &spec,
     const auto *text = std::get_if<std::string>(&value.storage);
     if (text == nullptr)
       return false;
-    if (spec.string_choices[0].empty())
+    if (!spec.panel_layout)
       return text->size() <= max_automation_string_bytes;
-    return *text == spec.string_choices[0] || *text == spec.string_choices[1] ||
-           *text == spec.string_choices[2];
+    return profile_wire::parse(profile_wire::panel_layout, *text).has_value();
   }
   case AutomationValueType::integer: {
     const auto *integer = std::get_if<std::int64_t>(&value.storage);

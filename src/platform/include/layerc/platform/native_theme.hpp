@@ -1,6 +1,6 @@
 #pragma once
 
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/editor_appearance.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -43,8 +43,6 @@ inline constexpr ThemeBase dark_theme{0x1B1F24, 0x282D34, 0x20252B, 0x4B525C,
 [[nodiscard]] NativeThemeColors native_theme_colors(
     EditorTheme theme, std::uint32_t accent, EditorControlRole role,
     const EditorAppearanceOverrides &overrides);
-[[nodiscard]] NativeThemeColors native_theme_colors(
-    EditorTheme theme, std::uint32_t accent, EditorControlRole role);
 
 void enable_native_dark_mode();
 void set_dark_title_bar(HWND window);

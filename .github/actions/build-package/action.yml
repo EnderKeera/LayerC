@@ -1,0 +1,53 @@
+name: Build, test, and package (Windows)
+description: Shared ci-preset pipeline (configure/build/test/bench/install/ZIP).
+runs:
+  using: composite
+  steps:
+    - name: Configure (CI preset)
+      shell: pwsh
+      run: cmake --preset ci
+
+    - name: Build
+      shell: pwsh
+      run: cmake --build --preset ci --parallel
+
+    - name: Test
+      shell: pwsh
+      run: |
+        python -m unittest tools/tests/test_linux_test_report.py
+        if ($LASTEXITCODE -ne 0) { throw 'CTest result policy tests failed.' }
+        $registration = Join-Path $PWD 'build/ci/test-registration.json'
+        ctest --test-dir build/ci --show-only=json-v1 |
+          Set-Content -LiteralPath $registration -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { throw 'CTest registration failed.' }
+        $reportPath = Join-Path $PWD 'build/ci/test-results.xml'
+        ctest --preset ci --output-on-failure --no-tests=error `
+          --output-junit $reportPath
+        if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
+        # Hosted runners may lack CreateDesktop authority; that single skipped
+        # suite is explicitly allowed, but every other registered required
+        # suite must have executed and passed.
+        python tools/linux_test_report.py --registration $registration `
+          --junit $reportPath --label required `
+          --allow-skip layerc_overlay_tests `
+          --report build/ci/test-result-summary.json
+        if ($LASTEXITCODE -ne 0) { throw 'CTest result validation failed.' }
+
+    - name: Automated Benchmarks (Idle Plateau)
+      shell: pwsh
+      run: pwsh -File tools/benchmark_v22.ps1 -BuildDirectory build/ci
+
+    - name: Automated Benchmarks (CPU Evaluator)
+      shell: pwsh
+      run: pwsh -File tools/benchmark_v23.ps1 -BuildDirectory build/ci
+
+    - name: Install
+      shell: pwsh
+      run: cmake --build --preset ci-install
+
+    - name: Package (ZIP)
+      shell: pwsh
+      run: |
+        cpack --preset ci --verbose
+        Get-ChildItem -Recurse -Filter *.zip |
+          Select-Object FullName,Length | Format-Table
