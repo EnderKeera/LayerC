@@ -13,9 +13,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <optional>
 #include <string>
 #include <thread>
@@ -27,15 +25,15 @@
 namespace {
 
 using layerc::test::expect;
+using layerc::test::read_file;
+using layerc::test::write_file;
 using layerc::test::platform_live::completed_visual_gc;
 using layerc::test::platform_live::durable_read_contract;
 using layerc::test::platform_live::launch_auth_peer;
-using layerc::test::platform_live::read_test_file;
 using layerc::test::platform_live::test_automation_profile;
 using layerc::test::platform_live::test_profile;
 using layerc::test::platform_live::test_visual_profile;
 using layerc::test::platform_live::visual_gc_blocked_by;
-using layerc::test::platform_live::write_test_file;
 
 class ScopedCurrentDirectory {
 public:
@@ -136,21 +134,20 @@ void platform_transactions() {
   const auto transaction =
       directory / L"_transactions" / L"published-upper-bound";
   expect(
-      write_test_file(recovery_first, "new-first") &&
-          write_test_file(recovery_second, "old-second") &&
-          write_test_file(transaction / L"backup" / L"0.bin", "old-first") &&
-          write_test_file(transaction / L"backup" / L"1.bin", "old-second") &&
-          write_test_file(
-              transaction / L"journal.json",
-              "{\"schemaVersion\":2,\"operations\":["
-              "{\"root\":\"config\",\"target\":\"recovery-first.bin\","
-              "\"existed\":true},"
-              "{\"root\":\"config\",\"target\":\"recovery-second.bin\","
-              "\"existed\":true}]}\n") &&
-          write_test_file(transaction / L"published", "2\n") &&
+      write_file(recovery_first, "new-first") &&
+          write_file(recovery_second, "old-second") &&
+          write_file(transaction / L"backup" / L"0.bin", "old-first") &&
+          write_file(transaction / L"backup" / L"1.bin", "old-second") &&
+          write_file(transaction / L"journal.json",
+                     "{\"schemaVersion\":2,\"operations\":["
+                     "{\"root\":\"config\",\"target\":\"recovery-first.bin\","
+                     "\"existed\":true},"
+                     "{\"root\":\"config\",\"target\":\"recovery-second.bin\","
+                     "\"existed\":true}]}\n") &&
+          write_file(transaction / L"published", "2\n") &&
           layerc::platform::recover_profile_transactions(*transaction_scope) &&
-          read_test_file(recovery_first) == "old-first" &&
-          read_test_file(recovery_second) == "old-second",
+          read_file(recovery_first) == "old-first" &&
+          read_file(recovery_second) == "old-second",
       "recovery should roll back the durable published upper bound when a "
       "crash occurs before the next replacement");
 
@@ -158,18 +155,16 @@ void platform_transactions() {
   const auto committed_transaction =
       directory / L"_transactions" / L"committed-cleanup";
   expect(
-      write_test_file(committed_target, "published") &&
-          write_test_file(committed_transaction / L"backup" / L"0.bin",
-                          "old") &&
-          write_test_file(committed_transaction / L"journal.json",
-                          "{\"schemaVersion\":2,\"operations\":["
-                          "{\"root\":\"config\",\"target\":"
-                          "\"recovery-committed.bin\",\"existed\":true}]}\n") &&
-          write_test_file(committed_transaction / L"published", "1\n") &&
-          write_test_file(committed_transaction / L"committed",
-                          "committed\n") &&
+      write_file(committed_target, "published") &&
+          write_file(committed_transaction / L"backup" / L"0.bin", "old") &&
+          write_file(committed_transaction / L"journal.json",
+                     "{\"schemaVersion\":2,\"operations\":["
+                     "{\"root\":\"config\",\"target\":"
+                     "\"recovery-committed.bin\",\"existed\":true}]}\n") &&
+          write_file(committed_transaction / L"published", "1\n") &&
+          write_file(committed_transaction / L"committed", "committed\n") &&
           layerc::platform::recover_profile_transactions(*transaction_scope) &&
-          read_test_file(committed_target) == "published",
+          read_file(committed_target) == "published",
       "recovery should retain a committed publication and clean only its "
       "journal residue");
   filesystem_error.clear();
@@ -221,11 +216,7 @@ void platform_visual_assets() {
     expect(image != nullptr && image->pixels == asset.pixels &&
                image->alpha == asset.alpha,
            "stored template assets should verify and round-trip");
-    {
-      std::ofstream corrupt(stored_asset_info->path,
-                            std::ios::binary | std::ios::trunc);
-      corrupt << "not a png";
-    }
+    write_file(stored_asset_info->path, "not a png");
     expect(std::holds_alternative<layerc::platform::VisualAssetError>(
                layerc::platform::load_template_asset(
                    stored_asset_info->reference.asset_sha256)),
@@ -260,11 +251,7 @@ void platform_visual_assets() {
     const auto stale_asset_temporary =
         layerc::platform::visual_asset_directory() /
         (std::wstring(64, L'd') + L".png.1.1.tmp");
-    {
-      std::ofstream output(stale_asset_temporary,
-                           std::ios::binary | std::ios::trunc);
-      output << "stale";
-    }
+    write_file(stale_asset_temporary, "stale");
     std::filesystem::last_write_time(
         stale_asset_temporary,
         std::filesystem::file_time_type::clock::now() - std::chrono::hours(48),
@@ -293,8 +280,8 @@ void platform_visual_assets() {
       auto recovery_visual = gc_visual;
       recovery_visual.templates.front().references = {
           third_asset_info->reference};
-      std::ofstream output(stale_backup, std::ios::binary | std::ios::trunc);
-      output << layerc::core::serialize_visual_profile_json(recovery_visual);
+      write_file(stale_backup,
+                 layerc::core::serialize_visual_profile_json(recovery_visual));
     }
     const bool recovery_gc_completed = completed_visual_gc(0U, 2U);
     expect(third_asset_info != nullptr && recovery_gc_completed &&
@@ -303,14 +290,8 @@ void platform_visual_assets() {
            "retained");
 
     const auto malformed = directory / L"unreadable.json";
-    {
-      std::ofstream output(malformed, std::ios::binary | std::ios::trunc);
-      output << "{not-json";
-    }
-    {
-      std::ofstream output(stale_backup, std::ios::binary | std::ios::trunc);
-      output << "{corrupt-stale-backup";
-    }
+    write_file(malformed, "{not-json");
+    write_file(stale_backup, "{corrupt-stale-backup");
     const bool unrelated_malformed_gc_completed = completed_visual_gc(0U, 1U);
     expect(
         third_asset_info != nullptr && unrelated_malformed_gc_completed &&
@@ -329,10 +310,7 @@ void platform_visual_assets() {
         std::get_if<layerc::platform::ImportedTemplateAsset>(&fourth_result);
     const auto active_sidecar =
         layerc::platform::visual_sidecar_path(gc_profile_path);
-    {
-      std::ofstream output(active_sidecar, std::ios::binary | std::ios::trunc);
-      output << "{invalid-active-sidecar";
-    }
+    write_file(active_sidecar, "{invalid-active-sidecar");
     const bool gc_was_blocked = visual_gc_blocked_by(active_sidecar);
     expect(fourth_asset_info != nullptr && gc_was_blocked &&
                std::filesystem::exists(fourth_asset_info->path),
@@ -509,7 +487,7 @@ void platform_visual_sidecar_recovery() {
          "visual sidecars should pair by base profile filename");
   const auto absent_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  expect(absent_visual.state == layerc::platform::VisualSidecarState::absent,
+  expect(absent_visual.state == layerc::platform::ModuleSidecarState::absent,
          "profiles without a visual sidecar should remain input-only");
   auto visual = test_visual_profile();
   expect(layerc::platform::write_profile_bundle(path, second, visual),
@@ -536,45 +514,36 @@ void platform_visual_sidecar_recovery() {
     const auto after_state_failure =
         layerc::platform::load_visual_sidecar(path, second);
     expect(after_state_failure.state ==
-                   layerc::platform::VisualSidecarState::valid &&
+                   layerc::platform::ModuleSidecarState::valid &&
                after_state_failure.profile.has_value() &&
                after_state_failure.profile->sample_rate_hz == 15,
            "a state-publication failure must restore the previous "
            "visual and backup");
     visual.sample_rate_hz = 15;
   }
-  {
-    std::ofstream corrupt(expected_sidecar, std::ios::binary | std::ios::trunc);
-    corrupt << "{broken";
-  }
+  write_file(expected_sidecar, "{broken");
   const auto recovered_visual =
       layerc::platform::load_visual_sidecar(path, second);
   expect(recovered_visual.state ==
-                 layerc::platform::VisualSidecarState::recovered_backup &&
+                 layerc::platform::ModuleSidecarState::recovered_backup &&
              recovered_visual.profile.has_value() &&
              recovered_visual.profile->sample_rate_hz == 10,
          "an invalid visual sidecar should recover its last valid backup");
-  {
-    std::ofstream corrupt(visual_backup, std::ios::binary | std::ios::trunc);
-    corrupt << "{also-broken";
-  }
+  write_file(visual_backup, "{also-broken");
   const auto invalid_visual =
       layerc::platform::load_visual_sidecar(path, second);
   expect(invalid_visual.state ==
-                 layerc::platform::VisualSidecarState::invalid &&
+                 layerc::platform::ModuleSidecarState::invalid &&
              !invalid_visual.error.message.empty(),
          "two invalid visual copies should produce a blocking diagnostic");
   visual.sample_rate_hz = 5;
   expect(layerc::platform::write_profile_bundle(path, second, visual),
          "repairing an invalid visual sidecar should replace its stale backup");
-  {
-    std::ofstream corrupt(expected_sidecar, std::ios::binary | std::ios::trunc);
-    corrupt << "{broken-again";
-  }
+  write_file(expected_sidecar, "{broken-again");
   const auto repaired_backup =
       layerc::platform::load_visual_sidecar(path, second);
   expect(repaired_backup.state ==
-                 layerc::platform::VisualSidecarState::recovered_backup &&
+                 layerc::platform::ModuleSidecarState::recovered_backup &&
              repaired_backup.profile.has_value() &&
              repaired_backup.profile->sample_rate_hz == 5,
          "a second corruption should recover the repaired visual definition");
@@ -591,19 +560,12 @@ void platform_atomic_temporary_collision() {
   const auto collision_path = directory / L"collision.json";
   auto legacy_temporary = collision_path;
   legacy_temporary += L".tmp";
-  {
-    std::ofstream sentinel(legacy_temporary, std::ios::binary);
-    sentinel << "do-not-replace";
-  }
+  write_file(legacy_temporary, "do-not-replace");
   expect(layerc::platform::write_profile_file(
              collision_path, layerc::core::serialize_profile_json(first)),
          "profile writes should not collide with a legacy deterministic "
          ".tmp file");
-  std::ifstream sentinel(legacy_temporary, std::ios::binary);
-  const std::string sentinel_contents{std::istreambuf_iterator<char>(sentinel),
-                                      std::istreambuf_iterator<char>()};
-  sentinel.close();
-  expect(sentinel_contents == "do-not-replace",
+  expect(read_file(legacy_temporary) == "do-not-replace",
          "unique atomic-write temporaries should leave unrelated "
          ".tmp files untouched");
 }
@@ -657,7 +619,7 @@ void platform_bundle_recovery() {
       std::get_if<layerc::core::GameProfile>(&rolled_back_profile);
   layerc::platform::VisualSidecarLoad rolled_back_visual;
   if (rolled_back == nullptr)
-    rolled_back_visual.state = layerc::platform::VisualSidecarState::invalid;
+    rolled_back_visual.state = layerc::platform::ModuleSidecarState::invalid;
   else
     rolled_back_visual =
         layerc::platform::load_visual_sidecar(bundle_path, *rolled_back);
@@ -726,7 +688,7 @@ void platform_bundle_recovery() {
         layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
     expect(
         removed_while_locked.state ==
-            layerc::platform::VisualSidecarState::absent,
+            layerc::platform::ModuleSidecarState::absent,
         "locked stale visual bytes must remain inactive after removal commits");
     CloseHandle(locked_visual);
   }
@@ -738,7 +700,7 @@ void platform_bundle_recovery() {
           layerc::platform::visual_sidecar_path(bundle_path)) &&
           std::filesystem::exists(committed_visual_backup) &&
           layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile)
-                  .state == layerc::platform::VisualSidecarState::absent,
+                  .state == layerc::platform::ModuleSidecarState::absent,
       "a durable removal marker must keep retained visual recovery bytes "
       "inactive");
 }
@@ -805,7 +767,7 @@ void platform_automation_state_recovery() {
         "a failed state replacement must retain the prior durable checkpoint");
     CloseHandle(locked_state);
   }
-  expect(write_test_file(automation_state_path, "{malformed") &&
+  expect(write_file(automation_state_path, "{malformed") &&
              layerc::platform::load_automation_state(bundle_path,
                                                      automation_bundle)
                  .error.has_value(),
@@ -830,7 +792,7 @@ void platform_automation_state_recovery() {
         "are locked");
     expect(layerc::platform::load_automation_sidecar(bundle_path,
                                                      new_bundle_profile)
-                   .state == layerc::platform::AutomationSidecarState::absent,
+                   .state == layerc::platform::ModuleSidecarState::absent,
            "locked stale automation bytes must remain inactive after removal "
            "commits");
     CloseHandle(locked_automation);
@@ -842,7 +804,7 @@ void platform_automation_state_recovery() {
              std::filesystem::exists(automation_backup) &&
              layerc::platform::load_automation_sidecar(bundle_path,
                                                        new_bundle_profile)
-                     .state == layerc::platform::AutomationSidecarState::absent,
+                     .state == layerc::platform::ModuleSidecarState::absent,
          "automation removal must keep retained recovery bytes inactive after "
          "unlock");
 }
@@ -876,10 +838,7 @@ void platform_corrupt_profile_recovery() {
     return;
   const auto first = test_profile("First");
   const auto corrupt_path = directory / L"corrupt.json";
-  {
-    std::ofstream corrupt(corrupt_path, std::ios::binary | std::ios::trunc);
-    corrupt << R"({"schemaVersion":1,"name":)";
-  }
+  write_file(corrupt_path, R"({"schemaVersion":1,"name":)");
   const auto corrupt_contents =
       layerc::platform::read_profile_file(corrupt_path);
   expect(corrupt_contents.has_value() &&

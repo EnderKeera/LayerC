@@ -35,29 +35,6 @@ std::string random_hex() {
   return result;
 }
 
-std::wstring quoted(const std::wstring &value) {
-  std::wstring output = L"\"";
-  std::size_t slashes{};
-  for (const wchar_t character : value) {
-    if (character == L'\\') {
-      ++slashes;
-      continue;
-    }
-    if (character == L'\"') {
-      output.append(slashes * 2U + 1U, L'\\');
-      output.push_back(L'\"');
-      slashes = 0;
-      continue;
-    }
-    output.append(slashes, L'\\');
-    slashes = 0;
-    output.push_back(character);
-  }
-  output.append(slashes * 2U, L'\\');
-  output.push_back(L'\"');
-  return output;
-}
-
 template <typename NativeHandle>
 HANDLE cancellable_thread_handle(const NativeHandle handle) noexcept {
   if constexpr (std::is_pointer_v<NativeHandle>)
@@ -114,45 +91,30 @@ IsolatedHelperProcess::~IsolatedHelperProcess() { close(); }
 
 HANDLE IsolatedHelperProcess::pipe() const noexcept {
   const std::scoped_lock lock(mutex_);
-  return pipe_;
+  return pipe_.get();
 }
 
 DWORD IsolatedHelperProcess::process_id() const noexcept {
   const std::scoped_lock lock(mutex_);
-  return process_id_;
+  return child_.process_id;
 }
 
 void IsolatedHelperProcess::terminate(const DWORD exit_code) noexcept {
   std::scoped_lock lock(mutex_);
-  if (job_ != nullptr)
-    (void)TerminateJobObject(job_, exit_code);
-  // The process may not have reached AssignProcessToJobObject yet when a
-  // foreground transition destroys this worker. Terminate it directly as
-  // well so the CREATE_SUSPENDED launch window cannot leak an orphan.
-  if (process_ != nullptr) {
-    (void)TerminateProcess(process_, exit_code);
-    (void)WaitForSingleObject(process_, 2'000);
-  }
-  if (pipe_ != INVALID_HANDLE_VALUE)
-    (void)CancelIoEx(pipe_, nullptr);
+  // Terminates the Job and the process directly: the process may not have
+  // reached AssignProcessToJobObject yet when a foreground transition destroys
+  // this worker, and the CREATE_SUSPENDED launch window must not leak it.
+  child_.terminate(exit_code);
+  if (pipe_.valid())
+    (void)CancelIoEx(pipe_.get(), nullptr);
 }
 
 void IsolatedHelperProcess::close() noexcept {
   const std::scoped_lock lock(mutex_);
-  if (pipe_ != INVALID_HANDLE_VALUE) {
-    (void)DisconnectNamedPipe(pipe_);
-    CloseHandle(pipe_);
-    pipe_ = INVALID_HANDLE_VALUE;
-  }
-  if (process_ != nullptr) {
-    CloseHandle(process_);
-    process_ = nullptr;
-  }
-  if (job_ != nullptr) {
-    CloseHandle(job_);
-    job_ = nullptr;
-  }
-  process_id_ = 0;
+  if (pipe_.valid())
+    (void)DisconnectNamedPipe(pipe_.get());
+  pipe_.reset();
+  child_ = {};
 }
 
 bool IsolatedHelperProcess::connect_and_authenticate(
@@ -161,8 +123,8 @@ bool IsolatedHelperProcess::connect_and_authenticate(
   DWORD helper_process_id{};
   {
     const std::scoped_lock lock(mutex_);
-    pipe = pipe_;
-    helper_process_id = process_id_;
+    pipe = pipe_.get();
+    helper_process_id = child_.process_id;
   }
   const BOOL connected = ConnectNamedPipe(pipe, nullptr);
   if (connected == FALSE && GetLastError() != ERROR_PIPE_CONNECTED) {
@@ -221,8 +183,10 @@ bool IsolatedHelperProcess::launch(const HWND window,
   if (!prepare_helper_pipe(pipe_name, launch_pipe, error))
     return false;
   const std::wstring command =
-      quoted(helper.wstring()) + L" --pipe=" + quoted(pipe_name) +
-      L" --nonce=" + quoted(std::wstring(nonce.begin(), nonce.end())) +
+      platform::quote_command_argument(helper.wstring()) + L" --pipe=" +
+      platform::quote_command_argument(pipe_name) + L" --nonce=" +
+      platform::quote_command_argument(
+          std::wstring(nonce.begin(), nonce.end())) +
       L" --parent=" + std::to_wstring(GetCurrentProcessId()) + L" --window=" +
       std::to_wstring(reinterpret_cast<std::uintptr_t>(window));
   platform::HelperLaunchOptions options;
@@ -232,12 +196,9 @@ bool IsolatedHelperProcess::launch(const HWND window,
   options.active_process_limit = 1;
   options.process_memory_limit = 256ULL * 1024ULL * 1024ULL;
   options.validate_suspended = [&](const HANDLE process, const DWORD id) {
-    DWORD current_session{}, helper_session{};
     return !stopping.load(std::memory_order_acquire) &&
            platform::process_image_equals(process, helper) &&
-           ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
-           ProcessIdToSessionId(id, &helper_session) != FALSE &&
-           current_session == helper_session;
+           platform::same_session_as_current_process(id);
   };
   {
     // Serialize launch and ownership publication against stop(). The platform
@@ -250,11 +211,8 @@ bool IsolatedHelperProcess::launch(const HWND window,
                   : "isolated helper failed package, session, or job validation";
       return false;
     }
-    auto &child = std::get<platform::BoundedHelper>(launched);
-    job_ = child.job.release();
-    pipe_ = launch_pipe.release();
-    process_ = child.process.release();
-    process_id_ = child.process_id;
+    child_ = std::move(std::get<platform::BoundedHelper>(launched));
+    pipe_ = std::move(launch_pipe);
   }
 
   if (!connect_and_authenticate(nonce, error)) {

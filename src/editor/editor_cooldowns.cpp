@@ -194,7 +194,7 @@ bool EditorWindow::handle_binding_capture_message(const MSG &message) {
   }
   if ((message.message == WM_LBUTTONDOWN || message.message == WM_RBUTTONDOWN ||
        message.message == WM_MBUTTONDOWN) &&
-      message.hwnd != GetDlgItem(shell_.window(), IDC_CAPTURE_BINDING)) {
+      message.hwnd != GetDlgItem(shell_.window, IDC_CAPTURE_BINDING)) {
     cancel_binding_capture();
   }
   return false;
@@ -203,10 +203,10 @@ bool EditorWindow::handle_binding_capture_message(const MSG &message) {
 void EditorWindow::refresh_profile_controls() {
   cooldown_editor_.finish_binding_capture();
   auto sync = shell_.sync_scope();
-  const ProfileFieldContext context{shell_.window(), document_.profile()};
+  const ProfileFieldContext context{shell_.window, document_.profile()};
   write_profile_fields(context, ProfileFieldOwner::profile);
   set_owner_draw_checkbox(
-      GetDlgItem(shell_.window(), IDC_APPLICATION_EXACT_PATH),
+      GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH),
       !document_.profile().game.executable_path.empty());
   const auto &game = document_.profile().game;
   std::wstring application = L"Choose a running application.";
@@ -214,25 +214,25 @@ void EditorWindow::refresh_profile_controls() {
     application = to_wide(game.executable_path);
   else if (!game.executable_name.empty())
     application = to_wide(game.executable_name);
-  set_text(shell_.application_path(), application);
+  set_text(shell_.application_path, application);
   refresh_cooldown_list();
   refresh_bar_list();
-  InvalidateRect(panel_preview_.window(), nullptr, TRUE);
+  InvalidateRect(panel_preview_.window, nullptr, TRUE);
 }
 
 void EditorWindow::refresh_cooldown_list(const int selection) {
-  SendMessageW(cooldown_editor_.list(), LB_RESETCONTENT, 0, 0);
+  SendMessageW(cooldown_editor_.list, LB_RESETCONTENT, 0, 0);
   for (std::size_t index = 0; index < document_.profile().cooldowns.size(); ++index) {
     const auto label = cooldown_label(document_.profile().cooldowns[index]);
-    const auto item = SendMessageW(cooldown_editor_.list(), LB_ADDSTRING, 0,
+    const auto item = SendMessageW(cooldown_editor_.list, LB_ADDSTRING, 0,
                                    reinterpret_cast<LPARAM>(label.c_str()));
     if (item != LB_ERR && item != LB_ERRSPACE)
-      SendMessageW(cooldown_editor_.list(), LB_SETITEMDATA, static_cast<WPARAM>(item),
+      SendMessageW(cooldown_editor_.list, LB_SETITEMDATA, static_cast<WPARAM>(item),
                    static_cast<LPARAM>(index));
   }
   if (!document_.profile().cooldowns.empty())
     SendMessageW(
-        cooldown_editor_.list(), LB_SETCURSEL,
+        cooldown_editor_.list, LB_SETCURSEL,
         static_cast<WPARAM>(std::clamp(
             selection, 0, static_cast<int>(document_.profile().cooldowns.size()) - 1)),
         0);
@@ -241,27 +241,27 @@ void EditorWindow::refresh_cooldown_list(const int selection) {
 
 void EditorWindow::refresh_selected_cooldown_label() {
   const auto selected = selected_cooldown_row(
-      cooldown_editor_.list(), document_.profile().cooldowns.size());
+      cooldown_editor_.list, document_.profile().cooldowns.size());
   if (!selected)
     return;
   const auto [row, index] = *selected;
   const auto label = cooldown_label(document_.profile().cooldowns[index]);
   auto sync = shell_.sync_scope();
-  SendMessageW(cooldown_editor_.list(), LB_DELETESTRING, static_cast<WPARAM>(row), 0);
+  SendMessageW(cooldown_editor_.list, LB_DELETESTRING, static_cast<WPARAM>(row), 0);
   const LRESULT inserted = SendMessageW(
-      cooldown_editor_.list(), LB_INSERTSTRING, static_cast<WPARAM>(row),
+      cooldown_editor_.list, LB_INSERTSTRING, static_cast<WPARAM>(row),
       reinterpret_cast<LPARAM>(label.c_str()));
   if (inserted != LB_ERR && inserted != LB_ERRSPACE) {
-    SendMessageW(cooldown_editor_.list(), LB_SETITEMDATA,
+    SendMessageW(cooldown_editor_.list, LB_SETITEMDATA,
                  static_cast<WPARAM>(inserted), static_cast<LPARAM>(index));
-    SendMessageW(cooldown_editor_.list(), LB_SETCURSEL,
+    SendMessageW(cooldown_editor_.list, LB_SETCURSEL,
                  static_cast<WPARAM>(inserted), 0);
   }
 }
 
 layerc::core::CooldownDefinition *EditorWindow::selected_cooldown() {
   const auto selected = selected_cooldown_row(
-      cooldown_editor_.list(), document_.profile().cooldowns.size());
+      cooldown_editor_.list, document_.profile().cooldowns.size());
   if (!selected)
     return nullptr;
   return &document_.profile().cooldowns[selected->index];
@@ -271,31 +271,31 @@ void EditorWindow::refresh_binding_controls() {
   auto *cooldown = selected_cooldown();
   const bool has_selection = cooldown != nullptr;
   auto sync = shell_.sync_scope();
-  const HWND binding_control = GetDlgItem(shell_.window(), IDC_COOLDOWN_BINDING);
-  const HWND capture = GetDlgItem(shell_.window(), IDC_CAPTURE_BINDING);
+  const HWND binding_control = GetDlgItem(shell_.window, IDC_COOLDOWN_BINDING);
+  const HWND capture = GetDlgItem(shell_.window, IDC_CAPTURE_BINDING);
   for (const auto &binding : profile_field_bindings())
     if (binding.owner == ProfileFieldOwner::cooldown)
-      EnableWindow(GetDlgItem(shell_.window(), binding.control_id), has_selection);
+      EnableWindow(GetDlgItem(shell_.window, binding.control_id), has_selection);
   for (const int id : {IDC_COOLDOWN_ID, IDC_COOLDOWN_GROUPS,
                        IDC_COOLDOWN_BINDING, IDC_CAPTURE_BINDING,
                        IDC_CAPTURE_HID})
-    EnableWindow(GetDlgItem(shell_.window(), id), has_selection);
+    EnableWindow(GetDlgItem(shell_.window, id), has_selection);
   set_text(capture,
            cooldown_editor_.capturing_binding() ? L"Press chord..."
                                                 : L"Capture key");
   if (!has_selection) {
-    const ProfileFieldContext context{shell_.window(), document_.profile()};
+    const ProfileFieldContext context{shell_.window, document_.profile()};
     write_profile_fields(context, ProfileFieldOwner::cooldown);
     for (const int id : {IDC_COOLDOWN_ID, IDC_COOLDOWN_GROUPS})
-      set_text(GetDlgItem(shell_.window(), id), L"");
+      set_text(GetDlgItem(shell_.window, id), L"");
     set_text(binding_control, L"Select a cooldown");
     refresh_visual_controls();
     return;
   }
 
-  const ProfileFieldContext context{shell_.window(), document_.profile(), cooldown};
+  const ProfileFieldContext context{shell_.window, document_.profile(), cooldown};
   write_profile_fields(context, ProfileFieldOwner::cooldown);
-  set_text(GetDlgItem(shell_.window(), IDC_COOLDOWN_ID), to_wide(cooldown->id));
+  set_text(GetDlgItem(shell_.window, IDC_COOLDOWN_ID), to_wide(cooldown->id));
   std::wstring groups;
   for (const auto &group : document_.profile().cooldown_groups) {
     if (std::ranges::find(group.cooldown_ids, cooldown->id) ==
@@ -308,7 +308,7 @@ void EditorWindow::refresh_binding_controls() {
                   ? L" (shared pool)"
                   : L" (trigger propagation)";
   }
-  set_text(GetDlgItem(shell_.window(), IDC_COOLDOWN_GROUPS),
+  set_text(GetDlgItem(shell_.window, IDC_COOLDOWN_GROUPS),
            groups.empty() ? L"None" : groups);
   refresh_visual_controls();
   if (cooldown_editor_.capturing_binding()) {
@@ -336,7 +336,7 @@ void EditorWindow::begin_binding_capture() {
     return;
   }
   cooldown_editor_.begin_binding_capture();
-  SetFocus(GetDlgItem(shell_.window(), IDC_CAPTURE_BINDING));
+  SetFocus(GetDlgItem(shell_.window, IDC_CAPTURE_BINDING));
   refresh_binding_controls();
   set_status(L"Press a key or chord for the selected cooldown; Esc cancels.");
 }
@@ -456,22 +456,22 @@ void EditorWindow::add_cooldown() {
 
 void EditorWindow::remove_cooldown() {
   if (document_.profile().cooldowns.size() <= 1) {
-    MessageBoxW(shell_.window(), L"A profile needs at least one cooldown.",
+    MessageBoxW(shell_.window, L"A profile needs at least one cooldown.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
   const auto selected = selected_cooldown_row(
-      cooldown_editor_.list(), document_.profile().cooldowns.size());
+      cooldown_editor_.list, document_.profile().cooldowns.size());
   if (!selected) {
-    MessageBoxW(shell_.window(), L"Select a cooldown to remove.", L"LayerC Editor",
+    MessageBoxW(shell_.window, L"Select a cooldown to remove.", L"LayerC Editor",
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
   const std::size_t index = selected->index;
   const auto &cooldown = document_.profile().cooldowns[index];
   const auto prompt = L"Remove '" + to_wide(cooldown.name) + L"'?";
-  if (MessageBoxW(shell_.window(), prompt.c_str(), L"Remove cooldown",
+  if (MessageBoxW(shell_.window, prompt.c_str(), L"Remove cooldown",
                   MB_YESNO | MB_ICONQUESTION) != IDYES)
     return;
   const auto id = cooldown.id;

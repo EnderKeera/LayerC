@@ -43,6 +43,17 @@ inline constexpr ThemeBase dark_theme{0x1B1F24, 0x282D34, 0x20252B, 0x4B525C,
 [[nodiscard]] NativeThemeColors native_theme_colors(
     EditorTheme theme, std::uint32_t accent, EditorControlRole role,
     const EditorAppearanceOverrides &overrides);
+// One role of a full appearance, including that role's overrides.
+[[nodiscard]] NativeThemeColors
+native_theme_colors(const EditorAppearanceSettings &appearance,
+                    EditorControlRole role);
+// Segoe UI 9 pt at `dpi` (0 means 96): the shared native dialog font.
+[[nodiscard]] HFONT create_native_dialog_font(UINT dpi);
+// Fill or frame a rectangle through a temporary solid brush, or outline it
+// with a temporary pen, restoring the DC's selected objects.
+void fill_solid_rect(HDC dc, const RECT &rect, COLORREF color);
+void frame_solid_rect(HDC dc, const RECT &rect, COLORREF color);
+void outline_rect(HDC dc, const RECT &rect, int pen_width, COLORREF color);
 
 void enable_native_dark_mode();
 void set_dark_title_bar(HWND window);

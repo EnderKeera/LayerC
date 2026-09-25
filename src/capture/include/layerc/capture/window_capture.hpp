@@ -5,10 +5,13 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 
 namespace layerc::capture {
+
+class CaptureBackend;
 
 struct CaptureOptions {
   bool allow_desktop_duplication{true};
@@ -40,8 +43,22 @@ public:
   [[nodiscard]] std::string gpu_description() const;
 
 private:
-  class Impl;
-  std::unique_ptr<Impl> impl_;
+  [[nodiscard]] CapturePollResult poll_backend(core::TimePoint now,
+                                               bool foreground);
+  [[nodiscard]] std::string backend_error() const;
+  [[nodiscard]] bool start_backend(core::CaptureBackendKind kind);
+  [[nodiscard]] CapturePollResult switch_to(core::CaptureBackendKind kind,
+                                            std::string reason,
+                                            bool foreground);
+  void apply_exclusions();
+
+  HWND window_{};
+  CaptureOptions options_;
+  std::unique_ptr<CaptureBackend> backend_;
+  std::vector<RECT> excluded_;
+  std::string error_;
+  std::string fallback_reason_;
+  CaptureHealthTracker health_;
 };
 
 // One-shot screen snapshot used only when calibration's Desktop Duplication

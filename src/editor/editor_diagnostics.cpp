@@ -180,11 +180,11 @@ void copy_raw_json(const HWND owner, const std::string_view source) {
 } // namespace
 
 void EditorWindow::refresh_runtime_diagnostics_dialog() {
-  const HWND dialog = pack_dialogs_.diagnostics_window();
+  const HWND dialog = pack_dialogs_.diagnostics_window;
   if (dialog == nullptr || !IsWindow(dialog))
     return;
 
-  const auto &snapshot = pack_dialogs_.runtime_diagnostics_json();
+  const auto &snapshot = pack_dialogs_.runtime_diagnostics_json;
   const bool connected = live_edit_.channel().connected();
   const auto view = diagnostics_view(snapshot, connected,
                                      live_edit_.package_authenticated());
@@ -220,7 +220,7 @@ void EditorWindow::request_runtime_diagnostics() {
 }
 
 void EditorWindow::open_runtime_diagnostics() {
-  DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_RUNTIME_DIAGNOSTICS), shell_.window(),
+  DialogBoxParamW(shell_.instance, MAKEINTRESOURCEW(IDD_RUNTIME_DIAGNOSTICS), shell_.window,
                   &EditorWindow::diagnostics_dialog_proc,
                   reinterpret_cast<LPARAM>(this));
 }
@@ -232,11 +232,11 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
   if (editor == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    editor->pack_dialogs_.diagnostics_window() = window;
+    editor->pack_dialogs_.diagnostics_window = window;
     const int dpi = window_base_dpi(window);
     resize_to_logical_size(window, 760, 460);
-    apply_dialog_chrome(window, editor->shell_.capture_exclusion());
-    if (!editor->pack_dialogs_.diagnostics_chrome().attach(window, static_cast<UINT>(dpi)))
+    apply_dialog_chrome(window, editor->shell_.capture_exclusion);
+    if (!editor->pack_dialogs_.diagnostics_chrome.attach(window, static_cast<UINT>(dpi)))
       editor->style_dialog_children(window);
     SendDlgItemMessageW(window, IDC_DIAGNOSTICS_RAW_TOGGLE, BM_SETCHECK,
                         BST_CHECKED, 0);
@@ -248,12 +248,12 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     return TRUE;
   }
   if (message == WM_DPICHANGED) {
-    (void)editor->pack_dialogs_.diagnostics_chrome().on_dpi_changed(HIWORD(wparam), lparam);
+    (void)editor->pack_dialogs_.diagnostics_chrome.on_dpi_changed(HIWORD(wparam), lparam);
     layout_diagnostics_dialog(window);
     return TRUE;
   }
   if (message == WM_GETMINMAXINFO) {
-    editor->pack_dialogs_.diagnostics_chrome().on_minimum_size(lparam, 520, 320);
+    editor->pack_dialogs_.diagnostics_chrome.on_minimum_size(lparam, 520, 320);
     return TRUE;
   }
   if (message == WM_COMMAND) {
@@ -278,7 +278,7 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
       editor->request_runtime_diagnostics();
       return TRUE;
     case IDC_DIAGNOSTICS_COPY:
-      copy_raw_json(window, editor->pack_dialogs_.runtime_diagnostics_json());
+      copy_raw_json(window, editor->pack_dialogs_.runtime_diagnostics_json);
       return TRUE;
     case IDOK:
     case IDCANCEL:
@@ -287,8 +287,8 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     }
   }
   if (message == WM_DESTROY) {
-    editor->pack_dialogs_.diagnostics_window() = nullptr;
-    editor->pack_dialogs_.diagnostics_chrome().on_destroy();
+    editor->pack_dialogs_.diagnostics_window = nullptr;
+    editor->pack_dialogs_.diagnostics_chrome.on_destroy();
     return TRUE;
   }
   return editor->dialog_theme_message(window, message, wparam, lparam)

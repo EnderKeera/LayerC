@@ -58,8 +58,7 @@ void append_source_fields(std::string &output, const std::string_view path,
   output += ",\"size\":";
   core::json::append_unsigned(output, json.size());
   output += ",\"sha256\":";
-  core::json::append_quoted(
-      output, core::sha256(std::as_bytes(std::span(json.data(), json.size()))));
+  core::json::append_quoted(output, core::sha256(core::text_bytes(json)));
 }
 
 void append_module(std::string &output, bool &first,
@@ -77,15 +76,10 @@ void append_module(std::string &output, bool &first,
 
 } // namespace
 
-std::string as_string(const std::span<const std::byte> bytes) {
-  if (bytes.empty()) return {};
-  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-}
-
 namespace {
 
 bool is_safe_path_component(const std::string_view component) {
-  const auto wide = platform::try_utf8_to_wide(component);
+  const auto wide = core::try_utf8_to_wide(component);
   if (!wide.has_value() || wide->empty() || wide->size() > 240 ||
       wide->back() == L'.' || wide->back() == L' ')
     return false;
@@ -112,7 +106,7 @@ bool safe_entry_path(const std::string_view path) {
       path.find('\\') != std::string_view::npos ||
       path.find(':') != std::string_view::npos ||
       path.find('\0') != std::string_view::npos ||
-      !platform::try_utf8_to_wide(path).has_value())
+      !core::try_utf8_to_wide(path).has_value())
     return false;
   std::size_t start{};
   while (start <= path.size()) {

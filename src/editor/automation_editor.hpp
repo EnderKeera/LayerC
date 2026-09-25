@@ -16,31 +16,13 @@
 
 namespace layerc::editor {
 
-class AutomationHost {
-public:
-  virtual ~AutomationHost() = default;
+class EditorWindow;
 
-  [[nodiscard]] virtual ProfileDocument &document() noexcept = 0;
-  virtual void mark_changed(DocumentChangeKind kind) = 0;
-  [[nodiscard]] virtual HINSTANCE instance() const noexcept = 0;
-  [[nodiscard]] virtual HWND owner_window() const noexcept = 0;
-  [[nodiscard]] virtual HFONT owner_font() const noexcept = 0;
-  [[nodiscard]] virtual bool capture_exclusion_enabled() const noexcept = 0;
-  virtual void draw_owner_list_item(const DRAWITEMSTRUCT &item) const = 0;
-  [[nodiscard]] virtual std::optional<LRESULT>
-  owner_theme_message(HWND window, UINT message, WPARAM wparam,
-                      LPARAM lparam) const = 0;
-  [[nodiscard]] virtual bool live_connected() const noexcept = 0;
-  [[nodiscard]] virtual bool live_authenticated() const noexcept = 0;
-  virtual void advance_live_revision() noexcept = 0;
-  [[nodiscard]] virtual layerc::core::ProfileRevision
-  live_revision() const noexcept = 0;
-  virtual void send_live(const layerc::core::LiveMessage &message) = 0;
-};
-
+// The automation dialog. It is a friend of its owning EditorWindow and works
+// directly on that window's document, shell, and live-edit channel.
 class AutomationEditor final {
 public:
-  explicit AutomationEditor(AutomationHost &owner) noexcept;
+  explicit AutomationEditor(EditorWindow &owner) noexcept;
   ~AutomationEditor();
 
   AutomationEditor(const AutomationEditor &) = delete;
@@ -89,7 +71,7 @@ private:
   [[nodiscard]] Mutation mutate_automation(HWND dialog, const wchar_t *title,
                                            const AutomationEdit &edit);
 
-  AutomationHost &owner_;
+  EditorWindow &owner_;
   HWND dialog_{};
   DialogChrome chrome_;
   std::string trace_json_;

@@ -17,6 +17,9 @@ bool source_schema_before(const std::string_view source,
          version->as_number() < static_cast<double>(current_schema);
 }
 
+namespace {
+
+// True when the loaded visual sidecar's source file uses an older schema.
 bool visual_sidecar_is_legacy(const VisualSidecarLoad &visual) {
   if (visual.source_path.empty()) return false;
   const auto source = read_durable_text(visual.source_path,
@@ -24,6 +27,8 @@ bool visual_sidecar_is_legacy(const VisualSidecarLoad &visual) {
   return source && source_schema_before(*source,
                                         layerc::core::visual_schema_version);
 }
+
+} // namespace
 
 std::variant<ProfileBundleLoad, ProfileBundleLoadError>
 load_profile_bundle(const std::filesystem::path &path) {

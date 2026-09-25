@@ -56,7 +56,7 @@ RECT paint_checkbox(const HDC dc, const RECT bounds,
 void EditorWindow::draw_button(const DRAWITEMSTRUCT &draw,
                                const layerc::platform::EditorControlRole role,
                                const std::optional<COLORREF> explicit_fill) const {
-  layerc::platform::paint_native_button(draw, colors(role), shell_.font(),
+  layerc::platform::paint_native_button(draw, colors(role), shell_.font,
                                         explicit_fill);
 }
 void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
@@ -81,7 +81,7 @@ void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
       text_rect.right -= 4;
       SetBkMode(draw.hDC, TRANSPARENT);
       SetTextColor(draw.hDC, disabled ? list_colors.disabled : list_colors.text);
-      const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font());
+      const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font);
       DrawTextW(draw.hDC, label.c_str(), static_cast<int>(label.size()), &text_rect,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
       SelectObject(draw.hDC, previous_font);
@@ -107,7 +107,7 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
 
   if (draw.itemID != static_cast<UINT>(-1)) {
     const auto index = static_cast<std::size_t>(draw.itemID);
-    const bool enabled = index < shell_.profiles().size() && shell_.profiles()[index].enabled;
+    const bool enabled = index < shell_.profiles.size() && shell_.profiles[index].enabled;
     const bool checked =
         ListView_GetCheckState(draw.hwndItem,
                                static_cast<int>(draw.itemID)) != FALSE;
@@ -124,13 +124,13 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
         paint_checkbox(draw.hDC, row, state, checkbox_colors, metrics);
 
     const std::wstring label =
-        index < shell_.profiles().size() ? shell_.profiles()[index].label : std::wstring{};
+        index < shell_.profiles.size() ? shell_.profiles[index].label : std::wstring{};
     RECT text = row;
     text.left = box.right + std::max(1, MulDiv(5, metrics.image_size, 16));
     text.right -= std::max(1, MulDiv(4, metrics.image_size, 16));
     SetBkMode(draw.hDC, TRANSPARENT);
     SetTextColor(draw.hDC, enabled ? list_colors.text : list_colors.disabled);
-    const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font());
+    const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font);
     DrawTextW(draw.hDC, label.c_str(), static_cast<int>(label.size()), &text,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
                   DT_NOPREFIX);
@@ -162,13 +162,13 @@ void EditorWindow::draw_checkbox(const DRAWITEMSTRUCT &draw) const {
   SetBkMode(draw.hDC, TRANSPARENT);
   SetTextColor(draw.hDC,
                disabled ? role_colors.disabled : role_colors.text);
-  const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font());
+  const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font);
   DrawTextW(draw.hDC, label.data(), -1, &text,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
   SelectObject(draw.hDC, previous_font);
 }
 void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw, const HWND window) const {
-  const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font());
+  const HGDIOBJ previous_font = SelectObject(draw.hDC, shell_.font);
   const auto role_colors = colors(appearance_role(window));
   fill_solid_rect(draw.hDC, draw.rcItem, role_colors.fill);
   RECT button{draw.rcItem.left + 16, draw.rcItem.top + 16, draw.rcItem.left + 145, draw.rcItem.top + 48};
@@ -205,7 +205,7 @@ LRESULT EditorWindow::color_message(const UINT message, const WPARAM wparam,
                    type == BS_OWNERDRAW
                ? layerc::platform::EditorControlRole::button
                : layerc::platform::EditorControlRole::checkbox;
-  } else if (control == shell_.status()) {
+  } else if (control == shell_.status) {
     role = layerc::platform::EditorControlRole::status;
   }
   const auto role_colors = colors(role);

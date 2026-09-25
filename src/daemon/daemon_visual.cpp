@@ -50,12 +50,12 @@ void DaemonApp::reconcile_visual_captures(
   std::unordered_map<HWND, std::vector<VisualEvaluationRequest>> desired;
   for (const auto &consumer : demand.visual_consumers()) {
     if (consumer.runtime != runtime) continue;
-    const auto found = std::ranges::find_if(session_registry_.sessions(), [&](const auto &session) {
+    const auto found = std::ranges::find_if(session_registry_.sessions, [&](const auto &session) {
       return session != nullptr && session->profile.id == consumer.profile_id &&
              reinterpret_cast<std::uintptr_t>(session->game_window) ==
                  consumer.window.opaque;
     });
-    if (found == session_registry_.sessions().end() || !(*found)->modules.visual.profile)
+    if (found == session_registry_.sessions.end() || !(*found)->modules.visual.profile)
       continue;
     const auto *session = found->get();
     desired[session->game_window].push_back(build_visual_request(*session));
@@ -63,7 +63,7 @@ void DaemonApp::reconcile_visual_captures(
 
   if (!desired.empty())
     (void)visual_capture_runtime_.ensure_snapshot_event();
-  std::erase_if(visual_capture_runtime_.captures(), [&](auto &entry) {
+  std::erase_if(visual_capture_runtime_.captures, [&](auto &entry) {
     if (entry.second == nullptr || !IsWindow(entry.first)) return true;
     const auto wanted = desired.find(entry.first);
     if (wanted != desired.end()) return entry.second->runtime() != runtime;
@@ -75,7 +75,7 @@ void DaemonApp::reconcile_visual_captures(
     const auto quality =
         std::ranges::max(requests, {}, &VisualEvaluationRequest::quality)
             .quality;
-    auto &worker = visual_capture_runtime_.captures()[window];
+    auto &worker = visual_capture_runtime_.captures[window];
     const bool created = worker == nullptr;
     if (created) {
       if (runtime == layerc::core::VisualRuntime::isolated)
@@ -91,7 +91,7 @@ void DaemonApp::reconcile_visual_captures(
   }
   sync_visual_exclusions();
 
-  const bool any_capture = !visual_capture_runtime_.captures().empty();
+  const bool any_capture = !visual_capture_runtime_.captures.empty();
   if (!any_capture)
     visual_capture_runtime_.close_snapshot_event();
   visual_capture_runtime_.publish_activity(any_capture);
@@ -100,23 +100,23 @@ void DaemonApp::reconcile_visual_captures(
 
 void DaemonApp::quiesce_visual_captures(
     const layerc::core::VisualRuntime runtime) noexcept {
-  std::erase_if(visual_capture_runtime_.captures(), [runtime](const auto &entry) {
+  std::erase_if(visual_capture_runtime_.captures, [runtime](const auto &entry) {
     return entry.second == nullptr || entry.second->runtime() == runtime;
   });
-  if (visual_capture_runtime_.captures().empty())
+  if (visual_capture_runtime_.captures.empty())
     visual_capture_runtime_.close_snapshot_event();
   visual_capture_runtime_.publish_activity(
-      !visual_capture_runtime_.captures().empty());
+      !visual_capture_runtime_.captures.empty());
   update_visual_status();
 }
 
 void DaemonApp::sync_visual_exclusions() {
-  for (auto &[window, worker] : visual_capture_runtime_.captures()) {
+  for (auto &[window, worker] : visual_capture_runtime_.captures) {
     if (worker == nullptr)
       continue;
     std::vector<RECT> exclusions;
     exclusions.reserve(16);
-    for (const auto &session : session_registry_.sessions()) {
+    for (const auto &session : session_registry_.sessions) {
       if (session->is_global() || session->game_window != window)
         continue;
       session->overlays.append_screen_bounds(exclusions);
@@ -129,11 +129,11 @@ void DaemonApp::sync_visual_exclusions() {
 void DaemonApp::poll_visual_captures() {
   const auto now = layerc::core::MonotonicClock::now();
   std::vector<VisualCaptureSnapshot> captured_snapshots;
-  captured_snapshots.reserve(visual_capture_runtime_.captures().size());
+  captured_snapshots.reserve(visual_capture_runtime_.captures.size());
   const auto poll_capture = [&](const HWND window, auto &worker) {
     const auto captured = worker.snapshot();
     if (captured.sequence != 0) {
-      for (auto *session : session_registry_.active_inputs()) {
+      for (auto *session : session_registry_.active_inputs) {
         if (session->game_window != window ||
             !session->has_active_visual_rules())
           continue;
@@ -160,7 +160,7 @@ void DaemonApp::poll_visual_captures() {
     }
     captured_snapshots.push_back(captured);
   };
-  for (auto &[window, worker] : visual_capture_runtime_.captures()) {
+  for (auto &[window, worker] : visual_capture_runtime_.captures) {
     if (worker)
       poll_capture(window, *worker);
   }
@@ -168,7 +168,7 @@ void DaemonApp::poll_visual_captures() {
 }
 
 void DaemonApp::maintain_visual_captures() {
-  for (auto &[window, worker] : visual_capture_runtime_.captures()) {
+  for (auto &[window, worker] : visual_capture_runtime_.captures) {
     (void)window;
     if (worker)
       worker->maintain();
@@ -177,7 +177,7 @@ void DaemonApp::maintain_visual_captures() {
 }
 
 void DaemonApp::retry_quarantined_visual_captures() {
-  for (auto &[window, worker] : visual_capture_runtime_.captures()) {
+  for (auto &[window, worker] : visual_capture_runtime_.captures) {
     (void)window;
     if (worker && worker->status().quarantined)
       worker->retry();
@@ -187,8 +187,8 @@ void DaemonApp::retry_quarantined_visual_captures() {
 
 void DaemonApp::update_visual_status() {
   std::vector<VisualCaptureSnapshot> snapshots;
-  snapshots.reserve(visual_capture_runtime_.captures().size());
-  for (const auto &[window, worker] : visual_capture_runtime_.captures()) {
+  snapshots.reserve(visual_capture_runtime_.captures.size());
+  for (const auto &[window, worker] : visual_capture_runtime_.captures) {
     (void)window;
     if (worker)
       snapshots.push_back(worker->snapshot());
@@ -200,12 +200,12 @@ void DaemonApp::publish_visual_status(
     const std::span<const VisualCaptureSnapshot> snapshots) {
   VisualStatusSummary summary;
   summary.invalid_sidecar = std::ranges::any_of(
-      session_registry_.active_inputs(), [](const Session *session) {
+      session_registry_.active_inputs, [](const Session *session) {
         return session->modules.visual.state ==
                layerc::platform::ModuleSidecarState::invalid;
       });
   summary.disabled = !visual_recognition_enabled_;
-  summary.inactive = visual_capture_runtime_.captures().empty();
+  summary.inactive = visual_capture_runtime_.captures.empty();
   for (const auto &current : snapshots) {
     summary.fallback =
         summary.fallback ||
@@ -225,20 +225,20 @@ void DaemonApp::publish_visual_status(
     if (summary.gpu.empty() && !current.gpu_description.empty())
       summary.gpu = current.gpu_description;
   }
-  for (const auto &[window, worker] : visual_capture_runtime_.captures()) {
+  for (const auto &[window, worker] : visual_capture_runtime_.captures) {
     (void)window;
     if (worker)
       summary.quarantined = summary.quarantined || worker->status().quarantined;
   }
 
   auto next = format_visual_status(summary);
-  if (next == visual_capture_runtime_.status())
+  if (next == visual_capture_runtime_.status)
     return;
-  visual_capture_runtime_.set_status(std::move(next));
-  if (live_edit_host_.channel().connected() && live_edit_host_.authenticated())
-    (void)live_edit_host_.channel().send({
+  visual_capture_runtime_.status = std::move(next);
+  if (live_edit_host_.channel.connected() && live_edit_host_.authenticated)
+    (void)live_edit_host_.channel.send({
         .type = layerc::core::LiveMessageType::runtime_status,
-        .text = layerc::platform::wide_to_utf8(visual_capture_runtime_.status()),
+        .text = layerc::platform::wide_to_utf8(visual_capture_runtime_.status),
     });
 }
 

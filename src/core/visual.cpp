@@ -535,14 +535,6 @@ bool has_observation(const VisualProfile &profile,
          find_template_state(profile, id) != nullptr;
 }
 
-std::uint8_t observation_stable_samples(const VisualProfile &profile,
-                                        const std::string_view id) noexcept {
-  if (const auto *rule = find_pixel_rule(profile, id)) return rule->stable_samples;
-  if (const auto *state = find_template_state(profile, id))
-    return state->stable_samples;
-  return 1;
-}
-
 PixelRepeatPolicy observation_repeat_policy(
     const VisualProfile &profile, const std::string_view id) noexcept {
   if (const auto *rule = find_pixel_rule(profile, id)) return rule->repeat;

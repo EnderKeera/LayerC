@@ -68,10 +68,6 @@ public:
   [[nodiscard]] std::uint64_t atom(std::string_view name) const noexcept;
   [[nodiscard]] std::string atom_name(std::uint64_t atom) const;
 
-  // Discards every event already queued on the connection. Registered on the
-  // event loop so a readable socket cannot busy-poll; later phases dispatch
-  // instead of discarding.
-  [[nodiscard]] int drain_events() noexcept;
   // Client-side buffered event count (XPending): socket readiness alone
   // cannot prove the queue is empty because synchronous Xlib queries and
   // XSync(False) move bytes from the socket into this queue without waking

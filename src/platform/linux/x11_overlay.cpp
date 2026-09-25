@@ -179,7 +179,6 @@ X11OverlayWindow::create(const X11Display &display, std::string &error) {
   // click passes through to the window below.
   XShapeCombineRectangles(raw, window, ShapeInput, 0, 0, nullptr, 0, ShapeSet,
                           YXBanded);
-  XSync(raw, False);
   if (!trap.ok()) {
     error = "overlay: XShapeCombineRectangles failed";
     return std::nullopt;

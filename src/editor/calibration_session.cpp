@@ -91,7 +91,8 @@ run_calibration_session(const HWND owner,
   layerc::platform::HelperLaunchOptions options;
   options.inherited_handles = inherited;
   options.creation_flags = CREATE_UNICODE_ENVIRONMENT;
-  const auto command = L"\"" + child.wstring() + L"\" --request-pipe " +
+  const auto command = layerc::platform::quote_command_argument(child.wstring()) +
+                       L" --request-pipe " +
                        std::to_wstring(reinterpret_cast<std::uintptr_t>(request_read.get())) +
                        L" --response-pipe " +
                        std::to_wstring(reinterpret_cast<std::uintptr_t>(response_write.get()));

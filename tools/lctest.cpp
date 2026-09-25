@@ -77,12 +77,11 @@ LRESULT CALLBACK window_proc(const HWND window, const UINT message,
 
 int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
                     _In_ LPWSTR, _In_ int show_command) {
-  const WNDCLASSW definition{
-      .lpfnWndProc = window_proc,
-      .hInstance = instance,
-      .hCursor = LoadCursorW(nullptr, IDC_ARROW),
-      .lpszClassName = L"LCTestWindow",
-  };
+  WNDCLASSW definition{};
+  definition.lpfnWndProc = window_proc;
+  definition.hInstance = instance;
+  definition.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  definition.lpszClassName = L"LCTestWindow";
   if (RegisterClassW(&definition) == 0) {
     return 1;
   }

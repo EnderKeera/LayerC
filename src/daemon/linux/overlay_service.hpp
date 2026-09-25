@@ -48,9 +48,6 @@ public:
   [[nodiscard]] std::vector<std::uint64_t> windows() const;
   [[nodiscard]] std::vector<std::string> unavailable() const;
 
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
-    return layerc::runtime::Capability::overlay;
-  }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
       const layerc::runtime::CapabilityDemand &demand) override;
   void quiesce() noexcept override;

@@ -274,9 +274,6 @@ find_pixel_rule(const VisualProfile &profile, std::string_view id) noexcept;
 find_template_state(const VisualProfile &profile, std::string_view id) noexcept;
 [[nodiscard]] bool
 has_observation(const VisualProfile &profile, std::string_view id) noexcept;
-[[nodiscard]] std::uint8_t
-observation_stable_samples(const VisualProfile &profile,
-                           std::string_view id) noexcept;
 [[nodiscard]] PixelRepeatPolicy
 observation_repeat_policy(const VisualProfile &profile,
                           std::string_view id) noexcept;

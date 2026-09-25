@@ -174,7 +174,6 @@ void capture_math_contracts() {
   }
   expect(health_result.availability ==
                  layerc::core::CaptureAvailability::protected_or_black &&
-             health_result.phase == layerc::capture::CapturePhase::degraded &&
              health_result.diagnostic.find("persistent black") !=
                  std::string::npos,
          "one shared threshold should classify persistent black frames");
@@ -186,7 +185,8 @@ void capture_math_contracts() {
   health_result = health.observe(
       {.availability = layerc::core::CaptureAvailability::available,
        .frame = observed_white});
-  expect(health_result.phase == layerc::capture::CapturePhase::live &&
+  expect(health_result.availability ==
+                 layerc::core::CaptureAvailability::available &&
              health.consecutive_black_frames() == 0,
          "reset and a non-black frame should return capture health to live");
   const layerc::core::RgbPixel white{255, 255, 255};

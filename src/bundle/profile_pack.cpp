@@ -20,11 +20,11 @@
 namespace layerc::bundle {
 namespace {
 
+using core::owned_bytes;
 using detail::asset_path_for_profile;
 using detail::EntryMap;
 using detail::kSidecars;
 using detail::manifest_json;
-using detail::owned_bytes;
 using detail::pack_error;
 using detail::SidecarPathLists;
 

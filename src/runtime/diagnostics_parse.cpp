@@ -69,26 +69,20 @@ bool process(json::Reader &r, const json::Value &root, const std::string &path,
 }
 bool parse_capability(json::Reader &r, const std::string &path,
                       const std::string &name, Capability &output) {
-  for (std::size_t i{}; i < capability_count; ++i) {
-    const auto candidate = static_cast<Capability>(i);
-    if (capability_name(candidate) == name) {
-      output = candidate;
-      return true;
-    }
-  }
-  return r.fail(path + ".capability", "unknown runtime capability");
+  const auto parsed = core::parse_enum_wire(capability_wire, name);
+  if (!parsed.has_value())
+    return r.fail(path + ".capability", "unknown runtime capability");
+  output = *parsed;
+  return true;
 }
 
 bool parse_service_state(json::Reader &r, const std::string &path,
                          const std::string &name, ServiceState &output) {
-  for (const auto candidate :
-       {ServiceState::absent, ServiceState::active, ServiceState::faulted}) {
-    if (service_state_name(candidate) == name) {
-      output = candidate;
-      return true;
-    }
-  }
-  return r.fail(path + ".state", "unknown runtime service state");
+  const auto parsed = core::parse_enum_wire(service_state_wire, name);
+  if (!parsed.has_value())
+    return r.fail(path + ".state", "unknown runtime service state");
+  output = *parsed;
+  return true;
 }
 
 bool service(json::Reader &r, const json::Value &root, const std::string &path,

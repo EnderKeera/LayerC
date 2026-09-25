@@ -31,6 +31,14 @@ earliest_deadline(const std::optional<TimePoint> left,
 
 // Longest cooldown or automation duration accepted by every profile surface.
 inline constexpr Milliseconds max_cooldown_duration{86'400'000};
+// Inclusive bounds shared by the profile parser, overlay overrides, and the
+// editor fields.
+inline constexpr std::uint32_t min_cooldown_charges = 1;
+inline constexpr std::uint32_t max_cooldown_charges = 99;
+inline constexpr std::uint32_t min_bar_width = 40;
+inline constexpr std::uint32_t max_bar_width = 1'200;
+inline constexpr std::uint32_t min_bar_height = 16;
+inline constexpr std::uint32_t max_bar_height = 240;
 
 // Opaque native-window handle shared by the capture boundary and the daemon
 // kernel. A leaf struct, not kernel policy, so it lives in core and the
@@ -195,7 +203,6 @@ struct OverlayMetrics {
   int card_text_inset{3};
 };
 inline constexpr OverlayMetrics overlay_metrics{};
-using PanelMetrics = OverlayMetrics;
 
 struct OverlayGridExtent {
   std::size_t columns{};

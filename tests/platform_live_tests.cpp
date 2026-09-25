@@ -98,7 +98,10 @@ void bounded_helper_failure() {
     };
     const std::filesystem::path image(image_path.data());
     const auto launched = layerc::platform::launch_bounded_helper(
-        image, L"\"" + image.wstring() + L"\" --bounded-helper-probe", options);
+        image,
+        layerc::platform::quote_command_argument(image.wstring()) +
+            L" --bounded-helper-probe",
+        options);
     const auto *failure =
         std::get_if<layerc::platform::HelperLaunchError>(&launched);
     DWORD exit_code{};

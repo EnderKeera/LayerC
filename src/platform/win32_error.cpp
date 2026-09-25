@@ -1,5 +1,7 @@
 #include "layerc/platform/win32_error.hpp"
 
+#include "layerc/platform/text.hpp"
+
 namespace layerc::platform {
 
 std::wstring windows_error_text(const DWORD error) {
@@ -19,6 +21,10 @@ std::wstring windows_error_text(const DWORD error) {
                              result.back() == L' '))
     result.pop_back();
   return result;
+}
+
+std::string hresult_message(const HRESULT result) {
+  return wide_to_utf8(windows_error_text(static_cast<DWORD>(result)));
 }
 
 } // namespace layerc::platform

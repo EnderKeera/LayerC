@@ -71,4 +71,12 @@ profile_transaction_scope(const std::filesystem::path &profile_directory);
 // Safe to call at every LayerD and LayerE startup.
 [[nodiscard]] ProfileWriteResult recover_profile_transactions(const ProfileStoreRoots &roots);
 
+// Directory forms: resolve profile_transaction_scope(profile_directory) first
+// and fail with scope_rejected when the directory is refused.
+[[nodiscard]] ProfileWriteResult commit_profile_transaction(
+    const std::filesystem::path &profile_directory,
+    std::span<const ProfileFileMutation> mutations);
+[[nodiscard]] ProfileWriteResult
+recover_profile_transactions(const std::filesystem::path &profile_directory);
+
 } // namespace layerc::platform

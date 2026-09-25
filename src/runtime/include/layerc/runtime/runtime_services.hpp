@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/enum_wire.hpp"
 #include "layerc/core/types.hpp"
 
 #include <array>
@@ -27,7 +28,21 @@ enum class Capability : std::uint8_t {
 inline constexpr std::size_t capability_count =
     static_cast<std::size_t>(Capability::count);
 
-[[nodiscard]] std::string_view capability_name(Capability capability) noexcept;
+inline constexpr std::array capability_wire{
+    core::EnumWireEntry{Capability::input, "input"},
+    core::EnumWireEntry{Capability::generic_hid, "genericHid"},
+    core::EnumWireEntry{Capability::overlay, "overlay"},
+    core::EnumWireEntry{Capability::visual, "visual"},
+    core::EnumWireEntry{Capability::isolated_visual, "isolatedVisual"},
+    core::EnumWireEntry{Capability::automation, "automation"},
+    core::EnumWireEntry{Capability::gamebar, "gamebar"},
+};
+static_assert(capability_wire.size() == capability_count);
+
+[[nodiscard]] constexpr std::string_view
+capability_name(const Capability capability) noexcept {
+  return core::enum_wire_name(capability_wire, capability).value_or("unknown");
+}
 
 struct VisualConsumer {
   core::WindowId window;
@@ -76,16 +91,17 @@ enum class ServiceState : std::uint8_t {
   faulted,
 };
 
-// Single owner for the ServiceState -> string mapping shared by the Windows
-// and Linux daemon diagnostics (previously two identical local copies).
-[[nodiscard]] inline const char *
+// Single owner for the ServiceState wire names shared by the Windows and
+// Linux daemon diagnostics.
+inline constexpr std::array service_state_wire{
+    core::EnumWireEntry{ServiceState::absent, "absent"},
+    core::EnumWireEntry{ServiceState::active, "active"},
+    core::EnumWireEntry{ServiceState::faulted, "faulted"},
+};
+
+[[nodiscard]] constexpr std::string_view
 service_state_name(const ServiceState state) noexcept {
-  switch (state) {
-  case ServiceState::absent: return "absent";
-  case ServiceState::active: return "active";
-  case ServiceState::faulted: return "faulted";
-  }
-  return "unknown";
+  return core::enum_wire_name(service_state_wire, state).value_or("unknown");
 }
 
 struct RuntimeServiceStats {
@@ -112,13 +128,13 @@ class IRuntimeService {
 public:
   virtual ~IRuntimeService() = default;
 
-  [[nodiscard]] virtual Capability capability() const noexcept = 0;
   [[nodiscard]] virtual ServiceReconcileResult
   reconcile(const CapabilityDemand &demand) = 0;
   virtual void quiesce() noexcept = 0;
   [[nodiscard]] virtual RuntimeResourceStats resources() const noexcept = 0;
 };
 
+// Indexed by Capability: a service serves the capability of its slot.
 using RuntimeServiceRegistry =
     std::array<IRuntimeService *, capability_count>;
 
@@ -142,7 +158,6 @@ public:
     resource_ledger_ = resources;
   }
 
-  [[nodiscard]] IRuntimeService *find(Capability capability) noexcept;
   [[nodiscard]] const IRuntimeService *find(Capability capability) const noexcept;
   [[nodiscard]] RuntimeServiceStats stats(Capability capability) const;
   [[nodiscard]] std::array<RuntimeServiceStats, capability_count>

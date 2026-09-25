@@ -8,6 +8,7 @@
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/core/profile.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
 
@@ -105,10 +106,8 @@ public:
       const std::string_view bytes) {
     auto reserved = reserve();
     if (!reserved.has_value()) return std::nullopt;
-    const auto view =
-        std::span(reinterpret_cast<const std::byte *>(bytes.data()),
-                  bytes.size());
-    if (!platform::create_durable_file(reserved->path_, view))
+    if (!platform::create_durable_file(reserved->path_,
+                                       layerc::core::text_bytes(bytes)))
       return std::nullopt;
     return reserved;
   }
@@ -149,8 +148,7 @@ private:
   // the bundle ceiling, so max_pack_bytes bounds it.
   auto bytes = platform::read_durable_file(path, bundle::max_pack_bytes);
   if (!bytes.has_value()) return std::nullopt;
-  return std::string(reinterpret_cast<const char *>(bytes->data()),
-                     bytes->size());
+  return layerc::core::as_text(*bytes);
 }
 
 int call_daemon(const platform::ControlCommand command, bool json_output) {
@@ -202,8 +200,8 @@ int profile_command(int argc, char **argv) {
     }
     const auto target =
         roots.config_profiles / platform::profile_store_filename(profile->id);
-    const auto written = platform::write_profile_bundle_create_only(
-        target, *profile, std::nullopt);
+    const auto written =
+        platform::write_profile_bundle_create_only(target, *profile);
     if (const auto error = written.error()) {
       std::fprintf(stderr, "layerctl: profile import failed: %s\n",
                    platform::profile_write_error_text(*error));

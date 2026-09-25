@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <system_error>
 #include <utility>
 
@@ -113,6 +115,23 @@ TempDirectory::TempDirectory(const std::string_view prefix) {
 TempDirectory::~TempDirectory() {
   std::error_code ignored;
   std::filesystem::remove_all(path_, ignored);
+}
+
+bool write_file(const std::filesystem::path &path,
+                const std::string_view contents) {
+  std::error_code error;
+  std::filesystem::create_directories(path.parent_path(), error);
+  if (error) return false;
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  return static_cast<bool>(output);
+}
+
+std::optional<std::string> read_file(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return std::nullopt;
+  return std::string(std::istreambuf_iterator<char>(input),
+                     std::istreambuf_iterator<char>());
 }
 
 ScopedEnvironment::ScopedEnvironment(

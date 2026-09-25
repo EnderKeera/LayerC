@@ -301,14 +301,4 @@ void TextureReadback::reset() {
   staging_description_ = {};
 }
 
-std::string hresult_message(const HRESULT result) {
-  std::string output =
-      std::system_category().message(static_cast<int>(result));
-  while (!output.empty() &&
-         (output.back() == '\r' || output.back() == '\n' || output.back() == ' '))
-    output.pop_back();
-  if (output.empty()) output = "HRESULT " + std::to_string(result);
-  return output;
-}
-
 } // namespace layerc::capture

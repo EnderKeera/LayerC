@@ -6,13 +6,13 @@
 // drift between Windows and Linux.
 
 #include "layerc/core/hash.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/visual_assets.hpp"
 #include "test_support.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -54,16 +54,8 @@ decode_failure(std::vector<std::uint8_t> &) {
   return layerc::platform::VisualAssetError{"contract decoder rejected bytes"};
 }
 
-inline bool write_bytes(const std::filesystem::path &path,
-                        const std::string &bytes) {
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  return static_cast<bool>(output);
-}
-
 inline std::string digest(const std::string &bytes) {
-  return layerc::core::sha256(
-      std::as_bytes(std::span(bytes.data(), bytes.size())));
+  return layerc::core::sha256(layerc::core::text_bytes(bytes));
 }
 
 inline bool fails_with(const layerc::platform::TemplateImageResult &result,
@@ -82,7 +74,7 @@ inline void visual_asset_load_contract(const std::filesystem::path &directory) {
   const std::string payload = "template-asset-contract";
   const auto payload_sha = digest(payload);
   const auto asset = directory / "contract-asset.png";
-  expect(write_bytes(asset, payload), "contract asset should be written");
+  expect(write_file(asset, payload), "contract asset should be written");
 
   expect(fails_with(verified_template_from_bytes(asset, "NOT-A-DIGEST",
                                                  decode_structured),
@@ -95,7 +87,7 @@ inline void visual_asset_load_contract(const std::filesystem::path &directory) {
 
   const auto oversized = directory / "oversized.png";
   const std::string large(layerc::platform::max_template_asset_bytes + 1U, 'x');
-  expect(write_bytes(oversized, large), "oversized fixture should be written");
+  expect(write_file(oversized, large), "oversized fixture should be written");
   expect(fails_with(verified_template_from_bytes(oversized, digest(large),
                                                  decode_structured),
                     "4 MiB"),

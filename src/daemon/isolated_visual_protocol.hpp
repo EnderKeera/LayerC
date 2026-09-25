@@ -53,8 +53,6 @@ struct IsolatedPoll {
   std::uint64_t sequence{};
 };
 
-using IsolatedConfigurationResult =
-    std::variant<IsolatedConfiguration, IsolatedProtocolError>;
 using IsolatedSnapshotResult =
     std::variant<VisualCaptureSnapshot, IsolatedProtocolError>;
 // One parse for every daemon-to-worker packet the helper receives.
@@ -98,12 +96,7 @@ private:
                                            std::string &error);
 [[nodiscard]] std::string
 encode_isolated_configuration(const IsolatedConfiguration &configuration);
-[[nodiscard]] IsolatedConfigurationResult
-decode_isolated_configuration(std::string_view json);
 [[nodiscard]] std::string encode_isolated_poll(std::uint64_t sequence);
-[[nodiscard]] bool decode_isolated_poll(std::string_view json,
-                                        std::uint64_t &sequence,
-                                        std::string &error);
 // Single-parse entry for helper inbound packets (configure / waitSnapshot).
 [[nodiscard]] IsolatedInboundMessage
 decode_isolated_message(std::string_view json);

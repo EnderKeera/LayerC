@@ -149,10 +149,8 @@ void X11CaptureSession::release_named_pixmap() noexcept {
   const auto pixmap = std::exchange(pixmap_, 0);
   if (pixmap == 0 || display_ == nullptr || !display_->valid()) return;
   auto *raw = reinterpret_cast<Display *>(display_->raw());
-  X11ErrorTrap trap{raw};
+  X11ErrorTrap trap{raw}; // synchronizes on scope exit
   XFreePixmap(raw, static_cast<Pixmap>(pixmap));
-  XSync(raw, False);
-  (void)trap;
 }
 
 void X11CaptureSession::release_damage() noexcept {
@@ -161,12 +159,10 @@ void X11CaptureSession::release_damage() noexcept {
   damage_event_base_ = 0;
   if (display_ == nullptr || !display_->valid()) return;
   auto *raw = reinterpret_cast<Display *>(display_->raw());
-  X11ErrorTrap trap{raw};
+  X11ErrorTrap trap{raw}; // synchronizes on scope exit
   if (damage != 0) XDamageDestroy(raw, static_cast<Damage>(damage));
   if (region != 0)
     XFixesDestroyRegion(raw, static_cast<XserverRegion>(region));
-  XSync(raw, False);
-  (void)trap;
 }
 
 void X11CaptureSession::refresh_named_pixmap() {
@@ -183,7 +179,6 @@ void X11CaptureSession::refresh_named_pixmap() {
   X11ErrorTrap trap{raw};
   const Pixmap pixmap = XCompositeNameWindowPixmap(
       raw, static_cast<::Window>(window_.opaque));
-  XSync(raw, False);
   if (pixmap == None || !trap.ok()) {
     fallback_reason_ =
         "x11 composite: window is not redirected; using bounded direct capture";
@@ -215,7 +210,6 @@ void X11CaptureSession::start_damage() {
   const XserverRegion region = XFixesCreateRegion(raw, nullptr, 0);
   const Damage damage = XDamageCreate(
       raw, static_cast<Drawable>(window_.opaque), XDamageReportNonEmpty);
-  XSync(raw, False);
   damage_region_ = static_cast<std::uint64_t>(region);
   damage_ = static_cast<std::uint64_t>(damage);
   damage_event_base_ = probe.damage.event_base;

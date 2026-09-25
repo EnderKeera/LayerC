@@ -70,11 +70,8 @@ $utf8 = $context.Utf8
 
 $required = @('layerd.exe', 'lctest.exe', 'layerc_capture_probe.exe')
 if ($Isolated) { $required += 'layerw.exe' }
-foreach ($name in $required) {
-    if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
-        throw "Missing $name in $BuildDirectory. Build Release with tests enabled first."
-    }
-}
+Assert-LayerCExecutables $BuildDirectory $required `
+    -Hint 'Build Release with tests enabled first.'
 Assert-LayerCQuiescent -ProcessNames layerd `
     -FailureMessage 'Close the existing LayerD instance before running an isolated benchmark.'
 

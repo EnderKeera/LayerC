@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/capture/window_capture.hpp"
+#include "layerc/platform/win32_error.hpp"
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
@@ -40,6 +41,6 @@ private:
   D3D11_TEXTURE2D_DESC staging_description_{};
 };
 
-[[nodiscard]] std::string hresult_message(HRESULT result);
+using platform::hresult_message;
 
 } // namespace layerc::capture

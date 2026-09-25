@@ -89,9 +89,6 @@ struct Session : layerc::core::AutomationSession {
       ModuleSidecar<layerc::core::CompanionProfile> companion);
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
-  [[nodiscard]] bool blocks_all_triggers() const noexcept {
-    return layerc::core::AutomationSession::blocks_all_triggers();
-  }
   [[nodiscard]] bool is_global() const noexcept { return profile.game.global; }
   [[nodiscard]] bool requires_input_polling() const noexcept {
     return uses_controller || !global_keyboard.empty();

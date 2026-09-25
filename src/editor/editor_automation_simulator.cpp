@@ -121,8 +121,8 @@ void AutomationEditor::update_simulator_view(const HWND dialog) {
     for (const auto &[id, value] : simulator_->snapshot().variables)
       output +=
           " " + id + "=" + layerc::core::automation_value_json(value) + ";";
-    const auto assertions = to_utf8(
-        control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_ASSERTIONS)));
+    const auto assertions = wide_to_utf8(
+        window_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_ASSERTIONS)));
     if (!assertions.empty()) {
       bool all_passed = true;
       for_each_list_item(assertions, [&](const std::string_view item) {
@@ -163,8 +163,8 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
   simulator_playing_ = false;
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_PLAY), L"Play");
   const auto parsed = layerc::core::parse_automation_profile_json(
-      to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_JSON))),
-      owner_.document().profile());
+      wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_JSON))),
+      owner_.document_.profile());
   const auto *graph = std::get_if<layerc::core::AutomationProfile>(&parsed);
   if (graph == nullptr) {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
@@ -176,7 +176,7 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
   }
   simulator_ = std::make_unique<layerc::core::AutomationRuntime>(
       *graph, layerc::core::AutomationPersistentValues{},
-      owner_.document().profile().cooldown_groups);
+      owner_.document_.profile().cooldown_groups);
   simulator_->set_trace_enabled(true);
   simulator_index_ = 0;
   if (simulator_events_.empty()) {
@@ -226,7 +226,7 @@ void AutomationEditor::step_simulator(const HWND dialog) {
   if (!result.committed)
     simulator_playing_ = false;
   const auto breakpoint =
-      to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_BREAKPOINT)));
+      wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_BREAKPOINT)));
   if (!breakpoint.empty()) {
     const auto &trace = simulator_->trace();
     if (std::any_of(trace.begin() + static_cast<std::ptrdiff_t>(trace_start),
@@ -248,7 +248,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
   layerc::core::AutomationEvent event;
   event.kind = kinds[static_cast<std::size_t>(selected)];
   event.source_id =
-      to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_SOURCE)));
+      wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_SOURCE)));
   const auto timestamp =
       simulator_events_.empty()
           ? 0ms
@@ -258,7 +258,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
   event.timestamp = layerc::core::TimePoint(timestamp);
   event.origin_token = simulator_events_.size() + 1U;
   auto fields =
-      to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_FIELDS)));
+      wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_FIELDS)));
   if (fields != "field:type=JSON; ..." && !fields.empty()) {
     bool valid = true;
     for_each_list_item(fields, [&](const std::string_view item) {
@@ -363,10 +363,10 @@ bool AutomationEditor::handle_live_message(
 void AutomationEditor::restore_live_subscription() {
   if (!trace_enabled_)
     return;
-  owner_.advance_live_revision();
-  (void)owner_.send_live({
+  owner_.live_edit_.advance_revision();
+  (void)(void)owner_.live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::automation_trace_subscribe,
-      .revision = owner_.live_revision(),
+      .revision = owner_.live_edit_.revision(),
   });
 }
 void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
@@ -377,8 +377,8 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
     trace_events_.clear();
     trace_display_ = "Waiting for authenticated LayerD events...";
   }
-  if (!owner_.live_connected() ||
-      !owner_.live_authenticated()) {
+  if (!owner_.live_edit_.channel().connected() ||
+      !owner_.live_edit_.package_authenticated()) {
     trace_display_ =
         "LayerD is not authenticated; start or restart LayerD and try again.";
     set_text(GetDlgItem(dialog, IDC_AUTOMATION_TRACE_TEXT),
@@ -387,13 +387,13 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
     set_owner_draw_checkbox(GetDlgItem(dialog, IDC_AUTOMATION_TRACE), false);
     return;
   }
-  owner_.advance_live_revision();
+  owner_.live_edit_.advance_revision();
   layerc::core::LiveMessage message;
   message.type =
       enabled ? layerc::core::LiveMessageType::automation_trace_subscribe
               : layerc::core::LiveMessageType::automation_trace_unsubscribe;
-  message.revision = owner_.live_revision();
-  (void)owner_.send_live(message);
+  message.revision = owner_.live_edit_.revision();
+  (void)(void)owner_.live_edit_.channel().send(message);
 }
 
 void AutomationEditor::save_trace(const HWND dialog) {
@@ -424,13 +424,13 @@ void AutomationEditor::retry_selected(const HWND dialog) {
   const auto *automation = selected_automation(dialog);
   if (automation == nullptr)
     return;
-  owner_.advance_live_revision();
+  owner_.live_edit_.advance_revision();
   layerc::core::LiveMessage message;
   message.type = layerc::core::LiveMessageType::retry_automation;
-  message.revision = owner_.live_revision();
+  message.revision = owner_.live_edit_.revision();
   message.profile_key =
-      layerc::platform::canonical_profile_key(owner_.document().path());
+      layerc::platform::canonical_profile_key(owner_.document_.path());
   message.text = automation->id;
-  (void)owner_.send_live(message);
+  (void)(void)owner_.live_edit_.channel().send(message);
 }
 } // namespace layerc::editor

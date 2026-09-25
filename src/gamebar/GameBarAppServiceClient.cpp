@@ -1,19 +1,45 @@
+// MSVC-only App Service client (C++/WinRT). MinGW builds link
+// GameBarAppServiceClient_stub.cpp instead.
 #include "GameBarTransportState.hpp"
 
 #include <roapi.h>
-
-#include <utility>
-
-#if defined(_MSC_VER)
 #include <winrt/Windows.Foundation.Collections.h>
-#endif
+
+#include <algorithm>
+#include <chrono>
+#include <utility>
 
 namespace layerc::gamebar::detail {
 namespace {
 
-#if defined(_MSC_VER)
 using namespace winrt::Windows::ApplicationModel::AppService;
 using Link = GameBarTransportState::Link;
+
+void schedule_retry_locked(
+    const std::shared_ptr<GameBarTransportState> &state) {
+  if (state->link == Link::stopped || state->retry_timer != nullptr)
+    return;
+  const auto generation = state->generation;
+  const auto delay = std::chrono::milliseconds(state->retry.delay_ms);
+  state->retry.delay_ms = std::min(state->retry.delay_ms * 2U, 2'000U);
+  state->retry_timer =
+      winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
+          [weak_state = std::weak_ptr(state), generation](const auto &) {
+            const auto locked = weak_state.lock();
+            if (!locked)
+              return;
+            {
+              std::lock_guard lock(locked->mutex);
+              if (locked->link == Link::stopped ||
+                  locked->generation != generation)
+                return;
+              locked->retry_timer = nullptr;
+              locked->retry.ready = true;
+            }
+            raise_wake_event(locked);
+          },
+          delay);
+}
 
 [[nodiscard]] bool connected(const GameBarTransportState &state) noexcept {
   return state.link == Link::connected || state.link == Link::sending;
@@ -350,19 +376,17 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
                            std::wstring(error.message()));
   }
 }
-#endif
 
 } // namespace
 
 bool start_app_service(const std::shared_ptr<GameBarTransportState> &state) {
-#if !defined(_MSC_VER)
-  std::lock_guard lock(state->mutex);
-  state->enter(GameBarTransportState::Link::stopped,
-               L"Game Bar App Service requires the MSVC package build");
-  return false;
-#else
   {
     std::lock_guard lock(state->mutex);
+    if (!GameBarTransport::current_process_is_expected_package()) {
+      state->enter(Link::stopped,
+                   L"Game Bar App Service is unavailable outside the full MSIX");
+      return false;
+    }
     if (state->link != Link::stopped)
       return true;
     const HRESULT apartment = RoInitialize(RO_INIT_MULTITHREADED);
@@ -388,15 +412,12 @@ bool start_app_service(const std::shared_ptr<GameBarTransportState> &state) {
   }
   raise_wake_event(state);
   return true;
-#endif
 }
 
 void stop_app_service(
     const std::shared_ptr<GameBarTransportState> &state) noexcept {
-#if defined(_MSC_VER)
   ClientResources resources;
   bool uninitialize{};
-#endif
   std::shared_ptr<GameBarWakeEvent> wake;
   {
     std::lock_guard lock(state->mutex);
@@ -406,14 +427,11 @@ void stop_app_service(
     state->retry = {};
     state->pending_snapshot.reset();
     state->preference_updates.clear();
-#if defined(_MSC_VER)
     resources = release_client_locked(*state);
     uninitialize = std::exchange(state->apartment_initialized, false);
-#endif
     state->enter(GameBarTransportState::Link::stopped);
     wake = std::move(state->wake_event);
   }
-#if defined(_MSC_VER)
   cleanup_client(std::move(resources));
   if (uninitialize) {
     // C++/WinRT caches agile activation factories process-wide. Release them
@@ -422,7 +440,6 @@ void stop_app_service(
     winrt::clear_factory_cache();
     RoUninitialize();
   }
-#endif
   if (wake != nullptr && wake->handle != nullptr)
     ResetEvent(wake->handle);
 }
@@ -432,55 +449,43 @@ poll_app_service(const std::shared_ptr<GameBarTransportState> &state) noexcept {
   bool open{};
   bool send{};
   std::vector<GameBarPreferenceUpdate> updates;
-#if defined(_MSC_VER)
   std::optional<ClientResources> failed_resources;
-#endif
   {
     std::lock_guard lock(state->mutex);
     if (state->wake_event != nullptr && state->wake_event->handle != nullptr)
       ResetEvent(state->wake_event->handle);
     if (state->link == GameBarTransportState::Link::stopped)
       return updates;
-#if defined(_MSC_VER)
     if (state->retry.needed) {
       state->retry.needed = false;
       failed_resources = release_client_locked(*state);
       state->preference_updates.clear();
       schedule_retry_locked(state);
     }
-#endif
     updates.reserve(state->preference_updates.size());
     while (!state->preference_updates.empty()) {
       updates.push_back(std::move(state->preference_updates.front()));
       state->preference_updates.pop_front();
     }
-#if defined(_MSC_VER)
     if (state->retry.ready) {
       state->retry.ready = false;
       open = true;
     }
     send = state->link == Link::connected &&
            state->pending_snapshot.has_value();
-#endif
   }
-#if defined(_MSC_VER)
   if (failed_resources.has_value())
     cleanup_client(std::move(*failed_resources));
   if (open)
     begin_open(state);
   if (send)
     begin_send(state);
-#else
-  (void)open;
-  (void)send;
-#endif
   return updates;
 }
 
 void complete_preference_update(
     const std::shared_ptr<GameBarTransportState> &state,
     const std::uint64_t request_id, const bool accepted) noexcept {
-#if defined(_MSC_VER)
   std::optional<GameBarTransportState::PreferenceResponse> response;
   {
     std::lock_guard lock(state->mutex);
@@ -492,11 +497,6 @@ void complete_preference_update(
   }
   send_preference_response(std::move(response->first),
                            std::move(response->second), accepted);
-#else
-  (void)state;
-  (void)request_id;
-  (void)accepted;
-#endif
 }
 
 } // namespace layerc::gamebar::detail

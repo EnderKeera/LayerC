@@ -17,13 +17,8 @@ namespace {
 using namespace layerc::core;
 using namespace std::chrono_literals;
 
-AutomationExpression literal(AutomationValue value) {
-  return {.kind = ExpressionKind::literal, .literal = std::move(value)};
-}
-
-AutomationExpression variable(std::string id) {
-  return {.kind = ExpressionKind::variable, .reference = std::move(id)};
-}
+using expr::literal;
+using expr::variable;
 
 GameProfile automation_base() {
   GameProfile profile;

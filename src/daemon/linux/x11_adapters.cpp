@@ -142,18 +142,13 @@ void X11Adapters::refresh(
                           " demanded but unavailable");
 }
 
-X11AdapterDispatch X11Adapters::dispatch(const std::span<const int> ready) {
-  X11AdapterDispatch result;
-  if (impl_->fd < 0 ||
-      std::ranges::find(ready, impl_->fd) == ready.end())
-    return result;
-  const auto input = impl_->input.dispatch();
-  result.triggered = input.triggered;
-  result.events = input.events;
+X11Dispatch X11Adapters::dispatch(const std::span<const int> ready) {
+  if (impl_->fd < 0 || std::ranges::find(ready, impl_->fd) == ready.end())
+    return {};
+  auto result = impl_->input.dispatch();
   result.windows_changed =
-      input.windows_changed ||
+      result.windows_changed ||
       (!impl_->input.attached() && impl_->tracker->poll_changes());
-  result.devices_changed = input.devices_changed;
   return result;
 }
 
@@ -166,7 +161,7 @@ bool X11Adapters::has_pending_events() noexcept {
   }
 }
 
-X11AdapterDispatch X11Adapters::dispatch_pending() {
+X11Dispatch X11Adapters::dispatch_pending() {
   if (!has_pending_events()) return {};
   const int ready = impl_->fd;
   return dispatch({&ready, 1});
@@ -217,9 +212,9 @@ void X11Adapters::refresh(
   (void)kernel.reconcile({});
 }
 
-X11AdapterDispatch X11Adapters::dispatch(std::span<const int>) { return {}; }
+X11Dispatch X11Adapters::dispatch(std::span<const int>) { return {}; }
 bool X11Adapters::has_pending_events() noexcept { return false; }
-X11AdapterDispatch X11Adapters::dispatch_pending() { return {}; }
+X11Dispatch X11Adapters::dispatch_pending() { return {}; }
 void X11Adapters::render(layerc::core::TimePoint) {}
 void X11Adapters::stop_sessions(layerc::core::TimePoint) {}
 

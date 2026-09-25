@@ -19,17 +19,6 @@ enum class X11DeviceKind : std::uint8_t {
   gamepad,
 };
 
-[[nodiscard]] constexpr std::string_view
-x11_device_kind_label(X11DeviceKind kind) noexcept {
-  switch (kind) {
-  case X11DeviceKind::other: return "other";
-  case X11DeviceKind::keyboard: return "keyboard";
-  case X11DeviceKind::mouse: return "mouse";
-  case X11DeviceKind::gamepad: return "gamepad";
-  }
-  return "unknown";
-}
-
 struct X11InputDevice {
   int id{};
   std::string name;

@@ -2,9 +2,9 @@
 
 #include "layerc/core/game_match.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_handle.hpp"
 
 #include <algorithm>
-#include <array>
 #include <filesystem>
 #include <vector>
 
@@ -13,42 +13,10 @@ namespace {
 
 std::wstring process_path_for_window(const HWND window, DWORD &process_id) {
   GetWindowThreadProcessId(window, &process_id);
-  if (process_id == 0) {
-    return {};
-  }
-  const HANDLE process =
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr) {
-    return {};
-  }
-
-  std::vector<wchar_t> path(32'768);
-  DWORD length = static_cast<DWORD>(path.size());
-  const BOOL succeeded =
-      QueryFullProcessImageNameW(process, 0, path.data(), &length);
-  CloseHandle(process);
-  return succeeded ? std::wstring(path.data(), length) : std::wstring{};
-}
-
-std::wstring window_text(const HWND window) {
-  const int length = GetWindowTextLengthW(window);
-  if (length <= 0) {
-    return {};
-  }
-  std::wstring output(static_cast<std::size_t>(length) + 1U, L'\0');
-  const int copied =
-      GetWindowTextW(window, output.data(), static_cast<int>(output.size()));
-  output.resize(static_cast<std::size_t>(std::max(copied, 0)));
-  return output;
-}
-
-std::wstring window_class(const HWND window) {
-  std::array<wchar_t, 256> value{};
-  const int copied =
-      GetClassNameW(window, value.data(), static_cast<int>(value.size()));
-  return copied > 0
-             ? std::wstring(value.data(), static_cast<std::size_t>(copied))
-             : std::wstring{};
+  if (process_id == 0) return {};
+  const OwnedHandle process(
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
+  return process.valid() ? process_image_path(process.get()) : std::wstring{};
 }
 
 bool is_shell_window(const HWND window) {
@@ -146,10 +114,10 @@ bool profile_matches_window(const WindowCandidate &candidate,
   // Windows filesystems compare case-insensitively: the shared policy folds
   // the executable path (exact_path=false). Enumeration stays here; the
   // matching rules live in core::candidate_matches_game.
-  const auto executable_path = try_wide_to_utf8(candidate.executable_path);
-  const auto executable_name = try_wide_to_utf8(candidate.executable_name);
-  const auto window_class = try_wide_to_utf8(candidate.window_class);
-  const auto title = try_wide_to_utf8(candidate.title);
+  const auto executable_path = core::try_wide_to_utf8(candidate.executable_path);
+  const auto executable_name = core::try_wide_to_utf8(candidate.executable_name);
+  const auto window_class = core::try_wide_to_utf8(candidate.window_class);
+  const auto title = core::try_wide_to_utf8(candidate.title);
   if (!executable_path.has_value() || !executable_name.has_value() ||
       !window_class.has_value() || !title.has_value())
     return false;

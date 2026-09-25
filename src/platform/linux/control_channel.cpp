@@ -84,15 +84,6 @@ using Clock = std::chrono::steady_clock;
 
 } // namespace
 
-std::optional<ControlCommand>
-parse_control_command(const std::string_view name) noexcept {
-  if (name == "status") return ControlCommand::status;
-  if (name == "reload") return ControlCommand::reload;
-  if (name == "notify-reload") return ControlCommand::notify_reload;
-  if (name == "stop") return ControlCommand::stop;
-  return std::nullopt;
-}
-
 std::string encode_control_request(const ControlCommand command) {
   std::string out;
   out += "{\"proto\":";

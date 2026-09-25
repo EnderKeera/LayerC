@@ -17,6 +17,11 @@ namespace layerc::editor {
 
 using RoleColors = layerc::platform::NativeThemeColors;
 using layerc::platform::enable_native_dark_mode;
+using layerc::platform::fill_solid_rect;
+using layerc::platform::frame_solid_rect;
+using layerc::platform::native_color_ref;
+using layerc::platform::native_rgb_value;
+using layerc::platform::outline_rect;
 using layerc::platform::set_dark_title_bar;
 
 // Dark title bar plus the capture-exclusion policy: the chrome every LayerC
@@ -32,17 +37,8 @@ struct ProfileCheckboxMetrics {
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
-[[nodiscard]] COLORREF color_ref(std::uint32_t color);
-[[nodiscard]] std::uint32_t rgb_value(COLORREF color);
-// Fill or frame a rectangle through a temporary solid brush, or outline it
-// with a temporary pen, restoring the DC's selected objects.
-void fill_solid_rect(HDC dc, const RECT &rect, COLORREF color);
-void frame_solid_rect(HDC dc, const RECT &rect, COLORREF color);
-void outline_rect(HDC dc, const RECT &rect, int pen_width, COLORREF color);
 [[nodiscard]] bool start_daemon();
 [[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
-[[nodiscard]] std::string
-safe_identifier(std::wstring_view text, std::string_view fallback = "profile");
 [[nodiscard]] layerc::core::GameProfile make_new_profile();
 [[nodiscard]] std::wstring
 profile_list_label(const layerc::core::GameProfile &profile);

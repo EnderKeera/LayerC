@@ -1,11 +1,12 @@
 #include "editor_window.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
+#include "layerc/core/json.hpp"
 #include "layerc/platform/native_theme.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <array>
 #include <cstdint>
-#include <cwchar>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -50,7 +51,7 @@ constexpr std::array<PaletteColor, 24> color_palette{
 };
 
 std::optional<std::uint32_t> channel_value(const HWND window, const int id) {
-  return parse_bounded(control_text(GetDlgItem(window, id)), 0, 255);
+  return parse_bounded(window_text(GetDlgItem(window, id)), 0, 255);
 }
 
 std::optional<std::uint32_t> rgb_fields(const HWND window) {
@@ -63,15 +64,13 @@ std::optional<std::uint32_t> rgb_fields(const HWND window) {
 }
 
 std::optional<std::uint32_t> hex_value(std::wstring text) {
-  if (!text.empty() && text.front() == L'#') text.erase(text.begin());
-  if (text.size() != 6) return std::nullopt;
-  return parse_bounded(text, 0, 0xFFFFFFU, 16);
+  if (text.empty() || text.front() != L'#') text.insert(text.begin(), L'#');
+  const auto narrow = layerc::platform::ascii_narrow(text);
+  return narrow ? layerc::core::json::parse_color_text(*narrow) : std::nullopt;
 }
 
 std::wstring hex_label(const std::uint32_t color) {
-  std::array<wchar_t, 8> buffer{};
-  std::swprintf(buffer.data(), buffer.size(), L"#%06X", color & 0xFFFFFFU);
-  return buffer.data();
+  return layerc::platform::utf8_to_wide(layerc::core::json::color_text(color));
 }
 
 std::wstring swatch_label(const PaletteColor &color) {
@@ -89,7 +88,7 @@ void invalidate_picker(const HWND window) {
 bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
   appearance_editor_.set_picker_color(value);
   const INT_PTR result = DialogBoxParamW(
-      shell_.instance(), MAKEINTRESOURCEW(IDD_COLOR_PICKER), owner,
+      shell_.instance, MAKEINTRESOURCEW(IDD_COLOR_PICKER), owner,
       &dispatch_member_dialog<EditorWindow,
                               &EditorWindow::initialize_color_picker,
                               &EditorWindow::handle_color_picker_message>,
@@ -100,7 +99,7 @@ bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
 }
 
 void EditorWindow::initialize_color_picker(const HWND window) {
-  apply_dialog_chrome(window, shell_.capture_exclusion());
+  apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
   for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
     set_text(GetDlgItem(window, id), swatch_label(
@@ -140,7 +139,7 @@ void EditorWindow::update_color_picker_from_rgb(const HWND window) {
 
 void EditorWindow::update_color_picker_from_hex(const HWND window) {
   if (appearance_editor_.picker_syncing()) return;
-  const auto value = hex_value(control_text(GetDlgItem(window, IDC_COLOR_HEX)));
+  const auto value = hex_value(window_text(GetDlgItem(window, IDC_COLOR_HEX)));
   if (!value.has_value()) return;
   appearance_editor_.set_picker_color(*value);
   {
@@ -168,7 +167,7 @@ bool EditorWindow::draw_color_picker_item(const DRAWITEMSTRUCT &draw) const {
   fill_solid_rect(draw.hDC, draw.rcItem, role_colors.fill);
   RECT sample = draw.rcItem;
   InflateRect(&sample, -3, -3);
-  fill_solid_rect(draw.hDC, sample, color_ref(*color));
+  fill_solid_rect(draw.hDC, sample, native_color_ref(*color));
   outline_rect(draw.hDC, sample, selected ? 2 : 1,
                selected ? role_colors.selection : role_colors.border);
   if ((draw.itemState & ODS_FOCUS) != 0) {
@@ -207,7 +206,7 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
     }
     if (id == IDOK) {
       const auto rgb = rgb_fields(window);
-      const auto hex = hex_value(control_text(GetDlgItem(window, IDC_COLOR_HEX)));
+      const auto hex = hex_value(window_text(GetDlgItem(window, IDC_COLOR_HEX)));
       if (!rgb.has_value() || !hex.has_value() || *rgb != *hex) {
         MessageBoxW(window, L"Enter RGB values from 0 to 255 or a #RRGGBB value.",
                     L"Invalid color", MB_OK | MB_ICONWARNING);

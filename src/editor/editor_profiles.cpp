@@ -69,11 +69,11 @@ bool confirm_schema_upgrade(const HWND owner) {
 }
 
 void EditorWindow::sync_profile_from_controls() {
-  if (shell_.syncing()) return;
-  auto *panel = panel_preview_.controls_panel() < document_.profile().panels.size()
-                    ? &document_.profile().panels[panel_preview_.controls_panel()]
+  if (shell_.syncing) return;
+  auto *panel = panel_preview_.controls_panel < document_.profile().panels.size()
+                    ? &document_.profile().panels[panel_preview_.controls_panel]
                     : nullptr;
-  ProfileFieldContext context{shell_.window(), document_.profile(), selected_cooldown(), panel};
+  ProfileFieldContext context{shell_.window, document_.profile(), selected_cooldown(), panel};
   read_profile_fields(context);
   if (document_.visual()) document_.visual()->profile_id = document_.profile().id;
   if (document_.automation()) document_.automation()->profile_id = document_.profile().id;
@@ -81,12 +81,12 @@ void EditorWindow::sync_profile_from_controls() {
 
 bool EditorWindow::validate_profile() {
   if (!draft_controls_valid()) {
-    show_invalid_field_message(shell_.window());
+    show_invalid_field_message(shell_.window);
     return false;
   }
   sync_profile_from_controls();
   if (const auto error = normalize_for_commit()) {
-    MessageBoxW(shell_.window(), profile_error_text(*error).c_str(),
+    MessageBoxW(shell_.window, profile_error_text(*error).c_str(),
                 L"Profile is incomplete", MB_OK | MB_ICONWARNING);
     return false;
   }
@@ -97,7 +97,7 @@ bool EditorWindow::confirm_v2_upgrade() {
   if ((!document_.legacy_base_schema() && !document_.legacy_visual_schema()) ||
       document_.upgrade_acknowledged())
     return true;
-  if (!confirm_schema_upgrade(shell_.window()))
+  if (!confirm_schema_upgrade(shell_.window))
     return false;
   document_.acknowledge_upgrade();
   return true;
@@ -109,7 +109,7 @@ bool EditorWindow::confirm_unsaved_changes() {
   if (!document_.path().empty() && draft_controls_valid() && flush_autosave(false))
     return true;
   const int choice = MessageBoxW(
-      shell_.window(), L"The current profile has unsaved changes. Save them first?",
+      shell_.window, L"The current profile has unsaved changes. Save them first?",
       L"Unsaved changes", MB_YESNOCANCEL | MB_ICONWARNING);
   return choice == IDYES ? save_profile(false) : choice == IDNO;
 }
@@ -130,62 +130,62 @@ void EditorWindow::new_profile(const bool confirm) {
 }
 void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
                                        const bool open_selection) {
-  shell_.profiles().clear();
+  shell_.profiles.clear();
   int selected = -1;
   {
   auto sync = shell_.sync_scope();
-  ListView_DeleteAllItems(shell_.profile_list());
+  ListView_DeleteAllItems(shell_.profile_list);
   const auto directory = layerc::platform::profile_directory();
   const auto scan = layerc::platform::scan_profile_directory(directory);
   if (scan.error.empty()) {
     for (const auto &entry : scan.profiles)
-      shell_.profiles().push_back({.path = entry.path,
+      shell_.profiles.push_back({.path = entry.path,
                           .label = profile_list_label(entry.profile),
                           .enabled = entry.profile.enabled});
   }
-  std::sort(shell_.profiles().begin(), shell_.profiles().end(),
+  std::sort(shell_.profiles.begin(), shell_.profiles.end(),
             [](const ProfileEntry &left, const ProfileEntry &right) {
               return _wcsicmp(left.label.c_str(), right.label.c_str()) < 0;
             });
-  for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
+  for (std::size_t index = 0; index < shell_.profiles.size(); ++index) {
     LVITEMW item{};
     item.mask = LVIF_TEXT | LVIF_PARAM;
     item.iItem = static_cast<int>(index);
-    item.pszText = const_cast<LPWSTR>(shell_.profiles()[index].label.c_str());
+    item.pszText = const_cast<LPWSTR>(shell_.profiles[index].label.c_str());
     item.lParam = static_cast<LPARAM>(index);
-    ListView_InsertItem(shell_.profile_list(), &item);
-    ListView_SetCheckState(shell_.profile_list(), static_cast<int>(index),
-                           shell_.profiles()[index].enabled);
-    if (!select_path.empty() && shell_.profiles()[index].path.lexically_normal() ==
+    ListView_InsertItem(shell_.profile_list, &item);
+    ListView_SetCheckState(shell_.profile_list, static_cast<int>(index),
+                           shell_.profiles[index].enabled);
+    if (!select_path.empty() && shell_.profiles[index].path.lexically_normal() ==
                                     select_path.lexically_normal())
       selected = static_cast<int>(index);
   }
-  if (selected < 0 && !shell_.profiles().empty())
+  if (selected < 0 && !shell_.profiles.empty())
     selected = 0;
   if (selected >= 0)
-    ListView_SetItemState(shell_.profile_list(), selected, LVIS_SELECTED | LVIS_FOCUSED,
+    ListView_SetItemState(shell_.profile_list, selected, LVIS_SELECTED | LVIS_FOCUSED,
                           LVIS_SELECTED | LVIS_FOCUSED);
   }
   if (open_selection && selected >= 0)
     open_profile_row(selected, false);
-  else if (shell_.profiles().empty() && document_.path().empty())
+  else if (shell_.profiles.empty() && document_.path().empty())
     new_profile(false);
 }
 
 void EditorWindow::open_profile_row(const int row, const bool confirm) {
-  if (row < 0 || static_cast<std::size_t>(row) >= shell_.profiles().size())
+  if (row < 0 || static_cast<std::size_t>(row) >= shell_.profiles.size())
     return;
-  const auto target_path = shell_.profiles()[static_cast<std::size_t>(row)].path;
+  const auto target_path = shell_.profiles[static_cast<std::size_t>(row)].path;
   const auto select_path = [&](const std::filesystem::path &path) {
     auto sync = shell_.sync_scope();
-    ListView_SetItemState(shell_.profile_list(), -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
-      if (shell_.profiles()[index].path.lexically_normal() != path.lexically_normal())
+    ListView_SetItemState(shell_.profile_list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    for (std::size_t index = 0; index < shell_.profiles.size(); ++index) {
+      if (shell_.profiles[index].path.lexically_normal() != path.lexically_normal())
         continue;
-      ListView_SetItemState(shell_.profile_list(), static_cast<int>(index),
+      ListView_SetItemState(shell_.profile_list, static_cast<int>(index),
                             LVIS_SELECTED | LVIS_FOCUSED,
                             LVIS_SELECTED | LVIS_FOCUSED);
-      ListView_EnsureVisible(shell_.profile_list(), static_cast<int>(index), FALSE);
+      ListView_EnsureVisible(shell_.profile_list, static_cast<int>(index), FALSE);
       break;
     }
   };
@@ -215,14 +215,14 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
 }
 
 void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
-  if (row < 0 || static_cast<std::size_t>(row) >= shell_.profiles().size())
+  if (row < 0 || static_cast<std::size_t>(row) >= shell_.profiles.size())
     return;
-  auto &entry = shell_.profiles()[static_cast<std::size_t>(row)];
+  auto &entry = shell_.profiles[static_cast<std::size_t>(row)];
   if (entry.enabled == enabled)
     return;
   const auto restore_checkbox = [&] {
     auto sync = shell_.sync_scope();
-    ListView_SetCheckState(shell_.profile_list(), row, entry.enabled);
+    ListView_SetCheckState(shell_.profile_list, row, entry.enabled);
   };
   const bool is_current =
       layerc::platform::canonical_profile_key(entry.path) ==
@@ -263,10 +263,10 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
                     : L"Could not update an invalid profile.";
     } else {
       auto &bundle = std::get<layerc::platform::ProfileBundleLoad>(loaded);
-      if (bundle.visual.state == layerc::platform::VisualSidecarState::invalid)
+      if (bundle.visual.state == layerc::platform::ModuleSidecarState::invalid)
         failure = L"Could not update a profile with an invalid visual sidecar.";
       else if (bundle.automation.state ==
-               layerc::platform::AutomationSidecarState::invalid)
+               layerc::platform::ModuleSidecarState::invalid)
         failure = L"Could not update a profile with an invalid automation sidecar.";
       stored_profile = std::move(bundle.profile);
       stored_visual = std::move(bundle.visual.profile);
@@ -303,7 +303,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   entry.label = profile_list_label(stored_profile);
   {
     auto sync = shell_.sync_scope();
-    ListView_SetItemText(shell_.profile_list(), row, 0, entry.label.data());
+    ListView_SetItemText(shell_.profile_list, row, 0, entry.label.data());
   }
   if (is_current) {
     document_.visual() = stored_visual;
@@ -322,13 +322,13 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   }
   set_status(enabled ? L"Profile enabled — LayerD updated live."
                      : L"Profile disabled — LayerD retired its instances.");
-  InvalidateRect(shell_.profile_list(), nullptr, TRUE);
+  InvalidateRect(shell_.profile_list, nullptr, TRUE);
 }
 
 bool EditorWindow::choose_save_path(std::filesystem::path &path) {
   const auto directory = layerc::platform::profile_directory();
   if (directory.empty()) {
-    MessageBoxW(shell_.window(), L"The profiles directory is unavailable.",
+    MessageBoxW(shell_.window, L"The profiles directory is unavailable.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return false;
@@ -336,7 +336,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error) {
-    MessageBoxW(shell_.window(), L"Could not create the profiles directory.",
+    MessageBoxW(shell_.window, L"Could not create the profiles directory.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return false;
@@ -352,7 +352,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
     wcsncpy_s(buffer.data(), buffer.size(), initial_path.c_str(), _TRUNCATE);
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = this->shell_.window();
+    dialog.hwndOwner = this->shell_.window;
     dialog.lpstrFilter = L"LayerC profiles (*.json)\0*.json\0All files\0*.*\0";
     dialog.lpstrFile = buffer.data();
     dialog.nMaxFile = static_cast<DWORD>(buffer.size());
@@ -367,7 +367,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
       candidate += L".json";
     if (_wcsicmp(candidate.extension().c_str(), L".json") != 0) {
       candidate.replace_extension(L".json");
-      MessageBoxW(shell_.window(), L"LayerC profiles must use the .json extension.",
+      MessageBoxW(shell_.window, L"LayerC profiles must use the .json extension.",
                   L"Choose a JSON profile name", MB_OK | MB_ICONWARNING);
       initial_path = directory / candidate.filename();
       continue;
@@ -384,7 +384,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
       return true;
     }
 
-    MessageBoxW(shell_.window(),
+    MessageBoxW(shell_.window,
                 L"Profiles must be saved directly in the LayerC profiles "
                 L"folder so LayerD can load them.",
                 L"Choose the profiles folder", MB_OK | MB_ICONWARNING);
@@ -398,7 +398,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
   // Shared document-commit gate: every UI entry point blocks on invalid
   // modules so unrelated edits never discard recovery data.
   if (!can_commit_document_bundle()) {
-    show_sidecar_repair_message(shell_.window());
+    show_sidecar_repair_message(shell_.window);
     return false;
   }
   auto destination = document_.path();
@@ -411,11 +411,11 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     std::error_code error;
     if (std::filesystem::exists(destination, error) &&
         MessageBoxW(
-            shell_.window(), L"A profile with this ID already exists. Overwrite it?",
+            shell_.window, L"A profile with this ID already exists. Overwrite it?",
             L"Profile already exists", MB_YESNO | MB_ICONWARNING) != IDYES)
       return false;
     if (error) {
-      MessageBoxW(shell_.window(), L"Could not inspect the profile destination.",
+      MessageBoxW(shell_.window, L"Could not inspect the profile destination.",
                   L"LayerC Editor", MB_OK | MB_ICONERROR);
       return false;
     }
@@ -425,15 +425,15 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     break;
   case CommitResult::invalid_fields:
   case CommitResult::invalid_profile:
-    show_invalid_field_message(shell_.window());
+    show_invalid_field_message(shell_.window);
     return false;
   case CommitResult::upgrade_declined:
     return false;
   case CommitResult::blocked_by_sidecar:
-    show_sidecar_repair_message(shell_.window());
+    show_sidecar_repair_message(shell_.window);
     return false;
   case CommitResult::write_failed:
-    MessageBoxW(shell_.window(), write_failure_message().c_str(),
+    MessageBoxW(shell_.window, write_failure_message().c_str(),
                 L"Profile save failed", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -445,7 +445,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
 
 void EditorWindow::delete_profile() {
   if (document_.path().empty()) {
-    MessageBoxW(shell_.window(), L"Save this profile before deleting it.",
+    MessageBoxW(shell_.window, L"Save this profile before deleting it.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONINFORMATION);
     return;
@@ -454,18 +454,18 @@ void EditorWindow::delete_profile() {
     return;
   const auto prompt =
       L"Move '" + to_wide(document_.profile().name) + L"' to the Recycle Bin?";
-  if (MessageBoxW(shell_.window(), prompt.c_str(), L"Delete profile",
+  if (MessageBoxW(shell_.window, prompt.c_str(), L"Delete profile",
                   MB_YESNO | MB_ICONWARNING) != IDYES)
     return;
   std::filesystem::path safe_remaining;
-  for (const auto &entry : shell_.profiles()) {
+  for (const auto &entry : shell_.profiles) {
     if (entry.path.lexically_normal() != document_.path().lexically_normal()) {
       safe_remaining = entry.path;
       break;
     }
   }
   if (!recycle_profile_bundle(document_.path())) {
-    MessageBoxW(shell_.window(), L"Could not move the profile to the Recycle Bin.",
+    MessageBoxW(shell_.window, L"Could not move the profile to the Recycle Bin.",
                 L"LayerC Editor", MB_OK | MB_ICONERROR);
     return;
   }
@@ -486,12 +486,12 @@ void EditorWindow::open_profiles_folder() {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error || directory.empty()) {
-    MessageBoxW(shell_.window(), L"Could not open the profiles folder.",
+    MessageBoxW(shell_.window, L"Could not open the profiles folder.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return;
   }
-  ShellExecuteW(shell_.window(), L"open", directory.c_str(), nullptr, nullptr,
+  ShellExecuteW(shell_.window, L"open", directory.c_str(), nullptr, nullptr,
                 SW_SHOWNORMAL);
 }
 
@@ -500,11 +500,11 @@ bool EditorWindow::can_commit_document_bundle() const {
   // with a nullopt would plan an explicit removal and discard recovery
   // bytes/backups. Absent modules are a valid keep-absent intent.
   if (!document_.visual() &&
-      document_.visual_state() == layerc::platform::VisualSidecarState::invalid)
+      document_.visual_state() == layerc::platform::ModuleSidecarState::invalid)
     return false;
   if (!document_.automation() &&
       document_.automation_state() ==
-          layerc::platform::AutomationSidecarState::invalid)
+          layerc::platform::ModuleSidecarState::invalid)
     return false;
   return true;
 }
@@ -570,7 +570,7 @@ CommitResult EditorWindow::commit_bundle(
   if (upgrade_needed) {
     if (!options.prompt_upgrade) return CommitResult::upgrade_declined;
     if (!(is_document_path(document_, path) ? confirm_v2_upgrade()
-                              : confirm_schema_upgrade(shell_.window())))
+                              : confirm_schema_upgrade(shell_.window)))
       return CommitResult::upgrade_declined;
   }
   if (normalize_profile_bundle(profile, visual, automation).has_value())
@@ -597,7 +597,7 @@ void EditorWindow::mark_committed(const std::filesystem::path &path,
     document_.clear_legacy_schemas();
     document_.history().rebase(document_.profile(), document_.visual(),
                                document_.automation());
-    KillTimer(shell_.window(), autosave_timer);
+    KillTimer(shell_.window, autosave_timer);
     if (options.refresh_list)
       reload_profile_list(path, false);
     else

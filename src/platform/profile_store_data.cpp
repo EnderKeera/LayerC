@@ -1,6 +1,8 @@
 #include "layerc/platform/profile_store.hpp"
 
+#include "layerc/core/automation_session.hpp"
 #include "layerc/core/profile.hpp"
+#include "layerc/core/utf8.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
 #include "layerc/platform/profile_transaction.hpp"
@@ -15,10 +17,7 @@
 namespace layerc::platform {
 namespace {
 
-std::string as_text(const std::span<const std::byte> bytes) {
-  if (bytes.empty()) return {};
-  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-}
+using layerc::core::as_text;
 
 std::filesystem::path sidecar_state_path(const std::filesystem::path &sidecar) {
   auto state = sidecar;
@@ -29,10 +28,8 @@ std::filesystem::path sidecar_state_path(const std::filesystem::path &sidecar) {
 [[nodiscard]] ProfileFileMutation
 text_mutation(const std::filesystem::path &target,
               const std::string_view contents) {
-  const auto *first = reinterpret_cast<const std::byte *>(contents.data());
-  return ProfileFileMutation{
-      .target = target,
-      .contents = std::vector<std::byte>(first, first + contents.size())};
+  return ProfileFileMutation{.target = target,
+                             .contents = layerc::core::owned_bytes(contents)};
 }
 
 } // namespace
@@ -56,7 +53,7 @@ const StoredProfile *ProfileDirectoryScan::find(
 bool has_json_extension(const std::filesystem::path &path) {
   const auto encoded = path_to_utf8(path.extension());
   if (!encoded.has_value()) return false;
-  const auto folded = try_casefold_path(*encoded);
+  const auto folded = core::try_casefold_utf8(*encoded);
   return folded.has_value() && *folded == ".json";
 }
 
@@ -303,8 +300,6 @@ ProfileWriteResult write_profile_file(const std::filesystem::path &path,
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
   if (path_error) return {ProfileWriteError::invalid_input};
-  const auto scope = profile_transaction_scope(absolute.parent_path());
-  if (!scope.has_value()) return {ProfileWriteError::scope_rejected};
 
   std::vector<ProfileFileMutation> mutations;
   // Keep the previous parseable profile as the last-valid recovery point.
@@ -317,7 +312,7 @@ ProfileWriteResult write_profile_file(const std::filesystem::path &path,
           layerc::core::parse_profile_json(*previous)))
     mutations.push_back(text_mutation(recovery_backup_path(absolute), *previous));
   mutations.push_back(text_mutation(absolute, contents));
-  return commit_profile_transaction(*scope, mutations);
+  return commit_profile_transaction(absolute.parent_path(), mutations);
 }
 
 // --- Bundle plan: pure planning (reads only) then one commit ---
@@ -328,9 +323,9 @@ namespace {
 struct BundleInputs {
   std::filesystem::path path;
   layerc::core::GameProfile profile;
-  std::optional<layerc::core::VisualProfile> visual;
-  std::optional<layerc::core::AutomationProfile> automation;
-  std::optional<layerc::core::CompanionProfile> companion;
+  std::optional<layerc::core::VisualProfile> visual{};
+  std::optional<layerc::core::AutomationProfile> automation{};
+  std::optional<layerc::core::CompanionProfile> companion{};
   bool create_only{};
 };
 
@@ -410,7 +405,7 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
       previous_profile.has_value() ? *previous_profile : plan.stored_profile;
   if (!inputs.companion.has_value()) {
     const auto existing = load_companion_sidecar(path, previous_base);
-    if (existing.state == CompanionSidecarState::invalid)
+    if (existing.state == ModuleSidecarState::invalid)
       return std::nullopt;
     if (existing.profile.has_value())
       preserved_companion = existing.profile;
@@ -552,17 +547,11 @@ ProfileWriteResult write_profile_bundle(
                                     .create_only = false});
 }
 
-ProfileWriteResult write_profile_bundle_create_only(
-    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
-    const std::optional<layerc::core::VisualProfile> &visual_profile,
-    const std::optional<layerc::core::AutomationProfile> &automation_profile,
-    const std::optional<layerc::core::CompanionProfile> &companion_profile) {
-  return write_profile_bundle_impl({.path = path,
-                                    .profile = profile,
-                                    .visual = visual_profile,
-                                    .automation = automation_profile,
-                                    .companion = companion_profile,
-                                    .create_only = true});
+ProfileWriteResult
+write_profile_bundle_create_only(const std::filesystem::path &path,
+                                 const layerc::core::GameProfile &profile) {
+  return write_profile_bundle_impl(
+      {.path = path, .profile = profile, .create_only = true});
 }
 
 VisualSidecarLoad
@@ -624,18 +613,31 @@ ProfileWriteResult write_automation_state(
       layerc::core::serialize_automation_state_json(automation_profile, values);
   if (contents.size() > layerc::core::max_automation_state_bytes)
     return {ProfileWriteError::invalid_input};
-  // Scope on the profile directory (not `_state/`) so this write shares the
-  // store's transaction roots with bundle saves and startup recovery.
-  const auto scope = profile_transaction_scope(profile_path.parent_path());
-  if (!scope.has_value()) return {ProfileWriteError::scope_rejected};
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
   if (path_error) return {ProfileWriteError::invalid_input};
   // Transient session data: no user-visible `.bak`. The journal still owns
   // crash rollback for the single mutation.
   const std::array mutations{text_mutation(absolute, contents)};
-  return commit_profile_transaction(*scope, mutations);
+  // Scope on the profile directory (not `_state/`) so this write shares the
+  // store's transaction roots with bundle saves and startup recovery.
+  return commit_profile_transaction(profile_path.parent_path(), mutations);
 }
+
+std::optional<ProfileWriteResult> checkpoint_automation_state(
+    const std::filesystem::path &profile_path,
+    const layerc::core::AutomationProfile &automation_profile,
+    const layerc::core::AutomationPersistentValues &values,
+    std::optional<layerc::core::TimePoint> &due,
+    const layerc::core::TimePoint now, const bool force) {
+  if (!layerc::core::automation_checkpoint_ready(due, now, force))
+    return std::nullopt;
+  auto written =
+      write_automation_state(profile_path, automation_profile, values);
+  layerc::core::automation_checkpoint_report(due, now, written);
+  return written;
+}
+
 SidecarMarkerInspection
 inspect_sidecar_markers(const std::filesystem::path &sidecar) noexcept {
   const std::array paths{

@@ -81,8 +81,6 @@ ensure_guard_transaction_roots(const ProfileStoreRoots &roots);
 [[nodiscard]] std::optional<ProfileStoreRoots>
 guard_transaction_scope(const std::filesystem::path &profile_directory);
 
-[[nodiscard]] std::uint64_t file_guard_process_id() noexcept;
-
 // One-writer lock for the transaction engine. Unified stores take a named
 // OS mutex with a bounded wait; split stores take a non-blocking flock on
 // the store lock file and fail fast when contended.

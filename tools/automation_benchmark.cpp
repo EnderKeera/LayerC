@@ -14,28 +14,9 @@
 namespace {
 using namespace layerc::core;
 
-AutomationExpression literal(AutomationValue value) {
-  AutomationExpression result;
-  result.kind = ExpressionKind::literal;
-  result.literal = std::move(value);
-  return result;
-}
-
-AutomationExpression variable(std::string id) {
-  AutomationExpression result;
-  result.kind = ExpressionKind::variable;
-  result.reference = std::move(id);
-  return result;
-}
-
-AutomationExpression binary(std::string operation, AutomationExpression left,
-                            AutomationExpression right) {
-  AutomationExpression result;
-  result.kind = ExpressionKind::binary;
-  result.operation = std::move(operation);
-  result.arguments = {std::move(left), std::move(right)};
-  return result;
-}
+using expr::binary;
+using expr::literal;
+using expr::variable;
 
 AutomationProfile workload() {
   AutomationProfile profile;
