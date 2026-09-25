@@ -284,6 +284,23 @@ interactive desktop box, not a headless agent:
   Flatpak smoke. The GNOME Xorg/KDE X11 native+Flatpak physical checklist is
   separate and remains pending until archived evidence exists.
 
+### Self-hosted Windows build and test
+
+`windows-selfhosted.yml` builds and tests one ref on a `[self-hosted, windows]`
+runner. It runs only on manual dispatch, so fork PRs never run code on that
+machine:
+
+```powershell
+gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>
+```
+
+It configures the `vs2026` preset, builds Debug with one MSBuild node and two
+compiler processes, runs every CTest suite with `--output-on-failure`, and
+uploads `windows-selfhosted-logs-<run>-<attempt>`: the tested commit, the
+configure/build/CTest logs, and CTest JUnit XML. The runner needs Visual Studio
+2026 with the C++ workload and PowerShell 7; the overlay and capture suites
+need a signed-in desktop session, as on `layerc-bench`.
+
 ## Profile locations and format
 
 | Platform | Base profiles | Sidecars/state |
