@@ -261,7 +261,7 @@ void EditorWindow::begin_picker() {
   }
   task_picker_.begin_pick(task_picker_.window != nullptr &&
                           IsWindowVisible(task_picker_.window));
-  if (task_picker_.was_visible())
+  if (task_picker_.was_visible() && task_picker_.window != nullptr)
     ShowWindow(task_picker_.window, SW_HIDE);
   SetFocus(shell_.window);
   SetCapture(shell_.window);
