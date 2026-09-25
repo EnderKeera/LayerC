@@ -92,9 +92,10 @@ jobs:
           -DLAYERC_BUILD_TESTS=ON
           -DLAYERC_MSVC_ANALYZE=ON
 
+      # Keep going so one run reports every analysis finding.
       - name: Build with MSVC analysis
         shell: pwsh
-        run: cmake --build build/analyze --parallel 2
+        run: cmake --build build/analyze --parallel 2 -- -k 0
 
       - name: Run analyzed tests
         shell: pwsh
