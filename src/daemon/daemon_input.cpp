@@ -201,7 +201,8 @@ void DaemonApp::poll_controllers() {
     if (XInputGetState(index, &state) != ERROR_SUCCESS) {
       state = {};
     }
-    const WORD previous = input_runtime_.controllers[index].Gamepad.wButtons;
+    auto &previous_state = input_runtime_.controllers[index];
+    const WORD previous = previous_state.Gamepad.wButtons;
     const WORD current = state.Gamepad.wButtons;
     for (unsigned bit = 0; bit < 16; ++bit) {
       const WORD mask = static_cast<WORD>(1U << bit);
@@ -226,9 +227,9 @@ void DaemonApp::poll_controllers() {
              .pressed = new_pressed});
       }
     };
-    emit_trigger(input_runtime_.controllers[index].Gamepad.bLeftTrigger,
+    emit_trigger(previous_state.Gamepad.bLeftTrigger,
                  state.Gamepad.bLeftTrigger, 17);
-    emit_trigger(input_runtime_.controllers[index].Gamepad.bRightTrigger,
+    emit_trigger(previous_state.Gamepad.bRightTrigger,
                  state.Gamepad.bRightTrigger, 18);
 
     const auto now = layerc::core::MonotonicClock::now();
@@ -259,7 +260,7 @@ void DaemonApp::poll_controllers() {
         process_automation_input_value(*session, prefix + axis.name,
                                        axis.value, now);
     }
-    input_runtime_.controllers[index] = state;
+    previous_state = state;
   }
 }
 

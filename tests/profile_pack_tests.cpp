@@ -215,8 +215,9 @@ struct PackFixture {
   validate_pack(const std::filesystem::path &path) const {
     const auto result = layerc::bundle::validate_profile_pack(path);
     const auto *validated = std::get_if<layerc::bundle::ValidatedPack>(&result);
-    if (!expect(validated != nullptr && validated->profiles.size() == 2,
-                "exported pack should validate with both profiles"))
+    expect(validated != nullptr && validated->profiles.size() == 2,
+           "exported pack should validate with both profiles");
+    if (validated == nullptr || validated->profiles.size() != 2)
       return std::nullopt;
     return *validated;
   }

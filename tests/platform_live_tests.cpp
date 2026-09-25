@@ -16,6 +16,7 @@
 #include <string_view>
 #include <thread>
 #include <variant>
+#include <vector>
 
 #include <windows.h>
 
@@ -80,7 +81,7 @@ void pipe_name_contract() {
 
 void bounded_helper_failure() {
   // A forced Job-assignment failure must terminate the still-suspended child.
-  std::array<wchar_t, 32'768> image_path{};
+  std::vector<wchar_t> image_path(32'768);
   const DWORD image_length = GetModuleFileNameW(
       nullptr, image_path.data(), static_cast<DWORD>(image_path.size()));
   expect(image_length != 0 && image_length < image_path.size(),

@@ -357,37 +357,38 @@ void platform_sibling_authentication() {
         sibling_client, L"--auth-client", sibling_pipe, client_process);
     expect(server_launched && client_launched,
            "sibling layerd/layere authentication peers should launch");
-    if (server_launched && client_launched) {
-      const DWORD server_wait =
-          WaitForSingleObject(server_process.hProcess, 10'000);
-      const DWORD client_wait =
-          WaitForSingleObject(client_process.hProcess, 10'000);
+    // Guard on the handles themselves: a failed launch leaves them null.
+    const HANDLE server = server_process.hProcess;
+    const HANDLE client = client_process.hProcess;
+    if (server != nullptr && client != nullptr) {
+      const DWORD server_wait = WaitForSingleObject(server, 10'000);
+      const DWORD client_wait = WaitForSingleObject(client, 10'000);
       DWORD server_exit{1};
       DWORD client_exit{1};
       if (server_wait == WAIT_OBJECT_0)
-        (void)GetExitCodeProcess(server_process.hProcess, &server_exit);
+        (void)GetExitCodeProcess(server, &server_exit);
       if (client_wait == WAIT_OBJECT_0)
-        (void)GetExitCodeProcess(client_process.hProcess, &client_exit);
+        (void)GetExitCodeProcess(client, &client_exit);
       expect(server_wait == WAIT_OBJECT_0 && client_wait == WAIT_OBJECT_0 &&
                  server_exit == 0 && client_exit == 0,
              "same-user, same-session sibling images should authenticate "
              "bidirectionally");
       if (server_wait != WAIT_OBJECT_0) {
-        TerminateProcess(server_process.hProcess, 1);
-        WaitForSingleObject(server_process.hProcess, 1'000);
+        TerminateProcess(server, 1);
+        WaitForSingleObject(server, 1'000);
       }
       if (client_wait != WAIT_OBJECT_0) {
-        TerminateProcess(client_process.hProcess, 1);
-        WaitForSingleObject(client_process.hProcess, 1'000);
+        TerminateProcess(client, 1);
+        WaitForSingleObject(client, 1'000);
       }
     } else {
-      if (server_launched) {
-        TerminateProcess(server_process.hProcess, 1);
-        WaitForSingleObject(server_process.hProcess, 1'000);
+      if (server != nullptr) {
+        TerminateProcess(server, 1);
+        WaitForSingleObject(server, 1'000);
       }
-      if (client_launched) {
-        TerminateProcess(client_process.hProcess, 1);
-        WaitForSingleObject(client_process.hProcess, 1'000);
+      if (client != nullptr) {
+        TerminateProcess(client, 1);
+        WaitForSingleObject(client, 1'000);
       }
     }
     for (auto *process : {&client_process, &server_process}) {
