@@ -22,9 +22,7 @@ public:
   explicit FakeService(const Capability capability) noexcept
       : capability_(capability) {}
 
-  [[nodiscard]] Capability capability() const noexcept override {
-    return capability_;
-  }
+  [[nodiscard]] Capability capability() const noexcept { return capability_; }
 
   [[nodiscard]] ServiceReconcileResult
   reconcile(const CapabilityDemand &demand) override {
@@ -57,7 +55,7 @@ private:
 template <typename... Services>
 [[nodiscard]] RuntimeServiceRegistry registry(Services &...services) {
   RuntimeServiceRegistry result{};
-  const auto add = [&](IRuntimeService &service) {
+  const auto add = [&](auto &service) {
     result[static_cast<std::size_t>(service.capability())] = &service;
   };
   (add(services), ...);
@@ -126,23 +124,6 @@ void faults_release_the_service() {
   expect(stats.state == layerc::runtime::ServiceState::faulted &&
              stats.fault_count == 1 && stats.last_error == "test fault",
          "failure diagnostics should be retained");
-}
-
-void mismatched_registry_entry_is_rejected() {
-  FakeService visual(Capability::visual);
-  RuntimeServiceRegistry services{};
-  services[static_cast<std::size_t>(Capability::input)] = &visual;
-  layerc::runtime::RuntimeServiceHost host(services);
-  CapabilityDemand demand;
-  demand.set(Capability::input, 1);
-
-  expect(!host.reconcile(demand),
-         "a service registered in the wrong slot should be unavailable");
-  expect(visual.reconciled == 0 && visual.quiesced == 0,
-         "a mismatched service must never be invoked");
-  expect(host.stats(Capability::input).last_error ==
-             "required runtime service is unavailable",
-         "a rejected registration should remain diagnosable");
 }
 
 void later_fault_keeps_healthy_capabilities_active() {
@@ -330,7 +311,7 @@ public:
   bool notified{};
   int quiesced{};
 
-  [[nodiscard]] Capability capability() const noexcept override {
+  [[nodiscard]] static Capability capability() noexcept {
     return Capability::visual;
   }
   [[nodiscard]] ServiceReconcileResult
@@ -455,7 +436,7 @@ void diagnostics_contract_round_trips() {
          "typed diagnostics should reject duplicate capability rows");
 
   expect(layerc::runtime::RuntimeDiagnostics{}.package_version ==
-             layerc::runtime::runtime_package_version(),
+             layerc::core::product_version,
          "diagnostics should source the package version from the build definition");
 }
 
@@ -466,7 +447,6 @@ int main() {
       {"demand_counts_saturate", demand_counts_saturate},
       {"host_is_lazy_and_idempotent", host_is_lazy_and_idempotent},
       {"faults_release_the_service", faults_release_the_service},
-      {"mismatched_registry_entry_is_rejected", mismatched_registry_entry_is_rejected},
       {"later_fault_keeps_healthy_capabilities_active", later_fault_keeps_healthy_capabilities_active},
       {"unavailable_isolated_capture_leaves_input_active", unavailable_isolated_capture_leaves_input_active},
       {"teardown_is_reverse_ordered", teardown_is_reverse_ordered},

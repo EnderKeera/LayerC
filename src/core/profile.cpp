@@ -317,8 +317,9 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
       const auto duration = fields_.integer(value, keys::duration_ms, path, 1,
                                             max_cooldown_duration.count(),
                                             json::Required::yes);
-      const auto charges = fields_.integer(value, keys::max_charges, path, 1,
-                                           99, json::Required::no, 1);
+      const auto charges = fields_.integer(
+          value, keys::max_charges, path, min_cooldown_charges,
+          max_cooldown_charges, json::Required::no, 1);
       if (!duration.has_value() || !charges.has_value()) {
         return false;
       }
@@ -433,7 +434,8 @@ bool ProfileReader::read_cooldown_groups(
           value, keys::duration_ms, path, 1, max_cooldown_duration.count(),
           json::Required::yes);
       const auto charges = fields_.integer(
-          value, keys::max_charges, path, 1, 99, json::Required::no, 1);
+          value, keys::max_charges, path, min_cooldown_charges,
+          max_cooldown_charges, json::Required::no, 1);
       std::string recovery;
       std::string retrigger = "ignore";
       if (!duration.has_value() || !charges.has_value() ||
@@ -526,10 +528,10 @@ bool ProfileReader::read_panels(GameProfile &profile) {
         }
         const auto bar_path = path + ".bar";
         const auto width = fields_.integer(
-            *bar, keys::width, bar_path, 40, 1'200,
+            *bar, keys::width, bar_path, min_bar_width, max_bar_width,
             json::Required::no, panel.bar.width);
         const auto height = fields_.integer(
-            *bar, keys::height, bar_path, 16, 240,
+            *bar, keys::height, bar_path, min_bar_height, max_bar_height,
             json::Required::no, panel.bar.height);
         if (!width.has_value() || !height.has_value()) {
           return false;

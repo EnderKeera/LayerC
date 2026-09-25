@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -21,6 +22,11 @@ struct VisualAssetError {
 using TemplateImageResult =
     std::variant<layerc::core::TemplateImage, VisualAssetError>;
 using DecodeTemplateRgba = TemplateImageResult (*)(std::vector<std::uint8_t> &);
+
+// Bounded, guarded read of one template asset; nullopt when the file is
+// missing, empty, or larger than max_template_asset_bytes.
+[[nodiscard]] std::optional<std::vector<std::uint8_t>>
+read_template_asset_bytes(const std::filesystem::path &path);
 
 // Reads a bounded, guarded file, checks the content hash, then decodes it.
 [[nodiscard]] TemplateImageResult verified_template_from_bytes(

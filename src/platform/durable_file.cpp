@@ -1,5 +1,4 @@
 #include "layerc/platform/durable_file.hpp"
-#include "durable_file_internal.hpp"
 #include "io_chunk_size.hpp"
 
 #include <utility>
@@ -24,7 +23,7 @@ bool publishable_destination(const std::filesystem::path &destination) {
 
 } // namespace
 
-std::uint64_t detail::durable_process_id() noexcept {
+std::uint64_t current_process_id() noexcept {
   return static_cast<std::uint64_t>(GetCurrentProcessId());
 }
 

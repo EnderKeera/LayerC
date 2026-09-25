@@ -1,45 +1,20 @@
 #pragma once
 
+#include "layerc/platform/win32_handle.hpp"
+
 #include <filesystem>
 #include <functional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include <windows.h>
 
 namespace layerc::platform {
 
-class OwnedHandle {
-public:
-  OwnedHandle() = default;
-  explicit OwnedHandle(HANDLE handle) noexcept : handle_(handle) {}
-  ~OwnedHandle() { reset(); }
-  OwnedHandle(const OwnedHandle &) = delete;
-  OwnedHandle &operator=(const OwnedHandle &) = delete;
-  OwnedHandle(OwnedHandle &&other) noexcept : handle_(other.release()) {}
-  OwnedHandle &operator=(OwnedHandle &&other) noexcept {
-    if (this != &other) reset(other.release());
-    return *this;
-  }
-
-  [[nodiscard]] HANDLE get() const noexcept { return handle_; }
-  [[nodiscard]] bool valid() const noexcept {
-    return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-  }
-  [[nodiscard]] HANDLE release() noexcept {
-    const HANDLE old = handle_;
-    handle_ = nullptr;
-    return old;
-  }
-  void reset(HANDLE handle = nullptr) noexcept {
-    if (valid()) CloseHandle(handle_);
-    handle_ = handle;
-  }
-
-private:
-  HANDLE handle_{};
-};
+// Quotes one argument so CommandLineToArgvW recovers it exactly.
+[[nodiscard]] std::wstring quote_command_argument(std::wstring_view value);
 
 struct BoundedHelper {
   OwnedHandle job;

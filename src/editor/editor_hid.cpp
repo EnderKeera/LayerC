@@ -37,7 +37,7 @@ bool system_class(const layerc::platform::HidRawDevice &device) {
 }
 
 void unregister_devices(HidDialogState &state) {
-  for (const auto [page, usage] : state.registrations) {
+  for (const auto &[page, usage] : state.registrations) {
     RAWINPUTDEVICE device{.usUsagePage = page,
                           .usUsage = usage,
                           .dwFlags = RIDEV_REMOVE,
@@ -117,7 +117,7 @@ selected_device(const HWND window, const HidDialogState &state) {
 }
 
 bool read_percent(const HWND control, const unsigned maximum, double &value) {
-  const auto parsed = parse_bounded(control_text(control), 0, maximum);
+  const auto parsed = parse_bounded(window_text(control), 0, maximum);
   if (!parsed)
     return false;
   value = static_cast<double>(*parsed) / 100.0;
@@ -135,7 +135,7 @@ void EditorWindow::capture_hid_binding() {
   HidDialogState state{};
   state.editor = this;
   state.devices = layerc::platform::enumerate_raw_hid_devices();
-  if (DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_HID_BINDING), shell_.window(),
+  if (DialogBoxParamW(shell_.instance, MAKEINTRESOURCEW(IDD_HID_BINDING), shell_.window,
                       &EditorWindow::hid_binding_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK ||
       !state.inferred)
@@ -153,7 +153,7 @@ void EditorWindow::capture_hid_binding() {
       binding_index = token.code - 1U;
   }
   const auto id_base =
-      "hid-" + safe_identifier(to_wide(cooldown_id), "control");
+      "hid-" + layerc::core::slugify(cooldown_id, "control");
   captured.id = next_unique_id(id_base, [&](const std::string_view id) {
     return std::ranges::any_of(document_.profile().hid_bindings,
                                [&](const auto &candidate) {
@@ -164,7 +164,7 @@ void EditorWindow::capture_hid_binding() {
   });
   if (binding_index == SIZE_MAX) {
     if (document_.profile().hid_bindings.size() >= 128) {
-      MessageBoxW(shell_.window(),
+      MessageBoxW(shell_.window,
                   L"This profile already has the maximum 128 HID bindings.",
                   L"HID binding", MB_OK | MB_ICONERROR);
       return;
@@ -198,7 +198,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion());
+    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion);
     state->editor->style_dialog_children(window);
     set_owner_draw_checkbox(GetDlgItem(window, IDC_HID_SYSTEM_CLASS), false);
     set_text(GetDlgItem(window, IDC_HID_THRESHOLD), L"50");
@@ -344,7 +344,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
         return TRUE;
       double threshold{}, hysteresis{};
       const auto slot =
-          parse_uint(control_text(GetDlgItem(window, IDC_HID_SLOT)), 0);
+          parse_uint(window_text(GetDlgItem(window, IDC_HID_SLOT)), 0);
       if (!read_percent(GetDlgItem(window, IDC_HID_THRESHOLD), 100,
                         threshold) ||
           !read_percent(GetDlgItem(window, IDC_HID_HYSTERESIS), 49,

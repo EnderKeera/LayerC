@@ -14,23 +14,6 @@ bool frame_is_valid(const CaptureFrame &frame) noexcept {
          expected == static_cast<std::uint64_t>(frame.pixels.size());
 }
 
-CapturePhase phase_for(const core::CaptureAvailability availability) noexcept {
-  switch (availability) {
-  case core::CaptureAvailability::inactive:
-    return CapturePhase::stopped;
-  case core::CaptureAvailability::starting:
-    return CapturePhase::starting;
-  case core::CaptureAvailability::available:
-    return CapturePhase::live;
-  case core::CaptureAvailability::protected_or_black:
-  case core::CaptureAvailability::outside_output:
-    return CapturePhase::degraded;
-  case core::CaptureAvailability::unavailable:
-    return CapturePhase::unavailable;
-  }
-  return CapturePhase::unavailable;
-}
-
 } // namespace
 
 CapturePoll normalize_capture_poll(const core::WindowId window,
@@ -45,7 +28,6 @@ CapturePoll normalize_capture_poll(const core::WindowId window,
     else
       result.diagnostic += "; invalid capture frame";
   }
-  result.phase = phase_for(result.availability);
   return {.window = window, .result = std::move(result)};
 }
 
@@ -64,7 +46,6 @@ CapturePollResult CaptureHealthTracker::observe(CapturePollResult result) {
     if (!result.diagnostic.empty()) result.diagnostic += "; ";
     result.diagnostic += "persistent black frames detected";
   }
-  result.phase = phase_for(result.availability);
   return result;
 }
 

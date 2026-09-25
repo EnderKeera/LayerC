@@ -65,7 +65,7 @@ const Value *object_root(const std::string_view source, Reader &reader,
   if (!reader.string(root, "packageVersion", "$", package, Required::yes,
                      EmptyString::reject))
     return nullptr;
-  if (package != layerc::core::package_version) {
+  if (package != layerc::core::product_version) {
     reader.fail("$.packageVersion", "isolated visual package version mismatch");
     return nullptr;
   }
@@ -76,9 +76,19 @@ void append_packet_prefix(std::string &output, const std::string_view type) {
   output += "{\"protocolVersion\":";
   layerc::core::json::append_unsigned(output, isolated_visual_protocol_version);
   output += ",\"packageVersion\":";
-  layerc::core::json::append_quoted(output, layerc::core::package_version);
+  layerc::core::json::append_quoted(output, layerc::core::product_version);
   output += ",\"type\":";
   layerc::core::json::append_quoted(output, type);
+}
+
+std::string encode_sequence_packet(const std::string_view type,
+                                   const std::uint64_t sequence) {
+  std::string output;
+  append_packet_prefix(output, type);
+  output += ",\"sequence\":";
+  layerc::core::json::append_unsigned(output, sequence);
+  output.push_back('}');
+  return output;
 }
 
 std::uint64_t monotonic_nanoseconds(const layerc::core::TimePoint value) {
@@ -513,40 +523,8 @@ IsolatedInboundMessage decode_isolated_message(const std::string_view json) {
   return IsolatedProtocolError{"unexpected isolated visual message type"};
 }
 
-IsolatedConfigurationResult
-decode_isolated_configuration(const std::string_view json) {
-  auto message = decode_isolated_message(json);
-  if (const auto *error = std::get_if<IsolatedProtocolError>(&message))
-    return *error;
-  if (const auto *configuration =
-          std::get_if<IsolatedConfiguration>(&message))
-    return *configuration;
-  return IsolatedProtocolError{"expected isolated configure message"};
-}
-
 std::string encode_isolated_poll(const std::uint64_t sequence) {
-  std::string output;
-  append_packet_prefix(output, "waitSnapshot");
-  output += ",\"sequence\":";
-  layerc::core::json::append_unsigned(output, sequence);
-  output.push_back('}');
-  return output;
-}
-
-bool decode_isolated_poll(const std::string_view json, std::uint64_t &sequence,
-                          std::string &error) {
-  auto message = decode_isolated_message(json);
-  if (const auto *failure = std::get_if<IsolatedProtocolError>(&message)) {
-    error = failure->message;
-    return false;
-  }
-  const auto *poll = std::get_if<IsolatedPoll>(&message);
-  if (poll == nullptr) {
-    error = "expected isolated waitSnapshot message";
-    return false;
-  }
-  sequence = poll->sequence;
-  return true;
+  return encode_sequence_packet("waitSnapshot", sequence);
 }
 
 std::string encode_isolated_snapshot(const std::uint64_t packet_sequence,
@@ -746,12 +724,7 @@ decode_isolated_snapshot(const std::string_view json,
 }
 
 std::string encode_isolated_ack(const std::uint64_t sequence) {
-  std::string output;
-  append_packet_prefix(output, "ack");
-  output += ",\"sequence\":";
-  layerc::core::json::append_unsigned(output, sequence);
-  output.push_back('}');
-  return output;
+  return encode_sequence_packet("ack", sequence);
 }
 
 bool decode_isolated_ack(const std::string_view json,

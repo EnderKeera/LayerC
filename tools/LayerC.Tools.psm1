@@ -31,16 +31,23 @@ function Assert-NativeSuccess {
     }
 }
 
-function Invoke-Checked {
+function Assert-LayerCExecutables {
     param(
-        [Parameter(Mandatory)][string]$Operation,
-        [Parameter(Mandatory)][scriptblock]$Command
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string[]]$Names,
+        [string]$Hint = ''
     )
-    & $Command
-    Assert-NativeSuccess $Operation
+    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
+        throw "Build directory does not exist: $Directory"
+    }
+    foreach ($name in $Names) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Directory $name) -PathType Leaf)) {
+            throw ("Missing $name in $Directory. $Hint").TrimEnd()
+        }
+    }
 }
 
-function Resolve-InstallRoot {
+function Resolve-LayerCBuildRoot {
     <#.SYNOPSIS
         Resolves the directory that directly contains a staged LayerC install.
         Accepts either the install root itself or its parent when the archive
@@ -72,14 +79,6 @@ function Resolve-InstallRoot {
             ($RequiredExecutables -join ', '), $Path, $candidates.Count)
     }
     return $candidates[0].FullName
-}
-
-function Resolve-LayerCBuildRoot {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string[]]$RequiredExecutables
-    )
-    Resolve-InstallRoot -Path $Path -RequiredExecutables $RequiredExecutables
 }
 
 function New-LayerCBenchmarkContext {
@@ -316,8 +315,8 @@ function Set-BenchmarkForeground {
     return $foregroundRoot -eq $targetRoot
 }
 
-Export-ModuleMember -Function Assert-NativeSuccess, Invoke-Checked,
-    Resolve-InstallRoot, Resolve-LayerCBuildRoot, New-LayerCBenchmarkContext,
+Export-ModuleMember -Function Assert-NativeSuccess, Assert-LayerCExecutables,
+    Resolve-LayerCBuildRoot, New-LayerCBenchmarkContext,
     Assert-LayerCQuiescent, Enter-LayerCProfileSandbox, Exit-LayerCProfileSandbox,
     Start-LayerCDaemon, Stop-LayerCBenchmarkProcess, Get-LayerCPackageVersion,
     Get-LayerCCommitSha, New-LayerCBenchmarkResult, Measure-LayerCPlateau,

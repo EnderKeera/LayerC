@@ -38,7 +38,7 @@ load_visual(const layerc::platform::StoredProfile &source) {
   auto sidecar =
       layerc::platform::load_visual_sidecar(source.path, source.profile);
   if (!sidecar.profile.has_value()) {
-    if (sidecar.state == layerc::platform::VisualSidecarState::invalid) {
+    if (sidecar.state == layerc::platform::ModuleSidecarState::invalid) {
       result.invalid = true;
       result.diagnostic = source.path.string() + ": " + sidecar.error.message;
     }
@@ -49,19 +49,13 @@ load_visual(const layerc::platform::StoredProfile &source) {
   return result;
 }
 
-[[nodiscard]] bool has_enabled_rules(const AutomationProfile &profile) {
-  return std::ranges::any_of(profile.automations, [](const auto &automation) {
-    return automation.enabled && !automation.rules.empty();
-  });
-}
-
 [[nodiscard]] LoadedAutomation
 load_automation(const layerc::platform::StoredProfile &source) {
   LoadedAutomation result;
   auto sidecar = layerc::platform::load_automation_sidecar(source.path,
                                                            source.profile);
   if (!sidecar.profile.has_value()) {
-    if (sidecar.state == layerc::platform::AutomationSidecarState::invalid)
+    if (sidecar.state == layerc::platform::ModuleSidecarState::invalid)
       result.diagnostic = source.path.string() + ": " + sidecar.error.message;
     return result;
   }
@@ -71,7 +65,7 @@ load_automation(const layerc::platform::StoredProfile &source) {
   result.state = std::move(state.values);
   if (state.error.has_value())
     result.diagnostic = source.path.string() + ": " + state.error->message;
-  if (has_enabled_rules(*sidecar.profile))
+  if (layerc::core::has_enabled_automations(*sidecar.profile))
     result.profile = std::move(sidecar.profile);
   return result;
 }
@@ -139,22 +133,21 @@ InputSession::InputSession(
 
 void InputSession::checkpoint_automation_state(const TimePoint now,
                                                const bool force) {
-  if (automation_runtime && automation_runtime->persistent_dirty())
+  if (!automation_runtime) return;
+  if (automation_runtime->persistent_dirty())
     layerc::core::automation_checkpoint_arm(automation_state_due, now);
-  if (!automation_runtime || !layerc::core::automation_checkpoint_ready(
-                                 automation_state_due, now, force)) return;
-  const auto written = layerc::platform::write_automation_state(
+  const auto written = layerc::platform::checkpoint_automation_state(
       source_path, automation_runtime->profile(),
-      automation_runtime->snapshot().persistent_values);
-  if (const auto error = written.error(); error.has_value())
+      automation_runtime->snapshot().persistent_values, automation_state_due,
+      now, force);
+  if (!written.has_value()) return;
+  if (const auto error = written->error(); error.has_value())
     automation_faults.push_back(
         std::string("automation checkpoint failed (") +
         layerc::platform::profile_write_error_text(*error) +
         "): " + source_path.string());
   else
     automation_runtime->mark_persistent_saved();
-  layerc::core::automation_checkpoint_report(automation_state_due, now,
-                                             written);
 }
 
 std::vector<std::string>
@@ -295,8 +288,8 @@ X11SessionRegistry::session_requests() const {
   return requests;
 }
 
-X11InputDispatch X11InputService::dispatch() {
-  X11InputDispatch result;
+X11Dispatch X11InputService::dispatch() {
+  X11Dispatch result;
   if (!source_.has_value()) return result;
   auto poll = source_->poll();
   result.events = poll.events.size();

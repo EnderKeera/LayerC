@@ -31,7 +31,4 @@ load_profile_bundle(const std::filesystem::path &path);
 [[nodiscard]] bool source_schema_before(std::string_view source,
                                         std::uint32_t current_schema);
 
-// True when the loaded visual sidecar's source file uses an older schema.
-[[nodiscard]] bool visual_sidecar_is_legacy(const VisualSidecarLoad &visual);
-
 } // namespace layerc::platform

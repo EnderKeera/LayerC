@@ -3,6 +3,7 @@
 
 #include "layerc/core/hash.hpp"
 #include "layerc/core/utf8.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <string_view>
@@ -10,10 +11,21 @@
 namespace layerc::platform {
 namespace {
 
-std::filesystem::path profile_data_file(const std::filesystem::path &profile_path,
-                                        const std::string_view name) {
-  const auto data = profile_data_directory(profile_path);
-  return data.empty() ? data : data / name;
+// One module file per profile: `<dir>/<profile filename><suffix>` beside a
+// unified store, `<data dir>/<data_name>` in a split store.
+std::filesystem::path
+module_file_path(const std::filesystem::path &profile_path,
+                 const std::string_view unified_directory,
+                 const std::string_view unified_suffix,
+                 const std::string_view data_name) {
+  if (!profile_roots_unified_targets(profile_layout_roots(profile_path))) {
+    const auto data = profile_data_directory(profile_path);
+    return data.empty() ? data : data / data_name;
+  }
+  if (profile_path.filename().empty()) return {};
+  auto filename = profile_path.filename();
+  filename += unified_suffix;
+  return profile_path.parent_path() / unified_directory / filename;
 }
 
 } // namespace
@@ -32,81 +44,52 @@ profile_visual_asset_directory(const std::filesystem::path &profile_path) {
   if (profile_path.empty()) return {};
   const auto roots = profile_layout_roots(profile_path);
   if (profile_roots_unified_targets(roots))
-    return profile_path.parent_path() / "_visual" / "assets";
+    return unified_visual_asset_directory(profile_path.parent_path());
   const auto data = profile_data_directory(profile_path);
   return data.empty() ? data : data / "assets";
 }
 
+std::filesystem::path
+unified_visual_asset_directory(const std::filesystem::path &profile_directory) {
+  return profile_directory / "_visual" / "assets";
+}
+
+std::filesystem::path visual_asset_file(const std::filesystem::path &directory,
+                                        const std::string_view sha256) {
+  if (directory.empty() || !layerc::core::is_lowercase_sha256(sha256))
+    return {};
+  return directory / (std::string(sha256) + ".png");
+}
+
 std::filesystem::path profile_visual_asset_path(
     const std::filesystem::path &profile_path, const std::string_view sha256) {
-  if (!layerc::core::is_lowercase_sha256(sha256)) return {};
-  const auto directory = profile_visual_asset_directory(profile_path);
-  return directory.empty() ? directory
-                           : directory / (std::string(sha256) + ".png");
+  return visual_asset_file(profile_visual_asset_directory(profile_path),
+                           sha256);
 }
 
 std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path) {
-  const auto roots = profile_layout_roots(profile_path);
-  if (profile_roots_unified_targets(roots)) {
-    if (profile_path.filename().empty()) return {};
-    return profile_path.parent_path() / "_visual" / profile_path.filename();
-  }
-  return profile_data_file(profile_path, "visual.json");
+  return module_file_path(profile_path, "_visual", "", "visual.json");
 }
 
 std::filesystem::path
 automation_sidecar_path(const std::filesystem::path &profile_path) {
-  const auto roots = profile_layout_roots(profile_path);
-  if (profile_roots_unified_targets(roots)) {
-    if (profile_path.filename().empty()) return {};
-    return profile_path.parent_path() / "_automation" / profile_path.filename();
-  }
-  return profile_data_file(profile_path, "automation.json");
+  return module_file_path(profile_path, "_automation", "", "automation.json");
 }
 
 std::filesystem::path
 automation_state_path(const std::filesystem::path &profile_path) {
-  const auto roots = profile_layout_roots(profile_path);
-  if (profile_roots_unified_targets(roots)) {
-    if (profile_path.filename().empty()) return {};
-    auto filename = profile_path.filename();
-    filename += ".automation-state.json";
-    return profile_path.parent_path() / "_state" / filename;
-  }
-  return profile_data_file(profile_path, "automation-state.json");
+  return module_file_path(profile_path, "_state", ".automation-state.json",
+                          "automation-state.json");
 }
 
 std::filesystem::path
 companion_sidecar_path(const std::filesystem::path &profile_path) {
-  const auto roots = profile_layout_roots(profile_path);
-  if (profile_roots_unified_targets(roots)) {
-    if (profile_path.filename().empty()) return {};
-    return profile_path.parent_path() / "_companion" / profile_path.filename();
-  }
-  return profile_data_file(profile_path, "companion.json");
+  return module_file_path(profile_path, "_companion", "", "companion.json");
 }
 
 std::filesystem::path profile_store_filename(const std::string_view profile_id) {
-  std::string stem;
-  bool last_dash{};
-  for (const char character : profile_id) {
-    const char lower = character >= 'A' && character <= 'Z'
-                           ? static_cast<char>(character - 'A' + 'a')
-                           : character;
-    if ((lower >= 'a' && lower <= 'z') || (lower >= '0' && lower <= '9')) {
-      stem.push_back(lower);
-      last_dash = false;
-    } else if (!stem.empty() && !last_dash) {
-      stem.push_back('-');
-      last_dash = true;
-    }
-  }
-  while (!stem.empty() && stem.back() == '-')
-    stem.pop_back();
-  if (stem.empty())
-    stem = "profile";
-  return std::filesystem::path(stem + ".json");
+  return std::filesystem::path(core::slugify(profile_id, "profile") + ".json");
 }
 
 std::string canonical_profile_key(const std::filesystem::path &path) {
@@ -121,17 +104,13 @@ std::string canonical_profile_key(const std::filesystem::path &path) {
     }
     if (error) normalized = path;
   }
-  normalized = normalized.lexically_normal();
-#ifdef _WIN32
-  auto wide = normalized.wstring();
-  std::replace(wide.begin(), wide.end(), L'/', L'\\');
-  const auto encoded = layerc::core::try_wide_to_utf8(wide);
+  auto encoded = path_to_utf8(normalized.lexically_normal());
   if (!encoded.has_value()) return {};
+  // Native separators: keys keep the platform's spelling of the path.
+  std::ranges::replace(
+      *encoded, '/',
+      static_cast<char>(std::filesystem::path::preferred_separator));
   return layerc::core::try_casefold_utf8(*encoded).value_or(std::string{});
-#else
-  return layerc::core::try_casefold_utf8(normalized.generic_string())
-      .value_or(std::string{});
-#endif
 }
 
 } // namespace layerc::platform

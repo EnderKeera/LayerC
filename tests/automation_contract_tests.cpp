@@ -23,20 +23,13 @@ namespace {
 using namespace layerc::core;
 using namespace std::chrono_literals;
 
-AutomationExpression literal(AutomationValue value) {
-  return {.kind = ExpressionKind::literal, .literal = std::move(value)};
-}
+using expr::binary;
+using expr::literal;
 AutomationExpression unary(std::string operation,
                            AutomationExpression argument) {
   return {.kind = ExpressionKind::unary,
           .operation = std::move(operation),
           .arguments = {std::move(argument)}};
-}
-AutomationExpression binary(std::string operation, AutomationExpression left,
-                            AutomationExpression right) {
-  return {.kind = ExpressionKind::binary,
-          .operation = std::move(operation),
-          .arguments = {std::move(left), std::move(right)}};
 }
 AutomationExpression call(std::string operation,
                           std::vector<AutomationExpression> arguments) {

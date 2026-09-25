@@ -1,19 +1,12 @@
 #pragma once
 
+#include "layerc/platform/native_theme.hpp"
+
 #include <algorithm>
 
 #include <windows.h>
 
 namespace layerc::editor {
-
-[[nodiscard]] inline HFONT create_editor_font(const UINT dpi) {
-  const auto effective_dpi = dpi == 0 ? 96 : static_cast<int>(dpi);
-  return CreateFontW(-MulDiv(9, effective_dpi, 72), 0, 0, 0, FW_NORMAL,
-                     FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                     L"Segoe UI");
-}
 
 inline void apply_suggested_dpi_rect(const HWND window, const LPARAM lparam) {
   const auto *suggested = reinterpret_cast<const RECT *>(lparam);
@@ -29,7 +22,7 @@ void style_native_dialog_children(HWND dialog, HFONT font);
 
 [[nodiscard]] inline bool replace_dialog_font(const HWND dialog, const UINT dpi,
                                               HFONT &font) {
-  const HFONT replacement = create_editor_font(dpi);
+  const HFONT replacement = layerc::platform::create_native_dialog_font(dpi);
   if (replacement == nullptr)
     return false;
   const HFONT previous = font;

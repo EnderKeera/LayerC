@@ -1,5 +1,4 @@
 #include "layerc/platform/durable_file.hpp"
-#include "durable_file_internal.hpp"
 
 #include <atomic>
 #include <string>
@@ -30,7 +29,7 @@ bool fsync_parent_checked(const std::filesystem::path &path) noexcept {
 std::filesystem::path
 unique_durable_stage_path(const std::filesystem::path &destination) {
   auto stage = destination;
-  stage += "." + std::to_string(detail::durable_process_id()) + "." +
+  stage += "." + std::to_string(current_process_id()) + "." +
            std::to_string(
                stage_sequence.fetch_add(1, std::memory_order_relaxed)) +
            ".tmp";

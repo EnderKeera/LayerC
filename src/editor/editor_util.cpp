@@ -1,6 +1,7 @@
 #include "editor_text.hpp"
 #include "editor_util.hpp"
 
+#include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "layerc/platform/text.hpp"
@@ -27,55 +28,18 @@ std::wstring to_wide(const std::string_view text) {
   return !text.empty() && converted.empty() ? L"?" : converted;
 }
 
-std::string to_utf8(const std::wstring_view text) {
-  return layerc::platform::wide_to_utf8(text);
-}
-
-std::wstring control_text(const HWND control) {
-  const int length = GetWindowTextLengthW(control);
-  if (length <= 0)
-    return {};
-  std::wstring output(static_cast<std::size_t>(length) + 1U, L'\0');
-  const int copied =
-      GetWindowTextW(control, output.data(), static_cast<int>(output.size()));
-  output.resize(static_cast<std::size_t>(std::max(copied, 0)));
-  return output;
-}
-
 void set_text(const HWND control, const std::wstring_view text) {
   if (control != nullptr)
     SetWindowTextW(control, std::wstring(text).c_str());
 }
 
-namespace {
-// std::from_chars has no wide overload. Numeric text is ASCII, so narrowing is
-// exact once every non-ASCII code unit has been rejected.
-std::optional<std::string> ascii_text(const std::wstring_view text) {
-  std::string narrow;
-  narrow.reserve(text.size());
-  for (const wchar_t character : text) {
-    if (character > 0x7F)
-      return std::nullopt;
-    narrow.push_back(static_cast<char>(character));
-  }
-  return narrow;
-}
-} // namespace
-
 std::optional<std::uint32_t> parse_bounded(const std::wstring_view text,
                                            const std::uint32_t minimum,
                                            const std::uint32_t maximum,
                                            const int base) {
-  const auto source = ascii_text(text);
-  if (!source)
-    return std::nullopt;
-  const auto &narrow = *source;
-  std::uint32_t parsed{};
-  const auto [end, code] = std::from_chars(
-      narrow.data(), narrow.data() + narrow.size(), parsed, base);
-  if (narrow.empty() || code != std::errc{} ||
-      end != narrow.data() + narrow.size() || parsed < minimum ||
-      parsed > maximum)
+  const auto parsed =
+      layerc::platform::parse_integer<std::uint32_t>(text, base);
+  if (!parsed || *parsed < minimum || *parsed > maximum)
     return std::nullopt;
   return parsed;
 }
@@ -89,7 +53,7 @@ std::optional<layerc::core::Milliseconds>
 parse_duration_ms(const std::wstring_view seconds) {
   if (seconds.empty())
     return std::nullopt;
-  const auto source = ascii_text(seconds);
+  const auto source = layerc::platform::ascii_narrow(seconds);
   if (!source)
     return std::nullopt;
   double parsed{};
@@ -128,43 +92,11 @@ bool owner_draw_checkbox_checked(const HWND control) {
          SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
 
-COLORREF color_ref(const std::uint32_t color) {
-  return layerc::platform::native_color_ref(color);
-}
-
-std::uint32_t rgb_value(const COLORREF color) {
-  return layerc::platform::native_rgb_value(color);
-}
-
-void fill_solid_rect(const HDC dc, const RECT &rect, const COLORREF color) {
-  const HBRUSH brush = CreateSolidBrush(color);
-  FillRect(dc, &rect, brush);
-  DeleteObject(brush);
-}
-
-void frame_solid_rect(const HDC dc, const RECT &rect, const COLORREF color) {
-  const HBRUSH brush = CreateSolidBrush(color);
-  FrameRect(dc, &rect, brush);
-  DeleteObject(brush);
-}
-
-void outline_rect(const HDC dc, const RECT &rect, const int pen_width,
-                  const COLORREF color) {
-  const HPEN pen = CreatePen(PS_SOLID, pen_width, color);
-  const HGDIOBJ previous_pen = SelectObject(dc, pen);
-  const HGDIOBJ previous_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-  Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
-  SelectObject(dc, previous_brush);
-  SelectObject(dc, previous_pen);
-  DeleteObject(pen);
-}
-
 bool start_daemon() {
   const auto daemon = layerc::platform::sibling_image_path(L"layerd.exe");
   if (daemon.empty()) return false;
-  std::wstring command = L"\"" + daemon.wstring() + L"\"";
-  std::vector<wchar_t> command_line(command.begin(), command.end());
-  command_line.push_back(L'\0');
+  std::wstring command_line =
+      layerc::platform::quote_command_argument(daemon.wstring());
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
   PROCESS_INFORMATION process{};
@@ -172,10 +104,8 @@ bool start_daemon() {
       CreateProcessW(daemon.c_str(), command_line.data(), nullptr, nullptr, FALSE,
                      CREATE_NO_WINDOW, nullptr, daemon.parent_path().c_str(),
                      &startup, &process);
-  if (process.hThread != nullptr)
-    CloseHandle(process.hThread);
-  if (process.hProcess != nullptr)
-    CloseHandle(process.hProcess);
+  const layerc::platform::OwnedHandle thread(process.hThread);
+  const layerc::platform::OwnedHandle launched(process.hProcess);
   return created != FALSE;
 }
 
@@ -212,28 +142,6 @@ bool recycle_profile_bundle(const std::filesystem::path &path) {
   operation.pFrom = source.data();
   operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT;
   return SHFileOperationW(&operation) == 0 && !operation.fAnyOperationsAborted;
-}
-
-std::string safe_identifier(const std::wstring_view text,
-                            const std::string_view fallback) {
-  std::string output;
-  bool last_dash{};
-  for (const wchar_t character : text) {
-    const wchar_t lower = character >= L'A' && character <= L'Z'
-                              ? character + (L'a' - L'A')
-                              : character;
-    if ((lower >= L'a' && lower <= L'z') ||
-        (lower >= L'0' && lower <= L'9')) {
-      output.push_back(static_cast<char>(lower));
-      last_dash = false;
-    } else if (!output.empty() && !last_dash) {
-      output.push_back('-');
-      last_dash = true;
-    }
-  }
-  while (!output.empty() && output.back() == '-')
-    output.pop_back();
-  return output.empty() ? std::string(fallback) : output;
 }
 
 layerc::core::GameProfile make_new_profile() {

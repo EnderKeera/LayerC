@@ -10,9 +10,10 @@ namespace layerc::platform {
 namespace {
 
 constexpr wchar_t settings_registry_key[] = L"Software\\LayerC";
-constexpr wchar_t capture_exclusion_value[] = L"ExcludeFromCapture";
-constexpr wchar_t visual_recognition_value[] = L"VisualRecognitionEnabled";
-constexpr wchar_t visual_capture_notice_value[] = L"VisualCaptureNoticeSeen";
+// Registry value name per BoolSetting, in enum order.
+constexpr const wchar_t *bool_setting_values[] = {
+    L"ExcludeFromCapture", L"VisualRecognitionEnabled",
+    L"VisualCaptureNoticeSeen"};
 
 class UniqueHKey {
 public:
@@ -99,13 +100,6 @@ SettingReadResult<std::vector<std::byte>> query_value(
   return {.value = std::move(value), .error = 0};
 }
 
-SettingReadResult<bool> read_bool(const wchar_t *const name) {
-  const auto value = read_layerc_registry_dword(name);
-  if (!value.value)
-    return {.value = std::nullopt, .error = value.error};
-  return {.value = *value.value != 0, .error = 0};
-}
-
 } // namespace
 
 SettingReadResult<std::uint32_t>
@@ -120,13 +114,6 @@ read_layerc_registry_dword(const std::wstring_view value_name,
   std::uint32_t value{};
   std::memcpy(&value, bytes.value->data(), sizeof(value));
   return {.value = value, .error = 0};
-}
-
-SettingWriteResult
-write_layerc_registry_dword(const std::wstring_view value_name,
-                            const std::uint32_t value,
-                            const std::wstring_view subkey) {
-  return set_layerc_value(subkey, value_name, REG_DWORD, &value, sizeof(value));
 }
 
 SettingReadResult<std::vector<std::byte>>
@@ -180,30 +167,20 @@ write_layerc_registry_string(const std::wstring_view value_name,
                           static_cast<DWORD>(characters * sizeof(wchar_t)));
 }
 
-SettingReadResult<bool> read_capture_exclusion_setting() {
-  return read_bool(capture_exclusion_value);
+SettingReadResult<bool> read_bool_setting(const BoolSetting setting) {
+  const auto value = read_layerc_registry_dword(
+      bool_setting_values[static_cast<std::size_t>(setting)]);
+  if (!value.value)
+    return {.value = std::nullopt, .error = value.error};
+  return {.value = *value.value != 0, .error = 0};
 }
 
-SettingWriteResult write_capture_exclusion_setting(const bool enabled) {
-  return write_layerc_registry_dword(capture_exclusion_value, enabled ? 1U : 0U);
-}
-
-SettingReadResult<bool> read_visual_recognition_setting() {
-  return read_bool(visual_recognition_value);
-}
-
-SettingWriteResult write_visual_recognition_setting(const bool enabled) {
-  return write_layerc_registry_dword(visual_recognition_value, enabled ? 1U : 0U);
-}
-
-SettingReadResult<bool> read_visual_capture_notice_setting() {
-  return read_bool(visual_capture_notice_value);
-}
-
-SettingWriteResult
-write_visual_capture_notice_setting(const bool acknowledged) {
-  return write_layerc_registry_dword(visual_capture_notice_value,
-                                     acknowledged ? 1U : 0U);
+SettingWriteResult write_bool_setting(const BoolSetting setting,
+                                      const bool value) {
+  const DWORD stored = value ? 1U : 0U;
+  return set_layerc_value(
+      {}, bool_setting_values[static_cast<std::size_t>(setting)], REG_DWORD,
+      &stored, sizeof(stored));
 }
 
 } // namespace layerc::platform

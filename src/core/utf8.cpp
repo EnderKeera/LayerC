@@ -152,4 +152,25 @@ std::optional<std::string> try_casefold_utf8(const std::string_view text) {
   return output;
 }
 
+std::string slugify(const std::string_view text,
+                    const std::string_view fallback) {
+  std::string output;
+  bool last_dash{};
+  for (const char character : text) {
+    const char lower = character >= 'A' && character <= 'Z'
+                           ? static_cast<char>(character - 'A' + 'a')
+                           : character;
+    if ((lower >= 'a' && lower <= 'z') || (lower >= '0' && lower <= '9')) {
+      output.push_back(lower);
+      last_dash = false;
+    } else if (!output.empty() && !last_dash) {
+      output.push_back('-');
+      last_dash = true;
+    }
+  }
+  while (!output.empty() && output.back() == '-')
+    output.pop_back();
+  return output.empty() ? std::string(fallback) : output;
+}
+
 } // namespace layerc::core

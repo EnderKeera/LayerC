@@ -314,7 +314,7 @@ static void test_all_eight_slots_persist_and_publish() {
                            std::nullopt, profile),
       "all eight slot preferences save through the profile transaction");
   const auto loaded = load_companion_sidecar(base_path, base_profile);
-  layerc::test::expect(loaded.state == CompanionSidecarState::valid &&
+  layerc::test::expect(loaded.state == ModuleSidecarState::valid &&
                            loaded.profile.has_value() &&
                            *loaded.profile == profile,
                        "all eight slot preferences survive sidecar reload");

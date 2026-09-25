@@ -161,7 +161,7 @@ double contrast_ratio(const COLORREF first, const COLORREF second) {
 
 void EditorWindow::open_options() {
   DialogBoxParamW(
-      shell_.instance(), MAKEINTRESOURCEW(IDD_OPTIONS), shell_.window(),
+      shell_.instance, MAKEINTRESOURCEW(IDD_OPTIONS), shell_.window,
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_options,
                               &EditorWindow::handle_options_message>,
       reinterpret_cast<LPARAM>(this));
@@ -170,7 +170,7 @@ void EditorWindow::open_options() {
 void EditorWindow::open_appearance() {
   const auto loaded = layerc::platform::read_editor_appearance();
   if (loaded.failed()) {
-    MessageBoxW(shell_.window(), L"Could not read the editor appearance settings.",
+    MessageBoxW(shell_.window, L"Could not read the editor appearance settings.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
     return;
   }
@@ -179,7 +179,7 @@ void EditorWindow::open_appearance() {
   appearance_editor_.begin_open();
   refresh_theme();
   DialogBoxParamW(
-      shell_.instance(), MAKEINTRESOURCEW(IDD_APPEARANCE), shell_.window(),
+      shell_.instance, MAKEINTRESOURCEW(IDD_APPEARANCE), shell_.window,
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_appearance,
                               &EditorWindow::handle_appearance_message>,
       reinterpret_cast<LPARAM>(this));
@@ -191,9 +191,10 @@ void EditorWindow::open_appearance() {
 }
 
 void EditorWindow::initialize_options(const HWND window) {
-  apply_dialog_chrome(window, shell_.capture_exclusion());
+  apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
-  const auto visual = layerc::platform::read_visual_recognition_setting();
+  const auto visual = layerc::platform::read_bool_setting(
+          layerc::platform::BoolSetting::visual_recognition);
   if (visual.failed())
     MessageBoxW(window, L"Could not read the visual-recognition setting.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
@@ -201,7 +202,7 @@ void EditorWindow::initialize_options(const HWND window) {
                  visual.value.value_or(visual.missing()) ? BST_CHECKED
                                                          : BST_UNCHECKED);
   CheckDlgButton(window, IDC_CAPTURE_PRIVACY,
-                 shell_.capture_exclusion() ? BST_CHECKED : BST_UNCHECKED);
+                 shell_.capture_exclusion ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(window, IDC_OPTIONS_ADVANCED, BST_UNCHECKED);
   ShowWindow(GetDlgItem(window, IDC_CAPTURE_PRIVACY), SW_HIDE);
 }
@@ -212,8 +213,10 @@ void EditorWindow::apply_options(const HWND window) {
   const bool visual =
       IsDlgButtonChecked(window, IDC_VISUAL_MASTER) == BST_CHECKED;
   bool saved = static_cast<bool>(
-      layerc::platform::write_capture_exclusion_setting(capture));
-  if (!layerc::platform::write_visual_recognition_setting(visual))
+      layerc::platform::write_bool_setting(
+          layerc::platform::BoolSetting::capture_exclusion, capture));
+  if (!layerc::platform::write_bool_setting(
+          layerc::platform::BoolSetting::visual_recognition, visual))
     saved = false;
   if (!saved) {
     MessageBoxW(window, L"Could not save the selected options.",
@@ -221,12 +224,12 @@ void EditorWindow::apply_options(const HWND window) {
     return;
   }
 
-  shell_.capture_exclusion() = capture;
-  (void)layerc::platform::apply_capture_exclusion(window, shell_.capture_exclusion());
-  (void)layerc::platform::apply_capture_exclusion(shell_.window(), shell_.capture_exclusion());
-  if (task_picker_.window() != nullptr && IsWindow(task_picker_.window()))
-    (void)layerc::platform::apply_capture_exclusion(task_picker_.window(),
-                                                    shell_.capture_exclusion());
+  shell_.capture_exclusion = capture;
+  (void)layerc::platform::apply_capture_exclusion(window, shell_.capture_exclusion);
+  (void)layerc::platform::apply_capture_exclusion(shell_.window, shell_.capture_exclusion);
+  if (task_picker_.window != nullptr && IsWindow(task_picker_.window))
+    (void)layerc::platform::apply_capture_exclusion(task_picker_.window,
+                                                    shell_.capture_exclusion);
   (void)layerc::platform::signal_settings_reload();
   set_status(L"Options saved.");
 }
@@ -246,7 +249,7 @@ EditorWindow::appearance_role(const HWND window) const {
 }
 
 void EditorWindow::initialize_appearance(const HWND window) {
-  apply_dialog_chrome(window, shell_.capture_exclusion());
+  apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
 
   const HWND preset = GetDlgItem(window, IDC_THEME_PRESET);
@@ -301,9 +304,7 @@ EditorWindow::appearance_color(const HWND window,
     return std::nullopt;
   const auto role = appearance_role(window);
   const auto &appearance = appearance_editor_.draft().staged();
-  return layerc::platform::native_theme_colors(appearance.theme,
-                                               appearance.accent, role,
-                                               appearance.overrides[static_cast<std::size_t>(role)])
+  return layerc::platform::native_theme_colors(appearance, role)
       .*(entry->resolved_value);
 }
 
@@ -320,7 +321,7 @@ void EditorWindow::choose_appearance_color(const HWND window,
   const auto current = appearance_color(window, field);
   if (!current)
     return;
-  std::uint32_t selected = rgb_value(*current);
+  std::uint32_t selected = native_rgb_value(*current);
   if (!choose_color(window, selected))
     return;
   if (auto *value = appearance_value(appearance.overrides[index], field);
@@ -355,8 +356,8 @@ bool EditorWindow::apply_appearance(const HWND window) {
   for (std::size_t index = 0; index < appearance.overrides.size(); ++index) {
     const auto role =
         static_cast<layerc::platform::EditorControlRole>(index);
-    const auto role_colors = layerc::platform::native_theme_colors(
-        appearance.theme, appearance.accent, role, appearance.overrides[index]);
+    const auto role_colors =
+        layerc::platform::native_theme_colors(appearance, role);
     struct ContrastPair {
       const wchar_t *name;
       COLORREF foreground;

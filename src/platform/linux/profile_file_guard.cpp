@@ -126,10 +126,6 @@ guard_transaction_scope(const std::filesystem::path &profile_directory) {
   return roots;
 }
 
-std::uint64_t file_guard_process_id() noexcept {
-  return static_cast<std::uint64_t>(::getpid());
-}
-
 struct TransactionFileLock::Impl {
   int descriptor_{-1};
 };

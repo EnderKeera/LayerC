@@ -31,27 +31,27 @@ void EditorWindow::reset_history() {
 }
 
 void EditorWindow::sync_current_profile_entry() {
-  if (document_.path().empty() || shell_.profile_list() == nullptr) return;
+  if (document_.path().empty() || shell_.profile_list == nullptr) return;
   const auto current_key =
       layerc::platform::canonical_profile_key(document_.path());
-  for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
-    auto &entry = shell_.profiles()[index];
+  for (std::size_t index = 0; index < shell_.profiles.size(); ++index) {
+    auto &entry = shell_.profiles[index];
     if (layerc::platform::canonical_profile_key(entry.path) != current_key)
       continue;
     entry.enabled = document_.profile().enabled;
     entry.label = profile_list_label(document_.profile());
     auto sync = shell_.sync_scope();
-    ListView_SetItemText(shell_.profile_list(), static_cast<int>(index), 0,
+    ListView_SetItemText(shell_.profile_list, static_cast<int>(index), 0,
                          entry.label.data());
-    ListView_SetCheckState(shell_.profile_list(), static_cast<int>(index),
+    ListView_SetCheckState(shell_.profile_list, static_cast<int>(index),
                            entry.enabled);
-    InvalidateRect(shell_.profile_list(), nullptr, TRUE);
+    InvalidateRect(shell_.profile_list, nullptr, TRUE);
     return;
   }
 }
 
 void EditorWindow::record_profile_change(const ChangeKind kind) {
-  if (shell_.syncing()) return;
+  if (shell_.syncing) return;
   if (document_.history().is_baseline(document_.profile(), document_.visual(), document_.automation())) {
     if (!draft_controls_valid()) {
       document_.set_dirty(true);
@@ -71,23 +71,23 @@ void EditorWindow::schedule_autosave(const bool immediate) {
     set_status(L"Draft changed — use Save once to create the profile.");
     return;
   }
-  KillTimer(shell_.window(), autosave_timer);
-  SetTimer(shell_.window(), autosave_timer, immediate ? 1U : 400U, nullptr);
+  KillTimer(shell_.window, autosave_timer);
+  SetTimer(shell_.window, autosave_timer, immediate ? 1U : 400U, nullptr);
   if (!immediate) set_status(L"Editing — autosave pending.");
 }
 
 bool EditorWindow::draft_controls_valid() const {
   auto &self = const_cast<EditorWindow &>(*this);
-  auto *panel = self.panel_preview_.controls_panel() < self.document_.profile().panels.size()
-                    ? &self.document_.profile().panels[self.panel_preview_.controls_panel()]
+  auto *panel = self.panel_preview_.controls_panel < self.document_.profile().panels.size()
+                    ? &self.document_.profile().panels[self.panel_preview_.controls_panel]
                     : nullptr;
   const ProfileFieldContext context{
-      self.shell_.window(), self.document_.profile(), self.selected_cooldown(), panel};
+      self.shell_.window, self.document_.profile(), self.selected_cooldown(), panel};
   return profile_fields_valid(context);
 }
 
 bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
-  KillTimer(shell_.window(), autosave_timer);
+  KillTimer(shell_.window, autosave_timer);
   document_.history().end_text_coalescing();
   if (!document_.dirty()) return true;
   if (document_.path().empty() || !draft_controls_valid()) {
@@ -170,7 +170,7 @@ void EditorWindow::poll_live_channel() {
     } else if (GetTickCount64() >= live_edit_.pending_deadline()) {
       live_edit_.clear_pending_target();
       set_status(L"Live editing is unavailable — restart LayerD to update its protocol version.");
-      MessageBoxW(shell_.window(),
+      MessageBoxW(shell_.window,
                   L"LayerD did not expose the live-edit service. Exit the "
                   L"older LayerD from its tray icon, then try Position on "
                   L"Window again.",
@@ -194,19 +194,19 @@ void EditorWindow::poll_live_channel() {
   const UINT desired_interval = live_edit_.channel().connected() ? 16U : 100U;
   if (desired_interval != live_edit_.timer_interval()) {
     live_edit_.set_timer_interval(desired_interval);
-    SetTimer(shell_.window(), live_channel_timer, live_edit_.timer_interval(), nullptr);
+    SetTimer(shell_.window, live_channel_timer, live_edit_.timer_interval(), nullptr);
   }
 }
 
 void EditorWindow::handle_live_message(
     const layerc::core::LiveMessage &message) {
   if (message.type == layerc::core::LiveMessageType::runtime_status) {
-    shell_.visual_runtime_status() = to_wide(message.text);
+    shell_.visual_runtime_status = to_wide(message.text);
     refresh_visual_controls();
     return;
   }
   if (message.type == layerc::core::LiveMessageType::diagnostics_reply) {
-    pack_dialogs_.runtime_diagnostics_json() = message.text;
+    pack_dialogs_.runtime_diagnostics_json = message.text;
     refresh_runtime_diagnostics_dialog();
     return;
   }
@@ -265,7 +265,7 @@ void EditorWindow::handle_live_message(
   panel->anchor_x = message.anchor_x;
   panel->anchor_y = message.anchor_y;
   select_bar_by_id(message.panel_id);
-  InvalidateRect(panel_preview_.window(), nullptr, TRUE);
+  InvalidateRect(panel_preview_.window, nullptr, TRUE);
   if (message.final)
     record_profile_change(ChangeKind::drag);
 }
@@ -316,7 +316,7 @@ void EditorWindow::edit_on_window() {
     return;
   }
   if (document_.path().empty()) {
-    MessageBoxW(shell_.window(), L"Save this new profile once before editing it on a window.",
+    MessageBoxW(shell_.window, L"Save this new profile once before editing it on a window.",
                 L"Create profile first", MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -353,7 +353,7 @@ void EditorWindow::edit_selected_task() {
   matching.enabled = true;
   if (!matching.game.global &&
       !layerc::platform::profile_matches_window(*candidate, matching)) {
-    MessageBoxW(task_picker_.window(),
+    MessageBoxW(task_picker_.window,
                 L"That window does not match this profile. Use Selected Task first if you want to change the profile matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
     return;
@@ -387,9 +387,9 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
       (static_cast<std::uint64_t>(GetCurrentProcessId()) << 1U) ^
       reinterpret_cast<std::uintptr_t>(target);
   live_edit_.begin_session(target, session_id);
-  set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), false);
-  EnableWindow(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), TRUE);
-  set_text(GetDlgItem(shell_.window(), IDC_POSITION_ON_WINDOW), L"End Positioning");
+  set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
+  EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), TRUE);
+  set_text(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW), L"End Positioning");
   const auto *panel = selected_bar();
   live_edit_.advance_revision();
   (void)live_edit_.channel().send({
@@ -417,26 +417,25 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
   live_edit_.clear_session();
   if (task_picker_.awaiting_live_edit())
     task_picker_.clear_request();
-  set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), false);
-  EnableWindow(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), FALSE);
-  set_text(GetDlgItem(shell_.window(), IDC_POSITION_ON_WINDOW),
+  set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
+  EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), FALSE);
+  set_text(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW),
            L"Position on Window");
   if (!status.empty()) set_status(status);
 }
 
-void EditorWindow::set_direct_drag_enabled(const bool enabled,
-                                           const bool show_notice) {
+void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   if (live_edit_.session_id() == 0) return;
-  if (enabled && show_notice && !live_edit_.direct_drag_notice_shown() &&
-      MessageBoxW(shell_.window(),
+  if (enabled && !live_edit_.direct_drag_notice_shown() &&
+      MessageBoxW(shell_.window,
                   L"Direct Drag temporarily lets LayerD receive clicks only inside visible bar rectangles. It uses no injection or game hooks, but anti-cheat compatibility cannot be guaranteed. Continue?",
                   L"Enable Direct Drag", MB_OKCANCEL | MB_ICONINFORMATION) !=
           IDOK) {
-    set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), false);
+    set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
     return;
   }
-  live_edit_.set_direct_drag(enabled);
-  set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), enabled);
+  if (enabled) live_edit_.note_direct_drag_notice();
+  set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), enabled);
   live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::set_direct_drag,

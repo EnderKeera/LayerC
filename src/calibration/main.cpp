@@ -2,9 +2,8 @@
 
 #include "layerc/core/calibration.hpp"
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/text.hpp"
 
-#include <cerrno>
-#include <cstdlib>
 #include <optional>
 #include <string_view>
 #include <variant>
@@ -18,13 +17,10 @@ std::optional<HANDLE> handle_argument(const int argc, wchar_t **argv,
                                       const std::wstring_view name) {
   for (int index = 1; index + 1 < argc; ++index) {
     if (argv[index] != name) continue;
-    wchar_t *end{};
-    errno = 0;
-    const auto value = wcstoull(argv[index + 1], &end, 10);
-    if (errno != 0 || end == argv[index + 1] || *end != L'\0' || value == 0)
-      return std::nullopt;
-    const auto handle = reinterpret_cast<HANDLE>(
-        static_cast<std::uintptr_t>(value));
+    const auto value =
+        layerc::platform::parse_integer<std::uintptr_t>(argv[index + 1]);
+    if (!value || *value == 0) return std::nullopt;
+    const auto handle = reinterpret_cast<HANDLE>(*value);
     DWORD flags{};
     if (GetHandleInformation(handle, &flags) == FALSE) return std::nullopt;
     return handle;

@@ -187,7 +187,7 @@ template_asset_hashes(const std::filesystem::path &path) {
   if (profile == nullptr)
     return assets;
   const auto visual = layerc::platform::load_visual_sidecar(path, *profile);
-  if (visual.state != layerc::platform::VisualSidecarState::valid ||
+  if (visual.state != layerc::platform::ModuleSidecarState::valid ||
       !visual.profile.has_value())
     return assets;
   for (const auto &definition : visual.profile->templates)
@@ -325,7 +325,7 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion());
+    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion);
     if (!state->chrome.attach(window))
       state->editor->style_dialog_children(window);
     const HWND list = GetDlgItem(window, IDC_PACK_LIST);
@@ -389,7 +389,7 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion());
+    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion);
     if (!state->chrome.attach(window))
       state->editor->style_dialog_children(window);
     const HWND list = GetDlgItem(window, IDC_PACK_LIST);
@@ -470,9 +470,9 @@ void EditorWindow::export_profile_pack() {
     return;
   ExportDialogState state{};
   state.editor = this;
-  state.items.reserve(shell_.profiles().size());
-  for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
-    const auto &entry = shell_.profiles()[index];
+  state.items.reserve(shell_.profiles.size());
+  for (std::size_t index = 0; index < shell_.profiles.size(); ++index) {
+    const auto &entry = shell_.profiles[index];
     ExportItem item{};
     item.path = entry.path;
     item.label = entry.label;
@@ -489,23 +489,23 @@ void EditorWindow::export_profile_pack() {
     state.items.push_back(std::move(item));
   }
   if (state.items.empty()) {
-    MessageBoxW(shell_.window(), L"There are no saved profiles to export.",
+    MessageBoxW(shell_.window, L"There are no saved profiles to export.",
                 L"Export Pack", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (state.current_index == SIZE_MAX)
     state.current_index = 0;
-  if (DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_EXPORT_PACK), shell_.window(),
+  if (DialogBoxParamW(shell_.instance, MAKEINTRESOURCEW(IDD_EXPORT_PACK), shell_.window,
                       &EditorWindow::export_pack_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK)
     return;
-  const auto destination = choose_pack_path(shell_.window(), true);
+  const auto destination = choose_pack_path(shell_.window, true);
   if (!destination.has_value())
     return;
   const auto result =
       layerc::bundle::export_profile_pack(*destination, state.selected);
   if (const auto *error = std::get_if<layerc::bundle::PackError>(&result)) {
-    show_pack_error(shell_.window(), L"Profile pack export failed", *error);
+    show_pack_error(shell_.window, L"Profile pack export failed", *error);
     return;
   }
   set_status(L"Profile pack exported.");
@@ -514,13 +514,13 @@ void EditorWindow::export_profile_pack() {
 void EditorWindow::import_profile_pack() {
   if (!confirm_unsaved_changes())
     return;
-  const auto source = choose_pack_path(shell_.window(), false);
+  const auto source = choose_pack_path(shell_.window, false);
   if (!source.has_value())
     return;
   const auto validation = layerc::bundle::validate_profile_pack(*source);
   const auto *pack = std::get_if<layerc::bundle::ValidatedPack>(&validation);
   if (pack == nullptr) {
-    show_pack_error(shell_.window(), L"Profile pack validation failed",
+    show_pack_error(shell_.window, L"Profile pack validation failed",
                     std::get<layerc::bundle::PackError>(validation));
     return;
   }
@@ -533,7 +533,7 @@ void EditorWindow::import_profile_pack() {
   const auto preview = layerc::bundle::preview_profile_import(
       *pack, copy_choices, profile_directory);
   if (preview.error) {
-    show_pack_error(shell_.window(), L"Import preview failed", *preview.error);
+    show_pack_error(shell_.window, L"Import preview failed", *preview.error);
     return;
   }
   ImportDialogState state{};
@@ -549,14 +549,14 @@ void EditorWindow::import_profile_pack() {
          .action = entry.collides ? layerc::bundle::ImportAction::copy
                                   : layerc::bundle::ImportAction::replace});
   }
-  if (DialogBoxParamW(shell_.instance(), MAKEINTRESOURCEW(IDD_IMPORT_PACK), shell_.window(),
+  if (DialogBoxParamW(shell_.instance, MAKEINTRESOURCEW(IDD_IMPORT_PACK), shell_.window,
                       &EditorWindow::import_pack_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK)
     return;
   const auto result = layerc::bundle::import_profile_pack(
       *pack, state.selected, layerc::platform::profile_directory());
   if (const auto *error = std::get_if<layerc::bundle::PackError>(&result)) {
-    show_pack_error(shell_.window(), L"Profile pack import failed", *error);
+    show_pack_error(shell_.window, L"Profile pack import failed", *error);
     return;
   }
   reload_profile_list({}, true);

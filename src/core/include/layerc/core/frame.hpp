@@ -5,6 +5,8 @@
 // visual-worker pipe all frame payloads with this header so the framing
 // cannot drift between transports.
 
+#include "layerc/core/utf8.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -68,9 +70,8 @@ public:
       return std::nullopt;
     }
     if (buffered_bytes() - frame_header_bytes < length) return std::nullopt;
-    const auto *payload = reinterpret_cast<const char *>(
-        buffer_.data() + consumed_ + frame_header_bytes);
-    std::string result(payload, length);
+    auto result = as_text(
+        std::span(buffer_).subspan(consumed_ + frame_header_bytes, length));
     consumed_ += frame_header_bytes + length;
     if (consumed_ == buffer_.size()) {
       buffer_.clear();

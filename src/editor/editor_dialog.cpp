@@ -10,6 +10,7 @@
 #include "layerc/platform/settings_store.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_error.hpp"
+#include "layerc/platform/win32_handle.hpp"
 #include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
@@ -24,14 +25,13 @@ namespace layerc::editor {
 namespace {
 
 std::wstring editor_single_instance_name() {
-  HANDLE token{};
+  HANDLE raw_token{};
   TOKEN_STATISTICS statistics{};
   DWORD required{};
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE) {
-    const BOOL queried = GetTokenInformation(
-        token, TokenStatistics, &statistics, sizeof(statistics), &required);
-    CloseHandle(token);
-    if (queried != FALSE) {
+  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_token) != FALSE) {
+    const layerc::platform::OwnedHandle token(raw_token);
+    if (GetTokenInformation(token.get(), TokenStatistics, &statistics,
+                            sizeof(statistics), &required) != FALSE) {
       wchar_t name[96]{};
       swprintf_s(
           name, L"Local\\LayerC.LayerE.%08lX%08lX.v1",
@@ -53,18 +53,9 @@ void raise_existing_editor() {
   EnumWindows(
       [](const HWND window, const LPARAM raw) -> BOOL {
         auto &context = *reinterpret_cast<Context *>(raw);
-        if (GetWindow(window, GW_OWNER) != nullptr)
-          return TRUE;
-        std::array<wchar_t, 32> class_name{};
-        if (GetClassNameW(window, class_name.data(),
-                          static_cast<int>(class_name.size())) == 0)
-          return TRUE;
-        if (wcscmp(class_name.data(), L"#32770") != 0)
-          return TRUE;
-        std::array<wchar_t, 32> title{};
-        const int length = GetWindowTextW(window, title.data(),
-                                          static_cast<int>(title.size()));
-        if (length <= 0 || wcscmp(title.data(), L"LayerC Editor") != 0)
+        if (GetWindow(window, GW_OWNER) != nullptr ||
+            layerc::platform::window_class(window) != L"#32770" ||
+            layerc::platform::window_text(window) != L"LayerC Editor")
           return TRUE;
         DWORD process_id{};
         GetWindowThreadProcessId(window, &process_id);
@@ -86,7 +77,7 @@ void raise_existing_editor() {
 } // namespace
 
 int EditorWindow::run(const HINSTANCE instance, const int show_command) {
-  shell_.instance() = instance;
+  shell_.instance = instance;
   const auto migration = layerc::platform::migrate_editor_appearance();
   const auto appearance = layerc::platform::read_editor_appearance();
   if (appearance.value)
@@ -101,9 +92,10 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
                     .c_str(),
                 L"LayerC settings", MB_OK | MB_ICONWARNING);
   }
-  const auto capture = layerc::platform::read_capture_exclusion_setting();
+  const auto capture = layerc::platform::read_bool_setting(
+          layerc::platform::BoolSetting::capture_exclusion);
   if (capture.value)
-    shell_.capture_exclusion() = *capture.value;
+    shell_.capture_exclusion = *capture.value;
   if (capture.failed()) {
     const auto detail = layerc::platform::windows_error_text(capture.error);
     MessageBoxW(nullptr,
@@ -112,13 +104,8 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
                     .c_str(),
                 L"LayerC settings", MB_OK | MB_ICONWARNING);
   }
-  const auto transaction_scope = layerc::platform::profile_transaction_scope(
+  const auto recovered = layerc::platform::recover_profile_transactions(
       layerc::platform::profile_directory());
-  const auto recovered =
-      transaction_scope.has_value()
-          ? layerc::platform::recover_profile_transactions(*transaction_scope)
-          : layerc::platform::ProfileWriteResult{
-                layerc::platform::ProfileWriteError::scope_rejected};
   if (const auto error = recovered.error(); error.has_value()) {
     const auto message =
         L"LayerC Editor could not recover an interrupted profile import (" +
@@ -134,12 +121,12 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
                                 .dwICC =
                                     ICC_LISTVIEW_CLASSES | ICC_WIN95_CLASSES};
   InitCommonControlsEx(&controls);
-  shell_.window() = CreateDialogParamW(
-      shell_.instance(), MAKEINTRESOURCEW(IDD_EDITOR), nullptr,
+  shell_.window = CreateDialogParamW(
+      shell_.instance, MAKEINTRESOURCEW(IDD_EDITOR), nullptr,
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize,
                               &EditorWindow::handle_main_message>,
       reinterpret_cast<LPARAM>(this));
-  if (shell_.window() == nullptr)
+  if (shell_.window == nullptr)
     return 1;
   // CW_USEDEFAULT only has meaning when a window is created.  Passing it to
   // SetWindowPos placed the dialog at (-2147483648, -2147483648), leaving a
@@ -148,26 +135,26 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
   MONITORINFO initial_monitor{};
   initial_monitor.cbSize = sizeof(initial_monitor);
   RECT work{};
-  if (GetMonitorInfoW(MonitorFromWindow(shell_.window(), MONITOR_DEFAULTTONEAREST),
+  if (GetMonitorInfoW(MonitorFromWindow(shell_.window, MONITOR_DEFAULTTONEAREST),
                       &initial_monitor) != FALSE)
     work = initial_monitor.rcWork;
   else
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
   const int work_width = static_cast<int>(work.right - work.left);
   const int work_height = static_cast<int>(work.bottom - work.top);
-  const int dpi = window_base_dpi(shell_.window());
+  const int dpi = window_base_dpi(shell_.window);
   const int width = std::max(1, std::min(dpi_scaled(1210, dpi), work_width));
   const int height = std::max(1, std::min(dpi_scaled(760, dpi), work_height));
   const int left =
       static_cast<int>(work.left) + std::max(0, (work_width - width) / 2);
   const int top =
       static_cast<int>(work.top) + std::max(0, (work_height - height) / 2);
-  SetWindowPos(shell_.window(), nullptr, left, top, width, height,
+  SetWindowPos(shell_.window, nullptr, left, top, width, height,
                SWP_NOZORDER | SWP_NOACTIVATE);
-  ShowWindow(shell_.window(), show_command);
-  UpdateWindow(shell_.window());
+  ShowWindow(shell_.window, show_command);
+  UpdateWindow(shell_.window);
   const HACCEL accelerators =
-      LoadAcceleratorsW(shell_.instance(), MAKEINTRESOURCEW(IDR_EDITOR_ACCELERATORS));
+      LoadAcceleratorsW(shell_.instance, MAKEINTRESOURCEW(IDR_EDITOR_ACCELERATORS));
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
     if (handle_binding_capture_message(message))
@@ -178,13 +165,13 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
       set_status(L"Window picker cancelled.");
       continue;
     }
-    if (accelerators != nullptr && IsWindowEnabled(shell_.window()) != FALSE &&
-        TranslateAcceleratorW(shell_.window(), accelerators, &message) != 0)
+    if (accelerators != nullptr && IsWindowEnabled(shell_.window) != FALSE &&
+        TranslateAcceleratorW(shell_.window, accelerators, &message) != 0)
       continue;
-    const bool main_handled = IsDialogMessageW(shell_.window(), &message) != FALSE;
-    const bool task_handled = task_picker_.window() != nullptr &&
-                              IsWindow(task_picker_.window()) &&
-                              IsDialogMessageW(task_picker_.window(), &message) != FALSE;
+    const bool main_handled = IsDialogMessageW(shell_.window, &message) != FALSE;
+    const bool task_handled = task_picker_.window != nullptr &&
+                              IsWindow(task_picker_.window) &&
+                              IsDialogMessageW(task_picker_.window, &message) != FALSE;
     if (!main_handled && !task_handled) {
       TranslateMessage(&message);
       DispatchMessageW(&message);
@@ -194,55 +181,55 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
 }
 
 void EditorWindow::initialize(const HWND window) {
-  shell_.window() = window;
-  shell_.font() = create_editor_font(GetDpiForWindow(window));
+  shell_.window = window;
+  shell_.font = layerc::platform::create_native_dialog_font(GetDpiForWindow(window));
   appearance_editor_.set_appearance(appearance_editor_.draft().staged().theme,
                                     appearance_editor_.draft().staged().accent);
-  apply_dialog_chrome(shell_.window(), shell_.capture_exclusion());
-  style_dialog_children(shell_.window());
+  apply_dialog_chrome(shell_.window, shell_.capture_exclusion);
+  style_dialog_children(shell_.window);
   rebuild_brushes();
-  shell_.profile_list() = GetDlgItem(shell_.window(), IDC_PROFILE_LIST);
-  cooldown_editor_.list() = GetDlgItem(shell_.window(), IDC_COOLDOWN_LIST);
-  panel_preview_.list() = GetDlgItem(shell_.window(), IDC_BAR_LIST);
-  panel_preview_.window() = GetDlgItem(shell_.window(), IDC_PREVIEW);
-  shell_.status() = GetDlgItem(shell_.window(), IDC_STATUS);
-  shell_.application_path() = GetDlgItem(shell_.window(), IDC_APPLICATION_PATH);
-  shell_.advanced_visible() = false;
-  set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_ADVANCED), false);
+  shell_.profile_list = GetDlgItem(shell_.window, IDC_PROFILE_LIST);
+  cooldown_editor_.list = GetDlgItem(shell_.window, IDC_COOLDOWN_LIST);
+  panel_preview_.list = GetDlgItem(shell_.window, IDC_BAR_LIST);
+  panel_preview_.window = GetDlgItem(shell_.window, IDC_PREVIEW);
+  shell_.status = GetDlgItem(shell_.window, IDC_STATUS);
+  shell_.application_path = GetDlgItem(shell_.window, IDC_APPLICATION_PATH);
+  shell_.advanced_visible = false;
+  set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_ADVANCED), false);
   for (const wchar_t *label : {L"Ignore", L"Restart"})
-    SendMessageW(GetDlgItem(shell_.window(), IDC_COOLDOWN_RETRIGGER), CB_ADDSTRING, 0,
+    SendMessageW(GetDlgItem(shell_.window, IDC_COOLDOWN_RETRIGGER), CB_ADDSTRING, 0,
                  reinterpret_cast<LPARAM>(label));
   for (const wchar_t *label : {L"Single", L"Sequential", L"Parallel"})
-    SendMessageW(GetDlgItem(shell_.window(), IDC_COOLDOWN_RECOVERY), CB_ADDSTRING, 0,
+    SendMessageW(GetDlgItem(shell_.window, IDC_COOLDOWN_RECOVERY), CB_ADDSTRING, 0,
                  reinterpret_cast<LPARAM>(label));
-  ListView_SetExtendedListViewStyle(shell_.profile_list(),
+  ListView_SetExtendedListViewStyle(shell_.profile_list,
                                     LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES |
                                         LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
   LVCOLUMNW column{};
   column.mask = LVCF_TEXT | LVCF_WIDTH;
   column.cx = 198;
   column.pszText = const_cast<LPWSTR>(L"Profile");
-  ListView_InsertColumn(shell_.profile_list(), 0, &column);
-  style_list_view(shell_.profile_list(), true);
+  ListView_InsertColumn(shell_.profile_list, 0, &column);
+  style_list_view(shell_.profile_list, true);
   rebuild_profile_check_hit_images();
-  DrawMenuBar(shell_.window());
-  if (panel_preview_.window() != nullptr) {
-    const auto style = GetWindowLongPtrW(panel_preview_.window(), GWL_STYLE);
-    SetWindowLongPtrW(panel_preview_.window(), GWL_STYLE, style | SS_NOTIFY);
-    SetWindowPos(panel_preview_.window(), nullptr, 0, 0, 0, 0,
+  DrawMenuBar(shell_.window);
+  if (panel_preview_.window != nullptr) {
+    const auto style = GetWindowLongPtrW(panel_preview_.window, GWL_STYLE);
+    SetWindowLongPtrW(panel_preview_.window, GWL_STYLE, style | SS_NOTIFY);
+    SetWindowPos(panel_preview_.window, nullptr, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
                      SWP_FRAMECHANGED);
-    SetWindowSubclass(panel_preview_.window(), &EditorWindow::preview_subclass, 1,
+    SetWindowSubclass(panel_preview_.window, &EditorWindow::preview_subclass, 1,
                       reinterpret_cast<DWORD_PTR>(this));
   }
   layout();
   reload_profile_list({}, true);
   live_edit_.set_revision((static_cast<std::uint64_t>(GetTickCount64()) << 16U) |
               static_cast<std::uint64_t>(GetCurrentProcessId()));
-  EnableWindow(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), FALSE);
-  set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), false);
+  EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), FALSE);
+  set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
   (void)start_daemon();
-  SetTimer(shell_.window(), live_channel_timer, live_edit_.timer_interval(), nullptr);
+  SetTimer(shell_.window, live_channel_timer, live_edit_.timer_interval(), nullptr);
   set_status(L"Ready — connecting to LayerD.");
 }
 
@@ -252,7 +239,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
     const auto notification = HIWORD(wparam);
     if (const auto *binding = profile_field_binding(id);
         binding != nullptr) {
-      if (!shell_.syncing() && notification == binding->notification) {
+      if (!shell_.syncing && notification == binding->notification) {
         sync_profile_from_controls();
         if (binding->refresh_cooldown_label)
           refresh_selected_cooldown_label();
@@ -260,41 +247,41 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
                                   ? ChangeKind::text
                                   : ChangeKind::immediate);
         if (binding->invalidate_preview)
-          InvalidateRect(panel_preview_.window(), nullptr, TRUE);
+          InvalidateRect(panel_preview_.window, nullptr, TRUE);
         if (notification == BN_CLICKED)
-          InvalidateRect(GetDlgItem(shell_.window(), id), nullptr, TRUE);
+          InvalidateRect(GetDlgItem(shell_.window, id), nullptr, TRUE);
       }
       return TRUE;
     }
     if (id == IDC_ADVANCED && notification == BN_CLICKED) {
-      shell_.advanced_visible() =
-          owner_draw_checkbox_checked(GetDlgItem(shell_.window(), IDC_ADVANCED));
-      InvalidateRect(GetDlgItem(shell_.window(), IDC_ADVANCED), nullptr, TRUE);
+      shell_.advanced_visible =
+          owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_ADVANCED));
+      InvalidateRect(GetDlgItem(shell_.window, IDC_ADVANCED), nullptr, TRUE);
       layout();
       return TRUE;
     }
     if (id == IDC_APPLICATION_EXACT_PATH &&
         notification == BN_CLICKED) {
       const bool exact = owner_draw_checkbox_checked(
-          GetDlgItem(shell_.window(), IDC_APPLICATION_EXACT_PATH));
-      InvalidateRect(GetDlgItem(shell_.window(), IDC_APPLICATION_EXACT_PATH), nullptr,
+          GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH));
+      InvalidateRect(GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH), nullptr,
                      TRUE);
       if (!exact && !document_.profile().game.executable_path.empty()) {
         sync_profile_from_controls();
         if (document_.profile().game.executable_name.empty()) {
-          document_.profile().game.executable_name = to_utf8(
+          document_.profile().game.executable_name = wide_to_utf8(
               std::filesystem::path(to_wide(document_.profile().game.executable_path))
                   .filename()
                   .wstring());
         }
         document_.profile().game.executable_path.clear();
-        set_text(shell_.application_path(),
+        set_text(shell_.application_path,
                  document_.profile().game.executable_name.empty()
                      ? L"Choose a running application."
                      : to_wide(document_.profile().game.executable_name));
         record_profile_change(ChangeKind::immediate);
       } else if (exact && document_.profile().game.executable_path.empty()) {
-        MessageBoxW(shell_.window(),
+        MessageBoxW(shell_.window,
                     L"Choose a running application to capture its exact "
                     L"executable path.",
                     L"Exact path matching", MB_OK | MB_ICONINFORMATION);
@@ -304,21 +291,21 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
     }
     if (id == IDC_DIRECT_DRAG && notification == BN_CLICKED) {
       const bool enabled =
-          owner_draw_checkbox_checked(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG));
-      set_direct_drag_enabled(enabled, /*show_notice=*/enabled);
-      InvalidateRect(GetDlgItem(shell_.window(), IDC_DIRECT_DRAG), nullptr, TRUE);
+          owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_DIRECT_DRAG));
+      set_direct_drag_enabled(enabled);
+      InvalidateRect(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), nullptr, TRUE);
       return TRUE;
     }
     if (id == IDC_VISUAL_ENABLED && notification == BN_CLICKED) {
       set_visual_assignment_enabled(
-          owner_draw_checkbox_checked(GetDlgItem(shell_.window(), IDC_VISUAL_ENABLED)));
+          owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_VISUAL_ENABLED)));
       return TRUE;
     }
     if (id == IDC_VISUAL_ISOLATED && notification == BN_CLICKED) {
       bool isolated =
-          owner_draw_checkbox_checked(GetDlgItem(shell_.window(), IDC_VISUAL_ISOLATED));
+          owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_VISUAL_ISOLATED));
       if (isolated &&
-          MessageBoxW(shell_.window(),
+          MessageBoxW(shell_.window,
                       L"Isolated capture starts one bounded layerw.exe "
                       L"for this game window while visual recognition is "
                       L"active. It improves crash containment but uses "
@@ -326,7 +313,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
                       L"Isolate visual capture",
                       MB_YESNO | MB_ICONINFORMATION) != IDYES) {
         isolated = false;
-        set_owner_draw_checkbox(GetDlgItem(shell_.window(), IDC_VISUAL_ISOLATED),
+        set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_VISUAL_ISOLATED),
                                 false);
       }
       document_.profile().visual_runtime =
@@ -371,7 +358,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       automation_editor_->open();
       return TRUE;
     case IDM_HELP_ABOUT:
-      MessageBoxW(shell_.window(),
+      MessageBoxW(shell_.window,
                   L"LayerC Editor\n\nCreate and edit LayerC cooldown "
                   L"profiles using passive input only.",
                   L"About LayerC Editor", MB_OK | MB_ICONINFORMATION);
@@ -410,7 +397,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       open_profiles_folder();
       return TRUE;
     case IDM_FILE_EXIT:
-      SendMessageW(shell_.window(), WM_CLOSE, 0, 0);
+      SendMessageW(shell_.window, WM_CLOSE, 0, 0);
       return TRUE;
     case IDM_EDIT_UNDO:
       undo();
@@ -453,25 +440,25 @@ std::optional<LRESULT> EditorWindow::handle_main_notify(
         const auto *click = reinterpret_cast<const NMITEMACTIVATE *>(lparam);
         LVHITTESTINFO hit{};
         hit.pt = click->ptAction;
-        const int row = ListView_HitTest(shell_.profile_list(), &hit);
+        const int row = ListView_HitTest(shell_.profile_list, &hit);
         if (row >= 0 && (hit.flags & LVHT_ONITEMSTATEICON) != 0 &&
-            static_cast<std::size_t>(row) < shell_.profiles().size()) {
-          const bool enabled = !shell_.profiles()[static_cast<std::size_t>(row)].enabled;
+            static_cast<std::size_t>(row) < shell_.profiles.size()) {
+          const bool enabled = !shell_.profiles[static_cast<std::size_t>(row)].enabled;
           auto sync = shell_.sync_scope();
-          ListView_SetCheckState(shell_.profile_list(), row, enabled);
+          ListView_SetCheckState(shell_.profile_list, row, enabled);
           save_profile_enabled(row, enabled);
           return TRUE;
         }
       } else if (header->code == LVN_ITEMCHANGED) {
         const auto *change = reinterpret_cast<const NMLISTVIEW *>(lparam);
-        if (shell_.syncing())
+        if (shell_.syncing)
           return TRUE;
         if ((change->uChanged & LVIF_STATE) != 0 &&
             ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) !=
                 0) {
           save_profile_enabled(
               change->iItem,
-              ListView_GetCheckState(shell_.profile_list(), change->iItem) != FALSE);
+              ListView_GetCheckState(shell_.profile_list, change->iItem) != FALSE);
           return TRUE;
         }
         if ((change->uChanged & LVIF_STATE) != 0 &&
@@ -509,13 +496,13 @@ std::optional<LRESULT> EditorWindow::handle_main_draw_item(
     std::optional<COLORREF> overlay_color;
     if (const auto *panel = selected_bar()) {
       if (id == IDC_BAR_FILL)
-        overlay_color = color_ref(panel->bar.fill_color);
+        overlay_color = native_color_ref(panel->bar.fill_color);
       else if (id == IDC_BAR_BACKGROUND)
-        overlay_color = color_ref(panel->bar.background_color);
+        overlay_color = native_color_ref(panel->bar.background_color);
       else if (id == IDC_BAR_BORDER)
-        overlay_color = color_ref(panel->bar.border_color);
+        overlay_color = native_color_ref(panel->bar.border_color);
       else if (id == IDC_BAR_TEXT)
-        overlay_color = color_ref(panel->bar.text_color);
+        overlay_color = native_color_ref(panel->bar.text_color);
     }
     draw_button(*draw, layerc::platform::EditorControlRole::button,
                 overlay_color);
@@ -532,10 +519,10 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   case WM_DPICHANGED: {
     apply_suggested_dpi_rect(window, lparam);
     const UINT dpi = HIWORD(wparam);
-    const HFONT old_font = shell_.font();
-    const HFONT new_font = create_editor_font(dpi);
+    const HFONT old_font = shell_.font;
+    const HFONT new_font = layerc::platform::create_native_dialog_font(dpi);
     if (new_font != nullptr) {
-      shell_.font() = new_font;
+      shell_.font = new_font;
       style_dialog_children(window);
       if (old_font != nullptr)
         DeleteObject(old_font);
@@ -640,19 +627,19 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     cancel_picker();
     KillTimer(window, autosave_timer);
     KillTimer(window, live_channel_timer);
-    if (task_picker_.window() != nullptr && IsWindow(task_picker_.window()))
-      DestroyWindow(task_picker_.window());
-    task_picker_.window() = nullptr;
-    if (shell_.profile_check_hit_images() != nullptr) {
-      ImageList_Destroy(shell_.profile_check_hit_images());
-      shell_.profile_check_hit_images() = nullptr;
+    if (task_picker_.window != nullptr && IsWindow(task_picker_.window))
+      DestroyWindow(task_picker_.window);
+    task_picker_.window = nullptr;
+    if (shell_.profile_check_hit_images != nullptr) {
+      ImageList_Destroy(shell_.profile_check_hit_images);
+      shell_.profile_check_hit_images = nullptr;
     }
     for (auto &brush_value : appearance_editor_.brushes()) {
       if (brush_value != nullptr)
         DeleteObject(brush_value);
       brush_value = nullptr;
     }
-    destroy_dialog_font(shell_.font());
+    destroy_dialog_font(shell_.font);
     PostQuitMessage(0);
     return TRUE;
   default:
@@ -661,26 +648,20 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
   return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
-int EditorApp::run(const HINSTANCE instance, const int show_command) {
-  const auto mutex_name = editor_single_instance_name();
-  const HANDLE single_instance =
-      CreateMutexW(nullptr, TRUE, mutex_name.c_str());
-  if (single_instance == nullptr) {
+int run_editor(const HINSTANCE instance, const int show_command) {
+  using layerc::platform::SingleInstanceGuard;
+  const SingleInstanceGuard guard(editor_single_instance_name().c_str());
+  if (guard.state() == SingleInstanceGuard::State::failed) {
     MessageBoxW(nullptr,
                 L"LayerC Editor could not create its single-instance guard.",
                 L"LayerC Editor", MB_OK | MB_ICONERROR);
     return 1;
   }
-  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+  if (guard.state() == SingleInstanceGuard::State::already_running) {
     raise_existing_editor();
-    CloseHandle(single_instance);
     return 0;
   }
-  const auto editor = std::make_unique<EditorWindow>();
-  const int result = editor->run(instance, show_command);
-  ReleaseMutex(single_instance);
-  CloseHandle(single_instance);
-  return result;
+  return std::make_unique<EditorWindow>()->run(instance, show_command);
 }
 
 } // namespace layerc::editor

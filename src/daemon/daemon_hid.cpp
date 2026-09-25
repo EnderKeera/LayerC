@@ -58,7 +58,7 @@ bool DaemonApp::reconcile_hid_runtime() {
   auto &hid = input_runtime_.ensure_hid();
   std::set<TopLevelUsage> required;
   std::vector<layerc::core::HidDeviceSelector> active_selectors;
-  for (const auto *session : session_registry_.active_inputs()) {
+  for (const auto *session : session_registry_.active_inputs) {
     if (session == nullptr) continue;
     for (const auto &binding : session->profile.hid_bindings) {
       if (std::ranges::find(active_selectors, binding.device) ==
@@ -140,7 +140,7 @@ void DaemonApp::quiesce_hid_runtime() noexcept {
   if (!input_runtime_.hid()) return;
   for (const auto &usage : input_runtime_.hid()->registered_usages)
     unregister_usage(usage);
-  for (auto &session : session_registry_.sessions()) {
+  for (auto &session : session_registry_.sessions) {
     session->hid_states.clear();
     session->clear_input_state();
   }
@@ -151,7 +151,7 @@ void DaemonApp::handle_hid_device_change(const HANDLE, const bool) {
   if (!input_runtime_.hid()) return;
   input_runtime_.hid()->devices_dirty = true;
   input_runtime_.hid()->resolver.clear();
-  for (auto &session : session_registry_.sessions()) {
+  for (auto &session : session_registry_.sessions) {
     session->hid_states.assign(session->profile.hid_bindings.size(), {});
     session->clear_input_state();
   }
@@ -218,7 +218,7 @@ void DaemonApp::process_hid_sample(
 }
 
 void DaemonApp::handle_hid_input(const RAWINPUT &input) {
-  if (!input_runtime_.hid() || session_registry_.active_inputs().empty())
+  if (!input_runtime_.hid() || session_registry_.active_inputs.empty())
     return;
   auto device = input_runtime_.hid()->devices.find(input.header.hDevice);
   if (device == input_runtime_.hid()->devices.end()) {
@@ -232,7 +232,7 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
   }
 
   const auto evaluate_for_sessions = [&](const auto &sample_for) {
-    for (auto *session : session_registry_.active_inputs()) {
+    for (auto *session : session_registry_.active_inputs) {
       if (session == nullptr || !session->uses_hid) continue;
       if (session->hid_states.size() != session->profile.hid_bindings.size())
         session->hid_states.assign(session->profile.hid_bindings.size(), {});

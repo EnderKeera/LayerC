@@ -1,25 +1,15 @@
 #include "platform_live_test_support.hpp"
 
+#include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/visual_assets_windows.hpp"
+#include "test_support.hpp"
 
 #include <chrono>
-#include <fstream>
-#include <iterator>
 #include <utility>
 #include <vector>
 
 namespace layerc::test::platform_live {
-namespace {
-
-core::AutomationExpression automation_literal(core::AutomationValue value) {
-  core::AutomationExpression result;
-  result.kind = core::ExpressionKind::literal;
-  result.literal = std::move(value);
-  return result;
-}
-
-} // namespace
 
 core::GameProfile test_profile(const std::string &name) {
   using namespace std::chrono_literals;
@@ -66,36 +56,19 @@ test_automation_profile(const std::string &profile_id) {
   core::AutomationAction action;
   action.kind = core::AutomationActionKind::increment_variable;
   action.target = "count";
-  action.value = automation_literal(core::AutomationValue(std::int64_t{1}));
+  action.value = core::expr::literal(core::AutomationValue(std::int64_t{1}));
   rule.actions.push_back(std::move(action));
   profile.automations.push_back(
       {.id = "counter", .name = "Counter", .rules = {rule}});
   return profile;
 }
 
-bool write_test_file(const std::filesystem::path &path,
-                     const std::string_view contents) {
-  std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error) return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-  return static_cast<bool>(output);
-}
-
-std::optional<std::string>
-read_test_file(const std::filesystem::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) return std::nullopt;
-  return std::string(std::istreambuf_iterator<char>(input),
-                     std::istreambuf_iterator<char>());
-}
-
 bool launch_auth_peer(const std::filesystem::path &executable,
                       const wchar_t *const mode, const std::wstring &pipe_name,
                       PROCESS_INFORMATION &process) {
   std::wstring command =
-      L"\"" + executable.wstring() + L"\" " + mode + L" \"" + pipe_name + L"\"";
+      platform::quote_command_argument(executable.wstring()) + L" " + mode +
+      L" " + platform::quote_command_argument(pipe_name);
   std::vector<wchar_t> command_buffer(command.begin(), command.end());
   command_buffer.push_back(L'\0');
   STARTUPINFOW startup{};
@@ -109,10 +82,7 @@ bool durable_read_contract(const std::filesystem::path &directory) {
   const auto absent =
       platform::read_durable_file(directory / L"absent.bin", 4U);
   const auto path = directory / L"bounded-read.bin";
-  {
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    output << "abcde";
-  }
+  write_file(path, "abcde");
   const auto oversized = platform::read_durable_file(path, 4U);
   const auto successful = platform::read_durable_file(path, 5U);
   return absent.status == platform::FileReadStatus::missing &&

@@ -2,6 +2,8 @@
 
 #include "isolated_visual_protocol.hpp"
 
+#include "layerc/platform/bounded_helper.hpp"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -41,10 +43,8 @@ private:
                                               std::string &error);
 
   mutable std::mutex mutex_;
-  HANDLE job_{};
-  HANDLE pipe_{INVALID_HANDLE_VALUE};
-  HANDLE process_{};
-  DWORD process_id_{};
+  platform::BoundedHelper child_;
+  platform::OwnedHandle pipe_;
 };
 
 // Configure / waitSnapshot / snapshot client for one authenticated helper

@@ -1,6 +1,7 @@
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_error.hpp"
+#include "layerc/platform/win32_handle.hpp"
 #include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
@@ -147,22 +148,17 @@ bool NamedPipeEditorDaemonChannel::verify_peer_identity(
     const std::wstring_view session_error,
     const std::wstring_view authenticate_error,
     const std::wstring_view untrusted_error) {
-  DWORD current_session{};
-  DWORD peer_session{};
-  if (ProcessIdToSessionId(GetCurrentProcessId(), &current_session) == FALSE ||
-      ProcessIdToSessionId(peer_pid, &peer_session) == FALSE ||
-      current_session != peer_session) {
+  if (!same_session_as_current_process(peer_pid)) {
     last_error_ = std::wstring(session_error);
     return false;
   }
-  const HANDLE peer_process =
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, peer_pid);
-  if (peer_process == nullptr) {
+  const OwnedHandle peer_process(
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, peer_pid));
+  if (!peer_process.valid()) {
     last_error_ = std::wstring(authenticate_error);
     return false;
   }
-  const bool trusted_user = same_user_as_current_process(peer_process);
-  CloseHandle(peer_process);
+  const bool trusted_user = same_user_as_current_process(peer_process.get());
   const bool trusted_image = expected_peer_process_id_ != 0 ||
                              is_sibling_process_image(peer_pid, sibling_image);
   if (!trusted_user || !trusted_image) {

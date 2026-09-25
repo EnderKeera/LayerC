@@ -1,7 +1,10 @@
 #pragma once
 
+#include "layerc/core/enum_wire.hpp"
 #include "layerc/core/frame.hpp"
+#include "layerc/core/utf8.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -26,19 +29,23 @@ enum class ControlCommand : std::uint8_t {
   stop,
 };
 
+inline constexpr std::array control_command_wire{
+    layerc::core::EnumWireEntry{ControlCommand::status, "status"},
+    layerc::core::EnumWireEntry{ControlCommand::reload, "reload"},
+    layerc::core::EnumWireEntry{ControlCommand::notify_reload, "notify-reload"},
+    layerc::core::EnumWireEntry{ControlCommand::stop, "stop"},
+};
+
 [[nodiscard]] constexpr std::string_view
-control_command_name(ControlCommand command) noexcept {
-  switch (command) {
-  case ControlCommand::status: return "status";
-  case ControlCommand::reload: return "reload";
-  case ControlCommand::notify_reload: return "notify-reload";
-  case ControlCommand::stop: return "stop";
-  }
-  return {};
+control_command_name(const ControlCommand command) noexcept {
+  return layerc::core::enum_wire_name(control_command_wire, command)
+      .value_or(std::string_view{});
 }
 
-[[nodiscard]] std::optional<ControlCommand>
-parse_control_command(std::string_view name) noexcept;
+[[nodiscard]] constexpr std::optional<ControlCommand>
+parse_control_command(const std::string_view name) noexcept {
+  return layerc::core::parse_enum_wire(control_command_wire, name);
+}
 
 // Request JSON: {"proto":"LayerC.Control","v":1,"cmd":"<command>"}
 // Response JSON: {"proto":"LayerC.Control","v":1,"ok":true[,"payload":<json>]
@@ -69,7 +76,7 @@ public:
   using Fault = layerc::core::FrameDecoder::Fault;
 
   void feed(std::string_view bytes) {
-    decoder_.feed(std::as_bytes(std::span(bytes.data(), bytes.size())));
+    decoder_.feed(layerc::core::text_bytes(bytes));
   }
   [[nodiscard]] std::optional<std::string> next_frame() {
     return decoder_.next_frame();

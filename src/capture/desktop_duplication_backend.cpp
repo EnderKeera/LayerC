@@ -249,7 +249,6 @@ private:
             .backend = kind(),
             .diagnostic = with_fallback_warning(std::move(diagnostic)),
             .frame = {},
-            .phase = CapturePhase::starting,
             .recovery = CaptureRecovery::restart_backend};
   }
 

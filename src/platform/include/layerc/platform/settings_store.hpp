@@ -26,13 +26,15 @@ struct SettingWriteResult {
   [[nodiscard]] explicit operator bool() const noexcept { return error == 0; }
 };
 
-[[nodiscard]] SettingReadResult<bool> read_capture_exclusion_setting();
-[[nodiscard]] SettingWriteResult write_capture_exclusion_setting(bool enabled);
-[[nodiscard]] SettingReadResult<bool> read_visual_recognition_setting();
-[[nodiscard]] SettingWriteResult write_visual_recognition_setting(bool enabled);
-[[nodiscard]] SettingReadResult<bool> read_visual_capture_notice_setting();
-[[nodiscard]] SettingWriteResult
-write_visual_capture_notice_setting(bool acknowledged);
+enum class BoolSetting : std::uint8_t {
+  capture_exclusion,
+  visual_recognition,
+  visual_capture_notice,
+};
+
+[[nodiscard]] SettingReadResult<bool> read_bool_setting(BoolSetting setting);
+[[nodiscard]] SettingWriteResult write_bool_setting(BoolSetting setting,
+                                                    bool value);
 
 // Registry primitives below share the single HKCU\Software\LayerC root. They
 // are exposed for platform-owned structured settings such as appearance and HID
@@ -40,9 +42,6 @@ write_visual_capture_notice_setting(bool acknowledged);
 [[nodiscard]] SettingReadResult<std::uint32_t>
 read_layerc_registry_dword(std::wstring_view value_name,
                            std::wstring_view subkey = {});
-[[nodiscard]] SettingWriteResult
-write_layerc_registry_dword(std::wstring_view value_name, std::uint32_t value,
-                            std::wstring_view subkey = {});
 [[nodiscard]] SettingReadResult<std::vector<std::byte>>
 read_layerc_registry_binary(std::wstring_view value_name,
                             std::size_t maximum_bytes,

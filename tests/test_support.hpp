@@ -66,6 +66,12 @@ private:
   bool applied_{};
 };
 
+// Binary file fixtures. write_file creates missing parent directories;
+// read_file returns nullopt when the file cannot be opened.
+bool write_file(const std::filesystem::path &path, std::string_view contents);
+[[nodiscard]] std::optional<std::string>
+read_file(const std::filesystem::path &path);
+
 [[nodiscard]] int run(std::initializer_list<Case> cases);
 
 } // namespace layerc::test

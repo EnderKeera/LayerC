@@ -7,9 +7,6 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -17,6 +14,8 @@
 namespace {
 
 using layerc::test::expect;
+using layerc::test::read_file;
+using layerc::test::write_file;
 
 layerc::core::GameProfile profile() {
   layerc::core::GameProfile result;
@@ -54,26 +53,6 @@ layerc::core::VisualProfile visual_profile() {
   return result;
 }
 
-bool write_text(const std::filesystem::path &path,
-                const std::string_view text) {
-  std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error) return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(text.data(), static_cast<std::streamsize>(text.size()));
-  return static_cast<bool>(output);
-}
-
-std::vector<std::byte> read_all(const std::filesystem::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  input.seekg(0, std::ios::end);
-  const auto size = input.tellg();
-  input.seekg(0);
-  std::vector<std::byte> result(static_cast<std::size_t>(size));
-  input.read(reinterpret_cast<char *>(result.data()), size);
-  return result;
-}
-
 } // namespace
 
 void linux_profile_pack_contracts() {
@@ -102,10 +81,10 @@ void linux_profile_pack_contracts() {
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
   bool passed = expect(layerc::platform::ensure_profile_store_roots(roots),
                        "XDG profile-pack roots should be created");
-  passed &= expect(write_text(layerc::platform::profile_visual_asset_path(
+  passed &= expect(write_file(layerc::platform::profile_visual_asset_path(
                                   profile_path, asset_hash),
                               "abc") &&
-                       write_text(layerc::platform::profile_visual_asset_path(
+                       write_file(layerc::platform::profile_visual_asset_path(
                                       second_profile_path, asset_hash),
                                   "abc"),
                    "profile-local visual assets should be written");
@@ -125,7 +104,7 @@ void linux_profile_pack_contracts() {
                            layerc::bundle::export_profile_pack(second_pack,
                                                                selected)),
                    "Linux profile pack should export twice");
-  passed &= expect(read_all(first_pack) == read_all(second_pack),
+  passed &= expect(read_file(first_pack) == read_file(second_pack),
                    "Linux profile pack bytes should be deterministic");
 
   auto validated_result = layerc::bundle::validate_profile_pack(first_pack);
@@ -152,7 +131,7 @@ void linux_profile_pack_contracts() {
                          layerc::bundle::import_profile_pack(
                              *validated, choices, roots.config_profiles)),
                      "validated pack should import across XDG roots");
-    const auto before = read_all(profile_path);
+    const auto before = read_file(profile_path);
     std::vector<layerc::bundle::ImportChoice> replace_all;
     for (std::size_t index = 0; index < validated->profiles.size(); ++index)
       replace_all.push_back({.profile_index = index,
@@ -174,7 +153,7 @@ void linux_profile_pack_contracts() {
                          layerc::bundle::import_profile_pack(
                              *validated, skipped, roots.config_profiles)),
                      "an all-skipped import succeeds without a transaction");
-    passed &= expect(read_all(profile_path) == before &&
+    passed &= expect(read_file(profile_path) == before &&
                          !std::filesystem::exists(roots.store / "transactions"),
                      "an all-skipped import preserves files without a journal");
     auto invalid = skipped;
@@ -192,9 +171,9 @@ void linux_profile_pack_contracts() {
   passed &= expect(
       std::filesystem::exists(profile_path) &&
           std::filesystem::exists(second_profile_path) &&
-          loaded.state == layerc::platform::VisualSidecarState::valid &&
+          loaded.state == layerc::platform::ModuleSidecarState::valid &&
           second_loaded.state ==
-              layerc::platform::VisualSidecarState::valid &&
+              layerc::platform::ModuleSidecarState::valid &&
           std::filesystem::exists(layerc::platform::profile_visual_asset_path(
               profile_path, asset_hash)) &&
           std::filesystem::exists(layerc::platform::profile_visual_asset_path(
@@ -207,22 +186,22 @@ void linux_profile_pack_contracts() {
   const auto sidecar = layerc::platform::visual_sidecar_path(profile_path);
   auto backup = sidecar;
   backup += ".bak";
-  const auto sidecar_bytes = read_all(sidecar);
-  const auto backup_bytes = read_all(backup);
+  const auto sidecar_bytes = read_file(sidecar);
+  const auto backup_bytes = read_file(backup);
   passed &= expect(layerc::platform::write_profile_bundle(
                        profile_path, profile(), std::nullopt) &&
                        layerc::platform::load_visual_sidecar(
                            profile_path, profile()).state ==
-                           layerc::platform::VisualSidecarState::absent,
+                           layerc::platform::ModuleSidecarState::absent,
                    "a removed marker disables the visual sidecar");
-  passed &= expect(read_all(sidecar) == sidecar_bytes &&
-                       read_all(backup) == backup_bytes,
+  passed &= expect(read_file(sidecar) == sidecar_bytes &&
+                       read_file(backup) == backup_bytes,
                    "removal retains bytes instead of running unlocked cleanup");
   passed &= expect(layerc::platform::write_profile_bundle(
                        profile_path, profile(), visual) &&
                        layerc::platform::load_visual_sidecar(
                            profile_path, profile()).state ==
-                           layerc::platform::VisualSidecarState::valid,
+                           layerc::platform::ModuleSidecarState::valid,
                    "a later writer can reactivate retained sidecars");
 
   (void)passed;

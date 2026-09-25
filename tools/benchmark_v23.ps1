@@ -20,11 +20,9 @@ $OutputPath = $context.OutputPath
 $temporary = $context.Temporary
 $profileDirectory = $context.ProfileDirectory
 $utf8 = $context.Utf8
-foreach ($name in @('layerd.exe', 'layerc_automation_benchmark.exe')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
-        throw "Missing $name in $BuildDirectory. Build Release with tests first."
-    }
-}
+Assert-LayerCExecutables $BuildDirectory @(
+    'layerd.exe', 'layerc_automation_benchmark.exe') `
+    -Hint 'Build Release with tests first.'
 Assert-LayerCQuiescent -ProcessNames layerd `
     -FailureMessage 'Close the existing LayerD process before running the V2.3 benchmark.'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null

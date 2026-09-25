@@ -18,7 +18,7 @@
 namespace layerc::daemon {
 namespace {
 std::filesystem::path profile_path_for_key(const std::string_view key) {
-  const auto decoded = layerc::platform::try_utf8_to_wide(key);
+  const auto decoded = layerc::core::try_utf8_to_wide(key);
   return decoded.has_value() && !decoded->empty()
              ? std::filesystem::path(*decoded)
              : std::filesystem::path{};
@@ -173,10 +173,7 @@ void Session::apply_companion_profile(
 
 bool Session::has_enabled_automations() const noexcept {
   return modules.automation.usable() &&
-         std::ranges::any_of(
-             modules.automation.profile->automations, [](const auto &automation) {
-               return automation.enabled && !automation.rules.empty();
-             });
+         layerc::core::has_enabled_automations(*modules.automation.profile);
 }
 bool Session::has_active_visual_rules() const noexcept {
   return visual_triggers != nullptr && modules.visual.usable() &&
@@ -358,7 +355,7 @@ void DaemonApp::apply_profile_update(
   auto source_path = profile_path_for_key(key);
   if (source_path.empty()) return;
   key = layerc::platform::canonical_profile_key(source_path);
-  auto loaded = session_registry_.sources();
+  auto loaded = session_registry_.sources;
   const auto found = std::ranges::find_if(
       loaded, [&](const ProfileSource &source) { return source.key == key; });
   if (found != loaded.end()) source_path = found->path;
@@ -378,17 +375,17 @@ void DaemonApp::apply_profile_update(
 
 void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
   loaded = dedupe_sources(std::move(loaded));
-  advance_source_revisions(loaded, session_registry_.sources());
-  const auto recreate_keys = compute_recreate_keys(loaded, session_registry_.sources());
+  advance_source_revisions(loaded, session_registry_.sources);
+  const auto recreate_keys = compute_recreate_keys(loaded, session_registry_.sources);
 
   const auto should_recreate = [&](const std::string &key) {
     return std::ranges::find(recreate_keys, key) != recreate_keys.end();
   };
-  std::erase_if(session_registry_.active_inputs(), [&](const Session *session) {
+  std::erase_if(session_registry_.active_inputs, [&](const Session *session) {
     return should_recreate(session->source_key);
   });
   const auto reconcile_now = layerc::core::MonotonicClock::now();
-  std::erase_if(session_registry_.sessions(), [&](const std::unique_ptr<Session> &session) {
+  std::erase_if(session_registry_.sessions, [&](const std::unique_ptr<Session> &session) {
     const auto source =
         std::ranges::find_if(loaded, [&](const ProfileSource &candidate) {
           return candidate.key == session->source_key;
@@ -409,23 +406,23 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
     return false;
   });
   for (const auto &key : recreate_keys)
-    session_registry_.instances().erase_profile(key);
+    session_registry_.instances.erase_profile(key);
 
-  session_registry_.sources() = std::move(loaded);
-  for (const auto &source : session_registry_.sources()) {
+  session_registry_.sources = std::move(loaded);
+  for (const auto &source : session_registry_.sources) {
     if (!source.profile.enabled || !source.profile.game.global)
       continue;
     const bool exists = std::ranges::any_of(
-        session_registry_.sessions(), [&](const std::unique_ptr<Session> &session) {
+        session_registry_.sessions, [&](const std::unique_ptr<Session> &session) {
           return session->source_key == source.key && session->is_global();
         });
     if (!exists)
-      session_registry_.sessions().push_back(std::make_unique<Session>(
+      session_registry_.sessions.push_back(std::make_unique<Session>(
           source.to_session_init(visual_recognition_enabled_)));
   }
 
   const bool has_enabled_profile = std::any_of(
-      session_registry_.sources().begin(), session_registry_.sources().end(),
+      session_registry_.sources.begin(), session_registry_.sources.end(),
       [](const ProfileSource &source) { return source.profile.enabled; });
   update_tooltip(has_enabled_profile ? L"LayerD - profiles loaded"
                                      : L"LayerD - no enabled profiles");
@@ -439,13 +436,13 @@ bool DaemonApp::reload_settings_if_requested() {
   }
   ResetEvent(settings_reload_event_);
   load_platform_settings();
-  for (auto &session : session_registry_.sessions()) {
+  for (auto &session : session_registry_.sessions) {
     session->set_capture_exclusion(capture_exclusion_);
     if (session->visual_triggers)
       session->visual_triggers->set_visual_enabled(visual_recognition_enabled_);
   }
-  if (live_edit_host_.session() != nullptr) {
-    live_edit_host_.session()->overlays.set_capture_exclusion(capture_exclusion_);
+  if (live_edit_host_.session != nullptr) {
+    live_edit_host_.session->overlays.set_capture_exclusion(capture_exclusion_);
   }
   reconcile_runtime_services();
   return true;
@@ -481,10 +478,10 @@ void DaemonApp::refresh_game_windows() {
         if (described->process_id == GetCurrentProcessId() ||
             layerc::platform::is_layerc_editor_process(
                 described->process_id,
-                context.first->live_edit_host_.channel().peer_process_id())) {
+                context.first->live_edit_host_.channel.peer_process_id())) {
           return TRUE;
         }
-        for (const auto &source : context.first->session_registry_.sources()) {
+        for (const auto &source : context.first->session_registry_.sources) {
           if (!layerc::platform::profile_matches_window(*described,
                                                         source.profile)) {
             continue;
@@ -496,19 +493,19 @@ void DaemonApp::refresh_game_windows() {
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&context));
-  const auto changes = session_registry_.instances().reconcile(std::move(desired));
-  std::erase_if(session_registry_.active_inputs(), [&](const Session *session) {
+  const auto changes = session_registry_.instances.reconcile(std::move(desired));
+  std::erase_if(session_registry_.active_inputs, [&](const Session *session) {
     return !session->is_global() &&
-           !session_registry_.instances().contains(
+           !session_registry_.instances.contains(
                {.profile_key = session->source_key,
                 .window = {reinterpret_cast<std::uintptr_t>(
                     session->game_window)}});
   });
   const auto refresh_now = layerc::core::MonotonicClock::now();
-  std::erase_if(session_registry_.sessions(), [&](const std::unique_ptr<Session> &session) {
+  std::erase_if(session_registry_.sessions, [&](const std::unique_ptr<Session> &session) {
     if (session->is_global())
       return false;
-    const bool removed = !session_registry_.instances().contains(
+    const bool removed = !session_registry_.instances.contains(
         {.profile_key = session->source_key,
          .window = {reinterpret_cast<std::uintptr_t>(session->game_window)}});
     if (removed)
@@ -518,19 +515,19 @@ void DaemonApp::refresh_game_windows() {
 
   for (const auto &key : changes.added) {
     const auto source =
-        std::find_if(session_registry_.sources().begin(), session_registry_.sources().end(),
+        std::find_if(session_registry_.sources.begin(), session_registry_.sources.end(),
                      [&](const ProfileSource &candidate) {
                        return candidate.key == key.profile_key;
                      });
     const auto window = reinterpret_cast<HWND>(
         static_cast<std::uintptr_t>(key.window.opaque));
-    if (source == session_registry_.sources().end() || !IsWindow(window)) {
+    if (source == session_registry_.sources.end() || !IsWindow(window)) {
       continue;
     }
     auto instance = std::make_unique<Session>(
         source->to_session_init(visual_recognition_enabled_));
     instance->game_window = window;
-    session_registry_.sessions().push_back(std::move(instance));
+    session_registry_.sessions.push_back(std::move(instance));
   }
 
   sync_foreground_state();
@@ -544,23 +541,23 @@ void DaemonApp::sync_foreground_state() {
                         ? foreground_root
                         : active_sessions.front()->game_window;
   const bool used_controller = std::any_of(
-      session_registry_.active_inputs().begin(), session_registry_.active_inputs().end(),
+      session_registry_.active_inputs.begin(), session_registry_.active_inputs.end(),
       [](const Session *session) { return session->uses_controller; });
   const bool uses_controller = std::any_of(
       active_sessions.begin(), active_sessions.end(),
       [](const Session *session) { return session->uses_controller; });
-  if (active_window != session_registry_.input_foreground()) {
-    for (auto &session : session_registry_.sessions()) {
+  if (active_window != session_registry_.input_foreground) {
+    for (auto &session : session_registry_.sessions) {
       session->clear_input_state();
     }
-    session_registry_.set_input_foreground(active_window);
+    session_registry_.input_foreground = active_window;
     if (uses_controller) {
       seed_controller_states();
     } else {
       input_runtime_.reset_controllers();
     }
   } else {
-    for (auto *previous : session_registry_.active_inputs()) {
+    for (auto *previous : session_registry_.active_inputs) {
       if (std::find(active_sessions.begin(), active_sessions.end(), previous) ==
           active_sessions.end()) {
         previous->clear_input_state();
@@ -572,7 +569,7 @@ void DaemonApp::sync_foreground_state() {
       input_runtime_.reset_controllers();
     }
   }
-  session_registry_.active_inputs() = std::move(active_sessions);
+  session_registry_.active_inputs = std::move(active_sessions);
   assert(session_registry_.invariant_holds());
 
   reconcile_runtime_services();
@@ -585,16 +582,16 @@ std::vector<Session *> DaemonApp::foreground_sessions() const {
     GetWindowThreadProcessId(foreground, &foreground_process_id);
   if (layerc::platform::is_layerc_editor_process(
           foreground_process_id,
-          live_edit_host_.channel().peer_process_id()))
+          live_edit_host_.channel.peer_process_id()))
     return {};
-  if (live_edit_host_.session() != nullptr &&
-      GetAncestor(live_edit_host_.session()->target, GA_ROOT) == foreground)
+  if (live_edit_host_.session != nullptr &&
+      GetAncestor(live_edit_host_.session->target, GA_ROOT) == foreground)
     return {};
-  const auto active = session_registry_.instances().foreground(
+  const auto active = session_registry_.instances.foreground(
       {reinterpret_cast<std::uintptr_t>(foreground)});
   std::vector<Session *> matches;
   matches.reserve(active.size());
-  for (auto &session : session_registry_.sessions()) {
+  for (auto &session : session_registry_.sessions) {
     if (session->is_global())
       continue;
     const auto found =
@@ -610,7 +607,7 @@ std::vector<Session *> DaemonApp::foreground_sessions() const {
   }
   if (!matches.empty())
     return matches;
-  for (auto &session : session_registry_.sessions()) {
+  for (auto &session : session_registry_.sessions) {
     if (session->is_global())
       matches.push_back(session.get());
   }
@@ -625,8 +622,8 @@ std::vector<Session *> DaemonApp::current_companion_sessions() {
     GetWindowThreadProcessId(foreground_window, &foreground_process_id);
 
   std::vector<Session *> all_sessions;
-  all_sessions.reserve(session_registry_.sessions().size());
-  for (const auto &session : session_registry_.sessions())
+  all_sessions.reserve(session_registry_.sessions.size());
+  for (const auto &session : session_registry_.sessions)
     all_sessions.push_back(session.get());
 
   const bool gamebar_foreground =
@@ -638,10 +635,10 @@ std::vector<Session *> DaemonApp::current_companion_sessions() {
           return session != nullptr && !session->is_global();
         });
     if (game != foreground.end())
-      session_registry_.set_last_game_foreground((*game)->game_window);
+      session_registry_.last_game_foreground = (*game)->game_window;
   } else {
     const auto game = std::ranges::find(
-        all_sessions, session_registry_.last_game_foreground(), &Session::game_window);
+        all_sessions, session_registry_.last_game_foreground, &Session::game_window);
     if (game != all_sessions.end())
       preferred = *game;
   }

@@ -61,8 +61,6 @@ void adapters_preserve_capability_identity_and_results() {
     expect(service != nullptr, "every runtime capability should have an adapter");
     if (service == nullptr)
       continue;
-    expect(service->capability() == capability,
-           "adapter capability should match its registry slot");
 
     CapabilityDemand demand;
     demand.set(capability, static_cast<std::uint32_t>(index + 1U));

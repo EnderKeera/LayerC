@@ -7,7 +7,6 @@
 namespace layerc::runtime {
 
 inline constexpr std::uint32_t runtime_diagnostics_schema = 1;
-[[nodiscard]] std::string_view runtime_package_version() noexcept;
 
 struct ProcessDiagnostics {
   std::uint32_t pid{};
@@ -53,7 +52,7 @@ struct HelperDiagnostics {
 // of the service host and native process/window APIs.
 struct RuntimeDiagnostics {
   std::uint32_t schema_version{runtime_diagnostics_schema};
-  std::string package_version{runtime_package_version()};
+  std::string package_version{layerc::core::product_version};
   std::uint32_t protocol_version{core::live_protocol_version};
   ProcessDiagnostics process;
   std::vector<RuntimeServiceStats> services;

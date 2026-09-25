@@ -843,11 +843,11 @@ void editor_dialog_contracts() {
   panel_state.begin_drag({12, 24}, {3, 4});
   panel_state.mark_drag_moved();
   panel_state.finish_drag();
-  passed &= expect(!panel_state.dragging() && !panel_state.drag_moved() &&
-                       panel_state.drag_start().x == 0 &&
-                       panel_state.drag_start().y == 0 &&
-                       panel_state.drag_offset().x == 0 &&
-                       panel_state.drag_offset().y == 0,
+  passed &= expect(!panel_state.dragging && !panel_state.drag_moved &&
+                       panel_state.drag_start.x == 0 &&
+                       panel_state.drag_start.y == 0 &&
+                       panel_state.drag_offset.x == 0 &&
+                       panel_state.drag_offset.y == 0,
       "finishing a preview drag should reset the entire drag state");
 
   layerc::editor::CooldownEditor binding_state;

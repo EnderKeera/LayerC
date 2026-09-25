@@ -1,4 +1,5 @@
 #include "layerc/core/live_edit.hpp"
+#include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "overlay_window.hpp"
 #include "test_support.hpp"
@@ -59,7 +60,8 @@ bool wait_for_window(const DWORD process_id, const wchar_t *const class_name,
 
 bool launch_target(const std::wstring &executable,
                    PROCESS_INFORMATION &process) {
-  const std::wstring command = L"\"" + executable + L"\"";
+  const std::wstring command =
+      layerc::platform::quote_command_argument(executable);
   std::vector<wchar_t> command_buffer(command.begin(), command.end());
   command_buffer.push_back(L'\0');
   STARTUPINFOW startup{};
@@ -113,8 +115,11 @@ int run_on_private_desktop(const wchar_t *const test_target) {
     CloseDesktop(desktop);
     return 1;
   }
-  std::wstring command = L"\"" + std::wstring(executable.data(), length) +
-                         L"\" --desktop-child \"" + test_target + L"\"";
+  std::wstring command =
+      layerc::platform::quote_command_argument(
+          std::wstring_view(executable.data(), length)) +
+      L" --desktop-child " +
+      layerc::platform::quote_command_argument(test_target);
   std::vector<wchar_t> command_buffer(command.begin(), command.end());
   command_buffer.push_back(L'\0');
   STARTUPINFOW startup{};

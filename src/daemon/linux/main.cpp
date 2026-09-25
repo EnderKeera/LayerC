@@ -94,7 +94,7 @@ public:
 
 private:
   void step() {
-    if (dirty_)
+    if (profiles_dirty_ || sessions_dirty_)
       reload();
 
     // Queue-aware prepare phase: synchronous Xlib queries during
@@ -123,12 +123,16 @@ private:
     arm_deadline(MonotonicClock::now());
   }
 
+  // Window and device changes only rematch sessions; the store is re-read
+  // on a control reload (explicit or import notification).
   void reload() {
-    std::string load_warning;
-    profiles_ = layerc::daemon::load_profiles(load_warning);
-    if (!load_warning.empty())
-      std::fprintf(stderr, "layerd: %s\n", load_warning.c_str());
-    dirty_ = false;
+    if (profiles_dirty_) {
+      std::string load_warning;
+      profiles_ = layerc::daemon::load_profiles(load_warning);
+      if (!load_warning.empty())
+        std::fprintf(stderr, "layerd: %s\n", load_warning.c_str());
+    }
+    profiles_dirty_ = sessions_dirty_ = false;
 
     diagnostics_.clear();
     adapters_.refresh(profiles_, kernel_, status_, diagnostics_);
@@ -146,16 +150,16 @@ private:
     if (!outcome.diagnostic.empty())
       std::fprintf(stderr, "layerd: %s\n", outcome.diagnostic.c_str());
     stop_requested_ = stop_requested_ || outcome.stop_requested;
-    dirty_ = dirty_ || outcome.reload_requested;
+    profiles_dirty_ = profiles_dirty_ || outcome.reload_requested;
   }
 
   void dispatch_input(const bool readable) {
     const auto dispatch = readable ? adapters_.dispatch(loop_.ready_fds())
                                    : adapters_.dispatch_pending();
     if (dispatch.windows_changed)
-      dirty_ = true;
+      sessions_dirty_ = true;
     if (dispatch.devices_changed) {
-      dirty_ = true;
+      sessions_dirty_ = true;
       std::fprintf(stderr, "layerd: input devices changed\n");
     }
     for (const auto &cooldown : dispatch.triggered)
@@ -178,7 +182,8 @@ private:
   layerc::daemon::LinuxStatusSnapshot status_;
   std::vector<std::string> diagnostics_;
   std::vector<layerc::platform::StoredProfile> profiles_;
-  bool dirty_{true};
+  bool profiles_dirty_{true};
+  bool sessions_dirty_{};
   bool stop_requested_{};
 };
 

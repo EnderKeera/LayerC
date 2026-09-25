@@ -363,11 +363,11 @@ void layout_visual_panel(const MainLayout &f) {
 } // namespace
 
 void EditorWindow::layout() {
-  if (shell_.window() == nullptr)
+  if (shell_.window == nullptr)
     return;
   const MainLayout frame =
-      make_main_layout(shell_.window(), shell_.advanced_visible());
-  show_advanced_controls(shell_.window(), frame.advanced);
+      make_main_layout(shell_.window, shell_.advanced_visible);
+  show_advanced_controls(shell_.window, frame.advanced);
   layout_sidebar(frame);
   const int binding_top =
       layout_cooldown_list(frame, layout_profile_fields(frame));
@@ -377,9 +377,9 @@ void EditorWindow::layout() {
   const DialogLayout &ui = frame.ui;
   ui.move(IDC_STATUS, frame.margin, frame.status_top,
           frame.width - frame.margin * 2, ui.scaled(19));
-  ListView_SetColumnWidth(shell_.profile_list(), 0,
+  ListView_SetColumnWidth(shell_.profile_list, 0,
                           std::max(1, frame.sidebar_width - ui.scaled(8)));
-  RedrawWindow(shell_.window(), nullptr, nullptr,
+  RedrawWindow(shell_.window, nullptr, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 

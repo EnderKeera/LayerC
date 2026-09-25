@@ -1,9 +1,10 @@
 #include "layerc/capture/window_capture.hpp"
 #include "layerc/core/json.hpp"
+#include "layerc/core/visual.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -18,9 +19,9 @@ std::optional<std::uint64_t> unsigned_argument(const int argc, wchar_t **argv,
                                                const std::wstring_view name) {
   for (int index = 1; index + 1 < argc; ++index) {
     if (argv[index] != name) continue;
-    wchar_t *end{};
-    const auto value = wcstoull(argv[index + 1], &end, 10);
-    if (end != argv[index + 1] && *end == L'\0') return value;
+    if (const auto value =
+            layerc::platform::parse_integer<std::uint64_t>(argv[index + 1]))
+      return value;
   }
   return std::nullopt;
 }
@@ -44,20 +45,6 @@ const char *backend_name(const layerc::core::CaptureBackendKind backend) {
     return "desktopDuplication";
   default:
     return "none";
-  }
-}
-
-const char *availability_name(
-    const layerc::core::CaptureAvailability availability) {
-  switch (availability) {
-  case layerc::core::CaptureAvailability::starting: return "starting";
-  case layerc::core::CaptureAvailability::available: return "available";
-  case layerc::core::CaptureAvailability::unavailable: return "unavailable";
-  case layerc::core::CaptureAvailability::protected_or_black:
-    return "protectedOrBlack";
-  case layerc::core::CaptureAvailability::outside_output:
-    return "outsideOutput";
-  default: return "inactive";
   }
 }
 
@@ -103,7 +90,9 @@ int wmain(const int argc, wchar_t **argv) {
   std::string output = "{\"backend\":\"";
   output += backend_name(latest.backend);
   output += "\",\"availability\":\"";
-  output += availability_name(latest.availability);
+  output += layerc::core::enum_wire_name(layerc::core::capture_availability_wire,
+                                        latest.availability)
+                .value_or("inactive");
   output += "\",\"gpu\":";
   layerc::core::json::append_quoted(output, gpu);
   output += ",\"width\":";

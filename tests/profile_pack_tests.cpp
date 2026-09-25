@@ -8,11 +8,8 @@
 
 #include <array>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <optional>
 #include <ranges>
-#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -20,6 +17,8 @@
 namespace {
 
 using layerc::test::expect;
+using layerc::test::read_file;
+using layerc::test::write_file;
 
 layerc::core::GameProfile profile(std::string id, std::string name,
                                   const std::uint16_t key) {
@@ -41,14 +40,6 @@ layerc::core::GameProfile profile(std::string id, std::string name,
   return result;
 }
 
-layerc::core::AutomationExpression
-automation_literal(layerc::core::AutomationValue value) {
-  layerc::core::AutomationExpression result;
-  result.kind = layerc::core::ExpressionKind::literal;
-  result.literal = std::move(value);
-  return result;
-}
-
 layerc::core::AutomationProfile automation_profile(const std::string &id) {
   using namespace layerc::core;
   AutomationProfile result;
@@ -63,45 +54,11 @@ layerc::core::AutomationProfile automation_profile(const std::string &id) {
   AutomationAction action;
   action.kind = AutomationActionKind::increment_variable;
   action.target = "count";
-  action.value = automation_literal(AutomationValue(std::int64_t{1}));
+  action.value = expr::literal(AutomationValue(std::int64_t{1}));
   rule.actions.push_back(std::move(action));
   result.automations.push_back(
       {.id = "counter", .name = "Counter", .rules = {rule}});
   return result;
-}
-
-std::vector<std::byte> read_all(const std::filesystem::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  input.seekg(0, std::ios::end);
-  const auto size = input.tellg();
-  input.seekg(0);
-  std::vector<std::byte> bytes(static_cast<std::size_t>(size));
-  input.read(reinterpret_cast<char *>(bytes.data()), size);
-  return bytes;
-}
-
-std::string read_text(const std::filesystem::path &path) {
-  const auto bytes = read_all(path);
-  return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-}
-
-bool write_all(const std::filesystem::path &path,
-               const std::span<const std::byte> bytes) {
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(reinterpret_cast<const char *>(bytes.data()),
-               static_cast<std::streamsize>(bytes.size()));
-  return static_cast<bool>(output);
-}
-
-bool write_text(const std::filesystem::path &path,
-                const std::string_view text) {
-  std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error)
-    return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(text.data(), static_cast<std::streamsize>(text.size()));
-  return static_cast<bool>(output);
 }
 
 bool write_traversal_zip(const std::filesystem::path &path) {
@@ -117,8 +74,8 @@ bool write_traversal_zip(const std::filesystem::path &path) {
   mz_zip_writer_end(&zip);
   if (!ok || data == nullptr)
     return false;
-  const auto bytes = std::span(reinterpret_cast<const std::byte *>(data), size);
-  const bool written = write_all(path, bytes);
+  const bool written = layerc::test::write_file(
+      path, std::string_view(static_cast<const char *>(data), size));
   mz_free(data);
   return written;
 }
@@ -179,9 +136,9 @@ bool rewrite_zip(const std::filesystem::path &source,
     mz_free(archive_data);
     return false;
   }
-  const bool written = write_all(
-      destination, std::span(reinterpret_cast<const std::byte *>(archive_data),
-                             archive_size));
+  const bool written = layerc::test::write_file(
+      destination,
+      std::string_view(static_cast<const char *>(archive_data), archive_size));
   mz_free(archive_data);
   return written;
 }
@@ -222,9 +179,9 @@ struct PackFixture {
     });
     first_visual.triggers.push_back(
         {.cooldown_id = "dash", .observation_id = "ready-template"});
-    bool passed = expect(write_text(source / "_visual" / "assets" /
-                                             (std::string(asset_hash) + ".png"),
-                                         "abc"),
+    bool passed = expect(write_file(source / "_visual" / "assets" /
+                                        (std::string(asset_hash) + ".png"),
+                                    "abc"),
                          "content-addressed test asset should be created");
     first_companion.profile_id = first_base.id;
     first_companion.slots.push_back({.slot_index = 0,
@@ -296,9 +253,9 @@ void legacy_visual_schema_validation() {
     "triggers":[{"cooldownId":"dash","ruleId":"ready","enabled":true,
       "mode":"pixelOnly","keepInput":false,"onUnavailable":"ignore"}]
   })json";
-  if (!expect(write_text(legacy_path,
+  if (!expect(write_file(legacy_path,
                          layerc::core::serialize_profile_json(legacy_base)) &&
-                  write_text(layerc::platform::visual_sidecar_path(legacy_path),
+                  write_file(layerc::platform::visual_sidecar_path(legacy_path),
                              legacy_visual),
               "matching schema-1 base metadata and visual sidecar should be staged"))
     return;
@@ -312,7 +269,7 @@ void legacy_visual_schema_validation() {
          "source schema before in-memory migration");
 
   legacy_base.modules.front().schema_version = 2;
-  if (!expect(write_text(legacy_path,
+  if (!expect(write_file(legacy_path,
                          layerc::core::serialize_profile_json(legacy_base)),
               "mismatched visual module metadata fixture should be staged"))
     return;
@@ -338,7 +295,7 @@ void deterministic_export_and_import() {
                   layerc::bundle::export_profile_pack(pack_two, selected)),
               "same multi-profile pack should export twice"))
     return;
-  expect(read_all(pack_one) == read_all(pack_two),
+  expect(read_file(pack_one) == read_file(pack_two),
          "pack export should be byte-for-byte deterministic");
   const auto nested_name = layerc::bundle::resolve_suggested_profile_filename(
       "folder/existing.json");
@@ -363,10 +320,8 @@ void deterministic_export_and_import() {
   expect(std::filesystem::exists(imported / "_visual" / "first.json") &&
              std::filesystem::exists(imported / "_visual" / "assets" /
                                      (std::string(asset_hash) + ".png")) &&
-             read_all(imported / "_visual" / "assets" /
-                      (std::string(asset_hash) + ".png")) ==
-                 std::vector<std::byte>{std::byte{'a'}, std::byte{'b'},
-                                        std::byte{'c'}},
+             read_file(imported / "_visual" / "assets" /
+                       (std::string(asset_hash) + ".png")) == "abc",
          "sidecars and assets should import beneath the requested "
          "destination root");
   expect(std::filesystem::exists(imported / "_automation" / "first.json") &&
@@ -378,7 +333,7 @@ void deterministic_export_and_import() {
   const auto imported_companion = layerc::platform::load_companion_sidecar(
       imported / "first.json", fixture.first_base);
   expect(imported_companion.state ==
-                 layerc::platform::CompanionSidecarState::valid &&
+                 layerc::platform::ModuleSidecarState::valid &&
              imported_companion.profile.has_value() &&
              *imported_companion.profile == fixture.first_companion,
          "packs should import companion preferences with the profile bundle");
@@ -414,12 +369,12 @@ void copy_import_guards() {
     auto reviewed_choice = copy_choice;
     reviewed_choice.front().expected_target = target;
     reviewed_choice.front().require_absent = true;
-    if (expect(write_text(target, "new occupant"),
+    if (expect(write_file(target, "new occupant"),
                "a destination can become occupied after preview")) {
       expect(std::holds_alternative<layerc::bundle::PackError>(
                  layerc::bundle::import_profile_pack(
                      *validated, reviewed_choice, imported)) &&
-                 read_text(target) == "new occupant",
+                 read_file(target) == "new occupant",
              "a changed Copy destination must fail without overwriting it");
     }
     std::error_code error;
@@ -443,7 +398,7 @@ void copy_import_guards() {
         layerc::platform::load_companion_sidecar(entry.path(), *candidate);
     found_companion_copy =
         copied_companion.state ==
-            layerc::platform::CompanionSidecarState::valid &&
+            layerc::platform::ModuleSidecarState::valid &&
         copied_companion.profile.has_value() &&
         copied_companion.profile->profile_id == candidate->id &&
         copied_companion.profile->slots.size() == 1U &&
@@ -472,7 +427,7 @@ void import_preview_conflicts() {
          "import preview must resolve destinations without creating the store");
   const auto conflict_root = fixture.root / "conflicts";
   const auto invalid_target = conflict_root / "existing.JSON";
-  if (!expect(write_text(invalid_target, "{invalid-profile"),
+  if (!expect(write_file(invalid_target, "{invalid-profile"),
               "invalid conflict fixture should be created"))
     return;
   auto nested_pack = *validated;
@@ -486,7 +441,7 @@ void import_preview_conflicts() {
   expect(std::holds_alternative<layerc::bundle::PackError>(
              layerc::bundle::import_profile_pack(
                  nested_pack, replace_nested, conflict_root)) &&
-             read_text(invalid_target) == "{invalid-profile",
+             read_file(invalid_target) == "{invalid-profile",
          "Replace must reject a case-colliding unreadable JSON "
          "target instead of overwriting it without a Copy choice");
 }
@@ -498,11 +453,12 @@ void malformed_packs_rejected() {
   const auto pack_one = root / "one.layercprofile";
   if (!fixture.export_pack(pack_one)) return;
 
-  auto corrupt = read_all(pack_one);
+  auto corrupt = read_file(pack_one).value_or("");
   if (corrupt.size() > 32U)
-    corrupt[corrupt.size() / 2U] ^= std::byte{0x5A};
+    corrupt[corrupt.size() / 2U] =
+        static_cast<char>(corrupt[corrupt.size() / 2U] ^ 0x5A);
   const auto corrupt_path = root / "corrupt.layercprofile";
-  if (expect(write_all(corrupt_path, corrupt), "corrupt ZIP fixture should be written"))
+  if (expect(write_file(corrupt_path, corrupt), "corrupt ZIP fixture should be written"))
     expect(std::holds_alternative<layerc::bundle::PackError>(
                layerc::bundle::validate_profile_pack(corrupt_path)),
            "corrupt ZIP data or CRC should be rejected");
@@ -623,28 +579,28 @@ void pack_transaction_recovery() {
 
   const auto recovery_target = imported / "recovery.json";
   const auto uncommitted = imported / "_transactions" / "uncommitted";
-  expect(write_text(recovery_target, "new") &&
-             write_text(uncommitted / "backup" / "0.bin", "old") &&
-             write_text(uncommitted / "journal.json",
+  expect(write_file(recovery_target, "new") &&
+             write_file(uncommitted / "backup" / "0.bin", "old") &&
+             write_file(uncommitted / "journal.json",
                         "{\"schemaVersion\":2,\"operations\":[{\"root\":"
                         "\"config\",\"target\":\"recovery.json\","
                         "\"existed\":true}]}\n") &&
              std::holds_alternative<std::monostate>(
                  layerc::bundle::recover_profile_pack_transactions(imported)) &&
-             read_text(recovery_target) == "old",
+             read_file(recovery_target) == "old",
          "startup recovery should roll back an uncommitted journal");
 
   const auto committed = imported / "_transactions" / "committed";
-  expect(write_text(recovery_target, "published") &&
-             write_text(committed / "backup" / "0.bin", "old") &&
-             write_text(committed / "journal.json",
+  expect(write_file(recovery_target, "published") &&
+             write_file(committed / "backup" / "0.bin", "old") &&
+             write_file(committed / "journal.json",
                         "{\"schemaVersion\":2,\"operations\":[{\"root\":"
                         "\"config\",\"target\":\"recovery.json\","
                         "\"existed\":true}]}\n") &&
-             write_text(committed / "committed", "committed\n") &&
+             write_file(committed / "committed", "committed\n") &&
              std::holds_alternative<std::monostate>(
                  layerc::bundle::recover_profile_pack_transactions(imported)) &&
-             read_text(recovery_target) == "published",
+             read_file(recovery_target) == "published",
          "startup recovery should retain a committed publication and clean its "
          "journal");
 }

@@ -45,14 +45,6 @@ struct CaptureFrame {
   }
 };
 
-enum class CapturePhase : std::uint8_t {
-  stopped,
-  starting,
-  live,
-  degraded,
-  unavailable,
-};
-
 enum class CaptureRecovery : std::uint8_t {
   none,
   restart_backend,
@@ -63,7 +55,6 @@ struct CapturePollResult {
   core::CaptureBackendKind backend{core::CaptureBackendKind::none};
   std::string diagnostic{};
   std::shared_ptr<const CaptureFrame> frame{};
-  CapturePhase phase{CapturePhase::stopped};
   CaptureRecovery recovery{CaptureRecovery::none};
 };
 

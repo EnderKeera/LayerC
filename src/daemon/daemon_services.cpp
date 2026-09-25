@@ -37,7 +37,7 @@ DaemonApp::reconcile_capability(const Capability capability,
     reconcile_automation_runtime();
     return {};
   case Capability::gamebar:
-    return companion_host_.transport().start()
+    return companion_host_.transport.start()
                ? ServiceReconcileResult{}
                : ServiceReconcileResult{false,
                                         "Game Bar transport could not start"};
@@ -68,7 +68,7 @@ void DaemonApp::quiesce_capability(const Capability capability) noexcept {
     quiesce_automation_runtime();
     return;
   case Capability::gamebar:
-    companion_host_.transport().stop();
+    companion_host_.transport.stop();
     companion_host_.set_active_session_count(0);
     return;
   case Capability::count:
@@ -102,14 +102,14 @@ DaemonApp::capability_resources(const Capability capability) const noexcept {
 }
 
 layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() {
-  const auto &active = session_registry_.active_inputs();
+  const auto &active = session_registry_.active_inputs;
   const auto companion =
       layerc::gamebar::GameBarTransport::current_process_is_expected_package()
           ? current_companion_sessions()
           : std::vector<Session *>{};
   std::vector<layerc::runtime::SessionCapabilityRequest> requests;
-  requests.reserve(session_registry_.sessions().size());
-  for (const auto &owned : session_registry_.sessions()) {
+  requests.reserve(session_registry_.sessions.size());
+  for (const auto &owned : session_registry_.sessions) {
     const auto *session = owned.get();
     if (session == nullptr)
       continue;
@@ -130,12 +130,12 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() {
     });
   }
   return layerc::runtime::calculate_capability_demand(
-      requests, live_edit_host_.session() != nullptr);
+      requests, live_edit_host_.session != nullptr);
 }
 
 void DaemonApp::reconcile_runtime_services() {
   runtime_kernel_.services().set_resource_ledger(
-      {.handles = live_edit_host_.authenticated() ? 1U : 0U});
+      {.handles = live_edit_host_.authenticated ? 1U : 0U});
   (void)runtime_kernel_.reconcile(runtime_demand());
 }
 

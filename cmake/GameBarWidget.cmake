@@ -37,9 +37,7 @@ file(GLOB LAYERC_UWP_TOOLSET_TARGETS
     "C:/Program Files/Microsoft Visual Studio/*/*/MSBuild/Microsoft/VC/*/Application Type/Windows Store/10.0/Platforms/x64/PlatformToolsets/*/Toolset.targets"
     "C:/Program Files (x86)/Microsoft Visual Studio/*/*/MSBuild/Microsoft/VC/*/Application Type/Windows Store/10.0/Platforms/x64/PlatformToolsets/*/Toolset.targets")
 find_program(LAYERC_POWERSHELL NAMES powershell pwsh)
-if(NOT MSVC)
-    message(STATUS "Game Bar host disabled: the Xbox Game Bar SDK requires the MSVC UWP toolchain")
-elseif(NOT LAYERC_CPPWINRT_DIR)
+if(NOT LAYERC_CPPWINRT_DIR)
     message(STATUS "Game Bar host disabled: Windows SDK C++/WinRT headers not found")
 elseif(NOT LAYERC_UWP_TOOLSET_TARGETS)
     message(STATUS "Game Bar host disabled: Visual Studio UWP C++/XAML tools are not installed")
@@ -65,29 +63,22 @@ else()
         "${LAYERC_GAMEBAR_WIDGET_ROOT}/$<CONFIG>/Assets/StoreLogo.png")
     set(LAYERC_GAMEBAR_WIDGET_PROJECT
         "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/widget/LayerC.GameBar.vcxproj")
-    # Verify the MSBuild core compilation inputs against the dependency list.
-    # A missing source must fail configuration, not just a future widget link.
-    set(LAYERC_GAMEBAR_WIDGET_CORE_SOURCES
-        src/core/companion.cpp
-        src/core/json.cpp
-        src/core/json_reader.cpp
-        src/core/json_value.cpp
-        src/core/utf8.cpp)
+    # The MSBuild project owns the shared core sources it compiles; derive the
+    # dependency list from it. A missing source must fail configuration, not
+    # just a future widget link.
     file(STRINGS "${LAYERC_GAMEBAR_WIDGET_PROJECT}" _widget_core_items
         REGEX "ClCompile Include=.*core")
-    set(_widget_project_core_sources)
+    set(LAYERC_GAMEBAR_WIDGET_CORE_SOURCES)
     foreach(_item IN LISTS _widget_core_items)
         string(REPLACE "\\" "/" _item "${_item}")
         if(_item MATCHES "core/([a-z_0-9]+[.]cpp)")
-            list(APPEND _widget_project_core_sources "src/core/${CMAKE_MATCH_1}")
+            set(_source "src/core/${CMAKE_MATCH_1}")
+            if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_source}")
+                message(FATAL_ERROR "${LAYERC_GAMEBAR_WIDGET_PROJECT} compiles missing ${_source}")
+            endif()
+            list(APPEND LAYERC_GAMEBAR_WIDGET_CORE_SOURCES "${_source}")
         endif()
     endforeach()
-    set(_widget_expected_core_sources ${LAYERC_GAMEBAR_WIDGET_CORE_SOURCES})
-    list(SORT _widget_expected_core_sources)
-    list(SORT _widget_project_core_sources)
-    if(NOT _widget_expected_core_sources STREQUAL _widget_project_core_sources)
-        message(FATAL_ERROR "Game Bar widget core sources differ between cmake/GameBarWidget.cmake and ${LAYERC_GAMEBAR_WIDGET_PROJECT}: expected ${_widget_expected_core_sources}, found ${_widget_project_core_sources}")
-    endif()
     set(LAYERC_GAMEBAR_WIDGET_SOURCES
         src/gamebar/widget/App.cpp
         src/gamebar/widget/App.h

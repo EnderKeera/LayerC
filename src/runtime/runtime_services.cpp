@@ -23,20 +23,6 @@ void mark_faulted(RuntimeServiceStats &stats, std::string error) {
 
 } // namespace
 
-std::string_view capability_name(const Capability capability) noexcept {
-  switch (capability) {
-  case Capability::input: return "input";
-  case Capability::generic_hid: return "genericHid";
-  case Capability::overlay: return "overlay";
-  case Capability::visual: return "visual";
-  case Capability::isolated_visual: return "isolatedVisual";
-  case Capability::automation: return "automation";
-  case Capability::gamebar: return "gamebar";
-  case Capability::count: break;
-  }
-  return "unknown";
-}
-
 void CapabilityDemand::add(const Capability capability,
                            const std::uint32_t consumers) noexcept {
   const auto slot = static_cast<std::size_t>(capability);
@@ -83,11 +69,8 @@ RuntimeResourceStats::operator+=(const RuntimeResourceStats &other) noexcept {
 RuntimeServiceHost::RuntimeServiceHost(
     const RuntimeServiceRegistry services) noexcept {
   for (std::size_t slot = 0; slot < services.size(); ++slot) {
-    const auto capability = static_cast<Capability>(slot);
-    slots_[slot].stats.capability = capability;
-    if (services[slot] != nullptr &&
-        services[slot]->capability() == capability)
-      slots_[slot].service = services[slot];
+    slots_[slot].stats.capability = static_cast<Capability>(slot);
+    slots_[slot].service = services[slot];
   }
 }
 
@@ -177,13 +160,6 @@ void RuntimeServiceHost::quiesce_slot(Slot &slot,
 void RuntimeServiceHost::quiesce_all(const core::TimePoint now) noexcept {
   for (std::size_t slot_index = slots_.size(); slot_index-- > 0;)
     quiesce_slot(slots_[slot_index], now);
-}
-
-IRuntimeService *RuntimeServiceHost::find(const Capability capability) noexcept {
-  const auto slot = index(capability);
-  return slot < slots_.size() && slots_[slot].active
-             ? slots_[slot].service
-             : nullptr;
 }
 
 const IRuntimeService *

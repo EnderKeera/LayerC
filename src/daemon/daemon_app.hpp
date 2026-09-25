@@ -33,7 +33,7 @@
 
 namespace layerc::daemon {
 
-class DaemonApp : private OverlayEventSink {
+class DaemonApp {
 public:
   DaemonApp();
   ~DaemonApp();
@@ -116,13 +116,6 @@ private:
   void process_automation_event(Session &session,
                                 const layerc::core::AutomationEvent &event);
   void publish_automation_trace(Session &session);
-  [[nodiscard]] layerc::core::AutomationEvent
-  automation_event(layerc::core::AutomationEventKind kind,
-                   std::string source_id, layerc::core::TimePoint now,
-                   std::uint64_t origin_token);
-  [[nodiscard]] layerc::core::AutomationEvent
-  automation_event(layerc::core::AutomationEventKind kind,
-                   std::string source_id, layerc::core::TimePoint now);
   void acknowledge_automation_state(const ProfileSource &source);
   void synchronize_automation_state(Session &session,
                                     layerc::core::TimePoint now);
@@ -152,7 +145,8 @@ private:
   void load_platform_settings();
   [[nodiscard]] std::vector<Session *> foreground_sessions() const;
   [[nodiscard]] RECT overlay_target() const;
-  void on_overlay_event(DWORD event, HWND window) override;
+  friend class OverlayRuntime;
+  void on_overlay_event(DWORD event, HWND window);
   void sync_visual_exclusions();
   // Typed capability dispatch for the kernel's per-capability adapters.
   friend class OwnedCapabilityService<DaemonApp>;

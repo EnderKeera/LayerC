@@ -29,9 +29,6 @@ public:
   next_deadline(layerc::core::TimePoint now) const noexcept;
 
   [[nodiscard]] std::vector<std::string> unavailable() const;
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
-    return layerc::runtime::Capability::visual;
-  }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
       const layerc::runtime::CapabilityDemand &demand) override;
   void quiesce() noexcept override;

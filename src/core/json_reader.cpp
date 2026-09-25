@@ -55,6 +55,11 @@ void append_exact_unsigned(std::string &output, const std::uint64_t value) {
   else
     append_quoted(output, std::to_string(value));
 }
+Value exact_unsigned_value(const std::uint64_t value) {
+  if (value > static_cast<std::uint64_t>(max_exact_json_integer))
+    return Value(std::to_string(value));
+  return Value(static_cast<std::int64_t>(value));
+}
 void append_exact_integer(std::string &output, const std::int64_t value) {
   if (value < -max_exact_json_integer || value > max_exact_json_integer) {
     append_quoted(output, std::to_string(value));
@@ -192,14 +197,8 @@ Reader::color(const Value &parent, const std::string_view key, const std::string
               const Required required, const std::uint32_t fallback) {
   const auto *value = field(parent, key, path, required);
   if (!value) return ok() ? std::optional(fallback) : std::nullopt;
-  if (value->is_string()) {
-    const auto &source = value->as_string();
-    if (source.size() == 7 && source.front() == '#') {
-      std::uint32_t result{};
-      const auto [tail, code] = std::from_chars(source.data() + 1, source.data() + 7, result, 16);
-      if (code == std::errc{} && tail == source.data() + 7) return result;
-    }
-  }
+  if (value->is_string())
+    if (const auto color = parse_color_text(value->as_string())) return color;
   fail(path + "." + std::string(key), "expected #RRGGBB color string");
   return std::nullopt;
 }

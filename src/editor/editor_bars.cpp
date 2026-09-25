@@ -69,9 +69,9 @@ LRESULT CALLBACK EditorWindow::preview_subclass(HWND window, UINT message, WPARA
 }
 
 layerc::core::Panel *EditorWindow::selected_bar() {
-  const LRESULT row = SendMessageW(panel_preview_.list(), LB_GETCURSEL, 0, 0);
+  const LRESULT row = SendMessageW(panel_preview_.list, LB_GETCURSEL, 0, 0);
   if (row == LB_ERR) return nullptr;
-  const LRESULT value = SendMessageW(panel_preview_.list(), LB_GETITEMDATA, static_cast<WPARAM>(row), 0);
+  const LRESULT value = SendMessageW(panel_preview_.list, LB_GETITEMDATA, static_cast<WPARAM>(row), 0);
   if (value == LB_ERR || value < 0 || static_cast<std::size_t>(value) >= document_.profile().panels.size()) return nullptr;
   return &document_.profile().panels[static_cast<std::size_t>(value)];
 }
@@ -82,7 +82,7 @@ const layerc::core::Panel *EditorWindow::selected_bar() const {
 
 
 void EditorWindow::refresh_bar_list(const std::size_t preferred_panel) {
-  SendMessageW(panel_preview_.list(), LB_RESETCONTENT, 0, 0);
+  SendMessageW(panel_preview_.list, LB_RESETCONTENT, 0, 0);
   int selected_row = -1;
   for (std::size_t index = 0; index < document_.profile().panels.size(); ++index) {
     const auto &panel = document_.profile().panels[index];
@@ -91,43 +91,43 @@ void EditorWindow::refresh_bar_list(const std::size_t preferred_panel) {
     if (panel.cooldown_ids.size() > 1)
       label += L"  (grouped: " + std::to_wstring(panel.cooldown_ids.size()) + L")";
     else if (!panel.cooldown_ids.empty()) label += L"  —  " + to_wide(panel.cooldown_ids.front());
-    const auto row = SendMessageW(panel_preview_.list(), LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+    const auto row = SendMessageW(panel_preview_.list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
     if (row != LB_ERR && row != LB_ERRSPACE) {
-      SendMessageW(panel_preview_.list(), LB_SETITEMDATA, static_cast<WPARAM>(row), static_cast<LPARAM>(index));
+      SendMessageW(panel_preview_.list, LB_SETITEMDATA, static_cast<WPARAM>(row), static_cast<LPARAM>(index));
       if (index == preferred_panel) selected_row = static_cast<int>(row);
     }
   }
-  if (selected_row < 0 && SendMessageW(panel_preview_.list(), LB_GETCOUNT, 0, 0) > 0) selected_row = 0;
-  if (selected_row >= 0) SendMessageW(panel_preview_.list(), LB_SETCURSEL, static_cast<WPARAM>(selected_row), 0);
+  if (selected_row < 0 && SendMessageW(panel_preview_.list, LB_GETCOUNT, 0, 0) > 0) selected_row = 0;
+  if (selected_row >= 0) SendMessageW(panel_preview_.list, LB_SETCURSEL, static_cast<WPARAM>(selected_row), 0);
   refresh_bar_controls();
 }
 
 void EditorWindow::refresh_bar_controls() {
   auto sync = shell_.sync_scope();
   const auto *panel = selected_bar();
-  panel_preview_.set_controls_panel(panel == nullptr
+  panel_preview_.controls_panel = panel == nullptr
                             ? SIZE_MAX
-                            : static_cast<std::size_t>(panel - document_.profile().panels.data()));
+                            : static_cast<std::size_t>(panel - document_.profile().panels.data());
   for (const auto &binding : profile_field_bindings())
     if (binding.owner == ProfileFieldOwner::panel)
-      EnableWindow(GetDlgItem(shell_.window(), binding.control_id), panel != nullptr);
+      EnableWindow(GetDlgItem(shell_.window, binding.control_id), panel != nullptr);
   for (const int id :
        {IDC_BAR_FILL, IDC_BAR_BACKGROUND, IDC_BAR_BORDER, IDC_BAR_TEXT})
-    EnableWindow(GetDlgItem(shell_.window(), id), panel != nullptr);
+    EnableWindow(GetDlgItem(shell_.window, id), panel != nullptr);
   if (panel != nullptr) {
     const ProfileFieldContext context{
-        shell_.window(), document_.profile(), selected_cooldown(),
-        &document_.profile().panels[panel_preview_.controls_panel()]};
+        shell_.window, document_.profile(), selected_cooldown(),
+        &document_.profile().panels[panel_preview_.controls_panel]};
     write_profile_fields(context, ProfileFieldOwner::panel);
-    set_text(GetDlgItem(shell_.window(), IDC_POSITION_STATUS), panel->cooldown_ids.size() > 1
+    set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), panel->cooldown_ids.size() > 1
       ? L"Legacy grouped bar. Split it to give each cooldown its own position."
       : L"Drag the selected bar in the preview to save normalized position.");
-    set_text(GetDlgItem(shell_.window(), IDC_BAR_FILL), L"Fill");
-    set_text(GetDlgItem(shell_.window(), IDC_BAR_BACKGROUND), L"BG");
-    set_text(GetDlgItem(shell_.window(), IDC_BAR_BORDER), L"Border");
-    set_text(GetDlgItem(shell_.window(), IDC_BAR_TEXT), L"Text");
-  } else set_text(GetDlgItem(shell_.window(), IDC_POSITION_STATUS), L"Add a cooldown to create a bar.");
-  InvalidateRect(panel_preview_.window(), nullptr, TRUE);
+    set_text(GetDlgItem(shell_.window, IDC_BAR_FILL), L"Fill");
+    set_text(GetDlgItem(shell_.window, IDC_BAR_BACKGROUND), L"BG");
+    set_text(GetDlgItem(shell_.window, IDC_BAR_BORDER), L"Border");
+    set_text(GetDlgItem(shell_.window, IDC_BAR_TEXT), L"Text");
+  } else set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), L"Add a cooldown to create a bar.");
+  InvalidateRect(panel_preview_.window, nullptr, TRUE);
 }
 
 
@@ -178,7 +178,7 @@ void EditorWindow::choose_bar_color(const int id) {
   case IDC_BAR_TEXT: value = &panel->bar.text_color; break;
   default: return;
   }
-  if (!choose_color(shell_.window(), *value)) return;
+  if (!choose_color(shell_.window, *value)) return;
   refresh_bar_controls();
   record_profile_change(ChangeKind::immediate);
 }
@@ -186,7 +186,7 @@ void EditorWindow::choose_bar_color(const int id) {
 SIZE EditorWindow::preview_target_size() const {
   const auto expected_path = to_wide(document_.profile().game.executable_path);
   const auto expected_name = to_wide(document_.profile().game.executable_name);
-  for (const auto &candidate : task_picker_.candidates()) {
+  for (const auto &candidate : task_picker_.candidates) {
     const bool path_matches = !expected_path.empty() &&
                               _wcsicmp(candidate.executable_path.c_str(), expected_path.c_str()) == 0;
     const bool name_matches = !expected_name.empty() &&
@@ -204,7 +204,7 @@ SIZE EditorWindow::preview_target_size() const {
 }
 
 RECT EditorWindow::preview_canvas() const {
-  RECT client{}; GetClientRect(panel_preview_.window(), &client);
+  RECT client{}; GetClientRect(panel_preview_.window, &client);
   constexpr int inset = 12;
   const int available_width = std::max(1L, client.right - client.left - inset * 2);
   const int available_height = std::max(1L, client.bottom - client.top - inset * 2);
@@ -228,7 +228,7 @@ RECT EditorWindow::bar_preview_rect(const layerc::core::Panel &panel, const RECT
 
 void EditorWindow::paint_preview(const HWND window) {
   PAINTSTRUCT paint{}; const HDC dc = BeginPaint(window, &paint);
-  const HGDIOBJ previous_font = SelectObject(dc, shell_.font());
+  const HGDIOBJ previous_font = SelectObject(dc, shell_.font);
   const auto preview_colors = colors(layerc::platform::EditorControlRole::preview);
   RECT client{}; GetClientRect(window, &client);
   fill_solid_rect(dc, client, preview_colors.fill);
@@ -262,9 +262,9 @@ void EditorWindow::paint_preview(const HWND window) {
       const HPEN border = CreatePen(
           PS_SOLID, selected == &panel ? 2 : 1,
           selected == &panel ? preview_colors.selection
-                             : color_ref(panel.bar.border_color));
+                             : native_color_ref(panel.bar.border_color));
       const HBRUSH background = CreateSolidBrush(
-          color_ref(panel.style == layerc::core::PanelStyle::bar && count == 1
+          native_color_ref(panel.style == layerc::core::PanelStyle::bar && count == 1
                         ? panel.bar.fill_color
                         : panel.bar.background_color));
       const HGDIOBJ previous_pen = SelectObject(dc, border);
@@ -280,13 +280,13 @@ void EditorWindow::paint_preview(const HWND window) {
 
       if (draw_fill && fill_rect.right > fill_rect.left) {
         fill_solid_rect(dc, preview_rect(fill_rect, placement),
-                        color_ref(panel.bar.fill_color));
+                        native_color_ref(panel.bar.fill_color));
       }
       if (panel.style == layerc::core::PanelStyle::bar &&
           !panel.bar.show_text)
         continue;
       SetBkMode(dc, TRANSPARENT);
-      SetTextColor(dc, color_ref(panel.bar.text_color));
+      SetTextColor(dc, native_color_ref(panel.bar.text_color));
       const auto label = to_wide(count == 1 ? panel.name
                                             : panel.cooldown_ids[index]);
       RECT text = preview_rect(text_rect, placement);
@@ -335,25 +335,25 @@ bool EditorWindow::handle_preview_message(const HWND window, const UINT message,
     return true;
   }
   case WM_MOUSEMOVE:
-    if (panel_preview_.dragging()) {
+    if (panel_preview_.dragging) {
       const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      if (point.x != panel_preview_.drag_start().x || point.y != panel_preview_.drag_start().y)
+      if (point.x != panel_preview_.drag_start.x || point.y != panel_preview_.drag_start.y)
         panel_preview_.mark_drag_moved();
-      if (panel_preview_.drag_moved()) update_dragged_bar(point, false);
+      if (panel_preview_.drag_moved) update_dragged_bar(point, false);
     }
-    return panel_preview_.dragging();
+    return panel_preview_.dragging;
   case WM_LBUTTONUP:
-    if (panel_preview_.dragging()) {
+    if (panel_preview_.dragging) {
       const POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      if (point.x != panel_preview_.drag_start().x || point.y != panel_preview_.drag_start().y)
+      if (point.x != panel_preview_.drag_start.x || point.y != panel_preview_.drag_start.y)
         panel_preview_.mark_drag_moved();
-      if (panel_preview_.drag_moved()) update_dragged_bar(point, true);
+      if (panel_preview_.drag_moved) update_dragged_bar(point, true);
       panel_preview_.finish_drag();
       if (GetCapture() == window) ReleaseCapture();
     }
     return true;
   case WM_CAPTURECHANGED:
-    if (panel_preview_.dragging() && panel_preview_.drag_moved()) finalize_dragged_bar();
+    if (panel_preview_.dragging && panel_preview_.drag_moved) finalize_dragged_bar();
     panel_preview_.finish_drag();
     return true;
   default: return false;
@@ -364,8 +364,8 @@ void EditorWindow::update_dragged_bar(const POINT point, const bool final) {
   auto *panel = selected_bar();
   if (panel == nullptr) return;
   const auto canvas = preview_canvas();
-  const LONG center_x = point.x - panel_preview_.drag_offset().x;
-  const LONG center_y = point.y - panel_preview_.drag_offset().y;
+  const LONG center_x = point.x - panel_preview_.drag_offset.x;
+  const LONG center_y = point.y - panel_preview_.drag_offset.y;
   panel->anchor_x = std::clamp(
       (center_x - canvas.left) /
           static_cast<double>(std::max(1L, canvas.right - canvas.left)),
@@ -379,7 +379,7 @@ void EditorWindow::update_dragged_bar(const POINT point, const bool final) {
   } else {
     send_live_anchor(false);
   }
-  InvalidateRect(panel_preview_.window(), nullptr, TRUE);
+  InvalidateRect(panel_preview_.window, nullptr, TRUE);
 }
 
 void EditorWindow::finalize_dragged_bar() {
@@ -388,7 +388,7 @@ void EditorWindow::finalize_dragged_bar() {
                  ? L"Bar position updated — Save once to create the profile."
                  : L"Bar position updated and autosaving.");
   send_live_anchor(true);
-  InvalidateRect(panel_preview_.window(), nullptr, TRUE);
+  InvalidateRect(panel_preview_.window, nullptr, TRUE);
 }
 
 } // namespace layerc::editor

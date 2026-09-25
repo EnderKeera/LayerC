@@ -8,6 +8,17 @@
 
 namespace layerc::gamebar {
 
+void detail::raise_wake_event(
+    const std::shared_ptr<GameBarTransportState> &state) noexcept {
+  std::shared_ptr<GameBarWakeEvent> wake;
+  {
+    std::lock_guard lock(state->mutex);
+    wake = state->wake_event;
+  }
+  if (wake != nullptr && wake->handle != nullptr)
+    SetEvent(wake->handle);
+}
+
 GameBarTransport::GameBarTransport()
     : state_(std::make_shared<GameBarTransportState>()) {}
 
@@ -46,17 +57,7 @@ bool GameBarTransport::current_process_is_expected_package() noexcept {
   return expected;
 }
 
-bool GameBarTransport::start() {
-#if defined(_MSC_VER)
-  if (!current_process_is_expected_package()) {
-    std::lock_guard lock(state_->mutex);
-    state_->enter(GameBarTransportState::Link::stopped,
-                  L"Game Bar App Service is unavailable outside the full MSIX");
-    return false;
-  }
-#endif
-  return detail::start_app_service(state_);
-}
+bool GameBarTransport::start() { return detail::start_app_service(state_); }
 
 void GameBarTransport::stop() noexcept {
   detail::stop_app_service(state_);

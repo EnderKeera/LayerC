@@ -4,6 +4,7 @@
 // between a scan and its queries).
 #include "x11_display.hpp"
 #include "x11_error.hpp"
+#include "x11_property.hpp"
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
@@ -125,21 +126,9 @@ bool query_ewmh(Display *display, ::Window root) noexcept {
   const Atom client_list = XInternAtom(display, "_NET_CLIENT_LIST", True);
   if (supporting == None || client_list == None) return false;
   X11ErrorTrap trap{display};
-  Atom type{};
-  int format{};
-  unsigned long count{};
-  unsigned long remaining{};
-  unsigned char *data{};
-  const Status status =
-      XGetWindowProperty(display, root, supporting, 0, 1, False, XA_WINDOW,
-                         &type, &format, &count, &remaining, &data);
-  if (status != Success || !trap.ok() || type != XA_WINDOW || count != 1) {
-    if (data != nullptr) XFree(data);
-    return false;
-  }
-  const auto owner = *reinterpret_cast<const ::Window *>(data);
-  XFree(data);
-  return owner != None;
+  const auto owners =
+      x11_property::read_window_list(display, root, supporting);
+  return trap.ok() && !owners.empty() && owners.front() != None;
 }
 
 X11Probe probe_display(Display *display, ::Window root) noexcept {
@@ -293,20 +282,6 @@ std::string X11Display::atom_name(std::uint64_t atom) const {
   std::string result{name};
   XFree(name);
   return result;
-}
-
-int X11Display::drain_events() noexcept {
-  if (display_ == nullptr) return 0;
-  auto *raw = reinterpret_cast<Display *>(display_);
-  int drained = 0;
-  X11ErrorTrap trap{raw};
-  while (XPending(raw) > 0) {
-    XEvent event{};
-    XNextEvent(raw, &event);
-    ++drained;
-    if (!trap.ok()) break;
-  }
-  return drained;
 }
 
 int X11Display::pending_events() noexcept {

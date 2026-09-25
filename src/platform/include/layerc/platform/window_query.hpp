@@ -29,12 +29,17 @@ describe_attachable_window(HWND window);
 // `filename` next to the current executable; empty if the module path is
 // unavailable.
 [[nodiscard]] std::filesystem::path sibling_image_path(const wchar_t *filename);
+[[nodiscard]] std::wstring window_text(HWND window);
+[[nodiscard]] std::wstring window_class(HWND window);
+// Full image path of `process`; empty when it cannot be queried.
+[[nodiscard]] std::wstring process_image_path(HANDLE process);
 // True when the process image path is equivalent to `expected`.
 [[nodiscard]] bool process_image_equals(HANDLE process,
                                         const std::filesystem::path &expected);
 [[nodiscard]] bool is_sibling_process_image(DWORD process_id,
                                              const wchar_t *filename);
 [[nodiscard]] bool same_user_as_current_process(HANDLE process);
+[[nodiscard]] bool same_session_as_current_process(DWORD process_id);
 [[nodiscard]] bool
 profile_matches_window(const WindowCandidate &candidate,
                        const layerc::core::GameProfile &profile);

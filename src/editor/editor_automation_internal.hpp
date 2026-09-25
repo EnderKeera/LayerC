@@ -13,13 +13,7 @@ namespace layerc::editor {
 
 inline constexpr UINT_PTR automation_simulator_timer = 94'001;
 
-[[nodiscard]] inline layerc::core::AutomationExpression
-literal(layerc::core::AutomationValue value) {
-  layerc::core::AutomationExpression expression;
-  expression.kind = layerc::core::ExpressionKind::literal;
-  expression.literal = std::move(value);
-  return expression;
-}
+using layerc::core::expr::literal;
 
 enum class AutomationPreset {
   blank,

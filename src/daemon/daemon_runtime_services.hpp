@@ -21,9 +21,6 @@ public:
                          const layerc::runtime::Capability capability) noexcept
       : owner_(owner), capability_(capability) {}
 
-  [[nodiscard]] layerc::runtime::Capability capability() const noexcept override {
-    return capability_;
-  }
   [[nodiscard]] layerc::runtime::ServiceReconcileResult
   reconcile(const layerc::runtime::CapabilityDemand &demand) override {
     return owner_.reconcile_capability(capability_, demand);
