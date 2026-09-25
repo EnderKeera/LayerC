@@ -269,14 +269,16 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
         MessageBoxW(dialog,
                     L"Fields use name:type=JSON; for example value:number=0.5",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
-        return valid = false;
+        valid = false;
+        return false;
       }
       const auto type = layerc::core::parse_automation_value_type_name(
           item.substr(colon + 1U, equal - colon - 1U));
       if (!type.has_value()) {
         MessageBoxW(dialog, L"Unsupported synthetic field type.",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
-        return valid = false;
+        valid = false;
+        return false;
       }
       const auto parsed = layerc::core::parse_automation_value_json(
           item.substr(equal + 1U), *type);
@@ -285,7 +287,8 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
         const auto &error = std::get<layerc::core::AutomationError>(parsed);
         MessageBoxW(dialog, to_wide(error.path + ": " + error.message).c_str(),
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
-        return valid = false;
+        valid = false;
+        return false;
       }
       event.fields.emplace(std::string(item.substr(0, colon)), *value);
       return true;
