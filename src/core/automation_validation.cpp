@@ -178,7 +178,7 @@ AutomationError validate_action(const AutomationAction &action,
   std::optional<AutomationValueType> primary_type;
   std::optional<AutomationValueType> secondary_type;
   AutomationError expression_error;
-  if (spec->accepts_value) {
+  if (spec->accepts_value()) {
     if (!has_value)
       return {path + ".value", "this action requires a value"};
     if (!validate_expression_tree(*action.value, variables, path + ".value",

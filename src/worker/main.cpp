@@ -2,6 +2,7 @@
 #include "visual_capture_worker.hpp"
 
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/win32_handle.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "layerc/core/json.hpp"
 
@@ -62,19 +63,13 @@ std::optional<Integer> decimal(const std::wstring &source) {
 // Authenticated parent check: same session, same user, and the expected
 // layerd.exe image. Any failure refuses the pipe rather than running capture.
 bool parent_is_trusted(const DWORD parent_process_id) {
-  DWORD current_session{}, parent_session{};
-  const HANDLE parent = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
-                                    parent_process_id);
-  const bool trusted =
-      parent != nullptr &&
-      ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
-      ProcessIdToSessionId(parent_process_id, &parent_session) != FALSE &&
-      current_session == parent_session &&
-      layerc::platform::same_user_as_current_process(parent) &&
-      layerc::platform::is_sibling_process_image(parent_process_id,
-                                                 L"layerd.exe");
-  if (parent != nullptr) CloseHandle(parent);
-  return trusted;
+  const layerc::platform::OwnedHandle parent(OpenProcess(
+      PROCESS_QUERY_LIMITED_INFORMATION, FALSE, parent_process_id));
+  return parent.valid() &&
+         layerc::platform::same_session_as_current_process(parent_process_id) &&
+         layerc::platform::same_user_as_current_process(parent.get()) &&
+         layerc::platform::is_sibling_process_image(parent_process_id,
+                                                    L"layerd.exe");
 }
 
 int worker_main(const std::wstring &pipe_name, const std::string &nonce,
@@ -89,44 +84,36 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
     return 3;
 
   if (WaitNamedPipeW(pipe_name.c_str(), 5'000) == FALSE) return 4;
-  const HANDLE pipe = CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE,
-                                  0, nullptr, OPEN_EXISTING, 0, nullptr);
-  if (pipe == INVALID_HANDLE_VALUE) return 5;
+  const layerc::platform::OwnedHandle owned_pipe(
+      CreateFileW(pipe_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                  OPEN_EXISTING, 0, nullptr));
+  if (!owned_pipe.valid()) return 5;
+  const HANDLE pipe = owned_pipe.get();
   ULONG server_pid{};
   if (GetNamedPipeServerProcessId(pipe, &server_pid) == FALSE ||
-      server_pid != parent_process_id) {
-    CloseHandle(pipe);
+      server_pid != parent_process_id)
     return 6;
-  }
-  if (!parent_is_trusted(parent_process_id)) {
-    CloseHandle(pipe);
-    return 7;
-  }
+  if (!parent_is_trusted(parent_process_id)) return 7;
 
   std::string error;
   if (!layerc::platform::write_framed_pipe(
           pipe,
           layerc::daemon::isolated_hello_json(
               nonce, "worker", GetCurrentProcessId()),
-          layerc::daemon::isolated_visual_max_message_bytes, error)) {
-    CloseHandle(pipe);
+          layerc::daemon::isolated_visual_max_message_bytes, error))
     return 8;
-  }
   const auto hello = layerc::platform::read_framed_pipe(
       pipe, layerc::daemon::isolated_visual_max_message_bytes);
   if (!hello || !layerc::daemon::validate_isolated_hello(
                     hello.payload, nonce, "daemon", parent_process_id,
-                    error)) {
-    CloseHandle(pipe);
+                    error))
     return 9;
-  }
 
   std::unique_ptr<layerc::daemon::VisualCaptureWorker> worker;
-  const HANDLE capture_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-  if (capture_event == nullptr) {
-    CloseHandle(pipe);
-    return 10;
-  }
+  const layerc::platform::OwnedHandle owned_capture_event(
+      CreateEventW(nullptr, FALSE, FALSE, nullptr));
+  if (!owned_capture_event.valid()) return 10;
+  const HANDLE capture_event = owned_capture_event.get();
   std::uint64_t last_configuration_sequence{};
   layerc::daemon::IsolatedSnapshotValidator snapshot_validator;
   while (true) {
@@ -182,8 +169,6 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
       break;
   }
   worker.reset();
-  CloseHandle(capture_event);
-  CloseHandle(pipe);
   return 0;
 }
 

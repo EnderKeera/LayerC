@@ -18,15 +18,9 @@ if ([string]::IsNullOrWhiteSpace($CandidateBuildDirectory)) {
 }
 $BaselineBuildDirectory = [IO.Path]::GetFullPath($BaselineBuildDirectory)
 $CandidateBuildDirectory = [IO.Path]::GetFullPath($CandidateBuildDirectory)
-foreach ($directory in @($BaselineBuildDirectory, $CandidateBuildDirectory)) {
-    if (-not (Test-Path -LiteralPath (Join-Path $directory 'layerd.exe'))) {
-        throw "Missing layerd.exe in $directory."
-    }
-}
-if (-not (Test-Path -LiteralPath (Join-Path $CandidateBuildDirectory 'lctest.exe'))) {
-    throw "Missing lctest.exe in $CandidateBuildDirectory."
-}
 Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
+Assert-LayerCExecutables $BaselineBuildDirectory @('layerd.exe')
+Assert-LayerCExecutables $CandidateBuildDirectory @('layerd.exe', 'lctest.exe')
 Assert-LayerCQuiescent -ProcessNames layerd, lctest `
     -FailureMessage 'Close existing LayerD and lctest processes before the latency benchmark.'
 

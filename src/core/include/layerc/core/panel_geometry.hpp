@@ -41,13 +41,11 @@ struct BarGeometry {
 
 // Geometry is expressed in profile DIPs. Hosts apply their one scale when
 // converting the returned sizes and rectangles to device pixels.
-[[nodiscard]] PanelGeometry
-panel_geometry(const Panel &panel, std::size_t item_count,
-               PanelMetrics metrics = overlay_metrics);
-[[nodiscard]] BarGeometry
-bar_geometry(const Panel &panel, std::size_t item_index,
-             std::size_t item_count, double progress,
-             PanelMetrics metrics = overlay_metrics);
+[[nodiscard]] PanelGeometry panel_geometry(const Panel &panel,
+                                           std::size_t item_count);
+[[nodiscard]] BarGeometry bar_geometry(const Panel &panel,
+                                       std::size_t item_index,
+                                       std::size_t item_count, double progress);
 [[nodiscard]] PanelRect inset_panel_rect(PanelRect rect, int inset) noexcept;
 
 } // namespace layerc::core

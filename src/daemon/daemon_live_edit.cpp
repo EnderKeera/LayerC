@@ -13,7 +13,7 @@ namespace layerc::daemon {
 void DaemonApp::send_live_reply(const layerc::core::LiveMessageType type,
                                 const layerc::core::LiveMessage &request,
                                 std::string text) {
-  (void)live_edit_host_.channel().send({.type = type,
+  (void)live_edit_host_.channel.send({.type = type,
                             .revision = request.revision,
                             .edit_session = request.edit_session,
                             .profile_key = request.profile_key,
@@ -21,13 +21,13 @@ void DaemonApp::send_live_reply(const layerc::core::LiveMessageType type,
 }
 
 void DaemonApp::poll_live_channel() {
-  auto results = live_edit_host_.channel().poll();
-  const bool connection_changed = live_edit_host_.channel().take_connection_changed();
+  auto results = live_edit_host_.channel.poll();
+  const bool connection_changed = live_edit_host_.channel.take_connection_changed();
   if (connection_changed) {
-    live_edit_host_.set_authenticated(false);
-    if (!live_edit_host_.channel().connected()) {
-      automation_runtime_host_.set_trace_subscribed(false);
-      for (auto &session : session_registry_.sessions()) {
+    live_edit_host_.authenticated = false;
+    if (!live_edit_host_.channel.connected()) {
+      automation_runtime_host_.trace_subscribed = false;
+      for (auto &session : session_registry_.sessions) {
         if (!session->automation_runtime)
           continue;
         session->automation_runtime->set_trace_enabled(false);
@@ -48,8 +48,8 @@ void DaemonApp::poll_live_channel() {
     handle_live_message(std::get<layerc::core::LiveMessage>(result));
   }
 
-  if (live_edit_host_.session() != nullptr &&
-      layerc::core::MonotonicClock::now() - live_edit_host_.session()->last_heartbeat >
+  if (live_edit_host_.session != nullptr &&
+      layerc::core::MonotonicClock::now() - live_edit_host_.session->last_heartbeat >
           std::chrono::seconds(1)) {
     end_edit_session("edit lease expired");
   }
@@ -61,23 +61,23 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
   using layerc::core::LiveMessageType;
   if (message.type == LiveMessageType::handshake) {
     if (message.text != layerc::core::package_identity("LayerE")) {
-      live_edit_host_.set_authenticated(false);
-      live_edit_host_.channel().disconnect_peer();
+      live_edit_host_.authenticated = false;
+      live_edit_host_.channel.disconnect_peer();
       return;
     }
-    live_edit_host_.set_authenticated(true);
+    live_edit_host_.authenticated = true;
     send_live_reply(LiveMessageType::acknowledgement, message,
                     layerc::core::package_identity("LayerD") +
                         ";live-profile,mirrored-drag,direct-drag,lease-v1,"
                         "visual-status-v1,diagnostics-v1,automation-trace-v1");
-    (void)live_edit_host_.channel().send({
+    (void)live_edit_host_.channel.send({
         .type = LiveMessageType::runtime_status,
-        .text = layerc::platform::wide_to_utf8(visual_capture_runtime_.status()),
+        .text = layerc::platform::wide_to_utf8(visual_capture_runtime_.status),
     });
     return;
   }
-  if (!live_edit_host_.authenticated()) {
-    live_edit_host_.channel().disconnect_peer();
+  if (!live_edit_host_.authenticated) {
+    live_edit_host_.channel.disconnect_peer();
     return;
   }
   if (message.type == LiveMessageType::diagnostics_request) {
@@ -86,7 +86,7 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
     return;
   }
   if (message.type == LiveMessageType::retry_visual) {
-    for (auto &[window, worker] : visual_capture_runtime_.captures()) {
+    for (auto &[window, worker] : visual_capture_runtime_.captures) {
       (void)window;
       if (worker)
         worker->retry();
@@ -98,24 +98,24 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
   }
   if (message.type == LiveMessageType::automation_trace_subscribe ||
       message.type == LiveMessageType::automation_trace_unsubscribe) {
-    automation_runtime_host_.set_trace_subscribed(
-        message.type == LiveMessageType::automation_trace_subscribe);
-    for (auto &session : session_registry_.sessions()) {
+    automation_runtime_host_.trace_subscribed = 
+        message.type == LiveMessageType::automation_trace_subscribe;
+    for (auto &session : session_registry_.sessions) {
       if (!session->automation_runtime)
         continue;
       session->automation_runtime->clear_trace();
       session->automation_runtime->set_trace_enabled(
-          automation_runtime_host_.trace_subscribed());
+          automation_runtime_host_.trace_subscribed);
     }
     send_live_reply(LiveMessageType::acknowledgement, message,
-                    automation_runtime_host_.trace_subscribed()
+                    automation_runtime_host_.trace_subscribed
                         ? "automation trace subscribed"
                         : "automation trace unsubscribed");
     return;
   }
   if (message.type == LiveMessageType::retry_automation) {
     bool retried{};
-    for (auto &session : session_registry_.sessions()) {
+    for (auto &session : session_registry_.sessions) {
       if (!session->automation_runtime)
         continue;
       if (!message.profile_key.empty() &&
@@ -140,14 +140,14 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
     return;
   }
 
-  if (live_edit_host_.session() == nullptr || message.edit_session != live_edit_host_.session()->id) {
+  if (live_edit_host_.session == nullptr || message.edit_session != live_edit_host_.session->id) {
     send_live_reply(LiveMessageType::error, message,
                     "edit session is not active");
     return;
   }
-  live_edit_host_.session()->last_heartbeat = layerc::core::MonotonicClock::now();
+  live_edit_host_.session->last_heartbeat = layerc::core::MonotonicClock::now();
   if (layerc::core::revision_decision(message.revision,
-                                      live_edit_host_.session()->revision) ==
+                                      live_edit_host_.session->revision) ==
       layerc::core::RevisionDecision::stale) {
     send_live_reply(LiveMessageType::error, message, "stale edit revision");
     return;
@@ -167,37 +167,37 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
                       "live profile is invalid");
       return;
     }
-    live_edit_host_.session()->profile = *profile;
-    live_edit_host_.session()->revision = message.revision;
+    live_edit_host_.session->profile = *profile;
+    live_edit_host_.session->revision = message.revision;
     rebuild_edit_overlays();
     return;
   }
   if (message.type == LiveMessageType::select_panel) {
-    live_edit_host_.session()->revision = message.revision;
-    live_edit_host_.session()->selected_panel = message.panel_id;
+    live_edit_host_.session->revision = message.revision;
+    live_edit_host_.session->selected_panel = message.panel_id;
     rebuild_edit_overlays();
     return;
   }
   if (message.type == LiveMessageType::set_direct_drag) {
-    live_edit_host_.session()->revision = message.revision;
-    live_edit_host_.session()->direct_drag = message.direct_drag;
+    live_edit_host_.session->revision = message.revision;
+    live_edit_host_.session->direct_drag = message.direct_drag;
     rebuild_edit_overlays();
     return;
   }
   if (message.type == LiveMessageType::anchor_changed) {
     const auto panel =
-        std::ranges::find_if(live_edit_host_.session()->profile.panels,
+        std::ranges::find_if(live_edit_host_.session->profile.panels,
                              [&](const layerc::core::Panel &candidate) {
                                return candidate.id == message.panel_id;
                              });
-    if (panel == live_edit_host_.session()->profile.panels.end()) {
+    if (panel == live_edit_host_.session->profile.panels.end()) {
       send_live_reply(LiveMessageType::error, message, "unknown panel id");
       return;
     }
     panel->anchor_x = message.anchor_x;
     panel->anchor_y = message.anchor_y;
-    live_edit_host_.session()->revision = message.revision;
-    live_edit_host_.session()->overlays.update_panel(*panel);
+    live_edit_host_.session->revision = message.revision;
+    live_edit_host_.session->overlays.update_panel(*panel);
     update_edit_overlays();
   }
 }
@@ -214,9 +214,9 @@ void DaemonApp::handle_committed_profile(
     return;
   }
   const auto current = std::ranges::find_if(
-      session_registry_.sources(),
+      session_registry_.sources,
       [&](const ProfileSource &source) { return source.key == key; });
-  if (current != session_registry_.sources().end()) {
+  if (current != session_registry_.sources.end()) {
     const auto decision = layerc::core::revision_decision(message.revision,
                                                           current->revision);
     const bool duplicate_match =
@@ -235,11 +235,11 @@ void DaemonApp::handle_committed_profile(
     }
   }
   apply_profile_update(key, *profile, message.revision);
-  if (live_edit_host_.session() != nullptr &&
-      live_edit_host_.session()->source_key == key &&
-      message.revision >= live_edit_host_.session()->revision) {
-    live_edit_host_.session()->profile = *profile;
-    live_edit_host_.session()->revision = message.revision;
+  if (live_edit_host_.session != nullptr &&
+      live_edit_host_.session->source_key == key &&
+      message.revision >= live_edit_host_.session->revision) {
+    live_edit_host_.session->profile = *profile;
+    live_edit_host_.session->revision = message.revision;
     rebuild_edit_overlays();
   }
   send_live_reply(LiveMessageType::acknowledgement, message,
@@ -260,7 +260,7 @@ void DaemonApp::handle_begin_edit(const layerc::core::LiveMessage &message) {
   if (profile == nullptr || message.edit_session == 0 || source_key.empty() ||
       target == nullptr || !IsWindow(target) || IsIconic(target) ||
       target_process_id == 0 || target_process_id == GetCurrentProcessId() ||
-      target_process_id == live_edit_host_.channel().peer_process_id()) {
+      target_process_id == live_edit_host_.channel.peer_process_id()) {
     send_live_reply(LiveMessageType::error, message,
                     "edit target or profile is invalid");
     return;
@@ -282,16 +282,16 @@ void DaemonApp::begin_edit_session(const layerc::core::LiveMessage &message,
   session->target = reinterpret_cast<HWND>(
       static_cast<std::uintptr_t>(message.target_window));
   session->last_heartbeat = layerc::core::MonotonicClock::now();
-  live_edit_host_.session() = std::move(session);
+  live_edit_host_.session = std::move(session);
   rebuild_edit_overlays();
   sync_foreground_state();
   mark_overlays_dirty();
 }
 
 void DaemonApp::rebuild_edit_overlays() {
-  if (live_edit_host_.session() == nullptr)
+  if (live_edit_host_.session == nullptr)
     return;
-  auto &session = *live_edit_host_.session();
+  auto &session = *live_edit_host_.session;
   session.preview_states.clear();
   session.preview_states.reserve(session.profile.cooldowns.size());
   for (const auto &cooldown : session.profile.cooldowns) {
@@ -314,9 +314,9 @@ void DaemonApp::rebuild_edit_overlays() {
 }
 
 void DaemonApp::update_edit_overlays() {
-  if (live_edit_host_.session() == nullptr)
+  if (live_edit_host_.session == nullptr)
     return;
-  auto &session = *live_edit_host_.session();
+  auto &session = *live_edit_host_.session;
   if (session.target == nullptr || !IsWindow(session.target) ||
       !IsWindowVisible(session.target) || IsIconic(session.target)) {
     end_edit_session("target closed or minimized");
@@ -330,25 +330,25 @@ void DaemonApp::update_edit_overlays() {
 void DaemonApp::on_direct_anchor(const std::string_view panel_id,
                                  const double anchor_x, const double anchor_y,
                                  const bool final) {
-  if (live_edit_host_.session() == nullptr)
+  if (live_edit_host_.session == nullptr)
     return;
   const auto panel = std::ranges::find_if(
-      live_edit_host_.session()->profile.panels, [&](const layerc::core::Panel &candidate) {
+      live_edit_host_.session->profile.panels, [&](const layerc::core::Panel &candidate) {
         return candidate.id == panel_id;
       });
-  if (panel == live_edit_host_.session()->profile.panels.end())
+  if (panel == live_edit_host_.session->profile.panels.end())
     return;
   panel->anchor_x = anchor_x;
   panel->anchor_y = anchor_y;
-  if (live_edit_host_.session()->selected_panel != panel_id) {
-    live_edit_host_.session()->selected_panel = std::string(panel_id);
+  if (live_edit_host_.session->selected_panel != panel_id) {
+    live_edit_host_.session->selected_panel = std::string(panel_id);
     rebuild_edit_overlays();
   }
-  ++live_edit_host_.session()->outbound_revision;
-  (void)live_edit_host_.channel().send({
+  ++live_edit_host_.session->outbound_revision;
+  (void)live_edit_host_.channel.send({
       .type = layerc::core::LiveMessageType::anchor_changed,
-      .revision = live_edit_host_.session()->outbound_revision,
-      .edit_session = live_edit_host_.session()->id,
+      .revision = live_edit_host_.session->outbound_revision,
+      .edit_session = live_edit_host_.session->id,
       .panel_id = std::string(panel_id),
       .anchor_x = anchor_x,
       .anchor_y = anchor_y,
@@ -357,20 +357,20 @@ void DaemonApp::on_direct_anchor(const std::string_view panel_id,
 }
 
 void DaemonApp::end_edit_session(const std::string_view reason) {
-  if (live_edit_host_.session() == nullptr)
+  if (live_edit_host_.session == nullptr)
     return;
-  if (!reason.empty() && live_edit_host_.channel().connected() &&
-      live_edit_host_.authenticated()) {
+  if (!reason.empty() && live_edit_host_.channel.connected() &&
+      live_edit_host_.authenticated) {
     const layerc::core::LiveMessage ended{
-        .revision = live_edit_host_.session()->revision,
-        .edit_session = live_edit_host_.session()->id,
-        .profile_key = live_edit_host_.session()->source_key,
+        .revision = live_edit_host_.session->revision,
+        .edit_session = live_edit_host_.session->id,
+        .profile_key = live_edit_host_.session->source_key,
     };
     send_live_reply(layerc::core::LiveMessageType::end_edit, ended,
                     std::string(reason));
   }
-  live_edit_host_.session()->overlays.hide();
-  live_edit_host_.session().reset();
+  live_edit_host_.session->overlays.hide();
+  live_edit_host_.session.reset();
   if (shutting_down_)
     return;
   sync_foreground_state();

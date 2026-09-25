@@ -172,25 +172,15 @@ void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
                 [&](const auto &state) { return state.id == observation_id; });
 }
 
-void EditorWindow::load_current_visual_profile() {
-  auto loaded = document_.path().empty()
-                    ? layerc::platform::VisualSidecarLoad{}
-                    : layerc::platform::load_visual_sidecar(document_.path(),
-                                                            document_.profile());
-  const bool legacy = layerc::platform::visual_sidecar_is_legacy(loaded);
-  document_.set_visual(std::move(loaded), legacy);
-  refresh_visual_controls();
-}
-
 void EditorWindow::refresh_visual_controls() {
-  if (shell_.window() == nullptr) return;
-  const HWND summary = GetDlgItem(shell_.window(), IDC_VISUAL_SUMMARY);
-  const HWND enabled = GetDlgItem(shell_.window(), IDC_VISUAL_ENABLED);
-  const HWND calibrate = GetDlgItem(shell_.window(), IDC_CALIBRATE_VISUAL);
-  const HWND remove = GetDlgItem(shell_.window(), IDC_REMOVE_VISUAL);
-  const HWND isolated = GetDlgItem(shell_.window(), IDC_VISUAL_ISOLATED);
-  set_text(GetDlgItem(shell_.window(), IDC_VISUAL_RUNTIME_STATUS),
-           shell_.visual_runtime_status());
+  if (shell_.window == nullptr) return;
+  const HWND summary = GetDlgItem(shell_.window, IDC_VISUAL_SUMMARY);
+  const HWND enabled = GetDlgItem(shell_.window, IDC_VISUAL_ENABLED);
+  const HWND calibrate = GetDlgItem(shell_.window, IDC_CALIBRATE_VISUAL);
+  const HWND remove = GetDlgItem(shell_.window, IDC_REMOVE_VISUAL);
+  const HWND isolated = GetDlgItem(shell_.window, IDC_VISUAL_ISOLATED);
+  set_text(GetDlgItem(shell_.window, IDC_VISUAL_RUNTIME_STATUS),
+           shell_.visual_runtime_status);
 
   const auto *cooldown = selected_cooldown();
   const bool editable = cooldown != nullptr && !document_.profile().game.global;
@@ -211,7 +201,7 @@ void EditorWindow::refresh_visual_controls() {
   if (document_.profile().game.global) {
     text = L"Visual capture is unavailable for global profiles";
   } else if (document_.visual_state() ==
-             layerc::platform::VisualSidecarState::invalid) {
+             layerc::platform::ModuleSidecarState::invalid) {
     text = L"Invalid visual sidecar — all triggers blocked";
     if (!document_.visual_error().empty())
       text += L": " + to_wide(document_.visual_error());
@@ -222,7 +212,7 @@ void EditorWindow::refresh_visual_controls() {
     else if (template_state != nullptr && !template_state->name.empty())
       text += L" — Template: " + to_wide(template_state->name);
     if (document_.visual_state() ==
-        layerc::platform::VisualSidecarState::recovered_backup)
+        layerc::platform::ModuleSidecarState::recovered_backup)
       text += L" (recovered backup)";
   }
   set_text(summary, text);
@@ -247,7 +237,7 @@ bool EditorWindow::save_visual_profile() {
     break;
   case CommitResult::invalid_fields:
   case CommitResult::invalid_profile:
-    MessageBoxW(shell_.window(),
+    MessageBoxW(shell_.window,
                 L"Finish the invalid profile field before committing visual "
                 L"recognition.",
                 L"Visual save failed", MB_OK | MB_ICONERROR);
@@ -255,14 +245,14 @@ bool EditorWindow::save_visual_profile() {
   case CommitResult::upgrade_declined:
     return false;
   case CommitResult::blocked_by_sidecar:
-    MessageBoxW(shell_.window(),
+    MessageBoxW(shell_.window,
                 L"Repair the invalid automation sidecar before committing "
                 L"visual recognition. This prevents an unrelated visual edit "
                 L"from silently discarding recovery data.",
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   case CommitResult::write_failed:
-    MessageBoxW(shell_.window(), write_failure_message().c_str(),
+    MessageBoxW(shell_.window, write_failure_message().c_str(),
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -305,7 +295,7 @@ void EditorWindow::remove_visual_assignment() {
   if (cooldown == nullptr || !document_.visual()) return;
   const auto *existing = find_trigger(*document_.visual(), cooldown->id);
   if (existing == nullptr) return;
-  if (MessageBoxW(shell_.window(),
+  if (MessageBoxW(shell_.window,
                   L"Remove visual recognition from this cooldown? Its ordinary input binding is preserved.",
                   L"Remove visual assignment", MB_OKCANCEL | MB_ICONQUESTION) !=
       IDOK)
@@ -325,13 +315,13 @@ void EditorWindow::calibrate_visual() {
   const auto *cooldown = selected_cooldown();
   if (cooldown == nullptr) return;
   if (document_.profile().game.global) {
-    MessageBoxW(shell_.window(),
+    MessageBoxW(shell_.window,
                 L"Visual recognition needs a specific matched game window and is unavailable for global profiles.",
                 L"Visual calibration", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (document_.path().empty()) {
-    MessageBoxW(shell_.window(), L"Save this new profile before calibrating it.",
+    MessageBoxW(shell_.window, L"Save this new profile before calibrating it.",
                 L"Create profile first", MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -358,17 +348,17 @@ void EditorWindow::calibrate_selected_task() {
   auto matching = document_.profile();
   matching.enabled = true;
   if (!layerc::platform::profile_matches_window(*candidate, matching)) {
-    MessageBoxW(task_picker_.window(),
+    MessageBoxW(task_picker_.window,
                 L"That window does not match this profile. Use Selected Task first if you intend to change the matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (task_picker_.awaiting_calibration())
     task_picker_.clear_request();
-  ShowWindow(task_picker_.window(), SW_HIDE);
+  ShowWindow(task_picker_.window, SW_HIDE);
   if (!launch_calibration(candidate->window)) {
-    ShowWindow(task_picker_.window(), SW_SHOWNORMAL);
-    SetForegroundWindow(task_picker_.window());
+    ShowWindow(task_picker_.window, SW_SHOWNORMAL);
+    SetForegroundWindow(task_picker_.window);
     set_status(L"Visual calibration was not started.");
   }
 }
@@ -379,20 +369,22 @@ bool EditorWindow::launch_calibration(const HWND target) {
     return false;
   report_visual_asset_gc(
       layerc::platform::garbage_collect_unreferenced_visual_assets());
-  const auto notice = layerc::platform::read_visual_capture_notice_setting();
+  const auto notice = layerc::platform::read_bool_setting(
+          layerc::platform::BoolSetting::visual_capture_notice);
   if (notice.failed()) {
-    MessageBoxW(shell_.window(), L"Could not read the visual capture acknowledgement.",
+    MessageBoxW(shell_.window, L"Could not read the visual capture acknowledgement.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
     return false;
   }
   if (!notice.value.value_or(false)) {
     if (MessageBoxW(
-            shell_.window(),
+            shell_.window,
             L"Visual recognition captures pixels from the selected game window without injecting into or hooking the game. Protected content can appear black, and anti-cheat compatibility cannot be guaranteed. Continue?",
             L"Visual capture notice", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
       return false;
-    if (!layerc::platform::write_visual_capture_notice_setting(true)) {
-      MessageBoxW(shell_.window(), L"Could not save the visual capture acknowledgement.",
+    if (!layerc::platform::write_bool_setting(
+          layerc::platform::BoolSetting::visual_capture_notice, true)) {
+      MessageBoxW(shell_.window, L"Could not save the visual capture acknowledgement.",
                   L"LayerC Editor", MB_OK | MB_ICONWARNING);
       return false;
     }
@@ -407,9 +399,9 @@ bool EditorWindow::launch_calibration(const HWND target) {
                                *document_.visual())
                          : std::string{},
   };
-  auto session = run_calibration_session(shell_.window(), request);
+  auto session = run_calibration_session(shell_.window, request);
   if (const auto *failure = std::get_if<CalibrationFailure>(&session)) {
-    show_calibration_failure(shell_.window(), *failure);
+    show_calibration_failure(shell_.window, *failure);
     return false;
   }
   const auto &result = std::get<layerc::core::CalibrationResponse>(session);
@@ -436,7 +428,7 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
   if (candidate_profile == nullptr || cooldown == nullptr || !candidate ||
       candidate_profile->triggers.size() != 1 ||
       candidate_profile->triggers.front().cooldown_id != cooldown->id) {
-    MessageBoxW(shell_.window(),
+    MessageBoxW(shell_.window,
                 L"LayerC Calibration returned an invalid result. No profile "
                 L"data was changed.",
                 L"Calibration rejected", MB_OK | MB_ICONERROR);
@@ -445,7 +437,7 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
 
   layerc::core::VisualProfile merged =
       document_.visual().value_or(layerc::core::VisualProfile{});
-  if (document_.visual_state() == layerc::platform::VisualSidecarState::invalid)
+  if (document_.visual_state() == layerc::platform::ModuleSidecarState::invalid)
     merged = {};
   merged.profile_id = document_.profile().id;
   merged.sample_rate_hz = candidate_profile->sample_rate_hz;
@@ -464,28 +456,28 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
     bool update_shared = references <= 1;
     if (references > 1) {
       const int choice = MessageBoxW(
-          shell_.window(),
+          shell_.window,
           L"This visual observation is shared by multiple cooldowns. Choose Yes to update the shared observation, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
           L"Shared visual observation", MB_YESNOCANCEL | MB_ICONQUESTION);
       if (choice == IDCANCEL) return false;
       update_shared = choice == IDYES;
     }
     if (update_shared) {
-      if (!ensure_observation_capacity(shell_.window(), merged,
+      if (!ensure_observation_capacity(shell_.window, merged,
                                        candidate_observation,
                                        old_observation_id))
         return false;
       set_observation_id(candidate_observation, old_observation_id);
       replace_observation(merged, old_observation_id, candidate_observation);
       candidate_trigger.observation_id = old_observation_id;
-    } else if (!install_new_observation(shell_.window(), merged,
+    } else if (!install_new_observation(shell_.window, merged,
                                         candidate_observation,
                                         candidate_trigger)) {
       return false;
     }
     *old_trigger = candidate_trigger;
   } else {
-    if (!install_new_observation(shell_.window(), merged, candidate_observation,
+    if (!install_new_observation(shell_.window, merged, candidate_observation,
                                  candidate_trigger))
       return false;
     merged.triggers.push_back(candidate_trigger);
@@ -495,7 +487,7 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
 
   const auto error = layerc::core::validate_visual_profile(merged, document_.profile());
   if (!error.message.empty()) {
-    MessageBoxW(shell_.window(), to_wide(error.message).c_str(),
+    MessageBoxW(shell_.window, to_wide(error.message).c_str(),
                 L"Calibration rejected", MB_OK | MB_ICONERROR);
     return false;
   }

@@ -5,6 +5,7 @@
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
+#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <array>
@@ -66,22 +67,12 @@ std::optional<bool> visual_bundle_exists(
   return false;
 }
 
-bool is_lower_hex(const wchar_t character) noexcept {
-  return (character >= L'0' && character <= L'9') ||
-         (character >= L'a' && character <= L'f');
-}
-
 // Content-addressed stage name: 64 hex digits, ".png.", then the unique suffix.
-bool is_asset_stage_filename(const std::wstring &filename) noexcept {
-  return filename.size() > 64U + 5U &&
-         filename.compare(64U, 5U, L".png.") == 0 &&
-         std::ranges::all_of(filename.begin(), filename.begin() + 64,
-                             is_lower_hex);
-}
-
-bool is_sha256_png_stem(const std::wstring &stem) noexcept {
-  return stem.size() == 64 &&
-         std::ranges::all_of(stem, is_lower_hex);
+bool is_asset_stage_filename(const std::filesystem::path &filename) {
+  const auto name = path_to_utf8(filename);
+  return name.has_value() && name->size() > 64U + 5U &&
+         name->compare(64U, 5U, ".png.") == 0 &&
+         layerc::core::is_lowercase_sha256(std::string_view(*name).substr(0, 64));
 }
 
 void collect_asset_references(const layerc::core::VisualProfile &profile,
@@ -146,16 +137,6 @@ bool collect_active_asset_references(std::vector<std::string> &references,
     }
   }
   return true;
-}
-
-std::optional<std::vector<std::uint8_t>>
-read_asset_bytes(const std::filesystem::path &path) {
-  const auto read = read_durable_file(path, max_template_asset_bytes);
-  if (!read.has_value() || read->empty()) return std::nullopt;
-  std::vector<std::uint8_t> bytes(read->size());
-  for (std::size_t index = 0; index < bytes.size(); ++index)
-    bytes[index] = std::to_integer<std::uint8_t>((*read)[index]);
-  return bytes;
 }
 
 std::variant<layerc::core::TemplateImage, VisualAssetError>
@@ -377,7 +358,7 @@ store_template_asset(const layerc::core::TemplateImage &image) {
     return failure("content-addressed asset path is invalid");
 
   bool needs_write = true;
-  if (auto existing = read_asset_bytes(destination); existing.has_value()) {
+  if (auto existing = read_template_asset_bytes(destination); existing.has_value()) {
     needs_write = layerc::core::sha256(std::as_bytes(std::span(*existing))) != digest;
   }
   if (needs_write && !write_asset_atomically(destination, bytes))
@@ -393,7 +374,7 @@ store_template_asset(const layerc::core::TemplateImage &image) {
 
 TemplateAssetResult
 import_template_asset(const std::filesystem::path &source) {
-  auto bytes = read_asset_bytes(source);
+  auto bytes = read_template_asset_bytes(source);
   if (!bytes.has_value())
     return failure("PNG is missing, unreadable, empty, or larger than 4 MiB");
   auto decoded = decode_png(*bytes);
@@ -435,8 +416,7 @@ VisualAssetGcReport garbage_collect_visual_assets(
     }
     const auto path = iterator->path();
     if (_wcsicmp(path.extension().c_str(), L".tmp") == 0) {
-      const auto filename = path.filename().wstring();
-      if (is_asset_stage_filename(filename)) {
+      if (is_asset_stage_filename(path.filename())) {
         const auto modified = std::filesystem::last_write_time(path, error);
         if (error) {
           report.blocked_by = path;
@@ -453,13 +433,9 @@ VisualAssetGcReport garbage_collect_visual_assets(
       continue;
     }
     if (path.extension() != L".png") continue;
-    const auto stem_wide = path.stem().wstring();
-    if (!is_sha256_png_stem(stem_wide)) continue;
-    std::string stem;
-    stem.reserve(stem_wide.size());
-    for (const wchar_t character : stem_wide)
-      stem.push_back(static_cast<char>(character));
-    if (referenced.contains(stem)) {
+    const auto stem = path_to_utf8(path.stem());
+    if (!stem || !layerc::core::is_lowercase_sha256(*stem)) continue;
+    if (referenced.contains(*stem)) {
       ++report.retained;
       continue;
     }

@@ -19,13 +19,8 @@ namespace layerc::daemon {
 int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   (void)show_command;
   instance_ = instance;
-  const auto transaction_scope = layerc::platform::profile_transaction_scope(
+  const auto recovered = layerc::platform::recover_profile_transactions(
       layerc::platform::profile_directory());
-  const auto recovered =
-      transaction_scope.has_value()
-          ? layerc::platform::recover_profile_transactions(*transaction_scope)
-          : layerc::platform::ProfileWriteResult{
-                layerc::platform::ProfileWriteError::scope_rejected};
   if (const auto error = recovered.error(); error.has_value()) {
     const auto message =
         L"LayerD could not recover an interrupted profile import (" +
@@ -61,10 +56,10 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     flush_overlays();
     std::array<HANDLE, 5> live_handles{};
     const auto live_handle_count = static_cast<DWORD>(
-        live_edit_host_.channel().wait_handles(std::span<HANDLE>(live_handles).first(3)));
+        live_edit_host_.channel.wait_handles(std::span<HANDLE>(live_handles).first(3)));
     DWORD wait_handle_count = live_handle_count;
     const DWORD gamebar_wait_index = wait_handle_count;
-    const HANDLE gamebar_wait = companion_host_.transport().wait_handle();
+    const HANDLE gamebar_wait = companion_host_.transport.wait_handle();
     if (gamebar_wait != nullptr)
       live_handles[wait_handle_count++] = gamebar_wait;
     const DWORD visual_wait_index = wait_handle_count;
@@ -72,9 +67,9 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     if (visual_wait)
       live_handles[wait_handle_count++] = visual_capture_runtime_.snapshot_event();
     DWORD timeout = INFINITE;
-    if (live_edit_host_.session() != nullptr)
+    if (live_edit_host_.session != nullptr)
       timeout = 250U;
-    else if (std::ranges::any_of(visual_capture_runtime_.captures(), [](const auto &entry) {
+    else if (std::ranges::any_of(visual_capture_runtime_.captures, [](const auto &entry) {
                return entry.second != nullptr &&
                       entry.second->runtime() ==
                           layerc::core::VisualRuntime::isolated;
@@ -157,10 +152,12 @@ void DaemonApp::load_platform_settings() {
       append_error(name, result.error);
   };
 
-  apply(capture_exclusion_, layerc::platform::read_capture_exclusion_setting(),
+  apply(capture_exclusion_, layerc::platform::read_bool_setting(
+          layerc::platform::BoolSetting::capture_exclusion),
         "capture exclusion");
   apply(visual_recognition_enabled_,
-        layerc::platform::read_visual_recognition_setting(),
+        layerc::platform::read_bool_setting(
+          layerc::platform::BoolSetting::visual_recognition),
         "visual recognition");
 }
 
@@ -215,7 +212,7 @@ void DaemonApp::show_tray_menu() {
   if (menu == nullptr) {
     return;
   }
-  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_capture_runtime_.status().c_str());
+  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_capture_runtime_.status.c_str());
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, command_open_editor, L"Open editor");
   AppendMenuW(menu, MF_STRING, command_reload, L"Reload profiles");

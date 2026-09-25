@@ -108,7 +108,7 @@ void probe_extensions() {
   expect(probe.xi2.present && probe.xi2.major >= 2, "XI2 >= 2.0 present");
   expect(probe.shape.present, "Shape present");
   expect(probe.randr.present, "RandR present");
-  expect(display.drain_events() >= 0, "drain does not fault");
+  expect(display.pending_events() >= 0, "pending query does not fault");
 }
 
 void error_traps() {

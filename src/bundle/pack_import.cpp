@@ -26,29 +26,11 @@ using detail::kSidecars;
 using detail::owned_bytes;
 using detail::pack_error;
 
-// Path <-> UTF-8 conversions live in platform/text.hpp (path_to_utf8 /
-// path_from_utf8) — this TU uses the canonical pair so failure modes match
-// the transaction engine and store scan.
-platform::ProfileWriteResult commit_pack_transaction(
-    const std::filesystem::path &profile_directory,
-    const std::span<const platform::ProfileFileMutation> mutations) {
-  const auto roots = platform::profile_transaction_scope(profile_directory);
-  if (!roots.has_value()) return {platform::ProfileWriteError::scope_rejected};
-  return platform::commit_profile_transaction(*roots, mutations);
-}
-
-platform::ProfileWriteResult recover_pack_transaction(
-    const std::filesystem::path &profile_directory) {
-  const auto roots = platform::profile_transaction_scope(profile_directory);
-  if (!roots.has_value()) return {platform::ProfileWriteError::scope_rejected};
-  return platform::recover_profile_transactions(*roots);
-}
-
 } // namespace
 
 std::optional<std::filesystem::path>
 resolve_suggested_profile_filename(const std::string_view suggested_filename) {
-  auto filename = platform::try_utf8_to_wide(suggested_filename);
+  auto filename = core::try_utf8_to_wide(suggested_filename);
   if (!filename.has_value() || filename->empty())
     return std::nullopt;
   for (auto &character : *filename) {
@@ -59,7 +41,7 @@ resolve_suggested_profile_filename(const std::string_view suggested_filename) {
   while (!filename->empty() &&
          (filename->back() == L'.' || filename->back() == L' '))
     filename->pop_back();
-  const auto sanitized = platform::try_wide_to_utf8(*filename);
+  const auto sanitized = core::try_wide_to_utf8(*filename);
   if (!sanitized.has_value()) return std::nullopt;
   const auto decoded = platform::path_from_utf8(*sanitized);
   if (!decoded.has_value()) return std::nullopt;
@@ -104,7 +86,7 @@ std::string unique_copy_profile_id(
 // Case-folded UTF-8 filename used for collision checks.
 std::optional<std::string>
 folded_filename(const std::filesystem::path &path) {
-  return platform::try_casefold_path(
+  return core::try_casefold_utf8(
       platform::path_to_utf8(path.filename()).value_or(std::string{}));
 }
 
@@ -190,7 +172,7 @@ ImportPlanResult build_import_plan(
         std::ranges::find_if(existing, [&](const ExistingProfile &candidate) {
           return candidate.id == imported.profile.id;
         });
-    const auto suggested_folded = platform::try_casefold_path(
+    const auto suggested_folded = core::try_casefold_utf8(
         platform::path_to_utf8(suggested).value_or(std::string{}));
     if (!suggested_folded.has_value())
       return pack_error<ImportPlanResult>("suggested profile filename is invalid");
@@ -366,7 +348,8 @@ import_profile_pack(const ValidatedPack &pack,
                          std::make_move_iterator(plan.mutations.begin()),
                          std::make_move_iterator(plan.mutations.end()));
   if (asset_mutations.empty()) return std::monostate{};
-  const auto committed = commit_pack_transaction(profile_directory, asset_mutations);
+  const auto committed = platform::commit_profile_transaction(profile_directory,
+                                                              asset_mutations);
   if (const auto error = committed.error())
     return pack_error<PackOperationResult>(std::string("profile-pack transaction failed: ") +
                    platform::profile_write_error_text(*error));
@@ -378,7 +361,7 @@ import_profile_pack(const ValidatedPack &pack,
 
 PackOperationResult recover_profile_pack_transactions(
     const std::filesystem::path &profile_directory) {
-  const auto recovered = recover_pack_transaction(profile_directory);
+  const auto recovered = platform::recover_profile_transactions(profile_directory);
   if (const auto error = recovered.error())
     return pack_error<PackOperationResult>(std::string("profile-pack recovery failed: ") +
                    platform::profile_write_error_text(*error));

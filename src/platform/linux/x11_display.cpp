@@ -295,20 +295,6 @@ std::string X11Display::atom_name(std::uint64_t atom) const {
   return result;
 }
 
-int X11Display::drain_events() noexcept {
-  if (display_ == nullptr) return 0;
-  auto *raw = reinterpret_cast<Display *>(display_);
-  int drained = 0;
-  X11ErrorTrap trap{raw};
-  while (XPending(raw) > 0) {
-    XEvent event{};
-    XNextEvent(raw, &event);
-    ++drained;
-    if (!trap.ok()) break;
-  }
-  return drained;
-}
-
 int X11Display::pending_events() noexcept {
   if (display_ == nullptr) return 0;
   auto *raw = reinterpret_cast<Display *>(display_);

@@ -35,6 +35,9 @@ struct FileReadResult {
   [[nodiscard]] std::vector<std::byte> *operator->() noexcept { return &bytes; }
 };
 
+// Current process id: keeps concurrent writers' stage and journal names apart.
+[[nodiscard]] std::uint64_t current_process_id() noexcept;
+
 [[nodiscard]] FileReadResult
 read_durable_file(const std::filesystem::path &path, std::size_t maximum_bytes);
 

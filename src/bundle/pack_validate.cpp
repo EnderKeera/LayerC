@@ -86,7 +86,7 @@ validate_archive_entries(const std::filesystem::path &source) {
       return PackError{"pack entry name could not be read"};
     if (!safe_entry_path(path))
       return PackError{"unsafe pack entry path: " + path};
-    const auto folded = platform::try_casefold_path(path);
+    const auto folded = core::try_casefold_utf8(path);
     if (!folded.has_value() || !folded_paths.insert(*folded).second)
       return PackError{"duplicate or case-colliding pack entry: " + path};
     if (stat.m_uncomp_size > max_pack_bytes ||

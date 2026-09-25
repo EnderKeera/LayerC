@@ -139,15 +139,6 @@ availability_name(const CaptureAvailability availability) {
          std::fflush(stdout) == 0;
 }
 
-[[nodiscard]] std::uint32_t region_edge(const double value,
-                                        const std::uint32_t extent,
-                                        const bool upper) {
-  const double scaled = value * static_cast<double>(extent);
-  return static_cast<std::uint32_t>(std::clamp(
-      upper ? std::ceil(scaled) : std::floor(scaled), 0.0,
-      static_cast<double>(extent)));
-}
-
 void append_region(std::string &out, const NormalizedRegion &region) {
   out += "{\"x\":";
   layerc::core::json::append_number(out, region.x);
@@ -189,18 +180,15 @@ void write_metadata(const Options &options,
   layerc::core::json::append_unsigned(out, height);
   out += ",\"region\":";
   append_region(out, options.region);
+  const auto pixels = layerc::core::to_pixel_bounds(options.region, width, height);
   out += ",\"pixelRegion\":{\"left\":";
-  layerc::core::json::append_unsigned(
-      out, region_edge(options.region.x, width, false));
+  layerc::core::json::append_unsigned(out, pixels.left);
   out += ",\"top\":";
-  layerc::core::json::append_unsigned(
-      out, region_edge(options.region.y, height, false));
+  layerc::core::json::append_unsigned(out, pixels.top);
   out += ",\"right\":";
-  layerc::core::json::append_unsigned(
-      out, region_edge(options.region.x + options.region.width, width, true));
+  layerc::core::json::append_unsigned(out, pixels.right);
   out += ",\"bottom\":";
-  layerc::core::json::append_unsigned(
-      out, region_edge(options.region.y + options.region.height, height, true));
+  layerc::core::json::append_unsigned(out, pixels.bottom);
   out += "},\"snapshot\":{\"format\":\"ppm\",\"bytes\":";
   layerc::core::json::append_unsigned(out, snapshot_bytes);
   out += "},\"resources\":{\"captureSessions\":";

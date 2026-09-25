@@ -65,7 +65,6 @@ private:
   std::vector<int> extra_fds_;
   std::vector<int> ready_fds_;
   std::vector<::pollfd> poll_fds_;
-  bool poll_fds_dirty_{true};
 };
 
 } // namespace layerc::platform

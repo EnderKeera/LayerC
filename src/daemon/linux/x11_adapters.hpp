@@ -15,7 +15,8 @@
 
 namespace layerc::daemon {
 
-struct X11AdapterDispatch {
+// Work surfaced by one pass over the X11 connection.
+struct X11Dispatch {
   std::vector<std::string> triggered;
   std::size_t events{};
   bool windows_changed{};
@@ -41,14 +42,14 @@ public:
                layerc::runtime::DaemonKernel &kernel,
                LinuxStatusSnapshot &status,
                std::vector<std::string> &diagnostics);
-  [[nodiscard]] X11AdapterDispatch dispatch(std::span<const int> ready);
+  [[nodiscard]] X11Dispatch dispatch(std::span<const int> ready);
   // Queue-aware prepare/check phase for the blocking loop: Xlib synchronous
   // queries buffer events client-side without waking the socket, so the host
   // must check pending_events() before sleeping and dispatch buffered work
   // without waiting for a second external event. The loop still blocks when
   // both local queues and external sources are empty (no polling timer).
   [[nodiscard]] bool has_pending_events() noexcept;
-  [[nodiscard]] X11AdapterDispatch dispatch_pending();
+  [[nodiscard]] X11Dispatch dispatch_pending();
   void render(layerc::core::TimePoint now);
   void stop_sessions(layerc::core::TimePoint now);
   [[nodiscard]] std::optional<layerc::core::TimePoint>

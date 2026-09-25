@@ -192,9 +192,9 @@ void linux_profile_pack_contracts() {
   passed &= expect(
       std::filesystem::exists(profile_path) &&
           std::filesystem::exists(second_profile_path) &&
-          loaded.state == layerc::platform::VisualSidecarState::valid &&
+          loaded.state == layerc::platform::ModuleSidecarState::valid &&
           second_loaded.state ==
-              layerc::platform::VisualSidecarState::valid &&
+              layerc::platform::ModuleSidecarState::valid &&
           std::filesystem::exists(layerc::platform::profile_visual_asset_path(
               profile_path, asset_hash)) &&
           std::filesystem::exists(layerc::platform::profile_visual_asset_path(
@@ -213,7 +213,7 @@ void linux_profile_pack_contracts() {
                        profile_path, profile(), std::nullopt) &&
                        layerc::platform::load_visual_sidecar(
                            profile_path, profile()).state ==
-                           layerc::platform::VisualSidecarState::absent,
+                           layerc::platform::ModuleSidecarState::absent,
                    "a removed marker disables the visual sidecar");
   passed &= expect(read_all(sidecar) == sidecar_bytes &&
                        read_all(backup) == backup_bytes,
@@ -222,7 +222,7 @@ void linux_profile_pack_contracts() {
                        profile_path, profile(), visual) &&
                        layerc::platform::load_visual_sidecar(
                            profile_path, profile()).state ==
-                           layerc::platform::VisualSidecarState::valid,
+                           layerc::platform::ModuleSidecarState::valid,
                    "a later writer can reactivate retained sidecars");
 
   (void)passed;

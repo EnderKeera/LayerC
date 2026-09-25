@@ -232,11 +232,7 @@ bool CalibrationWindow::initialize(const HWND window) {
   panel_brush_ = CreateSolidBrush(palette_.panel);
   input_brush_ = CreateSolidBrush(palette_.input);
   const UINT dpi = GetDpiForWindow(dialog_);
-  font_ =
-      CreateFontW(-MulDiv(9, dpi == 0 ? 96 : static_cast<int>(dpi), 72), 0, 0,
-                  0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  font_ = layerc::platform::create_native_dialog_font(dpi);
   layerc::platform::style_native_dialog_children(dialog_, font_);
   preview_.attach(GetDlgItem(dialog_, IDC_CAL_PREVIEW));
   SetWindowSubclass(preview_.window(), &preview_proc, 1,
@@ -261,9 +257,7 @@ void CalibrationWindow::initialize_palette() {
   const auto appearance = loaded.value.value_or(
       layerc::platform::EditorAppearanceSettings{});
   const auto colors = [&](const layerc::platform::EditorControlRole role) {
-    return layerc::platform::native_theme_colors(
-        appearance.theme, appearance.accent, role,
-        appearance.overrides[static_cast<std::size_t>(role)]);
+    return layerc::platform::native_theme_colors(appearance, role);
   };
   const auto window =
       colors(layerc::platform::EditorControlRole::window);

@@ -49,6 +49,14 @@ function(layerc_win32 target)
     layerc_enable_warnings(${target})
 endfunction()
 
+# Executables entered through wWinMain/wmain; MinGW links those with -municode.
+function(layerc_win32_exe target)
+    layerc_win32(${target})
+    if(MINGW)
+        target_link_options(${target} PRIVATE -municode)
+    endif()
+endfunction()
+
 if(MINGW)
     # Ninja otherwise scales to every logical CPU; MinGW's C++ front end can
     # exhaust memory when several Win32-heavy translation units compile at
@@ -105,13 +113,8 @@ add_library(layerc_runtime STATIC
     src/runtime/diagnostics_linux.cpp
     src/runtime/runtime_services.cpp
 )
-target_include_directories(layerc_runtime PUBLIC
-    src/runtime/include
-    src/core/include
-)
+target_include_directories(layerc_runtime PUBLIC src/runtime/include)
 target_link_libraries(layerc_runtime PUBLIC layerc_core)
-target_compile_definitions(layerc_runtime PRIVATE LAYERC_VERSION="${PROJECT_VERSION}")
-target_compile_features(layerc_runtime PUBLIC cxx_std_20)
 layerc_enable_warnings(layerc_runtime)
 
 add_library(layerc_capture_common STATIC
@@ -122,7 +125,6 @@ target_include_directories(layerc_capture_common PUBLIC
     src/capture/include
 )
 target_link_libraries(layerc_capture_common PUBLIC layerc_core)
-target_compile_features(layerc_capture_common PUBLIC cxx_std_20)
 layerc_enable_warnings(layerc_capture_common)
 
 add_library(layerc_miniz STATIC
@@ -146,10 +148,7 @@ add_library(layerc_bundle STATIC
     src/bundle/pack_validate.cpp
     src/bundle/profile_pack.cpp
 )
-target_include_directories(layerc_bundle PUBLIC
-    src/bundle/include
-    src/core/include
-    src/platform/include)
+target_include_directories(layerc_bundle PUBLIC src/bundle/include)
 target_link_libraries(layerc_bundle PUBLIC layerc_core)
 target_link_libraries(layerc_bundle PRIVATE layerc_miniz)
 # Warnings for the bundle's own TUs live here, once, so the platform
@@ -183,10 +182,7 @@ if(WIN32)
         src/platform/hid_device.cpp
         src/platform/hid_device_inference.cpp
     )
-    target_include_directories(layerc_windows PUBLIC
-        src/platform/include
-        src/core/include
-    )
+    target_include_directories(layerc_windows PUBLIC src/platform/include)
     target_link_libraries(layerc_windows PUBLIC
         layerc_core user32 advapi32 shell32 ole32 gdi32 shcore
         windowscodecs bcrypt hid comctl32 dwmapi uxtheme)
@@ -202,10 +198,6 @@ if(WIN32)
         src/capture/d3d_capture_support.cpp
         src/capture/wgc_backend.cpp
         src/capture/desktop_duplication_backend.cpp
-    )
-    target_include_directories(layerc_capture PUBLIC
-        src/capture/include
-        src/core/include
     )
     target_include_directories(layerc_capture PRIVATE src/capture)
     target_link_libraries(layerc_capture PUBLIC
@@ -237,10 +229,15 @@ if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
         layerc_core layerc_windows layerc_capture)
     layerc_win32(layerc_isolated)
 
+    # C++/WinRT is MSVC-only; MinGW links an inert client that reports the
+    # App Service as unavailable.
+    if(MSVC)
+        set(layerc_gamebar_client src/gamebar/GameBarAppServiceClient.cpp)
+    else()
+        set(layerc_gamebar_client src/gamebar/GameBarAppServiceClient_stub.cpp)
+    endif()
     add_library(layerc_gamebar STATIC
-        src/gamebar/GameBarTransport.cpp
-        src/gamebar/GameBarAppServiceClient.cpp
-        src/gamebar/GameBarRetryPolicy.cpp)
+        src/gamebar/GameBarTransport.cpp ${layerc_gamebar_client})
     target_include_directories(layerc_gamebar PUBLIC src/gamebar)
     target_link_libraries(layerc_gamebar PUBLIC layerc_core layerc_windows)
     layerc_win32(layerc_gamebar)
@@ -310,17 +307,12 @@ if(NOT WIN32)
         src/platform/linux/event_loop.cpp
         src/platform/linux/control_channel.cpp
     )
-    target_include_directories(layerc_linux PUBLIC
-        src/platform/include
-        src/core/include
-    )
+    target_include_directories(layerc_linux PUBLIC src/platform/include)
     target_include_directories(layerc_linux PRIVATE src/platform/linux)
     target_link_libraries(layerc_linux PUBLIC layerc_core)
     # miniz serves the platform template-asset decoder; the daemon consumes
     # only verified images through the visual-asset contract.
     target_link_libraries(layerc_linux PRIVATE layerc_miniz)
-    target_include_directories(layerc_linux PRIVATE third_party/miniz)
-    target_compile_features(layerc_linux PUBLIC cxx_std_20)
     layerc_enable_warnings(layerc_linux)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_linux)
@@ -351,14 +343,12 @@ if(NOT WIN32)
         )
         target_include_directories(layerc_x11 PUBLIC
             ${X11_INCLUDE_DIR}
-            src/platform/include
-            src/core/include)
+            src/platform/include)
         target_include_directories(layerc_x11 PRIVATE src/platform/linux)
         target_link_libraries(layerc_x11 PUBLIC
             layerc_capture_common layerc_core layerc_runtime ${X11_LIBRARIES}
             ${X11_Xext_LIB} ${X11_Xi_LIB} ${X11_Xrandr_LIB}
             ${X11_Xcomposite_LIB} ${X11_Xdamage_LIB} ${X11_Xfixes_LIB})
-        target_compile_features(layerc_x11 PUBLIC cxx_std_20)
         layerc_enable_warnings(layerc_x11)
 
         add_executable(layercal src/calibration/linux_main.cpp)
@@ -405,16 +395,6 @@ if(NOT WIN32)
     endif()
 endif()
 
-if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
-    add_library(layerc_daemon_runtime_services INTERFACE)
-    target_include_directories(layerc_daemon_runtime_services INTERFACE
-        src/daemon)
-    target_link_libraries(layerc_daemon_runtime_services INTERFACE
-        layerc_runtime)
-    target_compile_features(layerc_daemon_runtime_services INTERFACE
-        cxx_std_20)
-endif()
-
 if(WIN32 AND LAYERC_BUILD_DAEMON)
     add_executable(layerd WIN32
         src/daemon/main.cpp
@@ -434,32 +414,20 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/isolated_visual_worker.cpp)
     target_include_directories(layerd PRIVATE src/daemon src/gamebar)
     target_link_libraries(layerd PRIVATE
-        layerc_core layerc_runtime layerc_daemon_runtime_services
-        layerc_windows layerc_capture layerc_overlay layerc_isolated
-        layerc_gamebar shell32 user32 gdi32 xinput9_1_0)
-    target_link_libraries(layerd PRIVATE psapi)
-    target_link_libraries(layerd PRIVATE hid bcrypt)
-    layerc_win32(layerd)
+        layerc_core layerc_runtime layerc_windows layerc_capture
+        layerc_overlay layerc_isolated layerc_gamebar
+        shell32 user32 gdi32 xinput9_1_0 psapi hid bcrypt)
+    layerc_win32_exe(layerd)
     if(MSVC)
-        target_link_libraries(layerd PRIVATE runtimeobject)
         target_link_libraries(layerd PRIVATE delayimp)
-        target_link_options(layerd PRIVATE
-            /DELAYLOAD:xinput9_1_0.dll
-        )
-    elseif(MINGW)
-        target_link_options(layerd PRIVATE -municode)
+        target_link_options(layerd PRIVATE /DELAYLOAD:xinput9_1_0.dll)
     endif()
-endif()
 
-if(WIN32 AND LAYERC_BUILD_DAEMON)
     add_executable(layerw WIN32 src/worker/main.cpp)
     target_include_directories(layerw PRIVATE src/daemon)
     target_link_libraries(layerw PRIVATE
         layerc_isolated shell32 user32 gdi32)
-    layerc_win32(layerw)
-    if(MINGW)
-        target_link_options(layerw PRIVATE -municode)
-    endif()
+    layerc_win32_exe(layerw)
 endif()
 
 option(LAYERC_BUILD_GAMEBAR_HOST "Build the C++/WinRT Game Bar companion host" ON)
@@ -467,29 +435,20 @@ if(WIN32 AND MSVC AND LAYERC_BUILD_GAMEBAR_HOST)
     include(cmake/GameBarWidget.cmake)
 endif()
 
-
 if(WIN32 AND LAYERC_BUILD_EDITOR)
     add_executable(layere WIN32
         src/editor/main.cpp
         src/editor/editor_resources.rc)
     target_include_directories(layere PRIVATE src/editor)
     target_link_libraries(layere PRIVATE layerc_editor_ui)
-    layerc_win32(layere)
-    if(MINGW)
-        target_link_options(layere PRIVATE -municode)
-    endif()
-endif()
+    layerc_win32_exe(layere)
 
-if(WIN32 AND LAYERC_BUILD_EDITOR)
     add_executable(layercal WIN32
         src/calibration/main.cpp
         src/calibration/calibration_resources.rc)
     target_include_directories(layercal PRIVATE src/calibration)
     target_link_libraries(layercal PRIVATE layerc_calibration_ui)
-    layerc_win32(layercal)
-    if(MINGW)
-        target_link_options(layercal PRIVATE -municode)
-    endif()
+    layerc_win32_exe(layercal)
 endif()
 
 set(LAYERC_MINGW_RUNTIME_DLLS)
@@ -645,15 +604,12 @@ if(LAYERC_BUILD_TESTS)
         if(TEST_LINK)
             target_link_libraries(${target} PRIVATE ${TEST_LINK})
         endif()
-        if(TEST_WIN32)
+        if(TEST_MINGW_UNICODE)
+            layerc_win32_exe(${target})
+        elseif(TEST_WIN32)
             layerc_win32(${target})
         else()
             layerc_enable_warnings(${target})
-        endif()
-        if(MINGW AND WIN32)
-            if(TEST_MINGW_UNICODE)
-                target_link_options(${target} PRIVATE -municode)
-            endif()
         endif()
         if(TEST_NO_REGISTER)
             return()
@@ -675,7 +631,7 @@ if(LAYERC_BUILD_TESTS)
         if(TEST_RESOURCE_LOCK)
             list(APPEND properties RESOURCE_LOCK ${TEST_RESOURCE_LOCK})
         endif()
-        if(MINGW AND WIN32)
+        if(MINGW)
             get_filename_component(mingw_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
             list(APPEND properties ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:${mingw_runtime_dir}")
@@ -827,20 +783,14 @@ if(LAYERC_BUILD_TESTS)
 
         add_executable(layerc_capture_probe tools/capture_probe.cpp)
         target_link_libraries(layerc_capture_probe PRIVATE layerc_capture)
-        layerc_win32(layerc_capture_probe)
-        if(MINGW)
-            target_link_options(layerc_capture_probe PRIVATE -municode)
-        endif()
+        layerc_win32_exe(layerc_capture_probe)
 
         add_executable(lctest WIN32 tools/lctest.cpp)
-        layerc_win32(lctest)
-        if(MINGW)
-            target_link_options(lctest PRIVATE -municode)
-        endif()
+        layerc_win32_exe(lctest)
 
         layerc_add_test(layerc_overlay_tests
             SOURCES tests/overlay_window_tests.cpp LINK layerc_overlay
-            WIN32 MINGW_UNICODE TIMEOUT 45 SKIP_RETURN_CODE 77
+            MINGW_UNICODE TIMEOUT 45 SKIP_RETURN_CODE 77
             ARGUMENTS $<TARGET_FILE:lctest>)
         target_include_directories(layerc_overlay_tests PRIVATE src/daemon)
         add_dependencies(layerc_overlay_tests lctest)
@@ -853,7 +803,8 @@ if(LAYERC_BUILD_TESTS)
 
         layerc_add_test(layerc_daemon_runtime_tests
             SOURCES tests/daemon_runtime_services_tests.cpp
-            LINK layerc_daemon_runtime_services WIN32 TIMEOUT 30)
+            LINK layerc_runtime WIN32 TIMEOUT 30)
+        target_include_directories(layerc_daemon_runtime_tests PRIVATE src/daemon)
 
         layerc_add_test(layerc_bundle_tests
             SOURCES tests/profile_pack_tests.cpp LINK layerc_bundle layerc_miniz
@@ -869,7 +820,6 @@ if(LAYERC_BUILD_TESTS)
             SOURCES tests/companion_tests.cpp LINK layerc_gamebar
             WIN32 TIMEOUT 30)
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
-
 
         layerc_add_test(layerc_editor_tests
             SOURCES tests/editor_dialog_tests.cpp src/editor/editor_resources.rc

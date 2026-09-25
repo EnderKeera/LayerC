@@ -85,7 +85,7 @@ std::string as_string(const std::span<const std::byte> bytes) {
 namespace {
 
 bool is_safe_path_component(const std::string_view component) {
-  const auto wide = platform::try_utf8_to_wide(component);
+  const auto wide = core::try_utf8_to_wide(component);
   if (!wide.has_value() || wide->empty() || wide->size() > 240 ||
       wide->back() == L'.' || wide->back() == L' ')
     return false;
@@ -112,7 +112,7 @@ bool safe_entry_path(const std::string_view path) {
       path.find('\\') != std::string_view::npos ||
       path.find(':') != std::string_view::npos ||
       path.find('\0') != std::string_view::npos ||
-      !platform::try_utf8_to_wide(path).has_value())
+      !core::try_utf8_to_wide(path).has_value())
     return false;
   std::size_t start{};
   while (start <= path.size()) {

@@ -88,25 +88,7 @@ companion_sidecar_path(const std::filesystem::path &profile_path) {
 }
 
 std::filesystem::path profile_store_filename(const std::string_view profile_id) {
-  std::string stem;
-  bool last_dash{};
-  for (const char character : profile_id) {
-    const char lower = character >= 'A' && character <= 'Z'
-                           ? static_cast<char>(character - 'A' + 'a')
-                           : character;
-    if ((lower >= 'a' && lower <= 'z') || (lower >= '0' && lower <= '9')) {
-      stem.push_back(lower);
-      last_dash = false;
-    } else if (!stem.empty() && !last_dash) {
-      stem.push_back('-');
-      last_dash = true;
-    }
-  }
-  while (!stem.empty() && stem.back() == '-')
-    stem.pop_back();
-  if (stem.empty())
-    stem = "profile";
-  return std::filesystem::path(stem + ".json");
+  return std::filesystem::path(core::slugify(profile_id, "profile") + ".json");
 }
 
 std::string canonical_profile_key(const std::filesystem::path &path) {

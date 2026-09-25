@@ -8,39 +8,35 @@ namespace {
 namespace json = core::json;
 using json::Value;
 
-Value counter(const std::uint64_t value) {
-  if (value > static_cast<std::uint64_t>(json::max_exact_json_integer))
-    return Value(std::to_string(value));
-  return Value(static_cast<std::int64_t>(value));
-}
+using json::exact_unsigned_value;
 Value timestamp(const std::optional<core::TimePoint> time) {
   if (!time) return Value(nullptr);
   const auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          time->time_since_epoch()).count();
-  return counter(ticks < 0 ? 0U : static_cast<std::uint64_t>(ticks));
+  return exact_unsigned_value(ticks < 0 ? 0U : static_cast<std::uint64_t>(ticks));
 }
 Value resources(const RuntimeResourceStats &value) {
   return Value(Value::Object{
-      {"threads", counter(value.threads)}, {"timers", counter(value.timers)},
-      {"handles", counter(value.handles)}, {"windows", counter(value.windows)},
-      {"objects", counter(value.objects)}, {"captureSessions", counter(value.capture_sessions)},
-      {"queues", counter(value.queues)}, {"decodedAssets", counter(value.decoded_assets)},
-      {"cacheBytes", counter(value.cache_bytes)}});
+      {"threads", exact_unsigned_value(value.threads)}, {"timers", exact_unsigned_value(value.timers)},
+      {"handles", exact_unsigned_value(value.handles)}, {"windows", exact_unsigned_value(value.windows)},
+      {"objects", exact_unsigned_value(value.objects)}, {"captureSessions", exact_unsigned_value(value.capture_sessions)},
+      {"queues", exact_unsigned_value(value.queues)}, {"decodedAssets", exact_unsigned_value(value.decoded_assets)},
+      {"cacheBytes", exact_unsigned_value(value.cache_bytes)}});
 }
 Value process(const ProcessDiagnostics &value) {
   return Value(Value::Object{
-      {"pid", counter(value.pid)}, {"privateBytes", counter(value.private_bytes)},
-      {"workingSetBytes", counter(value.working_set_bytes)},
-      {"handles", counter(value.handles)}, {"threads", counter(value.threads)},
-      {"kernelTime100ns", counter(value.kernel_time_100ns)},
-      {"userTime100ns", counter(value.user_time_100ns)}});
+      {"pid", exact_unsigned_value(value.pid)}, {"privateBytes", exact_unsigned_value(value.private_bytes)},
+      {"workingSetBytes", exact_unsigned_value(value.working_set_bytes)},
+      {"handles", exact_unsigned_value(value.handles)}, {"threads", exact_unsigned_value(value.threads)},
+      {"kernelTime100ns", exact_unsigned_value(value.kernel_time_100ns)},
+      {"userTime100ns", exact_unsigned_value(value.user_time_100ns)}});
 }
 Value service(const RuntimeServiceStats &value) {
   return Value(Value::Object{
       {"capability", Value(std::string(capability_name(value.capability)))},
       {"state", Value(std::string(service_state_name(value.state)))},
-      {"consumers", counter(value.consumers)}, {"resources", resources(value.resources)},
-      {"activationCount", counter(value.activation_count)}, {"faultCount", counter(value.fault_count)},
+      {"consumers", exact_unsigned_value(value.consumers)}, {"resources", resources(value.resources)},
+      {"activationCount", exact_unsigned_value(value.activation_count)}, {"faultCount", exact_unsigned_value(value.fault_count)},
       {"lastActivationNs", timestamp(value.last_activation)},
       {"lastQuiescenceNs", timestamp(value.last_quiescence)}, {"lastError", Value(value.last_error)}});
 }
@@ -48,14 +44,14 @@ Value session(const SessionDiagnostics &value) {
   return Value(Value::Object{
       {"profileId", Value(value.profile_id)}, {"sourceKey", Value(value.source_key)},
       {"window", Value(std::to_string(value.window))}, {"foreground", Value(value.foreground)},
-      {"overlayWindows", counter(value.overlay_windows)},
+      {"overlayWindows", exact_unsigned_value(value.overlay_windows)},
       {"lastInputMatch", Value(value.last_input_match)}});
 }
 Value helper(const HelperDiagnostics &value) {
   return Value(Value::Object{
-      {"window", Value(std::to_string(value.window))}, {"pid", counter(value.pid)},
+      {"window", Value(std::to_string(value.window))}, {"pid", exact_unsigned_value(value.pid)},
       {"running", Value(value.running)}, {"quarantined", Value(value.quarantined)},
-      {"faultCount", counter(value.fault_count)}, {"lastError", Value(value.last_error)}});
+      {"faultCount", exact_unsigned_value(value.fault_count)}, {"lastError", Value(value.last_error)}});
 }
 template <typename T, typename Encode>
 Value array(const std::vector<T> &values, Encode encode) {
@@ -66,13 +62,11 @@ Value array(const std::vector<T> &values, Encode encode) {
 }
 } // namespace
 
-std::string_view runtime_package_version() noexcept { return LAYERC_VERSION; }
-
 std::string serialize_runtime_diagnostics_json(const RuntimeDiagnostics &value) {
   const Value root(Value::Object{
-      {"schemaVersion", counter(value.schema_version)},
+      {"schemaVersion", exact_unsigned_value(value.schema_version)},
       {"packageVersion", Value(value.package_version)},
-      {"protocolVersion", counter(value.protocol_version)},
+      {"protocolVersion", exact_unsigned_value(value.protocol_version)},
       {"process", process(value.process)}, {"services", array(value.services, service)},
       {"gameBarTransport", Value(Value::Object{
           {"connected", Value(value.gamebar.connected)}, {"lastError", Value(value.gamebar.last_error)}})},

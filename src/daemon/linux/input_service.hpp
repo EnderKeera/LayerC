@@ -1,5 +1,6 @@
 #pragma once
 
+#include "x11_adapters.hpp"
 #include "x11_display.hpp"
 #include "x11_input.hpp"
 #include "x11_window.hpp"
@@ -64,13 +65,6 @@ private:
   void checkpoint_automation_state(layerc::core::TimePoint now, bool force);
 };
 
-struct X11InputDispatch {
-  std::vector<std::string> triggered;
-  std::size_t events{};
-  bool windows_changed{};
-  bool devices_changed{};
-};
-
 // Owns the profile sessions for the whole daemon, mirroring the Windows
 // SessionRegistry: input feeds them, automation checkpoints them, and the
 // overlay and visual services paint and sample from the same list.
@@ -124,7 +118,7 @@ public:
 
   // Drains the X connection and feeds every normalized event to the
   // sessions. Unknown events are discarded so the socket cannot busy-poll.
-  [[nodiscard]] X11InputDispatch dispatch();
+  [[nodiscard]] X11Dispatch dispatch();
 
   [[nodiscard]] bool attached() const noexcept {
     return source_.has_value();

@@ -55,6 +55,11 @@ void append_exact_unsigned(std::string &output, const std::uint64_t value) {
   else
     append_quoted(output, std::to_string(value));
 }
+Value exact_unsigned_value(const std::uint64_t value) {
+  if (value > static_cast<std::uint64_t>(max_exact_json_integer))
+    return Value(std::to_string(value));
+  return Value(static_cast<std::int64_t>(value));
+}
 void append_exact_integer(std::string &output, const std::int64_t value) {
   if (value < -max_exact_json_integer || value > max_exact_json_integer) {
     append_quoted(output, std::to_string(value));

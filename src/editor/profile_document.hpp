@@ -48,36 +48,33 @@ public:
   }
 
   [[nodiscard]] std::optional<layerc::core::VisualProfile> &visual() noexcept {
-    return visual_;
+    return visual_.profile;
   }
   [[nodiscard]] const std::optional<layerc::core::VisualProfile> &
   visual() const noexcept {
-    return visual_;
+    return visual_.profile;
   }
 
   [[nodiscard]] std::optional<layerc::core::AutomationProfile> &
   automation() noexcept {
-    return automation_;
+    return automation_.profile;
   }
   [[nodiscard]] const std::optional<layerc::core::AutomationProfile> &
   automation() const noexcept {
-    return automation_;
+    return automation_.profile;
   }
 
-  [[nodiscard]] layerc::platform::VisualSidecarState
+  [[nodiscard]] layerc::platform::ModuleSidecarState
   visual_state() const noexcept {
-    return visual_state_;
+    return visual_.state;
   }
   [[nodiscard]] const std::string &visual_error() const noexcept {
-    return visual_error_;
+    return visual_.error.message;
   }
 
-  [[nodiscard]] layerc::platform::AutomationSidecarState
+  [[nodiscard]] layerc::platform::ModuleSidecarState
   automation_state() const noexcept {
-    return automation_state_;
-  }
-  [[nodiscard]] const std::string &automation_error() const noexcept {
-    return automation_error_;
+    return automation_.state;
   }
 
   [[nodiscard]] std::filesystem::path &path() noexcept { return path_; }
@@ -104,34 +101,17 @@ public:
   // Sidecar value, state, and error move together so no caller can leave a
   // valid state beside a stale error or an invalid state beside a value.
   void set_visual(layerc::platform::VisualSidecarLoad loaded, const bool legacy) {
-    visual_ = std::move(loaded.profile);
-    visual_state_ = loaded.state;
-    visual_error_ = std::move(loaded.error.message);
+    visual_ = std::move(loaded);
     legacy_visual_schema_ = legacy;
   }
   void set_automation(layerc::platform::AutomationSidecarLoad loaded) {
-    automation_ = std::move(loaded.profile);
-    automation_state_ = loaded.state;
-    automation_error_ = std::move(loaded.error.message);
+    automation_ = std::move(loaded);
   }
-  // After an in-memory edit the sidecar is valid when present, else absent.
-  void mark_visual_edited() {
-    visual_state_ = visual_ ? layerc::platform::VisualSidecarState::valid
-                            : layerc::platform::VisualSidecarState::absent;
-    visual_error_.clear();
-  }
-  void mark_automation_edited() {
-    automation_state_ = automation_
-                            ? layerc::platform::AutomationSidecarState::valid
-                            : layerc::platform::AutomationSidecarState::absent;
-    automation_error_.clear();
-  }
+  void mark_visual_edited() { mark_edited(visual_); }
+  void mark_automation_edited() { mark_edited(automation_); }
   void clear_sidecars() {
     set_visual({}, false);
     set_automation({});
-  }
-  void set_legacy_base_schema(const bool legacy) noexcept {
-    legacy_base_schema_ = legacy;
   }
   // The document was rewritten in the current schemas.
   void clear_legacy_schemas() noexcept {
@@ -150,15 +130,16 @@ public:
   }
 
 private:
+  // After an in-memory edit the sidecar is valid when present, else absent.
+  template <typename Load> static void mark_edited(Load &load) {
+    load.state = load.profile ? layerc::platform::ModuleSidecarState::valid
+                              : layerc::platform::ModuleSidecarState::absent;
+    load.error = {};
+  }
+
   layerc::core::GameProfile profile_;
-  std::optional<layerc::core::VisualProfile> visual_;
-  std::optional<layerc::core::AutomationProfile> automation_;
-  layerc::platform::AutomationSidecarState automation_state_{
-      layerc::platform::AutomationSidecarState::absent};
-  std::string automation_error_;
-  layerc::platform::VisualSidecarState visual_state_{
-      layerc::platform::VisualSidecarState::absent};
-  std::string visual_error_;
+  layerc::platform::VisualSidecarLoad visual_;
+  layerc::platform::AutomationSidecarLoad automation_;
   std::filesystem::path path_;
   bool legacy_base_schema_{};
   bool legacy_visual_schema_{};

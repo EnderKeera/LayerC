@@ -455,7 +455,7 @@ void diagnostics_contract_round_trips() {
          "typed diagnostics should reject duplicate capability rows");
 
   expect(layerc::runtime::RuntimeDiagnostics{}.package_version ==
-             layerc::runtime::runtime_package_version(),
+             layerc::core::product_version,
          "diagnostics should source the package version from the build definition");
 }
 

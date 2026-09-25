@@ -80,7 +80,6 @@ inline constexpr std::size_t max_pending_preference_updates = 16;
 
 void raise_wake_event(
     const std::shared_ptr<GameBarTransportState> &state) noexcept;
-void schedule_retry_locked(const std::shared_ptr<GameBarTransportState> &state);
 [[nodiscard]] bool
 start_app_service(const std::shared_ptr<GameBarTransportState> &state);
 void stop_app_service(

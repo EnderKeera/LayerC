@@ -508,7 +508,7 @@ void platform_visual_sidecar_recovery() {
          "visual sidecars should pair by base profile filename");
   const auto absent_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  expect(absent_visual.state == layerc::platform::VisualSidecarState::absent,
+  expect(absent_visual.state == layerc::platform::ModuleSidecarState::absent,
          "profiles without a visual sidecar should remain input-only");
   auto visual = test_visual_profile();
   expect(layerc::platform::write_profile_bundle(path, second, visual),
@@ -535,7 +535,7 @@ void platform_visual_sidecar_recovery() {
     const auto after_state_failure =
         layerc::platform::load_visual_sidecar(path, second);
     expect(after_state_failure.state ==
-                   layerc::platform::VisualSidecarState::valid &&
+                   layerc::platform::ModuleSidecarState::valid &&
                after_state_failure.profile.has_value() &&
                after_state_failure.profile->sample_rate_hz == 15,
            "a state-publication failure must restore the previous "
@@ -549,7 +549,7 @@ void platform_visual_sidecar_recovery() {
   const auto recovered_visual =
       layerc::platform::load_visual_sidecar(path, second);
   expect(recovered_visual.state ==
-                 layerc::platform::VisualSidecarState::recovered_backup &&
+                 layerc::platform::ModuleSidecarState::recovered_backup &&
              recovered_visual.profile.has_value() &&
              recovered_visual.profile->sample_rate_hz == 10,
          "an invalid visual sidecar should recover its last valid backup");
@@ -560,7 +560,7 @@ void platform_visual_sidecar_recovery() {
   const auto invalid_visual =
       layerc::platform::load_visual_sidecar(path, second);
   expect(invalid_visual.state ==
-                 layerc::platform::VisualSidecarState::invalid &&
+                 layerc::platform::ModuleSidecarState::invalid &&
              !invalid_visual.error.message.empty(),
          "two invalid visual copies should produce a blocking diagnostic");
   visual.sample_rate_hz = 5;
@@ -573,7 +573,7 @@ void platform_visual_sidecar_recovery() {
   const auto repaired_backup =
       layerc::platform::load_visual_sidecar(path, second);
   expect(repaired_backup.state ==
-                 layerc::platform::VisualSidecarState::recovered_backup &&
+                 layerc::platform::ModuleSidecarState::recovered_backup &&
              repaired_backup.profile.has_value() &&
              repaired_backup.profile->sample_rate_hz == 5,
          "a second corruption should recover the repaired visual definition");
@@ -656,7 +656,7 @@ void platform_bundle_recovery() {
       std::get_if<layerc::core::GameProfile>(&rolled_back_profile);
   layerc::platform::VisualSidecarLoad rolled_back_visual;
   if (rolled_back == nullptr)
-    rolled_back_visual.state = layerc::platform::VisualSidecarState::invalid;
+    rolled_back_visual.state = layerc::platform::ModuleSidecarState::invalid;
   else
     rolled_back_visual =
         layerc::platform::load_visual_sidecar(bundle_path, *rolled_back);
@@ -725,7 +725,7 @@ void platform_bundle_recovery() {
         layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
     expect(
         removed_while_locked.state ==
-            layerc::platform::VisualSidecarState::absent,
+            layerc::platform::ModuleSidecarState::absent,
         "locked stale visual bytes must remain inactive after removal commits");
     CloseHandle(locked_visual);
   }
@@ -737,7 +737,7 @@ void platform_bundle_recovery() {
           layerc::platform::visual_sidecar_path(bundle_path)) &&
           std::filesystem::exists(committed_visual_backup) &&
           layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile)
-                  .state == layerc::platform::VisualSidecarState::absent,
+                  .state == layerc::platform::ModuleSidecarState::absent,
       "a durable removal marker must keep retained visual recovery bytes "
       "inactive");
 }
@@ -829,7 +829,7 @@ void platform_automation_state_recovery() {
         "are locked");
     expect(layerc::platform::load_automation_sidecar(bundle_path,
                                                      new_bundle_profile)
-                   .state == layerc::platform::AutomationSidecarState::absent,
+                   .state == layerc::platform::ModuleSidecarState::absent,
            "locked stale automation bytes must remain inactive after removal "
            "commits");
     CloseHandle(locked_automation);
@@ -841,7 +841,7 @@ void platform_automation_state_recovery() {
              std::filesystem::exists(automation_backup) &&
              layerc::platform::load_automation_sidecar(bundle_path,
                                                        new_bundle_profile)
-                     .state == layerc::platform::AutomationSidecarState::absent,
+                     .state == layerc::platform::ModuleSidecarState::absent,
          "automation removal must keep retained recovery bytes inactive after "
          "unlock");
 }

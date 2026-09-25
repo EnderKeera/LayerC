@@ -1,5 +1,7 @@
 #include "layerc/platform/native_theme.hpp"
 
+#include "layerc/platform/window_query.hpp"
+
 #include <algorithm>
 #include <array>
 #include <commctrl.h>
@@ -133,6 +135,45 @@ NativeThemeColors native_theme_colors(
   return colors;
 }
 
+NativeThemeColors
+native_theme_colors(const EditorAppearanceSettings &appearance,
+                    const EditorControlRole role) {
+  return native_theme_colors(
+      appearance.theme, appearance.accent, role,
+      appearance.overrides[static_cast<std::size_t>(role)]);
+}
+
+HFONT create_native_dialog_font(const UINT dpi) {
+  const auto effective_dpi = dpi == 0 ? 96 : static_cast<int>(dpi);
+  return CreateFontW(-MulDiv(9, effective_dpi, 72), 0, 0, 0, FW_NORMAL, FALSE,
+                     FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                     DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+}
+
+void fill_solid_rect(const HDC dc, const RECT &rect, const COLORREF color) {
+  const HBRUSH brush = CreateSolidBrush(color);
+  FillRect(dc, &rect, brush);
+  DeleteObject(brush);
+}
+
+void frame_solid_rect(const HDC dc, const RECT &rect, const COLORREF color) {
+  const HBRUSH brush = CreateSolidBrush(color);
+  FrameRect(dc, &rect, brush);
+  DeleteObject(brush);
+}
+
+void outline_rect(const HDC dc, const RECT &rect, const int pen_width,
+                  const COLORREF color) {
+  const HPEN pen = CreatePen(PS_SOLID, pen_width, color);
+  const HGDIOBJ previous_pen = SelectObject(dc, pen);
+  const HGDIOBJ previous_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+  Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+  SelectObject(dc, previous_brush);
+  SelectObject(dc, previous_pen);
+  DeleteObject(pen);
+}
+
 void enable_native_dark_mode() {
   const HMODULE module = uxtheme_module();
   if (module == nullptr)
@@ -226,20 +267,17 @@ void style_native_dialog_children(const HWND dialog, const HFONT font,
   for (HWND child = GetWindow(dialog, GW_CHILD); child != nullptr;
        child = GetWindow(child, GW_HWNDNEXT)) {
     SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-    std::array<wchar_t, 64> class_name{};
-    GetClassNameW(child, class_name.data(),
-                  static_cast<int>(class_name.size()));
-    if (wcscmp(class_name.data(), L"Button") == 0) {
+    const auto class_name = window_class(child);
+    if (class_name == L"Button") {
       style_button_child(child);
-    } else if (wcscmp(class_name.data(), L"ComboBox") == 0) {
+    } else if (class_name == L"ComboBox") {
       style_combo_child(dialog, child, owner_draw_list_boxes);
-    } else if (wcscmp(class_name.data(), L"ListBox") == 0) {
+    } else if (class_name == L"ListBox") {
       style_listbox_child(dialog, child, owner_draw_list_boxes);
-    } else if (wcscmp(class_name.data(), WC_LISTVIEWW) == 0) {
+    } else if (class_name == WC_LISTVIEWW) {
       style_listview_child(child);
-    } else if (wcscmp(class_name.data(), L"Edit") == 0 ||
-               wcscmp(class_name.data(), L"ScrollBar") == 0 ||
-               wcscmp(class_name.data(), TOOLTIPS_CLASSW) == 0) {
+    } else if (class_name == L"Edit" || class_name == L"ScrollBar" ||
+               class_name == TOOLTIPS_CLASSW) {
       SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
     }
   }
@@ -258,9 +296,7 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
     else if (hot)
       fill = colors.hover;
   }
-  const HBRUSH background = CreateSolidBrush(fill);
-  FillRect(draw.hDC, &draw.rcItem, background);
-  DeleteObject(background);
+  fill_solid_rect(draw.hDC, draw.rcItem, fill);
   const bool default_action = (draw.itemState & ODS_DEFAULT) != 0;
   const bool emphasized = pressed || default_action;
   COLORREF outline = colors.border;
@@ -268,15 +304,7 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
     outline = colors.disabled;
   else if (emphasized)
     outline = colors.selection;
-  const HPEN pen = CreatePen(PS_SOLID, emphasized ? 2 : 1, outline);
-  const HGDIOBJ previous_pen = SelectObject(draw.hDC, pen);
-  const HGDIOBJ previous_brush =
-      SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));
-  Rectangle(draw.hDC, draw.rcItem.left, draw.rcItem.top, draw.rcItem.right,
-            draw.rcItem.bottom);
-  SelectObject(draw.hDC, previous_brush);
-  SelectObject(draw.hDC, previous_pen);
-  DeleteObject(pen);
+  outline_rect(draw.hDC, draw.rcItem, emphasized ? 2 : 1, outline);
 
   RECT text_rect = draw.rcItem;
   UINT text_format = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
@@ -288,13 +316,9 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
         draw.rcItem.top + (draw.rcItem.bottom - draw.rcItem.top - swatch_size) / 2;
     RECT swatch{draw.rcItem.left + 7, swatch_top,
                 draw.rcItem.left + 7 + swatch_size, swatch_top + swatch_size};
-    const HBRUSH swatch_fill = CreateSolidBrush(*explicit_fill);
-    FillRect(draw.hDC, &swatch, swatch_fill);
-    DeleteObject(swatch_fill);
-    const HBRUSH swatch_border =
-        CreateSolidBrush(disabled ? colors.disabled : colors.border);
-    FrameRect(draw.hDC, &swatch, swatch_border);
-    DeleteObject(swatch_border);
+    fill_solid_rect(draw.hDC, swatch, *explicit_fill);
+    frame_solid_rect(draw.hDC, swatch,
+                     disabled ? colors.disabled : colors.border);
     text_rect.left = swatch.right + 7;
     text_rect.right -= 5;
     text_format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;

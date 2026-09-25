@@ -21,7 +21,7 @@ void apply_dialog_chrome(const HWND window, const bool capture_exclusion) {
 }
 
 void EditorWindow::style_dialog_children(const HWND dialog) const {
-  style_native_dialog_children(dialog, shell_.font());
+  style_native_dialog_children(dialog, shell_.font);
 }
 
 void EditorWindow::style_list_view(const HWND list,
@@ -45,9 +45,9 @@ void EditorWindow::style_list_view(const HWND list,
 }
 
 void EditorWindow::rebuild_profile_check_hit_images() {
-  if (shell_.profile_list() == nullptr)
+  if (shell_.profile_list == nullptr)
     return;
-  const auto metrics = profile_checkbox_metrics(GetDpiForWindow(shell_.profile_list()));
+  const auto metrics = profile_checkbox_metrics(GetDpiForWindow(shell_.profile_list));
   const HIMAGELIST images = ImageList_Create(
       metrics.image_size, metrics.image_size, ILC_COLOR32 | ILC_MASK, 2, 0);
   if (images == nullptr)
@@ -68,10 +68,10 @@ void EditorWindow::rebuild_profile_check_hit_images() {
   }
   DeleteObject(transparent);
 
-  (void)ListView_SetImageList(shell_.profile_list(), images, LVSIL_STATE);
-  if (shell_.profile_check_hit_images() != nullptr)
-    ImageList_Destroy(shell_.profile_check_hit_images());
-  shell_.profile_check_hit_images() = images;
+  (void)ListView_SetImageList(shell_.profile_list, images, LVSIL_STATE);
+  if (shell_.profile_check_hit_images != nullptr)
+    ImageList_Destroy(shell_.profile_check_hit_images);
+  shell_.profile_check_hit_images = images;
 }
 
 void EditorWindow::rebuild_brushes() {
@@ -91,22 +91,22 @@ void EditorWindow::rebuild_brushes() {
 
 void EditorWindow::refresh_theme() {
   rebuild_brushes();
-  style_list_view(shell_.profile_list(), true);
+  style_list_view(shell_.profile_list, true);
   rebuild_profile_check_hit_images();
-  style_list_view(task_picker_.list(), false);
-  if (shell_.window() != nullptr) {
-    DrawMenuBar(shell_.window());
-    InvalidateRect(shell_.window(), nullptr, TRUE);
+  style_list_view(task_picker_.list, false);
+  if (shell_.window != nullptr) {
+    DrawMenuBar(shell_.window);
+    InvalidateRect(shell_.window, nullptr, TRUE);
     EnumChildWindows(
-        shell_.window(),
+        shell_.window,
         [](HWND child, LPARAM) -> BOOL {
           InvalidateRect(child, nullptr, TRUE);
           return TRUE;
         },
         0);
   }
-  if (task_picker_.window() != nullptr)
-    InvalidateRect(task_picker_.window(), nullptr, TRUE);
+  if (task_picker_.window != nullptr)
+    InvalidateRect(task_picker_.window, nullptr, TRUE);
 }
 
 } // namespace layerc::editor

@@ -164,9 +164,6 @@ template <typename Profile, typename Error> struct ModuleSidecarLoad {
   }
 };
 
-using VisualSidecarState = ModuleSidecarState;
-using AutomationSidecarState = ModuleSidecarState;
-using CompanionSidecarState = ModuleSidecarState;
 using VisualSidecarLoad =
     ModuleSidecarLoad<layerc::core::VisualProfile, layerc::core::VisualError>;
 using AutomationSidecarLoad = ModuleSidecarLoad<

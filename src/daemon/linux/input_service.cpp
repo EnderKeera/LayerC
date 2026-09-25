@@ -38,7 +38,7 @@ load_visual(const layerc::platform::StoredProfile &source) {
   auto sidecar =
       layerc::platform::load_visual_sidecar(source.path, source.profile);
   if (!sidecar.profile.has_value()) {
-    if (sidecar.state == layerc::platform::VisualSidecarState::invalid) {
+    if (sidecar.state == layerc::platform::ModuleSidecarState::invalid) {
       result.invalid = true;
       result.diagnostic = source.path.string() + ": " + sidecar.error.message;
     }
@@ -49,19 +49,13 @@ load_visual(const layerc::platform::StoredProfile &source) {
   return result;
 }
 
-[[nodiscard]] bool has_enabled_rules(const AutomationProfile &profile) {
-  return std::ranges::any_of(profile.automations, [](const auto &automation) {
-    return automation.enabled && !automation.rules.empty();
-  });
-}
-
 [[nodiscard]] LoadedAutomation
 load_automation(const layerc::platform::StoredProfile &source) {
   LoadedAutomation result;
   auto sidecar = layerc::platform::load_automation_sidecar(source.path,
                                                            source.profile);
   if (!sidecar.profile.has_value()) {
-    if (sidecar.state == layerc::platform::AutomationSidecarState::invalid)
+    if (sidecar.state == layerc::platform::ModuleSidecarState::invalid)
       result.diagnostic = source.path.string() + ": " + sidecar.error.message;
     return result;
   }
@@ -71,7 +65,7 @@ load_automation(const layerc::platform::StoredProfile &source) {
   result.state = std::move(state.values);
   if (state.error.has_value())
     result.diagnostic = source.path.string() + ": " + state.error->message;
-  if (has_enabled_rules(*sidecar.profile))
+  if (layerc::core::has_enabled_automations(*sidecar.profile))
     result.profile = std::move(sidecar.profile);
   return result;
 }
@@ -295,8 +289,8 @@ X11SessionRegistry::session_requests() const {
   return requests;
 }
 
-X11InputDispatch X11InputService::dispatch() {
-  X11InputDispatch result;
+X11Dispatch X11InputService::dispatch() {
+  X11Dispatch result;
   if (!source_.has_value()) return result;
   auto poll = source_->poll();
   result.events = poll.events.size();

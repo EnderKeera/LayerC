@@ -1,7 +1,11 @@
 #include "layerc/platform/window_query.hpp"
 
+#include "layerc/platform/win32_handle.hpp"
+
 #include <appmodel.h>
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <string_view>
@@ -27,28 +31,58 @@ std::filesystem::path sibling_image_path(const wchar_t *filename) {
          filename;
 }
 
+std::wstring window_text(const HWND window) {
+  const int length = GetWindowTextLengthW(window);
+  if (length <= 0) return {};
+  std::wstring output(static_cast<std::size_t>(length) + 1U, L'\0');
+  const int copied =
+      GetWindowTextW(window, output.data(), static_cast<int>(output.size()));
+  output.resize(static_cast<std::size_t>(std::max(copied, 0)));
+  return output;
+}
+
+std::wstring window_class(const HWND window) {
+  std::array<wchar_t, 256> value{};
+  const int copied =
+      GetClassNameW(window, value.data(), static_cast<int>(value.size()));
+  return copied > 0
+             ? std::wstring(value.data(), static_cast<std::size_t>(copied))
+             : std::wstring{};
+}
+
+std::wstring process_image_path(const HANDLE process) {
+  std::vector<wchar_t> path(32'768);
+  DWORD length = static_cast<DWORD>(path.size());
+  if (QueryFullProcessImageNameW(process, 0, path.data(), &length) == FALSE)
+    return {};
+  return std::wstring(path.data(), length);
+}
+
 bool process_image_equals(const HANDLE process,
                           const std::filesystem::path &expected) {
-  std::vector<wchar_t> actual(32'768);
-  DWORD length = static_cast<DWORD>(actual.size());
-  if (QueryFullProcessImageNameW(process, 0, actual.data(), &length) == FALSE ||
-      length == 0)
-    return false;
+  const auto actual = process_image_path(process);
+  if (actual.empty()) return false;
   std::error_code error;
-  const bool equivalent = std::filesystem::equivalent(
-      expected, std::filesystem::path(std::wstring_view(actual.data(), length)),
-      error);
+  const bool equivalent =
+      std::filesystem::equivalent(expected, std::filesystem::path(actual), error);
   return !error && equivalent;
 }
 
 bool is_sibling_process_image(const DWORD process_id,
                               const wchar_t *const filename) {
-  const HANDLE process =
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr) return false;
-  const bool sibling = process_image_equals(process, sibling_image_path(filename));
-  CloseHandle(process);
-  return sibling;
+  const OwnedHandle process(
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
+  return process.valid() &&
+         process_image_equals(process.get(), sibling_image_path(filename));
+}
+
+bool same_session_as_current_process(const DWORD process_id) {
+  DWORD peer_session{};
+  DWORD current_session{};
+  return ProcessIdToSessionId(process_id, &peer_session) != FALSE &&
+         ProcessIdToSessionId(GetCurrentProcessId(), &current_session) !=
+             FALSE &&
+         peer_session == current_session;
 }
 
 bool apply_capture_exclusion(const HWND window, const bool enabled) {
@@ -59,17 +93,15 @@ bool apply_capture_exclusion(const HWND window, const bool enabled) {
 }
 
 bool same_user_as_current_process(const HANDLE process) {
-  HANDLE current_token{};
-  HANDLE other_token{};
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &current_token) ==
-          FALSE ||
-      OpenProcessToken(process, TOKEN_QUERY, &other_token) == FALSE) {
-    if (current_token != nullptr)
-      CloseHandle(current_token);
-    if (other_token != nullptr)
-      CloseHandle(other_token);
-    return false;
-  }
+  HANDLE raw_current{};
+  HANDLE raw_other{};
+  const bool opened =
+      OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw_current) !=
+          FALSE &&
+      OpenProcessToken(process, TOKEN_QUERY, &raw_other) != FALSE;
+  const OwnedHandle current_token(raw_current);
+  const OwnedHandle other_token(raw_other);
+  if (!opened) return false;
   const auto token_user = [](const HANDLE token,
                              std::vector<std::byte> &storage) -> PSID {
     DWORD required{};
@@ -84,13 +116,10 @@ bool same_user_as_current_process(const HANDLE process) {
   };
   std::vector<std::byte> current_storage;
   std::vector<std::byte> other_storage;
-  const PSID current_sid = token_user(current_token, current_storage);
-  const PSID other_sid = token_user(other_token, other_storage);
-  const bool matches = current_sid != nullptr && other_sid != nullptr &&
-                       EqualSid(current_sid, other_sid) != FALSE;
-  CloseHandle(other_token);
-  CloseHandle(current_token);
-  return matches;
+  const PSID current_sid = token_user(current_token.get(), current_storage);
+  const PSID other_sid = token_user(other_token.get(), other_storage);
+  return current_sid != nullptr && other_sid != nullptr &&
+         EqualSid(current_sid, other_sid) != FALSE;
 }
 
 UINT monitor_dpi_for_rect(const RECT &rect) {
@@ -108,21 +137,19 @@ UINT monitor_dpi_for_rect(const RECT &rect) {
 bool is_gamebar_overlay_process(const DWORD process_id) {
   if (process_id == 0)
     return false;
-  const HANDLE process =
-      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
-  if (process == nullptr)
+  const OwnedHandle process(
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
+  if (!process.valid())
     return false;
 
   UINT32 family_length{};
-  const LONG probe = GetPackageFamilyName(process, &family_length, nullptr);
-  if (probe != ERROR_INSUFFICIENT_BUFFER || family_length <= 1U) {
-    CloseHandle(process);
+  const LONG probe =
+      GetPackageFamilyName(process.get(), &family_length, nullptr);
+  if (probe != ERROR_INSUFFICIENT_BUFFER || family_length <= 1U)
     return false;
-  }
   std::vector<wchar_t> family(family_length);
   const LONG result =
-      GetPackageFamilyName(process, &family_length, family.data());
-  CloseHandle(process);
+      GetPackageFamilyName(process.get(), &family_length, family.data());
   return result == ERROR_SUCCESS &&
          std::wstring_view(family.data()) ==
              L"Microsoft.XboxGamingOverlay_8wekyb3d8bbwe";

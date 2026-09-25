@@ -430,7 +430,7 @@ std::string transaction_name() {
   const auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          std::chrono::steady_clock::now().time_since_epoch())
                          .count();
-  const auto process = file_guard_process_id();
+  const auto process = current_process_id();
   return std::to_string(process) + "-" + std::to_string(ticks) + "-" +
          std::to_string(
              transaction_sequence.fetch_add(1, std::memory_order_relaxed));
@@ -693,4 +693,20 @@ ProfileWriteResult commit_profile_transaction(
     const std::span<const ProfileFileMutation> mutations) {
   return commit_profile_transaction_impl(roots, mutations, std::nullopt);
 }
+
+ProfileWriteResult commit_profile_transaction(
+    const std::filesystem::path &profile_directory,
+    const std::span<const ProfileFileMutation> mutations) {
+  const auto roots = profile_transaction_scope(profile_directory);
+  if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
+  return commit_profile_transaction(*roots, mutations);
+}
+
+ProfileWriteResult
+recover_profile_transactions(const std::filesystem::path &profile_directory) {
+  const auto roots = profile_transaction_scope(profile_directory);
+  if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
+  return recover_profile_transactions(*roots);
+}
+
 } // namespace layerc::platform

@@ -40,7 +40,7 @@ struct VisualAssetGcReport;
 
 namespace layerc::editor {
 
-class EditorWindow : private AutomationHost {
+class EditorWindow {
 public:
   EditorWindow();
   ~EditorWindow();
@@ -48,46 +48,7 @@ public:
   int run(HINSTANCE instance, int show_command);
 
 private:
-  [[nodiscard]] ProfileDocument &document() noexcept override {
-    return document_;
-  }
-  void mark_changed(const DocumentChangeKind kind) override {
-    record_profile_change(kind);
-  }
-  [[nodiscard]] HINSTANCE instance() const noexcept override {
-    return shell_.instance();
-  }
-  [[nodiscard]] HWND owner_window() const noexcept override {
-    return shell_.window();
-  }
-  [[nodiscard]] HFONT owner_font() const noexcept override {
-    return shell_.font();
-  }
-  [[nodiscard]] bool capture_exclusion_enabled() const noexcept override {
-    return shell_.capture_exclusion();
-  }
-  void draw_owner_list_item(const DRAWITEMSTRUCT &item) const override {
-    draw_list_box_item(item);
-  }
-  [[nodiscard]] std::optional<LRESULT>
-  owner_theme_message(const HWND window, const UINT message,
-                      const WPARAM wparam, const LPARAM lparam) const override {
-    return dialog_theme_message(window, message, wparam, lparam);
-  }
-  [[nodiscard]] bool live_connected() const noexcept override {
-    return live_edit_.channel().connected();
-  }
-  [[nodiscard]] bool live_authenticated() const noexcept override {
-    return live_edit_.package_authenticated();
-  }
-  void advance_live_revision() noexcept override { live_edit_.advance_revision(); }
-  [[nodiscard]] layerc::core::ProfileRevision
-  live_revision() const noexcept override {
-    return live_edit_.revision();
-  }
-  void send_live(const layerc::core::LiveMessage &message) override {
-    (void)live_edit_.channel().send(message);
-  }
+  friend class AutomationEditor;
 
   static constexpr UINT_PTR autosave_timer = 10;
   static constexpr UINT_PTR live_channel_timer = 11;
@@ -119,7 +80,7 @@ private:
   void refresh_theme();
   void layout();
   void layout_tasks(HWND);
-  void set_status(std::wstring_view text) { set_text(shell_.status(), text); }
+  void set_status(std::wstring_view text) { set_text(shell_.status, text); }
   [[nodiscard]] HBRUSH brush(layerc::platform::EditorControlRole role) const {
     return appearance_editor_.brushes()[static_cast<std::size_t>(role)];
   }
@@ -129,8 +90,6 @@ private:
   void refresh_selected_cooldown_label();
   [[nodiscard]] layerc::core::CooldownDefinition *selected_cooldown();
   void refresh_binding_controls();
-  void load_current_visual_profile();
-  void load_current_automation_profile();
   void refresh_visual_controls();
   void calibrate_visual();
   void calibrate_selected_task();
@@ -249,7 +208,7 @@ private:
   void send_live_anchor(bool final);
   void send_live_profile();
   void select_bar_by_id(std::string_view panel_id);
-  void set_direct_drag_enabled(bool enabled, bool show_notice);
+  void set_direct_drag_enabled(bool enabled);
   void undo();
   void redo();
   void apply_history_snapshot(EditorProfileSnapshot snapshot);

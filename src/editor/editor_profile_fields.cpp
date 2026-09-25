@@ -43,7 +43,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               context.profile.name =
-                  to_utf8(control_text(field_control(context, IDC_PROFILE_NAME)));
+                  wide_to_utf8(window_text(field_control(context, IDC_PROFILE_NAME)));
             },
         .write =
             +[](const ProfileFieldContext &context) {
@@ -52,7 +52,7 @@ const std::array kProfileFields{
             },
         .valid =
             +[](const ProfileFieldContext &context) {
-              return !control_text(field_control(context, IDC_PROFILE_NAME))
+              return !window_text(field_control(context, IDC_PROFILE_NAME))
                           .empty();
             }},
     ProfileFieldBinding{
@@ -65,7 +65,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               context.profile.id =
-                  to_utf8(control_text(field_control(context, IDC_PROFILE_ID)));
+                  wide_to_utf8(window_text(field_control(context, IDC_PROFILE_ID)));
             },
         .write =
             +[](const ProfileFieldContext &context) {
@@ -74,7 +74,7 @@ const std::array kProfileFields{
             },
         .valid =
             +[](const ProfileFieldContext &context) {
-              return !control_text(field_control(context, IDC_PROFILE_ID))
+              return !window_text(field_control(context, IDC_PROFILE_ID))
                           .empty();
             }},
     ProfileFieldBinding{
@@ -87,7 +87,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               context.cooldown->name =
-                  to_utf8(control_text(field_control(context, IDC_COOLDOWN_NAME)));
+                  wide_to_utf8(window_text(field_control(context, IDC_COOLDOWN_NAME)));
             },
         .write =
             +[](const ProfileFieldContext &context) {
@@ -98,7 +98,7 @@ const std::array kProfileFields{
         .valid =
             +[](const ProfileFieldContext &context) {
               return context.cooldown != nullptr &&
-                     !control_text(field_control(context, IDC_COOLDOWN_NAME))
+                     !window_text(field_control(context, IDC_COOLDOWN_NAME))
                           .empty();
             }},
     ProfileFieldBinding{
@@ -111,7 +111,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               if (const auto duration = parse_duration_ms(
-                      control_text(field_control(context, IDC_COOLDOWN_DURATION))))
+                      window_text(field_control(context, IDC_COOLDOWN_DURATION))))
                 context.cooldown->duration = *duration;
             },
         .write =
@@ -124,7 +124,7 @@ const std::array kProfileFields{
         .valid =
             +[](const ProfileFieldContext &context) {
               return context.cooldown != nullptr &&
-                     parse_duration_ms(control_text(
+                     parse_duration_ms(window_text(
                          field_control(context, IDC_COOLDOWN_DURATION)))
                          .has_value();
             }},
@@ -138,7 +138,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               context.cooldown->max_charges = parse_uint(
-                  control_text(field_control(context, IDC_COOLDOWN_CHARGES)),
+                  window_text(field_control(context, IDC_COOLDOWN_CHARGES)),
                   context.cooldown->max_charges);
             },
         .write =
@@ -152,8 +152,9 @@ const std::array kProfileFields{
             +[](const ProfileFieldContext &context) {
               return context.cooldown != nullptr &&
                      bounded_decimal(
-                         control_text(field_control(context, IDC_COOLDOWN_CHARGES)),
-                         1, 99);
+                         window_text(field_control(context, IDC_COOLDOWN_CHARGES)),
+                         layerc::core::min_cooldown_charges,
+                         layerc::core::max_cooldown_charges);
             }},
     ProfileFieldBinding{
         .control_id = IDC_COOLDOWN_RETRIGGER,
@@ -215,7 +216,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               context.panel->bar.width = parse_uint(
-                  control_text(field_control(context, IDC_BAR_WIDTH)),
+                  window_text(field_control(context, IDC_BAR_WIDTH)),
                   context.panel->bar.width);
             },
         .write =
@@ -228,8 +229,8 @@ const std::array kProfileFields{
             +[](const ProfileFieldContext &context) {
               return context.panel == nullptr ||
                      bounded_decimal(
-                         control_text(field_control(context, IDC_BAR_WIDTH)), 40,
-                         1200);
+                         window_text(field_control(context, IDC_BAR_WIDTH)),
+                         layerc::core::min_bar_width, layerc::core::max_bar_width);
             }},
     ProfileFieldBinding{
         .control_id = IDC_BAR_HEIGHT,
@@ -241,7 +242,7 @@ const std::array kProfileFields{
         .read =
             +[](ProfileFieldContext &context) {
               context.panel->bar.height = parse_uint(
-                  control_text(field_control(context, IDC_BAR_HEIGHT)),
+                  window_text(field_control(context, IDC_BAR_HEIGHT)),
                   context.panel->bar.height);
             },
         .write =
@@ -254,8 +255,9 @@ const std::array kProfileFields{
             +[](const ProfileFieldContext &context) {
               return context.panel == nullptr ||
                      bounded_decimal(
-                         control_text(field_control(context, IDC_BAR_HEIGHT)), 16,
-                         240);
+                         window_text(field_control(context, IDC_BAR_HEIGHT)),
+                         layerc::core::min_bar_height,
+                         layerc::core::max_bar_height);
             }},
     ProfileFieldBinding{
         .control_id = IDC_SHOW_TEXT,

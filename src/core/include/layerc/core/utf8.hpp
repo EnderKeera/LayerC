@@ -17,6 +17,10 @@ try_wide_to_utf8(std::wstring_view text);
 // (U+00C0-U+00D6, U+00D8-U+00DE). All other codepoints compare byte-exact.
 [[nodiscard]] std::optional<std::string>
 try_casefold_utf8(std::string_view text);
+// Generated identifier/file stem: lower-case ASCII letters and digits, one
+// dash for every other run, and `fallback` when nothing remains.
+[[nodiscard]] std::string slugify(std::string_view text,
+                                  std::string_view fallback);
 
 namespace detail {
 

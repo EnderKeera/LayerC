@@ -65,7 +65,6 @@ private:
   void toggle_template_mask_editing();
   [[nodiscard]] bool finish_template_mask_editing();
   void update_template_mask(POINT point, bool opaque);
-  void refresh_template_mask_preview();
   void refresh_template_reference_label();
   void update_match_status(bool force = true);
   bool apply();

@@ -4,9 +4,11 @@
 #include <cmath>
 
 namespace layerc::core {
+namespace {
+constexpr const OverlayMetrics &metrics = overlay_metrics;
+} // namespace
 
-PanelGeometry panel_geometry(const Panel &panel, const std::size_t item_count,
-                             const PanelMetrics metrics) {
+PanelGeometry panel_geometry(const Panel &panel, const std::size_t item_count) {
   const auto sizing_count = std::max<std::size_t>(item_count, 1);
   PanelGeometry result;
   result.items.reserve(item_count);
@@ -58,9 +60,8 @@ PanelGeometry panel_geometry(const Panel &panel, const std::size_t item_count,
 }
 
 BarGeometry bar_geometry(const Panel &panel, const std::size_t item_index,
-                         const std::size_t item_count, const double progress,
-                         const PanelMetrics metrics) {
-  const auto layout = panel_geometry(panel, item_count, metrics);
+                         const std::size_t item_count, const double progress) {
+  const auto layout = panel_geometry(panel, item_count);
   if (item_index >= layout.items.size()) return {};
   const auto track = layout.items[item_index];
   const auto bounded_progress = std::clamp(progress, 0.0, 1.0);

@@ -15,14 +15,13 @@
 namespace layerc::core {
 
 inline constexpr std::uint32_t live_protocol_version = 3;
-inline constexpr std::string_view package_version = product_version;
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;
-  result.reserve(component.size() + 1U + package_version.size());
+  result.reserve(component.size() + 1U + product_version.size());
   result.append(component);
   result.push_back('/');
-  result.append(package_version);
+  result.append(product_version);
   return result;
 }
 inline constexpr std::size_t max_live_message_bytes = 512U * 1024U;

@@ -3,6 +3,7 @@
 #include "layerc/core/types.hpp"
 #include "layerc/core/enum_wire.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -232,7 +233,7 @@ enum class ActionTargetRole : std::uint8_t {
   override_name,
 };
 
-// Constraint on the evaluated primary value, beyond accepts_value.
+// Constraint on the evaluated primary value; none accepts no value.
 enum class ActionValuePolicy : std::uint8_t {
   none,
   match_variable,
@@ -247,7 +248,6 @@ struct AutomationActionSpec {
   AutomationActionKind kind;
   std::string_view wire_name;
   std::string_view display_name;
-  bool accepts_value;
   AutomationEffectDomain domain;
   ActionSecondaryPolicy secondary;
   ActionTargetRole target;
@@ -255,95 +255,101 @@ struct AutomationActionSpec {
   bool allows_repeating{};
   bool requires_name{};
   bool requires_property{};
+
+  // True for actions whose primary value expression is evaluated before the
+  // transaction commits.
+  [[nodiscard]] constexpr bool accepts_value() const noexcept {
+    return value != ActionValuePolicy::none;
+  }
 };
 
 inline constexpr std::array automation_action_specs{
     AutomationActionSpec{AutomationActionKind::set_variable, "setVariable",
-                         "Set variable", true,
+                         "Set variable",
                          AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::variable_any,
                          ActionValuePolicy::match_variable},
     AutomationActionSpec{AutomationActionKind::increment_variable,
-                         "incrementVariable", "Increment variable", true,
+                         "incrementVariable", "Increment variable",
                          AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::variable_numeric,
                          ActionValuePolicy::match_numeric_variable},
     AutomationActionSpec{AutomationActionKind::append_list, "appendList",
-                         "Append list", true,
+                         "Append list",
                          AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::variable_list,
                          ActionValuePolicy::any},
     AutomationActionSpec{AutomationActionKind::set_map_entry, "setMapEntry",
-                         "Set map entry", true,
+                         "Set map entry",
                          AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::required_string_key,
                          ActionTargetRole::variable_map,
                          ActionValuePolicy::any},
     AutomationActionSpec{AutomationActionKind::erase_map_entry, "eraseMapEntry",
-                         "Erase map entry", true,
+                         "Erase map entry",
                          AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::variable_map,
                          ActionValuePolicy::string_key},
     AutomationActionSpec{AutomationActionKind::trigger_cooldown,
-                         "triggerCooldown", "Trigger cooldown", false,
+                         "triggerCooldown", "Trigger cooldown",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown, ActionValuePolicy::none},
     AutomationActionSpec{AutomationActionKind::reset_cooldown, "resetCooldown",
-                         "Reset cooldown", false,
+                         "Reset cooldown",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown, ActionValuePolicy::none},
     AutomationActionSpec{AutomationActionKind::reduce_cooldown_next,
-                         "reduceCooldownNext", "Reduce next recovery", true,
+                         "reduceCooldownNext", "Reduce next recovery",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown,
                          ActionValuePolicy::duration_or_integer},
     AutomationActionSpec{AutomationActionKind::reduce_cooldown_all,
-                         "reduceCooldownAll", "Reduce all recoveries", true,
+                         "reduceCooldownAll", "Reduce all recoveries",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown,
                          ActionValuePolicy::duration_or_integer},
     AutomationActionSpec{AutomationActionKind::refund_cooldown,
-                         "refundCooldown", "Refund cooldown", false,
+                         "refundCooldown", "Refund cooldown",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown, ActionValuePolicy::none},
     AutomationActionSpec{AutomationActionKind::trigger_group, "triggerGroup",
-                         "Trigger group", false,
+                         "Trigger group",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown_group,
                          ActionValuePolicy::none},
     AutomationActionSpec{AutomationActionKind::reset_group, "resetGroup",
-                         "Reset group", false,
+                         "Reset group",
                          AutomationEffectDomain::cooldown_engine,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::cooldown_group,
                          ActionValuePolicy::none},
     AutomationActionSpec{AutomationActionKind::create_timer, "createTimer",
-                         "Create timer", true, AutomationEffectDomain::internal,
+                         "Create timer", AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::timer_id,
                          ActionValuePolicy::duration_or_integer, true},
     AutomationActionSpec{AutomationActionKind::cancel_timer, "cancelTimer",
-                         "Cancel timer", false, AutomationEffectDomain::internal,
+                         "Cancel timer", AutomationEffectDomain::internal,
                          ActionSecondaryPolicy::none,
                          ActionTargetRole::timer_id, ActionValuePolicy::none},
     AutomationActionSpec{
         AutomationActionKind::set_overlay_override, "setOverlayOverride",
-        "Set overlay override", true, AutomationEffectDomain::overlay,
+        "Set overlay override", AutomationEffectDomain::overlay,
         ActionSecondaryPolicy::optional_duration, ActionTargetRole::panel,
         ActionValuePolicy::overlay_property, false, true, true},
     AutomationActionSpec{
         AutomationActionKind::clear_overlay_override, "clearOverlayOverride",
-        "Clear overlay override", false, AutomationEffectDomain::overlay,
+        "Clear overlay override", AutomationEffectDomain::overlay,
         ActionSecondaryPolicy::none, ActionTargetRole::override_name,
         ActionValuePolicy::none},
 };
@@ -385,15 +391,6 @@ struct AutomationAction {
 
   bool operator==(const AutomationAction &) const = default;
 };
-
-// True for actions whose primary value expression is evaluated before the
-// transaction commits (parser, validator, serializer, and runtime agree on
-// this one classifier).
-[[nodiscard]] constexpr bool
-action_accepts_value(const AutomationActionKind kind) noexcept {
-  const auto *spec = automation_action_spec(kind);
-  return spec != nullptr && spec->accepts_value;
-}
 
 [[nodiscard]] constexpr AutomationEffectDomain
 effect_domain(const AutomationActionKind kind) noexcept {
@@ -446,6 +443,15 @@ struct AutomationProfile {
   std::vector<AutomationDefinition> automations;
   bool operator==(const AutomationProfile &) const = default;
 };
+
+// True when at least one enabled automation has a rule to evaluate: the one
+// demand rule both daemons use to start an automation runtime.
+[[nodiscard]] inline bool
+has_enabled_automations(const AutomationProfile &profile) noexcept {
+  return std::ranges::any_of(profile.automations, [](const auto &automation) {
+    return automation.enabled && !automation.rules.empty();
+  });
+}
 
 struct AutomationError {
   std::string path;
@@ -520,10 +526,6 @@ struct OverlayPropertyOverride {
   EffectOrder order{};
 
   bool operator==(const OverlayPropertyOverride &) const = default;
-
-  [[nodiscard]] constexpr const EffectOrder &effect_order() const noexcept {
-    return order;
-  }
 };
 
 [[nodiscard]] inline bool overlay_override_precedes(
@@ -567,10 +569,6 @@ struct AutomationEffect {
   AutomationValue secondary;
   bool repeating{};
   EffectOrder order{};
-
-  [[nodiscard]] constexpr const EffectOrder &effect_order() const noexcept {
-    return order;
-  }
 };
 
 struct AutomationTraceEntry {

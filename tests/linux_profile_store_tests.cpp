@@ -39,26 +39,8 @@ std::filesystem::path fault_ancestor;
 int failures_remaining{};
 int injected_failures{};
 
-class TemporaryDirectory {
-public:
-  TemporaryDirectory() {
-    std::array<char, 64> pattern{};
-    const std::string source = "/tmp/layerc-store-test-XXXXXX";
-    std::copy(source.begin(), source.end(), pattern.begin());
-    if (char *const result = ::mkdtemp(pattern.data()); result != nullptr)
-      path_ = result;
-  }
-  ~TemporaryDirectory() {
-    std::error_code error;
-    std::filesystem::remove_all(path_, error);
-  }
-  [[nodiscard]] const std::filesystem::path &path() const noexcept {
-    return path_;
-  }
-
-private:
-  std::filesystem::path path_;
-};
+using layerc::test::read_file;
+using layerc::test::write_file;
 
 std::vector<std::byte> bytes(const std::string_view source) {
   const auto *const first =
@@ -66,25 +48,8 @@ std::vector<std::byte> bytes(const std::string_view source) {
   return {first, first + source.size()};
 }
 
-bool write_file(const std::filesystem::path &path,
-                const std::string_view contents) {
-  std::error_code error;
-  std::filesystem::create_directories(path.parent_path(), error);
-  if (error) return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-  return static_cast<bool>(output);
-}
-
-std::optional<std::string> read_file(const std::filesystem::path &path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) return std::nullopt;
-  return std::string(std::istreambuf_iterator<char>(input),
-                     std::istreambuf_iterator<char>());
-}
-
 void test_bounded_file_read_statuses() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto path = temporary.path() / "bounded-read.bin";
   expect(write_file(path, "abcde"), "bounded-read fixture should be written");
   const auto missing = layerc::platform::read_durable_file(
@@ -163,7 +128,7 @@ void test_xdg_roots_and_permissions() {
   expect(layerc::platform::profile_store_roots_from("relative").store.empty(),
          "relative HOME should not produce storage roots");
 
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto roots = roots_under(temporary.path());
   expect(layerc::platform::ensure_profile_store_roots(roots),
          "LayerC XDG directories should be created");
@@ -186,7 +151,7 @@ void test_xdg_roots_and_permissions() {
 }
 
 void test_profile_directory_scan_resolves_ids() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto profiles = temporary.path() / "profiles";
   std::error_code error;
   std::filesystem::create_directories(profiles / "nested", error);
@@ -221,7 +186,7 @@ void test_profile_directory_scan_resolves_ids() {
 }
 
 void test_transaction_validation_and_locking() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto roots = roots_under(temporary.path());
   expect(layerc::platform::ensure_profile_store_roots(roots),
          "transaction roots should be created");
@@ -285,7 +250,7 @@ void test_transaction_validation_and_locking() {
 }
 
 void test_corrupt_journal_self_heals() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto roots = roots_under(temporary.path());
   expect(layerc::platform::ensure_profile_store_roots(roots),
          "corrupt-journal test directories should be created");
@@ -321,7 +286,7 @@ void test_corrupt_journal_self_heals() {
 }
 
 void test_precreated_stage_symlink_is_rejected() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto victim = temporary.path() / "victim";
   const auto stage = temporary.path() / "precreated.stage";
   expect(write_file(victim, "untouched"), "symlink victim should be written");
@@ -336,7 +301,7 @@ void test_precreated_stage_symlink_is_rejected() {
 }
 
 void test_concurrent_create_only_has_one_winner() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto roots = roots_under(temporary.path());
   expect(layerc::platform::ensure_profile_store_roots(roots),
          "concurrent-writer test directories should be created");
@@ -391,7 +356,7 @@ void test_concurrent_create_only_has_one_winner() {
 }
 
 void test_cross_root_publish_and_recovery() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto roots = roots_under(temporary.path());
   expect(layerc::platform::ensure_profile_store_roots(roots),
          "cross-root test directories should be created");
@@ -447,7 +412,7 @@ void test_cross_root_publish_and_recovery() {
 }
 
 void test_directory_durability_failures() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   const auto roots = roots_under(temporary.path());
   expect(layerc::platform::ensure_profile_store_roots(roots),
          "durability fixture roots should be created");
@@ -564,7 +529,7 @@ void test_profile_store_filename_policy() {
 }
 
 void test_visual_asset_load_contract() {
-  TemporaryDirectory temporary;
+  const layerc::test::TempDirectory temporary("layerc-store-test");
   layerc::test::visual_asset_load_contract(temporary.path());
 }
 } // namespace

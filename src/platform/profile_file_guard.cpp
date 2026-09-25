@@ -22,11 +22,11 @@ std::optional<std::string>
 transaction_relative_key(const std::filesystem::path &relative) {
   const auto encoded = path_to_utf8(relative);
   if (!encoded.has_value()) return std::nullopt;
-  return try_casefold_path(*encoded);
+  return core::try_casefold_utf8(*encoded);
 }
 
 bool transaction_reserved_first_component(std::string_view name_utf8) {
-  const auto folded = try_casefold_path(name_utf8);
+  const auto folded = core::try_casefold_utf8(name_utf8);
   return folded.has_value() && *folded == "_transactions";
 }
 
@@ -102,10 +102,6 @@ guard_transaction_scope(const std::filesystem::path &profile_directory) {
   return ProfileStoreRoots{.config_profiles = directory,
                            .data_profiles = directory,
                            .store = directory};
-}
-
-std::uint64_t file_guard_process_id() noexcept {
-  return static_cast<std::uint64_t>(GetCurrentProcessId());
 }
 
 struct TransactionFileLock::Impl {

@@ -8,77 +8,41 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $CandidateBuildDirectory = [IO.Path]::GetFullPath($CandidateBuildDirectory)
 
-function Assert-Executables {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Directory,
-        [Parameter(Mandatory = $true)]
-        [string[]]$Names
-    )
+Assert-LayerCExecutables $CandidateBuildDirectory @(
+    'layerd.exe', 'lctest.exe', 'layerc_capture_probe.exe')
 
-    if (-not (Test-Path -LiteralPath $Directory -PathType Container)) {
-        throw "Build directory does not exist: $Directory"
-    }
-    foreach ($name in $Names) {
-        if (-not (Test-Path -LiteralPath (Join-Path $Directory $name) -PathType Leaf)) {
-            throw "Missing $name in $Directory."
-        }
-    }
-}
-
-function Assert-BenchmarkPassed {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Name,
-        [Parameter(Mandatory = $true)]
-        [bool]$Succeeded,
-        [Parameter(Mandatory = $true)]
-        [int]$ExitCode
-    )
-
-    if (-not $Succeeded -or $ExitCode -ne 0) {
-        if ($ExitCode -eq 0) { $ExitCode = 1 }
-        throw "$Name failed with exit code $ExitCode."
-    }
-}
-
-Assert-Executables $CandidateBuildDirectory @(
-    'layerd.exe',
-    'lctest.exe',
-    'layerc_capture_probe.exe'
+$visual = @{ BuildDirectory = $CandidateBuildDirectory }
+$runs = @(
+    @{ Name = 'V1.1 visual low'; Script = 'benchmark_v11.ps1'
+       Arguments = $visual + @{ Quality = 'low' } }
+    @{ Name = 'V1.1 visual balanced'; Script = 'benchmark_v11.ps1'
+       Arguments = $visual + @{ Quality = 'balanced' } }
+    @{ Name = 'V2.1 visual template'; Script = 'benchmark_v11.ps1'
+       Arguments = $visual + @{ Quality = 'balanced'; Workload = 'v21-template' } }
 )
-
 if (-not $VisualOnly) {
     if ([string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
         throw 'BaselineBuildDirectory is required unless VisualOnly is set.'
     }
     $BaselineBuildDirectory = [IO.Path]::GetFullPath($BaselineBuildDirectory)
-    Assert-Executables $BaselineBuildDirectory @('layerd.exe')
+    Assert-LayerCExecutables $BaselineBuildDirectory @('layerd.exe')
+    $runs += @{ Name = 'V2.2 input-to-overlay latency'; Script = 'benchmark_latency.ps1'
+        Arguments = @{ BaselineBuildDirectory = $BaselineBuildDirectory
+                       CandidateBuildDirectory = $CandidateBuildDirectory } }
 }
 
-Write-Host '==> V1.1 visual low'
-$global:LASTEXITCODE = 0
-& (Join-Path $PSScriptRoot 'benchmark_v11.ps1') -BuildDirectory $CandidateBuildDirectory -Quality low
-Assert-BenchmarkPassed 'V1.1 visual low' $? $LASTEXITCODE
-
-Write-Host '==> V1.1 visual balanced'
-$global:LASTEXITCODE = 0
-& (Join-Path $PSScriptRoot 'benchmark_v11.ps1') -BuildDirectory $CandidateBuildDirectory -Quality balanced
-Assert-BenchmarkPassed 'V1.1 visual balanced' $? $LASTEXITCODE
-
-Write-Host '==> V2.1 visual template'
-$global:LASTEXITCODE = 0
-& (Join-Path $PSScriptRoot 'benchmark_v11.ps1') -BuildDirectory $CandidateBuildDirectory -Quality balanced -Workload v21-template
-Assert-BenchmarkPassed 'V2.1 visual template' $? $LASTEXITCODE
-
-if (-not $VisualOnly) {
-    Write-Host '==> V2.2 input-to-overlay latency'
+foreach ($run in $runs) {
+    Write-Host "==> $($run.Name)"
     $global:LASTEXITCODE = 0
-    & (Join-Path $PSScriptRoot 'benchmark_latency.ps1') -BaselineBuildDirectory $BaselineBuildDirectory -CandidateBuildDirectory $CandidateBuildDirectory
-    Assert-BenchmarkPassed 'V2.2 input-to-overlay latency' $? $LASTEXITCODE
+    $arguments = $run.Arguments
+    & (Join-Path $PSScriptRoot $run.Script) @arguments
+    if (-not $? -or $LASTEXITCODE -ne 0) {
+        throw "$($run.Name) failed with exit code $([Math]::Max(1, $LASTEXITCODE))."
+    }
 }
 
 Write-Host ''

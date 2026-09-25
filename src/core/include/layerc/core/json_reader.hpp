@@ -34,6 +34,9 @@ read_integer(const Value &value, IntegerEncoding encoding = IntegerEncoding::num
 read_unsigned(const Value &value, IntegerEncoding encoding = IntegerEncoding::number);
 void append_exact_integer(std::string &output, std::int64_t value);
 void append_exact_unsigned(std::string &output, std::uint64_t value);
+// Value form of append_exact_unsigned: a number while exactly representable,
+// otherwise a decimal string.
+[[nodiscard]] Value exact_unsigned_value(std::uint64_t value);
 
 // One accumulator can read nested objects using their domain paths. Optional
 // fields preserve the supplied fallback/output; errors always retain the first

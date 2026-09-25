@@ -18,12 +18,8 @@ $BuildDirectory = $context.BuildDirectory
 $OutputPath = $context.OutputPath
 $temporary = $context.Temporary
 $profileDirectory = $context.ProfileDirectory
-$utf8 = $context.Utf8
-foreach ($name in @('layerd.exe', 'layere.exe')) {
-    if (-not (Test-Path -LiteralPath (Join-Path $BuildDirectory $name))) {
-        throw "Missing $name in $BuildDirectory. Build Release first."
-    }
-}
+Assert-LayerCExecutables $BuildDirectory @('layerd.exe', 'layere.exe') `
+    -Hint 'Build Release first.'
 Assert-LayerCQuiescent -ProcessNames layerd, layere `
     -FailureMessage 'Close existing LayerD and LayerE processes before running the isolated V2.2 benchmark.'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $OutputPath)) | Out-Null

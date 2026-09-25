@@ -80,7 +80,7 @@ void configuration_and_packet_sequences_round_trip() {
                                   .last_write_ticks = 17}};
   request.templates.push_back(std::move(evaluation));
   configuration.requests.push_back(std::move(request));
-  const auto decoded = decode_isolated_configuration(
+  const auto decoded = decode_isolated_message(
       encode_isolated_configuration(configuration));
   const auto *value = std::get_if<IsolatedConfiguration>(&decoded);
   expect(
@@ -93,12 +93,12 @@ void configuration_and_packet_sequences_round_trip() {
       "bounded helper configuration and asset revisions should round-trip "
       "exactly");
 
-  std::uint64_t sequence{};
-  std::string error;
-  expect(decode_isolated_poll(encode_isolated_poll(42), sequence, error) &&
-             sequence == 42 &&
+  const auto poll = decode_isolated_message(encode_isolated_poll(42));
+  const auto *polled = std::get_if<IsolatedPoll>(&poll);
+  expect(polled != nullptr && polled->sequence == 42 &&
              encode_isolated_poll(42).find("waitSnapshot") != std::string::npos,
          "event-driven waitSnapshot sequence should round-trip");
+  std::string error;
   expect(decode_isolated_ack(encode_isolated_ack(42), 42, error),
          "matching acknowledgement should be accepted");
   error.clear();

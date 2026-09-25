@@ -118,19 +118,8 @@ void CalibrationWindow::capture_template_reference() {
   }
   if (reject_when_reference_limit_reached(dialog_, template_state_))
     return;
-  const auto &region = rule_.region;
-  const auto pixel_edge = [](const double edge, const std::uint32_t extent) {
-    return static_cast<std::uint32_t>(
-        std::clamp(edge, 0.0, static_cast<double>(extent)));
-  };
-  const auto left =
-      pixel_edge(std::floor(region.x * frame->width), frame->width);
-  const auto top =
-      pixel_edge(std::floor(region.y * frame->height), frame->height);
-  const auto right = pixel_edge(
-      std::ceil((region.x + region.width) * frame->width), frame->width);
-  const auto bottom = pixel_edge(
-      std::ceil((region.y + region.height) * frame->height), frame->height);
+  const auto [left, top, right, bottom] =
+      layerc::core::to_pixel_bounds(rule_.region, frame->width, frame->height);
   if (right <= left || bottom <= top ||
       static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U) {
     MessageBoxW(dialog_,
@@ -248,13 +237,6 @@ bool CalibrationWindow::finish_template_mask_editing() {
   preview_.invalidate();
   refresh_preview_frame();
   return true;
-}
-
-void CalibrationWindow::refresh_template_mask_preview() {
-  if (template_images_.empty())
-    return;
-  mask_editor_.refresh(template_images_.back());
-  preview_.invalidate();
 }
 
 void CalibrationWindow::update_template_mask(const POINT point,

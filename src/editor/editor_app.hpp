@@ -4,9 +4,6 @@
 
 namespace layerc::editor {
 
-class EditorApp {
-public:
-  int run(HINSTANCE instance, int show_command);
-};
+int run_editor(HINSTANCE instance, int show_command);
 
 } // namespace layerc::editor

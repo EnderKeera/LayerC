@@ -42,6 +42,29 @@ private:
 
 } // namespace
 
+std::wstring quote_command_argument(const std::wstring_view value) {
+  std::wstring output = L"\"";
+  std::size_t slashes{};
+  for (const wchar_t character : value) {
+    if (character == L'\\') {
+      ++slashes;
+      continue;
+    }
+    if (character == L'\"') {
+      output.append(slashes * 2U + 1U, L'\\');
+      output.push_back(L'\"');
+      slashes = 0;
+      continue;
+    }
+    output.append(slashes, L'\\');
+    slashes = 0;
+    output.push_back(character);
+  }
+  output.append(slashes * 2U, L'\\');
+  output.push_back(L'\"');
+  return output;
+}
+
 void BoundedHelper::terminate(const UINT exit_code) const noexcept {
   if (job.valid()) (void)TerminateJobObject(job.get(), exit_code);
   if (process.valid()) {

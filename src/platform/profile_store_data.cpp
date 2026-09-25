@@ -56,7 +56,7 @@ const StoredProfile *ProfileDirectoryScan::find(
 bool has_json_extension(const std::filesystem::path &path) {
   const auto encoded = path_to_utf8(path.extension());
   if (!encoded.has_value()) return false;
-  const auto folded = try_casefold_path(*encoded);
+  const auto folded = core::try_casefold_utf8(*encoded);
   return folded.has_value() && *folded == ".json";
 }
 
@@ -303,8 +303,6 @@ ProfileWriteResult write_profile_file(const std::filesystem::path &path,
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
   if (path_error) return {ProfileWriteError::invalid_input};
-  const auto scope = profile_transaction_scope(absolute.parent_path());
-  if (!scope.has_value()) return {ProfileWriteError::scope_rejected};
 
   std::vector<ProfileFileMutation> mutations;
   // Keep the previous parseable profile as the last-valid recovery point.
@@ -317,7 +315,7 @@ ProfileWriteResult write_profile_file(const std::filesystem::path &path,
           layerc::core::parse_profile_json(*previous)))
     mutations.push_back(text_mutation(recovery_backup_path(absolute), *previous));
   mutations.push_back(text_mutation(absolute, contents));
-  return commit_profile_transaction(*scope, mutations);
+  return commit_profile_transaction(absolute.parent_path(), mutations);
 }
 
 // --- Bundle plan: pure planning (reads only) then one commit ---
@@ -410,7 +408,7 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
       previous_profile.has_value() ? *previous_profile : plan.stored_profile;
   if (!inputs.companion.has_value()) {
     const auto existing = load_companion_sidecar(path, previous_base);
-    if (existing.state == CompanionSidecarState::invalid)
+    if (existing.state == ModuleSidecarState::invalid)
       return std::nullopt;
     if (existing.profile.has_value())
       preserved_companion = existing.profile;
@@ -624,17 +622,15 @@ ProfileWriteResult write_automation_state(
       layerc::core::serialize_automation_state_json(automation_profile, values);
   if (contents.size() > layerc::core::max_automation_state_bytes)
     return {ProfileWriteError::invalid_input};
-  // Scope on the profile directory (not `_state/`) so this write shares the
-  // store's transaction roots with bundle saves and startup recovery.
-  const auto scope = profile_transaction_scope(profile_path.parent_path());
-  if (!scope.has_value()) return {ProfileWriteError::scope_rejected};
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
   if (path_error) return {ProfileWriteError::invalid_input};
   // Transient session data: no user-visible `.bak`. The journal still owns
   // crash rollback for the single mutation.
   const std::array mutations{text_mutation(absolute, contents)};
-  return commit_profile_transaction(*scope, mutations);
+  // Scope on the profile directory (not `_state/`) so this write shares the
+  // store's transaction roots with bundle saves and startup recovery.
+  return commit_profile_transaction(profile_path.parent_path(), mutations);
 }
 SidecarMarkerInspection
 inspect_sidecar_markers(const std::filesystem::path &sidecar) noexcept {

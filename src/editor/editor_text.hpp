@@ -1,6 +1,8 @@
 #pragma once
 
 #include "layerc/core/types.hpp"
+#include "layerc/platform/text.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -11,9 +13,11 @@
 
 namespace layerc::editor {
 
+using layerc::platform::wide_to_utf8;
+using layerc::platform::window_text;
+
+// Like platform::utf8_to_wide, but shows "?" for undecodable non-empty text.
 [[nodiscard]] std::wstring to_wide(std::string_view text);
-[[nodiscard]] std::string to_utf8(std::wstring_view text);
-[[nodiscard]] std::wstring control_text(HWND control);
 void set_text(HWND control, std::wstring_view text);
 // Digits only: signs, whitespace, prefixes and out-of-range values are
 // rejected, so "-1" or "-FFFFF" can never wrap into a large unsigned value.
