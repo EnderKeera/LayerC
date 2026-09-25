@@ -150,7 +150,7 @@ jobs:
           sudo apt-get update
           mapfile -t packages < tools/linux-deps.txt
           sudo apt-get install -y --no-install-recommends \
-            "${packages[@]}" flatpak flatpak-builder
+            "${packages[@]}" flatpak flatpak-builder elfutils
           sudo flatpak remote-add --system --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y flathub \
