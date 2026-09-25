@@ -110,6 +110,10 @@ void linux_event_loop_contracts() {
     loop.register_fd(pipefd[0]);
     loop.set_deadline(layerc::core::MonotonicClock::now() -
                       std::chrono::milliseconds(1));
+    // A past deadline arms the timerfd 1 ns ahead; with the pipe already
+    // readable, poll() can return before the kernel fires it. Let the timer
+    // actually expire so both sources are ready when the loop polls.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
     const auto wake = loop.poll_once(250);
     passed &= expect(wake.timer && wake.fd &&
                          std::count(loop.ready_fds().begin(),
