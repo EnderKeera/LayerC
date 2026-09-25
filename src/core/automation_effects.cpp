@@ -111,9 +111,9 @@ find_overlay_property(const std::string_view name) noexcept {
   return nullptr;
 }
 
-ResolvedPanelOverrides
-resolve_panel_overrides(const Panel &base,
-                        const std::span<const OverlayPropertyOverride> overrides) {
+ResolvedPanelOverrides resolve_panel_overrides(
+    const Panel &base,
+    const std::span<const OverlayPropertyOverride> overrides) {
   std::map<std::string_view, const OverlayPropertyOverride *> winners;
   for (const auto &item : overrides) {
     if (item.panel_id != base.id) continue;

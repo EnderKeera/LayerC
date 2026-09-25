@@ -58,8 +58,7 @@ void append_source_fields(std::string &output, const std::string_view path,
   output += ",\"size\":";
   core::json::append_unsigned(output, json.size());
   output += ",\"sha256\":";
-  core::json::append_quoted(
-      output, core::sha256(core::text_bytes(json)));
+  core::json::append_quoted(output, core::sha256(core::text_bytes(json)));
 }
 
 void append_module(std::string &output, bool &first,

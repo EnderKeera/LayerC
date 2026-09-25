@@ -35,7 +35,8 @@ owned_bytes(const std::string_view text) {
   const auto bytes = text_bytes(text);
   return {bytes.begin(), bytes.end()};
 }
-[[nodiscard]] inline std::string as_text(const std::span<const std::byte> bytes) {
+[[nodiscard]] inline std::string
+as_text(const std::span<const std::byte> bytes) {
   if (bytes.empty()) return {};
   return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
 }

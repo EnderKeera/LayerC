@@ -632,7 +632,8 @@ std::optional<ProfileWriteResult> checkpoint_automation_state(
     const layerc::core::TimePoint now, const bool force) {
   if (!layerc::core::automation_checkpoint_ready(due, now, force))
     return std::nullopt;
-  auto written = write_automation_state(profile_path, automation_profile, values);
+  auto written =
+      write_automation_state(profile_path, automation_profile, values);
   layerc::core::automation_checkpoint_report(due, now, written);
   return written;
 }

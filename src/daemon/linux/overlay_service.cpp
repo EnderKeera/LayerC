@@ -39,19 +39,20 @@ InputSession *find_session(const std::span<InputSession> sessions,
                                       &layerc::core::Panel::id);
   if (base == session.profile.panels.end()) return false;
   overrides = layerc::core::resolve_panel_overrides(
-      *base, session.automation_runtime
-                 ? std::span(session.automation_runtime->snapshot()
-                                 .overlay_overrides)
-                 : std::span<const layerc::core::OverlayPropertyOverride>{});
+      *base,
+      session.automation_runtime
+          ? std::span(session.automation_runtime->snapshot().overlay_overrides)
+          : std::span<const layerc::core::OverlayPropertyOverride>{});
   frame.panel = std::move(overrides.panel);
   return overrides.visible.value_or(true);
 }
 
 // Fills `frame.bars` from the session's engine. false means the panel has
 // nothing to show right now (everything is ready and the style hides it).
-[[nodiscard]] bool fill_bars(layerc::platform::X11OverlayFrame &frame,
-                             InputSession &session, const TimePoint now,
-                             const layerc::core::ResolvedPanelOverrides &overrides) {
+[[nodiscard]] bool
+fill_bars(layerc::platform::X11OverlayFrame &frame, InputSession &session,
+          const TimePoint now,
+          const layerc::core::ResolvedPanelOverrides &overrides) {
   session.cooldowns.update(now);
   const auto states = session.cooldowns.snapshot(now);
   frame.bars.clear();

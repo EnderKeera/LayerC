@@ -111,7 +111,8 @@ std::string color_text(std::uint32_t color) {
     return text;
 }
 
-std::optional<std::uint32_t> parse_color_text(const std::string_view text) noexcept {
+std::optional<std::uint32_t>
+parse_color_text(const std::string_view text) noexcept {
     if (text.size() != 7 || text.front() != '#') return std::nullopt;
     const auto *const last = text.data() + text.size();
     std::uint32_t color{};

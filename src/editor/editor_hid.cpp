@@ -37,7 +37,7 @@ bool system_class(const layerc::platform::HidRawDevice &device) {
 }
 
 void unregister_devices(HidDialogState &state) {
-  for (const auto [page, usage] : state.registrations) {
+  for (const auto &[page, usage] : state.registrations) {
     RAWINPUTDEVICE device{.usUsagePage = page,
                           .usUsage = usage,
                           .dwFlags = RIDEV_REMOVE,
