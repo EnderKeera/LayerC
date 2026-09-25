@@ -42,7 +42,8 @@ namespace layerc::core::detail {
 
 [[nodiscard]] std::optional<AutomationValue>
 duration_result(const double value) {
-  if (!std::isfinite(value) || value < 0.0 || value > 86'400'000.0 ||
+  if (!std::isfinite(value) || value < 0.0 ||
+      value > static_cast<double>(max_cooldown_duration.count()) ||
       std::floor(value) != value)
     return std::nullopt;
   return AutomationValue(
@@ -331,30 +332,26 @@ bool eval_comparison(const AutomationOpSpec &self, const Args arguments,
     default: return std::nullopt;
     }
   };
-  const auto *left_integer = std::get_if<std::int64_t>(&arguments[0].storage);
-  const auto *right_integer = std::get_if<std::int64_t>(&arguments[1].storage);
-  if (left_integer != nullptr && right_integer != nullptr) {
-    const auto compared = compare(*left_integer, *right_integer);
+  const auto finish = [&](const auto left, const auto right) {
+    const auto compared = compare(left, right);
     if (!compared.has_value()) {
       error = "unsupported expression operation";
       return false;
     }
     result = AutomationValue(*compared);
     return true;
-  }
+  };
+  const auto *left_integer = std::get_if<std::int64_t>(&arguments[0].storage);
+  const auto *right_integer = std::get_if<std::int64_t>(&arguments[1].storage);
+  if (left_integer != nullptr && right_integer != nullptr)
+    return finish(*left_integer, *right_integer);
   const auto left = number(arguments[0]);
   const auto right = number(arguments[1]);
   if (!left || !right) {
     error = std::string(self.name) + " requires numeric arguments";
     return false;
   }
-  const auto compared = compare(*left, *right);
-  if (!compared.has_value()) {
-    error = "unsupported expression operation";
-    return false;
-  }
-  result = AutomationValue(*compared);
-  return true;
+  return finish(*left, *right);
 }
 
 bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
@@ -437,35 +434,42 @@ bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
   return true;
 }
 
+namespace {
+
+const AutomationList *list_argument(const AutomationOpSpec &self,
+                                   const AutomationValue &argument,
+                                   std::string &error) {
+  const auto *list = std::get_if<AutomationList>(&argument.storage);
+  if (list == nullptr)
+    error = std::string(self.name) + " requires a list";
+  return list;
+}
+
+} // namespace
+
 bool eval_any(const AutomationOpSpec &self, const Args arguments,
                      AutomationValue &result, std::string &error) {
-  const auto *list = std::get_if<AutomationList>(&arguments[0].storage);
-  if (list == nullptr) {
-    error = std::string(self.name) + " requires a list";
+  const auto *list = list_argument(self, arguments[0], error);
+  if (list == nullptr)
     return false;
-  }
   result = AutomationValue(std::ranges::any_of(*list, truthy));
   return true;
 }
 
 bool eval_all(const AutomationOpSpec &self, const Args arguments,
                      AutomationValue &result, std::string &error) {
-  const auto *list = std::get_if<AutomationList>(&arguments[0].storage);
-  if (list == nullptr) {
-    error = std::string(self.name) + " requires a list";
+  const auto *list = list_argument(self, arguments[0], error);
+  if (list == nullptr)
     return false;
-  }
   result = AutomationValue(std::ranges::all_of(*list, truthy));
   return true;
 }
 
 bool eval_map_filter(const AutomationOpSpec &self, const Args arguments,
                             AutomationValue &result, std::string &error) {
-  const auto *list = std::get_if<AutomationList>(&arguments[0].storage);
-  if (list == nullptr) {
-    error = std::string(self.name) + " requires a list";
+  const auto *list = list_argument(self, arguments[0], error);
+  if (list == nullptr)
     return false;
-  }
   const auto *field = std::get_if<std::string>(&arguments[1].storage);
   if (field == nullptr) {
     error = std::string(self.name) + " requires a string field name";
@@ -475,15 +479,15 @@ bool eval_map_filter(const AutomationOpSpec &self, const Args arguments,
   items.reserve(list->size());
   for (const auto &item : *list) {
     const auto *map = std::get_if<AutomationMap>(&item.storage);
-    const auto found =
-        map == nullptr ? AutomationMap::const_iterator{} : map->find(*field);
-    if (self.opcode == AutomationOpcode::map) {
-      items.push_back(map != nullptr && found != map->end() ? found->second
-                                                            : AutomationValue{});
-    } else if (map != nullptr && found != map->end() &&
-               truthy(found->second)) {
-      items.push_back(item);
+    const AutomationValue *field_value = nullptr;
+    if (map != nullptr) {
+      if (const auto found = map->find(*field); found != map->end())
+        field_value = &found->second;
     }
+    if (self.opcode == AutomationOpcode::map)
+      items.push_back(field_value != nullptr ? *field_value : AutomationValue{});
+    else if (field_value != nullptr && truthy(*field_value))
+      items.push_back(item);
   }
   result = AutomationValue(std::move(items));
   return true;
@@ -496,20 +500,24 @@ bool eval_min_max_clamp(const AutomationOpSpec &self, const Args arguments,
     error = std::string(self.name) + " requires numbers";
     return false;
   }
+  // min/max fold every argument; clamp(x, lo, hi) is max with lo then min
+  // with hi, so only the remaining bounds participate in order.
   for (std::size_t index = 1; index < arguments.size(); ++index) {
     const auto next = number(arguments[index]);
     if (!next.has_value()) {
       error = std::string(self.name) + " requires numbers";
       return false;
     }
-    if (self.opcode == AutomationOpcode::minimum)
+    if (self.opcode == AutomationOpcode::clamp) {
+      if (index == 1)
+        *value = std::max(*value, *next);
+      else
+        *value = std::min(*value, *next);
+    } else if (self.opcode == AutomationOpcode::minimum) {
       *value = std::min(*value, *next);
-    else if (self.opcode == AutomationOpcode::maximum)
+    } else {
       *value = std::max(*value, *next);
-    else if (index == 1)
-      *value = std::max(*value, *next);
-    else
-      *value = std::min(*value, *next);
+    }
   }
   result = AutomationValue(*value);
   return true;

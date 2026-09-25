@@ -96,17 +96,6 @@ const char *import_verb(const bool dry_run, const bool collides) {
   }
 }
 
-// Profile ids become store filenames; reject anything path-shaped.
-[[nodiscard]] bool safe_profile_id(std::string_view id) {
-  if (id.empty() || id.size() > 128U) return false;
-  for (const char c : id) {
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                    (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
-    if (!ok) return false;
-  }
-  return id != "." && id != "..";
-}
-
 // Staged bundle bytes through the platform durable-file primitive (O_EXCL,
 // owner-only, fsynced, symlink-safe) instead of a hand-rolled mkstemp
 // wrapper. The stage file is removed on scope exit.
@@ -177,16 +166,13 @@ int call_daemon(const platform::ControlCommand command, bool json_output) {
     std::fputc('\n', stdout);
     return 0;
   }
-  const auto parsed = layerc::core::json::parse(*response);
-  const auto *value = std::get_if<layerc::core::json::Value>(&parsed);
-  const auto *ok = value != nullptr ? value->find("ok") : nullptr;
-  if (ok == nullptr || !ok->is_bool() || !ok->as_bool()) {
-    const auto *error_field =
-        value != nullptr ? value->find("error") : nullptr;
-    std::fprintf(stderr, "layerctl: %s\n",
-                 error_field != nullptr && error_field->is_string()
-                     ? error_field->as_string().c_str()
-                     : "the daemon returned an invalid response");
+  const auto decoded = platform::decode_control_response(*response);
+  if (!decoded.has_value() || !decoded->ok) {
+    const std::string message =
+        decoded.has_value() && !decoded->error.empty()
+            ? decoded->error
+            : "the daemon returned an invalid response";
+    std::fprintf(stderr, "layerctl: %s\n", message.c_str());
     return 1;
   }
   std::printf("layerctl: %s acknowledged\n",
@@ -209,21 +195,18 @@ int profile_command(int argc, char **argv) {
                  stderr);
       return 1;
     }
-    if (!safe_profile_id(profile->id)) {
-      std::fputs("layerctl: profile id is not usable as a filename\n",
-                 stderr);
-      return 1;
-    }
     if (!platform::ensure_profile_store_roots(roots)) {
       std::fputs("layerctl: the profile store roots could not be created\n",
                  stderr);
       return 1;
     }
-    const auto target = roots.config_profiles / (profile->id + ".json");
-    if (!platform::write_profile_bundle_create_only(target, *profile,
-                                                     std::nullopt)) {
-      std::fputs("layerctl: profile already exists or publishing failed\n",
-                 stderr);
+    const auto target =
+        roots.config_profiles / platform::profile_store_filename(profile->id);
+    const auto written = platform::write_profile_bundle_create_only(
+        target, *profile, std::nullopt);
+    if (const auto error = written.error()) {
+      std::fprintf(stderr, "layerctl: profile import failed: %s\n",
+                   platform::profile_write_error_text(*error));
       return 1;
     }
     std::fprintf(stderr, "layerctl: imported profile '%s'\n",
@@ -298,23 +281,27 @@ int bundle_command(int argc, char **argv) {
     const auto scan = scan_or_die(roots);
     if (!scan.has_value()) return 1;
     // One resolved plan for preview and commit: filename-aware collision
-    // detection, keep-existing skips, and validation errors come from the
-    // library, never from a CLI-local ID-only reimplementation.
+    // detection and validation errors come from the library, never from a
+    // CLI-local ID-only reimplementation. The preview binds each choice to
+    // the reviewed destination, so the commit fails if the store changed.
+    std::vector<bundle::ImportChoice> requested;
+    requested.reserve(pack->profiles.size());
+    for (std::size_t index = 0; index < pack->profiles.size(); ++index)
+      requested.push_back(
+          {.profile_index = index, .action = bundle::ImportAction::replace});
     const auto preview = bundle::preview_profile_import(
-        *pack, keep_existing, roots.config_profiles);
+        *pack, requested, roots.config_profiles);
     if (preview.error.has_value()) {
       std::fprintf(stderr, "layerctl: bundle import failed (%s)\n",
                    preview.error->message.c_str());
       return 1;
     }
-    std::vector<bundle::ImportChoice> choices;
-    choices.reserve(preview.entries.size());
-    for (const auto &entry : preview.entries) {
-      choices.push_back(
-          {.profile_index = entry.profile_index,
-           .action = entry.skipped ? bundle::ImportAction::skip
-                                   : bundle::ImportAction::replace});
-      if (entry.skipped) {
+    auto choices = preview.choices;
+    for (std::size_t index = 0; index < preview.entries.size(); ++index) {
+      const auto &entry = preview.entries[index];
+      const bool keep = keep_existing && entry.collides;
+      if (keep) choices[index].action = bundle::ImportAction::skip;
+      if (keep) {
         std::fprintf(stderr, "layerctl: keeping existing profile '%s'\n",
                      entry.id.c_str());
       } else {

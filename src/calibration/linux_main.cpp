@@ -12,7 +12,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
-#include <limits>
 #include <string>
 #include <string_view>
 
@@ -80,15 +79,10 @@ struct Options {
     }
     if (argument == "--quality") {
       if (++index >= argc) usage();
-      const std::string_view value{argv[index]};
-      if (value == "low")
-        options.quality = CaptureQuality::low;
-      else if (value == "balanced")
-        options.quality = CaptureQuality::balanced;
-      else if (value == "exact")
-        options.quality = CaptureQuality::exact;
-      else
-        usage();
+      const auto quality = layerc::core::parse_enum_wire(
+          layerc::core::capture_quality_wire, std::string_view{argv[index]});
+      if (!quality) usage();
+      options.quality = *quality;
       continue;
     }
     if (argument == "--region") {
@@ -111,38 +105,23 @@ struct Options {
   return options;
 }
 
+// Wire names come from the shared visual tables so the JSON report and
+// saved sidecars use one vocabulary.
 [[nodiscard]] std::string_view quality_name(const CaptureQuality quality) {
-  switch (quality) {
-  case CaptureQuality::low: return "low";
-  case CaptureQuality::balanced: return "balanced";
-  case CaptureQuality::exact: return "exact";
-  }
-  return "balanced";
+  return layerc::core::enum_wire_name(layerc::core::capture_quality_wire, quality)
+      .value_or("balanced");
 }
 
 [[nodiscard]] std::string_view
 availability_name(const CaptureAvailability availability) {
-  switch (availability) {
-  case CaptureAvailability::inactive: return "inactive";
-  case CaptureAvailability::starting: return "starting";
-  case CaptureAvailability::available: return "available";
-  case CaptureAvailability::unavailable: return "unavailable";
-  case CaptureAvailability::protected_or_black: return "protectedOrBlack";
-  case CaptureAvailability::outside_output: return "outsideOutput";
-  }
-  return "unavailable";
+  return layerc::core::enum_wire_name(layerc::core::capture_availability_wire,
+                                      availability)
+      .value_or("unavailable");
 }
 
 [[nodiscard]] std::string_view backend_name(const CaptureBackendKind backend) {
-  switch (backend) {
-  case CaptureBackendKind::none: return "none";
-  case CaptureBackendKind::windows_graphics_capture:
-    return "windowsGraphicsCapture";
-  case CaptureBackendKind::desktop_duplication: return "desktopDuplication";
-  case CaptureBackendKind::x11_composite: return "x11Composite";
-  case CaptureBackendKind::x11_full_frame: return "x11FullFrame";
-  }
-  return "none";
+  return layerc::core::enum_wire_name(layerc::core::capture_backend_wire, backend)
+      .value_or("none");
 }
 
 [[nodiscard]] std::string ppm_header(const std::uint32_t width,
@@ -249,10 +228,8 @@ int main(const int argc, char **argv) {
 
   layerc::platform::X11CaptureSession session(*display, options.window,
                                                options.quality);
-  const bool started = session.start();
-  auto poll = session.poll(layerc::core::MonotonicClock::now());
-  if (!started && poll.result.availability == CaptureAvailability::inactive)
-    poll.result.availability = CaptureAvailability::unavailable;
+  (void)session.start();
+  const auto poll = session.poll(layerc::core::MonotonicClock::now());
   const bool available =
       poll.result.availability == CaptureAvailability::available &&
       poll.result.frame != nullptr;

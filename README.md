@@ -187,7 +187,8 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_core_tests` | Profiles, UTF-8, cooldowns, automation, live edit, and visual-profile logic |
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
-| `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` maximum) |
+| `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
+| `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
 
 ### Windows
 
@@ -196,10 +197,12 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_capture_integration_tests` | Interactive WGC/DD integration; registered only with `LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS=ON` |
 | `layerc_overlay_tests` | HWND attachment, GDI rendering, capture exclusion, and `lctest` matching |
 | `layerc_platform_tests` | Profile store, transaction recovery, named-pipe IPC, and peer authentication |
+| `layerc_daemon_runtime_tests` | Capability-service reconciliation, rollback, and demand-driven lifecycle |
 | `layerc_bundle_tests` | Deterministic bundle export/import and SHA-256 asset deduplication |
 | `layerc_isolated_visual_tests` | `layerw` protocol, bounds, authentication, and quarantine behavior |
 | `layerc_companion_tests` | Companion sidecars, snapshots, transport, and stale expiration |
 | `layerc_editor_tests` | Editor dialogs, theme behavior, schema helpers, and automation presets |
+| `layerc_calibration_tests` | Calibration window layout, behavior, and worker interaction |
 
 ### Linux
 
@@ -231,9 +234,14 @@ Every push runs:
 3. `windows-analyze`: a non-unity Release build with MSVC `/analyze` enabled
    for every LayerC target.
 4. `linux`: `tools/ci-linux.sh` in digest-pinned `debian:stable` and
-   `ubuntu:24.04` containers under Xvfb (the same script runs locally).
+   `ubuntu:24.04` containers. It separates headless and required Xvfb suites,
+   rejects missing/skipped coverage, smokes the installed binaries with private
+   XDG roots, and uploads commit-bound evidence.
+5. `linux-flatpak`: builds the 25.08 manifest and requires daemon/control/X11
+   runtime smoke under Xvfb; unavailable Flatpak coverage fails this job.
 
-`publish-rolling` requires `windows-msvc`, `windows-analyze`, AND `linux`:
+`publish-rolling` requires `windows-msvc`, `windows-analyze`, `linux`, AND
+`linux-flatpak`:
 `rolling` means green main across those gates. Tagged releases and the rolling prerelease ship the Windows
 x64 ZIP only; Linux V2.6 stays pre-release with no packaged artifact.
 
@@ -272,9 +280,9 @@ interactive desktop box, not a headless agent:
 - CI only writes inside `GITHUB_WORKSPACE` and uploads `benchmark-evidence`.
   Syncing the rolling install into a local checkout stays a manual step for
   the box owner: `.\tools\pull-ci.ps1`.
-- Linux container CI is the automated compatibility gate; the native/Flatpak
-  physical X11 checklist is separate and remains pending until archived
-  evidence exists.
+- Linux CI is the automated compatibility gate, including installed-native and
+  Flatpak smoke. The GNOME Xorg/KDE X11 native+Flatpak physical checklist is
+  separate and remains pending until archived evidence exists.
 
 ## Profile locations and format
 

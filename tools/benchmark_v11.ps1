@@ -75,9 +75,8 @@ foreach ($name in $required) {
         throw "Missing $name in $BuildDirectory. Build Release with tests enabled first."
     }
 }
-if (Get-Process -Name layerd -ErrorAction SilentlyContinue) {
-    throw 'Close the existing LayerD instance before running an isolated benchmark.'
-}
+Assert-LayerCQuiescent -ProcessNames layerd `
+    -FailureMessage 'Close the existing LayerD instance before running an isolated benchmark.'
 
 $visualDirectory = Join-Path $profileDirectory '_visual'
 [IO.Directory]::CreateDirectory($visualDirectory) | Out-Null
@@ -394,7 +393,7 @@ try {
     [void](New-Item -Path $settingsRegistryPath -Force)
     Set-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -Type DWord -Value 1
     $visualSettingTouched = $true
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $profileDirectory, 'Process')
+    Enter-LayerCProfileSandbox -ProfileDirectory $profileDirectory
     $game = Start-Process -FilePath (Join-Path $BuildDirectory 'lctest.exe') -PassThru
     for ($attempt = 0; $attempt -lt 40; ++$attempt) {
         Start-Sleep -Milliseconds 100
@@ -428,8 +427,7 @@ try {
     }
     $captureProbe = $probeText | ConvertFrom-Json
 
-    $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+    $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
     [void]$activator.AppActivate($game.Id)
     $daemonCaptureVerified = $false
     for ($attempt = 0; $attempt -lt 50 -and -not $daemonCaptureVerified; ++$attempt) {
@@ -603,15 +601,8 @@ try {
     if (-not $gatePassed) { exit 1 }
 } finally {
     if ($null -ne $captureEvent) { $captureEvent.Dispose() }
-    if ($null -ne $daemon -and -not $daemon.HasExited) {
-        Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue
-        [void]$daemon.WaitForExit(5000)
-    }
-    if ($null -ne $game -and -not $game.HasExited) {
-        Stop-Process -Id $game.Id -Force -ErrorAction SilentlyContinue
-        [void]$game.WaitForExit(5000)
-    }
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $oldProfileDirectory, 'Process')
+    Stop-LayerCBenchmarkProcess -Process $daemon
+    Stop-LayerCBenchmarkProcess -Process $game
     if ($visualSettingTouched) {
         if ($visualSettingWasPresent) {
             Set-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -Type DWord -Value ([int]$oldVisualSetting) -ErrorAction SilentlyContinue
@@ -619,5 +610,6 @@ try {
             Remove-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -ErrorAction SilentlyContinue
         }
     }
-    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
+    Exit-LayerCProfileSandbox -PreviousDirectory $oldProfileDirectory `
+        -TemporaryDirectory $temporary
 }

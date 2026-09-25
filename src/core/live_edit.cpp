@@ -26,9 +26,8 @@ bool same_runtime_definition(const CooldownDefinition &left,
 const CooldownDefinition *
 find_cooldown(const std::vector<CooldownDefinition> &definitions,
               const std::string_view id) {
-  const auto found = std::ranges::find_if(
-      definitions,
-      [&](const CooldownDefinition &candidate) { return candidate.id == id; });
+  const auto found =
+      std::ranges::find(definitions, id, &CooldownDefinition::id);
   return found == definitions.end() ? nullptr : &*found;
 }
 
@@ -247,6 +246,10 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
     return LiveProtocolError{fields.error().describe()};
   switch (message.type) {
   case LiveMessageType::handshake:
+  case LiveMessageType::runtime_status:
+  case LiveMessageType::diagnostics_reply:
+  case LiveMessageType::acknowledgement:
+  case LiveMessageType::error:
     if (!fields.required_fields(root, {"text"}, "$"))
       return LiveProtocolError{fields.error().describe()};
     break;
@@ -284,27 +287,14 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
     if (!fields.required_fields(root, {"editSession"}, "$"))
       return LiveProtocolError{fields.error().describe()};
     break;
-  case LiveMessageType::runtime_status:
-  case LiveMessageType::diagnostics_reply:
-    if (!fields.required_fields(root, {"text"}, "$"))
-      return LiveProtocolError{fields.error().describe()};
-    break;
   case LiveMessageType::diagnostics_request:
   case LiveMessageType::retry_visual:
   case LiveMessageType::automation_trace_subscribe:
   case LiveMessageType::automation_trace_unsubscribe:
     break;
   case LiveMessageType::automation_trace_event:
-    if (!fields.required_fields(root, {"profileKey", "text"}, "$"))
-      return LiveProtocolError{fields.error().describe()};
-    break;
   case LiveMessageType::retry_automation:
     if (!fields.required_fields(root, {"profileKey", "text"}, "$"))
-      return LiveProtocolError{fields.error().describe()};
-    break;
-  case LiveMessageType::acknowledgement:
-  case LiveMessageType::error:
-    if (!fields.required_fields(root, {"text"}, "$"))
       return LiveProtocolError{fields.error().describe()};
     break;
   }

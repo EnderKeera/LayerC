@@ -7,8 +7,7 @@ namespace {
 
 const CooldownState *find_cooldown(
     const std::span<const CooldownState> cooldowns, const std::string_view id) {
-  const auto found = std::ranges::find_if(
-      cooldowns, [&](const CooldownState &state) { return state.id == id; });
+  const auto found = std::ranges::find(cooldowns, id, &CooldownState::id);
   return found == cooldowns.end() ? nullptr : &*found;
 }
 
@@ -113,104 +112,115 @@ VisualTriggerEngine::on_input(const std::string_view cooldown_id,
   return {};
 }
 
+void VisualTriggerEngine::apply_measurement(
+    const ObservationMeasurement &measurement) {
+  const auto found = rules_.find(measurement.observation_id);
+  if (found == rules_.end()) return;
+  auto &state = found->second;
+  state.availability = measurement.availability;
+  state.sampled_at = measurement.sampled_at;
+  state.has_sample = true;
+  if (measurement.availability != CaptureAvailability::available) {
+    state.matching_samples = 0;
+    state.nonmatching_samples = 0;
+    state.stable_match = false;
+    for (const auto &trigger : profile_.triggers) {
+      if (trigger.observation_id != measurement.observation_id) continue;
+      auto &trigger_state = triggers_.at(trigger.cooldown_id);
+      trigger_state.edge_armed = true;
+      trigger_state.repeat_fired_for_ready = false;
+    }
+    return;
+  }
+  if (measurement.matched) {
+    state.nonmatching_samples = 0;
+    if (state.matching_samples < state.stable_samples)
+      ++state.matching_samples;
+    if (state.matching_samples >= state.stable_samples)
+      state.stable_match = true;
+  } else {
+    state.matching_samples = 0;
+    if (state.nonmatching_samples < state.stable_samples)
+      ++state.nonmatching_samples;
+    if (state.nonmatching_samples >= state.stable_samples)
+      state.stable_match = false;
+  }
+}
+
+void VisualTriggerEngine::evaluate_confirm_trigger(
+    const VisualTrigger &trigger, TriggerState &trigger_state,
+    const RuleState &rule_state, const TimePoint now,
+    std::vector<VisualTriggerRequest> &output) {
+  if (!trigger_state.pending_confirmation) return;
+  if (now > trigger_state.confirmation_deadline) {
+    trigger_state.pending_confirmation = false;
+    return;
+  }
+  const auto decision = classify(trigger, &rule_state, now);
+  if (decision == ConfirmationDecision::fallback) {
+    trigger_state.pending_confirmation = false;
+    output.push_back({trigger.cooldown_id, VisualTriggerSource::capture_fallback});
+  } else if (decision == ConfirmationDecision::terminal) {
+    trigger_state.pending_confirmation = false;
+  } else if (decision == ConfirmationDecision::confirmed) {
+    trigger_state.pending_confirmation = false;
+    output.push_back({trigger.cooldown_id, VisualTriggerSource::input_confirmed});
+  }
+}
+
+void VisualTriggerEngine::evaluate_pixel_trigger(
+    const VisualTrigger &trigger, TriggerState &trigger_state,
+    const RuleState &rule_state, const std::span<const CooldownState> cooldowns,
+    const TimePoint now, std::vector<VisualTriggerRequest> &output) {
+  if (rule_state.availability != CaptureAvailability::available ||
+      !measurement_is_fresh(rule_state, now))
+    return;
+  if (!rule_state.stable_match) {
+    trigger_state.edge_armed = true;
+    trigger_state.repeat_fired_for_ready = false;
+    return;
+  }
+
+  if (observation_repeat_policy(profile_, trigger.observation_id) ==
+      PixelRepeatPolicy::edge) {
+    if (trigger_state.edge_armed) {
+      output.push_back({trigger.cooldown_id, VisualTriggerSource::pixel_edge});
+      trigger_state.edge_armed = false;
+    }
+    return;
+  }
+
+  const auto ready =
+      fully_ready(find_cooldown(cooldowns, trigger.cooldown_id));
+  if (!ready) {
+    trigger_state.repeat_fired_for_ready = false;
+  } else if (!trigger_state.repeat_fired_for_ready) {
+    output.push_back({trigger.cooldown_id, VisualTriggerSource::pixel_repeat});
+    trigger_state.repeat_fired_for_ready = true;
+  }
+}
+
 std::vector<VisualTriggerRequest> VisualTriggerEngine::on_measurements(
     const std::span<const ObservationMeasurement> measurements,
     const std::span<const CooldownState> cooldowns, const TimePoint now) {
   std::vector<VisualTriggerRequest> output;
   if (!enabled_) return output;
 
-  for (const auto &measurement : measurements) {
-    const auto found = rules_.find(measurement.observation_id);
-    if (found == rules_.end())
-      continue;
-    auto &state = found->second;
-    state.availability = measurement.availability;
-    state.sampled_at = measurement.sampled_at;
-    state.has_sample = true;
-    if (measurement.availability != CaptureAvailability::available) {
-      state.matching_samples = 0;
-      state.nonmatching_samples = 0;
-      state.stable_match = false;
-      for (const auto &trigger : profile_.triggers) {
-        if (trigger.observation_id != measurement.observation_id) continue;
-        auto &trigger_state = triggers_.at(trigger.cooldown_id);
-        trigger_state.edge_armed = true;
-        trigger_state.repeat_fired_for_ready = false;
-      }
-      continue;
-    }
-    if (measurement.matched) {
-      state.nonmatching_samples = 0;
-      if (state.matching_samples < state.stable_samples)
-        ++state.matching_samples;
-      if (state.matching_samples >= state.stable_samples)
-        state.stable_match = true;
-    } else {
-      state.matching_samples = 0;
-      if (state.nonmatching_samples < state.stable_samples)
-        ++state.nonmatching_samples;
-      if (state.nonmatching_samples >= state.stable_samples)
-        state.stable_match = false;
-    }
-  }
+  for (const auto &measurement : measurements) apply_measurement(measurement);
 
   for (const auto &trigger : profile_.triggers) {
     if (!trigger.enabled) continue;
     auto &trigger_state = triggers_.at(trigger.cooldown_id);
     const auto rule_it = rules_.find(trigger.observation_id);
-    if (rule_it == rules_.end())
-      continue;
+    if (rule_it == rules_.end()) continue;
     const auto &rule_state = rule_it->second;
 
     if (trigger.mode == VisualTriggerMode::confirm_input) {
-      if (!trigger_state.pending_confirmation) continue;
-      if (now > trigger_state.confirmation_deadline) {
-        trigger_state.pending_confirmation = false;
-        continue;
-      }
-      const auto decision = classify(trigger, &rule_state, now);
-      if (decision == ConfirmationDecision::fallback) {
-        trigger_state.pending_confirmation = false;
-        output.push_back(
-            {trigger.cooldown_id, VisualTriggerSource::capture_fallback});
-      } else if (decision == ConfirmationDecision::terminal) {
-        trigger_state.pending_confirmation = false;
-      } else if (decision == ConfirmationDecision::confirmed) {
-        trigger_state.pending_confirmation = false;
-        output.push_back(
-            {trigger.cooldown_id, VisualTriggerSource::input_confirmed});
-      }
+      evaluate_confirm_trigger(trigger, trigger_state, rule_state, now, output);
       continue;
     }
-
-    if (rule_state.availability != CaptureAvailability::available ||
-        !measurement_is_fresh(rule_state, now))
-      continue;
-    if (!rule_state.stable_match) {
-      trigger_state.edge_armed = true;
-      trigger_state.repeat_fired_for_ready = false;
-      continue;
-    }
-
-    if (observation_repeat_policy(profile_, trigger.observation_id) ==
-        PixelRepeatPolicy::edge) {
-      if (trigger_state.edge_armed) {
-        output.push_back(
-            {trigger.cooldown_id, VisualTriggerSource::pixel_edge});
-        trigger_state.edge_armed = false;
-      }
-      continue;
-    }
-
-    const auto ready =
-        fully_ready(find_cooldown(cooldowns, trigger.cooldown_id));
-    if (!ready) {
-      trigger_state.repeat_fired_for_ready = false;
-    } else if (!trigger_state.repeat_fired_for_ready) {
-      output.push_back(
-          {trigger.cooldown_id, VisualTriggerSource::pixel_repeat});
-      trigger_state.repeat_fired_for_ready = true;
-    }
+    evaluate_pixel_trigger(trigger, trigger_state, rule_state, cooldowns, now,
+                           output);
   }
   return output;
 }

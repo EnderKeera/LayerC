@@ -30,6 +30,8 @@ struct AutomationRuntime::Impl {
 
   void consume_timer_firing(std::string_view id, TimePoint now);
   void make_trace_room();
+  [[nodiscard]] std::optional<AutomationTraceEntry>
+  begin_trace(const AutomationEvent &event);
   void add_source_trace(const AutomationEvent &event);
   void add_trace(const AutomationEvent &event, std::string automation,
                  std::string rule, std::string phase, std::string detail);

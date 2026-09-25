@@ -18,7 +18,7 @@
 
 namespace layerc::platform {
 
-[[nodiscard]] bool commit_profile_transaction_impl(
+[[nodiscard]] ProfileWriteResult commit_profile_transaction_impl(
     const ProfileStoreRoots &roots,
     const std::span<const ProfileFileMutation> &mutations,
     const std::optional<std::size_t> &fail_after_publish);

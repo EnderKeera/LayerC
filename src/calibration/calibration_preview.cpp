@@ -5,6 +5,15 @@
 #include <utility>
 
 namespace layerc::calibration {
+namespace {
+
+// GDI 32-bit DIBs store pixels as 0x00RRGGBB.
+[[nodiscard]] std::uint32_t to_dib_pixel(const layerc::core::RgbPixel pixel) {
+  return pixel.blue | (static_cast<std::uint32_t>(pixel.green) << 8U) |
+         (static_cast<std::uint32_t>(pixel.red) << 16U);
+}
+
+} // namespace
 
 void CapturePreview::set_frame(
     std::shared_ptr<const layerc::capture::CaptureFrame> frame) {
@@ -12,12 +21,7 @@ void CapturePreview::set_frame(
   pixels_.clear();
   if (frame_) {
     pixels_.resize(frame_->pixels.size());
-    for (std::size_t index = 0; index < frame_->pixels.size(); ++index) {
-      const auto pixel = frame_->pixels[index];
-      pixels_[index] = pixel.blue |
-                       (static_cast<std::uint32_t>(pixel.green) << 8U) |
-                       (static_cast<std::uint32_t>(pixel.red) << 16U);
-    }
+    std::ranges::transform(frame_->pixels, pixels_.begin(), to_dib_pixel);
   }
   invalidate();
 }
@@ -86,14 +90,13 @@ void MaskEditor::refresh(const layerc::core::TemplateImage &image) {
   for (std::uint32_t y = 0; y < image.height; ++y) {
     for (std::uint32_t x = 0; x < image.width; ++x) {
       const auto index = static_cast<std::size_t>(y) * image.width + x;
-      const auto pixel = image.pixels[index];
-      pixels_[index] =
-          image.alpha[index] == 0
-              ? (((x / 12U) + (y / 12U)) % 2U == 0U ? 0x3A3F46U
-                                                     : 0x24282DU)
-              : pixel.blue |
-                    (static_cast<std::uint32_t>(pixel.green) << 8U) |
-                    (static_cast<std::uint32_t>(pixel.red) << 16U);
+      if (image.alpha[index] == 0) {
+        // Checkerboard marks ignored (masked-out) pixels.
+        const bool light = ((x / 12U) + (y / 12U)) % 2U == 0U;
+        pixels_[index] = light ? 0x3A3F46U : 0x24282DU;
+      } else {
+        pixels_[index] = to_dib_pixel(image.pixels[index]);
+      }
     }
   }
 }

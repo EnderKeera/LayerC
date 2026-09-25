@@ -82,8 +82,7 @@ read_atom_list(Display *display, ::Window window, Atom atom) noexcept {
   RawProperty property = read_property(display, window, atom, XA_ATOM);
   if (property.data == nullptr || property.format != 32) return values;
   const auto *raw = reinterpret_cast<const Atom *>(property.data);
-  for (unsigned long index = 0; index < property.count; ++index)
-    values.push_back(static_cast<std::uint64_t>(raw[index]));
+  values.assign(raw, raw + property.count);
   return values;
 }
 
@@ -93,8 +92,7 @@ read_window_list(Display *display, ::Window window, Atom atom) noexcept {
   RawProperty property = read_property(display, window, atom, XA_WINDOW);
   if (property.data == nullptr || property.format != 32) return values;
   const auto *raw = reinterpret_cast<const ::Window *>(property.data);
-  for (unsigned long index = 0; index < property.count; ++index)
-    values.push_back(raw[index]);
+  values.assign(raw, raw + property.count);
   return values;
 }
 
@@ -201,15 +199,13 @@ X11WindowScan X11WindowTracker::scan(const std::uint32_t limit) const {
     ::Window parent{};
     ::Window *children{};
     unsigned int count{};
-    if (XQueryTree(display, root, &tree_root, &parent, &children, &count) != 0 &&
-        children != nullptr) {
-      for (unsigned int index = 0; index < count; ++index)
-        candidates.push_back(children[index]);
-      XFree(children);
-    } else {
+    if (XQueryTree(display, root, &tree_root, &parent, &children, &count) == 0 ||
+        children == nullptr) {
       scan.warning = "x11: XQueryTree failed";
       return scan;
     }
+    candidates.assign(children, children + count);
+    XFree(children);
   }
 
   for (const ::Window window : candidates) {
@@ -349,8 +345,11 @@ const X11WindowSnapshot *match_window(const X11WindowScan &scan,
   const auto resolved = layerc::core::resolve_game_match(
       candidates, match, /*exact_path=*/true);
   if (!resolved.has_value()) return nullptr;
-  const auto index = *resolved == 0 ? previous_index
-                     : *resolved <= previous_index ? *resolved - 1 : *resolved;
+  std::size_t index = *resolved;
+  if (*resolved == 0)
+    index = previous_index;
+  else if (*resolved <= previous_index)
+    index = *resolved - 1;
   return &scan.windows[index];
 }
 

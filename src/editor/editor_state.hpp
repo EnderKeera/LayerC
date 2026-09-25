@@ -30,6 +30,19 @@ struct ProfileEntry {
 // once during WM_INITDIALOG; every borrowed child handle belongs to that window.
 class EditorShell final {
 public:
+  class [[nodiscard]] SyncScope {
+  public:
+    explicit SyncScope(bool &syncing) noexcept
+        : syncing_(syncing), was_syncing_(syncing) { syncing_ = true; }
+    ~SyncScope() { syncing_ = was_syncing_; }
+    SyncScope(const SyncScope &) = delete;
+    SyncScope &operator=(const SyncScope &) = delete;
+
+  private:
+    bool &syncing_;
+    bool was_syncing_;
+  };
+  [[nodiscard]] SyncScope sync_scope() noexcept { return SyncScope(syncing_); }
   [[nodiscard]] HINSTANCE &instance() noexcept { return instance_; }
   [[nodiscard]] HINSTANCE instance() const noexcept { return instance_; }
   [[nodiscard]] HWND &window() noexcept { return window_; }
@@ -68,7 +81,6 @@ public:
   [[nodiscard]] bool advanced_visible() const noexcept {
     return advanced_visible_;
   }
-  [[nodiscard]] bool &syncing() noexcept { return syncing_; }
   [[nodiscard]] bool syncing() const noexcept { return syncing_; }
 
 private:
@@ -135,9 +147,11 @@ public:
   [[nodiscard]] POINT drag_start() const noexcept { return drag_start_; }
   [[nodiscard]] POINT &drag_offset() noexcept { return drag_offset_; }
   [[nodiscard]] POINT drag_offset() const noexcept { return drag_offset_; }
-  [[nodiscard]] std::size_t &controls_panel() noexcept { return controls_panel_; }
   [[nodiscard]] std::size_t controls_panel() const noexcept {
     return controls_panel_;
+  }
+  void set_controls_panel(const std::size_t index) noexcept {
+    controls_panel_ = index;
   }
 
   void begin_drag(const POINT start, const POINT offset) noexcept {
@@ -168,24 +182,32 @@ private:
 // While the appearance dialog is open, staged values are the only preview source.
 class AppearanceEditor final {
 public:
-  [[nodiscard]] layerc::platform::EditorTheme &theme() noexcept { return theme_; }
+  void set_appearance(const layerc::platform::EditorTheme theme,
+                      const std::uint32_t accent) noexcept {
+    theme_ = theme;
+    accent_ = accent;
+  }
   [[nodiscard]] layerc::platform::EditorTheme theme() const noexcept {
     return theme_;
   }
-  [[nodiscard]] std::uint32_t &accent() noexcept { return accent_; }
   [[nodiscard]] std::uint32_t accent() const noexcept { return accent_; }
   [[nodiscard]] AppearanceDraft &draft() noexcept { return draft_; }
   [[nodiscard]] const AppearanceDraft &draft() const noexcept { return draft_; }
-  [[nodiscard]] bool &open() noexcept { return open_; }
   [[nodiscard]] bool open() const noexcept { return open_; }
+  void begin_open() noexcept { open_ = true; }
+  void close() noexcept { open_ = false; }
   [[nodiscard]] auto &brushes() noexcept { return brushes_; }
   [[nodiscard]] const auto &brushes() const noexcept { return brushes_; }
-  [[nodiscard]] std::uint32_t &picker_color() noexcept { return picker_color_; }
+  void set_picker_color(const std::uint32_t color) noexcept {
+    picker_color_ = color & 0xFFFFFFU;
+  }
   [[nodiscard]] std::uint32_t picker_color() const noexcept {
     return picker_color_;
   }
-  [[nodiscard]] bool &picker_syncing() noexcept { return picker_syncing_; }
   [[nodiscard]] bool picker_syncing() const noexcept { return picker_syncing_; }
+  [[nodiscard]] EditorShell::SyncScope picker_sync_scope() noexcept {
+    return EditorShell::SyncScope(picker_syncing_);
+  }
 
 private:
   layerc::platform::EditorTheme theme_{
@@ -220,10 +242,16 @@ public:
   candidates() const noexcept {
     return candidates_;
   }
-  [[nodiscard]] bool &picking() noexcept { return picking_; }
   [[nodiscard]] bool picking() const noexcept { return picking_; }
-  [[nodiscard]] bool &was_visible() noexcept { return was_visible_; }
   [[nodiscard]] bool was_visible() const noexcept { return was_visible_; }
+  void begin_pick(const bool was_visible) noexcept {
+    picking_ = true;
+    was_visible_ = was_visible;
+  }
+  void end_pick() noexcept {
+    picking_ = false;
+    was_visible_ = false;
+  }
   [[nodiscard]] TaskTargetRequest request() const noexcept { return request_; }
   [[nodiscard]] bool has_request() const noexcept {
     return request_ != TaskTargetRequest::none;
@@ -291,65 +319,58 @@ public:
       const noexcept {
     return channel_;
   }
-  [[nodiscard]] layerc::core::ProfileRevision &revision() noexcept {
-    return revision_;
-  }
   [[nodiscard]] layerc::core::ProfileRevision revision() const noexcept {
     return revision_;
   }
-  [[nodiscard]] layerc::core::ProfileRevision &peer_revision() noexcept {
-    return peer_revision_;
+  void set_revision(const layerc::core::ProfileRevision revision) noexcept {
+    revision_ = revision;
   }
+  void advance_revision() noexcept { ++revision_; }
   [[nodiscard]] layerc::core::ProfileRevision peer_revision() const noexcept {
     return peer_revision_;
   }
-  [[nodiscard]] layerc::core::EditSessionId &session_id() noexcept {
-    return session_id_;
+  void observe_peer(const layerc::core::ProfileRevision revision) noexcept {
+    peer_revision_ = revision;
   }
   [[nodiscard]] layerc::core::EditSessionId session_id() const noexcept {
     return session_id_;
   }
-  [[nodiscard]] HWND &target() noexcept { return target_; }
   [[nodiscard]] HWND target() const noexcept { return target_; }
-  [[nodiscard]] HWND &pending_target() noexcept { return pending_target_; }
   [[nodiscard]] HWND pending_target() const noexcept { return pending_target_; }
-  [[nodiscard]] ULONGLONG &pending_deadline() noexcept {
-    return pending_deadline_;
-  }
   [[nodiscard]] ULONGLONG pending_deadline() const noexcept {
     return pending_deadline_;
-  }
-  [[nodiscard]] bool &direct_drag_enabled() noexcept {
-    return direct_drag_enabled_;
   }
   [[nodiscard]] bool direct_drag_enabled() const noexcept {
     return direct_drag_enabled_;
   }
-  [[nodiscard]] bool &direct_drag_notice_shown() noexcept {
-    return direct_drag_notice_shown_;
-  }
   [[nodiscard]] bool direct_drag_notice_shown() const noexcept {
     return direct_drag_notice_shown_;
   }
-  [[nodiscard]] ULONGLONG &last_drag_send() noexcept { return last_drag_send_; }
   [[nodiscard]] ULONGLONG last_drag_send() const noexcept {
     return last_drag_send_;
-  }
-  [[nodiscard]] ULONGLONG &last_heartbeat_send() noexcept {
-    return last_heartbeat_send_;
   }
   [[nodiscard]] ULONGLONG last_heartbeat_send() const noexcept {
     return last_heartbeat_send_;
   }
-  [[nodiscard]] UINT &timer_interval() noexcept { return timer_interval_; }
   [[nodiscard]] UINT timer_interval() const noexcept { return timer_interval_; }
-  [[nodiscard]] bool &package_authenticated() noexcept {
-    return package_authenticated_;
-  }
   [[nodiscard]] bool package_authenticated() const noexcept {
     return package_authenticated_;
   }
 
+  void set_package_authenticated(const bool authenticated) noexcept {
+    package_authenticated_ = authenticated;
+  }
+  void set_timer_interval(const UINT interval) noexcept {
+    timer_interval_ = interval;
+  }
+  void note_drag_send(const ULONGLONG now) noexcept { last_drag_send_ = now; }
+  void note_heartbeat_send(const ULONGLONG now) noexcept {
+    last_heartbeat_send_ = now;
+  }
+  void set_direct_drag(const bool enabled) noexcept {
+    direct_drag_enabled_ = enabled;
+    if (enabled) direct_drag_notice_shown_ = true;
+  }
   void await_target(const HWND target, const ULONGLONG deadline) noexcept {
     pending_target_ = target;
     pending_deadline_ = deadline;

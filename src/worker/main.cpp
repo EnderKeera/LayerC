@@ -59,6 +59,24 @@ std::optional<Integer> decimal(const std::wstring &source) {
   return result;
 }
 
+// Authenticated parent check: same session, same user, and the expected
+// layerd.exe image. Any failure refuses the pipe rather than running capture.
+bool parent_is_trusted(const DWORD parent_process_id) {
+  DWORD current_session{}, parent_session{};
+  const HANDLE parent = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                    parent_process_id);
+  const bool trusted =
+      parent != nullptr &&
+      ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
+      ProcessIdToSessionId(parent_process_id, &parent_session) != FALSE &&
+      current_session == parent_session &&
+      layerc::platform::same_user_as_current_process(parent) &&
+      layerc::platform::is_sibling_process_image(parent_process_id,
+                                                 L"layerd.exe");
+  if (parent != nullptr) CloseHandle(parent);
+  return trusted;
+}
+
 int worker_main(const std::wstring &pipe_name, const std::string &nonce,
                 const DWORD parent_process_id, const HWND target_window) {
   if (pipe_name.empty() || nonce.size() != 48 || parent_process_id == 0 ||
@@ -80,19 +98,7 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
     CloseHandle(pipe);
     return 6;
   }
-  DWORD current_session{}, parent_session{};
-  const HANDLE parent = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
-                                    parent_process_id);
-  const bool trusted =
-      parent != nullptr &&
-      ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
-      ProcessIdToSessionId(parent_process_id, &parent_session) != FALSE &&
-      current_session == parent_session &&
-      layerc::platform::same_user_as_current_process(parent) &&
-      layerc::platform::is_sibling_process_image(parent_process_id,
-                                                 L"layerd.exe");
-  if (parent != nullptr) CloseHandle(parent);
-  if (!trusted) {
+  if (!parent_is_trusted(parent_process_id)) {
     CloseHandle(pipe);
     return 7;
   }
@@ -128,11 +134,8 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
         pipe, layerc::daemon::isolated_visual_max_message_bytes);
     if (!packet) break;
     auto message = layerc::daemon::decode_isolated_message(packet.payload);
-    if (const auto *protocol_error =
-            std::get_if<layerc::daemon::IsolatedProtocolError>(&message)) {
-      (void)protocol_error;
+    if (std::holds_alternative<layerc::daemon::IsolatedProtocolError>(message))
       break;
-    }
     if (const auto *poll =
             std::get_if<layerc::daemon::IsolatedPoll>(&message)) {
       const DWORD wait = WaitForSingleObject(

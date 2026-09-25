@@ -78,6 +78,35 @@ trace_from_events(const std::span<const layerc::core::AutomationEvent> events) {
   }
   return layerc::core::export_layerc_trace(entries);
 }
+
+// Visits each ';'-separated item until visit returns false. Spaces after a
+// separator are skipped and a trailing separator yields no empty item.
+template <typename Visit>
+void for_each_list_item(const std::string_view text, Visit &&visit) {
+  std::size_t cursor{};
+  while (cursor < text.size()) {
+    const auto end = text.find(';', cursor);
+    const auto item = text.substr(
+        cursor, end == std::string_view::npos ? std::string_view::npos
+                                              : end - cursor);
+    if (!visit(item) || end == std::string_view::npos)
+      return;
+    cursor = end + 1U;
+    while (cursor < text.size() && text[cursor] == ' ')
+      ++cursor;
+  }
+}
+
+UINT simulator_interval_ms(const int speed) {
+  switch (speed) {
+  case 0:
+    return 400U;
+  case 2:
+    return 25U;
+  default:
+    return 100U;
+  }
+}
 } // namespace
 
 void AutomationEditor::update_simulator_view(const HWND dialog) {
@@ -96,17 +125,11 @@ void AutomationEditor::update_simulator_view(const HWND dialog) {
         control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_ASSERTIONS)));
     if (!assertions.empty()) {
       bool all_passed = true;
-      std::size_t cursor{};
-      while (cursor < assertions.size()) {
-        const auto end = assertions.find(';', cursor);
-        const auto item =
-            std::string_view(assertions)
-                .substr(cursor, end == std::string::npos ? std::string::npos
-                                                         : end - cursor);
+      for_each_list_item(assertions, [&](const std::string_view item) {
         const auto equal = item.find('=');
         if (equal == std::string_view::npos || equal == 0) {
           all_passed = false;
-          break;
+          return false;
         }
         const auto id = std::string(item.substr(0, equal));
         const auto &profile = simulator_->profile();
@@ -114,7 +137,7 @@ void AutomationEditor::update_simulator_view(const HWND dialog) {
             profile.variables, id, &layerc::core::AutomationVariable::id);
         if (declaration == profile.variables.end()) {
           all_passed = false;
-          break;
+          return false;
         }
         const auto expected = layerc::core::parse_automation_value_json(
             item.substr(equal + 1U), declaration->type);
@@ -125,12 +148,8 @@ void AutomationEditor::update_simulator_view(const HWND dialog) {
             actual == simulator_->snapshot().variables.end() ||
             actual->second != *value)
           all_passed = false;
-        if (end == std::string::npos)
-          break;
-        cursor = end + 1U;
-        while (cursor < assertions.size() && assertions[cursor] == ' ')
-          ++cursor;
-      }
+        return true;
+      });
       output += all_passed ? "\r\nAssertions: PASS" : "\r\nAssertions: FAIL";
     }
   }
@@ -183,10 +202,7 @@ void AutomationEditor::play_simulator(const HWND dialog, const bool playing) {
       const int speed = static_cast<int>(SendDlgItemMessageW(
           dialog, IDC_AUTOMATION_SIM_SPEED, CB_GETCURSEL, 0, 0));
       SetTimer(dialog, automation_simulator_timer,
-               speed == 0   ? 400U
-               : speed == 2 ? 25U
-                            : 100U,
-               nullptr);
+               simulator_interval_ms(speed), nullptr);
     }
   }
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_PLAY),
@@ -213,11 +229,11 @@ void AutomationEditor::step_simulator(const HWND dialog) {
       to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_BREAKPOINT)));
   if (!breakpoint.empty()) {
     const auto &trace = simulator_->trace();
-    for (std::size_t index = trace_start; index < trace.size(); ++index)
-      if (trace[index].rule_id == breakpoint) {
-        simulator_playing_ = false;
-        break;
-      }
+    if (std::any_of(trace.begin() + static_cast<std::ptrdiff_t>(trace_start),
+                    trace.end(), [&](const auto &entry) {
+                      return entry.rule_id == breakpoint;
+                    }))
+      simulator_playing_ = false;
   }
   if (!simulator_playing_ || simulator_index_ >= simulator_events_.size())
     play_simulator(dialog, false);
@@ -244,11 +260,8 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
   auto fields =
       to_utf8(control_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_FIELDS)));
   if (fields != "field:type=JSON; ..." && !fields.empty()) {
-    std::size_t cursor{};
-    while (cursor < fields.size()) {
-      const auto end = fields.find(';', cursor);
-      const auto item = std::string_view(fields).substr(
-          cursor, end == std::string::npos ? std::string::npos : end - cursor);
+    bool valid = true;
+    for_each_list_item(fields, [&](const std::string_view item) {
       const auto colon = item.find(':');
       const auto equal = item.find('=');
       if (colon == std::string_view::npos || equal == std::string_view::npos ||
@@ -256,14 +269,14 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
         MessageBoxW(dialog,
                     L"Fields use name:type=JSON; for example value:number=0.5",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
-        return;
+        return valid = false;
       }
       const auto type = layerc::core::parse_automation_value_type_name(
           item.substr(colon + 1U, equal - colon - 1U));
       if (!type.has_value()) {
         MessageBoxW(dialog, L"Unsupported synthetic field type.",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
-        return;
+        return valid = false;
       }
       const auto parsed = layerc::core::parse_automation_value_json(
           item.substr(equal + 1U), *type);
@@ -272,15 +285,13 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
         const auto &error = std::get<layerc::core::AutomationError>(parsed);
         MessageBoxW(dialog, to_wide(error.path + ": " + error.message).c_str(),
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
-        return;
+        return valid = false;
       }
       event.fields.emplace(std::string(item.substr(0, colon)), *value);
-      if (end == std::string::npos)
-        break;
-      cursor = end + 1U;
-      while (cursor < fields.size() && fields[cursor] == ' ')
-        ++cursor;
-    }
+      return true;
+    });
+    if (!valid)
+      return;
   }
   simulator_events_.push_back(event);
   trace_events_.push_back(std::move(event));
@@ -407,11 +418,8 @@ void AutomationEditor::save_trace(const HWND dialog) {
 }
 
 void AutomationEditor::retry_selected(const HWND dialog) {
-  if (!owner_.document().automation())
-    return;
-  const int selected = selected_index(dialog);
-  if (selected < 0 || static_cast<std::size_t>(selected) >=
-                          owner_.document().automation()->automations.size())
+  const auto *automation = selected_automation(dialog);
+  if (automation == nullptr)
     return;
   owner_.advance_live_revision();
   layerc::core::LiveMessage message;
@@ -419,9 +427,7 @@ void AutomationEditor::retry_selected(const HWND dialog) {
   message.revision = owner_.live_revision();
   message.profile_key =
       layerc::platform::canonical_profile_key(owner_.document().path());
-  message.text = owner_.document().automation()
-                     ->automations[static_cast<std::size_t>(selected)]
-                     .id;
+  message.text = automation->id;
   (void)owner_.send_live(message);
 }
 } // namespace layerc::editor

@@ -67,6 +67,30 @@ bool process(json::Reader &r, const json::Value &root, const std::string &path,
          counter(r, root, "kernelTime100ns", path, value.kernel_time_100ns) &&
          counter(r, root, "userTime100ns", path, value.user_time_100ns);
 }
+bool parse_capability(json::Reader &r, const std::string &path,
+                      const std::string &name, Capability &output) {
+  for (std::size_t i{}; i < capability_count; ++i) {
+    const auto candidate = static_cast<Capability>(i);
+    if (capability_name(candidate) == name) {
+      output = candidate;
+      return true;
+    }
+  }
+  return r.fail(path + ".capability", "unknown runtime capability");
+}
+
+bool parse_service_state(json::Reader &r, const std::string &path,
+                         const std::string &name, ServiceState &output) {
+  for (const auto candidate :
+       {ServiceState::absent, ServiceState::active, ServiceState::faulted}) {
+    if (service_state_name(candidate) == name) {
+      output = candidate;
+      return true;
+    }
+  }
+  return r.fail(path + ".state", "unknown runtime service state");
+}
+
 bool service(json::Reader &r, const json::Value &root, const std::string &path,
              RuntimeServiceStats &value) {
   if (!r.exact_fields(root,
@@ -79,25 +103,9 @@ bool service(json::Reader &r, const json::Value &root, const std::string &path,
   if (!r.string(root, "capability", path, capability, Required::yes, EmptyString::reject) ||
       !r.string(root, "state", path, state, Required::yes, EmptyString::reject))
     return false;
-  bool found{};
-  for (std::size_t i{}; i < capability_count; ++i) {
-    const auto candidate = static_cast<Capability>(i);
-    if (capability_name(candidate) == capability) {
-      value.capability = candidate;
-      found = true;
-      break;
-    }
-  }
-  if (!found) return r.fail(path + ".capability", "unknown runtime capability");
-  found = false;
-  for (const auto candidate : {ServiceState::absent, ServiceState::active, ServiceState::faulted}) {
-    if (service_state_name(candidate) == state) {
-      value.state = candidate;
-      found = true;
-      break;
-    }
-  }
-  if (!found) return r.fail(path + ".state", "unknown runtime service state");
+  if (!parse_capability(r, path, capability, value.capability) ||
+      !parse_service_state(r, path, state, value.state))
+    return false;
   const auto *owned = r.object(root, "resources", path, Required::yes);
   return owned && resources(r, *owned, path + ".resources", value.resources) &&
          counter(r, root, "consumers", path, value.consumers) &&
@@ -107,6 +115,7 @@ bool service(json::Reader &r, const json::Value &root, const std::string &path,
          timestamp(r, root, "lastQuiescenceNs", path, value.last_quiescence) &&
          r.string(root, "lastError", path, value.last_error, Required::yes, EmptyString::allow);
 }
+
 bool session(json::Reader &r, const json::Value &root, const std::string &path,
              SessionDiagnostics &value) {
   return r.exact_fields(root,

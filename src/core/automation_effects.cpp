@@ -9,15 +9,12 @@
 namespace layerc::core {
 namespace {
 
-void apply_show_text(Panel &panel, const AutomationValue &value) noexcept {
+// Bounds live on OverlayPropertySpec and are enforced by overlay_value_valid
+// before apply runs; these mutate only.
+template <bool BarAppearance::*Field>
+void apply_bar_flag(Panel &panel, const AutomationValue &value) noexcept {
   if (const auto *boolean = std::get_if<bool>(&value.storage))
-    panel.bar.show_text = *boolean;
-}
-
-void apply_hide_when_ready(Panel &panel,
-                           const AutomationValue &value) noexcept {
-  if (const auto *boolean = std::get_if<bool>(&value.storage))
-    panel.bar.hide_when_ready = *boolean;
+    panel.bar.*Field = *boolean;
 }
 
 void apply_layout(Panel &panel, const AutomationValue &value) noexcept {
@@ -29,20 +26,8 @@ void apply_layout(Panel &panel, const AutomationValue &value) noexcept {
     panel.layout = *layout;
 }
 
-// Bounds live on OverlayPropertySpec and are enforced by overlay_value_valid
-// before apply runs; these mutate only.
-void apply_width(Panel &panel, const AutomationValue &value) noexcept {
-  if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
-    panel.bar.width = static_cast<std::uint32_t>(*integer);
-}
-
-void apply_height(Panel &panel, const AutomationValue &value) noexcept {
-  if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
-    panel.bar.height = static_cast<std::uint32_t>(*integer);
-}
-
 template <std::uint32_t BarAppearance::*Field>
-void apply_color(Panel &panel, const AutomationValue &value) noexcept {
+void apply_bar_integer(Panel &panel, const AutomationValue &value) noexcept {
   if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
     panel.bar.*Field = static_cast<std::uint32_t>(*integer);
 }
@@ -60,10 +45,10 @@ constexpr OverlayPropertySpec overlay_properties[] = {
      .apply = nullptr},
     {.name = "showText",
      .type = AutomationValueType::boolean,
-     .apply = apply_show_text},
+     .apply = apply_bar_flag<&BarAppearance::show_text>},
     {.name = "hideWhenReady",
      .type = AutomationValueType::boolean,
-     .apply = apply_hide_when_ready},
+     .apply = apply_bar_flag<&BarAppearance::hide_when_ready>},
     {.name = "text",
      .type = AutomationValueType::string,
      .panel_text = true,
@@ -76,32 +61,32 @@ constexpr OverlayPropertySpec overlay_properties[] = {
      .type = AutomationValueType::integer,
      .min_value = 40,
      .max_value = 1'200,
-     .apply = apply_width},
+     .apply = apply_bar_integer<&BarAppearance::width>},
     {.name = "height",
      .type = AutomationValueType::integer,
      .min_value = 16,
      .max_value = 240,
-     .apply = apply_height},
+     .apply = apply_bar_integer<&BarAppearance::height>},
     {.name = "fillColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::fill_color>},
+     .apply = apply_bar_integer<&BarAppearance::fill_color>},
     {.name = "backgroundColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::background_color>},
+     .apply = apply_bar_integer<&BarAppearance::background_color>},
     {.name = "borderColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::border_color>},
+     .apply = apply_bar_integer<&BarAppearance::border_color>},
     {.name = "textColor",
      .type = AutomationValueType::integer,
      .min_value = 0,
      .max_value = 0xFFFFFF,
-     .apply = apply_color<&BarAppearance::text_color>},
+     .apply = apply_bar_integer<&BarAppearance::text_color>},
     {.name = "anchorX",
      .type = AutomationValueType::number,
      .min_value = 0.0,

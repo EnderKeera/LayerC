@@ -29,8 +29,10 @@ public:
 
   [[nodiscard]] bool start();
   void stop();
-  [[nodiscard]] CapturePollResult poll(core::TimePoint now,
-                                       bool target_is_foreground);
+  // Same contract as every capture session: a normalized poll whose frame
+  // is present only while available; not started reports unavailable.
+  [[nodiscard]] CapturePoll poll(core::TimePoint now,
+                                 bool target_is_foreground);
   void set_excluded_screen_rects(std::span<const RECT> rectangles);
   void set_quality(core::CaptureQuality quality);
 
@@ -41,10 +43,6 @@ private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 };
-
-[[nodiscard]] CapturePoll poll_window_capture(
-    core::WindowId window, WindowCaptureSession &session,
-    core::TimePoint now, bool target_is_foreground);
 
 // One-shot screen snapshot used only when calibration's Desktop Duplication
 // fallback cannot obtain an initial frame from an otherwise static desktop.

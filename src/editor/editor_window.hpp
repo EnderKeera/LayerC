@@ -18,6 +18,7 @@
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/window_query.hpp"
 
 #include <commctrl.h>
@@ -79,7 +80,7 @@ private:
   [[nodiscard]] bool live_authenticated() const noexcept override {
     return live_edit_.package_authenticated();
   }
-  void advance_live_revision() noexcept override { ++live_edit_.revision(); }
+  void advance_live_revision() noexcept override { live_edit_.advance_revision(); }
   [[nodiscard]] layerc::core::ProfileRevision
   live_revision() const noexcept override {
     return live_edit_.revision();
@@ -146,7 +147,9 @@ private:
   // parsed profile) must block the commit so a nullopt never becomes an
   // explicit removal request that discards recovery bytes and backups.
   [[nodiscard]] bool can_commit_document_bundle() const;
-  [[nodiscard]] bool commit_document_bundle(const std::filesystem::path &destination);
+  [[nodiscard]] layerc::platform::ProfileWriteResult
+  commit_document_bundle(const std::filesystem::path &destination);
+  [[nodiscard]] std::wstring write_failure_message() const;
   // serialize → parse → reassign, keeping sidecar profile ids aligned.
   // Nullopt when the profile round-trips cleanly.
   [[nodiscard]] std::optional<layerc::core::ProfileError> normalize_for_commit();
@@ -296,6 +299,7 @@ private:
   PackDialogs pack_dialogs_;
   LiveEditSession live_edit_;
   std::unique_ptr<AutomationEditor> automation_editor_;
+  std::optional<layerc::platform::ProfileWriteError> last_write_error_;
 };
 
 } // namespace layerc::editor

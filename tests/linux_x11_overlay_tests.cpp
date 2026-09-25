@@ -22,6 +22,9 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/shape.h>
+#if defined(LAYERC_TEST_XTEST)
+#include <X11/extensions/XTest.h>
+#endif
 
 #include <unistd.h>
 
@@ -207,7 +210,7 @@ void check_missing_shape_path(bool &passed) {
 }
 
 [[nodiscard]] layerc::core::AutomationProfile
-visibility_automation(std::string profile_id) {
+overlay_automation(std::string profile_id) {
   using layerc::core::AutomationActionKind;
   using layerc::core::AutomationEventKind;
 
@@ -216,7 +219,8 @@ visibility_automation(std::string profile_id) {
   hide.target = "main";
   hide.name = "hide";
   hide.property = "visible";
-  hide.value.literal = layerc::core::AutomationValue(false);
+  hide.value.emplace();
+  hide.value->literal = layerc::core::AutomationValue(false);
 
   layerc::core::AutomationRule pressed;
   pressed.id = "pressed";
@@ -234,15 +238,55 @@ visibility_automation(std::string profile_id) {
   released.source_filter = "keyboard:69";
   released.actions = {clear};
 
+  auto show = hide;
+  show.name = "show";
+  show.value->literal = layerc::core::AutomationValue(true);
+  auto show_pressed = pressed;
+  show_pressed.id = "show-pressed";
+  show_pressed.source_filter = "keyboard:70";
+  show_pressed.actions = {show};
+  auto clear_show = clear;
+  clear_show.target = "show";
+  auto show_released = released;
+  show_released.id = "show-released";
+  show_released.source_filter = "keyboard:70";
+  show_released.actions = {clear_show};
+
+  auto text = hide;
+  text.name = "text";
+  text.property = "text";
+  text.value->literal = layerc::core::AutomationValue(std::string{"OVERRIDE"});
+  auto text_pressed = pressed;
+  text_pressed.id = "text-pressed";
+  text_pressed.source_filter = "keyboard:71";
+  text_pressed.actions = {text};
+  auto clear_text = clear;
+  clear_text.target = "text";
+  auto text_released = released;
+  text_released.id = "text-released";
+  text_released.source_filter = "keyboard:71";
+  text_released.actions = {clear_text};
+
   layerc::core::AutomationDefinition automation;
-  automation.id = "visibility";
-  automation.name = "Visibility";
-  automation.rules = {pressed, released};
+  automation.id = "overlay";
+  automation.name = "Overlay";
+  automation.rules = {pressed, released, show_pressed, show_released,
+                      text_pressed, text_released};
 
   layerc::core::AutomationProfile profile;
   profile.profile_id = std::move(profile_id);
   profile.automations = {automation};
   return profile;
+}
+
+[[nodiscard]] bool same_pixels(XImage *left, XImage *right) {
+  if (left == nullptr || right == nullptr || left->width != right->width ||
+      left->height != right->height)
+    return false;
+  for (int y = 0; y < left->height; ++y)
+    for (int x = 0; x < left->width; ++x)
+      if (XGetPixel(left, x, y) != XGetPixel(right, x, y)) return false;
+  return true;
 }
 
 [[nodiscard]] unsigned long alloc_pixel(Display *raw, const unsigned int rgb) {
@@ -261,10 +305,6 @@ visibility_automation(std::string profile_id) {
 int run_linux_x11_overlay_tests() {
   using layerc::test::expect;
   bool passed = true;
-
-  check_scale_rules(passed);
-  check_geometry_rules(passed);
-  check_missing_shape_path(passed);
 
   if (!layerc::test::x11_display_available()) {
     std::fprintf(stderr, "skip: DISPLAY is not set (run under Xvfb)\n");
@@ -345,21 +385,33 @@ int run_linux_x11_overlay_tests() {
   if (profile == nullptr) return passed ? 0 : 1;
 
   // --- service: session -> overlay window --------------------------------
-  layerc::daemon::X11InputService input;
+  layerc::daemon::X11SessionRegistry input_sessions;
+  layerc::daemon::X11InputService input(input_sessions);
   layerc::daemon::X11OverlayService overlay;
   input.attach(*display);
   overlay.attach(*display);
   const X11WindowScan scan = layerc::platform::X11WindowTracker(*display).scan();
+  layerc::test::TempDirectory temp{"layerc-x11-overlay"};
   const StoredProfile profiles[] = {
-      {.path = std::filesystem::temp_directory_path() /
-               ("layerc-x11-overlay-" + std::to_string(::getpid()) + ".json"),
-       .profile = *profile}};
-  input.refresh(profiles, scan);
-  passed &= expect(input.session_count() == 1, "the fixture window matches");
+      {.path = temp.path() / "profile.json", .profile = *profile}};
+  input_sessions.refresh(profiles, scan);
+  passed &= expect(input_sessions.session_count() == 1, "the fixture window matches");
 
-  overlay.refresh(input.sessions(), scan, monitors);
+  auto background_scan = scan;
+  background_scan.active.reset();
+  for (auto &snapshot : background_scan.windows) snapshot.active = false;
+  input_sessions.refresh(profiles, background_scan);
+  passed &= expect(input_sessions.session_count() == 1 &&
+                       !input_sessions.sessions().front().active,
+                   "a background profile keeps an inactive session");
+  overlay.refresh(input_sessions.sessions(), background_scan, monitors);
+  passed &= expect(overlay.resources().objects == 0,
+                   "an inactive session creates no overlay target");
+
+  input_sessions.refresh(profiles, scan);
+  overlay.refresh(input_sessions.sessions(), scan, monitors);
   const auto demand = layerc::runtime::calculate_capability_demand(
-      input.session_requests(), false);
+      input_sessions.session_requests(), false);
   passed &= expect(demand.required(layerc::runtime::Capability::overlay),
                    "an active session demands the overlay");
   layerc::runtime::RuntimeServiceRegistry services{};
@@ -398,9 +450,9 @@ int run_linux_x11_overlay_tests() {
 
   // --- geometry + paint --------------------------------------------------
   const auto now = layerc::core::MonotonicClock::now();
-  for (auto &session : input.sessions())
-    (void)session.engine.trigger("dash", now);
-  overlay.render(input.sessions(), now);
+  for (auto &session : input_sessions.sessions())
+    (void)session.cooldowns.trigger("dash", now);
+  overlay.render(input_sessions.sessions(), now);
   passed &= expect(overlay.next_render_deadline(now).has_value(),
                    "a mapped overlay arms the repaint deadline");
 
@@ -419,9 +471,35 @@ int run_linux_x11_overlay_tests() {
   passed &= expect(geometry_matches,
                    "the server reports the panel rect, override-redirected");
   passed &= expect(attributes.map_state == IsViewable, "the overlay is mapped");
+#if defined(LAYERC_TEST_XTEST)
+  // XTest is linked only into this executable. The server routes a real
+  // pointer press through the visible panel to the target window.
+  XSelectInput(raw, fixture, ButtonPressMask);
+  XSync(raw, False);
+  int xtest_event_base{};
+  int xtest_error_base{};
+  int xtest_major{};
+  int xtest_minor{};
+  const bool xtest = XTestQueryExtension(raw, &xtest_event_base,
+                                        &xtest_error_base, &xtest_major,
+                                        &xtest_minor) != False;
+  passed &= expect(xtest, "the X server exposes test-only XTest input");
+  if (xtest) {
+    passed &= expect(XTestFakeMotionEvent(raw, -1, 240, 210, CurrentTime),
+                     "the test pointer moves over the panel");
+    passed &= expect(XTestFakeButtonEvent(raw, 1, True, CurrentTime),
+                     "the test pointer presses over the panel");
+    passed &= expect(XTestFakeButtonEvent(raw, 1, False, CurrentTime),
+                     "the test pointer releases over the panel");
+    XSync(raw, False);
+    XEvent click{};
+    passed &= expect(XCheckTypedWindowEvent(raw, fixture, ButtonPress, &click),
+                     "the target receives the press through the overlay");
+  }
+#endif
 
   // Halfway through the cooldown the fill covers half the track.
-  overlay.render(input.sessions(), now + std::chrono::seconds{30});
+  overlay.render(input_sessions.sessions(), now + std::chrono::seconds{30});
   const unsigned long fill = alloc_pixel(raw, 0x50BAC8);
   const unsigned long background = alloc_pixel(raw, 0x272D35);
   XImage *image = XGetImage(raw, overlay_window, 0, 0,
@@ -443,53 +521,118 @@ int run_linux_x11_overlay_tests() {
 
   // --- hide when everything is ready -------------------------------------
   const auto ready = now + std::chrono::seconds{61};
-  overlay.render(input.sessions(), ready);
+  overlay.render(input_sessions.sessions(), ready);
   passed &= expect(!overlay.next_render_deadline(ready).has_value(),
                    "a hidden overlay disarms the repaint deadline");
   XGetWindowAttributes(raw, overlay_window, &attributes);
   passed &= expect(attributes.map_state != IsViewable,
                    "a ready bar panel is hidden");
 
+  // A true visibility override keeps a ready bar mapped. A text override
+  // changes its painted label and clearing it restores the normal label.
+  auto &session = input_sessions.sessions().front();
+  session.automation_runtime = std::make_unique<layerc::core::AutomationRuntime>(
+      overlay_automation(session.profile.id));
+  const layerc::core::InputEvent show_press{
+      {layerc::core::InputDevice::keyboard, 70, 0}, true};
+  const layerc::core::InputEvent show_release{
+      {layerc::core::InputDevice::keyboard, 70, 0}, false};
+  const layerc::core::InputEvent text_press{
+      {layerc::core::InputDevice::keyboard, 71, 0}, true};
+  const layerc::core::InputEvent text_release{
+      {layerc::core::InputDevice::keyboard, 71, 0}, false};
+  (void)session.feed(show_press, ready);
+  overlay.render(input_sessions.sessions(), ready);
+  XGetWindowAttributes(raw, overlay_window, &attributes);
+  passed &= expect(attributes.map_state == IsViewable &&
+                       overlay.next_render_deadline(ready).has_value(),
+                   "true visibility override shows a ready bar");
+  XImage *normal_label = attributes.map_state == IsViewable
+                             ? XGetImage(raw, overlay_window, 0, 0,
+                                         static_cast<unsigned int>(expected.width),
+                                         static_cast<unsigned int>(expected.height),
+                                         AllPlanes, ZPixmap)
+                             : nullptr;
+  (void)session.feed(text_press, ready);
+  overlay.render(input_sessions.sessions(), ready);
+  XGetWindowAttributes(raw, overlay_window, &attributes);
+  XImage *custom_label = attributes.map_state == IsViewable
+                             ? XGetImage(raw, overlay_window, 0, 0,
+                                         static_cast<unsigned int>(expected.width),
+                                         static_cast<unsigned int>(expected.height),
+                                         AllPlanes, ZPixmap)
+                             : nullptr;
+  passed &= expect(normal_label != nullptr && custom_label != nullptr &&
+                       !same_pixels(normal_label, custom_label),
+                   "the text override changes painted label pixels");
+  (void)session.feed(text_release, ready);
+  overlay.render(input_sessions.sessions(), ready);
+  XGetWindowAttributes(raw, overlay_window, &attributes);
+  XImage *restored_label = attributes.map_state == IsViewable
+                               ? XGetImage(raw, overlay_window, 0, 0,
+                                           static_cast<unsigned int>(expected.width),
+                                           static_cast<unsigned int>(expected.height),
+                                           AllPlanes, ZPixmap)
+                               : nullptr;
+  passed &= expect(same_pixels(normal_label, restored_label),
+                   "clearing text restores the cooldown label");
+  if (normal_label != nullptr) XDestroyImage(normal_label);
+  if (custom_label != nullptr) XDestroyImage(custom_label);
+  if (restored_label != nullptr) XDestroyImage(restored_label);
+  (void)session.feed(show_release, ready);
+  overlay.render(input_sessions.sessions(), ready);
+  passed &= expect(!overlay.next_render_deadline(ready).has_value(),
+                   "clearing true visibility restores hideWhenReady");
+
   // A new trigger brings it back: cooldown clocks only move forward.
-  for (auto &session : input.sessions())
-    (void)session.engine.trigger("dash", ready);
+  for (auto &session : input_sessions.sessions())
+    (void)session.cooldowns.trigger("dash", ready);
   const auto running = ready + std::chrono::seconds{10};
-  overlay.render(input.sessions(), running);
+  overlay.render(input_sessions.sessions(), running);
   XGetWindowAttributes(raw, overlay_window, &attributes);
   passed &= expect(attributes.map_state == IsViewable,
                    "a running cooldown shows the panel again");
 
   // Visibility automation hides the winning panel, then clearing the layer
   // rebuilds the frame from the profile's visible base state.
-  auto &session = input.sessions().front();
-  session.automation = std::make_unique<layerc::core::AutomationRuntime>(
-      visibility_automation(session.profile.id));
   const layerc::core::InputEvent press_e{
       {layerc::core::InputDevice::keyboard, 69, 0}, true};
   const layerc::core::InputEvent release_e{
       {layerc::core::InputDevice::keyboard, 69, 0}, false};
   (void)session.feed(press_e, running);
-  overlay.render(input.sessions(), running);
+  overlay.render(input_sessions.sessions(), running);
   XGetWindowAttributes(raw, overlay_window, &attributes);
   passed &= expect(attributes.map_state != IsViewable,
                    "a visibility override hides the rendered panel");
 
   (void)session.feed(release_e, running);
-  overlay.render(input.sessions(), running);
+  overlay.render(input_sessions.sessions(), running);
   XGetWindowAttributes(raw, overlay_window, &attributes);
   passed &= expect(attributes.map_state == IsViewable,
                    "clearing the override restores the base panel visibility");
 
-  std::printf("%s\n", passed ? "P9_OK" : "P9_FAILED");
   return passed ? 0 : 1;
 }
 
 int main() {
-  return layerc::test::run({{"linux_x11_overlay_tests", [] {
-                              const int result = run_linux_x11_overlay_tests();
-                              if (result == skip_code) layerc::test::skip();
-                              layerc::test::expect(
-                                  result == 0,
-                                  "the X11 overlay program should succeed");
-                            }}});
+  return layerc::test::run({
+      {"scale_rules", [] {
+         bool passed = true;
+         check_scale_rules(passed);
+       }},
+      {"geometry_rules", [] {
+         bool passed = true;
+         check_geometry_rules(passed);
+       }},
+      {"missing_shape_path", [] {
+         bool passed = true;
+         check_missing_shape_path(passed);
+       }},
+      {"live_overlay", [] {
+         layerc::test::require_x11();
+         const int result = run_linux_x11_overlay_tests();
+         if (result == skip_code) layerc::test::skip();
+         layerc::test::expect(result == 0, "the X11 overlay program should succeed");
+       }}
+  });
 }

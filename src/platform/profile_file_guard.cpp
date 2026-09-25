@@ -30,16 +30,20 @@ bool transaction_reserved_first_component(std::string_view name_utf8) {
   return folded.has_value() && *folded == "_transactions";
 }
 
+// Every reparse point (symbolic link, junction, mount point) can redirect a
+// store path outside its root; std::filesystem reports junctions as
+// file_type::junction rather than a symlink, so test the attribute directly.
 bool file_guard_is_symlink(const std::filesystem::path &path) {
-  std::error_code error;
-  return std::filesystem::is_symlink(
-      std::filesystem::symlink_status(path, error));
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+         (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 }
 
 bool file_guard_owned_directory(const std::filesystem::path &path) {
-  std::error_code error;
-  return std::filesystem::is_directory(path, error) && !error &&
-         !file_guard_is_symlink(path);
+  const DWORD attributes = GetFileAttributesW(path.c_str());
+  return attributes != INVALID_FILE_ATTRIBUTES &&
+         (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 &&
+         (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
 }
 
 bool file_guard_ensure_directory(const std::filesystem::path &path) {

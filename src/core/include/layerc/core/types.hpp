@@ -10,11 +10,27 @@
 #include <string_view>
 #include <vector>
 
+#include "layerc/core/enum_wire.hpp"
+
 namespace layerc::core {
 
 using MonotonicClock = std::chrono::steady_clock;
 using TimePoint = MonotonicClock::time_point;
 using Milliseconds = std::chrono::milliseconds;
+
+// The earlier of two optional deadlines; an absent deadline never wins.
+[[nodiscard]] constexpr std::optional<TimePoint>
+earliest_deadline(const std::optional<TimePoint> left,
+                  const std::optional<TimePoint> right) noexcept {
+  if (!left.has_value())
+    return right;
+  if (!right.has_value())
+    return left;
+  return *right < *left ? right : left;
+}
+
+// Longest cooldown or automation duration accepted by every profile surface.
+inline constexpr Milliseconds max_cooldown_duration{86'400'000};
 
 // Opaque native-window handle shared by the capture boundary and the daemon
 // kernel. A leaf struct, not kernel policy, so it lives in core and the
@@ -31,19 +47,15 @@ enum class InputDevice : std::uint8_t {
     generic_hid,
 };
 
+inline constexpr std::array input_device_wire{
+    EnumWireEntry{InputDevice::keyboard, "keyboard"},
+    EnumWireEntry{InputDevice::mouse, "mouse"},
+    EnumWireEntry{InputDevice::controller, "controller"},
+    EnumWireEntry{InputDevice::generic_hid, "hid"}};
+
 [[nodiscard]] constexpr std::string_view
 input_device_label(const InputDevice device) noexcept {
-    switch (device) {
-    case InputDevice::keyboard:
-        return "keyboard";
-    case InputDevice::mouse:
-        return "mouse";
-    case InputDevice::controller:
-        return "controller";
-    case InputDevice::generic_hid:
-        return "hid";
-    }
-    return "unknown";
+    return enum_wire_name(input_device_wire, device).value_or("unknown");
 }
 
 struct InputToken {

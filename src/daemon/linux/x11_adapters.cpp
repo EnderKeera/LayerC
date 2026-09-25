@@ -21,8 +21,9 @@ namespace layerc::daemon {
 struct X11Adapters::Impl {
   std::optional<layerc::platform::X11Display> display;
   std::optional<layerc::platform::X11WindowTracker> tracker;
-  X11InputService input;
-  X11AutomationService automation{input};
+  X11SessionRegistry sessions;
+  X11InputService input{sessions};
+  X11AutomationService automation{sessions};
   X11OverlayService overlay;
   X11VisualService visual;
   int fd{-1};
@@ -105,24 +106,22 @@ void X11Adapters::refresh(
   }
 
   const auto scan = impl_->tracker->scan();
-  impl_->input.refresh(profiles, scan);
-  impl_->overlay.refresh(impl_->input.sessions(), scan,
+  impl_->sessions.refresh(profiles, scan);
+  impl_->overlay.refresh(impl_->sessions.sessions(), scan,
                          layerc::platform::scan_monitors(*impl_->display));
-  const auto requests = impl_->input.session_requests();
-  auto demand =
+  const auto requests = impl_->sessions.session_requests();
+  const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  demand.set(layerc::runtime::Capability::automation,
-             static_cast<std::uint32_t>(impl_->input.automation_count()));
-  impl_->visual.refresh(impl_->input.sessions(), demand);
+  impl_->visual.refresh(impl_->sessions.sessions(), demand);
   (void)kernel.reconcile(demand);
 
   const auto input_unavailable = impl_->input.unavailable();
   const auto overlay_unavailable = impl_->overlay.unavailable();
-  const auto automation_unavailable = impl_->input.automation_diagnostics();
+  const auto automation_unavailable = impl_->sessions.automation_diagnostics();
   auto visual_unavailable = impl_->visual.unavailable();
   visual_unavailable.insert(visual_unavailable.end(),
-                            impl_->input.visual_diagnostics().begin(),
-                            impl_->input.visual_diagnostics().end());
+                            impl_->sessions.visual_diagnostics().begin(),
+                            impl_->sessions.visual_diagnostics().end());
   derive_capability_status(
       status, demand,
       {.input = input_unavailable,
@@ -169,36 +168,31 @@ bool X11Adapters::has_pending_events() noexcept {
 
 X11AdapterDispatch X11Adapters::dispatch_pending() {
   if (!has_pending_events()) return {};
-  const int fd = impl_->fd;
-  const int ready = fd;
+  const int ready = impl_->fd;
   return dispatch({&ready, 1});
 }
 
 void X11Adapters::render(const layerc::core::TimePoint now) {
-  (void)impl_->visual.poll(impl_->input.sessions(), now);
-  impl_->input.poll_automation(now);
-  impl_->overlay.render(impl_->input.sessions(), now);
+  (void)impl_->visual.poll(impl_->sessions.sessions(), now);
+  impl_->sessions.poll_automation(now);
+  impl_->overlay.render(impl_->sessions.sessions(), now);
 }
 
 void X11Adapters::stop_sessions(const layerc::core::TimePoint now) {
-  impl_->input.stop_sessions(now);
+  impl_->sessions.stop_sessions(now);
 }
 
 std::optional<layerc::core::TimePoint>
 X11Adapters::next_deadline(const layerc::core::TimePoint now) const {
   auto next = impl_->overlay.next_render_deadline(now);
-  const auto automation = impl_->input.next_automation_deadline(now);
-  if (automation.has_value() &&
-      (!next.has_value() || *automation < *next))
-    next = automation;
-  const auto visual = impl_->visual.next_deadline(now);
-  if (visual.has_value() && (!next.has_value() || *visual < *next))
-    next = visual;
-  return next;
+  next = layerc::core::earliest_deadline(
+      next, impl_->sessions.next_automation_deadline(now));
+  return layerc::core::earliest_deadline(next,
+                                         impl_->visual.next_deadline(now));
 }
 
 std::size_t X11Adapters::session_count() const noexcept {
-  return impl_->input.session_count();
+  return impl_->sessions.session_count();
 }
 
 #else

@@ -19,6 +19,12 @@ CapabilityDemand calculate_capability_demand(
       isolated_windows.push_back(session.window);
   }
   for (const auto &session : sessions) {
+    // Automation timers and the companion snapshot follow a session while it
+    // is in the background, so they count before the foreground filter.
+    if (session.automation)
+      demand.add(Capability::automation);
+    if (session.companion)
+      demand.add(Capability::gamebar);
     if (!session.active)
       continue;
     demand.add(Capability::input);

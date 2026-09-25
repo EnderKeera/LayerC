@@ -1,7 +1,7 @@
 #include "platform_live_test_support.hpp"
 
 #include "layerc/platform/durable_file.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <chrono>
 #include <fstream>

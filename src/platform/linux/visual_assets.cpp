@@ -5,7 +5,6 @@
 
 #include "layerc/platform/visual_assets.hpp"
 
-#include "layerc/core/hash.hpp"
 #include "layerc/platform/profile_store.hpp"
 
 #include "miniz.h"
@@ -15,7 +14,6 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 
 namespace layerc::platform {
 namespace {
@@ -36,22 +34,6 @@ constexpr std::size_t png_channel_count = 4U;
          static_cast<std::uint32_t>(bytes[3]);
 }
 
-[[nodiscard]] std::optional<std::vector<std::uint8_t>>
-read_profile_bytes(const std::filesystem::path &path) {
-  std::error_code error;
-  const auto size = std::filesystem::file_size(path, error);
-  if (error || size == 0 || size > max_template_asset_bytes)
-    return std::nullopt;
-  std::ifstream input(path, std::ios::binary);
-  if (!input) return std::nullopt;
-  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-  input.read(reinterpret_cast<char *>(bytes.data()),
-             static_cast<std::streamsize>(bytes.size()));
-  if (input.gcount() != static_cast<std::streamsize>(bytes.size()))
-    return std::nullopt;
-  return bytes;
-}
-
 [[nodiscard]] std::uint8_t paeth(const std::uint8_t left,
                                  const std::uint8_t above,
                                  const std::uint8_t upper_left) noexcept {
@@ -67,7 +49,7 @@ read_profile_bytes(const std::filesystem::path &path) {
 }
 
 [[nodiscard]] TemplateImageResult
-decode_canonical_png(const std::vector<std::uint8_t> &bytes) {
+decode_canonical_png(std::vector<std::uint8_t> &bytes) {
   if (bytes.size() < png_signature.size() + 12U ||
       !std::equal(png_signature.begin(), png_signature.end(), bytes.begin()))
     return failure("asset is not a PNG image");
@@ -171,21 +153,10 @@ decode_canonical_png(const std::vector<std::uint8_t> &bytes) {
     }
   }
 
-  layerc::core::TemplateImage image;
-  image.width = width;
-  image.height = height;
-  image.pixels.resize(static_cast<std::size_t>(width) * height);
-  image.alpha.resize(image.pixels.size());
-  for (std::size_t index = 0; index < image.pixels.size(); ++index) {
-    image.pixels[index] = {rgba[index * 4U], rgba[index * 4U + 1U],
-                           rgba[index * 4U + 2U]};
-    image.alpha[index] = rgba[index * 4U + 3U];
-  }
-  if (!image.valid())
+  auto image = layerc::core::template_image_from_rgba(width, height, rgba);
+  if (!image.has_value())
     return failure("template requires at least 64 nontransparent pixels");
-  if (!layerc::core::template_image_has_structure(image))
-    return failure("template asset lacks enough visual structure for matching");
-  return image;
+  return std::move(*image);
 }
 
 } // namespace
@@ -193,24 +164,9 @@ decode_canonical_png(const std::vector<std::uint8_t> &bytes) {
 TemplateImageResult
 load_profile_template_asset(const std::filesystem::path &profile_path,
                             const std::string_view sha256) {
-  if (!layerc::core::is_lowercase_sha256(sha256))
-    return failure("template asset id is not a lower-case SHA-256 digest");
-  const auto path = profile_visual_asset_path(profile_path, sha256);
-  auto bytes = read_profile_bytes(path);
-  if (!bytes.has_value())
-    return failure("template asset is missing or exceeds the 4 MiB limit");
-  if (layerc::core::sha256(std::as_bytes(std::span(*bytes))) != sha256)
-    return failure("template asset hash does not match its profile reference");
-  auto decoded = decode_canonical_png(*bytes);
-  if (auto *image = std::get_if<layerc::core::TemplateImage>(&decoded))
-    image->asset_sha256 = std::string(sha256);
-  return decoded;
-}
-
-// Linux has no NTFS change journal. Content identity falls back to the
-// metadata fields filled by callers that can observe the file.
-VisualAssetSignature asset_signature(const std::string_view) {
-  return {};
+  return verified_template_from_bytes(
+      profile_visual_asset_path(profile_path, sha256), sha256,
+      decode_canonical_png);
 }
 
 } // namespace layerc::platform

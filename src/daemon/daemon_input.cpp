@@ -158,10 +158,9 @@ void DaemonApp::poll_input_devices() {
     sync_foreground_state();
     return;
   }
-  bool changed{};
   for (auto *session : session_registry_.active_inputs()) {
     if (session->is_global()) {
-      changed = poll_global_keyboard(*session) || changed;
+      poll_global_keyboard(*session);
     }
   }
   if (std::any_of(
@@ -169,12 +168,9 @@ void DaemonApp::poll_input_devices() {
           [](const Session *session) { return session->uses_controller; })) {
     poll_controllers();
   }
-  if (changed)
-    update_overlays();
 }
 
-bool DaemonApp::poll_global_keyboard(Session &session) {
-  bool changed{};
+void DaemonApp::poll_global_keyboard(Session &session) {
   for (auto &key : session.global_keyboard) {
     const UINT scan = static_cast<UINT>(key.token.code);
     const UINT virtual_key = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
@@ -185,12 +181,9 @@ bool DaemonApp::poll_global_keyboard(Session &session) {
     const bool was_pressed = key.pressed;
     key.pressed = pressed;
     if (pressed != was_pressed) {
-      changed =
-          process_input(session, {.token = key.token, .pressed = pressed}) ||
-          changed;
+      process_input(session, {.token = key.token, .pressed = pressed});
     }
   }
-  return changed;
 }
 
 void DaemonApp::seed_controller_states() {
@@ -246,38 +239,26 @@ void DaemonApp::poll_controllers() {
     const auto trigger = [](const BYTE value) {
       return static_cast<double>(value) / 255.0;
     };
-    bool automation_changed{};
+    const auto prefix = "controller:" + std::to_string(index) + ":";
+    struct AnalogAxis {
+      const char *name;
+      double value;
+    };
+    const AnalogAxis axes[] = {
+        {"leftX", stick(state.Gamepad.sThumbLX)},
+        {"leftY", stick(state.Gamepad.sThumbLY)},
+        {"rightX", stick(state.Gamepad.sThumbRX)},
+        {"rightY", stick(state.Gamepad.sThumbRY)},
+        {"leftTrigger", trigger(state.Gamepad.bLeftTrigger)},
+        {"rightTrigger", trigger(state.Gamepad.bRightTrigger)},
+    };
     for (auto *session : session_registry_.active_inputs()) {
       if (session == nullptr || !session->automation_runtime)
         continue;
-      const auto prefix = "controller:" + std::to_string(index) + ":";
-      automation_changed =
-          process_automation_input_value(*session, prefix + "leftX",
-                                         stick(state.Gamepad.sThumbLX), now) ||
-          automation_changed;
-      automation_changed =
-          process_automation_input_value(*session, prefix + "leftY",
-                                         stick(state.Gamepad.sThumbLY), now) ||
-          automation_changed;
-      automation_changed =
-          process_automation_input_value(*session, prefix + "rightX",
-                                         stick(state.Gamepad.sThumbRX), now) ||
-          automation_changed;
-      automation_changed =
-          process_automation_input_value(*session, prefix + "rightY",
-                                         stick(state.Gamepad.sThumbRY), now) ||
-          automation_changed;
-      automation_changed = process_automation_input_value(
-                               *session, prefix + "leftTrigger",
-                               trigger(state.Gamepad.bLeftTrigger), now) ||
-                           automation_changed;
-      automation_changed = process_automation_input_value(
-                               *session, prefix + "rightTrigger",
-                               trigger(state.Gamepad.bRightTrigger), now) ||
-                           automation_changed;
+      for (const auto &axis : axes)
+        process_automation_input_value(*session, prefix + axis.name,
+                                       axis.value, now);
     }
-    if (automation_changed)
-      update_overlays();
     input_runtime_.controllers()[index] = state;
   }
 }
@@ -287,18 +268,15 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
     sync_foreground_state();
   if (session_registry_.active_inputs().empty())
     return;
-  bool changed{};
   for (auto *session : session_registry_.active_inputs())
-    changed = process_input(*session, event) || changed;
-  if (changed)
-    update_overlays();
+    process_input(*session, event);
 }
 
-bool DaemonApp::process_automation_input_value(
+void DaemonApp::process_automation_input_value(
     Session &session, std::string source, double value,
     const layerc::core::TimePoint now, const bool momentary) {
   if (!session.automation_runtime || !std::isfinite(value))
-    return false;
+    return;
   const auto &profile = session.automation_runtime->profile();
   const bool demanded =
       std::ranges::any_of(profile.automations, [&](const auto &automation) {
@@ -311,7 +289,7 @@ bool DaemonApp::process_automation_input_value(
                });
       });
   if (!demanded)
-    return false;
+    return;
 
   if (std::abs(value) < profile.continuous_input.deadzone)
     value = 0.0;
@@ -324,78 +302,54 @@ bool DaemonApp::process_automation_input_value(
   const auto last = edges.input_emitted.find(source);
   if (last != edges.input_emitted.end() &&
       now - last->second < minimum_interval)
-    return false;
-  if (momentary) {
+    return;
+  const auto emit_value = [&](const double previous_value) {
     edges.input_emitted[source] = now;
     auto event = automation_event(
         layerc::core::AutomationEventKind::input_value_changed,
         std::move(source), now);
-    event.fields.emplace("previous", layerc::core::AutomationValue(0.0));
+    event.fields.emplace("previous",
+                         layerc::core::AutomationValue(previous_value));
     event.fields.emplace("value", layerc::core::AutomationValue(value));
-    return process_automation_event(session, event);
+    process_automation_event(session, event);
+  };
+  if (momentary) {
+    emit_value(0.0);
+    return;
   }
   const auto previous = edges.input_values.find(source);
   if (previous == edges.input_values.end()) {
     edges.input_values.emplace(std::move(source), value);
-    return false;
+    return;
   }
   if (std::abs(value - previous->second) <
       profile.continuous_input.change_threshold)
-    return false;
+    return;
 
   const double old_value = previous->second;
   previous->second = value;
-  edges.input_emitted[source] = now;
-  auto event = automation_event(
-      layerc::core::AutomationEventKind::input_value_changed,
-      std::move(source), now);
-  event.fields.emplace("previous", layerc::core::AutomationValue(old_value));
-  event.fields.emplace("value", layerc::core::AutomationValue(value));
-  return process_automation_event(session, event);
+  emit_value(old_value);
 }
-bool DaemonApp::process_input(Session &session,
+void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
-  bool automation_changed{};
-  if (session.automation_runtime) {
-    const auto device = std::string(input_device_label(event.token.device));
-    auto source = device + ":" + std::to_string(event.token.code);
-    if (event.token.device == layerc::core::InputDevice::controller)
-      source += ":" + std::to_string(event.token.controller_index);
-    automation_changed = process_automation_event(
-        session,
-        automation_event(event.pressed
-                             ? layerc::core::AutomationEventKind::input_pressed
-                             : layerc::core::AutomationEventKind::input_released,
-                         std::move(source),
-                         layerc::core::MonotonicClock::now()));
-  }
-  const auto triggered = session.input.process(event);
-  if (!triggered.empty()) {
+  const auto now = layerc::core::MonotonicClock::now();
+  const auto result = session.feed_input(session.input, event,
+                                         session.profile, now);
+  if (result.changed)
+    mark_overlays_dirty();
+  if (result.matched)
     session.last_input_match =
         std::string(layerc::core::input_device_label(event.token.device)) + ":" +
         std::to_string(event.token.code) +
         (event.pressed ? ":press" : ":release");
+  if (!result.triggered.empty())
+    update_tooltip(L"LayerD - triggered " +
+                   layerc::platform::utf8_to_wide(result.triggered.back()));
+  if (session.automation_runtime) {
+    publish_automation_trace(session);
+    synchronize_automation_state(session, now);
+    schedule_automation_timer();
   }
-  if (session.blocks_all_triggers())
-    return automation_changed;
-  const auto now = layerc::core::MonotonicClock::now();
-  bool changed{automation_changed};
-  for (const auto &cooldown_id : triggered) {
-    std::vector<layerc::core::VisualTriggerRequest> requests;
-    if (session.visual_triggers)
-      requests = session.visual_triggers->on_input(cooldown_id, now);
-    else
-      requests.push_back(
-          {cooldown_id, layerc::core::VisualTriggerSource::direct_input});
-    for (const auto &request : requests) {
-      if (trigger_cooldown_with_automation(session, request.cooldown_id, now)) {
-        changed = true;
-        update_tooltip(L"LayerD - triggered " +
-                       layerc::platform::utf8_to_wide(request.cooldown_id));
-      }
-    }
-  }
-  return changed;
 }
 
 } // namespace layerc::daemon

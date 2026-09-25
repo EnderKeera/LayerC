@@ -1,4 +1,4 @@
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include "layerc/core/hash.hpp"
 #include "layerc/core/profile.hpp"
@@ -8,9 +8,7 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
-#include <fstream>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -66,6 +64,24 @@ std::optional<bool> visual_bundle_exists(
     }
   }
   return false;
+}
+
+bool is_lower_hex(const wchar_t character) noexcept {
+  return (character >= L'0' && character <= L'9') ||
+         (character >= L'a' && character <= L'f');
+}
+
+// Content-addressed stage name: 64 hex digits, ".png.", then the unique suffix.
+bool is_asset_stage_filename(const std::wstring &filename) noexcept {
+  return filename.size() > 64U + 5U &&
+         filename.compare(64U, 5U, L".png.") == 0 &&
+         std::ranges::all_of(filename.begin(), filename.begin() + 64,
+                             is_lower_hex);
+}
+
+bool is_sha256_png_stem(const std::wstring &stem) noexcept {
+  return stem.size() == 64 &&
+         std::ranges::all_of(stem, is_lower_hex);
 }
 
 void collect_asset_references(const layerc::core::VisualProfile &profile,
@@ -134,17 +150,11 @@ bool collect_active_asset_references(std::vector<std::string> &references,
 
 std::optional<std::vector<std::uint8_t>>
 read_asset_bytes(const std::filesystem::path &path) {
-  std::error_code error;
-  const auto size = std::filesystem::file_size(path, error);
-  if (error || size == 0 || size > max_template_asset_bytes)
-    return std::nullopt;
-  std::ifstream input(path, std::ios::binary);
-  if (!input) return std::nullopt;
-  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-  input.read(reinterpret_cast<char *>(bytes.data()),
-             static_cast<std::streamsize>(bytes.size()));
-  if (input.gcount() != static_cast<std::streamsize>(bytes.size()))
-    return std::nullopt;
+  const auto read = read_durable_file(path, max_template_asset_bytes);
+  if (!read.has_value() || read->empty()) return std::nullopt;
+  std::vector<std::uint8_t> bytes(read->size());
+  for (std::size_t index = 0; index < bytes.size(); ++index)
+    bytes[index] = std::to_integer<std::uint8_t>((*read)[index]);
   return bytes;
 }
 
@@ -188,19 +198,10 @@ decode_png(std::vector<std::uint8_t> &bytes) {
                                    rgba.data())))
     return failure("PNG pixels could not be decoded");
 
-  layerc::core::TemplateImage image;
-  image.width = width;
-  image.height = height;
-  image.pixels.resize(static_cast<std::size_t>(width) * height);
-  image.alpha.resize(image.pixels.size());
-  for (std::size_t index = 0; index < image.pixels.size(); ++index) {
-    image.pixels[index] = {rgba[index * 4U], rgba[index * 4U + 1U],
-                           rgba[index * 4U + 2U]};
-    image.alpha[index] = rgba[index * 4U + 3U];
-  }
-  if (!image.valid())
+  auto image = layerc::core::template_image_from_rgba(width, height, rgba);
+  if (!image.has_value())
     return failure("template requires at least 64 nontransparent pixels");
-  return image;
+  return std::move(*image);
 }
 
 std::variant<std::vector<std::uint8_t>, VisualAssetError>
@@ -232,17 +233,17 @@ encode_png(const layerc::core::TemplateImage &image) {
   if (FAILED(frame->SetPixelFormat(&format)) ||
       format != GUID_WICPixelFormat32bppBGRA)
     return failure("PNG encoder rejected BGRA pixels");
-  std::vector<std::uint8_t> rgba(image.pixels.size() * 4U);
+  std::vector<std::uint8_t> bgra(image.pixels.size() * 4U);
   for (std::size_t index = 0; index < image.pixels.size(); ++index) {
-    rgba[index * 4U] = image.pixels[index].blue;
-    rgba[index * 4U + 1U] = image.pixels[index].green;
-    rgba[index * 4U + 2U] = image.pixels[index].red;
-    rgba[index * 4U + 3U] = image.alpha[index];
+    bgra[index * 4U] = image.pixels[index].blue;
+    bgra[index * 4U + 1U] = image.pixels[index].green;
+    bgra[index * 4U + 2U] = image.pixels[index].red;
+    bgra[index * 4U + 3U] = image.alpha[index];
   }
   const auto stride = image.width * 4U;
   if (FAILED(frame->WritePixels(image.height, stride,
-                                static_cast<UINT>(rgba.size()),
-                                rgba.data())) ||
+                                static_cast<UINT>(bgra.size()),
+                                bgra.data())) ||
       FAILED(frame->Commit()) || FAILED(encoder->Commit()))
     return failure("PNG pixels could not be encoded");
   HGLOBAL memory{};
@@ -266,24 +267,39 @@ encode_png(const layerc::core::TemplateImage &image) {
 
 bool write_asset_atomically(const std::filesystem::path &path,
                             const std::span<const std::uint8_t> bytes) {
-  if (!file_guard_ensure_directory(visual_directory()) ||
+  if (!file_guard_ensure_directory(path.parent_path().parent_path()) ||
       !file_guard_ensure_directory(path.parent_path()) ||
       !file_guard_absent_or_regular(path)) return false;
   return write_durable_file(path, std::as_bytes(bytes)) ==
          DurablePublishOutcome::published_durable;
 }
 
+// An already-vanished file counts as collected; any other failure records
+// `fault` and tells the caller to stop.
+bool delete_asset_file(const std::filesystem::path &path,
+                       VisualAssetGcReport &report, const char *const fault) {
+  if (DeleteFileW(path.c_str()) != FALSE) {
+    ++report.deleted;
+    return true;
+  }
+  if (GetLastError() == ERROR_FILE_NOT_FOUND) return true;
+  report.blocked_by = path;
+  report.fault = fault;
+  return false;
+}
+
 } // namespace
 
+// The store-wide asset directory is the one the shared layout assigns to a
+// profile stored directly in profile_directory().
 std::filesystem::path visual_asset_directory() {
-  return visual_directory() / L"assets";
+  return profile_visual_asset_directory(profile_directory() /
+                                        L"asset.profile.json");
 }
 
 std::filesystem::path visual_asset_path(const std::string_view sha256_value) {
-  if (!layerc::core::is_lowercase_sha256(sha256_value)) return {};
-  std::wstring filename(sha256_value.begin(), sha256_value.end());
-  filename += L".png";
-  return visual_asset_directory() / filename;
+  return profile_visual_asset_path(profile_directory() / L"asset.profile.json",
+                                   sha256_value);
 }
 
 VisualAssetSignature asset_signature(const std::string_view hash) {
@@ -388,24 +404,8 @@ import_template_asset(const std::filesystem::path &source) {
 }
 
 TemplateImageResult load_template_asset(const std::string_view sha256_value) {
-  if (!layerc::core::is_lowercase_sha256(sha256_value))
-    return failure("template asset id is not a lower-case SHA-256 digest");
-  const auto path = visual_asset_path(sha256_value);
-  auto bytes = read_asset_bytes(path);
-  if (!bytes.has_value())
-    return failure("template asset is missing or exceeds the 4 MiB limit");
-  const auto digest = layerc::core::sha256(std::as_bytes(std::span(*bytes)));
-  if (digest != sha256_value)
-    return failure("template asset hash does not match its profile reference");
-  auto decoded = decode_png(*bytes);
-  if (auto *image = std::get_if<layerc::core::TemplateImage>(&decoded)) {
-    if (!layerc::core::template_image_has_structure(*image))
-      return failure(
-          "template asset lacks enough visual structure for positional matching");
-    image->asset_sha256 = std::string(sha256_value);
-    return std::move(*image);
-  }
-  return std::get<VisualAssetError>(std::move(decoded));
+  return verified_template_from_bytes(visual_asset_path(sha256_value),
+                                      sha256_value, decode_png);
 }
 
 VisualAssetGcReport garbage_collect_visual_assets(
@@ -436,16 +436,7 @@ VisualAssetGcReport garbage_collect_visual_assets(
     const auto path = iterator->path();
     if (_wcsicmp(path.extension().c_str(), L".tmp") == 0) {
       const auto filename = path.filename().wstring();
-      const bool asset_temporary =
-          filename.size() > 64U + 5U &&
-          filename.compare(64U, 5U, L".png.") == 0 &&
-          std::ranges::all_of(
-              filename.begin(), filename.begin() + 64,
-              [](const wchar_t character) {
-                return (character >= L'0' && character <= L'9') ||
-                       (character >= L'a' && character <= L'f');
-              });
-      if (asset_temporary) {
+      if (is_asset_stage_filename(filename)) {
         const auto modified = std::filesystem::last_write_time(path, error);
         if (error) {
           report.blocked_by = path;
@@ -453,26 +444,17 @@ VisualAssetGcReport garbage_collect_visual_assets(
           return report;
         }
         if (std::filesystem::file_time_type::clock::now() - modified >=
-            std::chrono::hours(24)) {
-          if (DeleteFileW(path.c_str()) != FALSE) {
-            ++report.deleted;
-          } else if (GetLastError() != ERROR_FILE_NOT_FOUND) {
-            report.blocked_by = path;
-            report.fault = "stale temporary visual asset could not be deleted";
-            return report;
-          }
-        }
+                std::chrono::hours(24) &&
+            !delete_asset_file(
+                path, report,
+                "stale temporary visual asset could not be deleted"))
+          return report;
       }
       continue;
     }
     if (path.extension() != L".png") continue;
     const auto stem_wide = path.stem().wstring();
-    if (stem_wide.size() != 64 ||
-        !std::ranges::all_of(stem_wide, [](const wchar_t character) {
-          return (character >= L'0' && character <= L'9') ||
-                 (character >= L'a' && character <= L'f');
-        }))
-      continue;
+    if (!is_sha256_png_stem(stem_wide)) continue;
     std::string stem;
     stem.reserve(stem_wide.size());
     for (const wchar_t character : stem_wide)
@@ -481,13 +463,9 @@ VisualAssetGcReport garbage_collect_visual_assets(
       ++report.retained;
       continue;
     }
-    if (DeleteFileW(path.c_str()) != FALSE) {
-      ++report.deleted;
-    } else if (GetLastError() != ERROR_FILE_NOT_FOUND) {
-      report.blocked_by = path;
-      report.fault = "unreferenced visual asset could not be deleted";
+    if (!delete_asset_file(path, report,
+                           "unreferenced visual asset could not be deleted"))
       return report;
-    }
   }
   if (error) {
     report.blocked_by = directory;

@@ -9,6 +9,7 @@
 #include "layerc/platform/text.hpp"
 
 #include <cerrno>
+#include <filesystem>
 #include <string>
 #include <system_error>
 
@@ -32,6 +33,45 @@ transaction_relative_key(const std::filesystem::path &relative) {
 bool transaction_reserved_first_component(std::string_view name_utf8) {
   (void)name_utf8;
   return false;
+}
+
+namespace {
+
+bool has_symlink_component(const std::filesystem::path &path) {
+  std::filesystem::path current;
+  for (const auto &part : path.lexically_normal()) {
+    current /= part;
+    struct stat status {};
+    if (::lstat(current.c_str(), &status) == 0) {
+      if (S_ISLNK(status.st_mode)) return true;
+    } else if (errno != ENOENT) {
+      return true;
+    }
+  }
+  return false;
+}
+
+} // namespace
+
+bool ensure_owned_directory(const std::filesystem::path &path,
+                            const OwnedDirectoryPolicy policy) {
+  if (path.empty() || !path.is_absolute() || has_symlink_component(path))
+    return false;
+  const bool require_private = policy == OwnedDirectoryPolicy::require_private;
+  if (require_private) {
+    if (::mkdir(path.c_str(), S_IRWXU) != 0 && errno != EEXIST) return false;
+  } else {
+    std::error_code error;
+    std::filesystem::create_directories(path, error);
+    if (error) return false;
+  }
+  if (has_symlink_component(path)) return false;
+  struct stat status {};
+  if (::lstat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode) ||
+      status.st_uid != ::geteuid())
+    return false;
+  if (require_private) return (status.st_mode & 0777U) == S_IRWXU;
+  return ::chmod(path.c_str(), S_IRWXU) == 0;
 }
 
 bool file_guard_is_symlink(const std::filesystem::path &path) {

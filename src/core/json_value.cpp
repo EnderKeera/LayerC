@@ -102,14 +102,17 @@ void append_quoted(std::string &output, std::string_view text) {
     output.push_back('"');
 }
 
-void append_color_quoted(std::string &output, std::uint32_t color) {
+std::string color_text(std::uint32_t color) {
     constexpr std::string_view hex = "0123456789ABCDEF";
-    output.push_back('"');
-    output.push_back('#');
-    for (int shift = 20; shift >= 0; shift -= 4) {
-        output.push_back(hex[(color >> static_cast<unsigned>(shift)) & 0xFU]);
-    }
-    output.push_back('"');
+    std::string text = "#000000";
+    for (int shift = 20, index = 1; shift >= 0; shift -= 4, ++index)
+        text[static_cast<std::size_t>(index)] =
+            hex[(color >> static_cast<unsigned>(shift)) & 0xFU];
+    return text;
+}
+
+void append_color_quoted(std::string &output, std::uint32_t color) {
+    append_quoted(output, color_text(color));
 }
 
 void append_bool(std::string &output, bool value) {

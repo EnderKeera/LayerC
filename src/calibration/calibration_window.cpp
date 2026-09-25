@@ -4,7 +4,7 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/text.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 #include "layerc/platform/editor_appearance.hpp"
 #include "layerc/platform/window_query.hpp"
 
@@ -49,6 +49,25 @@ layerc::core::CaptureQuality capture_quality_from_combobox(
   if (index == 0) return layerc::core::CaptureQuality::low;
   if (index == 2) return layerc::core::CaptureQuality::exact;
   return layerc::core::CaptureQuality::balanced;
+}
+
+WPARAM sample_rate_combobox_index(const std::uint8_t sample_rate_hz) {
+  if (sample_rate_hz == 5) return 0;
+  if (sample_rate_hz == 15) return 2;
+  return 1;
+}
+
+WPARAM capture_quality_combobox_index(
+    const layerc::core::CaptureQuality quality) {
+  if (quality == layerc::core::CaptureQuality::low) return 0;
+  if (quality == layerc::core::CaptureQuality::exact) return 2;
+  return 1;
+}
+
+layerc::core::PixelRepeatPolicy repeat_policy_from_combobox(
+    const LRESULT index) {
+  return index == 1 ? layerc::core::PixelRepeatPolicy::when_fully_ready
+                    : layerc::core::PixelRepeatPolicy::edge;
 }
 
 } // namespace
@@ -109,14 +128,17 @@ LRESULT CALLBACK CalibrationWindow::preview_proc(const HWND window,
 
 bool CalibrationWindow::initialize(const HWND window) {
   dialog_ = window;
+  const auto reject = [this](const char *error) {
+    response_.error = error;
+    EndDialog(dialog_, IDCANCEL);
+    return false;
+  };
   target_window_ = reinterpret_cast<HWND>(
       static_cast<std::uintptr_t>(request_.target_window));
   auto parsed = layerc::core::parse_profile_json(request_.profile_json);
   const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
   if (profile == nullptr || !IsWindow(target_window_)) {
-    response_.error = "calibration profile or target is invalid";
-    EndDialog(dialog_, IDCANCEL);
-    return false;
+    return reject("calibration profile or target is invalid");
   }
   profile_ = *profile;
   auto matching_profile = profile_;
@@ -125,18 +147,14 @@ bool CalibrationWindow::initialize(const HWND window) {
       layerc::platform::describe_attachable_window(target_window_);
   if (!candidate.has_value() ||
       !layerc::platform::profile_matches_window(*candidate, matching_profile)) {
-    response_.error = "calibration target does not match the selected profile";
-    EndDialog(dialog_, IDCANCEL);
-    return false;
+    return reject("calibration target does not match the selected profile");
   }
   const auto cooldown =
       std::ranges::find_if(profile_.cooldowns, [&](const auto &definition) {
         return definition.id == request_.cooldown_id;
       });
   if (cooldown == profile_.cooldowns.end()) {
-    response_.error = "selected calibration cooldown is invalid";
-    EndDialog(dialog_, IDCANCEL);
-    return false;
+    return reject("selected calibration cooldown is invalid");
   }
 
   if (!request_.visual_json.empty()) {
@@ -147,9 +165,7 @@ bool CalibrationWindow::initialize(const HWND window) {
       sample_rate_hz_ = value->sample_rate_hz;
       quality_ = value->quality;
     } else {
-      response_.error = "existing visual sidecar is invalid";
-      EndDialog(dialog_, IDCANCEL);
-      return false;
+      return reject("existing visual sidecar is invalid");
     }
   }
 
@@ -336,15 +352,9 @@ void CalibrationWindow::initialize_controls() {
           : 0,
       0);
   SendDlgItemMessageW(dialog_, IDC_CAL_SAMPLE_RATE, CB_SETCURSEL,
-                      sample_rate_hz_ == 5    ? 0
-                      : sample_rate_hz_ == 15 ? 2
-                                              : 1,
-                      0);
+                      sample_rate_combobox_index(sample_rate_hz_), 0);
   SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_SETCURSEL,
-                      quality_ == layerc::core::CaptureQuality::low     ? 0
-                      : quality_ == layerc::core::CaptureQuality::exact ? 2
-                                                                        : 1,
-                      0);
+                      capture_quality_combobox_index(quality_), 0);
   CheckDlgButton(dialog_, IDC_CAL_KEEP_INPUT,
                  trigger_.keep_input ? BST_CHECKED : BST_UNCHECKED);
   set_control_text(IDC_CAL_COLOR_VALUE, color_text(target_color_));
@@ -423,9 +433,7 @@ bool CalibrationWindow::handle_command(const WPARAM wparam) {
   if (id == IDC_CAL_QUALITY && notification == CBN_SELCHANGE) {
     const auto selection =
         SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0);
-    quality_ = selection == 0   ? layerc::core::CaptureQuality::low
-               : selection == 2 ? layerc::core::CaptureQuality::exact
-                                : layerc::core::CaptureQuality::balanced;
+    quality_ = capture_quality_from_combobox(selection);
     if (capture_)
       capture_->set_quality(quality_);
     if (fallback_snapshot_ && capture_) {
@@ -470,6 +478,15 @@ bool CalibrationWindow::handle_command(const WPARAM wparam) {
 INT_PTR CalibrationWindow::handle_message(const HWND window, const UINT message,
                                           const WPARAM wparam,
                                           const LPARAM lparam) {
+  const auto color_control = [&](const COLORREF background,
+                                 const HBRUSH brush) {
+    const HDC dc = reinterpret_cast<HDC>(wparam);
+    const HWND control = reinterpret_cast<HWND>(lparam);
+    SetTextColor(dc,
+                 IsWindowEnabled(control) ? palette_.text : palette_.muted);
+    SetBkColor(dc, background);
+    return reinterpret_cast<INT_PTR>(brush);
+  };
   switch (message) {
   case WM_TIMER:
     if (wparam == capture_timer) {
@@ -495,31 +512,13 @@ INT_PTR CalibrationWindow::handle_message(const HWND window, const UINT message,
   }
   case WM_CTLCOLORDLG:
     return reinterpret_cast<INT_PTR>(background_brush_);
-  case WM_CTLCOLORSTATIC: {
-    const HDC dc = reinterpret_cast<HDC>(wparam);
-    const HWND control = reinterpret_cast<HWND>(lparam);
-    SetTextColor(dc,
-                 IsWindowEnabled(control) ? palette_.text : palette_.muted);
-    SetBkColor(dc, palette_.background);
-    return reinterpret_cast<INT_PTR>(background_brush_);
-  }
-  case WM_CTLCOLORBTN: {
-    const HDC dc = reinterpret_cast<HDC>(wparam);
-    const HWND control = reinterpret_cast<HWND>(lparam);
-    SetTextColor(dc,
-                 IsWindowEnabled(control) ? palette_.text : palette_.muted);
-    SetBkColor(dc, palette_.panel);
-    return reinterpret_cast<INT_PTR>(panel_brush_);
-  }
+  case WM_CTLCOLORSTATIC:
+    return color_control(palette_.background, background_brush_);
+  case WM_CTLCOLORBTN:
+    return color_control(palette_.panel, panel_brush_);
   case WM_CTLCOLOREDIT:
-  case WM_CTLCOLORLISTBOX: {
-    const HDC dc = reinterpret_cast<HDC>(wparam);
-    const HWND control = reinterpret_cast<HWND>(lparam);
-    SetTextColor(dc,
-                 IsWindowEnabled(control) ? palette_.text : palette_.muted);
-    SetBkColor(dc, palette_.input);
-    return reinterpret_cast<INT_PTR>(input_brush_);
-  }
+  case WM_CTLCOLORLISTBOX:
+    return color_control(palette_.input, input_brush_);
   case WM_ERASEBKGND: {
     RECT client{};
     GetClientRect(window, &client);
@@ -636,10 +635,8 @@ CalibrationWindow::current_template_from_controls() const {
       static_cast<std::uint8_t>(integer_control(IDC_CAL_TOLERANCE, 24, 0, 255));
   state.stable_samples = static_cast<std::uint8_t>(
       integer_control(IDC_CAL_STABLE_SAMPLES, 2, 1, 15));
-  state.repeat =
-      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0) == 1
-          ? layerc::core::PixelRepeatPolicy::when_fully_ready
-          : layerc::core::PixelRepeatPolicy::edge;
+  state.repeat = repeat_policy_from_combobox(
+      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0));
   return state;
 }
 
@@ -658,10 +655,8 @@ layerc::core::PixelRule CalibrationWindow::current_rule_from_controls() const {
   auto rule = rule_;
   rule.stable_samples = static_cast<std::uint8_t>(
       integer_control(IDC_CAL_STABLE_SAMPLES, rule.stable_samples, 1, 15));
-  rule.repeat =
-      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0) == 1
-          ? layerc::core::PixelRepeatPolicy::when_fully_ready
-          : layerc::core::PixelRepeatPolicy::edge;
+  rule.repeat = repeat_policy_from_combobox(
+      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0));
   switch (mode()) {
   case CalibrationMode::brightness:
     rule.predicate = layerc::core::BrightnessPredicate{

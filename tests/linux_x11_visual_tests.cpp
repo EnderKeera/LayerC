@@ -10,14 +10,11 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/Xcomposite.h>
 
-#include <unistd.h>
-
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -66,14 +63,6 @@ constexpr std::array<std::uint8_t, 325> template_png{
     0x20U, 0x12U, 0x86U, 0xfcU, 0x03U, 0x52U, 0x92U, 0x9aU, 0x81U, 0x5eU,
     0x26U, 0x69U, 0xf0U, 0x00U, 0x00U, 0x00U, 0x00U, 0x49U, 0x45U, 0x4eU,
     0x44U, 0xaeU, 0x42U, 0x60U, 0x82U};
-
-struct TempDirectory {
-  std::filesystem::path path;
-  ~TempDirectory() {
-    std::error_code ignored;
-    std::filesystem::remove_all(path, ignored);
-  }
-};
 
 struct FixtureColor {
   unsigned long pixel{};
@@ -190,23 +179,19 @@ int run_linux_x11_visual_tests() {
     return skip_code;
   }
 
-  TempDirectory temp{std::filesystem::temp_directory_path() /
-                     ("layerc-x11-visual-" + std::to_string(::getpid()))};
-  std::error_code error;
-  std::filesystem::remove_all(temp.path, error);
-  error.clear();
-  std::filesystem::create_directories(temp.path, error);
-  if (error || ::setenv("HOME", temp.path.c_str(), 1) != 0 ||
-      ::setenv("XDG_CONFIG_HOME", (temp.path / "config").c_str(), 1) != 0 ||
-      ::setenv("XDG_DATA_HOME", (temp.path / "data").c_str(), 1) != 0) {
-    std::fprintf(stderr, "skip: cannot create isolated XDG roots\n");
-    return skip_code;
-  }
+  layerc::test::TempDirectory temp{"layerc-x11-visual"};
+  layerc::test::ScopedEnvironment home{"HOME", temp.path()};
+  layerc::test::ScopedEnvironment config{"XDG_CONFIG_HOME",
+                                          temp.path() / "config"};
+  layerc::test::ScopedEnvironment data{"XDG_DATA_HOME",
+                                        temp.path() / "data"};
+  if (!expect(home.applied() && config.applied() && data.applied(),
+              "isolated XDG roots are installed"))
+    return 1;
   const auto roots = layerc::platform::profile_store_roots();
-  if (!layerc::platform::ensure_profile_store_roots(roots)) {
-    std::fprintf(stderr, "skip: cannot initialize isolated profile store\n");
-    return skip_code;
-  }
+  if (!expect(layerc::platform::ensure_profile_store_roots(roots),
+              "isolated profile store roots are initialized"))
+    return 1;
   const auto profile_path = roots.config_profiles / "visual-fixture.json";
   const auto asset_path =
       layerc::platform::profile_visual_asset_path(profile_path, template_sha);
@@ -313,8 +298,8 @@ int run_linux_x11_visual_tests() {
                    "the captured pixel rule triggers its cooldown");
   passed &= expect(std::ranges::find(triggered, "template") != triggered.end(),
                    "the resolved template matches and triggers its cooldown");
-  passed &= expect(!sessions.front().engine.trigger("pixel", now) &&
-                       !sessions.front().engine.trigger("template", now),
+  passed &= expect(!sessions.front().cooldowns.trigger("pixel", now) &&
+                       !sessions.front().cooldowns.trigger("template", now),
                    "accepted visual requests consume both cooldowns");
   passed &= expect(
       visual.poll(sessions, now + std::chrono::milliseconds{50}).empty(),
@@ -362,7 +347,6 @@ int run_linux_x11_visual_tests() {
               static_cast<int>(allocated.size()), 0);
   XSync(raw, False);
 
-  std::printf("x11 visual tests: %s\n", passed ? "PASS" : "FAIL");
   return passed ? 0 : 1;
 }
 

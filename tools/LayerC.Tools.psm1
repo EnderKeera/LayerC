@@ -1,5 +1,7 @@
 #Requires -Version 5.1
 
+$ErrorActionPreference = 'Stop'
+
 if (-not ('LayerCBenchmarkNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -109,6 +111,50 @@ function New-LayerCBenchmarkContext {
     }
 }
 
+function Assert-LayerCQuiescent {
+    param(
+        [Parameter(Mandatory)][string[]]$ProcessNames,
+        [Parameter(Mandatory)][string]$FailureMessage
+    )
+    $owners = @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue)
+    if ($owners.Count -ne 0) {
+        $running = ($owners | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', '
+        throw "$FailureMessage (running: $running)"
+    }
+}
+
+function Enter-LayerCProfileSandbox {
+    param([Parameter(Mandatory)][string]$ProfileDirectory)
+    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $ProfileDirectory, 'Process')
+}
+
+function Exit-LayerCProfileSandbox {
+    param(
+        # PowerShell coerces $null to '' for [string] parameters.
+        [AllowNull()][object]$PreviousDirectory,
+        [Parameter(Mandatory)][string]$TemporaryDirectory,
+        [switch]$KeepTemporary
+    )
+    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $PreviousDirectory, 'Process')
+    if (-not $KeepTemporary -and (Test-Path -LiteralPath $TemporaryDirectory)) {
+        Remove-Item -LiteralPath $TemporaryDirectory -Recurse -Force
+    }
+}
+
+function Start-LayerCDaemon {
+    param([Parameter(Mandatory)][string]$BuildDirectory)
+    Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
+        -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+}
+
+function Stop-LayerCBenchmarkProcess {
+    param([Diagnostics.Process]$Process)
+    if ($null -ne $Process -and -not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        [void]$Process.WaitForExit(5000)
+    }
+}
+
 function Get-LayerCPackageVersion {
     $cmake = Get-Content -LiteralPath (
         Join-Path (Split-Path -Parent $PSScriptRoot) 'CMakeLists.txt') -Raw
@@ -141,20 +187,20 @@ function New-LayerCBenchmarkResult {
         [ValidateRange(2, 100)][int]$Depth = 8
     )
 
-    $host = [ordered]@{
+    $hostInfo = [ordered]@{
         computerName = $env:COMPUTERNAME
         os = [Environment]::OSVersion.VersionString
         logicalProcessors = [Environment]::ProcessorCount
     }
     foreach ($entry in $HostData.GetEnumerator()) {
-        $host[$entry.Key] = $entry.Value
+        $hostInfo[$entry.Key] = $entry.Value
     }
     $result = [ordered]@{
         schemaVersion = 1
         packageVersion = Get-LayerCPackageVersion
         commitSha = Get-LayerCCommitSha
         measuredAt = (Get-Date).ToUniversalTime().ToString('o')
-        host = $host
+        host = $hostInfo
     }
     foreach ($entry in $Data.GetEnumerator()) {
         if ($result.Contains($entry.Key)) {
@@ -272,5 +318,7 @@ function Set-BenchmarkForeground {
 
 Export-ModuleMember -Function Assert-NativeSuccess, Invoke-Checked,
     Resolve-InstallRoot, Resolve-LayerCBuildRoot, New-LayerCBenchmarkContext,
-    Get-LayerCPackageVersion, Get-LayerCCommitSha, New-LayerCBenchmarkResult,
-    Measure-LayerCPlateau, Set-BenchmarkForeground
+    Assert-LayerCQuiescent, Enter-LayerCProfileSandbox, Exit-LayerCProfileSandbox,
+    Start-LayerCDaemon, Stop-LayerCBenchmarkProcess, Get-LayerCPackageVersion,
+    Get-LayerCCommitSha, New-LayerCBenchmarkResult, Measure-LayerCPlateau,
+    Set-BenchmarkForeground

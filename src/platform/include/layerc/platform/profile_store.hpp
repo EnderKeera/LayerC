@@ -3,6 +3,7 @@
 #include "layerc/core/automation.hpp"
 #include "layerc/core/companion.hpp"
 #include "layerc/core/visual.hpp"
+#include "layerc/platform/profile_transaction.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -47,9 +48,10 @@ struct ProfileStoreRoots {
 
 
 [[nodiscard]] std::filesystem::path profile_directory();
-[[nodiscard]] std::filesystem::path visual_directory();
 [[nodiscard]] std::filesystem::path
 profile_data_directory(const std::filesystem::path &profile_path);
+[[nodiscard]] std::filesystem::path
+profile_visual_asset_directory(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path profile_visual_asset_path(
     const std::filesystem::path &profile_path, std::string_view sha256);
 [[nodiscard]] std::filesystem::path
@@ -67,6 +69,11 @@ sidecar_paths(const std::filesystem::path &profile_path, ModuleSidecarKind kind)
 [[nodiscard]] std::string_view sidecar_marker_contents(bool active) noexcept;
 [[nodiscard]] std::string
 canonical_profile_key(const std::filesystem::path &path);
+// Store filename for a new profile: lower-case ASCII letters and digits, one
+// dash for every other run, "profile" when nothing remains, plus ".json".
+// Profile ids never become path components directly.
+[[nodiscard]] std::filesystem::path
+profile_store_filename(std::string_view profile_id);
 [[nodiscard]] std::optional<std::string>
 read_profile_file(const std::filesystem::path &path);
 
@@ -98,23 +105,17 @@ struct ProfileDirectoryScan {
 [[nodiscard]] ProfileDirectoryScan
 scan_profile_directory(const std::filesystem::path &directory);
 
-// Shared durable sidecar text read. Callers pass the codec byte cap
-// (max_visual_json_bytes / max_automation_json_bytes /
-// max_companion_sidecar_bytes).
-[[nodiscard]] std::optional<std::string>
-read_sidecar_text(const std::filesystem::path &path, std::size_t max_bytes);
-
 // Publishes one base-profile file through the stage→commit journal. A
 // user-visible `.bak` of the previous parseable profile is published as a
 // mutation of the same transaction (never promoted from invalid external
 // edits). Visual assets stay content-addressed CAS instead: identity is the
 // content hash and overwrites cannot occur.
-[[nodiscard]] bool write_profile_file(const std::filesystem::path &path,
+[[nodiscard]] ProfileWriteResult write_profile_file(const std::filesystem::path &path,
                                       std::string_view contents);
 
 // Commits a mutually compatible base profile and its declared first-party
 // module sidecars. Optional module failure never disables base input/overlays.
-[[nodiscard]] bool write_profile_bundle(
+[[nodiscard]] ProfileWriteResult write_profile_bundle(
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile,
     const std::optional<layerc::core::AutomationProfile> &automation_profile =
@@ -124,7 +125,7 @@ read_sidecar_text(const std::filesystem::path &path, std::size_t max_bytes);
 
 // Like write_profile_bundle, but fails atomically if the base profile already
 // exists when the transaction lock is acquired.
-[[nodiscard]] bool write_profile_bundle_create_only(
+[[nodiscard]] ProfileWriteResult write_profile_bundle_create_only(
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile,
     const std::optional<layerc::core::AutomationProfile> &automation_profile =
@@ -195,7 +196,7 @@ struct AutomationStateLoad {
     const layerc::core::AutomationProfile &automation_profile);
 // Publishes machine-local automation state through the stage→commit journal
 // (one mutation, no user-visible `.bak`).
-[[nodiscard]] bool write_automation_state(
+[[nodiscard]] ProfileWriteResult write_automation_state(
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values);

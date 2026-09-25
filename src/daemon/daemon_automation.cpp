@@ -1,9 +1,6 @@
 #include "daemon_app.hpp"
 
-#include "layerc/platform/platform_events.hpp"
-
 #include "layerc/core/automation_session.hpp"
-#include "layerc/platform/text.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -13,11 +10,8 @@
 
 namespace layerc::daemon {
 namespace {
-using layerc::core::AutomationActionKind;
-using layerc::core::AutomationEffect;
 using layerc::core::AutomationEvent;
 using layerc::core::AutomationEventKind;
-using layerc::core::DurationValue;
 using layerc::core::Milliseconds;
 using layerc::core::TimePoint;
 
@@ -26,23 +20,26 @@ using layerc::core::TimePoint;
 layerc::core::AutomationEvent DaemonApp::automation_event(
     const layerc::core::AutomationEventKind kind, std::string source_id,
     const layerc::core::TimePoint now) {
-  return automation_event(kind, std::move(source_id), now,
-                          automation_runtime_host_.next_origin());
+  return layerc::core::AutomationSession::event(kind, std::move(source_id), now);
 }
 
 layerc::core::AutomationEvent DaemonApp::automation_event(
     const layerc::core::AutomationEventKind kind, std::string source_id,
     const layerc::core::TimePoint now, const std::uint64_t origin_token) {
-  return layerc::core::AutomationEvent{.kind = kind,
-                                       .timestamp = now,
-                                       .source_id = std::move(source_id),
-                                       .origin_token = origin_token,
-                                       .fields = {}};
+  return layerc::core::AutomationSession::event(
+      kind, std::move(source_id), now, origin_token);
 }
 
 void DaemonApp::reconcile_automation_runtime() {
   const auto now = layerc::core::MonotonicClock::now();
-  bool overlays_changed{};
+  // A new or reconfigured runtime starts with fresh session-scoped state, so
+  // it seeds cooldown edges and replays session_started.
+  const auto start_session = [&](Session &session) {
+    poll_automation_cooldown_transitions(session, now, false);
+    process_automation_event(
+        session,
+        automation_event(AutomationEventKind::session_started, {}, now));
+  };
   for (auto &session : session_registry_.sessions()) {
     if (!session->has_enabled_automations()) {
       session->automation_runtime.reset();
@@ -56,19 +53,13 @@ void DaemonApp::reconcile_automation_runtime() {
       continue;
     }
     if (!session->automation_runtime) {
-      session->automation_runtime =
-          std::make_unique<layerc::core::AutomationRuntime>(
-              *source->modules.automation.profile, source->automation_state,
-              session->profile.cooldown_groups);
       session->automation_revision = source->automation_revision;
-      session->automation_runtime->set_trace_enabled(
-          automation_runtime_host_.trace_subscribed());
-      (void)poll_automation_cooldown_transitions(*session, now, false);
-      overlays_changed =
-          process_automation_event(
-              *session,
-              automation_event(AutomationEventKind::session_started, {}, now)) ||
-          overlays_changed;
+      if (session->start(*source->modules.automation.profile,
+                         source->automation_state, session->profile, now,
+                         nullptr, automation_runtime_host_.trace_subscribed()))
+        mark_overlays_dirty();
+      publish_automation_trace(*session);
+      synchronize_automation_state(*session, now);
     } else if (session->automation_revision != source->automation_revision) {
       // The revision gate replaced a deep AutomationProfile compare plus a
       // cooldown-group compare that used to run on every reconcile: now they
@@ -89,13 +80,7 @@ void DaemonApp::reconcile_automation_runtime() {
         // monitors), so replay session_started like a fresh runtime: rules
         // keyed on it re-run against the edited profile instead of waiting
         // for the next session.
-        (void)poll_automation_cooldown_transitions(*session, now, false);
-        overlays_changed =
-            process_automation_event(
-                *session,
-                automation_event(AutomationEventKind::session_started, {},
-                                 now)) ||
-            overlays_changed;
+        start_session(*session);
       }
     }
   }
@@ -104,8 +89,6 @@ void DaemonApp::reconcile_automation_runtime() {
   });
   automation_runtime_host_.publish_activity(active);
   schedule_automation_timer();
-  if (overlays_changed)
-    update_overlays();
 }
 
 void DaemonApp::quiesce_automation_runtime() noexcept {
@@ -116,7 +99,7 @@ void DaemonApp::quiesce_automation_runtime() noexcept {
   for (auto &session : session_registry_.sessions()) {
     if (!session->automation_runtime)
       continue;
-    (void)process_automation_event(
+    process_automation_event(
         *session,
         automation_event(AutomationEventKind::session_stopping, {}, now));
     synchronize_automation_state(*session, now);
@@ -144,7 +127,7 @@ void DaemonApp::retire_automation_session(Session &session,
                                           const TimePoint now) {
   if (!session.automation_runtime)
     return;
-  (void)process_automation_event(
+  process_automation_event(
       session,
       automation_event(AutomationEventKind::session_stopping, {}, now));
   synchronize_automation_state(session, now);
@@ -168,9 +151,7 @@ void DaemonApp::schedule_automation_timer() {
   for (auto &session : session_registry_.sessions()) {
     if (!session->automation_runtime)
       continue;
-    session->cooldowns.snapshot(now, session->snapshot_buffer);
-    next = layerc::core::next_automation_deadline(
-        *session->automation_runtime, session->snapshot_buffer, next);
+    next = session->next_deadline(now, next);
   }
   for (const auto &source : session_registry_.sources()) {
     if (source.automation_state_due.has_value() &&
@@ -195,17 +176,12 @@ void DaemonApp::poll_automation_timer() {
     KillTimer(window_, automation_timer);
   automation_runtime_host_.set_timer_running(false);
   const auto now = layerc::core::MonotonicClock::now();
-  bool changed{};
   for (auto &session : session_registry_.sessions()) {
     if (!session->automation_runtime)
       continue;
-    changed =
-        poll_automation_cooldown_transitions(*session, now, true) || changed;
-    changed = session->automation_runtime->expire_overlay_overrides(now) ||
-              changed;
-    for (const auto &event :
-         session->automation_runtime->due_timer_events(now))
-      changed = process_automation_event(*session, event) || changed;
+    if (session->poll(session->profile, now))
+      mark_overlays_dirty();
+    publish_automation_trace(*session);
     synchronize_automation_state(*session, now);
   }
   for (auto &source : session_registry_.sources()) {
@@ -220,133 +196,72 @@ void DaemonApp::poll_automation_timer() {
                                                 now, stored);
     if (stored) acknowledge_automation_state(source);
   }
-  if (changed)
-    update_overlays();
   schedule_automation_timer();
 }
 
-bool DaemonApp::poll_automation_cooldown_transitions(Session &session,
+void DaemonApp::poll_automation_cooldown_transitions(Session &session,
                                                      const TimePoint now,
                                                      const bool emit) {
   if (!session.automation_runtime)
-    return false;
-  // Edge computation lives in core::poll_automation_ready_transitions; this
-  // keeps only the trace/live event emission glue.
-  session.cooldowns.snapshot(now, session.snapshot_buffer);
-  const auto ready = layerc::core::poll_automation_ready_transitions(
-      session.automation_runtime->edges(), session.snapshot_buffer,
-      session.profile.cooldown_groups);
-  bool changed{};
+    return;
+  if (session.poll_ready(session.profile, now, emit))
+    mark_overlays_dirty();
   if (emit) {
-    for (const auto &id : ready.cooldowns)
-      changed = process_automation_event(
-                    session,
-                    automation_event(AutomationEventKind::cooldown_ready, id,
-                                     now)) ||
-                changed;
-    for (const auto &id : ready.groups)
-      changed = process_automation_event(
-                    session,
-                    automation_event(AutomationEventKind::group_ready, id,
-                                     now)) ||
-                changed;
+    publish_automation_trace(session);
+    synchronize_automation_state(session, now);
+    schedule_automation_timer();
   }
-  return changed;
 }
-bool DaemonApp::validate_automation_effect(
-    const Session &session, const AutomationEffect &effect) const {
-  // Policy lives in core::validate_automation_effect; the daemon supplies
-  // only its session target sets.
-  return layerc::core::validate_automation_effect(
-      effect, session.profile.panels, session.profile.cooldowns,
-      session.profile.cooldown_groups);
-}
-
-bool DaemonApp::commit_automation_effects(
-    Session &session, const std::span<const AutomationEffect> effects,
-    const TimePoint now, const std::uint64_t origin_token) {
-  return layerc::core::commit_automation_cooldown_effects(
-      session.cooldowns, effects, session.profile.cooldowns,
-      session.profile.cooldown_groups, now, origin_token);
-}
-bool DaemonApp::trigger_cooldown_with_automation(
-    Session &session, const std::string_view cooldown_id, const TimePoint now) {
-  const auto origin = automation_runtime_host_.next_origin();
-  const auto triggered =
-      session.cooldowns.trigger_with_propagation(cooldown_id, now, origin);
-  if (triggered.empty())
-    return false;
-
-  bool changed = true;
-  for (const auto &id : triggered) {
-    if (session.visual_triggers)
-      session.visual_triggers->on_cooldown_triggered(id);
-    if (session.automation_runtime)
-      changed = process_automation_event(
-                    session,
-                    automation_event(AutomationEventKind::cooldown_triggered,
-                                     id, now, origin)) ||
-                changed;
-  }
-  return changed;
-}
-bool DaemonApp::process_automation_event(Session &session,
-                                         const AutomationEvent &event) {
-  if (!session.automation_runtime)
-    return false;
-  const auto now = event.timestamp;
-  const auto result = session.automation_runtime->process(
-      event,
-      [&](const AutomationEffect &effect) {
-        return validate_automation_effect(session, effect);
-      },
-      [&](const std::span<const AutomationEffect> effects) {
-        return commit_automation_effects(session, effects, now,
-                                         event.origin_token);
-      });
-  (void)poll_automation_cooldown_transitions(session, now, false);
-  if (automation_runtime_host_.trace_subscribed() && live_edit_host_.authenticated() &&
-      !session.automation_runtime->trace().empty()) {
-    layerc::core::LiveMessage message;
-    message.type = layerc::core::LiveMessageType::automation_trace_event;
-    message.target_window =
-        reinterpret_cast<std::uintptr_t>(session.game_window);
-    message.profile_key = session.source_key;
-    constexpr std::size_t max_chunks_per_event = 4U;
-    for (std::size_t chunk{}; chunk < max_chunks_per_event &&
-                              !session.automation_runtime->trace().empty();
-         ++chunk) {
-      const auto &trace = session.automation_runtime->trace();
-      const auto selected =
-          layerc::core::live_trace_prefix_count(message, trace);
-      if (selected == 0U) {
-        auto omitted = trace.front();
-        omitted.phase = "error";
-        omitted.detail = "source trace entry omitted because it exceeded the "
-                         "live frame limit";
-        omitted.source_event.reset();
-        message.text = layerc::core::export_layerc_trace(
-            std::span<const layerc::core::AutomationTraceEntry>(&omitted, 1U));
-        if (!live_edit_host_.channel().send(message))
-          break;
-        session.automation_runtime->consume_trace(1U);
-        continue;
-      }
+void DaemonApp::publish_automation_trace(Session &session) {
+  if (!automation_runtime_host_.trace_subscribed() ||
+      !live_edit_host_.authenticated() ||
+      session.automation_runtime->trace().empty())
+    return;
+  layerc::core::LiveMessage message;
+  message.type = layerc::core::LiveMessageType::automation_trace_event;
+  message.target_window =
+      reinterpret_cast<std::uintptr_t>(session.game_window);
+  message.profile_key = session.source_key;
+  constexpr std::size_t max_chunks_per_event = 4U;
+  for (std::size_t chunk{}; chunk < max_chunks_per_event &&
+                            !session.automation_runtime->trace().empty();
+       ++chunk) {
+    const auto &trace = session.automation_runtime->trace();
+    const auto selected =
+        layerc::core::live_trace_prefix_count(message, trace);
+    if (selected == 0U) {
+      // A single entry that cannot fit a live frame is replaced by an
+      // explicit omission marker so the editor still sees progress.
+      auto omitted = trace.front();
+      omitted.phase = "error";
+      omitted.detail = "source trace entry omitted because it exceeded the "
+                       "live frame limit";
+      omitted.source_event.reset();
       message.text = layerc::core::export_layerc_trace(
-          std::span<const layerc::core::AutomationTraceEntry>(trace.data(),
-                                                              selected));
+          std::span<const layerc::core::AutomationTraceEntry>(&omitted, 1U));
       if (!live_edit_host_.channel().send(message))
         break;
-      session.automation_runtime->consume_trace(selected);
+      session.automation_runtime->consume_trace(1U);
+      continue;
     }
+    message.text = layerc::core::export_layerc_trace(
+        std::span<const layerc::core::AutomationTraceEntry>(trace.data(),
+                                                            selected));
+    if (!live_edit_host_.channel().send(message))
+      break;
+    session.automation_runtime->consume_trace(selected);
   }
-  synchronize_automation_state(session, now);
+}
+
+void DaemonApp::process_automation_event(Session &session,
+                                         const AutomationEvent &event) {
+  if (!session.automation_runtime)
+    return;
+  if (session.process(event, session.profile))
+    mark_overlays_dirty();
+  publish_automation_trace(session);
+  synchronize_automation_state(session, event.timestamp);
   schedule_automation_timer();
-  return result.committed &&
-         std::ranges::any_of(result.effects, [](const AutomationEffect &effect) {
-           return layerc::core::effect_domain(effect.kind) !=
-                  layerc::core::AutomationEffectDomain::internal;
-         });
 }
 
 void DaemonApp::acknowledge_automation_state(const ProfileSource &source) {
@@ -377,8 +292,7 @@ void DaemonApp::synchronize_automation_state(Session &session,
     if (other.get() == &session || !other->automation_runtime ||
         other->source_key != session.source_key)
       continue;
-    other->automation_runtime->apply_persistent_values(
-        source->automation_state);
+    (void)session.sync_persistent_to(*other);
   }
 }
 

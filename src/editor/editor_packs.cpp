@@ -7,7 +7,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/text.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
 #include <array>
@@ -63,21 +63,21 @@ void set_column(const HWND list, const int index, const int width,
   ListView_InsertColumn(list, index, &column);
 }
 
-void fit_pack_columns(const HWND list, const bool import, const int dpi) {
+void fit_pack_columns(const HWND list, const bool import,
+                      const DialogLayout &ui) {
   if (list == nullptr)
     return;
   const HWND header = ListView_GetHeader(list);
   RECT client{};
   GetClientRect(header == nullptr ? list : header, &client);
-  const auto scaled = [dpi](const int value) { return dpi_scaled(value, dpi); };
   const int available =
-      std::max(1, static_cast<int>(client.right - client.left) - scaled(2));
+      std::max(1, static_cast<int>(client.right - client.left) - ui.scaled(2));
   if (!import) {
     ListView_SetColumnWidth(list, 0, available);
     return;
   }
   const int action_width =
-      std::min(scaled(120), std::max(scaled(88), available / 5));
+      std::min(ui.scaled(120), std::max(ui.scaled(88), available / 5));
   const int remaining = std::max(2, available - action_width);
   const int profile_width = std::max(1, remaining * 45 / 100);
   ListView_SetColumnWidth(list, 0, profile_width);
@@ -91,42 +91,41 @@ void layout_pack_dialog(const HWND window, const bool import) {
   GetClientRect(window, &client);
   const int width = std::max(1, static_cast<int>(client.right - client.left));
   const int height = std::max(1, static_cast<int>(client.bottom - client.top));
-  const int dpi = window_base_dpi(window);
-  const auto scaled = [dpi](const int value) { return dpi_scaled(value, dpi); };
+  const DialogLayout ui(window, window_base_dpi(window));
 
-  const int margin = scaled(12);
-  const int gap = scaled(8);
-  const int intro_height = scaled(30);
-  const int button_height = scaled(25);
+  const int margin = ui.scaled(12);
+  const int gap = ui.scaled(8);
+  const int intro_height = ui.scaled(30);
+  const int button_height = ui.scaled(25);
   const int action_top = height - margin - button_height;
   const int selection_top = action_top - gap - button_height;
   const int list_top = margin + intro_height + gap;
-  move_control(window, IDC_PACK_INTRO, margin, margin, width - margin * 2,
-                   intro_height);
-  move_control(window, IDC_PACK_LIST, margin, list_top, width - margin * 2,
-                   selection_top - gap - list_top);
+  ui.move(IDC_PACK_INTRO, margin, margin, width - margin * 2,
+          intro_height);
+  ui.move(IDC_PACK_LIST, margin, list_top, width - margin * 2,
+          selection_top - gap - list_top);
 
   int left = margin;
-  move_control(window, IDC_PACK_SELECT_ALL, left, selection_top, scaled(84),
-                   button_height);
-  left += scaled(92);
+  ui.move(IDC_PACK_SELECT_ALL, left, selection_top, ui.scaled(84),
+          button_height);
+  left += ui.scaled(92);
   if (import) {
-    move_control(window, IDC_PACK_TOGGLE_ACTION, left, selection_top,
-                     scaled(142), button_height);
-    left += scaled(150);
+    ui.move(IDC_PACK_TOGGLE_ACTION, left, selection_top,
+            ui.scaled(142), button_height);
+    left += ui.scaled(150);
   }
-  move_control(window, IDC_PACK_SUMMARY, left,
-                   selection_top + scaled(5), width - margin - left,
-                   scaled(18));
+  ui.move(IDC_PACK_SUMMARY, left,
+          selection_top + ui.scaled(5), width - margin - left,
+          ui.scaled(18));
 
-  const int cancel_width = scaled(80);
-  const int confirm_width = scaled(88);
-  move_control(window, IDCANCEL, width - margin - cancel_width, action_top,
-                   cancel_width, button_height);
-  move_control(window, IDC_PACK_CONFIRM,
-                   width - margin - cancel_width - gap - confirm_width,
-                   action_top, confirm_width, button_height);
-  fit_pack_columns(GetDlgItem(window, IDC_PACK_LIST), import, dpi);
+  const int cancel_width = ui.scaled(80);
+  const int confirm_width = ui.scaled(88);
+  ui.move(IDCANCEL, width - margin - cancel_width, action_top,
+          cancel_width, button_height);
+  ui.move(IDC_PACK_CONFIRM,
+          width - margin - cancel_width - gap - confirm_width,
+          action_top, confirm_width, button_height);
+  fit_pack_columns(GetDlgItem(window, IDC_PACK_LIST), import, ui);
 }
 
 bool handle_pack_window_message(const HWND window, const UINT message,
@@ -142,7 +141,10 @@ bool handle_pack_window_message(const HWND window, const UINT message,
     return true;
   }
   if (message == WM_GETMINMAXINFO) {
-    chrome.on_minimum_size(lparam, import ? 620 : 520, import ? 360 : 330);
+    // Import needs a wider action column and a taller list.
+    const int min_width = import ? 620 : 520;
+    const int min_height = import ? 360 : 330;
+    chrome.on_minimum_size(lparam, min_width, min_height);
     return true;
   }
   if (message == WM_DESTROY) {
@@ -158,6 +160,42 @@ std::size_t checked_count(const HWND list) {
     if (ListView_GetCheckState(list, index) != FALSE)
       ++count;
   return count;
+}
+
+void check_all(const HWND list) {
+  for (int index = 0; index < ListView_GetItemCount(list); ++index)
+    ListView_SetCheckState(list, index, TRUE);
+}
+
+bool is_pack_list_change(const UINT message, const LPARAM lparam) {
+  if (message != WM_NOTIFY)
+    return false;
+  const auto *header = reinterpret_cast<const NMHDR *>(lparam);
+  return header->idFrom == IDC_PACK_LIST && header->code == LVN_ITEMCHANGED;
+}
+
+// Sorted, de-duplicated template asset hashes referenced by the profile's
+// valid visual sidecar; empty when the profile or sidecar is unusable.
+std::vector<std::string>
+template_asset_hashes(const std::filesystem::path &path) {
+  std::vector<std::string> assets;
+  const auto base = layerc::platform::read_profile_file(path);
+  if (!base.has_value())
+    return assets;
+  const auto parsed = layerc::core::parse_profile_json(*base);
+  const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
+  if (profile == nullptr)
+    return assets;
+  const auto visual = layerc::platform::load_visual_sidecar(path, *profile);
+  if (visual.state != layerc::platform::VisualSidecarState::valid ||
+      !visual.profile.has_value())
+    return assets;
+  for (const auto &definition : visual.profile->templates)
+    for (const auto &reference : definition.references)
+      assets.push_back(reference.asset_sha256);
+  std::ranges::sort(assets);
+  assets.erase(std::unique(assets.begin(), assets.end()), assets.end());
+  return assets;
 }
 
 void update_export_summary(const HWND window, ExportDialogState &state) {
@@ -224,9 +262,12 @@ void update_import_summary(const HWND window, ImportDialogState &state) {
 void set_import_action_text(const HWND list, const int index,
                             const ImportItem &item) {
   const wchar_t *text = L"Import";
-  if (item.conflict)
-    text = item.action == layerc::bundle::ImportAction::copy ? L"Import Copy"
-                                                             : L"Replace";
+  if (item.conflict) {
+    if (item.action == layerc::bundle::ImportAction::copy)
+      text = L"Import Copy";
+    else
+      text = L"Replace";
+  }
   ListView_SetItemText(list, index, 2, const_cast<LPWSTR>(text));
 }
 
@@ -307,21 +348,16 @@ INT_PTR CALLBACK EditorWindow::export_pack_dialog_proc(const HWND window,
     layout_pack_dialog(window, false);
     return TRUE;
   }
-  if (message == WM_NOTIFY &&
-      reinterpret_cast<NMHDR *>(lparam)->idFrom == IDC_PACK_LIST &&
-      reinterpret_cast<NMHDR *>(lparam)->code == LVN_ITEMCHANGED) {
+  if (is_pack_list_change(message, lparam)) {
     update_export_summary(window, *state);
     return TRUE;
   }
   if (message == WM_COMMAND) {
     switch (LOWORD(wparam)) {
-    case IDC_PACK_SELECT_ALL: {
-      const HWND list = GetDlgItem(window, IDC_PACK_LIST);
-      for (int index = 0; index < ListView_GetItemCount(list); ++index)
-        ListView_SetCheckState(list, index, TRUE);
+    case IDC_PACK_SELECT_ALL:
+      check_all(GetDlgItem(window, IDC_PACK_LIST));
       update_export_summary(window, *state);
       return TRUE;
-    }
     case IDC_PACK_CONFIRM: {
       const HWND list = GetDlgItem(window, IDC_PACK_LIST);
       state->selected.clear();
@@ -382,9 +418,7 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
     layout_pack_dialog(window, true);
     return TRUE;
   }
-  if (message == WM_NOTIFY &&
-      reinterpret_cast<NMHDR *>(lparam)->idFrom == IDC_PACK_LIST &&
-      reinterpret_cast<NMHDR *>(lparam)->code == LVN_ITEMCHANGED) {
+  if (is_pack_list_change(message, lparam)) {
     const auto *change = reinterpret_cast<NMLISTVIEW *>(lparam);
     if (((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK) != 0)
       update_import_summary(window, *state);
@@ -392,13 +426,10 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
   }
   if (message == WM_COMMAND) {
     switch (LOWORD(wparam)) {
-    case IDC_PACK_SELECT_ALL: {
-      const HWND list = GetDlgItem(window, IDC_PACK_LIST);
-      for (int index = 0; index < ListView_GetItemCount(list); ++index)
-        ListView_SetCheckState(list, index, TRUE);
+    case IDC_PACK_SELECT_ALL:
+      check_all(GetDlgItem(window, IDC_PACK_LIST));
       update_import_summary(window, *state);
       return TRUE;
-    }
     case IDC_PACK_TOGGLE_ACTION: {
       const HWND list = GetDlgItem(window, IDC_PACK_LIST);
       int index = ListView_GetNextItem(list, -1, LVNI_SELECTED);
@@ -441,36 +472,19 @@ void EditorWindow::export_profile_pack() {
   state.editor = this;
   state.items.reserve(shell_.profiles().size());
   for (std::size_t index = 0; index < shell_.profiles().size(); ++index) {
+    const auto &entry = shell_.profiles()[index];
     ExportItem item{};
-    item.path = shell_.profiles()[index].path;
-    item.label = shell_.profiles()[index].label;
-    if (shell_.profiles()[index].path.lexically_normal() ==
-        document_.path().lexically_normal())
+    item.path = entry.path;
+    item.label = entry.label;
+    if (entry.path.lexically_normal() == document_.path().lexically_normal())
       state.current_index = index;
-    const auto base = layerc::platform::read_profile_file(shell_.profiles()[index].path);
-    if (base.has_value()) {
-      const auto parsed = layerc::core::parse_profile_json(*base);
-      if (const auto *profile =
-              std::get_if<layerc::core::GameProfile>(&parsed)) {
-        const auto visual = layerc::platform::load_visual_sidecar(
-            shell_.profiles()[index].path, *profile);
-        if (visual.state == layerc::platform::VisualSidecarState::valid &&
-            visual.profile.has_value()) {
-          for (const auto &definition : visual.profile->templates)
-            for (const auto &reference : definition.references)
-              item.assets.push_back(reference.asset_sha256);
-          std::ranges::sort(item.assets);
-          item.assets.erase(std::unique(item.assets.begin(), item.assets.end()),
-                            item.assets.end());
-          for (const auto &hash : item.assets) {
-            std::error_code size_error;
-            const auto size = std::filesystem::file_size(
-                layerc::platform::visual_asset_path(hash), size_error);
-            if (!size_error)
-              state.asset_sizes.try_emplace(hash, size);
-          }
-        }
-      }
+    item.assets = template_asset_hashes(entry.path);
+    for (const auto &hash : item.assets) {
+      std::error_code size_error;
+      const auto size = std::filesystem::file_size(
+          layerc::platform::visual_asset_path(hash), size_error);
+      if (!size_error)
+        state.asset_sizes.try_emplace(hash, size);
     }
     state.items.push_back(std::move(item));
   }

@@ -3,7 +3,7 @@
 #include "daemon_session.hpp"
 #include "visual_capture_host.hpp"
 
-#include "GameBarBridge.hpp"
+#include "layerc/core/companion_snapshot.hpp"
 #include "GameBarTransport.hpp"
 #include "layerc/core/runtime_instances.hpp"
 #include "layerc/platform/live_channel.hpp"
@@ -252,16 +252,9 @@ private:
   bool authenticated_{};
 };
 
-// Owns the bridge snapshot and same-package App Service transport. The bridge is
-// cleared whenever the transport is unavailable or no eligible session exists.
+// Owns the demand-driven same-package App Service transport.
 class CompanionHost final {
 public:
-  [[nodiscard]] layerc::gamebar::GameBarBridge &bridge() noexcept {
-    return bridge_;
-  }
-  [[nodiscard]] const layerc::gamebar::GameBarBridge &bridge() const noexcept {
-    return bridge_;
-  }
   [[nodiscard]] layerc::gamebar::GameBarTransport &transport() noexcept {
     return transport_;
   }
@@ -273,7 +266,6 @@ public:
   [[nodiscard]] layerc::runtime::RuntimeResourceStats resources() const noexcept;
 
 private:
-  layerc::gamebar::GameBarBridge bridge_;
   layerc::gamebar::GameBarTransport transport_;
   std::uint32_t active_session_count_{};
 };

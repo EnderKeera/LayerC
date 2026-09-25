@@ -52,6 +52,16 @@ parse_control_request(std::string_view json);
                                                   std::string_view error,
                                                   std::string_view payload_json);
 
+struct ControlResponse {
+  bool ok{};
+  std::string error;
+};
+
+// Mirror of encode_control_response; nullopt for anything that is not a
+// LayerC.Control v1 response envelope.
+[[nodiscard]] std::optional<ControlResponse>
+decode_control_response(std::string_view json);
+
 // Incremental byte-stream → frame decoder with the plan's bounds: partial
 // frames accumulate, an oversized declared frame or buffer is sticky-faulted.
 class ControlFramer {

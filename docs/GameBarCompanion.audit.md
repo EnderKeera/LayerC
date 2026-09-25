@@ -25,6 +25,23 @@ was not rerun by later documentation edits:
 
 These values remain evidence for that run, not a substitute for current CI.
 
+## Mandatory pre-release widget gate
+
+The `windows-2022` CI build does not provision the UWP C++/XAML workload;
+`layerc_gamebar_host` is conditionally registered only when the UWP toolset,
+Windows SDK C++/WinRT headers, and MSBuild are installed. Before each Game Bar
+package release, on an MSVC machine with that workload and restored widget
+NuGet packages, run:
+
+```powershell
+cmake -S . -B build -DLAYERC_BUILD_TESTS=ON
+cmake --build build --config Debug --target layerc_gamebar_host
+```
+
+Both commands must succeed, and the second must link `layerc-gamebar.exe`;
+absence of the target fails the gate rather than counting as a skip. Record the
+commit and the successful link with the package evidence.
+
 ## Outstanding manual and certification evidence
 
 A production Game Bar release remains incomplete until all of the following are

@@ -18,6 +18,14 @@ struct TopLevelUsage {
   auto operator<=>(const TopLevelUsage &) const = default;
 };
 
+void unregister_usage(const TopLevelUsage &usage) noexcept {
+  RAWINPUTDEVICE remove{.usUsagePage = usage.page,
+                        .usUsage = usage.usage,
+                        .dwFlags = RIDEV_REMOVE,
+                        .hwndTarget = nullptr};
+  (void)RegisterRawInputDevices(&remove, 1, sizeof(remove));
+}
+
 } // namespace
 
 struct HidRuntimeState {
@@ -43,11 +51,11 @@ void InputRuntime::reset_hid() noexcept {
 
 DaemonApp::~DaemonApp() = default;
 DaemonApp::DaemonApp()
-    : runtime_services_(this, capability_policies()),
+    : runtime_services_(*this, every_capability()),
       runtime_kernel_(runtime_services_.registry()) {}
 
 bool DaemonApp::reconcile_hid_runtime() {
-  (void)input_runtime_.ensure_hid();
+  auto &hid = input_runtime_.ensure_hid();
   std::set<TopLevelUsage> required;
   std::vector<layerc::core::HidDeviceSelector> active_selectors;
   for (const auto *session : session_registry_.active_inputs()) {
@@ -62,27 +70,23 @@ bool DaemonApp::reconcile_hid_runtime() {
       required.insert({binding.device.usage_page, binding.device.usage});
     }
   }
-  input_runtime_.hid()->resolver.retain(active_selectors);
+  hid.resolver.retain(active_selectors);
   const bool selector_set_changed =
-      active_selectors.size() != input_runtime_.hid()->active_selectors.size() ||
+      active_selectors.size() != hid.active_selectors.size() ||
       std::ranges::any_of(active_selectors, [&](const auto &selector) {
-        return std::ranges::find(input_runtime_.hid()->active_selectors, selector) ==
-               input_runtime_.hid()->active_selectors.end();
+        return std::ranges::find(hid.active_selectors, selector) ==
+               hid.active_selectors.end();
       });
   const bool usage_set_changed =
-      required != input_runtime_.hid()->registered_usages;
+      required != hid.registered_usages;
 
   std::set<TopLevelUsage> retained;
-  for (const auto &usage : input_runtime_.hid()->registered_usages) {
+  for (const auto &usage : hid.registered_usages) {
     if (required.contains(usage)) {
       retained.insert(usage);
       continue;
     }
-    RAWINPUTDEVICE remove{.usUsagePage = usage.page,
-                          .usUsage = usage.usage,
-                          .dwFlags = RIDEV_REMOVE,
-                          .hwndTarget = nullptr};
-    (void)RegisterRawInputDevices(&remove, 1, sizeof(remove));
+    unregister_usage(usage);
   }
   std::vector<TopLevelUsage> added;
   bool registration_ok = true;
@@ -100,28 +104,24 @@ bool DaemonApp::reconcile_hid_runtime() {
   }
   if (!registration_ok) {
     for (const auto &usage : added) {
-      RAWINPUTDEVICE remove{.usUsagePage = usage.page,
-                            .usUsage = usage.usage,
-                            .dwFlags = RIDEV_REMOVE,
-                            .hwndTarget = nullptr};
-      (void)RegisterRawInputDevices(&remove, 1, sizeof(remove));
+      unregister_usage(usage);
     }
   } else {
     retained.insert(added.begin(), added.end());
   }
-  input_runtime_.hid()->registered_usages = std::move(retained);
+  hid.registered_usages = std::move(retained);
 
   if (!registration_ok) return false;
-  input_runtime_.hid()->active_selectors = std::move(active_selectors);
+  hid.active_selectors = std::move(active_selectors);
   if (selector_set_changed || usage_set_changed)
-    input_runtime_.hid()->devices_dirty = true;
+    hid.devices_dirty = true;
 
-  if (input_runtime_.hid()->devices_dirty) {
-    input_runtime_.hid()->devices.clear();
+  if (hid.devices_dirty) {
+    hid.devices.clear();
     for (auto &device : layerc::platform::enumerate_raw_hid_devices())
-      input_runtime_.hid()->devices.emplace(device.handle, std::move(device));
-    input_runtime_.hid()->resolver.clear();
-    input_runtime_.hid()->devices_dirty = false;
+      hid.devices.emplace(device.handle, std::move(device));
+    hid.resolver.clear();
+    hid.devices_dirty = false;
   }
   return true;
 }
@@ -138,13 +138,8 @@ layerc::runtime::RuntimeResourceStats InputRuntime::hid_resources() const
 
 void DaemonApp::quiesce_hid_runtime() noexcept {
   if (!input_runtime_.hid()) return;
-  for (const auto &usage : input_runtime_.hid()->registered_usages) {
-    RAWINPUTDEVICE remove{.usUsagePage = usage.page,
-                          .usUsage = usage.usage,
-                          .dwFlags = RIDEV_REMOVE,
-                          .hwndTarget = nullptr};
-    (void)RegisterRawInputDevices(&remove, 1, sizeof(remove));
-  }
+  for (const auto &usage : input_runtime_.hid()->registered_usages)
+    unregister_usage(usage);
   for (auto &session : session_registry_.sessions()) {
     session->hid_states.clear();
     session->clear_input_state();
@@ -166,35 +161,42 @@ void DaemonApp::handle_hid_device_change(const HANDLE, const bool) {
   reconcile_runtime_services();
 }
 
-bool DaemonApp::process_hid_sample(
+namespace {
+
+// Relative samples normalize against the larger magnitude endpoint so a
+// signed axis maps into roughly [-1, 1]; absolute samples map the logical
+// range onto [0, 1].
+double normalized_hid_value(const layerc::core::HidControlSample &sample) {
+  if (sample.relative) {
+    const double extent = std::max(
+        std::abs(static_cast<double>(sample.logical_min)),
+        std::abs(static_cast<double>(sample.logical_max)));
+    return static_cast<double>(sample.value) / std::max(1.0, extent);
+  }
+  return (static_cast<double>(sample.value) - sample.logical_min) /
+         static_cast<double>(sample.logical_max - sample.logical_min);
+}
+
+} // namespace
+
+void DaemonApp::process_hid_sample(
     Session &session, const std::size_t index,
     const layerc::core::HidControlBinding &binding,
     const layerc::core::HidControlSample &sample) {
-  bool overlays_changed{};
   auto &state = session.hid_states[index];
   const bool initialized = state.initialized;
   if (session.automation_runtime && sample.available &&
       sample.logical_max > sample.logical_min) {
-    const double normalized =
-        sample.relative
-            ? static_cast<double>(sample.value) /
-                  std::max(
-                      1.0,
-                      std::max(
-                          std::abs(static_cast<double>(sample.logical_min)),
-                          std::abs(static_cast<double>(sample.logical_max))))
-            : (static_cast<double>(sample.value) - sample.logical_min) /
-                  static_cast<double>(sample.logical_max -
-                                      sample.logical_min);
     const bool momentary = sample.relative;
     if (!momentary || sample.value != 0)
-      overlays_changed = process_automation_input_value(
-          session, "hid:" + std::to_string(index + 1U), normalized,
+      process_automation_input_value(
+          session, "hid:" + std::to_string(index + 1U),
+          normalized_hid_value(sample),
           layerc::core::MonotonicClock::now(), momentary);
   }
   const auto edge = layerc::core::evaluate_hid_control(binding, sample, state);
   if (!edge)
-    return overlays_changed;
+    return;
 
   const layerc::core::InputToken token{
       .device = layerc::core::InputDevice::generic_hid,
@@ -205,19 +207,14 @@ bool DaemonApp::process_hid_sample(
       binding.activation == layerc::core::HidActivationMode::relative_negative;
   if (!initialized && !relative) {
     session.input.seed(token, *edge);
-    return overlays_changed;
+    return;
   }
-  overlays_changed =
-      process_input(session, {.token = token, .pressed = *edge}) ||
-      overlays_changed;
+  process_input(session, {.token = token, .pressed = *edge});
   if (relative && *edge) {
-    overlays_changed =
-        process_input(session, {.token = token, .pressed = false}) ||
-        overlays_changed;
+    process_input(session, {.token = token, .pressed = false});
     state.initialized = true;
     state.pressed = false;
   }
-  return overlays_changed;
 }
 
 void DaemonApp::handle_hid_input(const RAWINPUT &input) {
@@ -233,7 +230,6 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
                  .first;
     input_runtime_.hid()->resolver.clear();
   }
-  bool overlays_changed{};
 
   const auto evaluate_for_sessions = [&](const auto &sample_for) {
     for (auto *session : session_registry_.active_inputs()) {
@@ -248,9 +244,7 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
           continue;
         const auto sample = sample_for(binding);
         if (sample.has_value())
-          overlays_changed =
-              process_hid_sample(*session, index, binding, *sample) ||
-              overlays_changed;
+          process_hid_sample(*session, index, binding, *sample);
       }
     }
   };
@@ -284,7 +278,6 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
                                                    input);
     });
   }
-  if (overlays_changed) update_overlays();
 }
 
 } // namespace layerc::daemon

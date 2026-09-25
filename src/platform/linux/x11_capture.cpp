@@ -350,9 +350,9 @@ std::string X11CaptureSession::warning() const {
 capture::CapturePoll X11CaptureSession::poll(const core::TimePoint now) {
   if (!started_) {
     capture::CapturePollResult result;
-    result.availability = core::CaptureAvailability::inactive;
+    result.availability = core::CaptureAvailability::unavailable;
     result.backend = backend_;
-    result.diagnostic = error_;
+    result.diagnostic = error_.empty() ? "capture is not started" : error_;
     return capture::normalize_capture_poll(window_, std::move(result));
   }
 

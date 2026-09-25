@@ -206,15 +206,15 @@ void capture_math_contracts() {
 #if defined(_WIN32)
   layerc::capture::WindowCaptureSession session(nullptr);
   const auto now = layerc::core::MonotonicClock::now();
-  const auto direct = session.poll(now, false);
-  const auto adapted =
-      layerc::capture::poll_window_capture(window, session, now, false);
-  expect(adapted.window == window &&
-             adapted.result.availability == direct.availability &&
-             adapted.result.backend == direct.backend &&
-             adapted.result.diagnostic == direct.diagnostic &&
-             adapted.result.frame == direct.frame,
-         "the Win32 adapter should preserve the existing poll result");
+  const auto polled = session.poll(now, false);
+  expect(polled.window == layerc::runtime::WindowId{} &&
+             polled.result.availability ==
+                 layerc::core::CaptureAvailability::unavailable &&
+             polled.result.backend == layerc::core::CaptureBackendKind::none &&
+             polled.result.diagnostic == "capture is not started" &&
+             polled.result.frame == nullptr,
+         "a session that was never started reports a normalized, "
+         "diagnosed unavailable poll");
 #endif
 
   // F9 shared synchronous evaluator: one ROI/error-to-measurement policy

@@ -54,7 +54,7 @@ struct CompanionSnapshotItem {
   // empty strings until a renderer defines the data source.
   std::string icon;
   // Fraction of the cooldown elapsed toward ready: 1.0 = ready, 0.0 = just
-  // triggered (see GameBarBridge::create_session_snapshot).
+  // triggered (see build_companion_snapshot).
   double progress{0.0};
   std::uint32_t available_charges{1};
   std::uint32_t max_charges{1};

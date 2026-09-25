@@ -24,7 +24,7 @@ void CalibrationWindow::update_capture() {
       return;
     }
     const auto captured =
-        capture_->poll(layerc::core::MonotonicClock::now(), true);
+        capture_->poll(layerc::core::MonotonicClock::now(), true).result;
     if (captured.frame) {
       preview_.set_frame(captured.frame);
       finish_fallback_snapshot(
@@ -41,7 +41,7 @@ void CalibrationWindow::update_capture() {
   }
 
   const auto captured =
-      capture_->poll(layerc::core::MonotonicClock::now(), false);
+      capture_->poll(layerc::core::MonotonicClock::now(), false).result;
   if (captured.backend ==
       layerc::core::CaptureBackendKind::desktop_duplication) {
     begin_fallback_snapshot();
@@ -109,11 +109,19 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
     return;
   }
   const auto image = preview_image_rect();
-  const auto width = mask_preview ? template_images_.back().width : frame->width;
-  const auto height =
-      mask_preview ? template_images_.back().height : frame->height;
-  const auto *pixels = mask_preview ? mask_editor_.pixels().data()
-                                    : preview_.pixels().data();
+  std::uint32_t width;
+  std::uint32_t height;
+  const std::uint32_t *pixels;
+  if (mask_preview) {
+    const auto &mask_image = template_images_.back();
+    width = mask_image.width;
+    height = mask_image.height;
+    pixels = mask_editor_.pixels().data();
+  } else {
+    width = frame->width;
+    height = frame->height;
+    pixels = preview_.pixels().data();
+  }
   BITMAPINFO bitmap{};
   bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bitmap.bmiHeader.biWidth = static_cast<LONG>(width);
@@ -129,17 +137,17 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
   if (mask_preview)
     return;
 
-  RECT region{
-      image.left + static_cast<LONG>(std::lround(rule_.region.x *
-                                                 (image.right - image.left))),
-      image.top + static_cast<LONG>(
-                      std::lround(rule_.region.y * (image.bottom - image.top))),
-      image.left +
-          static_cast<LONG>(std::lround((rule_.region.x + rule_.region.width) *
-                                        (image.right - image.left))),
-      image.top +
-          static_cast<LONG>(std::lround((rule_.region.y + rule_.region.height) *
-                                        (image.bottom - image.top)))};
+  const auto to_x = [&](const double fraction) {
+    return image.left +
+           static_cast<LONG>(std::lround(fraction * (image.right - image.left)));
+  };
+  const auto to_y = [&](const double fraction) {
+    return image.top +
+           static_cast<LONG>(std::lround(fraction * (image.bottom - image.top)));
+  };
+  const RECT region{to_x(rule_.region.x), to_y(rule_.region.y),
+                    to_x(rule_.region.x + rule_.region.width),
+                    to_y(rule_.region.y + rule_.region.height)};
   const HPEN pen = CreatePen(PS_SOLID, 2, palette_.selection);
   const auto old_pen = SelectObject(draw.hDC, pen);
   const auto old_brush = SelectObject(draw.hDC, GetStockObject(HOLLOW_BRUSH));

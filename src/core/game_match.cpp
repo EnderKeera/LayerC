@@ -45,35 +45,32 @@ void fold_into(std::optional<std::string> &slot, std::string_view text,
   slot = std::move(*folded);
 }
 
-[[nodiscard]] FoldedSide fold_match(const GameMatch &match, bool exact_path) {
+[[nodiscard]] FoldedSide fold_side(std::string_view name, std::string_view path,
+                                   std::string_view clazz,
+                                   std::string_view title, bool exact_path) {
   FoldedSide folded;
-  fold_into(folded.name, match.executable_name, folded.usable);
-  if (!match.executable_path.empty()) {
+  fold_into(folded.name, name, folded.usable);
+  if (!path.empty()) {
     if (exact_path) {
-      folded.path = std::string(match.executable_path);
+      folded.path = std::string(path);
     } else {
-      fold_into(folded.path, match.executable_path, folded.usable);
+      fold_into(folded.path, path, folded.usable);
     }
   }
-  fold_into(folded.clazz, match.window_class, folded.usable);
-  fold_into(folded.title, match.window_title, folded.usable);
+  fold_into(folded.clazz, clazz, folded.usable);
+  fold_into(folded.title, title, folded.usable);
   return folded;
+}
+
+[[nodiscard]] FoldedSide fold_match(const GameMatch &match, bool exact_path) {
+  return fold_side(match.executable_name, match.executable_path,
+                   match.window_class, match.window_title, exact_path);
 }
 
 [[nodiscard]] FoldedSide fold_candidate(const MatchCandidate &candidate,
                                         bool exact_path) {
-  FoldedSide folded;
-  fold_into(folded.name, candidate.executable_name, folded.usable);
-  if (!candidate.executable_path.empty()) {
-    if (exact_path) {
-      folded.path = candidate.executable_path;
-    } else {
-      fold_into(folded.path, candidate.executable_path, folded.usable);
-    }
-  }
-  fold_into(folded.clazz, candidate.class_name, folded.usable);
-  fold_into(folded.title, candidate.title, folded.usable);
-  return folded;
+  return fold_side(candidate.executable_name, candidate.executable_path,
+                   candidate.class_name, candidate.title, exact_path);
 }
 
 [[nodiscard]] bool field_equals(const std::optional<std::string> &candidate,

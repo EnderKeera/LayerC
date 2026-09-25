@@ -1,7 +1,7 @@
 #include "visual_capture_worker.hpp"
 
 #include "layerc/capture/visual_evaluation.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -157,23 +157,13 @@ void VisualCaptureWorker::configure(
 
 void VisualCaptureWorker::set_excluded_screen_rects(
     const std::span<const RECT> rectangles) {
-  bool changed{};
   {
     const std::scoped_lock lock(mutex_);
-    changed = rectangles.size() != exclusions_.size() ||
-              !std::equal(rectangles.begin(), rectangles.end(),
-                          exclusions_.begin(), exclusions_.end(),
-                          [](const RECT &left, const RECT &right) {
-                            return left.left == right.left &&
-                                   left.top == right.top &&
-                                   left.right == right.right &&
-                                   left.bottom == right.bottom;
-                          });
-    if (!changed) return;
+    if (same_rectangles(rectangles, exclusions_)) return;
     exclusions_.assign(rectangles.begin(), rectangles.end());
     ++exclusion_revision_;
   }
-  if (changed) wake_.notify_all();
+  wake_.notify_all();
 }
 
 VisualCaptureSnapshot VisualCaptureWorker::snapshot() const {
@@ -356,10 +346,7 @@ void VisualCaptureWorker::run() {
     const auto now = layerc::core::MonotonicClock::now();
     const bool foreground =
         GetAncestor(GetForegroundWindow(), GA_ROOT) == window_;
-    auto result = layerc::capture::poll_window_capture(
-                      {reinterpret_cast<std::uintptr_t>(window_)},
-                      state.capture, now, foreground)
-                      .result;
+    auto result = state.capture.poll(now, foreground).result;
     ++state.capture_sequence;
     evaluate_requests(state, result, now);
     publish_latest(state, std::move(result));

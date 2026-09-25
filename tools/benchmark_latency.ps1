@@ -26,11 +26,9 @@ foreach ($directory in @($BaselineBuildDirectory, $CandidateBuildDirectory)) {
 if (-not (Test-Path -LiteralPath (Join-Path $CandidateBuildDirectory 'lctest.exe'))) {
     throw "Missing lctest.exe in $CandidateBuildDirectory."
 }
-if (Get-Process -Name layerd, lctest -ErrorAction SilentlyContinue) {
-    throw 'Close existing LayerD and lctest processes before the latency benchmark.'
-}
-
 Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
+Assert-LayerCQuiescent -ProcessNames layerd, lctest `
+    -FailureMessage 'Close existing LayerD and lctest processes before the latency benchmark.'
 
 function Send-TriggerChord {
     $scanCode = 0x0008 # KEYEVENTF_SCANCODE
@@ -51,8 +49,7 @@ function Measure-Version([string]$BuildDirectory, [Diagnostics.Process]$Game) {
     $daemon = $null
     $activator = New-Object -ComObject WScript.Shell
     try {
-        $daemon = Start-Process -FilePath (Join-Path $BuildDirectory 'layerd.exe') `
-            -WorkingDirectory $BuildDirectory -WindowStyle Hidden -PassThru
+        $daemon = Start-LayerCDaemon -BuildDirectory $BuildDirectory
         $overlay = [IntPtr]::Zero
         for ($attempt = 0; $attempt -lt 80; ++$attempt) {
             if ($daemon.HasExited) { throw "LayerD exited with code $($daemon.ExitCode)." }
@@ -102,10 +99,7 @@ function Measure-Version([string]$BuildDirectory, [Diagnostics.Process]$Game) {
             maximumMs = [Math]::Round(($values | Measure-Object -Maximum).Maximum, 3)
         }
     } finally {
-        if ($null -ne $daemon -and -not $daemon.HasExited) {
-            Stop-Process -Id $daemon.Id -Force -ErrorAction SilentlyContinue
-            [void]$daemon.WaitForExit(5000)
-        }
+        Stop-LayerCBenchmarkProcess -Process $daemon
     }
 }
 
@@ -138,7 +132,7 @@ $profile = @'
 $oldProfiles = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR', 'Process')
 $game = $null
 try {
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $profiles, 'Process')
+    Enter-LayerCProfileSandbox -ProfileDirectory $profiles
     $game = Start-Process -FilePath (Join-Path $CandidateBuildDirectory 'lctest.exe') -PassThru
     for ($attempt = 0; $attempt -lt 80; ++$attempt) {
         Start-Sleep -Milliseconds 50
@@ -175,8 +169,6 @@ try {
             Stop-Process -Id $game.Id -Force -ErrorAction SilentlyContinue
         }
     }
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $oldProfiles, 'Process')
-    if (Test-Path -LiteralPath $temporary) {
-        Remove-Item -LiteralPath $temporary -Recurse -Force
-    }
+    Exit-LayerCProfileSandbox -PreviousDirectory $oldProfiles `
+        -TemporaryDirectory $temporary
 }

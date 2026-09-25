@@ -110,7 +110,13 @@ bool NamedPipeEditorDaemonChannel::connect_client() {
       set_error(error);
     return false;
   }
-  if (!authenticate_server()) {
+  if (!authenticate_peer(PeerSpec{
+          .server = true, .image = L"layerd.exe",
+          .identity_error = L"Could not identify the LayerD live-channel server.",
+          .unexpected_error = L"Rejected an unexpected live-channel server process.",
+          .session_error = L"Rejected a live-channel server from another logon session.",
+          .authenticate_error = L"Could not authenticate the LayerD live-channel server.",
+          .untrusted_error = L"Rejected an untrusted LayerD live-channel server."})) {
     CloseHandle(pipe_);
     pipe_ = INVALID_HANDLE_VALUE;
     return false;
@@ -119,42 +125,21 @@ bool NamedPipeEditorDaemonChannel::connect_client() {
   return true;
 }
 
-bool NamedPipeEditorDaemonChannel::authenticate_server() {
-  ULONG server_process_id{};
-  if (GetNamedPipeServerProcessId(pipe_, &server_process_id) == FALSE ||
-      server_process_id == 0) {
-    last_error_ = L"Could not identify the LayerD live-channel server.";
+bool NamedPipeEditorDaemonChannel::authenticate_peer(const PeerSpec &spec) {
+  ULONG peer_pid{};
+  const BOOL identified = spec.server
+      ? GetNamedPipeServerProcessId(pipe_, &peer_pid)
+      : GetNamedPipeClientProcessId(pipe_, &peer_pid);
+  if (identified == FALSE || peer_pid == 0) {
+    last_error_ = spec.identity_error;
     return false;
   }
-  if (expected_peer_process_id_ != 0 &&
-      server_process_id != expected_peer_process_id_) {
-    last_error_ = L"Rejected an unexpected live-channel server process.";
+  if (expected_peer_process_id_ != 0 && peer_pid != expected_peer_process_id_) {
+    last_error_ = spec.unexpected_error;
     return false;
   }
-  return verify_peer_identity(
-      server_process_id, L"layerd.exe",
-      L"Rejected a live-channel server from another logon session.",
-      L"Could not authenticate the LayerD live-channel server.",
-      L"Rejected an untrusted LayerD live-channel server.");
-}
-
-bool NamedPipeEditorDaemonChannel::authenticate_client() {
-  ULONG client_process_id{};
-  if (GetNamedPipeClientProcessId(pipe_, &client_process_id) == FALSE ||
-      client_process_id == 0) {
-    last_error_ = L"Could not identify the LayerE live-channel client.";
-    return false;
-  }
-  if (expected_peer_process_id_ != 0 &&
-      client_process_id != expected_peer_process_id_) {
-    last_error_ = L"Rejected an unexpected live-channel client process.";
-    return false;
-  }
-  return verify_peer_identity(
-      client_process_id, L"layere.exe",
-      L"Rejected a live-channel client from another logon session.",
-      L"Could not authenticate the LayerE live-channel client.",
-      L"Rejected an untrusted LayerE live-channel client.");
+  return verify_peer_identity(peer_pid, spec.image, spec.session_error,
+                              spec.authenticate_error, spec.untrusted_error);
 }
 
 bool NamedPipeEditorDaemonChannel::verify_peer_identity(
@@ -189,7 +174,13 @@ bool NamedPipeEditorDaemonChannel::verify_peer_identity(
 }
 
 void NamedPipeEditorDaemonChannel::complete_connection() {
-  if (role_ == Role::server && !authenticate_client()) {
+  if (role_ == Role::server && !authenticate_peer(PeerSpec{
+          .server = false, .image = L"layere.exe",
+          .identity_error = L"Could not identify the LayerE live-channel client.",
+          .unexpected_error = L"Rejected an unexpected live-channel client process.",
+          .session_error = L"Rejected a live-channel client from another logon session.",
+          .authenticate_error = L"Could not authenticate the LayerE live-channel client.",
+          .untrusted_error = L"Rejected an untrusted LayerE live-channel client."})) {
     disconnect(ERROR_SUCCESS);
     return;
   }
@@ -209,6 +200,7 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
   read_pending_ = false;
   write_pending_ = false;
   decoder_.clear();
+  pending_messages_.clear();
   // This object lives for LayerD's entire lifetime. clear() would keep the
   // largest profile frame and deque storage committed after LayerE closes.
   std::vector<std::byte>().swap(active_write_);
@@ -249,86 +241,142 @@ bool NamedPipeEditorDaemonChannel::send(
 }
 
 void NamedPipeEditorDaemonChannel::continue_write() {
-  if (!connected_ || write_pending_ || pipe_ == INVALID_HANDLE_VALUE) return;
-  if (active_write_.empty()) {
-    if (write_queue_.empty()) return;
-    active_write_ = std::move(write_queue_.front());
-    write_queue_.pop_front();
-  }
-  ResetEvent(write_event_);
-  write_overlapped_ = {};
-  write_overlapped_.hEvent = write_event_;
-  DWORD written{};
-  const BOOL result = WriteFile(pipe_, active_write_.data(),
-                                static_cast<DWORD>(active_write_.size()),
-                                &written, &write_overlapped_);
-  if (result != FALSE) {
-    if (written != active_write_.size()) {
-      disconnect(ERROR_WRITE_FAULT);
+  for (std::size_t writes = 0; writes < max_messages_per_poll; ++writes) {
+    if (!connected_ || write_pending_ || pipe_ == INVALID_HANDLE_VALUE) return;
+    if (active_write_.empty()) {
+      if (write_queue_.empty()) return;
+      active_write_ = std::move(write_queue_.front());
+      write_queue_.pop_front();
+    }
+    ResetEvent(write_event_);
+    write_overlapped_ = {};
+    write_overlapped_.hEvent = write_event_;
+    DWORD written{};
+    const BOOL result = WriteFile(pipe_, active_write_.data(),
+                                  static_cast<DWORD>(active_write_.size()),
+                                  &written, &write_overlapped_);
+    if (result != FALSE) {
+      if (written != active_write_.size()) {
+        disconnect(ERROR_WRITE_FAULT);
+        return;
+      }
+      active_write_.clear();
+      continue;
+    }
+    const DWORD error = GetLastError();
+    if (error == ERROR_IO_PENDING) {
+      write_pending_ = true;
       return;
     }
-    active_write_.clear();
-    continue_write();
+    disconnect(error);
     return;
   }
-  const DWORD error = GetLastError();
-  if (error == ERROR_IO_PENDING) {
-    write_pending_ = true;
-    return;
+}
+
+void NamedPipeEditorDaemonChannel::drain_messages(
+    std::vector<layerc::core::LiveMessageResult> &messages) {
+  while (messages.size() < max_messages_per_poll && !pending_messages_.empty()) {
+    messages.push_back(std::move(pending_messages_.front()));
+    pending_messages_.pop_front();
   }
-  disconnect(error);
+}
+
+void NamedPipeEditorDaemonChannel::queue_decoded(
+    std::vector<layerc::core::LiveMessageResult> decoded,
+    std::vector<layerc::core::LiveMessageResult> &messages) {
+  for (auto &message : decoded) pending_messages_.push_back(std::move(message));
+  drain_messages(messages);
 }
 
 void NamedPipeEditorDaemonChannel::start_read(
     std::vector<layerc::core::LiveMessageResult> &messages) {
-  if (!connected_ || read_pending_ || pipe_ == INVALID_HANDLE_VALUE) return;
-  ResetEvent(read_event_);
-  read_overlapped_ = {};
-  read_overlapped_.hEvent = read_event_;
-  DWORD read{};
-  const BOOL result = ReadFile(pipe_, read_buffer_.data(),
-                               static_cast<DWORD>(read_buffer_.size()), &read,
-                               &read_overlapped_);
-  if (result != FALSE) {
-    if (read == 0) {
-      disconnect(ERROR_BROKEN_PIPE);
+  for (std::size_t reads = 0; reads < max_messages_per_poll; ++reads) {
+    if (!connected_ || read_pending_ || pipe_ == INVALID_HANDLE_VALUE ||
+        messages.size() >= max_messages_per_poll || !pending_messages_.empty())
+      return;
+    ResetEvent(read_event_);
+    read_overlapped_ = {};
+    read_overlapped_.hEvent = read_event_;
+    DWORD read{};
+    const BOOL result = ReadFile(pipe_, read_buffer_.data(),
+                                 static_cast<DWORD>(read_buffer_.size()), &read,
+                                 &read_overlapped_);
+    if (result != FALSE) {
+      if (read == 0) {
+        disconnect(ERROR_BROKEN_PIPE);
+        return;
+      }
+      queue_decoded(decoder_.push(
+          std::span<const std::byte>(read_buffer_.data(), read)), messages);
+      continue;
+    }
+    const DWORD error = GetLastError();
+    if (error == ERROR_IO_PENDING) {
+      read_pending_ = true;
       return;
     }
-    auto decoded = decoder_.push(
-        std::span<const std::byte>(read_buffer_.data(), read));
-    messages.insert(messages.end(),
-                    std::make_move_iterator(decoded.begin()),
-                    std::make_move_iterator(decoded.end()));
-    start_read(messages);
+    disconnect(error);
     return;
   }
-  const DWORD error = GetLastError();
-  if (error == ERROR_IO_PENDING) {
-    read_pending_ = true;
-    return;
+}
+
+bool NamedPipeEditorDaemonChannel::service_connect() {
+  if (!connect_pending_ ||
+      WaitForSingleObject(connect_event_, 0) != WAIT_OBJECT_0)
+    return true;
+  DWORD transferred{};
+  if (GetOverlappedResult(pipe_, &connect_overlapped_, &transferred, FALSE))
+    complete_connection();
+  else
+    disconnect(GetLastError());
+  return connected_;
+}
+
+bool NamedPipeEditorDaemonChannel::service_write() {
+  if (write_pending_ && WaitForSingleObject(write_event_, 0) == WAIT_OBJECT_0) {
+    DWORD written{};
+    if (!GetOverlappedResult(pipe_, &write_overlapped_, &written, FALSE) ||
+        written != active_write_.size()) {
+      disconnect(GetLastError());
+      return false;
+    }
+    write_pending_ = false;
+    active_write_.clear();
   }
-  disconnect(error);
+  continue_write();
+  return connected_;
+}
+
+bool NamedPipeEditorDaemonChannel::service_read(
+    std::vector<layerc::core::LiveMessageResult> &messages) {
+  if (read_pending_ && WaitForSingleObject(read_event_, 0) == WAIT_OBJECT_0) {
+    DWORD read{};
+    if (!GetOverlappedResult(pipe_, &read_overlapped_, &read, FALSE) ||
+        read == 0) {
+      disconnect(GetLastError());
+      return false;
+    }
+    read_pending_ = false;
+    queue_decoded(decoder_.push(
+        std::span<const std::byte>(read_buffer_.data(), read)), messages);
+  }
+  start_read(messages);
+  return connected_;
 }
 
 std::vector<layerc::core::LiveMessageResult>
 NamedPipeEditorDaemonChannel::poll() {
   std::vector<layerc::core::LiveMessageResult> messages;
+  drain_messages(messages);
   const auto relisten_server = [&] {
     if (role_ == Role::server && pipe_ == INVALID_HANDLE_VALUE)
       (void)create_server_pipe();
   };
-  if (role_ == Role::server && pipe_ == INVALID_HANDLE_VALUE)
-    (void)create_server_pipe();
+  relisten_server();
   if (role_ == Role::client && pipe_ == INVALID_HANDLE_VALUE)
     (void)connect_client();
 
-  if (connect_pending_ && WaitForSingleObject(connect_event_, 0) == WAIT_OBJECT_0) {
-    DWORD transferred{};
-    if (GetOverlappedResult(pipe_, &connect_overlapped_, &transferred, FALSE))
-      complete_connection();
-    else
-      disconnect(GetLastError());
-  }
+  (void)service_connect();
   if (!connected_) {
     // Re-arm once after a rejected/closed peer in this poll. This is outside
     // create_server_pipe's call stack, so a spoofing client cannot force
@@ -337,39 +385,7 @@ NamedPipeEditorDaemonChannel::poll() {
     if (!connected_) return messages;
   }
 
-  if (write_pending_ && WaitForSingleObject(write_event_, 0) == WAIT_OBJECT_0) {
-    DWORD written{};
-    if (!GetOverlappedResult(pipe_, &write_overlapped_, &written, FALSE) ||
-        written != active_write_.size()) {
-      disconnect(GetLastError());
-      relisten_server();
-      return messages;
-    }
-    write_pending_ = false;
-    active_write_.clear();
-  }
-  continue_write();
-  if (!connected_) {
-    relisten_server();
-    return messages;
-  }
-
-  if (read_pending_ && WaitForSingleObject(read_event_, 0) == WAIT_OBJECT_0) {
-    DWORD read{};
-    if (!GetOverlappedResult(pipe_, &read_overlapped_, &read, FALSE) || read == 0) {
-      disconnect(GetLastError());
-      relisten_server();
-      return messages;
-    }
-    read_pending_ = false;
-    auto decoded = decoder_.push(
-        std::span<const std::byte>(read_buffer_.data(), read));
-    messages.insert(messages.end(),
-                    std::make_move_iterator(decoded.begin()),
-                    std::make_move_iterator(decoded.end()));
-  }
-  start_read(messages);
-  if (!connected_) relisten_server();
+  if (!service_write() || !service_read(messages)) relisten_server();
   return messages;
 }
 
@@ -390,9 +406,19 @@ std::size_t NamedPipeEditorDaemonChannel::wait_handles(
     if (!pending || event == nullptr || count >= output.size()) return;
     output[count++] = event;
   };
+  // A poll capped at max_messages_per_poll (or a synchronous reconnect) can
+  // leave read or write work with no overlapped I/O in flight. Signal the idle
+  // manual-reset event so the owner's wait returns for the next poll instead
+  // of stalling; issuing the next overlapped operation resets it.
+  const bool read_deferred = connected_ && !read_pending_;
+  const bool write_deferred =
+      connected_ && !write_pending_ &&
+      (!active_write_.empty() || !write_queue_.empty());
+  if (read_deferred) SetEvent(read_event_);
+  if (write_deferred) SetEvent(write_event_);
   append(connect_pending_, connect_event_);
-  append(read_pending_, read_event_);
-  append(write_pending_, write_event_);
+  append(read_pending_ || read_deferred, read_event_);
+  append(write_pending_ || write_deferred, write_event_);
   return count;
 }
 

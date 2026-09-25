@@ -27,6 +27,39 @@ struct AppearancePreset {
   const wchar_t *name{};
 };
 
+// Hover contrast only applies to interactive chrome; selection contrast is
+// checked on list-like roles as well.
+bool contrast_pair_applies(const layerc::platform::EditorControlRole role,
+                           const int control) {
+  using Role = layerc::platform::EditorControlRole;
+  if (control == IDC_APPEARANCE_HOVER)
+    return role == Role::button || role == Role::checkbox;
+  if (control == IDC_APPEARANCE_SELECTION)
+    return role == Role::button || role == Role::checkbox ||
+           role == Role::list || role == Role::sidebar;
+  return true;
+}
+
+std::wstring find_role_label(const HWND roles,
+                             const layerc::platform::EditorControlRole role) {
+  const auto count = SendMessageW(roles, LB_GETCOUNT, 0, 0);
+  for (LRESULT row = 0; row < count; ++row) {
+    if (SendMessageW(roles, LB_GETITEMDATA, row, 0) !=
+        static_cast<LRESULT>(role))
+      continue;
+    SendMessageW(roles, LB_SETCURSEL, row, 0);
+    const auto length = SendMessageW(roles, LB_GETTEXTLEN, row, 0);
+    if (length == LB_ERR)
+      return {};
+    std::wstring name(static_cast<std::size_t>(length) + 1, L'\0');
+    SendMessageW(roles, LB_GETTEXT, row,
+                 reinterpret_cast<LPARAM>(name.data()));
+    name.resize(static_cast<std::size_t>(length));
+    return name;
+  }
+  return {};
+}
+
 constexpr std::array appearance_presets{
     AppearancePreset{layerc::platform::EditorTheme::system,
                      L"System accent (dark)"},
@@ -41,13 +74,12 @@ constexpr std::array appearance_presets{
 
 void select_appearance_preset(const HWND window,
                               const layerc::platform::EditorTheme theme) {
-  for (std::size_t index = 0; index < appearance_presets.size(); ++index) {
-    if (appearance_presets[index].theme == theme) {
-      SendDlgItemMessageW(window, IDC_THEME_PRESET, CB_SETCURSEL,
-                          static_cast<WPARAM>(index), 0);
-      return;
-    }
-  }
+  const auto found =
+      std::ranges::find(appearance_presets, theme, &AppearancePreset::theme);
+  if (found == appearance_presets.end()) return;
+  SendDlgItemMessageW(
+      window, IDC_THEME_PRESET, CB_SETCURSEL,
+      static_cast<WPARAM>(found - appearance_presets.begin()), 0);
 }
 
 constexpr std::array appearance_fields{
@@ -95,6 +127,12 @@ const AppearanceFieldAction *appearance_field(const std::uint32_t field) {
   return found == appearance_fields.end() ? nullptr : &*found;
 }
 
+const AppearanceFieldAction *appearance_field_for_control(const int control) {
+  const auto found = std::ranges::find(appearance_fields, control,
+                                       &AppearanceFieldAction::control);
+  return found == appearance_fields.end() ? nullptr : &*found;
+}
+
 void show_advanced_appearance(const HWND window, const bool visible) {
   for (const int id : appearance_advanced_controls)
     ShowWindow(GetDlgItem(window, id), visible ? SW_SHOW : SW_HIDE);
@@ -138,17 +176,17 @@ void EditorWindow::open_appearance() {
   }
   appearance_editor_.draft().begin(loaded.value.value_or(
       layerc::platform::EditorAppearanceSettings{}));
-  appearance_editor_.open() = true;
+  appearance_editor_.begin_open();
   refresh_theme();
   DialogBoxParamW(
       shell_.instance(), MAKEINTRESOURCEW(IDD_APPEARANCE), shell_.window(),
       &dispatch_member_dialog<EditorWindow, &EditorWindow::initialize_appearance,
                               &EditorWindow::handle_appearance_message>,
       reinterpret_cast<LPARAM>(this));
-  appearance_editor_.open() = false;
+  appearance_editor_.close();
   appearance_editor_.draft().cancel();
-  appearance_editor_.theme() = appearance_editor_.draft().staged().theme;
-  appearance_editor_.accent() = appearance_editor_.draft().staged().accent;
+  appearance_editor_.set_appearance(appearance_editor_.draft().staged().theme,
+                                    appearance_editor_.draft().staged().accent);
   refresh_theme();
 }
 
@@ -332,28 +370,13 @@ bool EditorWindow::apply_appearance(const HWND window) {
         ContrastPair{L"Text / Hover", role_colors.text, role_colors.hover, 4.5, IDC_APPEARANCE_HOVER},
         ContrastPair{L"Text / Selection", role_colors.text, role_colors.selection, 4.5, IDC_APPEARANCE_SELECTION}};
     for (const auto &pair : pairs) {
-      using Role = layerc::platform::EditorControlRole;
-      if (pair.control == IDC_APPEARANCE_HOVER &&
-          role != Role::button && role != Role::checkbox) continue;
-      if (pair.control == IDC_APPEARANCE_SELECTION &&
-          role != Role::button && role != Role::checkbox &&
-          role != Role::list && role != Role::sidebar) continue;
+      if (!contrast_pair_applies(role, pair.control))
+        continue;
       const auto ratio = contrast_ratio(pair.foreground, pair.background);
-      if (ratio >= pair.minimum) continue;
+      if (ratio >= pair.minimum)
+        continue;
       const HWND roles = GetDlgItem(window, IDC_APPEARANCE_TREE);
-      std::wstring role_name;
-      const auto count = SendMessageW(roles, LB_GETCOUNT, 0, 0);
-      for (LRESULT row = 0; row < count; ++row) {
-        if (SendMessageW(roles, LB_GETITEMDATA, row, 0) != static_cast<LRESULT>(role)) continue;
-        SendMessageW(roles, LB_SETCURSEL, row, 0);
-        const auto length = SendMessageW(roles, LB_GETTEXTLEN, row, 0);
-        if (length != LB_ERR) {
-          role_name.resize(static_cast<std::size_t>(length) + 1);
-          SendMessageW(roles, LB_GETTEXT, row, reinterpret_cast<LPARAM>(role_name.data()));
-          role_name.resize(static_cast<std::size_t>(length));
-        }
-        break;
-      }
+      const auto role_name = find_role_label(roles, role);
       refresh_appearance_controls(window);
       const auto message = role_name + L": " + pair.name + L" contrast is " +
           std::to_wstring(ratio).substr(0, 4) + L":1; at least " +
@@ -371,8 +394,7 @@ bool EditorWindow::apply_appearance(const HWND window) {
     return false;
   }
 
-  appearance_editor_.theme() = appearance.theme;
-  appearance_editor_.accent() = appearance.accent;
+  appearance_editor_.set_appearance(appearance.theme, appearance.accent);
   (void)layerc::platform::signal_settings_reload();
   refresh_theme();
   set_status(L"Appearance saved.");
@@ -437,11 +459,10 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
       refresh_appearance_controls(window);
       return TRUE;
     }
-    for (const auto &entry : appearance_fields) {
-      if (id == entry.control && notification == BN_CLICKED) {
-        choose_appearance_color(window, entry.field);
-        return TRUE;
-      }
+    if (const auto *entry = appearance_field_for_control(id);
+        entry != nullptr && notification == BN_CLICKED) {
+      choose_appearance_color(window, entry->field);
+      return TRUE;
     }
     if (id == IDC_APPEARANCE_RESET && notification == BN_CLICKED) {
       reset_appearance(window);
@@ -478,10 +499,9 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
     }
     if (draw->CtlType == ODT_BUTTON) {
       std::optional<COLORREF> fill;
-      for (const auto &entry : appearance_fields) {
-        if (static_cast<int>(draw->CtlID) == entry.control)
-          fill = appearance_color(window, entry.field);
-      }
+      if (const auto *entry =
+              appearance_field_for_control(static_cast<int>(draw->CtlID)))
+        fill = appearance_color(window, entry->field);
       draw_button(*draw, layerc::platform::EditorControlRole::button, fill);
       return TRUE;
     }

@@ -4,6 +4,7 @@
 #include "layerc/platform/profile_transaction.hpp"
 #include "profile_transaction_test.hpp"
 #include "test_support.hpp"
+#include "visual_asset_load_contract.hpp"
 
 #include <algorithm>
 #include <array>
@@ -227,9 +228,26 @@ void test_transaction_validation_and_locking() {
 
   const layerc::platform::ProfileFileMutation outside = {
       .target = temporary.path() / "outside.json", .contents = bytes("x")};
-  expect(!layerc::platform::commit_profile_transaction(roots,
-                                                       std::span(&outside, 1)),
+  expect(layerc::platform::commit_profile_transaction(roots,
+                                                      std::span(&outside, 1))
+                 .error() == layerc::platform::ProfileWriteError::scope_rejected,
          "transaction targets outside config/data roots should be rejected");
+  expect(layerc::platform::commit_profile_transaction(
+             roots, std::span<const layerc::platform::ProfileFileMutation>{})
+                 .error() == layerc::platform::ProfileWriteError::invalid_input,
+         "an empty transaction should report invalid input");
+  const layerc::platform::ProfileFileMutation create = {
+      .target = roots.config_profiles / "create-only.json",
+      .contents = bytes("first")};
+  expect(static_cast<bool>(layerc::platform::commit_profile_transaction(
+             roots, std::span(&create, 1))),
+         "the first create-only write should publish");
+  auto create_again = create;
+  create_again.must_be_absent = true;
+  expect(layerc::platform::commit_profile_transaction(
+             roots, std::span(&create_again, 1))
+                 .error() == layerc::platform::ProfileWriteError::target_exists,
+         "a create-only write over an existing file should report target_exists");
   const layerc::platform::ProfileFileMutation traversal = {
       .target = roots.config_profiles / ".." / "escape.json",
       .contents = bytes("x")};
@@ -255,8 +273,9 @@ void test_transaction_validation_and_locking() {
   const int lock = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
   expect(lock >= 0 && ::flock(lock, LOCK_EX | LOCK_NB) == 0,
          "test should acquire the store lock");
-  expect(!layerc::platform::commit_profile_transaction(roots,
-                                                       std::span(&mutation, 1)),
+  expect(layerc::platform::commit_profile_transaction(roots,
+                                                      std::span(&mutation, 1))
+                 .error() == layerc::platform::ProfileWriteError::lock_busy,
          "a second writer should not bypass the store lock");
   if (lock >= 0) {
     (void)::flock(lock, LOCK_UN);
@@ -535,8 +554,25 @@ extern "C" int __wrap_fsync(const int descriptor) {
   return __real_fsync(descriptor);
 }
 
+namespace {
+void test_profile_store_filename_policy() {
+  using layerc::platform::profile_store_filename;
+  expect(profile_store_filename("My Game_2") == "my-game-2.json" &&
+             profile_store_filename("../etc/passwd") == "etc-passwd.json" &&
+             profile_store_filename("--") == "profile.json",
+         "profile ids map to one flat, sanitized store filename");
+}
+
+void test_visual_asset_load_contract() {
+  TemporaryDirectory temporary;
+  layerc::test::visual_asset_load_contract(temporary.path());
+}
+} // namespace
+
 int main() {
   return layerc::test::run({
+      {"test_visual_asset_load_contract", test_visual_asset_load_contract},
+      {"test_profile_store_filename_policy", test_profile_store_filename_policy},
       {"test_xdg_roots_and_permissions", test_xdg_roots_and_permissions},
       {"test_bounded_file_read_statuses", test_bounded_file_read_statuses},
       {"test_profile_directory_scan_resolves_ids", test_profile_directory_scan_resolves_ids},

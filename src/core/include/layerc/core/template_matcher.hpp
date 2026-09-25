@@ -4,9 +4,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace layerc::core {
@@ -24,6 +25,11 @@ struct TemplateImage {
   bool operator==(const TemplateImage &) const = default;
 };
 
+// Converts bounded, interleaved RGBA bytes into a validated matcher image.
+[[nodiscard]] std::optional<TemplateImage> template_image_from_rgba(
+    std::uint32_t width, std::uint32_t height,
+    std::span<const std::uint8_t> rgba);
+
 struct TemplateMatchResult {
   bool matched{};
   // True when the configured search region intersects pixels supplied by the
@@ -35,29 +41,6 @@ struct TemplateMatchResult {
   std::size_t candidates_evaluated{};
   std::size_t pixel_comparisons{};
 };
-
-namespace detail {
-
-struct TemplateMatcherSample {
-  float x{};
-  float y{};
-  RgbPixel color;
-  float luma{};
-};
-
-struct TemplateMatcherReference {
-  std::vector<TemplateMatcherSample> samples;
-  double mean_luma{};
-  double luma_variance{};
-  std::vector<TemplateMatcherSample> search_samples;
-  double search_mean_luma{};
-  double search_luma_variance{};
-  std::vector<TemplateMatcherSample> locator_samples;
-  double locator_mean_luma{};
-  double locator_luma_variance{};
-};
-
-} // namespace detail
 
 // Flat and near-flat images do not carry enough spatial information to locate
 // an element. They are rejected instead of matching an arbitrary same-colored
@@ -75,10 +58,10 @@ compact_template_image(const TemplateImage &image, CaptureQuality quality);
 // caches quality-specific reference samples by verified content hash.
 class CpuTemplateMatcher final {
 public:
-  CpuTemplateMatcher() = default;
-  ~CpuTemplateMatcher() = default;
-  CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept = default;
-  CpuTemplateMatcher &operator=(CpuTemplateMatcher &&) noexcept = default;
+  CpuTemplateMatcher();
+  ~CpuTemplateMatcher();
+  CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept;
+  CpuTemplateMatcher &operator=(CpuTemplateMatcher &&) noexcept;
   CpuTemplateMatcher(const CpuTemplateMatcher &) = delete;
   CpuTemplateMatcher &operator=(const CpuTemplateMatcher &) = delete;
 
@@ -90,7 +73,8 @@ public:
   void clear();
 
 private:
-  std::unordered_map<std::string, detail::TemplateMatcherReference> prepared_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 } // namespace layerc::core

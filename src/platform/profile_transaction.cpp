@@ -9,12 +9,10 @@
 #include "profile_transaction_internal.hpp"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -130,7 +128,7 @@ bool replace_from_file(const std::filesystem::path &source,
 }
 
 bool delete_target(const std::filesystem::path &target) {
-  return remove_durable_file(target) && fsync_parent_checked(target);
+  return remove_durable_file(target);
 }
 
 std::filesystem::path root_path(const ProfileStoreRoots &roots,
@@ -443,7 +441,8 @@ std::string transaction_name() {
 // target existence. Pure planning — nothing is written.
 [[nodiscard]] std::optional<std::vector<JournalOperation>>
 prepare_ops(const ProfileStoreRoots &roots,
-            const std::span<const ProfileFileMutation> &mutations) {
+            const std::span<const ProfileFileMutation> &mutations,
+            ProfileWriteError &failure) {
   std::vector<JournalOperation> operations;
   std::set<std::string, std::less<>> unique;
   std::size_t total_bytes{};
@@ -452,10 +451,17 @@ prepare_ops(const ProfileStoreRoots &roots,
     std::filesystem::path relative;
     const auto kind = classify_target(roots, mutation.target, relative);
     const auto key_part = transaction_relative_key(relative);
-    if (!kind.has_value() || !key_part.has_value() ||
-        !safe_target(root_path(roots, *kind), relative) ||
+    if (!kind.has_value()) {
+      failure = ProfileWriteError::scope_rejected;
+      return std::nullopt;
+    }
+    if (!key_part.has_value() ||
         (mutation.must_be_absent && !mutation.contents.has_value()))
       return std::nullopt;
+    if (!safe_target(root_path(roots, *kind), relative)) {
+      failure = ProfileWriteError::scope_rejected;
+      return std::nullopt;
+    }
     const auto key = std::string(*kind == RootKind::config ? "c:" : "d:") +
                      *key_part;
     if (!unique.insert(key).second) return std::nullopt;
@@ -481,8 +487,14 @@ prepare_ops(const ProfileStoreRoots &roots,
 
   for (auto &operation : operations) {
     const auto existed = file_guard_regular_file_exists(operation.target);
-    if (!existed.has_value() || (operation.must_be_absent && *existed))
+    if (!existed.has_value()) {
+      failure = ProfileWriteError::io_failed;
       return std::nullopt;
+    }
+    if (operation.must_be_absent && *existed) {
+      failure = ProfileWriteError::target_exists;
+      return std::nullopt;
+    }
     operation.existed = *existed;
   }
   return operations;
@@ -494,7 +506,8 @@ prepare_ops(const ProfileStoreRoots &roots,
 // is visible yet.
 [[nodiscard]] bool write_journal_and_barriers(
     const std::filesystem::path &transaction, const std::string_view name,
-    std::vector<JournalOperation> &operations) {
+    std::vector<JournalOperation> &operations,
+    ProfileWriteError &failure) {
   if (!file_guard_ensure_directory(transaction) ||
       !file_guard_ensure_directory(transaction / "backup")) {
     (void)remove_transaction(transaction);
@@ -532,6 +545,7 @@ prepare_ops(const ProfileStoreRoots &roots,
   // visible yet, so failing here is safe (no rollback of published bytes).
   if (!flush_directory_hierarchy(transaction / "backup") ||
       !flush_target_directories(operations)) {
+    failure = ProfileWriteError::durability_unconfirmed;
     remove_stages(operations);
     (void)remove_transaction(transaction);
     return false;
@@ -583,33 +597,34 @@ struct PublishProgress {
 // incomplete publish. Leaves recovery evidence whenever durability is
 // unconfirmed. Rollback of an already-open recovery pass stays in
 // recover_locked.
-[[nodiscard]] bool finish_or_recover(
+[[nodiscard]] ProfileWriteResult finish_or_recover(
     const std::filesystem::path &transaction,
     const std::filesystem::path &transactions,
     const std::vector<JournalOperation> &operations,
     const PublishProgress &progress) {
   if (progress.published != operations.size()) {
-    if (progress.unconfirmed) return false;
+    if (progress.unconfirmed) return {ProfileWriteError::durability_unconfirmed};
     if (rollback(transaction, operations, progress.rollback_count)) {
       remove_stages(operations);
       (void)remove_transaction(transaction);
     }
-    return false;
+    return {ProfileWriteError::io_failed};
   }
   // Retry unconfirmed publications before acknowledging the bundle. If the
   // barrier still fails, retain the uncommitted journal and rollback copies
   // for recovery under the next writer's ownership.
   if (progress.unconfirmed && !flush_target_directories(operations))
-    return false;
+    return {ProfileWriteError::durability_unconfirmed};
   if (!durable_write_new(transaction / "committed", "committed\n")) {
     (void)remove_durable_file(transaction / "committed");
     if (rollback(transaction, operations, progress.published)) {
       remove_stages(operations);
       (void)remove_transaction(transaction);
     }
-    return false;
+    return {ProfileWriteError::io_failed};
   }
-  if (!fsync_parent_checked(transaction / "committed")) return false;
+  if (!fsync_parent_checked(transaction / "committed"))
+    return {ProfileWriteError::durability_unconfirmed};
   // Cleanup is best-effort: the transaction is fully published and marked
   // committed above, so residue-removal failures (antivirus/sharing races)
   // must not flip a durable commit into a reported failure. Leftover residue
@@ -618,7 +633,7 @@ struct PublishProgress {
   (void)remove_transaction(transaction);
   std::error_code error;
   std::filesystem::remove(transactions, error);
-  return true;
+  return {};
 }
 
 } // namespace
@@ -626,30 +641,36 @@ struct PublishProgress {
 // Internal bridge for test-only fault injection (see
 // profile_transaction_internal.hpp): the production wrapper below always
 // passes std::nullopt.
-bool commit_profile_transaction_impl(
+ProfileWriteResult commit_profile_transaction_impl(
     const ProfileStoreRoots &roots,
     const std::span<const ProfileFileMutation> &mutations,
     const std::optional<std::size_t> &fail_after_publish) {
-  if (mutations.empty() || mutations.size() > max_transaction_operations ||
-      !ensure_guard_transaction_roots(roots))
-    return false;
+  if (mutations.empty() || mutations.size() > max_transaction_operations)
+    return {ProfileWriteError::invalid_input};
+  if (!ensure_guard_transaction_roots(roots))
+    return {ProfileWriteError::scope_rejected};
   TransactionFileLock lock(roots);
-  if (!lock.locked() || !recover_locked(roots)) return false;
+  if (!lock.locked()) return {ProfileWriteError::lock_busy};
+  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
 
-  auto operations = prepare_ops(roots, mutations);
-  if (!operations.has_value()) return false;
+  ProfileWriteError failure = ProfileWriteError::invalid_input;
+  auto operations = prepare_ops(roots, mutations, failure);
+  if (!operations.has_value()) return {failure};
 
   const auto transactions = transaction_root(roots);
-  if (!file_guard_ensure_directory(transactions)) return false;
+  if (!file_guard_ensure_directory(transactions))
+    return {ProfileWriteError::io_failed};
   const auto name = transaction_name();
   const auto transaction = transactions / name;
-  if (!write_journal_and_barriers(transaction, name, *operations)) return false;
+  failure = ProfileWriteError::io_failed;
+  if (!write_journal_and_barriers(transaction, name, *operations, failure))
+    return {failure};
 
   const auto progress =
       publish_ops(transaction, *operations, fail_after_publish);
   // Fault injection simulated process loss mid-publish: leave the journal
   // and partial publications for recover_locked under the next writer.
-  if (!progress.has_value()) return false;
+  if (!progress.has_value()) return {ProfileWriteError::io_failed};
   return finish_or_recover(transaction, transactions, *operations, *progress);
 }
 
@@ -658,13 +679,16 @@ profile_transaction_scope(const std::filesystem::path &profile_directory) {
   return guard_transaction_scope(profile_directory);
 }
 
-bool recover_profile_transactions(const ProfileStoreRoots &roots) {
-  if (!ensure_guard_transaction_roots(roots)) return false;
+ProfileWriteResult recover_profile_transactions(const ProfileStoreRoots &roots) {
+  if (!ensure_guard_transaction_roots(roots))
+    return {ProfileWriteError::scope_rejected};
   TransactionFileLock lock(roots);
-  return lock.locked() && recover_locked(roots);
+  if (!lock.locked()) return {ProfileWriteError::lock_busy};
+  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
+  return {};
 }
 
-bool commit_profile_transaction(
+ProfileWriteResult commit_profile_transaction(
     const ProfileStoreRoots &roots,
     const std::span<const ProfileFileMutation> mutations) {
   return commit_profile_transaction_impl(roots, mutations, std::nullopt);

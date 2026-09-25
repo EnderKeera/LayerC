@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/linux-lib.sh"
 
 usage() {
   cat <<'EOF'
@@ -10,6 +11,9 @@ Environment:
   LAYERC_EVIDENCE_DIR    Artifact root (default: out/benchmarks/v26-linux)
   LAYERC_MANUAL_RESULT   pass or fail; prompted when unset
   LAYERC_MANUAL_NOTES    Notes saved with the run
+  LAYERC_RUN_AUTOMATION  1 runs tools/run-linux-tests.sh before physical checks
+  LAYERC_AUTOMATION_SUMMARY  Existing summary.json to bind to this run
+  LAYERC_REQUIRE_AUTOMATION  1 rejects physical evidence without a bound summary
 EOF
 }
 
@@ -44,6 +48,52 @@ out="$evidence_root/$stamp-$desktop-$mode"
 mkdir -p "$out"
 exec > >(tee "$out/run.log") 2>&1
 
+if [[ ${LAYERC_RUN_AUTOMATION:-0} == 1 && -n ${LAYERC_AUTOMATION_SUMMARY:-} ]]; then
+  echo "error: set only one of LAYERC_RUN_AUTOMATION and LAYERC_AUTOMATION_SUMMARY" >&2
+  exit 64
+fi
+automation_summary=${LAYERC_AUTOMATION_SUMMARY:-}
+if [[ ${LAYERC_RUN_AUTOMATION:-0} == 1 ]]; then
+  automation_dir="$out/automated"
+  flatpak_policy=off
+  [[ $mode == flatpak ]] && flatpak_policy=required
+  bash tools/run-linux-tests.sh --build-dir "$build_dir" \
+    --evidence-dir "$automation_dir" --flatpak "$flatpak_policy"
+  automation_summary="$automation_dir/summary.json"
+fi
+if [[ -n $automation_summary ]]; then
+  commit=$(git rev-parse HEAD)
+  python3 - "$automation_summary" "$commit" "$mode" \
+    "${LAYERC_REQUIRE_AUTOMATION:-0}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+required = ["overall", "verify-headless", "verify-x11", "native-headless-smoke", "native-x11-smoke"]
+if sys.argv[3] == "flatpak":
+    required.append("flatpak")
+bad = [name for name in required if summary.get("automatedEvidence", {}).get(name, {}).get("status") != "pass"]
+if summary.get("commit") != sys.argv[2]:
+    raise SystemExit("automated evidence commit does not match the physical checkout")
+if sys.argv[4] == "1" and summary.get("sourceTreeClean") is not True:
+    raise SystemExit("release evidence requires a clean automated source tree")
+if bad:
+    raise SystemExit("automated evidence lacks passing stages: " + ", ".join(bad))
+PY
+  cp "$automation_summary" "$out/automated-summary.json"
+  printf 'status=bound\nsource=%s\n' "$automation_summary" >"$out/automation-link.txt"
+elif [[ ${LAYERC_REQUIRE_AUTOMATION:-0} == 1 ]]; then
+  echo "error: LAYERC_REQUIRE_AUTOMATION=1 needs automated evidence" >&2
+  exit 1
+else
+  printf 'status=not-bound\n' >"$out/automation-link.txt"
+fi
+if [[ ${LAYERC_REQUIRE_AUTOMATION:-0} == 1 && -n $(git status --porcelain) ]]; then
+  echo "error: release physical evidence requires a clean checkout" >&2
+  exit 1
+fi
+
 app_id=io.github.EnderKeera.LayerC
 if [[ $mode == native ]]; then
   daemon=("$build_dir/layerd")
@@ -62,6 +112,7 @@ else
   ctl=(flatpak run --command=layerctl "$app_id")
   cal=(flatpak run --command=layercal "$app_id")
 fi
+run_ctl() { "${ctl[@]}" "$@"; }
 
 {
   printf 'recordedAtUtc=%s\n' "$stamp"
@@ -75,6 +126,12 @@ git status --short >"$out/git-status.txt" 2>/dev/null || true
 command -v xrandr >/dev/null && xrandr --current >"$out/xrandr.txt"
 command -v xdpyinfo >/dev/null && xdpyinfo >"$out/xdpyinfo.txt"
 
+if "${ctl[@]}" status --json >"$out/existing-daemon-status.json" \
+    2>"$out/existing-daemon-error.txt"; then
+  echo "error: a daemon is already active; stop it yourself before physical testing" >&2
+  exit 1
+fi
+
 cat >"$out/manual-checklist.txt" <<'EOF'
 Confirm all items before entering pass:
 - Passive keyboard and mouse input trigger the expected cooldowns.
@@ -87,30 +144,16 @@ Confirm all items before entering pass:
 - Closing the session returns capture/assets/cache to zero with no idle polling.
 EOF
 
-"${daemon[@]}" >"$out/layerd.log" 2>&1 &
-daemon_pid=$!
-cleanup() {
-  if kill -0 "$daemon_pid" 2>/dev/null; then
-    "${ctl[@]}" stop >/dev/null 2>&1 || kill "$daemon_pid" 2>/dev/null || true
-    wait "$daemon_pid" 2>/dev/null || true
-  fi
-}
+layerc_daemon_pid=
+cleanup() { layerc_daemon_cleanup run_ctl; }
 trap cleanup EXIT
 
-ready=false
-for _ in {1..50}; do
-  if "${ctl[@]}" status --json >"$out/status-before.json" 2>/dev/null; then
-    ready=true
-    break
-  fi
-  sleep 0.1
-done
-if [[ $ready != true ]]; then
-  echo "error: daemon did not become ready" >&2
-  exit 1
-fi
+layerc_daemon_start run_ctl \
+  "$out/layerd.log" "$out/status-before.json" \
+  50 0.1 "error: daemon did not become ready" \
+  "error: the daemon launched by this script exited before readiness" "${daemon[@]}"
 
-runtime_pid=$daemon_pid
+runtime_pid=$layerc_daemon_pid
 if [[ $mode == flatpak ]]; then
   flatpak_pid=$(flatpak ps --columns=pid,application 2>/dev/null |
     awk -v app="$app_id" '$2 == app { print $1; exit }')
@@ -141,21 +184,36 @@ if [[ -z $manual_result && -t 0 ]]; then
   read -r -p 'Notes: ' manual_notes
 fi
 manual_result=${manual_result:-pending}
+case "$manual_result" in pass | fail | pending) ;; *)
+  echo "error: manual result must be pass, fail, or pending" >&2
+  exit 64
+esac
 printf 'result=%s\nnotes=%s\n' "$manual_result" "$manual_notes" \
   >"$out/manual-result.txt"
 
 "${ctl[@]}" status --json >"$out/status-after.json"
-"${ctl[@]}" stop
-wait "$daemon_pid"
+layerc_daemon_stop run_ctl
 trap - EXIT
 
-checksums=$(mktemp)
-(
-  cd "$out"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z |
-    xargs -0 sha256sum
-) >"$checksums"
-mv "$checksums" "$out/SHA256SUMS"
+python3 - "$out" "$stamp" "$desktop" "$mode" "$manual_result" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+summary = {
+    "schemaVersion": 1,
+    "recordedAtUtc": sys.argv[2],
+    "desktop": sys.argv[3],
+    "packageMode": sys.argv[4],
+    "manualResult": sys.argv[5],
+    "automatedEvidence": "bound" if (root / "automated-summary.json").exists() else "not-bound",
+    "evidenceKind": "physical-x11",
+}
+(root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+PY
+
+layerc_write_sha256sums "$out"
 
 echo "Evidence archived in $out"
 if [[ $manual_result != pass ]]; then

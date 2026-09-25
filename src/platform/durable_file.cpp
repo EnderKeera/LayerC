@@ -1,8 +1,7 @@
 #include "layerc/platform/durable_file.hpp"
+#include "durable_file_internal.hpp"
+#include "io_chunk_size.hpp"
 
-#include <algorithm>
-#include <atomic>
-#include <limits>
 #include <utility>
 
 #include <windows.h>
@@ -10,9 +9,24 @@
 namespace layerc::platform {
 namespace {
 
-std::atomic_uint64_t stage_sequence{};
+// Publication only ever replaces a plain file. MoveFileExW would replace a
+// symlink or junction itself, so refuse reparse points (read_durable_file
+// refuses them too) and directories; an absent destination is fine.
+bool publishable_destination(const std::filesystem::path &destination) {
+  const DWORD attributes = GetFileAttributesW(destination.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    const auto error = GetLastError();
+    return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+  }
+  return (attributes &
+          (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0;
+}
 
 } // namespace
+
+std::uint64_t detail::durable_process_id() noexcept {
+  return static_cast<std::uint64_t>(GetCurrentProcessId());
+}
 
 FileReadResult read_durable_file(const std::filesystem::path &path,
                                  const std::size_t maximum_bytes) {
@@ -48,12 +62,9 @@ FileReadResult read_durable_file(const std::filesystem::path &path,
   std::vector<std::byte> bytes(static_cast<std::size_t>(size.QuadPart));
   std::size_t offset{};
   while (offset < bytes.size()) {
-    const auto remaining = bytes.size() - offset;
-    const DWORD request = static_cast<DWORD>(
-        (std::min)(remaining,
-                   static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
     DWORD read{};
-    if (ReadFile(file, bytes.data() + offset, request, &read, nullptr) == FALSE ||
+    if (ReadFile(file, bytes.data() + offset, io_chunk_size(bytes.size() - offset),
+                 &read, nullptr) == FALSE ||
         read == 0) {
       CloseHandle(file);
       return {.status = FileReadStatus::io_error, .bytes = {}};
@@ -74,13 +85,10 @@ bool create_durable_file(const std::filesystem::path &path,
   std::size_t offset{};
   bool success = true;
   while (offset < contents.size()) {
-    const auto remaining = contents.size() - offset;
-    const DWORD request = static_cast<DWORD>(
-        (std::min)(remaining,
-                   static_cast<std::size_t>((std::numeric_limits<DWORD>::max)())));
     DWORD written{};
-    if (WriteFile(file, contents.data() + offset, request, &written, nullptr) ==
-            FALSE ||
+    if (WriteFile(file, contents.data() + offset,
+                  io_chunk_size(contents.size() - offset), &written,
+                  nullptr) == FALSE ||
         written == 0) {
       success = false;
       break;
@@ -93,26 +101,18 @@ bool create_durable_file(const std::filesystem::path &path,
   return success;
 }
 
-bool publish_durable_file(const std::filesystem::path &stage,
-                          const std::filesystem::path &destination) {
-  return publish_durable_file_checked(stage, destination) !=
-         DurablePublishOutcome::failed;
-}
-
 DurablePublishOutcome publish_durable_file_checked(
     const std::filesystem::path &stage,
     const std::filesystem::path &destination) {
   // MOVEFILE_WRITE_THROUGH commits the rename durably on NTFS; there is no
   // separate parent-fsync step to fail, so a successful move is durably
   // published and a failed move published nothing.
+  if (!publishable_destination(destination))
+    return DurablePublishOutcome::failed;
   return MoveFileExW(stage.c_str(), destination.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE
              ? DurablePublishOutcome::published_durable
              : DurablePublishOutcome::failed;
-}
-
-bool fsync_parent_checked(const std::filesystem::path &path) noexcept {
-  return fsync_directory_checked(path.parent_path());
 }
 
 bool fsync_directory_checked(const std::filesystem::path &directory) noexcept {
@@ -125,16 +125,6 @@ bool fsync_directory_checked(const std::filesystem::path &directory) noexcept {
 bool remove_durable_file(const std::filesystem::path &path) {
   return DeleteFileW(path.c_str()) != FALSE ||
          GetLastError() == ERROR_FILE_NOT_FOUND;
-}
-
-std::filesystem::path
-unique_durable_stage_path(const std::filesystem::path &destination) {
-  auto stage = destination;
-  stage += L"." + std::to_wstring(GetCurrentProcessId()) + L"." +
-           std::to_wstring(
-               stage_sequence.fetch_add(1, std::memory_order_relaxed)) +
-           L".tmp";
-  return stage;
 }
 
 } // namespace layerc::platform

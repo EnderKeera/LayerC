@@ -42,7 +42,7 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
 
 ## 3. Daemon Bridge & Transport
 
-- **`GameBarBridge`** (`src/gamebar/GameBarBridge.cpp`): formats immutable snapshots from active cooldown states, caches the latest snapshot under a mutex, and enforces the 2.0s staleness cutoff.
+- **`core::build_companion_snapshot`** (`src/core/companion_snapshot.cpp`): formats and serializes bounded immutable snapshots from active cooldown states, shrinking oversized live data before publication. The widget independently clears stale data after 2.0 seconds.
 - **`GameBarTransport`** (`src/gamebar/GameBarTransport.cpp`): demand-driven App Service client.
   - Active only in the packaged MSIX build when an active game session exists.
   - Connects to same-package App Service `LayerC.GameBar.v1`.
@@ -62,6 +62,8 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
 ---
 
 ## 5. MSIX Packaging (`src/gamebar/Package.appxmanifest`)
+
+CMake configures this manifest from `project(LayerC VERSION ...)` into the build tree (including the four-part MSIX identity version). The widget MSBuild project and package staging both consume that generated manifest, and the generated `layerc/core/version.hpp` supplies the matching runtime identity.
 
 The package manifest registers:
 

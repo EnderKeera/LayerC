@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <array>
-#include <limits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -124,11 +123,6 @@ scan_profile_directory(const std::filesystem::path &directory) {
   }
   if (error) result.error = "profile directory enumeration failed";
   return result;
-}
-
-std::optional<std::string>
-read_sidecar_text(const std::filesystem::path &path, const std::size_t max_bytes) {
-  return read_durable_text(path, max_bytes);
 }
 
 // --- Sidecar paths and marker policy ---
@@ -302,14 +296,15 @@ private:
 // recovery with bundle saves. Visual assets stay content-addressed CAS
 // (hash-named immutable PNGs via write_asset_atomically): identity is the
 // content hash, overwrites cannot occur, and there is no user-visible `.bak`.
-bool write_profile_file(const std::filesystem::path &path,
-                        const std::string_view contents) {
-  if (contents.size() > layerc::core::max_profile_json_bytes) return false;
+ProfileWriteResult write_profile_file(const std::filesystem::path &path,
+                                      const std::string_view contents) {
+  if (contents.size() > layerc::core::max_profile_json_bytes)
+    return {ProfileWriteError::invalid_input};
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
-  if (path_error) return false;
+  if (path_error) return {ProfileWriteError::invalid_input};
   const auto scope = profile_transaction_scope(absolute.parent_path());
-  if (!scope.has_value()) return false;
+  if (!scope.has_value()) return {ProfileWriteError::scope_rejected};
 
   std::vector<ProfileFileMutation> mutations;
   // Keep the previous parseable profile as the last-valid recovery point.
@@ -354,10 +349,44 @@ struct BundlePlan {
   std::vector<ProfileFileMutation> mutations;
 };
 
+// Prefer the last usable sidecar bytes as the user-visible recovery copy.
+// Falls back to the new contents when nothing usable was stored; fails when
+// a usable source cannot be re-read.
+template <typename Codec>
+[[nodiscard]] bool retain_sidecar_recovery(
+    SidecarPlan &sidecar,
+    const std::optional<layerc::core::GameProfile> &previous_profile) {
+  if (!sidecar.contents.has_value()) return true;
+  sidecar.recovery_contents = sidecar.contents;
+  if (!previous_profile.has_value()) return true;
+  const auto loaded =
+      SidecarStore<Codec>{}.load(sidecar.paths.primary, *previous_profile);
+  if (!loaded.usable()) return true;
+  auto source = read_durable_file(loaded.source_path, Codec::max_bytes);
+  if (!source.has_value()) return false;
+  sidecar.recovery_contents = as_text(*source);
+  return true;
+}
+
+template <typename T, typename Serialize>
+[[nodiscard]] std::optional<std::string>
+serialize_if_present(const std::optional<T> &value, Serialize serialize) {
+  if (!value.has_value()) return std::nullopt;
+  return serialize(*value);
+}
+
+[[nodiscard]] std::optional<bool>
+path_exists(const std::filesystem::path &target) {
+  std::error_code error;
+  const bool found = std::filesystem::exists(target, error);
+  if (error) return std::nullopt;
+  return found;
+}
+
 // Validate + assemble: pure planning (reads only, no writes). Nullopt when
 // the inputs cannot become a committable bundle.
 [[nodiscard]] std::optional<BundlePlan>
-plan_profile_bundle(BundleInputs inputs) {
+plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   BundlePlan plan;
   plan.stored_profile = std::move(inputs.profile);
   plan.stored_profile.schema_version = 4;
@@ -423,60 +452,46 @@ plan_profile_bundle(BundleInputs inputs) {
       companion.primary.empty())
     return std::nullopt;
   const auto transaction_scope = profile_transaction_scope(root);
-  if (!transaction_scope.has_value()) return std::nullopt;
+  if (!transaction_scope.has_value()) {
+    failure = ProfileWriteError::scope_rejected;
+    return std::nullopt;
+  }
   plan.roots = std::move(*transaction_scope);
-
-  const auto exists = [](const std::filesystem::path &target, bool &result) {
-    std::error_code error;
-    result = std::filesystem::exists(target, error);
-    return !error;
-  };
 
   std::array<SidecarPlan, 3> sidecars{{
       {.paths = visual,
-       .contents =
-           inputs.visual.has_value()
-               ? std::optional{layerc::core::serialize_visual_profile_json(
-                     *inputs.visual)}
-               : std::nullopt,
+       .contents = serialize_if_present(
+           inputs.visual, layerc::core::serialize_visual_profile_json),
        .recovery_contents = std::nullopt},
       {.paths = automation,
-       .contents =
-           inputs.automation.has_value()
-               ? std::optional{layerc::core::serialize_automation_profile_json(
-                     *inputs.automation)}
-               : std::nullopt,
+       .contents = serialize_if_present(
+           inputs.automation, layerc::core::serialize_automation_profile_json),
        .recovery_contents = std::nullopt},
       {.paths = companion,
-       .contents =
-           effective_companion.has_value()
-               ? std::optional{layerc::core::serialize_companion_profile_json(
-                     *effective_companion)}
-               : std::nullopt,
+       .contents = serialize_if_present(
+           effective_companion,
+           layerc::core::serialize_companion_profile_json),
        .recovery_contents = std::nullopt},
   }};
   for (auto &sidecar : sidecars) {
-    if (!exists(sidecar.paths.primary, sidecar.primary_exists) ||
-        !exists(sidecar.paths.backup, sidecar.backup_exists) ||
-        !exists(sidecar.paths.marker, sidecar.marker_exists))
+    const auto primary = path_exists(sidecar.paths.primary);
+    const auto backup = path_exists(sidecar.paths.backup);
+    const auto marker = path_exists(sidecar.paths.marker);
+    if (!primary || !backup || !marker) {
+      failure = ProfileWriteError::io_failed;
       return std::nullopt;
+    }
+    sidecar.primary_exists = *primary;
+    sidecar.backup_exists = *backup;
+    sidecar.marker_exists = *marker;
   }
 
-  const auto retain_recovery = [&]<typename Codec>(SidecarPlan &sidecar) {
-    if (!sidecar.contents.has_value()) return true;
-    sidecar.recovery_contents = sidecar.contents;
-    if (!previous_profile.has_value()) return true;
-    const auto loaded =
-        SidecarStore<Codec>{}.load(sidecar.paths.primary, *previous_profile);
-    if (!loaded.usable()) return true;
-    auto source = read_durable_file(loaded.source_path, Codec::max_bytes);
-    if (!source.has_value()) return false;
-    sidecar.recovery_contents = as_text(*source);
-    return true;
-  };
-  if (!retain_recovery.operator()<VisualSidecarCodec>(sidecars[0]) ||
-      !retain_recovery.operator()<AutomationSidecarCodec>(sidecars[1]) ||
-      !retain_recovery.operator()<CompanionSidecarCodec>(sidecars[2]))
+  if (!retain_sidecar_recovery<VisualSidecarCodec>(sidecars[0],
+                                                   previous_profile) ||
+      !retain_sidecar_recovery<AutomationSidecarCodec>(sidecars[1],
+                                                       previous_profile) ||
+      !retain_sidecar_recovery<CompanionSidecarCodec>(sidecars[2],
+                                                      previous_profile))
     return std::nullopt;
 
   std::vector<ProfileFileMutation> mutations;
@@ -515,15 +530,16 @@ plan_profile_bundle(BundleInputs inputs) {
 // The durable tombstone is authoritative. Retain removed sidecar bytes:
 // deleting after the transaction releases writer ownership could remove a
 // concurrent writer's newly activated sidecar and recovery copy.
-bool write_profile_bundle_impl(BundleInputs inputs) {
-  auto plan = plan_profile_bundle(std::move(inputs));
-  return plan.has_value() &&
-         commit_profile_transaction(plan->roots, plan->mutations);
+ProfileWriteResult write_profile_bundle_impl(BundleInputs inputs) {
+  ProfileWriteError failure = ProfileWriteError::invalid_input;
+  auto plan = plan_profile_bundle(std::move(inputs), failure);
+  if (!plan.has_value()) return {failure};
+  return commit_profile_transaction(plan->roots, plan->mutations);
 }
 
 } // namespace
 
-bool write_profile_bundle(
+ProfileWriteResult write_profile_bundle(
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile,
     const std::optional<layerc::core::AutomationProfile> &automation_profile,
@@ -536,7 +552,7 @@ bool write_profile_bundle(
                                     .create_only = false});
 }
 
-bool write_profile_bundle_create_only(
+ProfileWriteResult write_profile_bundle_create_only(
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
     const std::optional<layerc::core::VisualProfile> &visual_profile,
     const std::optional<layerc::core::AutomationProfile> &automation_profile,
@@ -597,22 +613,24 @@ AutomationStateLoad load_automation_state(
           .error = std::get<layerc::core::AutomationError>(std::move(parsed))};
 }
 
-bool write_automation_state(
+ProfileWriteResult write_automation_state(
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values) {
   const auto path = automation_state_path(profile_path);
-  if (path.empty() || profile_path.empty()) return false;
+  if (path.empty() || profile_path.empty())
+    return {ProfileWriteError::invalid_input};
   const auto contents =
       layerc::core::serialize_automation_state_json(automation_profile, values);
-  if (contents.size() > layerc::core::max_automation_state_bytes) return false;
+  if (contents.size() > layerc::core::max_automation_state_bytes)
+    return {ProfileWriteError::invalid_input};
   // Scope on the profile directory (not `_state/`) so this write shares the
   // store's transaction roots with bundle saves and startup recovery.
   const auto scope = profile_transaction_scope(profile_path.parent_path());
-  if (!scope.has_value()) return false;
+  if (!scope.has_value()) return {ProfileWriteError::scope_rejected};
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
-  if (path_error) return false;
+  if (path_error) return {ProfileWriteError::invalid_input};
   // Transient session data: no user-visible `.bak`. The journal still owns
   // crash rollback for the single mutation.
   const std::array mutations{text_mutation(absolute, contents)};

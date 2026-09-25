@@ -326,7 +326,7 @@ X11InputPoll X11InputSource::poll() {
               {{layerc::core::InputDevice::controller,
                 static_cast<std::uint16_t>(detail), slot},
                pressed});
-        } else {
+        } else if (kind == X11DeviceKind::mouse) {
           result.events.push_back(
               {{layerc::core::InputDevice::mouse, button_to_mouse_code(detail),
                 0},

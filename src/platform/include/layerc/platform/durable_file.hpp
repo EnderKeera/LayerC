@@ -52,11 +52,6 @@ read_durable_text(const std::filesystem::path &path,
 [[nodiscard]] bool create_durable_file(
     const std::filesystem::path &path, std::span<const std::byte> contents);
 
-// Atomically replaces destination with an already-durable adjacent file.
-[[nodiscard]] bool publish_durable_file(
-    const std::filesystem::path &stage,
-    const std::filesystem::path &destination);
-
 // Publication outcome with crash-durability distinguished at the owning
 // boundary: not-published (rename failed, nothing visible), published but
 // durability-unconfirmed (rename succeeded, parent fsync failed — the bytes
@@ -68,6 +63,8 @@ enum class DurablePublishOutcome : std::uint8_t {
   published_durable,
 };
 
+// Refuses (failed) to replace an existing directory, symlink, or reparse
+// point: publication only ever replaces a plain file.
 [[nodiscard]] DurablePublishOutcome publish_durable_file_checked(
     const std::filesystem::path &stage,
     const std::filesystem::path &destination);
@@ -84,6 +81,9 @@ enum class DurablePublishOutcome : std::uint8_t {
 [[nodiscard]] bool fsync_parent_checked(
     const std::filesystem::path &path) noexcept;
 
+// Removes path (absent counts as removed) behind the same checked parent
+// barrier as publication; false after a failed barrier means the file may
+// already be gone.
 [[nodiscard]] bool remove_durable_file(const std::filesystem::path &path);
 [[nodiscard]] std::filesystem::path
 unique_durable_stage_path(const std::filesystem::path &destination);

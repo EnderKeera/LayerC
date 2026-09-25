@@ -2,9 +2,11 @@
 #include "editor_util.hpp"
 
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/window_query.hpp"
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -45,29 +47,62 @@ void set_text(const HWND control, const std::wstring_view text) {
     SetWindowTextW(control, std::wstring(text).c_str());
 }
 
+namespace {
+// std::from_chars has no wide overload. Numeric text is ASCII, so narrowing is
+// exact once every non-ASCII code unit has been rejected.
+std::optional<std::string> ascii_text(const std::wstring_view text) {
+  std::string narrow;
+  narrow.reserve(text.size());
+  for (const wchar_t character : text) {
+    if (character > 0x7F)
+      return std::nullopt;
+    narrow.push_back(static_cast<char>(character));
+  }
+  return narrow;
+}
+} // namespace
+
+std::optional<std::uint32_t> parse_bounded(const std::wstring_view text,
+                                           const std::uint32_t minimum,
+                                           const std::uint32_t maximum,
+                                           const int base) {
+  const auto source = ascii_text(text);
+  if (!source)
+    return std::nullopt;
+  const auto &narrow = *source;
+  std::uint32_t parsed{};
+  const auto [end, code] = std::from_chars(
+      narrow.data(), narrow.data() + narrow.size(), parsed, base);
+  if (narrow.empty() || code != std::errc{} ||
+      end != narrow.data() + narrow.size() || parsed < minimum ||
+      parsed > maximum)
+    return std::nullopt;
+  return parsed;
+}
+
 std::uint32_t parse_uint(const std::wstring_view text,
                          const std::uint32_t fallback) {
-  const std::wstring value(text);
-  wchar_t *end{};
-  const auto parsed = wcstoul(value.c_str(), &end, 10);
-  return end != nullptr && end != value.c_str() && *end == L'\0' &&
-                 parsed <= UINT32_MAX
-             ? static_cast<std::uint32_t>(parsed)
-             : fallback;
+  return parse_bounded(text, 0, UINT32_MAX).value_or(fallback);
 }
 
 std::optional<layerc::core::Milliseconds>
 parse_duration_ms(const std::wstring_view seconds) {
   if (seconds.empty())
     return std::nullopt;
-  const std::wstring value(seconds);
-  wchar_t *end{};
-  const double parsed = wcstod(value.c_str(), &end);
-  if (end == value.c_str() || end == nullptr || *end != L'\0' ||
-      !std::isfinite(parsed) || parsed <= 0.0 || parsed > 86'400.0)
+  const auto source = ascii_text(seconds);
+  if (!source)
+    return std::nullopt;
+  double parsed{};
+  const auto [end, code] = std::from_chars(
+      source->data(), source->data() + source->size(), parsed);
+  if (code != std::errc{} || end != source->data() + source->size() ||
+      !std::isfinite(parsed) || parsed <= 0.0 ||
+      parsed * 1000.0 >
+          static_cast<double>(layerc::core::max_cooldown_duration.count()))
     return std::nullopt;
   const auto milliseconds = std::llround(parsed * 1000.0);
-  if (milliseconds < 1 || milliseconds > 86'400'000)
+  if (milliseconds < 1 ||
+      milliseconds > layerc::core::max_cooldown_duration.count())
     return std::nullopt;
   return layerc::core::Milliseconds(milliseconds);
 }
@@ -101,16 +136,32 @@ std::uint32_t rgb_value(const COLORREF color) {
   return layerc::platform::native_rgb_value(color);
 }
 
+void fill_solid_rect(const HDC dc, const RECT &rect, const COLORREF color) {
+  const HBRUSH brush = CreateSolidBrush(color);
+  FillRect(dc, &rect, brush);
+  DeleteObject(brush);
+}
+
+void frame_solid_rect(const HDC dc, const RECT &rect, const COLORREF color) {
+  const HBRUSH brush = CreateSolidBrush(color);
+  FrameRect(dc, &rect, brush);
+  DeleteObject(brush);
+}
+
+void outline_rect(const HDC dc, const RECT &rect, const int pen_width,
+                  const COLORREF color) {
+  const HPEN pen = CreatePen(PS_SOLID, pen_width, color);
+  const HGDIOBJ previous_pen = SelectObject(dc, pen);
+  const HGDIOBJ previous_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+  Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+  SelectObject(dc, previous_brush);
+  SelectObject(dc, previous_pen);
+  DeleteObject(pen);
+}
+
 bool start_daemon() {
-  std::vector<wchar_t> module_path(32'768);
-  const DWORD length = GetModuleFileNameW(
-      nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
-  if (length == 0 || length >= module_path.size())
-    return false;
-  const auto daemon =
-      std::filesystem::path(std::wstring_view(module_path.data(), length))
-          .parent_path() /
-      L"layerd.exe";
+  const auto daemon = layerc::platform::sibling_image_path(L"layerd.exe");
+  if (daemon.empty()) return false;
   std::wstring command = L"\"" + daemon.wstring() + L"\"";
   std::vector<wchar_t> command_line(command.begin(), command.end());
   command_line.push_back(L'\0');

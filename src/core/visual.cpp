@@ -13,29 +13,6 @@
 namespace layerc::core {
 namespace {
 
-[[nodiscard]] constexpr std::string_view
-capture_quality_name(const CaptureQuality quality) noexcept {
-  switch (quality) {
-  case CaptureQuality::low:
-    return "low";
-  case CaptureQuality::balanced:
-    return "balanced";
-  case CaptureQuality::exact:
-    return "exact";
-  }
-  return "balanced";
-}
-
-[[nodiscard]] std::optional<CaptureQuality>
-parse_capture_quality(const std::string_view name) noexcept {
-  if (name == "low")
-    return CaptureQuality::low;
-  if (name == "balanced")
-    return CaptureQuality::balanced;
-  if (name == "exact")
-    return CaptureQuality::exact;
-  return std::nullopt;
-}
 
 class Reader {
 public:
@@ -44,35 +21,36 @@ public:
 
   VisualResult read() {
     if (!root_.is_object()) return error("$", "visual root must be an object");
-    const auto version = integer(root_, "schemaVersion", "$", 1, 2);
+    const auto version = fields_.integer(root_, "schemaVersion", "$", 1, 2);
     if (!version) return failure();
     if (*version == 1) {
-      if (!fields(root_, {"schemaVersion", "profileId", "sampleRateHz",
+      if (!fields_.exact_fields(root_, {"schemaVersion", "profileId", "sampleRateHz",
                           "quality", "rules", "triggers"}, "$"))
         return failure();
-    } else if (!fields(root_, {"schemaVersion", "profileId", "sampleRateHz",
+    } else if (!fields_.exact_fields(root_, {"schemaVersion", "profileId", "sampleRateHz",
                                "quality", "observations", "triggers"}, "$")) {
       return failure();
     }
 
+    schema_version_ = *version;
     VisualProfile result;
-    if (!version || !string(root_, "profileId", "$", result.profile_id))
+    if (!fields_.string(root_, "profileId", "$", result.profile_id))
       return failure();
     // Schema 1 is migrated in memory. Every subsequent save emits schema 2.
     result.schema_version = 2;
-    const auto rate = integer(root_, "sampleRateHz", "$", 5, 15);
+    const auto rate = fields_.integer(root_, "sampleRateHz", "$", 5, 15);
     std::string quality;
-    if (!rate || !string(root_, "quality", "$", quality)) return failure();
-    if (*rate != 5 && *rate != 10 && *rate != 15)
-      return error("$.sampleRateHz", "sample rate must be 5, 10, or 15 Hz");
+    if (!rate || !fields_.string(root_, "quality", "$", quality)) return failure();
+    // The 5/10/15 Hz set, reference counts, and cross-field rules are
+    // semantic invariants owned by validate_visual_profile.
     result.sample_rate_hz = static_cast<std::uint8_t>(*rate);
-    if (auto parsed = parse_capture_quality(quality))
+    if (auto parsed = parse_enum_wire(capture_quality_wire, quality))
       result.quality = *parsed;
     else
       return error("$.quality", "expected low, balanced, or exact");
 
     if (*version == 1) {
-      const auto *rules = array(root_, "rules", "$", true);
+      const auto *rules = fields_.array(root_, "rules", "$");
       if (rules == nullptr) return failure();
       if (rules->size() > max_pixel_rules)
         return error("$.rules", "at most four pixel rules are supported");
@@ -81,7 +59,7 @@ public:
           return failure();
       }
     } else {
-      const auto *observations = array(root_, "observations", "$", true);
+      const auto *observations = fields_.array(root_, "observations", "$");
       if (observations == nullptr) return failure();
       if (observations->size() > max_pixel_rules + max_template_states)
         return error("$.observations",
@@ -92,13 +70,18 @@ public:
       }
     }
 
-    const auto *triggers = array(root_, "triggers", "$", true);
+    const auto *triggers = fields_.array(root_, "triggers", "$");
     if (triggers == nullptr) return failure();
     for (std::size_t index = 0; index < triggers->size(); ++index) {
       if (!read_trigger((*triggers)[index], index, *version, result.triggers))
         return failure();
     }
-    const auto validation = validate_visual_profile(result, base_);
+    const auto validation = validate_visual_profile(
+        result, base_, [this](bool pixel, std::size_t index) {
+          const auto &indices = pixel ? rule_indices_ : template_indices_;
+          return (schema_version_ == 2 ? "$.observations[" : "$.rules[") +
+                 std::to_string(indices[index]) + "]";
+        });
     if (!validation.message.empty()) return validation;
     return result;
   }
@@ -106,102 +89,118 @@ public:
 private:
   bool read_legacy_rule(const json::Value &value, const std::size_t index,
                         std::vector<PixelRule> &output) {
-    return read_rule(value, "$.rules[" + std::to_string(index) + "]", output,
-                     false);
+    if (!read_rule(value, "$.rules[" + std::to_string(index) + "]", output,
+                   false)) return false;
+    rule_indices_.push_back(index);
+    return true;
   }
 
   bool read_typed_rule(const json::Value &value, const std::size_t index,
                        std::vector<PixelRule> &output) {
-    return read_rule(value, "$.observations[" + std::to_string(index) + "]",
-                     output, true);
+    if (!read_rule(value, "$.observations[" + std::to_string(index) + "]",
+                   output, true)) return false;
+    rule_indices_.push_back(index);
+    return true;
+  }
+
+  bool read_region(const json::Value &value, const std::string_view key,
+                   const std::string &path, NormalizedRegion &out) {
+    const auto *region = fields_.object(value, key, path);
+    const auto region_path = path + "." + std::string(key);
+    if (region == nullptr ||
+        !fields_.exact_fields(*region, {"x", "y", "width", "height"}, region_path))
+      return false;
+    const auto x = fields_.number(*region, "x", region_path, 0.0, 1.0);
+    const auto y = fields_.number(*region, "y", region_path, 0.0, 1.0);
+    const auto width = fields_.number(*region, "width", region_path, 0.0, 1.0);
+    const auto height = fields_.number(*region, "height", region_path, 0.0, 1.0);
+    if (!x || !y || !width || !height) return false;
+    out = {*x, *y, *width, *height};
+    return true;
+  }
+
+  bool read_repeat_policy(const json::Value &value, const std::string &path,
+                          PixelRepeatPolicy &out) {
+    std::string repeat;
+    if (!fields_.string(value, "repeat", path, repeat)) return false;
+    const auto parsed = parse_enum_wire(pixel_repeat_wire, repeat);
+    if (!parsed)
+      return set(path + ".repeat", "expected edge or whenFullyReady");
+    out = *parsed;
+    return true;
+  }
+
+  bool read_predicate(const json::Value &value, const std::string &path,
+                      PixelPredicate &out) {
+    const auto *predicate = fields_.object(value, "predicate", path);
+    if (predicate == nullptr) return false;
+    const auto predicate_path = path + ".predicate";
+    std::string kind;
+    if (!fields_.string(*predicate, "type", predicate_path, kind)) return false;
+    if (kind == "averageColor") {
+      if (!fields_.exact_fields(*predicate, {"type", "target", "tolerance"}, predicate_path))
+        return false;
+      const auto target = fields_.color(*predicate, "target", predicate_path);
+      const auto tolerance =
+          fields_.integer(*predicate, "tolerance", predicate_path, 0, 255);
+      if (!target || !tolerance) return false;
+      out = AverageColorPredicate{*target, static_cast<std::uint8_t>(*tolerance)};
+    } else if (kind == "brightness") {
+      if (!fields_.exact_fields(*predicate, {"type", "comparison", "threshold"},
+                  predicate_path))
+        return false;
+      std::string comparison;
+      const auto threshold =
+          fields_.integer(*predicate, "threshold", predicate_path, 0, 255);
+      if (!threshold ||
+          !fields_.string(*predicate, "comparison", predicate_path, comparison))
+        return false;
+      BrightnessComparison parsed{};
+      if (const auto wire = parse_enum_wire(brightness_wire, comparison))
+        parsed = *wire;
+      else
+        return set(predicate_path + ".comparison", "expected above or below");
+      out = BrightnessPredicate{static_cast<std::uint8_t>(*threshold), parsed};
+    } else if (kind == "colorCoverage") {
+      if (!fields_.exact_fields(*predicate, {"type", "target", "tolerance", "minimumPercent"},
+                  predicate_path))
+        return false;
+      const auto target = fields_.color(*predicate, "target", predicate_path);
+      const auto tolerance =
+          fields_.integer(*predicate, "tolerance", predicate_path, 0, 255);
+      const auto minimum =
+          fields_.number(*predicate, "minimumPercent", predicate_path, 0.0, 100.0);
+      if (!target || !tolerance || !minimum) return false;
+      out = ColorCoveragePredicate{*target, static_cast<std::uint8_t>(*tolerance),
+                                  *minimum / 100.0};
+    } else {
+      return set(predicate_path + ".type", "unsupported pixel predicate");
+    }
+    return true;
   }
 
   bool read_rule(const json::Value &value, const std::string &path,
                  std::vector<PixelRule> &output, const bool includes_type) {
     if (!value.is_object()) return set(path, "pixel rule must be an object");
     if ((includes_type &&
-         !fields(value, {"type", "id", "name", "region", "predicate",
+         !fields_.exact_fields(value, {"type", "id", "name", "region", "predicate",
                          "stableSamples", "repeat"}, path)) ||
         (!includes_type &&
-         !fields(value, {"id", "name", "region", "predicate",
+         !fields_.exact_fields(value, {"id", "name", "region", "predicate",
                          "stableSamples", "repeat"}, path)))
       return false;
     PixelRule rule;
-    if (!string(value, "id", path, rule.id) ||
-        !string(value, "name", path, rule.name))
+    if (!fields_.string(value, "id", path, rule.id) ||
+        !fields_.string(value, "name", path, rule.name))
       return false;
-    const auto *region = object(value, "region", path);
-    if (region == nullptr ||
-        !fields(*region, {"x", "y", "width", "height"}, path + ".region"))
-      return false;
-    const auto x = number(*region, "x", path + ".region", 0.0, 1.0);
-    const auto y = number(*region, "y", path + ".region", 0.0, 1.0);
-    const auto width = number(*region, "width", path + ".region", 0.0, 1.0);
-    const auto height = number(*region, "height", path + ".region", 0.0, 1.0);
-    if (!x || !y || !width || !height) return false;
-    rule.region = {*x, *y, *width, *height};
+    if (!read_region(value, "region", path, rule.region)) return false;
 
-    const auto *predicate = object(value, "predicate", path);
-    if (predicate == nullptr) return false;
-    std::string kind;
-    if (!string(*predicate, "type", path + ".predicate", kind)) return false;
-    if (kind == "averageColor") {
-      if (!fields(*predicate, {"type", "target", "tolerance"},
-                  path + ".predicate"))
-        return false;
-      const auto target = color(*predicate, "target", path + ".predicate");
-      const auto tolerance = integer(*predicate, "tolerance",
-                                     path + ".predicate", 0, 255);
-      if (!target || !tolerance) return false;
-      rule.predicate = AverageColorPredicate{
-          *target, static_cast<std::uint8_t>(*tolerance)};
-    } else if (kind == "brightness") {
-      if (!fields(*predicate, {"type", "comparison", "threshold"},
-                  path + ".predicate"))
-        return false;
-      std::string comparison;
-      const auto threshold = integer(*predicate, "threshold",
-                                     path + ".predicate", 0, 255);
-      if (!threshold || !string(*predicate, "comparison",
-                                path + ".predicate", comparison))
-        return false;
-      BrightnessComparison parsed{};
-      if (comparison == "above")
-        parsed = BrightnessComparison::above;
-      else if (comparison == "below")
-        parsed = BrightnessComparison::below;
-      else
-        return set(path + ".predicate.comparison",
-                   "expected above or below");
-      rule.predicate = BrightnessPredicate{
-          static_cast<std::uint8_t>(*threshold), parsed};
-    } else if (kind == "colorCoverage") {
-      if (!fields(*predicate,
-                  {"type", "target", "tolerance", "minimumPercent"},
-                  path + ".predicate"))
-        return false;
-      const auto target = color(*predicate, "target", path + ".predicate");
-      const auto tolerance = integer(*predicate, "tolerance",
-                                     path + ".predicate", 0, 255);
-      const auto minimum = number(*predicate, "minimumPercent",
-                                  path + ".predicate", 0.0, 100.0);
-      if (!target || !tolerance || !minimum) return false;
-      rule.predicate = ColorCoveragePredicate{
-          *target, static_cast<std::uint8_t>(*tolerance), *minimum / 100.0};
-    } else {
-      return set(path + ".predicate.type", "unsupported pixel predicate");
-    }
+    if (!read_predicate(value, path, rule.predicate)) return false;
 
-    const auto stable = integer(value, "stableSamples", path, 1, 15);
-    std::string repeat;
-    if (!stable || !string(value, "repeat", path, repeat)) return false;
+    const auto stable = fields_.integer(value, "stableSamples", path, 1, 15);
+    if (!stable) return false;
     rule.stable_samples = static_cast<std::uint8_t>(*stable);
-    if (repeat == "edge")
-      rule.repeat = PixelRepeatPolicy::edge;
-    else if (repeat == "whenFullyReady")
-      rule.repeat = PixelRepeatPolicy::when_fully_ready;
-    else
-      return set(path + ".repeat", "expected edge or whenFullyReady");
+    if (!read_repeat_policy(value, path, rule.repeat)) return false;
     output.push_back(std::move(rule));
     return true;
   }
@@ -212,7 +211,7 @@ private:
     if (!value.is_object())
       return set(path, "visual observation must be an object");
     std::string type;
-    if (!string(value, "type", path, type)) return false;
+    if (!fields_.string(value, "type", path, type)) return false;
     if (type == "pixel") {
       if (output.rules.size() >= max_pixel_rules)
         return set(path, "at most four pixel observations are supported");
@@ -222,91 +221,70 @@ private:
       return set(path + ".type", "expected pixel or template");
     if (output.templates.size() >= max_template_states)
       return set(path, "at most four template observations are supported");
-    return read_template(value, index, output.templates);
+    if (!read_template(value, index, output.templates)) return false;
+    template_indices_.push_back(index);
+    return true;
   }
 
   bool read_template(const json::Value &value, const std::size_t index,
                      std::vector<TemplateState> &output) {
     const auto path = "$.observations[" + std::to_string(index) + "]";
-    if (!fields(value,
+    if (!fields_.exact_fields(value,
                 {"type", "id", "name", "searchRegion", "expectedSize",
                  "references", "confidence", "scaleTolerancePercent",
                  "colorTolerance", "stableSamples", "repeat"},
                 path))
       return false;
     TemplateState state;
-    if (!string(value, "id", path, state.id) ||
-        !string(value, "name", path, state.name))
+    if (!fields_.string(value, "id", path, state.id) ||
+        !fields_.string(value, "name", path, state.name))
       return false;
 
-    const auto *region = object(value, "searchRegion", path);
-    if (region == nullptr)
+    if (!read_region(value, "searchRegion", path, state.search_region))
       return false;
-    if (!fields(*region, {"x", "y", "width", "height"},
-                path + ".searchRegion"))
-      return false;
-    const auto x = number(*region, "x", path + ".searchRegion", 0.0, 1.0);
-    const auto y = number(*region, "y", path + ".searchRegion", 0.0, 1.0);
-    const auto width =
-        number(*region, "width", path + ".searchRegion", 0.0, 1.0);
-    const auto height =
-        number(*region, "height", path + ".searchRegion", 0.0, 1.0);
-    if (!x || !y || !width || !height) return false;
-    state.search_region = {*x, *y, *width, *height};
 
-    const auto *expected = object(value, "expectedSize", path);
+    const auto *expected = fields_.object(value, "expectedSize", path);
     if (expected == nullptr)
       return false;
-    if (!fields(*expected, {"width", "height"}, path + ".expectedSize"))
+    if (!fields_.exact_fields(*expected, {"width", "height"}, path + ".expectedSize"))
       return false;
     const auto expected_width =
-        number(*expected, "width", path + ".expectedSize", 0.000001, 1.0);
+        fields_.number(*expected, "width", path + ".expectedSize", 0.000001, 1.0);
     const auto expected_height =
-        number(*expected, "height", path + ".expectedSize", 0.000001, 1.0);
+        fields_.number(*expected, "height", path + ".expectedSize", 0.000001, 1.0);
     if (!expected_width || !expected_height) return false;
     state.expected_width = *expected_width;
     state.expected_height = *expected_height;
 
-    const auto *references = array(value, "references", path, true);
-    if (references == nullptr || references->empty() ||
-        references->size() > max_template_references)
-      return set(path + ".references",
-                 "one to four template references are required");
+    const auto *references = fields_.array(value, "references", path);
+    if (references == nullptr) return false;
     for (std::size_t reference_index = 0;
          reference_index < references->size(); ++reference_index) {
       const auto reference_path =
           path + ".references[" + std::to_string(reference_index) + "]";
       const auto &reference = (*references)[reference_index];
       if (!reference.is_object() ||
-          !fields(reference, {"asset"}, reference_path))
+          !fields_.exact_fields(reference, {"asset"}, reference_path))
         return set(reference_path, "template reference must be an object");
       TemplateReference parsed;
-      if (!string(reference, "asset", reference_path, parsed.asset_sha256))
+      if (!fields_.string(reference, "asset", reference_path, parsed.asset_sha256))
         return false;
       state.references.push_back(std::move(parsed));
     }
 
     const auto confidence =
-        number(value, "confidence", path, 0.0, 1.0);
+        fields_.number(value, "confidence", path, 0.0, 1.0);
     const auto scale =
-        number(value, "scaleTolerancePercent", path, 0.0, 20.0);
+        fields_.number(value, "scaleTolerancePercent", path, 0.0, 20.0);
     const auto color_tolerance =
-        integer(value, "colorTolerance", path, 0, 255);
-    const auto stable = integer(value, "stableSamples", path, 1, 15);
-    std::string repeat;
-    if (!confidence || !scale || !color_tolerance || !stable ||
-        !string(value, "repeat", path, repeat))
-      return false;
+        fields_.integer(value, "colorTolerance", path, 0, 255);
+    const auto stable = fields_.integer(value, "stableSamples", path, 1, 15);
+    if (!confidence || !scale || !color_tolerance || !stable) return false;
     state.confidence_threshold = *confidence;
     state.scale_tolerance = *scale / 100.0;
     state.color_tolerance = static_cast<std::uint8_t>(*color_tolerance);
     state.stable_samples = static_cast<std::uint8_t>(*stable);
-    if (repeat == "edge")
-      state.repeat = PixelRepeatPolicy::edge;
-    else if (repeat == "whenFullyReady")
-      state.repeat = PixelRepeatPolicy::when_fully_ready;
-    else
-      return set(path + ".repeat", "expected edge or whenFullyReady");
+    if (!read_repeat_policy(value, path, state.repeat)) return false;
     output.push_back(std::move(state));
     return true;
   }
@@ -317,37 +295,43 @@ private:
     const auto path = "$.triggers[" + std::to_string(index) + "]";
     if (!value.is_object()) return set(path, "visual trigger must be an object");
     if ((schema_version == 1 &&
-         !fields(value,
+         !fields_.exact_fields(value,
                  {"cooldownId", "ruleId", "enabled", "mode", "keepInput",
                   "confirmationTimeoutMs", "onUnavailable"},
                  path)) ||
         (schema_version == 2 &&
-         !fields(value,
+         !fields_.exact_fields(value,
                  {"cooldownId", "observationId", "enabled", "mode",
                   "keepInput", "confirmationTimeoutMs", "onUnavailable"},
                  path)))
       return false;
     VisualTrigger trigger;
-    if (!string(value, "cooldownId", path, trigger.cooldown_id) ||
-        !string(value, schema_version == 1 ? "ruleId" : "observationId", path,
-                trigger.observation_id))
+    if (!fields_.string(value, "cooldownId", path, trigger.cooldown_id) ||
+        !fields_.string(value, schema_version == 1 ? "ruleId" : "observationId",
+                        path, trigger.observation_id))
       return false;
-    if (!boolean(value, "enabled", path, trigger.enabled, true)) return false;
+    trigger.enabled = true;
+    if (!fields_.boolean(value, "enabled", path, trigger.enabled,
+                         json::Required::no))
+      return false;
     std::string mode;
-    if (!string(value, "mode", path, mode)) return false;
-    if (mode == "pixelOnly") {
+    if (!fields_.string(value, "mode", path, mode)) return false;
+    const auto parsed_mode = parse_enum_wire(visual_trigger_mode_wire, mode);
+    if (parsed_mode == VisualTriggerMode::pixel_only) {
       trigger.mode = VisualTriggerMode::pixel_only;
       if (value.find("confirmationTimeoutMs") != nullptr)
         return set(path + ".confirmationTimeoutMs",
                    "field is only valid for confirmInput");
-      if (!boolean(value, "keepInput", path, trigger.keep_input, false))
+      trigger.keep_input = false;
+      if (!fields_.boolean(value, "keepInput", path, trigger.keep_input,
+                           json::Required::no))
         return false;
-    } else if (mode == "confirmInput") {
+    } else if (parsed_mode == VisualTriggerMode::confirm_input) {
       trigger.mode = VisualTriggerMode::confirm_input;
       if (value.find("keepInput") != nullptr)
         return set(path + ".keepInput",
                    "field is only valid for pixelOnly");
-      const auto timeout = integer(value, "confirmationTimeoutMs", path,
+      const auto timeout = fields_.integer(value, "confirmationTimeoutMs", path,
                                    50, 5'000);
       if (!timeout)
         return false;
@@ -362,55 +346,15 @@ private:
         return set(path + ".onUnavailable", "expected string");
       unavailable = policy_value->as_string();
     }
-    if (unavailable == "ignore")
-      trigger.unavailable_policy = CaptureUnavailablePolicy::ignore;
-    else if (unavailable == "triggerFromInput")
-      trigger.unavailable_policy =
-          CaptureUnavailablePolicy::trigger_from_input;
+    if (const auto policy = parse_enum_wire(capture_unavailable_policy_wire, unavailable))
+      trigger.unavailable_policy = *policy;
     else
       return set(path + ".onUnavailable",
-                 "expected ignore or triggerFromInput");
+                  "expected ignore or triggerFromInput");
     output.push_back(std::move(trigger));
     return true;
   }
 
-  bool fields(const json::Value &value,
-              const std::initializer_list<std::string_view> allowed,
-              const std::string &path) {
-    return fields_.exact_fields(value, allowed, path);
-  }
-  const json::Value *object(const json::Value &parent, std::string_view key,
-                            const std::string &path) {
-    return fields_.object(parent, key, path, json::Required::yes);
-  }
-  const json::Value::Array *array(const json::Value &parent, std::string_view key,
-                                  const std::string &path, bool required) {
-    return fields_.array(parent, key, path,
-                         required ? json::Required::yes : json::Required::no);
-  }
-  bool string(const json::Value &parent, std::string_view key,
-               const std::string &path, std::string &output) {
-    return fields_.string(parent, key, path, output, json::Required::yes,
-                          json::EmptyString::reject);
-  }
-  bool boolean(const json::Value &parent, std::string_view key,
-                const std::string &path, bool &output, bool fallback) {
-    output = fallback;
-    return fields_.boolean(parent, key, path, output, json::Required::no);
-  }
-  std::optional<std::int64_t> integer(const json::Value &parent, std::string_view key,
-                                      const std::string &path,
-                                      std::int64_t minimum, std::int64_t maximum) {
-    return fields_.integer(parent, key, path, minimum, maximum, json::Required::yes);
-  }
-  std::optional<double> number(const json::Value &parent, std::string_view key,
-                               const std::string &path, double minimum, double maximum) {
-    return fields_.number(parent, key, path, minimum, maximum, json::Required::yes);
-  }
-  std::optional<std::uint32_t> color(const json::Value &parent, std::string_view key,
-                                     const std::string &path) {
-    return fields_.color(parent, key, path, json::Required::yes);
-  }
   VisualError failure() const {
     return {fields_.error().path, fields_.error().message};
   }
@@ -424,6 +368,9 @@ private:
   const json::Value &root_;
   const GameProfile &base_;
   json::Reader fields_;
+  std::int64_t schema_version_{};
+  std::vector<std::size_t> rule_indices_;
+  std::vector<std::size_t> template_indices_;
 };
 
 } // namespace
@@ -437,8 +384,9 @@ bool valid_normalized_region(const NormalizedRegion &region) noexcept {
          region.y + region.height <= 1.0 + 1e-12;
 }
 
-VisualError validate_visual_profile(const VisualProfile &profile,
-                                    const GameProfile &base_profile) {
+VisualError validate_visual_profile(
+    const VisualProfile &profile, const GameProfile &base_profile,
+    const std::function<std::string(bool, std::size_t)> &source_path) {
   const auto invalid = [](std::string path, std::string message) {
     return VisualError{std::move(path), std::move(message)};
   };
@@ -452,15 +400,22 @@ VisualError validate_visual_profile(const VisualProfile &profile,
       profile.sample_rate_hz != 15)
     return invalid("$.sampleRateHz", "sample rate must be 5, 10, or 15 Hz");
   if (profile.rules.size() > max_pixel_rules)
-    return invalid("$.rules", "at most four pixel rules are supported");
+    return invalid("$.observations", "at most four pixel rules are supported");
   if (profile.templates.size() > max_template_states)
-    return invalid("$.templates",
+    return invalid("$.observations",
                    "at most four template observations are supported");
+  // Without a source mapper, cite the schema-2 position the serializer emits:
+  // pixel rules first, then templates, in one $.observations array.
+  const auto observation_path = [&](const bool pixel, const std::size_t index) {
+    if (source_path) return source_path(pixel, index);
+    return "$.observations[" +
+           std::to_string(pixel ? index : profile.rules.size() + index) + "]";
+  };
 
   std::set<std::string, std::less<>> observation_ids;
   for (std::size_t index = 0; index < profile.rules.size(); ++index) {
     const auto &rule = profile.rules[index];
-    const auto path = "$.rules[" + std::to_string(index) + "]";
+    const auto path = observation_path(true, index);
     if (rule.id.empty() || rule.name.empty())
       return invalid(path, "rule id and name are required");
     if (!observation_ids.insert(rule.id).second)
@@ -483,7 +438,7 @@ VisualError validate_visual_profile(const VisualProfile &profile,
 
   for (std::size_t index = 0; index < profile.templates.size(); ++index) {
     const auto &state = profile.templates[index];
-    const auto path = "$.templates[" + std::to_string(index) + "]";
+    const auto path = observation_path(false, index);
     if (state.id.empty() || state.name.empty())
       return invalid(path, "template id and name are required");
     if (!observation_ids.insert(state.id).second)
@@ -600,11 +555,9 @@ VisualResult parse_visual_profile_json(const std::string_view source,
                                        const GameProfile &base_profile) {
   if (source.size() > max_visual_json_bytes)
     return VisualError{"$", "visual sidecar exceeds 256 KiB limit"};
-  const auto parsed = json::parse(source);
-  if (const auto *error = std::get_if<json::ParseError>(&parsed))
-    return VisualError{"$", "invalid JSON at byte " +
-                                std::to_string(error->offset) + ": " +
-                                error->message};
+  const auto parsed = json::parse_bounded(source, max_visual_json_bytes);
+  if (const auto *error = std::get_if<json::FieldError>(&parsed))
+    return VisualError{error->path, error->message};
   return parse_visual_profile_value(std::get<json::Value>(parsed), base_profile);
 }
 
@@ -620,13 +573,12 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
   json::append_quoted(output, profile.profile_id);
   output += ",\n  \"sampleRateHz\": " +
             std::to_string(profile.sample_rate_hz) + ",\n  \"quality\": ";
-  json::append_quoted(output, capture_quality_name(profile.quality));
+  json::append_quoted(output, enum_wire_name(capture_quality_wire, profile.quality).value_or("balanced"));
   output += ",\n  \"observations\": [\n";
   const auto observation_count =
       profile.rules.size() + profile.templates.size();
   std::size_t observation_index{};
-  for (std::size_t index = 0; index < profile.rules.size(); ++index) {
-    const auto &rule = profile.rules[index];
+  for (const auto &rule : profile.rules) {
     output += "    {\n      \"type\": \"pixel\",\n      \"id\": ";
     json::append_quoted(output, rule.id);
     output += ",\n      \"name\": "; json::append_quoted(output, rule.name);
@@ -645,9 +597,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
                       std::to_string(predicate.tolerance);
           } else if constexpr (std::is_same_v<T, BrightnessPredicate>) {
             output += "\"type\": \"brightness\", \"comparison\": \"";
-            output += predicate.comparison == BrightnessComparison::above
-                          ? "above"
-                          : "below";
+output += enum_wire_name(brightness_wire, predicate.comparison).value_or("below");
             output += "\", \"threshold\": " +
                       std::to_string(predicate.threshold);
           } else {
@@ -662,10 +612,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
         rule.predicate);
     output += "},\n      \"stableSamples\": " +
               std::to_string(rule.stable_samples) + ",\n      \"repeat\": \"" +
-              std::string(rule.repeat == PixelRepeatPolicy::edge
-                              ? "edge"
-                              : "whenFullyReady") +
-              "\"\n    }";
+              std::string(enum_wire_name(pixel_repeat_wire, rule.repeat).value_or("edge")) + "\"\n    }";
     output += ++observation_index == observation_count ? "\n" : ",\n";
   }
   for (const auto &state : profile.templates) {
@@ -701,10 +648,7 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
     output += ",\n      \"stableSamples\": " +
               std::to_string(state.stable_samples);
     output += ",\n      \"repeat\": \"" +
-              std::string(state.repeat == PixelRepeatPolicy::edge
-                              ? "edge"
-                              : "whenFullyReady") +
-              "\"\n    }";
+              std::string(enum_wire_name(pixel_repeat_wire, state.repeat).value_or("edge")) + "\"\n    }";
     output += ++observation_index == observation_count ? "\n" : ",\n";
   }
   output += "  ],\n  \"triggers\": [\n";
@@ -716,9 +660,8 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
     output += ",\n      \"enabled\": ";
     json::append_bool(output, trigger.enabled);
     output += ",\n      \"mode\": \"" +
-              std::string(trigger.mode == VisualTriggerMode::pixel_only
-                              ? "pixelOnly"
-                              : "confirmInput") +
+              std::string(enum_wire_name(visual_trigger_mode_wire, trigger.mode)
+                              .value_or("confirmInput")) +
               "\"";
     if (trigger.mode == VisualTriggerMode::pixel_only) {
       output += ",\n      \"keepInput\": ";
@@ -728,10 +671,9 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
                 std::to_string(trigger.confirmation_timeout.count());
     }
     output += ",\n      \"onUnavailable\": \"" +
-              std::string(trigger.unavailable_policy ==
-                                  CaptureUnavailablePolicy::trigger_from_input
-                              ? "triggerFromInput"
-                              : "ignore") +
+              std::string(enum_wire_name(capture_unavailable_policy_wire,
+                                         trigger.unavailable_policy)
+                              .value_or("ignore")) +
               "\"";
     output += "\n    }";
     output += index + 1 == profile.triggers.size() ? "\n" : ",\n";

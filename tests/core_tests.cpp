@@ -43,6 +43,8 @@ int main() {
       {"test_visual_repeat_when_ready", test_visual_repeat_when_ready},
       {"test_calibration_protocol", test_calibration_protocol},
       {"test_automation_profile_round_trip", test_automation_profile_round_trip},
+      {"test_automation_session_trigger_policy", test_automation_session_trigger_policy},
+      {"test_automation_session_origin_and_persistence", test_automation_session_origin_and_persistence},
       {"test_automation_runtime_transaction_and_replay", test_automation_runtime_transaction_and_replay},
       {"test_automation_priority_fault_isolation_and_reconfigure", test_automation_priority_fault_isolation_and_reconfigure},
       {"test_automation_value_round_trip_and_bounds", test_automation_value_round_trip_and_bounds},

@@ -55,15 +55,15 @@ void advance_source_revisions(
     const auto previous = std::ranges::find(previous_sources, source.key,
                                             &ProfileSource::key);
     if (previous == previous_sources.end()) continue;
-    if (source.revision == 0)
-      source.revision = source.profile == previous->profile
-                            ? previous->revision
-                            : previous->revision + 1;
-    source.automation_revision =
-        (source.revision != previous->revision ||
-         source.modules.automation != previous->modules.automation)
-            ? previous->automation_revision + 1
-            : previous->automation_revision;
+    if (source.revision == 0) {
+      source.revision = previous->revision;
+      if (source.profile != previous->profile)
+        ++source.revision;
+    }
+    source.automation_revision = previous->automation_revision;
+    if (source.revision != previous->revision ||
+        source.modules.automation != previous->modules.automation)
+      ++source.automation_revision;
   }
 }
 
@@ -127,8 +127,8 @@ SessionInit ProfileSource::to_session_init(const bool visual_enabled) const {
 }
 
 Session::Session(SessionInit init)
-    : source_key(std::move(init.source_key)), profile(std::move(init.profile)),
-      cooldowns(profile.cooldowns, profile.cooldown_groups),
+    : layerc::core::AutomationSession(init.profile),
+      source_key(std::move(init.source_key)), profile(std::move(init.profile)),
       input(profile.bindings) {
   apply_visual_profile(std::move(init.modules.visual), init.visual_enabled);
   apply_automation_profile(std::move(init.modules.automation));
@@ -141,6 +141,8 @@ void Session::apply_visual_profile(
     ModuleSidecar<layerc::core::VisualProfile> updated,
     const bool visual_enabled) {
   modules.visual = std::move(updated);
+  set_invalid_visual_sidecar(
+      modules.visual.state == layerc::platform::ModuleSidecarState::invalid);
   last_visual_sequence = 0;
   if (modules.visual.usable()) {
     if (visual_triggers)
@@ -182,6 +184,67 @@ bool Session::has_active_visual_rules() const noexcept {
          visual_triggers->visual_enabled();
 }
 
+namespace {
+
+// Seeds matcher state for keyboard/controller tokens and records which
+// device classes and global keys this session needs at runtime.
+void seed_binding_token(Session &session,
+                        const layerc::core::InputToken &token) {
+  bool pressed{};
+  if (token.device == layerc::core::InputDevice::keyboard) {
+    const UINT virtual_key = MapVirtualKeyW(token.code, MAPVK_VSC_TO_VK_EX);
+    pressed =
+        virtual_key != 0 &&
+        (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0;
+    session.input.seed(token, pressed);
+  } else if (token.device == layerc::core::InputDevice::controller &&
+             token.controller_index < XUSER_MAX_COUNT) {
+    XINPUT_STATE state{};
+    if (XInputGetState(token.controller_index, &state) == ERROR_SUCCESS) {
+      if (token.code >= 1 && token.code <= 16) {
+        const WORD mask = static_cast<WORD>(1U << (token.code - 1U));
+        pressed = (state.Gamepad.wButtons & mask) != 0;
+      } else if (token.code == 17) {
+        pressed =
+            state.Gamepad.bLeftTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+      } else if (token.code == 18) {
+        pressed =
+            state.Gamepad.bRightTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+      }
+      session.input.seed(token, pressed);
+    }
+  }
+  if (!session.is_global() || token.device != layerc::core::InputDevice::keyboard)
+    return;
+  const auto existing = std::find_if(
+      session.global_keyboard.begin(), session.global_keyboard.end(),
+      [&](const Session::PolledKeyState &key) { return key.token == token; });
+  if (existing == session.global_keyboard.end())
+    session.global_keyboard.push_back({.token = token, .pressed = pressed});
+}
+
+void mark_automation_input_usage(Session &session) {
+  if (!session.modules.automation.profile.has_value())
+    return;
+  for (const auto &automation : session.modules.automation.profile->automations) {
+    if (!automation.enabled)
+      continue;
+    for (const auto &rule : automation.rules) {
+      if (rule.event !=
+          layerc::core::AutomationEventKind::input_value_changed)
+        continue;
+      if (rule.source_filter.empty() ||
+          rule.source_filter.starts_with("controller:"))
+        session.uses_controller = true;
+      if (rule.source_filter.starts_with("hid:") &&
+          !session.profile.hid_bindings.empty())
+        session.uses_hid = true;
+    }
+  }
+}
+
+} // namespace
+
 void Session::rebuild_input_configuration() {
   uses_controller = false;
   uses_raw_input = false;
@@ -197,57 +260,10 @@ void Session::rebuild_input_configuration() {
                        token.device == layerc::core::InputDevice::mouse;
       uses_hid =
           uses_hid || token.device == layerc::core::InputDevice::generic_hid;
-      bool pressed{};
-      if (token.device == layerc::core::InputDevice::keyboard) {
-        const UINT virtual_key = MapVirtualKeyW(token.code, MAPVK_VSC_TO_VK_EX);
-        pressed =
-            virtual_key != 0 &&
-            (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0;
-        input.seed(token, pressed);
-      } else if (token.device == layerc::core::InputDevice::controller &&
-                 token.controller_index < XUSER_MAX_COUNT) {
-        XINPUT_STATE state{};
-        if (XInputGetState(token.controller_index, &state) == ERROR_SUCCESS) {
-          if (token.code >= 1 && token.code <= 16) {
-            const WORD mask = static_cast<WORD>(1U << (token.code - 1U));
-            pressed = (state.Gamepad.wButtons & mask) != 0;
-          } else if (token.code == 17) {
-            pressed =
-                state.Gamepad.bLeftTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-          } else if (token.code == 18) {
-            pressed =
-                state.Gamepad.bRightTrigger >= XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
-          }
-          input.seed(token, pressed);
-        }
-      }
-      if (!is_global() || token.device != layerc::core::InputDevice::keyboard)
-        continue;
-      const auto existing = std::find_if(
-          global_keyboard.begin(), global_keyboard.end(),
-          [&](const PolledKeyState &key) { return key.token == token; });
-      if (existing == global_keyboard.end()) {
-        global_keyboard.push_back({.token = token, .pressed = pressed});
-      }
+      seed_binding_token(*this, token);
     }
   }
-  if (modules.automation.profile.has_value()) {
-    for (const auto &automation : modules.automation.profile->automations) {
-      if (!automation.enabled)
-        continue;
-      for (const auto &rule : automation.rules) {
-        if (rule.event !=
-            layerc::core::AutomationEventKind::input_value_changed)
-          continue;
-        if (rule.source_filter.empty() ||
-            rule.source_filter.starts_with("controller:"))
-          uses_controller = true;
-        if (rule.source_filter.starts_with("hid:") &&
-            !profile.hid_bindings.empty())
-          uses_hid = true;
-      }
-    }
-  }
+  mark_automation_input_usage(*this);
 }
 
 void Session::apply_profile(const layerc::core::GameProfile &updated,
@@ -281,13 +297,13 @@ void Session::clear_input_state() {
   }
 }
 
-void DaemonApp::load_visual_source(ProfileSource &source) {
+namespace {
+
+// Loads every sidecar module, plus persisted automation state, for a source
+// whose path and base profile are already set.
+void load_source_modules(ProfileSource &source) {
   source.modules.visual = module_sidecar_from(
       layerc::platform::load_visual_sidecar(source.path, source.profile));
-}
-
-void DaemonApp::load_automation_source(ProfileSource &source) {
-  source.modules.automation = {};
   source.automation_state.clear();
   source.automation_state_due.reset();
   source.modules.automation = module_sidecar_from(
@@ -297,11 +313,11 @@ void DaemonApp::load_automation_source(ProfileSource &source) {
         source.path, *source.modules.automation.profile);
     source.automation_state = state.values;
   }
-}
-void DaemonApp::load_companion_source(ProfileSource &source) {
   source.modules.companion = module_sidecar_from(
       layerc::platform::load_companion_sidecar(source.path, source.profile));
 }
+
+} // namespace
 
 void DaemonApp::reload_profiles() {
   std::vector<ProfileSource> loaded;
@@ -326,9 +342,7 @@ void DaemonApp::reload_profiles() {
         source.path = std::move(stored.path);
         source.profile = std::move(stored.profile);
         source.revision = 0;
-        load_visual_source(source);
-        load_automation_source(source);
-        load_companion_source(source);
+        load_source_modules(source);
         loaded.push_back(std::move(source));
       }
     }
@@ -353,9 +367,7 @@ void DaemonApp::apply_profile_update(
   source.path = source_path;
   source.profile = std::move(profile);
   source.revision = revision;
-  load_visual_source(source);
-  load_automation_source(source);
-  load_companion_source(source);
+  load_source_modules(source);
   if (found == loaded.end())
     loaded.push_back(std::move(source));
   else
@@ -526,11 +538,11 @@ void DaemonApp::refresh_game_windows() {
 void DaemonApp::sync_foreground_state() {
   const HWND foreground_root = GetAncestor(GetForegroundWindow(), GA_ROOT);
   auto active_sessions = foreground_sessions();
-  const HWND active_window = active_sessions.empty()
-                                 ? nullptr
-                                 : (active_sessions.front()->is_global()
-                                        ? foreground_root
-                                        : active_sessions.front()->game_window);
+  HWND active_window = nullptr;
+  if (!active_sessions.empty())
+    active_window = active_sessions.front()->is_global()
+                        ? foreground_root
+                        : active_sessions.front()->game_window;
   const bool used_controller = std::any_of(
       session_registry_.active_inputs().begin(), session_registry_.active_inputs().end(),
       [](const Session *session) { return session->uses_controller; });

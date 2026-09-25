@@ -6,125 +6,111 @@
 
 namespace layerc::daemon {
 
-namespace {
 using layerc::runtime::Capability;
 using layerc::runtime::CapabilityDemand;
 using layerc::runtime::RuntimeResourceStats;
 using layerc::runtime::ServiceReconcileResult;
+using layerc::core::VisualRuntime;
 
-DaemonApp &app_from(void *owner) noexcept {
-  return *static_cast<DaemonApp *>(owner);
+ServiceReconcileResult
+DaemonApp::reconcile_capability(const Capability capability,
+                                const CapabilityDemand &demand) {
+  switch (capability) {
+  case Capability::input:
+    reconcile_input_runtime();
+    return {};
+  case Capability::generic_hid:
+    return reconcile_hid_runtime()
+               ? ServiceReconcileResult{}
+               : ServiceReconcileResult{
+                     false, "Raw Input rejected a required HID usage"};
+  case Capability::overlay:
+    reconcile_overlay_runtime();
+    return {};
+  case Capability::visual:
+    reconcile_visual_captures(demand, VisualRuntime::inline_process);
+    return {};
+  case Capability::isolated_visual:
+    reconcile_visual_captures(demand, VisualRuntime::isolated);
+    return {};
+  case Capability::automation:
+    reconcile_automation_runtime();
+    return {};
+  case Capability::gamebar:
+    return companion_host_.transport().start()
+               ? ServiceReconcileResult{}
+               : ServiceReconcileResult{false,
+                                        "Game Bar transport could not start"};
+  case Capability::count:
+    break;
+  }
+  return {false, "unknown runtime capability"};
 }
 
-const DaemonApp &app_from(const void *owner) noexcept {
-  return *static_cast<const DaemonApp *>(owner);
+void DaemonApp::quiesce_capability(const Capability capability) noexcept {
+  switch (capability) {
+  case Capability::input:
+    quiesce_input_runtime();
+    return;
+  case Capability::generic_hid:
+    quiesce_hid_runtime();
+    return;
+  case Capability::overlay:
+    quiesce_overlay_runtime();
+    return;
+  case Capability::visual:
+    quiesce_visual_captures(VisualRuntime::inline_process);
+    return;
+  case Capability::isolated_visual:
+    quiesce_visual_captures(VisualRuntime::isolated);
+    return;
+  case Capability::automation:
+    quiesce_automation_runtime();
+    return;
+  case Capability::gamebar:
+    companion_host_.transport().stop();
+    companion_host_.set_active_session_count(0);
+    return;
+  case Capability::count:
+    return;
+  }
 }
-} // namespace
 
-std::span<const CapabilityPolicy> DaemonApp::capability_policies() noexcept {
-  // The single dispatch table. CapabilityService forwards each slot here and
-  // calls the matching DaemonApp method — one hop, no identity wrappers.
-  static constexpr std::array<CapabilityPolicy, layerc::runtime::capability_count>
-      policies{{
-          {Capability::input,
-           [](void *owner, const CapabilityDemand &) {
-             app_from(owner).reconcile_input_runtime();
-             return ServiceReconcileResult{};
-           },
-           [](void *owner) noexcept { app_from(owner).quiesce_input_runtime(); },
-           [](const void *owner) noexcept {
-             return app_from(owner).input_runtime_.resources();
-           }},
-          {Capability::generic_hid,
-           [](void *owner, const CapabilityDemand &) {
-             return app_from(owner).reconcile_hid_runtime()
-                        ? ServiceReconcileResult{}
-                        : ServiceReconcileResult{
-                              false, "Raw Input rejected a required HID usage"};
-           },
-           [](void *owner) noexcept { app_from(owner).quiesce_hid_runtime(); },
-           [](const void *owner) noexcept {
-             return app_from(owner).input_runtime_.hid_resources();
-           }},
-          {Capability::overlay,
-           [](void *owner, const CapabilityDemand &) {
-             app_from(owner).reconcile_overlay_runtime();
-             return ServiceReconcileResult{};
-           },
-           [](void *owner) noexcept {
-             app_from(owner).quiesce_overlay_runtime();
-           },
-           [](const void *owner) noexcept {
-             return app_from(owner).overlay_runtime_.resources(
-                 app_from(owner).session_registry_,
-                 app_from(owner).live_edit_host_);
-           }},
-          {Capability::visual,
-           [](void *owner, const CapabilityDemand &demand) {
-             app_from(owner).reconcile_visual_captures(
-                 demand, layerc::core::VisualRuntime::inline_process);
-             return ServiceReconcileResult{};
-           },
-           [](void *owner) noexcept {
-             app_from(owner).quiesce_visual_captures(
-                 layerc::core::VisualRuntime::inline_process);
-           },
-           [](const void *owner) noexcept {
-             return app_from(owner).visual_capture_runtime_.resources(
-                 layerc::core::VisualRuntime::inline_process,
-                 app_from(owner).session_registry_);
-           }},
-          {Capability::isolated_visual,
-           [](void *owner, const CapabilityDemand &demand) {
-             app_from(owner).reconcile_visual_captures(
-                 demand, layerc::core::VisualRuntime::isolated);
-             return ServiceReconcileResult{};
-           },
-           [](void *owner) noexcept {
-             app_from(owner).quiesce_visual_captures(
-                 layerc::core::VisualRuntime::isolated);
-           },
-           [](const void *owner) noexcept {
-             return app_from(owner).visual_capture_runtime_.resources(
-                 layerc::core::VisualRuntime::isolated,
-                 app_from(owner).session_registry_);
-           }},
-          {Capability::automation,
-           [](void *owner, const CapabilityDemand &) {
-             app_from(owner).reconcile_automation_runtime();
-             return ServiceReconcileResult{};
-           },
-           [](void *owner) noexcept {
-             app_from(owner).quiesce_automation_runtime();
-           },
-           [](const void *owner) noexcept {
-             return app_from(owner).automation_runtime_host_.resources(
-                 app_from(owner).session_registry_);
-           }},
-          {Capability::gamebar,
-           [](void *owner, const CapabilityDemand &) {
-             return app_from(owner).companion_host_.transport().start()
-                        ? ServiceReconcileResult{}
-                        : ServiceReconcileResult{
-                              false, "Game Bar transport could not start"};
-           },
-           [](void *owner) noexcept {
-             app_from(owner).companion_host_.transport().stop();
-             app_from(owner).companion_host_.set_active_session_count(0);
-           },
-           [](const void *owner) noexcept {
-             return app_from(owner).companion_host_.resources();
-           }},
-      }};
-  return policies;
+RuntimeResourceStats
+DaemonApp::capability_resources(const Capability capability) const noexcept {
+  switch (capability) {
+  case Capability::input:
+    return input_runtime_.resources();
+  case Capability::generic_hid:
+    return input_runtime_.hid_resources();
+  case Capability::overlay:
+    return overlay_runtime_.resources(session_registry_, live_edit_host_);
+  case Capability::visual:
+    return visual_capture_runtime_.resources(VisualRuntime::inline_process,
+                                             session_registry_);
+  case Capability::isolated_visual:
+    return visual_capture_runtime_.resources(VisualRuntime::isolated,
+                                             session_registry_);
+  case Capability::automation:
+    return automation_runtime_host_.resources(session_registry_);
+  case Capability::gamebar:
+    return companion_host_.resources();
+  case Capability::count:
+    break;
+  }
+  return {};
 }
 
 layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() {
+  const auto &active = session_registry_.active_inputs();
+  const auto companion =
+      layerc::gamebar::GameBarTransport::current_process_is_expected_package()
+          ? current_companion_sessions()
+          : std::vector<Session *>{};
   std::vector<layerc::runtime::SessionCapabilityRequest> requests;
-  requests.reserve(session_registry_.active_inputs().size());
-  const bool companion_available =
-      layerc::gamebar::GameBarTransport::current_process_is_expected_package();
-  for (const auto *session : session_registry_.active_inputs()) {
+  requests.reserve(session_registry_.sessions().size());
+  for (const auto &owned : session_registry_.sessions()) {
+    const auto *session = owned.get();
     if (session == nullptr)
       continue;
     const bool visual = visual_recognition_enabled_ && !session->is_global() &&
@@ -132,27 +118,19 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() {
                         session->has_active_visual_rules();
     requests.push_back({
         .window = {reinterpret_cast<std::uintptr_t>(session->game_window)},
-        .active = true,
+        .active = std::ranges::find(active, session) != active.end(),
         .global = session->is_global(),
         .visual = visual,
         .generic_hid = session->uses_hid,
         .isolated_visual = session->profile.visual_runtime ==
                            layerc::core::VisualRuntime::isolated,
+        .automation = session->has_enabled_automations(),
+        .companion = std::ranges::find(companion, session) != companion.end(),
         .profile_id = session->profile.id,
     });
   }
-  auto demand = layerc::runtime::calculate_capability_demand(
+  return layerc::runtime::calculate_capability_demand(
       requests, live_edit_host_.session() != nullptr);
-  const auto automation_consumers = static_cast<std::uint32_t>(
-      std::ranges::count_if(session_registry_.sessions(), [](const auto &session) {
-        return session != nullptr && session->has_enabled_automations();
-      }));
-  demand.set(layerc::runtime::Capability::automation, automation_consumers);
-  demand.set(layerc::runtime::Capability::gamebar,
-             companion_available ? static_cast<std::uint32_t>(
-                                       current_companion_sessions().size())
-                                 : 0U);
-  return demand;
 }
 
 void DaemonApp::reconcile_runtime_services() {

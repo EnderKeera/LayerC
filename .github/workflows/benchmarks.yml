@@ -97,11 +97,9 @@ jobs:
           # Quiescent-box gate: benchmarks start their own LayerD instances,
           # so a foreign daemon would corrupt the measurement. Never kill it
           # from CI — fail with the owning PIDs and let the box owner decide.
-          $owners = @(Get-Process -Name layerd, layere -ErrorAction SilentlyContinue)
-          if ($owners.Count -ne 0) {
-            $pids = ($owners | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ', '
-            throw "Box is not quiescent (running: $pids). Stop them before benchmarking."
-          }
+          Import-Module .\tools\LayerC.Tools.psm1 -Force
+          Assert-LayerCQuiescent -ProcessNames layerd, layere `
+            -FailureMessage 'Box is not quiescent; stop these processes before benchmarking.'
           & .\tools\run-hardware-benchmarks.ps1 `
             -CandidateBuildDirectory (Resolve-Path tools-build) `
             -BaselineBuildDirectory (Resolve-Path -LiteralPath $env:BASELINE_BUILD_ROOT)

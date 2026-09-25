@@ -4,6 +4,7 @@
 
 #include <winrt/Windows.ApplicationModel.AppService.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.System.Threading.h>
 
 #include <chrono>
@@ -52,5 +53,22 @@ private:
   winrt::Windows::ApplicationModel::AppService::AppServiceConnection
       app_service_{nullptr};
 };
+
+// Deliver a subscription on the page's dispatcher without keeping the page
+// alive after navigation. Both page types use the same snapshot handoff.
+template <typename Weak, typename Render>
+[[nodiscard]] std::uint64_t subscribe_on_dispatcher(
+    winrt::Windows::UI::Core::CoreDispatcher dispatcher, Weak weak,
+    Render render) {
+  return SnapshotHub::instance().subscribe(
+      [dispatcher, weak, render](std::optional<SnapshotHub::Snapshot> snapshot) {
+        (void)dispatcher.RunAsync(
+            winrt::Windows::UI::Core::CoreDispatcherPriority::Normal,
+            [weak, render, snapshot = std::move(snapshot)]() mutable {
+              if (const auto self = weak.get())
+                render(self, std::move(snapshot));
+            });
+      });
+}
 
 } // namespace layerc::gamebar::widget

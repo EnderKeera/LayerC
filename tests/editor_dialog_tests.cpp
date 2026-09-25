@@ -10,6 +10,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include <commctrl.h>
@@ -296,20 +297,22 @@ void editor_dialog_contracts() {
       high_dpi_checkbox.image_size == 32 && high_dpi_checkbox.inset == 4 &&
           high_dpi_checkbox.pen_width == 4,
       "profile checkbox resources and hit target should scale with DPI");
+  const auto legacy_base = [](const std::string_view source) {
+    return layerc::platform::source_schema_before(
+        source, layerc::core::profile_schema_version);
+  };
+  const auto legacy_visual = [](const std::string_view source) {
+    return layerc::platform::source_schema_before(
+        source, layerc::core::visual_schema_version);
+  };
   passed &=
-      expect(layerc::editor::source_uses_legacy_base_schema(
-                 R"({"schemaVersion":1,"name":"legacy"})") &&
-                 layerc::editor::source_uses_legacy_base_schema(
-                     R"({"schemaVersion":2,"name":"legacy"})") &&
-                 layerc::editor::source_uses_legacy_base_schema(
-                     R"({"schemaVersion":3,"name":"legacy"})") &&
-                 !layerc::editor::source_uses_legacy_base_schema(
-                     R"({"schemaVersion":4,"name":"current"})") &&
-                 layerc::editor::source_uses_legacy_visual_schema(
-                     R"({"schemaVersion":1})") &&
-                 !layerc::editor::source_uses_legacy_visual_schema(
-                     R"({"schemaVersion":2})") &&
-                 !layerc::editor::source_uses_legacy_base_schema("{broken"),
+      expect(legacy_base(R"({"schemaVersion":1,"name":"legacy"})") &&
+                 legacy_base(R"({"schemaVersion":2,"name":"legacy"})") &&
+                 legacy_base(R"({"schemaVersion":3,"name":"legacy"})") &&
+                 !legacy_base(R"({"schemaVersion":4,"name":"current"})") &&
+                 legacy_visual(R"({"schemaVersion":1})") &&
+                 !legacy_visual(R"({"schemaVersion":2})") &&
+                 !legacy_base("{broken"),
              "the editor should warn only when a valid source predates its "
              "current schema");
 
@@ -467,6 +470,26 @@ void editor_dialog_contracts() {
           !layerc::editor::parse_duration_ms(L"-1").has_value(),
       "cooldown duration editing should accept positive decimals and reject "
       "non-positive values");
+  passed &= expect(
+      !layerc::editor::parse_duration_ms(L"+5").has_value() &&
+          !layerc::editor::parse_duration_ms(L" 5").has_value() &&
+          layerc::editor::parse_duration_ms(L"86400") ==
+              layerc::core::max_cooldown_duration &&
+          !layerc::editor::parse_duration_ms(L"86400.5").has_value(),
+      "cooldown duration editing should reject signs, whitespace, and "
+      "durations above the shared core limit");
+  passed &= expect(
+      layerc::editor::parse_bounded(L"FFFFFF", 0, 0xFFFFFFU, 16) ==
+              0xFFFFFFU &&
+          !layerc::editor::parse_bounded(L"-FFFFF", 0, 0xFFFFFFU, 16) &&
+          !layerc::editor::parse_bounded(L"+FFFFF", 0, 0xFFFFFFU, 16) &&
+          !layerc::editor::parse_bounded(L" FFFFF", 0, 0xFFFFFFU, 16) &&
+          !layerc::editor::parse_bounded(L"256", 0, 255) &&
+          !layerc::editor::parse_bounded(L"", 0, 255) &&
+          layerc::editor::parse_uint(L"-1", 7) == 7 &&
+          layerc::editor::parse_uint(L"42", 7) == 42,
+      "editor number fields should reject signed, padded, and out-of-range "
+      "input instead of wrapping it");
   layerc::core::GameProfile persisted_profile;
   persisted_profile.id = "cooldown-edit";
   persisted_profile.name = "Cooldown edit";
@@ -847,7 +870,48 @@ void editor_dialog_contracts() {
   DestroyWindow(dialog);
 }
 
+void automation_palette_contracts() {
+  using layerc::core::AutomationActionKind;
+  using layerc::core::AutomationEventKind;
+  using layerc::editor::AutomationPaletteNode;
+  const auto &palette = layerc::editor::automation_palette;
+  expect(palette.size() == 6U &&
+             std::wstring_view(palette[0].label) == L"Event: input pressed" &&
+             std::wstring_view(palette[5].label) == L"Variable: Boolean",
+         "the palette table should keep the combo item order");
+  expect(layerc::editor::automation_palette_entry(-1) == nullptr &&
+             layerc::editor::automation_palette_entry(6) == nullptr &&
+             layerc::editor::automation_palette_entry(4) == &palette[4],
+         "palette lookup should reject out-of-range combo indices");
+
+  const auto rule = layerc::editor::make_palette_rule(
+      AutomationPaletteNode::timer_rule, "rule-2", "cooldown");
+  expect(rule.id == "rule-2" && rule.event == AutomationEventKind::timer_fired &&
+             rule.source_filter == "pulse" && rule.actions.size() == 1U &&
+             rule.actions[0].kind == AutomationActionKind::reset_cooldown &&
+             rule.actions[0].target == "cooldown",
+         "a timer rule node should reset the first cooldown on pulse");
+  const auto timer = layerc::editor::make_palette_action(
+      AutomationPaletteNode::timer_action, 2U, "cooldown", "panel");
+  expect(timer.kind == AutomationActionKind::create_timer &&
+             timer.target == "pulse-3" && timer.value.has_value(),
+         "timer action nodes should number after the existing actions");
+  const auto overlay = layerc::editor::make_palette_action(
+      AutomationPaletteNode::overlay_action, 1U, "cooldown", "panel");
+  expect(overlay.kind == AutomationActionKind::set_overlay_override &&
+             overlay.target == "panel" && overlay.name == "visibility-2" &&
+             overlay.property == "visible" && overlay.value.has_value() &&
+             overlay.secondary.has_value(),
+         "overlay action nodes should pulse the first panel's visibility");
+  const auto flag = layerc::editor::make_palette_variable("flag-1");
+  expect(flag.id == "flag-1" &&
+             flag.type == layerc::core::AutomationValueType::boolean &&
+             flag.default_value == layerc::core::AutomationValue(false),
+         "flag variable nodes should default to false");
+}
+
 int main() {
-  return layerc::test::run({{"editor_dialog_contracts",
-                             editor_dialog_contracts}});
+  return layerc::test::run(
+      {{"editor_dialog_contracts", editor_dialog_contracts},
+       {"automation_palette_contracts", automation_palette_contracts}});
 }

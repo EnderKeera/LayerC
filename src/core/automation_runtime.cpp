@@ -23,36 +23,40 @@ void AutomationRuntime::Impl::make_trace_room() {
     trace_entries.erase(trace_entries.begin(), trace_entries.begin() + 256);
 }
 
-void AutomationRuntime::Impl::add_source_trace(const AutomationEvent &event) {
+std::optional<AutomationTraceEntry>
+AutomationRuntime::Impl::begin_trace(const AutomationEvent &event) {
   if (!trace_enabled)
-    return;
+    return std::nullopt;
   make_trace_room();
   AutomationTraceEntry entry;
   entry.sequence = ++trace_sequence;
   entry.timestamp = std::chrono::duration_cast<Milliseconds>(
       event.timestamp.time_since_epoch());
-  entry.phase = "source";
-  entry.detail = std::string(automation_event_name(event.kind));
-  entry.source_event = event;
-  trace_entries.push_back(std::move(entry));
+  return entry;
+}
+
+void AutomationRuntime::Impl::add_source_trace(const AutomationEvent &event) {
+  auto entry = begin_trace(event);
+  if (!entry.has_value())
+    return;
+  entry->phase = "source";
+  entry->detail = std::string(automation_event_name(event.kind));
+  entry->source_event = event;
+  trace_entries.push_back(std::move(*entry));
 }
 
 void AutomationRuntime::Impl::add_trace(const AutomationEvent &event,
                                         std::string automation,
                                         std::string rule, std::string phase,
                                         std::string detail) {
-  if (!trace_enabled)
+  auto entry = begin_trace(event);
+  if (!entry.has_value())
     return;
-  make_trace_room();
-  AutomationTraceEntry entry;
-  entry.sequence = ++trace_sequence;
-  entry.timestamp = std::chrono::duration_cast<Milliseconds>(
-      event.timestamp.time_since_epoch());
-  entry.automation_id = std::move(automation);
-  entry.rule_id = std::move(rule);
-  entry.phase = std::move(phase);
-  entry.detail = std::move(detail);
-  trace_entries.push_back(std::move(entry));
+  entry->automation_id = std::move(automation);
+  entry->rule_id = std::move(rule);
+  entry->phase = std::move(phase);
+  entry->detail = std::move(detail);
+  trace_entries.push_back(std::move(*entry));
 }
 
 AutomationRuntime::AutomationRuntime(
@@ -82,14 +86,15 @@ AutomationRuntime::process(const AutomationEvent &root,
                            const EffectValidator &validator,
                            const EffectCommitter &committer) {
   AutomationEvaluationResult result;
+  const auto field_in_bounds = [](const auto &field) {
+    return field.first.size() <= max_automation_string_bytes &&
+           is_valid_utf8(field.first) &&
+           automation_value_valid(field.second);
+  };
   if (root.source_id.size() > max_automation_string_bytes ||
       !is_valid_utf8(root.source_id) ||
       root.fields.size() > max_automation_collection_entries ||
-      !std::ranges::all_of(root.fields, [](const auto &field) {
-        return field.first.size() <= max_automation_string_bytes &&
-               is_valid_utf8(field.first) &&
-               automation_value_valid(field.second);
-      })) {
+      !std::ranges::all_of(root.fields, field_in_bounds)) {
     result.error = {"$event", "source event exceeds automation bounds"};
     return result;
   }

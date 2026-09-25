@@ -81,6 +81,39 @@ inline void move_control(const HWND dialog, const int id, const int x,
     MoveWindow(control, x, y, std::max(1, width), std::max(1, height), TRUE);
 }
 
+// Keeps logical units, placement, and repeating rows together for resizable
+// native dialogs. Positions remain in physical client pixels.
+class DialogLayout final {
+public:
+  DialogLayout(const HWND dialog, const int dpi) noexcept
+      : dialog_(dialog), dpi_(dpi) {}
+
+  [[nodiscard]] int scaled(const int logical) const noexcept {
+    return dpi_scaled(logical, dpi_);
+  }
+  void move(const int id, const int x, const int y, const int width,
+            const int height) const {
+    move_control(dialog_, id, x, y, width, height);
+  }
+  void field_row(const int label_id, const int control_id, const int x,
+                 const int y, const int column_width, const int total_width,
+                 const int label_height, const int control_height) const {
+    move(label_id, x, y + scaled(3), column_width - scaled(5), label_height);
+    move(control_id, x + column_width, y,
+         std::max(1, total_width - column_width), control_height);
+  }
+  void next_button(const int id, int &x, const int y,
+                   const int logical_width, const int height,
+                   const int gap) const {
+    move(id, x, y, scaled(logical_width), height);
+    x += scaled(logical_width) + gap;
+  }
+
+private:
+  HWND dialog_{};
+  int dpi_{};
+};
+
 inline void resize_to_logical_size(const HWND dialog, const int logical_width,
                                    const int logical_height) {
   const int dpi = window_base_dpi(dialog);

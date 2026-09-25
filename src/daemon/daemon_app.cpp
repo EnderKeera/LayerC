@@ -6,13 +6,13 @@
 #include "layerc/platform/settings_store.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_error.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cwchar>
 #include <filesystem>
 #include <string_view>
-#include <vector>
 
 namespace layerc::daemon {
 
@@ -21,13 +21,20 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   instance_ = instance;
   const auto transaction_scope = layerc::platform::profile_transaction_scope(
       layerc::platform::profile_directory());
-  if (!transaction_scope.has_value() ||
-      !layerc::platform::recover_profile_transactions(*transaction_scope)) {
-    MessageBoxW(
-        nullptr,
-        L"LayerD could not recover an interrupted profile import. "
-        L"Profiles were not loaded to avoid publishing a partial transaction.",
-        L"LayerC profile recovery", MB_OK | MB_ICONERROR);
+  const auto recovered =
+      transaction_scope.has_value()
+          ? layerc::platform::recover_profile_transactions(*transaction_scope)
+          : layerc::platform::ProfileWriteResult{
+                layerc::platform::ProfileWriteError::scope_rejected};
+  if (const auto error = recovered.error(); error.has_value()) {
+    const auto message =
+        L"LayerD could not recover an interrupted profile import (" +
+        layerc::platform::utf8_to_wide(
+            layerc::platform::profile_write_error_text(*error)) +
+        L"). Profiles were not loaded to avoid publishing a partial "
+        L"transaction.";
+    MessageBoxW(nullptr, message.c_str(), L"LayerC profile recovery",
+                MB_OK | MB_ICONERROR);
     return 1;
   }
   if (!create_message_window(instance)) {
@@ -49,6 +56,9 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   int exit_code{};
   MSG message{};
   while (running) {
+    // Flush here for work done outside window messages (loop-level polls,
+    // WinEvent callbacks); handle_message flushes for modal-loop dispatch.
+    flush_overlays();
     std::array<HANDLE, 5> live_handles{};
     const auto live_handle_count = static_cast<DWORD>(
         live_edit_host_.channel().wait_handles(std::span<HANDLE>(live_handles).first(3)));
@@ -136,22 +146,22 @@ void DaemonApp::load_platform_settings() {
     settings_error_ += layerc::platform::wide_to_utf8(
         layerc::platform::windows_error_text(error));
   };
+  // Both flags default to enabled when the setting is absent from the store.
+  const auto apply = [&](bool &target, const auto &result,
+                         const std::string_view name) {
+    if (result.value)
+      target = *result.value;
+    else if (result.missing())
+      target = true;
+    else
+      append_error(name, result.error);
+  };
 
-  const auto capture = layerc::platform::read_capture_exclusion_setting();
-  if (capture.value)
-    capture_exclusion_ = *capture.value;
-  else if (capture.missing())
-    capture_exclusion_ = true;
-  else
-    append_error("capture exclusion", capture.error);
-
-  const auto visual = layerc::platform::read_visual_recognition_setting();
-  if (visual.value)
-    visual_recognition_enabled_ = *visual.value;
-  else if (visual.missing())
-    visual_recognition_enabled_ = true;
-  else
-    append_error("visual recognition", visual.error);
+  apply(capture_exclusion_, layerc::platform::read_capture_exclusion_setting(),
+        "capture exclusion");
+  apply(visual_recognition_enabled_,
+        layerc::platform::read_visual_recognition_setting(),
+        "visual recognition");
 }
 
 bool DaemonApp::create_message_window(const HINSTANCE instance) {
@@ -220,16 +230,10 @@ void DaemonApp::show_tray_menu() {
 }
 
 void DaemonApp::launch_editor() {
-  std::vector<wchar_t> module_path(32'768);
-  const DWORD length = GetModuleFileNameW(
-      nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
-  if (length == 0 || length >= module_path.size()) {
+  const auto editor = platform::sibling_image_path(L"layere.exe");
+  if (editor.empty()) {
     return;
   }
-  const auto editor =
-      std::filesystem::path(std::wstring_view(module_path.data(), length))
-          .parent_path() /
-      L"layere.exe";
   ShellExecuteW(nullptr, L"open", editor.c_str(), nullptr,
                 editor.parent_path().c_str(), SW_SHOWNORMAL);
 }
@@ -259,6 +263,13 @@ LRESULT CALLBACK DaemonApp::window_proc(const HWND window, const UINT message,
 
 LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
                                   const WPARAM wparam, const LPARAM lparam) {
+  const LRESULT result = dispatch_message(window, message, wparam, lparam);
+  flush_overlays();
+  return result;
+}
+
+LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
+                                    const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_INPUT:
     handle_raw_input(reinterpret_cast<HRAWINPUT>(lparam));
@@ -279,7 +290,7 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     } else if (wparam == input_poll_timer) {
       poll_input_devices();
     } else if (wparam == overlay_render_timer) {
-      update_overlays();
+      mark_overlays_dirty();
     } else if (wparam == automation_timer) {
       poll_automation_timer();
     }

@@ -109,8 +109,10 @@ jobs:
       matrix:
         include:
           - name: debian:stable
+            artifact: debian-stable
             image: debian@sha256:7fa362f5e7c036d7f45621a6c721c03493cdcb5889adfcd65587759e34fe4c6f
           - name: ubuntu:24.04
+            artifact: ubuntu-24.04
             image: ubuntu@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
     name: Linux (${{ matrix.name }})
     steps:
@@ -121,10 +123,57 @@ jobs:
       # Logic lives in tools/ci-linux.sh so the same gate runs locally.
       - name: Build and test (${{ matrix.name }})
         shell: bash
-        run: bash tools/ci-linux.sh "${{ matrix.image }}"
+        run: >-
+          bash tools/ci-linux.sh "${{ matrix.image }}"
+          "out/linux-ci/${{ matrix.artifact }}"
+
+      - name: Upload Linux evidence (${{ matrix.name }})
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-linux-${{ matrix.artifact }}-evidence
+          path: out/linux-ci/${{ matrix.artifact }}/**
+          if-no-files-found: warn
+
+  linux-flatpak:
+    needs: workflow-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install Linux and Flatpak build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          mapfile -t packages < tools/linux-deps.txt
+          sudo apt-get install -y --no-install-recommends \
+            "${packages[@]}" flatpak flatpak-builder
+          sudo flatpak remote-add --system --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y flathub \
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+
+      - name: Run required Flatpak and native smoke
+        shell: bash
+        run: >-
+          bash tools/run-linux-tests.sh
+          --build-dir build/linux-flatpak-ci
+          --evidence-dir out/linux-flatpak-ci
+          --flatpak required
+
+      - name: Upload Flatpak evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-linux-flatpak-evidence
+          path: out/linux-flatpak-ci/**
+          if-no-files-found: warn
 
   publish-rolling:
-    needs: [windows-msvc, windows-analyze, linux]
+    needs: [windows-msvc, windows-analyze, linux, linux-flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5

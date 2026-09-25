@@ -38,6 +38,8 @@ void test_visual_trigger_state_machine();
 void test_visual_repeat_when_ready();
 void test_calibration_protocol();
 void test_automation_profile_round_trip();
+void test_automation_session_trigger_policy();
+void test_automation_session_origin_and_persistence();
 void test_automation_runtime_transaction_and_replay();
 void test_automation_priority_fault_isolation_and_reconfigure();
 void test_automation_value_round_trip_and_bounds();

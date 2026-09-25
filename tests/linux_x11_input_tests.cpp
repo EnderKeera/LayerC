@@ -27,7 +27,6 @@
 
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -46,14 +45,6 @@ using layerc::platform::X11WindowScan;
 using layerc::platform::X11WindowSnapshot;
 
 using layerc::test::skip_code;
-
-struct TempDirectory {
-  std::filesystem::path path;
-  ~TempDirectory() {
-    std::error_code ignored;
-    std::filesystem::remove_all(path, ignored);
-  }
-};
 
 [[nodiscard]] layerc::core::AutomationExpression
 literal(layerc::core::AutomationValue value) {
@@ -188,11 +179,8 @@ void replace_all(std::string &text, std::string_view placeholder,
   return std::nullopt;
 }
 
-} // namespace
-
-int run_linux_x11_input_tests() {
+void check_normalization(bool &passed) {
   using layerc::test::expect;
-  bool passed = true;
 
   // --- normalization (pure) ------------------------------------------------
   using layerc::platform::keysym_to_vk;
@@ -247,6 +235,13 @@ int run_linux_x11_input_tests() {
   passed &= expect(classify_device("Pedal", false, true, 0, false) ==
                        X11DeviceKind::other,
                    "buttons without axes are not claimed");
+}
+
+} // namespace
+
+int run_linux_x11_input_tests() {
+  using layerc::test::expect;
+  bool passed = true;
 
   // --- sessions (pure) -----------------------------------------------------
   const std::string self_name = basename_of(self_executable());
@@ -260,18 +255,14 @@ int run_linux_x11_input_tests() {
                    "fixture profiles parse");
   if (!by_name.has_value() || !global.has_value()) return 1;
 
-  TempDirectory temp{std::filesystem::temp_directory_path() /
-                     ("layerc-x11-input-" + std::to_string(::getpid()))};
-  std::error_code temp_error;
-  std::filesystem::remove_all(temp.path, temp_error);
-  temp_error.clear();
-  std::filesystem::create_directories(temp.path, temp_error);
-  passed &= expect(!temp_error, "the test profile directory is available");
-  const auto config_home = temp.path / "config";
-  const auto data_home = temp.path / "data";
-  passed &= expect(::setenv("XDG_CONFIG_HOME", config_home.c_str(), 1) == 0 &&
-                       ::setenv("XDG_DATA_HOME", data_home.c_str(), 1) == 0,
-                   "the test owns isolated XDG roots");
+  layerc::test::TempDirectory temp{"layerc-x11-input"};
+  layerc::test::ScopedEnvironment config_home{"XDG_CONFIG_HOME",
+                                               temp.path() / "config"};
+  layerc::test::ScopedEnvironment data_home{"XDG_DATA_HOME",
+                                             temp.path() / "data"};
+  if (!expect(config_home.applied() && data_home.applied(),
+              "the test owns isolated XDG roots"))
+    return 1;
   const auto roots = layerc::platform::profile_store_roots();
   passed &= expect(layerc::platform::ensure_profile_store_roots(roots),
                    "the isolated profile store is available");
@@ -288,48 +279,50 @@ int run_linux_x11_input_tests() {
   scan.windows.push_back(foreground);
   scan.active = foreground.window;
 
-  layerc::daemon::X11InputService service;
+  layerc::daemon::X11SessionRegistry service_sessions;
+
+  layerc::daemon::X11InputService service(service_sessions);
   const StoredProfile profiles[] = {
       {.path = roots.config_profiles / "by-name.json", .profile = *by_name},
       {.path = roots.config_profiles / "global.json", .profile = *global}};
-  service.refresh(profiles, scan);
-  passed &= expect(service.session_count() == 2,
+  service_sessions.refresh(profiles, scan);
+  passed &= expect(service_sessions.session_count() == 2,
                    "both profiles resolve against the fixture window");
-  passed &= expect(service.session_requests().size() == 2,
+  passed &= expect(service_sessions.session_requests().size() == 2,
                    "each session publishes a capability request");
-  passed &= expect(service.session_requests().front().global == false &&
-                       service.session_requests().back().global == true,
+  passed &= expect(service_sessions.session_requests().front().global == false &&
+                       service_sessions.session_requests().back().global == true,
                    "the global profile reports itself as global");
-  passed &= expect(service.sessions().front().window == foreground.window &&
-                       service.session_requests().front().active,
+  passed &= expect(service_sessions.sessions().front().window == foreground.window &&
+                       service_sessions.session_requests().front().active,
                    "a non-global profile prefers and reports the active match");
   const auto state_now = layerc::core::MonotonicClock::now();
-  passed &= expect(service.sessions().front().engine.trigger("dash", state_now),
+  passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
                    "fixture cooldown starts");
-  service.refresh(profiles, scan);
-  passed &= expect(!service.sessions().front().engine.trigger("dash", state_now),
+  service_sessions.refresh(profiles, scan);
+  passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
                    "an unchanged refresh preserves cooldown state");
   auto changed = profiles[0];
   changed.profile.name = "Changed definition";
   const StoredProfile changed_profiles[] = {changed, profiles[1]};
-  service.refresh(changed_profiles, scan);
-  passed &= expect(service.sessions().front().engine.trigger("dash", state_now),
+  service_sessions.refresh(changed_profiles, scan);
+  passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
                    "a changed profile definition starts a fresh session");
 
   X11WindowScan empty_scan;
-  service.refresh(profiles, empty_scan);
-  passed &= expect(service.session_count() == 0,
+  service_sessions.refresh(profiles, empty_scan);
+  passed &= expect(service_sessions.session_count() == 0,
                    "no windows means no sessions");
-  service.refresh(profiles, scan);
+  service_sessions.refresh(profiles, scan);
 
   X11WindowScan background_scan = scan;
   background_scan.active = 0x9999;
   for (auto &snapshot : background_scan.windows) snapshot.active = false;
-  service.refresh(profiles, background_scan);
-  passed &= expect(!service.session_requests().front().active &&
-                       service.session_requests().back().active,
+  service_sessions.refresh(profiles, background_scan);
+  passed &= expect(!service_sessions.session_requests().front().active &&
+                       service_sessions.session_requests().back().active,
                    "only global profiles stay active in the background");
-  passed &= expect(service.sessions().front().window == foreground.window,
+  passed &= expect(service_sessions.sessions().front().window == foreground.window,
                    "focus loss retains the previous matching window");
   passed &= expect(layerc::platform::match_window(
                        scan, profiles[0].profile.game, window.window)->window ==
@@ -348,16 +341,16 @@ int run_linux_x11_input_tests() {
   // reconstruct the session (which would reset the cooldown engine).
   {
     const auto focus_now = layerc::core::MonotonicClock::now();
-    passed &= expect(service.sessions().front().engine.trigger("dash", focus_now),
+    passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
                      "focus regression starts a cooldown");
-    service.refresh(profiles, background_scan);
-    passed &= expect(!service.sessions().front().engine.trigger("dash", focus_now),
+    service_sessions.refresh(profiles, background_scan);
+    passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
                      "a background refresh preserves cooldown state");
-    service.refresh(profiles, scan);
-    passed &= expect(!service.sessions().front().engine.trigger("dash", focus_now),
+    service_sessions.refresh(profiles, scan);
+    passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
                      "focus gain preserves cooldown state");
   }
-  service.refresh(profiles, scan);
+  service_sessions.refresh(profiles, scan);
 
   layerc::daemon::InputSession session(profiles[0], window.window, false);
   const layerc::core::InputEvent press_e{
@@ -393,29 +386,30 @@ int run_linux_x11_input_tests() {
     auto chord_profile = profiles[0];
     chord_profile.profile.bindings.front().chord.tokens.push_back(
         {layerc::core::InputDevice::keyboard, 17, 0});
-    layerc::daemon::X11InputService focus_service;
-    focus_service.refresh(std::span{&chord_profile, 1}, focus_scan);
+    layerc::daemon::X11SessionRegistry focus_service_sessions;
+    layerc::daemon::X11InputService focus_service(focus_service_sessions);
+    focus_service_sessions.refresh(std::span{&chord_profile, 1}, focus_scan);
     const layerc::core::InputEvent ctrl{
         {layerc::core::InputDevice::keyboard, 17, 0}, true};
-    (void)focus_service.sessions().front().matcher.process(ctrl);
-    focus_service.refresh(std::span{&chord_profile, 1}, inactive_scan);
-    focus_service.refresh(std::span{&chord_profile, 1}, focus_scan);
+    (void)focus_service_sessions.sessions().front().matcher.process(ctrl);
+    focus_service_sessions.refresh(std::span{&chord_profile, 1}, inactive_scan);
+    focus_service_sessions.refresh(std::span{&chord_profile, 1}, focus_scan);
     passed &= expect(
-        focus_service.sessions().front().matcher.process(press_e).empty(),
+        focus_service_sessions.sessions().front().matcher.process(press_e).empty(),
         "focus loss clears a modifier whose background release was skipped");
 
-    focus_service.refresh(std::span{profiles}.first(1), focus_scan);
+    focus_service_sessions.refresh(std::span{profiles}.first(1), focus_scan);
     passed &= expect(
-        focus_service.sessions().front().matcher.process(press_e).size() == 1,
+        focus_service_sessions.sessions().front().matcher.process(press_e).size() == 1,
         "single-key fixture latches a press");
-    focus_service.refresh(std::span{profiles}.first(1), focus_scan);
+    focus_service_sessions.refresh(std::span{profiles}.first(1), focus_scan);
     passed &= expect(
-        focus_service.sessions().front().matcher.process(press_e).empty(),
+        focus_service_sessions.sessions().front().matcher.process(press_e).empty(),
         "an unchanged active refresh keeps the held key latched");
-    focus_service.refresh(std::span{profiles}.first(1), inactive_scan);
-    focus_service.refresh(std::span{profiles}.first(1), focus_scan);
+    focus_service_sessions.refresh(std::span{profiles}.first(1), inactive_scan);
+    focus_service_sessions.refresh(std::span{profiles}.first(1), focus_scan);
     passed &= expect(
-        focus_service.sessions().front().matcher.process(press_e).size() == 1,
+        focus_service_sessions.sessions().front().matcher.process(press_e).size() == 1,
         "focus loss clears a single key whose release was skipped");
   }
 
@@ -425,39 +419,39 @@ int run_linux_x11_input_tests() {
                        profiles[0].path, profiles[0].profile, std::nullopt,
                        automation_profile),
                    "the automation sidecar is committed beside its profile");
-  service.refresh(profiles, scan);
-  passed &= expect(service.automation_count() == 1 &&
-                       service.automation_diagnostics().empty(),
+  service_sessions.refresh(profiles, scan);
+  passed &= expect(service_sessions.automation_count() == 1 &&
+                       service_sessions.automation_diagnostics().empty(),
                    "an active matched profile owns one sidecar runtime");
-  auto &automated = service.sessions().front();
+  auto &automated = service_sessions.sessions().front();
   const auto automation_now = layerc::core::MonotonicClock::now();
   const auto automation_triggered = automated.feed(press_e, automation_now);
   passed &= expect(automation_triggered.size() == 1 &&
                        automation_triggered.front() == "dash",
                    "automation observes input before the binding cooldown");
-  passed &= expect(automated.automation != nullptr &&
-                       automated.automation->snapshot().timers.size() == 1 &&
-                       automated.automation->snapshot().overlay_overrides.size() ==
+  passed &= expect(automated.automation_runtime != nullptr &&
+                       automated.automation_runtime->snapshot().timers.size() == 1 &&
+                       automated.automation_runtime->snapshot().overlay_overrides.size() ==
                            1,
                    "input commits timer and overlay effects");
-  const auto state_due = service.next_automation_deadline(automation_now);
+  const auto state_due = service_sessions.next_automation_deadline(automation_now);
   passed &= expect(state_due.has_value(),
                    "runtime effects publish a monotonic service deadline");
 
-  service.poll_automation(automation_now + std::chrono::milliseconds{55});
-  const auto &after_timer = automated.automation->snapshot();
+  service_sessions.poll_automation(automation_now + std::chrono::milliseconds{55});
+  const auto &after_timer = automated.automation_runtime->snapshot();
   const auto count = after_timer.persistent_values.find("count");
   passed &= expect(count != after_timer.persistent_values.end() &&
                        count->second == layerc::core::AutomationValue(
                                             std::int64_t{2}) &&
                        after_timer.timers.empty() &&
                        after_timer.overlay_overrides.empty() &&
-                       !automated.engine.trigger(
+                       !automated.cooldowns.trigger(
                            "potion", automation_now +
                                          std::chrono::milliseconds{55}),
                    "the timer commits persistent, cooldown, and override effects");
 
-  service.poll_automation(automation_now + std::chrono::milliseconds{1'100});
+  service_sessions.poll_automation(automation_now + std::chrono::milliseconds{1'100});
   const auto persisted = layerc::platform::load_automation_state(
       profiles[0].path, automation_profile);
   const auto persisted_count = persisted.values.find("count");
@@ -467,11 +461,13 @@ int run_linux_x11_input_tests() {
                                                       std::int64_t{2}),
                    "dirty persistent state checkpoints transactionally");
 
-  layerc::daemon::X11InputService reloaded;
-  reloaded.refresh(std::span{profiles}.first(1), scan);
+  layerc::daemon::X11SessionRegistry reloaded_sessions;
+
+  layerc::daemon::X11InputService reloaded(reloaded_sessions);
+  reloaded_sessions.refresh(std::span{profiles}.first(1), scan);
   const auto &reloaded_values =
-      reloaded.sessions().front().automation->snapshot().persistent_values;
-  passed &= expect(reloaded.automation_count() == 1 &&
+      reloaded_sessions.sessions().front().automation_runtime->snapshot().persistent_values;
+  passed &= expect(reloaded_sessions.automation_count() == 1 &&
                        reloaded_values.at("count") ==
                            layerc::core::AutomationValue(std::int64_t{2}),
                    "a fresh runtime reloads its persistent values");
@@ -526,10 +522,11 @@ int run_linux_x11_input_tests() {
                    "destroying the XI2 source clears raw-event selection");
 
   layerc::platform::X11WindowTracker tracker(*display);
-  layerc::daemon::X11InputService live;
+  layerc::daemon::X11SessionRegistry live_registry;
+  layerc::daemon::X11InputService live(live_registry);
   live.attach(*display);
-  live.refresh(profiles, tracker.scan());
-  const auto live_sessions = live.session_count();
+  live_registry.refresh(profiles, tracker.scan());
+  const auto live_sessions = live_registry.session_count();
   passed &= expect(live_sessions == 2,
                    "the fixture window resolves both live sessions");
   if (live_sessions != 2) std::fprintf(stderr, "live sessions: %zu\n", live_sessions);
@@ -538,14 +535,12 @@ int run_linux_x11_input_tests() {
   // demands both, and this regression must prove input survives that activation.
   layerc::daemon::X11OverlayService overlay;
   overlay.attach(*display);
-  overlay.refresh(live.sessions(), tracker.scan(),
+  overlay.refresh(live_registry.sessions(), tracker.scan(),
                   layerc::platform::scan_monitors(*display));
-  const auto requests = live.session_requests();
-  auto demand =
+  const auto requests = live_registry.session_requests();
+  const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  demand.set(layerc::runtime::Capability::automation,
-             static_cast<std::uint32_t>(live.automation_count()));
-  layerc::daemon::X11AutomationService automation(live);
+  layerc::daemon::X11AutomationService automation(live_registry);
   layerc::runtime::RuntimeServiceRegistry services{};
   services[static_cast<std::size_t>(layerc::runtime::Capability::input)] = &live;
   services[static_cast<std::size_t>(layerc::runtime::Capability::automation)] =
@@ -571,7 +566,7 @@ int run_linux_x11_input_tests() {
       "one active runtime owns one demanded automation resource");
   // Card panels are visible while ready, so the overlay paints without
   // consuming the cooldowns the injected keypress below must trigger.
-  overlay.render(live.sessions(), layerc::core::MonotonicClock::now());
+  overlay.render(live_registry.sessions(), layerc::core::MonotonicClock::now());
   passed &= expect(overlay.window_count() >= 1, "the overlay shows a panel");
 
   int xtest_event{};
@@ -626,28 +621,28 @@ int run_linux_x11_input_tests() {
     (void)live.dispatch();
   }
 
-  (void)live.sessions().front().matcher.process(press_e);
+  (void)live_registry.sessions().front().matcher.process(press_e);
   kernel.quiesce();
   passed &= expect(!live.attached(), "quiescing releases the XI2 source");
   passed &= expect(!raw_input_selected(raw, root),
                    "quiescing deselects XI2 raw events");
-  passed &= expect(live.automation_count() == 1 && kernel.demand().empty() &&
+  passed &= expect(live_registry.automation_count() == 1 && kernel.demand().empty() &&
                        kernel.services().aggregate_resources() ==
                            layerc::runtime::RuntimeResourceStats{},
                    "temporary quiescence retains sessions but releases demand");
   passed &= expect(
-      live.sessions().front().matcher.process(press_e).size() == 1,
+      live_registry.sessions().front().matcher.process(press_e).size() == 1,
       "detaching XI2 clears transient key state");
   passed &= expect(
-      live.sessions().front().automation->snapshot().persistent_values.at(
+      live_registry.sessions().front().automation_runtime->snapshot().persistent_values.at(
           "stopped") == layerc::core::AutomationValue(std::int64_t{0}),
       "temporary quiescence does not run session-stopping rules");
-  live.stop_sessions(layerc::core::MonotonicClock::now());
-  live.stop_sessions(layerc::core::MonotonicClock::now());
+  live_registry.stop_sessions(layerc::core::MonotonicClock::now());
+  live_registry.stop_sessions(layerc::core::MonotonicClock::now());
   const auto stopped_state = layerc::platform::load_automation_state(
       profiles[0].path, automation_profile);
   passed &= expect(
-      live.automation_count() == 0 && live.session_count() == 0 &&
+      live_registry.automation_count() == 0 && live_registry.session_count() == 0 &&
           !stopped_state.error.has_value() &&
           stopped_state.values.at("stopped") ==
               layerc::core::AutomationValue(std::int64_t{1}),
@@ -667,16 +662,19 @@ int run_linux_x11_input_tests() {
   XDeleteProperty(raw, root, XInternAtom(raw, "_NET_ACTIVE_WINDOW", False));
   XSync(raw, False);
 
-  std::printf("x11 input tests: %s\n", passed ? "PASS" : "FAIL");
   return passed ? 0 : 1;
 }
 
 int main() {
-  return layerc::test::run({{"linux_x11_input_tests", [] {
-                              const int result = run_linux_x11_input_tests();
-                              if (result == skip_code) layerc::test::skip();
-                              layerc::test::expect(
-                                  result == 0,
-                                  "the X11 input program should succeed");
-                            }}});
+  return layerc::test::run({
+      {"normalization", [] {
+         bool passed = true;
+         check_normalization(passed);
+       }},
+      {"sessions_and_live_input", [] {
+         const int result = run_linux_x11_input_tests();
+         if (result == skip_code) layerc::test::skip();
+         layerc::test::expect(result == 0, "the X11 input program should succeed");
+       }}
+  });
 }

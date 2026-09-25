@@ -8,6 +8,7 @@
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "layerc/core/pixel_engine.hpp"
+#include "layerc/core/profile_session.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/platform/profile_store.hpp"
 
@@ -67,7 +68,7 @@ struct ProfileSource {
   [[nodiscard]] SessionInit to_session_init(bool visual_enabled) const;
 };
 
-struct Session {
+struct Session : layerc::core::AutomationSession {
   struct PolledKeyState {
     layerc::core::InputToken token;
     bool pressed{};
@@ -89,8 +90,7 @@ struct Session {
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
   [[nodiscard]] bool blocks_all_triggers() const noexcept {
-    return modules.visual.state ==
-           layerc::platform::ModuleSidecarState::invalid;
+    return layerc::core::AutomationSession::blocks_all_triggers();
   }
   [[nodiscard]] bool is_global() const noexcept { return profile.game.global; }
   [[nodiscard]] bool requires_input_polling() const noexcept {
@@ -100,11 +100,8 @@ struct Session {
   std::string source_key;
   layerc::core::GameProfile profile;
   OverlayCollection overlays;
-  layerc::core::CooldownEngine cooldowns;
   layerc::core::InputMatcher input;
   ProfileModules modules;
-  std::unique_ptr<layerc::core::VisualTriggerEngine> visual_triggers;
-  std::unique_ptr<layerc::core::AutomationRuntime> automation_runtime;
   // The source automation_revision the runtime was created or last
   // reconfigured against; reconcile compares this instead of deep-comparing
   // profiles on every state change.
@@ -112,7 +109,6 @@ struct Session {
   std::vector<layerc::core::OverlayPropertyOverride>
       applied_overlay_overrides;
   std::uint64_t last_visual_sequence{};
-  std::vector<layerc::core::CooldownState> snapshot_buffer;
   std::vector<PolledKeyState> global_keyboard;
   std::vector<layerc::core::HidControlState> hid_states;
   HWND game_window{};

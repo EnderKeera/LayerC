@@ -33,6 +33,12 @@ void draw_rounded_rectangle(HDC dc, const RECT &rectangle, const int radius,
   SelectObject(dc, previous_brush);
 }
 
+void draw_label(HDC dc, const std::wstring &label, RECT &rectangle) {
+  DrawTextW(dc, label.c_str(), static_cast<int>(label.size()), &rectangle,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                DT_NOPREFIX);
+}
+
 } // namespace
 bool OverlayWindow::ensure_render_resources() {
   if (buffer_dc_ != nullptr) {
@@ -63,18 +69,12 @@ bool OverlayWindow::ensure_render_resources() {
     return false;
   }
 
-  const auto background_color = panel_.style == layerc::core::PanelStyle::bar
-                                    ? panel_.bar.background_color
-                                    : 0x272D35U;
-  const auto border_color = panel_.style == layerc::core::PanelStyle::bar
-                                ? panel_.bar.border_color
-                                : 0x50BAC8U;
-  const auto fill_color = panel_.style == layerc::core::PanelStyle::bar
-                              ? panel_.bar.fill_color
-                              : border_color;
-  const auto text_color = panel_.style == layerc::core::PanelStyle::bar
-                              ? panel_.bar.text_color
-                              : 0xE4E8ECU;
+  const bool is_bar = panel_.style == layerc::core::PanelStyle::bar;
+  const auto background_color =
+      is_bar ? panel_.bar.background_color : 0x272D35U;
+  const auto border_color = is_bar ? panel_.bar.border_color : 0x50BAC8U;
+  const auto fill_color = is_bar ? panel_.bar.fill_color : border_color;
+  const auto text_color = is_bar ? panel_.bar.text_color : 0xE4E8ECU;
 
   font_ =
       CreateFontW(font_height, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
@@ -170,42 +170,37 @@ void OverlayWindow::render(
       const auto shape = layerc::core::bar_geometry(
           panel_, index, cooldown_indices_.size(), progress);
       const RECT bar = scaled_rect(shape.outline);
-      const bool is_single_bar = !shape.grouped;
-      const int visible_width = bar.right - bar.left;
-
-      if (is_single_bar) {
-        const int radius = std::max(1L, scaled(shape.corner_radius));
-        if (visible_width != last_region_width_) {
+      const int radius = std::max(1L, scaled(shape.corner_radius));
+      if (!shape.grouped) {
+        // Single-bar panels clip the window region to the bar shape so the
+        // transparent surround is truly click-through.
+        if (bar.right - bar.left != last_region_width_) {
           const HRGN region = CreateRoundRectRgn(
               bar.left, bar.top, bar.right, bar.bottom, radius, radius);
           if (region != nullptr) {
             if (SetWindowRgn(window_, region, TRUE) == 0)
               DeleteObject(region);
             else
-              last_region_width_ = visible_width;
+              last_region_width_ = bar.right - bar.left;
           }
         }
         draw_rounded_rectangle(buffer_dc_, bar, radius, fill_brush_,
                                visible_border);
       } else {
-        const int radius = std::max(1L, scaled(shape.corner_radius));
         draw_rounded_rectangle(buffer_dc_, bar, radius, panel_brush_,
                                visible_border);
         const RECT fill = scaled_rect(shape.fill);
         if (fill.right > fill.left && fill.bottom > fill.top) {
           draw_rounded_rectangle(buffer_dc_, fill,
                                  std::max(1L, scaled(shape.fill_radius)),
-                                  fill_brush_, null_pen);
+                                 fill_brush_, null_pen);
         }
       }
 
       RECT text_rectangle = scaled_rect(shape.text);
       if (panel_.bar.show_text &&
           text_rectangle.right > text_rectangle.left) {
-        DrawTextW(buffer_dc_, label_buffer_.c_str(),
-                  static_cast<int>(label_buffer_.size()), &text_rectangle,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
-                      DT_NOPREFIX);
+        draw_label(buffer_dc_, label_buffer_, text_rectangle);
       }
       continue;
     }
@@ -218,10 +213,7 @@ void OverlayWindow::render(
 
     RECT text_rectangle = scaled_rect(layerc::core::inset_panel_rect(
         geometry.items[index], layerc::core::overlay_metrics.card_text_inset));
-    DrawTextW(buffer_dc_, label_buffer_.c_str(),
-              static_cast<int>(label_buffer_.size()), &text_rectangle,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
-                  DT_NOPREFIX);
+    draw_label(buffer_dc_, label_buffer_, text_rectangle);
   }
 
   if (selection_pen != nullptr) DeleteObject(selection_pen);
