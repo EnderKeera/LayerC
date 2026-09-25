@@ -317,8 +317,9 @@ void direct_edit_restores_click_through() {
       WS_OVERLAPPEDWINDOW | WS_VISIBLE, fixture.work_area.left + 80,
       fixture.work_area.top + 80, 480, 320, nullptr, nullptr,
       GetModuleHandleW(nullptr), nullptr)};
-  if (!expect(unrelated.window != nullptr,
-              "an unrelated foreground window should be available"))
+  expect(unrelated.window != nullptr,
+         "an unrelated foreground window should be available");
+  if (unrelated.window == nullptr)
     return;
   SetWindowPos(unrelated.window, HWND_TOP, fixture.work_area.left + 80,
                fixture.work_area.top + 80, 480, 320, SWP_SHOWWINDOW);
