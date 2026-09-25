@@ -7,9 +7,9 @@ void capture_static_window_snapshot_case() {
   const HWND snapshot_window = CreateWindowExW(
       0, L"STATIC", L"LayerC snapshot integration test", WS_POPUP, 0, 0, 32,
       16, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-  if (!layerc::test::expect(
-          snapshot_window != nullptr,
-          "interactive snapshot window should be created"))
+  layerc::test::expect(snapshot_window != nullptr,
+                       "interactive snapshot window should be created");
+  if (snapshot_window == nullptr)
     return;
   const auto snapshot = layerc::capture::capture_static_window_snapshot(
       snapshot_window, layerc::core::CaptureQuality::exact,
