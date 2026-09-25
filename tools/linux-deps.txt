@@ -2,6 +2,7 @@ g++
 cmake
 ninja-build
 python3
+git
 xvfb
 xauth
 x11-utils
