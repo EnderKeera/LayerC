@@ -32,7 +32,12 @@ function(layerc_enable_warnings target)
         target_compile_options(${target} PRIVATE
             /W4 /permissive- /EHsc /utf-8)
         if(LAYERC_MSVC_ANALYZE)
-            target_compile_options(${target} PRIVATE /analyze /WX)
+            # Analyze project code only: <...> system headers are external.
+            # C6553 is the Windows SDK 10.0.26100 winreg.h annotating the
+            # RegOpenKeyExW value parameter, reported at every call site.
+            target_compile_options(${target} PRIVATE
+                /analyze /analyze:external- /external:anglebrackets
+                /external:W0 /wd6553 /WX)
         endif()
     else()
         target_compile_options(${target} PRIVATE
