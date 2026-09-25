@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -23,6 +24,11 @@ struct TemplateImage {
   [[nodiscard]] bool valid() const noexcept;
   bool operator==(const TemplateImage &) const = default;
 };
+
+// Converts bounded, interleaved RGBA bytes into a validated matcher image.
+[[nodiscard]] std::optional<TemplateImage> template_image_from_rgba(
+    std::uint32_t width, std::uint32_t height,
+    std::span<const std::uint8_t> rgba);
 
 struct TemplateMatchResult {
   bool matched{};
@@ -62,12 +68,12 @@ public:
   [[nodiscard]] TemplateMatchResult
   evaluate(const TemplateState &state, std::span<const TemplateImage> references,
            PixelFrameView frame, CaptureQuality quality,
-           NormalizedRegion available_region = {0.0, 0.0, 1.0, 1.0},
-           std::span<const NormalizedRegion> unavailable_regions = {});
+           NormalizedRegion available_region,
+           std::span<const NormalizedRegion> unavailable_regions);
   void clear();
 
 private:
-  class Impl;
+  struct Impl;
   std::unique_ptr<Impl> impl_;
 };
 

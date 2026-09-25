@@ -1,6 +1,8 @@
 #include "isolated_visual_worker.hpp"
 
+#include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/framed_pipe.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +10,10 @@
 #include <filesystem>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #include <bcrypt.h>
 #include <sddl.h>
@@ -28,30 +33,6 @@ std::string random_hex() {
     result[index * 2U + 1U] = digits[bytes[index] & 0x0FU];
   }
   return result;
-}
-
-std::filesystem::path sibling_path(const wchar_t *filename) {
-  std::array<wchar_t, 32'768> module{};
-  const DWORD length = GetModuleFileNameW(nullptr, module.data(),
-                                          static_cast<DWORD>(module.size()));
-  if (length == 0 || length >= module.size())
-    return {};
-  return std::filesystem::path(std::wstring_view(module.data(), length))
-             .parent_path() /
-         filename;
-}
-
-bool same_path(const std::filesystem::path &expected, const HANDLE process) {
-  std::array<wchar_t, 32'768> actual{};
-  DWORD length = static_cast<DWORD>(actual.size());
-  if (QueryFullProcessImageNameW(process, 0, actual.data(), &length) == FALSE ||
-      length == 0)
-    return false;
-  std::error_code error;
-  const bool equivalent = std::filesystem::equivalent(
-      expected, std::filesystem::path(std::wstring_view(actual.data(), length)),
-      error);
-  return !error && equivalent;
 }
 
 std::wstring quoted(const std::wstring &value) {
@@ -77,16 +58,6 @@ std::wstring quoted(const std::wstring &value) {
   return output;
 }
 
-bool same_rectangles(const std::span<const RECT> left,
-                     const std::span<const RECT> right) {
-  return left.size() == right.size() &&
-         std::equal(left.begin(), left.end(), right.begin(),
-                    [](const RECT &a, const RECT &b) {
-                      return a.left == b.left && a.top == b.top &&
-                             a.right == b.right && a.bottom == b.bottom;
-                    });
-}
-
 template <typename NativeHandle>
 HANDLE cancellable_thread_handle(const NativeHandle handle) noexcept {
   if constexpr (std::is_pointer_v<NativeHandle>)
@@ -95,7 +66,336 @@ HANDLE cancellable_thread_handle(const NativeHandle handle) noexcept {
     return reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(handle));
 }
 
+using layerc::platform::OwnedHandle;
+
+class OwnedLocalMemory {
+public:
+  explicit OwnedLocalMemory(const HLOCAL value) : value_(value) {}
+  ~OwnedLocalMemory() {
+    if (value_ != nullptr)
+      LocalFree(value_);
+  }
+  OwnedLocalMemory(const OwnedLocalMemory &) = delete;
+  OwnedLocalMemory &operator=(const OwnedLocalMemory &) = delete;
+
+private:
+  HLOCAL value_{};
+};
+
+bool prepare_helper_pipe(const std::wstring &pipe_name,
+                         OwnedHandle &pipe, std::string &error) {
+  PSECURITY_DESCRIPTOR descriptor{};
+  if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          L"D:P(A;;GA;;;OW)(A;;GA;;;SY)", SDDL_REVISION_1, &descriptor,
+          nullptr) == FALSE) {
+    error = "could not create helper pipe security descriptor";
+    return false;
+  }
+  const OwnedLocalMemory owned_descriptor(descriptor);
+  SECURITY_ATTRIBUTES security{.nLength = sizeof(SECURITY_ATTRIBUTES),
+                               .lpSecurityDescriptor = descriptor,
+                               .bInheritHandle = FALSE};
+  pipe.reset(CreateNamedPipeW(
+      pipe_name.c_str(), PIPE_ACCESS_DUPLEX,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+          PIPE_REJECT_REMOTE_CLIENTS,
+      1, static_cast<DWORD>(isolated_visual_max_message_bytes),
+      static_cast<DWORD>(isolated_visual_max_message_bytes), 0, &security));
+  if (!pipe.valid()) {
+    error = "could not create isolated helper pipe";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
+
+IsolatedHelperProcess::~IsolatedHelperProcess() { close(); }
+
+HANDLE IsolatedHelperProcess::pipe() const noexcept {
+  const std::scoped_lock lock(mutex_);
+  return pipe_;
+}
+
+DWORD IsolatedHelperProcess::process_id() const noexcept {
+  const std::scoped_lock lock(mutex_);
+  return process_id_;
+}
+
+void IsolatedHelperProcess::terminate(const DWORD exit_code) noexcept {
+  std::scoped_lock lock(mutex_);
+  if (job_ != nullptr)
+    (void)TerminateJobObject(job_, exit_code);
+  // The process may not have reached AssignProcessToJobObject yet when a
+  // foreground transition destroys this worker. Terminate it directly as
+  // well so the CREATE_SUSPENDED launch window cannot leak an orphan.
+  if (process_ != nullptr) {
+    (void)TerminateProcess(process_, exit_code);
+    (void)WaitForSingleObject(process_, 2'000);
+  }
+  if (pipe_ != INVALID_HANDLE_VALUE)
+    (void)CancelIoEx(pipe_, nullptr);
+}
+
+void IsolatedHelperProcess::close() noexcept {
+  const std::scoped_lock lock(mutex_);
+  if (pipe_ != INVALID_HANDLE_VALUE) {
+    (void)DisconnectNamedPipe(pipe_);
+    CloseHandle(pipe_);
+    pipe_ = INVALID_HANDLE_VALUE;
+  }
+  if (process_ != nullptr) {
+    CloseHandle(process_);
+    process_ = nullptr;
+  }
+  if (job_ != nullptr) {
+    CloseHandle(job_);
+    job_ = nullptr;
+  }
+  process_id_ = 0;
+}
+
+bool IsolatedHelperProcess::connect_and_authenticate(
+    const std::string_view nonce, std::string &error) {
+  HANDLE pipe{};
+  DWORD helper_process_id{};
+  {
+    const std::scoped_lock lock(mutex_);
+    pipe = pipe_;
+    helper_process_id = process_id_;
+  }
+  const BOOL connected = ConnectNamedPipe(pipe, nullptr);
+  if (connected == FALSE && GetLastError() != ERROR_PIPE_CONNECTED) {
+    error = "layerw did not connect to its owned pipe";
+    terminate(ERROR_BROKEN_PIPE);
+    return false;
+  }
+
+  ULONG client_pid{};
+  if (GetNamedPipeClientProcessId(pipe, &client_pid) == FALSE ||
+      client_pid != helper_process_id) {
+    error = "isolated pipe client PID did not match layerw";
+    terminate(ERROR_ACCESS_DENIED);
+    return false;
+  }
+
+  auto hello = layerc::platform::read_framed_pipe(
+      pipe, isolated_visual_max_message_bytes);
+  if (!hello ||
+      !validate_isolated_hello(hello.payload, nonce, "worker",
+                               helper_process_id, error)) {
+    if (error.empty())
+      error = std::move(hello.error);
+    terminate(ERROR_ACCESS_DENIED);
+    return false;
+  }
+
+  std::string write_error;
+  if (!layerc::platform::write_framed_pipe(
+          pipe, isolated_hello_json(nonce, "daemon", GetCurrentProcessId()),
+          isolated_visual_max_message_bytes, write_error)) {
+    error = std::move(write_error);
+    terminate(ERROR_BROKEN_PIPE);
+    return false;
+  }
+  return true;
+}
+
+bool IsolatedHelperProcess::launch(const HWND window,
+                                   const std::atomic_bool &stopping,
+                                   std::string &error) {
+  close();
+  const auto helper = platform::sibling_image_path(L"layerw.exe");
+  const auto nonce = random_hex();
+  const auto suffix = random_hex();
+  if (helper.empty() || nonce.empty() || suffix.empty()) {
+    error = "could not create isolated helper identity";
+    return false;
+  }
+  const std::wstring pipe_name =
+      LR"(\\.\pipe\LayerC.VisualWorker.)" +
+      std::to_wstring(GetCurrentProcessId()) + L"." +
+      std::wstring(suffix.begin(), suffix.end());
+
+  OwnedHandle launch_pipe;
+  if (!prepare_helper_pipe(pipe_name, launch_pipe, error))
+    return false;
+  const std::wstring command =
+      quoted(helper.wstring()) + L" --pipe=" + quoted(pipe_name) +
+      L" --nonce=" + quoted(std::wstring(nonce.begin(), nonce.end())) +
+      L" --parent=" + std::to_wstring(GetCurrentProcessId()) + L" --window=" +
+      std::to_wstring(reinterpret_cast<std::uintptr_t>(window));
+  platform::HelperLaunchOptions options;
+  options.creation_flags = CREATE_NO_WINDOW;
+  options.job_flags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
+                      JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+  options.active_process_limit = 1;
+  options.process_memory_limit = 256ULL * 1024ULL * 1024ULL;
+  options.validate_suspended = [&](const HANDLE process, const DWORD id) {
+    DWORD current_session{}, helper_session{};
+    return !stopping.load(std::memory_order_acquire) &&
+           platform::process_image_equals(process, helper) &&
+           ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
+           ProcessIdToSessionId(id, &helper_session) != FALSE &&
+           current_session == helper_session;
+  };
+  {
+    // Serialize launch and ownership publication against stop(). The platform
+    // helper assigns and validates the suspended process before resuming it.
+    const std::scoped_lock lock(mutex_);
+    auto launched = platform::launch_bounded_helper(helper, command, options);
+    if (auto *failure = std::get_if<platform::HelperLaunchError>(&launched)) {
+      error = failure->step == platform::HelperLaunchStep::create_process
+                  ? "could not launch layerw.exe"
+                  : "isolated helper failed package, session, or job validation";
+      return false;
+    }
+    auto &child = std::get<platform::BoundedHelper>(launched);
+    job_ = child.job.release();
+    pipe_ = launch_pipe.release();
+    process_ = child.process.release();
+    process_id_ = child.process_id;
+  }
+
+  if (!connect_and_authenticate(nonce, error)) {
+    close();
+    return false;
+  }
+  return true;
+}
+
+bool IsolatedProtocolClient::apply_requests(
+    std::vector<VisualEvaluationRequest> requests,
+    const layerc::core::CaptureQuality quality) {
+  const std::scoped_lock lock(mutex_);
+  if (requests_ == requests && capture_quality_ == quality)
+    return false;
+  requests_ = std::move(requests);
+  capture_quality_ = quality;
+  ++configuration_revision_;
+  return true;
+}
+
+bool IsolatedProtocolClient::apply_exclusions(
+    const std::span<const RECT> rectangles) {
+  const std::scoped_lock lock(mutex_);
+  if (same_rectangles(exclusions_, rectangles))
+    return false;
+  exclusions_.assign(rectangles.begin(), rectangles.end());
+  ++configuration_revision_;
+  return true;
+}
+
+void IsolatedProtocolClient::clear_snapshot() {
+  const std::scoped_lock lock(mutex_);
+  latest_ = {};
+}
+
+VisualCaptureSnapshot IsolatedProtocolClient::snapshot() const {
+  const std::scoped_lock lock(mutex_);
+  return latest_;
+}
+
+bool IsolatedProtocolClient::exchange_configuration(
+    const HANDLE pipe, std::uint64_t &applied_revision,
+    std::atomic_uint64_t &last_progress_ms, std::string &error) {
+  IsolatedConfiguration configuration;
+  {
+    const std::scoped_lock lock(mutex_);
+    if (applied_revision == configuration_revision_)
+      return true;
+    configuration.sequence = configuration_revision_;
+    configuration.capture_quality = capture_quality_;
+    configuration.requests = requests_;
+    configuration.exclusions = exclusions_;
+  }
+  std::string write_error;
+  if (!layerc::platform::write_framed_pipe(
+          pipe, encode_isolated_configuration(configuration),
+          isolated_visual_max_message_bytes, write_error)) {
+    error = std::move(write_error);
+    return false;
+  }
+  auto reply = layerc::platform::read_framed_pipe(
+      pipe, isolated_visual_max_message_bytes);
+  if (!reply ||
+      !decode_isolated_ack(reply.payload, configuration.sequence, error)) {
+    if (error.empty())
+      error = std::move(reply.error);
+    return false;
+  }
+  applied_revision = configuration.sequence;
+  last_progress_ms.store(GetTickCount64(), std::memory_order_release);
+  return true;
+}
+
+bool IsolatedProtocolClient::poll_snapshot(
+    const HANDLE pipe, std::uint64_t &packet_sequence,
+    std::atomic_uint64_t &last_progress_ms, const HANDLE snapshot_event,
+    std::string &error) {
+  ++packet_sequence;
+  std::string write_error;
+  if (!layerc::platform::write_framed_pipe(
+          pipe, encode_isolated_poll(packet_sequence),
+          isolated_visual_max_message_bytes, write_error)) {
+    error = std::move(write_error);
+    return false;
+  }
+  auto reply = layerc::platform::read_framed_pipe(
+      pipe, isolated_visual_max_message_bytes);
+  if (!reply) {
+    error = std::move(reply.error);
+    return false;
+  }
+  auto decoded = decode_isolated_snapshot(reply.payload, packet_sequence);
+  if (const auto *protocol_error =
+          std::get_if<IsolatedProtocolError>(&decoded)) {
+    error = protocol_error->message;
+    return false;
+  }
+  auto snapshot = std::move(std::get<VisualCaptureSnapshot>(decoded));
+  const auto disposition = snapshot_validator_.validate(
+      snapshot, layerc::core::MonotonicClock::now(), error);
+  if (disposition == IsolatedSnapshotDisposition::rejected)
+    return false;
+  // A poll may legitimately observe the same bounded capture snapshot. Do
+  // not republish duplicate measurements into LayerD's authoritative state.
+  if (disposition == IsolatedSnapshotDisposition::accepted) {
+    const std::scoped_lock lock(mutex_);
+    latest_ = std::move(snapshot);
+    if (snapshot_event != nullptr)
+      SetEvent(snapshot_event);
+  }
+  last_progress_ms.store(GetTickCount64(), std::memory_order_release);
+  return true;
+}
+
+void IsolatedProtocolClient::run(const HANDLE pipe,
+                                 const std::atomic_bool &stopping,
+                                 std::atomic_uint64_t &last_progress_ms,
+                                 const HANDLE snapshot_event,
+                                 std::string &error) {
+  std::uint64_t applied_revision = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t packet_sequence{};
+
+  while (error.empty() && !stopping.load(std::memory_order_acquire)) {
+    if (!exchange_configuration(pipe, applied_revision, last_progress_ms,
+                                error))
+      break;
+    if (!poll_snapshot(pipe, packet_sequence, last_progress_ms, snapshot_event,
+                       error))
+      break;
+  }
+}
+
+bool IsolatedVisualWorker::run_helper(std::string &error) {
+  if (!helper_.launch(window_, stopping_, error))
+    return false;
+  client_.run(helper_.pipe(), stopping_, last_progress_ms_, snapshot_event_,
+              error);
+  helper_.close();
+  return error.empty() || stopping_.load(std::memory_order_acquire);
+}
 
 IsolatedVisualWorker::IsolatedVisualWorker(const HWND window,
                                            const HANDLE snapshot_event)
@@ -115,7 +415,7 @@ void IsolatedVisualWorker::start() {
 void IsolatedVisualWorker::stop() noexcept {
   stopping_.store(true, std::memory_order_release);
   wake_.notify_all();
-  terminate_owned_helper(ERROR_OPERATION_ABORTED);
+  helper_.terminate(ERROR_OPERATION_ABORTED);
   if (thread_.joinable()) {
     (void)CancelSynchronousIo(
         cancellable_thread_handle(thread_.native_handle()));
@@ -127,17 +427,7 @@ void IsolatedVisualWorker::stop() noexcept {
 void IsolatedVisualWorker::configure(
     std::vector<VisualEvaluationRequest> requests,
     const layerc::core::CaptureQuality capture_quality) {
-  bool changed{};
-  {
-    const std::scoped_lock lock(mutex_);
-    if (requests_ != requests || capture_quality_ != capture_quality) {
-      requests_ = std::move(requests);
-      capture_quality_ = capture_quality;
-      ++configuration_revision_;
-      changed = true;
-    }
-  }
-  if (changed) {
+  if (client_.apply_requests(std::move(requests), capture_quality)) {
     wake_.notify_all();
     if (quarantined_.load(std::memory_order_acquire))
       retry();
@@ -146,51 +436,8 @@ void IsolatedVisualWorker::configure(
 
 void IsolatedVisualWorker::set_excluded_screen_rects(
     const std::span<const RECT> rectangles) {
-  bool changed{};
-  {
-    const std::scoped_lock lock(mutex_);
-    if (!same_rectangles(exclusions_, rectangles)) {
-      exclusions_.assign(rectangles.begin(), rectangles.end());
-      ++configuration_revision_;
-      changed = true;
-    }
-  }
-  if (changed)
+  if (client_.apply_exclusions(rectangles))
     wake_.notify_all();
-}
-
-void IsolatedVisualWorker::terminate_owned_helper(
-    const DWORD exit_code) noexcept {
-  std::scoped_lock lock(process_mutex_);
-  if (job_ != nullptr)
-    (void)TerminateJobObject(job_, exit_code);
-  // The process may not have reached AssignProcessToJobObject yet when a
-  // foreground transition destroys this worker. Terminate it directly as
-  // well so the CREATE_SUSPENDED launch window cannot leak an orphan.
-  if (process_ != nullptr) {
-    (void)TerminateProcess(process_, exit_code);
-    (void)WaitForSingleObject(process_, 2'000);
-  }
-  if (pipe_ != INVALID_HANDLE_VALUE)
-    (void)CancelIoEx(pipe_, nullptr);
-}
-
-void IsolatedVisualWorker::close_owned_helper_handles() noexcept {
-  const std::scoped_lock lock(process_mutex_);
-  if (pipe_ != INVALID_HANDLE_VALUE) {
-    (void)DisconnectNamedPipe(pipe_);
-    CloseHandle(pipe_);
-    pipe_ = INVALID_HANDLE_VALUE;
-  }
-  if (process_ != nullptr) {
-    CloseHandle(process_);
-    process_ = nullptr;
-  }
-  if (job_ != nullptr) {
-    CloseHandle(job_);
-    job_ = nullptr;
-  }
-  process_id_ = 0;
 }
 
 void IsolatedVisualWorker::maintain() {
@@ -204,7 +451,7 @@ void IsolatedVisualWorker::maintain() {
     const std::scoped_lock lock(mutex_);
     last_error_ = "isolated visual helper made no progress for two seconds";
   }
-  terminate_owned_helper(ERROR_TIMEOUT);
+  helper_.terminate(ERROR_TIMEOUT);
   if (thread_.joinable())
     (void)CancelSynchronousIo(
         cancellable_thread_handle(thread_.native_handle()));
@@ -225,12 +472,11 @@ void IsolatedVisualWorker::retry() {
 }
 
 VisualCaptureSnapshot IsolatedVisualWorker::snapshot() const {
-  const std::scoped_lock lock(mutex_);
-  return latest_;
+  return client_.snapshot();
 }
 
-IsolatedVisualStatus IsolatedVisualWorker::status() const {
-  IsolatedVisualStatus status;
+VisualCaptureHostStatus IsolatedVisualWorker::status() const {
+  VisualCaptureHostStatus status;
   status.running = running_.load(std::memory_order_acquire);
   status.quarantined = quarantined_.load(std::memory_order_acquire);
   status.fault_count = fault_count_.load(std::memory_order_acquire);
@@ -238,223 +484,8 @@ IsolatedVisualStatus IsolatedVisualWorker::status() const {
     const std::scoped_lock lock(mutex_);
     status.last_error = last_error_;
   }
-  {
-    const std::scoped_lock lock(process_mutex_);
-    status.helper_process_id = process_id_;
-  }
+  status.helper_process_id = helper_.process_id();
   return status;
-}
-
-bool IsolatedVisualWorker::run_helper(std::string &error) {
-  const auto helper = sibling_path(L"layerw.exe");
-  const auto nonce = random_hex();
-  const auto suffix = random_hex();
-  if (helper.empty() || nonce.empty() || suffix.empty()) {
-    error = "could not create isolated helper identity";
-    return false;
-  }
-  const std::wstring pipe_name = L"\\\\.\\pipe\\LayerC.VisualWorker." +
-                                 std::to_wstring(GetCurrentProcessId()) + L"." +
-                                 std::wstring(suffix.begin(), suffix.end());
-
-  PSECURITY_DESCRIPTOR descriptor{};
-  if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
-          L"D:P(A;;GA;;;OW)(A;;GA;;;SY)", SDDL_REVISION_1, &descriptor,
-          nullptr) == FALSE) {
-    error = "could not create helper pipe security descriptor";
-    return false;
-  }
-  SECURITY_ATTRIBUTES security{.nLength = sizeof(SECURITY_ATTRIBUTES),
-                               .lpSecurityDescriptor = descriptor,
-                               .bInheritHandle = FALSE};
-  HANDLE pipe = CreateNamedPipeW(
-      pipe_name.c_str(), PIPE_ACCESS_DUPLEX,
-      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
-          PIPE_REJECT_REMOTE_CLIENTS,
-      1, static_cast<DWORD>(isolated_visual_max_message_bytes),
-      static_cast<DWORD>(isolated_visual_max_message_bytes), 0, &security);
-  LocalFree(descriptor);
-  if (pipe == INVALID_HANDLE_VALUE) {
-    error = "could not create isolated helper pipe";
-    return false;
-  }
-
-  HANDLE job = CreateJobObjectW(nullptr, nullptr);
-  if (job == nullptr) {
-    CloseHandle(pipe);
-    error = "could not create isolated helper job";
-    return false;
-  }
-  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
-                                            JOB_OBJECT_LIMIT_ACTIVE_PROCESS |
-                                            JOB_OBJECT_LIMIT_PROCESS_MEMORY;
-  limits.BasicLimitInformation.ActiveProcessLimit = 1;
-  limits.ProcessMemoryLimit = 256ULL * 1024ULL * 1024ULL;
-  if (SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits,
-                              sizeof(limits)) == FALSE) {
-    CloseHandle(job);
-    CloseHandle(pipe);
-    error = "could not apply isolated helper job limits";
-    return false;
-  }
-
-  const std::wstring command =
-      quoted(helper.wstring()) + L" --pipe=" + quoted(pipe_name) +
-      L" --nonce=" + quoted(std::wstring(nonce.begin(), nonce.end())) +
-      L" --parent=" + std::to_wstring(GetCurrentProcessId()) + L" --window=" +
-      std::to_wstring(reinterpret_cast<std::uintptr_t>(window_));
-  std::vector<wchar_t> mutable_command(command.begin(), command.end());
-  mutable_command.push_back(L'\0');
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  PROCESS_INFORMATION process{};
-  if (CreateProcessW(helper.c_str(), mutable_command.data(), nullptr, nullptr,
-                     FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr,
-                     helper.parent_path().c_str(), &startup,
-                     &process) == FALSE) {
-    CloseHandle(job);
-    CloseHandle(pipe);
-    error = "could not launch layerw.exe";
-    return false;
-  }
-  // Publish ownership before validation or ResumeThread. stop() can run from
-  // the foreground hook while this launch thread is between those operations;
-  // keeping the handles private until after resume left a suspended child that
-  // neither the job nor the worker destructor could reliably retire.
-  {
-    const std::scoped_lock lock(process_mutex_);
-    job_ = job;
-    pipe_ = pipe;
-    process_ = process.hProcess;
-    process_id_ = process.dwProcessId;
-  }
-  const bool assigned =
-      AssignProcessToJobObject(job, process.hProcess) != FALSE;
-  const bool trusted_path = same_path(helper, process.hProcess);
-  DWORD current_session{}, helper_session{};
-  const bool same_session =
-      ProcessIdToSessionId(GetCurrentProcessId(), &current_session) != FALSE &&
-      ProcessIdToSessionId(process.dwProcessId, &helper_session) != FALSE &&
-      current_session == helper_session;
-  if (stopping_.load(std::memory_order_acquire) || !assigned || !trusted_path ||
-      !same_session ||
-      ResumeThread(process.hThread) == static_cast<DWORD>(-1)) {
-    terminate_owned_helper(stopping_.load(std::memory_order_acquire)
-                               ? ERROR_OPERATION_ABORTED
-                               : ERROR_ACCESS_DENIED);
-    CloseHandle(process.hThread);
-    close_owned_helper_handles();
-    error = "isolated helper failed package, session, or job validation";
-    return false;
-  }
-  CloseHandle(process.hThread);
-
-  const BOOL connected = ConnectNamedPipe(pipe, nullptr);
-  if (connected == FALSE && GetLastError() != ERROR_PIPE_CONNECTED) {
-    error = "layerw did not connect to its owned pipe";
-    terminate_owned_helper(ERROR_BROKEN_PIPE);
-  } else {
-    ULONG client_pid{};
-    if (GetNamedPipeClientProcessId(pipe, &client_pid) == FALSE ||
-        client_pid != process.dwProcessId) {
-      error = "isolated pipe client PID did not match layerw";
-      terminate_owned_helper(ERROR_ACCESS_DENIED);
-    }
-  }
-
-  std::uint64_t applied_revision = std::numeric_limits<std::uint64_t>::max();
-  std::uint64_t packet_sequence{};
-  IsolatedSnapshotValidator snapshot_validator;
-  if (error.empty()) {
-    auto hello = layerc::platform::read_framed_pipe(
-        pipe, isolated_visual_max_message_bytes);
-    if (!hello || !validate_isolated_hello(hello.payload, nonce, "worker",
-                                           process.dwProcessId, error)) {
-      if (error.empty())
-        error = hello.error;
-    } else {
-      std::string write_error;
-      if (!layerc::platform::write_framed_pipe(
-              pipe, isolated_hello_json(nonce, "daemon", GetCurrentProcessId()),
-              isolated_visual_max_message_bytes, write_error))
-        error = std::move(write_error);
-      else
-        last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
-    }
-  }
-
-  while (error.empty() && !stopping_.load(std::memory_order_acquire)) {
-    IsolatedConfiguration configuration;
-    bool configure{};
-    {
-      const std::scoped_lock lock(mutex_);
-      configure = applied_revision != configuration_revision_;
-      if (configure) {
-        configuration.sequence = configuration_revision_;
-        configuration.capture_quality = capture_quality_;
-        configuration.requests = requests_;
-        configuration.exclusions = exclusions_;
-      }
-    }
-    if (configure) {
-      std::string write_error;
-      if (!layerc::platform::write_framed_pipe(
-              pipe, encode_isolated_configuration(configuration),
-              isolated_visual_max_message_bytes, write_error)) {
-        error = std::move(write_error);
-        break;
-      }
-      auto reply = layerc::platform::read_framed_pipe(
-          pipe, isolated_visual_max_message_bytes);
-      if (!reply ||
-          !decode_isolated_ack(reply.payload, configuration.sequence, error)) {
-        if (error.empty())
-          error = reply.error;
-        break;
-      }
-      applied_revision = configuration.sequence;
-      last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
-    }
-
-    ++packet_sequence;
-    std::string write_error;
-    if (!layerc::platform::write_framed_pipe(
-            pipe, encode_isolated_poll(packet_sequence),
-            isolated_visual_max_message_bytes, write_error)) {
-      error = std::move(write_error);
-      break;
-    }
-    auto reply = layerc::platform::read_framed_pipe(
-        pipe, isolated_visual_max_message_bytes);
-    if (!reply) {
-      error = std::move(reply.error);
-      break;
-    }
-    auto decoded = decode_isolated_snapshot(reply.payload, packet_sequence);
-    if (const auto *protocol_error =
-            std::get_if<IsolatedProtocolError>(&decoded)) {
-      error = protocol_error->message;
-      break;
-    }
-    auto snapshot = std::move(std::get<VisualCaptureSnapshot>(decoded));
-    const auto disposition = snapshot_validator.validate(
-        snapshot, layerc::core::MonotonicClock::now(), error);
-    if (disposition == IsolatedSnapshotDisposition::rejected)
-      break;
-    // A poll may legitimately observe the same bounded capture snapshot. Do
-    // not republish duplicate measurements into LayerD's authoritative state.
-    if (disposition == IsolatedSnapshotDisposition::accepted) {
-      const std::scoped_lock lock(mutex_);
-      latest_ = std::move(snapshot);
-      if (snapshot_event_ != nullptr)
-        SetEvent(snapshot_event_);
-    }
-    last_progress_ms_.store(GetTickCount64(), std::memory_order_release);
-  }
-
-  close_owned_helper_handles();
-  return error.empty() || stopping_.load(std::memory_order_acquire);
 }
 
 void IsolatedVisualWorker::run() {
@@ -466,8 +497,8 @@ void IsolatedVisualWorker::run() {
     {
       const std::scoped_lock lock(mutex_);
       last_error_ = std::move(error);
-      latest_ = {};
     }
+    client_.clear_snapshot();
     const auto faults =
         fault_count_.fetch_add(1, std::memory_order_acq_rel) + 1U;
     if (faults >= 2) {

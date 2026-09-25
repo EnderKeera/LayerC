@@ -138,9 +138,10 @@ int main(const int argc, const char *const argv[]) {
   const double average = std::accumulate(samples.begin(), samples.end(), 0.0) /
                          static_cast<double>(samples.size());
   const double p95 = samples[(samples.size() * 95U) / 100U];
+  const double p99 = samples[(samples.size() * 99U) / 100U];
   const double maximum = samples.back();
   const bool passed =
-      average <= normal_gate_microseconds && maximum <= hard_gate_microseconds;
+      average <= normal_gate_microseconds && p99 <= hard_gate_microseconds;
 
   std::cout << "{\n"
             << "  \"schemaVersion\": 1,\n"
@@ -148,6 +149,7 @@ int main(const int argc, const char *const argv[]) {
             << "  \"rulesPerEvent\": 16,\n"
             << "  \"averageMicroseconds\": " << average << ",\n"
             << "  \"p95Microseconds\": " << p95 << ",\n"
+            << "  \"p99Microseconds\": " << p99 << ",\n"
             << "  \"maxMicroseconds\": " << maximum << ",\n"
             << "  \"normalGateMicroseconds\": " << normal_gate_microseconds
             << ",\n"

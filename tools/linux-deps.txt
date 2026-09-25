@@ -1,0 +1,16 @@
+g++
+cmake
+ninja-build
+python3
+git
+xvfb
+xauth
+x11-utils
+libx11-dev
+libxi-dev
+libxext-dev
+libxrandr-dev
+libxcomposite-dev
+libxdamage-dev
+libxfixes-dev
+libxtst-dev

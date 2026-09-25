@@ -19,6 +19,23 @@ layerc::core::HidDeviceSelector selector_for(const HidRawDevice &device) {
           .stable_slot = 1};
 }
 
+layerc::core::HidActivationMode relative_activation(const bool negative) {
+  return negative ? layerc::core::HidActivationMode::relative_negative
+                  : layerc::core::HidActivationMode::relative_positive;
+}
+
+// Binds the half of an absolute axis that `normalized` (0..1) leans toward;
+// returns whether that is the negative half.
+bool apply_axis_activation(layerc::core::HidControlBinding &binding,
+                           const double normalized) {
+  const bool negative = normalized < 0.5;
+  binding.activation = negative ? layerc::core::HidActivationMode::axis_negative
+                                : layerc::core::HidActivationMode::axis_positive;
+  binding.threshold =
+      std::clamp(negative ? 1.0 - normalized : normalized, 0.55, 0.95);
+  return negative;
+}
+
 } // namespace
 
 std::optional<InferredHidControl>
@@ -142,12 +159,10 @@ infer_hid_control(const HidRawDevice &device,
   const auto range = static_cast<std::int64_t>(best->caps.LogicalMax) -
                      best->caps.LogicalMin;
   if (best->caps.IsAbsolute == FALSE) {
-    result.binding.activation =
-        best->value < 0
-            ? layerc::core::HidActivationMode::relative_negative
-            : layerc::core::HidActivationMode::relative_positive;
-    result.description = best->value < 0 ? L"Relative axis negative"
-                                         : L"Relative axis positive";
+    const bool negative = best->value < 0;
+    result.binding.activation = relative_activation(negative);
+    result.description =
+        negative ? L"Relative axis negative" : L"Relative axis positive";
   } else if (range >= 0 && range <= 16) {
     result.binding.activation = layerc::core::HidActivationMode::equals;
     result.binding.discrete_value = best->value;
@@ -158,15 +173,9 @@ infer_hid_control(const HidRawDevice &device,
                    : (static_cast<double>(best->value) -
                       best->caps.LogicalMin) /
                          static_cast<double>(range);
-    result.binding.activation =
-        normalized < 0.5
-            ? layerc::core::HidActivationMode::axis_negative
-            : layerc::core::HidActivationMode::axis_positive;
-    result.binding.threshold =
-        std::clamp(normalized < 0.5 ? 1.0 - normalized : normalized,
-                   0.55, 0.95);
-    result.description = normalized < 0.5 ? L"Absolute axis negative"
-                                          : L"Absolute axis positive";
+    result.description = apply_axis_activation(result.binding, normalized)
+                             ? L"Absolute axis negative"
+                             : L"Absolute axis positive";
   }
   result.description += L", usage " +
                         std::to_wstring(result.binding.usage_page) + L":" +
@@ -238,20 +247,12 @@ infer_hid_control(const HidRawDevice &device, const RAWINPUT &input) {
     return std::nullopt;
   }
   const bool relative = (mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0;
-  if (relative) {
-    result.binding.activation =
-        value < 0 ? layerc::core::HidActivationMode::relative_negative
-                  : layerc::core::HidActivationMode::relative_positive;
-  } else {
-    const double normalized =
-        std::clamp(static_cast<double>(value) / 65'535.0, 0.0, 1.0);
-    result.binding.activation =
-        normalized < 0.5 ? layerc::core::HidActivationMode::axis_negative
-                         : layerc::core::HidActivationMode::axis_positive;
-    result.binding.threshold =
-        std::clamp(normalized < 0.5 ? 1.0 - normalized : normalized,
-                   0.55, 0.95);
-  }
+  if (relative)
+    result.binding.activation = relative_activation(value < 0);
+  else
+    (void)apply_axis_activation(
+        result.binding,
+        std::clamp(static_cast<double>(value) / 65'535.0, 0.0, 1.0));
   return result;
 }
 

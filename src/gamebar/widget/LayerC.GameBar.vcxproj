@@ -68,7 +68,7 @@
       <MultiProcessorCompilation>false</MultiProcessorCompilation>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\..\..\core\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)\..\..\core\include;$(LayerCGeneratedInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/utf-8 /bigobj /DWINRT_NO_MAKE_DETECTION %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>UNICODE;_UNICODE;WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -101,7 +101,7 @@
     <Page Include="SettingsWidgetPage.xaml"><SubType>Designer</SubType></Page>
   </ItemGroup>
   <ItemGroup>
-    <AppxManifest Include="..\Package.appxmanifest"><SubType>Designer</SubType></AppxManifest>
+    <AppxManifest Include="$(LayerCGameBarManifest)"><SubType>Designer</SubType></AppxManifest>
   </ItemGroup>
   <ItemGroup Condition="'$(LayerCGameBarAsset)'!=''">
     <Image Include="$(LayerCGameBarAsset)"><Link>Assets\StoreLogo.png</Link></Image>
@@ -115,6 +115,7 @@
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
     <ClCompile Include="..\..\core\companion.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\..\core\json.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\..\core\json_reader.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\..\core\json_value.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\..\core\utf8.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
   </ItemGroup>

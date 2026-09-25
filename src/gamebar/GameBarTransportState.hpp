@@ -30,13 +30,22 @@ struct GameBarWakeEvent {
 struct GameBarTransportState {
   mutable std::mutex mutex;
   std::shared_ptr<GameBarWakeEvent> wake_event;
-  bool started{};
-  bool connected{};
-  bool opening{};
-  bool sending{};
-  bool retry_ready{};
-  bool retry_needed{};
-  unsigned retry_ms{100};
+  enum class Link { stopped, idle, opening, connected, sending };
+  struct RetryState {
+    bool ready{};
+    bool needed{};
+    unsigned delay_ms{100};
+  };
+
+  // Caller holds mutex for every transition and observation.
+  void enter(Link next, std::optional<std::wstring> reason = std::nullopt) {
+    link = next;
+    if (reason.has_value())
+      last_error = std::move(*reason);
+  }
+
+  Link link{Link::stopped};
+  RetryState retry;
   std::uint64_t generation{};
   std::uint64_t connection_epoch{};
   std::optional<std::string> pending_snapshot;
@@ -69,7 +78,8 @@ namespace detail {
 
 inline constexpr std::size_t max_pending_preference_updates = 16;
 
-void signal(const std::shared_ptr<GameBarTransportState> &state) noexcept;
+void raise_wake_event(
+    const std::shared_ptr<GameBarTransportState> &state) noexcept;
 void schedule_retry_locked(const std::shared_ptr<GameBarTransportState> &state);
 [[nodiscard]] bool
 start_app_service(const std::shared_ptr<GameBarTransportState> &state);

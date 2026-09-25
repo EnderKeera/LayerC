@@ -2,7 +2,11 @@
 
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/profile_transaction.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/platform_events.hpp"
+#include "layerc/platform/settings_store.hpp"
+#include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_error.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,37 +19,36 @@ namespace layerc::daemon {
 int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   (void)show_command;
   instance_ = instance;
-  if (!layerc::platform::recover_profile_transactions(
-          layerc::platform::profile_directory())) {
-    MessageBoxW(
-        nullptr,
-        L"LayerD could not recover an interrupted profile import. "
-        L"Profiles were not loaded to avoid publishing a partial transaction.",
-        L"LayerC profile recovery", MB_OK | MB_ICONERROR);
+  const auto transaction_scope = layerc::platform::profile_transaction_scope(
+      layerc::platform::profile_directory());
+  const auto recovered =
+      transaction_scope.has_value()
+          ? layerc::platform::recover_profile_transactions(*transaction_scope)
+          : layerc::platform::ProfileWriteResult{
+                layerc::platform::ProfileWriteError::scope_rejected};
+  if (const auto error = recovered.error(); error.has_value()) {
+    const auto message =
+        L"LayerD could not recover an interrupted profile import (" +
+        layerc::platform::utf8_to_wide(
+            layerc::platform::profile_write_error_text(*error)) +
+        L"). Profiles were not loaded to avoid publishing a partial "
+        L"transaction.";
+    MessageBoxW(nullptr, message.c_str(), L"LayerC profile recovery",
+                MB_OK | MB_ICONERROR);
     return 1;
   }
   if (!create_message_window(instance)) {
     return 1;
   }
-  capture_exclusion_ = layerc::platform::capture_exclusion_enabled();
-  visual_recognition_enabled_ = layerc::platform::visual_recognition_enabled();
+  load_platform_settings();
   reload_event_ = CreateEventW(nullptr, TRUE, FALSE,
                                layerc::platform::profile_reload_event_name);
   settings_reload_event_ = CreateEventW(
       nullptr, TRUE, FALSE, layerc::platform::settings_reload_event_name);
-  visual_capture_active_event_ = CreateEventW(
-      nullptr, TRUE, FALSE, layerc::platform::visual_capture_active_event_name);
+  (void)visual_capture_runtime_.open_activity_event();
   add_tray_icon();
   reload_profiles();
-  foreground_hook_target_ = this;
-  foreground_event_hook_ = SetWinEventHook(
-      EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
-      &DaemonApp::foreground_event_proc, 0, 0, WINEVENT_OUTOFCONTEXT);
-  // Include destroy notifications so a closed matched game immediately retires
-  // its instance and owned overlays rather than waiting for the next scan.
-  location_event_hook_ = SetWinEventHook(
-      EVENT_OBJECT_DESTROY, EVENT_OBJECT_LOCATIONCHANGE, nullptr,
-      &DaemonApp::foreground_event_proc, 0, 0, WINEVENT_OUTOFCONTEXT);
+  overlay_runtime_.start();
   SetTimer(window_, game_scan_timer, 1000, nullptr);
   poll_live_channel();
 
@@ -53,22 +56,29 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   int exit_code{};
   MSG message{};
   while (running) {
+    // Flush here for work done outside window messages (loop-level polls,
+    // WinEvent callbacks); handle_message flushes for modal-loop dispatch.
+    flush_overlays();
     std::array<HANDLE, 5> live_handles{};
     const auto live_handle_count = static_cast<DWORD>(
-        live_channel_.wait_handles(std::span<HANDLE>(live_handles).first(3)));
+        live_edit_host_.channel().wait_handles(std::span<HANDLE>(live_handles).first(3)));
     DWORD wait_handle_count = live_handle_count;
     const DWORD gamebar_wait_index = wait_handle_count;
-    const HANDLE gamebar_wait = gamebar_transport_.wait_handle();
+    const HANDLE gamebar_wait = companion_host_.transport().wait_handle();
     if (gamebar_wait != nullptr)
       live_handles[wait_handle_count++] = gamebar_wait;
     const DWORD visual_wait_index = wait_handle_count;
-    const bool visual_wait = visual_snapshot_event_ != nullptr;
+    const bool visual_wait = visual_capture_runtime_.snapshot_event() != nullptr;
     if (visual_wait)
-      live_handles[wait_handle_count++] = visual_snapshot_event_;
+      live_handles[wait_handle_count++] = visual_capture_runtime_.snapshot_event();
     DWORD timeout = INFINITE;
-    if (edit_session_ != nullptr)
+    if (live_edit_host_.session() != nullptr)
       timeout = 250U;
-    else if (!isolated_visual_captures_.empty())
+    else if (std::ranges::any_of(visual_capture_runtime_.captures(), [](const auto &entry) {
+               return entry.second != nullptr &&
+                      entry.second->runtime() ==
+                          layerc::core::VisualRuntime::isolated;
+             }))
       timeout = 500U;
     else if (wait_handle_count == 0)
       timeout = 1'000U;
@@ -81,7 +91,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
       break;
     }
     if (result == WAIT_TIMEOUT) {
-      maintain_isolated_visual_captures();
+      maintain_visual_captures();
       poll_live_channel();
       continue;
     }
@@ -111,30 +121,47 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     }
   }
 
-  if (foreground_hook_target_ == this) {
-    foreground_hook_target_ = nullptr;
-  }
-  if (foreground_event_hook_ != nullptr) {
-    UnhookWinEvent(foreground_event_hook_);
-  }
-  if (location_event_hook_ != nullptr) {
-    UnhookWinEvent(location_event_hook_);
-  }
+  runtime_kernel_.quiesce();
+  overlay_runtime_.stop();
+  visual_capture_runtime_.publish_activity(false);
+  automation_runtime_host_.publish_activity(false);
   if (reload_event_ != nullptr) {
     CloseHandle(reload_event_);
   }
   if (settings_reload_event_ != nullptr) {
     CloseHandle(settings_reload_event_);
   }
-  if (visual_capture_active_event_ != nullptr) {
-    CloseHandle(visual_capture_active_event_);
-  }
-  if (automation_active_event_ != nullptr) {
-    CloseHandle(automation_active_event_);
-    automation_active_event_ = nullptr;
-  }
   remove_tray_icon();
   return exit_code;
+}
+
+void DaemonApp::load_platform_settings() {
+  settings_error_.clear();
+  const auto append_error = [&](const std::string_view name,
+                                const std::uint32_t error) {
+    if (!settings_error_.empty())
+      settings_error_ += "; ";
+    settings_error_ += name;
+    settings_error_ += ": ";
+    settings_error_ += layerc::platform::wide_to_utf8(
+        layerc::platform::windows_error_text(error));
+  };
+  // Both flags default to enabled when the setting is absent from the store.
+  const auto apply = [&](bool &target, const auto &result,
+                         const std::string_view name) {
+    if (result.value)
+      target = *result.value;
+    else if (result.missing())
+      target = true;
+    else
+      append_error(name, result.error);
+  };
+
+  apply(capture_exclusion_, layerc::platform::read_capture_exclusion_setting(),
+        "capture exclusion");
+  apply(visual_recognition_enabled_,
+        layerc::platform::read_visual_recognition_setting(),
+        "visual recognition");
 }
 
 bool DaemonApp::create_message_window(const HINSTANCE instance) {
@@ -188,7 +215,7 @@ void DaemonApp::show_tray_menu() {
   if (menu == nullptr) {
     return;
   }
-  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_status_.c_str());
+  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_capture_runtime_.status().c_str());
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, command_open_editor, L"Open editor");
   AppendMenuW(menu, MF_STRING, command_reload, L"Reload profiles");
@@ -203,16 +230,10 @@ void DaemonApp::show_tray_menu() {
 }
 
 void DaemonApp::launch_editor() {
-  std::array<wchar_t, 32'768> module_path{};
-  const DWORD length = GetModuleFileNameW(
-      nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
-  if (length == 0 || length >= module_path.size()) {
+  const auto editor = platform::sibling_image_path(L"layere.exe");
+  if (editor.empty()) {
     return;
   }
-  const auto editor =
-      std::filesystem::path(std::wstring_view(module_path.data(), length))
-          .parent_path() /
-      L"layere.exe";
   ShellExecuteW(nullptr, L"open", editor.c_str(), nullptr,
                 editor.parent_path().c_str(), SW_SHOWNORMAL);
 }
@@ -242,6 +263,13 @@ LRESULT CALLBACK DaemonApp::window_proc(const HWND window, const UINT message,
 
 LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
                                   const WPARAM wparam, const LPARAM lparam) {
+  const LRESULT result = dispatch_message(window, message, wparam, lparam);
+  flush_overlays();
+  return result;
+}
+
+LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
+                                    const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_INPUT:
     handle_raw_input(reinterpret_cast<HRAWINPUT>(lparam));
@@ -262,7 +290,7 @@ LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
     } else if (wparam == input_poll_timer) {
       poll_input_devices();
     } else if (wparam == overlay_render_timer) {
-      update_overlays();
+      mark_overlays_dirty();
     } else if (wparam == automation_timer) {
       poll_automation_timer();
     }

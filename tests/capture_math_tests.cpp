@@ -1,12 +1,20 @@
 #include "test_support.hpp"
 
+#include "layerc/capture/capture.hpp"
+#include "layerc/capture/visual_evaluation.hpp"
+#include "layerc/runtime/daemon_kernel.hpp"
+
+#if defined(_WIN32)
 #include "layerc/capture/window_capture.hpp"
+#endif
 
 #include <cstdlib>
 #include <iostream>
+#include <span>
+#include <type_traits>
 #include <utility>
 
-int main() {
+void capture_math_contracts() {
   using layerc::capture::region_is_available;
   using layerc::core::NormalizedRegion;
   using layerc::test::expect;
@@ -67,6 +75,74 @@ int main() {
   expect(region_is_available({0.2, 0.2, 0.2, 0.2}, frame),
          "rules touching but not entering an excluded region should remain available");
 
+  static_assert(std::is_same_v<
+                decltype(layerc::capture::CapturePoll::window),
+                layerc::runtime::WindowId>);
+  const layerc::runtime::WindowId window{42};
+  auto valid_frame = std::make_shared<layerc::capture::CaptureFrame>();
+  valid_frame->width = 2;
+  valid_frame->height = 2;
+  valid_frame->pixels.resize(4);
+  auto valid_poll = layerc::capture::normalize_capture_poll(
+      window, {.availability = layerc::core::CaptureAvailability::available,
+               .backend = layerc::core::CaptureBackendKind::none,
+               .diagnostic = "valid",
+               .frame = valid_frame});
+  expect(valid_poll.window == window &&
+             valid_poll.result.availability ==
+                 layerc::core::CaptureAvailability::available &&
+             valid_poll.result.frame == valid_frame &&
+             valid_poll.result.diagnostic == "valid",
+         "the keyed seam should preserve a valid available frame");
+
+  auto short_frame = std::make_shared<layerc::capture::CaptureFrame>(
+      *valid_frame);
+  short_frame->pixels.pop_back();
+  const auto short_poll = layerc::capture::normalize_capture_poll(
+      window, {.availability = layerc::core::CaptureAvailability::available,
+               .frame = short_frame});
+  expect(short_poll.result.availability ==
+                 layerc::core::CaptureAvailability::unavailable &&
+             !short_poll.result.frame,
+         "an undersized available frame should become unavailable");
+
+  auto oversized_frame = std::make_shared<layerc::capture::CaptureFrame>(
+      *valid_frame);
+  oversized_frame->pixels.push_back({});
+  const auto oversized_poll = layerc::capture::normalize_capture_poll(
+      window, {.availability = layerc::core::CaptureAvailability::available,
+               .frame = oversized_frame});
+  expect(oversized_poll.result.availability ==
+                 layerc::core::CaptureAvailability::unavailable &&
+             !oversized_poll.result.frame,
+         "a tightly packed frame should reject pixels outside its bounds");
+
+  const auto missing_poll = layerc::capture::normalize_capture_poll(
+      window, {.availability = layerc::core::CaptureAvailability::available});
+  expect(missing_poll.result.availability ==
+                 layerc::core::CaptureAvailability::unavailable &&
+             !missing_poll.result.frame,
+         "an available result without a frame should become unavailable");
+
+  const layerc::core::CaptureAvailability unavailable_states[]{
+      layerc::core::CaptureAvailability::inactive,
+      layerc::core::CaptureAvailability::starting,
+      layerc::core::CaptureAvailability::unavailable,
+      layerc::core::CaptureAvailability::protected_or_black,
+      layerc::core::CaptureAvailability::outside_output,
+  };
+  for (const auto availability : unavailable_states) {
+    const auto unavailable_poll = layerc::capture::normalize_capture_poll(
+        window, {.availability = availability,
+                 .backend = layerc::core::CaptureBackendKind::none,
+                 .diagnostic = "preserved",
+                 .frame = valid_frame});
+    expect(unavailable_poll.result.availability == availability &&
+               !unavailable_poll.result.frame &&
+               unavailable_poll.result.diagnostic == "preserved",
+           "unavailable states should clear stale frames only");
+  }
+
   layerc::capture::CaptureFrame black_frame;
   black_frame.width = 512;
   black_frame.height = 512;
@@ -74,6 +150,45 @@ int main() {
       static_cast<std::size_t>(black_frame.width) * black_frame.height);
   expect(layerc::capture::frame_is_nearly_black(black_frame),
          "a genuinely black frame should remain protected");
+  layerc::capture::CaptureHealthTracker health;
+  auto observed_black = std::make_shared<layerc::capture::CaptureFrame>();
+  observed_black->width = 1;
+  observed_black->height = 1;
+  observed_black->pixels.resize(1);
+  auto health_result = health.observe(
+      {.availability = layerc::core::CaptureAvailability::available,
+       .frame = observed_black});
+  (void)health.observe(
+      {.availability = layerc::core::CaptureAvailability::available,
+       .frame = observed_black});
+  expect(health.consecutive_black_frames() == 1,
+         "polling one buffered frame twice should count it once");
+  for (std::uint32_t index = 1;
+       index < layerc::capture::CaptureHealthTracker::protected_frame_threshold;
+       ++index) {
+    auto next_black =
+        std::make_shared<layerc::capture::CaptureFrame>(*observed_black);
+    health_result = health.observe(
+        {.availability = layerc::core::CaptureAvailability::available,
+         .frame = std::move(next_black)});
+  }
+  expect(health_result.availability ==
+                 layerc::core::CaptureAvailability::protected_or_black &&
+             health_result.phase == layerc::capture::CapturePhase::degraded &&
+             health_result.diagnostic.find("persistent black") !=
+                 std::string::npos,
+         "one shared threshold should classify persistent black frames");
+  health.reset();
+  auto observed_white = std::make_shared<layerc::capture::CaptureFrame>();
+  observed_white->width = 1;
+  observed_white->height = 1;
+  observed_white->pixels.push_back({255, 255, 255});
+  health_result = health.observe(
+      {.availability = layerc::core::CaptureAvailability::available,
+       .frame = observed_white});
+  expect(health_result.phase == layerc::capture::CapturePhase::live &&
+             health.consecutive_black_frames() == 0,
+         "reset and a non-black frame should return capture health to live");
   const layerc::core::RgbPixel white{255, 255, 255};
   for (std::uint32_t x = 0; x < black_frame.width; ++x) {
     black_frame.pixels[x] = white;
@@ -87,10 +202,102 @@ int main() {
   }
   expect(!layerc::capture::frame_is_nearly_black(black_frame),
          "sparse bright window borders should not be missed by black-frame sampling");
-  if (layerc::test::failures != 0) {
-    std::cerr << layerc::test::failures << " test(s) failed\n";
-    return EXIT_FAILURE;
+
+#if defined(_WIN32)
+  layerc::capture::WindowCaptureSession session(nullptr);
+  const auto now = layerc::core::MonotonicClock::now();
+  const auto polled = session.poll(now, false);
+  expect(polled.window == layerc::runtime::WindowId{} &&
+             polled.result.availability ==
+                 layerc::core::CaptureAvailability::unavailable &&
+             polled.result.backend == layerc::core::CaptureBackendKind::none &&
+             polled.result.diagnostic == "capture is not started" &&
+             polled.result.frame == nullptr,
+         "a session that was never started reports a normalized, "
+         "diagnosed unavailable poll");
+#endif
+
+  // F9 shared synchronous evaluator: one ROI/error-to-measurement policy
+  // for the Windows worker and the Linux inline service.
+  {
+    using layerc::core::CaptureAvailability;
+    using layerc::core::CaptureQuality;
+    const auto sampled_at = layerc::core::MonotonicClock::now();
+    layerc::core::CpuTemplateMatcher matcher;
+    const layerc::core::PixelRule white_rule{
+        .id = "white",
+        .name = "White",
+        .region = {0.0, 0.0, 1.0, 1.0},
+        .predicate = layerc::core::AverageColorPredicate{
+            .target_color = 0xFFFFFF, .tolerance = 16}};
+
+    // Unavailable frames keep their availability and never match.
+    const layerc::capture::CapturePollResult unavailable{
+        .availability = CaptureAvailability::unavailable};
+    const auto unavailable_measurement =
+        layerc::capture::evaluate_pixel_measurement(
+            white_rule, {unavailable, CaptureQuality::low, sampled_at});
+    expect(unavailable_measurement.availability ==
+                   CaptureAvailability::unavailable &&
+               !unavailable_measurement.matched &&
+               unavailable_measurement.sampled_at == sampled_at,
+           "an unavailable frame must stay unavailable with caller time");
+
+    // Rules outside the frame map to outside_output, not unavailable.
+    auto narrow_frame = std::make_shared<layerc::capture::CaptureFrame>();
+    narrow_frame->width = 2;
+    narrow_frame->height = 2;
+    narrow_frame->pixels.assign(4, layerc::core::RgbPixel{255, 255, 255});
+    narrow_frame->available_region = {0.0, 0.0, 0.5, 0.5};
+    const layerc::capture::CapturePollResult narrow{
+        .availability = CaptureAvailability::available,
+        .frame = narrow_frame};
+    const layerc::core::PixelRule far_rule{
+        .id = "far",
+        .name = "Far",
+        .region = {0.75, 0.75, 0.2, 0.2},
+        .predicate = layerc::core::AverageColorPredicate{
+            .target_color = 0xFFFFFF, .tolerance = 16}};
+    expect(layerc::capture::evaluate_pixel_measurement(
+               far_rule, {narrow, CaptureQuality::low, sampled_at})
+                   .availability == CaptureAvailability::outside_output,
+           "a rule outside the available region must report outside_output");
+
+    // A matching pixel rule reports matched with full confidence.
+    auto white_frame = std::make_shared<layerc::capture::CaptureFrame>();
+    white_frame->width = 2;
+    white_frame->height = 2;
+    white_frame->pixels.assign(4, layerc::core::RgbPixel{255, 255, 255});
+    const layerc::capture::CapturePollResult white_capture{
+        .availability = CaptureAvailability::available, .frame = white_frame};
+    const auto matched = layerc::capture::evaluate_pixel_measurement(
+        white_rule, {white_capture, CaptureQuality::low, sampled_at});
+    expect(matched.matched && matched.confidence == 1.0 &&
+               matched.availability == CaptureAvailability::available &&
+               matched.sampled_at == sampled_at,
+           "a matching pixel rule must report matched with caller time");
+
+    // Missing template references fail as unavailable, never as a match.
+    const layerc::core::TemplateState template_state{
+        .id = "sigil",
+        .name = "Sigil",
+        .search_region = {0.0, 0.0, 1.0, 1.0},
+        .references = {{.asset_sha256 = std::string(64, 'a')}}};
+    const std::span<const layerc::core::TemplateImage> no_references{};
+    const auto reference_failure =
+        layerc::capture::evaluate_template_measurement(
+            template_state, no_references, false,
+            {white_capture, CaptureQuality::low, sampled_at}, matcher);
+    expect(reference_failure.availability ==
+                   CaptureAvailability::unavailable &&
+               !reference_failure.matched &&
+               reference_failure.sampled_at == sampled_at,
+           "missing template assets must report unavailable with caller time");
   }
-  std::cout << "All LayerC capture tests passed\n";
-  return EXIT_SUCCESS;
+
+}
+
+int main() {
+  return layerc::test::run(
+      {{"capture_math_contracts", capture_math_contracts}});
 }

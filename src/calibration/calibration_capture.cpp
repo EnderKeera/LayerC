@@ -17,23 +17,23 @@ void CalibrationWindow::update_capture() {
     const HWND target_root = GetAncestor(target_window_, GA_ROOT);
     if (foreground_root == nullptr || foreground_root != target_root) {
       if (GetTickCount64() >= fallback_deadline_) {
-        frame_.reset();
+        preview_.clear_frame();
         finish_fallback_snapshot(L"Desktop Duplication fallback stopped "
                                  L"because the target was not foreground.");
       }
       return;
     }
     const auto captured =
-        capture_->poll(layerc::core::MonotonicClock::now(), true);
+        capture_->poll(layerc::core::MonotonicClock::now(), true).result;
     if (captured.frame) {
-      frame_ = captured.frame;
+      preview_.set_frame(captured.frame);
       finish_fallback_snapshot(
           L"Desktop Duplication fallback — frozen foreground snapshot.");
     } else if (GetTickCount64() >= fallback_deadline_) {
-      frame_ = layerc::capture::capture_static_window_snapshot(
-          target_window_, quality_, layerc::core::MonotonicClock::now());
+      preview_.set_frame(layerc::capture::capture_static_window_snapshot(
+          target_window_, quality_, layerc::core::MonotonicClock::now()));
       finish_fallback_snapshot(
-          frame_
+          preview_.frame()
               ? L"Desktop Duplication was static — frozen screen snapshot."
               : L"Desktop Duplication fallback could not capture the target.");
     }
@@ -41,14 +41,14 @@ void CalibrationWindow::update_capture() {
   }
 
   const auto captured =
-      capture_->poll(layerc::core::MonotonicClock::now(), false);
+      capture_->poll(layerc::core::MonotonicClock::now(), false).result;
   if (captured.backend ==
       layerc::core::CaptureBackendKind::desktop_duplication) {
     begin_fallback_snapshot();
     return;
   }
   if (captured.frame)
-    frame_ = captured.frame;
+    preview_.set_frame(captured.frame);
   if (captured.availability == layerc::core::CaptureAvailability::available)
     set_control_text(IDC_CAL_BACKEND,
                      L"Windows Graphics Capture — live preview");
@@ -59,16 +59,9 @@ void CalibrationWindow::update_capture() {
 }
 
 void CalibrationWindow::refresh_preview_frame() {
-  if (!frame_)
+  if (!preview_.frame())
     return;
-  preview_pixels_.resize(frame_->pixels.size());
-  for (std::size_t index = 0; index < frame_->pixels.size(); ++index) {
-    const auto pixel = frame_->pixels[index];
-    preview_pixels_[index] = pixel.blue |
-                             (static_cast<std::uint32_t>(pixel.green) << 8U) |
-                             (static_cast<std::uint32_t>(pixel.red) << 16U);
-  }
-  InvalidateRect(preview_, nullptr, FALSE);
+  preview_.invalidate();
   update_match_status(false);
 }
 
@@ -103,9 +96,11 @@ void CalibrationWindow::finish_fallback_snapshot(
 
 void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
   FillRect(draw.hDC, &draw.rcItem, input_brush_);
-  const bool mask_preview = mask_editing_ && !template_images_.empty() &&
-                            !mask_preview_pixels_.empty();
-  if (!mask_preview && (!frame_ || preview_pixels_.empty())) {
+  const auto &frame = preview_.frame();
+  const bool mask_preview =
+      mask_editor_.editing() && !template_images_.empty() &&
+      !mask_editor_.pixels().empty();
+  if (!mask_preview && (!frame || preview_.pixels().empty())) {
     SetTextColor(draw.hDC, palette_.muted);
     SetBkMode(draw.hDC, TRANSPARENT);
     DrawTextW(draw.hDC, L"Waiting for captured pixels...", -1,
@@ -114,12 +109,19 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
     return;
   }
   const auto image = preview_image_rect();
-  const auto width =
-      mask_preview ? template_images_.back().width : frame_->width;
-  const auto height =
-      mask_preview ? template_images_.back().height : frame_->height;
-  const auto *pixels =
-      mask_preview ? mask_preview_pixels_.data() : preview_pixels_.data();
+  std::uint32_t width;
+  std::uint32_t height;
+  const std::uint32_t *pixels;
+  if (mask_preview) {
+    const auto &mask_image = template_images_.back();
+    width = mask_image.width;
+    height = mask_image.height;
+    pixels = mask_editor_.pixels().data();
+  } else {
+    width = frame->width;
+    height = frame->height;
+    pixels = preview_.pixels().data();
+  }
   BITMAPINFO bitmap{};
   bitmap.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bitmap.bmiHeader.biWidth = static_cast<LONG>(width);
@@ -135,17 +137,17 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
   if (mask_preview)
     return;
 
-  RECT region{
-      image.left + static_cast<LONG>(std::lround(rule_.region.x *
-                                                 (image.right - image.left))),
-      image.top + static_cast<LONG>(
-                      std::lround(rule_.region.y * (image.bottom - image.top))),
-      image.left +
-          static_cast<LONG>(std::lround((rule_.region.x + rule_.region.width) *
-                                        (image.right - image.left))),
-      image.top +
-          static_cast<LONG>(std::lround((rule_.region.y + rule_.region.height) *
-                                        (image.bottom - image.top)))};
+  const auto to_x = [&](const double fraction) {
+    return image.left +
+           static_cast<LONG>(std::lround(fraction * (image.right - image.left)));
+  };
+  const auto to_y = [&](const double fraction) {
+    return image.top +
+           static_cast<LONG>(std::lround(fraction * (image.bottom - image.top)));
+  };
+  const RECT region{to_x(rule_.region.x), to_y(rule_.region.y),
+                    to_x(rule_.region.x + rule_.region.width),
+                    to_y(rule_.region.y + rule_.region.height)};
   const HPEN pen = CreatePen(PS_SOLID, 2, palette_.selection);
   const auto old_pen = SelectObject(draw.hDC, pen);
   const auto old_brush = SelectObject(draw.hDC, GetStockObject(HOLLOW_BRUSH));
@@ -156,31 +158,10 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
 }
 
 RECT CalibrationWindow::preview_image_rect() const {
-  RECT client{};
-  GetClientRect(preview_, &client);
-  const auto source_width = mask_editing_ && !template_images_.empty()
-                                ? template_images_.back().width
-                            : frame_ ? frame_->width
-                                     : 0;
-  const auto source_height = mask_editing_ && !template_images_.empty()
-                                 ? template_images_.back().height
-                             : frame_ ? frame_->height
-                                      : 0;
-  if (source_width == 0 || source_height == 0)
-    return client;
-  const double frame_aspect = static_cast<double>(source_width) / source_height;
-  const double client_aspect =
-      static_cast<double>(client.right) / std::max<LONG>(1, client.bottom);
-  if (client_aspect > frame_aspect) {
-    const auto display_width =
-        static_cast<LONG>(std::lround(client.bottom * frame_aspect));
-    const auto left = (client.right - display_width) / 2;
-    return {left, 0, left + display_width, client.bottom};
-  }
-  const auto display_height =
-      static_cast<LONG>(std::lround(client.right / frame_aspect));
-  const auto top = (client.bottom - display_height) / 2;
-  return {0, top, client.right, top + display_height};
+  if (mask_editor_.editing() && !template_images_.empty())
+    return preview_.image_rect(template_images_.back().width,
+                               template_images_.back().height);
+  return preview_.image_rect();
 }
 
 void CalibrationWindow::update_region_from_pointer(POINT point,
@@ -191,7 +172,7 @@ void CalibrationWindow::update_region_from_pointer(POINT point,
     value.y = std::clamp(value.y, image.top, image.bottom);
     return value;
   };
-  const auto start = clamp_point(drag_start_);
+  const auto start = clamp_point(preview_.drag_start());
   point = clamp_point(point);
   const auto width = std::max<LONG>(1, image.right - image.left);
   const auto height = std::max<LONG>(1, image.bottom - image.top);
@@ -205,9 +186,9 @@ void CalibrationWindow::update_region_from_pointer(POINT point,
                   static_cast<double>(top - image.top) / height,
                   static_cast<double>(right - left) / width,
                   static_cast<double>(bottom - top) / height};
-  if (template_mode())
+  if (mode() == CalibrationMode::template_match)
     template_state_.search_region = rule_.region;
-  InvalidateRect(preview_, nullptr, FALSE);
+  preview_.invalidate();
   update_match_status(final);
 }
 

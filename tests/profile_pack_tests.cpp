@@ -9,15 +9,13 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <iterator>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
-
-#include <windows.h>
 
 namespace {
 
@@ -188,80 +186,102 @@ bool rewrite_zip(const std::filesystem::path &source,
   return written;
 }
 
-} // namespace
+constexpr std::string_view asset_hash =
+    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
-int main() {
-  bool passed = true;
-  const auto root =
-      std::filesystem::temp_directory_path() /
-      ("layerc-pack-tests-" + std::to_string(GetCurrentProcessId()));
-  const auto source = root / "source";
-  const auto imported = root / "imported";
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
-  std::filesystem::create_directories(source, error);
-  std::filesystem::create_directories(imported, error);
-  if (error) {
-    std::cerr << "FAIL: temporary directories could not be created\n";
-    return 1;
-  }
-
-  std::wstring previous_profile_dir;
-  {
-    const DWORD required =
-        GetEnvironmentVariableW(L"LAYERC_PROFILE_DIR", nullptr, 0);
-    if (required > 0) {
-      previous_profile_dir.resize(required - 1U);
-      GetEnvironmentVariableW(L"LAYERC_PROFILE_DIR",
-                              previous_profile_dir.data(), required);
-    }
-  }
-  SetEnvironmentVariableW(L"LAYERC_PROFILE_DIR", source.c_str());
-
-  const auto first_path = source / "first.json";
-  const auto second_path = source / "second.json";
-  constexpr std::string_view asset_hash =
-      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-  layerc::core::VisualProfile first_visual;
-  first_visual.profile_id = "first";
-  first_visual.templates.push_back({
-      .id = "ready-template",
-      .name = "Ready",
-      .search_region = {.x = 0.1, .y = 0.1, .width = 0.4, .height = 0.4},
-      .expected_width = 0.2,
-      .expected_height = 0.2,
-      .references = {{.asset_sha256 = std::string(asset_hash)}},
-  });
-  first_visual.triggers.push_back(
-      {.cooldown_id = "dash", .observation_id = "ready-template"});
-  passed &= expect(write_text(source / "_visual" / "assets" /
-                                  (std::string(asset_hash) + ".png"),
-                              "abc"),
-                   "content-addressed test asset should be created");
-  const auto first_base = profile("first", "First", 30);
-  const auto first_automation = automation_profile(first_base.id);
+struct PackFixture {
+  layerc::test::TempDirectory directory{"layerc-pack-tests"};
+  std::filesystem::path root = directory.path();
+  std::filesystem::path source = root / "source";
+  std::filesystem::path imported = root / "imported";
+  layerc::test::ScopedEnvironment profile_dir{"LAYERC_PROFILE_DIR", source};
+  std::filesystem::path first_path = source / "first.json";
+  std::filesystem::path second_path = source / "second.json";
+  layerc::core::GameProfile first_base = profile("first", "First", 30);
+  layerc::core::AutomationProfile first_automation = automation_profile(first_base.id);
   layerc::core::CompanionProfile first_companion;
-  first_companion.profile_id = first_base.id;
-  first_companion.slots.push_back({.slot_index = 0,
-                                   .panel_id = "dash-bar",
-                                   .pinned = true,
-                                   .click_through = false,
-                                   .opacity = 0.75});
-  passed &=
-      expect(layerc::platform::write_profile_bundle(
-                 first_path, first_base, first_visual, first_automation,
-                 first_companion),
-             "first schema-4 profile and all module sidecars should save");
-  passed &= expect(
-      layerc::platform::write_automation_state(
-          first_path, first_automation,
-          {{"count", layerc::core::AutomationValue(std::int64_t{9})}}),
-      "machine-local automation state should exist beside the export fixture");
-  passed &=
-      expect(layerc::platform::write_profile_bundle(
-                 second_path, profile("second", "Second", 31), std::nullopt),
-             "second schema-3 profile should save");
+  bool ready{};
 
+  PackFixture() {
+    std::error_code error;
+    std::filesystem::create_directories(source, error);
+    std::filesystem::create_directories(imported, error);
+    if (!expect(!error, "profile-pack temporary directories should be created") ||
+        !expect(profile_dir.applied(), "profile-pack store should use the fixture directory"))
+      return;
+
+    layerc::core::VisualProfile first_visual;
+    first_visual.profile_id = "first";
+    first_visual.templates.push_back({
+        .id = "ready-template",
+        .name = "Ready",
+        .search_region = {.x = 0.1, .y = 0.1, .width = 0.4, .height = 0.4},
+        .expected_width = 0.2,
+        .expected_height = 0.2,
+        .references = {{.asset_sha256 = std::string(asset_hash)}},
+    });
+    first_visual.triggers.push_back(
+        {.cooldown_id = "dash", .observation_id = "ready-template"});
+    bool passed = expect(write_text(source / "_visual" / "assets" /
+                                             (std::string(asset_hash) + ".png"),
+                                         "abc"),
+                         "content-addressed test asset should be created");
+    first_companion.profile_id = first_base.id;
+    first_companion.slots.push_back({.slot_index = 0,
+                                     .panel_id = "dash-bar",
+                                     .pinned = true,
+                                     .click_through = false,
+                                     .opacity = 0.75});
+    passed &= expect(layerc::platform::write_profile_bundle(
+                         first_path, first_base, first_visual, first_automation,
+                         first_companion),
+                     "first schema-4 profile and all module sidecars should save");
+    passed &= expect(
+        layerc::platform::write_automation_state(
+            first_path, first_automation,
+            {{"count", layerc::core::AutomationValue(std::int64_t{9})}}),
+        "machine-local automation state should exist beside the export fixture");
+    passed &= expect(layerc::platform::write_profile_bundle(
+                         second_path, profile("second", "Second", 31), std::nullopt),
+                     "second schema-3 profile should save");
+    ready = passed;
+  }
+
+  [[nodiscard]] bool export_pack(const std::filesystem::path &path) const {
+    const std::array selected{second_path, first_path};
+    return expect(std::holds_alternative<std::monostate>(
+                      layerc::bundle::export_profile_pack(path, selected)),
+                  "multi-profile pack should export");
+  }
+
+  [[nodiscard]] std::optional<layerc::bundle::ValidatedPack>
+  validate_pack(const std::filesystem::path &path) const {
+    const auto result = layerc::bundle::validate_profile_pack(path);
+    const auto *validated = std::get_if<layerc::bundle::ValidatedPack>(&result);
+    expect(validated != nullptr && validated->profiles.size() == 2,
+           "exported pack should validate with both profiles");
+    if (validated == nullptr || validated->profiles.size() != 2)
+      return std::nullopt;
+    return *validated;
+  }
+
+  [[nodiscard]] bool import_both(const layerc::bundle::ValidatedPack &pack) const {
+    const std::array choices{
+        layerc::bundle::ImportChoice{.profile_index = 0,
+                                     .action = layerc::bundle::ImportAction::replace},
+        layerc::bundle::ImportChoice{.profile_index = 1,
+                                     .action = layerc::bundle::ImportAction::replace}};
+    return expect(std::holds_alternative<std::monostate>(
+                      layerc::bundle::import_profile_pack(pack, choices, imported)),
+                  "validated profiles should import atomically");
+  }
+};
+
+void legacy_visual_schema_validation() {
+  PackFixture fixture;
+  if (!fixture.ready) return;
+  const auto &root = fixture.root;
+  const auto &source = fixture.source;
   const auto legacy_path = source / "legacy.json";
   auto legacy_base = profile("legacy", "Legacy", 32);
   legacy_base.schema_version = 3;
@@ -276,211 +296,242 @@ int main() {
     "triggers":[{"cooldownId":"dash","ruleId":"ready","enabled":true,
       "mode":"pixelOnly","keepInput":false,"onUnavailable":"ignore"}]
   })json";
-  passed &= expect(
-      write_text(legacy_path,
-                 layerc::core::serialize_profile_json(legacy_base)) &&
-          write_text(layerc::platform::visual_sidecar_path(legacy_path),
-                     legacy_visual),
-      "matching schema-1 base metadata and visual sidecar should be staged");
+  if (!expect(write_text(legacy_path,
+                         layerc::core::serialize_profile_json(legacy_base)) &&
+                  write_text(layerc::platform::visual_sidecar_path(legacy_path),
+                             legacy_visual),
+              "matching schema-1 base metadata and visual sidecar should be staged"))
+    return;
   const std::array legacy_selection{legacy_path};
   const auto legacy_pack = root / "legacy.layercprofile";
-  passed &= expect(
-      std::holds_alternative<std::monostate>(
-          layerc::bundle::export_profile_pack(legacy_pack, legacy_selection)) &&
-          std::holds_alternative<layerc::bundle::ValidatedPack>(
-              layerc::bundle::validate_profile_pack(legacy_pack)),
-      "matching schema-1 module metadata should validate against the packed "
-      "source schema before in-memory migration");
+  expect(std::holds_alternative<std::monostate>(
+             layerc::bundle::export_profile_pack(legacy_pack, legacy_selection)) &&
+             std::holds_alternative<layerc::bundle::ValidatedPack>(
+                 layerc::bundle::validate_profile_pack(legacy_pack)),
+         "matching schema-1 module metadata should validate against the packed "
+         "source schema before in-memory migration");
 
   legacy_base.modules.front().schema_version = 2;
-  passed &=
-      expect(write_text(legacy_path,
-                        layerc::core::serialize_profile_json(legacy_base)),
-             "mismatched visual module metadata fixture should be staged");
+  if (!expect(write_text(legacy_path,
+                         layerc::core::serialize_profile_json(legacy_base)),
+              "mismatched visual module metadata fixture should be staged"))
+    return;
   const auto mismatched_schema_pack = root / "mismatched-schema.layercprofile";
-  passed &= expect(
-      std::holds_alternative<std::monostate>(
-          layerc::bundle::export_profile_pack(mismatched_schema_pack,
-                                              legacy_selection)) &&
-          std::holds_alternative<layerc::bundle::PackError>(
-              layerc::bundle::validate_profile_pack(mismatched_schema_pack)),
-      "base module metadata must match the actual packed visual schema");
-  std::filesystem::remove(legacy_path, error);
-  std::filesystem::remove(layerc::platform::visual_sidecar_path(legacy_path),
-                          error);
+  expect(std::holds_alternative<std::monostate>(
+             layerc::bundle::export_profile_pack(mismatched_schema_pack,
+                                                 legacy_selection)) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(mismatched_schema_pack)),
+         "base module metadata must match the actual packed visual schema");
+}
 
-  const std::array selected{second_path, first_path};
+void deterministic_export_and_import() {
+  PackFixture fixture;
+  if (!fixture.ready) return;
+  const auto &root = fixture.root;
+  const auto &imported = fixture.imported;
   const auto pack_one = root / "one.layercprofile";
   const auto pack_two = root / "two.layercprofile";
-  passed &= expect(std::holds_alternative<std::monostate>(
-                       layerc::bundle::export_profile_pack(pack_one, selected)),
-                   "multi-profile pack should export");
-  passed &= expect(std::holds_alternative<std::monostate>(
-                       layerc::bundle::export_profile_pack(pack_two, selected)),
-                   "same multi-profile pack should export twice");
-  passed &= expect(read_all(pack_one) == read_all(pack_two),
-                   "pack export should be byte-for-byte deterministic");
+  if (!fixture.export_pack(pack_one)) return;
+  const std::array selected{fixture.second_path, fixture.first_path};
+  if (!expect(std::holds_alternative<std::monostate>(
+                  layerc::bundle::export_profile_pack(pack_two, selected)),
+              "same multi-profile pack should export twice"))
+    return;
+  expect(read_all(pack_one) == read_all(pack_two),
+         "pack export should be byte-for-byte deterministic");
   const auto nested_name = layerc::bundle::resolve_suggested_profile_filename(
       "folder/existing.json");
-  passed &= expect(nested_name.has_value() &&
-                       nested_name->wstring() == L"existing.json",
-                   "pack preview and import should resolve nested suggestions "
-                   "to one top-level basename");
+  expect(nested_name.has_value() && nested_name->wstring() == L"existing.json",
+         "pack preview and import should resolve nested suggestions "
+         "to one top-level basename");
 
-  const auto validated_result = layerc::bundle::validate_profile_pack(pack_one);
-  const auto *validated =
-      std::get_if<layerc::bundle::ValidatedPack>(&validated_result);
-  passed &= expect(validated != nullptr && validated->profiles.size() == 2,
-                   "exported pack should validate with both profiles");
-  if (validated != nullptr) {
-    const auto first =
-        std::ranges::find(validated->profiles, std::string("first"),
-                          [](const auto &entry) { return entry.profile.id; });
-    passed &= expect(first != validated->profiles.end() &&
-                         first->automation_profile.has_value() &&
-                         first->companion_profile.has_value() &&
-                         *first->companion_profile == first_companion,
-                     "automation and companion definitions should be included "
-                     "in a profile pack");
-  }
-  if (validated != nullptr) {
-    const std::array choices{
-        layerc::bundle::ImportChoice{.profile_index = 0,
-                                     .action =
-                                         layerc::bundle::ImportAction::replace},
-        layerc::bundle::ImportChoice{
-            .profile_index = 1,
-            .action = layerc::bundle::ImportAction::replace}};
-    passed &= expect(
-        std::holds_alternative<std::monostate>(
-            layerc::bundle::import_profile_pack(*validated, choices, imported)),
-        "validated profiles should import atomically");
-    passed &=
-        expect(std::filesystem::exists(imported / "first.json") &&
-                   std::filesystem::exists(imported / "second.json"),
-               "suggested filenames should be retained without conflicts");
-    passed &=
-        expect(std::filesystem::exists(imported / "_visual" / "first.json") &&
-                   read_all(imported / "_visual" / "assets" /
-                            (std::string(asset_hash) + ".png")) ==
-                       std::vector<std::byte>{std::byte{'a'}, std::byte{'b'},
-                                              std::byte{'c'}},
-               "sidecars and assets should import beneath the requested "
-               "destination root");
-    passed &= expect(
-        std::filesystem::exists(imported / "_automation" / "first.json") &&
-            !std::filesystem::exists(imported / "_automation_state" /
-                                     "first.json.automation-state.json"),
-        "packs should import automation definitions while excluding "
-        "machine-local state");
+  auto validated = fixture.validate_pack(pack_one);
+  if (!validated) return;
+  const auto first =
+      std::ranges::find(validated->profiles, std::string("first"),
+                        [](const auto &entry) { return entry.profile.id; });
+  expect(first != validated->profiles.end() && first->automation.has_value() &&
+             first->companion.has_value() &&
+             first->companion->profile == fixture.first_companion,
+         "automation and companion definitions should be included "
+         "in a profile pack");
+  if (!fixture.import_both(*validated)) return;
+  expect(std::filesystem::exists(imported / "first.json") &&
+             std::filesystem::exists(imported / "second.json"),
+         "suggested filenames should be retained without conflicts");
+  expect(std::filesystem::exists(imported / "_visual" / "first.json") &&
+             std::filesystem::exists(imported / "_visual" / "assets" /
+                                     (std::string(asset_hash) + ".png")) &&
+             read_all(imported / "_visual" / "assets" /
+                      (std::string(asset_hash) + ".png")) ==
+                 std::vector<std::byte>{std::byte{'a'}, std::byte{'b'},
+                                        std::byte{'c'}},
+         "sidecars and assets should import beneath the requested "
+         "destination root");
+  expect(std::filesystem::exists(imported / "_automation" / "first.json") &&
+             !std::filesystem::exists(imported / "_automation_state" /
+                                      "first.json.automation-state.json"),
+         "packs should import automation definitions while excluding "
+         "machine-local state");
 
-    const auto imported_companion = layerc::platform::load_companion_sidecar(
-        imported / "first.json", first_base);
-    passed &= expect(
-        imported_companion.state ==
-                layerc::platform::CompanionSidecarState::valid &&
-            imported_companion.profile.has_value() &&
-            *imported_companion.profile == first_companion,
-        "packs should import companion preferences with the profile bundle");
+  const auto imported_companion = layerc::platform::load_companion_sidecar(
+      imported / "first.json", fixture.first_base);
+  expect(imported_companion.state ==
+                 layerc::platform::CompanionSidecarState::valid &&
+             imported_companion.profile.has_value() &&
+             *imported_companion.profile == fixture.first_companion,
+         "packs should import companion preferences with the profile bundle");
+}
 
-    const auto first_to_copy =
-        std::ranges::find(validated->profiles, std::string("first"),
-                          [](const auto &entry) { return entry.profile.id; });
-    passed &= expect(first_to_copy != validated->profiles.end(),
-                     "the companion fixture should remain available for Copy");
-    const auto first_index =
-        first_to_copy == validated->profiles.end()
-            ? std::size_t{}
-            : static_cast<std::size_t>(
-                  std::distance(validated->profiles.begin(), first_to_copy));
-    const std::array copy_choice{layerc::bundle::ImportChoice{
-        .profile_index = first_index,
-        .action = layerc::bundle::ImportAction::copy}};
-    passed &= expect(std::holds_alternative<std::monostate>(
-                         layerc::bundle::import_profile_pack(
-                             *validated, copy_choice, imported)),
-                     "Import Copy should succeed beside existing profiles");
-    bool found_copy{};
-    bool found_companion_copy{};
-    for (const auto &entry : std::filesystem::directory_iterator(imported)) {
-      if (entry.path().extension() != ".json")
-        continue;
-      const auto json = layerc::platform::read_profile_file(entry.path());
-      if (!json.has_value())
-        continue;
-      const auto parsed = layerc::core::parse_profile_json(*json);
-      const auto *candidate = std::get_if<layerc::core::GameProfile>(&parsed);
-      if (candidate == nullptr ||
-          candidate->id.find("-copy") == std::string::npos)
-        continue;
-      found_copy = true;
-      const auto copied_companion =
-          layerc::platform::load_companion_sidecar(entry.path(), *candidate);
-      found_companion_copy =
-          copied_companion.state ==
-              layerc::platform::CompanionSidecarState::valid &&
-          copied_companion.profile.has_value() &&
-          copied_companion.profile->profile_id == candidate->id &&
-          copied_companion.profile->slots.size() == 1U &&
-          copied_companion.profile->slots.front().panel_id == "dash-bar";
+void copy_import_guards() {
+  PackFixture fixture;
+  if (!fixture.ready) return;
+  const auto pack = fixture.root / "one.layercprofile";
+  if (!fixture.export_pack(pack)) return;
+  auto validated = fixture.validate_pack(pack);
+  if (!validated || !fixture.import_both(*validated)) return;
+  const auto &imported = fixture.imported;
+  const auto first_to_copy =
+      std::ranges::find(validated->profiles, std::string("first"),
+                        [](const auto &entry) { return entry.profile.id; });
+  if (!expect(first_to_copy != validated->profiles.end(),
+              "the companion fixture should remain available for Copy"))
+    return;
+  const auto first_index = static_cast<std::size_t>(
+      std::distance(validated->profiles.begin(), first_to_copy));
+  const std::array copy_choice{layerc::bundle::ImportChoice{
+      .profile_index = first_index, .action = layerc::bundle::ImportAction::copy}};
+  expect(std::holds_alternative<std::monostate>(
+             layerc::bundle::import_profile_pack(*validated, copy_choice, imported)),
+         "Import Copy should succeed beside existing profiles");
+  const auto copy_preview = layerc::bundle::preview_profile_import(
+      *validated, copy_choice, imported);
+  expect(!copy_preview.error && copy_preview.entries.size() == 1,
+         "Copy preview should resolve the next available destination");
+  if (!copy_preview.error && copy_preview.entries.size() == 1) {
+    const auto target = copy_preview.entries.front().target;
+    auto reviewed_choice = copy_choice;
+    reviewed_choice.front().expected_target = target;
+    reviewed_choice.front().require_absent = true;
+    if (expect(write_text(target, "new occupant"),
+               "a destination can become occupied after preview")) {
+      expect(std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::import_profile_pack(
+                     *validated, reviewed_choice, imported)) &&
+                 read_text(target) == "new occupant",
+             "a changed Copy destination must fail without overwriting it");
     }
-    passed &= expect(
-        found_copy && found_companion_copy,
-        "Import Copy should regenerate both base and companion profile IDs");
-
-    const auto conflict_root = root / "conflicts";
-    const auto invalid_target = conflict_root / "existing.JSON";
-    passed &= expect(write_text(invalid_target, "{invalid-profile"),
-                     "invalid conflict fixture should be created");
-    auto nested_pack = *validated;
-    nested_pack.profiles.front().suggested_filename = "folder/existing.json";
-    const std::array replace_nested{layerc::bundle::ImportChoice{
-        .profile_index = 0, .action = layerc::bundle::ImportAction::replace}};
-    passed &= expect(std::holds_alternative<layerc::bundle::PackError>(
-                         layerc::bundle::import_profile_pack(
-                             nested_pack, replace_nested, conflict_root)) &&
-                         read_text(invalid_target) == "{invalid-profile",
-                     "Replace must reject a case-colliding unreadable JSON "
-                     "target instead of overwriting it without a Copy choice");
+    std::error_code error;
+    std::filesystem::remove(target, error);
   }
+  bool found_copy{};
+  bool found_companion_copy{};
+  for (const auto &entry : std::filesystem::directory_iterator(imported)) {
+    if (entry.path().extension() != ".json")
+      continue;
+    const auto json = layerc::platform::read_profile_file(entry.path());
+    if (!json.has_value())
+      continue;
+    const auto parsed = layerc::core::parse_profile_json(*json);
+    const auto *candidate = std::get_if<layerc::core::GameProfile>(&parsed);
+    if (candidate == nullptr ||
+        candidate->id.find("-copy") == std::string::npos)
+      continue;
+    found_copy = true;
+    const auto copied_companion =
+        layerc::platform::load_companion_sidecar(entry.path(), *candidate);
+    found_companion_copy =
+        copied_companion.state ==
+            layerc::platform::CompanionSidecarState::valid &&
+        copied_companion.profile.has_value() &&
+        copied_companion.profile->profile_id == candidate->id &&
+        copied_companion.profile->slots.size() == 1U &&
+        copied_companion.profile->slots.front().panel_id == "dash-bar";
+  }
+  expect(found_copy && found_companion_copy,
+         "Import Copy should regenerate both base and companion profile IDs");
+}
+
+void import_preview_conflicts() {
+  PackFixture fixture;
+  if (!fixture.ready) return;
+  const auto pack = fixture.root / "one.layercprofile";
+  if (!fixture.export_pack(pack)) return;
+  auto validated = fixture.validate_pack(pack);
+  if (!validated) return;
+  const auto preview_root = fixture.root / "preview-must-not-create";
+  std::vector<layerc::bundle::ImportChoice> replace_all;
+  for (std::size_t index = 0; index < validated->profiles.size(); ++index)
+    replace_all.push_back({.profile_index = index,
+                           .action = layerc::bundle::ImportAction::replace});
+  const auto preview = layerc::bundle::preview_profile_import(
+      *validated, replace_all, preview_root);
+  expect(!preview.error && !preview.entries.empty() &&
+             !std::filesystem::exists(preview_root),
+         "import preview must resolve destinations without creating the store");
+  const auto conflict_root = fixture.root / "conflicts";
+  const auto invalid_target = conflict_root / "existing.JSON";
+  if (!expect(write_text(invalid_target, "{invalid-profile"),
+              "invalid conflict fixture should be created"))
+    return;
+  auto nested_pack = *validated;
+  nested_pack.profiles.front().suggested_filename = "folder/existing.json";
+  const auto invalid_preview = layerc::bundle::preview_profile_import(
+      nested_pack, replace_all, conflict_root);
+  expect(invalid_preview.error.has_value(),
+         "preview must reject the same unreadable filename collision as commit");
+  const std::array replace_nested{layerc::bundle::ImportChoice{
+      .profile_index = 0, .action = layerc::bundle::ImportAction::replace}};
+  expect(std::holds_alternative<layerc::bundle::PackError>(
+             layerc::bundle::import_profile_pack(
+                 nested_pack, replace_nested, conflict_root)) &&
+             read_text(invalid_target) == "{invalid-profile",
+         "Replace must reject a case-colliding unreadable JSON "
+         "target instead of overwriting it without a Copy choice");
+}
+
+void malformed_packs_rejected() {
+  PackFixture fixture;
+  if (!fixture.ready) return;
+  const auto &root = fixture.root;
+  const auto pack_one = root / "one.layercprofile";
+  if (!fixture.export_pack(pack_one)) return;
 
   auto corrupt = read_all(pack_one);
   if (corrupt.size() > 32U)
     corrupt[corrupt.size() / 2U] ^= std::byte{0x5A};
   const auto corrupt_path = root / "corrupt.layercprofile";
-  write_all(corrupt_path, corrupt);
-  passed &= expect(std::holds_alternative<layerc::bundle::PackError>(
-                       layerc::bundle::validate_profile_pack(corrupt_path)),
-                   "corrupt ZIP data or CRC should be rejected");
+  if (expect(write_all(corrupt_path, corrupt), "corrupt ZIP fixture should be written"))
+    expect(std::holds_alternative<layerc::bundle::PackError>(
+               layerc::bundle::validate_profile_pack(corrupt_path)),
+           "corrupt ZIP data or CRC should be rejected");
 
   const auto traversal = root / "traversal.layercprofile";
-  passed &= expect(write_traversal_zip(traversal),
-                   "traversal test ZIP should be created");
-  passed &= expect(std::holds_alternative<layerc::bundle::PackError>(
-                       layerc::bundle::validate_profile_pack(traversal)),
-                   "parent-directory archive paths should be rejected");
+  if (expect(write_traversal_zip(traversal), "traversal test ZIP should be created"))
+    expect(std::holds_alternative<layerc::bundle::PackError>(
+               layerc::bundle::validate_profile_pack(traversal)),
+           "parent-directory archive paths should be rejected");
 
   const auto case_collision = root / "case-collision.layercprofile";
-  passed &=
-      expect(rewrite_zip(pack_one, case_collision,
-                         {.extras = {{"Manifest.json", "{}"}}}) &&
-                 std::holds_alternative<layerc::bundle::PackError>(
-                     layerc::bundle::validate_profile_pack(case_collision)),
-             "Windows case-colliding archive entries should be rejected");
+  expect(rewrite_zip(pack_one, case_collision,
+                     {.extras = {{"Manifest.json", "{}"}}}) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(case_collision)),
+         "Windows case-colliding archive entries should be rejected");
 
   const auto reserved = root / "reserved.layercprofile";
-  passed &= expect(
-      rewrite_zip(pack_one, reserved, {.extras = {{"CON.json", "{}"}}}) &&
-          std::holds_alternative<layerc::bundle::PackError>(
-              layerc::bundle::validate_profile_pack(reserved)),
-      "Windows reserved archive components should be rejected");
+  expect(rewrite_zip(pack_one, reserved, {.extras = {{"CON.json", "{}"}}}) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(reserved)),
+         "Windows reserved archive components should be rejected");
 
   const auto undeclared = root / "undeclared.layercprofile";
-  passed &= expect(rewrite_zip(pack_one, undeclared,
-                               {.extras = {{"extra.bin", "not declared"}}}) &&
-                       std::holds_alternative<layerc::bundle::PackError>(
-                           layerc::bundle::validate_profile_pack(undeclared)),
-                   "undeclared archive entries should be rejected");
+  expect(rewrite_zip(pack_one, undeclared,
+                     {.extras = {{"extra.bin", "not declared"}}}) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(undeclared)),
+         "undeclared archive entries should be rejected");
 
   mz_zip_archive manifest_reader{};
   std::string original_manifest;
@@ -498,71 +549,111 @@ int main() {
   if (schema != std::string::npos)
     unsupported_manifest.replace(schema, 18, "\"schemaVersion\": 99");
   const auto unsupported = root / "unsupported.layercprofile";
-  passed &= expect(!original_manifest.empty() && schema != std::string::npos &&
-                       rewrite_zip(pack_one, unsupported,
-                                   {.replace_path = "manifest.json",
-                                    .replacement = unsupported_manifest}) &&
-                       std::holds_alternative<layerc::bundle::PackError>(
-                           layerc::bundle::validate_profile_pack(unsupported)),
-                   "unsupported manifest schemas should be rejected");
+  expect(!original_manifest.empty() && schema != std::string::npos &&
+             rewrite_zip(pack_one, unsupported,
+                         {.replace_path = "manifest.json",
+                          .replacement = unsupported_manifest}) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(unsupported)),
+         "unsupported manifest schemas should be rejected");
+
+  auto invalid_field_manifest = original_manifest;
+  const auto filename_key = invalid_field_manifest.find("\"suggestedFilename\":");
+  if (filename_key != std::string::npos) {
+    const auto begin = invalid_field_manifest.find('"', filename_key + 20);
+    const auto end = invalid_field_manifest.find('"', begin + 1);
+    if (begin != std::string::npos && end != std::string::npos)
+      invalid_field_manifest.replace(begin, end - begin + 1, "null");
+  }
+  const auto invalid_field = root / "invalid-field.layercprofile";
+  expect(filename_key != std::string::npos &&
+             rewrite_zip(pack_one, invalid_field,
+                         {.replace_path = "manifest.json",
+                          .replacement = invalid_field_manifest}),
+         "a malformed nested manifest field should be written");
+  const auto invalid_field_result = layerc::bundle::validate_profile_pack(invalid_field);
+  const auto *field_error = std::get_if<layerc::bundle::PackError>(&invalid_field_result);
+  expect(field_error != nullptr &&
+             field_error->message.find("$.profiles[0].suggestedFilename") != std::string::npos,
+         "bundle field validation should retain the full descriptor path");
+
+  auto overflow_manifest = original_manifest;
+  if (schema != std::string::npos)
+    overflow_manifest.replace(schema, 18, "\"schemaVersion\":18446744073709551616");
+  const auto overflow_path = root / "overflow-field.layercprofile";
+  expect(rewrite_zip(pack_one, overflow_path,
+                     {.replace_path = "manifest.json",
+                      .replacement = overflow_manifest}),
+         "an overflowing manifest integer should be written");
+  const auto overflow_result = layerc::bundle::validate_profile_pack(overflow_path);
+  const auto *overflow_error = std::get_if<layerc::bundle::PackError>(&overflow_result);
+  expect(overflow_error != nullptr &&
+             overflow_error->message.find("$.schemaVersion") != std::string::npos,
+         "bundle integers beyond uint64 must fail before a narrowing conversion");
 
   const auto missing_module = root / "missing-module.layercprofile";
-  passed &=
-      expect(rewrite_zip(pack_one, missing_module,
-                         {.skip_path = "modules/000.visual.json"}) &&
-                 std::holds_alternative<layerc::bundle::PackError>(
-                     layerc::bundle::validate_profile_pack(missing_module)),
-             "missing declared modules should be rejected");
+  expect(rewrite_zip(pack_one, missing_module,
+                     {.skip_path = "modules/000.visual.json"}) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(missing_module)),
+         "missing declared modules should be rejected");
 
   ZipRewrite too_many;
   for (int index = 0; index < 256; ++index)
-    too_many.extras.emplace_back("extra-" + std::to_string(index) + ".bin",
-                                 "x");
+    too_many.extras.emplace_back("extra-" + std::to_string(index) + ".bin", "x");
   const auto excessive_entries = root / "too-many.layercprofile";
-  passed &=
-      expect(rewrite_zip(pack_one, excessive_entries, too_many) &&
-                 std::holds_alternative<layerc::bundle::PackError>(
-                     layerc::bundle::validate_profile_pack(excessive_entries)),
-             "archives beyond the 256-entry limit should be rejected before "
-             "extraction");
+  expect(rewrite_zip(pack_one, excessive_entries, too_many) &&
+             std::holds_alternative<layerc::bundle::PackError>(
+                 layerc::bundle::validate_profile_pack(excessive_entries)),
+         "archives beyond the 256-entry limit should be rejected before "
+         "extraction");
+}
 
-  passed &= expect(
-      std::holds_alternative<std::monostate>(
-          layerc::bundle::recover_profile_pack_transactions(imported)),
-      "transaction recovery should be idempotent after successful imports");
+void pack_transaction_recovery() {
+  PackFixture fixture;
+  if (!fixture.ready) return;
+  const auto pack = fixture.root / "one.layercprofile";
+  if (!fixture.export_pack(pack)) return;
+  auto validated = fixture.validate_pack(pack);
+  if (!validated || !fixture.import_both(*validated)) return;
+  const auto &imported = fixture.imported;
+  expect(std::holds_alternative<std::monostate>(
+             layerc::bundle::recover_profile_pack_transactions(imported)),
+         "transaction recovery should be idempotent after successful imports");
 
   const auto recovery_target = imported / "recovery.json";
   const auto uncommitted = imported / "_transactions" / "uncommitted";
-  passed &= expect(
-      write_text(recovery_target, "new") &&
-          write_text(uncommitted / "backup" / "0.bin", "old") &&
-          write_text(uncommitted / "journal.json",
-                     "{\"schemaVersion\":1,\"operations\":[{\"target\":"
-                     "\"recovery.json\",\"existed\":true}]}\n") &&
-          std::holds_alternative<std::monostate>(
-              layerc::bundle::recover_profile_pack_transactions(imported)) &&
-          read_text(recovery_target) == "old",
-      "startup recovery should roll back an uncommitted journal");
+  expect(write_text(recovery_target, "new") &&
+             write_text(uncommitted / "backup" / "0.bin", "old") &&
+             write_text(uncommitted / "journal.json",
+                        "{\"schemaVersion\":2,\"operations\":[{\"root\":"
+                        "\"config\",\"target\":\"recovery.json\","
+                        "\"existed\":true}]}\n") &&
+             std::holds_alternative<std::monostate>(
+                 layerc::bundle::recover_profile_pack_transactions(imported)) &&
+             read_text(recovery_target) == "old",
+         "startup recovery should roll back an uncommitted journal");
 
   const auto committed = imported / "_transactions" / "committed";
-  passed &= expect(
-      write_text(recovery_target, "published") &&
-          write_text(committed / "backup" / "0.bin", "old") &&
-          write_text(committed / "journal.json",
-                     "{\"schemaVersion\":1,\"operations\":[{\"target\":"
-                     "\"recovery.json\",\"existed\":true}]}\n") &&
-          write_text(committed / "committed", "committed\n") &&
-          std::holds_alternative<std::monostate>(
-              layerc::bundle::recover_profile_pack_transactions(imported)) &&
-          read_text(recovery_target) == "published",
-      "startup recovery should retain a committed publication and clean its "
-      "journal");
-
-  if (previous_profile_dir.empty())
-    SetEnvironmentVariableW(L"LAYERC_PROFILE_DIR", nullptr);
-  else
-    SetEnvironmentVariableW(L"LAYERC_PROFILE_DIR",
-                            previous_profile_dir.c_str());
-  std::filesystem::remove_all(root, error);
-  return passed ? 0 : 1;
+  expect(write_text(recovery_target, "published") &&
+             write_text(committed / "backup" / "0.bin", "old") &&
+             write_text(committed / "journal.json",
+                        "{\"schemaVersion\":2,\"operations\":[{\"root\":"
+                        "\"config\",\"target\":\"recovery.json\","
+                        "\"existed\":true}]}\n") &&
+             write_text(committed / "committed", "committed\n") &&
+             std::holds_alternative<std::monostate>(
+                 layerc::bundle::recover_profile_pack_transactions(imported)) &&
+             read_text(recovery_target) == "published",
+         "startup recovery should retain a committed publication and clean its "
+         "journal");
 }
+
+} // namespace
+
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(legacy_visual_schema_validation),
+                 LAYERC_TEST_CASE(deterministic_export_and_import),
+                 LAYERC_TEST_CASE(copy_import_guards),
+                 LAYERC_TEST_CASE(import_preview_conflicts),
+                 LAYERC_TEST_CASE(malformed_packs_rejected),
+                 LAYERC_TEST_CASE(pack_transaction_recovery))

@@ -1,18 +1,44 @@
 #pragma once
 
 #include <chrono>
+#include <cmath>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "layerc/core/enum_wire.hpp"
+
 namespace layerc::core {
 
 using MonotonicClock = std::chrono::steady_clock;
 using TimePoint = MonotonicClock::time_point;
 using Milliseconds = std::chrono::milliseconds;
+
+// The earlier of two optional deadlines; an absent deadline never wins.
+[[nodiscard]] constexpr std::optional<TimePoint>
+earliest_deadline(const std::optional<TimePoint> left,
+                  const std::optional<TimePoint> right) noexcept {
+  if (!left.has_value())
+    return right;
+  if (!right.has_value())
+    return left;
+  return *right < *left ? right : left;
+}
+
+// Longest cooldown or automation duration accepted by every profile surface.
+inline constexpr Milliseconds max_cooldown_duration{86'400'000};
+
+// Opaque native-window handle shared by the capture boundary and the daemon
+// kernel. A leaf struct, not kernel policy, so it lives in core and the
+// capture layer stays independent of the runtime.
+struct WindowId {
+    std::uint64_t opaque{};
+    auto operator<=>(const WindowId&) const = default;
+};
 
 enum class InputDevice : std::uint8_t {
     keyboard,
@@ -21,19 +47,15 @@ enum class InputDevice : std::uint8_t {
     generic_hid,
 };
 
+inline constexpr std::array input_device_wire{
+    EnumWireEntry{InputDevice::keyboard, "keyboard"},
+    EnumWireEntry{InputDevice::mouse, "mouse"},
+    EnumWireEntry{InputDevice::controller, "controller"},
+    EnumWireEntry{InputDevice::generic_hid, "hid"}};
+
 [[nodiscard]] constexpr std::string_view
 input_device_label(const InputDevice device) noexcept {
-    switch (device) {
-    case InputDevice::keyboard:
-        return "keyboard";
-    case InputDevice::mouse:
-        return "mouse";
-    case InputDevice::controller:
-        return "controller";
-    case InputDevice::generic_hid:
-        return "hid";
-    }
-    return "unknown";
+    return enum_wire_name(input_device_wire, device).value_or("unknown");
 }
 
 struct InputToken {
@@ -156,6 +178,44 @@ enum class PanelLayout : std::uint8_t {
     column,
     grid,
 };
+
+// Shared overlay geometry: one profile looks the same on the Windows and
+// X11 backends, so the metrics have one owner here next to Panel. Values
+// are authored at 96 dpi; each backend scales them per monitor.
+struct OverlayMetrics {
+  int padding{6};
+  int spacing{6};
+  int card_item_width{78};
+  int card_item_height{72};
+  int bar_inset{2};
+  int corner_radius{8};
+  int fill_radius{6};
+  int bar_text_inset_h{8};
+  int bar_text_inset_v{2};
+  int card_text_inset{3};
+};
+inline constexpr OverlayMetrics overlay_metrics{};
+using PanelMetrics = OverlayMetrics;
+
+struct OverlayGridExtent {
+  std::size_t columns{};
+  std::size_t rows{};
+};
+
+// Card-grid shape shared by both backends: row lays out horizontally,
+// column vertically, grid fills the squarest rectangle. A zero count yields
+// an empty single row (never a divide-by-zero); callers size empty panels
+// without placing items.
+[[nodiscard]] inline OverlayGridExtent
+overlay_grid_extent(const PanelLayout layout, const std::size_t count) noexcept {
+  if (layout == PanelLayout::column) return {1, count};
+  if (layout == PanelLayout::grid && count > 0) {
+    const auto columns = static_cast<std::size_t>(
+        std::ceil(std::sqrt(static_cast<double>(count))));
+    return {columns, (count + columns - 1) / columns};
+  }
+  return {count, 1};
+}
 
 enum class PanelStyle : std::uint8_t {
     card,

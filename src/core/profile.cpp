@@ -1,8 +1,10 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/core/hash.hpp"
 #include "layerc/core/hid.hpp"
+#include "layerc/core/profile_wire.hpp"
 
 #include "profile_reader.hpp"
+#include "profile_keys.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -11,248 +13,271 @@
 #include <variant>
 
 namespace layerc::core::detail {
+namespace keys = profile_keys;
 
 ProfileReader::ProfileReader(const json::Value &root) : root_(root) {}
+ProfileError ProfileReader::failure() const {
+  return {fields_.error().path, fields_.error().message};
+}
+
 ProfileResult ProfileReader::read() {
     if (!root_.is_object()) {
-      return error("$", "profile root must be an object");
+      return ProfileError{"$", "profile root must be an object"};
     }
 
     GameProfile profile;
     const auto schema_version =
-        required_integer(root_, "schemaVersion", "$", 1, 4);
+        fields_.integer(root_, keys::schema_version, "$", 1,
+                        profile_schema_version, json::Required::yes);
     if (!schema_version.has_value()) {
-      return error_;
+      return failure();
     }
     // Schemas 1 and 2 are migrated in memory. LayerE retains the source schema
     // separately so only an explicit Save can approve the V2.2 boundary.
-    profile.schema_version = 4;
+    profile.schema_version = profile_schema_version;
 
-    if (!required_string(root_, "id", "$", profile.id) ||
-        !required_string(root_, "name", "$", profile.name)) {
-      return error_;
+    if (!fields_.string(root_, keys::id, "$", profile.id,
+                        json::Required::yes, json::EmptyString::reject) ||
+        !fields_.string(root_, keys::name, "$", profile.name,
+                        json::Required::yes, json::EmptyString::reject)) {
+      return failure();
     }
-    optional_boolean(root_, "enabled", "$", profile.enabled);
-    if (!ok()) {
-      return error_;
+    fields_.boolean(root_, keys::enabled, "$", profile.enabled,
+                    json::Required::no);
+    if (!fields_.ok()) {
+      return failure();
     }
 
-    const auto *game = required_object(root_, "game", "$");
+    const auto *game =
+        fields_.object(root_, keys::game, "$", json::Required::yes);
     if (game == nullptr) {
-      return error_;
+      return failure();
     }
-    optional_string(*game, "executablePath", "$.game", profile.game.executable_path);
-    optional_string(*game, "executableName", "$.game", profile.game.executable_name);
-    optional_string(*game, "windowClass", "$.game", profile.game.window_class);
-    optional_string(*game, "windowTitle", "$.game", profile.game.window_title);
-    optional_boolean(*game, "global", "$.game", profile.game.global);
-    if (!ok()) {
-      return error_;
+    fields_.string(*game, keys::executable_path, "$.game",
+                   profile.game.executable_path, json::Required::no,
+                   json::EmptyString::allow);
+    fields_.string(*game, keys::executable_name, "$.game",
+                   profile.game.executable_name, json::Required::no,
+                   json::EmptyString::allow);
+    fields_.string(*game, keys::window_class, "$.game",
+                   profile.game.window_class, json::Required::no,
+                   json::EmptyString::allow);
+    fields_.string(*game, keys::window_title, "$.game",
+                   profile.game.window_title, json::Required::no,
+                   json::EmptyString::allow);
+    fields_.boolean(*game, keys::global, "$.game", profile.game.global,
+                    json::Required::no);
+    if (!fields_.ok()) {
+      return failure();
     }
     // JSON parsing is the single UTF-8 validation boundary. Every persisted
     // string reaches ProfileReader only after that parser succeeds.
     if (!profile.game.global && profile.game.executable_path.empty() &&
         profile.game.executable_name.empty()) {
-      return error("$.game", "executablePath or executableName is required");
+      return ProfileError{"$.game",
+                          "executablePath or executableName is required"};
     }
 
     std::string visual_runtime = "inline";
-    optional_string(root_, "visualRuntime", "$", visual_runtime);
-    if (!ok()) return error_;
-    if (visual_runtime == "inline") {
-      profile.visual_runtime = VisualRuntime::inline_process;
-    } else if (visual_runtime == "isolated") {
-      profile.visual_runtime = VisualRuntime::isolated;
-    } else {
-      return error("$.visualRuntime", "expected 'inline' or 'isolated'");
+    fields_.string(root_, keys::visual_runtime, "$", visual_runtime,
+                   json::Required::no, json::EmptyString::allow);
+    if (!fields_.ok()) return failure();
+    const auto parsed_visual_runtime =
+        profile_wire::parse(profile_wire::visual_runtime, visual_runtime);
+    if (!parsed_visual_runtime.has_value()) {
+      return ProfileError{"$.visualRuntime", "expected 'inline' or 'isolated'"};
     }
+    profile.visual_runtime = *parsed_visual_runtime;
 
-    if (!read_modules(profile, static_cast<std::uint32_t>(*schema_version)) ||
-        !read_hid_bindings(profile,
-                           static_cast<std::uint32_t>(*schema_version)) ||
-        !read_cooldowns(profile, static_cast<std::uint32_t>(*schema_version)) ||
-        !read_cooldown_groups(
-            profile, static_cast<std::uint32_t>(*schema_version)) ||
+    const auto source_schema = static_cast<std::uint32_t>(*schema_version);
+    if (!read_modules(profile, source_schema) ||
+        !read_hid_bindings(profile, source_schema) ||
+        !read_cooldowns(profile, source_schema) ||
+        !read_cooldown_groups(profile, source_schema) ||
         !read_panels(profile) || !read_bindings(profile)) {
-      return error_;
+      return failure();
     }
     return profile;
   }
 
+bool ProfileReader::read_hid_device(const json::Value &device,
+                                    const std::string &path,
+                                    HidDeviceSelector &out) {
+  const auto vid =
+      fields_.integer(device, keys::vid, path, 0, 65'535, json::Required::yes);
+  const auto pid =
+      fields_.integer(device, keys::pid, path, 0, 65'535, json::Required::yes);
+  const auto version = fields_.integer(device, keys::version, path, 0, 65'535,
+                                       json::Required::yes);
+  const auto usage_page = fields_.integer(device, keys::usage_page, path, 0,
+                                          65'535, json::Required::yes);
+  const auto usage =
+      fields_.integer(device, keys::usage, path, 0, 65'535, json::Required::yes);
+  const auto slot =
+      fields_.integer(device, keys::stable_slot, path, 1, 32, json::Required::no,
+                      1);
+  if (!vid.has_value() || !pid.has_value() || !version.has_value() ||
+      !usage_page.has_value() || !usage.has_value() || !slot.has_value() ||
+      !fields_.string(device, keys::descriptor_hash, path, out.descriptor_hash,
+                      json::Required::yes, json::EmptyString::reject))
+    return false;
+  fields_.string(device, keys::serial, path, out.serial, json::Required::no,
+                 json::EmptyString::allow);
+  if (!fields_.ok()) return false;
+  if (!is_lowercase_sha256(out.descriptor_hash))
+    return fields_.fail(path + ".descriptorHash",
+                        "expected a lower-case SHA-256 digest");
+  out.vendor_id = static_cast<std::uint16_t>(*vid);
+  out.product_id = static_cast<std::uint16_t>(*pid);
+  out.version = static_cast<std::uint16_t>(*version);
+  out.usage_page = static_cast<std::uint16_t>(*usage_page);
+  out.usage = static_cast<std::uint16_t>(*usage);
+  out.stable_slot = static_cast<std::uint16_t>(*slot);
+  return true;
+}
+
+bool ProfileReader::read_hid_control(const json::Value &control,
+                                     const std::string &path,
+                                     HidControlBinding &out) {
+  const auto report_id =
+      fields_.integer(control, keys::report_id, path, 0, 255, json::Required::yes);
+  const auto control_page = fields_.integer(control, keys::usage_page, path, 0,
+                                            65'535, json::Required::yes);
+  const auto control_usage = fields_.integer(control, keys::usage, path, 0,
+                                             65'535, json::Required::yes);
+  const auto link = fields_.integer(control, keys::link_collection, path, 0,
+                                    65'535, json::Required::no, 0);
+  const auto discrete = fields_.integer(
+      control, keys::value, path, std::numeric_limits<std::int32_t>::min(),
+      std::numeric_limits<std::int32_t>::max(), json::Required::no, 0);
+  const auto threshold =
+      fields_.number(control, keys::threshold, path, 0.0, 1.0, json::Required::no,
+                     0.5);
+  const auto hysteresis =
+      fields_.number(control, keys::hysteresis, path, 0.0, 0.49,
+                     json::Required::no, 0.1);
+  if (!report_id.has_value() || !control_page.has_value() ||
+      !control_usage.has_value() || !link.has_value() ||
+      !discrete.has_value() || !threshold.has_value() ||
+      !hysteresis.has_value())
+    return false;
+  out.report_id = static_cast<std::uint8_t>(*report_id);
+  out.usage_page = static_cast<std::uint16_t>(*control_page);
+  out.usage = static_cast<std::uint16_t>(*control_usage);
+  out.link_collection = static_cast<std::uint16_t>(*link);
+  out.discrete_value = static_cast<std::int32_t>(*discrete);
+  out.threshold = *threshold;
+  out.hysteresis = *hysteresis;
+
+  std::string activation;
+  if (!fields_.string(control, keys::activation, path, activation,
+                      json::Required::yes, json::EmptyString::reject))
+    return false;
+  const auto parsed_activation =
+      profile_wire::parse(profile_wire::hid_activation, activation);
+  if (!parsed_activation.has_value())
+    return fields_.fail(path + ".activation",
+                        "unsupported HID activation mode");
+  out.activation = *parsed_activation;
+  return true;
+}
+
 bool ProfileReader::read_hid_bindings(GameProfile &profile,
                                       const std::uint32_t source_schema) {
-    const auto *value = root_.find("hidBindings");
-    if (value == nullptr) {
-      if (source_schema >= 3)
-        return set_error("$.hidBindings",
-                         "schema 3 requires a HID binding collection");
-      return true;
-    }
-    if (source_schema < 3)
-      return set_error("$.hidBindings",
-                       "generic HID bindings require schema version 3");
-    if (!value->is_array())
-      return set_error("$.hidBindings", "expected array");
-    if (value->as_array().size() > 128U)
-      return set_error("$.hidBindings", "at most 128 HID bindings are allowed");
-
-    profile.hid_bindings.reserve(value->as_array().size());
-    for (std::size_t index = 0; index < value->as_array().size(); ++index) {
-      const auto path = "$.hidBindings[" + std::to_string(index) + "]";
-      const auto &entry = value->as_array()[index];
-      if (!entry.is_object())
-        return set_error(path, "HID binding must be an object");
-      HidControlBinding binding;
-      if (!required_string(entry, "id", path, binding.id)) return false;
-      if (binding.id.empty() ||
-          !hid_binding_ids_
-               .emplace(binding.id,
-                        static_cast<std::uint16_t>(index + 1U))
-               .second)
-        return set_error(path + ".id", "duplicate or empty HID binding id");
-
-      const auto *device = required_object(entry, "device", path);
-      const auto *control = required_object(entry, "control", path);
-      if (device == nullptr || control == nullptr) return false;
-      const auto vid =
-          required_integer(*device, "vid", path + ".device", 0, 65'535);
-      const auto pid =
-          required_integer(*device, "pid", path + ".device", 0, 65'535);
-      const auto version =
-          required_integer(*device, "version", path + ".device", 0, 65'535);
-      const auto usage_page = required_integer(
-          *device, "usagePage", path + ".device", 0, 65'535);
-      const auto usage =
-          required_integer(*device, "usage", path + ".device", 0, 65'535);
-      const auto slot = optional_integer(*device, "stableSlot",
-                                         path + ".device", 1, 32, 1);
-      if (!vid.has_value() || !pid.has_value() || !version.has_value() ||
-          !usage_page.has_value() || !usage.has_value() ||
-          !slot.has_value() ||
-          !required_string(*device, "descriptorHash", path + ".device",
-                           binding.device.descriptor_hash))
-        return false;
-      optional_string(*device, "serial", path + ".device",
-                      binding.device.serial);
-      if (!ok()) return false;
-      if (!is_lowercase_sha256(binding.device.descriptor_hash))
-        return set_error(path + ".device.descriptorHash",
-                         "expected a lower-case SHA-256 digest");
-      binding.device.vendor_id = static_cast<std::uint16_t>(*vid);
-      binding.device.product_id = static_cast<std::uint16_t>(*pid);
-      binding.device.version = static_cast<std::uint16_t>(*version);
-      binding.device.usage_page = static_cast<std::uint16_t>(*usage_page);
-      binding.device.usage = static_cast<std::uint16_t>(*usage);
-      binding.device.stable_slot = static_cast<std::uint16_t>(*slot);
-
-      const auto report_id =
-          required_integer(*control, "reportId", path + ".control", 0, 255);
-      const auto control_page = required_integer(
-          *control, "usagePage", path + ".control", 0, 65'535);
-      const auto control_usage =
-          required_integer(*control, "usage", path + ".control", 0, 65'535);
-      const auto link = optional_integer(*control, "linkCollection",
-                                         path + ".control", 0, 65'535, 0);
-      const auto discrete = optional_integer(
-          *control, "value", path + ".control",
-          std::numeric_limits<std::int32_t>::min(),
-          std::numeric_limits<std::int32_t>::max(), 0);
-      const auto threshold = optional_number(*control, "threshold",
-                                             path + ".control", 0.0, 1.0, 0.5);
-      const auto hysteresis = optional_number(
-          *control, "hysteresis", path + ".control", 0.0, 0.49, 0.1);
-      if (!report_id.has_value() || !control_page.has_value() ||
-          !control_usage.has_value() || !link.has_value() ||
-          !discrete.has_value() || !threshold.has_value() ||
-          !hysteresis.has_value())
-        return false;
-      binding.report_id = static_cast<std::uint8_t>(*report_id);
-      binding.usage_page = static_cast<std::uint16_t>(*control_page);
-      binding.usage = static_cast<std::uint16_t>(*control_usage);
-      binding.link_collection = static_cast<std::uint16_t>(*link);
-      binding.discrete_value = static_cast<std::int32_t>(*discrete);
-      binding.threshold = *threshold;
-      binding.hysteresis = *hysteresis;
-
-      std::string activation;
-      if (!required_string(*control, "activation", path + ".control",
-                           activation))
-        return false;
-      if (activation == "button")
-        binding.activation = HidActivationMode::button;
-      else if (activation == "equals")
-        binding.activation = HidActivationMode::equals;
-      else if (activation == "axisPositive")
-        binding.activation = HidActivationMode::axis_positive;
-      else if (activation == "axisNegative")
-        binding.activation = HidActivationMode::axis_negative;
-      else if (activation == "relativePositive")
-        binding.activation = HidActivationMode::relative_positive;
-      else if (activation == "relativeNegative")
-        binding.activation = HidActivationMode::relative_negative;
-      else
-        return set_error(path + ".control.activation",
-                         "unsupported HID activation mode");
-      optional_boolean(entry, "allowSystemClass", path,
-                       binding.allow_system_class);
-      if (!ok()) return false;
-      if (is_system_keyboard_or_mouse(binding.device) &&
-          !binding.allow_system_class)
-        return set_error(path + ".allowSystemClass",
-                         "keyboard/mouse HID requires explicit opt-in");
-      if ((binding.activation == HidActivationMode::axis_positive ||
-           binding.activation == HidActivationMode::axis_negative) &&
-          binding.hysteresis >
-              std::min(binding.threshold, 1.0 - binding.threshold))
-        return set_error(path + ".control.hysteresis",
-                         "hysteresis crosses the axis threshold");
-      profile.hid_bindings.push_back(std::move(binding));
-    }
+  const auto *value = root_.find(keys::hid_bindings);
+  if (value == nullptr) {
+    if (source_schema >= 3)
+      return fields_.fail("$.hidBindings",
+                          "schema 3 requires a HID binding collection");
     return true;
   }
+  if (source_schema < 3)
+    return fields_.fail("$.hidBindings",
+                        "generic HID bindings require schema version 3");
+  if (!value->is_array())
+    return fields_.fail("$.hidBindings", "expected array");
+  if (value->as_array().size() > 128U)
+    return fields_.fail("$.hidBindings",
+                        "at most 128 HID bindings are allowed");
+
+  profile.hid_bindings.reserve(value->as_array().size());
+  for (std::size_t index = 0; index < value->as_array().size(); ++index) {
+    const auto path = "$.hidBindings[" + std::to_string(index) + "]";
+    const auto &entry = value->as_array()[index];
+    if (!entry.is_object())
+      return fields_.fail(path, "HID binding must be an object");
+    HidControlBinding binding;
+    if (!fields_.string(entry, keys::id, path, binding.id,
+                        json::Required::yes, json::EmptyString::reject))
+      return false;
+    if (binding.id.empty() ||
+        !hid_binding_ids_
+             .emplace(binding.id, static_cast<std::uint16_t>(index + 1U))
+             .second)
+      return fields_.fail(path + ".id", "duplicate or empty HID binding id");
+
+    const auto *device =
+        fields_.object(entry, keys::device, path, json::Required::yes);
+    const auto *control =
+        fields_.object(entry, keys::control, path, json::Required::yes);
+    if (device == nullptr || control == nullptr) return false;
+    if (!read_hid_device(*device, path + ".device", binding.device) ||
+        !read_hid_control(*control, path + ".control", binding))
+      return false;
+    fields_.boolean(entry, keys::allow_system_class, path,
+                    binding.allow_system_class, json::Required::no);
+    if (!fields_.ok()) return false;
+    if (is_system_keyboard_or_mouse(binding.device) &&
+        !binding.allow_system_class)
+      return fields_.fail(path + ".allowSystemClass",
+                          "keyboard/mouse HID requires explicit opt-in");
+    if ((binding.activation == HidActivationMode::axis_positive ||
+         binding.activation == HidActivationMode::axis_negative) &&
+        binding.hysteresis >
+            std::min(binding.threshold, 1.0 - binding.threshold))
+      return fields_.fail(path + ".control.hysteresis",
+                          "hysteresis crosses the axis threshold");
+    profile.hid_bindings.push_back(std::move(binding));
+  }
+  return true;
+}
 
 bool ProfileReader::read_modules(GameProfile &profile,
                                  const std::uint32_t source_schema) {
-    const auto *value = root_.find("modules");
+    const auto *value = root_.find(keys::modules);
     if (value == nullptr) {
       if (source_schema >= 3)
-        return set_error("$.modules", "schema 3 requires module metadata");
+        return fields_.fail("$.modules", "schema 3 requires module metadata");
       return true;
     }
     if (!value->is_array())
-      return set_error("$.modules", "expected array");
+      return fields_.fail("$.modules", "expected array");
 
     std::set<ProfileModuleKind> kinds;
     for (std::size_t index = 0; index < value->as_array().size(); ++index) {
       const auto path = "$.modules[" + std::to_string(index) + "]";
       const auto &entry = value->as_array()[index];
       if (!entry.is_object())
-        return set_error(path, "module descriptor must be an object");
+        return fields_.fail(path, "module descriptor must be an object");
       std::string kind;
-      if (!required_string(entry, "kind", path, kind)) return false;
+      if (!fields_.string(entry, keys::kind, path, kind, json::Required::yes,
+                          json::EmptyString::reject))
+        return false;
       ProfileModule module;
-      std::int64_t maximum_version{};
-      if (kind == "visual") {
-        module.kind = ProfileModuleKind::visual;
-        maximum_version = 2;
-      } else if (kind == "automation") {
-        if (source_schema < 4)
-          return set_error(path + ".kind",
-                           "automation modules require schema version 4");
-        module.kind = ProfileModuleKind::automation;
-        maximum_version = 1;
-      } else if (kind == "companion") {
-        module.kind = ProfileModuleKind::companion;
-        maximum_version = 1;
-      } else {
-        return set_error(path + ".kind", "unsupported module kind");
-      }
-      const auto version = required_integer(
-          entry, "schemaVersion", path, 1, maximum_version);
+      const auto *wire = profile_wire::module(kind);
+      if (wire == nullptr)
+        return fields_.fail(path + ".kind", "unsupported module kind");
+      if (source_schema < wire->minimum_profile_schema)
+        return fields_.fail(path + ".kind",
+                            "module requires a newer profile schema");
+      module.kind = wire->value;
+      const auto version = fields_.integer(
+          entry, keys::schema_version, path, 1, wire->maximum_version,
+          json::Required::yes);
       if (!version.has_value()) return false;
       module.schema_version = static_cast<std::uint32_t>(*version);
       if (!kinds.insert(module.kind).second)
-        return set_error(path + ".kind", "duplicate module kind");
+        return fields_.fail(path + ".kind", "duplicate module kind");
       profile.modules.push_back(module);
     }
     return true;
@@ -260,12 +285,14 @@ bool ProfileReader::read_modules(GameProfile &profile,
 
 bool ProfileReader::read_cooldowns(GameProfile &profile,
                                    const std::uint32_t source_schema) {
-    const auto *values = required_array(root_, "cooldowns", "$");
+    const auto *values =
+        fields_.array(root_, keys::cooldowns, "$", json::Required::yes);
     if (values == nullptr) {
       return false;
     }
     if (values->empty()) {
-      return set_error("$.cooldowns", "at least one cooldown is required");
+      return fields_.fail("$.cooldowns",
+                          "at least one cooldown is required");
     }
 
     std::set<std::string, std::less<>> ids;
@@ -274,19 +301,24 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
       const auto path = "$.cooldowns[" + std::to_string(index) + "]";
       const auto &value = (*values)[index];
       if (!value.is_object()) {
-        return set_error(path, "cooldown must be an object");
+        return fields_.fail(path, "cooldown must be an object");
       }
 
       CooldownDefinition definition;
-      if (!required_string(value, "id", path, definition.id) ||
-          !required_string(value, "name", path, definition.name)) {
+      if (!fields_.string(value, keys::id, path, definition.id,
+                          json::Required::yes, json::EmptyString::reject) ||
+          !fields_.string(value, keys::name, path, definition.name,
+                          json::Required::yes, json::EmptyString::reject)) {
         return false;
       }
       if (!ids.insert(definition.id).second) {
-        return set_error(path + ".id", "duplicate cooldown id");
+        return fields_.fail(path + ".id", "duplicate cooldown id");
       }
-      const auto duration = required_integer(value, "durationMs", path, 1, 86'400'000);
-      const auto charges = optional_integer(value, "maxCharges", path, 1, 99, 1);
+      const auto duration = fields_.integer(value, keys::duration_ms, path, 1,
+                                            max_cooldown_duration.count(),
+                                            json::Required::yes);
+      const auto charges = fields_.integer(value, keys::max_charges, path, 1,
+                                           99, json::Required::no, 1);
       if (!duration.has_value() || !charges.has_value()) {
         return false;
       }
@@ -294,35 +326,36 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
       definition.max_charges = static_cast<std::uint32_t>(*charges);
 
       std::string retrigger = "ignore";
-      optional_string(value, "retrigger", path, retrigger);
+      fields_.string(value, keys::retrigger, path, retrigger,
+                     json::Required::no, json::EmptyString::allow);
       if (source_schema >= 4) {
         std::string recovery;
-        if (!required_string(value, "recovery", path, recovery)) return false;
-        if (recovery == "single")
-          definition.recovery = RecoveryMode::single;
-        else if (recovery == "sequential")
-          definition.recovery = RecoveryMode::sequential;
-        else if (recovery == "parallel")
-          definition.recovery = RecoveryMode::parallel;
-        else
-          return set_error(path + ".recovery",
-                           "expected single, sequential, or parallel");
+        if (!fields_.string(value, keys::recovery, path, recovery,
+                            json::Required::yes, json::EmptyString::reject))
+          return false;
+        const auto parsed_recovery =
+            profile_wire::parse(profile_wire::recovery, recovery);
+        if (!parsed_recovery.has_value())
+          return fields_.fail(path + ".recovery",
+                              "expected single, sequential, or parallel");
+        definition.recovery = *parsed_recovery;
       } else {
         // Schema <4 expressed recovery as a stackCharges boolean; derive the
         // canonical field here so runtime code never sees the mirror.
         bool stack_charges{};
-        optional_boolean(value, "stackCharges", path, stack_charges);
+        fields_.boolean(value, keys::stack_charges, path, stack_charges,
+                        json::Required::no);
         definition.recovery = stack_charges ? RecoveryMode::sequential
                                             : RecoveryMode::single;
       }
-      if (!ok()) return false;
-      if (retrigger == "ignore") {
-        definition.retrigger = RetriggerPolicy::ignore;
-      } else if (retrigger == "restart") {
-        definition.retrigger = RetriggerPolicy::restart;
-      } else {
-        return set_error(path + ".retrigger", "expected 'ignore' or 'restart'");
+      if (!fields_.ok()) return false;
+      const auto parsed_retrigger =
+          profile_wire::parse(profile_wire::retrigger, retrigger);
+      if (!parsed_retrigger.has_value()) {
+        return fields_.fail(path + ".retrigger",
+                            "expected 'ignore' or 'restart'");
       }
+      definition.retrigger = *parsed_retrigger;
       profile.cooldowns.push_back(std::move(definition));
     }
     cooldown_ids_ = std::move(ids);
@@ -331,20 +364,20 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
 
 bool ProfileReader::read_cooldown_groups(
     GameProfile &profile, const std::uint32_t source_schema) {
-  const auto *values = root_.find("cooldownGroups");
+  const auto *values = root_.find(keys::cooldown_groups);
   if (values == nullptr) {
     if (source_schema >= 4)
-      return set_error("$.cooldownGroups",
-                       "schema 4 requires a cooldown group collection");
+      return fields_.fail("$.cooldownGroups",
+                          "schema 4 requires a cooldown group collection");
     return true;
   }
   if (source_schema < 4)
-    return set_error("$.cooldownGroups",
-                     "cooldown groups require schema version 4");
+    return fields_.fail("$.cooldownGroups",
+                        "cooldown groups require schema version 4");
   if (!values->is_array())
-    return set_error("$.cooldownGroups", "expected array");
+    return fields_.fail("$.cooldownGroups", "expected array");
   if (values->as_array().size() > 64U)
-    return set_error("$.cooldownGroups", "at most 64 groups are allowed");
+    return fields_.fail("$.cooldownGroups", "at most 64 groups are allowed");
 
   std::set<std::string, std::less<>> group_ids;
   std::set<std::string, std::less<>> shared_members;
@@ -352,87 +385,91 @@ bool ProfileReader::read_cooldown_groups(
     const auto path = "$.cooldownGroups[" + std::to_string(index) + "]";
     const auto &value = values->as_array()[index];
     if (!value.is_object())
-      return set_error(path, "cooldown group must be an object");
+      return fields_.fail(path, "cooldown group must be an object");
     CooldownGroup group;
-    if (!required_string(value, "id", path, group.id) ||
-        !required_string(value, "name", path, group.name))
+    if (!fields_.string(value, keys::id, path, group.id, json::Required::yes,
+                        json::EmptyString::reject) ||
+        !fields_.string(value, keys::name, path, group.name,
+                        json::Required::yes, json::EmptyString::reject))
       return false;
     if (group.id.empty() || !group_ids.insert(group.id).second)
-      return set_error(path + ".id", "duplicate or empty group id");
+      return fields_.fail(path + ".id", "duplicate or empty group id");
 
     std::string mode;
-    if (!required_string(value, "mode", path, mode)) return false;
-    if (mode == "sharedPool")
-      group.mode = CooldownGroupMode::shared_pool;
-    else if (mode == "triggerPropagation")
-      group.mode = CooldownGroupMode::trigger_propagation;
-    else
-      return set_error(path + ".mode",
-                       "expected sharedPool or triggerPropagation");
+    if (!fields_.string(value, keys::mode, path, mode, json::Required::yes,
+                        json::EmptyString::reject))
+      return false;
+    const auto parsed_mode =
+        profile_wire::parse(profile_wire::group_mode, mode);
+    if (!parsed_mode.has_value())
+      return fields_.fail(path + ".mode",
+                          "expected sharedPool or triggerPropagation");
+    group.mode = *parsed_mode;
 
-    const auto *members = required_array(value, "cooldowns", path);
+    const auto *members =
+        fields_.array(value, keys::cooldowns, path, json::Required::yes);
     if (members == nullptr) return false;
     if (members->empty())
-      return set_error(path + ".cooldowns", "group requires a member");
+      return fields_.fail(path + ".cooldowns", "group requires a member");
     std::set<std::string, std::less<>> local_members;
     for (std::size_t item{}; item < members->size(); ++item) {
       const auto item_path = path + ".cooldowns[" + std::to_string(item) + "]";
       if (!(*members)[item].is_string())
-        return set_error(item_path, "expected cooldown id");
+        return fields_.fail(item_path, "expected cooldown id");
       const auto &id = (*members)[item].as_string();
       if (!cooldown_ids_.contains(id))
-        return set_error(item_path, "unknown cooldown id");
+        return fields_.fail(item_path, "unknown cooldown id");
       if (!local_members.insert(id).second)
-        return set_error(item_path, "duplicate group member");
+        return fields_.fail(item_path, "duplicate group member");
       if (group.mode == CooldownGroupMode::shared_pool &&
           !shared_members.insert(id).second)
-        return set_error(item_path,
-                         "cooldown belongs to more than one shared pool");
+        return fields_.fail(item_path,
+                            "cooldown belongs to more than one shared pool");
       group.cooldown_ids.push_back(id);
     }
 
     if (group.mode == CooldownGroupMode::shared_pool) {
-      const auto duration =
-          required_integer(value, "durationMs", path, 1, 86'400'000);
-      const auto charges =
-          optional_integer(value, "maxCharges", path, 1, 99, 1);
+      const auto duration = fields_.integer(
+          value, keys::duration_ms, path, 1, max_cooldown_duration.count(),
+          json::Required::yes);
+      const auto charges = fields_.integer(
+          value, keys::max_charges, path, 1, 99, json::Required::no, 1);
       std::string recovery;
       std::string retrigger = "ignore";
       if (!duration.has_value() || !charges.has_value() ||
-          !required_string(value, "recovery", path, recovery))
+          !fields_.string(value, keys::recovery, path, recovery,
+                          json::Required::yes, json::EmptyString::reject))
         return false;
-      optional_string(value, "retrigger", path, retrigger);
-      if (!ok()) return false;
+      fields_.string(value, keys::retrigger, path, retrigger,
+                     json::Required::no, json::EmptyString::allow);
+      if (!fields_.ok()) return false;
       group.duration = Milliseconds(*duration);
       group.max_charges = static_cast<std::uint32_t>(*charges);
-      if (recovery == "single")
-        group.recovery = RecoveryMode::single;
-      else if (recovery == "sequential")
-        group.recovery = RecoveryMode::sequential;
-      else if (recovery == "parallel")
-        group.recovery = RecoveryMode::parallel;
-      else
-        return set_error(path + ".recovery",
-                         "expected single, sequential, or parallel");
-      if (retrigger == "ignore")
-        group.retrigger = RetriggerPolicy::ignore;
-      else if (retrigger == "restart")
-        group.retrigger = RetriggerPolicy::restart;
-      else
-        return set_error(path + ".retrigger",
-                         "expected ignore or restart");
+      const auto parsed_recovery =
+          profile_wire::parse(profile_wire::recovery, recovery);
+      if (!parsed_recovery.has_value())
+        return fields_.fail(path + ".recovery",
+                            "expected single, sequential, or parallel");
+      group.recovery = *parsed_recovery;
+      const auto parsed_retrigger =
+          profile_wire::parse(profile_wire::retrigger, retrigger);
+      if (!parsed_retrigger.has_value())
+        return fields_.fail(path + ".retrigger",
+                            "expected ignore or restart");
+      group.retrigger = *parsed_retrigger;
     }
     profile.cooldown_groups.push_back(std::move(group));
   }
   return true;
 }
 bool ProfileReader::read_panels(GameProfile &profile) {
-    const auto *values = required_array(root_, "panels", "$");
+    const auto *values =
+        fields_.array(root_, keys::panels, "$", json::Required::yes);
     if (values == nullptr) {
       return false;
     }
     if (values->empty()) {
-      return set_error("$.panels", "at least one panel is required");
+      return fields_.fail("$.panels", "at least one panel is required");
     }
 
     std::set<std::string, std::less<>> ids;
@@ -441,91 +478,111 @@ bool ProfileReader::read_panels(GameProfile &profile) {
       const auto path = "$.panels[" + std::to_string(index) + "]";
       const auto &value = (*values)[index];
       if (!value.is_object()) {
-        return set_error(path, "panel must be an object");
+        return fields_.fail(path, "panel must be an object");
       }
 
       Panel panel;
-      if (!required_string(value, "id", path, panel.id) ||
-          !required_string(value, "name", path, panel.name)) {
+      if (!fields_.string(value, keys::id, path, panel.id,
+                          json::Required::yes, json::EmptyString::reject) ||
+          !fields_.string(value, keys::name, path, panel.name,
+                          json::Required::yes, json::EmptyString::reject)) {
         return false;
       }
       if (!ids.insert(panel.id).second) {
-        return set_error(path + ".id", "duplicate panel id");
+        return fields_.fail(path + ".id", "duplicate panel id");
       }
 
       std::string layout = "row";
-      optional_string(value, "layout", path, layout);
-      if (!ok()) {
+      fields_.string(value, keys::layout, path, layout, json::Required::no,
+                     json::EmptyString::allow);
+      if (!fields_.ok()) {
         return false;
       }
-      if (layout == "row") {
-        panel.layout = PanelLayout::row;
-      } else if (layout == "column") {
-        panel.layout = PanelLayout::column;
-      } else if (layout == "grid") {
-        panel.layout = PanelLayout::grid;
-      } else {
-        return set_error(path + ".layout", "expected 'row', 'column', or 'grid'");
+      const auto parsed_layout =
+          profile_wire::parse(profile_wire::panel_layout, layout);
+      if (!parsed_layout.has_value()) {
+        return fields_.fail(path + ".layout",
+                            "expected 'row', 'column', or 'grid'");
       }
+      panel.layout = *parsed_layout;
 
       std::string style = "card";
-      optional_string(value, "style", path, style);
-      if (!ok()) {
+      fields_.string(value, keys::style, path, style, json::Required::no,
+                     json::EmptyString::allow);
+      if (!fields_.ok()) {
         return false;
       }
-      if (style == "card") {
-        panel.style = PanelStyle::card;
-      } else if (style == "bar") {
-        panel.style = PanelStyle::bar;
-      } else {
-        return set_error(path + ".style", "expected 'card' or 'bar'");
+      const auto parsed_style =
+          profile_wire::parse(profile_wire::panel_style, style);
+      if (!parsed_style.has_value()) {
+        return fields_.fail(path + ".style", "expected 'card' or 'bar'");
       }
+      panel.style = *parsed_style;
 
-      const auto *bar = value.find("bar");
+      const auto *bar = value.find(keys::bar);
       if (bar != nullptr) {
         if (!bar->is_object()) {
-          return set_error(path + ".bar", "expected object");
+          return fields_.fail(path + ".bar", "expected object");
         }
-        const auto width = optional_integer(*bar, "width", path + ".bar", 40, 1'200, panel.bar.width);
-        const auto height = optional_integer(*bar, "height", path + ".bar", 16, 240, panel.bar.height);
+        const auto bar_path = path + ".bar";
+        const auto width = fields_.integer(
+            *bar, keys::width, bar_path, 40, 1'200,
+            json::Required::no, panel.bar.width);
+        const auto height = fields_.integer(
+            *bar, keys::height, bar_path, 16, 240,
+            json::Required::no, panel.bar.height);
         if (!width.has_value() || !height.has_value()) {
           return false;
         }
         panel.bar.width = static_cast<std::uint32_t>(*width);
         panel.bar.height = static_cast<std::uint32_t>(*height);
-        optional_color(*bar, "fillColor", path + ".bar", panel.bar.fill_color);
-        optional_color(*bar, "backgroundColor", path + ".bar", panel.bar.background_color);
-        optional_color(*bar, "borderColor", path + ".bar", panel.bar.border_color);
-        optional_color(*bar, "textColor", path + ".bar", panel.bar.text_color);
-        optional_boolean(*bar, "showText", path + ".bar", panel.bar.show_text);
-        optional_boolean(*bar, "hideWhenReady", path + ".bar", panel.bar.hide_when_ready);
-        if (!ok()) {
+        const auto read_color = [&](const std::string_view key,
+                                    std::uint32_t &color) {
+          if (const auto parsed = fields_.color(*bar, key, bar_path,
+                                                json::Required::no, color))
+            color = *parsed;
+        };
+        read_color(keys::fill_color, panel.bar.fill_color);
+        read_color(keys::background_color, panel.bar.background_color);
+        read_color(keys::border_color, panel.bar.border_color);
+        read_color(keys::text_color, panel.bar.text_color);
+        fields_.boolean(*bar, keys::show_text, bar_path,
+                        panel.bar.show_text, json::Required::no);
+        fields_.boolean(*bar, keys::hide_when_ready, bar_path,
+                        panel.bar.hide_when_ready, json::Required::no);
+        if (!fields_.ok()) {
           return false;
         }
       }
 
-      const auto x = optional_number(value, "anchorX", path, 0.0, 1.0, 0.5);
-      const auto y = optional_number(value, "anchorY", path, 0.0, 1.0, 0.5);
+      const auto x = fields_.number(value, keys::anchor_x, path, 0.0, 1.0,
+                                    json::Required::no, 0.5);
+      const auto y = fields_.number(value, keys::anchor_y, path, 0.0, 1.0,
+                                    json::Required::no, 0.5);
       if (!x.has_value() || !y.has_value()) {
         return false;
       }
       panel.anchor_x = *x;
       panel.anchor_y = *y;
 
-      const auto *cooldowns = required_array(value, "cooldowns", path);
+      const auto *cooldowns =
+          fields_.array(value, keys::cooldowns, path, json::Required::yes);
       if (cooldowns == nullptr) {
         return false;
       }
       if (cooldowns->empty()) {
-        return set_error(path + ".cooldowns", "panel requires at least one cooldown id");
+        return fields_.fail(path + ".cooldowns",
+                            "panel requires at least one cooldown id");
       }
       for (std::size_t item = 0; item < cooldowns->size(); ++item) {
+        const auto item_path =
+            path + ".cooldowns[" + std::to_string(item) + "]";
         if (!(*cooldowns)[item].is_string()) {
-          return set_error(path + ".cooldowns[" + std::to_string(item) + "]", "expected string cooldown id");
+          return fields_.fail(item_path, "expected string cooldown id");
         }
         const auto &id = (*cooldowns)[item].as_string();
         if (!cooldown_ids_.contains(id)) {
-          return set_error(path + ".cooldowns[" + std::to_string(item) + "]", "unknown cooldown id");
+          return fields_.fail(item_path, "unknown cooldown id");
         }
         panel.cooldown_ids.push_back(id);
       }
@@ -534,104 +591,98 @@ bool ProfileReader::read_panels(GameProfile &profile) {
     return true;
   }
 
-bool ProfileReader::read_bindings(GameProfile &profile) {
-    const auto *values = required_array(root_, "bindings", "$");
-    if (values == nullptr) {
+bool ProfileReader::read_chord_token(const json::Value &token_value,
+                                     const std::string &token_path,
+                                     std::set<InputToken> &tokens,
+                                     InputBinding &binding) {
+  std::string device;
+  if (!fields_.string(token_value, keys::device, token_path, device,
+                      json::Required::yes, json::EmptyString::reject))
+    return false;
+  InputToken token;
+  if (const auto parsed = parse_enum_wire(input_device_wire, device))
+    token.device = *parsed;
+  else
+    return fields_.fail(token_path + ".device",
+                        "expected keyboard, mouse, controller, or hid");
+  if (token.device == InputDevice::generic_hid) {
+    std::string binding_id;
+    if (!fields_.string(token_value, keys::binding_id, token_path, binding_id,
+                        json::Required::yes, json::EmptyString::reject))
       return false;
-    }
-    if (values->empty()) {
-      return set_error("$.bindings", "at least one binding is required");
-    }
-
-    profile.bindings.reserve(values->size());
-    for (std::size_t index = 0; index < values->size(); ++index) {
-      const auto path = "$.bindings[" + std::to_string(index) + "]";
-      const auto &value = (*values)[index];
-      if (!value.is_object()) {
-        return set_error(path, "binding must be an object");
-      }
-
-      InputBinding binding;
-      if (!required_string(value, "cooldownId", path, binding.cooldown_id)) {
-        return false;
-      }
-      if (!cooldown_ids_.contains(binding.cooldown_id)) {
-        return set_error(path + ".cooldownId", "unknown cooldown id");
-      }
-      const auto *chord = required_array(value, "chord", path);
-      if (chord == nullptr) {
-        return false;
-      }
-      if (chord->empty()) {
-        return set_error(path + ".chord", "chord requires at least one token");
-      }
-
-      std::set<InputToken> tokens;
-      for (std::size_t token_index = 0; token_index < chord->size(); ++token_index) {
-        const auto token_path = path + ".chord[" + std::to_string(token_index) + "]";
-        const auto &token_value = (*chord)[token_index];
-        if (!token_value.is_object()) {
-          return set_error(token_path, "input token must be an object");
-        }
-        std::string device;
-        if (!required_string(token_value, "device", token_path, device)) {
-          return false;
-        }
-        InputToken token;
-        if (device == "keyboard") {
-          token.device = InputDevice::keyboard;
-        } else if (device == "mouse") {
-          token.device = InputDevice::mouse;
-        } else if (device == "controller") {
-          token.device = InputDevice::controller;
-        } else if (device == "hid") {
-          token.device = InputDevice::generic_hid;
-        } else {
-          return set_error(token_path + ".device",
-                           "expected keyboard, mouse, controller, or hid");
-        }
-        if (token.device == InputDevice::generic_hid) {
-          std::string binding_id;
-          if (!required_string(token_value, "bindingId", token_path,
-                               binding_id))
-            return false;
-          const auto found = hid_binding_ids_.find(binding_id);
-          if (found == hid_binding_ids_.end())
-            return set_error(token_path + ".bindingId",
-                             "unknown HID binding id");
-          token.code = found->second;
-          if (!tokens.insert(token).second)
-            return set_error(token_path, "duplicate token in chord");
-          binding.chord.tokens.push_back(token);
-          continue;
-        }
-        const std::int64_t maximum = token.device == InputDevice::mouse ? 7 :
-                                     token.device == InputDevice::controller ? 18 : 65'535;
-        const auto code = required_integer(token_value, "code", token_path, 1, maximum);
-        const auto controller = optional_integer(token_value, "controllerIndex", token_path, 0, 3, 0);
-        if (!code.has_value() || !controller.has_value()) {
-          return false;
-        }
-        if (token.device == InputDevice::controller &&
-            !((*code >= 1 && *code <= 10) ||
-              (*code >= 13 && *code <= 18))) {
-          return set_error(token_path + ".code",
-                           "controller code must be 1-10 or 13-18");
-        }
-        token.code = static_cast<std::uint16_t>(*code);
-        token.controller_index = static_cast<std::uint8_t>(*controller);
-        if (token.device != InputDevice::controller && token.controller_index != 0) {
-          return set_error(token_path + ".controllerIndex", "controllerIndex is valid only for controller tokens");
-        }
-        if (!tokens.insert(token).second) {
-          return set_error(token_path, "duplicate token in chord");
-        }
-        binding.chord.tokens.push_back(token);
-      }
-      profile.bindings.push_back(std::move(binding));
-    }
-    return true;
+    const auto found = hid_binding_ids_.find(binding_id);
+    if (found == hid_binding_ids_.end())
+      return fields_.fail(token_path + ".bindingId", "unknown HID binding id");
+    token.code = found->second;
+  } else {
+    const std::int64_t maximum = token.device == InputDevice::mouse
+                                     ? 7
+                                     : token.device == InputDevice::controller
+                                           ? 18
+                                           : 65'535;
+    const auto code = fields_.integer(token_value, keys::code, token_path, 1,
+                                      maximum, json::Required::yes);
+    const auto controller = fields_.integer(token_value, keys::controller_index,
+                                            token_path, 0, 3, json::Required::no,
+                                            0);
+    if (!code.has_value() || !controller.has_value()) return false;
+    if (token.device == InputDevice::controller &&
+        !((*code >= 1 && *code <= 10) || (*code >= 13 && *code <= 18)))
+      return fields_.fail(token_path + ".code",
+                          "controller code must be 1-10 or 13-18");
+    token.code = static_cast<std::uint16_t>(*code);
+    token.controller_index = static_cast<std::uint8_t>(*controller);
+    if (token.device != InputDevice::controller && token.controller_index != 0)
+      return fields_.fail(token_path + ".controllerIndex",
+                          "controllerIndex is valid only for controller tokens");
   }
+  if (!tokens.insert(token).second)
+    return fields_.fail(token_path, "duplicate token in chord");
+  binding.chord.tokens.push_back(token);
+  return true;
+}
+
+bool ProfileReader::read_bindings(GameProfile &profile) {
+  const auto *values =
+      fields_.array(root_, keys::bindings, "$", json::Required::yes);
+  if (values == nullptr) return false;
+  if (values->empty())
+    return fields_.fail("$.bindings", "at least one binding is required");
+
+  profile.bindings.reserve(values->size());
+  for (std::size_t index = 0; index < values->size(); ++index) {
+    const auto path = "$.bindings[" + std::to_string(index) + "]";
+    const auto &value = (*values)[index];
+    if (!value.is_object())
+      return fields_.fail(path, "binding must be an object");
+
+    InputBinding binding;
+    if (!fields_.string(value, keys::cooldown_id, path, binding.cooldown_id,
+                        json::Required::yes, json::EmptyString::reject))
+      return false;
+    if (!cooldown_ids_.contains(binding.cooldown_id))
+      return fields_.fail(path + ".cooldownId", "unknown cooldown id");
+    const auto *chord =
+        fields_.array(value, keys::chord, path, json::Required::yes);
+    if (chord == nullptr) return false;
+    if (chord->empty())
+      return fields_.fail(path + ".chord", "chord requires at least one token");
+
+    std::set<InputToken> tokens;
+    for (std::size_t token_index = 0; token_index < chord->size();
+         ++token_index) {
+      const auto token_path =
+          path + ".chord[" + std::to_string(token_index) + "]";
+      const auto &token_value = (*chord)[token_index];
+      if (!token_value.is_object())
+        return fields_.fail(token_path, "input token must be an object");
+      if (!read_chord_token(token_value, token_path, tokens, binding))
+        return false;
+    }
+    profile.bindings.push_back(std::move(binding));
+  }
+  return true;
+}
 } // namespace layerc::core::detail
 
 namespace layerc::core {
@@ -641,12 +692,14 @@ ProfileResult parse_profile_json(const std::string_view source) {
     return ProfileError{.path = "$",
                         .message = "profile exceeds the 256 KiB limit"};
   }
-  auto parsed = json::parse(source);
-  if (const auto *parse_error = std::get_if<json::ParseError>(&parsed)) {
-    return ProfileError{.path = "$@" + std::to_string(parse_error->offset),
-                        .message = parse_error->message};
-  }
-  return detail::ProfileReader(std::get<json::Value>(parsed)).read();
+  auto parsed = json::parse_bounded(source, max_profile_json_bytes);
+  if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
+    return ProfileError{.path = parse_error->path, .message = parse_error->message};
+  return parse_profile_value(std::get<json::Value>(parsed));
+}
+
+ProfileResult parse_profile_value(const json::Value &root) {
+  return detail::ProfileReader(root).read();
 }
 
 } // namespace layerc::core

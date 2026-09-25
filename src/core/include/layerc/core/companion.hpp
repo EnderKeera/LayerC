@@ -6,10 +6,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
 namespace layerc::core {
+namespace json { class Value; }
 
 inline constexpr std::uint32_t companion_schema_version = 1;
 inline constexpr std::size_t max_companion_slots = 8;
@@ -52,7 +54,7 @@ struct CompanionSnapshotItem {
   // empty strings until a renderer defines the data source.
   std::string icon;
   // Fraction of the cooldown elapsed toward ready: 1.0 = ready, 0.0 = just
-  // triggered (see GameBarBridge::create_session_snapshot).
+  // triggered (see build_companion_snapshot).
   double progress{0.0};
   std::uint32_t available_charges{1};
   std::uint32_t max_charges{1};
@@ -99,18 +101,27 @@ struct CompanionSessionSnapshot {
 [[nodiscard]] std::variant<CompanionProfile, CompanionError>
 parse_companion_profile_json(std::string_view json,
                              const GameProfile &base_profile);
+// For a bounded document already accepted by json::parse (including UTF-8).
+[[nodiscard]] std::variant<CompanionProfile, CompanionError>
+parse_companion_profile_value(const json::Value &root,
+                              const GameProfile &base_profile);
 
-[[nodiscard]] CompanionError
+// Present means validation failed. Matches optional<CompanionError> so
+// `if (auto error = validate_...)` reads as "if there is an error".
+using CompanionValidationResult = std::optional<CompanionError>;
+using CompanionSerializeResult = std::variant<std::string, CompanionError>;
+
+[[nodiscard]] CompanionValidationResult
 validate_companion_profile(const CompanionProfile &profile,
                            const GameProfile &base_profile);
 
 [[nodiscard]] std::string
 serialize_companion_profile_json(const CompanionProfile &profile);
 
-[[nodiscard]] CompanionError
+[[nodiscard]] CompanionValidationResult
 validate_companion_snapshot(const CompanionSessionSnapshot &snapshot);
 
-[[nodiscard]] std::optional<std::string>
+[[nodiscard]] CompanionSerializeResult
 serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot);
 
 [[nodiscard]] std::variant<CompanionSessionSnapshot, CompanionError>

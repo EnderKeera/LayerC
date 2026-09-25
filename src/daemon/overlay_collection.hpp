@@ -46,7 +46,7 @@ public:
                       layerc::core::TimePoint now);
 
 private:
-  std::vector<OverlayCooldown> cooldowns_;
+  std::vector<layerc::core::CooldownDefinition> cooldowns_;
   std::vector<std::unique_ptr<OverlayWindow>> windows_;
 };
 

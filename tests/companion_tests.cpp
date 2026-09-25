@@ -1,10 +1,11 @@
 #include "../src/daemon/companion_session_selection.hpp"
-#include "../src/gamebar/GameBarBridge.hpp"
+#include "layerc/core/companion_snapshot.hpp"
 #include "../src/gamebar/GameBarTransport.hpp"
+#include "../src/gamebar/GameBarTransportState.hpp"
 #include "layerc/core/companion.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 #include "test_support.hpp"
 
 #include <filesystem>
@@ -14,6 +15,11 @@
 using namespace layerc::core;
 using namespace layerc::platform;
 using namespace layerc::gamebar;
+
+static const std::string *serialized_json(
+    const CompanionSerializeResult &result) {
+  return std::get_if<std::string>(&result);
+}
 
 static void test_companion_json_roundtrip() {
   GameProfile base_profile;
@@ -86,9 +92,12 @@ static void test_companion_snapshot_bridge() {
 
   std::vector<CooldownState> states = {s1, s2};
 
-  auto snapshot = GameBarBridge::create_session_snapshot(
+  auto json = build_companion_snapshot(
       "hero_game", "session_123", base_profile.panels, defs, states,
       std::nullopt, now);
+  layerc::test::expect(!json.empty(), "valid session produces bounded JSON");
+  auto snapshot = std::get<CompanionSessionSnapshot>(
+      parse_companion_snapshot_json(json));
 
   layerc::test::expect(snapshot.profile_id == "hero_game",
                        "snapshot profile_id");
@@ -120,8 +129,9 @@ static void test_companion_snapshot_bridge() {
 
   // Roundtrip snapshot json
   const auto serialized = serialize_companion_snapshot_json(snapshot);
-  layerc::test::expect(serialized.has_value(), "valid snapshot serializes");
-  auto parsed_snap = parse_companion_snapshot_json(*serialized);
+  layerc::test::expect(serialized_json(serialized) != nullptr,
+                       "valid snapshot serializes");
+  auto parsed_snap = parse_companion_snapshot_json(*serialized_json(serialized));
   layerc::test::expect(
       std::holds_alternative<CompanionSessionSnapshot>(parsed_snap),
       "snapshot parses from json");
@@ -135,23 +145,15 @@ static void test_companion_snapshot_bridge() {
 
   snapshot.preferences.front().opacity = 0.0;
   const auto transparent = serialize_companion_snapshot_json(snapshot);
-  layerc::test::expect(transparent.has_value(),
+  layerc::test::expect(serialized_json(transparent) != nullptr,
                        "zero-opacity snapshot preference serializes");
-  const auto transparent_parsed = parse_companion_snapshot_json(*transparent);
+  const auto transparent_parsed =
+      parse_companion_snapshot_json(*serialized_json(transparent));
   layerc::test::expect(
       std::holds_alternative<CompanionSessionSnapshot>(transparent_parsed) &&
           std::get<CompanionSessionSnapshot>(transparent_parsed) == snapshot,
       "zero-opacity snapshot preference round trips exactly");
 
-  // Test bridge stale cutoff
-  GameBarBridge bridge;
-  bridge.update_snapshot(snapshot);
-  layerc::test::expect(bridge.latest_snapshot_json(now).has_value(),
-                       "snapshot valid at now");
-  layerc::test::expect(
-      !bridge.latest_snapshot_json(now + std::chrono::milliseconds(2500))
-           .has_value(),
-      "snapshot stale after 2.5s");
 }
 
 static void test_companion_snapshot_bounds_and_session_identity() {
@@ -169,14 +171,16 @@ static void test_companion_snapshot_bounds_and_session_identity() {
   }
   base_profile.panels.push_back(std::move(panel));
   const auto now = MonotonicClock::now();
-  const auto snapshot = GameBarBridge::create_session_snapshot(
+  const auto json = build_companion_snapshot(
       base_profile.id, window_session_key(reinterpret_cast<HWND>(1)),
       base_profile.panels, definitions, {}, std::nullopt, now);
+  const auto snapshot = std::get<CompanionSessionSnapshot>(
+      parse_companion_snapshot_json(json));
   layerc::test::expect(
       snapshot.panels.size() == 1 &&
           snapshot.panels.front().items.size() ==
               max_companion_snapshot_items &&
-          serialize_companion_snapshot_json(snapshot).has_value(),
+          serialized_json(serialize_companion_snapshot_json(snapshot)) != nullptr,
       "bridge truncates oversized panels to the serializable item bound");
 
   const auto first = window_session_key(reinterpret_cast<HWND>(100));
@@ -184,15 +188,15 @@ static void test_companion_snapshot_bounds_and_session_identity() {
   layerc::test::expect(
       first != second,
       "matched windows receive distinct companion session keys");
-  layerc::test::expect(window_session_key(nullptr) == "global",
+  layerc::test::expect(window_session_key(nullptr).compare("global") == 0,
                        "global companion sessions use a stable discriminator");
 
   const std::string maximum_profile_id(max_companion_text_bytes, 'p');
-  const auto maximum_id_snapshot = GameBarBridge::create_session_snapshot(
+  const auto maximum_id_json = build_companion_snapshot(
       maximum_profile_id, window_session_key(reinterpret_cast<HWND>(100)),
       base_profile.panels, definitions, {}, std::nullopt, now);
   layerc::test::expect(
-      serialize_companion_snapshot_json(maximum_id_snapshot).has_value(),
+      !maximum_id_json.empty(),
       "session key remains bounded for a maximum-length profile ID");
 }
 
@@ -245,16 +249,18 @@ static void test_bridge_truncates_worst_case_snapshot() {
   layerc::test::expect(
       profile_json.size() <= max_profile_json_bytes &&
           std::holds_alternative<GameProfile>(parse_profile_json(profile_json)) &&
-          validate_companion_profile(companion, base_profile).message.empty(),
+          !validate_companion_profile(companion, base_profile),
       "worst-case bridge input is accepted by the profile boundaries");
 
-  const auto snapshot = GameBarBridge::create_session_snapshot(
+  const auto json = build_companion_snapshot(
       base_profile.id, "session", base_profile.panels, definitions, {},
       companion, MonotonicClock::now());
+  const auto snapshot = std::get<CompanionSessionSnapshot>(
+      parse_companion_snapshot_json(json));
   layerc::test::expect(
       snapshot.available_panels.size() == max_companion_slots &&
           !snapshot.panels.empty() && snapshot.panels.back().items.empty() &&
-          serialize_companion_snapshot_json(snapshot).has_value(),
+          serialized_json(serialize_companion_snapshot_json(snapshot)) != nullptr,
       "bridge preserves mapped metadata and truncates live data to 64 KiB");
 }
 
@@ -279,8 +285,10 @@ static void test_all_eight_slots_persist_and_publish() {
   }
 
   const auto now = MonotonicClock::now();
-  const auto snapshot = GameBarBridge::create_session_snapshot(
+  const auto json = build_companion_snapshot(
       base_profile.id, "global", base_profile.panels, {}, {}, profile, now);
+  const auto snapshot = std::get<CompanionSessionSnapshot>(
+      parse_companion_snapshot_json(json));
   layerc::test::expect(
       snapshot.panels.size() == max_companion_slots &&
           snapshot.available_panels.size() == max_companion_slots &&
@@ -293,28 +301,47 @@ static void test_all_eight_slots_persist_and_publish() {
         "each published panel retains its distinct slot mapping");
   }
   const auto serialized = serialize_companion_snapshot_json(snapshot);
-  layerc::test::expect(serialized.has_value() &&
+  layerc::test::expect(serialized_json(serialized) != nullptr &&
                            std::holds_alternative<CompanionSessionSnapshot>(
-                               parse_companion_snapshot_json(*serialized)),
-                       "the simultaneous eight-slot snapshot round trips");
+                               parse_companion_snapshot_json(
+                                   *serialized_json(serialized))),
+                        "the simultaneous eight-slot snapshot round trips");
 
-  const auto root =
-      std::filesystem::temp_directory_path() /
-      ("LayerC-companion-eight-slots-" + std::to_string(GetCurrentProcessId()));
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
-  std::filesystem::create_directories(root, error);
-  const auto base_path = root / "profile.json";
+  const layerc::test::TempDirectory directory("LayerC-companion-eight-slots");
+  const auto base_path = directory.path() / "profile.json";
   layerc::test::expect(
-      !error && write_profile_bundle(base_path, base_profile, std::nullopt,
-                                     std::nullopt, profile),
+      write_profile_bundle(base_path, base_profile, std::nullopt,
+                           std::nullopt, profile),
       "all eight slot preferences save through the profile transaction");
   const auto loaded = load_companion_sidecar(base_path, base_profile);
   layerc::test::expect(loaded.state == CompanionSidecarState::valid &&
                            loaded.profile.has_value() &&
                            *loaded.profile == profile,
                        "all eight slot preferences survive sidecar reload");
-  std::filesystem::remove_all(root, error);
+}
+
+static void test_companion_transport_transitions() {
+  GameBarTransportState state;
+  using Link = GameBarTransportState::Link;
+  layerc::test::expect(state.link == Link::stopped && !state.retry.ready &&
+                           !state.retry.needed && state.retry.delay_ms == 100,
+                       "transport starts inert without resource allocation");
+  {
+    std::lock_guard lock(state.mutex);
+    state.enter(Link::idle);
+    state.enter(Link::opening);
+    state.enter(Link::connected, L"");
+    state.enter(Link::sending);
+    state.enter(Link::idle, L"Game Bar snapshot send failed");
+    state.retry.needed = true;
+    layerc::test::expect(state.last_error == L"Game Bar snapshot send failed" &&
+                             state.retry.needed && state.link == Link::idle,
+                         "send failure retains diagnostics until retry");
+    state.enter(Link::stopped);
+  }
+  layerc::test::expect(state.link == Link::stopped &&
+                           state.last_error == L"Game Bar snapshot send failed",
+                       "stopping does not hide the last failure reason");
 }
 
 static void test_companion_package_identity() {
@@ -403,12 +430,14 @@ static void test_companion_snapshot_rejects_malformed_input() {
   expect_rejected(std::string(max_companion_snapshot_bytes + 1, 'x'),
                   "snapshot rejects oversized message");
 
-  // layer21-F9: serialization reports validation failure as std::nullopt
-  // rather than an empty string that callers must misread as a failure.
+  // Serialization preserves the exact validation or byte-budget failure.
   CompanionSessionSnapshot invalid;
   invalid.profile_id = "";
-  layerc::test::expect(!serialize_companion_snapshot_json(invalid).has_value(),
-                       "invalid snapshot serializes to nullopt");
+  const auto invalid_result = serialize_companion_snapshot_json(invalid);
+  layerc::test::expect(
+      std::holds_alternative<CompanionError>(invalid_result) &&
+          std::get<CompanionError>(invalid_result).path == "$.profileId",
+      "invalid snapshot serialization returns its validation error");
   CompanionSessionSnapshot duplicate;
   duplicate.profile_id = "p";
   duplicate.session_key = "s";
@@ -416,8 +445,9 @@ static void test_companion_snapshot_rejects_malformed_input() {
   duplicate.panels = {{.panel_id = "a", .slot_index = 2, .items = {}},
                       {.panel_id = "b", .slot_index = 2, .items = {}}};
   layerc::test::expect(
-      !serialize_companion_snapshot_json(duplicate).has_value(),
-      "duplicate-slot snapshot serializes to nullopt");
+      std::holds_alternative<CompanionError>(
+          serialize_companion_snapshot_json(duplicate)),
+      "duplicate-slot snapshot serialization returns an error");
   CompanionSessionSnapshot oversized;
   oversized.profile_id = "p";
   oversized.session_key = "s";
@@ -429,17 +459,14 @@ static void test_companion_snapshot_rejects_malformed_input() {
          .name = std::string(max_companion_text_bytes, 'n')});
   }
   layerc::test::expect(
-      !serialize_companion_snapshot_json(oversized).has_value(),
-      "snapshot serializer enforces the final 64 KiB wire bound");
+      std::holds_alternative<CompanionError>(
+          serialize_companion_snapshot_json(oversized)),
+      "snapshot serializer reports the final 64 KiB wire bound");
 }
 
 static void test_companion_sidecar_survives_unrelated_bundle_save() {
-  const auto root =
-      std::filesystem::temp_directory_path() / "LayerC-companion-preservation";
-  std::error_code error;
-  std::filesystem::remove_all(root, error);
-  std::filesystem::create_directories(root, error);
-  const auto base_path = root / "profile.json";
+  const layerc::test::TempDirectory directory("LayerC-companion-preservation");
+  const auto base_path = directory.path() / "profile.json";
 
   GameProfile base;
   base.id = "preserve";
@@ -463,7 +490,6 @@ static void test_companion_sidecar_survives_unrelated_bundle_save() {
                            loaded.profile->profile_id == base.id &&
                            loaded.profile->slots.size() == 1,
                        "unrelated bundle save must preserve companion sidecar");
-  std::filesystem::remove_all(root, error);
 }
 
 static void test_companion_profile_write_validation() {
@@ -477,14 +503,14 @@ static void test_companion_profile_write_validation() {
   duplicate_panel.slots = {{.slot_index = 0, .panel_id = "panel"},
                            {.slot_index = 1, .panel_id = "panel"}};
   const auto error = validate_companion_profile(duplicate_panel, base);
-  layerc::test::expect(!error.message.empty(),
+  layerc::test::expect(error.has_value() && !(*error).message.empty(),
                        "validator rejects duplicate panel assignments");
   CompanionProfile invalid_opacity;
   invalid_opacity.profile_id = "p";
   invalid_opacity.slots = {
       {.slot_index = 0, .panel_id = "panel", .opacity = 2.0}};
   layerc::test::expect(
-      !validate_companion_profile(invalid_opacity, base).message.empty(),
+      validate_companion_profile(invalid_opacity, base).has_value(),
       "validator rejects out-of-range opacity");
 }
 
@@ -516,15 +542,17 @@ static void test_gamebar_selects_multiple_game_sessions() {
 }
 
 int main() {
-  test_companion_json_roundtrip();
-  test_companion_snapshot_bridge();
-  test_companion_snapshot_bounds_and_session_identity();
-  test_bridge_truncates_worst_case_snapshot();
-  test_all_eight_slots_persist_and_publish();
-  test_companion_package_identity();
-  test_companion_snapshot_rejects_malformed_input();
-  test_companion_profile_write_validation();
-  test_companion_sidecar_survives_unrelated_bundle_save();
-  test_gamebar_selects_multiple_game_sessions();
-  return 0;
+  return layerc::test::run({
+      {"test_companion_json_roundtrip", test_companion_json_roundtrip},
+      {"test_companion_snapshot_bridge", test_companion_snapshot_bridge},
+      {"test_companion_snapshot_bounds_and_session_identity", test_companion_snapshot_bounds_and_session_identity},
+      {"test_bridge_truncates_worst_case_snapshot", test_bridge_truncates_worst_case_snapshot},
+      {"test_all_eight_slots_persist_and_publish", test_all_eight_slots_persist_and_publish},
+      {"test_companion_transport_transitions", test_companion_transport_transitions},
+      {"test_companion_package_identity", test_companion_package_identity},
+      {"test_companion_snapshot_rejects_malformed_input", test_companion_snapshot_rejects_malformed_input},
+      {"test_companion_profile_write_validation", test_companion_profile_write_validation},
+      {"test_companion_sidecar_survives_unrelated_bundle_save", test_companion_sidecar_survives_unrelated_bundle_save},
+      {"test_gamebar_selects_multiple_game_sessions", test_gamebar_selects_multiple_game_sessions},
+  });
 }

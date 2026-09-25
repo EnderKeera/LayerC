@@ -2,7 +2,8 @@
 
 #include <windows.h>
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
+                    _In_ LPWSTR, _In_ int show_command) {
   (void)SetProcessDpiAwarenessContext(
       DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   layerc::editor::EditorApp app;

@@ -3,13 +3,14 @@
 #include "calibration_resource.h"
 
 #include "layerc/platform/text.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <filesystem>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <commdlg.h>
 
@@ -30,6 +31,71 @@ layerc::core::NormalizedRegion expanded_template_search_region(
   return {x, y, width, height};
 }
 
+// Samples the source pixel under the center of each downscaled pixel so the
+// stored reference never exceeds 512 pixels on its longer side.
+layerc::core::TemplateImage
+downscale_capture_region(const layerc::capture::CaptureFrame &frame,
+                         const std::uint32_t left, const std::uint32_t top,
+                         const std::uint32_t source_width,
+                         const std::uint32_t source_height) {
+  const auto source_offset = [](const std::uint32_t index,
+                                const std::uint32_t extent,
+                                const std::uint32_t source_extent) {
+    return std::min(source_extent - 1,
+                    static_cast<std::uint32_t>(
+                        (static_cast<std::uint64_t>(index) * 2U + 1U) *
+                        source_extent /
+                        (static_cast<std::uint64_t>(extent) * 2U)));
+  };
+  const double factor =
+      std::min(1.0, 512.0 / std::max(source_width, source_height));
+  layerc::core::TemplateImage image;
+  image.width = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(std::lround(source_width * factor)));
+  image.height = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(std::lround(source_height * factor)));
+  image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
+  image.alpha.assign(image.pixels.size(), 255);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    const auto source_y = top + source_offset(y, image.height, source_height);
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      const auto source_x = left + source_offset(x, image.width, source_width);
+      image.pixels[static_cast<std::size_t>(y) * image.width + x] =
+          frame.pixels[static_cast<std::size_t>(source_y) * frame.width +
+                       source_x];
+    }
+  }
+  return image;
+}
+
+[[nodiscard]] bool reject_when_reference_limit_reached(
+    const HWND dialog, const layerc::core::TemplateState &state) {
+  if (state.references.size() < layerc::core::max_template_references)
+    return false;
+  MessageBoxW(dialog, L"A template state supports at most four references.",
+              L"Template reference limit", MB_OK | MB_ICONINFORMATION);
+  return true;
+}
+
+void show_asset_error(const HWND dialog,
+                      const layerc::platform::VisualAssetError &error,
+                      const wchar_t *const title) {
+  MessageBoxW(dialog, layerc::platform::utf8_to_wide(error.message).c_str(),
+              title, MB_OK | MB_ICONERROR);
+}
+
+void append_unique_reference(
+    layerc::core::TemplateState &state,
+    std::vector<layerc::core::TemplateImage> &images,
+    const layerc::platform::ImportedTemplateAsset &asset) {
+  if (std::ranges::any_of(state.references, [&](const auto &item) {
+        return item.asset_sha256 == asset.reference.asset_sha256;
+      }))
+    return;
+  state.references.push_back(asset.reference);
+  images.push_back(asset.image);
+}
+
 } // namespace
 
 void CalibrationWindow::install_template_reference(
@@ -44,30 +110,27 @@ void CalibrationWindow::install_template_reference(
 }
 
 void CalibrationWindow::capture_template_reference() {
-  if (!frame_) {
+  const auto &frame = preview_.frame();
+  if (!frame) {
     MessageBoxW(dialog_, L"Wait for a captured frame first.", L"LayerC",
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (template_state_.references.size() >=
-      layerc::core::max_template_references) {
-    MessageBoxW(dialog_, L"A template state supports at most four references.",
-                L"Template reference limit", MB_OK | MB_ICONINFORMATION);
+  if (reject_when_reference_limit_reached(dialog_, template_state_))
     return;
-  }
   const auto &region = rule_.region;
-  const auto left = static_cast<std::uint32_t>(std::clamp(
-      std::floor(region.x * frame_->width), 0.0,
-      static_cast<double>(frame_->width)));
-  const auto top = static_cast<std::uint32_t>(std::clamp(
-      std::floor(region.y * frame_->height), 0.0,
-      static_cast<double>(frame_->height)));
-  const auto right = static_cast<std::uint32_t>(std::clamp(
-      std::ceil((region.x + region.width) * frame_->width), 0.0,
-      static_cast<double>(frame_->width)));
-  const auto bottom = static_cast<std::uint32_t>(std::clamp(
-      std::ceil((region.y + region.height) * frame_->height), 0.0,
-      static_cast<double>(frame_->height)));
+  const auto pixel_edge = [](const double edge, const std::uint32_t extent) {
+    return static_cast<std::uint32_t>(
+        std::clamp(edge, 0.0, static_cast<double>(extent)));
+  };
+  const auto left =
+      pixel_edge(std::floor(region.x * frame->width), frame->width);
+  const auto top =
+      pixel_edge(std::floor(region.y * frame->height), frame->height);
+  const auto right = pixel_edge(
+      std::ceil((region.x + region.width) * frame->width), frame->width);
+  const auto bottom = pixel_edge(
+      std::ceil((region.y + region.height) * frame->height), frame->height);
   if (right <= left || bottom <= top ||
       static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U) {
     MessageBoxW(dialog_,
@@ -75,64 +138,25 @@ void CalibrationWindow::capture_template_reference() {
                 L"Template region too small", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  const auto source_width = right - left;
-  const auto source_height = bottom - top;
-  const double factor =
-      std::min(1.0, 512.0 / std::max(source_width, source_height));
-  layerc::core::TemplateImage image;
-  image.width = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(source_width * factor)));
-  image.height = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(source_height * factor)));
-  image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
-  image.alpha.assign(image.pixels.size(), 255);
-  for (std::uint32_t y = 0; y < image.height; ++y) {
-    const auto source_y =
-        top + std::min(source_height - 1,
-                       static_cast<std::uint32_t>(
-                           (static_cast<std::uint64_t>(y) * 2U + 1U) *
-                           source_height /
-                           (static_cast<std::uint64_t>(image.height) * 2U)));
-    for (std::uint32_t x = 0; x < image.width; ++x) {
-      const auto source_x =
-          left + std::min(source_width - 1,
-                          static_cast<std::uint32_t>(
-                              (static_cast<std::uint64_t>(x) * 2U + 1U) *
-                              source_width /
-                              (static_cast<std::uint64_t>(image.width) * 2U)));
-      image.pixels[static_cast<std::size_t>(y) * image.width + x] =
-          frame_->pixels[static_cast<std::size_t>(source_y) * frame_->width +
-                         source_x];
-    }
-  }
-  auto stored = layerc::platform::store_template_asset(image);
+  auto stored = layerc::platform::store_template_asset(
+      downscale_capture_region(*frame, left, top, right - left, bottom - top));
   const auto *asset =
       std::get_if<layerc::platform::ImportedTemplateAsset>(&stored);
   if (asset == nullptr) {
-    const auto &error =
-        std::get<layerc::platform::VisualAssetError>(stored);
-    MessageBoxW(dialog_, layerc::platform::utf8_to_wide(error.message).c_str(),
-                L"Template capture failed", MB_OK | MB_ICONERROR);
+    show_asset_error(dialog_,
+                     std::get<layerc::platform::VisualAssetError>(stored),
+                     L"Template capture failed");
     return;
   }
-  if (std::ranges::none_of(template_state_.references, [&](const auto &item) {
-        return item.asset_sha256 == asset->reference.asset_sha256;
-      })) {
-    template_state_.references.push_back(asset->reference);
-    template_images_.push_back(asset->image);
-  }
+  append_unique_reference(template_state_, template_images_, *asset);
   install_template_reference(rule_.region);
-  InvalidateRect(preview_, nullptr, FALSE);
+  preview_.invalidate();
 }
 
 void CalibrationWindow::import_template_reference() {
-  if (template_state_.references.size() >=
-      layerc::core::max_template_references) {
-    MessageBoxW(dialog_, L"A template state supports at most four references.",
-                L"Template reference limit", MB_OK | MB_ICONINFORMATION);
+  if (reject_when_reference_limit_reached(dialog_, template_state_))
     return;
-  }
-  std::array<wchar_t, 32'768> path{};
+  std::vector<wchar_t> path(32'768);
   OPENFILENAMEW picker{};
   picker.lStructSize = sizeof(OPENFILENAMEW);
   picker.hwndOwner = dialog_;
@@ -148,25 +172,17 @@ void CalibrationWindow::import_template_reference() {
   const auto *asset =
       std::get_if<layerc::platform::ImportedTemplateAsset>(&imported);
   if (asset == nullptr) {
-    const auto &error =
-        std::get<layerc::platform::VisualAssetError>(imported);
-    MessageBoxW(dialog_, layerc::platform::utf8_to_wide(error.message).c_str(),
-                L"Template import failed", MB_OK | MB_ICONERROR);
+    show_asset_error(dialog_,
+                     std::get<layerc::platform::VisualAssetError>(imported),
+                     L"Template import failed");
     return;
   }
-  if (std::ranges::none_of(template_state_.references, [&](const auto &item) {
-        return item.asset_sha256 == asset->reference.asset_sha256;
-      })) {
-    template_state_.references.push_back(asset->reference);
-    template_images_.push_back(asset->image);
-  }
+  append_unique_reference(template_state_, template_images_, *asset);
   install_template_reference(rule_.region);
 }
 
 void CalibrationWindow::clear_template_references() {
-  mask_editing_ = false;
-  mask_changed_ = false;
-  mask_preview_pixels_.clear();
+  mask_editor_.clear();
   template_state_.references.clear();
   template_images_.clear();
   template_matcher_.clear();
@@ -175,7 +191,7 @@ void CalibrationWindow::clear_template_references() {
 }
 
 void CalibrationWindow::toggle_template_mask_editing() {
-  if (mask_editing_) {
+  if (mask_editor_.editing()) {
     (void)finish_template_mask_editing();
     return;
   }
@@ -185,32 +201,29 @@ void CalibrationWindow::toggle_template_mask_editing() {
                 L"Mask unavailable", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  mask_editing_ = true;
-  mask_changed_ = false;
+  mask_editor_.begin(template_images_.back());
   SetDlgItemTextW(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK, L"Done");
-  refresh_template_mask_preview();
+  preview_.invalidate();
   update_control_enablement();
   update_match_status();
 }
 
 bool CalibrationWindow::finish_template_mask_editing() {
-  if (!mask_editing_) return true;
+  if (!mask_editor_.editing()) return true;
   auto &image = template_images_.back();
   if (!image.valid()) {
     MessageBoxW(dialog_, L"Keep at least 64 opaque pixels in the template mask.",
                 L"Mask is too small", MB_OK | MB_ICONWARNING);
     return false;
   }
-  if (mask_changed_) {
+  if (mask_editor_.changed()) {
     auto stored = layerc::platform::store_template_asset(image);
     const auto *asset =
         std::get_if<layerc::platform::ImportedTemplateAsset>(&stored);
     if (asset == nullptr) {
-      const auto &error =
-          std::get<layerc::platform::VisualAssetError>(stored);
-      MessageBoxW(dialog_,
-                  layerc::platform::utf8_to_wide(error.message).c_str(),
-                  L"Mask save failed", MB_OK | MB_ICONERROR);
+      show_asset_error(dialog_,
+                       std::get<layerc::platform::VisualAssetError>(stored),
+                       L"Mask save failed");
       return false;
     }
     const bool duplicates_earlier = std::ranges::any_of(
@@ -228,68 +241,29 @@ bool CalibrationWindow::finish_template_mask_editing() {
     image = asset->image;
     template_matcher_.clear();
   }
-  mask_editing_ = false;
-  mask_changed_ = false;
-  mask_preview_pixels_.clear();
+  mask_editor_.finish();
   SetDlgItemTextW(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK, L"Mask...");
   refresh_template_reference_label();
   update_control_enablement();
-  InvalidateRect(preview_, nullptr, FALSE);
+  preview_.invalidate();
   refresh_preview_frame();
   return true;
 }
 
 void CalibrationWindow::refresh_template_mask_preview() {
-  if (!mask_editing_ || template_images_.empty()) return;
-  const auto &image = template_images_.back();
-  mask_preview_pixels_.resize(image.pixels.size());
-  for (std::uint32_t y = 0; y < image.height; ++y) {
-    for (std::uint32_t x = 0; x < image.width; ++x) {
-      const auto index = static_cast<std::size_t>(y) * image.width + x;
-      const auto pixel = image.pixels[index];
-      if (image.alpha[index] == 0) {
-        mask_preview_pixels_[index] =
-            ((x / 12U) + (y / 12U)) % 2U == 0U ? 0x3A3F46U : 0x24282DU;
-      } else {
-        mask_preview_pixels_[index] =
-            pixel.blue | (static_cast<std::uint32_t>(pixel.green) << 8U) |
-            (static_cast<std::uint32_t>(pixel.red) << 16U);
-      }
-    }
-  }
-  InvalidateRect(preview_, nullptr, FALSE);
+  if (template_images_.empty())
+    return;
+  mask_editor_.refresh(template_images_.back());
+  preview_.invalidate();
 }
 
-void CalibrationWindow::update_template_mask(POINT point, const bool opaque) {
-  if (!mask_editing_ || template_images_.empty()) return;
-  const auto bounds = preview_image_rect();
-  if (point.x < bounds.left || point.x >= bounds.right ||
-      point.y < bounds.top || point.y >= bounds.bottom)
+void CalibrationWindow::update_template_mask(const POINT point,
+                                             const bool opaque) {
+  if (template_images_.empty())
     return;
-  auto &image = template_images_.back();
-  const auto x = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(point.x - bounds.left) * image.width /
-      std::max<LONG>(1, bounds.right - bounds.left));
-  const auto y = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(point.y - bounds.top) * image.height /
-      std::max<LONG>(1, bounds.bottom - bounds.top));
-  const int radius = std::max<int>(1, std::min(image.width, image.height) / 32);
-  for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
-    for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
-      if (offset_x * offset_x + offset_y * offset_y > radius * radius)
-        continue;
-      const int target_x = static_cast<int>(x) + offset_x;
-      const int target_y = static_cast<int>(y) + offset_y;
-      if (target_x < 0 || target_y < 0 ||
-          target_x >= static_cast<int>(image.width) ||
-          target_y >= static_cast<int>(image.height))
-        continue;
-      image.alpha[static_cast<std::size_t>(target_y) * image.width +
-                  target_x] = opaque ? 255 : 0;
-    }
-  }
-  mask_changed_ = true;
-  refresh_template_mask_preview();
+  if (mask_editor_.update(template_images_.back(), point, preview_image_rect(),
+                          opaque))
+    preview_.invalidate();
 }
 
 } // namespace layerc::calibration

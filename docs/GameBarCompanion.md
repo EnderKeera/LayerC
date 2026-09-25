@@ -2,9 +2,20 @@
 
 ## Overview
 
+This document owns the companion architecture and invariants. Use
+[`GameBarCompanion.audit.md`](GameBarCompanion.audit.md) only for release
+evidence and [`../README.md`](../README.md) for project-wide status.
+
 The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overlay as eight fixed panel slots (`PanelSlot1`–`PanelSlot8`) and a settings widget (`Settings`). It is distributed exclusively as an optional full MSIX package, not in the portable ZIP.
 
+> **Release boundary:** the implementation described here is complete, but the
+> manual compatibility matrix, certification evidence, and production signing
+> remain outstanding. See the scoped
+> [V2.4 release-evidence record](GameBarCompanion.audit.md). This document is the
+> architecture contract, not a claim that a signed package has shipped.
+
 ### Invariants
+
 - **LayerD is authoritative**: the widget does not capture frames, process input, or mutate cooldown state.
 - **Bounded & immutable**: snapshots are capped at 64 KiB and 512-byte text fields.
 - **Stale data hiding**: snapshots older than 2.0 seconds are cleared.
@@ -31,7 +42,7 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
 
 ## 3. Daemon Bridge & Transport
 
-- **`GameBarBridge`** (`src/gamebar/GameBarBridge.cpp`): formats immutable snapshots from active cooldown states, caches the latest snapshot under a mutex, and enforces the 2.0s staleness cutoff.
+- **`core::build_companion_snapshot`** (`src/core/companion_snapshot.cpp`): formats and serializes bounded immutable snapshots from active cooldown states, shrinking oversized live data before publication. The widget independently clears stale data after 2.0 seconds.
 - **`GameBarTransport`** (`src/gamebar/GameBarTransport.cpp`): demand-driven App Service client.
   - Active only in the packaged MSIX build when an active game session exists.
   - Connects to same-package App Service `LayerC.GameBar.v1`.
@@ -52,9 +63,17 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
 
 ## 5. MSIX Packaging (`src/gamebar/Package.appxmanifest`)
 
+CMake configures this manifest from `project(LayerC VERSION ...)` into the build tree (including the four-part MSIX identity version). The widget MSBuild project and package staging both consume that generated manifest, and the generated `layerc/core/version.hpp` supplies the matching runtime identity.
+
 The package manifest registers:
+
 - 8 $\times$ standard panel widget extensions + 1 $\times$ settings widget extension.
 - Same-package App Service `LayerC.GameBar.v1`.
 - Full-trust process launcher for `layerd.exe`.
 - In-package proxy stubs and private Game Bar WinMD metadata (`Microsoft.Gaming.XboxGameBar.Private.winmd`).
 - Packaged binaries: `layerc-gamebar.exe`, `layerd.exe`, `layere.exe`, `layercal.exe`, `layerw.exe`, and VC runtime DLLs.
+
+## Related documentation
+
+- [`GameBarCompanion.audit.md`](GameBarCompanion.audit.md) — recorded automated evidence and outstanding manual/certification gates.
+- [`../README.md`](../README.md) — project-wide support and release status.

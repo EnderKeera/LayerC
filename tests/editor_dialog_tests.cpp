@@ -1,5 +1,5 @@
-#include "../src/calibration/calibration_resource.h"
 #include "appearance_draft.hpp"
+#include "dialog_layout.hpp"
 #include "editor_automation_internal.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
@@ -10,6 +10,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include <commctrl.h>
@@ -60,15 +61,17 @@ RECT child_rect(const HWND dialog, const int id) {
 
 } // namespace
 
-int main() {
+void editor_dialog_contracts() {
   INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
                                 .dwICC = ICC_WIN95_CLASSES};
   InitCommonControlsEx(&controls);
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   const HWND dialog = CreateDialogParamW(
       instance, MAKEINTRESOURCEW(IDD_OPTIONS), nullptr, &test_dialog_proc, 0);
-  if (!expect(dialog != nullptr, "the native Options dialog should load"))
-    return 1;
+  if (dialog == nullptr) {
+    (void)expect(false, "the native Options dialog should load");
+    return;
+  }
 
   layerc::editor::style_native_dialog_children(
       dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
@@ -82,8 +85,10 @@ int main() {
       GetWindowLongPtrW(visual_checkbox, GWL_STYLE) & BS_TYPEMASK;
   bool passed = true;
   passed &=
-      expect(apply_type == BS_DEFPUSHBUTTON,
-             "the default Apply button must retain dialog-manager semantics");
+      expect(apply_type == BS_OWNERDRAW &&
+                 LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) ==
+                     IDC_OPTIONS_APPLY,
+             "the themed Apply button must retain dialog-manager default semantics");
   passed &=
       expect(checkbox_type == BS_AUTOCHECKBOX,
              "the capture checkbox must retain native auto-toggle semantics");
@@ -292,20 +297,22 @@ int main() {
       high_dpi_checkbox.image_size == 32 && high_dpi_checkbox.inset == 4 &&
           high_dpi_checkbox.pen_width == 4,
       "profile checkbox resources and hit target should scale with DPI");
+  const auto legacy_base = [](const std::string_view source) {
+    return layerc::platform::source_schema_before(
+        source, layerc::core::profile_schema_version);
+  };
+  const auto legacy_visual = [](const std::string_view source) {
+    return layerc::platform::source_schema_before(
+        source, layerc::core::visual_schema_version);
+  };
   passed &=
-      expect(layerc::editor::source_uses_legacy_base_schema(
-                 R"({"schemaVersion":1,"name":"legacy"})") &&
-                 layerc::editor::source_uses_legacy_base_schema(
-                     R"({"schemaVersion":2,"name":"legacy"})") &&
-                 layerc::editor::source_uses_legacy_base_schema(
-                     R"({"schemaVersion":3,"name":"legacy"})") &&
-                 !layerc::editor::source_uses_legacy_base_schema(
-                     R"({"schemaVersion":4,"name":"current"})") &&
-                 layerc::editor::source_uses_legacy_visual_schema(
-                     R"({"schemaVersion":1})") &&
-                 !layerc::editor::source_uses_legacy_visual_schema(
-                     R"({"schemaVersion":2})") &&
-                 !layerc::editor::source_uses_legacy_base_schema("{broken"),
+      expect(legacy_base(R"({"schemaVersion":1,"name":"legacy"})") &&
+                 legacy_base(R"({"schemaVersion":2,"name":"legacy"})") &&
+                 legacy_base(R"({"schemaVersion":3,"name":"legacy"})") &&
+                 !legacy_base(R"({"schemaVersion":4,"name":"current"})") &&
+                 legacy_visual(R"({"schemaVersion":1})") &&
+                 !legacy_visual(R"({"schemaVersion":2})") &&
+                 !legacy_base("{broken"),
              "the editor should warn only when a valid source predates its "
              "current schema");
 
@@ -347,16 +354,21 @@ int main() {
       appearance_draft.staged().theme == layerc::platform::EditorTheme::plum,
       "a failed appearance save should preserve the last persisted settings");
 
-  const auto literal_is_true = [](const layerc::core::AutomationExpression &value) {
-    const auto *literal = std::get_if<bool>(&value.literal.storage);
-    return value.kind == layerc::core::ExpressionKind::literal &&
-           literal != nullptr && *literal;
-  };
+  const auto literal_is_true =
+      [](const std::optional<layerc::core::AutomationExpression> &value) {
+        if (!value.has_value())
+          return false;
+        const auto *literal = std::get_if<bool>(&value->literal.storage);
+        return value->kind == layerc::core::ExpressionKind::literal &&
+               literal != nullptr && *literal;
+      };
   const auto literal_is_one_second =
-      [](const layerc::core::AutomationExpression &value) {
+      [](const std::optional<layerc::core::AutomationExpression> &value) {
+        if (!value.has_value())
+          return false;
         const auto *literal =
-            std::get_if<layerc::core::DurationValue>(&value.literal.storage);
-        return value.kind == layerc::core::ExpressionKind::literal &&
+            std::get_if<layerc::core::DurationValue>(&value->literal.storage);
+        return value->kind == layerc::core::ExpressionKind::literal &&
                literal != nullptr &&
                literal->value == layerc::core::Milliseconds(1'000);
       };
@@ -458,6 +470,26 @@ int main() {
           !layerc::editor::parse_duration_ms(L"-1").has_value(),
       "cooldown duration editing should accept positive decimals and reject "
       "non-positive values");
+  passed &= expect(
+      !layerc::editor::parse_duration_ms(L"+5").has_value() &&
+          !layerc::editor::parse_duration_ms(L" 5").has_value() &&
+          layerc::editor::parse_duration_ms(L"86400") ==
+              layerc::core::max_cooldown_duration &&
+          !layerc::editor::parse_duration_ms(L"86400.5").has_value(),
+      "cooldown duration editing should reject signs, whitespace, and "
+      "durations above the shared core limit");
+  passed &= expect(
+      layerc::editor::parse_bounded(L"FFFFFF", 0, 0xFFFFFFU, 16) ==
+              0xFFFFFFU &&
+          !layerc::editor::parse_bounded(L"-FFFFF", 0, 0xFFFFFFU, 16) &&
+          !layerc::editor::parse_bounded(L"+FFFFF", 0, 0xFFFFFFU, 16) &&
+          !layerc::editor::parse_bounded(L" FFFFF", 0, 0xFFFFFFU, 16) &&
+          !layerc::editor::parse_bounded(L"256", 0, 255) &&
+          !layerc::editor::parse_bounded(L"", 0, 255) &&
+          layerc::editor::parse_uint(L"-1", 7) == 7 &&
+          layerc::editor::parse_uint(L"42", 7) == 42,
+      "editor number fields should reject signed, padded, and out-of-range "
+      "input instead of wrapping it");
   layerc::core::GameProfile persisted_profile;
   persisted_profile.id = "cooldown-edit";
   persisted_profile.name = "Cooldown edit";
@@ -689,6 +721,11 @@ int main() {
     const HWND trace = GetDlgItem(automation_dialog, IDC_AUTOMATION_TRACE);
     const HWND repeating =
         GetDlgItem(automation_dialog, IDC_AUTOMATION_REPEATING);
+    const auto view_style = GetWindowLongPtrW(
+        GetDlgItem(automation_dialog, IDC_AUTOMATION_VIEW), GWL_STYLE);
+    passed &= expect((view_style & CBS_OWNERDRAWFIXED) != 0,
+                     "themed automation selectors should use the shared "
+                     "owner-drawn selection palette");
     passed &= expect((GetWindowLongPtrW(enabled, GWL_STYLE) & BS_TYPEMASK) ==
                              BS_AUTOCHECKBOX &&
                          (GetWindowLongPtrW(trace, GWL_STYLE) & BS_TYPEMASK) ==
@@ -787,45 +824,94 @@ int main() {
     DestroyWindow(diagnostics_dialog);
   }
 
-  const HWND calibration_dialog =
-      CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr,
-                         &test_dialog_proc, 0);
-  passed &= expect(
-      calibration_dialog != nullptr &&
-          GetDlgItem(calibration_dialog, IDC_CAL_CAPTURE_TEMPLATE) != nullptr &&
-          GetDlgItem(calibration_dialog, IDC_CAL_IMPORT_TEMPLATE) != nullptr &&
-          GetDlgItem(calibration_dialog, IDC_CAL_EDIT_TEMPLATE_MASK) != nullptr,
-      "the V2.1 calibration resource should expose capture, import, and mask "
-      "controls");
-  if (calibration_dialog != nullptr) {
-    RECT window_rect{};
-    GetWindowRect(calibration_dialog, &window_rect);
-    const UINT dpi = std::max<UINT>(96, GetDpiForWindow(calibration_dialog));
-    const int logical_width =
-        MulDiv(window_rect.right - window_rect.left, 96, dpi);
-    const int logical_height =
-        MulDiv(window_rect.bottom - window_rect.top, 96, dpi);
-    passed &= expect(logical_width <= 1600 && logical_height <= 1040,
-                     "the calibration dialog should fit inside a 1920x1080 "
-                     "desktop work area at 100% scaling");
+  layerc::editor::TaskPicker task_picker_state;
+  passed &= expect(!task_picker_state.has_request(),
+                   "task picker should start without a target request");
+  task_picker_state.request_live_edit();
+  passed &= expect(task_picker_state.awaiting_live_edit() &&
+                       !task_picker_state.awaiting_calibration(),
+                   "live-edit target selection should be exclusive");
+  task_picker_state.request_calibration();
+  passed &= expect(task_picker_state.awaiting_calibration() &&
+                       !task_picker_state.awaiting_live_edit(),
+                   "calibration should replace any live-edit target request");
+  task_picker_state.clear_request();
+  passed &= expect(!task_picker_state.has_request(),
+                   "clearing the task picker should remove its target request");
 
-    RECT client{};
-    GetClientRect(calibration_dialog, &client);
-    for (const int id : {IDC_CAL_APPLY, IDCANCEL}) {
-      RECT button{};
-      const HWND control = GetDlgItem(calibration_dialog, id);
-      GetWindowRect(control, &button);
-      MapWindowPoints(HWND_DESKTOP, calibration_dialog,
-                      reinterpret_cast<POINT *>(&button), 2);
-      passed &= expect(button.left >= client.left && button.top >= client.top &&
-                           button.right <= client.right &&
-                           button.bottom <= client.bottom,
-                       "calibration Apply and Cancel must remain inside the "
-                       "visible client area");
-    }
-    DestroyWindow(calibration_dialog);
-  }
+  layerc::editor::PanelPreview panel_state;
+  panel_state.begin_drag({12, 24}, {3, 4});
+  panel_state.mark_drag_moved();
+  panel_state.finish_drag();
+  passed &= expect(!panel_state.dragging() && !panel_state.drag_moved() &&
+                       panel_state.drag_start().x == 0 &&
+                       panel_state.drag_start().y == 0 &&
+                       panel_state.drag_offset().x == 0 &&
+                       panel_state.drag_offset().y == 0,
+      "finishing a preview drag should reset the entire drag state");
+
+  layerc::editor::CooldownEditor binding_state;
+  binding_state.begin_binding_capture();
+  binding_state.record_binding_key(0x002AU);
+  binding_state.record_binding_key(0x002AU);
+  binding_state.record_binding_key(0x0012U);
+  const auto &captured_codes = binding_state.pending_binding_codes();
+  passed &= expect(binding_state.capturing_binding() &&
+                       captured_codes.size() == 2U &&
+                       captured_codes[0] == 0x002AU &&
+                       captured_codes[1] == 0x0012U,
+                   "binding capture should retain an ordered chord while "
+                   "ignoring key-repeat duplicates");
+  binding_state.finish_binding_capture();
+  passed &= expect(!binding_state.capturing_binding() &&
+                       binding_state.pending_binding_codes().empty(),
+                   "finishing binding capture should clear pending keys");
 
   DestroyWindow(dialog);
-  return passed ? 0 : 1;
+}
+
+void automation_palette_contracts() {
+  using layerc::core::AutomationActionKind;
+  using layerc::core::AutomationEventKind;
+  using layerc::editor::AutomationPaletteNode;
+  const auto &palette = layerc::editor::automation_palette;
+  expect(palette.size() == 6U &&
+             std::wstring_view(palette[0].label) == L"Event: input pressed" &&
+             std::wstring_view(palette[5].label) == L"Variable: Boolean",
+         "the palette table should keep the combo item order");
+  expect(layerc::editor::automation_palette_entry(-1) == nullptr &&
+             layerc::editor::automation_palette_entry(6) == nullptr &&
+             layerc::editor::automation_palette_entry(4) == &palette[4],
+         "palette lookup should reject out-of-range combo indices");
+
+  const auto rule = layerc::editor::make_palette_rule(
+      AutomationPaletteNode::timer_rule, "rule-2", "cooldown");
+  expect(rule.id == "rule-2" && rule.event == AutomationEventKind::timer_fired &&
+             rule.source_filter == "pulse" && rule.actions.size() == 1U &&
+             rule.actions[0].kind == AutomationActionKind::reset_cooldown &&
+             rule.actions[0].target == "cooldown",
+         "a timer rule node should reset the first cooldown on pulse");
+  const auto timer = layerc::editor::make_palette_action(
+      AutomationPaletteNode::timer_action, 2U, "cooldown", "panel");
+  expect(timer.kind == AutomationActionKind::create_timer &&
+             timer.target == "pulse-3" && timer.value.has_value(),
+         "timer action nodes should number after the existing actions");
+  const auto overlay = layerc::editor::make_palette_action(
+      AutomationPaletteNode::overlay_action, 1U, "cooldown", "panel");
+  expect(overlay.kind == AutomationActionKind::set_overlay_override &&
+             overlay.target == "panel" && overlay.name == "visibility-2" &&
+             overlay.property == "visible" && overlay.value.has_value() &&
+             overlay.secondary.has_value(),
+         "overlay action nodes should pulse the first panel's visibility");
+  const auto flag = layerc::editor::make_palette_variable("flag-1");
+  expect(flag.id == "flag-1" &&
+             flag.type == layerc::core::AutomationValueType::boolean &&
+             flag.default_value == layerc::core::AutomationValue(false),
+         "flag variable nodes should default to false");
+}
+
+int main() {
+  return layerc::test::run(
+      {{"editor_dialog_contracts", editor_dialog_contracts},
+       {"automation_palette_contracts", automation_palette_contracts}});
 }

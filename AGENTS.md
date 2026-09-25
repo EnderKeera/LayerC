@@ -1,95 +1,125 @@
 # LayerC — Agent Guide
 
-Canonical agent guide. `README.md` (user docs) is authoritative; repo state overrides memory.
+Repository constraints for coding agents. LayerC is a C++20 cooldown overlay
+with a shared core and native Windows and Linux backends. Read only the context
+needed for the current task; tracked source, CMake, tests, and workflows override
+memory and historical plans.
 
-## Project Overview
+## Route context by task
 
-Lightweight **Windows cooldown overlay** — dependency-free C++20, native Win32 (no Qt/.NET). Windows 10 22H2 / Windows 11 x64.
+| Task | Authoritative context |
+| --- | --- |
+| User behavior, support matrix, setup, programs, test targets, profile format | [`README.md`](README.md) |
+| Linux behavior, CLI, dependencies, packaging, permissions, physical evidence | [`docs/Linux.md`](docs/Linux.md) |
+| Game Bar architecture and invariants | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
+| Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
+| Build graph, options, versions, exact target registration | [`CMakeLists.txt`](CMakeLists.txt) and current source |
+| CI, benchmark, package, and release gates | the affected file under `.github/workflows/` and `tools/` |
 
-- `layerd.exe` — daemon: passive input, cooldown/automation, click-through GDI overlays.
-- `layere.exe` — editor: profile CRUD, live edit, automation rule editor + simulator.
-- `layercal.exe` — calibration helper (launched from editor).
-- `layerw.exe` — isolated WGC capture worker (demand-launched, 256 MiB Job, kill-on-close).
-- `third_party/miniz` — vendored miniz 3.1.2, only third-party code.
+`PLAN.md` and `PLAN-v26-linux.md` are historical design records, not current
+execution checklists. Project skills under `.agents/skills/` provide
+workflow-specific guidance and should be loaded only for matching tasks.
 
-**Invariants**
-- Passive input only — never block/synthesize input.
-- No anti-cheat bypass — no injection, memory read, driver, or admin elevation.
-- No telemetry/network — except same-package Game Bar App Service (`LayerC.GameBar.v1`).
-- Monotonic timing — `steady_clock` or Win32 `GetTickCount64` for all cooldowns/timers.
+## Non-negotiable product boundaries
 
-## Repository Layout
+- Input is passive: never block, modify, or synthesize it. XTest is test-only and
+  must not link into `layerd`.
+- No injection, hooks, game-memory reads, drivers, administrator elevation, or
+  anti-cheat bypass.
+- No telemetry or network access. The only exception is the same-package Game
+  Bar App Service `LayerC.GameBar.v1`.
+- Cooldowns, retries, deadlines, and timers use monotonic clocks.
+- Optional services are demand-driven, idle-blocking, owned, and joined.
+  Unavailable capabilities retain visible fault reasons without weakening
+  unrelated features.
+- Preserve profile compatibility and unsupported bindings. Move profiles between
+  Windows and Linux through validated JSON or `.layercprofile` bundles, never by
+  copying a platform store.
+- Gamescope and Wayland are unsupported in V2.6; do not imply otherwise.
 
-| Path | Description |
-|---|---|
-| `src/core/` + `src/platform/` | Core (`types.hpp`, JSON, cooldown, automation, companion, hash) + Win32 adapters (pipes, live channel, `profile_store`+journal, HID, visual) |
-| `src/capture/` + `src/runtime/` | WGC/DD fallback, aspect math + `DaemonKernel`/`CapabilityDemand`/`RuntimeServiceHost` |
-| `src/daemon/` `src/editor/` `src/calibration/` `src/worker/` `src/gamebar/` | Binaries `layerd`/`layere`/`layercal`/`layerw`/UWP host (`widget/`+App Service, `Package.appxmanifest`) |
-| `src/bundle/` | `.layercprofile` ZIP (miniz), SHA-256 dedup, `pack_detail.*` |
-| `tests/` `tools/` `examples/` | CTest suites, `lctest`/`capture_probe`/`benchmark_*.ps1`→`out/benchmarks/`, `lctest.json` |
-| `build/` `out/` `review/` | Gitignored outputs (`build/` not needed for gate, `out/benchmarks`/`out/layerc`), `review/archiv/` |
+## Architecture boundaries
 
-Analysis: exclude `build/`, `out/`, `review/`, `.review_tmp/`, `.codewhale/`, `.mimosa/`. Prefer explicit `src/**` `tests/**` `tools/**` `examples/**` globs; default deployables `out/layerc/layer*.exe`.
+- Keep shared-core interfaces free of Win32/X11 handles and platform headers.
+- Reuse core JSON, text, UTF-8, hashing, and validation. Emit byte-stable JSON
+  through `json::append_*`; do not add platform-local serializers or duplicate
+  normalization.
+- Profile writes use the existing durable `stage -> commit` transaction,
+  one-writer ownership, backup/journal markers, and crash recovery.
+- Derive automation limits and schemas from the current parser and
+  `src/core/include/layerc/core/automation.hpp`. Validate the complete winning
+  effect set before committing external effects; persistent state remains under
+  transactional `_state` storage.
+- Shared mutable data is mutex-protected with value-copy boundaries. The daemon
+  owns one platform event/message loop.
 
-## Build & Test
+### Windows
 
-Req: Windows 10 22H2+ / 11 x64, VS 2026 (Desktop C++), CMake 3.28+.
+Keep overlays non-activating and click-through. Visual capture uses WGC with
+Desktop Duplication fallback and explicit unavailable/fault diagnostics. The
+isolated worker remains authenticated, Job-bounded, kill-on-close, and
+demand-launched. Game Bar-specific limits and authority live in
+[`docs/GameBarCompanion.md`](docs/GameBarCompanion.md).
 
-> **The gate is CI on push, not a local build.** Before pushing, run the cheapest
-> relevant local check for the changed code (configure, focused target build, parser,
-> or targeted test). Do not run a full local build + CTest gate merely to conclude a
-> change; the authoritative release gate is the GitHub `windows-msvc` job, which builds,
-> runs CTest, `benchmark_v22`, and `benchmark_v23` on every push.
+### Linux
 
-```powershell
-# Debug — local iterative
-cmake --preset vs2026
-cmake --build --preset vs2026-debug
-ctest --preset vs2026-debug
+Keep base profiles in XDG config, sidecars/state in XDG data, and authenticated
+control sockets in `XDG_RUNTIME_DIR` or the private documented fallback. One X11
+connection is shared by adapters and integrated into the blocking event loop.
+XI2 input is read-only; Shape overlays stay hidden unless an empty input region
+is verified. Composite/Damage capture uses the bounded documented fallback.
+Headless operation retains store/control behavior while reporting graphical
+capabilities unavailable. See [`docs/Linux.md`](docs/Linux.md) for exact
+contracts.
 
-# Release — local full package
-cmake --workflow --preset vs2026-release  # build → test 10/10 → install out/layerc → CPack ZIP
+## Repository conventions
 
-# CI preset — what GitHub Actions uses (Ninja + MSVC + sccache + UNITY)
-cmake --preset ci
-cmake --build --preset ci --parallel
-ctest --preset ci
+- Use C++20 and keep MSVC/GCC/MinGW builds warning-free with the flags configured
+  by CMake.
+- Keep translation units focused and around 1000 lines or less.
+- Prefer `optional`/`variant`, typed `*Error` values, and `[[nodiscard]]` for
+  fallible returns.
+- Use the existing `layerc::core`, `platform`, `capture`, `runtime`,
+  `daemon`, `editor`, and `gamebar` namespaces as appropriate.
+- Preserve unrelated user changes. Exclude `build/`, `out/`, `review/`,
+  `.review_tmp/`, `.codewhale/`, and `.mimosa/` from source analysis and
+  never stage their generated content.
+- Durable reviews use `review/layerN.review-YYYY-MM-DD.md` and move to
+  `review/archiv/` only after every finding is verified fixed.
 
-# MinGW optional cross-compiler check (no UWP host) — not a release gate
-cmake --workflow --preset mingw-ninja
+## Validation and evidence
 
-# Game Bar MSIX (needs UWP tools)
-cmake --build --preset vs2026-release --target layerc_gamebar_msix
-```
+Local tests use disposable fixtures and have no production access. Run the
+smallest configured target that exercises the requested change, fix failures
+caused by the change, and rerun it without pausing for approval. Documentation or
+workflow-only edits may need only parser, link, or reference validation. Use a
+full local build and all CTest suites only when the change has comparable breadth;
+CI on push is the authoritative cross-platform gate.
 
-Presets: `vs2026` (VS 2026), `mingw-ninja` (MinGW-w64 + Ninja), `ci` (Ninja + `sccache` launchers + `UNITY_BUILD` batch 16). After push, free space: `Remove-Item -Recurse -Force build, out -ErrorAction SilentlyContinue` (keep `out/benchmarks` if needed for evidence).
+Resolve exact commands, targets, thresholds, artifact names, and registration
+from current CMake, tests, tools, and workflows. Bind CI, benchmark, and package
+claims to the exact commit. Keep automated, interactive-hardware, physical Linux,
+signing, and certification evidence distinct; do not promote unobserved or
+skipped coverage.
 
-### Test Suites & Benchmark Gates
-See `README.md`##Test Targets / ##Release Benchmarks and `tools/*.ps1` (`benchmark_v11/v22/latency/v23`→`out/benchmarks/*.json`). V2.2/V2.3 gates run in required CI; v11/latency run as post-merge regression monitoring on self-hosted `layerc-bench` (headful, integrated+discrete GPU).
+## Documentation changes
 
-## Architecture Rules
-See `README.md`##Features Overview for V1.0–V2.4 caps. Enforcement: `src/runtime/DaemonKernel` (demand-driven, zero idle), `src/core/automation_*` (64/64/32/256 caps, depth ≤16, 2 ms, `_state` checkpoint), `src/platform/profile_store` (journal `stage→commit`, `.bak`, `.state` marker), `src/capture/wgc_backend` (WGC/DD, 64/256 grids, ≤4×4×512), `src/gamebar/GameBarBridge` (64 KiB, 2s stale, `_companion` sidecar). Detail in `docs/GameBarCompanion.md`.
+Update only the document that owns the changed behavior plus any summary that
+became inaccurate. Keep version metadata, support claims, test tables, workflow
+names, packaging details, and specialized documentation synchronized.
 
-## Code Conventions
+## Decision boundaries and completion
 
-- C++20, `/W4 /permissive- /EHsc /utf-8` (MSVC), `-Wall -Wextra -Wpedantic` (MinGW).
-- Files ≤~1000 lines; split TUs instead of sprawling.
-- Errors: `optional`/`variant` + typed `*Error` (`[[nodiscard]]`).
-- Namespaces: `layerc::core/platform/daemon/editor/gamebar/runtime`.
-- Reuse `core/` primitives (`json`, `text`, `hash`, `utf8`) — don't duplicate.
-- JSON via `json::append_*` for byte-stable output.
-- Threading: daemon = single message loop; workers owned/joined; shared data mutex + value-copy at boundaries.
-
-## DevOps & CI
-- **CI** `ci.yml`: `workflow-lint` (actionlint 1.7.12) → `windows-msvc` (`ci` Ninja+sccache+UNITY, CTest+`benchmark_v22`+`benchmark_v23`, artifacts). `publish-rolling` on `main` only (`contents:write`). Never cache `build/ci`.
-- **Hardware monitoring** `benchmarks.yml`: post-merge `workflow_run` on green main or manual, pins `runId`/`headSha`, runs `run-hardware-benchmarks.ps1` on `[self-hosted,windows,x64,layerc-bench]` (`run.cmd` interactive), pulldown+mirror to `out/`; `if:always()` upload, 24h wait.
-- **PR Agent** `pr-agent.yml`+.pr_agent.toml: `pr-agent@v0.43.0`, DeepSeek `v4-flash`, C++20/Win32/invariants focus.
-- **Dependabot** weekly Actions, **Release** `v*.*.*`→ZIP, branch `main` linear `windows-msvc` required.
-
-## Agent Workflow
-
-1. Implement inline — no subagent delegation (vibe mode forbids spawning). Before pushing, run the cheapest relevant configure, focused build, parser, or targeted test. **Do not run a full local build + CTest gate merely to conclude.** The authoritative gate is CI on push: `windows-msvc` compiles, runs CTest, and gates `benchmark_v22` and `benchmark_v23`.
-2. Never stage/commit `.codewhale/`, `.review_tmp/`, `review/` working files. Avoid unscoped globs; use `git ls-files` and `read :range`.
-3. Keep `README.md` + `docs/GameBarCompanion*.md` in sync with feature/gate changes.
-4. Write warning-free code (`/W4 /permissive-`) and use monotonic `steady_clock` or Win32 `GetTickCount64` for timers — but let CI confirm it. Do not run a local CTest pass just to conclude.
-5. Reviews `review/layerN.review-YYYY-MM-DD.md` → `review/archiv/` when all FIXED. `build/`/`out/` gitignored — don't `git add`.
+- Implement in the current task. Subagent delegation is allowed for research,
+  planning, implementation, file modification, review, or independent
+  validation; keep delegated work self-contained and preserve these repository
+  constraints. The primary agent is responsible for reviewing delegated work
+  before acceptance.
+- Inspect source, tests, CMake, or specialized documentation when the requested
+  change crosses that boundary—not as a universal preflight.
+- Carry implementation through focused validation and the nearest relevant
+  failure or recovery path.
+- Stop for user input when completion requires an external mutation, unavailable
+  authority, or a product choice that materially changes scope.
+- Finish when the requested behavior is verified, affected documentation is
+  accurate, temporary mutations are restored, and remaining platform or hardware
+  gaps are reported explicitly.

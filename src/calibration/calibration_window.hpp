@@ -1,5 +1,8 @@
 #pragma once
 
+#include "calibration_mode.hpp"
+#include "calibration_preview.hpp"
+
 #include "layerc/capture/window_capture.hpp"
 #include "layerc/core/calibration.hpp"
 #include "layerc/core/template_matcher.hpp"
@@ -15,6 +18,7 @@
 #include <windows.h>
 
 namespace layerc::calibration {
+
 
 class CalibrationWindow {
 public:
@@ -73,7 +77,7 @@ private:
   [[nodiscard]] layerc::core::PixelRule current_rule_from_controls() const;
   [[nodiscard]] layerc::core::TemplateState
   current_template_from_controls() const;
-  [[nodiscard]] bool template_mode() const;
+  [[nodiscard]] CalibrationMode mode() const;
 
   layerc::core::CalibrationRequest request_;
   layerc::core::CalibrationResponse response_;
@@ -88,7 +92,7 @@ private:
 
   HINSTANCE instance_{};
   HWND dialog_{};
-  HWND preview_{};
+  CapturePreview preview_;
   HWND target_window_{};
   Palette palette_{};
   layerc::platform::NativeThemeColors button_colors_{};
@@ -97,17 +101,10 @@ private:
   HBRUSH input_brush_{};
   HFONT font_{};
   std::unique_ptr<layerc::capture::WindowCaptureSession> capture_;
-  std::shared_ptr<const layerc::capture::CaptureFrame> frame_;
-  std::vector<std::uint32_t> preview_pixels_;
-  std::vector<std::uint32_t> mask_preview_pixels_;
+  MaskEditor mask_editor_;
   std::vector<layerc::core::TemplateImage> template_images_;
   layerc::core::CpuTemplateMatcher template_matcher_;
   ULONGLONG next_template_match_at_{};
-  bool dragging_{};
-  bool mask_editing_{};
-  bool mask_changed_{};
-  bool mask_opaque_{};
-  POINT drag_start_{};
   bool fallback_snapshot_{};
   bool fallback_started_{};
   ULONGLONG fallback_deadline_{};

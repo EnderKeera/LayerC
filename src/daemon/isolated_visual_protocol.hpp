@@ -1,6 +1,6 @@
 #pragma once
 
-#include "visual_capture_worker.hpp"
+#include "visual_capture_host.hpp"
 #include "layerc/core/live_edit.hpp"
 
 #include <cstddef>
@@ -20,6 +20,23 @@ inline constexpr std::size_t isolated_visual_max_message_bytes =
 inline constexpr std::uint32_t isolated_visual_heartbeat_ms = 1'000;
 inline constexpr std::uint32_t isolated_visual_watchdog_ms = 2'000;
 static_assert(isolated_visual_heartbeat_ms < isolated_visual_watchdog_ms);
+
+// The isolated Windows helper is WGC / Desktop Duplication only. X11 backends
+// stay out of this wire; the bound comes from the core enumerator, not a magic
+// ordinal.
+inline constexpr std::uint8_t isolated_capture_backend_max =
+    static_cast<std::uint8_t>(
+        layerc::core::CaptureBackendKind::desktop_duplication);
+
+// Wire policy (both ends ship in one package; packageVersion rejects any other
+// build, so there is no mixed-version compatibility path):
+// - Integer fields (sequence, processId, captureSequence, sampledAtNs, and
+//   asset signature counters) are JSON numbers via json::append_unsigned and
+//   are read as IntegerEncoding::integer_token.
+// - Request visual profiles travel as a nested visualProfile object produced
+//   by serialize_visual_profile_json (not a double-encoded visualJson string)
+//   and are read with parse_visual_profile_value.
+
 struct IsolatedProtocolError {
   std::string message;
 };
@@ -32,10 +49,17 @@ struct IsolatedConfiguration {
   std::vector<RECT> exclusions;
 };
 
+struct IsolatedPoll {
+  std::uint64_t sequence{};
+};
+
 using IsolatedConfigurationResult =
     std::variant<IsolatedConfiguration, IsolatedProtocolError>;
 using IsolatedSnapshotResult =
     std::variant<VisualCaptureSnapshot, IsolatedProtocolError>;
+// One parse for every daemon-to-worker packet the helper receives.
+using IsolatedInboundMessage =
+    std::variant<IsolatedConfiguration, IsolatedPoll, IsolatedProtocolError>;
 
 enum class IsolatedSnapshotDisposition : std::uint8_t {
   accepted,
@@ -43,29 +67,25 @@ enum class IsolatedSnapshotDisposition : std::uint8_t {
   rejected,
 };
 
+// Shared sequence counters for both sides of the isolated capture stream.
+// The helper rebases its local capture counter onto the published monotonic
+// stream; the daemon validates and deduplicates what it receives. A helper
+// can recreate its in-process capture after an empty configuration — epoch
+// reset lives here so those restarts cannot move published sequences backwards.
 class IsolatedSnapshotValidator {
 public:
+  void begin_worker_epoch() noexcept { last_worker_sequence_ = 0; }
+  // Worker side: rebase helper-local sequences; true when the capture advanced.
+  [[nodiscard]] bool rebase(VisualCaptureSnapshot &snapshot);
+  // Daemon side: accept, deduplicate, or reject a published snapshot.
   [[nodiscard]] IsolatedSnapshotDisposition
   validate(VisualCaptureSnapshot &snapshot, layerc::core::TimePoint now,
            std::string &error);
 
 private:
-  std::uint64_t capture_sequence_{};
-  std::map<std::wstring, std::uint64_t> evaluation_sequences_;
-};
-
-// VisualCaptureWorker sequence counters restart when its capture quality
-// changes. This protocol-level sequencer keeps the helper's published stream
-// monotonic across those worker epochs.
-class IsolatedSnapshotSequencer {
-public:
-  void begin_worker_epoch() noexcept { last_worker_sequence_ = 0; }
-  [[nodiscard]] bool rebase(VisualCaptureSnapshot &snapshot);
-
-private:
   std::uint64_t last_worker_sequence_{};
   std::uint64_t capture_sequence_{};
-  std::map<std::wstring, std::uint64_t> evaluation_sequences_;
+  std::map<std::string, std::uint64_t> evaluation_sequences_;
 };
 
 [[nodiscard]] std::string isolated_hello_json(std::string_view nonce,
@@ -84,6 +104,9 @@ decode_isolated_configuration(std::string_view json);
 [[nodiscard]] bool decode_isolated_poll(std::string_view json,
                                         std::uint64_t &sequence,
                                         std::string &error);
+// Single-parse entry for helper inbound packets (configure / waitSnapshot).
+[[nodiscard]] IsolatedInboundMessage
+decode_isolated_message(std::string_view json);
 [[nodiscard]] std::string
 encode_isolated_snapshot(std::uint64_t packet_sequence,
                          const VisualCaptureSnapshot &snapshot);

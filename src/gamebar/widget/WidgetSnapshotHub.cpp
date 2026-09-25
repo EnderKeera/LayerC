@@ -3,6 +3,19 @@
 #include "WidgetSnapshotHub.hpp"
 
 namespace layerc::gamebar::widget {
+namespace {
+
+// Callbacks run outside the hub mutex, so callers take a value copy first.
+std::vector<SnapshotHub::Callback> copy_callbacks(
+    const std::map<std::uint64_t, SnapshotHub::Callback> &callbacks) {
+  std::vector<SnapshotHub::Callback> copies;
+  copies.reserve(callbacks.size());
+  for (const auto &entry : callbacks)
+    copies.push_back(entry.second);
+  return copies;
+}
+
+} // namespace
 
 SnapshotHub &SnapshotHub::instance() {
   static SnapshotHub hub;
@@ -92,11 +105,7 @@ void SnapshotHub::publish(Snapshot snapshot) {
     received_at_ = std::chrono::steady_clock::now();
     generation = ++generation_;
     current = latest_;
-    callbacks.reserve(callbacks_.size());
-    for (const auto &[token, callback] : callbacks_) {
-      (void)token;
-      callbacks.push_back(callback);
-    }
+    callbacks = copy_callbacks(callbacks_);
     if (stale_timer_ != nullptr)
       stale_timer_.Cancel();
     stale_timer_ =
@@ -118,11 +127,7 @@ void SnapshotHub::expire(const std::uint64_t generation) {
       return;
     latest_.reset();
     stale_timer_ = nullptr;
-    callbacks.reserve(callbacks_.size());
-    for (const auto &[token, callback] : callbacks_) {
-      (void)token;
-      callbacks.push_back(callback);
-    }
+    callbacks = copy_callbacks(callbacks_);
   }
   for (const auto &callback : callbacks)
     callback(std::nullopt);

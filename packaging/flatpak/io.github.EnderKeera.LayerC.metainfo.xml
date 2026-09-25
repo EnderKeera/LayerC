@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="console-application">
+  <id>io.github.EnderKeera.LayerC</id>
+  <name>LayerC</name>
+  <summary>Passive X11 cooldown overlay and command-line tools</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <developer id="io.github.enderkeera">
+    <name>EnderKeera</name>
+  </developer>
+  <description>
+    <p>
+      LayerC runs a passive, click-through cooldown overlay on X11. It provides
+      command-line tools for profile and bundle management, runtime control,
+      and visual calibration without input injection or elevated privileges.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/EnderKeera/LayerC</url>
+  <url type="bugtracker">https://github.com/EnderKeera/LayerC/issues</url>
+  <provides>
+    <binary>layerd</binary>
+    <binary>layerctl</binary>
+    <binary>layercal</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

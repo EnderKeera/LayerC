@@ -16,35 +16,7 @@ if ($WatchOnly) {
 }
 $root = Split-Path -Parent $PSScriptRoot
 $candidateDirectory = Join-Path $root 'out\bench-stage'
-
-function Assert-NativeSuccess {
-    param([Parameter(Mandatory = $true)][string]$Operation)
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Operation failed with exit code $LASTEXITCODE."
-    }
-}
-
-function Resolve-BuildRoot {
-    param(
-        [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$RequiredExecutable
-    )
-
-    $Path = [IO.Path]::GetFullPath($Path)
-    if (Test-Path -LiteralPath (Join-Path $Path $RequiredExecutable) -PathType Leaf) {
-        return $Path
-    }
-    $candidates = @(
-        Get-ChildItem -LiteralPath $Path -Directory |
-            Where-Object {
-                Test-Path -LiteralPath (Join-Path $_.FullName $RequiredExecutable) -PathType Leaf
-            }
-    )
-    if ($candidates.Count -ne 1) {
-        throw "Expected one build root containing $RequiredExecutable under $Path; found $($candidates.Count)."
-    }
-    return $candidates[0].FullName
-}
+Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
 
 $repository = gh repo view --json nameWithOwner -q .nameWithOwner
 Assert-NativeSuccess 'Resolving the GitHub repository'
@@ -73,26 +45,21 @@ if (-not $NoPush) {
 }
 
 Write-Host "==> resolving cloud CI for $currentSha on $repository"
-$run = $null
+$candidate = $null
 $deadline = [DateTime]::UtcNow.AddMinutes(2)
-do {
-    $runJson = gh run list --workflow CI --branch $Branch --commit $currentSha `
-        --limit 1 --json databaseId,headSha -q '.[0]'
-    Assert-NativeSuccess 'Listing CI runs'
-    if (-not [string]::IsNullOrWhiteSpace($runJson)) {
-        $run = $runJson | ConvertFrom-Json
-        break
+while ($null -eq $candidate) {
+    try {
+        $candidate = & (Join-Path $PSScriptRoot 'resolve-ci-candidate.ps1') `
+            -Branch $Branch -Workflow CI -Commit $currentSha
+    } catch {
+        if ($_.Exception.Message -notlike 'No CI run found*') { throw }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            throw "No CI run appeared for $currentSha within two minutes."
+        }
+        Start-Sleep -Seconds 2
     }
-    Start-Sleep -Seconds 2
-} while ([DateTime]::UtcNow -lt $deadline)
-
-if ($null -eq $run) {
-    throw "No CI run appeared for $currentSha within two minutes."
 }
-if ([string]$run.headSha -ne $currentSha) {
-    throw "Resolved CI run $($run.databaseId) for unexpected commit $($run.headSha)."
-}
-$runId = [string]$run.databaseId
+$runId = $candidate.RunId
 
 Write-Host "==> waiting for CI run $runId"
 gh run watch $runId --exit-status
@@ -106,7 +73,8 @@ Remove-Item -LiteralPath $candidateDirectory -Recurse -Force -ErrorAction Silent
 New-Item -ItemType Directory -Force $candidateDirectory | Out-Null
 gh run download $runId -n layerc-windows-x64-tools -D $candidateDirectory
 Assert-NativeSuccess 'Downloading CI benchmark tools'
-$candidateDirectory = Resolve-BuildRoot $candidateDirectory 'layerd.exe'
+$candidateDirectory = Resolve-LayerCBuildRoot -Path $candidateDirectory `
+    -RequiredExecutables @('layerd.exe')
 
 $arguments = @('-CandidateBuildDirectory', $candidateDirectory)
 if ($VisualOnly) {
@@ -127,7 +95,8 @@ if ($VisualOnly) {
         Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $baselineStage -Force
         $BaselineBuildDirectory = $baselineStage
     }
-    $BaselineBuildDirectory = Resolve-BuildRoot $BaselineBuildDirectory 'layerd.exe'
+    $BaselineBuildDirectory = Resolve-LayerCBuildRoot -Path $BaselineBuildDirectory `
+        -RequiredExecutables @('layerd.exe')
     $arguments += @('-BaselineBuildDirectory', $BaselineBuildDirectory)
 }
 

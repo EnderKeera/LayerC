@@ -39,42 +39,14 @@ PixelEvaluation evaluate_pixel_rule(const PixelRule &rule,
   PixelEvaluation result;
   if (!frame.valid()) return result;
 
-  const auto stride = frame.row_stride == 0 ? frame.width : frame.row_stride;
-  const auto clamp_x = [width = frame.width](const double normalized,
-                                             const bool upper) {
-    const auto scaled = normalized * static_cast<double>(width);
-    const auto rounded = upper ? std::ceil(scaled) : std::floor(scaled);
-    return static_cast<std::uint32_t>(
-        std::clamp(rounded, 0.0, static_cast<double>(width)));
-  };
-  const auto clamp_y = [height = frame.height](const double normalized,
-                                               const bool upper) {
-    const auto scaled = normalized * static_cast<double>(height);
-    const auto rounded = upper ? std::ceil(scaled) : std::floor(scaled);
-    return static_cast<std::uint32_t>(
-        std::clamp(rounded, 0.0, static_cast<double>(height)));
-  };
-
-  const auto left = clamp_x(rule.region.x, false);
-  const auto top = clamp_y(rule.region.y, false);
-  const auto right = clamp_x(rule.region.x + rule.region.width, true);
-  const auto bottom = clamp_y(rule.region.y + rule.region.height, true);
+  const auto stride = frame.stride();
+  const auto [left, top, right, bottom] =
+      to_pixel_bounds(rule.region, frame.width, frame.height);
   if (right <= left || bottom <= top) return result;
 
   const auto region_width = right - left;
   const auto region_height = bottom - top;
-  std::uint32_t evaluation_axis_sample_bound{};
-  switch (quality) {
-  case CaptureQuality::low:
-    evaluation_axis_sample_bound = 64U;
-    break;
-  case CaptureQuality::balanced:
-    evaluation_axis_sample_bound = 256U;
-    break;
-  case CaptureQuality::exact:
-    evaluation_axis_sample_bound = std::numeric_limits<std::uint32_t>::max();
-    break;
-  }
+  const auto evaluation_axis_sample_bound = quality_profile(quality).pixel_axis;
   const auto samples_x =
       std::min(region_width, evaluation_axis_sample_bound);
   const auto samples_y =

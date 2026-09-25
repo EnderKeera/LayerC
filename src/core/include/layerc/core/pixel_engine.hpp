@@ -3,8 +3,10 @@
 #include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,7 +28,7 @@ struct RgbPixel {
 [[nodiscard]] inline double rgb_luminance(double red, double green,
                                           double blue) noexcept {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-};
+}
 
 struct PixelFrameView {
   std::span<const RgbPixel> pixels;
@@ -37,7 +39,28 @@ struct PixelFrameView {
   std::uint32_t row_stride{};
 
   [[nodiscard]] bool valid() const noexcept;
+  [[nodiscard]] std::uint32_t stride() const noexcept {
+    return row_stride == 0 ? width : row_stride;
+  }
 };
+
+struct QualityProfile {
+  std::uint32_t pixel_axis;
+  std::uint32_t template_axis; // Zero means full reference resolution.
+  std::size_t search_samples;
+  std::size_t comparisons;
+};
+
+inline constexpr std::array<QualityProfile, 3> quality_profiles{{
+    {64U, 32U, 128U, 512U * 1024U},
+    {256U, 64U, 256U, 1024U * 1024U},
+    {std::numeric_limits<std::uint32_t>::max(), 0U, 512U, 8U * 1024U * 1024U},
+}};
+
+[[nodiscard]] constexpr const QualityProfile &quality_profile(
+    const CaptureQuality quality) noexcept {
+  return quality_profiles[static_cast<std::size_t>(quality)];
+}
 
 struct PixelEvaluation {
   bool matched{};
@@ -101,6 +124,7 @@ public:
 
 private:
   struct RuleState {
+    std::uint8_t stable_samples{1};
     std::uint8_t matching_samples{};
     std::uint8_t nonmatching_samples{};
     bool stable_match{};
@@ -116,19 +140,39 @@ private:
     TimePoint confirmation_deadline{};
   };
 
-  [[nodiscard]] bool observation_exists(std::string_view id) const;
-  [[nodiscard]] std::uint8_t stable_samples(std::string_view id) const;
+  enum class ConfirmationDecision : std::uint8_t {
+    wait,
+    confirmed,
+    fallback,
+    terminal,
+  };
+
   [[nodiscard]] const VisualTrigger *
   find_trigger(std::string_view cooldown_id) const;
+  [[nodiscard]] ConfirmationDecision
+  classify(const VisualTrigger &trigger, const RuleState *state,
+           TimePoint now) const;
   [[nodiscard]] bool measurement_is_fresh(const RuleState &state,
                                           TimePoint now) const;
   [[nodiscard]] static bool is_terminal_unavailable(
       CaptureAvailability availability) noexcept;
+  void apply_measurement(const ObservationMeasurement &measurement);
+  void evaluate_confirm_trigger(const VisualTrigger &trigger,
+                                TriggerState &trigger_state,
+                                const RuleState &rule_state, TimePoint now,
+                                std::vector<VisualTriggerRequest> &output);
+  void evaluate_pixel_trigger(const VisualTrigger &trigger,
+                              TriggerState &trigger_state,
+                              const RuleState &rule_state,
+                              std::span<const CooldownState> cooldowns,
+                              TimePoint now,
+                              std::vector<VisualTriggerRequest> &output);
 
   VisualProfile profile_;
   bool enabled_{true};
   std::unordered_map<std::string, RuleState> rules_;
   std::unordered_map<std::string, TriggerState> triggers_;
+  std::unordered_map<std::string, std::size_t> trigger_indices_;
 };
 
 } // namespace layerc::core

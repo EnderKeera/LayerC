@@ -1,7 +1,6 @@
 #include "overlay_window.hpp"
 
-#include "layerc/platform/text.hpp"
-#include "layerc/platform/windows.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,34 +9,23 @@
 
 namespace layerc::daemon {
 
-std::vector<OverlayCooldown> make_overlay_cooldowns(
-    const std::span<const layerc::core::CooldownDefinition> definitions) {
-  std::vector<OverlayCooldown> result;
-  result.reserve(definitions.size());
-  for (const auto &definition : definitions) {
-    result.push_back({.id = definition.id,
-                      .name = layerc::platform::utf8_to_wide(definition.name),
-                      .duration = definition.duration});
-  }
-  return result;
-}
-
 OverlayWindow::OverlayWindow(const layerc::core::Panel &panel,
-                             const std::span<const OverlayCooldown> cooldowns)
+                             const std::span<const layerc::core::CooldownDefinition>
+                                 cooldowns)
     : panel_(panel), cooldowns_(cooldowns.begin(), cooldowns.end()) {
   update_snapshot(panel, cooldowns);
 }
 
 void OverlayWindow::update_snapshot(
     const layerc::core::Panel &panel,
-    const std::span<const OverlayCooldown> cooldowns) {
+    const std::span<const layerc::core::CooldownDefinition> cooldowns) {
   panel_ = panel;
   cooldowns_.assign(cooldowns.begin(), cooldowns.end());
   cooldown_indices_.clear();
   cooldown_indices_.reserve(panel_.cooldown_ids.size());
   for (const auto &cooldown_id : panel_.cooldown_ids) {
     const auto definition =
-        std::ranges::find_if(cooldowns_, [&](const OverlayCooldown &cooldown) {
+        std::ranges::find_if(cooldowns_, [&](const auto &cooldown) {
           return cooldown.id == cooldown_id;
         });
     if (definition != cooldowns_.end()) {
@@ -114,33 +102,10 @@ OverlayWindow::~OverlayWindow() {
 }
 
 void OverlayWindow::calculate_size() {
-  const LONG scaled_padding = scaled(padding);
-  const LONG scaled_spacing = scaled(spacing);
-  const auto count =
-      static_cast<LONG>(std::max<std::size_t>(cooldown_indices_.size(), 1));
-  if (panel_.style == layerc::core::PanelStyle::bar) {
-    size_.cx = scaled_padding * 2 +
-               scaled(static_cast<LONG>(panel_.bar.width));
-    size_.cy = scaled_padding * 2 +
-               count * scaled(static_cast<LONG>(panel_.bar.height)) +
-               std::max<LONG>(0, count - 1) * scaled_spacing;
-    return;
-  }
-
-  LONG columns = count;
-  LONG rows = 1;
-  if (panel_.layout == layerc::core::PanelLayout::column) {
-    columns = 1;
-    rows = count;
-  } else if (panel_.layout == layerc::core::PanelLayout::grid) {
-    columns =
-        static_cast<LONG>(std::ceil(std::sqrt(static_cast<double>(count))));
-    rows = (count + columns - 1) / columns;
-  }
-  size_.cx = scaled_padding * 2 + columns * scaled(item_width) +
-             std::max<LONG>(0, columns - 1) * scaled_spacing;
-  size_.cy = scaled_padding * 2 + rows * scaled(item_height) +
-             std::max<LONG>(0, rows - 1) * scaled_spacing;
+  const auto geometry =
+      layerc::core::panel_geometry(panel_, cooldown_indices_.size());
+  size_.cx = std::max(1L, scaled(geometry.size.width));
+  size_.cy = std::max(1L, scaled(geometry.size.height));
 }
 
 LONG OverlayWindow::scaled(const LONG value) const noexcept {
@@ -209,6 +174,8 @@ void OverlayWindow::show_for(const HWND game_window) {
   if (window_ == nullptr && !create_window()) {
     return;
   }
+  if (window_ == nullptr)
+    return;
   if (owner_ != game_window) {
     SetLastError(0);
     const auto previous_owner = SetWindowLongPtrW(
@@ -237,6 +204,8 @@ void OverlayWindow::show_on_rect(const RECT &target) {
   if (window_ == nullptr && !create_window()) {
     return;
   }
+  if (window_ == nullptr)
+    return;
   if (owner_ != nullptr) {
     SetWindowLongPtrW(window_, GWLP_HWNDPARENT, 0);
     owner_ = nullptr;
@@ -338,6 +307,16 @@ LRESULT CALLBACK OverlayWindow::window_proc(const HWND window,
     return 1;
   }
   if (overlay != nullptr && overlay->direct_drag_) {
+    // Screen-space cursor for this message; any movement away from the press
+    // point marks the drag as moved.
+    const auto tracked_drag_point = [&] {
+      POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+      ClientToScreen(window, &point);
+      if (point.x != overlay->drag_start_.x ||
+          point.y != overlay->drag_start_.y)
+        overlay->drag_moved_ = true;
+      return point;
+    };
     if (message == WM_LBUTTONDOWN) {
       POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
       ClientToScreen(window, &point);
@@ -355,18 +334,12 @@ LRESULT CALLBACK OverlayWindow::window_proc(const HWND window,
       return 0;
     }
     if (message == WM_MOUSEMOVE && overlay->dragging_) {
-      POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      ClientToScreen(window, &point);
-      if (point.x != overlay->drag_start_.x || point.y != overlay->drag_start_.y)
-        overlay->drag_moved_ = true;
+      const POINT point = tracked_drag_point();
       if (overlay->drag_moved_) overlay->update_drag(point, false);
       return 0;
     }
     if (message == WM_LBUTTONUP && overlay->dragging_) {
-      POINT point{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-      ClientToScreen(window, &point);
-      if (point.x != overlay->drag_start_.x || point.y != overlay->drag_start_.y)
-        overlay->drag_moved_ = true;
+      const POINT point = tracked_drag_point();
       if (overlay->drag_moved_) overlay->update_drag(point, true);
       overlay->dragging_ = false;
       overlay->drag_moved_ = false;

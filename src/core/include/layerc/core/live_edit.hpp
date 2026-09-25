@@ -1,6 +1,8 @@
 #pragma once
 
 #include "layerc/core/types.hpp"
+#include "layerc/core/version.hpp"
+#include "layerc/core/frame.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -13,7 +15,7 @@
 namespace layerc::core {
 
 inline constexpr std::uint32_t live_protocol_version = 3;
-inline constexpr std::string_view package_version = "2.4.0";
+inline constexpr std::string_view package_version = product_version;
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;
@@ -142,16 +144,16 @@ public:
   push(std::span<const std::byte> bytes);
   // A disconnected editor can leave a frame-sized allocation behind. Release
   // it instead of retaining capacity in the always-on daemon.
-  void clear() noexcept { std::vector<std::byte>().swap(buffer_); }
+  void clear() noexcept { decoder_.clear(); }
   [[nodiscard]] std::size_t buffered_bytes() const noexcept {
-    return buffer_.size();
+    return decoder_.buffered_bytes();
   }
   [[nodiscard]] std::size_t reserved_bytes() const noexcept {
-    return buffer_.capacity();
+    return decoder_.reserved_bytes();
   }
 
 private:
-  std::vector<std::byte> buffer_;
+  FrameDecoder decoder_{max_live_message_bytes, max_live_buffer_bytes};
 };
 
 } // namespace layerc::core

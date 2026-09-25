@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "App.h"
 #include "PanelWidgetPage.h"
 // Generated definitions require the projected page declaration above.
 #include "PanelWidgetPage.g.cpp"
@@ -46,16 +47,9 @@ void PanelWidgetPage::OnNavigatedTo(
   compact_token_ = widget_.CompactModeEnabledChanged(refresh);
   click_through_token_ = widget_.ClickThroughEnabledChanged(refresh);
 
-  const auto dispatcher = Dispatcher();
-  subscription_ = layerc::gamebar::widget::SnapshotHub::instance().subscribe(
-      [dispatcher, weak = get_weak()](
-          std::optional<layerc::core::CompanionSessionSnapshot> snapshot) {
-        (void)dispatcher.RunAsync(
-            Windows::UI::Core::CoreDispatcherPriority::Normal,
-            [weak, snapshot = std::move(snapshot)]() mutable {
-              if (const auto self = weak.get())
-                self->render(std::move(snapshot));
-            });
+  subscription_ = layerc::gamebar::widget::subscribe_on_dispatcher(
+      Dispatcher(), get_weak(), [](const auto &self, auto snapshot) {
+        self->render(std::move(snapshot));
       });
   apply_presentation();
 }

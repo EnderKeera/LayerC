@@ -64,7 +64,7 @@ void test_automation_value_round_trip_and_bounds() {
   expect(round_trip != nullptr && round_trip->variables == profile.variables,
          "heterogeneous nested values and full int64 bounds should round trip");
 
-  for (const std::string malformed :
+  for (const std::string &malformed :
        {std::string{}, std::string{"{"}, std::string{"[]"},
         std::string{R"({"schemaVersion":2})"},
         std::string{"{\"schemaVersion\":1,\"profileId\":\"\xC3\x28\"}"}})
