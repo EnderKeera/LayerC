@@ -378,6 +378,67 @@ void direct_edit_restores_click_through() {
          "overlay should remain hit-test transparent");
 }
 
+void background_overlay_tracks_target() {
+  OverlayFixture fixture;
+  if (!fixture.show_overlay()) return;
+  OwnedWindow unrelated{CreateWindowExW(
+      WS_EX_TOOLWINDOW, L"STATIC", L"LayerC background overlay test",
+      WS_OVERLAPPEDWINDOW | WS_VISIBLE, fixture.work_area.left + 700,
+      fixture.work_area.top + 80, 320, 240, nullptr, nullptr,
+      GetModuleHandleW(nullptr), nullptr)};
+  expect(unrelated.window != nullptr,
+         "an unrelated foreground window should be available");
+  if (unrelated.window == nullptr)
+    return;
+  SetWindowPos(unrelated.window, HWND_TOP, fixture.work_area.left + 700,
+               fixture.work_area.top + 80, 320, 240, SWP_SHOWWINDOW);
+  SetForegroundWindow(unrelated.window);
+  if (!expect(GetAncestor(GetForegroundWindow(), GA_ROOT) != fixture.target_window,
+              "the target should be in the background"))
+    return;
+
+  const auto expect_aligned = [&](const char *const message) {
+    RECT client{};
+    POINT origin{};
+    RECT overlay_rect{};
+    if (!expect(GetClientRect(fixture.target_window, &client) != FALSE &&
+                    ClientToScreen(fixture.target_window, &origin) != FALSE &&
+                    GetWindowRect(fixture.overlay_window, &overlay_rect) != FALSE,
+                "background geometry should be available"))
+      return;
+    const auto expected = layerc::core::overlay_rectangle(
+        {.x = fixture.panel.anchor_x, .y = fixture.panel.anchor_y},
+        {origin.x, origin.y, origin.x + client.right - client.left,
+         origin.y + client.bottom - client.top},
+        overlay_rect.right - overlay_rect.left,
+        overlay_rect.bottom - overlay_rect.top);
+    expect(IsWindowVisible(fixture.overlay_window) != FALSE &&
+               rectangles_near(overlay_rect, expected, 2),
+           message);
+  };
+
+  // Background updates skip SetWindowPos only when the overlay is already in
+  // place, so a moved target and a displaced overlay must both be corrected.
+  SetWindowPos(fixture.target_window, nullptr, fixture.work_area.left + 100,
+               fixture.work_area.top + 70, 600, 450,
+               SWP_NOZORDER | SWP_NOACTIVATE);
+  fixture.overlay->show_for(fixture.target_window);
+  expect_aligned("a background overlay should follow its moved target");
+
+  RECT displaced{};
+  GetWindowRect(fixture.overlay_window, &displaced);
+  SetWindowPos(fixture.overlay_window, nullptr, displaced.left + 50,
+               displaced.top + 30, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  fixture.overlay->show_for(fixture.target_window);
+  expect_aligned("a displaced background overlay should return to its anchor");
+
+  fixture.overlay->show_for(fixture.target_window);
+  expect_aligned("an in-place background overlay should stay anchored");
+  expect(window_is_above(unrelated.window, fixture.overlay_window),
+         "a background overlay should remain below the foreground window");
+}
+
 void target_window_matching() {
   OverlayFixture fixture;
   if (!fixture.prepare_target()) return;
@@ -430,5 +491,6 @@ int wmain(const int argc, wchar_t *argv[]) {
   return layerc::test::run({LAYERC_TEST_CASE(overlay_initial_geometry_and_privacy),
                             LAYERC_TEST_CASE(attached_overlay_follows_target),
                             LAYERC_TEST_CASE(direct_edit_restores_click_through),
+                            LAYERC_TEST_CASE(background_overlay_tracks_target),
                             LAYERC_TEST_CASE(target_window_matching)});
 }
