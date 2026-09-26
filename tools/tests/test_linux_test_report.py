@@ -67,6 +67,24 @@ class LinuxTestReportTests(unittest.TestCase):
             self.assertEqual(["capture"], report["missingExecuted"])
             self.assertEqual(1, report["skipped"])
 
+    def test_reports_why_a_suite_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            registration = self.write(
+                root, "registered.json", json.dumps({"tests": [{"name": "x11"}]})
+            )
+            junit = self.write(
+                root, "ctest.xml",
+                '<testsuite><testcase name="x11"><skipped/><system-out>'
+                "PASS: probe\nskip: x11: cannot open display\nSKIP: tracker"
+                "</system-out></testcase></testsuite>",
+            )
+            report = linux_test_report.validate(registration, junit, ["x11"])
+            self.assertIn(
+                "x11 skip reason: skip: x11: cannot open display | SKIP: tracker",
+                report["problems"],
+            )
+
     def test_label_selects_registered_suites_and_allows_named_skip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

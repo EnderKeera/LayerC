@@ -100,4 +100,18 @@ if layerc_write_sha256sums "$root/missing" 2>"$root/error.txt"; then
   fail 'missing evidence directory accepted'
 fi
 cmp -s "$root/first-sums" "$evidence/SHA256SUMS" || fail 'failed seal changed evidence'
+# The X11 gate waits for the display, passes the command's status through, and
+# fails without running the command when the display never answers.
+xdpyinfo() { [[ -f $root/display-up ]]; }
+(sleep 0.05; : >"$root/display-up") &
+display_pid=$!
+layerc_x11_exec 50 0.02 bash -c 'exit 3' && fail 'command status was dropped'
+[[ $? -eq 3 ]] || fail 'command status changed'
+wait "$display_pid"
+rm -f -- "$root/display-up"
+if layerc_x11_exec 3 0.01 touch "$root/ran" 2>/dev/null; then
+  fail 'unreachable display accepted'
+fi
+[[ ! -e $root/ran ]] || fail 'command ran without a display'
+unset -f xdpyinfo
 printf 'linux-lib smoke: pass\n'

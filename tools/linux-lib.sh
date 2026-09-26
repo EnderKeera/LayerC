@@ -45,6 +45,28 @@ layerc_daemon_stop() {
   layerc_daemon_pid=
 }
 
+# x11-exec <tries> <seconds> <command...>
+# Runs the command once the X server in $DISPLAY accepts connections. xvfb-run
+# can return before a fresh Xvfb takes its first client, and a suite that finds
+# no display skips instead of failing, which the evidence gate then rejects.
+layerc_x11_exec() {
+  local attempts=$1 interval=$2 attempt
+  shift 2
+  if ! command -v xdpyinfo >/dev/null; then
+    echo 'error: xdpyinfo (x11-utils) is required to probe the X display' >&2
+    return 1
+  fi
+  for ((attempt = 0; attempt < attempts; ++attempt)); do
+    if xdpyinfo >/dev/null 2>&1; then
+      "$@"
+      return
+    fi
+    sleep "$interval"
+  done
+  echo "error: X display ${DISPLAY:-<unset>} did not accept connections" >&2
+  return 1
+}
+
 layerc_write_sha256sums() {
   local evidence_dir=$1 checksums rc
   checksums=$(mktemp) || return 1
