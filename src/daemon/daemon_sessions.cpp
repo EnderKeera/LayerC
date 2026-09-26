@@ -474,37 +474,44 @@ void DaemonApp::refresh_game_windows() {
   using RuntimeKeys = std::vector<layerc::core::RuntimeInstanceKey>;
   RuntimeKeys desired;
   std::pair<DaemonApp *, RuntimeKeys *> context{this, &desired};
-  EnumWindows(
-      [](const HWND candidate, const LPARAM parameter) -> BOOL {
-        auto &context =
-            *reinterpret_cast<std::pair<DaemonApp *, RuntimeKeys *> *>(
-                parameter);
-        if (IsIconic(candidate)) {
-          return TRUE;
-        }
-        const auto described =
-            layerc::platform::describe_attachable_window(candidate);
-        if (!described.has_value()) {
-          return TRUE;
-        }
-        if (described->process_id == GetCurrentProcessId() ||
-            layerc::platform::is_layerc_editor_process(
-                described->process_id,
-                context.first->live_edit_host_.channel.peer_process_id())) {
-          return TRUE;
-        }
-        for (const auto &source : context.first->session_registry_.sources) {
-          if (!layerc::platform::profile_matches_window(*described,
-                                                        source.profile)) {
-            continue;
+  // Only enabled window profiles can match; without one, skip opening every
+  // top-level window's process once a second.
+  const bool any_window_profile = std::ranges::any_of(
+      session_registry_.sources, [](const ProfileSource &source) {
+        return source.profile.enabled && !source.profile.game.global;
+      });
+  if (any_window_profile)
+    EnumWindows(
+        [](const HWND candidate, const LPARAM parameter) -> BOOL {
+          auto &context =
+              *reinterpret_cast<std::pair<DaemonApp *, RuntimeKeys *> *>(
+                  parameter);
+          if (IsIconic(candidate)) {
+            return TRUE;
           }
-          context.second->push_back(
-              {.profile_key = source.key,
-               .window = {reinterpret_cast<std::uintptr_t>(candidate)}});
-        }
-        return TRUE;
-      },
-      reinterpret_cast<LPARAM>(&context));
+          const auto described =
+              layerc::platform::describe_attachable_window(candidate);
+          if (!described.has_value()) {
+            return TRUE;
+          }
+          if (described->process_id == GetCurrentProcessId() ||
+              layerc::platform::is_layerc_editor_process(
+                  described->process_id,
+                  context.first->live_edit_host_.channel.peer_process_id())) {
+            return TRUE;
+          }
+          for (const auto &source : context.first->session_registry_.sources) {
+            if (!layerc::platform::profile_matches_window(*described,
+                                                          source.profile)) {
+              continue;
+            }
+            context.second->push_back(
+                {.profile_key = source.key,
+                 .window = {reinterpret_cast<std::uintptr_t>(candidate)}});
+          }
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&context));
   const auto changes = session_registry_.instances.reconcile(std::move(desired));
   std::erase_if(session_registry_.active_inputs, [&](const Session *session) {
     return !session->is_global() &&
