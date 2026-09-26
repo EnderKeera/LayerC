@@ -227,7 +227,7 @@ Per the [XDG Base Directory spec](https://specifications.freedesktop.org/basedir
 
 | Path | Purpose |
 | --- | --- |
-| `$XDG_CONFIG_HOME/layerc/profiles/<id>.json` | profile JSON (default `~/.config`) |
+| `$XDG_CONFIG_HOME/layerc/profiles/<id>.json` | profile JSON (default `~/.config`), plus a `<id>.json.bak` of the previous version after a replace |
 | `$XDG_DATA_HOME/layerc/profiles/<id>/` | profile sidecars/state (default `~/.local/share`) |
 | `$XDG_DATA_HOME/layerc/store/` | journal, backups, writer lock |
 | `$XDG_RUNTIME_DIR/layerc/control.sock` | daemon control socket (fallback `/tmp/layerc-<uid>/`, mode 0700, with a warning) |
@@ -240,7 +240,7 @@ the only cross-platform transfer path; there is no directory migration).
 
 ```sh
 layerd                       # foreground daemon; SIGINT/SIGTERM shut down
-layerctl status [--json]
+layerctl status [--json]     # summary: sessions and capability availability
 layerctl reload
 layerctl stop
 layerctl profile import-json < profile.json
@@ -249,10 +249,14 @@ layerctl bundle import [--keep-existing] [--dry-run] < profiles.layercprofile
 layerctl bundle export <id...> > profiles.layercprofile
 layercal snapshot <x11-window-id> [--quality low|balanced|exact] > snapshot.ppm
 layercal snapshot <x11-window-id> [--region x y width height] --json > snapshot.json
+                             # region: normalized 0..1 fractions, recorded in the JSON metadata
 ```
 
-Imports read stdin and publish transactionally; exports write only payload
-bytes to stdout (diagnostics go to stderr). Bundle import replaces colliding
+Imports read stdin and publish transactionally; a rejected profile names the
+failing JSON field. The store file name is the sanitized id; an id whose
+sanitized name is already taken by another profile gets a `-2`, `-3`, ...
+suffix instead of colliding. Exports write only payload bytes to stdout
+(diagnostics go to stderr). Bundle import replaces colliding
 profiles by default and prints each decision; `--keep-existing` skips
 collisions instead (an all-skipped import succeeds without a transaction), and
 `--dry-run` prints the plan without writing.

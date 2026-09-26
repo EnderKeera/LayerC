@@ -102,6 +102,11 @@ struct ProfileDirectoryScan {
   std::string error;
 
   [[nodiscard]] const StoredProfile *find(std::string_view id) const noexcept;
+  // Store path for `id` inside `directory`: the file that already holds the
+  // id, else the first `<slug>.json`, `<slug>-2.json`, ... whose casefolded
+  // name no scanned file uses, so distinct ids never share one file.
+  [[nodiscard]] std::filesystem::path
+  path_for(const std::filesystem::path &directory, std::string_view id) const;
 };
 
 [[nodiscard]] bool has_json_extension(const std::filesystem::path &path);

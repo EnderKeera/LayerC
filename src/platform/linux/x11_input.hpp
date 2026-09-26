@@ -82,7 +82,12 @@ public:
     return devices_;
   }
   [[nodiscard]] X11InputCapabilities capabilities() const noexcept;
-  [[nodiscard]] std::vector<std::string> unavailable() const;
+  // Reasons for missing device classes, limited to the classes `needed`
+  // names so an unused class never degrades the input capability.
+  [[nodiscard]] std::vector<std::string>
+  unavailable(X11InputCapabilities needed = {.keyboard = true,
+                                             .mouse = true,
+                                             .gamepad = true}) const;
 
   // Drains everything queued on the connection, converting XI2 raw events
   // into core input events. Unknown events are discarded so a readable

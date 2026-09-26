@@ -38,7 +38,9 @@ Plain `layerctl status` only prints "status acknowledged"; use `--json`.
 4. `xdotool key e`, then `xwd -root -silent | convert xwd:- shot.png`.
    Counting `#50BAC8` pixels in the panel crop tracks the bar draining.
 
-Gotchas: `xdotool windowactivate` does not move focus under openbox here; use
+Gotchas: keep `XDG_RUNTIME_DIR` short; the control socket path must fit the
+108-byte Unix socket limit, and a deep scratchpad path overflows it
+("control socket path exceeds the unix name limit"). `xdotool windowactivate` does not move focus under openbox here; use
 `xdotool windowfocus`. `examples/lctest.json` binds VK 0x2A/0x12, which is
 awkward to press; author a test profile instead.
 

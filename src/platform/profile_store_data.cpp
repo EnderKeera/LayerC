@@ -50,6 +50,28 @@ const StoredProfile *ProfileDirectoryScan::find(
   return found == profiles.end() ? nullptr : &*found;
 }
 
+std::filesystem::path
+ProfileDirectoryScan::path_for(const std::filesystem::path &directory,
+                               const std::string_view id) const {
+  if (const auto *stored = find(id)) return stored->path;
+  const auto folded_name = [](const std::filesystem::path &path) {
+    return core::try_casefold_utf8(
+        path_to_utf8(path.filename()).value_or(std::string{}));
+  };
+  const auto taken = [&](const std::filesystem::path &name) {
+    const auto folded = folded_name(name);
+    return std::ranges::any_of(base_paths, [&](const auto &path) {
+      return folded_name(path) == folded;
+    });
+  };
+  const auto slug = core::slugify(id, "profile");
+  auto name = std::filesystem::path(slug + ".json");
+  // base_paths is bounded by max_profile_directory_entries, so this ends.
+  for (std::size_t suffix = 2; taken(name); ++suffix)
+    name = std::filesystem::path(slug + "-" + std::to_string(suffix) + ".json");
+  return directory / name;
+}
+
 bool has_json_extension(const std::filesystem::path &path) {
   const auto encoded = path_to_utf8(path.extension());
   if (!encoded.has_value()) return false;

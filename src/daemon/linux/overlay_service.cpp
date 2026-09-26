@@ -142,12 +142,15 @@ void X11OverlayService::render(const std::span<InputSession> sessions,
       target.window.hide();
       continue;
     }
+    // Raise before painting: overlays have no backing store, so drawing
+    // into a window another overlay still covers is lost when it is raised
+    // afterwards, and overlapping panels would show unpainted black.
+    if (target.active) target.window.raise();
     if (!target.window.update(target.frame)) {
       // The server rejected the window; drop it so the next refresh rebuilds.
       target.window = layerc::platform::X11OverlayWindow{};
       continue;
     }
-    if (target.active) target.window.raise();
   }
 }
 
@@ -163,6 +166,14 @@ std::size_t X11OverlayService::window_count() const noexcept {
   for (const auto &target : targets_)
     if (target.window.valid()) ++count;
   return count;
+}
+
+std::size_t
+X11OverlayService::window_count(const std::string_view profile_id) const noexcept {
+  return static_cast<std::size_t>(
+      std::ranges::count_if(targets_, [&](const Target &target) {
+        return target.profile_id == profile_id && target.window.valid();
+      }));
 }
 
 std::vector<std::uint64_t> X11OverlayService::windows() const {

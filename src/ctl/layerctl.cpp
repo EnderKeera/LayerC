@@ -55,7 +55,7 @@ void require_min_args(const int argc, const int minimum) {
 // Progress verb for `bundle import`: dry runs describe the plan, otherwise
 // colliding profiles are replaced and new ones are imported.
 const char *import_verb(const bool dry_run, const bool collides) {
-  if (dry_run) return "would replace";
+  if (dry_run) return collides ? "would replace" : "would import";
   if (collides) return "replacing";
   return "importing";
 }
@@ -151,6 +151,73 @@ private:
   return layerc::core::as_text(*bytes);
 }
 
+// Human-readable `status`: sessions and capability availability from the
+// payload; `--json` keeps the full, byte-stable document.
+void print_status_summary(const std::string_view response) {
+  namespace json = layerc::core::json;
+  const auto parsed = json::parse(response);
+  const auto *root = std::get_if<json::Value>(&parsed);
+  const auto *payload = root != nullptr && root->is_object()
+                            ? root->find("payload")
+                            : nullptr;
+  if (payload == nullptr || !payload->is_object()) {
+    std::puts("layerd: running (status payload unavailable; use --json)");
+    return;
+  }
+  const auto text = [](const json::Value *value) {
+    return value != nullptr && value->is_string() ? value->as_string()
+                                                  : std::string{};
+  };
+  const auto *process = payload->find("process");
+  const auto *pid = process != nullptr && process->is_object()
+                        ? process->find("pid")
+                        : nullptr;
+  std::printf("layerd %s, pid %lld\n",
+              text(payload->find("packageVersion")).c_str(),
+              pid != nullptr && pid->is_integer()
+                  ? static_cast<long long>(pid->as_integer())
+                  : 0LL);
+  if (const auto *x11 = payload->find("x11"); x11 != nullptr && x11->is_object()) {
+    const auto *connected = x11->find("connected");
+    const bool up = connected != nullptr && connected->is_bool() &&
+                    connected->as_bool();
+    const auto reason = text(x11->find("reason"));
+    std::printf("x11: %s%s%s\n", up ? "connected" : "not connected",
+                reason.empty() ? "" : " - ", reason.c_str());
+  }
+  if (const auto *sessions = payload->find("sessions");
+      sessions != nullptr && sessions->is_array()) {
+    std::printf("sessions: %zu\n", sessions->as_array().size());
+    for (const auto &session : sessions->as_array()) {
+      if (!session.is_object()) continue;
+      const auto *foreground = session.find("foreground");
+      std::printf("  %s window %s%s\n", text(session.find("profileId")).c_str(),
+                  text(session.find("window")).c_str(),
+                  foreground != nullptr && foreground->is_bool() &&
+                          foreground->as_bool()
+                      ? " (foreground)"
+                      : "");
+    }
+  }
+  if (const auto *capabilities = payload->find("capabilities");
+      capabilities != nullptr && capabilities->is_array()) {
+    std::puts("capabilities:");
+    for (const auto &capability : capabilities->as_array()) {
+      if (!capability.is_object()) continue;
+      std::string reasons;
+      if (const auto *list = capability.find("reasons");
+          list != nullptr && list->is_array())
+        for (const auto &reason : list->as_array())
+          if (reason.is_string())
+            reasons += (reasons.empty() ? " (" : ", ") + reason.as_string();
+      if (!reasons.empty()) reasons += ')';
+      std::printf("  %-15s %s%s\n", text(capability.find("capability")).c_str(),
+                  text(capability.find("availability")).c_str(),
+                  reasons.c_str());
+    }
+  }
+}
+
 int call_daemon(const platform::ControlCommand command, bool json_output) {
   std::string error;
   const auto response = platform::control_roundtrip(
@@ -173,6 +240,10 @@ int call_daemon(const platform::ControlCommand command, bool json_output) {
     std::fprintf(stderr, "layerctl: %s\n", message.c_str());
     return 1;
   }
+  if (command == platform::ControlCommand::status) {
+    print_status_summary(*response);
+    return 0;
+  }
   std::printf("layerctl: %s acknowledged\n",
               std::string(platform::control_command_name(command)).c_str());
   return 0;
@@ -189,8 +260,15 @@ int profile_command(int argc, char **argv) {
     const auto parsed = layerc::core::parse_profile_json(*input);
     const auto *profile = std::get_if<layerc::core::GameProfile>(&parsed);
     if (input->empty() || profile == nullptr) {
-      std::fputs("layerctl: input is not a valid LayerC profile JSON\n",
-                 stderr);
+      const auto *error = std::get_if<layerc::core::ProfileError>(&parsed);
+      if (input->empty() || error == nullptr)
+        std::fputs("layerctl: input is not a valid LayerC profile JSON\n",
+                   stderr);
+      else
+        std::fprintf(stderr,
+                     "layerctl: input is not a valid LayerC profile JSON "
+                     "(%s: %s)\n",
+                     error->path.c_str(), error->message.c_str());
       return 1;
     }
     if (!platform::ensure_profile_store_roots(roots)) {
@@ -198,8 +276,11 @@ int profile_command(int argc, char **argv) {
                  stderr);
       return 1;
     }
-    const auto target =
-        roots.config_profiles / platform::profile_store_filename(profile->id);
+    // Collision-aware: an id whose sanitized name matches another profile's
+    // file gets a suffixed name instead of failing as "already exists".
+    const auto scan = scan_or_die(roots);
+    if (!scan.has_value()) return 1;
+    const auto target = scan->path_for(roots.config_profiles, profile->id);
     const auto written =
         platform::write_profile_bundle_create_only(target, *profile);
     if (const auto error = written.error()) {

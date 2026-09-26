@@ -55,6 +55,8 @@ public:
   [[nodiscard]] std::optional<layerc::core::TimePoint>
   next_deadline(layerc::core::TimePoint now) const;
   [[nodiscard]] std::size_t session_count() const noexcept;
+  [[nodiscard]] std::vector<layerc::runtime::SessionDiagnostics>
+  session_diagnostics() const;
 
 private:
   struct Impl;

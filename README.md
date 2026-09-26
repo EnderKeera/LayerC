@@ -320,9 +320,23 @@ Windows and Linux; do not copy an entire platform store.
     "executableName": "game.exe",
     "windowTitle": "Game Window"
   },
+  "modules": [],
+  "cooldowns": [
+    {
+      "id": "dash",
+      "name": "Dash",
+      "durationMs": 4000,
+      "maxCharges": 1,
+      "retrigger": "ignore",
+      "recovery": "single"
+    }
+  ],
+  "cooldownGroups": [],
   "panels": [
     {
       "id": "main-bar",
+      "name": "Main",
+      "layout": "row",
       "style": "bar",
       "bar": {
         "width": 360,
@@ -333,20 +347,29 @@ Windows and Linux; do not copy an entire platform store.
         "textColor": "#F1F5F7",
         "hideWhenReady": true
       },
-      "cooldownIds": ["dash"]
+      "anchorX": 0.5,
+      "anchorY": 0.75,
+      "cooldowns": ["dash"]
     }
   ],
-  "cooldowns": [
+  "bindings": [
     {
-      "id": "dash",
-      "name": "Dash",
-      "durationMs": 4000,
-      "maxCharges": 1,
-      "trigger": { "key": "E", "modifiers": ["Shift"] }
+      "cooldownId": "dash",
+      "chord": [
+        { "device": "keyboard", "code": 16 },
+        { "device": "keyboard", "code": 69 }
+      ]
     }
-  ]
+  ],
+  "hidBindings": []
 }
 ```
+
+Keyboard `code` values are Win32 virtual-key codes on both platforms
+(`16` is Shift, `69` is E), so this binding fires on Shift+E. Schema 4 requires
+the empty `modules`, `cooldownGroups`, and `hidBindings` arrays; older schemas
+(1 and 2) are migrated when loaded. `layerctl profile import-json` names the
+first field it rejects.
 
 Windows sidecars use these directories beneath the profile root:
 

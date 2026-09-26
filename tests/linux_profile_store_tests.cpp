@@ -525,6 +525,23 @@ void test_profile_store_filename_policy() {
          "profile ids map to one flat, sanitized store filename");
 }
 
+void test_profile_path_avoids_sanitized_collisions() {
+  const layerc::test::TempDirectory temporary("layerc-store-test");
+  const auto profiles = temporary.path() / "profiles";
+  std::error_code error;
+  std::filesystem::create_directories(profiles, error);
+  expect(!error && write_file(profiles / "Evil.json", profile_json("../evil")) &&
+             write_file(profiles / "evil-2.json", "not json"),
+         "sanitized-collision fixtures should be written");
+  const auto scan = layerc::platform::scan_profile_directory(profiles);
+  expect(scan.error.empty() &&
+             scan.path_for(profiles, "../evil") == profiles / "Evil.json" &&
+             scan.path_for(profiles, "evil") == profiles / "evil-3.json" &&
+             scan.path_for(profiles, "fresh") == profiles / "fresh.json",
+         "store paths keep an id's own file and never reuse another file's "
+         "casefolded name, even an unparseable one");
+}
+
 void test_visual_asset_load_contract() {
   const layerc::test::TempDirectory temporary("layerc-store-test");
   layerc::test::visual_asset_load_contract(temporary.path());
@@ -538,6 +555,7 @@ int main() {
       {"test_xdg_roots_and_permissions", test_xdg_roots_and_permissions},
       {"test_bounded_file_read_statuses", test_bounded_file_read_statuses},
       {"test_profile_directory_scan_resolves_ids", test_profile_directory_scan_resolves_ids},
+      {"test_profile_path_avoids_sanitized_collisions", test_profile_path_avoids_sanitized_collisions},
       {"test_transaction_validation_and_locking", test_transaction_validation_and_locking},
       {"test_corrupt_journal_self_heals", test_corrupt_journal_self_heals},
       {"test_precreated_stage_symlink_is_rejected", test_precreated_stage_symlink_is_rejected},

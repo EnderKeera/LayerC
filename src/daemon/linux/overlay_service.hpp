@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <span>
 #include <string>
 #include <vector>
@@ -45,6 +46,8 @@ public:
   next_render_deadline(layerc::core::TimePoint now) const;
 
   [[nodiscard]] std::size_t window_count() const noexcept;
+  [[nodiscard]] std::size_t
+  window_count(std::string_view profile_id) const noexcept;
   [[nodiscard]] std::vector<std::uint64_t> windows() const;
   [[nodiscard]] std::vector<std::string> unavailable() const;
 
