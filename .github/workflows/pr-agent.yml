@@ -23,5 +23,5 @@ jobs:
           # DeepSeek's OpenAI-compatible endpoint, not to OpenAI.
           OPENAI_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_BASE: https://openrouter.ai/api/v1/chat/completions
-          config.model: "@preset/standard-d"
+          OPENAI_API_BASE: https://openrouter.ai/api/v1
+          config.model: openai/flex@preset/standard-d
