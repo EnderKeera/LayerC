@@ -331,6 +331,8 @@ needed_devices(std::span<const InputSession> sessions) {
     needed.gamepad = needed.gamepad || device == InputDevice::controller;
   };
   for (const auto &session : sessions) {
+    // Only sessions dispatch() feeds can consume a device.
+    if (!session.global && !session.active) continue;
     for (const auto &binding : session.profile.bindings)
       for (const auto &token : binding.chord.tokens) mark(token.device);
     if (session.automation_runtime == nullptr) continue;

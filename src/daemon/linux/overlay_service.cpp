@@ -128,6 +128,7 @@ void X11OverlayService::refresh(
       Target entry;
       entry.profile_id = session.profile.id;
       entry.panel_id = panel.id;
+      entry.session_window = session.window;
       entry.frame.target = target;
       entry.frame.panel = panel;
       entry.frame.dpi = dpi;
@@ -194,10 +195,13 @@ std::size_t X11OverlayService::window_count() const noexcept {
 }
 
 std::size_t
-X11OverlayService::window_count(const std::string_view profile_id) const noexcept {
+X11OverlayService::window_count(const std::string_view profile_id,
+                                const std::uint64_t session_window) const noexcept {
   return static_cast<std::size_t>(
       std::ranges::count_if(targets_, [&](const Target &target) {
-        return target.profile_id == profile_id && target.window.valid();
+        return target.profile_id == profile_id &&
+               target.session_window == session_window &&
+               target.window.valid();
       }));
 }
 

@@ -203,7 +203,8 @@ X11Adapters::session_diagnostics() const {
         .window = session.window,
         .foreground = session.active,
         .overlay_windows = static_cast<std::uint32_t>(std::min<std::size_t>(
-            impl_->overlay.window_count(session.profile.id), 0xFFFFFFFFU)),
+            impl_->overlay.window_count(session.profile.id, session.window),
+            0xFFFFFFFFU)),
         .last_input_match = session.last_input_match,
     });
   return rows;

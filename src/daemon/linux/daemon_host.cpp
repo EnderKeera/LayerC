@@ -127,11 +127,9 @@ void derive_capability_status(
 
 namespace {
 
-// The shared process row from procfs and getrusage: working set is resident
-// memory, private bytes is anonymous resident memory, handles are open fds.
-layerc::runtime::ProcessDiagnostics process_diagnostics() {
-  layerc::runtime::ProcessDiagnostics process;
-  process.pid = static_cast<std::uint32_t>(::getpid());
+// VmRSS, RssAnon and Threads from /proc/self/status. The stream closes on
+// return, so it is not counted among the open descriptors afterwards.
+void read_proc_status(layerc::runtime::ProcessDiagnostics &process) {
   std::ifstream status("/proc/self/status");
   for (std::string line; std::getline(status, line);) {
     const auto kib = [&](const std::string_view key) -> std::optional<std::uint64_t> {
@@ -145,6 +143,14 @@ layerc::runtime::ProcessDiagnostics process_diagnostics() {
     if (line.starts_with("Threads:"))
       std::istringstream(line.substr(8)) >> process.threads;
   }
+}
+
+// The shared process row from procfs and getrusage: working set is resident
+// memory, private bytes is anonymous resident memory, handles are open fds.
+layerc::runtime::ProcessDiagnostics process_diagnostics() {
+  layerc::runtime::ProcessDiagnostics process;
+  process.pid = static_cast<std::uint32_t>(::getpid());
+  read_proc_status(process);
   std::error_code error;
   for (std::filesystem::directory_iterator it("/proc/self/fd", error), end;
        !error && it != end; it.increment(error))
