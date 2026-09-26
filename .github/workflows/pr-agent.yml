@@ -26,8 +26,8 @@ jobs:
           OPENAI_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_BASE: https://openrouter.ai/api/v1
-          config.model: openai/flex@preset/standard-d
-          config.fallback_models: '["openai/flex@preset/standard-d"]'
+          config.model: openai/@preset/standard-d
+          config.fallback_models: '["openai/@preset/standard-d"]'
           # PR Agent refuses models it has no context size for; an
           # OpenRouter preset is not in its table, so state the budget.
           config.custom_model_max_tokens: "64000"
