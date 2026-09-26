@@ -200,6 +200,9 @@ private:
   void record_profile_change(ChangeKind kind);
   void schedule_autosave(bool immediate);
   [[nodiscard]] bool flush_autosave(bool allow_upgrade_prompt = true);
+  // Live edit and calibration act on the stored profile: a new draft must be
+  // saved once, and pending edits are flushed first.
+  [[nodiscard]] bool require_stored_profile(const wchar_t *first_save_message);
   [[nodiscard]] bool draft_controls_valid() const;
   void notify_profile_committed(const std::filesystem::path &path,
                                 const layerc::core::GameProfile &profile);
