@@ -37,6 +37,15 @@ def junit_details(path: Path) -> tuple[dict[str, int], dict[str, ET.Element]]:
     return counts, {case.get("name", ""): case for case in cases}
 
 
+def skip_reason(case: ET.Element) -> str:
+    """The lines a skipped suite printed about why, from its captured output."""
+    output = case.findtext("system-out") or ""
+    return " | ".join(
+        line.strip() for line in output.splitlines()
+        if line.lstrip().lower().startswith("skip")
+    )
+
+
 def validate(
     registration: Path,
     junit: Path,
@@ -78,6 +87,11 @@ def validate(
         problems.append("duplicate testcase names in CTest report")
     if unexpected_skips:
         problems.append("unexpected skipped suites: " + ", ".join(unexpected_skips))
+        problems.extend(
+            f"{name} skip reason: {reason}"
+            for name in unexpected_skips
+            if (reason := skip_reason(cases[name]))
+        )
     if not_run:
         problems.append("tests did not run: " + ", ".join(not_run))
     if counts["failures"] or counts["errors"]:
