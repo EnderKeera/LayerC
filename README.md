@@ -220,7 +220,13 @@ tests skip with code 77 when a display or required extension is unavailable.
 
 ## CI and release evidence
 
-Every push runs these jobs in parallel:
+Ubuntu jobs use Ubicloud `ubicloud-standard-4` runners (Ubuntu 24.04); the
+Ubicloud GitHub App must have access to this repository. Windows CI and
+release builds use the interactive `layerc-bench` runner. Fork pull requests
+run the Ubuntu jobs, while Windows CI jobs run only for main, manual runs, and
+pull requests whose branch is in this repository.
+
+Every push queues these independent jobs; the Windows jobs share one runner:
 
 1. `actionlint` workflow validation.
 2. `windows-msvc`: the shared `.github/actions/build-package` pipeline (`ci`
@@ -228,7 +234,7 @@ Every push runs these jobs in parallel:
    install, ZIP, and artifact upload). `release.yml` reuses the same setup
    and build actions, so benchmark gating cannot drift between CI and
     release. Empty test runs, missing required suites, and unexpected skips fail
-    the gate. Hosted Windows runners may explicitly skip only the overlay suite
+    the gate. The Windows runner may explicitly skip only the overlay suite
     when an isolated desktop cannot be created; that result is unavailable
     interactive coverage, not a pass.
 3. `windows-analyze`: a non-unity Release build with MSVC `/analyze` enabled
@@ -289,9 +295,9 @@ interactive desktop box, not a headless agent:
 
 ### Self-hosted Windows build and test
 
-`windows-selfhosted.yml` builds and tests one ref on a `[self-hosted, windows]`
-runner. It runs only on manual dispatch, so fork PRs never run code on that
-machine:
+`windows-selfhosted.yml` builds and tests one ref on the
+`[self-hosted, windows, x64, layerc-bench]` runner. It runs only on manual
+dispatch, so fork PRs do not automatically run code on that machine:
 
 ```powershell
 gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>
