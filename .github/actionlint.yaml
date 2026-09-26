@@ -4,3 +4,4 @@ self-hosted-runner:
     - windows
     - x64
     - layerc-bench
+    - ubicloud-standard-4
