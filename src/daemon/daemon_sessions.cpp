@@ -221,6 +221,8 @@ void seed_binding_token(Session &session,
 }
 
 void mark_automation_input_usage(Session &session) {
+  using layerc::core::InputDevice;
+  using layerc::core::source_filter_names_device;
   if (!session.modules.automation.profile.has_value())
     return;
   for (const auto &automation : session.modules.automation.profile->automations) {
@@ -232,7 +234,7 @@ void mark_automation_input_usage(Session &session) {
       if (rule.event == layerc::core::AutomationEventKind::input_pressed ||
           rule.event == layerc::core::AutomationEventKind::input_released) {
         if (rule.source_filter.empty() ||
-            rule.source_filter.starts_with("mouse:"))
+            source_filter_names_device(rule.source_filter, InputDevice::mouse))
           session.uses_raw_mouse = true;
         continue;
       }
@@ -240,9 +242,11 @@ void mark_automation_input_usage(Session &session) {
           layerc::core::AutomationEventKind::input_value_changed)
         continue;
       if (rule.source_filter.empty() ||
-          rule.source_filter.starts_with("controller:"))
+          source_filter_names_device(rule.source_filter,
+                                     InputDevice::controller))
         session.uses_controller = true;
-      if (rule.source_filter.starts_with("hid:") &&
+      if (source_filter_names_device(rule.source_filter,
+                                     InputDevice::generic_hid) &&
           !session.profile.hid_bindings.empty())
         session.uses_hid = true;
     }

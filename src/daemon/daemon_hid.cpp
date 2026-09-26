@@ -190,7 +190,7 @@ void DaemonApp::process_hid_sample(
     const bool momentary = sample.relative;
     if (!momentary || sample.value != 0)
       process_automation_input_value(
-          session, "hid:" + std::to_string(index + 1U),
+          session, layerc::core::hid_source_id(index + 1U),
           normalized_hid_value(sample),
           layerc::core::MonotonicClock::now(), momentary);
   }

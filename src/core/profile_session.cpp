@@ -129,13 +129,9 @@ SessionFeedResult AutomationSession::feed_input(
     const TimePoint now, AutomationSessionSink *sink) {
   SessionFeedResult result;
   if (automation_runtime) {
-    auto source = std::string(input_device_label(input.token.device)) + ":" +
-                  std::to_string(input.token.code);
-    if (input.token.device == InputDevice::controller)
-      source += ":" + std::to_string(input.token.controller_index);
     result.changed = process(event(input.pressed ? AutomationEventKind::input_pressed
                                                   : AutomationEventKind::input_released,
-                                   std::move(source), now), base, sink);
+                                   input_source_id(input.token), now), base, sink);
   }
   for (const auto &id : matcher.process(input)) {
     result.matched = true;

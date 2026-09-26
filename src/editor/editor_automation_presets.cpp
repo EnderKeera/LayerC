@@ -19,7 +19,8 @@ layerc::core::AutomationDefinition make_automation_preset(
     layerc::core::AutomationRule input;
     input.id = "on-input";
     input.event = layerc::core::AutomationEventKind::input_pressed;
-    input.source_filter = "keyboard:18";
+    input.source_filter = layerc::core::input_source_id(
+        {.device = layerc::core::InputDevice::keyboard, .code = 18});
     layerc::core::AutomationAction trigger;
     trigger.kind = layerc::core::AutomationActionKind::trigger_cooldown;
     trigger.target = std::move(cooldown_id);
@@ -85,7 +86,11 @@ layerc::core::AutomationRule make_palette_rule(const AutomationPaletteNode node,
   rule.id = std::move(rule_id);
   rule.event = from_input ? layerc::core::AutomationEventKind::input_pressed
                           : layerc::core::AutomationEventKind::timer_fired;
-  rule.source_filter = from_input ? "keyboard:18" : "pulse";
+  rule.source_filter =
+      from_input ? layerc::core::input_source_id(
+                       {.device = layerc::core::InputDevice::keyboard,
+                        .code = 18})
+                 : std::string("pulse");
   layerc::core::AutomationAction action;
   action.kind = from_input
                     ? layerc::core::AutomationActionKind::trigger_cooldown

@@ -237,7 +237,6 @@ void DaemonApp::poll_controllers() {
     const auto trigger = [](const BYTE value) {
       return static_cast<double>(value) / 255.0;
     };
-    const auto prefix = "controller:" + std::to_string(index) + ":";
     struct AnalogAxis {
       const char *name;
       double value;
@@ -254,8 +253,9 @@ void DaemonApp::poll_controllers() {
       if (session == nullptr || !session->automation_runtime)
         continue;
       for (const auto &axis : axes)
-        process_automation_input_value(*session, prefix + axis.name,
-                                       axis.value, now);
+        process_automation_input_value(
+            *session, layerc::core::controller_axis_source_id(index, axis.name),
+            axis.value, now);
     }
     previous_state = state;
   }

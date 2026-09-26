@@ -118,4 +118,25 @@ void test_automation_session_origin_and_persistence() {
          "the sibling should receive the winning persistent value");
 }
 
+// Rule source filters match these ids byte for byte, and stored automation
+// profiles carry them, so the spellings are fixed.
+void test_automation_input_source_ids() {
+  expect(input_source_id({InputDevice::keyboard, 18, 0}) == "keyboard:18" &&
+             input_source_id({InputDevice::mouse, 2, 0}) == "mouse:2" &&
+             input_source_id({InputDevice::controller, 5, 3}) ==
+                 "controller:5:3" &&
+             input_source_id({InputDevice::generic_hid, 1, 0}) == "hid:1",
+         "button sources should be <device>:<code>[:<controller index>]");
+  expect(controller_axis_source_id(2, "leftX") == "controller:2:leftX" &&
+             hid_source_id(4) == "hid:4",
+         "analog sources should name the controller axis or HID binding");
+  expect(source_filter_names_device("mouse:1", InputDevice::mouse) &&
+             source_filter_names_device("mouse:", InputDevice::mouse) &&
+             !source_filter_names_device("mouse", InputDevice::mouse) &&
+             !source_filter_names_device("mousey:1", InputDevice::mouse) &&
+             !source_filter_names_device("", InputDevice::controller) &&
+             source_filter_names_device("hid:3", InputDevice::generic_hid),
+         "a source filter should name a device only by its '<label>:' prefix");
+}
+
 } // namespace layerc::test
