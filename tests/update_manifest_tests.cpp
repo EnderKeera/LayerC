@@ -119,7 +119,8 @@ void test_update_manifest_rejects_unsafe_input() {
 
   auto tampered = core::serialize_update_manifest_json(sample_manifest());
   tampered.replace(tampered.find("layerw.exe"), 10, "../w.exe");
-  const auto *tampered_error = parse_error(core::parse_update_manifest_json(tampered));
+  const auto tampered_result = core::parse_update_manifest_json(tampered);
+  const auto *tampered_error = parse_error(tampered_result);
   expect(tampered_error != nullptr && tampered_error->path == "$.files[2].path",
          "a traversal path in parsed JSON names the failing entry");
 
