@@ -57,14 +57,24 @@ private:
   void update_dpi(UINT dpi);
   [[nodiscard]] LONG scaled(LONG value) const noexcept;
   void update_position(const RECT &target);
+  [[nodiscard]] bool
+  assign_bars(std::span<const layerc::core::CooldownDefinition> cooldowns);
   void set_direct_drag(bool enabled);
   void update_drag(POINT screen_point, bool final);
   void clear_window_state();
 
+  // One entry per drawn cooldown. state_index is the definition's position
+  // in the profile, which is also its position in engine snapshots.
+  struct Bar {
+    layerc::core::CooldownDefinition definition;
+    std::size_t state_index{};
+    // Last status text and its wide form; converted only when it changes.
+    std::string label;
+    std::wstring wide_label;
+  };
+
   layerc::core::Panel panel_;
-  std::vector<layerc::core::CooldownDefinition> cooldowns_;
-  std::vector<std::size_t> cooldown_indices_;
-  std::wstring label_buffer_;
+  std::vector<Bar> bars_;
   HWND window_{};
   HWND owner_{};
   RECT target_{};

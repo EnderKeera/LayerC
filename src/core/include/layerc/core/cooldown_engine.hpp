@@ -18,6 +18,12 @@ namespace layerc::core {
 [[nodiscard]] double cooldown_progress(const CooldownDefinition &definition,
                                        const CooldownState &state,
                                        TimePoint now) noexcept;
+// Engine snapshots follow the definition order, so a definition's state is
+// normally at the definition's own position. Falls back to an id search if a
+// caller's states ever drift from its definitions; nullptr when absent.
+[[nodiscard]] const CooldownState *
+cooldown_state_at(std::span<const CooldownState> states, std::size_t index,
+                  std::string_view cooldown_id) noexcept;
 
 // Transparent hashing lets the engine look entries up by string_view without
 // constructing temporary std::string keys on the per-trigger hot path.

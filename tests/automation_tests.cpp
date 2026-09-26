@@ -224,6 +224,12 @@ void test_automation_runtime_transaction_and_replay() {
     expect(std::holds_alternative<std::vector<std::byte>>(
                encode_live_frame(trace_message)),
            "each selected trace chunk must fit the 512 KiB live-frame cap");
+    trace_message.text =
+        export_layerc_trace(std::span<const AutomationTraceEntry>(
+            large_trace.data(), trace_prefix + 1U));
+    expect(encode_live_message_json(trace_message).size() >
+               max_live_message_bytes,
+           "the selected trace chunk should be the longest prefix that fits");
   }
   AutomationProfile immutable;
   immutable.profile_id = "game";

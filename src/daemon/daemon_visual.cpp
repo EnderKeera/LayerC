@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace layerc::daemon {
@@ -131,7 +132,7 @@ void DaemonApp::poll_visual_captures() {
   std::vector<VisualCaptureSnapshot> captured_snapshots;
   captured_snapshots.reserve(visual_capture_runtime_.captures.size());
   const auto poll_capture = [&](const HWND window, auto &worker) {
-    const auto captured = worker.snapshot();
+    auto captured = worker.snapshot();
     if (captured.sequence != 0) {
       for (auto *session : session_registry_.active_inputs) {
         if (session->game_window != window ||
@@ -158,7 +159,7 @@ void DaemonApp::poll_visual_captures() {
         }
       }
     }
-    captured_snapshots.push_back(captured);
+    captured_snapshots.push_back(std::move(captured));
   };
   for (auto &[window, worker] : visual_capture_runtime_.captures) {
     if (worker)

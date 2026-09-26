@@ -25,6 +25,11 @@ struct TemplateMatcherReference {
   double locator_luma_variance{};
 };
 
+// True when compact_template_image would return the image unchanged, so a
+// caller holding an already-compacted image can skip the copy.
+[[nodiscard]] bool template_is_compact(const TemplateImage &image,
+                                       CaptureQuality quality) noexcept;
+
 [[nodiscard]] TemplateMatcherReference prepare_template(const TemplateImage &image,
                                                          CaptureQuality quality);
 

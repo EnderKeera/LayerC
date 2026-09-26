@@ -4,8 +4,12 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
+#include <span>
 #include <string>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -226,8 +230,8 @@ struct ReferenceSearchContext {
       std::span<const NormalizedRegion> unavailable_regions_value,
       std::uint32_t left_value, std::uint32_t top_value,
       std::uint32_t right_value, std::uint32_t bottom_value,
-      std::size_t total_budget, std::size_t references_remaining,
-      TemplateMatchResult &result_value);
+      std::span<const RenderedSize> sizes_value, std::size_t total_budget,
+      std::size_t references_remaining, TemplateMatchResult &result_value);
 
   bool run();
 
@@ -253,7 +257,7 @@ private:
   std::uint32_t right;
   std::uint32_t bottom;
   TemplateMatchResult &result;
-  std::vector<RenderedSize> sizes;
+  std::span<const RenderedSize> sizes;
   std::vector<Candidate> candidates;
   std::size_t reference_start;
   std::size_t reference_budget;
@@ -272,6 +276,7 @@ ReferenceSearchContext::ReferenceSearchContext(
     const std::span<const NormalizedRegion> unavailable_regions_value,
     const std::uint32_t left_value, const std::uint32_t top_value,
     const std::uint32_t right_value, const std::uint32_t bottom_value,
+    const std::span<const RenderedSize> sizes_value,
     const std::size_t total_budget,
     const std::size_t references_remaining, TemplateMatchResult &result_value)
     : state(state_value), definition(definition_value),
@@ -280,7 +285,7 @@ ReferenceSearchContext::ReferenceSearchContext(
       unavailable_regions(unavailable_regions_value), left(left_value),
       top(top_value), right(right_value), bottom(bottom_value),
       result(result_value),
-      sizes(rendered_sizes(state, frame, right - left, bottom - top)),
+      sizes(sizes_value),
       reference_start(result.pixel_comparisons),
       reference_budget(result.pixel_comparisons +
                        (total_budget > result.pixel_comparisons
@@ -558,7 +563,37 @@ bool ReferenceSearchContext::run() {
 } // namespace
 
 struct CpuTemplateMatcher::Impl {
-  std::unordered_map<std::string, detail::TemplateMatcherReference> prepared;
+  struct TransparentHash {
+    using is_transparent = void;
+    std::size_t operator()(const std::string_view value) const noexcept {
+      return std::hash<std::string_view>{}(value);
+    }
+  };
+  // Every input rendered_sizes() reads; equal keys yield equal sizes.
+  using SizesKey = std::tuple<double, double, double, std::uint32_t,
+                              std::uint32_t, std::uint32_t, std::uint32_t>;
+  static constexpr std::size_t max_cached_sizes = 64;
+
+  // Prepared samples by verified content hash, then quality. Heterogeneous
+  // lookup keeps the per-frame search allocation-free.
+  std::unordered_map<std::string,
+                     std::map<CaptureQuality, detail::TemplateMatcherReference>,
+                     TransparentHash, std::equal_to<>>
+      prepared;
+  std::map<SizesKey, std::vector<RenderedSize>> sizes;
+
+  const std::vector<RenderedSize> &
+  rendered_sizes_for(const TemplateState &state, const PixelFrameView frame,
+                     const std::uint32_t width, const std::uint32_t height) {
+    const SizesKey key{state.expected_width, state.expected_height,
+                       state.scale_tolerance, frame.width, frame.height,
+                       width, height};
+    if (const auto found = sizes.find(key); found != sizes.end())
+      return found->second;
+    if (sizes.size() >= max_cached_sizes) sizes.clear();
+    return sizes.emplace(key, rendered_sizes(state, frame, width, height))
+        .first->second;
+  }
 };
 
 CpuTemplateMatcher::CpuTemplateMatcher() : impl_(std::make_unique<Impl>()) {}
@@ -587,18 +622,25 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
       overlaps(search_region, available_region);
 
   const auto budget = comparison_budget(quality);
+  const auto &sizes =
+      impl_->rendered_sizes_for(state, frame, right - left, bottom - top);
   std::size_t reference_index{};
   for (const auto &definition : state.references) {
     ++reference_index;
     const auto image = std::ranges::find(
         images, definition.asset_sha256, &TemplateImage::asset_sha256);
     if (image == images.end() || !image->valid()) continue;
-    const auto key = definition.asset_sha256 + ":" +
-                     std::to_string(static_cast<unsigned>(quality));
-    auto [prepared_it, inserted] = impl_->prepared.try_emplace(key);
+    auto by_hash = impl_->prepared.find(std::string_view(definition.asset_sha256));
+    if (by_hash == impl_->prepared.end())
+      by_hash = impl_->prepared.try_emplace(definition.asset_sha256).first;
+    auto [prepared_it, inserted] = by_hash->second.try_emplace(quality);
     if (inserted) {
-      const auto compact = compact_template_image(*image, quality);
-      prepared_it->second = detail::prepare_template(compact, quality);
+      // Runtimes hand in images they already compacted for this quality.
+      prepared_it->second =
+          detail::template_is_compact(*image, quality)
+              ? detail::prepare_template(*image, quality)
+              : detail::prepare_template(
+                    compact_template_image(*image, quality), quality);
     }
     const auto &reference = prepared_it->second;
     if (reference.samples.empty() || reference.search_samples.empty() ||
@@ -607,7 +649,7 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
 
     ReferenceSearchContext search(
         state, definition, reference, frame, available_region,
-        unavailable_regions, left, top, right, bottom, budget,
+        unavailable_regions, left, top, right, bottom, sizes, budget,
         state.references.size() - reference_index + 1U, result);
     if (search.run()) return result;
     if (result.pixel_comparisons >= budget) break;
@@ -617,7 +659,16 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
 }
 
 void CpuTemplateMatcher::clear() {
-  if (impl_) impl_->prepared.clear();
+  if (!impl_) return;
+  impl_->prepared.clear();
+  impl_->sizes.clear();
+}
+
+void CpuTemplateMatcher::retain(const std::span<const std::string> asset_sha256) {
+  if (!impl_) return;
+  std::erase_if(impl_->prepared, [&](const auto &entry) {
+    return std::ranges::find(asset_sha256, entry.first) == asset_sha256.end();
+  });
 }
 
 } // namespace layerc::core
