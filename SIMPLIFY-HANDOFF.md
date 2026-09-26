@@ -6,25 +6,27 @@ it when the pass is finished.
 
 ## Verification state
 
-- Session 2 (cloud container, Ubuntu 24.04, GCC 13, `build/linux-dbg`, Ninja
-  Debug): Linux is warning-free; 13/13 CTest suites pass (8 headless, 5 X11
-  under `xvfb-run -a`); `tools/linux-runtime-smoke.sh` headless and x11 pass
-  against the debug binaries. The session-1 Linux gaps are now verified.
-- Windows was NOT built with MSVC or tested in session 2. Everything was
-  compile-checked with a MinGW-w64 13 cross build from Ubuntu
-  (`build/mingw-cross`, toolchain `x86_64-w64-mingw32-g++-posix`): no compile
-  errors or warnings; only `layerd`, `layere` and `layerc_platform_tests`
-  fail to link, on `HidD_*`/`HidP_*`, because Ubuntu's older mingw
-  `hidsdi.h`/`hidpi.h` lack `extern "C"` (environment, not code). **First
-  step on Windows: VS 2026 Debug build + all 13 CTest suites.** Windows-only
-  runtime edits in session 2: `daemon_automation.cpp` (checkpoint helper,
-  timer re-arm), `daemon_overlays.cpp` (core override resolution),
-  `visual_assets.cpp` (asset directory), `canonical_profile_key`, editor
-  color picker / number parsing, calibration and worker argument parsing,
-  and test helpers.
+- Session 3 (cloud container plus the maintainer's self-hosted runner):
+  - Linux (Ubuntu 24.04, GCC 13, `build/linux-dbg`, Ninja Debug) before
+    every push: warning-free, 8/8 headless and 5/5 X11 (`xvfb-run -a`)
+    CTest suites.
+  - MinGW-w64 cross compile before every push: no compile errors or
+    warnings; only the known `HidD_*`/`HidP_*` link failures (Ubuntu's
+    mingw `hidsdi.h`/`hidpi.h` lack `extern "C"`).
+  - Windows: `windows-selfhosted.yml` on the `layerc-bench` runner, VS 2026
+    Debug build and all 13 CTest suites. Finished runs: 36211860428 on
+    `28d43c6` (R1, E3, E9, E5) 13/13; 36212546696 on `79025ff` (A19, A3)
+    13/13. Later commits are reported only from their own finished runs.
+  - No interactive or hardware check was done. E9 (mouse Raw Input) still
+    needs a manual check: a mouse binding and a mouse automation rule must
+    still fire.
+- Session 2 (Linux verified; Windows MinGW compile-check only) and session 1
+  (reported by its author as VS 2026 Debug, 13/13) are superseded by the
+  session-3 Windows runs above for everything that landed through
+  EnderKeera/LayerC#8.
 - Windows machine is memory-constrained. Build with:
   `cmake --build build --config Debug -- -m:1 -nodeReuse:false -p:UseMultiToolTask=true -p:CL_MPCount=2 -p:MultiProcMaxCount=2`
-  (run from bash; PowerShell mangles `-m:1`).
+  (from bash; in PowerShell quote each switch, e.g. `'-m:1'`).
 - Editing: a Windows checkout has CRLF files. `ctx_patch` can silently no-op
   or mix line endings on CRLF files; use an EOL-aware script and verify diffs.
 
@@ -129,24 +131,35 @@ E20=A11, S10/S30/R27/A23.
   error trap already performs removed. E14 automation timer re-armed by
   `SetTimer` replacement instead of Kill+Set.
 
-## Remaining (not started)
+## Done in session 3
 
-Mostly Windows runtime or cross-cutting refactors that need a Windows build
-and test run to land safely:
+- R1 rest: durable_file, daemon diagnostics, hid_device, platform_events,
+  profile_store, visual_assets, the transaction mutex and the daemon reload
+  events use `OwnedHandle`; close points that matter stay explicit via
+  `reset()`.
+- E3 background overlays skip `SetWindowPos` when already visible at the
+  target rect (checked against the real window rect, so moves by others are
+  still repaired). E5 the 1 s window scan is skipped when no enabled window
+  profile exists. E9 mouse Raw Input is registered only while a mouse
+  binding, a mouse-capable press/release automation rule or a system-class
+  HID binding needs it.
+- A19 `core::input_source_id`, `controller_axis_source_id`, `hid_source_id`,
+  `source_filter_names_device` (byte-identical ids, pinned by a core test).
+  A3 `AutomationSession::input_value_event` owns the continuous-input policy
+  (core tests cover demand, deadzone, rate limit, threshold, momentary).
+  A2 `AutomationSession` owns its `profile`; the per-call `base` parameter
+  is gone (the sink stays per call because the Linux sink binds to a
+  session object that moves). A7/R24 `core::ProfileModuleKind` replaces
+  `platform::ModuleSidecarKind` and the bundle's `SidecarKind`.
+  A8 `EditorWindow::require_stored_profile` gates live edit and
+  calibration.
+- CI: `windows-selfhosted.yml` (manual dispatch only, SHA-pinned, quoted
+  MSBuild switches, `pwsh -NoProfile`); `ci.yml` cancels superseded pull
+  request runs.
 
-- Altitude: A2 AutomationSession sink/profile, A3 continuous input to core,
-  A5 shared visual evaluation plan, A6 single bundle planner, A7/R24 one
-  module registry, A8 editor save gating, A10 shared session registry,
-  A11/E20 wait on reload events (add the reload events to the daemon's
-  `MsgWaitForMultipleObjectsEx` set), A12 capability services, A19 input
-  source ids, A21 simulator via AutomationSession, A24 guard topology, A29
-  shared pack tests (`profile_pack_tests` is Windows-only and assumes the
-  unified store; sharing needs a split-store port).
-- Efficiency (Windows): E3 overlay SetWindowPos caching, E4 Game Bar 60 Hz,
-  E5 window scan, E6 service reconcile gating, E9 raw mouse registration,
-  E10–E13 capture readback, E15–E19, E23–E27; CI: E21/E22/E28.
-- S15/A9 rest (single `open_profile_store()` startup helper); R1 rest (raw
-  `CloseHandle` sites listed above).
+## Remaining
+
+Nothing. Every finding is done above or has a recorded reason below.
 
 ## Deliberately skipped
 
@@ -171,3 +184,39 @@ and test run to land safely:
   silent edge update, changing when ready transitions fire.
 - E8 (Linux idle repaint): the 100 ms repaint is the only Expose repair for
   override-redirect overlays; needs Expose handling plus physical X11 evidence.
+- S15/A9 rest (single `open_profile_store()`): the Windows programs only
+  recover transactions, the Linux daemon first ensures the split XDG roots,
+  and layerctl ensures roots only on write commands; each program formats
+  its own error, so a helper would wrap two calls.
+- R1 in `live_channel`: the pipe uses an `INVALID_HANDLE_VALUE` sentinel
+  inside the overlapped I/O state machine and its events feed OVERLAPPED
+  structures at about 15 sites. Test fixtures keep raw `PROCESS_INFORMATION`
+  handles.
+- A5 (shared visual evaluation plan): the evaluator is already shared; the
+  plans differ in rate policy (Windows clamps to 5–15 Hz on a capture thread
+  or the isolated worker, Linux uses max(1, rate) in its loop).
+- A6 (single bundle planner): already done; preview, dry-run and commit use
+  one `build_import_plan`.
+- A10 (shared session registry): Windows keeps one session per
+  profile × window, Linux one per profile; sharing picks an instance model.
+- A11/E20 (wait on reload events): the 1 s scan timer must stay, so the
+  only effect is faster reloads, a behaviour change.
+- A12 (capability services): covered by the typed `OwnedCapabilityService`
+  adapter; the remaining switches are compiler-checked.
+- A21 (simulator via AutomationSession): would commit cooldown effects and
+  add ready transitions, changing the trace the editor shows.
+- A24 (guard topology): the per-platform guard code is filesystem semantics
+  and on-disk journal names, inside the durable transaction path.
+- A29 (shared pack tests): needs a split-store port of the fixture and
+  platform-specific expectations (Windows reserved names); Linux already has
+  its own pack contract test.
+- E4 (Game Bar 60 Hz): no such path in the current code; snapshots publish
+  on the 1 s scan timer and the widget only has a one-shot stale timer.
+- E6 (service reconcile gating): reconcile also re-applies session-dependent
+  state (input registration follows active sessions) under unchanged demand.
+- E10–E13 (capture readback): readback already reuses its staging texture
+  and copies only sampled rows; the rest needs `layerc-bench` benchmarks or
+  changes frame latency (async staging).
+- E15–E19, E21–E28: their descriptions were not preserved by session 1 and
+  cannot be recovered from the tree or history. A fresh CI review found one
+  inefficiency (superseded PR runs kept running), fixed above.
