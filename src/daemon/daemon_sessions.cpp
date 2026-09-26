@@ -227,6 +227,15 @@ void mark_automation_input_usage(Session &session) {
     if (!automation.enabled)
       continue;
     for (const auto &rule : automation.rules) {
+      // Press/release rules see every Raw Input device, so one that can
+      // match a mouse source keeps the mouse registered.
+      if (rule.event == layerc::core::AutomationEventKind::input_pressed ||
+          rule.event == layerc::core::AutomationEventKind::input_released) {
+        if (rule.source_filter.empty() ||
+            rule.source_filter.starts_with("mouse:"))
+          session.uses_raw_mouse = true;
+        continue;
+      }
       if (rule.event !=
           layerc::core::AutomationEventKind::input_value_changed)
         continue;
@@ -245,6 +254,7 @@ void mark_automation_input_usage(Session &session) {
 void Session::rebuild_input_configuration() {
   uses_controller = false;
   uses_raw_input = false;
+  uses_raw_mouse = false;
   uses_hid = false;
   hid_states.assign(profile.hid_bindings.size(), {});
   global_keyboard.clear();
@@ -254,6 +264,8 @@ void Session::rebuild_input_configuration() {
                         token.device == layerc::core::InputDevice::controller;
       uses_raw_input = uses_raw_input ||
                        token.device == layerc::core::InputDevice::keyboard ||
+                       token.device == layerc::core::InputDevice::mouse;
+      uses_raw_mouse = uses_raw_mouse ||
                        token.device == layerc::core::InputDevice::mouse;
       uses_hid =
           uses_hid || token.device == layerc::core::InputDevice::generic_hid;

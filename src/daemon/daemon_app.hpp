@@ -56,8 +56,7 @@ private:
                            LPARAM lparam);
 
   bool create_message_window(HINSTANCE instance);
-  bool register_input_devices();
-  void unregister_input_devices() noexcept;
+  void set_raw_input(bool keyboard, bool mouse) noexcept;
   void reconcile_input_runtime();
   void quiesce_input_runtime() noexcept;
   void add_tray_icon();

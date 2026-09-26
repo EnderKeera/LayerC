@@ -111,6 +111,7 @@ struct Session : layerc::core::AutomationSession {
   HWND game_window{};
   bool uses_controller{};
   bool uses_raw_input{};
+  bool uses_raw_mouse{};
   bool uses_hid{};
   std::string last_input_match;
 };

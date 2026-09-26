@@ -12,37 +12,28 @@
 
 namespace layerc::daemon {
 
-bool DaemonApp::register_input_devices() {
-  const RAWINPUTDEVICE devices[] = {
-      {.usUsagePage = 0x01,
-       .usUsage = 0x06,
-       .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-       .hwndTarget = window_},
-      {.usUsagePage = 0x01,
-       .usUsage = 0x02,
-       .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-       .hwndTarget = window_},
+// Keyboard and mouse Raw Input register separately: a mouse sink receives
+// WM_INPUT for every movement, so it is registered only while something can
+// consume mouse input.
+void DaemonApp::set_raw_input(const bool keyboard, const bool mouse) noexcept {
+  const auto apply = [this](const USHORT usage, const bool wanted,
+                            bool &registered) {
+    if (wanted == registered)
+      return;
+    const RAWINPUTDEVICE device{
+        .usUsagePage = 0x01,
+        .usUsage = usage,
+        .dwFlags = static_cast<DWORD>(
+            wanted ? RIDEV_INPUTSINK | RIDEV_DEVNOTIFY : RIDEV_REMOVE),
+        .hwndTarget = wanted ? window_ : nullptr};
+    // Removal is best effort; a failed registration retries on the next
+    // reconcile.
+    if (RegisterRawInputDevices(&device, 1, sizeof(device)) != FALSE ||
+        !wanted)
+      registered = wanted;
   };
-  return RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
-                                 sizeof(RAWINPUTDEVICE)) != FALSE;
-}
-
-void DaemonApp::unregister_input_devices() noexcept {
-  if (!input_runtime_.raw_input_registered)
-    return;
-  const RAWINPUTDEVICE devices[] = {
-      {.usUsagePage = 0x01,
-       .usUsage = 0x06,
-       .dwFlags = RIDEV_REMOVE,
-       .hwndTarget = nullptr},
-      {.usUsagePage = 0x01,
-       .usUsage = 0x02,
-       .dwFlags = RIDEV_REMOVE,
-       .hwndTarget = nullptr},
-  };
-  (void)RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
-                                sizeof(RAWINPUTDEVICE));
-  input_runtime_.raw_input_registered = false;
+  apply(0x06, keyboard, input_runtime_.raw_keyboard_registered);
+  apply(0x02, mouse, input_runtime_.raw_mouse_registered);
 }
 
 void DaemonApp::reconcile_input_runtime() {
@@ -63,10 +54,16 @@ void DaemonApp::reconcile_input_runtime() {
                                    session->uses_raw_input;
                           }) ||
       needs_system_hid;
-  if (needs_raw_input && !input_runtime_.raw_input_registered)
-    input_runtime_.raw_input_registered = register_input_devices();
-  else if (!needs_raw_input)
-    unregister_input_devices();
+  // System-class HID bindings sample the mouse's Raw Input directly.
+  const bool needs_raw_mouse =
+      needs_raw_input &&
+      (needs_system_hid ||
+       std::ranges::any_of(session_registry_.active_inputs,
+                           [](const Session *session) {
+                             return session != nullptr &&
+                                    session->uses_raw_mouse;
+                           }));
+  set_raw_input(needs_raw_input, needs_raw_mouse);
 
   const bool needs_polling =
       std::ranges::any_of(session_registry_.active_inputs, [](const Session *session) {
@@ -88,7 +85,7 @@ void DaemonApp::quiesce_input_runtime() noexcept {
   if (input_runtime_.timer_running && window_ != nullptr)
     KillTimer(window_, input_poll_timer);
   input_runtime_.timer_running = false;
-  unregister_input_devices();
+  set_raw_input(false, false);
   input_runtime_.reset_controllers();
   session_registry_.input_foreground = nullptr;
   for (auto &session : session_registry_.sessions)
