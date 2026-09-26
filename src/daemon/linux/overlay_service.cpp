@@ -4,6 +4,9 @@
 #include "overlay_service.hpp"
 
 #include <algorithm>
+#include <optional>
+#include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -29,53 +32,68 @@ InputSession *find_session(const std::span<InputSession> sessions,
   return nullptr;
 }
 
-// Resolves the panel and its overrides into `frame.panel` and `overrides`.
-// false when the panel is gone or an override hides it.
+struct PanelOverrides {
+  std::optional<bool> visible;
+  std::optional<std::string> text;
+};
+
+// Resolves the panel and its overrides into `frame.panel` and `result`.
+// The panel is re-copied only while an override targets it (or to undo one),
+// so the common no-override frame does no allocation. false when the panel
+// is gone or an override hides it.
 [[nodiscard]] bool apply_automation_overrides(
-    layerc::platform::X11OverlayFrame &frame, const InputSession &session,
-    const std::string_view panel_id,
-    layerc::core::ResolvedPanelOverrides &overrides) {
+    layerc::platform::X11OverlayFrame &frame, bool &overridden,
+    const InputSession &session, const std::string_view panel_id,
+    PanelOverrides &result) {
   const auto base = std::ranges::find(session.profile.panels, panel_id,
                                       &layerc::core::Panel::id);
   if (base == session.profile.panels.end()) return false;
-  overrides = layerc::core::resolve_panel_overrides(
-      *base,
+  const auto overrides =
       session.automation_runtime
           ? std::span(session.automation_runtime->snapshot().overlay_overrides)
-          : std::span<const layerc::core::OverlayPropertyOverride>{});
-  frame.panel = std::move(overrides.panel);
-  return overrides.visible.value_or(true);
+          : std::span<const layerc::core::OverlayPropertyOverride>{};
+  if (std::ranges::none_of(overrides, [&](const auto &item) {
+        return item.panel_id == panel_id;
+      })) {
+    if (overridden) frame.panel = *base;
+    overridden = false;
+    result = {};
+    return true;
+  }
+  auto resolved = layerc::core::resolve_panel_overrides(*base, overrides);
+  frame.panel = std::move(resolved.panel);
+  overridden = true;
+  result = {resolved.visible, std::move(resolved.text)};
+  return result.visible.value_or(true);
 }
 
-// Fills `frame.bars` from the session's engine. false means the panel has
-// nothing to show right now (everything is ready and the style hides it).
+// Fills `frame.bars` from the session's cooldown snapshot, whose states
+// follow profile.cooldowns by position. false means the panel has nothing to
+// show right now (everything is ready and the style hides it).
 [[nodiscard]] bool
-fill_bars(layerc::platform::X11OverlayFrame &frame, InputSession &session,
-          const TimePoint now,
-          const layerc::core::ResolvedPanelOverrides &overrides) {
-  session.cooldowns.update(now);
-  const auto states = session.cooldowns.snapshot(now);
+fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
+          const TimePoint now, const PanelOverrides &overrides) {
+  const auto &definitions = session.profile.cooldowns;
+  const auto &states = session.snapshot_buffer;
   frame.bars.clear();
   bool running = false;
   for (const auto &cooldown_id : frame.panel.cooldown_ids) {
-    const auto definition = std::ranges::find_if(
-        session.profile.cooldowns, [&](const CooldownDefinition &candidate) {
-          return candidate.id == cooldown_id;
-        });
-    if (definition == session.profile.cooldowns.end()) continue;
-    const auto state = std::ranges::find_if(
-        states, [&](const CooldownState &candidate) {
-          return candidate.id == cooldown_id;
-        });
-    if (state == states.end()) continue;
-    if (state->next_charge_at.has_value()) running = true;
+    const auto definition =
+        std::ranges::find(definitions, cooldown_id, &CooldownDefinition::id);
+    if (definition == definitions.end()) continue;
+    const auto *found = layerc::core::cooldown_state_at(
+        states, static_cast<std::size_t>(definition - definitions.begin()),
+        cooldown_id);
+    if (found == nullptr) continue;
+    const CooldownState &state = *found;
+    if (state.next_charge_at.has_value()) running = true;
 
     layerc::platform::X11OverlayBar bar;
     bar.label = overrides.text.has_value()
                     ? *overrides.text
-                    : layerc::core::cooldown_status_text(*definition, *state, now);
-    bar.running = state->next_charge_at.has_value();
-    bar.remaining = layerc::core::cooldown_progress(*definition, *state, now);
+                    : layerc::core::cooldown_status_text(*definition, state, now);
+    bar.running = state.next_charge_at.has_value();
+    bar.remaining = layerc::core::cooldown_progress(*definition, state, now);
     frame.bars.push_back(std::move(bar));
   }
   if (frame.bars.empty()) return false;
@@ -131,13 +149,20 @@ void X11OverlayService::refresh(
 void X11OverlayService::render(const std::span<InputSession> sessions,
                                const TimePoint now) {
   if (display_ == nullptr) return;
+  // refresh() emits each session's panels together, so one snapshot per run
+  // of targets covers every panel of that session.
+  const InputSession *snapshotted = nullptr;
   for (auto &target : targets_) {
     if (!target.window.valid()) continue;
     auto *session = find_session(sessions, target.profile_id);
     if (session == nullptr) continue;
-    layerc::core::ResolvedPanelOverrides overrides;
-    if (!apply_automation_overrides(target.frame, *session, target.panel_id,
-                                    overrides) ||
+    if (session != snapshotted) {
+      session->cooldowns.snapshot(now, session->snapshot_buffer);
+      snapshotted = session;
+    }
+    PanelOverrides overrides;
+    if (!apply_automation_overrides(target.frame, target.overridden, *session,
+                                    target.panel_id, overrides) ||
         !fill_bars(target.frame, *session, now, overrides)) {
       target.window.hide();
       continue;

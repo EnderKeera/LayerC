@@ -48,6 +48,20 @@ struct CaptureSession : IInspectable {
   virtual HRESULT STDMETHODCALLTYPE StartCapture() = 0;
 };
 
+// Windows 10 2004+: IGraphicsCaptureSession2.
+struct CaptureSession2 : IInspectable {
+  virtual HRESULT STDMETHODCALLTYPE
+  get_IsCursorCaptureEnabled(unsigned char *value) = 0;
+  virtual HRESULT STDMETHODCALLTYPE
+  put_IsCursorCaptureEnabled(unsigned char value) = 0;
+};
+
+// Windows 11 24H2+: IGraphicsCaptureSession5.
+struct CaptureSession5 : IInspectable {
+  virtual HRESULT STDMETHODCALLTYPE get_MinUpdateInterval(TimeSpan *value) = 0;
+  virtual HRESULT STDMETHODCALLTYPE put_MinUpdateInterval(TimeSpan value) = 0;
+};
+
 struct CaptureFramePool : IInspectable {
   virtual HRESULT STDMETHODCALLTYPE Recreate(Direct3DDevice *device,
                                               std::int32_t pixel_format,
@@ -92,6 +106,10 @@ inline constexpr GUID iid_capture_frame_pool_statics2{
     0x589b103f, 0x6bbc, 0x5df5, {0xa9, 0x91, 0x02, 0xe2, 0x8b, 0x3b, 0x66, 0xd5}};
 inline constexpr GUID iid_capture_item{
     0x79c3f95b, 0x31f7, 0x4ec2, {0xa4, 0x64, 0x63, 0x2e, 0xf5, 0xd3, 0x07, 0x60}};
+inline constexpr GUID iid_capture_session2{
+    0x2c39ae40, 0x7d2e, 0x5044, {0x80, 0x4e, 0x8b, 0x67, 0x99, 0xd4, 0xcf, 0x9e}};
+inline constexpr GUID iid_capture_session5{
+    0x67c0ea62, 0x1f85, 0x5061, {0x92, 0x5a, 0x23, 0x9b, 0xe0, 0xac, 0x09, 0xcb}};
 inline constexpr GUID iid_capture_item_interop{
     0x3628e81b, 0x3cac, 0x4c60, {0xb7, 0xf4, 0x23, 0xce, 0x0e, 0x0c, 0x33, 0x56}};
 inline constexpr GUID iid_dxgi_interface_access{
