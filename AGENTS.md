@@ -26,8 +26,12 @@ workflow-specific guidance and should be loaded only for matching tasks.
   must not link into `layerd`.
 - No injection, hooks, game-memory reads, drivers, administrator elevation, or
   anti-cheat bypass.
-- No telemetry or network access. The only exception is the same-package Game
-  Bar App Service `LayerC.GameBar.v1`.
+- No telemetry or network access, with two exceptions: the same-package Game
+  Bar App Service `LayerC.GameBar.v1`, and the Windows launcher `layerc.exe`,
+  which may make anonymous HTTPS GETs to this repository's GitHub release at
+  launch to update itself and the app, can be turned off by the user, and
+  exits after starting `layerd`. `layerd`, `layere`, `layercal`, and `layerw`
+  never access the network or link an HTTP client.
 - Cooldowns, retries, deadlines, and timers use monotonic clocks.
 - Optional services are demand-driven, idle-blocking, owned, and joined.
   Unavailable capabilities retain visible fault reasons without weakening
