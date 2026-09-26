@@ -49,6 +49,9 @@ layerc_daemon_stop() {
 # Runs the command once the X server in $DISPLAY accepts connections. xvfb-run
 # can return before a fresh Xvfb takes its first client, and a suite that finds
 # no display skips instead of failing, which the evidence gate then rejects.
+# Each probe is bounded, so a server that accepts the socket but never answers
+# still ends within roughly tries * (probe timeout + seconds).
+layerc_x11_probe_timeout=2
 layerc_x11_exec() {
   local attempts=$1 interval=$2 attempt
   shift 2
@@ -57,7 +60,7 @@ layerc_x11_exec() {
     return 1
   fi
   for ((attempt = 0; attempt < attempts; ++attempt)); do
-    if xdpyinfo >/dev/null 2>&1; then
+    if timeout "$layerc_x11_probe_timeout" xdpyinfo >/dev/null 2>&1; then
       "$@"
       return
     fi
