@@ -1,6 +1,7 @@
 #include "daemon_app.hpp"
 
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_handle.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 
 #include <chrono>
@@ -19,9 +20,11 @@ std::uint64_t file_time_value(const FILETIME value) noexcept {
 }
 
 std::uint32_t process_thread_count() noexcept {
-  const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-  if (snapshot == INVALID_HANDLE_VALUE)
+  const layerc::platform::OwnedHandle owned_snapshot(
+      CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0));
+  if (!owned_snapshot.valid())
     return 0;
+  const HANDLE snapshot = owned_snapshot.get();
   THREADENTRY32 entry{};
   entry.dwSize = sizeof(entry);
   std::uint32_t count{};
@@ -32,7 +35,6 @@ std::uint32_t process_thread_count() noexcept {
       entry.dwSize = sizeof(THREADENTRY32);
     } while (Thread32Next(snapshot, &entry) != FALSE);
   }
-  CloseHandle(snapshot);
   return count;
 }
 

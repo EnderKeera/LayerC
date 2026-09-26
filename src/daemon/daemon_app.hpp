@@ -168,8 +168,8 @@ private:
   LiveEditHost live_edit_host_;
   CompanionHost companion_host_;
   [[nodiscard]] std::vector<Session *> current_companion_sessions();
-  HANDLE reload_event_{};
-  HANDLE settings_reload_event_{};
+  layerc::platform::OwnedHandle reload_event_;
+  layerc::platform::OwnedHandle settings_reload_event_;
   bool capture_exclusion_{true};
   bool visual_recognition_enabled_{};
   std::string settings_error_;

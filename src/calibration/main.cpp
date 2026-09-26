@@ -3,6 +3,7 @@
 #include "layerc/core/calibration.hpp"
 #include "layerc/platform/framed_pipe.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_handle.hpp"
 
 #include <optional>
 #include <string_view>
@@ -40,10 +41,12 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   const auto response_pipe = handle_argument(argc, argv, L"--response-pipe");
   LocalFree(argv);
   if (!request_pipe.has_value() || !response_pipe.has_value()) return 2;
+  layerc::platform::OwnedHandle request(*request_pipe);
+  const layerc::platform::OwnedHandle response_handle(*response_pipe);
 
   const auto framed = layerc::platform::read_framed_pipe(
-      *request_pipe, layerc::core::max_calibration_packet_bytes);
-  CloseHandle(*request_pipe);
+      request.get(), layerc::core::max_calibration_packet_bytes);
+  request.reset();
   layerc::core::CalibrationResponse response;
   int exit_code{};
   if (!framed) {
@@ -66,9 +69,8 @@ int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE,
   std::string write_error;
   const auto encoded = layerc::core::encode_calibration_response(response);
   if (!layerc::platform::write_framed_pipe(
-          *response_pipe, encoded,
+          response_handle.get(), encoded,
           layerc::core::max_calibration_packet_bytes, write_error))
     exit_code = 2;
-  CloseHandle(*response_pipe);
   return exit_code;
 }

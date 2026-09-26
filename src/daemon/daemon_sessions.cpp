@@ -430,11 +430,11 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
 }
 
 bool DaemonApp::reload_settings_if_requested() {
-  if (settings_reload_event_ == nullptr ||
-      WaitForSingleObject(settings_reload_event_, 0) != WAIT_OBJECT_0) {
+  if (!settings_reload_event_.valid() ||
+      WaitForSingleObject(settings_reload_event_.get(), 0) != WAIT_OBJECT_0) {
     return false;
   }
-  ResetEvent(settings_reload_event_);
+  ResetEvent(settings_reload_event_.get());
   load_platform_settings();
   for (auto &session : session_registry_.sessions) {
     session->set_capture_exclusion(capture_exclusion_);
@@ -449,11 +449,11 @@ bool DaemonApp::reload_settings_if_requested() {
 }
 
 bool DaemonApp::reload_profiles_if_requested() {
-  if (reload_event_ == nullptr ||
-      WaitForSingleObject(reload_event_, 0) != WAIT_OBJECT_0) {
+  if (!reload_event_.valid() ||
+      WaitForSingleObject(reload_event_.get(), 0) != WAIT_OBJECT_0) {
     return false;
   }
-  ResetEvent(reload_event_);
+  ResetEvent(reload_event_.get());
   reload_profiles();
   return true;
 }
