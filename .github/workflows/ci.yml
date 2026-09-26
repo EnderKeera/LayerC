@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   workflow-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -28,7 +28,9 @@ jobs:
         uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
 
   windows-msvc:
-    runs-on: windows-2022
+    # Only trusted branches may execute on the interactive Windows runner.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, windows, x64, layerc-bench]
     timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -78,7 +80,8 @@ jobs:
           if-no-files-found: error
 
   windows-analyze:
-    runs-on: windows-2022
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, windows, x64, layerc-bench]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -104,7 +107,7 @@ jobs:
         run: cmake --build build/analyze --parallel 2 -- -k 0
 
   linux:
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-4
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -138,7 +141,7 @@ jobs:
           if-no-files-found: warn
 
   linux-flatpak:
-    runs-on: ubuntu-24.04
+    runs-on: ubicloud-standard-4
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -180,7 +183,7 @@ jobs:
   publish-rolling:
     needs: [workflow-lint, windows-msvc, windows-analyze, linux, linux-flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     timeout-minutes: 5
     permissions:
       actions: read

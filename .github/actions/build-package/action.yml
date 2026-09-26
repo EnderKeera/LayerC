@@ -24,9 +24,9 @@ runs:
         ctest --preset ci --output-on-failure --no-tests=error `
           --output-junit $reportPath
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
-        # Hosted runners may lack CreateDesktop authority; that single skipped
-        # suite is explicitly allowed, but every other registered required
-        # suite must have executed and passed.
+        # A runner may lack CreateDesktop authority; that single skipped suite
+        # is explicitly allowed, but every other registered required suite
+        # must have executed and passed.
         python tools/linux_test_report.py --registration $registration `
           --junit $reportPath --label required `
           --allow-skip layerc_overlay_tests `
