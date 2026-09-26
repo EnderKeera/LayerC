@@ -80,7 +80,7 @@ void test_automation_session_trigger_policy() {
 
   AutomationSession valid(base);
   auto valid_matcher = dash_matcher(key);
-  const auto fed = valid.feed_input(valid_matcher, InputEvent{key, true}, base, now);
+  const auto fed = valid.feed_input(valid_matcher, InputEvent{key, true}, now);
   expect(!valid.blocks_all_triggers() && fed.matched && fed.changed &&
              fed.triggered == std::vector<std::string>{"dash"},
          "a valid session should trigger bound direct input");
@@ -89,11 +89,11 @@ void test_automation_session_trigger_policy() {
   blocked.set_invalid_visual_sidecar(true);
   auto blocked_matcher = dash_matcher(key);
   const auto gated =
-      blocked.feed_input(blocked_matcher, InputEvent{key, true}, base, now);
+      blocked.feed_input(blocked_matcher, InputEvent{key, true}, now);
   expect(blocked.blocks_all_triggers() && gated.matched && !gated.changed &&
              gated.triggered.empty(),
          "an invalid visual sidecar should match input without triggering");
-  expect(blocked.trigger("dash", base, now).triggered.empty(),
+  expect(blocked.trigger("dash", now).triggered.empty(),
          "an invalid visual sidecar should block explicit triggers");
   blocked.cooldowns.snapshot(now, blocked.snapshot_buffer);
   expect(blocked.snapshot_buffer.size() == 1 &&
@@ -101,7 +101,7 @@ void test_automation_session_trigger_policy() {
          "blocked triggers must not consume cooldown charges");
 
   blocked.set_invalid_visual_sidecar(false);
-  expect(blocked.trigger("dash", base, now).triggered ==
+  expect(blocked.trigger("dash", now).triggered ==
              std::vector<std::string>{"dash"},
          "a repaired visual sidecar should restore triggers");
 }
@@ -119,12 +119,12 @@ void test_automation_session_origin_and_persistence() {
 
   AutomationSession left(base);
   AutomationSession right(base);
-  (void)left.start(counting_profile(), {}, base, now);
-  (void)right.start(counting_profile(), {}, base, now);
+  (void)left.start(counting_profile(), {}, now);
+  (void)right.start(counting_profile(), {}, now);
   expect(!left.sync_persistent_to(right),
          "an unchanged session should not sync persistent values");
 
-  const auto triggered = left.trigger("dash", base, now);
+  const auto triggered = left.trigger("dash", now);
   expect(triggered.triggered == std::vector<std::string>{"dash"} &&
              triggered.changed,
          "a triggered cooldown should run cooldown_triggered automations");
@@ -146,7 +146,7 @@ void test_automation_session_continuous_input() {
   AutomationSession session(base);
   expect(!session.input_value_event(axis, 0.5, now),
          "a session without automation should not emit input values");
-  (void)session.start(axis_profile(), {}, base, now);
+  (void)session.start(axis_profile(), {}, now);
 
   expect(!session.input_value_event("controller:0:leftY", 0.9, now) &&
              !session.input_value_event(axis, std::nan(""), now),

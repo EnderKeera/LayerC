@@ -127,9 +127,8 @@ SessionInit ProfileSource::to_session_init(const bool visual_enabled) const {
 }
 
 Session::Session(SessionInit init)
-    : layerc::core::AutomationSession(init.profile),
-      source_key(std::move(init.source_key)), profile(std::move(init.profile)),
-      input(profile.bindings) {
+    : layerc::core::AutomationSession(std::move(init.profile)),
+      source_key(std::move(init.source_key)), input(profile.bindings) {
   apply_visual_profile(std::move(init.modules.visual), init.visual_enabled);
   apply_automation_profile(std::move(init.modules.automation));
   apply_companion_profile(std::move(init.modules.companion));

@@ -280,8 +280,7 @@ void DaemonApp::process_automation_input_value(
 void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto now = layerc::core::MonotonicClock::now();
-  const auto result = session.feed_input(session.input, event,
-                                         session.profile, now);
+  const auto result = session.feed_input(session.input, event, now);
   if (result.changed)
     mark_overlays_dirty();
   if (result.matched)

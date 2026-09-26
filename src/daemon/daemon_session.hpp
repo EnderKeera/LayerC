@@ -95,7 +95,6 @@ struct Session : layerc::core::AutomationSession {
   }
 
   std::string source_key;
-  layerc::core::GameProfile profile;
   OverlayCollection overlays;
   layerc::core::InputMatcher input;
   ProfileModules modules;
