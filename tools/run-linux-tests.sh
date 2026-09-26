@@ -12,6 +12,9 @@ Options:
   --build-dir PATH        Native build directory (default: build/linux-automation)
   --evidence-dir PATH     Durable artifact directory (default: out/linux-automation/<run>)
   --flatpak POLICY        off, auto, or required (default: auto; required for release mode)
+  --flatpak-only          Build only the X11 smoke fixture natively and run the
+                          Flatpak stages; needs --flatpak required. For CI jobs
+                          whose native coverage comes from another job.
 
 Environment:
   LAYERC_RELEASE_EVIDENCE=1  Makes absent Flatpak coverage a failure.
@@ -22,12 +25,14 @@ source_dir=
 build_dir=
 evidence_dir=
 flatpak_policy=
+flatpak_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source-dir) source_dir=${2:?}; shift 2 ;;
     --build-dir) build_dir=${2:?}; shift 2 ;;
     --evidence-dir) evidence_dir=${2:?}; shift 2 ;;
     --flatpak) flatpak_policy=${2:?}; shift 2 ;;
+    --flatpak-only) flatpak_only=true; shift ;;
     -h | --help) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
@@ -48,6 +53,11 @@ case "$flatpak_policy" in off | auto | required) ;; *)
 esac
 if [[ ${LAYERC_RELEASE_EVIDENCE:-0} == 1 && $flatpak_policy != required ]]; then
   echo "error: release evidence requires --flatpak required" >&2
+  exit 64
+fi
+if [[ $flatpak_only == true ]] &&
+    [[ $flatpak_policy != required || ${LAYERC_RELEASE_EVIDENCE:-0} == 1 ]]; then
+  echo "error: --flatpak-only needs --flatpak required and no release evidence" >&2
   exit 64
 fi
 
@@ -185,39 +195,48 @@ run_logged shell-helper-tests bash "$source_dir/tools/tests/test_linux_lib.sh"
 run_logged configure cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug -DLAYERC_BUILD_TESTS=ON \
   -DCMAKE_INSTALL_PREFIX="$build_dir/install"
-run_logged build cmake --build "$build_dir" --parallel
-run_logged install cmake --install "$build_dir"
+if [[ $flatpak_only == true ]]; then
+  # The native Linux jobs own the build, CTest, and native smokes; the Flatpak
+  # smoke only needs the fixture window from the native tree.
+  run_logged build cmake --build "$build_dir" --parallel \
+    --target layerc_linux_x11_smoke_fixture
+  record_stage native not-run \
+    'flatpak-only mode; native coverage is recorded by the native Linux jobs'
+else
+  run_logged build cmake --build "$build_dir" --parallel
+  run_logged install cmake --install "$build_dir"
 
-ctest --test-dir "$build_dir" --show-only=json-v1 \
-  >"$evidence_dir/ctest-registration.json"
+  ctest --test-dir "$build_dir" --show-only=json-v1 \
+    >"$evidence_dir/ctest-registration.json"
 
-headless_junit="$evidence_dir/ctest-headless.xml"
-run_logged ctest-headless env -u DISPLAY ctest --test-dir "$build_dir" \
-  -L '^headless$' --output-on-failure --no-tests=error \
-  --output-junit "$headless_junit"
-run_logged verify-headless python3 "$source_dir/tools/linux_test_report.py" \
-  --registration "$evidence_dir/ctest-registration.json" \
-  --junit "$headless_junit" --label headless \
-  --report "$evidence_dir/ctest-headless-summary.json"
+  headless_junit="$evidence_dir/ctest-headless.xml"
+  run_logged ctest-headless env -u DISPLAY ctest --test-dir "$build_dir" \
+    -L '^headless$' --output-on-failure --no-tests=error \
+    --output-junit "$headless_junit"
+  run_logged verify-headless python3 "$source_dir/tools/linux_test_report.py" \
+    --registration "$evidence_dir/ctest-registration.json" \
+    --junit "$headless_junit" --label headless \
+    --report "$evidence_dir/ctest-headless-summary.json"
 
-run_logged native-headless-smoke env -u DISPLAY \
-  bash "$source_dir/tools/linux-runtime-smoke.sh" headless \
-  "$build_dir/install/bin" "$evidence_dir/native-headless" \
-  "$source_dir/examples/lctest.json"
+  run_logged native-headless-smoke env -u DISPLAY \
+    bash "$source_dir/tools/linux-runtime-smoke.sh" headless \
+    "$build_dir/install/bin" "$evidence_dir/native-headless" \
+    "$source_dir/examples/lctest.json"
 
-x11_junit="$evidence_dir/ctest-x11.xml"
-run_logged ctest-x11 xvfb-run -a bash -c \
-  'source "$1"; shift; layerc_x11_exec 50 0.2 "$@"' _ "$source_dir/tools/linux-lib.sh" \
-  ctest --test-dir "$build_dir" -L '^x11$' --output-on-failure --no-tests=error \
-  --output-junit "$x11_junit"
-run_logged verify-x11 python3 "$source_dir/tools/linux_test_report.py" \
-  --registration "$evidence_dir/ctest-registration.json" \
-  --junit "$x11_junit" --label x11 \
-  --report "$evidence_dir/ctest-x11-summary.json"
-run_logged native-x11-smoke xvfb-run -a \
-  bash "$source_dir/tools/linux-runtime-smoke.sh" x11 \
-  "$build_dir/install/bin" "$evidence_dir/native-x11" \
-  "$source_dir/examples/lctest.json" "$build_dir/layerc_linux_x11_smoke_fixture"
+  x11_junit="$evidence_dir/ctest-x11.xml"
+  run_logged ctest-x11 xvfb-run -a bash -c \
+    'source "$1"; shift; layerc_x11_exec 50 0.2 "$@"' _ "$source_dir/tools/linux-lib.sh" \
+    ctest --test-dir "$build_dir" -L '^x11$' --output-on-failure --no-tests=error \
+    --output-junit "$x11_junit"
+  run_logged verify-x11 python3 "$source_dir/tools/linux_test_report.py" \
+    --registration "$evidence_dir/ctest-registration.json" \
+    --junit "$x11_junit" --label x11 \
+    --report "$evidence_dir/ctest-x11-summary.json"
+  run_logged native-x11-smoke xvfb-run -a \
+    bash "$source_dir/tools/linux-runtime-smoke.sh" x11 \
+    "$build_dir/install/bin" "$evidence_dir/native-x11" \
+    "$source_dir/examples/lctest.json" "$build_dir/layerc_linux_x11_smoke_fixture"
+fi
 
 run_flatpak=false
 flatpak_reason=

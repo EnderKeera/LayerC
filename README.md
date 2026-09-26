@@ -220,7 +220,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 
 ## CI and release evidence
 
-Every push runs:
+Every push runs these jobs in parallel:
 
 1. `actionlint` workflow validation.
 2. `windows-msvc`: the shared `.github/actions/build-package` pipeline (`ci`
@@ -232,16 +232,19 @@ Every push runs:
     when an isolated desktop cannot be created; that result is unavailable
     interactive coverage, not a pass.
 3. `windows-analyze`: a non-unity Release build with MSVC `/analyze` enabled
-   for every LayerC target.
+   for every LayerC target (compile-time analysis only; tests run in
+   `windows-msvc`).
 4. `linux`: `tools/ci-linux.sh` in digest-pinned `debian:stable` and
    `ubuntu:24.04` containers. It separates headless and required Xvfb suites,
    rejects missing/skipped coverage, smokes the installed binaries with private
    XDG roots, and uploads commit-bound evidence.
 5. `linux-flatpak`: builds the 25.08 manifest and requires daemon/control/X11
-   runtime smoke under Xvfb; unavailable Flatpak coverage fails this job.
+   runtime smoke under Xvfb; unavailable Flatpak coverage fails this job. It
+   uses `--flatpak-only`, so natively it builds only the smoke fixture and
+   leaves native coverage to `linux`.
 
-`publish-rolling` requires `windows-msvc`, `windows-analyze`, `linux`, AND
-`linux-flatpak`:
+`publish-rolling` requires `actionlint`, `windows-msvc`, `windows-analyze`,
+`linux`, AND `linux-flatpak`:
 `rolling` means green main across those gates. Tagged releases and the rolling prerelease ship the Windows
 x64 ZIP only; Linux V2.6 stays pre-release with no packaged artifact.
 

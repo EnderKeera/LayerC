@@ -168,12 +168,8 @@ void DaemonApp::poll_input_devices() {
 
 void DaemonApp::poll_global_keyboard(Session &session) {
   for (auto &key : session.global_keyboard) {
-    const UINT scan = static_cast<UINT>(key.token.code);
-    const UINT virtual_key = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
-    if (virtual_key == 0)
-      continue;
     const bool pressed =
-        (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0;
+        (GetAsyncKeyState(static_cast<int>(key.virtual_key)) & 0x8000) != 0;
     const bool was_pressed = key.pressed;
     key.pressed = pressed;
     if (pressed != was_pressed) {
