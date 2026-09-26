@@ -53,7 +53,7 @@ VisualAssetError failure(std::string message) {
 
 std::optional<bool> visual_bundle_exists(
     const std::filesystem::path &profile_path, VisualAssetGcReport &report) {
-  const auto paths = sidecar_paths(profile_path, ModuleSidecarKind::visual);
+  const auto paths = sidecar_paths(profile_path, core::ProfileModuleKind::visual);
   for (const auto &path : {paths.primary, paths.backup, paths.marker}) {
     const auto read =
         read_durable_file(path, layerc::core::max_visual_json_bytes);
@@ -119,7 +119,7 @@ bool collect_active_asset_references(std::vector<std::string> &references,
     // healthy. A malformed stale backup is unusable and can be ignored.
     if (visual.state == ModuleSidecarState::valid) {
       const auto paths =
-          sidecar_paths(stored.path, ModuleSidecarKind::visual);
+          sidecar_paths(stored.path, core::ProfileModuleKind::visual);
       const auto backup = read_durable_file(
           paths.backup, layerc::core::max_visual_json_bytes);
       if (backup.status == FileReadStatus::io_error) {

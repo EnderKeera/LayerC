@@ -18,34 +18,26 @@
 
 namespace layerc::bundle::detail {
 
-enum class SidecarKind { visual, automation, companion };
-
 struct SidecarDesc {
   std::size_t index;
-  SidecarKind type;
   std::string_view kind;
   std::string_view suffix; // ".visual.json" etc.
   std::size_t max_bytes;
   std::uint32_t max_schema;
   std::uint32_t minimum_profile_schema;
   layerc::core::ProfileModuleKind module_kind;
-  layerc::platform::ModuleSidecarKind platform_kind;
 };
 
 inline constexpr std::array<SidecarDesc, 3> kSidecars{{
-    {0U, SidecarKind::visual, "visual", ".visual.json",
-     layerc::core::max_visual_json_bytes, 2U, 3U,
-     layerc::core::ProfileModuleKind::visual,
-     layerc::platform::ModuleSidecarKind::visual},
-    {1U, SidecarKind::automation, "automation", ".automation.json",
+    {0U, "visual", ".visual.json", layerc::core::max_visual_json_bytes, 2U, 3U,
+     layerc::core::ProfileModuleKind::visual},
+    {1U, "automation", ".automation.json",
      layerc::core::max_automation_json_bytes, 1U, 4U,
-     layerc::core::ProfileModuleKind::automation,
-     layerc::platform::ModuleSidecarKind::automation},
-    {2U, SidecarKind::companion, "companion", ".companion.json",
+     layerc::core::ProfileModuleKind::automation},
+    {2U, "companion", ".companion.json",
      layerc::core::max_companion_sidecar_bytes,
      layerc::core::companion_schema_version, 1U,
-     layerc::core::ProfileModuleKind::companion,
-     layerc::platform::ModuleSidecarKind::companion},
+     layerc::core::ProfileModuleKind::companion},
 }};
 
 using SidecarPathLists =
@@ -111,19 +103,20 @@ struct CompanionSidecarTraits {
   static std::vector<std::string> assets(const Profile &) { return {}; }
 };
 
-// This is the only SidecarKind dispatch. Consumers supply one typed operation;
-// adding a sidecar requires one descriptor row, one traits type, and one arm.
+// This is the only module-kind dispatch. Consumers supply one typed
+// operation; adding a sidecar requires one descriptor row, one traits type,
+// and one arm.
 template <typename Pack, typename Visitor>
 decltype(auto) visit_sidecar(Pack &&profile, const SidecarDesc &desc,
                              Visitor &&visitor) {
-  switch (desc.type) {
-  case SidecarKind::visual:
+  switch (desc.module_kind) {
+  case layerc::core::ProfileModuleKind::visual:
     return std::forward<Visitor>(visitor)(
         std::forward<Pack>(profile).visual, VisualSidecarTraits{});
-  case SidecarKind::automation:
+  case layerc::core::ProfileModuleKind::automation:
     return std::forward<Visitor>(visitor)(
         std::forward<Pack>(profile).automation, AutomationSidecarTraits{});
-  case SidecarKind::companion:
+  case layerc::core::ProfileModuleKind::companion:
     return std::forward<Visitor>(visitor)(
         std::forward<Pack>(profile).companion, CompanionSidecarTraits{});
   }
