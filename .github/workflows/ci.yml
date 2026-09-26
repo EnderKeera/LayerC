@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes its running checks. Main pushes
+# and manual runs get a unique group and always finish, so publish-rolling
+# and the post-merge benchmarks see every main commit.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   workflow-lint:
     runs-on: ubuntu-latest

@@ -145,7 +145,7 @@ void DaemonApp::poll_visual_captures() {
           continue;
         session->last_visual_sequence = evaluation->sequence;
         const auto result = session->layerc::core::AutomationSession::
-            feed_measurements(evaluation->measurements, session->profile, now);
+            feed_measurements(evaluation->measurements, now);
         if (result.changed)
           mark_overlays_dirty();
         if (!result.triggered.empty())

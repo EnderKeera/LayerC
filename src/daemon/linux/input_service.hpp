@@ -29,7 +29,6 @@ namespace layerc::daemon {
 // (controller or HID tokens) stay in the matcher and simply never fire.
 struct InputSession : layerc::core::AutomationSession {
   std::filesystem::path source_path;
-  layerc::core::GameProfile profile;
   std::uint64_t window{};
   bool global{};
   bool active{};

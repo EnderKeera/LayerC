@@ -6,6 +6,7 @@
 #include "layerc/platform/profile_file_guard.hpp"
 
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_handle.hpp"
 
 #include <string>
 #include <system_error>
@@ -105,28 +106,27 @@ guard_transaction_scope(const std::filesystem::path &profile_directory) {
 }
 
 struct TransactionFileLock::Impl {
-  HANDLE mutex{};
+  OwnedHandle mutex;
   bool locked{};
 };
 
 TransactionFileLock::TransactionFileLock(const ProfileStoreRoots &roots)
     : impl_(std::make_unique<Impl>()) {
   (void)roots;
-  impl_->mutex =
-      CreateMutexW(nullptr, FALSE, L"Local\\LayerC.ProfileTransaction.v1");
-  if (impl_->mutex == nullptr) return;
+  impl_->mutex.reset(
+      CreateMutexW(nullptr, FALSE, L"Local\\LayerC.ProfileTransaction.v1"));
+  if (!impl_->mutex.valid()) return;
   // Timed wait: a layerE save racing a brief layerD commit (automation
   // state write, import) waits the holder out instead of failing the save.
   // Split stores keep LOCK_NB — flock has no timed wait — so a contended
   // Linux store still fails fast with a visible lock error.
-  const DWORD wait = WaitForSingleObject(impl_->mutex, 30'000);
+  const DWORD wait = WaitForSingleObject(impl_->mutex.get(), 30'000);
   impl_->locked = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
 }
 
 TransactionFileLock::~TransactionFileLock() {
   if (impl_ == nullptr) return;
-  if (impl_->locked) (void)ReleaseMutex(impl_->mutex);
-  if (impl_->mutex != nullptr) CloseHandle(impl_->mutex);
+  if (impl_->locked) (void)ReleaseMutex(impl_->mutex.get());
 }
 
 bool TransactionFileLock::locked() const noexcept {

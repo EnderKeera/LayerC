@@ -86,6 +86,15 @@ bool EditorWindow::draft_controls_valid() const {
   return profile_fields_valid(context);
 }
 
+bool EditorWindow::require_stored_profile(const wchar_t *const first_save_message) {
+  if (document_.path().empty()) {
+    MessageBoxW(shell_.window, first_save_message, L"Create profile first",
+                MB_OK | MB_ICONINFORMATION);
+    return false;
+  }
+  return !document_.dirty() || flush_autosave();
+}
+
 bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
   KillTimer(shell_.window, autosave_timer);
   document_.history().end_text_coalescing();
@@ -315,12 +324,9 @@ void EditorWindow::edit_on_window() {
     end_edit_on_window(L"On-window editing ended.");
     return;
   }
-  if (document_.path().empty()) {
-    MessageBoxW(shell_.window, L"Save this new profile once before editing it on a window.",
-                L"Create profile first", MB_OK | MB_ICONINFORMATION);
+  if (!require_stored_profile(
+          L"Save this new profile once before editing it on a window."))
     return;
-  }
-  if (document_.dirty() && !flush_autosave()) return;
 
   auto matching_profile = document_.profile();
   matching_profile.enabled = true;

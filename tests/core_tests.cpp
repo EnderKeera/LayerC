@@ -45,6 +45,8 @@ int main() {
       {"test_automation_profile_round_trip", test_automation_profile_round_trip},
       {"test_automation_session_trigger_policy", test_automation_session_trigger_policy},
       {"test_automation_session_origin_and_persistence", test_automation_session_origin_and_persistence},
+      {"test_automation_input_source_ids", test_automation_input_source_ids},
+      {"test_automation_session_continuous_input", test_automation_session_continuous_input},
       {"test_automation_runtime_transaction_and_replay", test_automation_runtime_transaction_and_replay},
       {"test_automation_priority_fault_isolation_and_reconfigure", test_automation_priority_fault_isolation_and_reconfigure},
       {"test_automation_value_round_trip_and_bounds", test_automation_value_round_trip_and_bounds},

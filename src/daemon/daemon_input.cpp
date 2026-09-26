@@ -5,44 +5,34 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <string>
 #include <vector>
 
 namespace layerc::daemon {
 
-bool DaemonApp::register_input_devices() {
-  const RAWINPUTDEVICE devices[] = {
-      {.usUsagePage = 0x01,
-       .usUsage = 0x06,
-       .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-       .hwndTarget = window_},
-      {.usUsagePage = 0x01,
-       .usUsage = 0x02,
-       .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-       .hwndTarget = window_},
+// Keyboard and mouse Raw Input register separately: a mouse sink receives
+// WM_INPUT for every movement, so it is registered only while something can
+// consume mouse input.
+void DaemonApp::set_raw_input(const bool keyboard, const bool mouse) noexcept {
+  const auto apply = [this](const USHORT usage, const bool wanted,
+                            bool &registered) {
+    if (wanted == registered)
+      return;
+    const RAWINPUTDEVICE device{
+        .usUsagePage = 0x01,
+        .usUsage = usage,
+        .dwFlags = static_cast<DWORD>(
+            wanted ? RIDEV_INPUTSINK | RIDEV_DEVNOTIFY : RIDEV_REMOVE),
+        .hwndTarget = wanted ? window_ : nullptr};
+    // Removal is best effort; a failed registration retries on the next
+    // reconcile.
+    if (RegisterRawInputDevices(&device, 1, sizeof(device)) != FALSE ||
+        !wanted)
+      registered = wanted;
   };
-  return RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
-                                 sizeof(RAWINPUTDEVICE)) != FALSE;
-}
-
-void DaemonApp::unregister_input_devices() noexcept {
-  if (!input_runtime_.raw_input_registered)
-    return;
-  const RAWINPUTDEVICE devices[] = {
-      {.usUsagePage = 0x01,
-       .usUsage = 0x06,
-       .dwFlags = RIDEV_REMOVE,
-       .hwndTarget = nullptr},
-      {.usUsagePage = 0x01,
-       .usUsage = 0x02,
-       .dwFlags = RIDEV_REMOVE,
-       .hwndTarget = nullptr},
-  };
-  (void)RegisterRawInputDevices(devices, static_cast<UINT>(std::size(devices)),
-                                sizeof(RAWINPUTDEVICE));
-  input_runtime_.raw_input_registered = false;
+  apply(0x06, keyboard, input_runtime_.raw_keyboard_registered);
+  apply(0x02, mouse, input_runtime_.raw_mouse_registered);
 }
 
 void DaemonApp::reconcile_input_runtime() {
@@ -63,10 +53,16 @@ void DaemonApp::reconcile_input_runtime() {
                                    session->uses_raw_input;
                           }) ||
       needs_system_hid;
-  if (needs_raw_input && !input_runtime_.raw_input_registered)
-    input_runtime_.raw_input_registered = register_input_devices();
-  else if (!needs_raw_input)
-    unregister_input_devices();
+  // System-class HID bindings sample the mouse's Raw Input directly.
+  const bool needs_raw_mouse =
+      needs_raw_input &&
+      (needs_system_hid ||
+       std::ranges::any_of(session_registry_.active_inputs,
+                           [](const Session *session) {
+                             return session != nullptr &&
+                                    session->uses_raw_mouse;
+                           }));
+  set_raw_input(needs_raw_input, needs_raw_mouse);
 
   const bool needs_polling =
       std::ranges::any_of(session_registry_.active_inputs, [](const Session *session) {
@@ -88,7 +84,7 @@ void DaemonApp::quiesce_input_runtime() noexcept {
   if (input_runtime_.timer_running && window_ != nullptr)
     KillTimer(window_, input_poll_timer);
   input_runtime_.timer_running = false;
-  unregister_input_devices();
+  set_raw_input(false, false);
   input_runtime_.reset_controllers();
   session_registry_.input_foreground = nullptr;
   for (auto &session : session_registry_.sessions)
@@ -240,7 +236,6 @@ void DaemonApp::poll_controllers() {
     const auto trigger = [](const BYTE value) {
       return static_cast<double>(value) / 255.0;
     };
-    const auto prefix = "controller:" + std::to_string(index) + ":";
     struct AnalogAxis {
       const char *name;
       double value;
@@ -257,8 +252,9 @@ void DaemonApp::poll_controllers() {
       if (session == nullptr || !session->automation_runtime)
         continue;
       for (const auto &axis : axes)
-        process_automation_input_value(*session, prefix + axis.name,
-                                       axis.value, now);
+        process_automation_input_value(
+            *session, layerc::core::controller_axis_source_id(index, axis.name),
+            axis.value, now);
     }
     previous_state = state;
   }
@@ -274,68 +270,17 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
 }
 
 void DaemonApp::process_automation_input_value(
-    Session &session, std::string source, double value,
+    Session &session, std::string source, const double value,
     const layerc::core::TimePoint now, const bool momentary) {
-  if (!session.automation_runtime || !std::isfinite(value))
-    return;
-  const auto &profile = session.automation_runtime->profile();
-  const bool demanded =
-      std::ranges::any_of(profile.automations, [&](const auto &automation) {
-        return automation.enabled &&
-               std::ranges::any_of(automation.rules, [&](const auto &rule) {
-                 return rule.event == layerc::core::AutomationEventKind::
-                                          input_value_changed &&
-                        (rule.source_filter.empty() ||
-                         rule.source_filter == source);
-               });
-      });
-  if (!demanded)
-    return;
-
-  if (std::abs(value) < profile.continuous_input.deadzone)
-    value = 0.0;
-  const auto minimum_interval =
-      layerc::core::Milliseconds(std::max<std::uint32_t>(
-          1U,
-          1'000U / std::max<std::uint32_t>(
-                       1U, profile.continuous_input.max_events_per_second)));
-  auto &edges = session.automation_runtime->edges();
-  const auto last = edges.input_emitted.find(source);
-  if (last != edges.input_emitted.end() &&
-      now - last->second < minimum_interval)
-    return;
-  const auto emit_value = [&](const double previous_value) {
-    edges.input_emitted[source] = now;
-    auto event = layerc::core::AutomationSession::event(
-        layerc::core::AutomationEventKind::input_value_changed,
-        std::move(source), now);
-    event.fields.emplace("previous",
-                         layerc::core::AutomationValue(previous_value));
-    event.fields.emplace("value", layerc::core::AutomationValue(value));
-    process_automation_event(session, event);
-  };
-  if (momentary) {
-    emit_value(0.0);
-    return;
-  }
-  const auto previous = edges.input_values.find(source);
-  if (previous == edges.input_values.end()) {
-    edges.input_values.emplace(std::move(source), value);
-    return;
-  }
-  if (std::abs(value - previous->second) <
-      profile.continuous_input.change_threshold)
-    return;
-
-  const double old_value = previous->second;
-  previous->second = value;
-  emit_value(old_value);
+  if (auto event =
+          session.input_value_event(std::move(source), value, now, momentary))
+    process_automation_event(session, *event);
 }
+
 void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto now = layerc::core::MonotonicClock::now();
-  const auto result = session.feed_input(session.input, event,
-                                         session.profile, now);
+  const auto result = session.feed_input(session.input, event, now);
   if (result.changed)
     mark_overlays_dirty();
   if (result.matched)

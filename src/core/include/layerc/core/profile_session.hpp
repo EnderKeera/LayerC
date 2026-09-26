@@ -33,9 +33,10 @@ struct SessionFeedResult {
 
 // One owner for a matched profile's cooldown/automation/visual state. Native
 // sessions may inherit it so their existing cooldown readers remain valid.
+// Every call evaluates against the session's own `profile`.
 class AutomationSession {
 public:
-  explicit AutomationSession(const GameProfile &profile);
+  explicit AutomationSession(GameProfile matched);
   AutomationSession(AutomationSession &&) = default;
   AutomationSession &operator=(AutomationSession &&) = default;
   AutomationSession(const AutomationSession &) = delete;
@@ -53,37 +54,39 @@ public:
                                              std::string source, TimePoint now,
                                              std::optional<std::uint64_t> origin = std::nullopt);
 
-  [[nodiscard]] bool start(AutomationProfile profile,
-                           AutomationPersistentValues values,
-                           const GameProfile &base, TimePoint now,
+  [[nodiscard]] bool start(AutomationProfile automation,
+                           AutomationPersistentValues values, TimePoint now,
                            AutomationSessionSink *sink = nullptr,
                            bool trace_enabled = false);
-  [[nodiscard]] bool stop(const GameProfile &base, TimePoint now,
-                          AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] bool stop(TimePoint now, AutomationSessionSink *sink = nullptr);
   [[nodiscard]] bool process(const AutomationEvent &value,
-                             const GameProfile &base,
                              AutomationSessionSink *sink = nullptr);
-  [[nodiscard]] bool poll_ready(const GameProfile &base, TimePoint now,
-                                bool emit, AutomationSessionSink *sink = nullptr);
-  [[nodiscard]] SessionFeedResult trigger(std::string_view id,
-                                           const GameProfile &base, TimePoint now,
+  [[nodiscard]] bool poll_ready(TimePoint now, bool emit,
+                                AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] SessionFeedResult trigger(std::string_view id, TimePoint now,
                                            AutomationSessionSink *sink = nullptr);
   [[nodiscard]] SessionFeedResult feed_input(InputMatcher &matcher,
                                               const InputEvent &input,
-                                              const GameProfile &base, TimePoint now,
+                                              TimePoint now,
                                               AutomationSessionSink *sink = nullptr);
+  // Continuous input (controller axes, HID values): applies the automation
+  // profile's demand check, deadzone, rate limit and change threshold, and
+  // returns the input_value_changed event to process, if any. A momentary
+  // (relative) sample reports from 0 on every accepted sample.
+  [[nodiscard]] std::optional<AutomationEvent>
+  input_value_event(std::string source, double value, TimePoint now,
+                    bool momentary = false);
   [[nodiscard]] SessionFeedResult feed_measurements(
-      std::span<const ObservationMeasurement> measurements,
-      const GameProfile &base, TimePoint now,
+      std::span<const ObservationMeasurement> measurements, TimePoint now,
       AutomationSessionSink *sink = nullptr);
-  [[nodiscard]] bool poll(const GameProfile &base, TimePoint now,
-                          AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] bool poll(TimePoint now, AutomationSessionSink *sink = nullptr);
   [[nodiscard]] std::optional<TimePoint> next_deadline(
       TimePoint now, std::optional<TimePoint> checkpoint = std::nullopt);
   // Call only for sessions of the same ProfileSource; the owning registry
   // chooses siblings and persists the source's winning value once.
   [[nodiscard]] bool sync_persistent_to(AutomationSession &sibling) const;
 
+  GameProfile profile;
   CooldownEngine cooldowns;
   std::unique_ptr<VisualTriggerEngine> visual_triggers;
   std::unique_ptr<AutomationRuntime> automation_runtime;
@@ -91,8 +94,8 @@ public:
 
 private:
   [[nodiscard]] SessionFeedResult trigger_requests(
-      std::span<const VisualTriggerRequest> requests,
-      const GameProfile &base, TimePoint now, AutomationSessionSink *sink);
+      std::span<const VisualTriggerRequest> requests, TimePoint now,
+      AutomationSessionSink *sink);
   bool invalid_visual_sidecar_{};
 };
 

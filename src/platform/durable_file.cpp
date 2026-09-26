@@ -1,5 +1,6 @@
 #include "layerc/platform/durable_file.hpp"
 #include "io_chunk_size.hpp"
+#include "layerc/platform/win32_handle.hpp"
 
 #include <utility>
 
@@ -29,12 +30,13 @@ std::uint64_t current_process_id() noexcept {
 
 FileReadResult read_durable_file(const std::filesystem::path &path,
                                  const std::size_t maximum_bytes) {
-  const HANDLE file = CreateFileW(
+  const OwnedHandle owned_file(CreateFileW(
       path.c_str(), GENERIC_READ,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
       OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
-      nullptr);
-  if (file == INVALID_HANDLE_VALUE) {
+      nullptr));
+  const HANDLE file = owned_file.get();
+  if (!owned_file.valid()) {
     const auto error = GetLastError();
     return {.status = error == ERROR_FILE_NOT_FOUND ||
                                error == ERROR_PATH_NOT_FOUND
@@ -49,14 +51,10 @@ FileReadResult read_durable_file(const std::filesystem::path &path,
       GetFileInformationByHandleEx(file, FileAttributeTagInfo, &attributes,
                                    sizeof(attributes)) == FALSE ||
       (attributes.FileAttributes &
-       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
-    CloseHandle(file);
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
     return {.status = FileReadStatus::io_error, .bytes = {}};
-  }
-  if (static_cast<unsigned long long>(size.QuadPart) > maximum_bytes) {
-    CloseHandle(file);
+  if (static_cast<unsigned long long>(size.QuadPart) > maximum_bytes)
     return {.status = FileReadStatus::too_large, .bytes = {}};
-  }
 
   std::vector<std::byte> bytes(static_cast<std::size_t>(size.QuadPart));
   std::size_t offset{};
@@ -64,22 +62,20 @@ FileReadResult read_durable_file(const std::filesystem::path &path,
     DWORD read{};
     if (ReadFile(file, bytes.data() + offset, io_chunk_size(bytes.size() - offset),
                  &read, nullptr) == FALSE ||
-        read == 0) {
-      CloseHandle(file);
+        read == 0)
       return {.status = FileReadStatus::io_error, .bytes = {}};
-    }
     offset += read;
   }
-  CloseHandle(file);
   return {.status = FileReadStatus::ok, .bytes = std::move(bytes)};
 }
 
 bool create_durable_file(const std::filesystem::path &path,
                          const std::span<const std::byte> contents) {
-  const HANDLE file =
+  OwnedHandle owned_file(
       CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr);
-  if (file == INVALID_HANDLE_VALUE) return false;
+                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, nullptr));
+  const HANDLE file = owned_file.get();
+  if (!owned_file.valid()) return false;
 
   std::size_t offset{};
   bool success = true;
@@ -95,7 +91,8 @@ bool create_durable_file(const std::filesystem::path &path,
     offset += written;
   }
   success = success && FlushFileBuffers(file) != FALSE;
-  CloseHandle(file);
+  // Close before deleting a partial file.
+  owned_file.reset();
   if (!success) (void)DeleteFileW(path.c_str());
   return success;
 }

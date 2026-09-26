@@ -56,8 +56,7 @@ private:
                            LPARAM lparam);
 
   bool create_message_window(HINSTANCE instance);
-  bool register_input_devices();
-  void unregister_input_devices() noexcept;
+  void set_raw_input(bool keyboard, bool mouse) noexcept;
   void reconcile_input_runtime();
   void quiesce_input_runtime() noexcept;
   void add_tray_icon();
@@ -168,8 +167,8 @@ private:
   LiveEditHost live_edit_host_;
   CompanionHost companion_host_;
   [[nodiscard]] std::vector<Session *> current_companion_sessions();
-  HANDLE reload_event_{};
-  HANDLE settings_reload_event_{};
+  layerc::platform::OwnedHandle reload_event_;
+  layerc::platform::OwnedHandle settings_reload_event_;
   bool capture_exclusion_{true};
   bool visual_recognition_enabled_{};
   std::string settings_error_;
