@@ -116,9 +116,9 @@ InputSession::InputSession(
     const bool global, std::optional<VisualProfile> loaded_visual_profile,
     std::optional<AutomationProfile> automation_profile,
     AutomationPersistentValues automation_state, const bool invalid_visual_sidecar)
-    : layerc::core::AutomationSession(source.profile),
-      source_path(std::move(source.path)), profile(std::move(source.profile)),
-      window(window), global(global), matcher(profile.bindings),
+    : layerc::core::AutomationSession(std::move(source.profile)),
+      source_path(std::move(source.path)), window(window), global(global),
+      matcher(profile.bindings),
       visual_profile(std::move(loaded_visual_profile)) {
   set_invalid_visual_sidecar(invalid_visual_sidecar);
   if (visual_profile)
@@ -127,7 +127,7 @@ InputSession::InputSession(
   if (automation_profile) {
     InputSessionSink sink(*this);
     (void)start(std::move(*automation_profile), std::move(automation_state),
-                profile, layerc::core::MonotonicClock::now(), &sink);
+                layerc::core::MonotonicClock::now(), &sink);
   }
 }
 
@@ -153,7 +153,7 @@ void InputSession::checkpoint_automation_state(const TimePoint now,
 std::vector<std::string>
 InputSession::feed(const layerc::core::InputEvent &input, const TimePoint now) {
   InputSessionSink sink(*this);
-  return feed_input(matcher, input, profile, now, &sink).triggered;
+  return feed_input(matcher, input, now, &sink).triggered;
 }
 
 std::vector<std::string> InputSession::feed_measurements(
@@ -161,12 +161,12 @@ std::vector<std::string> InputSession::feed_measurements(
     const TimePoint now) {
   InputSessionSink sink(*this);
   return layerc::core::AutomationSession::feed_measurements(
-      measurements, profile, now, &sink).triggered;
+      measurements, now, &sink).triggered;
 }
 
 void InputSession::poll_automation(const TimePoint now) {
   InputSessionSink sink(*this);
-  (void)poll(profile, now, &sink);
+  (void)poll(now, &sink);
   checkpoint_automation_state(now, false);
 }
 
@@ -177,7 +177,7 @@ InputSession::next_automation_deadline(const TimePoint now) {
 
 void InputSession::stop_automation(const TimePoint now) {
   InputSessionSink sink(*this);
-  (void)stop(profile, now, &sink);
+  (void)stop(now, &sink);
   // The sink checkpoints after session_stopping and before runtime teardown.
   automation_state_due.reset();
 }

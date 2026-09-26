@@ -43,8 +43,8 @@ void DaemonApp::reconcile_automation_runtime() {
     if (!session->automation_runtime) {
       session->automation_revision = source->automation_revision;
       if (session->start(*source->modules.automation.profile,
-                         source->automation_state, session->profile, now,
-                         nullptr, automation_runtime_host_.trace_subscribed))
+                         source->automation_state, now, nullptr,
+                         automation_runtime_host_.trace_subscribed))
         mark_overlays_dirty();
       publish_automation_trace(*session);
       synchronize_automation_state(*session, now);
@@ -159,7 +159,7 @@ void DaemonApp::poll_automation_timer() {
   for (auto &session : session_registry_.sessions) {
     if (!session->automation_runtime)
       continue;
-    if (session->poll(session->profile, now))
+    if (session->poll(now))
       mark_overlays_dirty();
     publish_automation_trace(*session);
     synchronize_automation_state(*session, now);
@@ -181,7 +181,7 @@ void DaemonApp::poll_automation_cooldown_transitions(Session &session,
                                                      const bool emit) {
   if (!session.automation_runtime)
     return;
-  if (session.poll_ready(session.profile, now, emit))
+  if (session.poll_ready(now, emit))
     mark_overlays_dirty();
   if (emit) {
     publish_automation_trace(session);
@@ -234,7 +234,7 @@ void DaemonApp::process_automation_event(Session &session,
                                          const AutomationEvent &event) {
   if (!session.automation_runtime)
     return;
-  if (session.process(event, session.profile))
+  if (session.process(event))
     mark_overlays_dirty();
   publish_automation_trace(session);
   synchronize_automation_state(session, event.timestamp);

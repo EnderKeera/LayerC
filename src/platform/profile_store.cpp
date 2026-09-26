@@ -1,5 +1,6 @@
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/platform_events.hpp"
+#include "layerc/platform/win32_handle.hpp"
 #include "profile_store_layout.hpp"
 
 #include <vector>
@@ -37,25 +38,20 @@ ProfileStoreRoots profile_layout_roots(
 
 std::filesystem::path profile_layout_final_path(
     const std::filesystem::path &path) {
-  std::wstring resolved;
-  const HANDLE file =
+  const OwnedHandle file(
       CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file != INVALID_HANDLE_VALUE) {
-    const DWORD required = GetFinalPathNameByHandleW(
-        file, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-    if (required != 0) {
-      std::vector<wchar_t> buffer(static_cast<std::size_t>(required) + 1U);
-      const DWORD length = GetFinalPathNameByHandleW(
-          file, buffer.data(), static_cast<DWORD>(buffer.size()),
-          FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-      if (length != 0 && length < buffer.size())
-        resolved.assign(buffer.data(), length);
-    }
-    CloseHandle(file);
-  }
-  return resolved.empty() ? std::filesystem::path{} : std::filesystem::path(resolved);
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (!file.valid()) return {};
+  const DWORD required = GetFinalPathNameByHandleW(
+      file.get(), nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (required == 0) return {};
+  std::vector<wchar_t> buffer(static_cast<std::size_t>(required) + 1U);
+  const DWORD length = GetFinalPathNameByHandleW(
+      file.get(), buffer.data(), static_cast<DWORD>(buffer.size()),
+      FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (length == 0 || length >= buffer.size()) return {};
+  return std::filesystem::path(std::wstring(buffer.data(), length));
 }
 
 bool signal_profile_reload() {

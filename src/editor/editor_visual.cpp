@@ -320,12 +320,8 @@ void EditorWindow::calibrate_visual() {
                 L"Visual calibration", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (document_.path().empty()) {
-    MessageBoxW(shell_.window, L"Save this new profile before calibrating it.",
-                L"Create profile first", MB_OK | MB_ICONINFORMATION);
+  if (!require_stored_profile(L"Save this new profile before calibrating it."))
     return;
-  }
-  if (document_.dirty() && !flush_autosave()) return;
 
   auto matching = document_.profile();
   matching.enabled = true;

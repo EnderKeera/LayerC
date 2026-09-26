@@ -127,9 +127,8 @@ SessionInit ProfileSource::to_session_init(const bool visual_enabled) const {
 }
 
 Session::Session(SessionInit init)
-    : layerc::core::AutomationSession(init.profile),
-      source_key(std::move(init.source_key)), profile(std::move(init.profile)),
-      input(profile.bindings) {
+    : layerc::core::AutomationSession(std::move(init.profile)),
+      source_key(std::move(init.source_key)), input(profile.bindings) {
   apply_visual_profile(std::move(init.modules.visual), init.visual_enabled);
   apply_automation_profile(std::move(init.modules.automation));
   apply_companion_profile(std::move(init.modules.companion));
@@ -221,19 +220,32 @@ void seed_binding_token(Session &session,
 }
 
 void mark_automation_input_usage(Session &session) {
+  using layerc::core::InputDevice;
+  using layerc::core::source_filter_names_device;
   if (!session.modules.automation.profile.has_value())
     return;
   for (const auto &automation : session.modules.automation.profile->automations) {
     if (!automation.enabled)
       continue;
     for (const auto &rule : automation.rules) {
+      // Press/release rules see every Raw Input device, so one that can
+      // match a mouse source keeps the mouse registered.
+      if (rule.event == layerc::core::AutomationEventKind::input_pressed ||
+          rule.event == layerc::core::AutomationEventKind::input_released) {
+        if (rule.source_filter.empty() ||
+            source_filter_names_device(rule.source_filter, InputDevice::mouse))
+          session.uses_raw_mouse = true;
+        continue;
+      }
       if (rule.event !=
           layerc::core::AutomationEventKind::input_value_changed)
         continue;
       if (rule.source_filter.empty() ||
-          rule.source_filter.starts_with("controller:"))
+          source_filter_names_device(rule.source_filter,
+                                     InputDevice::controller))
         session.uses_controller = true;
-      if (rule.source_filter.starts_with("hid:") &&
+      if (source_filter_names_device(rule.source_filter,
+                                     InputDevice::generic_hid) &&
           !session.profile.hid_bindings.empty())
         session.uses_hid = true;
     }
@@ -245,6 +257,7 @@ void mark_automation_input_usage(Session &session) {
 void Session::rebuild_input_configuration() {
   uses_controller = false;
   uses_raw_input = false;
+  uses_raw_mouse = false;
   uses_hid = false;
   hid_states.assign(profile.hid_bindings.size(), {});
   global_keyboard.clear();
@@ -254,6 +267,8 @@ void Session::rebuild_input_configuration() {
                         token.device == layerc::core::InputDevice::controller;
       uses_raw_input = uses_raw_input ||
                        token.device == layerc::core::InputDevice::keyboard ||
+                       token.device == layerc::core::InputDevice::mouse;
+      uses_raw_mouse = uses_raw_mouse ||
                        token.device == layerc::core::InputDevice::mouse;
       uses_hid =
           uses_hid || token.device == layerc::core::InputDevice::generic_hid;
@@ -430,11 +445,11 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
 }
 
 bool DaemonApp::reload_settings_if_requested() {
-  if (settings_reload_event_ == nullptr ||
-      WaitForSingleObject(settings_reload_event_, 0) != WAIT_OBJECT_0) {
+  if (!settings_reload_event_.valid() ||
+      WaitForSingleObject(settings_reload_event_.get(), 0) != WAIT_OBJECT_0) {
     return false;
   }
-  ResetEvent(settings_reload_event_);
+  ResetEvent(settings_reload_event_.get());
   load_platform_settings();
   for (auto &session : session_registry_.sessions) {
     session->set_capture_exclusion(capture_exclusion_);
@@ -449,11 +464,11 @@ bool DaemonApp::reload_settings_if_requested() {
 }
 
 bool DaemonApp::reload_profiles_if_requested() {
-  if (reload_event_ == nullptr ||
-      WaitForSingleObject(reload_event_, 0) != WAIT_OBJECT_0) {
+  if (!reload_event_.valid() ||
+      WaitForSingleObject(reload_event_.get(), 0) != WAIT_OBJECT_0) {
     return false;
   }
-  ResetEvent(reload_event_);
+  ResetEvent(reload_event_.get());
   reload_profiles();
   return true;
 }
@@ -462,37 +477,44 @@ void DaemonApp::refresh_game_windows() {
   using RuntimeKeys = std::vector<layerc::core::RuntimeInstanceKey>;
   RuntimeKeys desired;
   std::pair<DaemonApp *, RuntimeKeys *> context{this, &desired};
-  EnumWindows(
-      [](const HWND candidate, const LPARAM parameter) -> BOOL {
-        auto &context =
-            *reinterpret_cast<std::pair<DaemonApp *, RuntimeKeys *> *>(
-                parameter);
-        if (IsIconic(candidate)) {
-          return TRUE;
-        }
-        const auto described =
-            layerc::platform::describe_attachable_window(candidate);
-        if (!described.has_value()) {
-          return TRUE;
-        }
-        if (described->process_id == GetCurrentProcessId() ||
-            layerc::platform::is_layerc_editor_process(
-                described->process_id,
-                context.first->live_edit_host_.channel.peer_process_id())) {
-          return TRUE;
-        }
-        for (const auto &source : context.first->session_registry_.sources) {
-          if (!layerc::platform::profile_matches_window(*described,
-                                                        source.profile)) {
-            continue;
+  // Only enabled window profiles can match; without one, skip opening every
+  // top-level window's process once a second.
+  const bool any_window_profile = std::ranges::any_of(
+      session_registry_.sources, [](const ProfileSource &source) {
+        return source.profile.enabled && !source.profile.game.global;
+      });
+  if (any_window_profile)
+    EnumWindows(
+        [](const HWND candidate, const LPARAM parameter) -> BOOL {
+          auto &context =
+              *reinterpret_cast<std::pair<DaemonApp *, RuntimeKeys *> *>(
+                  parameter);
+          if (IsIconic(candidate)) {
+            return TRUE;
           }
-          context.second->push_back(
-              {.profile_key = source.key,
-               .window = {reinterpret_cast<std::uintptr_t>(candidate)}});
-        }
-        return TRUE;
-      },
-      reinterpret_cast<LPARAM>(&context));
+          const auto described =
+              layerc::platform::describe_attachable_window(candidate);
+          if (!described.has_value()) {
+            return TRUE;
+          }
+          if (described->process_id == GetCurrentProcessId() ||
+              layerc::platform::is_layerc_editor_process(
+                  described->process_id,
+                  context.first->live_edit_host_.channel.peer_process_id())) {
+            return TRUE;
+          }
+          for (const auto &source : context.first->session_registry_.sources) {
+            if (!layerc::platform::profile_matches_window(*described,
+                                                          source.profile)) {
+              continue;
+            }
+            context.second->push_back(
+                {.profile_key = source.key,
+                 .window = {reinterpret_cast<std::uintptr_t>(candidate)}});
+          }
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&context));
   const auto changes = session_registry_.instances.reconcile(std::move(desired));
   std::erase_if(session_registry_.active_inputs, [&](const Session *session) {
     return !session->is_global() &&

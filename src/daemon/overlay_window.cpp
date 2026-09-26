@@ -271,6 +271,14 @@ void OverlayWindow::update_position(const RECT &target) {
     // Preserve the current normal z-order while another application is
     // foreground. The foreground app naturally covers this overlay, without any
     // global-topmost behavior.
+    // Rendering calls this every frame; skip the move when the overlay
+    // already sits visible at the target.
+    RECT current{};
+    if (IsWindowVisible(window_) != FALSE &&
+        GetWindowRect(window_, &current) != FALSE && current.left == x &&
+        current.top == y && current.right - current.left == size_.cx &&
+        current.bottom - current.top == size_.cy)
+      return;
     SetWindowPos(window_, nullptr, x, y, size_.cx, size_.cy,
                  SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER |
                      SWP_SHOWWINDOW);

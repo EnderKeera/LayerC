@@ -132,16 +132,16 @@ recovery_backup_path(const std::filesystem::path &path) {
 }
 
 SidecarPaths sidecar_paths(const std::filesystem::path &profile_path,
-                           const ModuleSidecarKind kind) {
+                           const core::ProfileModuleKind kind) {
   std::filesystem::path primary;
   switch (kind) {
-  case ModuleSidecarKind::visual:
+  case core::ProfileModuleKind::visual:
     primary = visual_sidecar_path(profile_path);
     break;
-  case ModuleSidecarKind::automation:
+  case core::ProfileModuleKind::automation:
     primary = automation_sidecar_path(profile_path);
     break;
-  case ModuleSidecarKind::companion:
+  case core::ProfileModuleKind::companion:
     primary = companion_sidecar_path(profile_path);
     break;
   }
@@ -440,9 +440,9 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   }
 
   const auto root = path.parent_path();
-  const auto visual = sidecar_paths(path, ModuleSidecarKind::visual);
-  const auto automation = sidecar_paths(path, ModuleSidecarKind::automation);
-  const auto companion = sidecar_paths(path, ModuleSidecarKind::companion);
+  const auto visual = sidecar_paths(path, core::ProfileModuleKind::visual);
+  const auto automation = sidecar_paths(path, core::ProfileModuleKind::automation);
+  const auto companion = sidecar_paths(path, core::ProfileModuleKind::companion);
   if (root.empty() || visual.primary.empty() || automation.primary.empty() ||
       companion.primary.empty())
     return std::nullopt;
@@ -558,7 +558,7 @@ VisualSidecarLoad
 load_visual_sidecar(const std::filesystem::path &profile_path,
                     const layerc::core::GameProfile &base_profile) {
   return SidecarStore<VisualSidecarCodec>{}.load(
-      sidecar_paths(profile_path, ModuleSidecarKind::visual).primary,
+      sidecar_paths(profile_path, core::ProfileModuleKind::visual).primary,
       base_profile);
 }
 
@@ -567,7 +567,7 @@ AutomationSidecarLoad
 load_automation_sidecar(const std::filesystem::path &profile_path,
                         const layerc::core::GameProfile &base_profile) {
   return SidecarStore<AutomationSidecarCodec>{}.load(
-      sidecar_paths(profile_path, ModuleSidecarKind::automation).primary,
+      sidecar_paths(profile_path, core::ProfileModuleKind::automation).primary,
       base_profile);
 }
 
@@ -575,7 +575,7 @@ CompanionSidecarLoad
 load_companion_sidecar(const std::filesystem::path &profile_path,
                        const layerc::core::GameProfile &base_profile) {
   return SidecarStore<CompanionSidecarCodec>{}.load(
-      sidecar_paths(profile_path, ModuleSidecarKind::companion).primary,
+      sidecar_paths(profile_path, core::ProfileModuleKind::companion).primary,
       base_profile);
 }
 

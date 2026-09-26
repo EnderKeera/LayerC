@@ -7,6 +7,7 @@
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_handle.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,7 +53,7 @@ VisualAssetError failure(std::string message) {
 
 std::optional<bool> visual_bundle_exists(
     const std::filesystem::path &profile_path, VisualAssetGcReport &report) {
-  const auto paths = sidecar_paths(profile_path, ModuleSidecarKind::visual);
+  const auto paths = sidecar_paths(profile_path, core::ProfileModuleKind::visual);
   for (const auto &path : {paths.primary, paths.backup, paths.marker}) {
     const auto read =
         read_durable_file(path, layerc::core::max_visual_json_bytes);
@@ -118,7 +119,7 @@ bool collect_active_asset_references(std::vector<std::string> &references,
     // healthy. A malformed stale backup is unusable and can be ignored.
     if (visual.state == ModuleSidecarState::valid) {
       const auto paths =
-          sidecar_paths(stored.path, ModuleSidecarKind::visual);
+          sidecar_paths(stored.path, core::ProfileModuleKind::visual);
       const auto backup = read_durable_file(
           paths.backup, layerc::core::max_visual_json_bytes);
       if (backup.status == FileReadStatus::io_error) {
@@ -284,18 +285,16 @@ VisualAssetSignature asset_signature(const std::string_view hash) {
   const auto path = visual_asset_path(hash);
   if (path.empty())
     return {};
-  const HANDLE file =
+  const OwnedHandle owned_file(
       CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (file == INVALID_HANDLE_VALUE)
+                  nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  const HANDLE file = owned_file.get();
+  if (!owned_file.valid())
     return {};
   BY_HANDLE_FILE_INFORMATION information{};
-  const bool loaded = GetFileInformationByHandle(file, &information) != FALSE;
-  if (!loaded) {
-    CloseHandle(file);
+  if (GetFileInformationByHandle(file, &information) == FALSE)
     return {};
-  }
   const auto combine = [](const DWORD high, const DWORD low) {
     return (static_cast<std::uint64_t>(high) << 32U) | low;
   };
@@ -328,7 +327,6 @@ VisualAssetSignature asset_signature(const std::string_view hash) {
         journal_bytes >= usn_offset + sizeof(change_usn))
       std::memcpy(&change_usn, journal.data() + usn_offset, sizeof(change_usn));
   }
-  CloseHandle(file);
   return {
       .present = true,
       .volume_serial = information.dwVolumeSerialNumber,

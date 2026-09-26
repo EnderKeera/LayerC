@@ -36,10 +36,10 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     return 1;
   }
   load_platform_settings();
-  reload_event_ = CreateEventW(nullptr, TRUE, FALSE,
-                               layerc::platform::profile_reload_event_name);
-  settings_reload_event_ = CreateEventW(
-      nullptr, TRUE, FALSE, layerc::platform::settings_reload_event_name);
+  reload_event_.reset(CreateEventW(
+      nullptr, TRUE, FALSE, layerc::platform::profile_reload_event_name));
+  settings_reload_event_.reset(CreateEventW(
+      nullptr, TRUE, FALSE, layerc::platform::settings_reload_event_name));
   (void)visual_capture_runtime_.open_activity_event();
   add_tray_icon();
   reload_profiles();
@@ -120,12 +120,8 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   overlay_runtime_.stop();
   visual_capture_runtime_.publish_activity(false);
   automation_runtime_host_.publish_activity(false);
-  if (reload_event_ != nullptr) {
-    CloseHandle(reload_event_);
-  }
-  if (settings_reload_event_ != nullptr) {
-    CloseHandle(settings_reload_event_);
-  }
+  reload_event_.reset();
+  settings_reload_event_.reset();
   remove_tray_icon();
   return exit_code;
 }

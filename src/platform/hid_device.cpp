@@ -3,6 +3,7 @@
 
 #include "layerc/core/hash.hpp"
 #include "layerc/platform/text.hpp"
+#include "layerc/platform/win32_handle.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,15 +27,15 @@ std::wstring stable_slot_value_name(
 
 std::wstring hid_string(const std::wstring &path,
                         BOOLEAN(__stdcall *reader)(HANDLE, PVOID, ULONG)) {
-  const HANDLE device =
+  const OwnedHandle device(
       CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (device == INVALID_HANDLE_VALUE) return {};
+                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+  if (!device.valid()) return {};
   std::array<wchar_t, 256> value{};
-  const bool available =
-      reader(device, value.data(), static_cast<ULONG>(sizeof(value))) != FALSE;
-  CloseHandle(device);
-  return available ? std::wstring(value.data()) : std::wstring{};
+  if (reader(device.get(), value.data(), static_cast<ULONG>(sizeof(value))) ==
+      FALSE)
+    return {};
+  return std::wstring(value.data());
 }
 
 std::uint16_t path_hex_component(const std::wstring_view path,

@@ -85,6 +85,40 @@ struct InputEvent {
     bool pressed{};
 };
 
+// Automation input sources: "<device>:<code>" for pressed/released tokens
+// (controller tokens append ":<controller index>"),
+// "controller:<index>:<axis>" for analog axes and "hid:<binding number>" for
+// HID controls. Rule source filters match these exactly.
+[[nodiscard]] inline std::string input_source_id(const InputToken& token) {
+    auto source = std::string(input_device_label(token.device)) + ":" +
+                  std::to_string(token.code);
+    if (token.device == InputDevice::controller)
+        source += ":" + std::to_string(token.controller_index);
+    return source;
+}
+
+[[nodiscard]] inline std::string
+controller_axis_source_id(const std::uint32_t controller_index,
+                          const std::string_view axis) {
+    return std::string(input_device_label(InputDevice::controller)) + ":" +
+           std::to_string(controller_index) + ":" + std::string(axis);
+}
+
+[[nodiscard]] inline std::string
+hid_source_id(const std::size_t binding_number) {
+    return std::string(input_device_label(InputDevice::generic_hid)) + ":" +
+           std::to_string(binding_number);
+}
+
+// Whether a rule source filter names a source of `device`.
+[[nodiscard]] constexpr bool
+source_filter_names_device(const std::string_view filter,
+                           const InputDevice device) noexcept {
+    const auto label = input_device_label(device);
+    return filter.size() > label.size() && filter.starts_with(label) &&
+           filter[label.size()] == ':';
+}
+
 enum class RetriggerPolicy : std::uint8_t {
     ignore,
     restart,

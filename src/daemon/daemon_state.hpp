@@ -66,7 +66,8 @@ public:
   hid_resources() const noexcept;
 
   std::array<XINPUT_STATE, XUSER_MAX_COUNT> controllers{};
-  bool raw_input_registered{};
+  bool raw_keyboard_registered{};
+  bool raw_mouse_registered{};
   bool timer_running{};
 
 private:

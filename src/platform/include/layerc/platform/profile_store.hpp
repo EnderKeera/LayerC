@@ -2,6 +2,7 @@
 
 #include "layerc/core/automation.hpp"
 #include "layerc/core/companion.hpp"
+#include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/profile_transaction.hpp"
 
@@ -15,12 +16,6 @@
 #include <vector>
 
 namespace layerc::platform {
-
-enum class ModuleSidecarKind : std::uint8_t {
-  visual,
-  automation,
-  companion,
-};
 
 struct SidecarPaths {
   std::filesystem::path primary;
@@ -72,7 +67,8 @@ companion_sidecar_path(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path
 recovery_backup_path(const std::filesystem::path &path);
 [[nodiscard]] SidecarPaths
-sidecar_paths(const std::filesystem::path &profile_path, ModuleSidecarKind kind);
+sidecar_paths(const std::filesystem::path &profile_path,
+              core::ProfileModuleKind kind);
 [[nodiscard]] std::string_view sidecar_marker_contents(bool active) noexcept;
 [[nodiscard]] std::string
 canonical_profile_key(const std::filesystem::path &path);

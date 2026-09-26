@@ -297,7 +297,7 @@ ImportPlanResult build_import_plan(
               const auto &traits) -> std::optional<PackError> {
             using Traits = std::remove_cvref_t<decltype(traits)>;
             const auto error = stage_sidecar(
-                platform::sidecar_paths(target, desc.platform_kind), module,
+                platform::sidecar_paths(target, desc.module_kind), module,
                 desc.kind, desc.max_bytes, Traits::serialize);
             if (module.has_value())
               for (const auto &hash : Traits::assets(module->profile))
