@@ -1,5 +1,6 @@
 #include "overlay_window.hpp"
 
+#include "layerc/core/cooldown_engine.hpp"
 #include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
@@ -46,7 +47,9 @@ bool OverlayWindow::assign_bars(
       bars_.push_back(
           {.definition = *definition,
            .state_index =
-               static_cast<std::size_t>(definition - cooldowns.begin())});
+               static_cast<std::size_t>(definition - cooldowns.begin()),
+           .label = {},
+           .wide_label = {}});
   }
   return true;
 }
