@@ -100,9 +100,17 @@ if layerc_write_sha256sums "$root/missing" 2>"$root/error.txt"; then
   fail 'missing evidence directory accepted'
 fi
 cmp -s "$root/first-sums" "$evidence/SHA256SUMS" || fail 'failed seal changed evidence'
-# The X11 gate waits for the display, passes the command's status through, and
-# fails without running the command when the display never answers.
-xdpyinfo() { [[ -f $root/display-up ]]; }
+# The X11 gate waits for the display, passes the command's status through,
+# fails without running the command when the display never answers, and bounds
+# a probe that hangs. The probe runs under timeout(1), so fake xdpyinfo is an
+# executable on PATH rather than a shell function.
+fake_bin="$root/bin"
+mkdir -p "$fake_bin"
+printf '#!/usr/bin/env bash\n[[ -f %q ]] || exit 1\n[[ ! -f %q ]] || sleep 30\n' \
+  "$root/display-up" "$root/display-hangs" >"$fake_bin/xdpyinfo"
+chmod +x "$fake_bin/xdpyinfo"
+saved_path=$PATH
+PATH="$fake_bin:$PATH"
 (sleep 0.05; : >"$root/display-up") &
 display_pid=$!
 layerc_x11_exec 50 0.02 bash -c 'exit 3' && fail 'command status was dropped'
@@ -113,5 +121,15 @@ if layerc_x11_exec 3 0.01 touch "$root/ran" 2>/dev/null; then
   fail 'unreachable display accepted'
 fi
 [[ ! -e $root/ran ]] || fail 'command ran without a display'
-unset -f xdpyinfo
+: >"$root/display-up"
+: >"$root/display-hangs"
+layerc_x11_probe_timeout=0.2
+started=$SECONDS
+if layerc_x11_exec 2 0.01 touch "$root/ran" 2>/dev/null; then
+  fail 'hung display accepted'
+fi
+((SECONDS - started < 5)) || fail 'hung probe was not bounded'
+[[ ! -e $root/ran ]] || fail 'command ran behind a hung display'
+layerc_x11_probe_timeout=2
+PATH=$saved_path
 printf 'linux-lib smoke: pass\n'
