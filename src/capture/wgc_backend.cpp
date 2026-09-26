@@ -179,8 +179,10 @@ public:
           pool_.ReleaseAndGetAddressOf());
     if (SUCCEEDED(result))
       result = pool_->CreateCaptureSession(item_.Get(), session_.ReleaseAndGetAddressOf());
-    if (SUCCEEDED(result))
+    if (SUCCEEDED(result)) {
+      limit_session_updates();
       result = session_->StartCapture();
+    }
     if (FAILED(result))
       return fail("WGC session start failed", result);
     pin_graphics_capture_runtime();
@@ -292,6 +294,23 @@ public:
   }
 
 private:
+  // Optional session settings; older Windows builds lack the interfaces and
+  // keep their defaults. The cursor is not part of what rules match, and the
+  // worker samples at most 15 Hz, so copying every game frame is wasted work.
+  void limit_session_updates() {
+    ComPtr<wgc_abi::CaptureSession2> cursor_session;
+    if (SUCCEEDED(session_->QueryInterface(wgc_abi::iid_capture_session2,
+                                           &cursor_session)))
+      (void)cursor_session->put_IsCursorCaptureEnabled(0);
+    ComPtr<wgc_abi::CaptureSession5> interval_session;
+    if (SUCCEEDED(session_->QueryInterface(wgc_abi::iid_capture_session5,
+                                           &interval_session)))
+      // TimeSpan counts 100 ns ticks; 1/30 s stays under the 1/15 s sample
+      // period so the newest frame is never older than half a sample.
+      (void)interval_session->put_MinUpdateInterval(
+          {.duration = 10'000'000 / 30});
+  }
+
   bool fail(const char *prefix, const HRESULT result) {
     slot_.set_error(std::string(prefix) + ": " + hresult_message(result));
     stop();

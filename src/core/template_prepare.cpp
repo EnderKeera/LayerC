@@ -193,11 +193,16 @@ bool template_image_has_structure(const TemplateImage &image) noexcept {
              minimum_template_luma_variance;
 }
 
+bool detail::template_is_compact(const TemplateImage &image,
+                                 const CaptureQuality quality) noexcept {
+  return !image.valid() || quality == CaptureQuality::exact ||
+         std::max(image.width, image.height) <= axis_bound(quality, image);
+}
+
 TemplateImage compact_template_image(const TemplateImage &image,
                                      const CaptureQuality quality) {
-  if (!image.valid() || quality == CaptureQuality::exact) return image;
+  if (detail::template_is_compact(image, quality)) return image;
   const auto bound = axis_bound(quality, image);
-  if (std::max(image.width, image.height) <= bound) return image;
   const double factor = static_cast<double>(bound) /
                         std::max(image.width, image.height);
   TemplateImage compact;

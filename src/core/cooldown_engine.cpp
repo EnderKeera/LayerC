@@ -55,6 +55,15 @@ std::string cooldown_status_text(const CooldownDefinition &definition,
   return label;
 }
 
+const CooldownState *cooldown_state_at(
+    const std::span<const CooldownState> states, const std::size_t index,
+    const std::string_view cooldown_id) noexcept {
+  if (index < states.size() && states[index].id == cooldown_id)
+    return &states[index];
+  const auto found = std::ranges::find(states, cooldown_id, &CooldownState::id);
+  return found == states.end() ? nullptr : &*found;
+}
+
 double cooldown_progress(const CooldownDefinition &definition,
                          const CooldownState &state,
                          const TimePoint now) noexcept {

@@ -66,6 +66,9 @@ private:
     // Override-redirect windows are unmanaged: while their game is the active
     // window they are re-raised, so nothing can stack the game above them.
     bool active{};
+    // frame.panel carries an automation override that must be undone once
+    // the override is cleared.
+    bool overridden{};
   };
 
   layerc::platform::X11Display *display_{};

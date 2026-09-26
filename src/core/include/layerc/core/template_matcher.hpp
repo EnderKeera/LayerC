@@ -71,6 +71,9 @@ public:
            NormalizedRegion available_region,
            std::span<const NormalizedRegion> unavailable_regions);
   void clear();
+  // Drops prepared references whose content hash is not listed. Prepared
+  // entries are content-addressed, so a reconfigure need not discard the rest.
+  void retain(std::span<const std::string> asset_sha256);
 
 private:
   struct Impl;

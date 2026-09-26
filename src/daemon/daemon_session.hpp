@@ -71,6 +71,8 @@ struct ProfileSource {
 struct Session : layerc::core::AutomationSession {
   struct PolledKeyState {
     layerc::core::InputToken token;
+    // Resolved once at seed time; nonzero (unmappable keys are not polled).
+    UINT virtual_key{};
     bool pressed{};
   };
 
