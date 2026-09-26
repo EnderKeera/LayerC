@@ -3,58 +3,78 @@
 #include <algorithm>
 
 namespace layerc::core {
-namespace {
 
-void record_press(std::set<InputToken> &pressed, const InputToken &token,
-                  const bool is_pressed) {
-  if (is_pressed)
-    pressed.insert(token);
-  else
-    pressed.erase(token);
+InputMatcher::InputMatcher(const std::span<const InputBinding> bindings) {
+  replace_bindings(bindings);
 }
 
-} // namespace
-
-InputMatcher::InputMatcher(const std::span<const InputBinding> bindings)
-    : bindings_(bindings.begin(), bindings.end()),
-      active_(bindings_.size(), false) {}
-
 std::vector<std::string> InputMatcher::process(const InputEvent &event) {
-  record_press(pressed_, event.token, event.pressed);
+  const auto index = token_index(event.token);
+  if (index == tokens_.size() || pressed_[index] == event.pressed)
+    return {};
+  pressed_[index] = event.pressed;
+  if (!event.pressed)
+    return {};
 
+  // A chord containing this token could not have been pressed before, so every
+  // chord that is fully pressed now has just become active.
   std::vector<std::string> triggered;
-  for (std::size_t index = 0; index < bindings_.size(); ++index) {
-    const bool is_pressed = chord_pressed(bindings_[index].chord);
-    if (is_pressed && !active_[index]) {
-      triggered.push_back(bindings_[index].cooldown_id);
-    }
-    active_[index] = is_pressed;
+  for (const auto binding : token_bindings_[index]) {
+    if (chord_pressed(bindings_[binding]))
+      triggered.push_back(bindings_[binding].cooldown_id);
   }
   return triggered;
 }
 
 void InputMatcher::clear() {
-  pressed_.clear();
-  std::fill(active_.begin(), active_.end(), false);
+  pressed_.assign(pressed_.size(), false);
 }
 
 void InputMatcher::replace_bindings(
     const std::span<const InputBinding> bindings) {
-  bindings_.assign(bindings.begin(), bindings.end());
-  pressed_.clear();
-  active_.assign(bindings_.size(), false);
+  tokens_.clear();
+  for (const auto &binding : bindings)
+    tokens_.insert(tokens_.end(), binding.chord.tokens.begin(),
+                   binding.chord.tokens.end());
+  std::ranges::sort(tokens_);
+  const auto duplicates = std::ranges::unique(tokens_);
+  tokens_.erase(duplicates.begin(), duplicates.end());
+  pressed_.assign(tokens_.size(), false);
+  token_bindings_.assign(tokens_.size(), {});
+
+  bindings_.clear();
+  bindings_.reserve(bindings.size());
+  for (const auto &binding : bindings) {
+    const auto binding_index = bindings_.size();
+    auto &entry = bindings_.emplace_back(Binding{binding.cooldown_id, {}});
+    entry.tokens.reserve(binding.chord.tokens.size());
+    for (const auto &token : binding.chord.tokens) {
+      const auto index = token_index(token);
+      entry.tokens.push_back(index);
+      auto &owners = token_bindings_[index];
+      if (owners.empty() || owners.back() != binding_index)
+        owners.push_back(binding_index);
+    }
+  }
 }
 
 void InputMatcher::seed(const InputToken &token, const bool pressed) {
-  record_press(pressed_, token, pressed);
-  for (std::size_t index = 0; index < bindings_.size(); ++index)
-    active_[index] = chord_pressed(bindings_[index].chord);
+  const auto index = token_index(token);
+  if (index != tokens_.size())
+    pressed_[index] = pressed;
 }
 
-bool InputMatcher::chord_pressed(const InputChord &chord) const {
-  return !chord.tokens.empty() &&
-         std::ranges::all_of(chord.tokens, [this](const InputToken &token) {
-           return pressed_.contains(token);
+std::size_t InputMatcher::token_index(const InputToken &token) const {
+  const auto found = std::ranges::lower_bound(tokens_, token);
+  if (found == tokens_.end() || *found != token)
+    return tokens_.size();
+  return static_cast<std::size_t>(found - tokens_.begin());
+}
+
+bool InputMatcher::chord_pressed(const Binding &binding) const {
+  return !binding.tokens.empty() &&
+         std::ranges::all_of(binding.tokens, [this](const std::size_t token) {
+           return static_cast<bool>(pressed_[token]);
          });
 }
 

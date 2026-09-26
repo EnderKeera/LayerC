@@ -219,21 +219,28 @@ export_layerc_trace(const std::span<const AutomationTraceEntry> entries) {
 std::size_t
 live_trace_prefix_count(const LiveMessage &base_message,
                         const std::span<const AutomationTraceEntry> entries) {
-  if (entries.empty())
-    return 0U;
+  // JSON string escaping is per byte, so the quoted "text" field grows by the
+  // escaped size of each appended entry. Serialize each entry once and pack
+  // greedily instead of re-encoding whole prefixes.
+  const auto escaped_size = [](const std::string_view text) {
+    std::string quoted;
+    json::append_quoted(quoted, text);
+    return quoted.size() - 2U;
+  };
   auto message = base_message;
-  std::size_t low = 1U;
-  std::size_t high = entries.size();
+  message.text = export_layerc_trace({});
+  auto encoded_size = encode_live_message_json(message).size();
+  std::string entry_json;
   std::size_t selected{};
-  while (low <= high) {
-    const auto middle = low + (high - low) / 2U;
-    message.text = export_layerc_trace(entries.first(middle));
-    if (encode_live_message_json(message).size() <= max_live_message_bytes) {
-      selected = middle;
-      low = middle + 1U;
-    } else {
-      high = middle - 1U;
-    }
+  for (const auto &entry : entries) {
+    entry_json.clear();
+    if (selected != 0U)
+      entry_json.push_back(',');
+    append_trace_entry(entry_json, entry);
+    encoded_size += escaped_size(entry_json);
+    if (encoded_size > max_live_message_bytes)
+      break;
+    ++selected;
   }
   return selected;
 }
