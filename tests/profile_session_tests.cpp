@@ -4,8 +4,10 @@
 #include "layerc/core/profile_session.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace layerc::test {
@@ -44,6 +46,23 @@ AutomationProfile counting_profile() {
   profile.automations.push_back(
       {.id = "count", .name = "Count", .enabled = true, .rules = {rule}});
   return profile;
+}
+
+AutomationProfile axis_profile() {
+  auto profile = counting_profile();
+  profile.automations.front().rules.front().event =
+      AutomationEventKind::input_value_changed;
+  profile.automations.front().rules.front().source_filter =
+      "controller:0:leftX";
+  return profile;
+}
+
+double field(const AutomationEvent &event, const std::string &name) {
+  const auto found = event.fields.find(name);
+  const auto *number = found == event.fields.end()
+                           ? nullptr
+                           : std::get_if<double>(&found->second.storage);
+  return number == nullptr ? -1.0 : *number;
 }
 
 InputMatcher dash_matcher(const InputToken key) {
@@ -116,6 +135,41 @@ void test_automation_session_origin_and_persistence() {
   expect(count != values.end() &&
              count->second == AutomationValue(std::int64_t{1}),
          "the sibling should receive the winning persistent value");
+}
+
+// Continuous input is filtered once, in core, for every platform: demand,
+// deadzone, the per-source rate limit and the change threshold.
+void test_automation_session_continuous_input() {
+  const auto base = session_base();
+  const std::string axis = "controller:0:leftX";
+  auto now = TimePoint{} + 1s;
+  AutomationSession session(base);
+  expect(!session.input_value_event(axis, 0.5, now),
+         "a session without automation should not emit input values");
+  (void)session.start(axis_profile(), {}, base, now);
+
+  expect(!session.input_value_event("controller:0:leftY", 0.9, now) &&
+             !session.input_value_event(axis, std::nan(""), now),
+         "undemanded sources and non-finite samples should be ignored");
+  expect(!session.input_value_event(axis, 0.1, now),
+         "the first sample should only seed the source");
+  now += 20ms;
+  const auto moved = session.input_value_event(axis, 0.5, now);
+  expect(moved.has_value() &&
+             moved->kind == AutomationEventKind::input_value_changed &&
+             moved->source_id == axis && field(*moved, "previous") == 0.0 &&
+             field(*moved, "value") == 0.5,
+         "a change should report the deadzoned previous value and the new one");
+  now += 5ms;
+  expect(!session.input_value_event(axis, 0.9, now),
+         "a source should emit at most max_events_per_second");
+  now += 20ms;
+  expect(!session.input_value_event(axis, 0.51, now),
+         "changes under the threshold should be dropped");
+  const auto momentary = session.input_value_event(axis, 0.3, now, true);
+  expect(momentary.has_value() && field(*momentary, "previous") == 0.0 &&
+             field(*momentary, "value") == 0.3,
+         "a momentary sample should report from zero on every accepted sample");
 }
 
 // Rule source filters match these ids byte for byte, and stored automation

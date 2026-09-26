@@ -72,6 +72,13 @@ public:
                                               const InputEvent &input,
                                               const GameProfile &base, TimePoint now,
                                               AutomationSessionSink *sink = nullptr);
+  // Continuous input (controller axes, HID values): applies the automation
+  // profile's demand check, deadzone, rate limit and change threshold, and
+  // returns the input_value_changed event to process, if any. A momentary
+  // (relative) sample reports from 0 on every accepted sample.
+  [[nodiscard]] std::optional<AutomationEvent>
+  input_value_event(std::string source, double value, TimePoint now,
+                    bool momentary = false);
   [[nodiscard]] SessionFeedResult feed_measurements(
       std::span<const ObservationMeasurement> measurements,
       const GameProfile &base, TimePoint now,

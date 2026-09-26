@@ -41,6 +41,7 @@ void test_automation_profile_round_trip();
 void test_automation_session_trigger_policy();
 void test_automation_session_origin_and_persistence();
 void test_automation_input_source_ids();
+void test_automation_session_continuous_input();
 void test_automation_runtime_transaction_and_replay();
 void test_automation_priority_fault_isolation_and_reconfigure();
 void test_automation_value_round_trip_and_bounds();

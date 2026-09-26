@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -271,63 +270,13 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
 }
 
 void DaemonApp::process_automation_input_value(
-    Session &session, std::string source, double value,
+    Session &session, std::string source, const double value,
     const layerc::core::TimePoint now, const bool momentary) {
-  if (!session.automation_runtime || !std::isfinite(value))
-    return;
-  const auto &profile = session.automation_runtime->profile();
-  const bool demanded =
-      std::ranges::any_of(profile.automations, [&](const auto &automation) {
-        return automation.enabled &&
-               std::ranges::any_of(automation.rules, [&](const auto &rule) {
-                 return rule.event == layerc::core::AutomationEventKind::
-                                          input_value_changed &&
-                        (rule.source_filter.empty() ||
-                         rule.source_filter == source);
-               });
-      });
-  if (!demanded)
-    return;
-
-  if (std::abs(value) < profile.continuous_input.deadzone)
-    value = 0.0;
-  const auto minimum_interval =
-      layerc::core::Milliseconds(std::max<std::uint32_t>(
-          1U,
-          1'000U / std::max<std::uint32_t>(
-                       1U, profile.continuous_input.max_events_per_second)));
-  auto &edges = session.automation_runtime->edges();
-  const auto last = edges.input_emitted.find(source);
-  if (last != edges.input_emitted.end() &&
-      now - last->second < minimum_interval)
-    return;
-  const auto emit_value = [&](const double previous_value) {
-    edges.input_emitted[source] = now;
-    auto event = layerc::core::AutomationSession::event(
-        layerc::core::AutomationEventKind::input_value_changed,
-        std::move(source), now);
-    event.fields.emplace("previous",
-                         layerc::core::AutomationValue(previous_value));
-    event.fields.emplace("value", layerc::core::AutomationValue(value));
-    process_automation_event(session, event);
-  };
-  if (momentary) {
-    emit_value(0.0);
-    return;
-  }
-  const auto previous = edges.input_values.find(source);
-  if (previous == edges.input_values.end()) {
-    edges.input_values.emplace(std::move(source), value);
-    return;
-  }
-  if (std::abs(value - previous->second) <
-      profile.continuous_input.change_threshold)
-    return;
-
-  const double old_value = previous->second;
-  previous->second = value;
-  emit_value(old_value);
+  if (auto event =
+          session.input_value_event(std::move(source), value, now, momentary))
+    process_automation_event(session, *event);
 }
+
 void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto now = layerc::core::MonotonicClock::now();

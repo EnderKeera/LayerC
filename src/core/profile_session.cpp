@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <utility>
 
 namespace layerc::core {
@@ -144,6 +145,51 @@ SessionFeedResult AutomationSession::feed_input(
     }
   }
   return result;
+}
+
+std::optional<AutomationEvent>
+AutomationSession::input_value_event(std::string source, double value,
+                                     const TimePoint now, const bool momentary) {
+  if (!automation_runtime || !std::isfinite(value)) return std::nullopt;
+  const auto &profile = automation_runtime->profile();
+  const bool demanded =
+      std::ranges::any_of(profile.automations, [&](const auto &automation) {
+        return automation.enabled &&
+               std::ranges::any_of(automation.rules, [&](const auto &rule) {
+                 return rule.event == AutomationEventKind::input_value_changed &&
+                        (rule.source_filter.empty() ||
+                         rule.source_filter == source);
+               });
+      });
+  if (!demanded) return std::nullopt;
+
+  const auto &settings = profile.continuous_input;
+  if (std::abs(value) < settings.deadzone) value = 0.0;
+  const auto minimum_interval = Milliseconds(std::max<std::uint32_t>(
+      1U, 1'000U / std::max<std::uint32_t>(1U, settings.max_events_per_second)));
+  auto &edges = automation_runtime->edges();
+  const auto last = edges.input_emitted.find(source);
+  if (last != edges.input_emitted.end() && now - last->second < minimum_interval)
+    return std::nullopt;
+
+  double previous_value = 0.0;
+  if (!momentary) {
+    const auto previous = edges.input_values.find(source);
+    if (previous == edges.input_values.end()) {
+      edges.input_values.emplace(std::move(source), value);
+      return std::nullopt;
+    }
+    if (std::abs(value - previous->second) < settings.change_threshold)
+      return std::nullopt;
+    previous_value = previous->second;
+    previous->second = value;
+  }
+  edges.input_emitted[source] = now;
+  auto changed =
+      event(AutomationEventKind::input_value_changed, std::move(source), now);
+  changed.fields.emplace("previous", AutomationValue(previous_value));
+  changed.fields.emplace("value", AutomationValue(value));
+  return changed;
 }
 
 SessionFeedResult AutomationSession::feed_measurements(
