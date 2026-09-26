@@ -20,8 +20,10 @@ jobs:
       - uses: The-PR-Agent/pr-agent@4ebd5c5333c6ef21509e7304d27969eb825e6f22 # v0.43.0
         env:
           # OPENAI_* are this action's fixed input names; both are routed to
-          # DeepSeek's OpenAI-compatible endpoint, not to OpenAI.
+          # OpenRouter's OpenAI-compatible endpoint, not to OpenAI. The model
+          # is set only here, so .pr_agent.toml must not set [config] model.
           OPENAI_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_BASE: https://openrouter.ai/api/v1
           config.model: openai/flex@preset/standard-d
+          config.fallback_models: '["openai/flex@preset/standard-d"]'
