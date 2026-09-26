@@ -187,8 +187,9 @@ namespace {
 void seed_binding_token(Session &session,
                         const layerc::core::InputToken &token) {
   bool pressed{};
+  UINT virtual_key{};
   if (token.device == layerc::core::InputDevice::keyboard) {
-    const UINT virtual_key = MapVirtualKeyW(token.code, MAPVK_VSC_TO_VK_EX);
+    virtual_key = MapVirtualKeyW(token.code, MAPVK_VSC_TO_VK_EX);
     pressed =
         virtual_key != 0 &&
         (GetAsyncKeyState(static_cast<int>(virtual_key)) & 0x8000) != 0;
@@ -210,13 +211,15 @@ void seed_binding_token(Session &session,
       session.input.seed(token, pressed);
     }
   }
-  if (!session.is_global() || token.device != layerc::core::InputDevice::keyboard)
+  if (!session.is_global() ||
+      token.device != layerc::core::InputDevice::keyboard || virtual_key == 0)
     return;
   const auto existing = std::find_if(
       session.global_keyboard.begin(), session.global_keyboard.end(),
       [&](const Session::PolledKeyState &key) { return key.token == token; });
   if (existing == session.global_keyboard.end())
-    session.global_keyboard.push_back({.token = token, .pressed = pressed});
+    session.global_keyboard.push_back(
+        {.token = token, .virtual_key = virtual_key, .pressed = pressed});
 }
 
 void mark_automation_input_usage(Session &session) {

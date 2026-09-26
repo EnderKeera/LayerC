@@ -16,7 +16,7 @@ jobs:
     # PR events always review; comment events only answer explicit bot
     # commands so a plain "lgtm" never spawns an LLM run.
     if: ${{ github.event.sender.type != 'Bot' && (github.event_name == 'pull_request' || contains(github.event.comment.body, '/review') || contains(github.event.comment.body, '/ask') || contains(github.event.comment.body, '/describe')) }}
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-4
     steps:
       - uses: The-PR-Agent/pr-agent@4ebd5c5333c6ef21509e7304d27969eb825e6f22 # v0.43.0
         env:

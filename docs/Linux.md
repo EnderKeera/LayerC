@@ -220,6 +220,10 @@ disposable workers and performs the following:
 read-only source mount. Its build is container-local while the evidence mount
 survives container teardown. An `off` Flatpak policy is recorded as `not-run`,
 never as a pass; the dedicated Ubuntu Flatpak CI job supplies required coverage.
+That job passes `--flatpak-only` (valid only with `--flatpak required` and
+without release evidence): it builds just the smoke fixture natively, records
+the native stage as `not-run`, and runs the Flatpak build and smokes, since the
+container jobs already cover the native gate.
 
 ## Storage and IPC paths
 

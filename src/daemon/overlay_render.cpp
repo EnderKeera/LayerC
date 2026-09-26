@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <string>
+#include <utility>
 
 namespace layerc::daemon {
 namespace {
@@ -134,7 +136,7 @@ void OverlayWindow::render(
   SelectObject(buffer_dc_, font_);
 
   const auto geometry =
-      layerc::core::panel_geometry(panel_, cooldown_indices_.size());
+      layerc::core::panel_geometry(panel_, bars_.size());
   const auto scaled_rect = [&](const layerc::core::PanelRect rect) {
     return RECT{scaled(rect.left), scaled(rect.top), scaled(rect.right),
                 scaled(rect.bottom)};
@@ -146,29 +148,33 @@ void OverlayWindow::render(
   const HPEN visible_border = selection_pen != nullptr ? selection_pen
                                                         : border_pen_;
 
-  for (std::size_t index = 0; index < cooldown_indices_.size(); ++index) {
-    const auto &cooldown = cooldowns_[cooldown_indices_[index]];
-    const auto state = std::ranges::find_if(
-        states, [&](const layerc::core::CooldownState &candidate) {
-          return candidate.id == cooldown.id;
-        });
-    if (text_override_.has_value()) {
-      label_buffer_.assign(*text_override_);
-    } else {
-      const auto label = state == states.end()
-                             ? cooldown.name
-                             : layerc::core::cooldown_status_text(cooldown,
-                                                                  *state, now);
-      label_buffer_ = layerc::platform::utf8_to_wide(label);
+  for (std::size_t index = 0; index < bars_.size(); ++index) {
+    auto &bar_source = bars_[index];
+    const auto &cooldown = bar_source.definition;
+    const auto *state = layerc::core::cooldown_state_at(
+        states, bar_source.state_index, cooldown.id);
+    if (!text_override_.has_value()) {
+      auto label = state == nullptr
+                       ? cooldown.name
+                       : layerc::core::cooldown_status_text(cooldown, *state,
+                                                            now);
+      // The text changes only when the shown tenths or charges do; skip the
+      // wide conversion on the frames in between.
+      if (label != bar_source.label) {
+        bar_source.wide_label = layerc::platform::utf8_to_wide(label);
+        bar_source.label = std::move(label);
+      }
     }
+    const std::wstring &label_text =
+        text_override_.has_value() ? *text_override_ : bar_source.wide_label;
     const double progress =
-        state == states.end()
+        state == nullptr
             ? 1.0
             : layerc::core::cooldown_progress(cooldown, *state, now);
 
     if (panel_.style == layerc::core::PanelStyle::bar) {
       const auto shape = layerc::core::bar_geometry(
-          panel_, index, cooldown_indices_.size(), progress);
+          panel_, index, bars_.size(), progress);
       const RECT bar = scaled_rect(shape.outline);
       const int radius = std::max(1L, scaled(shape.corner_radius));
       if (!shape.grouped) {
@@ -200,7 +206,7 @@ void OverlayWindow::render(
       RECT text_rectangle = scaled_rect(shape.text);
       if (panel_.bar.show_text &&
           text_rectangle.right > text_rectangle.left) {
-        draw_label(buffer_dc_, label_buffer_, text_rectangle);
+        draw_label(buffer_dc_, label_text, text_rectangle);
       }
       continue;
     }
@@ -213,7 +219,7 @@ void OverlayWindow::render(
 
     RECT text_rectangle = scaled_rect(layerc::core::inset_panel_rect(
         geometry.items[index], layerc::core::overlay_metrics.card_text_inset));
-    draw_label(buffer_dc_, label_buffer_, text_rectangle);
+    draw_label(buffer_dc_, label_text, text_rectangle);
   }
 
   if (selection_pen != nullptr) DeleteObject(selection_pen);

@@ -345,6 +345,22 @@ void test_input_chord_edges() {
          "release should only rearm chord");
   expect(matcher.process(InputEvent{e, true}).size() == 1,
          "re-pressed chord should trigger again");
+
+  const InputToken q{InputDevice::keyboard, 81, 0};
+  const InputToken unbound{InputDevice::keyboard, 90, 0};
+  InputMatcher shared(std::vector<InputBinding>{
+      {.cooldown_id = "dash", .chord = InputChord{{shift, e}}},
+      {.cooldown_id = "blink", .chord = InputChord{{e}}},
+      {.cooldown_id = "roll", .chord = InputChord{{q, e}}}});
+  expect(shared.process(InputEvent{unbound, true}).empty() &&
+             shared.process(InputEvent{shift, true}).empty(),
+         "unbound tokens and partial chords should not trigger");
+  expect(shared.process(InputEvent{e, true}) ==
+             std::vector<std::string>{"dash", "blink"},
+         "a shared token should trigger every completed chord in order");
+  expect(shared.process(InputEvent{q, true}) ==
+             std::vector<std::string>{"roll"},
+         "completing a chord by its other token should trigger only it");
 }
 
 void test_input_matcher_state_management() {

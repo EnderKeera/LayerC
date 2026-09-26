@@ -52,6 +52,9 @@ private:
 
   static constexpr UINT_PTR autosave_timer = 10;
   static constexpr UINT_PTR live_channel_timer = 11;
+  // Coalesces live profile sends (about 30 Hz) while the user types or drags.
+  static constexpr UINT_PTR live_profile_timer = 12;
+  static constexpr UINT live_profile_interval_ms = 33;
 
   static INT_PTR CALLBACK export_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK import_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
@@ -210,6 +213,7 @@ private:
   void handle_live_message(const layerc::core::LiveMessage &message);
   void send_live_anchor(bool final);
   void send_live_profile();
+  void flush_live_profile();
   void select_bar_by_id(std::string_view panel_id);
   void set_direct_drag_enabled(bool enabled);
   void undo();
@@ -260,6 +264,7 @@ private:
   TaskPicker task_picker_;
   PackDialogs pack_dialogs_;
   LiveEditSession live_edit_;
+  bool live_profile_pending_{};
   std::unique_ptr<AutomationEditor> automation_editor_;
   std::optional<layerc::platform::ProfileWriteError> last_write_error_;
 };
