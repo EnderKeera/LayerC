@@ -386,8 +386,9 @@ void background_overlay_tracks_target() {
       WS_OVERLAPPEDWINDOW | WS_VISIBLE, fixture.work_area.left + 700,
       fixture.work_area.top + 80, 320, 240, nullptr, nullptr,
       GetModuleHandleW(nullptr), nullptr)};
-  if (!expect(unrelated.window != nullptr,
-              "an unrelated foreground window should be available"))
+  expect(unrelated.window != nullptr,
+         "an unrelated foreground window should be available");
+  if (unrelated.window == nullptr)
     return;
   SetWindowPos(unrelated.window, HWND_TOP, fixture.work_area.left + 700,
                fixture.work_area.top + 80, 320, 240, SWP_SHOWWINDOW);
