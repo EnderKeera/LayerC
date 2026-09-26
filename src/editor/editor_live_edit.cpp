@@ -200,7 +200,11 @@ void EditorWindow::poll_live_channel() {
         IsIconic(live_edit_.target()))
       end_edit_on_window(L"Edit target closed or minimized.");
   }
-  const UINT desired_interval = live_edit_.channel().connected() ? 16U : 100U;
+  // Poll at frame rate only while an edit session exchanges drags and
+  // heartbeats; an idle connection needs no more than the reconnect cadence.
+  const UINT desired_interval =
+      live_edit_.channel().connected() && live_edit_.session_id() != 0 ? 16U
+                                                                         : 100U;
   if (desired_interval != live_edit_.timer_interval()) {
     live_edit_.set_timer_interval(desired_interval);
     SetTimer(shell_.window, live_channel_timer, live_edit_.timer_interval(), nullptr);
@@ -280,6 +284,15 @@ void EditorWindow::handle_live_message(
 }
 
 void EditorWindow::send_live_profile() {
+  if (live_edit_.session_id() == 0 || live_profile_pending_) return;
+  live_profile_pending_ = true;
+  SetTimer(shell_.window, live_profile_timer, live_profile_interval_ms,
+           nullptr);
+}
+
+void EditorWindow::flush_live_profile() {
+  KillTimer(shell_.window, live_profile_timer);
+  live_profile_pending_ = false;
   if (live_edit_.session_id() == 0 || !draft_controls_valid()) return;
   const auto serialized = layerc::core::serialize_profile_json(document_.profile());
   if (!std::holds_alternative<layerc::core::GameProfile>(
@@ -421,6 +434,8 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
     });
   }
   live_edit_.clear_session();
+  KillTimer(shell_.window, live_profile_timer);
+  live_profile_pending_ = false;
   if (task_picker_.awaiting_live_edit())
     task_picker_.clear_request();
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);

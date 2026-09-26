@@ -12,38 +12,72 @@ namespace layerc::daemon {
 OverlayWindow::OverlayWindow(const layerc::core::Panel &panel,
                              const std::span<const layerc::core::CooldownDefinition>
                                  cooldowns)
-    : panel_(panel), cooldowns_(cooldowns.begin(), cooldowns.end()) {
-  update_snapshot(panel, cooldowns);
+    : panel_(panel) {
+  (void)assign_bars(cooldowns);
+  calculate_size();
+}
+
+// Rebuilds bars_ from the panel's cooldown ids. false when the bars already
+// match, so an unchanged panel keeps its cached labels.
+bool OverlayWindow::assign_bars(
+    const std::span<const layerc::core::CooldownDefinition> cooldowns) {
+  std::size_t count{};
+  bool same = true;
+  for (const auto &cooldown_id : panel_.cooldown_ids) {
+    const auto definition =
+        std::ranges::find(cooldowns, cooldown_id,
+                          &layerc::core::CooldownDefinition::id);
+    if (definition == cooldowns.end()) continue;
+    const auto index = static_cast<std::size_t>(definition - cooldowns.begin());
+    same = same && count < bars_.size() &&
+           bars_[count].state_index == index &&
+           bars_[count].definition == *definition;
+    ++count;
+  }
+  if (same && count == bars_.size()) return false;
+
+  bars_.clear();
+  bars_.reserve(count);
+  for (const auto &cooldown_id : panel_.cooldown_ids) {
+    const auto definition =
+        std::ranges::find(cooldowns, cooldown_id,
+                          &layerc::core::CooldownDefinition::id);
+    if (definition != cooldowns.end())
+      bars_.push_back(
+          {.definition = *definition,
+           .state_index =
+               static_cast<std::size_t>(definition - cooldowns.begin())});
+  }
+  return true;
 }
 
 void OverlayWindow::update_snapshot(
     const layerc::core::Panel &panel,
     const std::span<const layerc::core::CooldownDefinition> cooldowns) {
+  // Separate content from geometry: an unchanged panel does nothing, and a
+  // moved anchor (a drag) only repositions the existing window.
+  auto moved = panel_;
+  moved.anchor_x = panel.anchor_x;
+  moved.anchor_y = panel.anchor_y;
+  const bool anchor_changed = moved != panel_;
+  const bool appearance_changed = moved != panel;
   panel_ = panel;
-  cooldowns_.assign(cooldowns.begin(), cooldowns.end());
-  cooldown_indices_.clear();
-  cooldown_indices_.reserve(panel_.cooldown_ids.size());
-  for (const auto &cooldown_id : panel_.cooldown_ids) {
-    const auto definition =
-        std::ranges::find_if(cooldowns_, [&](const auto &cooldown) {
-          return cooldown.id == cooldown_id;
-        });
-    if (definition != cooldowns_.end()) {
-      cooldown_indices_.push_back(
-          static_cast<std::size_t>(definition - cooldowns_.begin()));
+  const bool bars_changed = assign_bars(cooldowns);
+  if (!anchor_changed && !appearance_changed && !bars_changed) return;
+  const bool window_valid = window_ != nullptr && IsWindow(window_);
+  if (appearance_changed || bars_changed) {
+    release_render_resources();
+    calculate_size();
+    if (window_valid) {
+      SetWindowRgn(window_, nullptr, TRUE);
+      last_region_width_ = -1;
+      SetWindowPos(window_, nullptr, 0, 0, size_.cx, size_.cy,
+                   SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
   }
-  label_buffer_.reserve(64);
-  release_render_resources();
-  calculate_size();
-  if (window_ != nullptr && IsWindow(window_)) {
-    SetWindowRgn(window_, nullptr, TRUE);
-    last_region_width_ = -1;
-    SetWindowPos(window_, nullptr, 0, 0, size_.cx, size_.cy,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-    if (target_.right > target_.left && target_.bottom > target_.top)
-      update_position(target_);
-  }
+  if (window_valid && target_.right > target_.left &&
+      target_.bottom > target_.top)
+    update_position(target_);
 }
 
 void OverlayWindow::set_session_override(
@@ -103,7 +137,7 @@ OverlayWindow::~OverlayWindow() {
 
 void OverlayWindow::calculate_size() {
   const auto geometry =
-      layerc::core::panel_geometry(panel_, cooldown_indices_.size());
+      layerc::core::panel_geometry(panel_, bars_.size());
   size_.cx = std::max(1L, scaled(geometry.size.width));
   size_.cy = std::max(1L, scaled(geometry.size.height));
 }
@@ -223,13 +257,10 @@ bool OverlayWindow::should_show(
       !panel_.bar.hide_when_ready) {
     return true;
   }
-  return std::ranges::any_of(cooldown_indices_, [&](const std::size_t index) {
-    const auto &cooldown = cooldowns_[index];
-    const auto state = std::ranges::find_if(
-        states, [&](const layerc::core::CooldownState &candidate) {
-          return candidate.id == cooldown.id;
-        });
-    return state != states.end() && state->next_charge_at.has_value();
+  return std::ranges::any_of(bars_, [&](const Bar &bar) {
+    const auto *state = layerc::core::cooldown_state_at(
+        states, bar.state_index, bar.definition.id);
+    return state != nullptr && state->next_charge_at.has_value();
   });
 }
 
@@ -247,7 +278,8 @@ void OverlayWindow::hide() {
   }
   visible_ = false;
   target_ = {};
-  release_render_resources();
+  // GDI resources stay alive so hide-when-ready bars reappear without
+  // recreating their font and buffer; window destruction releases them.
 }
 
 void OverlayWindow::update_position(const RECT &target) {

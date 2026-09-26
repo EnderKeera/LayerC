@@ -540,6 +540,10 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       poll_live_channel();
       return TRUE;
     }
+    if (wparam == live_profile_timer) {
+      flush_live_profile();
+      return TRUE;
+    }
     break;
   case WM_GETMINMAXINFO: {
     const int dpi = window_base_dpi(window);
@@ -627,6 +631,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     cancel_picker();
     KillTimer(window, autosave_timer);
     KillTimer(window, live_channel_timer);
+    KillTimer(window, live_profile_timer);
     if (task_picker_.window != nullptr && IsWindow(task_picker_.window))
       DestroyWindow(task_picker_.window);
     task_picker_.window = nullptr;

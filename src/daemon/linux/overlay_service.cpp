@@ -80,10 +80,12 @@ fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
   for (const auto &cooldown_id : frame.panel.cooldown_ids) {
     const auto definition =
         std::ranges::find(definitions, cooldown_id, &CooldownDefinition::id);
-    const auto index =
-        static_cast<std::size_t>(definition - definitions.begin());
-    if (definition == definitions.end() || index >= states.size()) continue;
-    const CooldownState &state = states[index];
+    if (definition == definitions.end()) continue;
+    const auto *found = layerc::core::cooldown_state_at(
+        states, static_cast<std::size_t>(definition - definitions.begin()),
+        cooldown_id);
+    if (found == nullptr) continue;
+    const CooldownState &state = *found;
     if (state.next_charge_at.has_value()) running = true;
 
     layerc::platform::X11OverlayBar bar;

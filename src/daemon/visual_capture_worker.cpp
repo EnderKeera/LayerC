@@ -231,15 +231,18 @@ void VisualCaptureWorker::apply_pending_configuration(RunState &state) {
     state.capture.set_quality(requested_quality);
     state.applied_quality = requested_quality;
   }
-  state.template_matcher.clear();
   std::unordered_map<ReferenceSetKey, ReferenceSet, ReferenceSetKeyHash>
       reference_sets;
+  std::vector<std::string> referenced_hashes;
   for (auto &request : state.requests) {
     for (auto &evaluation : request.templates) {
       ReferenceSetKey reference_key{.hashes = {}, .quality = request.quality};
       reference_key.hashes.reserve(evaluation.state.references.size());
       for (const auto &definition : evaluation.state.references)
         reference_key.hashes.push_back(definition.asset_sha256);
+      referenced_hashes.insert(referenced_hashes.end(),
+                               reference_key.hashes.begin(),
+                               reference_key.hashes.end());
       if (const auto cached = reference_sets.find(reference_key);
           cached != reference_sets.end()) {
         evaluation.references = cached->second.images;
@@ -269,6 +272,9 @@ void VisualCaptureWorker::apply_pending_configuration(RunState &state) {
                        .available = evaluation.assets_available});
     }
   }
+  // Prepared templates are keyed by content hash, so unchanged references
+  // keep their samples across a reconfigure; only dropped ones are released.
+  state.template_matcher.retain(referenced_hashes);
 }
 
 void VisualCaptureWorker::evaluate_requests(
