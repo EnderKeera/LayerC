@@ -206,8 +206,10 @@ run_logged native-headless-smoke env -u DISPLAY \
   "$source_dir/examples/lctest.json"
 
 x11_junit="$evidence_dir/ctest-x11.xml"
-run_logged ctest-x11 xvfb-run -a ctest --test-dir "$build_dir" \
-  -L '^x11$' --output-on-failure --no-tests=error --output-junit "$x11_junit"
+run_logged ctest-x11 xvfb-run -a bash -c \
+  'source "$1"; shift; layerc_x11_exec 50 0.2 "$@"' _ "$source_dir/tools/linux-lib.sh" \
+  ctest --test-dir "$build_dir" -L '^x11$' --output-on-failure --no-tests=error \
+  --output-junit "$x11_junit"
 run_logged verify-x11 python3 "$source_dir/tools/linux_test_report.py" \
   --registration "$evidence_dir/ctest-registration.json" \
   --junit "$x11_junit" --label x11 \
