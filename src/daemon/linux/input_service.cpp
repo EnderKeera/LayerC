@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <ranges>
+#include <string>
 #include <utility>
 
 namespace layerc::daemon {
@@ -153,7 +154,13 @@ void InputSession::checkpoint_automation_state(const TimePoint now,
 std::vector<std::string>
 InputSession::feed(const layerc::core::InputEvent &input, const TimePoint now) {
   InputSessionSink sink(*this);
-  return feed_input(matcher, input, now, &sink).triggered;
+  auto result = feed_input(matcher, input, now, &sink);
+  if (result.matched)
+    last_input_match =
+        std::string(layerc::core::input_device_label(input.token.device)) +
+        ":" + std::to_string(input.token.code) +
+        (input.pressed ? ":press" : ":release");
+  return std::move(result.triggered);
 }
 
 std::vector<std::string> InputSession::feed_measurements(
@@ -308,9 +315,61 @@ X11Dispatch X11InputService::dispatch() {
   return result;
 }
 
+namespace {
+
+// Device classes the matched sessions can consume: binding tokens plus the
+// automation input rules, mirroring the Windows daemon's registration.
+layerc::platform::X11InputCapabilities
+needed_devices(std::span<const InputSession> sessions) {
+  using layerc::core::AutomationEventKind;
+  using layerc::core::InputDevice;
+  using layerc::core::source_filter_names_device;
+  layerc::platform::X11InputCapabilities needed;
+  const auto mark = [&](const InputDevice device) {
+    needed.keyboard = needed.keyboard || device == InputDevice::keyboard;
+    needed.mouse = needed.mouse || device == InputDevice::mouse;
+    needed.gamepad = needed.gamepad || device == InputDevice::controller;
+  };
+  for (const auto &session : sessions) {
+    // Only sessions dispatch() feeds can consume a device.
+    if (!session.global && !session.active) continue;
+    for (const auto &binding : session.profile.bindings)
+      for (const auto &token : binding.chord.tokens) mark(token.device);
+    if (session.automation_runtime == nullptr) continue;
+    for (const auto &automation :
+         session.automation_runtime->profile().automations) {
+      if (!automation.enabled) continue;
+      for (const auto &rule : automation.rules) {
+        const bool edge = rule.event == AutomationEventKind::input_pressed ||
+                          rule.event == AutomationEventKind::input_released;
+        const bool value =
+            rule.event == AutomationEventKind::input_value_changed;
+        if (!edge && !value) continue;
+        for (const auto device : {InputDevice::keyboard, InputDevice::mouse,
+                                  InputDevice::controller})
+          if (rule.source_filter.empty() ||
+              source_filter_names_device(rule.source_filter, device))
+            mark(device);
+      }
+    }
+  }
+  return needed;
+}
+
+} // namespace
+
 std::vector<std::string> X11InputService::unavailable() const {
-  if (!source_.has_value()) return {"input: no profile session demands input"};
-  return source_->unavailable();
+  if (!source_.has_value()) {
+    // Idle (no active session) is not a fault; only a demanded but
+    // detached source is.
+    const bool demanded = std::ranges::any_of(
+        registry_.sessions(), [](const InputSession &session) {
+          return session.active;
+        });
+    if (!demanded) return {};
+    return {"input: XI2 source is not attached"};
+  }
+  return source_->unavailable(needed_devices(registry_.sessions()));
 }
 
 std::size_t X11SessionRegistry::automation_count() const noexcept {

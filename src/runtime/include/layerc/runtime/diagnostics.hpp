@@ -103,6 +103,9 @@ struct CapabilityStatus {
 struct LinuxStatusSnapshot {
   X11StatusSnapshot x11;
   std::vector<CapabilityStatus> capabilities;
+  // Shared-schema session rows; emitted as RuntimeDiagnostics::sessions,
+  // not inside the x11 extension.
+  std::vector<SessionDiagnostics> sessions;
 };
 
 // Appends Linux/X11 probes and availability to the shared diagnostics JSON.

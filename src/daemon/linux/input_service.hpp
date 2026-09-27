@@ -36,6 +36,9 @@ struct InputSession : layerc::core::AutomationSession {
   std::optional<layerc::core::VisualProfile> visual_profile;
   std::optional<layerc::core::TimePoint> automation_state_due;
   std::vector<std::string> automation_faults;
+  // "<device>:<code>:press|release" of the last event a binding consumed,
+  // as the Windows daemon reports it.
+  std::string last_input_match;
 
   InputSession(
       layerc::platform::StoredProfile source, std::uint64_t window, bool global,

@@ -34,9 +34,15 @@ bool is_document_path(const ProfileDocument &document,
              layerc::platform::canonical_profile_key(document.path());
 }
 
-std::filesystem::path default_profile_filename(
+// A new profile never lands on another id's file just because both ids
+// sanitize to the same name; an unreadable directory keeps the plain name.
+std::filesystem::path default_profile_path(
+    const std::filesystem::path &directory,
     const layerc::core::GameProfile &profile) {
-  return layerc::platform::profile_store_filename(profile.id);
+  const auto scan = layerc::platform::scan_profile_directory(directory);
+  if (!scan.error.empty())
+    return directory / layerc::platform::profile_store_filename(profile.id);
+  return scan.path_for(directory, profile.id);
 }
 
 void show_invalid_field_message(const HWND owner) {
@@ -342,10 +348,9 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
     return false;
   }
 
-  const auto initial_filename = path.empty()
-                                    ? default_profile_filename(document_.profile())
-                                    : path.filename();
-  auto initial_path = directory / initial_filename;
+  auto initial_path = path.empty()
+                          ? default_profile_path(directory, document_.profile())
+                          : directory / path.filename();
   const auto initial_directory = directory.wstring();
   for (;;) {
     std::vector<wchar_t> buffer(32'768);
@@ -406,8 +411,8 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     if (!choose_save_path(destination))
       return false;
   } else if (destination.empty()) {
-    destination = layerc::platform::profile_directory() /
-                  default_profile_filename(document_.profile());
+    destination = default_profile_path(layerc::platform::profile_directory(),
+                                       document_.profile());
     std::error_code error;
     if (std::filesystem::exists(destination, error) &&
         MessageBoxW(

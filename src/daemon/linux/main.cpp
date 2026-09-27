@@ -11,7 +11,9 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -126,7 +128,8 @@ private:
   // Window and device changes only rematch sessions; the store is re-read
   // on a control reload (explicit or import notification).
   void reload() {
-    if (profiles_dirty_) {
+    const bool reread = profiles_dirty_;
+    if (reread) {
       std::string load_warning;
       profiles_ = layerc::daemon::load_profiles(load_warning);
       if (!load_warning.empty())
@@ -136,15 +139,24 @@ private:
 
     diagnostics_.clear();
     adapters_.refresh(profiles_, kernel_, status_, diagnostics_);
-    std::fprintf(stderr, "layerd: %zu session(s) from %zu profile(s)\n",
-                 adapters_.session_count(), profiles_.size());
-    report(diagnostics_);
+    // Focus and window changes rematch often; log them only when the summary
+    // or its diagnostics changed. A store re-read always logs.
+    const std::pair summary{adapters_.session_count(), profiles_.size()};
+    if (reread || summary != logged_summary_ ||
+        diagnostics_ != logged_diagnostics_) {
+      std::fprintf(stderr, "layerd: %zu session(s) from %zu profile(s)\n",
+                   summary.first, summary.second);
+      report(diagnostics_);
+      logged_summary_ = summary;
+      logged_diagnostics_ = diagnostics_;
+    }
     const auto now = MonotonicClock::now();
     adapters_.render(now);
     arm_deadline(now);
   }
 
   void service_control() {
+    status_.sessions = adapters_.session_diagnostics();
     const auto outcome =
         control_.service(loop_, loop_.ready_fds(), kernel_, status_);
     if (!outcome.diagnostic.empty())
@@ -181,6 +193,8 @@ private:
   layerc::daemon::ControlService control_;
   layerc::daemon::LinuxStatusSnapshot status_;
   std::vector<std::string> diagnostics_;
+  std::optional<std::pair<std::size_t, std::size_t>> logged_summary_;
+  std::vector<std::string> logged_diagnostics_;
   std::vector<layerc::platform::StoredProfile> profiles_;
   bool profiles_dirty_{true};
   bool sessions_dirty_{};
