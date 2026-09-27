@@ -223,7 +223,8 @@ int launch(const Options &options, const win32::RegistryKeys &keys,
            const win32::InstallPaths &paths) {
   const launcher::InstallLayout layout{paths.root};
   std::string outcome;
-  if (daemon_running()) {
+  const bool running = daemon_running();
+  if (running) {
     // The running daemon uses the active build, so it is never switched.
     outcome = options.rollback ? "LayerC is running; exit it before rolling back"
                                : "LayerC is already running; update check skipped";
@@ -242,6 +243,8 @@ int launch(const Options &options, const win32::RegistryKeys &keys,
   if (const auto *build = std::get_if<std::optional<launcher::InstalledBuild>>(&installed);
       build != nullptr && build->has_value())
     (void)register_program(keys, paths, widen((*build)->id));
+
+  if (running) return 0;
 
   const auto daemon = launcher::active_file(layout, "layerd.exe");
   if (!daemon) {

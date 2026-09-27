@@ -175,11 +175,14 @@ std::optional<std::string> GitHubReleaseSource::fetch(const std::string_view ass
   }
   // Never follow a redirect from HTTPS down to HTTP, and send no cookies.
   DWORD redirect = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
-  WinHttpSetOption(request.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirect,
-                   sizeof(redirect));
   DWORD no_cookies = WINHTTP_DISABLE_COOKIES;
-  WinHttpSetOption(request.get(), WINHTTP_OPTION_DISABLE_FEATURE, &no_cookies,
-                   sizeof(no_cookies));
+  if (!WinHttpSetOption(request.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirect,
+                        sizeof(redirect)) ||
+      !WinHttpSetOption(request.get(), WINHTTP_OPTION_DISABLE_FEATURE, &no_cookies,
+                        sizeof(no_cookies))) {
+    last_error_ = win32_message("applying the request policy");
+    return std::nullopt;
+  }
 
   if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                           WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
