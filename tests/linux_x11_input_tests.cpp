@@ -499,6 +499,10 @@ int run_linux_x11_input_tests() {
     if (reason.find("gamepad") != std::string::npos) gamepad_reason = true;
   passed &= expect(gamepad_reason,
                    "the missing gamepad is reported as a capability reason");
+  passed &= expect(source->unavailable({.keyboard = true, .mouse = true,
+                                        .gamepad = false})
+                       .empty(),
+                   "an unneeded gamepad class is not a capability reason");
   passed &= expect(!source->refresh_devices() && !source->refresh_devices(),
                    "rescanning a quiet roster reports no change");
 
