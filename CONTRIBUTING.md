@@ -23,7 +23,7 @@ disposable profiles under `examples/` for mutation-heavy local checks.
 
 The non-negotiable project boundaries apply to every
 change: passive input, no anti-cheat bypass, no telemetry/network beyond the
-same-package Game Bar service, monotonic timing, demand-driven services, and
+same-package Game Bar service and the launch-time `layerc.exe` updater, monotonic timing, demand-driven services, and
 durable profile compatibility.
 
 Run the smallest configured check that exercises the behavior you changed and

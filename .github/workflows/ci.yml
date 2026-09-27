@@ -101,10 +101,19 @@ jobs:
           -DLAYERC_MSVC_ANALYZE=ON
 
       # Keep going so one run reports every analysis finding. /analyze runs
-      # at compile time; windows-msvc already runs the test suites.
+      # at compile time; windows-msvc already runs the test suites. Two
+      # /analyze compilers can exhaust the self-hosted box's memory (C1060)
+      # when it is busy, so a failed pass is finished with one compiler;
+      # Ninja rebuilds only what failed, and real findings fail both passes.
       - name: Build with MSVC analysis
         shell: pwsh
-        run: cmake --build build/analyze --parallel 2 -- -k 0
+        run: |
+          cmake --build build/analyze --parallel 2 -- -k 0
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host 'Retrying the failed analysis units with one compiler.'
+            cmake --build build/analyze --parallel 1 -- -k 0
+          }
+          exit $LASTEXITCODE
 
   linux:
     runs-on: ubicloud-standard-4
