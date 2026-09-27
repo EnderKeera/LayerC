@@ -7,17 +7,6 @@
 
 namespace layerc::core {
 
-void AutomationRuntime::Impl::consume_timer_firing(const std::string_view id,
-                                                   const TimePoint now) {
-  const auto timer = std::ranges::find(state.timers, id, &AutomationTimer::id);
-  if (timer == state.timers.end() || timer->due > now)
-    return; // cancelled, replaced, or a firing that is not yet due
-  if (timer->repeating)
-    timer->due = now + timer->interval;
-  else
-    state.timers.erase(timer);
-}
-
 void AutomationRuntime::Impl::make_trace_room() {
   if (trace_entries.size() == 2048)
     trace_entries.erase(trace_entries.begin(), trace_entries.begin() + 256);
@@ -98,13 +87,6 @@ AutomationRuntime::process(const AutomationEvent &root,
     result.error = {"$event", "source event exceeds automation bounds"};
     return result;
   }
-  // Delivering a timer firing consumes it—repeating timers rearm from the
-  // event timestamp, one-shot timers retire—before evaluation begins. The
-  // firing is a fact about time, not an automation decision: consuming it
-  // at delivery means a faulted or rejected batch neither loses the timer
-  // nor double-fires it on the next poll.
-  if (root.kind == AutomationEventKind::timer_fired)
-    impl_->consume_timer_firing(root.source_id, root.timestamp);
   // One deadline spans the whole fault-retry cascade: restarting the
   // evaluation used to grant each recursive retry a fresh budget, so a
   // chain of faulted automations could block the daemon loop for up to
@@ -136,10 +118,9 @@ AutomationRuntime::process(const AutomationEvent &root,
 
 std::vector<AutomationEvent>
 AutomationRuntime::due_timer_events(TimePoint now) {
-  // Pure collection, ordered oldest deadline first: the firing is consumed
-  // when the event is delivered to process(), so a collected but
-  // unprocessed event leaves the timer due and the next poll re-collects it
-  // (at-least-once delivery) instead of losing it at collection time.
+  // Pure collection, ordered oldest deadline first. A firing is consumed only
+  // when process() commits its transaction; unprocessed or rejected firings
+  // stay due for the next poll (at-least-once delivery).
   std::vector<std::pair<TimePoint, const AutomationTimer *>> due;
   for (const auto &timer : impl_->state.timers) {
     if (timer.due > now || due.size() >= max_automation_derived_events)

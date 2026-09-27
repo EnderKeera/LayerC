@@ -9,6 +9,17 @@ namespace layerc::core {
 namespace {
 using detail::truthy;
 
+void consume_timer_firing(AutomationRuntimeSnapshot &target,
+                          const std::string_view id, const TimePoint now) {
+  const auto timer = std::ranges::find(target.timers, id, &AutomationTimer::id);
+  if (timer == target.timers.end() || timer->due > now)
+    return; // cancelled, replaced, or a firing that is not yet due
+  if (timer->repeating)
+    timer->due = now + timer->interval;
+  else
+    target.timers.erase(timer);
+}
+
 } // namespace
 
 AutomationRuntime::Impl::Impl(AutomationProfile source,
@@ -247,10 +258,15 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate(
   result.derived_events.clear();
   result.committed = false;
   result.error.reset();
+  // Consume the firing only in the transaction snapshot. Rejection leaves
+  // the live timer due; accepted effects may replace or cancel it normally.
+  auto root_snapshot = state;
+  if (root.kind == AutomationEventKind::timer_fired)
+    consume_timer_firing(root_snapshot, root.source_id, root.timestamp);
   // Every expression reads the root snapshot; only winners are committed.
   EvaluationStage stage{
-      .root_snapshot = state,
-      .staged = state,
+      .root_snapshot = root_snapshot,
+      .staged = std::move(root_snapshot),
       .queue = {root},
       .fired = {},
       .winners = {},

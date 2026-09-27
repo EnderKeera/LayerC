@@ -447,6 +447,178 @@ void test_automation_expression_and_action_contract() {
          "transaction");
 }
 
+void test_automation_timer_commit_rollback() {
+  for (const bool repeating : {false, true}) {
+    for (const bool with_actions : {false, true}) {
+      AutomationProfile profile;
+      profile.profile_id = "game";
+      profile.variables = {{.id = "count",
+                            .type = AutomationValueType::integer,
+                            .default_value = AutomationValue(std::int64_t{0}),
+                            .persistent = true}};
+      AutomationRule arm{
+          .id = "arm",
+          .event = AutomationEventKind::session_started,
+          .actions = {{.kind = AutomationActionKind::create_timer,
+                       .target = "tick",
+                       .value = literal(AutomationValue(DurationValue{50ms})),
+                       .repeating = repeating}}};
+      profile.automations = {{.id = "clock", .name = "Clock", .rules = {arm}}};
+      if (with_actions)
+        profile.automations.front().rules.push_back(
+            {.id = "tick",
+             .event = AutomationEventKind::timer_fired,
+             .source_filter = "tick",
+             .actions = {{.kind = AutomationActionKind::increment_variable,
+                          .target = "count",
+                          .value = literal(AutomationValue(std::int64_t{1}))},
+                         {.kind = AutomationActionKind::trigger_cooldown,
+                          .target = "dash"}}});
+      expect(validate_automation_profile(profile, contract_base())
+                 .message.empty(),
+             "timer rollback fixture should validate");
+      AutomationRuntime runtime(profile);
+      const auto armed = runtime.process(
+          {.kind = AutomationEventKind::session_started});
+      expect(armed.committed,
+             "timer rollback fixture should arm its timer");
+      runtime.mark_persistent_saved();
+      const auto before = runtime.snapshot();
+      const auto due = runtime.due_timer_events(TimePoint(120ms));
+      expect(due.size() == 1U, "the timer should be collected once when late");
+      if (due.size() != 1U)
+        continue;
+      const auto unchanged = [&] {
+        const auto &snapshot = runtime.snapshot();
+        return snapshot.timers.size() == 1U &&
+               snapshot.timers.front().id == "tick" &&
+               snapshot.timers.front().due == TimePoint(50ms) &&
+               snapshot.timers.front().interval == 50ms &&
+               snapshot.timers.front().repeating == repeating &&
+               snapshot.variables == before.variables &&
+               snapshot.persistent_values == before.persistent_values &&
+               !runtime.persistent_dirty();
+      };
+      unsigned commit_calls{};
+      const auto rejected = runtime.process(
+          due.front(), {}, [&](const std::span<const AutomationEffect> effects) {
+            ++commit_calls;
+            expect(unchanged(),
+                   "the committer must observe unmodified live state");
+            expect(effects.size() == (with_actions ? 2U : 0U),
+                   "the committer should receive the complete winning set");
+            return false;
+          });
+      expect(commit_calls == 1U && !rejected.committed && rejected.error &&
+                 rejected.derived_events.empty() && unchanged(),
+             "rejected firings must preserve timer and persistent state");
+      expect(runtime.next_timer_due() == TimePoint(50ms) &&
+                 runtime.due_timer_events(TimePoint(120ms)).size() == 1U,
+             "a rejected firing must remain scheduled for redelivery");
+      const auto accepted = runtime.process(
+          due.front(), {}, [&](const std::span<const AutomationEffect>) {
+            expect(unchanged(), "retry must stage changes until commit accepts");
+            return true;
+          });
+      expect(accepted.committed && !accepted.error &&
+                 runtime.snapshot().variables.at("count") ==
+                     AutomationValue(std::int64_t{with_actions ? 1 : 0}) &&
+                 runtime.persistent_dirty() == with_actions,
+             "redelivery should commit the effects exactly once");
+      expect(repeating ? runtime.next_timer_due() == TimePoint(170ms)
+                       : runtime.snapshot().timers.empty(),
+             "accepted firings retire one-shots and rearm repeats from "
+             "event time");
+    }
+  }
+
+  AutomationProfile full;
+  full.profile_id = "game";
+  AutomationRule arm{.id = "arm", .event = AutomationEventKind::session_started};
+  for (std::size_t i{}; i < max_automation_timers; ++i)
+    arm.actions.push_back(
+        {.kind = AutomationActionKind::create_timer,
+         .target = "tick-" + std::to_string(i),
+         .value = literal(AutomationValue(DurationValue{50ms}))});
+  const AutomationRule replace{
+      .id = "replace",
+      .event = AutomationEventKind::timer_fired,
+      .source_filter = "tick-0",
+      .actions = {{.kind = AutomationActionKind::create_timer,
+                   .target = "replacement",
+                   .value = literal(AutomationValue(DurationValue{100ms}))}}};
+  full.automations = {
+      {.id = "clock", .name = "Clock", .rules = {arm, replace}}};
+  expect(validate_automation_profile(full, contract_base()).message.empty(),
+         "full timer fixture should validate");
+  AutomationRuntime runtime(full);
+  const auto armed = runtime.process(
+      {.kind = AutomationEventKind::session_started});
+  expect(armed.committed, "the timer capacity fixture should arm all timers");
+  const auto replaced = runtime.process({.kind = AutomationEventKind::timer_fired,
+                                        .timestamp = TimePoint(50ms),
+                                        .source_id = "tick-0"});
+  const auto &timers = runtime.snapshot().timers;
+  expect(replaced.committed && replaced.faulted_automations.empty() &&
+             timers.size() == max_automation_timers &&
+             std::ranges::find(timers, "tick-0", &AutomationTimer::id) ==
+                 timers.end() &&
+             std::ranges::find(timers, "replacement", &AutomationTimer::id) !=
+                 timers.end(),
+         "a staged one-shot firing must free capacity before evaluating "
+         "its actions");
+}
+
+void test_automation_action_value_type() {
+  AutomationProfile profile;
+  profile.variables = {{.id = "value", .type = AutomationValueType::integer}};
+  using Type = AutomationValueType;
+  const auto expected = std::to_array<std::optional<Type>>({
+      Type::integer, Type::integer, std::nullopt, std::nullopt,
+      Type::string, std::nullopt, std::nullopt, Type::duration,
+      Type::duration, std::nullopt, std::nullopt, std::nullopt,
+      Type::duration, std::nullopt, Type::boolean, std::nullopt});
+  static_assert(expected.size() == automation_action_kind_count);
+  for (const auto &spec : automation_action_specs) {
+    const AutomationAction action{.kind = spec.kind,
+                                  .target = "value", .property = "visible"};
+    expect(automation_action_value_type(action, profile) ==
+               expected[static_cast<std::size_t>(spec.kind)],
+           "each action should retain its literal editing type");
+  }
+  for (const auto kind : {AutomationActionKind::set_variable,
+                          AutomationActionKind::increment_variable}) {
+    const AutomationAction action{.kind = kind, .target = "value"};
+    for (const auto &type : automation_value_type_wire) {
+      profile.variables.front().type = type.value;
+      expect(automation_action_value_type(action, profile) == type.value,
+             "variable value hints must follow the declaration, not the default");
+    }
+    expect(!automation_action_value_type(
+               {.kind = kind, .target = "missing"}, profile),
+           "an unknown variable has no literal type hint");
+  }
+  for (const auto property : {"visible", "showText", "hideWhenReady", "text",
+                              "layout", "width", "height", "fillColor",
+                              "backgroundColor", "borderColor", "textColor",
+                              "anchorX", "anchorY"}) {
+    const auto *spec = find_overlay_property(property);
+    expect(spec != nullptr &&
+               automation_action_value_type(
+                   {.kind = AutomationActionKind::set_overlay_override,
+                    .property = property}, profile) == spec->type,
+           "overlay hints must use the canonical property metadata");
+  }
+  expect(automation_action_value_type(
+             {.kind = AutomationActionKind::set_overlay_override,
+              .property = "unknown"}, profile) == Type::integer,
+         "unknown overlay properties retain the editor's integer placeholder");
+  expect(!automation_action_value_type(
+             {.kind = static_cast<AutomationActionKind>(
+                  automation_action_kind_count)}, profile),
+         "unknown action kinds have no literal type hint");
+}
+
 void test_automation_limits_and_fault_rollback() {
   const auto base = contract_base();
   AutomationProfile profile;

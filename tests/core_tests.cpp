@@ -54,6 +54,8 @@ int main() {
       {"test_automation_priority_fault_isolation_and_reconfigure", test_automation_priority_fault_isolation_and_reconfigure},
       {"test_automation_value_round_trip_and_bounds", test_automation_value_round_trip_and_bounds},
       {"test_automation_expression_and_action_contract", test_automation_expression_and_action_contract},
+      {"test_automation_timer_commit_rollback", test_automation_timer_commit_rollback},
+      {"test_automation_action_value_type", test_automation_action_value_type},
       {"test_automation_limits_and_fault_rollback", test_automation_limits_and_fault_rollback},
       {"test_automation_persistent_sync_and_cascade_bounds", test_automation_persistent_sync_and_cascade_bounds},
   });

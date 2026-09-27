@@ -28,7 +28,6 @@ struct AutomationRuntime::Impl {
   Impl(AutomationProfile source, AutomationPersistentValues persistent,
        std::span<const CooldownGroup> groups);
 
-  void consume_timer_firing(std::string_view id, TimePoint now);
   void make_trace_room();
   [[nodiscard]] std::optional<AutomationTraceEntry>
   begin_trace(const AutomationEvent &event);

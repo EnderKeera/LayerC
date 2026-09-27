@@ -575,6 +575,41 @@ find_overlay_property(std::string_view name) noexcept;
 [[nodiscard]] bool overlay_value_valid(const OverlayPropertySpec &spec,
                                        const AutomationValue &value) noexcept;
 
+// Preferred literal editing type, derived from the canonical action policy.
+// This is a hint, not validation: durations prefer duration over integer;
+// absent/unconstrained values and unresolved variables have no hint.
+[[nodiscard]] inline std::optional<AutomationValueType>
+automation_action_value_type(const AutomationAction &action,
+                             const AutomationProfile &profile) {
+  const auto *spec = automation_action_spec(action.kind);
+  if (spec == nullptr)
+    return std::nullopt;
+  switch (spec->value) {
+  case ActionValuePolicy::match_variable:
+  case ActionValuePolicy::match_numeric_variable: {
+    const auto variable =
+        std::ranges::find(profile.variables, action.target,
+                          &AutomationVariable::id);
+    return variable == profile.variables.end()
+               ? std::nullopt
+               : std::optional<AutomationValueType>(variable->type);
+  }
+  case ActionValuePolicy::string_key:
+    return AutomationValueType::string;
+  case ActionValuePolicy::duration_or_integer:
+    return AutomationValueType::duration;
+  case ActionValuePolicy::overlay_property: {
+    const auto *property = find_overlay_property(action.property);
+    return property == nullptr ? std::optional(AutomationValueType::integer)
+                               : std::optional(property->type);
+  }
+  case ActionValuePolicy::none:
+  case ActionValuePolicy::any:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 // One panel after its winning overrides: Panel-field properties are applied
 // to `panel`; the session-level visibility and text layers are returned for
 // the platform renderer.
@@ -670,9 +705,8 @@ public:
   process(const AutomationEvent &event, const EffectValidator &validator = {},
           const EffectCommitter &committer = {});
   // Pure collection of due timer firings, ordered oldest deadline first.
-  // The firing itself is consumed when the event is delivered to process():
-  // a collected but unprocessed event leaves the timer due, so the next poll
-  // re-collects it instead of losing it.
+  // The firing is consumed only when process() commits its transaction:
+  // unprocessed or rejected firings stay due for the next poll.
   [[nodiscard]] std::vector<AutomationEvent> due_timer_events(TimePoint now);
   // Time-based housekeeping in the spirit of cooldown recovery: override
   // expiry is a fact about the clock, not an automation decision, so it
