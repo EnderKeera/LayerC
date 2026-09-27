@@ -186,6 +186,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | --- | --- |
 | `layerc_core_tests` | Profiles, UTF-8, cooldowns, automation, live edit, visual-profile logic, and update manifests |
 | `layerc_launcher_tests` | Launcher update engine: signed manifest checks, delta downloads, atomic build switch, repair, and rollback (v2.6b, not yet shipped) |
+| `layerc_launcher_win_tests` | Windows launcher: CNG verification of an openssl-signed manifest, per-user registration and autostart round trips in disposable HKCU keys, and the Start menu shortcut (v2.6b, not yet shipped) |
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
