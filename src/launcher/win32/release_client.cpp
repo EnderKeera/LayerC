@@ -120,7 +120,7 @@ struct GitHubReleaseSource::Handles {
 GitHubReleaseSource::GitHubReleaseSource(std::wstring repository, std::wstring tag,
                                          const Timeouts timeouts)
     : handles_(std::make_unique<Handles>()), repository_(std::move(repository)),
-      tag_(std::move(tag)) {
+      tag_(std::move(tag)), deadline_(std::chrono::steady_clock::now() + timeouts.total) {
   // Automatic proxy discovery honours the user's system proxy settings.
   handles_->session.reset(
       WinHttpOpen(L"LayerC-Launcher/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -140,8 +140,12 @@ GitHubReleaseSource::GitHubReleaseSource(std::wstring repository, std::wstring t
                         &protocols, sizeof(protocols)))
     protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 #endif
-  WinHttpSetOption(handles_->session.get(), WINHTTP_OPTION_SECURE_PROTOCOLS,
-                   &protocols, sizeof(protocols));
+  // Fail closed: without the protocol policy no request is ever sent.
+  if (!WinHttpSetOption(handles_->session.get(), WINHTTP_OPTION_SECURE_PROTOCOLS,
+                        &protocols, sizeof(protocols))) {
+    last_error_ = win32_message("requiring TLS 1.2 or newer");
+    return;
+  }
   handles_->connection.reset(WinHttpConnect(
       handles_->session.get(), L"github.com", INTERNET_DEFAULT_HTTPS_PORT, 0));
   if (handles_->connection.get() == nullptr)
@@ -150,9 +154,16 @@ GitHubReleaseSource::GitHubReleaseSource(std::wstring repository, std::wstring t
 
 GitHubReleaseSource::~GitHubReleaseSource() = default;
 
+bool GitHubReleaseSource::past_deadline() {
+  if (std::chrono::steady_clock::now() < deadline_) return false;
+  last_error_ = "the update took longer than its time limit";
+  return true;
+}
+
 std::optional<std::string> GitHubReleaseSource::fetch(const std::string_view asset_name,
                                                       const std::size_t max_bytes) {
   if (handles_->connection.get() == nullptr) return std::nullopt;
+  if (past_deadline()) return std::nullopt;
   const auto path = L"/" + repository_ + L"/releases/download/" + tag_ + L"/" +
                     widen_ascii(asset_name);
   const InternetHandle request(WinHttpOpenRequest(
@@ -197,6 +208,7 @@ std::optional<std::string> GitHubReleaseSource::fetch(const std::string_view ass
       return std::nullopt;
     }
     if (read == 0) break;
+    if (past_deadline()) return std::nullopt;
     if (body.size() + read > max_bytes) {
       last_error_ = std::string(asset_name) + " is larger than expected";
       return std::nullopt;

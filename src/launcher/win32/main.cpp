@@ -184,15 +184,16 @@ bool register_program(const win32::RegistryKeys &keys, const win32::InstallPaths
 }
 
 // Copies this executable into the install folder when it runs from anywhere
-// else (a download), so the Start menu entry points at a stable launcher.
+// else (a download) and nothing is installed yet, so the Start menu entry
+// points at a stable launcher. An existing install is never overwritten from
+// outside: it updates itself from signed builds instead.
 bool install_self(const win32::InstallPaths &paths) {
   const auto self = module_path();
   if (self.empty()) return false;
-  if (same_file(self, paths.launcher)) return true;
   std::error_code error;
   fs::create_directories(paths.root, error);
   if (error) return false;
-  fs::copy_file(self, paths.launcher, fs::copy_options::overwrite_existing, error);
+  fs::copy_file(self, paths.launcher, fs::copy_options::none, error);
   return !error;
 }
 
@@ -222,11 +223,13 @@ int launch(const Options &options, const win32::RegistryKeys &keys,
            const win32::InstallPaths &paths) {
   const launcher::InstallLayout layout{paths.root};
   std::string outcome;
-  if (options.rollback) {
+  if (daemon_running()) {
+    // The running daemon uses the active build, so it is never switched.
+    outcome = options.rollback ? "LayerC is running; exit it before rolling back"
+                               : "LayerC is already running; update check skipped";
+  } else if (options.rollback) {
     const auto failure = launcher::rollback(layout);
     outcome = failure ? "rollback failed: " + failure->message : "rolled back";
-  } else if (daemon_running()) {
-    outcome = "LayerC is already running; update check skipped";
   } else if (options.offline || !win32::updates_enabled(keys)) {
     outcome = "update check turned off";
   } else {
@@ -352,7 +355,18 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
     status = win32::set_autostart(keys, *options->autostart, paths->launcher) ? 0 : 1;
   } else {
     const bool from_elsewhere = !same_file(module_path(), paths->launcher);
-    if ((options->install || from_elsewhere) && !install_self(*paths)) {
+    std::error_code exists_error;
+    if (from_elsewhere && fs::exists(paths->launcher, exists_error)) {
+      // An older download must not replace the installed launcher; hand the
+      // launch to the installed copy, which updates itself.
+      std::wstring arguments;
+      if (options->offline) arguments += L"--offline ";
+      if (options->rollback) arguments += L"--rollback ";
+      ReleaseMutex(guard);
+      CloseHandle(guard);
+      return start_process(paths->launcher, arguments) ? 0 : 1;
+    }
+    if (from_elsewhere && !install_self(*paths)) {
       show_error(L"LayerC could not be copied to " + paths->root.wstring());
       status = 1;
     } else {

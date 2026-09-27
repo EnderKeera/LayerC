@@ -32,6 +32,9 @@ public:
     std::chrono::milliseconds connect{5'000};
     std::chrono::milliseconds send{10'000};
     std::chrono::milliseconds receive{30'000};
+    // Bounds the whole update across every fetch (a slow trickle of data
+    // resets the per-read timeout); measured on the monotonic clock.
+    std::chrono::milliseconds total{300'000};
   };
 
   GitHubReleaseSource(std::wstring repository, std::wstring tag,
@@ -47,10 +50,13 @@ public:
   [[nodiscard]] const std::string &last_error() const noexcept { return last_error_; }
 
 private:
+  [[nodiscard]] bool past_deadline();
+
   struct Handles;
   std::unique_ptr<Handles> handles_;
   std::wstring repository_;
   std::wstring tag_;
+  std::chrono::steady_clock::time_point deadline_;
   std::string last_error_;
 };
 
