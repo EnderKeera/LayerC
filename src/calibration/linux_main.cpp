@@ -33,7 +33,8 @@ struct Options {
   std::fputs(
       "usage: layercal snapshot <x11-window-id> "
       "[--quality low|balanced|exact] "
-      "[--region <x> <y> <width> <height>] [--json]\n",
+      "[--region <x> <y> <width> <height>] [--json]\n"
+      "       --region values are normalized fractions of the window (0..1)\n",
       stderr);
   std::exit(2);
 }
@@ -78,10 +79,19 @@ struct Options {
       continue;
     }
     if (argument == "--quality") {
-      if (++index >= argc) usage();
+      if (++index >= argc) {
+        std::fputs("layercal: --quality requires a value\n", stderr);
+        usage();
+      }
       const auto quality = layerc::core::parse_enum_wire(
           layerc::core::capture_quality_wire, std::string_view{argv[index]});
-      if (!quality) usage();
+      if (!quality) {
+        std::fprintf(stderr,
+                     "layercal: unknown --quality '%s' (expected low, "
+                     "balanced, or exact)\n",
+                     argv[index]);
+        usage();
+      }
       options.quality = *quality;
       continue;
     }
@@ -90,11 +100,16 @@ struct Options {
           !parse_number(argv[index + 1], options.region.x) ||
           !parse_number(argv[index + 2], options.region.y) ||
           !parse_number(argv[index + 3], options.region.width) ||
-          !parse_number(argv[index + 4], options.region.height))
+          !parse_number(argv[index + 4], options.region.height)) {
+        std::fputs("layercal: --region requires four numbers: x y width "
+                   "height\n",
+                   stderr);
         usage();
+      }
       index += 4;
       continue;
     }
+    std::fprintf(stderr, "layercal: unknown option '%s'\n", argv[index]);
     usage();
   }
   if (!layerc::core::valid_normalized_region(options.region)) {

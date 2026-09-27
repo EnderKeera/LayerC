@@ -258,21 +258,22 @@ X11InputCapabilities X11InputSource::capabilities() const noexcept {
   return caps;
 }
 
-std::vector<std::string> X11InputSource::unavailable() const {
+std::vector<std::string>
+X11InputSource::unavailable(const X11InputCapabilities needed) const {
   std::vector<std::string> reasons;
   if (!valid()) {
     reasons.push_back("xi2: input adapter is not attached to a display");
     return reasons;
   }
   const auto caps = capabilities();
-  if (!caps.keyboard)
+  if (needed.keyboard && !caps.keyboard)
     reasons.push_back(
         "xi2: no keyboard device visible to XInput2 (keyboard bindings "
         "stay inactive)");
-  if (!caps.mouse)
+  if (needed.mouse && !caps.mouse)
     reasons.push_back("xi2: no pointer device visible to XInput2 (mouse "
                       "bindings stay inactive)");
-  if (!caps.gamepad)
+  if (needed.gamepad && !caps.gamepad)
     reasons.push_back("xi2: no gamepad device visible to XInput2 (controller "
                       "bindings stay inactive)");
   return reasons;

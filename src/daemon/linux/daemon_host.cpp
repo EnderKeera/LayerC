@@ -4,12 +4,19 @@
 #include "layerc/platform/profile_store.hpp"
 
 #include <poll.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace layerc::daemon {
@@ -118,10 +125,57 @@ void derive_capability_status(
                         .platform_first = false});
 }
 
+namespace {
+
+// VmRSS, RssAnon and Threads from /proc/self/status. The stream closes on
+// return, so it is not counted among the open descriptors afterwards.
+void read_proc_status(layerc::runtime::ProcessDiagnostics &process) {
+  std::ifstream status("/proc/self/status");
+  for (std::string line; std::getline(status, line);) {
+    const auto kib = [&](const std::string_view key) -> std::optional<std::uint64_t> {
+      if (!line.starts_with(key)) return std::nullopt;
+      std::uint64_t value{};
+      std::istringstream(line.substr(key.size())) >> value;
+      return value * 1024U;
+    };
+    if (const auto rss = kib("VmRSS:")) process.working_set_bytes = *rss;
+    if (const auto anon = kib("RssAnon:")) process.private_bytes = *anon;
+    if (line.starts_with("Threads:"))
+      std::istringstream(line.substr(8)) >> process.threads;
+  }
+}
+
+// The shared process row from procfs and getrusage: working set is resident
+// memory, private bytes is anonymous resident memory, handles are open fds.
+layerc::runtime::ProcessDiagnostics process_diagnostics() {
+  layerc::runtime::ProcessDiagnostics process;
+  process.pid = static_cast<std::uint32_t>(::getpid());
+  read_proc_status(process);
+  std::error_code error;
+  for (std::filesystem::directory_iterator it("/proc/self/fd", error), end;
+       !error && it != end; it.increment(error))
+    ++process.handles;
+  // The iterator's own descriptor is counted while it is open.
+  if (process.handles > 0) --process.handles;
+  rusage usage{};
+  if (::getrusage(RUSAGE_SELF, &usage) == 0) {
+    const auto ticks = [](const timeval &time) {
+      return static_cast<std::uint64_t>(time.tv_sec) * 10'000'000U +
+             static_cast<std::uint64_t>(time.tv_usec) * 10U;
+    };
+    process.kernel_time_100ns = ticks(usage.ru_stime);
+    process.user_time_100ns = ticks(usage.ru_utime);
+  }
+  return process;
+}
+
+} // namespace
+
 std::string status_payload_json(const layerc::runtime::DaemonKernel &kernel,
                                 const LinuxStatusSnapshot &linux) {
   layerc::runtime::RuntimeDiagnostics diagnostics;
-  diagnostics.process.pid = static_cast<std::uint32_t>(::getpid());
+  diagnostics.process = process_diagnostics();
+  diagnostics.sessions = linux.sessions;
   const auto stats = kernel.services().all_stats();
   diagnostics.services.assign(stats.begin(), stats.end());
   diagnostics.aggregate_resources = kernel.services().aggregate_resources();

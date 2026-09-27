@@ -35,6 +35,13 @@ void install_x11_error_handler() noexcept {
   (void)XSetErrorHandler(&error_handler);
 }
 
+// The trap is a stack-scoped RAII guard: the destructor restores active_
+// before the object dies, so GCC's -Wdangling-pointer (Release inlining)
+// is a false positive here.
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdangling-pointer"
+#endif
 X11ErrorTrap::X11ErrorTrap(_XDisplay *display) noexcept : display_(display) {
   if (display_ != nullptr)
     XSync(reinterpret_cast<Display *>(display_), False);
@@ -44,6 +51,9 @@ X11ErrorTrap::X11ErrorTrap(_XDisplay *display) noexcept : display_(display) {
   previous_ = active_;
   active_ = this;
 }
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 12
+#pragma GCC diagnostic pop
+#endif
 
 X11ErrorTrap::~X11ErrorTrap() {
   synchronize();

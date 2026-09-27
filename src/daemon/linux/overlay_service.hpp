@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <span>
 #include <string>
 #include <vector>
@@ -45,6 +46,10 @@ public:
   next_render_deadline(layerc::core::TimePoint now) const;
 
   [[nodiscard]] std::size_t window_count() const noexcept;
+  // Overlay windows of the session matching `profile_id` on `session_window`.
+  [[nodiscard]] std::size_t
+  window_count(std::string_view profile_id,
+               std::uint64_t session_window) const noexcept;
   [[nodiscard]] std::vector<std::uint64_t> windows() const;
   [[nodiscard]] std::vector<std::string> unavailable() const;
 
@@ -58,6 +63,8 @@ private:
   struct Target {
     std::string profile_id;
     std::string panel_id;
+    // The matched game window this panel belongs to.
+    std::uint64_t session_window{};
     layerc::platform::X11OverlayWindow window;
     layerc::platform::X11OverlayFrame frame;
     // Override-redirect windows are unmanaged: while their game is the active
