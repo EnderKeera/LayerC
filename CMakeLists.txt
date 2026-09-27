@@ -104,12 +104,26 @@ add_library(layerc_core STATIC
     src/core/calibration.cpp
     src/core/companion.cpp
     src/core/companion_snapshot.cpp
+    src/core/update_manifest.cpp
 )
 target_include_directories(layerc_core PUBLIC
     src/core/include "${LAYERC_GENERATED_INCLUDE_DIR}")
 target_compile_features(layerc_core PUBLIC cxx_std_20)
 
 layerc_enable_warnings(layerc_core)
+
+# Build-time tool that writes the launch-time updater manifest; CI signs its
+# output. It never ships in the install tree.
+add_executable(layerc_manifest tools/update_manifest.cpp)
+target_link_libraries(layerc_manifest PRIVATE layerc_core)
+layerc_enable_warnings(layerc_manifest)
+
+# Update engine for the Windows launcher. It is platform-neutral apart from
+# the atomic file replace, so its behavior is tested on every CI platform.
+add_library(layerc_launcher_core STATIC src/launcher/update_engine.cpp)
+target_include_directories(layerc_launcher_core PUBLIC src/launcher/include)
+target_link_libraries(layerc_launcher_core PUBLIC layerc_core)
+layerc_enable_warnings(layerc_launcher_core)
 
 add_library(layerc_runtime STATIC
     src/runtime/daemon_kernel.cpp
@@ -667,11 +681,16 @@ if(LAYERC_BUILD_TESTS)
         tests/profile_tests.cpp
         tests/runtime_json_tests.cpp
         tests/utf8_tests.cpp
+        tests/update_manifest_tests.cpp
         tests/game_match_tests.cpp
         tests/live_edit_tests.cpp
         tests/visual_profile_tests.cpp
         tests/pixel_engine_tests.cpp
         LINK layerc_core TIMEOUT 30)
+
+    layerc_add_test(layerc_launcher_tests
+        SOURCES tests/launcher_update_tests.cpp
+        LINK layerc_launcher_core TIMEOUT 30)
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         # Fixtures deliberately name only fields relevant to each case; C++20
