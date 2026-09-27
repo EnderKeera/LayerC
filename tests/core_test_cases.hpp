@@ -49,6 +49,8 @@ void test_automation_runtime_transaction_and_replay();
 void test_automation_priority_fault_isolation_and_reconfigure();
 void test_automation_value_round_trip_and_bounds();
 void test_automation_expression_and_action_contract();
+void test_automation_timer_commit_rollback();
+void test_automation_action_value_type();
 void test_automation_limits_and_fault_rollback();
 void test_automation_persistent_sync_and_cascade_bounds();
 
