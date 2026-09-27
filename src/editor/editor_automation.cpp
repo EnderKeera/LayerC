@@ -55,32 +55,6 @@ constexpr auto &automation_actions = layerc::core::automation_action_specs;
 // tracked by AutomationEditor::advanced_expression_displayed_.
 constexpr wchar_t kAdvancedExpressionText[] = L"<Advanced expression>";
 
-std::optional<layerc::core::AutomationValueType>
-action_value_type(const layerc::core::AutomationAction &action,
-                  const layerc::core::AutomationProfile &profile) {
-  using layerc::core::AutomationActionKind;
-  using layerc::core::AutomationValueType;
-  if (action.kind == AutomationActionKind::set_variable ||
-      action.kind == AutomationActionKind::increment_variable) {
-    const auto variable =
-        std::ranges::find(profile.variables, action.target,
-                          &layerc::core::AutomationVariable::id);
-    return variable == profile.variables.end() ? std::nullopt
-                                               : std::optional(variable->type);
-  }
-  if (action.kind == AutomationActionKind::erase_map_entry)
-    return AutomationValueType::string;
-  if (action.kind == AutomationActionKind::reduce_cooldown_next ||
-      action.kind == AutomationActionKind::reduce_cooldown_all ||
-      action.kind == AutomationActionKind::create_timer)
-    return AutomationValueType::duration;
-  if (action.kind != AutomationActionKind::set_overlay_override)
-    return std::nullopt;
-  const auto *spec = layerc::core::find_overlay_property(action.property);
-  return spec == nullptr ? std::optional(AutomationValueType::integer)
-                         : std::optional(spec->type);
-}
-
 struct JsonErrorPresentation {
   std::wstring message;
   std::optional<LONG> selection_start;
@@ -403,7 +377,8 @@ void AutomationEditor::apply_node_properties(const HWND dialog) {
             owner_draw_checkbox_checked(
                 GetDlgItem(dialog, IDC_AUTOMATION_REPEATING));
         const auto expected =
-            action_value_type(*action, *owner_.document_.automation());
+            layerc::core::automation_action_value_type(
+                *action, *owner_.document_.automation());
         if (!expected.has_value() || advanced_expression_displayed_)
           return std::nullopt;
         const auto value_source =
