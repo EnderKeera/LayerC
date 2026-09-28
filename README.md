@@ -271,6 +271,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_event_loop_tests` | Monotonic timerfd deadlines, signal shutdown, and zero idle wakeups |
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_x11_tests` | X11 probes, EWMH tracking, and game matching |
+| `layerc_linux_x11_registry_tests` | Display-free session admission, automation health, checkpoint retry, and bounded status diagnostics |
 | `layerc_linux_x11_input_tests` | XI2 normalization, hotplug, mouse/wheel mapping, and session replay |
 | `layerc_linux_x11_overlay_tests` | Shape click-through, panel geometry, monitor scaling, and painted output |
 | `layerc_linux_x11_capture_tests` | Composite/Damage capture, bounded fallback, resources, faults, and `layercal` output |

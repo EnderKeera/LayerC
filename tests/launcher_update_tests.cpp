@@ -1,4 +1,5 @@
 #include "layerc/core/hash.hpp"
+#include "layerc/core/json.hpp"
 #include "layerc/launcher/signature.hpp"
 #include "layerc/launcher/update_engine.hpp"
 #include "launcher_signature_vectors.hpp"
@@ -73,7 +74,7 @@ public:
 
 struct Fixture {
   test::TempDirectory directory{"layerc-launcher"};
-  launcher::InstallLayout layout{directory.path()};
+  launcher::InstallLayout layout{directory.path(), {}};
   FakeRelease release;
   FakeVerifier verifier;
 
@@ -96,6 +97,27 @@ error(const std::variant<launcher::UpdateReport, launcher::UpdateError> &result)
   return std::get_if<launcher::UpdateError>(&result);
 }
 
+constexpr std::string_view build_a_id = "10-aaaaaaaaaaaa";
+constexpr std::string_view build_b_id = "11-bbbbbbbbbbbb";
+constexpr std::string_view build_c_id = "12-cccccccccccc";
+
+bool activation_is(const launcher::InstallLayout &layout,
+                   const std::string_view current_id,
+                   const std::optional<std::string_view> previous_id = std::nullopt) {
+  const auto bytes = test::read_file(layout.activation_file());
+  if (!bytes) return false;
+  const auto parsed = core::json::parse(*bytes);
+  const auto *record = std::get_if<core::json::Value>(&parsed);
+  if (record == nullptr || !record->is_object()) return false;
+  const auto *current = record->find("current");
+  const auto *previous = record->find("previous");
+  return current != nullptr && current->is_string() &&
+         current->as_string() == current_id && previous != nullptr &&
+         (previous_id ? previous->is_string() &&
+                            previous->as_string() == *previous_id
+                      : previous->is_null());
+}
+
 const std::map<std::string, std::string> build_one{
     {"layerd.exe", "daemon v1"},
     {"layere.exe", "editor v1"},
@@ -114,13 +136,15 @@ void fresh_install_and_up_to_date() {
   expect(fixture.active("layerd.exe") == "daemon v1" &&
              fixture.active("licenses/miniz/LICENSE") == "license",
          "installed files are reachable through the active build");
+  expect(activation_is(fixture.layout, build_a_id),
+         "the first activation record names one current build");
   expect(!fs::exists(fixture.layout.staging_directory()),
          "staging is removed after an install");
 
   const auto second = fixture.update();
   const auto *same = report(second);
   expect(same && same->result == launcher::UpdateResult::up_to_date &&
-             same->downloaded_files == 0 &&
+             same->downloaded_files == 0 && same->reused_files == build_one.size() &&
              fixture.release.downloads("daemon v1") == 1,
          "the same build is reported up to date without downloading");
 }
@@ -160,14 +184,14 @@ void rejected_releases_leave_the_install_untouched() {
   Fixture fixture;
   fixture.release.publish(10, 'a', build_one);
   (void)fixture.update();
-  const auto current = test::read_file(fixture.layout.current_file());
+  const auto activation = test::read_file(fixture.layout.activation_file());
 
   const auto expect_refused = [&](launcher::UpdateStage stage,
                                   const std::string &message) {
     const auto result = fixture.update();
     const auto *failure = error(result);
     expect(failure && failure->stage == stage, message);
-    expect(test::read_file(fixture.layout.current_file()) == current &&
+    expect(test::read_file(fixture.layout.activation_file()) == activation &&
                fixture.active("layerd.exe") == "daemon v1",
            message + " (active build unchanged)");
   };
@@ -224,15 +248,18 @@ void damaged_installs_are_repaired() {
              fixture.active("layere.exe") == "editor v1",
          "a damaged local file is downloaded instead of reused");
 
-  // A damaged pointer is reinstalled from scratch rather than blocking launch.
+  // A damaged legacy pointer is repaired during one-way migration.
+  fs::remove(fixture.layout.activation_file());
   test::write_file(fixture.layout.current_file(), "../escape\n");
+  test::write_file(fixture.layout.previous_file(), "10-aaaaaaaaaaaa\n");
   expect(std::holds_alternative<launcher::UpdateError>(
              launcher::read_installed_build(fixture.layout)),
          "a traversal in the build pointer is reported as damage");
   const auto reinstall = fixture.update();
   const auto *fresh = report(reinstall);
   expect(fresh && fresh->result == launcher::UpdateResult::installed &&
-             fresh->reused_files == 0 && fixture.active("layerd.exe") == "daemon v2",
+             fresh->reused_files == 0 && fixture.active("layerd.exe") == "daemon v2" &&
+             activation_is(fixture.layout, build_b_id, build_a_id),
          "a damaged install is repaired with a full download");
   expect(fs::exists(fixture.layout.build_directory("10-aaaaaaaaaaaa")),
          "repair keeps the recorded rollback build");
@@ -258,10 +285,12 @@ void rollback_switches_to_the_kept_build() {
   (void)fixture.update();
 
   expect(!launcher::rollback(fixture.layout).has_value() &&
-             fixture.active("layerd.exe") == "daemon v1",
+             fixture.active("layerd.exe") == "daemon v1" &&
+             activation_is(fixture.layout, build_a_id, build_b_id),
          "rollback activates the previous build");
   expect(!launcher::rollback(fixture.layout).has_value() &&
-             fixture.active("layerd.exe") == "daemon v2",
+             fixture.active("layerd.exe") == "daemon v2" &&
+             activation_is(fixture.layout, build_b_id, build_a_id),
          "a second rollback returns to the newer build");
 
   expect(!launcher::active_file(fixture.layout, "../layerd.exe") &&
@@ -313,6 +342,202 @@ void der_signatures_convert_strictly() {
          "missing, compressed-marker, short, or non-hex keys are rejected");
 }
 
+void same_version_damage_is_repaired() {
+  Fixture fixture;
+  fixture.release.publish(10, 'a', build_one);
+  (void)fixture.update();
+  const auto daemon = fixture.layout.build_directory(build_a_id) / "layerd.exe";
+  const auto check_repair = [&](const std::string_view reason) {
+    const auto result = fixture.update();
+    const auto *fixed = report(result);
+    expect(fixed && fixed->result == launcher::UpdateResult::installed &&
+               fixed->downloaded_files == 1 && fixed->reused_files == 2 &&
+               fixture.active("layerd.exe") == "daemon v1" &&
+               activation_is(fixture.layout, build_a_id),
+           reason);
+  };
+
+  fs::remove(daemon);
+  check_repair("a missing file triggers same-version repair");
+  test::write_file(daemon, "short");
+  check_repair("a wrong-size file triggers same-version repair");
+  test::write_file(daemon, "daemon vX");
+  check_repair("a same-size hash mismatch triggers same-version repair");
+  expect(fixture.release.downloads("daemon v1") == 4,
+         "only the damaged same-version file is downloaded each time");
+}
+
+void rollback_rejects_a_damaged_candidate() {
+  Fixture fixture;
+  fixture.release.publish(10, 'a', build_one);
+  (void)fixture.update();
+  fixture.release.publish(11, 'b', {{"layerd.exe", "daemon v2"}});
+  (void)fixture.update();
+  const auto previous_daemon =
+      fixture.layout.build_directory(build_a_id) / "layerd.exe";
+
+  fs::remove(previous_daemon);
+  expect(launcher::rollback(fixture.layout).has_value() &&
+             activation_is(fixture.layout, build_b_id, build_a_id),
+         "rollback rejects a missing file without changing the record");
+  test::write_file(previous_daemon, "daemon vX");
+  expect(launcher::rollback(fixture.layout).has_value() &&
+             activation_is(fixture.layout, build_b_id, build_a_id),
+         "rollback rejects same-size corruption without changing the record");
+  test::write_file(previous_daemon, "daemon v1");
+  expect(!launcher::rollback(fixture.layout).has_value() &&
+             activation_is(fixture.layout, build_a_id, build_b_id),
+         "rollback succeeds after the previous build is repaired");
+}
+
+void install_two_builds(Fixture &fixture) {
+  fixture.release.publish(10, 'a', build_one);
+  expect(report(fixture.update()) != nullptr, "publication fixture installs A");
+  fixture.release.publish(11, 'b', {{"layerd.exe", "daemon v2"}});
+  expect(report(fixture.update()) != nullptr, "publication fixture installs B");
+}
+
+void activation_publication_boundary_for_updates() {
+  for (const auto interrupted_at : {launcher::ActivationCheckpoint::before_publish,
+                                    launcher::ActivationCheckpoint::after_publish}) {
+    Fixture fixture;
+    install_two_builds(fixture);
+    fixture.release.publish(12, 'c', {{"layerd.exe", "daemon v3"}});
+    fixture.layout.activation_checkpoint = [interrupted_at](const auto point) {
+      return point != interrupted_at;
+    };
+    const auto interrupted = fixture.update();
+    fixture.layout.activation_checkpoint = {};
+    const auto *failure = error(interrupted);
+    expect(failure && failure->stage == launcher::UpdateStage::activate,
+           "an interrupted update reports an activation error");
+    if (interrupted_at == launcher::ActivationCheckpoint::before_publish) {
+      expect(activation_is(fixture.layout, build_b_id, build_a_id) &&
+                 fixture.active("layerd.exe") == "daemon v2",
+             "recovery before update publication keeps the old pair");
+      expect(!launcher::rollback(fixture.layout).has_value() &&
+                 activation_is(fixture.layout, build_a_id, build_b_id),
+             "a rejected update leaves its original rollback target available");
+    } else {
+      const auto installed = launcher::read_installed_build(fixture.layout);
+      const auto *build =
+          std::get_if<std::optional<launcher::InstalledBuild>>(&installed);
+      expect(build && *build && (*build)->id == build_c_id &&
+                 activation_is(fixture.layout, build_c_id, build_b_id) &&
+                 fixture.active("layerd.exe") == "daemon v3",
+             "recovery after update publication sees the complete new pair");
+      expect(!launcher::rollback(fixture.layout).has_value() &&
+                 activation_is(fixture.layout, build_b_id, build_c_id),
+             "the published update retains B as its rollback target");
+    }
+  }
+}
+
+void activation_publication_boundary_for_rollback() {
+  for (const auto interrupted_at : {launcher::ActivationCheckpoint::before_publish,
+                                    launcher::ActivationCheckpoint::after_publish}) {
+    Fixture fixture;
+    install_two_builds(fixture);
+    fixture.layout.activation_checkpoint = [interrupted_at](const auto point) {
+      return point != interrupted_at;
+    };
+    const auto interrupted = launcher::rollback(fixture.layout);
+    fixture.layout.activation_checkpoint = {};
+    expect(interrupted && interrupted->stage == launcher::UpdateStage::activate,
+           "an interrupted rollback reports an activation error");
+    if (interrupted_at == launcher::ActivationCheckpoint::before_publish) {
+      expect(activation_is(fixture.layout, build_b_id, build_a_id) &&
+                 fixture.active("layerd.exe") == "daemon v2",
+             "recovery before rollback publication keeps the old pair");
+      expect(!launcher::rollback(fixture.layout).has_value() &&
+                 activation_is(fixture.layout, build_a_id, build_b_id),
+             "a rejected rollback can still select its original target");
+    } else {
+      expect(activation_is(fixture.layout, build_a_id, build_b_id) &&
+                 fixture.active("layerd.exe") == "daemon v1",
+             "recovery after rollback publication sees the complete new pair");
+      expect(!launcher::rollback(fixture.layout).has_value() &&
+                 activation_is(fixture.layout, build_b_id, build_a_id),
+             "the post-publication rollback target is the former current build");
+    }
+  }
+}
+
+void blocked_activation_stage_preserves_rollback_target() {
+  Fixture fixture;
+  install_two_builds(fixture);
+  auto blocked = fixture.layout.activation_file();
+  blocked += ".tmp";
+  fs::create_directories(blocked);
+
+  const auto rejected = launcher::rollback(fixture.layout);
+  expect(rejected && rejected->stage == launcher::UpdateStage::activate &&
+             activation_is(fixture.layout, build_b_id, build_a_id),
+         "a blocked activation stage leaves the rollback pair unchanged");
+  fs::remove(blocked);
+  expect(!launcher::rollback(fixture.layout).has_value() &&
+             activation_is(fixture.layout, build_a_id, build_b_id),
+         "rollback still selects its original target after stage repair");
+}
+
+void install_writer_lock_covers_publication_and_recovery() {
+  Fixture fixture;
+  install_two_builds(fixture);
+  fixture.release.publish(12, 'c', {{"layerd.exe", "daemon v3"}});
+  Fixture other_root;
+  other_root.release.publish(10, 'a', build_one);
+
+  bool probing = false;
+  int checkpoints = 0;
+  fixture.layout.activation_checkpoint = [&](const auto point) {
+    if (probing) return true;
+    probing = true;
+    ++checkpoints;
+    const auto competing_update = fixture.update();
+    const auto *update_failure = error(competing_update);
+    expect(update_failure &&
+               update_failure->stage == launcher::UpdateStage::read_installed,
+           "a second update cannot enter the active install transaction");
+    const auto competing_rollback = launcher::rollback(fixture.layout);
+    expect(competing_rollback &&
+               competing_rollback->stage == launcher::UpdateStage::read_installed,
+           "rollback cannot enter the active install transaction");
+    const auto competing_read = launcher::read_installed_build(fixture.layout);
+    expect(std::holds_alternative<launcher::UpdateError>(competing_read) &&
+               !launcher::active_file(fixture.layout, "layerd.exe"),
+           "recovery readers cannot race build replacement");
+    if (point == launcher::ActivationCheckpoint::before_publish)
+      expect(report(other_root.update()) != nullptr,
+             "a different install root can update independently");
+    probing = false;
+    return true;
+  };
+  const auto result = fixture.update();
+  fixture.layout.activation_checkpoint = {};
+  expect(report(result) != nullptr && checkpoints == 2 &&
+             activation_is(fixture.layout, build_c_id, build_b_id),
+         "one writer owns update staging, publication, and pruning");
+}
+
+void parked_current_build_is_recovered() {
+  Fixture fixture;
+  fixture.release.publish(10, 'a', build_one);
+  (void)fixture.update();
+  const auto parked =
+      fixture.layout.staging_directory() / ".replaced" / build_a_id;
+  fs::create_directories(parked.parent_path());
+  fs::rename(fixture.layout.build_directory(build_a_id), parked);
+  test::write_file(fixture.layout.staging_directory() /
+                       std::string(build_a_id) / "partial",
+                   "unfinished replacement");
+  const auto installed = launcher::read_installed_build(fixture.layout);
+  const auto *build =
+      std::get_if<std::optional<launcher::InstalledBuild>>(&installed);
+  expect(build && *build && (*build)->id == build_a_id &&
+             fixture.active("layerd.exe") == "daemon v1",
+         "an interrupted same-ID replacement restores the parked current build");
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(der_signatures_convert_strictly),
@@ -320,4 +545,11 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(der_signatures_convert_strictly),
                  LAYERC_TEST_CASE(delta_update_reuses_unchanged_files),
                  LAYERC_TEST_CASE(rejected_releases_leave_the_install_untouched),
                  LAYERC_TEST_CASE(damaged_installs_are_repaired),
-                 LAYERC_TEST_CASE(rollback_switches_to_the_kept_build))
+                 LAYERC_TEST_CASE(rollback_switches_to_the_kept_build),
+                 LAYERC_TEST_CASE(same_version_damage_is_repaired),
+                 LAYERC_TEST_CASE(rollback_rejects_a_damaged_candidate),
+                  LAYERC_TEST_CASE(activation_publication_boundary_for_updates),
+                  LAYERC_TEST_CASE(activation_publication_boundary_for_rollback),
+                  LAYERC_TEST_CASE(blocked_activation_stage_preserves_rollback_target),
+                  LAYERC_TEST_CASE(install_writer_lock_covers_publication_and_recovery),
+                  LAYERC_TEST_CASE(parked_current_build_is_recovered))

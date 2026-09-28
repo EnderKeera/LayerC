@@ -35,7 +35,7 @@ registers its socket on the event loop:
 
 | Adapter | Status | Notes |
 | --- | --- | --- |
-| Connection + extension probes | done | `layerctl status --json` publishes XI2/Shape/RandR/Composite/Damage/XFixes versions, EWMH availability, service state, capability availability, and stable reason tokens |
+| Connection + extension probes | done | `layerctl status --json` publishes XI2/Shape/RandR/Composite/Damage/XFixes versions, EWMH availability, service state, capability availability, stable reason tokens, and bounded current session fault diagnostics |
 | Window tracking | done | EWMH `_NET_CLIENT_LIST` with a bounded root-child fallback; `GameMatch` resolution is name → path → class → title, case-folded |
 | Input | done | XI2 raw key/button events plus hierarchy tracking for hotplug |
 | Overlay | done | One click-through window per panel; Shape is required, otherwise the overlay stays hidden |

@@ -67,7 +67,17 @@ std::string serialize_linux_status_json(const RuntimeDiagnostics &diagnostics,
       reasons(out);
       json::append_quoted(out, reason);
     }
-    out += "]}";
+    out += "]";
+    if (!status.diagnostics.empty()) {
+      out += ",\"diagnostics\":[";
+      json::Join details_join;
+      for (const auto &detail : status.diagnostics) {
+        details_join(out);
+        json::append_quoted(out, detail);
+      }
+      out += "]";
+    }
+    out += "}";
   }
   out += "]}";
   return out;

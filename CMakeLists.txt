@@ -800,6 +800,12 @@ if(LAYERC_BUILD_TESTS)
                 TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
                 SKIP_RETURN_CODE 77)
 
+            # Registry admission and automation health use a synthetic scan;
+            # keep this suite in the display-free headless gate.
+            layerc_add_test(layerc_linux_x11_registry_tests
+                SOURCES tests/linux_x11_registry_tests.cpp LINK layerc_daemon_linux
+                TIMEOUT 60)
+
             # XI2 input + session replay. XTest is a test-only dependency:
             # it is never linked into layerd, which only ever reads input.
             if(X11_Xtst_LIB)
