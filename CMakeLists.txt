@@ -169,6 +169,11 @@ if(WIN32)
     target_include_directories(layerc_launcher_win PUBLIC src/launcher/win32)
     target_link_libraries(layerc_launcher_win PUBLIC
         layerc_launcher_core bcrypt winhttp advapi32 ole32 shell32 uuid)
+    # BCryptHash is declared only for Windows 10 targets (mingw-w64 headers).
+    target_compile_definitions(layerc_launcher_win PUBLIC
+        WINVER=0x0A00
+        _WIN32_WINNT=0x0A00
+    )
     layerc_win32(layerc_launcher_win)
 
     # Built as layerc.exe. Only this program links an HTTP client.
