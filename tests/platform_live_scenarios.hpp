@@ -3,6 +3,8 @@
 namespace layerc::test::platform_live {
 
 void platform_transactions();
+void journal_read_status_recovery();
+void profile_planning_after_recovery();
 void platform_visual_assets();
 void platform_sibling_authentication();
 void platform_profile_writes();
