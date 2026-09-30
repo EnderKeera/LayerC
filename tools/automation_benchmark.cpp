@@ -87,7 +87,12 @@ int main(const int argc, const char *const argv[]) {
   constexpr double normal_gate_microseconds = 500.0;
   constexpr double hard_gate_microseconds = 8'000.0;
 #endif
-  AutomationRuntime runtime(workload());
+  // Measure real elapsed time below, but keep the runtime's cooperative clock
+  // fixed during each event. Scheduler pauses must be samples for the unchanged
+  // average/p99 gates, not AR-01 deadline rejections that abort the benchmark.
+  // Deterministic deadline/exhaustion coverage lives in the core contract tests.
+  TimePoint runtime_now{};
+  AutomationRuntime runtime(workload(), {}, {}, [&] { return runtime_now; });
   AutomationEvent event{.kind = AutomationEventKind::input_pressed,
                         .timestamp = {},
                         .source_id = "keyboard:18",
@@ -95,23 +100,36 @@ int main(const int argc, const char *const argv[]) {
                         .fields = {}};
   for (std::size_t index = 0; index < warmup_iterations; ++index) {
     event.timestamp = TimePoint(Milliseconds(index));
+    runtime_now = event.timestamp;
     event.origin_token = index + 1;
-    if (!runtime.process(event).committed)
+    const auto result = runtime.process(event);
+    if (!result.committed) {
+      std::cerr << "warmup iteration " << index << " did not commit";
+      if (result.error)
+        std::cerr << ": " << result.error->path << ": " << result.error->message;
+      std::cerr << '\n';
       return 2;
+    }
   }
 
   std::vector<double> samples;
   samples.reserve(measured_iterations);
   for (std::size_t index = 0; index < measured_iterations; ++index) {
     event.timestamp = TimePoint(Milliseconds(warmup_iterations + index));
+    runtime_now = event.timestamp;
     event.origin_token = warmup_iterations + index + 1;
     const auto started = MonotonicClock::now();
     const auto result = runtime.process(event);
     const auto elapsed = std::chrono::duration<double, std::micro>(
                              MonotonicClock::now() - started)
                              .count();
-    if (!result.committed)
+    if (!result.committed) {
+      std::cerr << "measured iteration " << index << " did not commit";
+      if (result.error)
+        std::cerr << ": " << result.error->path << ": " << result.error->message;
+      std::cerr << '\n';
       return 3;
+    }
     samples.push_back(elapsed);
   }
 
