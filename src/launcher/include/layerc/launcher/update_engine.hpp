@@ -17,9 +17,11 @@ namespace layerc::launcher {
 //   <root>/current           one line naming the active build id
 //   <root>/previous          one line naming the rollback build id, if kept
 //   <root>/staging/          scratch for an update in progress
-// A build becomes active only when `current` is replaced after the new build
-// directory is complete, so an interrupted update leaves the old build
-// running and its leftovers in staging/ are removed by the next attempt.
+// A build becomes active only after every payload file, its installed manifest,
+// and its directory publication pass the platform durability barriers, then
+// `current` is durably replaced. Unconfirmed publication is not pruned. During
+// same-ID repair, <build-id>.old preserves the old directory until activation;
+// readers recover it if the replacement directory has not reached app/.
 struct InstallLayout {
   std::filesystem::path root;
 
@@ -114,10 +116,11 @@ struct UpdateReport {
 read_installed_build(const InstallLayout &layout);
 
 // Brings the install to the newest published build of `channel`. Never
-// changes the active build unless every file of the new build is present and
-// verified. A damaged install is treated as no install, so the launcher
-// repairs it with a full download instead of refusing to start. A lower sequence than the installed one is refused as a rollback
-// attack; the same sequence is reported as up to date without downloading.
+// changes the active build unless every file of the new build is present,
+// verified and durably flushed with its directory. A damaged install is treated
+// as no install, so the launcher repairs it with a full download instead of
+// refusing to start. A lower sequence than the installed one is refused as a
+// rollback attack; the same sequence is up to date without downloading.
 [[nodiscard]] std::variant<UpdateReport, UpdateError>
 apply_update(const InstallLayout &layout, std::string_view channel,
              ReleaseSource &source, SignatureVerifier &verifier);
