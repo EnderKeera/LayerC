@@ -7,9 +7,17 @@ runs:
       shell: pwsh
       run: cmake --preset ci
 
+    # Four jobs leave headroom on the shared 15 GB runner.
+    # Retry memory-starved units serially; real compile errors still fail.
     - name: Build
       shell: pwsh
-      run: cmake --build --preset ci --parallel
+      run: |
+        cmake --build --preset ci --parallel 4 -- -k 0
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host 'Retrying the failed build units with one compiler.'
+          cmake --build --preset ci --parallel 1 -- -k 0
+        }
+        exit $LASTEXITCODE
 
     - name: Test
       shell: pwsh
