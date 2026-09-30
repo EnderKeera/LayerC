@@ -84,17 +84,41 @@ void registration_round_trips() {
              !launcher::win32::autostart_enabled(keys) &&
              launcher::win32::set_autostart(keys, false, paths.launcher),
          "autostart can be turned off repeatedly");
+}
 
-  expect(launcher::win32::updates_enabled(keys), "updates are on when unset");
+void updates_require_explicit_opt_in() {
+  const TestKeys test_keys;
+  const auto &keys = test_keys.keys;
+  expect(!launcher::win32::updates_enabled(keys),
+         "updates are off when the settings key is missing");
+
   HKEY settings = nullptr;
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, keys.settings.c_str(), 0, nullptr, 0,
-                      KEY_SET_VALUE, nullptr, &settings, nullptr) == ERROR_SUCCESS) {
-    const DWORD off = 0;
-    RegSetValueExW(settings, L"Updates", 0, REG_DWORD,
-                   reinterpret_cast<const BYTE *>(&off), sizeof(off));
-    RegCloseKey(settings);
-  }
-  expect(!launcher::win32::updates_enabled(keys), "Updates=0 turns update checks off");
+  const auto status = RegCreateKeyExW(HKEY_CURRENT_USER, keys.settings.c_str(), 0, nullptr, 0,
+                                      KEY_SET_VALUE, nullptr, &settings, nullptr);
+  expect(status == ERROR_SUCCESS, "the disposable settings key is created");
+  if (status != ERROR_SUCCESS) return;
+  expect(!launcher::win32::updates_enabled(keys), "updates are off when the preference is unset");
+
+  const DWORD on = 1;
+  expect(RegSetValueExW(settings, L"Updates", 0, REG_DWORD,
+                        reinterpret_cast<const BYTE *>(&on), sizeof(on)) == ERROR_SUCCESS &&
+             launcher::win32::updates_enabled(keys),
+         "Updates=1 opts in to update checks");
+  const DWORD off = 0;
+  expect(RegSetValueExW(settings, L"Updates", 0, REG_DWORD,
+                        reinterpret_cast<const BYTE *>(&off), sizeof(off)) == ERROR_SUCCESS &&
+             !launcher::win32::updates_enabled(keys),
+         "Updates=0 turns update checks off");
+  expect(RegDeleteValueW(settings, L"Updates") == ERROR_SUCCESS &&
+             !launcher::win32::updates_enabled(keys),
+         "deleting the preference restores the offline default");
+
+  const wchar_t invalid[] = L"1";
+  expect(RegSetValueExW(settings, L"Updates", 0, REG_SZ,
+                        reinterpret_cast<const BYTE *>(invalid), sizeof(invalid)) == ERROR_SUCCESS &&
+             !launcher::win32::updates_enabled(keys),
+         "a malformed preference does not enable network updates");
+  RegCloseKey(settings);
 }
 
 void shortcut_points_at_the_launcher() {
@@ -113,4 +137,5 @@ void shortcut_points_at_the_launcher() {
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(bcrypt_verifies_openssl_signatures),
                  LAYERC_TEST_CASE(registration_round_trips),
+                 LAYERC_TEST_CASE(updates_require_explicit_opt_in),
                  LAYERC_TEST_CASE(shortcut_points_at_the_launcher))

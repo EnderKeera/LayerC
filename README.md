@@ -36,8 +36,12 @@ updated together.
   synthesizes them. XTest is linked only into a Linux test binary.
 - **No anti-cheat bypass:** no injection, hooks, game-memory reads, drivers, or
   administrator elevation.
-- **No telemetry or network:** the only IPC exception is the optional
-  same-package Game Bar App Service `LayerC.GameBar.v1`.
+- **No telemetry or network:** exceptions are the optional same-package Game
+  Bar App Service `LayerC.GameBar.v1` and the Windows `layerc.exe` launcher.
+  Only the launcher may make anonymous HTTPS GETs to this repository's GitHub
+  release at launch, with user-disableable updates, then start `layerd` and exit.
+  `layerd`, `layere`, `layercal`, and `layerw` never access the network or link
+  an HTTP client.
 - **Monotonic timing:** cooldowns and timers use monotonic clocks.
 - **Bounded work:** visual sampling and automation have explicit resource and
   execution caps.
@@ -93,12 +97,64 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 
 | Program | Windows | Linux | Purpose |
 | --- | ---: | ---: | --- |
+| `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
 | `layerd` | yes | yes | Cooldown/automation daemon; background desktop app on Windows, foreground service on Linux |
 | `layere` | yes | no | Native profile editor, live edit, automation editor, and simulator |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |
 | `layerc-gamebar` | optional MSIX | no | Xbox Game Bar widget host and same-package App Service |
+
+## Windows launcher and updates (v2.6b)
+
+The portable Windows ZIP starts LayerC via `layerd.exe`. With an empty
+`LAYERC_UPDATE_PUBLIC_KEY`, it omits `layerc.exe`; the launcher is packaged only
+once a release key is provisioned. The launcher and its tests are still built
+unconditionally.
+
+`layerc.exe` installs its launcher per user under
+`%LOCALAPPDATA%\Programs\LayerC`, registers Apps & Features and a Start menu
+shortcut, starts the already-installed `layerd`, and exits. Autostart is a
+separate opt-in (`--autostart=on|off`).
+
+**Self-updates are OFF by default.** Production release signing is not yet
+provisioned: this tree has no production public key, no release-signing secret
+is configured, and the release workflow publishes ZIPs rather than signed
+update assets. An unset, unreadable, or non-DWORD update preference stays OFF.
+With updates OFF, the launcher skips the update path entirely, performs no
+network I/O, and still starts the installed daemon. Keep an existing install
+or run the packaged `layerd.exe` directly; an offline launcher cannot download
+a first build.
+
+The preference is `HKCU\Software\LayerC\Updates` (REG_DWORD); a nonzero value
+opts in, zero or deleting the value opts out. In PowerShell:
+
+```powershell
+# Opt in for subsequent launches, only after signed releases are provisioned
+reg add HKCU\Software\LayerC /v Updates /t REG_DWORD /d 1 /f
+# Opt out persistently (also the default when the value is absent)
+reg add HKCU\Software\LayerC /v Updates /t REG_DWORD /d 0 /f
+# Skip the update check for just this launch, regardless of the preference
+& "$env:LOCALAPPDATA\Programs\LayerC\layerc.exe" --offline
+```
+
+Opting in never bypasses verification: without a valid embedded release key,
+even an enabled launcher makes no update requests. Checks are also skipped
+while `layerd` is running. Exit it before checking for an update or rolling
+back with `--rollback`.
+
+To provision signing, the release owner generates an ECDSA P-256 key pair
+outside the repository (`openssl ecparam -name prime256v1 -genkey -noout -out
+<private-key-path>`), commits only the uncompressed public point (130 hex
+characters starting `04`) to `packaging/windows/update-signing-key.hex`, or
+supplies it through `LAYERC_UPDATE_PUBLIC_KEY` at CMake configure time.
+The future signing job must use the PEM private key in the repository Actions
+secret **`LAYERC_UPDATE_SIGNING_KEY`**, sign the exact `layerc_manifest` output
+with `openssl dgst -sha256 -sign`, and publish `manifest.json`, its detached
+DER `manifest.sig`, and the SHA-256-named file assets. This is not wired into
+`release.yml` yet; do not enable unsigned updates. See
+[release signing instructions](CONTRIBUTING.md#release-signing-windows-updates)
+for key extraction, configuration, signing, and publication details.
 
 ## Build and package commands
 
@@ -186,7 +242,6 @@ tests skip with code 77 when a display or required extension is unavailable.
 | --- | --- |
 | `layerc_core_tests` | Profiles, UTF-8, cooldowns, automation, live edit, visual-profile logic, and update manifests |
 | `layerc_launcher_tests` | Launcher update engine: signed manifest checks, delta downloads, atomic build switch, repair, and rollback (v2.6b, not yet shipped) |
-| `layerc_launcher_win_tests` | Windows launcher: CNG verification of an openssl-signed manifest, per-user registration and autostart round trips in disposable HKCU keys, and the Start menu shortcut (v2.6b, not yet shipped) |
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
@@ -196,6 +251,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 
 | Target | Coverage |
 | --- | --- |
+| `layerc_launcher_win_tests` | Windows launcher: CNG signature verification, default-OFF update preference and opt-in/out, per-user registration/autostart in disposable HKCU keys, and the Start menu shortcut (v2.6b, not yet shipped) |
 | `layerc_capture_integration_tests` | Interactive WGC/DD integration; registered only with `LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS=ON` |
 | `layerc_overlay_tests` | HWND attachment, GDI rendering, capture exclusion, and `lctest` matching |
 | `layerc_platform_tests` | Profile store, transaction recovery, named-pipe IPC, and peer authentication |

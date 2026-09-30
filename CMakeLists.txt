@@ -128,8 +128,8 @@ target_link_libraries(layerc_launcher_core PUBLIC layerc_core)
 layerc_enable_warnings(layerc_launcher_core)
 
 # The release key and source are baked into layerc.exe. The public key is
-# read from packaging/windows/update-signing-key.hex when present; without a
-# key the launcher still installs and starts LayerC but never updates.
+# read from packaging/windows/update-signing-key.hex when present. Without a
+# key the launcher is still built and tested but omitted from the portable ZIP.
 set(layerc_release_key_file
     "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/update-signing-key.hex")
 set(layerc_default_release_key "")
@@ -586,6 +586,12 @@ endif()
 
 if(WIN32)
     foreach(layerc_runtime_target IN ITEMS layerc_launcher layerd layere layercal layerw)
+        # A keyless launcher cannot bootstrap a first build. Portable ZIPs
+        # start via layerd.exe until a release key is provisioned.
+        if(layerc_runtime_target STREQUAL "layerc_launcher" AND
+           "${LAYERC_UPDATE_PUBLIC_KEY}" STREQUAL "")
+            continue()
+        endif()
         if(TARGET ${layerc_runtime_target})
             install(TARGETS ${layerc_runtime_target}
                 RUNTIME DESTINATION . COMPONENT Runtime)

@@ -115,11 +115,11 @@ bool autostart_enabled(const RegistryKeys &keys) {
 }
 
 bool updates_enabled(const RegistryKeys &keys) {
-  DWORD value = 1;
+  DWORD value = 0;
   DWORD size = sizeof(value);
   const auto status = RegGetValueW(HKEY_CURRENT_USER, keys.settings.c_str(), L"Updates",
                                    RRF_RT_REG_DWORD, nullptr, &value, &size);
-  return status != ERROR_SUCCESS || value != 0;
+  return status == ERROR_SUCCESS && value != 0;
 }
 
 bool create_shortcut(const fs::path &shortcut, const fs::path &target,

@@ -38,7 +38,7 @@ struct RegistryKeys {
                                  const std::filesystem::path &launcher);
 [[nodiscard]] bool autostart_enabled(const RegistryKeys &keys);
 
-// Updates stay on unless HKCU\<settings>\Updates is a DWORD 0.
+// Updates stay off unless HKCU\<settings>\Updates is a readable, nonzero DWORD.
 [[nodiscard]] bool updates_enabled(const RegistryKeys &keys);
 
 [[nodiscard]] bool create_shortcut(const std::filesystem::path &shortcut,
