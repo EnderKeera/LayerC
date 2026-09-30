@@ -38,8 +38,7 @@ void EditorWindow::sync_current_profile_entry() {
     auto &entry = shell_.profiles[index];
     if (layerc::platform::canonical_profile_key(entry.path) != current_key)
       continue;
-    entry.enabled = document_.profile().enabled;
-    entry.label = profile_list_label(document_.profile());
+    entry.describe(document_.profile());
     auto sync = shell_.sync_scope();
     ListView_SetItemText(shell_.profile_list, static_cast<int>(index), 0,
                          entry.label.data());
@@ -88,7 +87,7 @@ bool EditorWindow::draft_controls_valid() const {
 
 bool EditorWindow::require_stored_profile(const wchar_t *const first_save_message) {
   if (document_.path().empty()) {
-    MessageBoxW(shell_.window, first_save_message, L"Create profile first",
+    themed_message_box(shell_.window, first_save_message, L"Create profile first",
                 MB_OK | MB_ICONINFORMATION);
     return false;
   }
@@ -119,11 +118,11 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
     break;
   case CommitResult::upgrade_declined:
     set_status(allow_upgrade_prompt
-                   ? L"Not saved — schema upgrade was not confirmed."
-                   : L"Autosave paused — use Save to approve the schema-v3 upgrade.");
+                   ? L"Not saved — the profile format upgrade was not confirmed."
+                   : L"Autosave paused — use Save to approve the profile format upgrade.");
     break;
   case CommitResult::blocked_by_sidecar:
-    set_status(L"Not autosaved — repair the invalid sidecar first.");
+    set_status(L"Not autosaved — repair the invalid visual or automation settings first.");
     break;
   case CommitResult::write_failed:
     set_status(write_failure_message());
@@ -179,13 +178,16 @@ void EditorWindow::poll_live_channel() {
     } else if (GetTickCount64() >= live_edit_.pending_deadline()) {
       live_edit_.clear_pending_target();
       set_status(L"Live editing is unavailable — restart LayerD to update its protocol version.");
-      MessageBoxW(shell_.window,
+      themed_message_box(shell_.window,
                   L"LayerD did not expose the live-edit service. Exit the "
                   L"older LayerD from its tray icon, then try Position on "
                   L"Window again.",
                   L"Restart LayerD", MB_OK | MB_ICONINFORMATION);
     }
   }
+
+  refresh_connection_status();
+  refresh_title();
 
   const ULONGLONG now = GetTickCount64();
   if (live_edit_.package_authenticated() && live_edit_.session_id() != 0 &&
@@ -372,7 +374,7 @@ void EditorWindow::edit_selected_task() {
   matching.enabled = true;
   if (!matching.game.global &&
       !layerc::platform::profile_matches_window(*candidate, matching)) {
-    MessageBoxW(task_picker_.window,
+    themed_message_box(task_picker_.window,
                 L"That window does not match this profile. Use Selected Task first if you want to change the profile matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
     return;
@@ -392,7 +394,7 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
     return;
   }
   if (!confirm_v2_upgrade()) {
-    set_status(L"On-window editing was not started because the schema-v3 upgrade was not approved.");
+    set_status(L"On-window editing needs the profile format upgrade, which was not approved.");
     return;
   }
   if (!live_edit_.channel().connected() || !live_edit_.package_authenticated()) {
@@ -408,7 +410,8 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
   live_edit_.begin_session(target, session_id);
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
   EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), TRUE);
-  set_text(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW), L"End Positioning");
+  set_text(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW), L"&End positioning");
+  refresh_bar_controls();
   const auto *panel = selected_bar();
   live_edit_.advance_revision();
   (void)live_edit_.channel().send({
@@ -441,14 +444,15 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
   EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), FALSE);
   set_text(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW),
-           L"Position on Window");
+           L"&Position on window");
+  refresh_bar_controls();
   if (!status.empty()) set_status(status);
 }
 
 void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   if (live_edit_.session_id() == 0) return;
   if (enabled && !live_edit_.direct_drag_notice_shown() &&
-      MessageBoxW(shell_.window,
+      themed_message_box(shell_.window,
                   L"Direct Drag temporarily lets LayerD receive clicks only inside visible bar rectangles. It uses no injection or game hooks, but anti-cheat compatibility cannot be guaranteed. Continue?",
                   L"Enable Direct Drag", MB_OKCANCEL | MB_ICONINFORMATION) !=
           IDOK) {

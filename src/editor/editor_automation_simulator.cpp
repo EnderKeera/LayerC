@@ -161,7 +161,7 @@ void AutomationEditor::update_simulator_view(const HWND dialog) {
 void AutomationEditor::reset_simulator(const HWND dialog) {
   KillTimer(dialog, automation_simulator_timer);
   simulator_playing_ = false;
-  set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_PLAY), L"Play");
+  set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_PLAY), L"Pla&y");
   const auto parsed = layerc::core::parse_automation_profile_json(
       wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_JSON))),
       owner_.document_.profile());
@@ -206,7 +206,7 @@ void AutomationEditor::play_simulator(const HWND dialog, const bool playing) {
     }
   }
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_PLAY),
-           simulator_playing_ ? L"Pause" : L"Play");
+           simulator_playing_ ? L"Pa&use" : L"Pla&y");
 }
 
 void AutomationEditor::step_simulator(const HWND dialog) {
@@ -266,7 +266,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
       const auto equal = item.find('=');
       if (colon == std::string_view::npos || equal == std::string_view::npos ||
           colon == 0 || equal <= colon + 1U) {
-        MessageBoxW(dialog,
+        themed_message_box(dialog,
                     L"Fields use name:type=JSON; for example value:number=0.5",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
         valid = false;
@@ -275,7 +275,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
       const auto type = layerc::core::parse_automation_value_type_name(
           item.substr(colon + 1U, equal - colon - 1U));
       if (!type.has_value()) {
-        MessageBoxW(dialog, L"Unsupported synthetic field type.",
+        themed_message_box(dialog, L"Unsupported synthetic field type.",
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
         valid = false;
         return false;
@@ -285,7 +285,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
       const auto *value = std::get_if<layerc::core::AutomationValue>(&parsed);
       if (value == nullptr) {
         const auto &error = std::get<layerc::core::AutomationError>(parsed);
-        MessageBoxW(dialog, to_wide(error.path + ": " + error.message).c_str(),
+        themed_message_box(dialog, to_wide(error.path + ": " + error.message).c_str(),
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
         valid = false;
         return false;
@@ -307,7 +307,7 @@ void AutomationEditor::load_trace(const HWND dialog) {
     return;
   const auto contents = read_bounded_trace(*path);
   if (!contents.has_value()) {
-    MessageBoxW(dialog, L"The trace could not be read or exceeds 4 MiB.",
+    themed_message_box(dialog, L"The trace could not be read or exceeds 4 MiB.",
                 L"Load trace", MB_OK | MB_ICONERROR);
     return;
   }
@@ -316,7 +316,7 @@ void AutomationEditor::load_trace(const HWND dialog) {
       std::get_if<std::vector<layerc::core::AutomationEvent>>(&parsed);
   if (events == nullptr) {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
-    MessageBoxW(dialog, to_wide(error.path + ": " + error.message).c_str(),
+    themed_message_box(dialog, to_wide(error.path + ": " + error.message).c_str(),
                 L"Invalid trace", MB_OK | MB_ICONWARNING);
     return;
   }
@@ -398,11 +398,11 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
 
 void AutomationEditor::save_trace(const HWND dialog) {
   if (trace_events_.empty() && trace_json_.empty()) {
-    MessageBoxW(dialog, L"There is no trace or simulator output to save.",
+    themed_message_box(dialog, L"There is no trace or simulator output to save.",
                 L"Automation trace", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (MessageBoxW(
+  if (themed_message_box(
           dialog,
           L"Trace files retain typed source-field values for exact replay and "
           L"may include user-authored strings or maps. Save this trace?",
@@ -416,7 +416,7 @@ void AutomationEditor::save_trace(const HWND dialog) {
   std::ofstream output(*path, std::ios::binary | std::ios::trunc);
   output.write(trace.data(), static_cast<std::streamsize>(trace.size()));
   if (!output)
-    MessageBoxW(dialog, L"Could not save the trace file.", L"Automation trace",
+    themed_message_box(dialog, L"Could not save the trace file.", L"Automation trace",
                 MB_OK | MB_ICONERROR);
 }
 

@@ -1,6 +1,9 @@
 #include "calibration_resource.h"
 #include <windows.h>
 
+// First icon: Explorer, taskbar and the title bar (set_window_app_icon).
+1 ICON "../../resources/windows/layerc_calibration.ico"
+
 IDD_CALIBRATION DIALOGEX 0, 0, 800, 510
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN
 EXSTYLE WS_EX_APPWINDOW

@@ -52,25 +52,32 @@ void show_invalid_field_message(const HWND owner) {
       L"Finish the invalid field. Cooldown duration must be greater than 0 "
       L"and no more than " +
       std::to_wstring(limit.count()) + L" seconds.";
-  MessageBoxW(owner, message.c_str(), L"Profile is incomplete",
+  themed_message_box(owner, message.c_str(), L"Profile is incomplete",
               MB_OK | MB_ICONWARNING);
 }
 
 void show_sidecar_repair_message(const HWND owner) {
-  MessageBoxW(owner,
-              L"Repair the invalid sidecar with Calibrate before "
+  themed_message_box(owner,
+              L"Repair the invalid visual settings with Calibrate before "
               L"saving this profile. This prevents an unrelated base edit "
               L"from silently discarding recovery data.",
-              L"Sidecar needs repair", MB_OK | MB_ICONWARNING);
+              L"Settings need repair", MB_OK | MB_ICONWARNING);
 }
 
 } // namespace
 
+void ProfileEntry::describe(const layerc::core::GameProfile &profile) {
+  label = profile_list_label(profile);
+  name = to_wide(profile.name);
+  executable = to_wide(profile.game.executable_name);
+  enabled = profile.enabled;
+}
+
 bool confirm_schema_upgrade(const HWND owner) {
-  return MessageBoxW(
+  return themed_message_box(
              owner,
-             L"Saving this legacy profile upgrades its base profile to schema version 4 and all declared module sidecars to their current schemas. Older LayerC builds cannot reopen the upgraded files. Continue?",
-             L"Upgrade profile to LayerC V2.3", MB_YESNO | MB_ICONWARNING) ==
+             L"This profile was saved by an older LayerC. Saving upgrades it, with its visual and automation settings, to the current profile format. Older LayerC versions cannot open it afterwards. Continue?",
+             L"Upgrade profile format", MB_YESNO | MB_ICONWARNING) ==
          IDYES;
 }
 
@@ -92,7 +99,7 @@ bool EditorWindow::validate_profile() {
   }
   sync_profile_from_controls();
   if (const auto error = normalize_for_commit()) {
-    MessageBoxW(shell_.window, profile_error_text(*error).c_str(),
+    themed_message_box(shell_.window, profile_error_text(*error).c_str(),
                 L"Profile is incomplete", MB_OK | MB_ICONWARNING);
     return false;
   }
@@ -114,7 +121,7 @@ bool EditorWindow::confirm_unsaved_changes() {
     return true;
   if (!document_.path().empty() && draft_controls_valid() && flush_autosave(false))
     return true;
-  const int choice = MessageBoxW(
+  const int choice = themed_message_box(
       shell_.window, L"The current profile has unsaved changes. Save them first?",
       L"Unsaved changes", MB_YESNOCANCEL | MB_ICONWARNING);
   return choice == IDYES ? save_profile(false) : choice == IDNO;
@@ -128,9 +135,13 @@ void EditorWindow::new_profile(const bool confirm) {
   document_.clear_sidecars();
   document_.clear_legacy_schemas();
   document_.path().clear();
-  document_.set_dirty(true);
+  // Untouched drafts are clean: the first real edit marks the document dirty,
+  // so leaving an unedited New Profile never asks to save it.
+  document_.set_dirty(false);
   reset_history();
   refresh_profile_controls();
+  refresh_visual_controls();
+  sync_draft_row();
   set_status(
       L"New profile ready — Save once to create it and enable autosave.");
 }
@@ -144,10 +155,11 @@ void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
   const auto directory = layerc::platform::profile_directory();
   const auto scan = layerc::platform::scan_profile_directory(directory);
   if (scan.error.empty()) {
-    for (const auto &entry : scan.profiles)
-      shell_.profiles.push_back({.path = entry.path,
-                          .label = profile_list_label(entry.profile),
-                          .enabled = entry.profile.enabled});
+    for (const auto &entry : scan.profiles) {
+      auto &added = shell_.profiles.emplace_back();
+      added.path = entry.path;
+      added.describe(entry.profile);
+    }
   }
   std::sort(shell_.profiles.begin(), shell_.profiles.end(),
             [](const ProfileEntry &left, const ProfileEntry &right) {
@@ -176,12 +188,17 @@ void EditorWindow::reload_profile_list(const std::filesystem::path &select_path,
     open_profile_row(selected, false);
   else if (shell_.profiles.empty() && document_.path().empty())
     new_profile(false);
+  else
+    sync_draft_row();
 }
 
 void EditorWindow::open_profile_row(const int row, const bool confirm) {
   if (row < 0 || static_cast<std::size_t>(row) >= shell_.profiles.size())
     return;
   const auto target_path = shell_.profiles[static_cast<std::size_t>(row)].path;
+  // The provisional draft row is the open document already.
+  if (target_path.empty())
+    return;
   const auto select_path = [&](const std::filesystem::path &path) {
     auto sync = shell_.sync_scope();
     ListView_SetItemState(shell_.profile_list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -214,10 +231,11 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
   document_.set_dirty(false);
   end_edit_on_window();
   reset_history();
+  sync_draft_row();
   select_path(target_path);
   refresh_profile_controls();
   set_status(document_.profile().enabled ? L"Profile loaded."
-                              : L"Disabled profile loaded.");
+                              : L"Profile loaded (off).");
 }
 
 void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
@@ -230,6 +248,11 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     auto sync = shell_.sync_scope();
     ListView_SetCheckState(shell_.profile_list, row, entry.enabled);
   };
+  if (entry.path.empty()) {
+    // The unsaved draft has no file to turn on or off.
+    restore_checkbox();
+    return;
+  }
   const bool is_current =
       layerc::platform::canonical_profile_key(entry.path) ==
       layerc::platform::canonical_profile_key(document_.path());
@@ -240,19 +263,19 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   if (is_current) {
     if (!draft_controls_valid()) {
       restore_checkbox();
-      set_status(L"Finish the invalid field before changing enablement.");
+      set_status(L"Finish the invalid field before turning the profile on or off.");
       return;
     }
     sync_profile_from_controls();
     if (normalize_for_commit().has_value()) {
       restore_checkbox();
-      set_status(L"Finish the invalid field before changing enablement.");
+      set_status(L"Finish the invalid field before turning the profile on or off.");
       return;
     }
     if (!can_commit_document_bundle()) {
       restore_checkbox();
       set_status(
-          L"Repair the invalid sidecar before changing enablement.");
+          L"Repair the invalid visual or automation settings before turning the profile on or off.");
       return;
     }
     stored_profile = document_.profile();
@@ -270,10 +293,10 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     } else {
       auto &bundle = std::get<layerc::platform::ProfileBundleLoad>(loaded);
       if (bundle.visual.state == layerc::platform::ModuleSidecarState::invalid)
-        failure = L"Could not update a profile with an invalid visual sidecar.";
+        failure = L"Could not update a profile whose visual settings are invalid.";
       else if (bundle.automation.state ==
                layerc::platform::ModuleSidecarState::invalid)
-        failure = L"Could not update a profile with an invalid automation sidecar.";
+        failure = L"Could not update a profile whose automation settings are invalid.";
       stored_profile = std::move(bundle.profile);
       stored_visual = std::move(bundle.visual.profile);
       stored_automation = std::move(bundle.automation.profile);
@@ -305,8 +328,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     set_status(write_failure_message());
     return;
   }
-  entry.enabled = enabled;
-  entry.label = profile_list_label(stored_profile);
+  entry.describe(stored_profile);
   {
     auto sync = shell_.sync_scope();
     ListView_SetItemText(shell_.profile_list, row, 0, entry.label.data());
@@ -334,7 +356,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
 bool EditorWindow::choose_save_path(std::filesystem::path &path) {
   const auto directory = layerc::platform::profile_directory();
   if (directory.empty()) {
-    MessageBoxW(shell_.window, L"The profiles directory is unavailable.",
+    themed_message_box(shell_.window, L"The profiles directory is unavailable.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return false;
@@ -342,7 +364,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error) {
-    MessageBoxW(shell_.window, L"Could not create the profiles directory.",
+    themed_message_box(shell_.window, L"Could not create the profiles directory.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return false;
@@ -372,7 +394,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
       candidate += L".json";
     if (_wcsicmp(candidate.extension().c_str(), L".json") != 0) {
       candidate.replace_extension(L".json");
-      MessageBoxW(shell_.window, L"LayerC profiles must use the .json extension.",
+      themed_message_box(shell_.window, L"LayerC profiles must use the .json extension.",
                   L"Choose a JSON profile name", MB_OK | MB_ICONWARNING);
       initial_path = directory / candidate.filename();
       continue;
@@ -389,7 +411,7 @@ bool EditorWindow::choose_save_path(std::filesystem::path &path) {
       return true;
     }
 
-    MessageBoxW(shell_.window,
+    themed_message_box(shell_.window,
                 L"Profiles must be saved directly in the LayerC profiles "
                 L"folder so LayerD can load them.",
                 L"Choose the profiles folder", MB_OK | MB_ICONWARNING);
@@ -415,12 +437,12 @@ bool EditorWindow::save_profile(const bool force_save_as) {
                                        document_.profile());
     std::error_code error;
     if (std::filesystem::exists(destination, error) &&
-        MessageBoxW(
+        themed_message_box(
             shell_.window, L"A profile with this ID already exists. Overwrite it?",
             L"Profile already exists", MB_YESNO | MB_ICONWARNING) != IDYES)
       return false;
     if (error) {
-      MessageBoxW(shell_.window, L"Could not inspect the profile destination.",
+      themed_message_box(shell_.window, L"Could not inspect the profile destination.",
                   L"LayerC Editor", MB_OK | MB_ICONERROR);
       return false;
     }
@@ -438,7 +460,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     show_sidecar_repair_message(shell_.window);
     return false;
   case CommitResult::write_failed:
-    MessageBoxW(shell_.window, write_failure_message().c_str(),
+    themed_message_box(shell_.window, write_failure_message().c_str(),
                 L"Profile save failed", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -450,16 +472,27 @@ bool EditorWindow::save_profile(const bool force_save_as) {
 
 void EditorWindow::delete_profile() {
   if (document_.path().empty()) {
-    MessageBoxW(shell_.window, L"Save this profile before deleting it.",
-                L"LayerC Editor",
-                MB_OK | MB_ICONINFORMATION);
+    // Deleting the unsaved draft discards it.
+    if (!confirm_unsaved_changes())
+      return;
+    const auto saved = std::ranges::find_if(
+        shell_.profiles, [](const ProfileEntry &entry) {
+          return !entry.path.empty();
+        });
+    if (saved == shell_.profiles.end()) {
+      new_profile(false);
+    } else {
+      document_.set_dirty(false);
+      open_profile_row(static_cast<int>(saved - shell_.profiles.begin()), false);
+    }
+    set_status(L"Draft discarded.");
     return;
   }
   if (!confirm_unsaved_changes())
     return;
   const auto prompt =
       L"Move '" + to_wide(document_.profile().name) + L"' to the Recycle Bin?";
-  if (MessageBoxW(shell_.window, prompt.c_str(), L"Delete profile",
+  if (themed_message_box(shell_.window, prompt.c_str(), L"Delete profile",
                   MB_YESNO | MB_ICONWARNING) != IDYES)
     return;
   std::filesystem::path safe_remaining;
@@ -470,7 +503,7 @@ void EditorWindow::delete_profile() {
     }
   }
   if (!recycle_profile_bundle(document_.path())) {
-    MessageBoxW(shell_.window, L"Could not move the profile to the Recycle Bin.",
+    themed_message_box(shell_.window, L"Could not move the profile to the Recycle Bin.",
                 L"LayerC Editor", MB_OK | MB_ICONERROR);
     return;
   }
@@ -491,7 +524,7 @@ void EditorWindow::open_profiles_folder() {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   if (error || directory.empty()) {
-    MessageBoxW(shell_.window, L"Could not open the profiles folder.",
+    themed_message_box(shell_.window, L"Could not open the profiles folder.",
                 L"LayerC Editor",
                 MB_OK | MB_ICONERROR);
     return;

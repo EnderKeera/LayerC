@@ -22,8 +22,14 @@ namespace layerc::editor {
 
 struct ProfileEntry {
   std::filesystem::path path;
+  // Item text for accessibility ("name — app.exe (off)"); the row paints
+  // `name` and `executable` separately with an Off tag instead.
   std::wstring label;
+  std::wstring name;
+  std::wstring executable;
   bool enabled{true};
+
+  void describe(const layerc::core::GameProfile &profile);
 };
 
 // The main editor shell and its profile-list controls. The shell is bound
@@ -49,10 +55,23 @@ struct EditorShell final {
   HWND application_path{};
   HWND status{};
   HFONT font{};
+  // Semibold section headings and the 20 px profile title (F33).
+  HFONT heading_font{};
+  HFONT title_font{};
   HIMAGELIST profile_check_hit_images{};
   std::vector<ProfileEntry> profiles;
   std::wstring visual_runtime_status{L"Visual recognition: connecting"};
-  bool capture_exclusion{true};
+  // The editor stays visible to screenshots, sharing and Magnifier unless the
+  // user opts out; overlay exclusion is LayerD's separate setting.
+  bool capture_exclusion{false};
+  // From the last layout(): the status strip's top edge and the smallest
+  // client height that shows every row (0 before the first layout).
+  int status_strip_top{};
+  int min_client_height{};
+  HWND tooltip{};
+  std::wstring tooltip_text;
+  std::wstring title_cache;
+  std::wstring connection_cache;
   bool advanced_visible{};
   bool syncing{};
 };

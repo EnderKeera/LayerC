@@ -133,9 +133,51 @@ const AppearanceFieldAction *appearance_field_for_control(const int control) {
   return found == appearance_fields.end() ? nullptr : &*found;
 }
 
+constexpr std::array appearance_footer_controls{
+    IDC_APPEARANCE_RESET_ALL, IDC_APPEARANCE_APPLY, IDOK, IDCANCEL};
+
+// Advanced colours are progressive disclosure, not a saved setting: the
+// button shows or hides the per-role overrides and the dialog grows or
+// shrinks by exactly their band, so no empty space is left behind.
 void show_advanced_appearance(const HWND window, const bool visible) {
+  const HWND tree = GetDlgItem(window, IDC_APPEARANCE_TREE);
+  const bool shown = (GetWindowLongPtrW(tree, GWL_STYLE) & WS_VISIBLE) != 0;
+  // Measured once while the template still shows the band: the distance
+  // from the role label down to the footer row.
+  constexpr wchar_t band_property[] = L"LayerC.AdvancedBand";
+  if (GetPropW(window, band_property) == nullptr && shown) {
+    RECT band_top{};
+    RECT footer{};
+    GetWindowRect(GetDlgItem(window, IDC_APPEARANCE_ROLE_LABEL), &band_top);
+    GetWindowRect(GetDlgItem(window, IDC_APPEARANCE_RESET_ALL), &footer);
+    SetPropW(window, band_property,
+             reinterpret_cast<HANDLE>(static_cast<INT_PTR>(
+                 std::max(0L, footer.top - band_top.top))));
+  }
+  const int band = static_cast<int>(
+      reinterpret_cast<INT_PTR>(GetPropW(window, band_property)));
+  if (shown != visible && band > 0) {
+    const int delta = visible ? band : -band;
+    for (const int id : appearance_footer_controls) {
+      const HWND control = GetDlgItem(window, id);
+      RECT bounds{};
+      GetWindowRect(control, &bounds);
+      MapWindowPoints(HWND_DESKTOP, window, reinterpret_cast<POINT *>(&bounds),
+                      2);
+      SetWindowPos(control, nullptr, bounds.left, bounds.top + delta, 0, 0,
+                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    RECT frame{};
+    GetWindowRect(window, &frame);
+    SetWindowPos(window, nullptr, 0, 0, frame.right - frame.left,
+                 frame.bottom - frame.top + delta,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
   for (const int id : appearance_advanced_controls)
     ShowWindow(GetDlgItem(window, id), visible ? SW_SHOW : SW_HIDE);
+  set_text(GetDlgItem(window, IDC_APPEARANCE_ADVANCED),
+           visible ? L"Hide &advanced colors" : L"Show &advanced colors");
+  InvalidateRect(window, nullptr, TRUE);
 }
 
 double relative_luminance(const COLORREF color) {
@@ -170,7 +212,7 @@ void EditorWindow::open_options() {
 void EditorWindow::open_appearance() {
   const auto loaded = layerc::platform::read_editor_appearance();
   if (loaded.failed()) {
-    MessageBoxW(shell_.window, L"Could not read the editor appearance settings.",
+    themed_message_box(shell_.window, L"Could not read the editor appearance settings.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
     return;
   }
@@ -196,34 +238,69 @@ void EditorWindow::initialize_options(const HWND window) {
   const auto visual = layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::visual_recognition);
   if (visual.failed())
-    MessageBoxW(window, L"Could not read the visual-recognition setting.",
+    themed_message_box(window, L"Could not read the visual-recognition setting.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
   CheckDlgButton(window, IDC_VISUAL_MASTER,
                  visual.value.value_or(visual.missing()) ? BST_CHECKED
                                                          : BST_UNCHECKED);
+  const auto overlays = layerc::platform::read_bool_setting(
+      layerc::platform::BoolSetting::capture_exclusion);
   CheckDlgButton(window, IDC_CAPTURE_PRIVACY,
+                 overlays.value.value_or(true) ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(window, IDC_EDITOR_CAPTURE_PRIVACY,
                  shell_.capture_exclusion ? BST_CHECKED : BST_UNCHECKED);
-  CheckDlgButton(window, IDC_OPTIONS_ADVANCED, BST_UNCHECKED);
-  ShowWindow(GetDlgItem(window, IDC_CAPTURE_PRIVACY), SW_HIDE);
+  const HWND text_size = GetDlgItem(window, IDC_TEXT_SIZE);
+  for (const int percent : text_scale_choices) {
+    const auto label = std::to_wstring(percent) + L" %";
+    const LRESULT row = SendMessageW(text_size, CB_ADDSTRING, 0,
+                                     reinterpret_cast<LPARAM>(label.c_str()));
+    if (row >= 0) {
+      SendMessageW(text_size, CB_SETITEMDATA, static_cast<WPARAM>(row), percent);
+      if (percent == layerc::platform::native_text_scale())
+        SendMessageW(text_size, CB_SETCURSEL, static_cast<WPARAM>(row), 0);
+    }
+  }
+  EnableWindow(GetDlgItem(window, IDC_OPTIONS_APPLY), FALSE);
 }
 
-void EditorWindow::apply_options(const HWND window) {
-  const bool capture =
+bool EditorWindow::apply_options(const HWND window) {
+  const bool overlays =
       IsDlgButtonChecked(window, IDC_CAPTURE_PRIVACY) == BST_CHECKED;
+  const bool capture =
+      IsDlgButtonChecked(window, IDC_EDITOR_CAPTURE_PRIVACY) == BST_CHECKED;
   const bool visual =
       IsDlgButtonChecked(window, IDC_VISUAL_MASTER) == BST_CHECKED;
+  const LRESULT text_row =
+      SendDlgItemMessageW(window, IDC_TEXT_SIZE, CB_GETCURSEL, 0, 0);
+  const int text_scale =
+      text_row >= 0 ? static_cast<int>(SendDlgItemMessageW(
+                          window, IDC_TEXT_SIZE, CB_GETITEMDATA,
+                          static_cast<WPARAM>(text_row), 0))
+                    : layerc::platform::native_text_scale();
   bool saved = static_cast<bool>(
       layerc::platform::write_bool_setting(
-          layerc::platform::BoolSetting::capture_exclusion, capture));
+          layerc::platform::BoolSetting::capture_exclusion, overlays));
+  if (!layerc::platform::write_bool_setting(
+          layerc::platform::BoolSetting::editor_capture_exclusion, capture))
+    saved = false;
   if (!layerc::platform::write_bool_setting(
           layerc::platform::BoolSetting::visual_recognition, visual))
     saved = false;
+  if (!layerc::platform::write_layerc_registry_dword(
+          text_scale_setting, static_cast<std::uint32_t>(text_scale)))
+    saved = false;
   if (!saved) {
-    MessageBoxW(window, L"Could not save the selected options.",
-                L"LayerC Editor", MB_OK | MB_ICONWARNING);
-    return;
+    set_status(L"Could not save the selected options.");
+    themed_message_box(window, L"Could not save the selected options.",
+                L"Options", MB_OK | MB_ICONWARNING);
+    return false;
   }
 
+  EnableWindow(GetDlgItem(window, IDC_OPTIONS_APPLY), FALSE);
+  if (text_scale != layerc::platform::native_text_scale()) {
+    layerc::platform::set_native_text_scale(text_scale);
+    reload_fonts();
+  }
   shell_.capture_exclusion = capture;
   (void)layerc::platform::apply_capture_exclusion(window, shell_.capture_exclusion);
   (void)layerc::platform::apply_capture_exclusion(shell_.window, shell_.capture_exclusion);
@@ -232,6 +309,7 @@ void EditorWindow::apply_options(const HWND window) {
                                                     shell_.capture_exclusion);
   (void)layerc::platform::signal_settings_reload();
   set_status(L"Options saved.");
+  return true;
 }
 
 layerc::platform::EditorControlRole
@@ -284,7 +362,6 @@ void EditorWindow::initialize_appearance(const HWND window) {
                  static_cast<LPARAM>(role));
   }
   SendMessageW(tree, LB_SETCURSEL, 0, 0);
-  CheckDlgButton(window, IDC_APPEARANCE_ADVANCED, BST_UNCHECKED);
   show_advanced_appearance(window, false);
   refresh_appearance_controls(window);
 }
@@ -383,14 +460,14 @@ bool EditorWindow::apply_appearance(const HWND window) {
           std::to_wstring(ratio).substr(0, 4) + L":1; at least " +
           std::to_wstring(pair.minimum).substr(0, 3) +
           L":1 is required. Adjust this override or use Reset selected.";
-      MessageBoxW(window, message.c_str(), L"LayerC Editor", MB_OK | MB_ICONWARNING);
+      themed_message_box(window, message.c_str(), L"LayerC Editor", MB_OK | MB_ICONWARNING);
       SetFocus(GetDlgItem(window, pair.control));
       return false;
     }
   }
 
   if (!appearance_editor_.draft().apply(layerc::platform::write_editor_appearance)) {
-    MessageBoxW(window, L"Could not save the selected appearance.",
+    themed_message_box(window, L"Could not save the selected appearance.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
     return false;
   }
@@ -408,15 +485,22 @@ LRESULT EditorWindow::handle_options_message(const HWND window,
                                              const LPARAM lparam) {
   if (message == WM_COMMAND) {
     const int id = LOWORD(wparam);
-    if (id == IDC_OPTIONS_ADVANCED && HIWORD(wparam) == BN_CLICKED) {
-      const bool visible =
-          IsDlgButtonChecked(window, IDC_OPTIONS_ADVANCED) == BST_CHECKED;
-      ShowWindow(GetDlgItem(window, IDC_CAPTURE_PRIVACY),
-                 visible ? SW_SHOW : SW_HIDE);
+    const int notification = HIWORD(wparam);
+    if ((notification == BN_CLICKED &&
+         (id == IDC_VISUAL_MASTER || id == IDC_CAPTURE_PRIVACY ||
+          id == IDC_EDITOR_CAPTURE_PRIVACY)) ||
+        (id == IDC_TEXT_SIZE && notification == CBN_SELCHANGE)) {
+      EnableWindow(GetDlgItem(window, IDC_OPTIONS_APPLY), TRUE);
       return TRUE;
     }
-    if (id == IDC_OPTIONS_APPLY && HIWORD(wparam) == BN_CLICKED) {
-      apply_options(window);
+    if (id == IDC_OPTIONS_APPLY && notification == BN_CLICKED) {
+      (void)apply_options(window);
+      return TRUE;
+    }
+    if (id == IDOK) {
+      if (IsWindowEnabled(GetDlgItem(window, IDC_OPTIONS_APPLY)) == FALSE ||
+          apply_options(window))
+        EndDialog(window, IDOK);
       return TRUE;
     }
     if (id == IDCANCEL) {
@@ -452,8 +536,9 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
     }
     if (id == IDC_APPEARANCE_ADVANCED && notification == BN_CLICKED) {
       show_advanced_appearance(
-          window, IsDlgButtonChecked(window, IDC_APPEARANCE_ADVANCED) ==
-                      BST_CHECKED);
+          window, (GetWindowLongPtrW(GetDlgItem(window, IDC_APPEARANCE_TREE),
+                                     GWL_STYLE) &
+                   WS_VISIBLE) == 0);
       return TRUE;
     }
     if (id == IDC_APPEARANCE_TREE && notification == LBN_SELCHANGE) {
@@ -508,6 +593,9 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
     }
     break;
   }
+  case WM_DESTROY:
+    RemovePropW(window, L"LayerC.AdvancedBand");
+    break;
   default:
     break;
   }

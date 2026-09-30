@@ -14,6 +14,7 @@ namespace {
 
 // Workspace below the automation list and view rows, shared by every view.
 struct AutomationFrame {
+  HWND dialog{};
   DialogLayout ui;
   int width{};
   int margin{};
@@ -23,6 +24,28 @@ struct AutomationFrame {
   int workspace_top{};
   int workspace_bottom{};
 };
+
+// Width of a label's current text in its own font, plus a small gap, so
+// labels size to their words instead of clipping ("Automatio").
+int text_width(const HWND dialog, const int id, const int minimum) {
+  const HWND control = GetDlgItem(dialog, id);
+  if (control == nullptr)
+    return minimum;
+  wchar_t text[128]{};
+  const int length = GetWindowTextW(control, text, 128);
+  const HDC dc = GetDC(dialog);
+  if (dc == nullptr)
+    return minimum;
+  const HGDIOBJ previous = SelectObject(
+      dc, reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0)));
+  // DrawText drops the access-key '&' the way the label renders it.
+  RECT extent{};
+  DrawTextW(dc, text, length, &extent, DT_CALCRECT | DT_SINGLELINE);
+  SelectObject(dc, previous);
+  ReleaseDC(dialog, dc);
+  return std::max(minimum, static_cast<int>(extent.right) +
+                               MulDiv(12, static_cast<int>(GetDpiForWindow(dialog)), 96));
+}
 
 constexpr int basic_ids[]{
     IDC_AUTOMATION_BASIC_LABEL,      IDC_AUTOMATION_PALETTE,
@@ -68,29 +91,42 @@ constexpr int advanced_ids[]{IDC_AUTOMATION_ADVANCED_LABEL,
 void layout_basic_view(const AutomationFrame &f,
                        const bool validation_expanded) {
   const DialogLayout &ui = f.ui;
-  const int validation_height = ui.scaled(validation_expanded ? 92 : 28);
+  // At least four rows so several findings read without scrolling.
+  const int validation_height = ui.scaled(validation_expanded ? 200 : 104);
   const int validation_top = f.workspace_bottom - validation_height;
   const int left_width = std::max(
       ui.scaled(260), std::min(f.width * 42 / 100,
                                f.width - ui.scaled(330) - f.margin * 2 - f.gap));
   const int right = f.margin + left_width + f.gap;
   const int right_width = f.width - f.margin - right;
-  const int header_height = ui.scaled(24);
-  ui.move(IDC_AUTOMATION_BASIC_LABEL, f.margin, f.workspace_top + ui.scaled(3),
-          ui.scaled(105), f.label_height);
-  ui.move(IDC_AUTOMATION_PALETTE, f.margin + ui.scaled(110), f.workspace_top,
-          std::max(ui.scaled(100), left_width - ui.scaled(168)),
-          f.control_height);
-  ui.move(IDC_AUTOMATION_ADD_NODE, f.margin + left_width - ui.scaled(52),
-          f.workspace_top, ui.scaled(52), f.control_height);
+  const int header_height = f.control_height + ui.scaled(8);
+  const int basic_label =
+      text_width(f.dialog, IDC_AUTOMATION_BASIC_LABEL, ui.scaled(60));
+  const int add_width = ui.scaled(64);
+  ui.move(IDC_AUTOMATION_BASIC_LABEL, f.margin,
+          f.workspace_top + (f.control_height - f.label_height) / 2,
+          basic_label, f.label_height);
+  ui.move(IDC_AUTOMATION_PALETTE, f.margin + basic_label, f.workspace_top,
+          std::max(ui.scaled(100),
+                   left_width - basic_label - add_width - ui.scaled(8)),
+          ui.scaled(240));
+  ui.move(IDC_AUTOMATION_ADD_NODE, f.margin + left_width - add_width,
+          f.workspace_top, add_width, f.control_height);
   ui.move(IDC_AUTOMATION_NODES, f.margin, f.workspace_top + header_height,
           left_width,
           std::max(ui.scaled(90), validation_top - f.gap - f.workspace_top -
                                       header_height));
 
-  const int field_label = ui.scaled(92);
+  int field_label = ui.scaled(72);
+  for (const int id :
+       {IDC_AUTOMATION_NAME_LABEL, IDC_AUTOMATION_SELECTED_LABEL,
+        IDC_AUTOMATION_RULE_ID_LABEL, IDC_AUTOMATION_EVENT_LABEL,
+        IDC_AUTOMATION_SOURCE_LABEL, IDC_AUTOMATION_PRIORITY_LABEL,
+        IDC_AUTOMATION_ACTION_LABEL, IDC_AUTOMATION_TARGET_LABEL,
+        IDC_AUTOMATION_VALUE_LABEL})
+    field_label = std::max(field_label, text_width(f.dialog, id, 0));
   const int field_left = right + field_label;
-  const int row_height = ui.scaled(27);
+  const int row_height = f.control_height + ui.scaled(8);
   constexpr std::array<std::array<int, 2>, 9> fields{{
       {IDC_AUTOMATION_NAME_LABEL, IDC_AUTOMATION_NAME},
       {IDC_AUTOMATION_SELECTED_LABEL, IDC_AUTOMATION_NODE_KIND},
@@ -108,21 +144,24 @@ void layout_basic_view(const AutomationFrame &f,
                  f.label_height, f.control_height);
     y += row_height;
   }
-  ui.move(IDC_AUTOMATION_REPEATING, field_left, y + ui.scaled(2),
-          ui.scaled(120), f.label_height);
+  ui.move(IDC_AUTOMATION_REPEATING, field_left, y,
+          ui.scaled(160), f.control_height);
   ui.move(IDC_AUTOMATION_APPLY_NODE, field_left, y + row_height,
-          ui.scaled(82), f.control_height);
-  ui.move(IDC_AUTOMATION_DELETE_NODE, field_left + ui.scaled(90),
-          y + row_height, ui.scaled(82), f.control_height);
+          ui.scaled(104), f.control_height);
+  ui.move(IDC_AUTOMATION_DELETE_NODE, field_left + ui.scaled(112),
+          y + row_height, ui.scaled(104), f.control_height);
 
+  const int validation_label =
+      text_width(f.dialog, IDC_AUTOMATION_VALIDATION_LABEL, ui.scaled(60));
   ui.move(IDC_AUTOMATION_VALIDATION_LABEL, f.margin,
-          validation_top + ui.scaled(4), ui.scaled(70), f.label_height);
-  const int validate_width = ui.scaled(68);
-  const int retry_width = ui.scaled(58);
+          validation_top + ui.scaled(4), validation_label, f.label_height);
+  const int validate_width = ui.scaled(88);
+  const int retry_width = ui.scaled(72);
   const int retry_left = f.width - f.margin - retry_width;
   const int validate_left = retry_left - f.gap - validate_width;
-  ui.move(IDC_AUTOMATION_VALIDATION, f.margin + ui.scaled(74), validation_top,
-          std::max(1, validate_left - f.gap - f.margin - ui.scaled(74)),
+  ui.move(IDC_AUTOMATION_VALIDATION, f.margin + validation_label,
+          validation_top,
+          std::max(1, validate_left - f.gap - f.margin - validation_label),
           validation_height);
   ui.move(IDC_AUTOMATION_VALIDATE, validate_left, validation_top,
           validate_width, f.control_height);
@@ -176,17 +215,22 @@ void layout_simulator_view(const AutomationFrame &f,
                  f.control_height, f.gap);
 
   const int options_top = controls_top + f.control_height + f.gap;
+  const int breakpoint_label =
+      text_width(f.dialog, IDC_AUTOMATION_SIM_BREAKPOINT_LABEL, 0);
   ui.move(IDC_AUTOMATION_SIM_BREAKPOINT_LABEL, f.margin,
-          options_top + ui.scaled(3), ui.scaled(100), f.label_height);
-  ui.move(IDC_AUTOMATION_SIM_BREAKPOINT, f.margin + ui.scaled(104),
+          options_top + ui.scaled(5), breakpoint_label, f.label_height);
+  ui.move(IDC_AUTOMATION_SIM_BREAKPOINT, f.margin + breakpoint_label,
           options_top, ui.scaled(170), f.control_height);
-  const int assertions_left = f.margin + ui.scaled(286);
+  const int assertions_left =
+      f.margin + breakpoint_label + ui.scaled(170) + f.gap * 2;
+  const int assertions_label =
+      text_width(f.dialog, IDC_AUTOMATION_SIM_ASSERTIONS_LABEL, 0);
   ui.move(IDC_AUTOMATION_SIM_ASSERTIONS_LABEL, assertions_left,
-          options_top + ui.scaled(3), ui.scaled(145), f.label_height);
-  ui.move(IDC_AUTOMATION_SIM_ASSERTIONS, assertions_left + ui.scaled(150),
+          options_top + ui.scaled(5), assertions_label, f.label_height);
+  ui.move(IDC_AUTOMATION_SIM_ASSERTIONS, assertions_left + assertions_label,
           options_top,
           std::max(ui.scaled(160),
-                   f.width - assertions_left - ui.scaled(150) - f.margin),
+                   f.width - assertions_left - assertions_label - f.margin),
           f.control_height);
   const int trace_top = options_top + f.control_height + f.gap;
   ui.move(IDC_AUTOMATION_SIM_TRACE_LABEL, f.margin, trace_top + ui.scaled(3),
@@ -235,39 +279,46 @@ AutomationFrame layout_automation_header(const HWND dialog) {
 
   const int margin = ui.scaled(12);
   const int gap = ui.scaled(8);
-  const int control_height = ui.scaled(24);
-  const int label_height = ui.scaled(18);
+  const int control_height = ui.scaled(30);
+  const int label_height = ui.scaled(20);
+  const int label_top = (control_height - label_height) / 2;
   const int top = margin;
-  const int extra = std::max(0, width - ui.scaled(756));
-  int left = margin;
-  ui.move(IDC_AUTOMATION_LIST_LABEL, left, top + ui.scaled(3), ui.scaled(60),
+  // Right-anchored preset/action cluster; the automation list takes the rest.
+  const int list_label = text_width(dialog, IDC_AUTOMATION_LIST_LABEL, 0);
+  const int preset_label = text_width(dialog, IDC_AUTOMATION_PRESET_LABEL, 0);
+  const int enabled_width =
+      text_width(dialog, IDC_AUTOMATION_ENABLED, 0) + ui.scaled(24);
+  const int new_width = ui.scaled(60);
+  const int remove_width = ui.scaled(68);
+  const int presets_width = ui.scaled(200);
+  int right = width - margin - enabled_width;
+  ui.move(IDC_AUTOMATION_ENABLED, right, top, enabled_width, control_height);
+  right -= gap + remove_width;
+  ui.move(IDC_AUTOMATION_REMOVE, right, top, remove_width, control_height);
+  right -= gap + new_width;
+  ui.move(IDC_AUTOMATION_ADD_PRESET, right, top, new_width, control_height);
+  right -= gap + presets_width;
+  ui.move(IDC_AUTOMATION_PRESETS, right, top, presets_width, ui.scaled(200));
+  right -= preset_label;
+  ui.move(IDC_AUTOMATION_PRESET_LABEL, right, top + label_top, preset_label,
           label_height);
-  left += ui.scaled(60);
-  ui.move(IDC_AUTOMATION_LIST, left, top, ui.scaled(140) + extra,
-          control_height);
-  left += ui.scaled(140) + extra + gap;
-  ui.move(IDC_AUTOMATION_PRESET_LABEL, left, top + ui.scaled(3),
-          ui.scaled(65), label_height);
-  left += ui.scaled(65);
-  ui.move(IDC_AUTOMATION_PRESETS, left, top, ui.scaled(220), control_height);
-  left += ui.scaled(220) + gap;
-  ui.move(IDC_AUTOMATION_ADD_PRESET, left, top, ui.scaled(54),
-          control_height);
-  left += ui.scaled(60);
-  ui.move(IDC_AUTOMATION_REMOVE, left, top, ui.scaled(58), control_height);
-  left += ui.scaled(66);
-  ui.move(IDC_AUTOMATION_ENABLED, left, top + ui.scaled(2), ui.scaled(70),
+  ui.move(IDC_AUTOMATION_LIST_LABEL, margin, top + label_top, list_label,
           label_height);
+  ui.move(IDC_AUTOMATION_LIST, margin + list_label, top,
+          std::max(ui.scaled(100), right - gap * 2 - margin - list_label),
+          ui.scaled(240));
   const int view_top = top + control_height + gap;
-  ui.move(IDC_AUTOMATION_VIEW_LABEL, margin, view_top + ui.scaled(3),
-          ui.scaled(40), label_height);
-  ui.move(IDC_AUTOMATION_VIEW, margin + ui.scaled(40), view_top,
-          ui.scaled(150), control_height);
+  const int view_label = text_width(dialog, IDC_AUTOMATION_VIEW_LABEL, 0);
+  ui.move(IDC_AUTOMATION_VIEW_LABEL, margin, view_top + label_top, view_label,
+          label_height);
+  ui.move(IDC_AUTOMATION_VIEW, margin + view_label, view_top, ui.scaled(170),
+          ui.scaled(160));
 
   const int close_top = height - margin - control_height;
-  ui.move(IDOK, width - margin - ui.scaled(72), close_top, ui.scaled(72),
+  ui.move(IDOK, width - margin - ui.scaled(88), close_top, ui.scaled(88),
           control_height);
-  return {.ui = ui,
+  return {.dialog = dialog,
+          .ui = ui,
           .width = width,
           .margin = margin,
           .gap = gap,

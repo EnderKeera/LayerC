@@ -54,9 +54,24 @@ function(layerc_win32 target)
     layerc_enable_warnings(${target})
 endfunction()
 
+# Native executables and tests need Common Controls 6 for themed controls,
+# cue banners, empty-list markup, and MinGW's named subclass API imports.
+# MSVC merges the dependency into its generated UAC manifest; MinGW embeds a
+# complete manifest that replaces mingw-w64's default one.
+function(layerc_common_controls target)
+    if(MSVC)
+        target_sources(${target} PRIVATE
+            "${PROJECT_SOURCE_DIR}/resources/windows/common_controls.manifest")
+    elseif(MINGW)
+        target_sources(${target} PRIVATE
+            "${PROJECT_SOURCE_DIR}/resources/windows/common_controls_mingw.rc")
+    endif()
+endfunction()
+
 # Executables entered through wWinMain/wmain; MinGW links those with -municode.
 function(layerc_win32_exe target)
     layerc_win32(${target})
+    layerc_common_controls(${target})
     if(MINGW)
         target_link_options(${target} PRIVATE -municode)
     endif()
@@ -220,6 +235,7 @@ if(WIN32)
         src/platform/win32_error.cpp
         src/platform/platform_events.cpp
         src/platform/native_theme.cpp
+        src/platform/native_controls.cpp
         src/platform/window_discovery.cpp
         src/platform/text.cpp
         src/platform/path_text.cpp
@@ -307,6 +323,8 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
     add_library(layerc_editor_ui STATIC
         src/editor/editor_dialog.cpp
         src/editor/editor_layout.cpp
+        src/editor/editor_shell.cpp
+        src/editor/editor_prompt.cpp
         src/editor/editor_profiles.cpp
         src/editor/editor_profile_fields.cpp
         src/editor/editor_util.cpp
@@ -468,7 +486,8 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/daemon_live_edit.cpp
         src/daemon/daemon_diagnostics.cpp
         src/daemon/daemon_visual.cpp
-        src/daemon/isolated_visual_worker.cpp)
+        src/daemon/isolated_visual_worker.cpp
+        resources/windows/layerd.rc)
     target_include_directories(layerd PRIVATE src/daemon src/gamebar)
     target_link_libraries(layerd PRIVATE
         layerc_core layerc_runtime layerc_windows layerc_capture
@@ -671,6 +690,7 @@ if(LAYERC_BUILD_TESTS)
             layerc_win32_exe(${target})
         elseif(TEST_WIN32)
             layerc_win32(${target})
+            layerc_common_controls(${target})
         else()
             layerc_enable_warnings(${target})
         endif()
@@ -901,7 +921,8 @@ if(LAYERC_BUILD_TESTS)
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
 
         layerc_add_test(layerc_editor_tests
-            SOURCES tests/editor_dialog_tests.cpp src/editor/editor_resources.rc
+            SOURCES tests/editor_dialog_tests.cpp tests/editor_regression_tests.cpp
+                src/editor/editor_resources.rc
             LINK layerc_editor_ui WIN32 TIMEOUT 30)
         target_include_directories(layerc_editor_tests PRIVATE src/editor)
 

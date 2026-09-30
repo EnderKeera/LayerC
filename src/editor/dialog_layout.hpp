@@ -3,6 +3,8 @@
 #include "layerc/platform/native_theme.hpp"
 
 #include <algorithm>
+#include <initializer_list>
+#include <vector>
 
 #include <windows.h>
 
@@ -41,10 +43,14 @@ inline void destroy_dialog_font(HFONT &font) noexcept {
 }
 
 // Shared DPI-scaled dialog plumbing: every resizable editor dialog computes
-// the same 96-DPI baseline, logical scaling, and clamped MoveWindow.
+// the same 96-DPI baseline, logical scaling, and clamped MoveWindow. The
+// baseline includes the text size (Windows setting and Options > Text size)
+// so code layouts grow with their text. Fonts take the raw window DPI.
 [[nodiscard]] inline int window_base_dpi(const HWND window) {
-  const UINT dpi = GetDpiForWindow(window);
-  return dpi == 0 ? 96 : static_cast<int>(dpi);
+  const UINT raw = GetDpiForWindow(window);
+  const UINT dpi = raw == 0 ? 96U : raw;
+  return MulDiv(static_cast<int>(dpi),
+                layerc::platform::native_text_percent(dpi), 100);
 }
 
 [[nodiscard]] inline int dpi_scaled(const int logical, const int dpi) {
@@ -136,14 +142,28 @@ public:
     dialog_ = dialog;
     if (dpi == 0 && dialog_ != nullptr)
       dpi = GetDpiForWindow(dialog_);
-    return dialog_ != nullptr && replace_dialog_font(dialog_, dpi, font_);
+    const bool styled =
+        dialog_ != nullptr && replace_dialog_font(dialog_, dpi, font_);
+    apply_monospace(dpi);
+    return styled;
   }
 
   [[nodiscard]] bool on_dpi_changed(const UINT dpi, const LPARAM lparam) {
     if (dialog_ == nullptr)
       return false;
     apply_suggested_dpi_rect(dialog_, lparam);
-    return replace_dialog_font(dialog_, dpi, font_);
+    const bool styled = replace_dialog_font(dialog_, dpi, font_);
+    apply_monospace(dpi);
+    return styled;
+  }
+
+  // JSON, traces and other machine text use the monospace font (Cascadia
+  // Mono, else Consolas); restyling gives children the body font, so it is
+  // re-applied after every font change.
+  void set_monospace(const std::initializer_list<int> ids) {
+    monospace_ids_.assign(ids.begin(), ids.end());
+    if (dialog_ != nullptr)
+      apply_monospace(GetDpiForWindow(dialog_));
   }
 
   void on_minimum_size(const LPARAM lparam, const int logical_width,
@@ -154,6 +174,7 @@ public:
 
   void on_destroy() noexcept {
     destroy_dialog_font(font_);
+    destroy_dialog_font(monospace_);
     dialog_ = nullptr;
   }
 
@@ -161,8 +182,25 @@ public:
   [[nodiscard]] HFONT font() const noexcept { return font_; }
 
 private:
+  void apply_monospace(const UINT dpi) {
+    if (dialog_ == nullptr || monospace_ids_.empty())
+      return;
+    const HFONT replacement = layerc::platform::create_native_monospace_font(dpi);
+    if (replacement == nullptr)
+      return;
+    for (const int id : monospace_ids_) {
+      if (const HWND control = GetDlgItem(dialog_, id); control != nullptr)
+        SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(replacement),
+                     TRUE);
+    }
+    destroy_dialog_font(monospace_);
+    monospace_ = replacement;
+  }
+
   HWND dialog_{};
   HFONT font_{};
+  HFONT monospace_{};
+  std::vector<int> monospace_ids_;
 };
 
 } // namespace layerc::editor

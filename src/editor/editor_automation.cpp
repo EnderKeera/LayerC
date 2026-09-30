@@ -18,6 +18,7 @@
 #include <string>
 #include <variant>
 
+#include <commctrl.h>
 #include <commdlg.h>
 #include <windows.h>
 
@@ -177,14 +178,14 @@ AutomationEditor::mutate_automation(const HWND dialog, const wchar_t *title,
   auto before = *profile;
   if (const auto rejection = edit()) {
     *profile = std::move(before);
-    MessageBoxW(dialog, rejection->c_str(), title, MB_OK | MB_ICONWARNING);
+    themed_message_box(dialog, rejection->c_str(), title, MB_OK | MB_ICONWARNING);
     return Mutation::rejected;
   }
   const auto validation = layerc::core::validate_automation_profile(
       *profile, owner_.document_.profile());
   if (!validation.message.empty()) {
     *profile = std::move(before);
-    MessageBoxW(dialog,
+    themed_message_box(dialog,
                 to_wide(validation.path + ": " + validation.message).c_str(),
                 title, MB_OK | MB_ICONWARNING);
     return Mutation::invalid;
@@ -255,9 +256,15 @@ void AutomationEditor::refresh_node_properties(const HWND dialog) {
   EnableWindow(GetDlgItem(dialog, IDC_AUTOMATION_VALUE), action != nullptr);
   EnableWindow(GetDlgItem(dialog, IDC_AUTOMATION_REPEATING), action != nullptr);
 
+  update_add_enabled(dialog);
   if (rule == nullptr) {
+    const auto *automation = selected_automation(dialog);
     set_text(GetDlgItem(dialog, IDC_AUTOMATION_NODE_KIND),
-             L"Select a node in the rule list.");
+             automation == nullptr
+                 ? L"No automation yet — choose a preset above and press New."
+             : automation->rules.empty()
+                 ? L"No rules yet — choose a rule type and press Add."
+                 : L"Select a rule or action in the list.");
     for (const int id :
          {IDC_AUTOMATION_RULE_ID, IDC_AUTOMATION_SOURCE,
           IDC_AUTOMATION_PRIORITY, IDC_AUTOMATION_TARGET, IDC_AUTOMATION_VALUE})
@@ -346,7 +353,7 @@ void AutomationEditor::apply_node_properties(const HWND dialog) {
   if (selected_rule(dialog) == nullptr)
     return;
   const auto result = mutate_automation(
-      dialog, L"Node properties", [&]() -> std::optional<std::wstring> {
+      dialog, L"Rule properties", [&]() -> std::optional<std::wstring> {
         auto &rule = *selected_rule(dialog);
         rule.id =
             wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_RULE_ID)));
@@ -429,11 +436,25 @@ void AutomationEditor::delete_node(const HWND dialog) {
 
 void AutomationEditor::initialize(const HWND dialog) {
   dialog_ = dialog;
-  const int dpi = window_base_dpi(dialog);
   resize_to_logical_size(dialog, 1000, 700);
   apply_dialog_chrome(dialog, owner_.shell_.capture_exclusion);
-  if (!chrome_.attach(dialog, static_cast<UINT>(dpi)))
+  if (!chrome_.attach(dialog))
     style_native_dialog_children(dialog, owner_.shell_.font);
+  chrome_.set_monospace({IDC_AUTOMATION_JSON, IDC_AUTOMATION_TRACE_TEXT});
+  // Hints for the free-text fields (Common Controls 6 cue banners).
+  const auto cue = [dialog](const int id, const wchar_t *text) {
+    SendMessageW(GetDlgItem(dialog, id), EM_SETCUEBANNER, FALSE,
+                 reinterpret_cast<LPARAM>(text));
+  };
+  cue(IDC_AUTOMATION_RULE_ID, L"Unique name, e.g. dash-start");
+  cue(IDC_AUTOMATION_SOURCE, L"Any source, or a device or cooldown id");
+  cue(IDC_AUTOMATION_TARGET, L"Cooldown or bar id the action changes");
+  cue(IDC_AUTOMATION_VALUE, L"Number, text, true or false");
+  cue(IDC_AUTOMATION_PRIORITY, L"0");
+  cue(IDC_AUTOMATION_SIM_SOURCE, L"Any source");
+  cue(IDC_AUTOMATION_SIM_FIELDS, L"field:type=JSON; ...");
+  cue(IDC_AUTOMATION_SIM_BREAKPOINT, L"Rule id to pause at");
+  cue(IDC_AUTOMATION_SIM_ASSERTIONS, L"id=JSON; ...");
 
   const HWND presets = GetDlgItem(dialog, IDC_AUTOMATION_PRESETS);
   for (const wchar_t *entry :
@@ -476,8 +497,6 @@ void AutomationEditor::initialize(const HWND dialog) {
   for (const wchar_t *entry : {L"0.25x", L"1x", L"4x"})
     SendMessageW(speed, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(entry));
   SendMessageW(speed, CB_SETCURSEL, 1, 0);
-  set_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_FIELDS),
-           L"field:type=JSON; ...");
   update_view(dialog);
   refresh(dialog);
 }
@@ -499,13 +518,13 @@ void AutomationEditor::add_basic(const HWND dialog) {
       std::max(0, static_cast<int>(SendDlgItemMessageW(
                       dialog, IDC_AUTOMATION_PRESETS, CB_GETCURSEL, 0, 0)));
   if (preset != 0 && owner_.document_.profile().cooldowns.empty()) {
-    MessageBoxW(dialog,
+    themed_message_box(dialog,
                 L"Add a cooldown before creating this automation preset.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (preset == 3 && owner_.document_.profile().panels.empty()) {
-    MessageBoxW(dialog, L"The overlay preset requires at least one panel.",
+    themed_message_box(dialog, L"The overlay preset requires at least one panel.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -536,6 +555,31 @@ void AutomationEditor::add_basic(const HWND dialog) {
   node_action_ = -1;
   refresh(dialog);
 }
+// Adding is offered only when it can succeed: an action needs a selected
+// rule, some entries need a cooldown or an overlay bar, and non-blank
+// presets need a cooldown.
+void AutomationEditor::update_add_enabled(const HWND dialog) {
+  const auto &profile = owner_.document_.profile();
+  const auto *entry = automation_palette_entry(
+      SendDlgItemMessageW(dialog, IDC_AUTOMATION_PALETTE, CB_GETCURSEL, 0, 0));
+  bool can_add = entry != nullptr;
+  if (entry != nullptr) {
+    if (entry->requires_cooldown && profile.cooldowns.empty())
+      can_add = false;
+    if (entry->requires_panel && profile.panels.empty())
+      can_add = false;
+    if (entry->target == AutomationPaletteTarget::action &&
+        selected_rule(dialog) == nullptr)
+      can_add = false;
+  }
+  EnableWindow(GetDlgItem(dialog, IDC_AUTOMATION_ADD_NODE), can_add);
+  const LRESULT preset =
+      SendDlgItemMessageW(dialog, IDC_AUTOMATION_PRESETS, CB_GETCURSEL, 0, 0);
+  EnableWindow(GetDlgItem(dialog, IDC_AUTOMATION_ADD_PRESET),
+               preset <= 0 || (!profile.cooldowns.empty() &&
+                               (preset != 3 || !profile.panels.empty())));
+}
+
 void AutomationEditor::add_palette_node(const HWND dialog) {
   const int selected = selected_index(dialog);
   if (selected < 0) {
@@ -548,18 +592,18 @@ void AutomationEditor::add_palette_node(const HWND dialog) {
     return;
   const auto &profile = owner_.document_.profile();
   if (entry->requires_cooldown && profile.cooldowns.empty()) {
-    MessageBoxW(dialog, L"This node requires at least one cooldown.",
+    themed_message_box(dialog, L"This rule type needs at least one cooldown.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
   const bool adds_action = entry->target == AutomationPaletteTarget::action;
   if (adds_action && selected_rule(dialog) == nullptr) {
-    MessageBoxW(dialog, L"Select a rule before adding an action.",
+    themed_message_box(dialog, L"Select a rule before adding an action.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (entry->requires_panel && profile.panels.empty()) {
-    MessageBoxW(dialog, L"Overlay nodes require at least one panel.",
+    themed_message_box(dialog, L"Overlay actions need at least one overlay bar.",
                 L"Automation", MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -568,7 +612,8 @@ void AutomationEditor::add_palette_node(const HWND dialog) {
   const auto panel_id =
       profile.panels.empty() ? std::string{} : profile.panels.front().id;
   const auto result = mutate_automation(
-      dialog, L"Node could not be added", [&]() -> std::optional<std::wstring> {
+      dialog, L"Could not add the rule or action",
+      [&]() -> std::optional<std::wstring> {
         auto &automation = *selected_automation(dialog);
         if (entry->target == AutomationPaletteTarget::rule) {
           automation.rules.push_back(make_palette_rule(
@@ -625,7 +670,7 @@ bool AutomationEditor::apply_json(const HWND dialog) {
   if (profile == nullptr) {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
     const auto presentation = present_json_error(source, error);
-    MessageBoxW(dialog, presentation.message.c_str(),
+    themed_message_box(dialog, presentation.message.c_str(),
                 L"Invalid automation graph", MB_OK | MB_ICONWARNING);
     select_json_error(dialog, presentation);
     return false;
@@ -670,6 +715,9 @@ bool AutomationEditor::handle_command(const HWND dialog,
     }
     return true;
   case IDC_AUTOMATION_PRESETS:
+  case IDC_AUTOMATION_PALETTE:
+    if (notification == CBN_SELCHANGE)
+      update_add_enabled(dialog);
     return true;
   case IDC_AUTOMATION_VIEW:
     if (notification == CBN_SELCHANGE)

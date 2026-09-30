@@ -27,9 +27,15 @@ struct SettingWriteResult {
 };
 
 enum class BoolSetting : std::uint8_t {
+  // Cooldown overlays (LayerD). Missing means excluded.
   capture_exclusion,
   visual_recognition,
   visual_capture_notice,
+  // LayerC Editor and its dialogs. Missing means capturable, so screenshots,
+  // screen sharing and Magnifier see the editor unless the user opts out.
+  editor_capture_exclusion,
+  // The editor's "Show advanced" view toggle.
+  editor_advanced_view,
 };
 
 [[nodiscard]] SettingReadResult<bool> read_bool_setting(BoolSetting setting);
@@ -42,6 +48,9 @@ enum class BoolSetting : std::uint8_t {
 [[nodiscard]] SettingReadResult<std::uint32_t>
 read_layerc_registry_dword(std::wstring_view value_name,
                            std::wstring_view subkey = {});
+[[nodiscard]] SettingWriteResult
+write_layerc_registry_dword(std::wstring_view value_name, std::uint32_t value,
+                            std::wstring_view subkey = {});
 [[nodiscard]] SettingReadResult<std::vector<std::byte>>
 read_layerc_registry_binary(std::wstring_view value_name,
                             std::size_t maximum_bytes,

@@ -39,12 +39,12 @@ void show_task_actions_menu(const HWND window) {
 
 void EditorWindow::initialize_tasks(const HWND window) {
   task_picker_.window = window;
-  const int dpi = window_base_dpi(window);
   resize_to_logical_size(window, 760, 360);
   set_dark_title_bar(window);
-  if (!task_picker_.chrome.attach(window, static_cast<UINT>(dpi)))
+  if (!task_picker_.chrome.attach(window))
     style_native_dialog_children(window, shell_.font);
   task_picker_.list = GetDlgItem(window, IDC_TASK_LIST);
+  set_owner_draw_checkbox(GetDlgItem(window, IDC_TASK_SHOW_ALL), false);
   ListView_SetExtendedListViewStyle(task_picker_.list,
                                     LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   const auto make_column = [](const int width, const wchar_t *text) {
@@ -77,11 +77,18 @@ void EditorWindow::layout_tasks(const HWND window) {
   const int dpi = window_base_dpi(window);
   const DialogLayout ui(window, dpi);
 
-  const int margin = ui.scaled(9);
-  const int list_top = ui.scaled(31);
-  const int button_height = ui.scaled(23);
-  const int detail_height = ui.scaled(18);
+  const int margin = ui.scaled(12);
+  const int button_height = ui.scaled(30);
+  const int heading_height = ui.scaled(24);
+  const int detail_height = ui.scaled(20);
   const int gap = ui.scaled(8);
+  // Heading row above the list, never overlapped by it.
+  const int show_all_width = ui.scaled(170);
+  ui.move(IDC_TASK_HEADING, margin, margin, width - margin * 3 - show_all_width,
+          heading_height);
+  ui.move(IDC_TASK_SHOW_ALL, width - margin - show_all_width, margin,
+          show_all_width, heading_height);
+  const int list_top = margin + heading_height + gap;
   const int button_top =
       std::max(list_top + ui.scaled(80),
                height - margin - detail_height - gap - button_height);
@@ -96,10 +103,12 @@ void EditorWindow::layout_tasks(const HWND window) {
             button_height);
     button_left += ui.scaled(button_width + 7);
   };
-  move_button(IDC_PICK_WINDOW, 84);
+  move_button(IDC_PICK_WINDOW, 104);
   move_button(IDC_USE_TASK, 110);
-  move_button(IDC_REFRESH_TASKS, 64);
-  move_button(IDC_TASK_ACTIONS, 68);
+  move_button(IDC_REFRESH_TASKS, 84);
+  move_button(IDC_TASK_ACTIONS, 84);
+  ui.move(IDCANCEL, width - margin - ui.scaled(88), button_top, ui.scaled(88),
+          button_height);
   ui.move(IDC_TASK_DETAIL, margin, button_top + button_height + gap, list_width,
           detail_height);
 
@@ -129,8 +138,12 @@ void EditorWindow::refresh_tasks() {
   ListView_DeleteAllItems(task_picker_.list);
   auto matching_profile = document_.profile();
   matching_profile.enabled = true;
+  const bool show_all = owner_draw_checkbox_checked(
+      GetDlgItem(task_picker_.window, IDC_TASK_SHOW_ALL));
   for (auto candidate : layerc::platform::enumerate_attachable_windows()) {
     if (candidate.process_id == GetCurrentProcessId())
+      continue;
+    if (!show_all && (candidate.background || candidate.title.empty()))
       continue;
     if (task_picker_.has_request() &&
         !matching_profile.game.global &&
@@ -178,7 +191,7 @@ EditorWindow::require_selected_task(const bool live_window_required) {
   if (candidate != nullptr &&
       (!live_window_required || IsWindow(candidate->window)))
     return candidate;
-  MessageBoxW(task_picker_.window,
+  themed_message_box(task_picker_.window,
               candidate == nullptr
                   ? L"Select a task first."
                   : L"The selected task has closed. Refresh the list before "
@@ -321,7 +334,11 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
       use_selected_task();
       return TRUE;
     case IDC_REFRESH_TASKS:
+    case IDC_TASK_SHOW_ALL:
       refresh_tasks();
+      return TRUE;
+    case IDCANCEL:
+      DestroyWindow(window);
       return TRUE;
     case IDC_TASK_ACTIONS:
       show_task_actions_menu(window);

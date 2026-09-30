@@ -20,6 +20,9 @@ struct WindowCandidate {
   std::wstring executable_name;
   std::wstring window_class;
   std::uint64_t client_area{};
+  // Cloaked, tool or non-activating windows (overlays, input hosts,
+  // suspended UWP frames): attachable, but rarely what a user picks.
+  bool background{};
 };
 
 [[nodiscard]] std::vector<WindowCandidate> enumerate_attachable_windows();
