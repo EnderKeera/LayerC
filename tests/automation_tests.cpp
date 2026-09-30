@@ -666,6 +666,59 @@ void test_automation_numeric_promotion() {
 }
 
 void test_automation_trace_root_provenance() {
+  {
+    const std::array recorded_events{
+        AutomationEvent{.kind = AutomationEventKind::session_started},
+        AutomationEvent{
+            .kind = AutomationEventKind::input_pressed,
+            .timestamp = TimePoint(25ms),
+            .source_id = "keyboard:18",
+            .origin_token = 42,
+            .fields = {{"pressed", AutomationValue(true)},
+                       {"count", AutomationValue(std::int64_t{-7})},
+                       {"value", AutomationValue(0.5)},
+                       {"label",
+                        AutomationValue(std::string("line\n\"quoted\""))}}},
+        AutomationEvent{
+            .kind = AutomationEventKind::visual_observation,
+            .timestamp = TimePoint(1250ms),
+            .source_id = "locator",
+            .origin_token = 42,
+            .fields = {
+                {"ageMs", AutomationValue(DurationValue{75ms})},
+                {"confidence", AutomationValue(ConfidenceValue{0.875})},
+                {"matches",
+                 AutomationValue(AutomationList{
+                     AutomationValue(AutomationMap{
+                         {"found", AutomationValue(true)},
+                         {"label", AutomationValue(std::string("target"))}})})}}}};
+    std::vector<AutomationTraceEntry> entries;
+    for (std::size_t index{}; index < recorded_events.size(); ++index) {
+      entries.push_back(make_automation_root_trace_entry(recorded_events[index],
+                                                       index + 1U));
+      expect(entries.back().sequence == index + 1U &&
+                 entries.back().phase == "root",
+             "simulator recordings must carry ordered explicit replay roots");
+    }
+    const auto imported = parse_layerc_trace(export_layerc_trace(entries));
+    const auto *events = std::get_if<std::vector<AutomationEvent>>(&imported);
+    expect(events != nullptr && events->size() == recorded_events.size(),
+           "simulator-recorded trace export must import every event once");
+    if (events != nullptr && events->size() == recorded_events.size()) {
+      for (std::size_t index{}; index < recorded_events.size(); ++index) {
+        const auto &expected = recorded_events[index];
+        const auto &actual = (*events)[index];
+        expect(actual.kind == expected.kind &&
+                   actual.timestamp == expected.timestamp &&
+                   actual.source_id == expected.source_id &&
+                   actual.origin_token == expected.origin_token &&
+                   actual.fields == expected.fields,
+               "simulator trace round trip must preserve event order, "
+               "timestamps, source, origins and typed fields");
+      }
+    }
+  }
+
   auto base = automation_base();
   base.panels.push_back({.id = "main", .name = "Main"});
   AutomationProfile profile;

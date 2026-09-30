@@ -650,6 +650,9 @@ struct AutomationEffect {
   EffectOrder order{};
 };
 
+// Only explicit external roots are replayable; derived/audit entries are not.
+inline constexpr char automation_trace_root_phase[] = "root";
+
 struct AutomationTraceEntry {
   std::uint64_t sequence{};
   Milliseconds timestamp{};
@@ -772,6 +775,10 @@ struct AutomationReplayResult {
     const AutomationProfile &profile, std::span<const AutomationEvent> events,
     std::span<const AutomationReplayAssertion> assertions = {},
     std::span<const CooldownGroup> cooldown_groups = {});
+// Records one external event as a replay root (for example, simulator input).
+[[nodiscard]] AutomationTraceEntry
+make_automation_root_trace_entry(const AutomationEvent &event,
+                                std::uint64_t sequence);
 [[nodiscard]] std::string
 export_layerc_trace(std::span<const AutomationTraceEntry> entries);
 struct LiveMessage;

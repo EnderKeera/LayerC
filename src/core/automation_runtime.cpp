@@ -92,7 +92,7 @@ AutomationRuntime::process(const AutomationEvent &root,
   // attempt.
   const auto deadline =
       automation_time_after(impl_->clock(), automation_execution_budget);
-  impl_->add_event_trace(root, "root");
+  impl_->add_event_trace(root, automation_trace_root_phase);
   if (!deadline) {
     result.error = {"$runtime",
                     "execution deadline is outside the clock range"};

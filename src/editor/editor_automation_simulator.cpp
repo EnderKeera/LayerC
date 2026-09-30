@@ -66,16 +66,9 @@ std::string
 trace_from_events(const std::span<const layerc::core::AutomationEvent> events) {
   std::vector<layerc::core::AutomationTraceEntry> entries;
   entries.reserve(events.size());
-  for (std::size_t index{}; index < events.size(); ++index) {
-    layerc::core::AutomationTraceEntry entry;
-    entry.sequence = index + 1U;
-    entry.timestamp = std::chrono::duration_cast<layerc::core::Milliseconds>(
-        events[index].timestamp.time_since_epoch());
-    entry.phase = "source";
-    entry.detail = "recorded event";
-    entry.source_event = events[index];
-    entries.push_back(std::move(entry));
-  }
+  for (std::size_t index{}; index < events.size(); ++index)
+    entries.push_back(layerc::core::make_automation_root_trace_entry(
+        events[index], index + 1U));
   return layerc::core::export_layerc_trace(entries);
 }
 

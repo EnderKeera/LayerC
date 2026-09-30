@@ -203,6 +203,19 @@ void append_trace_entry(std::string &output,
 }
 } // namespace
 
+AutomationTraceEntry
+make_automation_root_trace_entry(const AutomationEvent &event,
+                                const std::uint64_t sequence) {
+  AutomationTraceEntry entry;
+  entry.sequence = sequence;
+  entry.timestamp = std::chrono::duration_cast<Milliseconds>(
+      event.timestamp.time_since_epoch());
+  entry.phase = automation_trace_root_phase;
+  entry.detail = "recorded event";
+  entry.source_event = event;
+  return entry;
+}
+
 std::string
 export_layerc_trace(const std::span<const AutomationTraceEntry> entries) {
   std::string output =
@@ -276,7 +289,8 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
       return AutomationError{
           path + ".phase",
           "legacy source traces lack root provenance; capture a new trace"};
-    if (phase == nullptr || !phase->is_string() || phase->as_string() != "root")
+    if (phase == nullptr || !phase->is_string() ||
+        phase->as_string() != automation_trace_root_phase)
       continue; // derived entries and condition/error audit are never replay
                 // roots
     const auto *event_name_value = entry.find("event");
