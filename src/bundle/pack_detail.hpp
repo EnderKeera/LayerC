@@ -40,6 +40,14 @@ inline std::string size_limit_text(const std::size_t bytes) {
                            : std::to_string(bytes / 1024U) + " KiB";
 }
 
+// Durable importer without notification. False means an all-skipped no-op;
+// true means publication completed. Only the public importer broadcasts reload.
+// Tests use this boundary exclusively with disposable stores.
+using ImportCommitResult = std::variant<bool, PackError>;
+[[nodiscard]] ImportCommitResult commit_profile_import(
+    const ValidatedPack &pack, std::span<const ImportChoice> choices,
+    const std::filesystem::path &profile_directory);
+
 bool safe_entry_path(std::string_view path);
 std::filesystem::path
 asset_path_for_profile(const std::filesystem::path &profile_path,

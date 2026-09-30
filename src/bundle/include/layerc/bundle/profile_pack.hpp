@@ -87,12 +87,12 @@ resolve_suggested_profile_filename(std::string_view suggested_filename);
     const ValidatedPack &pack, std::span<const ImportChoice> choices,
     const std::filesystem::path &profile_directory);
 
-// Single side-effect-free resolved import plan shared by CLI preview
-// (--dry-run) and the committing importer. It accounts for profile IDs,
-// destination paths (filename-aware, case-folded), skipped entries, and
-// validation errors using the same policy. Callers keep existing profiles by
-// switching colliding bound choices to ImportAction::skip. Each call
-// observes a fresh filesystem snapshot; expected_target binds reviewed choices.
+// Advisory, side-effect-free resolved import plan for CLI preview (--dry-run).
+// The committing importer rebuilds it under recovered writer ownership using
+// the same policy for IDs, filename-aware case-folded destinations, skipped
+// entries, and validation errors. Callers keep existing profiles by switching
+// colliding bound choices to ImportAction::skip. expected_target binds reviewed
+// destinations; the preview does not reserve IDs, targets, or backup contents.
 struct ResolvedImportEntry {
   std::size_t profile_index{};
   std::string id;
@@ -103,7 +103,7 @@ struct ResolvedImportEntry {
 
 struct ImportPreview {
   std::vector<ResolvedImportEntry> entries;
-  // Commit-ready choices bound to the paths that were just reviewed.
+  // Advisory choices bound to reviewed paths, revalidated under ownership.
   std::vector<ImportChoice> choices;
   std::optional<PackError> error;
 };

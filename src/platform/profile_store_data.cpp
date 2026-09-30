@@ -323,21 +323,23 @@ ProfileWriteResult write_profile_file(const std::filesystem::path &path,
   const auto absolute = std::filesystem::absolute(path, path_error);
   if (path_error) return {ProfileWriteError::invalid_input};
 
-  std::vector<ProfileFileMutation> mutations;
-  // Keep the previous parseable profile as the last-valid recovery point.
-  // Invalid external edits are never promoted into the backup. The
-  // user-visible `.bak` is itself a transaction mutation so a rolled-back
-  // write cannot leave a backup newer than the primary it claims to protect.
-  const auto previous = read_profile_file(absolute);
-  if (previous.has_value() &&
-      std::holds_alternative<layerc::core::GameProfile>(
-          layerc::core::parse_profile_json(*previous)))
-    mutations.push_back(text_mutation(recovery_backup_path(absolute), *previous));
-  mutations.push_back(text_mutation(absolute, contents));
-  return commit_profile_transaction(absolute.parent_path(), mutations);
+  return commit_profile_transaction(
+      absolute.parent_path(), [&](std::vector<ProfileFileMutation> &mutations)
+                                  -> ProfileWriteResult {
+        // Read the immediately preceding recovered profile under ownership.
+        // Invalid external edits are never promoted into the recovery backup.
+        const auto previous = read_profile_file(absolute);
+        if (previous.has_value() &&
+            std::holds_alternative<layerc::core::GameProfile>(
+                layerc::core::parse_profile_json(*previous)))
+          mutations.push_back(
+              text_mutation(recovery_backup_path(absolute), *previous));
+        mutations.push_back(text_mutation(absolute, contents));
+        return {};
+      });
 }
 
-// --- Bundle plan: pure planning (reads only) then one commit ---
+// --- Bundle planning and publication share recovered writer ownership ---
 namespace {
 
 // N6: one struct instead of five optionals plus a flag parameter. The two
@@ -361,7 +363,6 @@ struct SidecarPlan {
 };
 
 struct BundlePlan {
-  ProfileStoreRoots roots;
   layerc::core::GameProfile stored_profile;
   std::vector<ProfileFileMutation> mutations;
 };
@@ -400,8 +401,8 @@ path_exists(const std::filesystem::path &target) {
   return found;
 }
 
-// Validate + assemble: pure planning (reads only, no writes). Nullopt when
-// the inputs cannot become a committable bundle.
+// Validate + assemble under recovered writer ownership. Nullopt when the
+// inputs cannot become a committable bundle.
 [[nodiscard]] std::optional<BundlePlan>
 plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   BundlePlan plan;
@@ -468,13 +469,6 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   if (root.empty() || visual.primary.empty() || automation.primary.empty() ||
       companion.primary.empty())
     return std::nullopt;
-  const auto transaction_scope = profile_transaction_scope(root);
-  if (!transaction_scope.has_value()) {
-    failure = ProfileWriteError::scope_rejected;
-    return std::nullopt;
-  }
-  plan.roots = std::move(*transaction_scope);
-
   std::array<SidecarPlan, 3> sidecars{{
       {.paths = visual,
        .contents = serialize_if_present(
@@ -548,10 +542,16 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
 // deleting after the transaction releases writer ownership could remove a
 // concurrent writer's newly activated sidecar and recovery copy.
 ProfileWriteResult write_profile_bundle_impl(BundleInputs inputs) {
-  ProfileWriteError failure = ProfileWriteError::invalid_input;
-  auto plan = plan_profile_bundle(std::move(inputs), failure);
-  if (!plan.has_value()) return {failure};
-  return commit_profile_transaction(plan->roots, plan->mutations);
+  const auto directory = inputs.path.parent_path();
+  return commit_profile_transaction(
+      directory, [&](std::vector<ProfileFileMutation> &mutations)
+                     -> ProfileWriteResult {
+        ProfileWriteError failure = ProfileWriteError::invalid_input;
+        auto plan = plan_profile_bundle(std::move(inputs), failure);
+        if (!plan.has_value()) return {failure};
+        mutations = std::move(plan->mutations);
+        return {};
+      });
 }
 
 } // namespace

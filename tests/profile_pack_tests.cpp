@@ -1,7 +1,10 @@
 #include "layerc/bundle/profile_pack.hpp"
+#include "../src/bundle/pack_detail.hpp"
 
+#include "layerc/core/json.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/text.hpp"
 
 #include "miniz.h"
 #include "test_support.hpp"
@@ -19,6 +22,16 @@ namespace {
 using layerc::test::expect;
 using layerc::test::read_file;
 using layerc::test::write_file;
+
+// Never broadcast to a running daemon from a disposable bundle test.
+layerc::bundle::PackOperationResult import_without_reload(
+    const layerc::bundle::ValidatedPack &pack,
+    const std::span<const layerc::bundle::ImportChoice> choices,
+    const std::filesystem::path &directory) {
+  const auto result = layerc::bundle::detail::commit_profile_import(pack, choices, directory);
+  if (const auto *error = std::get_if<layerc::bundle::PackError>(&result)) return *error;
+  return std::monostate{};
+}
 
 layerc::core::GameProfile profile(std::string id, std::string name,
                                   const std::uint16_t key) {
@@ -229,7 +242,7 @@ struct PackFixture {
         layerc::bundle::ImportChoice{.profile_index = 1,
                                      .action = layerc::bundle::ImportAction::replace}};
     return expect(std::holds_alternative<std::monostate>(
-                      layerc::bundle::import_profile_pack(pack, choices, imported)),
+                      import_without_reload(pack, choices, imported)),
                   "validated profiles should import atomically");
   }
 };
@@ -358,7 +371,7 @@ void copy_import_guards() {
   const std::array copy_choice{layerc::bundle::ImportChoice{
       .profile_index = first_index, .action = layerc::bundle::ImportAction::copy}};
   expect(std::holds_alternative<std::monostate>(
-             layerc::bundle::import_profile_pack(*validated, copy_choice, imported)),
+             import_without_reload(*validated, copy_choice, imported)),
          "Import Copy should succeed beside existing profiles");
   const auto copy_preview = layerc::bundle::preview_profile_import(
       *validated, copy_choice, imported);
@@ -372,8 +385,7 @@ void copy_import_guards() {
     if (expect(write_file(target, "new occupant"),
                "a destination can become occupied after preview")) {
       expect(std::holds_alternative<layerc::bundle::PackError>(
-                 layerc::bundle::import_profile_pack(
-                     *validated, reviewed_choice, imported)) &&
+                 import_without_reload(*validated, reviewed_choice, imported)) &&
                  read_file(target) == "new occupant",
              "a changed Copy destination must fail without overwriting it");
     }
@@ -439,11 +451,141 @@ void import_preview_conflicts() {
   const std::array replace_nested{layerc::bundle::ImportChoice{
       .profile_index = 0, .action = layerc::bundle::ImportAction::replace}};
   expect(std::holds_alternative<layerc::bundle::PackError>(
-             layerc::bundle::import_profile_pack(
-                 nested_pack, replace_nested, conflict_root)) &&
+             import_without_reload(nested_pack, replace_nested, conflict_root)) &&
              read_file(invalid_target) == "{invalid-profile",
          "Replace must reject a case-colliding unreadable JSON "
          "target instead of overwriting it without a Copy choice");
+}
+
+void copy_original_id_reservations() {
+  layerc::test::TempDirectory temp("LayerC-copy-original-ids");
+  layerc::test::ScopedEnvironment profile_dir("LAYERC_PROFILE_DIR", temp.path());
+  if (!expect(profile_dir.applied(), "copy allocation must use a disposable store")) return;
+  layerc::bundle::ValidatedPack pack;
+  for (const auto &[id, filename] : std::array{
+           std::pair{"foo", "foo.json"}, std::pair{"foo-copy", "foo-copy.json"}}) {
+    auto base = profile(id, id, 30);
+    pack.profiles.push_back({.suggested_filename = filename,
+                            .base_json = layerc::core::serialize_profile_json(base),
+                            .profile = std::move(base)});
+  }
+  const std::array choices{
+      layerc::bundle::ImportChoice{.profile_index = 0,
+                                  .action = layerc::bundle::ImportAction::copy},
+      layerc::bundle::ImportChoice{.profile_index = 1,
+                                  .action = layerc::bundle::ImportAction::replace}};
+  const std::array reversed{choices[1], choices[0]};
+  const auto check_orders = [&](const std::filesystem::path &expected_copy) {
+    const auto forward = layerc::bundle::preview_profile_import(pack, choices, temp.path());
+    const auto backward = layerc::bundle::preview_profile_import(pack, reversed, temp.path());
+    if (!expect(!forward.error && !backward.error &&
+                    forward.entries.size() == 2 && backward.entries.size() == 2,
+                "copy plus selected original should have valid previews in either order")) return;
+    expect(forward.entries[0].id == "foo-copy-2" &&
+               forward.entries[1].id == "foo-copy" &&
+               backward.entries[0].id == forward.entries[1].id &&
+               backward.entries[1].id == forward.entries[0].id &&
+               forward.entries[0].target == expected_copy &&
+               backward.entries[1].target == forward.entries[0].target &&
+               backward.entries[0].target == forward.entries[1].target,
+           "Copy(foo) must reserve Replace(foo-copy)'s ID independently of choice order");
+    expect(!layerc::bundle::validate_import_choices(pack, forward.choices, temp.path()) &&
+               !layerc::bundle::validate_import_choices(pack, backward.choices, temp.path()),
+           "complete final copy/original identities and targets should validate without publication");
+  };
+  check_orders(temp.path() / "foo copy.json");
+  pack.profiles[1].suggested_filename = "foo copy.json";
+  check_orders(temp.path() / "foo copy 2.json");
+  std::error_code error;
+  expect(std::filesystem::is_empty(temp.path(), error) && !error,
+         "copy allocation preview/validation must not write a store or broadcast a reload");
+}
+
+void copy_choice_order_is_canonical() {
+  layerc::test::TempDirectory temp("LayerC-canonical-copies");
+  layerc::test::ScopedEnvironment profile_dir("LAYERC_PROFILE_DIR", temp.path());
+  if (!expect(profile_dir.applied(), "copy ordering must use a disposable store")) return;
+  layerc::bundle::ValidatedPack pack;
+  for (const auto id : {"foo", "foo-copy"}) {
+    auto base = profile(id, id, 30);
+    pack.profiles.push_back({.suggested_filename = "foo.json",
+                            .base_json = layerc::core::serialize_profile_json(base),
+                            .profile = std::move(base)});
+  }
+  const std::array choices{
+      layerc::bundle::ImportChoice{.profile_index = 0,
+                                  .action = layerc::bundle::ImportAction::copy},
+      layerc::bundle::ImportChoice{.profile_index = 1,
+                                  .action = layerc::bundle::ImportAction::copy}};
+  const std::array reversed{choices[1], choices[0]};
+  const auto forward = layerc::bundle::preview_profile_import(pack, choices, temp.path());
+  const auto backward = layerc::bundle::preview_profile_import(pack, reversed, temp.path());
+  expect(!forward.error && !backward.error &&
+             forward.entries.size() == 2 && backward.entries.size() == 2 &&
+             forward.entries[0].id == backward.entries[1].id &&
+             forward.entries[1].id == backward.entries[0].id &&
+             forward.entries[0].target == backward.entries[1].target &&
+             forward.entries[1].target == backward.entries[0].target,
+         "multiple copy identities and destinations must be canonical across choice permutations");
+}
+
+void import_planning_after_recovery() {
+  layerc::test::TempDirectory temp("LayerC-import-owned-plan");
+  layerc::test::ScopedEnvironment profile_dir("LAYERC_PROFILE_DIR", temp.path());
+  if (!expect(profile_dir.applied(), "import planning must use a disposable store")) return;
+  const auto target = temp.path() / "a.json";
+  auto preceding_base = profile("foo", "Last committed", 30);
+  layerc::core::CompanionProfile preceding_companion;
+  preceding_companion.profile_id = preceding_base.id;
+  preceding_companion.slots.push_back(
+      {.slot_index = 0, .panel_id = "dash-bar", .opacity = 0.9});
+  if (!expect(layerc::platform::write_profile_bundle(
+                  target, preceding_base, std::nullopt, std::nullopt, preceding_companion),
+              "import should start from a committed bundle")) return;
+  const auto companion_path = layerc::platform::companion_sidecar_path(target);
+  const auto preceding_json = read_file(target);
+  const auto preceding_sidecar = read_file(companion_path);
+  auto incoming = preceding_base;
+  incoming.name = "Imported edit";
+  layerc::bundle::ValidatedPack pack;
+  pack.profiles.push_back({.suggested_filename = "a.json",
+                          .base_json = layerc::core::serialize_profile_json(incoming),
+                          .profile = incoming,
+                          .companion = layerc::bundle::ModulePayload{
+                              .json = layerc::core::serialize_companion_profile_json(preceding_companion),
+                              .profile = preceding_companion}});
+  const std::array choice{layerc::bundle::ImportChoice{
+      .profile_index = 0, .action = layerc::bundle::ImportAction::replace}};
+  const auto preview = layerc::bundle::preview_profile_import(pack, choice, temp.path());
+  if (!expect(!preview.error, "advisory import preview should bind the target")) return;
+  const auto transaction = temp.path() / "_transactions" / "interleaved-import";
+  auto partial_base = preceding_base;
+  partial_base.name = "Interrupted writer";
+  auto partial_companion = preceding_companion;
+  partial_companion.slots.front().opacity = 0.2;
+  std::string journal = "{\"schemaVersion\":2,\"operations\":[";
+  const std::array targets{target, companion_path};
+  for (std::size_t index{}; index < targets.size(); ++index) {
+    if (index != 0) journal.push_back(',');
+    journal += "{\"root\":\"config\",\"target\":";
+    layerc::core::json::append_quoted(
+        journal, layerc::platform::path_to_utf8(
+                     targets[index].lexically_relative(temp.path())).value_or(""));
+    journal += ",\"existed\":true}";
+  }
+  journal += "]}\n";
+  if (!expect(write_file(transaction / "backup" / "0.bin", preceding_json.value_or("")) &&
+                  write_file(transaction / "backup" / "1.bin", preceding_sidecar.value_or("")) &&
+                  write_file(transaction / "journal.json", journal) &&
+                  write_file(transaction / "published", "2\n") &&
+                  write_file(target, layerc::core::serialize_profile_json(partial_base)) &&
+                  write_file(companion_path, layerc::core::serialize_companion_profile_json(partial_companion)),
+              "interleaving fixture should leave partial primaries and real rollback evidence")) return;
+  expect(std::holds_alternative<std::monostate>(
+             import_without_reload(pack, preview.choices, temp.path())) &&
+             read_file(layerc::platform::recovery_backup_path(target)) == preceding_json &&
+             read_file(layerc::platform::recovery_backup_path(companion_path)) == preceding_sidecar,
+         "import must rebuild advisory plans after recovery and back up the preceding committed bundle");
 }
 
 void malformed_packs_rejected() {
@@ -611,5 +753,8 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(legacy_visual_schema_validation),
                  LAYERC_TEST_CASE(deterministic_export_and_import),
                  LAYERC_TEST_CASE(copy_import_guards),
                  LAYERC_TEST_CASE(import_preview_conflicts),
+                 LAYERC_TEST_CASE(import_planning_after_recovery),
+                 LAYERC_TEST_CASE(copy_original_id_reservations),
+                 LAYERC_TEST_CASE(copy_choice_order_is_canonical),
                  LAYERC_TEST_CASE(malformed_packs_rejected),
                  LAYERC_TEST_CASE(pack_transaction_recovery))
