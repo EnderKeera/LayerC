@@ -1,5 +1,5 @@
-// Profile-pack import: one side-effect-free plan shared by preview, dry-run
-// validation, and the committing transaction.
+// Profile-pack import: advisory previews share the planner with publication,
+// which rebuilds the plan only after acquiring recovered writer ownership.
 #include "layerc/bundle/profile_pack.hpp"
 
 #include "layerc/core/hash.hpp"
@@ -117,6 +117,27 @@ ImportPlanResult build_import_plan(
   if (choices.empty() || choices.size() > pack.profiles.size())
     return pack_error<ImportPlanResult>("select at least one valid pack profile");
 
+  std::vector<const ImportChoice *> ordered_choices;
+  std::set<std::size_t> selected_indices;
+  for (const auto &choice : choices) {
+    if (choice.profile_index >= pack.profiles.size() ||
+        !selected_indices.insert(choice.profile_index).second)
+      return pack_error<ImportPlanResult>("import choices are invalid or duplicated");
+    if (choice.action != ImportAction::skip &&
+        choice.action != ImportAction::copy &&
+        choice.action != ImportAction::replace)
+      return pack_error<ImportPlanResult>("import action is invalid");
+    ordered_choices.push_back(&choice);
+  }
+  // Resolve original destinations before copies, then allocate copies in pack
+  // order, not UI choice order. Both IDs and filenames are order-independent.
+  std::ranges::sort(ordered_choices, [](const auto *left, const auto *right) {
+    const bool left_copy = left->action == ImportAction::copy;
+    const bool right_copy = right->action == ImportAction::copy;
+    if (left_copy != right_copy) return !left_copy;
+    return left->profile_index < right->profile_index;
+  });
+
   struct ExistingProfile {
     std::filesystem::path path;
     std::string id;
@@ -137,8 +158,13 @@ ImportPlanResult build_import_plan(
     existing.push_back({.path = stored.path, .id = stored.profile.id});
   }
 
-  std::vector<ResolvedImportEntry> resolved_entries;
-  std::set<std::size_t> selected_indices;
+  // An incoming original identity is reserved even when it is not in the
+  // store yet. Copy(foo) must never consume Replace(foo-copy)'s identity.
+  for (const auto &choice : choices)
+    if (choice.action == ImportAction::replace)
+      used_ids.insert(pack.profiles[choice.profile_index].profile.id);
+
+  std::vector<ResolvedImportEntry> resolved_entries(choices.size());
   std::set<std::string, std::less<>> selected_targets;
   std::vector<platform::ProfileFileMutation> mutations;
   std::map<std::filesystem::path, std::string> required_assets;
@@ -153,14 +179,8 @@ ImportPlanResult build_import_plan(
     return true;
   };
 
-  for (const auto &choice : choices) {
-    if (choice.profile_index >= pack.profiles.size() ||
-        !selected_indices.insert(choice.profile_index).second)
-      return pack_error<ImportPlanResult>("import choices are invalid or duplicated");
-    if (choice.action != ImportAction::skip &&
-        choice.action != ImportAction::copy &&
-        choice.action != ImportAction::replace)
-      return pack_error<ImportPlanResult>("import action is invalid");
+  for (const auto *ordered_choice : ordered_choices) {
+    const auto &choice = *ordered_choice;
     auto imported = pack.profiles[choice.profile_index];
     const auto resolved_suggested =
         resolve_suggested_profile_filename(imported.suggested_filename);
@@ -226,11 +246,14 @@ ImportPlanResult build_import_plan(
     const bool collides = by_id != existing.end() ||
                           used_filenames.contains(*suggested_folded);
     const bool skipped = choice.action == ImportAction::skip;
-    resolved_entries.push_back({.profile_index = choice.profile_index,
-                                .id = imported.profile.id,
-                                .target = target,
-                                .collides = collides,
-                                .skipped = skipped});
+    // Return entries in the caller's order so advisory choices remain bound
+    // to their own destinations even though allocation is canonical.
+    resolved_entries[static_cast<std::size_t>(ordered_choice - choices.data())] =
+        {.profile_index = choice.profile_index,
+         .id = imported.profile.id,
+         .target = target,
+         .collides = collides,
+         .skipped = skipped};
     if (skipped) continue;
     const auto target_folded = folded_filename(target);
     if (!target_folded.has_value() ||
@@ -310,6 +333,27 @@ ImportPlanResult build_import_plan(
   }
 
 
+  // Validate the complete winning set, not just the allocator's reservations:
+  // replaced files surrender their old identities; untouched and skipped
+  // files retain theirs. Every final identity and target must be unique.
+  std::set<std::string, std::less<>> final_ids;
+  std::set<std::string, std::less<>> final_targets;
+  const auto add_final = [&](const std::string &id,
+                             const std::filesystem::path &target) {
+    const auto folded = folded_filename(target);
+    return folded.has_value() && final_ids.insert(id).second &&
+           final_targets.insert(*folded).second;
+  };
+  for (const auto &stored : existing) {
+    const auto folded = folded_filename(stored.path);
+    if (folded.has_value() && selected_targets.contains(*folded)) continue;
+    if (!add_final(stored.id, stored.path))
+      return pack_error<ImportPlanResult>("final profile IDs or destinations are duplicated");
+  }
+  for (const auto &entry : resolved_entries)
+    if (!entry.skipped && !add_final(entry.id, entry.target))
+      return pack_error<ImportPlanResult>("final profile IDs or destinations are duplicated");
+
   return ImportPlan{.mutations = std::move(mutations),
                     .required_assets = std::move(required_assets),
                     .entries = std::move(resolved_entries)};
@@ -317,45 +361,64 @@ ImportPlanResult build_import_plan(
 
 } // namespace
 
+detail::ImportCommitResult detail::commit_profile_import(
+    const ValidatedPack &pack, const std::span<const ImportChoice> choices,
+    const std::filesystem::path &profile_directory) {
+  std::optional<PackError> planning_error;
+  bool published{};
+  const auto committed = platform::commit_profile_transaction(
+      profile_directory, [&](std::vector<platform::ProfileFileMutation> &mutations)
+                             -> platform::ProfileWriteResult {
+        const auto reject = [&](std::string message) {
+          planning_error = PackError{std::move(message)};
+          return platform::ProfileWriteResult{
+              platform::ProfileWriteError::invalid_input};
+        };
+        auto built = build_import_plan(pack, choices, profile_directory);
+        if (const auto *error = std::get_if<PackError>(&built))
+          return reject(error->message);
+        auto plan = std::move(std::get<ImportPlan>(built));
+        // Asset inspection, backups, and document planning all observe the
+        // recovered store under the same owner as publication.
+        for (const auto &[target, hash] : plan.required_assets) {
+          const auto found = pack.assets.find(hash);
+          if (found == pack.assets.end())
+            return reject("selected profile asset is missing");
+          if (target.empty()) return reject("asset destination is invalid");
+          const auto existing_bytes =
+              platform::read_durable_file(target, max_pack_asset_bytes);
+          if (existing_bytes.has_value()) {
+            if (core::sha256(*existing_bytes) != hash)
+              return reject("existing content-addressed asset is corrupt: " + hash);
+            continue;
+          }
+          if (existing_bytes.status != platform::FileReadStatus::missing)
+            return reject("asset destination could not be read");
+          mutations.push_back({.target = target, .contents = found->second.bytes});
+        }
+        mutations.insert(mutations.end(),
+                         std::make_move_iterator(plan.mutations.begin()),
+                         std::make_move_iterator(plan.mutations.end()));
+        published = !mutations.empty();
+        return {};
+      });
+  if (planning_error) return *planning_error;
+  if (const auto error = committed.error())
+    return pack_error<ImportCommitResult>(
+        std::string("profile-pack transaction failed: ") +
+        platform::profile_write_error_text(*error));
+  return published;
+}
+
 PackOperationResult
 import_profile_pack(const ValidatedPack &pack,
                     const std::span<const ImportChoice> choices,
                     const std::filesystem::path &profile_directory) {
-  auto built = build_import_plan(pack, choices, profile_directory);
-  if (const auto *error = std::get_if<PackError>(&built)) return *error;
-  auto plan = std::move(std::get<ImportPlan>(built));
-  // Immutable assets publish before profile documents. Existing content must
-  // already match its content-addressed name.
-  std::vector<platform::ProfileFileMutation> asset_mutations;
-  for (const auto &[target, hash] : plan.required_assets) {
-    const auto found = pack.assets.find(hash);
-    if (found == pack.assets.end())
-      return pack_error<PackOperationResult>("selected profile asset is missing");
-    if (target.empty()) return pack_error<PackOperationResult>("asset destination is invalid");
-    const auto existing_bytes =
-        platform::read_durable_file(target, max_pack_asset_bytes);
-    if (existing_bytes.has_value()) {
-      if (core::sha256(*existing_bytes) != hash)
-        return pack_error<PackOperationResult>("existing content-addressed asset is corrupt: " + hash);
-      continue;
-    }
-    if (existing_bytes.status != platform::FileReadStatus::missing)
-      return pack_error<PackOperationResult>("asset destination could not be read");
-    asset_mutations.push_back(
-        {.target = target, .contents = found->second.bytes});
-  }
-  asset_mutations.insert(asset_mutations.end(),
-                         std::make_move_iterator(plan.mutations.begin()),
-                         std::make_move_iterator(plan.mutations.end()));
-  if (asset_mutations.empty()) return std::monostate{};
-  const auto committed = platform::commit_profile_transaction(profile_directory,
-                                                              asset_mutations);
-  if (const auto error = committed.error())
-    return pack_error<PackOperationResult>(std::string("profile-pack transaction failed: ") +
-                   platform::profile_write_error_text(*error));
-  // LayerD may legitimately not be running. The committed files are the
-  // source of truth and will be loaded at its next startup.
-  (void)platform::signal_profile_reload();
+  const auto committed = detail::commit_profile_import(pack, choices, profile_directory);
+  if (const auto *error = std::get_if<PackError>(&committed)) return *error;
+  // LayerD may not be running. Signal only after a nonempty durable commit;
+  // tests exercise the internal publication boundary without any broadcast.
+  if (std::get<bool>(committed)) (void)platform::signal_profile_reload();
   return std::monostate{};
 }
 

@@ -20,6 +20,41 @@
 
 #include <windows.h>
 
+namespace layerc::platform {
+
+struct NamedPipeEditorDaemonChannelTestAccess {
+  using Channel = NamedPipeEditorDaemonChannel;
+  static bool pending_connect(const Channel &channel) {
+    return channel.connect_pending_ &&
+           !HasOverlappedIoCompleted(&channel.connect_overlapped_);
+  }
+  static bool pending_read(const Channel &channel) {
+    return channel.read_pending_ &&
+           !HasOverlappedIoCompleted(&channel.read_overlapped_);
+  }
+  static bool pending_write(const Channel &channel) {
+    return channel.write_pending_ &&
+           !HasOverlappedIoCompleted(&channel.write_overlapped_);
+  }
+  static bool close_and_verify(Channel &channel) {
+    const std::array pending{channel.connect_pending_, channel.read_pending_,
+                             channel.write_pending_};
+    const std::array operations{&channel.connect_overlapped_,
+                                &channel.read_overlapped_,
+                                &channel.write_overlapped_};
+    // Exercise precisely the destructor's boundary while its OVERLAPPED
+    // storage is still inspectable; observing freed storage would be UB.
+    channel.close_handles();
+    for (std::size_t index{}; index < operations.size(); ++index)
+      if (pending[index] && !HasOverlappedIoCompleted(operations[index]))
+        return false;
+    return !channel.connect_pending_ && !channel.read_pending_ &&
+           !channel.write_pending_ && channel.pipe_ == INVALID_HANDLE_VALUE;
+  }
+};
+
+} // namespace layerc::platform
+
 namespace {
 
 using layerc::test::expect;
@@ -185,6 +220,112 @@ void named_pipe_round_trip() {
   expect(server_received, "framed UTF-8 messages should cross the named pipe");
 }
 
+bool connect_test_peers(layerc::platform::NamedPipeEditorDaemonChannel &server,
+                        layerc::platform::NamedPipeEditorDaemonChannel &client) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while ((!server.connected() || !client.connected()) &&
+         std::chrono::steady_clock::now() < deadline) {
+    (void)client.poll();
+    (void)server.poll();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return server.connected() && client.connected();
+}
+
+std::vector<layerc::platform::OwnedHandle> retain_completion_events(
+    const layerc::platform::NamedPipeEditorDaemonChannel &channel) {
+  std::array<HANDLE, 3> events{};
+  const auto count = channel.wait_handles(events);
+  std::vector<layerc::platform::OwnedHandle> retained;
+  for (std::size_t index{}; index < count; ++index) {
+    HANDLE duplicate{};
+    if (expect(DuplicateHandle(GetCurrentProcess(), events[index],
+                               GetCurrentProcess(), &duplicate, 0, FALSE,
+                               DUPLICATE_SAME_ACCESS) != FALSE,
+               "teardown test should retain completion events, not freed OVERLAPPED storage"))
+      retained.emplace_back(duplicate);
+  }
+  return retained;
+}
+
+void named_pipe_cancel_drain() {
+  using Channel = layerc::platform::NamedPipeEditorDaemonChannel;
+  using Access = layerc::platform::NamedPipeEditorDaemonChannelTestAccess;
+  const auto prefix = L"\\\\.\\pipe\\LayerC.CancelDrainTest." +
+                      std::to_wstring(GetCurrentProcessId()) + L"." +
+                      std::to_wstring(GetTickCount64());
+  for (int iteration{}; iteration < 4; ++iteration) {
+    const auto pipe_name = prefix + L"." + std::to_wstring(iteration);
+    auto server = std::make_unique<Channel>(Channel::Role::server, pipe_name,
+                                            GetCurrentProcessId());
+    if (!expect(Access::pending_connect(*server),
+                "teardown fixture must force a pending overlapped connect")) return;
+    expect(Access::close_and_verify(*server),
+           "destructor teardown must drain a pending connect before closing or reusing its state");
+    (void)server->poll();
+    auto client = std::make_unique<Channel>(Channel::Role::client, pipe_name,
+                                            GetCurrentProcessId());
+    if (!expect(connect_test_peers(*server, *client),
+                "server should reconnect after draining an unaccepted connect")) return;
+    if (!expect(Access::pending_read(*client) && Access::pending_read(*server),
+                "idle peers must have real pending reads")) return;
+    const layerc::core::LiveMessage large{
+        .type = layerc::core::LiveMessageType::handshake,
+        .revision = 900,
+        .text = std::string(400U * 1024U, 'x')};
+    // Do not poll the receiving peer: 400 KiB exceeds its pipe quota plus the
+    // outstanding 64 KiB read, forcing WriteFile to remain in flight.
+    if (!expect(client->send(large) && Access::pending_write(*client),
+                "teardown fixture must force a pending write with live frame storage")) return;
+    expect(Access::close_and_verify(*client),
+           "destructor teardown must drain pending read/write before releasing the frame or events");
+    client->disconnect_peer();
+    client.reset();
+    server->disconnect_peer();
+    (void)server->poll();
+    client = std::make_unique<Channel>(Channel::Role::client, pipe_name,
+                                      GetCurrentProcessId());
+    if (!expect(connect_test_peers(*server, *client),
+                "server must reconnect after cancelling a blocked write")) return;
+    expect(client->send({.type = layerc::core::LiveMessageType::handshake,
+                         .revision = 77, .text = "after-cancel"}),
+           "reconnected channel should accept a fresh frame");
+    bool received{};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!received && std::chrono::steady_clock::now() < deadline) {
+      (void)client->poll();
+      for (const auto &result : server->poll()) {
+        const auto *message = std::get_if<layerc::core::LiveMessage>(&result);
+        expect(message == nullptr || message->revision != 900,
+               "a cancelled frame must not leak into the reconnected stream");
+        received = message != nullptr && message->revision == 77 &&
+                   message->text == "after-cancel";
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(received, "reconnected channel should decode only the new connection's frame");
+    if (!expect(client->send(large) && Access::pending_write(*client) &&
+                    Access::pending_read(*client),
+                "destruction fixture should retain actual pending read and write")) return;
+    const auto events = retain_completion_events(*client);
+    expect(events.size() == 2, "pending read/write destruction should expose two events");
+    client.reset();
+    for (const auto &event : events)
+      expect(WaitForSingleObject(event.get(), 0) == WAIT_OBJECT_0,
+             "destruction must return only after cancelled read/write completion");
+    server.reset();
+  }
+  auto listening = std::make_unique<Channel>(Channel::Role::server,
+                                             prefix + L".destruction");
+  expect(Access::pending_connect(*listening),
+         "connect destruction fixture should still be pending");
+  const auto events = retain_completion_events(*listening);
+  listening.reset();
+  for (const auto &event : events)
+    expect(WaitForSingleObject(event.get(), 0) == WAIT_OBJECT_0,
+           "destruction must return only after cancelled connect completion");
+}
+
 void hid_sampling() {
   layerc::platform::HidRawDevice system_keyboard{};
   system_keyboard.handle = reinterpret_cast<HANDLE>(0x1234);
@@ -292,6 +433,8 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(visual_asset_contract_case),
       LAYERC_TEST_CASE(pipe_name_contract),
       LAYERC_TEST_CASE(live::platform_transactions),
+      LAYERC_TEST_CASE(live::journal_read_status_recovery),
+      LAYERC_TEST_CASE(live::profile_planning_after_recovery),
       LAYERC_TEST_CASE(hid_sampling),
       LAYERC_TEST_CASE(live::platform_visual_assets),
       LAYERC_TEST_CASE(live::platform_sibling_authentication),
@@ -307,5 +450,6 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(bounded_helper_failure),
       LAYERC_TEST_CASE(pipe_server_spoof),
       LAYERC_TEST_CASE(named_pipe_round_trip),
+      LAYERC_TEST_CASE(named_pipe_cancel_drain),
   });
 }

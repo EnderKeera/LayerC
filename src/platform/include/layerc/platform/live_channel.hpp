@@ -49,6 +49,8 @@ public:
   }
 
 private:
+  // Tests inspect terminal I/O state at the same boundary used by destruction.
+  friend struct NamedPipeEditorDaemonChannelTestAccess;
   bool create_server_pipe();
   bool connect_client();
   struct PeerSpec {
@@ -75,7 +77,8 @@ private:
   bool service_write();
   bool service_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void disconnect(DWORD error);
-  void close_handles();
+  // Cancel and drain submitted I/O before closing the pipe or reusing storage.
+  void close_handles() noexcept;
   void set_error(DWORD error);
 
   static constexpr std::size_t io_buffer_size = 64U * 1024U;
