@@ -4,6 +4,7 @@
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/live_edit.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <string>
@@ -151,6 +152,130 @@ void test_live_profile_reconciliation() {
   engine.reconfigure(changed_definition.cooldowns, reset, start + 1s);
   expect(engine.remaining("dash", start + 1s) == Milliseconds::zero(),
          "changed cooldown definitions should become ready");
+}
+
+void test_shared_pool_reconciliation() {
+  using namespace std::chrono_literals;
+  using namespace layerc::core;
+  GameProfile before;
+  before.cooldowns = {{.id = "a", .name = "A", .duration = 1s},
+                      {.id = "b", .name = "B", .duration = 10s}};
+  before.cooldown_groups = {{.id = "pool",
+                            .name = "Pool",
+                            .mode = CooldownGroupMode::shared_pool,
+                            .cooldown_ids = {"a", "b"},
+                            .duration = 5s,
+                            .max_charges = 2,
+                            .recovery = RecoveryMode::parallel}};
+  const TimePoint start{};
+  const std::vector<std::string> aliases{"a", "b"};
+  const auto check_edit = [&](const GameProfile &after) {
+    const auto delta = diff_profiles(before, after);
+    const auto plan = plan_session_reconciliation(before, after);
+    expect(!delta.empty() && plan.reset_cooldown_ids == aliases &&
+               plan.preserved_cooldown_ids.empty() && plan.rebuild_overlays,
+           "CM-01: effective pool edits reset every public alias");
+    CooldownEngine engine(before.cooldowns, before.cooldown_groups);
+    expect(engine.trigger("a", start), "pool edit fixture consumes a charge");
+    engine.reconfigure(after.cooldowns, plan.reset_cooldown_ids, start + 100ms,
+                       after.cooldown_groups);
+    expect(engine.remaining("a", start + 100ms) == 0ms &&
+               engine.remaining("b", start + 100ms) == 0ms,
+           "CM-01: a group edit cannot retain the old 4900 ms deadline");
+  };
+  auto after = before;
+  after.cooldown_groups.front().duration = 7s;
+  check_edit(after);
+  after = before;
+  after.cooldown_groups.front().max_charges = 3;
+  check_edit(after);
+  after = before;
+  after.cooldown_groups.front().recovery = RecoveryMode::sequential;
+  check_edit(after);
+  after = before;
+  after.cooldown_groups.front().retrigger = RetriggerPolicy::restart;
+  check_edit(after);
+  after = before;
+  after.cooldown_groups.front().id = "new-pool";
+  check_edit(after);
+  after = before;
+  after.cooldown_groups.front().mode = CooldownGroupMode::trigger_propagation;
+  check_edit(after);
+
+  after = before;
+  after.cooldowns.front().duration = 9s;
+  after.cooldowns.front().max_charges = 4;
+  after.cooldowns.front().recovery = RecoveryMode::single;
+  after.cooldowns.front().retrigger = RetriggerPolicy::restart;
+  after.cooldown_groups.front().name = "Renamed pool";
+  const auto dormant_plan = plan_session_reconciliation(before, after);
+  expect(!diff_profiles(before, after).empty() &&
+             dormant_plan.reset_cooldown_ids.empty() &&
+             dormant_plan.preserved_cooldown_ids == aliases,
+         "CM-01: dormant member settings and pool labels are not runtime owners");
+  CooldownEngine preserved(before.cooldowns, before.cooldown_groups);
+  expect(preserved.trigger_with_propagation("a", start, 91).size() == 1,
+         "preservation fixture consumes one owner charge");
+  std::ranges::reverse(after.cooldowns);
+  std::ranges::reverse(after.cooldown_groups.front().cooldown_ids);
+  preserved.reconfigure(after.cooldowns, {}, start + 100ms,
+                        after.cooldown_groups);
+  expect(preserved.remaining("a", start + 100ms) == 4900ms &&
+             preserved.remaining("b", start + 100ms) == 4900ms &&
+             preserved.trigger_with_propagation("b", start + 100ms, 91).empty(),
+         "CM-01: reorder and cosmetic edits preserve one owner and its origin");
+
+  for (const auto &reset_id : aliases) {
+    for (const bool reversed : {false, true}) {
+      after = before;
+      if (reversed) {
+        std::ranges::reverse(after.cooldowns);
+        std::ranges::reverse(after.cooldown_groups.front().cooldown_ids);
+      }
+      CooldownEngine engine(before.cooldowns, before.cooldown_groups);
+      expect(engine.trigger("a", start), "member reset fixture consumes a charge");
+      const std::vector<std::string> reset{reset_id};
+      engine.reconfigure(after.cooldowns, reset, start + 100ms,
+                         after.cooldown_groups);
+      const auto states = engine.snapshot(start + 100ms);
+      expect(std::ranges::all_of(states, [](const auto &state) {
+               return state.available_charges == 2 && !state.next_charge_at &&
+                      state.recovery_deadlines.empty();
+             }),
+             "CM-01: no alias or iteration order can defeat an owner reset");
+    }
+  }
+
+  after = before;
+  after.cooldown_groups.front().duration = 7s;
+  CooldownEngine direct(before.cooldowns, before.cooldown_groups);
+  expect(direct.trigger("a", start), "direct reconfigure fixture consumes a charge");
+  direct.reconfigure(after.cooldowns, {}, start + 100ms, after.cooldown_groups);
+  expect(direct.remaining("a", start + 100ms) == 0ms,
+         "CM-01: reconfigure itself compares effective owner definitions");
+
+  CooldownEngine removed(before.cooldowns, before.cooldown_groups);
+  expect(removed.trigger("a", start), "removed alias fixture consumes a charge");
+  after = before;
+  after.cooldowns.erase(after.cooldowns.begin());
+  after.cooldown_groups.front().cooldown_ids = {"b"};
+  removed.reconfigure(after.cooldowns, {}, start + 100ms, after.cooldown_groups);
+  expect(removed.remaining("b", start + 100ms) == 4900ms,
+         "CM-01: removing the first alias preserves the unchanged pool owner");
+  after.cooldowns.push_back({.id = "c", .name = "C", .duration = 2s});
+  after.cooldown_groups.front().cooldown_ids.push_back("c");
+  removed.reconfigure(after.cooldowns, {}, start + 100ms, after.cooldown_groups);
+  expect(removed.remaining("c", start + 100ms) == 4900ms,
+         "CM-01: a new alias joins the existing owner, not dormant member state");
+
+  auto propagation = before;
+  propagation.cooldown_groups.front().mode = CooldownGroupMode::trigger_propagation;
+  auto topology = propagation;
+  topology.cooldown_groups.front().cooldown_ids = {"a"};
+  expect(!diff_profiles(propagation, topology).empty() &&
+             plan_session_reconciliation(propagation, topology)
+                 .reset_cooldown_ids.empty(),
+         "CM-01: propagation edits are visible without changing timer owners");
 }
 
 void test_live_protocol_framing() {
