@@ -161,7 +161,7 @@ void test_automation_profile_round_trip() {
 void test_automation_runtime_transaction_and_replay() {
   using namespace layerc::core;
   const auto profile = automation_fixture();
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   runtime.set_trace_enabled(true);
 
   std::vector<AutomationEffect> committed;
@@ -262,7 +262,8 @@ void test_automation_runtime_transaction_and_replay() {
   immutable.automations = {{.id = "immutable-root",
                             .name = "Immutable root",
                             .rules = {increment, observe}}};
-  AutomationRuntime immutable_runtime(immutable);
+  AutomationRuntime immutable_runtime(immutable, {}, {},
+                                      [] { return TimePoint{}; });
   const auto immutable_first = immutable_runtime.process(event);
   expect(immutable_first.committed &&
              immutable_runtime.snapshot().variables.at("value") ==
@@ -277,7 +278,7 @@ void test_automation_runtime_transaction_and_replay() {
                  AutomationValue(true),
          "a later root event should observe the previously committed snapshot");
 
-  AutomationRuntime rejected(profile);
+  AutomationRuntime rejected(profile, {}, {}, [] { return TimePoint{}; });
   rejected.set_trace_enabled(true);
   const auto rolled_back =
       rejected.process(event, [](const AutomationEffect &effect) {
@@ -370,7 +371,8 @@ void test_automation_runtime_transaction_and_replay() {
                       .value = literal(AutomationValue(std::int64_t{1}))}}});
   }
   AutomationRuntime propagation_runtime(propagation_profile, {},
-                                        propagation_base.cooldown_groups);
+                                        propagation_base.cooldown_groups,
+                                        [] { return TimePoint{}; });
   const auto propagated = propagation_runtime.process(event);
   expect(propagated.committed &&
              propagation_runtime.snapshot().variables.at("dashSeen") ==
@@ -397,7 +399,7 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
        .value = literal(AutomationValue(std::int64_t{99}))}};
   profile.automations.push_back(lower);
 
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   const AutomationEvent event{AutomationEventKind::input_pressed, TimePoint{},
                               "key-e", 1};
   const auto result = runtime.process(event);
@@ -436,7 +438,7 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
                    .value = literal(AutomationValue(std::int64_t{1}))}}};
   isolated.automations = {{.id = "bad", .name = "Bad", .rules = {broken}},
                           {.id = "good", .name = "Good", .rules = {healthy}}};
-  AutomationRuntime fault_runtime(isolated);
+  AutomationRuntime fault_runtime(isolated, {}, {}, [] { return TimePoint{}; });
   const auto fault = fault_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 2});
   expect(fault.committed &&
@@ -453,7 +455,7 @@ void test_automation_persistent_sync_and_cascade_bounds() {
   // A sibling persistent-value push is not a durable write of THIS runtime's
   // snapshot and must not clear the unsaved-edit marker.
   const auto profile = automation_fixture();
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   (void)runtime.process(
       {AutomationEventKind::input_pressed, TimePoint{}, "key-e", 1});
   expect(runtime.persistent_dirty(),
@@ -509,7 +511,8 @@ void test_automation_persistent_sync_and_cascade_bounds() {
       {.id = "broken-2", .name = "B2", .rules = {broken_rule("two")}},
       {.id = "broken-3", .name = "B3", .rules = {broken_rule("three")}},
       {.id = "healthy-root", .name = "Healthy", .rules = {healthy}}};
-  AutomationRuntime cascade_runtime(cascade);
+  AutomationRuntime cascade_runtime(cascade, {}, {},
+                                    [] { return TimePoint{}; });
   const auto cascade_result = cascade_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 3});
   expect(cascade_result.committed &&
@@ -558,7 +561,8 @@ void test_automation_persistent_sync_and_cascade_bounds() {
        .cooldown_ids = burst_members}};
   fanout.automations = {{.id = "keeper", .name = "Keeper", .rules = {marker_rule}},
                         {.id = "fanout", .name = "Fanout", .rules = {fan_rule}}};
-  AutomationRuntime fanout_runtime(fanout, {}, burst_groups);
+  AutomationRuntime fanout_runtime(fanout, {}, burst_groups,
+                                    [] { return TimePoint{}; });
   const auto fanout_result = fanout_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 4});
   expect(fanout_result.committed &&

@@ -149,7 +149,7 @@ void test_automation_value_round_trip_and_bounds() {
   expect(!validate_automation_profile(invalid, base).message.empty(),
          "programmatic invalid UTF-8 should fail static validation");
 
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   AutomationEvent oversized;
   oversized.kind = AutomationEventKind::session_started;
   for (std::size_t index{}; index <= max_automation_collection_entries; ++index)

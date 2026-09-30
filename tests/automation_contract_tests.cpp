@@ -85,7 +85,8 @@ std::optional<AutomationValue> evaluate(AutomationExpression expression,
                                .value = std::move(expression)}}}}});
   if (!validate_automation_profile(profile, contract_base()).message.empty())
     return std::nullopt;
-  AutomationRuntime runtime(profile);
+  // Operator contracts must not depend on the CI host's scheduling latency.
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   const auto result = runtime.process(event);
   if (!result.committed)
     return std::nullopt;
@@ -551,7 +552,8 @@ void test_automation_timer_commit_rollback() {
       {.id = "clock", .name = "Clock", .rules = {arm, replace}}};
   expect(validate_automation_profile(full, contract_base()).message.empty(),
          "full timer fixture should validate");
-  AutomationRuntime runtime(full);
+  // Capacity is a functional boundary, not an execution-time benchmark.
+  AutomationRuntime runtime(full, {}, {}, [] { return TimePoint{}; });
   const auto armed = runtime.process(
       {.kind = AutomationEventKind::session_started});
   expect(armed.committed, "the timer capacity fixture should arm all timers");
@@ -680,7 +682,8 @@ void test_automation_limits_and_fault_rollback() {
        .value = literal(AutomationValue(DurationValue{50ms}))});
   timer_profile.automations = {
       {.id = "timers", .name = "Timers", .rules = {fill, overflow}}};
-  AutomationRuntime timer_runtime(timer_profile);
+  AutomationRuntime timer_runtime(timer_profile, {}, {},
+                                  [] { return TimePoint{}; });
   expect(timer_runtime
                  .process({.kind = AutomationEventKind::session_started,
                            .timestamp = TimePoint{},
