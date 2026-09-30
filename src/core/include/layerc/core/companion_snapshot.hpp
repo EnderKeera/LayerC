@@ -10,7 +10,9 @@
 namespace layerc::core {
 
 // Build a wire-bounded immutable snapshot from a session's cooldown states.
-// An empty result means even the reduced snapshot could not be serialized.
+// Engine states supply effective owner duration/charges; definitions supply
+// public IDs/labels (and legacy state defaults). Invalid data returns empty;
+// only valid oversize snapshots may drop detail to satisfy the wire bound.
 [[nodiscard]] std::string build_companion_snapshot(
     std::string_view profile_id, std::string_view session_key,
     std::span<const Panel> panels,

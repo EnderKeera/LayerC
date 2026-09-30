@@ -43,10 +43,11 @@ struct MatchCandidate {
 
 // best_identity: disjunctive cascade over a poll with identity precedence
 // (name → path → class → title), preferring the active window within each
-// kind. Unlike matches_all, only the winning identity kind participates —
-// a candidate matching on title alone wins when no candidate matches on
-// name/path/class. Nullopt when no candidate matches, no identity field is
-// specified, or the matcher fields are unusable. Used by trackers polling
+// kind. Mismatched or absent candidate fields fall through to the next
+// specified identity; only successful identities are ranked. Unlike
+// matches_all, a title-only success wins when no name/path/class succeeds.
+// Nullopt when no candidate matches, no identity field is specified, or the
+// matcher fields are unusable. Used by trackers polling
 // many windows at once.
 [[nodiscard]] std::optional<std::size_t>
 resolve_game_match(const std::vector<MatchCandidate> &candidates,

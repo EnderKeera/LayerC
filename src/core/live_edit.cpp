@@ -1,6 +1,7 @@
 #include "layerc/core/live_edit.hpp"
 
 #include "layerc/core/base64.hpp"
+#include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/enum_wire.hpp"
 #include "layerc/core/frame.hpp"
 #include "layerc/core/json_reader.hpp"
@@ -15,13 +16,6 @@
 
 namespace layerc::core {
 namespace {
-
-bool same_runtime_definition(const CooldownDefinition &left,
-                             const CooldownDefinition &right) {
-  return left.id == right.id && left.duration == right.duration &&
-         left.max_charges == right.max_charges &&
-         left.retrigger == right.retrigger && left.recovery == right.recovery;
-}
 
 const CooldownDefinition *
 find_cooldown(const std::vector<CooldownDefinition> &definitions,
@@ -89,19 +83,24 @@ ProfileDelta diff_profiles(const GameProfile &before,
   delta.metadata_changed = before.schema_version != after.schema_version ||
                            before.id != after.id || before.name != after.name ||
                            before.visual_runtime != after.visual_runtime ||
-                           before.modules != after.modules;
+                           before.modules != after.modules ||
+                           before.cooldown_groups != after.cooldown_groups ||
+                           before.cooldowns != after.cooldowns;
   delta.enablement_changed = before.enabled != after.enabled;
   delta.matcher_changed = before.game != after.game;
   delta.bindings_changed = before.bindings != after.bindings ||
                            before.hid_bindings != after.hid_bindings;
   delta.panels_changed = before.panels != after.panels;
 
+  const CooldownEngine previous(before.cooldowns, before.cooldown_groups);
+  const CooldownEngine replacement(after.cooldowns, after.cooldown_groups);
   for (const auto &definition : before.cooldowns) {
     const auto *updated = find_cooldown(after.cooldowns, definition.id);
     if (updated == nullptr) {
       delta.removed_cooldown_ids.push_back(definition.id);
     } else {
-      if (!same_runtime_definition(definition, *updated))
+      if (*previous.owner_definition(definition.id) !=
+          *replacement.owner_definition(definition.id))
         delta.reset_cooldown_ids.push_back(definition.id);
       if (definition.name != updated->name)
         delta.cooldown_visuals_changed = true;
