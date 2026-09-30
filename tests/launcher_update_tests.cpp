@@ -1,8 +1,11 @@
 #include "layerc/core/hash.hpp"
+#include "layerc/launcher/signature.hpp"
 #include "layerc/launcher/update_engine.hpp"
+#include "launcher_signature_vectors.hpp"
 #include "test_support.hpp"
 
 #include <filesystem>
+#include <algorithm>
 #include <map>
 #include <span>
 #include <string>
@@ -266,9 +269,54 @@ void rollback_switches_to_the_kept_build() {
          "active_file rejects unsafe and missing paths");
 }
 
+void der_signatures_convert_strictly() {
+  namespace vectors = test::signature_vectors;
+  const auto der = vectors::from_hex(vectors::der_signature_hex);
+  const auto raw = launcher::ecdsa_der_to_p1363(der);
+  const auto expected = vectors::from_hex(
+      "2be7f4422158e0b32e62a30cdee250d70dcf940ce5644d7b181d5dedbdc28004"
+      "d467b8d33d16a765d9b0dc7e3476fc8a1c2b8c29648f8eaac289d34acac6cdbb");
+  expect(raw && std::equal(raw->begin(), raw->end(), expected.begin(),
+                           [](std::uint8_t left, char right) {
+                             return left == static_cast<std::uint8_t>(right);
+                           }),
+         "an openssl DER signature converts to r||s with the sign byte dropped");
+
+  // Short r and s are left-padded to 32 bytes.
+  const auto short_values = launcher::ecdsa_der_to_p1363(
+      vectors::from_hex("3006020101020102"));
+  expect(short_values && (*short_values)[31] == 1 && (*short_values)[63] == 2 &&
+             (*short_values)[0] == 0,
+         "short integers are left-padded");
+
+  for (const std::string_view bad :
+       {"", "3006020101020102ff", "3106020101020102", "3007020101020102",
+        "3006020181020102", "300702020001020102", "3006020100020102",
+        "30050201010201", "3003020101", "30810602010102010200"}) {
+    expect(!launcher::ecdsa_der_to_p1363(vectors::from_hex(bad)),
+           "malformed DER is rejected: " + std::string(bad));
+  }
+  const auto too_wide = "30260221" + std::string("01") + std::string(64, 'f') + "020102";
+  expect(!launcher::ecdsa_der_to_p1363(vectors::from_hex(too_wide)),
+         "an integer wider than a coordinate is rejected");
+
+  const auto key = launcher::parse_p256_public_key_hex(
+      "  " + std::string(vectors::public_key_hex) + "\n");
+  expect(key && (*key)[0] == 0x64 && (*key)[63] == 0x57,
+         "the uncompressed public key parses without its 04 prefix");
+  expect(!launcher::parse_p256_public_key_hex("") &&
+             !launcher::parse_p256_public_key_hex(vectors::public_key_hex.substr(2)) &&
+             !launcher::parse_p256_public_key_hex(
+                 "05" + std::string(vectors::public_key_hex.substr(2))) &&
+             !launcher::parse_p256_public_key_hex(
+                 std::string(vectors::public_key_hex.substr(0, 128)) + "zz"),
+         "missing, compressed-marker, short, or non-hex keys are rejected");
+}
+
 } // namespace
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fresh_install_and_up_to_date),
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(der_signatures_convert_strictly),
+                 LAYERC_TEST_CASE(fresh_install_and_up_to_date),
                  LAYERC_TEST_CASE(delta_update_reuses_unchanged_files),
                  LAYERC_TEST_CASE(rejected_releases_leave_the_install_untouched),
                  LAYERC_TEST_CASE(damaged_installs_are_repaired),

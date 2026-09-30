@@ -120,10 +120,48 @@ layerc_enable_warnings(layerc_manifest)
 
 # Update engine for the Windows launcher. It is platform-neutral apart from
 # the atomic file replace, so its behavior is tested on every CI platform.
-add_library(layerc_launcher_core STATIC src/launcher/update_engine.cpp)
+add_library(layerc_launcher_core STATIC
+    src/launcher/update_engine.cpp
+    src/launcher/signature.cpp)
 target_include_directories(layerc_launcher_core PUBLIC src/launcher/include)
 target_link_libraries(layerc_launcher_core PUBLIC layerc_core)
 layerc_enable_warnings(layerc_launcher_core)
+
+# The release key and source are baked into layerc.exe. The public key is
+# read from packaging/windows/update-signing-key.hex when present. Without a
+# key the launcher is still built and tested but omitted from the portable ZIP.
+set(layerc_release_key_file
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/update-signing-key.hex")
+set(layerc_default_release_key "")
+if(EXISTS "${layerc_release_key_file}")
+    file(READ "${layerc_release_key_file}" layerc_default_release_key)
+    string(STRIP "${layerc_default_release_key}" layerc_default_release_key)
+endif()
+set(LAYERC_UPDATE_PUBLIC_KEY "${layerc_default_release_key}" CACHE STRING
+    "Uncompressed P-256 public key (hex, 04...) that signs update manifests")
+set(LAYERC_UPDATE_REPOSITORY "EnderKeera/LayerC" CACHE STRING
+    "GitHub owner/repository the launcher downloads releases from")
+set(LAYERC_UPDATE_CHANNEL "rolling" CACHE STRING
+    "Release tag and manifest channel the launcher follows")
+file(MAKE_DIRECTORY "${LAYERC_GENERATED_INCLUDE_DIR}/layerc/launcher")
+configure_file(cmake/release_key.hpp.in
+    "${LAYERC_GENERATED_INCLUDE_DIR}/layerc/launcher/release_key.hpp" @ONLY)
+
+if(WIN32)
+    add_library(layerc_launcher_win STATIC
+        src/launcher/win32/release_client.cpp
+        src/launcher/win32/install.cpp)
+    target_include_directories(layerc_launcher_win PUBLIC src/launcher/win32)
+    target_link_libraries(layerc_launcher_win PUBLIC
+        layerc_launcher_core bcrypt winhttp advapi32 ole32 shell32 uuid)
+    layerc_win32(layerc_launcher_win)
+
+    # Built as layerc.exe. Only this program links an HTTP client.
+    add_executable(layerc_launcher WIN32 src/launcher/win32/main.cpp)
+    set_target_properties(layerc_launcher PROPERTIES OUTPUT_NAME layerc)
+    target_link_libraries(layerc_launcher PRIVATE layerc_launcher_win user32)
+    layerc_win32_exe(layerc_launcher)
+endif()
 
 add_library(layerc_runtime STATIC
     src/runtime/daemon_kernel.cpp
@@ -547,7 +585,13 @@ if(TARGET layerc_gamebar_host)
 endif()
 
 if(WIN32)
-    foreach(layerc_runtime_target IN ITEMS layerd layere layercal layerw)
+    foreach(layerc_runtime_target IN ITEMS layerc_launcher layerd layere layercal layerw)
+        # A keyless launcher cannot bootstrap a first build. Portable ZIPs
+        # start via layerd.exe until a release key is provisioned.
+        if(layerc_runtime_target STREQUAL "layerc_launcher" AND
+           "${LAYERC_UPDATE_PUBLIC_KEY}" STREQUAL "")
+            continue()
+        endif()
         if(TARGET ${layerc_runtime_target})
             install(TARGETS ${layerc_runtime_target}
                 RUNTIME DESTINATION . COMPONENT Runtime)
@@ -691,6 +735,11 @@ if(LAYERC_BUILD_TESTS)
     layerc_add_test(layerc_launcher_tests
         SOURCES tests/launcher_update_tests.cpp
         LINK layerc_launcher_core TIMEOUT 30)
+    if(WIN32)
+        layerc_add_test(layerc_launcher_win_tests
+            SOURCES tests/launcher_win_tests.cpp
+            LINK layerc_launcher_win TIMEOUT 30)
+    endif()
 
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         # Fixtures deliberately name only fields relevant to each case; C++20

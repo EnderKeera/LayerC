@@ -1,0 +1,13 @@
+#pragma once
+
+#include <string_view>
+
+namespace layerc::launcher {
+// Uncompressed P-256 public key (130 hex digits starting "04") that release
+// manifests must be signed with. Empty when the build has no key: the
+// launcher then starts the installed build without checking for updates.
+inline constexpr std::string_view release_public_key_hex = "@LAYERC_UPDATE_PUBLIC_KEY@";
+inline constexpr std::wstring_view release_repository = L"@LAYERC_UPDATE_REPOSITORY@";
+inline constexpr std::wstring_view release_tag = L"@LAYERC_UPDATE_CHANNEL@";
+inline constexpr std::string_view release_channel = "@LAYERC_UPDATE_CHANNEL@";
+} // namespace layerc::launcher
