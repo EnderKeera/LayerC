@@ -56,5 +56,11 @@ void test_automation_timer_commit_rollback();
 void test_automation_action_value_type();
 void test_automation_limits_and_fault_rollback();
 void test_automation_persistent_sync_and_cascade_bounds();
+void test_automation_root_budget_isolation();
+void test_automation_mutation_postconditions();
+void test_automation_clock_boundaries();
+void test_automation_numeric_promotion();
+void test_automation_decode_postconditions();
+void test_automation_trace_root_provenance();
 
 } // namespace layerc::test

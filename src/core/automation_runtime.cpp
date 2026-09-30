@@ -24,11 +24,12 @@ AutomationRuntime::Impl::begin_trace(const AutomationEvent &event) {
   return entry;
 }
 
-void AutomationRuntime::Impl::add_source_trace(const AutomationEvent &event) {
+void AutomationRuntime::Impl::add_event_trace(const AutomationEvent &event,
+                                              std::string phase) {
   auto entry = begin_trace(event);
   if (!entry.has_value())
     return;
-  entry->phase = "source";
+  entry->phase = std::move(phase);
   entry->detail = std::string(automation_event_name(event.kind));
   entry->source_event = event;
   trace_entries.push_back(std::move(*entry));
@@ -50,9 +51,9 @@ void AutomationRuntime::Impl::add_trace(const AutomationEvent &event,
 
 AutomationRuntime::AutomationRuntime(
     AutomationProfile profile, AutomationPersistentValues persistent,
-    const std::span<const CooldownGroup> cooldown_groups)
+    const std::span<const CooldownGroup> cooldown_groups, ClockReader clock)
     : impl_(std::make_unique<Impl>(std::move(profile), std::move(persistent),
-                                   cooldown_groups)) {}
+                                   cooldown_groups, std::move(clock))) {}
 AutomationRuntime::~AutomationRuntime() = default;
 const AutomationProfile &AutomationRuntime::profile() const noexcept {
   return impl_->profile;
@@ -77,8 +78,7 @@ AutomationRuntime::process(const AutomationEvent &root,
   AutomationEvaluationResult result;
   const auto field_in_bounds = [](const auto &field) {
     return field.first.size() <= max_automation_string_bytes &&
-           is_valid_utf8(field.first) &&
-           automation_value_valid(field.second);
+           is_valid_utf8(field.first) && automation_value_valid(field.second);
   };
   if (root.source_id.size() > max_automation_string_bytes ||
       !is_valid_utf8(root.source_id) ||
@@ -87,32 +87,42 @@ AutomationRuntime::process(const AutomationEvent &root,
     result.error = {"$event", "source event exceeds automation bounds"};
     return result;
   }
-  // One deadline spans the whole fault-retry cascade: restarting the
-  // evaluation used to grant each recursive retry a fresh budget, so a
-  // chain of faulted automations could block the daemon loop for up to
-  // max_automation_rules x 2 ms on a single root event.
-  const auto deadline = MonotonicClock::now() + automation_execution_budget;
+  // One budget spans every attributable-fault retry. Root provenance belongs
+  // here, not in the cascade evaluator: children are audit-only on every
+  // attempt.
+  const auto deadline =
+      automation_time_after(impl_->clock(), automation_execution_budget);
+  impl_->add_event_trace(root, "root");
+  if (!deadline) {
+    result.error = {"$runtime",
+                    "execution deadline is outside the clock range"};
+    return result;
+  }
+  EvaluationBudget budget{*deadline, result.node_evaluations, impl_->clock};
   std::optional<AutomationError> last_fault;
   for (;;) {
-    const auto trace_sequence_start = impl_->trace_sequence;
-    AutomationError fault;
-    const auto restart_with =
-        impl_->evaluate(root, validator, committer, deadline, result, fault);
-    if (!restart_with.has_value()) {
-      if (!result.error.has_value() && last_fault.has_value())
-        result.error = *last_fault;
-      return result;
+    const auto outcome =
+        impl_->evaluate(root, validator, committer, budget, result);
+    if (const auto *failure = std::get_if<AutomationFault>(&outcome)) {
+      impl_->faulted.insert(failure->automation_id);
+      if (std::ranges::find(result.faulted_automations,
+                            failure->automation_id) ==
+          result.faulted_automations.end())
+        result.faulted_automations.push_back(failure->automation_id);
+      last_fault = failure->error;
+      continue;
     }
-    // Rewind this attempt's source-phase traces so the restart re-records
-    // them; condition/error traces stay as the fault's audit trail.
-    std::erase_if(impl_->trace_entries, [&](const auto &entry) {
-      return entry.sequence > trace_sequence_start && entry.phase == "source";
-    });
-    impl_->faulted.insert(*restart_with);
-    if (std::ranges::find(result.faulted_automations, *restart_with) ==
-        result.faulted_automations.end())
-      result.faulted_automations.push_back(*restart_with);
-    last_fault = fault;
+    if (const auto *exhausted = std::get_if<BudgetExhausted>(&outcome))
+      result.error = exhausted->error;
+    else if (const auto *rejected = std::get_if<AttemptRejected>(&outcome))
+      result.error = rejected->error;
+    else if (last_fault)
+      result.error = *last_fault;
+    if (!result.committed) {
+      result.effects.clear();
+      result.derived_events.clear();
+    }
+    return result;
   }
 }
 

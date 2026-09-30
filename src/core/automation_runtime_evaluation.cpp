@@ -9,24 +9,29 @@ namespace layerc::core {
 namespace {
 using detail::truthy;
 
-void consume_timer_firing(AutomationRuntimeSnapshot &target,
+bool consume_timer_firing(AutomationRuntimeSnapshot &target,
                           const std::string_view id, const TimePoint now) {
   const auto timer = std::ranges::find(target.timers, id, &AutomationTimer::id);
   if (timer == target.timers.end() || timer->due > now)
-    return; // cancelled, replaced, or a firing that is not yet due
-  if (timer->repeating)
-    timer->due = now + timer->interval;
-  else
+    return true; // cancelled, replaced, or a firing that is not yet due
+  if (timer->repeating) {
+    const auto due = automation_time_after(now, timer->interval);
+    if (!due)
+      return false;
+    timer->due = *due;
+  } else
     target.timers.erase(timer);
+  return true;
 }
 
 } // namespace
 
 AutomationRuntime::Impl::Impl(AutomationProfile source,
                               AutomationPersistentValues persistent,
-                              const std::span<const CooldownGroup> groups)
-    : profile(std::move(source)),
-      cooldown_groups(groups.begin(), groups.end()) {
+                              const std::span<const CooldownGroup> groups,
+                              ClockReader clock_reader)
+    : profile(std::move(source)), cooldown_groups(groups.begin(), groups.end()),
+      clock(std::move(clock_reader)) {
   for (const auto &variable : profile.variables) {
     auto value = variable.default_value;
     if (variable.persistent) {
@@ -41,23 +46,19 @@ AutomationRuntime::Impl::Impl(AutomationProfile source,
   }
 }
 
-std::optional<AutomationValue> AutomationRuntime::Impl::eval(
+ExpressionResult AutomationRuntime::Impl::eval(
     const AutomationExpression &expression, const AutomationEvent &event,
-    const AutomationRuntimeSnapshot &snapshot, std::size_t &evaluations,
-    AutomationError &error) const {
-  if (++evaluations > max_automation_node_evaluations) {
-    error = {"$runtime", "root event exceeded 8192 node evaluations"};
-    return std::nullopt;
-  }
+    const AutomationRuntimeSnapshot &snapshot, EvaluationBudget &budget) const {
+  if (auto exhausted = budget.consume_node())
+    return *exhausted;
   switch (expression.kind) {
   case ExpressionKind::literal:
     return expression.literal;
   case ExpressionKind::variable: {
     const auto found = snapshot.variables.find(expression.reference);
-    if (found == snapshot.variables.end()) {
-      error = {"$runtime", "unknown variable " + expression.reference};
-      return std::nullopt;
-    }
+    if (found == snapshot.variables.end())
+      return AutomationError{"$runtime",
+                             "unknown variable " + expression.reference};
     return found->second;
   }
   case ExpressionKind::event_field: {
@@ -73,12 +74,14 @@ std::optional<AutomationValue> AutomationRuntime::Impl::eval(
     return found == event.fields.end() ? AutomationValue{} : found->second;
   }
   case ExpressionKind::index: {
-    auto target =
-        eval(expression.arguments[0], event, snapshot, evaluations, error);
-    auto key =
-        eval(expression.arguments[1], event, snapshot, evaluations, error);
-    if (!target || !key)
-      return std::nullopt;
+    auto target_result = eval(expression.arguments[0], event, snapshot, budget);
+    auto *target = std::get_if<AutomationValue>(&target_result);
+    if (!target)
+      return target_result;
+    auto key_result = eval(expression.arguments[1], event, snapshot, budget);
+    const auto *key = std::get_if<AutomationValue>(&key_result);
+    if (!key)
+      return key_result;
     if (const auto *list = std::get_if<AutomationList>(&target->storage)) {
       const auto *index = std::get_if<std::int64_t>(&key->storage);
       if (!index || *index < 0 ||
@@ -93,8 +96,7 @@ std::optional<AutomationValue> AutomationRuntime::Impl::eval(
       const auto found = map->find(*name);
       return found == map->end() ? AutomationValue{} : found->second;
     }
-    error = {"$runtime", "index target is not a list or map"};
-    return std::nullopt;
+    return AutomationError{"$runtime", "index target is not a list or map"};
   }
   default:
     break;
@@ -102,29 +104,28 @@ std::optional<AutomationValue> AutomationRuntime::Impl::eval(
   std::vector<AutomationValue> args;
   args.reserve(expression.arguments.size());
   for (const auto &argument : expression.arguments) {
-    auto value = eval(argument, event, snapshot, evaluations, error);
+    auto evaluated = eval(argument, event, snapshot, budget);
+    auto *value = std::get_if<AutomationValue>(&evaluated);
     if (!value)
-      return std::nullopt;
+      return evaluated;
     args.push_back(std::move(*value));
   }
+  if (auto exhausted = budget.check())
+    return *exhausted;
   const auto *spec = detail::find_automation_op(expression.operation);
-  if (spec == nullptr) {
-    error = {"$runtime", "unsupported expression operation"};
-    return std::nullopt;
-  }
+  if (spec == nullptr)
+    return AutomationError{"$runtime", "unsupported expression operation"};
   AutomationValue evaluated;
   std::string message;
-  if (!spec->evaluate(*spec, args, evaluated, message)) {
-    error = {"$runtime", message};
-    return std::nullopt;
-  }
+  if (!spec->evaluate(*spec, args, evaluated, message))
+    return AutomationError{"$runtime", std::move(message)};
   return evaluated;
 }
 
-std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
-    const AutomationEvent &root, const AutomationEvent &event,
-    EvaluationStage &stage) {
-  add_source_trace(event);
+AttemptOutcome
+AutomationRuntime::Impl::evaluate_event(const AutomationEvent &root,
+                                        const AutomationEvent &event,
+                                        EvaluationStage &stage) {
   struct Match {
     const AutomationDefinition *automation;
     const AutomationRule *rule;
@@ -137,6 +138,8 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
   };
   std::vector<Match> matches;
   for (std::size_t ai{}; ai < profile.automations.size(); ++ai) {
+    if (auto exhausted = stage.budget.check())
+      return *exhausted;
     const auto &automation = profile.automations[ai];
     if (!automation.enabled || faulted.contains(automation.id))
       continue;
@@ -157,22 +160,24 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
     return a.ri < b.ri;
   });
   for (const auto &match : matches) {
-    // Record the error against this rule and fault its automation so the
-    // outer process() can retry from the original snapshot.
-    const auto fault_match = [&](const AutomationError &failure)
-        -> std::optional<std::string> {
+    const auto fault_match = [&](AutomationError failure) -> AttemptOutcome {
       add_trace(event, match.automation->id, match.rule->id, "error",
                 failure.message);
-      stage.fault = failure;
-      return match.automation->id;
+      return AutomationFault{match.automation->id, std::move(failure)};
     };
-    if (MonotonicClock::now() > stage.deadline)
-      return fault_match({"$runtime", "automation execution exceeded 2 ms"});
-    AutomationError error;
-    auto condition = eval(match.rule->condition, event, stage.root_snapshot,
-                          stage.result.node_evaluations, error);
+    const auto expression_failure =
+        [&](const ExpressionResult &evaluated) -> AttemptOutcome {
+      if (const auto *exhausted = std::get_if<BudgetExhausted>(&evaluated))
+        return *exhausted;
+      return fault_match(std::get<AutomationError>(evaluated));
+    };
+    if (auto exhausted = stage.budget.check())
+      return *exhausted;
+    auto evaluated =
+        eval(match.rule->condition, event, stage.root_snapshot, stage.budget);
+    const auto *condition = std::get_if<AutomationValue>(&evaluated);
     if (!condition)
-      return fault_match(error);
+      return expression_failure(evaluated);
     if (!truthy(*condition)) {
       add_trace(event, match.automation->id, match.rule->id, "condition",
                 "false");
@@ -180,21 +185,10 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
     }
     stage.fired.insert(fired_key(match.ai, match.ri));
     add_trace(event, match.automation->id, match.rule->id, "condition", "true");
-    bool rule_fault{};
-    const auto eval_into =
-        [&](const std::optional<AutomationExpression> &source,
-            AutomationValue &output) {
-          if (!source.has_value())
-            return true;
-          auto value = eval(*source, event, stage.root_snapshot,
-                            stage.result.node_evaluations, error);
-          if (!value)
-            return false;
-          output = std::move(*value);
-          return true;
-        };
     std::vector<AutomationEffect> candidate;
     for (const auto &action : match.rule->actions) {
+      if (auto exhausted = stage.budget.check())
+        return *exhausted;
       AutomationEffect effect;
       effect.kind = action.kind;
       effect.automation_id = match.automation->id;
@@ -204,65 +198,80 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate_event(
       effect.timestamp = event.timestamp;
       effect.repeating = action.repeating;
       effect.order = {match.rule->priority, match.ai, match.ri};
-      if (!eval_into(action.value, effect.value) ||
-          !eval_into(action.secondary, effect.secondary)) {
-        rule_fault = true;
-        break;
+      for (const auto &[expression, output] :
+           {std::pair{&action.value, &effect.value},
+            std::pair{&action.secondary, &effect.secondary}}) {
+        if (!expression->has_value())
+          continue;
+        auto value =
+            eval(**expression, event, stage.root_snapshot, stage.budget);
+        auto *result = std::get_if<AutomationValue>(&value);
+        if (!result)
+          return expression_failure(value);
+        *output = std::move(*result);
+      }
+      const auto *spec = automation_action_spec(action.kind);
+      if (spec && (spec->value == ActionValuePolicy::match_variable ||
+                   spec->value == ActionValuePolicy::match_numeric_variable ||
+                   spec->value == ActionValuePolicy::overlay_property)) {
+        const auto expected = automation_action_value_type(action, profile);
+        if (expected && !normalize_automation_value(effect.value, *expected))
+          return fault_match(
+              {"$runtime", "action value does not match its declared type"});
       }
       candidate.push_back(std::move(effect));
     }
-    if (rule_fault)
-      return fault_match(error);
     auto candidate_state = stage.staged;
     auto candidate_winners = stage.winners;
     std::vector<AutomationEvent> candidate_derived;
     for (auto &effect : candidate) {
+      if (auto exhausted = stage.budget.check())
+        return *exhausted;
       const auto key = runtime_effect_key(effect);
       const auto found = candidate_winners.find(key);
       if (found != candidate_winners.end() &&
           !runtime_effect_precedes(effect, found->second))
         continue;
       std::vector<AutomationEvent> derived;
+      AutomationError error;
       if (!apply_internal(effect, event.timestamp, candidate_state, error,
-                          derived)) {
-        rule_fault = true;
-        break;
-      }
+                          derived))
+        return fault_match(std::move(error));
       candidate_winners.insert_or_assign(key, effect);
       for (auto &next : derived) {
         next.origin_token = root.origin_token;
         candidate_derived.push_back(std::move(next));
       }
     }
-    if (rule_fault)
-      return fault_match(error);
     const auto derived_count = stage.queue.size() - 1U;
     if (candidate_derived.size() >
         max_automation_derived_events - derived_count)
-      return fault_match(
-          {"$runtime", "root event exceeded 32 derived events"});
+      return fault_match({"$runtime", "root event exceeded 32 derived events"});
     stage.staged = std::move(candidate_state);
     stage.winners = std::move(candidate_winners);
     for (auto &next : candidate_derived)
       stage.queue.push_back(std::move(next));
   }
-
-  return std::nullopt;
+  return AttemptComplete{};
 }
 
-std::optional<std::string> AutomationRuntime::Impl::evaluate(
+AttemptOutcome AutomationRuntime::Impl::evaluate(
     const AutomationEvent &root, const EffectValidator &validator,
-    const EffectCommitter &committer, const TimePoint deadline,
-    AutomationEvaluationResult &result, AutomationError &fault) {
+    const EffectCommitter &committer, EvaluationBudget &budget,
+    AutomationEvaluationResult &result) {
   result.effects.clear();
   result.derived_events.clear();
   result.committed = false;
   result.error.reset();
+  if (auto exhausted = budget.check())
+    return *exhausted;
   // Consume the firing only in the transaction snapshot. Rejection leaves
   // the live timer due; accepted effects may replace or cancel it normally.
   auto root_snapshot = state;
-  if (root.kind == AutomationEventKind::timer_fired)
-    consume_timer_firing(root_snapshot, root.source_id, root.timestamp);
+  if (root.kind == AutomationEventKind::timer_fired &&
+      !consume_timer_firing(root_snapshot, root.source_id, root.timestamp))
+    return AttemptRejected{
+        {"$runtime", "timer rearm is outside the clock range"}};
   // Every expression reads the root snapshot; only winners are committed.
   EvaluationStage stage{
       .root_snapshot = root_snapshot,
@@ -270,20 +279,22 @@ std::optional<std::string> AutomationRuntime::Impl::evaluate(
       .queue = {root},
       .fired = {},
       .winners = {},
-      .deadline = deadline,
+      .budget = budget,
       .result = result,
-      .fault = fault,
   };
   std::size_t queue_index{};
   while (queue_index < stage.queue.size()) {
-    if (queue_index >= max_automation_derived_events + 1U) {
-      stage.result.error =
-          AutomationError{"$runtime", "root event exceeded 32 derived events"};
-      return std::nullopt;
-    }
-    const auto event = stage.queue[queue_index++];
-    if (auto restart = evaluate_event(root, event, stage))
-      return restart;
+    if (auto exhausted = budget.check())
+      return *exhausted;
+    if (queue_index >= max_automation_derived_events + 1U)
+      return AttemptRejected{
+          {"$runtime", "root event exceeded 32 derived events"}};
+    const auto event = stage.queue[queue_index];
+    if (queue_index++ != 0U)
+      add_event_trace(event, "derived");
+    auto outcome = evaluate_event(root, event, stage);
+    if (!std::holds_alternative<AttemptComplete>(outcome))
+      return outcome;
   }
   return commit_batch(stage, validator, committer);
 }

@@ -154,9 +154,7 @@ bool validate_expression_tree(
 
 bool is_compatible_type(const std::optional<AutomationValueType> actual,
                         const AutomationValueType expected) {
-  return !actual.has_value() || *actual == expected ||
-         (expected == AutomationValueType::number &&
-          *actual == AutomationValueType::integer);
+  return !actual.has_value() || automation_value_type_compatible(*actual, expected);
 }
 
 bool duration_like(const std::optional<AutomationValueType> type) {

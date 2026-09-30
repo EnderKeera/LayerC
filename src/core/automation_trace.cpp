@@ -269,11 +269,16 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
     if (!entry.is_object())
       return AutomationError{"$.entries[" + std::to_string(index) + "]",
                              "trace entry must be an object"};
-    const auto *phase = entry.find("phase");
-    if (phase == nullptr || !phase->is_string() ||
-        phase->as_string() != "source")
-      continue;
     const auto path = "$.entries[" + std::to_string(index) + "]";
+    const auto *phase = entry.find("phase");
+    if (phase != nullptr && phase->is_string() &&
+        phase->as_string() == "source")
+      return AutomationError{
+          path + ".phase",
+          "legacy source traces lack root provenance; capture a new trace"};
+    if (phase == nullptr || !phase->is_string() || phase->as_string() != "root")
+      continue; // derived entries and condition/error audit are never replay
+                // roots
     const auto *event_name_value = entry.find("event");
     const auto *time = entry.find("timeMs");
     const auto *source_id = entry.find("source");
@@ -289,7 +294,7 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
       return event_name_value != nullptr && event_name_value->is_string() &&
              time_value.has_value() &&
              *time_value <= static_cast<std::uint64_t>(
-                               std::numeric_limits<std::int64_t>::max()) &&
+                                std::numeric_limits<std::int64_t>::max()) &&
              source_id != nullptr && source_id->is_string() &&
              source_id->as_string().size() <= max_automation_string_bytes &&
              origin_value.has_value() && fields != nullptr &&
@@ -302,10 +307,14 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
         detail::parse_automation_event_name(event_name_value->as_string());
     if (!event_kind.has_value())
       return AutomationError{path + ".event", "unsupported event kind"};
+    const auto timestamp = automation_time_after(
+        TimePoint{}, Milliseconds(static_cast<std::int64_t>(*time_value)));
+    if (!timestamp)
+      return AutomationError{path + ".timeMs",
+                             "trace timestamp is outside the clock range"};
     AutomationEvent event;
     event.kind = *event_kind;
-    event.timestamp =
-        TimePoint(Milliseconds(static_cast<std::int64_t>(*time_value)));
+    event.timestamp = *timestamp;
     event.source_id = source_id->as_string();
     event.origin_token = *origin_value;
     for (const auto &[name, value] : fields->as_object()) {
@@ -317,6 +326,9 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
           read_trace_value(value, path + ".fields." + name, 0, value_error);
       if (!parsed_value.has_value())
         return value_error;
+      if (!automation_value_valid(*parsed_value))
+        return AutomationError{path + ".fields." + name,
+                               "trace value exceeds automation bounds"};
       event.fields.emplace(name, std::move(*parsed_value));
     }
     events.push_back(std::move(event));
