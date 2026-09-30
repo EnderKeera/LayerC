@@ -363,8 +363,16 @@ bool recover_locked(const ProfileStoreRoots &roots) {
       if (!remove_transaction(transaction)) return false;
       continue;
     }
-    // An existing unreadable/oversized journal may describe a partial publish.
-    // Keep all rollback evidence and block writers until recovery can read it.
+    // An existing unreadable journal may describe a partial publish. Keep all
+    // rollback evidence and block writers until recovery can read it.
+    if (journal.status == FileReadStatus::io_error) return false;
+    // No writer produces an oversized journal, and it can never be read back:
+    // quarantine it like an unparseable one instead of blocking forever.
+    if (journal.status == FileReadStatus::too_large) {
+      if (!quarantine_transaction(transaction)) return false;
+      quarantined = true;
+      continue;
+    }
     if (!journal.has_value()) return false;
     const auto journal_text = layerc::core::as_text(*journal);
     const auto name = transaction.filename().string();

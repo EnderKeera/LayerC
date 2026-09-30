@@ -133,13 +133,29 @@ void journal_read_status_recovery() {
     expect(platform::read_durable_file(journal, limit).status == status,
            "recovery fixture should exercise the exact typed read status");
     const auto recovered = platform::recover_profile_transactions(*roots);
-    const bool unreadable = status == platform::FileReadStatus::too_large ||
-                            status == platform::FileReadStatus::io_error;
-    if (unreadable) {
+    if (status == platform::FileReadStatus::too_large) {
+      const std::filesystem::path quarantined(transaction.string() + ".corrupt-0");
+      std::error_code size_error;
+      const auto journal_size =
+          std::filesystem::file_size(quarantined / "journal.json", size_error);
+      expect(recovered && !std::filesystem::exists(transaction) && !size_error &&
+                 journal_size == limit + 1U &&
+                 read_file(quarantined / "backup" / "0.bin") == "old" &&
+                 read_file(target) == "partial",
+             "oversized journals are quarantined with all rollback evidence");
+      expect(platform::recover_profile_transactions(*roots) &&
+                 std::filesystem::exists(quarantined),
+             "repeated recovery must leave quarantined evidence alone");
+      const std::array mutation{platform::ProfileFileMutation{
+          .target = target, .contents = core::owned_bytes("after-quarantine")}};
+      expect(platform::commit_profile_transaction(*roots, mutation) &&
+                 read_file(target) == "after-quarantine",
+             "a quarantined oversized journal must not block later publications");
+    } else if (status == platform::FileReadStatus::io_error) {
       expect(recovered.error() == platform::ProfileWriteError::recovery_blocked &&
                  read_file(backup) == "old" && std::filesystem::exists(journal) &&
                  read_file(target) == "partial",
-             "existing unreadable/oversized journals must retain all evidence");
+             "existing unreadable journals must retain all evidence");
       expect(platform::recover_profile_transactions(*roots).error() ==
                      platform::ProfileWriteError::recovery_blocked &&
                  read_file(backup) == "old",
