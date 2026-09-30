@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <utility>
 #include <variant>
@@ -259,7 +260,9 @@ void editor_draft_leave_contracts() {
   for (const auto state : states) {
     for (const auto action : actions) {
       for (const bool cancel : {true, false}) {
-        layerc::editor::EditorWindow editor;
+        const auto editor_fixture =
+            std::make_unique<layerc::editor::EditorWindow>();
+        auto &editor = *editor_fixture;
         prepare(editor, state);
         auto &document = EditorWindowTestAccess::document(editor);
         const auto before = snapshot(document);
@@ -290,7 +293,7 @@ void editor_draft_leave_contracts() {
           expect(document.path().empty() && !document.dirty(),
                  "approved New Profile should replace the draft with a clean one");
         }
-        if (IsWindow(window) != FALSE)
+        if (window != nullptr && IsWindow(window) != FALSE)
           DestroyWindow(window);
       }
     }
@@ -304,7 +307,8 @@ void editor_dialog_font_contracts() {
   const HINSTANCE instance = GetModuleHandleW(nullptr);
   const HWND dialog = CreateDialogParamW(instance, MAKEINTRESOURCEW(IDD_OPTIONS),
                                          nullptr, &fixture_dialog_proc, 0);
-  if (!expect(dialog != nullptr, "the disposable font dialog should load"))
+  expect(dialog != nullptr, "the disposable font dialog should load");
+  if (dialog == nullptr)
     return;
   const HFONT small = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
@@ -317,7 +321,9 @@ void editor_dialog_font_contracts() {
   Canvas canvas;
   if (expect(small != nullptr && large != nullptr && canvas.valid(),
              "distinct fonts and a disposable bitmap should be available")) {
-    layerc::editor::EditorWindow editor;
+    const auto editor_fixture =
+        std::make_unique<layerc::editor::EditorWindow>();
+    auto &editor = *editor_fixture;
     layerc::editor::DialogChrome chrome;
     expect(chrome.attach(dialog, 96), "the fixture should own its dialog font");
     const std::array classes{L"BUTTON", L"BUTTON", L"BUTTON", L"LISTBOX", L"COMBOBOX"};
@@ -333,7 +339,8 @@ void editor_dialog_font_contracts() {
           0, 0, Canvas::width, Canvas::height, dialog,
           reinterpret_cast<HMENU>(static_cast<INT_PTR>(20000 + index)),
           instance, nullptr);
-      if (!expect(control != nullptr, "the disposable font control should load"))
+      expect(control != nullptr, "the disposable font control should load");
+      if (control == nullptr)
         continue;
       if (types[index] == ODT_LISTBOX || types[index] == ODT_COMBOBOX) {
         SendMessageW(control, types[index] == ODT_LISTBOX ? LB_ADDSTRING : CB_ADDSTRING,
