@@ -356,21 +356,32 @@ bool recover_locked(const ProfileStoreRoots &roots) {
       quarantined = true;
       continue;
     }
-  const auto journal = read_durable_text(transaction / "journal.json",
-                                         max_journal_bytes);
-    if (!journal.has_value()) {
-      // No journal: crashed before anything was published, so there is
-      // nothing to roll back and no evidence worth keeping.
+    const auto journal =
+        read_durable_file(transaction / "journal.json", max_journal_bytes);
+    if (journal.status == FileReadStatus::missing) {
+      // Only an absent journal proves the writer stopped before publication.
       if (!remove_transaction(transaction)) return false;
       continue;
     }
+    // An existing unreadable journal may describe a partial publish. Keep all
+    // rollback evidence and block writers until recovery can read it.
+    if (journal.status == FileReadStatus::io_error) return false;
+    // No writer produces an oversized journal, and it can never be read back:
+    // quarantine it like an unparseable one instead of blocking forever.
+    if (journal.status == FileReadStatus::too_large) {
+      if (!quarantine_transaction(transaction)) return false;
+      quarantined = true;
+      continue;
+    }
+    if (!journal.has_value()) return false;
+    const auto journal_text = layerc::core::as_text(*journal);
     const auto name = transaction.filename().string();
     constexpr JournalSchema schema_v2{2.0, std::nullopt};
     constexpr JournalSchema schema_v1{1.0, RootKind::config};
     auto operations =
-        parse_journal_operations(roots, name, *journal, schema_v2);
+        parse_journal_operations(roots, name, journal_text, schema_v2);
     if (!operations.has_value())
-      operations = parse_journal_operations(roots, name, *journal, schema_v1);
+      operations = parse_journal_operations(roots, name, journal_text, schema_v1);
     if (!operations.has_value()) {
       // Genuinely unparseable (and not a v1 upgrade journal): quarantine for
       // operator inspection instead of deleting the only record of a
@@ -635,23 +646,14 @@ struct PublishProgress {
   return {};
 }
 
-} // namespace
-
-// Internal bridge for test-only fault injection (see
-// profile_transaction_internal.hpp): the production wrapper below always
-// passes std::nullopt.
-ProfileWriteResult commit_profile_transaction_impl(
+// Already-owned publication: the caller retains recovered writer ownership
+// from before planning until this entire stage -> commit path has finished.
+[[nodiscard]] ProfileWriteResult commit_owned(
     const ProfileStoreRoots &roots,
-    const std::span<const ProfileFileMutation> &mutations,
-    const std::optional<std::size_t> &fail_after_publish) {
+    const std::span<const ProfileFileMutation> mutations,
+    const std::optional<std::size_t> fail_after_publish) {
   if (mutations.empty() || mutations.size() > max_transaction_operations)
     return {ProfileWriteError::invalid_input};
-  if (!ensure_guard_transaction_roots(roots))
-    return {ProfileWriteError::scope_rejected};
-  TransactionFileLock lock(roots);
-  if (!lock.locked()) return {ProfileWriteError::lock_busy};
-  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
-
   ProfileWriteError failure = ProfileWriteError::invalid_input;
   auto operations = prepare_ops(roots, mutations, failure);
   if (!operations.has_value()) return {failure};
@@ -671,6 +673,38 @@ ProfileWriteResult commit_profile_transaction_impl(
   // and partial publications for recover_locked under the next writer.
   if (!progress.has_value()) return {ProfileWriteError::io_failed};
   return finish_or_recover(transaction, transactions, *operations, *progress);
+}
+
+} // namespace
+
+// Internal bridge for test-only fault injection. Immutable mutations need no
+// store reads before ownership; store-dependent callers use the planner form.
+ProfileWriteResult commit_profile_transaction_impl(
+    const ProfileStoreRoots &roots,
+    const std::span<const ProfileFileMutation> &mutations,
+    const std::optional<std::size_t> &fail_after_publish) {
+  if (mutations.empty() || mutations.size() > max_transaction_operations)
+    return {ProfileWriteError::invalid_input};
+  if (!ensure_guard_transaction_roots(roots))
+    return {ProfileWriteError::scope_rejected};
+  TransactionFileLock lock(roots);
+  if (!lock.locked()) return {ProfileWriteError::lock_busy};
+  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
+  return commit_owned(roots, mutations, fail_after_publish);
+}
+
+ProfileWriteResult commit_profile_transaction(
+    const ProfileStoreRoots &roots, const ProfileMutationPlanner &planner) {
+  if (!planner) return {ProfileWriteError::invalid_input};
+  if (!ensure_guard_transaction_roots(roots))
+    return {ProfileWriteError::scope_rejected};
+  TransactionFileLock lock(roots);
+  if (!lock.locked()) return {ProfileWriteError::lock_busy};
+  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
+  std::vector<ProfileFileMutation> mutations;
+  const auto planned = planner(mutations);
+  if (!planned || mutations.empty()) return planned;
+  return commit_owned(roots, mutations, std::nullopt);
 }
 
 std::optional<ProfileStoreRoots>
@@ -699,6 +733,14 @@ ProfileWriteResult commit_profile_transaction(
   const auto roots = profile_transaction_scope(profile_directory);
   if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
   return commit_profile_transaction(*roots, mutations);
+}
+
+ProfileWriteResult commit_profile_transaction(
+    const std::filesystem::path &profile_directory,
+    const ProfileMutationPlanner &planner) {
+  const auto roots = profile_transaction_scope(profile_directory);
+  if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
+  return commit_profile_transaction(*roots, planner);
 }
 
 ProfileWriteResult
