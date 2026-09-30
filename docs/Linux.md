@@ -142,16 +142,18 @@ fault cleanup only. On each physical desktop, choose a controlled target with
 `xwininfo`, then run both package modes:
 
 ```sh
-LAYERC_BUILD_DIR=build-linux bash tools/run-linux-v26-evidence.sh gnome native 0x4600007
+bash tools/run-linux-v26-evidence.sh gnome native 0x4600007   # LAYERC_BUILD_DIR defaults to build-linux
 bash tools/run-linux-v26-evidence.sh gnome flatpak 0x4600007
-LAYERC_BUILD_DIR=build-linux bash tools/run-linux-v26-evidence.sh kde native 0x4600007
+bash tools/run-linux-v26-evidence.sh kde native 0x4600007
 bash tools/run-linux-v26-evidence.sh kde flatpak 0x4600007
 ```
 
 The harness refuses non-X11 sessions, never synthesizes input, records the
 status/capture/resource artifacts under `out/benchmarks/v26-linux/`, and
 requires an explicit operator pass for the visibility, click-through, hotplug,
-recovery, and visual-transition checks that cannot be proved automatically.
+recovery, and visual-transition checks that cannot be proved automatically
+(prompted, or preset with `LAYERC_MANUAL_RESULT=pass|fail` and
+`LAYERC_MANUAL_NOTES`; unset without a terminal records `pending`).
 Set `LAYERC_RUN_AUTOMATION=1` to run and bind the reusable automated gate before
 the physical checklist, or point `LAYERC_AUTOMATION_SUMMARY` at an existing
 commit-matched `summary.json`. Release collection can set
@@ -173,9 +175,9 @@ builds the headless daemon and reports graphical capabilities as unavailable.
 From the repo root:
 
 ```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure   # portable + Linux suites
+cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-linux --parallel
+ctest --test-dir build-linux --output-on-failure   # portable + Linux suites
 ```
 
 Linux builds `layerd`, `layerctl`, and `layercal` when the required X11
@@ -270,8 +272,7 @@ reports failure and retains recovery evidence for the next recovery attempt.
 Removed module sidecars retain their bytes behind an authoritative tombstone;
 cleanup never deletes sidecars after releasing writer ownership.
 Unparseable transaction journals are quarantined as `<name>.corrupt-<n>` for
-operator inspection rather than deleted. Name matching on both platforms uses
-the shared deterministic fold (ASCII plus the cased Latin-1 supplement rows).
+operator inspection rather than deleted.
 Import/export/reload commands work offline; after an import a running daemon
 is notified when its socket exists. One daemon per socket — a live daemon
 refuses a second bind.
@@ -286,14 +287,15 @@ sessions are destroyed; temporary capability quiescence only checkpoints.
 ## Install layout (GNUInstallDirs)
 
 ```sh
-cmake --install build --prefix /usr/local        # BINDIR: layerd, layerctl, layercal
+cmake --install build-linux --prefix /usr/local  # BINDIR: layerd, layerctl, layercal
 ```
 
 ### Optional systemd user unit (default OFF)
 
 ```sh
-cmake -S . -B build -DLAYERC_INSTALL_SYSTEMD_USER_UNIT=ON -DCMAKE_INSTALL_PREFIX=~/.local
-cmake --install build
+cmake -S . -B build-linux -DLAYERC_INSTALL_SYSTEMD_USER_UNIT=ON -DCMAKE_INSTALL_PREFIX=~/.local
+cmake --build build-linux --parallel
+cmake --install build-linux
 systemctl --user start io.github.EnderKeera.LayerC.service   # never auto-enabled
 ```
 
@@ -346,19 +348,12 @@ observations; automated Flatpak success does not satisfy that checklist.
 
 ## CI and release boundary
 
-The `.github/workflows/ci.yml` Linux matrix runs `tools/ci-linux.sh` in
-digest-pinned `debian:stable` and `ubuntu:24.04` containers (the tags are display
-labels). Headless and Xvfb suites are separate, required suite names are checked
-against CTest registration and JUnit, and installed-native smoke is part of each
-job. The repo is read-only; structured evidence is uploaded from a separate
-writable mount. A dedicated Ubuntu job installs the Freedesktop 25.08 runtime
-and SDK and runs the same gate with Flatpak coverage required.
-
-These jobs are the automated Linux compatibility gate. `windows-msvc` remains
-the package job and produces the Windows ZIP. Physical input/click-through,
-real-monitor/driver behavior, and GNOME Xorg/KDE X11 native plus Flatpak
-evidence remain manual and pending until separately archived.
-
-The runner boundaries are intentionally extensible: future Gamescope and
-Wayland lanes can reuse the evidence schema and runtime smoke contract, but no
-such backend or compatibility claim is part of V2.6.
+The `linux` (`debian:stable`, `ubuntu:24.04`) and `linux-flatpak` jobs in
+`ci.yml` run the gate above and are the automated Linux compatibility gate;
+job details are in
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md#ci-and-release-gates). No Linux
+package is published: `windows-msvc` produces the only release ZIP. Physical
+input/click-through, real-monitor/driver behavior, and GNOME Xorg/KDE X11
+native plus Flatpak evidence remain manual and pending until archived.
+Future Gamescope or Wayland lanes could reuse the evidence schema, but no such
+backend or claim is part of V2.6.

@@ -1,8 +1,9 @@
 /build/
 /.vs/
-# Local-only roadmap: intentionally not tracked in the public repo
+# Local-only historical plans, one-off handoffs, and scratch files
 /PLAN.md
 /PLAN-v26-linux.md
+/scratch/
 /out/
 *.user
 *.suo
@@ -18,6 +19,8 @@ reasonix.toml
 /.review_tmp/
 /.omp/
 /.pi/
+/.codegraph/
+__pycache__/
 *.zip
 /_CPack_Packages/
 /*.exe
