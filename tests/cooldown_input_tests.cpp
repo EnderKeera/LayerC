@@ -3,6 +3,7 @@
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
+#include "layerc/core/profile.hpp"
 #include "layerc/core/hid.hpp"
 
 #include <algorithm>
@@ -53,6 +54,7 @@ void test_cooldown_charges() {
   auto zero_duration = definitions.front();
   zero_duration.duration = Milliseconds::zero();
   state.next_charge_at = start + 1s;
+  state.recharge_duration.reset(); // legacy/manual state uses the definition
   expect(cooldown_progress(zero_duration, state, start) == 0.0,
          "running zero-duration cooldown progress should be empty");
 }
@@ -299,6 +301,77 @@ void test_cooldown_recovery_modes_and_groups() {
          "cyclic propagation groups must terminate with every member "
          "triggered exactly once");
 }
+void test_cooldown_owner_id_collisions() {
+  using namespace std::chrono_literals;
+  using namespace layerc::core;
+  GameProfile profile;
+  profile.id = "opaque-ids";
+  profile.name = "Opaque IDs";
+  profile.game.global = true;
+  profile.cooldowns = {
+      {.id = "a", .name = "A", .duration = 1s},
+      {.id = "b", .name = "B", .duration = 10s},
+      {.id = "@shared-pool/pool", .name = "Real ID", .duration = 9s,
+       .max_charges = 2, .recovery = RecoveryMode::parallel},
+      {.id = "pool", .name = "Same text as group", .duration = 3s},
+      {.id = "@shared-pool/@shared-pool/pool", .name = "Nested prefix",
+       .duration = 7s},
+      {.id = "c", .name = "C", .duration = 2s}};
+  profile.cooldown_groups = {
+      {.id = "pool", .name = "Pool", .mode = CooldownGroupMode::shared_pool,
+       .cooldown_ids = {"a", "b"}, .duration = 5s, .max_charges = 3,
+       .recovery = RecoveryMode::parallel},
+      {.id = "@shared-pool/pool", .name = "Prefix pool",
+       .mode = CooldownGroupMode::shared_pool, .cooldown_ids = {"c"},
+       .duration = 6s}};
+  profile.panels = {{.id = "panel", .name = "Panel", .cooldown_ids = {"a"}}};
+  profile.bindings = {{.cooldown_id = "@shared-pool/pool",
+                       .chord = {{{InputDevice::keyboard, 0x20, 0}}}}};
+  const auto json = serialize_profile_json(profile);
+  const auto parsed = parse_profile_json(json);
+  expect(std::holds_alternative<GameProfile>(parsed) &&
+             serialize_profile_json(std::get<GameProfile>(parsed)) == json,
+         "CM-02: all persisted synthetic-looking IDs remain accepted and byte-stable");
+
+  const TimePoint start{};
+  for (const bool reversed : {false, true}) {
+    auto ordered = profile;
+    if (reversed) {
+      std::ranges::reverse(ordered.cooldowns);
+      std::ranges::reverse(ordered.cooldown_groups);
+    }
+    CooldownEngine engine(ordered.cooldowns, ordered.cooldown_groups);
+    expect(engine.trigger("a", start), "collision fixture triggers a pool alias");
+    const auto charges = [&](const std::string_view id) {
+      const auto states = engine.snapshot(start);
+      const auto *state = cooldown_state_at(states, 0, id);
+      return state == nullptr ? 0U : state->available_charges;
+    };
+    expect(charges("a") == 2 && charges("b") == 2 &&
+               charges("@shared-pool/pool") == 2 && charges("pool") == 1,
+           "CM-02: triggering a pool cannot consume an unrelated public ID");
+    expect(engine.trigger("@shared-pool/pool", start) && charges("a") == 2 &&
+               charges("@shared-pool/pool") == 1,
+           "CM-02: synthetic-looking public IDs have independent state");
+    expect(engine.trigger("pool", start) && charges("a") == 2 &&
+               engine.trigger_group("pool", start).size() == 2 &&
+               charges("a") == 1 && charges("pool") == 0,
+           "CM-02: group and cooldown ID namespaces remain separate");
+    expect(engine.trigger("c", start) &&
+               charges("@shared-pool/@shared-pool/pool") == 1,
+           "CM-02: nested prefix collisions do not alias another pool");
+    expect(engine.reset_group("pool") && charges("a") == 3 &&
+               charges("@shared-pool/pool") == 1 &&
+               engine.refund("@shared-pool/pool", start) && charges("a") == 3,
+           "CM-02: reset and refund operate only on the requested owner");
+    expect(engine.trigger("a", start) &&
+               engine.reduce("b", 1s, true, start) &&
+               engine.remaining("a", start) == 4s &&
+               engine.remaining("@shared-pool/pool", start) == 0ms,
+           "CM-02: reductions share aliases without affecting opaque public IDs");
+  }
+}
+
 void test_snapshot_reuse() {
   using namespace std::chrono_literals;
   using namespace layerc::core;
