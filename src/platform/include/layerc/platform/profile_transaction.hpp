@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <span>
 #include <vector>
@@ -67,6 +68,15 @@ profile_transaction_scope(const std::filesystem::path &profile_directory);
     const ProfileStoreRoots &roots,
     std::span<const ProfileFileMutation> mutations);
 
+// Store-dependent planning runs only after acquiring writer ownership and
+// recovering prior journals. The planner returns value-owned mutations; the
+// engine stages and commits them without releasing or reacquiring ownership.
+// An empty successful plan is a no-op. Do not call another writer in a planner.
+using ProfileMutationPlanner =
+    std::function<ProfileWriteResult(std::vector<ProfileFileMutation> &)>;
+[[nodiscard]] ProfileWriteResult commit_profile_transaction(
+    const ProfileStoreRoots &roots, const ProfileMutationPlanner &planner);
+
 // Rolls back uncommitted journals and removes completed transaction residue.
 // Safe to call at every LayerD and LayerE startup.
 [[nodiscard]] ProfileWriteResult recover_profile_transactions(const ProfileStoreRoots &roots);
@@ -76,6 +86,9 @@ profile_transaction_scope(const std::filesystem::path &profile_directory);
 [[nodiscard]] ProfileWriteResult commit_profile_transaction(
     const std::filesystem::path &profile_directory,
     std::span<const ProfileFileMutation> mutations);
+[[nodiscard]] ProfileWriteResult commit_profile_transaction(
+    const std::filesystem::path &profile_directory,
+    const ProfileMutationPlanner &planner);
 [[nodiscard]] ProfileWriteResult
 recover_profile_transactions(const std::filesystem::path &profile_directory);
 

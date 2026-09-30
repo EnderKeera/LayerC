@@ -93,8 +93,7 @@ bool NamedPipeEditorDaemonChannel::create_server_pipe() {
     return true;
   }
   set_error(error);
-  CloseHandle(pipe_);
-  pipe_ = INVALID_HANDLE_VALUE;
+  close_handles();
   return false;
 }
 
@@ -118,8 +117,7 @@ bool NamedPipeEditorDaemonChannel::connect_client() {
           .session_error = L"Rejected a live-channel server from another logon session.",
           .authenticate_error = L"Could not authenticate the LayerD live-channel server.",
           .untrusted_error = L"Rejected an untrusted LayerD live-channel server."})) {
-    CloseHandle(pipe_);
-    pipe_ = INVALID_HANDLE_VALUE;
+    close_handles();
     return false;
   }
   complete_connection();
@@ -192,9 +190,6 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
   const bool was_connected = connected_;
   connected_ = false;
   peer_process_id_ = 0;
-  connect_pending_ = false;
-  read_pending_ = false;
-  write_pending_ = false;
   decoder_.clear();
   pending_messages_.clear();
   // This object lives for LayerD's entire lifetime. clear() would keep the
@@ -207,10 +202,22 @@ void NamedPipeEditorDaemonChannel::disconnect(const DWORD error) {
     set_error(error);
 }
 
-void NamedPipeEditorDaemonChannel::close_handles() {
+void NamedPipeEditorDaemonChannel::close_handles() noexcept {
   if (pipe_ != INVALID_HANDLE_VALUE) {
-    CancelIoEx(pipe_, nullptr);
-    if (role_ == Role::server) DisconnectNamedPipe(pipe_);
+    // Cancellation is only a request (including ERROR_NOT_FOUND when an I/O
+    // just completed). Keep the pipe, events, OVERLAPPEDs, and both buffers
+    // alive until every submitted operation has reached a terminal result.
+    (void)CancelIoEx(pipe_, nullptr);
+    const auto drain = [&](OVERLAPPED &overlapped, bool &pending) {
+      if (!pending) return;
+      DWORD transferred{};
+      (void)GetOverlappedResult(pipe_, &overlapped, &transferred, TRUE);
+      pending = false;
+    };
+    drain(connect_overlapped_, connect_pending_);
+    drain(read_overlapped_, read_pending_);
+    drain(write_overlapped_, write_pending_);
+    if (role_ == Role::server) (void)DisconnectNamedPipe(pipe_);
     CloseHandle(pipe_);
     pipe_ = INVALID_HANDLE_VALUE;
   }
