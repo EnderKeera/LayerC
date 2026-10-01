@@ -231,15 +231,6 @@ int call_daemon(const platform::ControlCommand command, bool json_output) {
     std::fputc('\n', stdout);
     return 0;
   }
-  const auto decoded = platform::decode_control_response(*response);
-  if (!decoded.has_value() || !decoded->ok) {
-    const std::string message =
-        decoded.has_value() && !decoded->error.empty()
-            ? decoded->error
-            : "the daemon returned an invalid response";
-    std::fprintf(stderr, "layerctl: %s\n", message.c_str());
-    return 1;
-  }
   if (command == platform::ControlCommand::status) {
     print_status_summary(*response);
     return 0;

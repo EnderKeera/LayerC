@@ -859,7 +859,11 @@ if(LAYERC_BUILD_TESTS)
 
         layerc_add_test(layerc_linux_control_channel_tests
             SOURCES tests/linux_control_channel_tests.cpp
+                tests/linux_control_service_tests.cpp
             LINK layerc_daemon_linux TIMEOUT 30)
+        target_compile_definitions(layerc_linux_control_channel_tests PRIVATE
+            LAYERC_TEST_LAYERCTL_PATH="$<TARGET_FILE:layerctl>")
+        add_dependencies(layerc_linux_control_channel_tests layerctl)
     endif()
 
     layerc_add_test(layerc_automation_benchmark
