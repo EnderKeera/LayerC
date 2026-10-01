@@ -2,6 +2,7 @@
 
 #include "layerc/core/hash.hpp"
 #include "layerc/core/json.hpp"
+#include "update_engine_internal.hpp"
 
 #include <cerrno>
 #include <cstddef>
@@ -51,21 +52,10 @@ using core::UpdateManifest;
 [[nodiscard]] bool write_bytes(const fs::path &path, const std::string_view bytes) {
   std::error_code error;
   fs::create_directories(path.parent_path(), error);
-  if (error) return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  output.close();
-  return static_cast<bool>(output);
+  return !error && platform::write_durable_file(
+                       path, std::as_bytes(std::span(bytes.data(), bytes.size()))) ==
+                       platform::DurablePublishOutcome::published_durable;
 }
-
-// A successful rename is the single activation boundary. The stage is flushed
-// first; on POSIX, the parent is flushed after rename as well.
-enum class PublishOutcome {
-  failed,
-  published_unconfirmed,
-  published_interrupted,
-  published_durable
-};
 
 [[nodiscard]] bool plain_file_or_absent(const fs::path &path) {
   std::error_code error;
@@ -184,24 +174,24 @@ private:
 #endif
 }
 
-[[nodiscard]] PublishOutcome publish_activation_file(
+[[nodiscard]] ActivationOutcome publish_activation_file(
     const fs::path &source, const fs::path &target) {
-  if (!plain_file_or_absent(target)) return PublishOutcome::failed;
+  if (!plain_file_or_absent(target)) return ActivationOutcome::failed;
 #ifdef _WIN32
   return MoveFileExW(source.c_str(), target.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0
-             ? PublishOutcome::published_durable
-             : PublishOutcome::failed;
+             ? ActivationOutcome::published_durable
+             : ActivationOutcome::failed;
 #else
   if (::rename(source.c_str(), target.c_str()) != 0)
-    return PublishOutcome::failed;
+    return ActivationOutcome::failed;
   const int directory = ::open(target.parent_path().c_str(),
                                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (directory < 0) return PublishOutcome::published_unconfirmed;
+  if (directory < 0) return ActivationOutcome::published_unconfirmed;
   const bool durable = ::fsync(directory) == 0;
   (void)::close(directory);
-  return durable ? PublishOutcome::published_durable
-                 : PublishOutcome::published_unconfirmed;
+  return durable ? ActivationOutcome::published_durable
+                 : ActivationOutcome::published_unconfirmed;
 #endif
 }
 
@@ -222,26 +212,32 @@ struct ActivationState {
   std::optional<std::string> previous;
 };
 
-// A replacement of an already-named build first parks the old directory in
-// staging. If power is lost before the new directory reaches app/, the next
-// read restores the parked directory before inspecting its manifest.
-[[nodiscard]] bool recover_parked_build(const InstallLayout &layout,
-                                         const std::string &id) {
-  const auto destination = layout.build_directory(id);
-  const auto parked = layout.staging_directory() / ".replaced" / id;
+[[nodiscard]] fs::path parked_build_directory(const InstallLayout &layout,
+                                              const std::string &id) {
+  auto path = layout.build_directory(id);
+  path += ".old";
+  return path;
+}
+
+// A same-ID repair never deletes the old directory before publishing its
+// replacement. Every activation read durably restores a parked build that the
+// record names if the process stopped between the two directory moves.
+[[nodiscard]] bool recover_build_directory(const InstallLayout &layout,
+                                           const std::string &id) {
   std::error_code error;
-  if (fs::exists(destination, error)) return true;
+  if (fs::exists(layout.build_directory(id), error)) return !error;
   if (error) return false;
+  const auto parked = parked_build_directory(layout, id);
   if (!fs::exists(parked, error)) return !error;
-  if (error) return false;
-  fs::rename(parked, destination, error);
-  return !error;
+  return platform::publish_durable_directory_checked(
+             parked, layout.build_directory(id)) ==
+         platform::DurablePublishOutcome::published_durable;
 }
 
 [[nodiscard]] std::variant<std::optional<ActivationState>, UpdateError>
 recover_activation_builds(const InstallLayout &layout, ActivationState state) {
-  if (!recover_parked_build(layout, state.current) ||
-      (state.previous && !recover_parked_build(layout, *state.previous)))
+  if (!recover_build_directory(layout, state.current) ||
+      (state.previous && !recover_build_directory(layout, *state.previous)))
     return fail(UpdateStage::read_installed,
                 "cannot recover an interrupted build replacement");
   return std::optional<ActivationState>{std::move(state)};
@@ -300,8 +296,9 @@ read_activation(const InstallLayout &layout) {
   return recover_activation_builds(layout, ActivationState{*current, previous});
 }
 
-[[nodiscard]] PublishOutcome write_activation(const InstallLayout &layout,
-                                               const ActivationState &state) {
+[[nodiscard]] ActivationOutcome write_activation(const InstallLayout &layout,
+                                                 const ActivationState &state,
+                                                 UpdateDurability &durability) {
   std::string bytes = "{\"schemaVersion\":1,\"current\":";
   core::json::append_quoted(bytes, state.current);
   bytes += ",\"previous\":";
@@ -310,17 +307,7 @@ read_activation(const InstallLayout &layout) {
   else
     bytes += "null";
   bytes += "}\n";
-  auto stage = layout.activation_file();
-  stage += ".tmp";
-  if (!write_activation_stage(stage, bytes)) return PublishOutcome::failed;
-  if (layout.activation_checkpoint &&
-      !layout.activation_checkpoint(ActivationCheckpoint::before_publish))
-    return PublishOutcome::failed;
-  const auto outcome = publish_activation_file(stage, layout.activation_file());
-  if (outcome != PublishOutcome::failed && layout.activation_checkpoint &&
-      !layout.activation_checkpoint(ActivationCheckpoint::after_publish))
-    return PublishOutcome::published_interrupted;
-  return outcome;
+  return durability.publish_activation(layout, bytes);
 }
 
 [[nodiscard]] std::variant<InstalledBuild, UpdateError>
@@ -361,6 +348,30 @@ first_damaged_file(const fs::path &directory, const UpdateManifest &manifest) {
   return std::nullopt;
 }
 
+// All files, whether downloaded or copied, cross the same checked barrier.
+// Hash reads establish visibility, not crash durability. Flush the installed
+// manifest too, then each containing directory and its ancestors before any
+// build-directory publication or activation record write.
+[[nodiscard]] std::optional<UpdateError>
+flush_build(const fs::path &directory, const UpdateManifest &manifest,
+            UpdateDurability &durability) {
+  for (const auto &file : manifest.files) {
+    const auto path = install_path(directory, file.path);
+    if (!file_matches(path, file))
+      return fail(UpdateStage::verify_file, file.path + " failed staged verification");
+    if (!durability.flush_file(path))
+      return fail(UpdateStage::write_file, "cannot durably flush " + file.path);
+  }
+  if (!durability.flush_file(directory / std::string(installed_manifest_name)))
+    return fail(UpdateStage::write_file, "cannot durably flush the installed manifest");
+  for (const auto &file : manifest.files)
+    if (!durability.flush_directory(install_path(directory, file.path).parent_path()))
+      return fail(UpdateStage::write_file, "cannot durably flush the payload directory");
+  if (!durability.flush_directory(directory))
+    return fail(UpdateStage::write_file, "cannot durably flush the build directory");
+  return std::nullopt;
+}
+
 // Keeps the active and rollback builds; everything else under app/ and all of
 // staging/ is scratch. Removal failures (a file still open) are left for the
 // next launch.
@@ -390,6 +401,34 @@ void prune(const InstallLayout &layout, const std::string &current,
 }
 
 } // namespace
+
+bool UpdateDurability::flush_file(const fs::path &path) {
+  return platform::flush_durable_file(path);
+}
+
+bool UpdateDurability::flush_directory(const fs::path &path) {
+  return platform::flush_directory_hierarchy(path);
+}
+
+platform::DurablePublishOutcome UpdateDurability::publish_directory(
+    const fs::path &from, const fs::path &to) {
+  return platform::publish_durable_directory_checked(from, to);
+}
+
+ActivationOutcome UpdateDurability::publish_activation(
+    const InstallLayout &layout, const std::string_view record) {
+  auto stage = layout.activation_file();
+  stage += ".tmp";
+  if (!write_activation_stage(stage, record)) return ActivationOutcome::failed;
+  if (layout.activation_checkpoint &&
+      !layout.activation_checkpoint(ActivationCheckpoint::before_publish))
+    return ActivationOutcome::failed;
+  const auto outcome = publish_activation_file(stage, layout.activation_file());
+  if (outcome != ActivationOutcome::failed && layout.activation_checkpoint &&
+      !layout.activation_checkpoint(ActivationCheckpoint::after_publish))
+    return ActivationOutcome::published_interrupted;
+  return outcome;
+}
 
 std::string_view stage_name(const UpdateStage stage) noexcept {
   switch (stage) {
@@ -429,6 +468,14 @@ read_installed_build(const InstallLayout &layout) {
 std::variant<UpdateReport, UpdateError>
 apply_update(const InstallLayout &layout, const std::string_view channel,
              ReleaseSource &source, SignatureVerifier &verifier) {
+  UpdateDurability durability;
+  return apply_update_impl(layout, channel, source, verifier, durability);
+}
+
+std::variant<UpdateReport, UpdateError>
+apply_update_impl(const InstallLayout &layout, const std::string_view channel,
+                  ReleaseSource &source, SignatureVerifier &verifier,
+                  UpdateDurability &durability) {
   const InstallWriterLock lock(layout);
   if (!lock.locked())
     return fail(UpdateStage::read_installed, "the install lock is unavailable");
@@ -536,38 +583,33 @@ apply_update(const InstallLayout &layout, const std::string_view channel,
   }
   if (!write_bytes(staging / std::string(installed_manifest_name), *manifest_bytes))
     return fail(UpdateStage::write_file, "cannot write the installed manifest");
-  if (const auto damaged = first_damaged_file(staging, target))
-    return fail(UpdateStage::verify_file,
-                "staged file " + *damaged + " does not match its manifest hash");
+  if (auto failure = flush_build(staging, target, durability)) return *failure;
 
-  // Park an existing destination before replacing it. In particular, a
-  // same-ID repair must not delete the current directory before its verified
-  // replacement is ready; read_activation restores a parked directory after
-  // an interruption between the two renames.
   const auto destination = layout.build_directory(id);
-  const auto parked = layout.staging_directory() / ".replaced" / id;
   fs::create_directories(layout.app_directory(), error);
-  if (error)
-    return fail(UpdateStage::activate, "cannot prepare the app directory: " +
-                                           error.message());
+  if (error || !durability.flush_directory(layout.app_directory()))
+    return fail(UpdateStage::activate, "cannot durably prepare the app directory");
+  // Keep replacement evidence until activation is durably committed. This is
+  // essential when repairing the directory the activation record names;
+  // read_activation restores it after an interruption between the two moves.
   if (fs::exists(destination, error)) {
-    fs::create_directories(parked.parent_path(), error);
-    if (error)
-      return fail(UpdateStage::activate, "cannot park the old build: " +
-                                             error.message());
-    fs::rename(destination, parked, error);
-    if (error)
-      return fail(UpdateStage::activate, "cannot park the old build: " +
-                                             error.message());
+    const auto parked = parked_build_directory(layout, id);
+    if (fs::exists(parked, error)) {
+      // A prior attempt reached the destination but not activation. Retire its
+      // older parking evidence only after the destination is itself durable.
+      if (auto failure = flush_build(destination, target, durability)) return *failure;
+      fs::remove_all(parked, error);
+      if (error || !durability.flush_directory(layout.app_directory()))
+        return fail(UpdateStage::activate, "cannot retire the old parked build");
+    }
+    if (error || durability.publish_directory(destination, parked) !=
+                     platform::DurablePublishOutcome::published_durable)
+      return fail(UpdateStage::activate, "cannot durably park the replaced build");
   }
-  fs::rename(staging, destination, error);
-  if (error) {
-    std::error_code restore_error;
-    if (fs::exists(parked, restore_error))
-      fs::rename(parked, destination, restore_error);
-    return fail(UpdateStage::activate, "cannot move the new build into place: " +
-                                           error.message());
-  }
+  if (error || durability.publish_directory(staging, destination) !=
+                   platform::DurablePublishOutcome::published_durable ||
+      !durability.flush_directory(destination))
+    return fail(UpdateStage::activate, "cannot durably move the new build into place");
   // Repairing the same ID preserves the previous rollback target.
   auto previous = installed && installed->id != id
                       ? std::optional(installed->id)
@@ -575,13 +617,14 @@ apply_update(const InstallLayout &layout, const std::string_view channel,
                             ? (*state)->previous
                             : read_pointer(layout.previous_file());
   if (previous == id) previous.reset();
-  const auto publication = write_activation(layout, ActivationState{id, previous});
-  if (publication == PublishOutcome::failed)
+  const auto publication =
+      write_activation(layout, ActivationState{id, previous}, durability);
+  if (publication == ActivationOutcome::failed)
     return fail(UpdateStage::activate, "cannot publish the activation record");
-  if (publication == PublishOutcome::published_unconfirmed)
+  if (publication == ActivationOutcome::published_unconfirmed)
     return fail(UpdateStage::activate,
                 "activation published but its durability is unconfirmed");
-  if (publication == PublishOutcome::published_interrupted)
+  if (publication == ActivationOutcome::published_interrupted)
     return fail(UpdateStage::activate,
                 "activation published but the update was interrupted");
   prune(layout, id, previous);
@@ -605,14 +648,18 @@ std::optional<UpdateError> rollback(const InstallLayout &layout) {
     return fail(UpdateStage::read_installed,
                 "rollback build " + candidate.id + " has a damaged file: " +
                     *damaged);
+  UpdateDurability durability;
+  if (auto failure = flush_build(layout.build_directory(candidate.id),
+                                 candidate.manifest, durability))
+    return failure;
   const auto publication = write_activation(
-      layout, ActivationState{*state->previous, state->current});
-  if (publication == PublishOutcome::failed)
+      layout, ActivationState{*state->previous, state->current}, durability);
+  if (publication == ActivationOutcome::failed)
     return fail(UpdateStage::activate, "cannot publish the activation record");
-  if (publication == PublishOutcome::published_unconfirmed)
+  if (publication == ActivationOutcome::published_unconfirmed)
     return fail(UpdateStage::activate,
                 "activation published but its durability is unconfirmed");
-  if (publication == PublishOutcome::published_interrupted)
+  if (publication == ActivationOutcome::published_interrupted)
     return fail(UpdateStage::activate,
                 "activation published but rollback was interrupted");
   return std::nullopt;

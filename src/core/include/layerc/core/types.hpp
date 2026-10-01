@@ -150,6 +150,10 @@ struct CooldownState {
     std::uint32_t max_charges{};
     std::optional<TimePoint> next_charge_at;
     std::vector<TimePoint> recovery_deadlines;
+    // Engine snapshots project the effective owner settings onto public IDs.
+    // Absent only for legacy/manual states; presentation then uses the member
+    // definition. This runtime-only field is never persisted in profile JSON.
+    std::optional<Milliseconds> recharge_duration;
 };
 
 enum class CooldownGroupMode : std::uint8_t {

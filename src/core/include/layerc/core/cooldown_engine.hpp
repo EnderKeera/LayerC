@@ -15,6 +15,10 @@ namespace layerc::core {
 [[nodiscard]] std::string cooldown_status_text(
     const CooldownDefinition &definition, const CooldownState &state,
     TimePoint now);
+[[nodiscard]] Milliseconds cooldown_remaining_ms(
+    const std::optional<TimePoint> &next_charge_at, TimePoint now) noexcept;
+// Native bars show the remaining fraction; ready is 1.0. Engine snapshots
+// carry the effective owner duration, with the definition as a legacy fallback.
 [[nodiscard]] double cooldown_progress(const CooldownDefinition &definition,
                                        const CooldownState &state,
                                        TimePoint now) noexcept;
@@ -43,6 +47,21 @@ struct CooldownIdEqual {
   }
 };
 
+// Runtime identities have separate domains. Persisted cooldown and group IDs
+// remain opaque: no synthetic string can collide with a public ID.
+enum class CooldownOwnerKind : std::uint8_t { cooldown, shared_pool };
+
+struct CooldownOwnerDefinition {
+  CooldownOwnerKind kind{CooldownOwnerKind::cooldown};
+  std::string id;
+  Milliseconds duration{};
+  std::uint32_t max_charges{1};
+  RetriggerPolicy retrigger{RetriggerPolicy::ignore};
+  RecoveryMode recovery{RecoveryMode::single};
+
+  bool operator==(const CooldownOwnerDefinition &) const = default;
+};
+
 class CooldownEngine {
 public:
   explicit CooldownEngine(std::span<const CooldownDefinition> definitions,
@@ -66,13 +85,18 @@ public:
   void snapshot(TimePoint now, std::vector<CooldownState> &output);
   [[nodiscard]] std::optional<Milliseconds>
   remaining(std::string_view cooldown_id, TimePoint now);
+  // The canonical effective runtime definition, shared by aliases. Labels and
+  // dormant member settings do not participate in owner reconciliation.
+  [[nodiscard]] const CooldownOwnerDefinition *
+  owner_definition(std::string_view cooldown_id) const;
+  // Preserve only unchanged owners; any reset alias resets its entire owner.
   void reconfigure(std::span<const CooldownDefinition> definitions,
                    std::span<const std::string> reset_ids, TimePoint now,
                    std::span<const CooldownGroup> groups = {});
 
 private:
   struct Entry {
-    CooldownDefinition definition;
+    CooldownOwnerDefinition definition;
     std::uint32_t available_charges{};
     std::optional<TimePoint> next_charge_at;
     std::vector<TimePoint> recovery_deadlines;
@@ -88,10 +112,10 @@ private:
   [[nodiscard]] const Entry *entry_for(std::string_view cooldown_id) const;
 
   std::vector<std::string> order_;
-  std::unordered_map<std::string, Entry, CooldownIdHash, CooldownIdEqual>
-      entries_;
-  std::unordered_map<std::string, std::string, CooldownIdHash, CooldownIdEqual>
-      shared_entries_;
+  // Exactly one definition and state per effective owner, no dormant entries.
+  std::vector<Entry> entries_;
+  std::unordered_map<std::string, std::size_t, CooldownIdHash, CooldownIdEqual>
+      owner_slots_;
   std::vector<CooldownGroup> groups_;
 };
 

@@ -4,12 +4,14 @@
 #include "layerc/launcher/update_engine.hpp"
 #include "launcher_signature_vectors.hpp"
 #include "test_support.hpp"
+#include "../src/launcher/update_engine_internal.hpp"
 
 #include <filesystem>
 #include <algorithm>
 #include <map>
 #include <span>
 #include <string>
+#include <vector>
 
 using namespace layerc;
 using layerc::test::expect;
@@ -72,6 +74,91 @@ public:
   }
 };
 
+struct SimulatedCrash {};
+
+class RecordingDurability final : public launcher::UpdateDurability {
+public:
+  RecordingDurability(const launcher::InstallLayout &layout, const std::string &id,
+                      const std::map<std::string, std::string> &files)
+      : root(layout.root), staging(layout.staging_directory() / id),
+        destination(layout.build_directory(id)) {
+    for (const auto &[path, contents] : files) {
+      (void)contents;
+      required_files.push_back(staging / fs::path(path));
+    }
+    required_files.push_back(staging / std::string(launcher::installed_manifest_name));
+  }
+
+  fs::path root, staging, destination;
+  std::vector<fs::path> required_files, flushed_files, flushed_directories;
+  std::vector<std::string> events;
+  fs::path failed_file, failed_directory;
+  bool refuse_publication{}, unconfirm_publication{}, crash_before_activation{};
+  bool crash_after_parking{}, payload_published{}, activation_barrier_observed{true};
+  std::size_t activation_writes{};
+
+  bool payload_flushed() const {
+    const auto contains = [](const auto &paths, const fs::path &path) {
+      return std::find(paths.begin(), paths.end(), path) != paths.end();
+    };
+    return contains(flushed_directories, staging) &&
+           std::all_of(required_files.begin(), required_files.end(),
+                       [&](const auto &path) {
+                         return contains(flushed_files, path) &&
+                                contains(flushed_directories, path.parent_path());
+                       });
+  }
+
+  bool ready_for_activation() const {
+    return payload_flushed() && payload_published &&
+           std::find(flushed_directories.begin(), flushed_directories.end(),
+                     destination) != flushed_directories.end();
+  }
+
+  bool flush_file(const fs::path &path) override {
+    events.push_back("file:" + path.lexically_relative(root).generic_string());
+    if (path == failed_file || !UpdateDurability::flush_file(path)) return false;
+    flushed_files.push_back(path);
+    return true;
+  }
+
+  bool flush_directory(const fs::path &path) override {
+    events.push_back("directory:" + path.lexically_relative(root).generic_string());
+    if (path == failed_directory || !UpdateDurability::flush_directory(path))
+      return false;
+    flushed_directories.push_back(path);
+    return true;
+  }
+
+  platform::DurablePublishOutcome publish_directory(
+      const fs::path &from, const fs::path &to) override {
+    events.push_back("publish:" + to.lexically_relative(root).generic_string());
+    if (from == staging && refuse_publication)
+      return platform::DurablePublishOutcome::failed;
+    const auto outcome = UpdateDurability::publish_directory(from, to);
+    if (outcome != platform::DurablePublishOutcome::published_durable) return outcome;
+    if (from == staging) {
+      payload_published = true;
+      if (unconfirm_publication)
+        return platform::DurablePublishOutcome::published_unconfirmed;
+    }
+    if (from == destination && crash_after_parking && payload_flushed())
+      throw SimulatedCrash{};
+    return outcome;
+  }
+
+  launcher::ActivationOutcome publish_activation(
+      const launcher::InstallLayout &layout, const std::string_view record) override {
+    // Model process loss only at the actual durability boundary, not at an
+    // arbitrary activation call. Without that boundary this crash test must fail.
+    if (crash_before_activation && ready_for_activation()) throw SimulatedCrash{};
+    activation_barrier_observed = activation_barrier_observed && ready_for_activation();
+    ++activation_writes;
+    events.push_back("activation");
+    return UpdateDurability::publish_activation(layout, record);
+  }
+};
+
 struct Fixture {
   test::TempDirectory directory{"layerc-launcher"};
   launcher::InstallLayout layout{directory.path(), {}};
@@ -80,6 +167,10 @@ struct Fixture {
 
   std::variant<launcher::UpdateReport, launcher::UpdateError> update() {
     return launcher::apply_update(layout, "rolling", release, verifier);
+  }
+  std::variant<launcher::UpdateReport, launcher::UpdateError>
+  update(launcher::UpdateDurability &durability) {
+    return launcher::apply_update_impl(layout, "rolling", release, verifier, durability);
   }
   std::optional<std::string> active(const std::string_view path) const {
     const auto file = launcher::active_file(layout, path);
@@ -121,6 +212,12 @@ bool activation_is(const launcher::InstallLayout &layout,
 const std::map<std::string, std::string> build_one{
     {"layerd.exe", "daemon v1"},
     {"layere.exe", "editor v1"},
+    {"licenses/miniz/LICENSE", "license"}};
+
+const std::map<std::string, std::string> build_two{
+    {"layerd.exe", "daemon v2"},
+    {"layere.exe", "editor v1"},
+    {"layerw.exe", "worker v2"},
     {"licenses/miniz/LICENSE", "license"}};
 
 void fresh_install_and_up_to_date() {
@@ -296,6 +393,189 @@ void rollback_switches_to_the_kept_build() {
   expect(!launcher::active_file(fixture.layout, "../layerd.exe") &&
              !launcher::active_file(fixture.layout, "missing.exe"),
          "active_file rejects unsafe and missing paths");
+}
+
+void payload_flush_failure_never_publishes_activation() {
+  // Exercise downloaded bytes, copy_file reuse, nested reuse and the manifest.
+  for (const std::string_view path :
+       {"layerd.exe", "layere.exe", "layerw.exe", "licenses/miniz/LICENSE",
+        ".layerc-manifest.json"}) {
+    Fixture fixture;
+    fixture.release.publish(10, 'a', build_one);
+    expect(report(fixture.update()) != nullptr, "install the durability baseline");
+    const auto activation = test::read_file(fixture.layout.activation_file());
+    fixture.release.publish(11, 'b', build_two);
+    RecordingDurability durability(fixture.layout, "11-bbbbbbbbbbbb", build_two);
+    durability.failed_file = durability.staging / fs::path(path);
+
+    const auto result = fixture.update(durability);
+    const auto *failure = error(result);
+    expect(failure && failure->stage == launcher::UpdateStage::write_file,
+           "payload flush failure is reported: " + std::string(path));
+    expect(durability.activation_writes == 0 &&
+               test::read_file(fixture.layout.activation_file()) == activation &&
+               fixture.active("layerd.exe") == "daemon v1",
+           "payload flush failure cannot publish either activation record");
+    expect(!fs::exists(durability.destination) && fs::exists(durability.staging),
+           "a failed payload remains staged and is not published or pruned");
+  }
+}
+
+void directory_flush_failure_never_publishes_activation() {
+  for (const std::string_view point : {"nested", "staged", "app", "published"}) {
+    Fixture fixture;
+    fixture.release.publish(10, 'a', build_one);
+    expect(report(fixture.update()) != nullptr, "install the directory baseline");
+    const auto activation = test::read_file(fixture.layout.activation_file());
+    fixture.release.publish(11, 'b', build_two);
+    RecordingDurability durability(fixture.layout, "11-bbbbbbbbbbbb", build_two);
+    durability.failed_directory = point == "nested" ? durability.staging / "licenses/miniz"
+        : point == "staged" ? durability.staging
+        : point == "app" ? fixture.layout.app_directory() : durability.destination;
+
+    const auto result = fixture.update(durability);
+    expect(error(result) && durability.activation_writes == 0 &&
+               test::read_file(fixture.layout.activation_file()) == activation &&
+               fixture.active("layerd.exe") == "daemon v1",
+           "a directory barrier failure stops activation: " + std::string(point));
+    expect(fs::exists(fixture.layout.build_directory("10-aaaaaaaaaaaa")) &&
+               (fs::exists(durability.staging) || fs::exists(durability.destination)),
+           "directory failure retains both the old build and update evidence");
+    expect(report(fixture.update()) != nullptr && fixture.active("layerd.exe") == "daemon v2",
+           "retry after a directory flush failure succeeds");
+  }
+}
+
+void unconfirmed_publication_retains_recovery_evidence() {
+  for (const bool published : {false, true}) {
+    Fixture fixture;
+    fixture.release.publish(10, 'a', build_one);
+    expect(report(fixture.update()) != nullptr, "install the publication baseline");
+    const auto activation = test::read_file(fixture.layout.activation_file());
+    fixture.release.publish(11, 'b', build_two);
+    RecordingDurability durability(fixture.layout, "11-bbbbbbbbbbbb", build_two);
+    durability.refuse_publication = !published;
+    durability.unconfirm_publication = published;
+
+    const auto result = fixture.update(durability);
+    const auto *failure = error(result);
+    expect(failure && failure->stage == launcher::UpdateStage::activate &&
+               durability.activation_writes == 0 &&
+               test::read_file(fixture.layout.activation_file()) == activation &&
+               fixture.active("layerd.exe") == "daemon v1",
+           "failed or unconfirmed build publication cannot activate");
+    expect(fs::exists(durability.destination) == published &&
+               fs::exists(durability.staging) != published,
+           "an already-visible unconfirmed build is retained, never undone or pruned");
+    expect(report(fixture.update()) != nullptr && fixture.active("layerd.exe") == "daemon v2",
+           "retry can complete a retained unconfirmed publication");
+  }
+}
+
+void crash_after_payload_flush_keeps_previous_build() {
+  Fixture fixture;
+  fixture.release.publish(10, 'a', build_one);
+  expect(report(fixture.update()) != nullptr, "install the crash baseline");
+  const auto activation = test::read_file(fixture.layout.activation_file());
+  fixture.release.publish(11, 'b', build_two);
+  RecordingDurability durability(fixture.layout, "11-bbbbbbbbbbbb", build_two);
+  durability.crash_before_activation = true;
+  bool crashed{};
+  try {
+    (void)fixture.update(durability);
+  } catch (const SimulatedCrash &) {
+    crashed = true;
+  }
+  expect(crashed && durability.ready_for_activation() && durability.activation_writes == 0,
+         "process loss occurs after the complete payload barrier, before activation");
+  expect(test::read_file(fixture.layout.activation_file()) == activation &&
+             fixture.active("layerd.exe") == "daemon v1",
+         "recovery after that crash still selects the previous build");
+  const auto recovered = launcher::read_installed_build(fixture.layout);
+  const auto *build = std::get_if<std::optional<launcher::InstalledBuild>>(&recovered);
+  expect(build && *build && (*build)->id == "10-aaaaaaaaaaaa" &&
+             fs::exists(durability.destination / std::string(launcher::installed_manifest_name)),
+         "a durable unactivated build cannot override the old activation record");
+  expect(report(fixture.update()) != nullptr && fixture.active("layerd.exe") == "daemon v2",
+         "a later update can activate after recovery");
+}
+
+void happy_path_flushes_payload_before_activation() {
+  Fixture fixture;
+  fixture.release.publish(10, 'a', build_one);
+  expect(report(fixture.update()) != nullptr, "install the ordered-update baseline");
+  fixture.release.publish(11, 'b', build_two);
+  RecordingDurability durability(fixture.layout, "11-bbbbbbbbbbbb", build_two);
+  const auto result = fixture.update(durability);
+  const auto *updated = report(result);
+  expect(updated && updated->result == launcher::UpdateResult::installed &&
+             updated->downloaded_files == 2 && updated->reused_files == 2 &&
+             updated->downloaded_bytes == 18 && fixture.release.downloads("editor v1") == 1 &&
+             fixture.active("layerd.exe") == "daemon v2" &&
+             fixture.active("licenses/miniz/LICENSE") == "license",
+         "the durable happy path preserves delta reuse, bytes and active contents");
+  expect(durability.activation_barrier_observed && durability.ready_for_activation() &&
+             durability.activation_writes == 1 &&
+             activation_is(fixture.layout, build_b_id, build_a_id) &&
+             !fs::exists(fixture.layout.staging_directory()),
+         "only the complete durable payload permits one activation record");
+  const auto index = [&](const std::string &event) {
+    return static_cast<std::size_t>(std::find(durability.events.begin(),
+        durability.events.end(), event) - durability.events.begin());
+  };
+  const auto published = index("publish:app/11-bbbbbbbbbbbb");
+  const auto activation = index("activation");
+  for (const auto &path : durability.required_files) {
+    expect(index("file:" + path.lexically_relative(durability.root).generic_string()) < published &&
+               index("directory:" + path.parent_path().lexically_relative(durability.root).generic_string()) < published,
+           "every file and containing directory is flushed before build publication");
+  }
+  expect(published < index("directory:app/11-bbbbbbbbbbbb") &&
+             index("directory:app/11-bbbbbbbbbbbb") < activation &&
+             activation < durability.events.size(),
+         "directory publication is durable before the activation record");
+  const auto again = fixture.update();
+  expect(report(again) && report(again)->result == launcher::UpdateResult::up_to_date,
+         "the subsequent happy-path check is still up to date");
+}
+
+void same_id_repair_crash_recovers_parked_build() {
+  Fixture fixture;
+  fixture.release.publish(10, 'a', build_one);
+  expect(report(fixture.update()) != nullptr, "install the same-ID repair baseline");
+  // An unreadable installed manifest takes the existing full-repair path even
+  // when the release ID is unchanged; the old daemon is still usable offline.
+  expect(test::write_file(fixture.layout.build_directory("10-aaaaaaaaaaaa") /
+                             std::string(launcher::installed_manifest_name), "damaged"),
+         "damage the manifest to require a same-ID repair");
+  auto repaired_files = build_one;
+  repaired_files["layerd.exe"] = "daemon repaired";
+  fixture.release.publish(10, 'a', repaired_files);
+  RecordingDurability durability(fixture.layout, "10-aaaaaaaaaaaa", repaired_files);
+  durability.crash_after_parking = true;
+  bool crashed{};
+  try {
+    (void)fixture.update(durability);
+  } catch (const SimulatedCrash &) {
+    crashed = true;
+  }
+  auto parked = durability.destination;
+  parked += ".old";
+  expect(crashed && durability.payload_flushed() && durability.activation_writes == 0 &&
+             fs::exists(parked) && !fs::exists(durability.destination),
+         "same-ID replacement parks the old build rather than deleting it");
+  expect(fixture.active("layerd.exe") == "daemon v1" &&
+             fs::exists(durability.destination) && !fs::exists(parked),
+         "offline lookup restores the parked active build after process loss");
+  expect(test::read_file(durability.destination /
+                            std::string(launcher::installed_manifest_name)) == "damaged",
+         "recovery restores the old directory without inventing a new manifest");
+  expect(report(fixture.update()) != nullptr && fixture.active("layerd.exe") == "daemon repaired",
+         "same-ID repair can retry successfully after recovery");
+  const auto recovered = launcher::read_installed_build(fixture.layout);
+  const auto *build = std::get_if<std::optional<launcher::InstalledBuild>>(&recovered);
+  expect(build && *build && (*build)->id == "10-aaaaaaaaaaaa",
+         "the completed repair has a consistent installed manifest");
 }
 
 void der_signatures_convert_strictly() {
@@ -524,8 +804,7 @@ void parked_current_build_is_recovered() {
   fixture.release.publish(10, 'a', build_one);
   (void)fixture.update();
   const auto parked =
-      fixture.layout.staging_directory() / ".replaced" / build_a_id;
-  fs::create_directories(parked.parent_path());
+      fixture.layout.build_directory(build_a_id).concat(".old");
   fs::rename(fixture.layout.build_directory(build_a_id), parked);
   test::write_file(fixture.layout.staging_directory() /
                        std::string(build_a_id) / "partial",
@@ -548,8 +827,14 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(der_signatures_convert_strictly),
                  LAYERC_TEST_CASE(rollback_switches_to_the_kept_build),
                  LAYERC_TEST_CASE(same_version_damage_is_repaired),
                  LAYERC_TEST_CASE(rollback_rejects_a_damaged_candidate),
-                  LAYERC_TEST_CASE(activation_publication_boundary_for_updates),
-                  LAYERC_TEST_CASE(activation_publication_boundary_for_rollback),
-                  LAYERC_TEST_CASE(blocked_activation_stage_preserves_rollback_target),
-                  LAYERC_TEST_CASE(install_writer_lock_covers_publication_and_recovery),
-                  LAYERC_TEST_CASE(parked_current_build_is_recovered))
+                 LAYERC_TEST_CASE(activation_publication_boundary_for_updates),
+                 LAYERC_TEST_CASE(activation_publication_boundary_for_rollback),
+                 LAYERC_TEST_CASE(blocked_activation_stage_preserves_rollback_target),
+                 LAYERC_TEST_CASE(install_writer_lock_covers_publication_and_recovery),
+                 LAYERC_TEST_CASE(parked_current_build_is_recovered),
+                 LAYERC_TEST_CASE(payload_flush_failure_never_publishes_activation),
+                 LAYERC_TEST_CASE(directory_flush_failure_never_publishes_activation),
+                 LAYERC_TEST_CASE(unconfirmed_publication_retains_recovery_evidence),
+                 LAYERC_TEST_CASE(crash_after_payload_flush_keeps_previous_build),
+                 LAYERC_TEST_CASE(happy_path_flushes_payload_before_activation),
+                 LAYERC_TEST_CASE(same_id_repair_crash_recovers_parked_build))

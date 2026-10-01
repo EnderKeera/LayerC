@@ -21,9 +21,13 @@ enum class ActivationCheckpoint { before_publish, after_publish };
 //   <root>/.activation.lock   per-install OS lock held during reads and writes
 //   <root>/current, previous legacy pointers, read only until the first publish
 //   <root>/staging/          scratch for an update in progress
-// A build becomes active only when the complete activation record is durably
-// replaced after the build directory is complete. Interrupted staging is
-// discarded on the next update attempt.
+// A build becomes active only after every payload file, its installed manifest,
+// and its directory publication pass the platform durability barriers, then
+// the complete activation record is durably replaced. Unconfirmed publication
+// is not pruned. During same-ID repair, app/<build-id>.old preserves the old
+// directory until activation; activation reads recover it if the replacement
+// directory has not reached app/. Interrupted staging is discarded on the next
+// update attempt.
 struct InstallLayout {
   std::filesystem::path root;
   // Optional interruption seam for deterministic publication tests. Production
@@ -126,8 +130,8 @@ struct UpdateReport {
 read_installed_build(const InstallLayout &layout);
 
 // Brings the install to the newest published build of `channel`. Never
-// changes the active build unless every file of the new build is present and
-// verified. Damaged installed metadata is treated as no install; damaged
+// changes the active build unless every file of the new build is present,
+// verified and durably flushed with its directory. Damaged installed metadata is treated as no install; damaged
 // payload files are repaired through the verified staging flow. A lower
 // sequence than the installed one is refused as a rollback attack. The same
 // sequence is up to date only after every installed file passes size and hash

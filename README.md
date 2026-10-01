@@ -143,6 +143,14 @@ even an enabled launcher makes no update requests. Checks are also skipped
 while `layerd` is running. Exit it before checking for an update or rolling
 back with `--rollback`.
 
+Activation is ordered after durable payload publication: all downloaded and
+reused files, the installed manifest, and their directories cross the platform
+durability barriers before `current` is durably replaced. A failed or unconfirmed
+barrier stops activation and retains recovery evidence. For a new build ID, an
+interruption before activation keeps the previous build selected. Same-build-ID
+repairs park the old directory until the replacement is committed and recover
+it on the next read if the replacement directory is absent.
+
 To provision signing, the release owner generates an ECDSA P-256 key pair
 outside the repository (`openssl ecparam -name prime256v1 -genkey -noout -out
 <private-key-path>`), commits only the uncompressed public point (130 hex
@@ -194,7 +202,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
   removed modules stay disabled through durable tombstones.
 - Declarative Automation Graphs reacting to input, visual triggers, cooldowns,
   timers, and variables. Caps: 64 rules, 64 variables, 32 timers, 256 AST nodes,
-  depth 16, and a 2 ms root-event budget.
+  depth 16, and a cooperative 2 ms root-event budget. Exhaustion rejects the
+  current event without disabling unrelated automations. The deadline is checked
+  before external commit; synchronous callbacks are not forcibly preempted.
 
 ### Windows desktop
 
@@ -208,7 +218,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
 - Bar preview preserves the target client area's aspect ratio and scales bar
   dimensions in device-independent pixels; without a live target it uses a
   1920 × 1080 reference. The simulator replays its exported events from empty
-  persistent state, so it does not reproduce saved daemon state.
+  persistent state, so it does not reproduce saved daemon state. Trace replay
+  imports recorded roots only; derived events remain audit-only. Legacy traces
+  without explicit root provenance must be recaptured.
 - Optional isolated capture worker and Xbox Game Bar companion.
 
 ### Linux X11

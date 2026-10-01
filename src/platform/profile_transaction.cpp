@@ -317,18 +317,6 @@ bool remove_transaction(const std::filesystem::path &transaction) {
   return !error;
 }
 
-// Persist each directory and its entry in its parent, including newly created
-// store ancestors. A file fsync alone does not make these names reachable.
-bool flush_directory_hierarchy(std::filesystem::path directory) {
-  while (!directory.empty()) {
-    if (!fsync_directory_checked(directory)) return false;
-    const auto parent = directory.parent_path();
-    if (parent == directory) break;
-    directory = parent;
-  }
-  return true;
-}
-
 bool flush_target_directories(const std::vector<JournalOperation> &operations) {
   for (const auto &operation : operations)
     if (!flush_directory_hierarchy(operation.target.parent_path())) return false;

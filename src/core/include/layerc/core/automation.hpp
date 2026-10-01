@@ -77,11 +77,26 @@ enum class AutomationValueType : std::uint8_t {
 [[nodiscard]] AutomationValueType value_type(const AutomationValue &) noexcept;
 [[nodiscard]] bool automation_value_valid(const AutomationValue &) noexcept;
 
+[[nodiscard]] constexpr bool
+automation_value_type_compatible(const AutomationValueType actual,
+                                 const AutomationValueType expected) noexcept {
+  return actual == expected || (actual == AutomationValueType::integer &&
+                                expected == AutomationValueType::number);
+}
+// The sole declared promotion, applied once to evaluated action values.
+[[nodiscard]] bool
+normalize_automation_value(AutomationValue &value,
+                           AutomationValueType expected) noexcept;
+
 [[nodiscard]] std::string automation_value_json(const AutomationValue &);
-// Interprets a duration-typed or non-negative integer value as a duration;
-// anything else is not a duration.
+// Interprets a duration-typed or non-negative integer value as a duration
+// only when it is representable by the native monotonic clock.
 [[nodiscard]] std::optional<Milliseconds>
 as_duration(const AutomationValue &value) noexcept;
+// Checked non-negative milliseconds conversion and addition. Also used with
+// an epoch base to import trace timestamps without overflowing duration_cast.
+[[nodiscard]] std::optional<TimePoint>
+automation_time_after(TimePoint base, Milliseconds duration) noexcept;
 
 enum class AutomationEventKind : std::uint8_t {
   input_pressed,
@@ -635,6 +650,9 @@ struct AutomationEffect {
   EffectOrder order{};
 };
 
+// Only explicit external roots are replayable; derived/audit entries are not.
+inline constexpr char automation_trace_root_phase[] = "root";
+
 struct AutomationTraceEntry {
   std::uint64_t sequence{};
   Milliseconds timestamp{};
@@ -680,9 +698,13 @@ public:
   using EffectCommitter =
       std::function<bool(std::span<const AutomationEffect>)>;
 
+  // Clock injection permits deterministic budget tests; production uses the
+  // monotonic clock. The reader is cooperative, not callback preemption.
+  using ClockReader = std::function<TimePoint()>;
   AutomationRuntime(AutomationProfile profile,
                     AutomationPersistentValues persistent_values = {},
-                    std::span<const CooldownGroup> cooldown_groups = {});
+                    std::span<const CooldownGroup> cooldown_groups = {},
+                    ClockReader clock = MonotonicClock::now);
   ~AutomationRuntime();
 
   [[nodiscard]] const AutomationProfile &profile() const noexcept;
@@ -694,8 +716,11 @@ public:
   // expression reads the batch-start snapshot (not staged mid-batch state),
   // so two rules keyed on the same trigger race on equal footing and only
   // the committed winning set becomes observable. Effects commit in one
-  // validator+committer call; an error faults only the offending automation,
-  // which is re-evaluated from the original snapshot. cooldown_triggered
+  // validator+committer call; an attributable error faults only the offending
+  // automation, which is re-evaluated from the original snapshot. Global
+  // exhaustion rejects the root without faulting automations. Checks are
+  // cooperative, including immediately before the non-preemptible committer.
+  // cooldown_triggered
   // events derived from trigger actions expand the profile's
   // trigger-propagation closure: the runtime does not own the cooldown
   // engine, so whether a charge was actually consumed is decided by the
@@ -750,6 +775,10 @@ struct AutomationReplayResult {
     const AutomationProfile &profile, std::span<const AutomationEvent> events,
     std::span<const AutomationReplayAssertion> assertions = {},
     std::span<const CooldownGroup> cooldown_groups = {});
+// Records one external event as a replay root (for example, simulator input).
+[[nodiscard]] AutomationTraceEntry
+make_automation_root_trace_entry(const AutomationEvent &event,
+                                std::uint64_t sequence);
 [[nodiscard]] std::string
 export_layerc_trace(std::span<const AutomationTraceEntry> entries);
 struct LiveMessage;

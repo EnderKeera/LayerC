@@ -55,6 +55,10 @@ read_durable_text(const std::filesystem::path &path,
 [[nodiscard]] bool create_durable_file(
     const std::filesystem::path &path, std::span<const std::byte> contents);
 
+// Flushes an existing plain file, including bytes produced by copy_file.
+// Directories, symlinks and reparse points are refused.
+[[nodiscard]] bool flush_durable_file(const std::filesystem::path &path);
+
 // Publication outcome with crash-durability distinguished at the owning
 // boundary: not-published (rename failed, nothing visible), published but
 // durability-unconfirmed (rename succeeded, parent fsync failed — the bytes
@@ -72,6 +76,13 @@ enum class DurablePublishOutcome : std::uint8_t {
     const std::filesystem::path &stage,
     const std::filesystem::path &destination);
 
+// Moves a plain directory to an absent destination on the same filesystem.
+// Checks both parent-entry barriers; an unconfirmed move stays visible and
+// must not be undone or pruned by the caller.
+[[nodiscard]] DurablePublishOutcome publish_durable_directory_checked(
+    const std::filesystem::path &stage,
+    const std::filesystem::path &destination);
+
 // Write and publish through an adjacent unique stage. The caller owns parent
 // preparation; an unconfirmed publication remains visible and is never deleted.
 [[nodiscard]] DurablePublishOutcome write_durable_file(
@@ -83,6 +94,9 @@ enum class DurablePublishOutcome : std::uint8_t {
     const std::filesystem::path &directory) noexcept;
 [[nodiscard]] bool fsync_parent_checked(
     const std::filesystem::path &path) noexcept;
+// Persists a directory and its entry in each ancestor (new hierarchies too).
+// On Windows, directory publication uses WRITE_THROUGH moves instead of fsync.
+[[nodiscard]] bool flush_directory_hierarchy(std::filesystem::path directory);
 
 // Removes path (absent counts as removed) behind the same checked parent
 // barrier as publication; false after a failed barrier means the file may

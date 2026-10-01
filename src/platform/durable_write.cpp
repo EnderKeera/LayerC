@@ -26,6 +26,16 @@ bool fsync_parent_checked(const std::filesystem::path &path) noexcept {
   return fsync_directory_checked(path.parent_path());
 }
 
+bool flush_directory_hierarchy(std::filesystem::path directory) {
+  while (!directory.empty()) {
+    if (!fsync_directory_checked(directory)) return false;
+    const auto parent = directory.parent_path();
+    if (parent == directory) break;
+    directory = parent;
+  }
+  return true;
+}
+
 std::filesystem::path
 unique_durable_stage_path(const std::filesystem::path &destination) {
   auto stage = destination;

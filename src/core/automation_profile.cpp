@@ -88,11 +88,12 @@ AutomationValueType infer_type(const Value &value) {
 }
 std::optional<AutomationValue>
 read_value(const Value &value, AutomationValueType type, AutomationError &error,
-           const std::string &path);
+           const std::string &path, std::size_t depth = 0);
 
 std::optional<AutomationValue> read_nested_value(const Value &value,
                                                  AutomationError &error,
-                                                 const std::string &path) {
+                                                 const std::string &path,
+                                                 const std::size_t depth) {
   if (value.is_object() && value.as_object().size() == 2U) {
     const auto *tag = value.find("$type");
     const auto *payload = value.find("$value");
@@ -103,16 +104,30 @@ std::optional<AutomationValue> read_nested_value(const Value &value,
         error = {path + ".$type", "unsupported nested value type"};
         return std::nullopt;
       }
-      return read_value(*payload, *type, error, path + ".$value");
+      return read_value(*payload, *type, error, path + ".$value", depth);
     }
   }
-  return read_value(value, infer_type(value), error, path);
+  return read_value(value, infer_type(value), error, path, depth);
 }
 
 std::optional<AutomationValue> read_value(const Value &value,
-                                           const AutomationValueType type,
-                                           AutomationError &error,
-                                           const std::string &path) {
+                                          const AutomationValueType type,
+                                          AutomationError &error,
+                                          const std::string &path,
+                                          const std::size_t depth) {
+  if (depth > max_automation_ast_depth) {
+    error = {path, "value nesting exceeds 16"};
+    return std::nullopt;
+  }
+  const auto bounded =
+      [&](AutomationValue candidate,
+          std::string message) -> std::optional<AutomationValue> {
+    if (!automation_value_valid(candidate)) {
+      error = {path, std::move(message)};
+      return std::nullopt;
+    }
+    return candidate;
+  };
   switch (type) {
   case AutomationValueType::null_value:
     if (value.is_null())
@@ -131,26 +146,38 @@ std::optional<AutomationValue> read_value(const Value &value,
       return AutomationValue(value.as_number());
     break;
   case AutomationValueType::duration:
-    if (const auto integer = json::read_integer(
-            value, json::IntegerEncoding::number_or_string))
-      return AutomationValue(DurationValue{Milliseconds(*integer)});
+    if (const auto integer =
+            json::read_integer(value, json::IntegerEncoding::number_or_string))
+      return bounded(AutomationValue(DurationValue{Milliseconds(*integer)}),
+                     "duration must be between 0 and 86400000 ms");
     break;
   case AutomationValueType::confidence:
     if (value.is_number() && std::isfinite(value.as_number()))
-      return AutomationValue(ConfidenceValue{value.as_number()});
+      return bounded(AutomationValue(ConfidenceValue{value.as_number()}),
+                     "confidence must be between 0 and 1");
     break;
   case AutomationValueType::string:
-    if (value.is_string())
-      return AutomationValue(value.as_string());
+    if (value.is_string()) {
+      if (value.as_string().size() > max_automation_string_bytes) {
+        error = {path, "string must be valid UTF-8 within 512 bytes"};
+        return std::nullopt;
+      }
+      return bounded(AutomationValue(value.as_string()),
+                     "string must be valid UTF-8 within 512 bytes");
+    }
     break;
   case AutomationValueType::list:
     if (value.is_array()) {
+      if (value.as_array().size() > max_automation_collection_entries) {
+        error = {path, "list exceeds 64 entries"};
+        return std::nullopt;
+      }
       AutomationList result;
       result.reserve(value.as_array().size());
       for (std::size_t i{}; i < value.as_array().size(); ++i) {
         auto child =
             read_nested_value(value.as_array()[i], error,
-                              path + "[" + std::to_string(i) + "]");
+                              path + "[" + std::to_string(i) + "]", depth + 1U);
         if (!child)
           return std::nullopt;
         result.push_back(std::move(*child));
@@ -160,9 +187,19 @@ std::optional<AutomationValue> read_value(const Value &value,
     break;
   case AutomationValueType::map:
     if (value.is_object()) {
+      if (value.as_object().size() > max_automation_collection_entries) {
+        error = {path, "map exceeds 64 entries"};
+        return std::nullopt;
+      }
       AutomationMap result;
       for (const auto &[key, raw] : value.as_object()) {
-        auto child = read_nested_value(raw, error, path + "." + key);
+        if (key.size() > max_automation_string_bytes || !is_valid_utf8(key)) {
+          error = {path + "." + key,
+                   "map key must be valid UTF-8 within 512 bytes"};
+          return std::nullopt;
+        }
+        auto child =
+            read_nested_value(raw, error, path + "." + key, depth + 1U);
         if (!child)
           return std::nullopt;
         result.emplace(key, std::move(*child));
