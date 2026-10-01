@@ -68,6 +68,8 @@ struct EditorShell final {
   // client height that shows every row (0 before the first layout).
   int status_strip_top{};
   int min_client_height{};
+  // Whether the last layout() had room for the preview column.
+  bool preview_visible{};
   HWND tooltip{};
   std::wstring tooltip_text;
   std::wstring title_cache;
