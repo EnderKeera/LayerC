@@ -206,9 +206,13 @@ void layout_simulator_view(const AutomationFrame &f,
   ui.move(IDC_AUTOMATION_SIM_SPEED, x, controls_top, ui.scaled(74),
           f.control_height);
   x += ui.scaled(82);
-  ui.move(IDC_AUTOMATION_TRACE, x, controls_top + ui.scaled(2), ui.scaled(76),
+  // The checkbox sizes to its label (box, gap, text) instead of clipping it
+  // to "Live tr...".
+  const int trace_width =
+      text_width(f.dialog, IDC_AUTOMATION_TRACE, 0) + ui.scaled(18 + 8);
+  ui.move(IDC_AUTOMATION_TRACE, x, controls_top + ui.scaled(2), trace_width,
           f.label_height);
-  x += ui.scaled(84);
+  x += trace_width + ui.scaled(8);
   ui.next_button(IDC_AUTOMATION_TRACE_LOAD, x, controls_top, 90,
                  f.control_height, f.gap);
   ui.next_button(IDC_AUTOMATION_SAVE_TRACE, x, controls_top, 90,

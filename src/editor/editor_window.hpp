@@ -179,6 +179,7 @@ private:
   void assign_binding_chord(std::span<const std::uint16_t> scan_codes);
   void refresh_bar_list(std::size_t preferred_panel = SIZE_MAX);
   void refresh_bar_controls();
+  void refresh_position_hint();
   void sync_profile_from_controls();
   [[nodiscard]] layerc::core::Panel *selected_bar();
   [[nodiscard]] const layerc::core::Panel *selected_bar() const;
@@ -211,6 +212,7 @@ private:
   [[nodiscard]] const layerc::platform::WindowCandidate *
   require_selected_task(bool live_window_required = true);
   void update_task_detail();
+  [[nodiscard]] const wchar_t *empty_task_list_text() const;
   void apply_task(const layerc::platform::WindowCandidate &candidate);
   void use_selected_task();
   void show_tasks();
