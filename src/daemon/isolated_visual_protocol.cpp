@@ -305,20 +305,40 @@ IsolatedInboundMessage decode_poll_message(const Value &root, Reader &reader) {
 
 } // namespace
 
+void IsolatedSnapshotValidator::begin_worker_epoch() noexcept {
+  local_capture_sequence_ = 0;
+  for (auto &[key, evaluation] : evaluations_) {
+    (void)key;
+    evaluation.local = 0;
+  }
+}
+
+void IsolatedSnapshotValidator::begin_connection() noexcept {
+  local_capture_sequence_ = 0;
+  capture_base_ = capture_sequence_;
+  for (auto &[key, evaluation] : evaluations_) {
+    (void)key;
+    evaluation.local = 0;
+    evaluation.base = evaluation.published;
+  }
+}
+
 IsolatedSnapshotDisposition
 IsolatedSnapshotValidator::validate(VisualCaptureSnapshot &snapshot,
                                     const layerc::core::TimePoint now,
                                     std::string &error) {
-  if (snapshot.sequence < capture_sequence_) {
+  // Checks use this connection's local sequences; accepted values are then
+  // mapped onto the host stream above everything earlier helpers published.
+  if (snapshot.sequence < local_capture_sequence_) {
     error = "isolated capture sequence moved backwards";
     return IsolatedSnapshotDisposition::rejected;
   }
   constexpr auto maximum_age = std::chrono::seconds(2);
   constexpr auto maximum_future_skew = std::chrono::milliseconds(250);
   for (const auto &evaluation : snapshot.evaluations) {
-    const auto previous = evaluation_sequences_.find(evaluation.source_key);
-    if (previous != evaluation_sequences_.end() &&
-        evaluation.sequence < previous->second) {
+    const auto previous = evaluations_.find(evaluation.source_key);
+    if (previous != evaluations_.end() &&
+        evaluation.sequence < previous->second.local) {
       error = "isolated evaluation sequence moved backwards";
       return IsolatedSnapshotDisposition::rejected;
     }
@@ -331,37 +351,47 @@ IsolatedSnapshotValidator::validate(VisualCaptureSnapshot &snapshot,
       }
     }
   }
-  if (snapshot.sequence == capture_sequence_)
+  if (snapshot.sequence == local_capture_sequence_)
     return IsolatedSnapshotDisposition::duplicate;
 
   std::erase_if(snapshot.evaluations, [&](const auto &evaluation) {
-    const auto previous = evaluation_sequences_.find(evaluation.source_key);
-    return previous != evaluation_sequences_.end() &&
-           evaluation.sequence == previous->second;
+    const auto previous = evaluations_.find(evaluation.source_key);
+    return previous != evaluations_.end() &&
+           evaluation.sequence == previous->second.local;
   });
-  capture_sequence_ = snapshot.sequence;
-  for (const auto &evaluation : snapshot.evaluations)
-    evaluation_sequences_[evaluation.source_key] = evaluation.sequence;
+  local_capture_sequence_ = snapshot.sequence;
+  capture_sequence_ = capture_base_ + snapshot.sequence;
+  snapshot.sequence = capture_sequence_;
+  for (auto &evaluation : snapshot.evaluations) {
+    auto &state = evaluations_[evaluation.source_key];
+    state.local = evaluation.sequence;
+    if (evaluation.sequence != 0) {
+      state.published = state.base + evaluation.sequence;
+      evaluation.sequence = state.published;
+    }
+  }
   return IsolatedSnapshotDisposition::accepted;
 }
 
 bool IsolatedSnapshotValidator::rebase(VisualCaptureSnapshot &snapshot) {
   const bool advanced =
-      snapshot.sequence != 0 && snapshot.sequence != last_worker_sequence_;
+      snapshot.sequence != 0 && snapshot.sequence != local_capture_sequence_;
   if (advanced) {
-    last_worker_sequence_ = snapshot.sequence;
-    snapshot.sequence = ++capture_sequence_;
-    for (auto &evaluation : snapshot.evaluations)
-      evaluation.sequence = ++evaluation_sequences_[evaluation.source_key];
-    return true;
+    local_capture_sequence_ = snapshot.sequence;
+    ++capture_sequence_;
   }
   snapshot.sequence = capture_sequence_;
   for (auto &evaluation : snapshot.evaluations) {
-    const auto found = evaluation_sequences_.find(evaluation.source_key);
-    evaluation.sequence =
-        found == evaluation_sequences_.end() ? 0U : found->second;
+    // A profile sampled slower than the shared capture keeps its previous
+    // local sequence and is republished unchanged, not as a fresh sample.
+    auto &state = evaluations_[evaluation.source_key];
+    if (evaluation.sequence != 0 && evaluation.sequence != state.local) {
+      state.local = evaluation.sequence;
+      ++state.published;
+    }
+    evaluation.sequence = state.published;
   }
-  return false;
+  return advanced;
 }
 
 std::string isolated_hello_json(const std::string_view nonce,
@@ -541,6 +571,8 @@ std::string encode_isolated_snapshot(const std::uint64_t packet_sequence,
   output += ",\"backend\":";
   layerc::core::json::append_unsigned(
       output, static_cast<std::uint8_t>(snapshot.result.backend));
+  output += ",\"diagnostic\":";
+  layerc::core::json::append_quoted(output, snapshot.result.diagnostic);
   output += ",\"gpu\":";
   layerc::core::json::append_quoted(output, snapshot.gpu_description);
   output += ",\"evaluations\":[";
@@ -674,10 +706,12 @@ decode_isolated_snapshot(const std::string_view json,
   const auto *root = object_root(json, reader, parsed);
   if (root == nullptr)
     return IsolatedProtocolError{reader_error(reader)};
-  std::string type, gpu;
+  std::string type, gpu, diagnostic;
   if (!reader.string(*root, "type", "$", type, Required::yes,
                      EmptyString::reject) ||
       !reader.string(*root, "gpu", "$", gpu, Required::yes,
+                     EmptyString::allow) ||
+      !reader.string(*root, "diagnostic", "$", diagnostic, Required::yes,
                      EmptyString::allow)) {
     return IsolatedProtocolError{reader_error(reader)};
   }
@@ -710,6 +744,7 @@ decode_isolated_snapshot(const std::string_view json,
       static_cast<layerc::core::CaptureAvailability>(*availability);
   result.result.backend =
       static_cast<layerc::core::CaptureBackendKind>(*backend);
+  result.result.diagnostic = std::move(diagnostic);
   result.gpu_description = std::move(gpu);
   std::string error;
   for (std::size_t index = 0; index < evaluations->size(); ++index) {

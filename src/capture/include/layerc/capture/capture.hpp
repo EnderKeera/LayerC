@@ -56,6 +56,10 @@ struct CapturePollResult {
   std::string diagnostic{};
   std::shared_ptr<const CaptureFrame> frame{};
   CaptureRecovery recovery{CaptureRecovery::none};
+
+  [[nodiscard]] core::CaptureHealth health() const {
+    return {availability, backend, diagnostic};
+  }
 };
 
 // Owns capture availability policy that must be identical for every backend.

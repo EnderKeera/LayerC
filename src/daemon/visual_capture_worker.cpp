@@ -172,12 +172,14 @@ VisualCaptureSnapshot VisualCaptureWorker::snapshot() const {
 }
 
 VisualCaptureHostStatus VisualCaptureWorker::status() const {
+  const std::scoped_lock lock(mutex_);
   return {.running = thread_.joinable() &&
                      !stopping_.load(std::memory_order_acquire),
           .quarantined = false,
           .fault_count = 0,
           .helper_process_id = 0,
-          .last_error = {}};
+          .last_error = {},
+          .capture_health = latest_.result.health()};
 }
 
 struct VisualCaptureWorker::RunState {

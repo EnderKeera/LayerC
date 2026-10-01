@@ -1,5 +1,7 @@
 #include "overlay_collection.hpp"
 
+#include "layerc/platform/text.hpp"
+
 #include <algorithm>
 
 namespace layerc::daemon {
@@ -66,13 +68,28 @@ void OverlayCollection::update_panel(const layerc::core::Panel &panel) {
   if (found != windows_.end()) (*found)->update_snapshot(panel, cooldowns_);
 }
 
-void OverlayCollection::apply_session_override(
-    const layerc::core::Panel &panel, const std::optional<bool> visible,
-    std::optional<std::wstring> text) {
-  const auto found = find_panel_window(windows_, panel.id);
-  if (found == windows_.end()) return;
-  (*found)->update_snapshot(panel, cooldowns_);
-  (*found)->set_session_override(visible, std::move(text));
+void OverlayCollection::apply_overrides(
+    const layerc::core::GameProfile &profile,
+    const std::span<const layerc::core::OverlayPropertyOverride> overrides) {
+  for (const auto &base_panel : profile.panels) {
+    const auto found = find_panel_window(windows_, base_panel.id);
+    if (found == windows_.end()) continue;
+    const auto resolved =
+        layerc::core::resolve_panel_overrides(base_panel, overrides);
+    std::optional<std::wstring> text;
+    if (resolved.text.has_value())
+      text = layerc::platform::utf8_to_wide(*resolved.text);
+    (*found)->update_snapshot(resolved.panel, cooldowns_);
+    (*found)->set_session_override(resolved.visible, std::move(text));
+  }
+}
+
+const OverlayWindow *
+OverlayCollection::find(const std::string_view panel_id) const {
+  const auto found = std::ranges::find_if(windows_, [&](const auto &candidate) {
+    return candidate != nullptr && candidate->panel_id() == panel_id;
+  });
+  return found == windows_.end() ? nullptr : found->get();
 }
 void OverlayCollection::set_capture_exclusion(const bool enabled) {
   for (auto &overlay : windows_) overlay->set_capture_exclusion(enabled);
