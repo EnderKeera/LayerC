@@ -968,11 +968,13 @@ void automation_palette_contracts() {
 
 void editor_draft_leave_contracts();
 void editor_dialog_font_contracts();
+void editor_cooldown_removal_contracts();
 
 int main() {
   return layerc::test::run(
       {{"editor_dialog_contracts", editor_dialog_contracts},
        {"automation_palette_contracts", automation_palette_contracts},
        {"editor_draft_leave_contracts", editor_draft_leave_contracts},
-       {"editor_dialog_font_contracts", editor_dialog_font_contracts}});
+       {"editor_dialog_font_contracts", editor_dialog_font_contracts},
+       {"editor_cooldown_removal_contracts", editor_cooldown_removal_contracts}});
 }
