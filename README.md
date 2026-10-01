@@ -143,6 +143,14 @@ even an enabled launcher makes no update requests. Checks are also skipped
 while `layerd` is running. Exit it before checking for an update or rolling
 back with `--rollback`.
 
+Activation is ordered after durable payload publication: all downloaded and
+reused files, the installed manifest, and their directories cross the platform
+durability barriers before `current` is durably replaced. A failed or unconfirmed
+barrier stops activation and retains recovery evidence. For a new build ID, an
+interruption before activation keeps the previous build selected. Same-build-ID
+repairs park the old directory until the replacement is committed and recover
+it on the next read if the replacement directory is absent.
+
 To provision signing, the release owner generates an ECDSA P-256 key pair
 outside the repository (`openssl ecparam -name prime256v1 -genkey -noout -out
 <private-key-path>`), commits only the uncompressed public point (130 hex
