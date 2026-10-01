@@ -476,8 +476,9 @@ static void test_companion_duplicate_slot_contract() {
       R"(],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":2,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1.0}]})";
   const auto parsed = parse_companion_snapshot_json(valid);
   const auto *baseline = std::get_if<CompanionSessionSnapshot>(&parsed);
-  if (!layerc::test::expect(baseline != nullptr,
-                           "duplicate-slot fixture starts from accepted JSON"))
+  layerc::test::expect(baseline != nullptr,
+                       "duplicate-slot fixture starts from accepted JSON");
+  if (baseline == nullptr)
     return;
   layerc::test::expect(
       serialized_json(serialize_companion_snapshot_json(*baseline)) != nullptr,
