@@ -10,11 +10,21 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace layerc::editor {
 
 enum class DocumentChangeKind { text, immediate, drag };
+
+struct CooldownRemovalError {
+  std::string message;
+};
+
+// Shared panel normalization for adding and removing a cooldown.
+void sync_bar_panels(
+    layerc::core::GameProfile &profile,
+    std::optional<std::string_view> added = std::nullopt);
 
 // Why a shared document commit stopped. Call sites map this to their own
 // status or dialog text so autosave, save, visual, and enablement keep
@@ -97,6 +107,14 @@ public:
   [[nodiscard]] const EditorProfileHistory &history() const noexcept {
     return history_;
   }
+
+  // Deletion is conservative: preflight reports every group/rule dependency.
+  // The operation validates a complete candidate before replacing any value;
+  // its caller records the accepted edit as one normal history transaction.
+  [[nodiscard]] std::optional<CooldownRemovalError>
+  cooldown_removal_error(std::string_view id) const;
+  [[nodiscard]] std::optional<CooldownRemovalError>
+  remove_cooldown(std::string_view id);
 
   // Sidecar value, state, and error move together so no caller can leave a
   // valid state beside a stale error or an invalid state beside a value.

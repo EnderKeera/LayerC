@@ -334,6 +334,7 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_prompt.cpp
         src/editor/editor_profiles.cpp
         src/editor/editor_profile_fields.cpp
+        src/editor/profile_document.cpp
         src/editor/editor_util.cpp
         src/editor/editor_cooldowns.cpp
         src/editor/editor_bars.cpp
@@ -936,6 +937,7 @@ if(LAYERC_BUILD_TESTS)
 
         layerc_add_test(layerc_editor_tests
             SOURCES tests/editor_dialog_tests.cpp tests/editor_regression_tests.cpp
+                tests/editor_document_tests.cpp
                 src/editor/editor_resources.rc
             LINK layerc_editor_ui WIN32 TIMEOUT 30)
         target_include_directories(layerc_editor_tests PRIVATE src/editor)
