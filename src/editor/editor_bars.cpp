@@ -145,22 +145,37 @@ void EditorWindow::refresh_bar_controls() {
         shell_.window, document_.profile(), selected_cooldown(),
         &document_.profile().panels[panel_preview_.controls_panel]};
     write_profile_fields(context, ProfileFieldOwner::panel);
-    const bool direct_drag_unavailable =
-        IsWindowEnabled(GetDlgItem(shell_.window, IDC_DIRECT_DRAG)) == FALSE;
-    set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS),
-             panel->cooldown_ids.size() > 1
-                 ? L"This bar is shared by several cooldowns. Tools > Split "
-                   L"Grouped Bars gives each its own position."
-             : direct_drag_unavailable
-                 ? L"Drag the bar in the preview to position it. Direct drag "
-                   L"works during Position on window."
-                 : L"Drag the bar in the preview to position it.");
     set_text(GetDlgItem(shell_.window, IDC_BAR_FILL), L"Fill");
     set_text(GetDlgItem(shell_.window, IDC_BAR_BACKGROUND), L"Background");
     set_text(GetDlgItem(shell_.window, IDC_BAR_BORDER), L"Border");
     set_text(GetDlgItem(shell_.window, IDC_BAR_TEXT), L"Text");
-  } else set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), L"Add a cooldown to create a bar.");
+  }
+  refresh_position_hint();
   InvalidateRect(panel_preview_.window, nullptr, TRUE);
+}
+
+// The hint names only surfaces the window currently shows: narrow windows
+// collapse the preview column, so they point at Position on window instead.
+void EditorWindow::refresh_position_hint() {
+  const auto *panel = selected_bar();
+  const bool direct_drag_unavailable =
+      IsWindowEnabled(GetDlgItem(shell_.window, IDC_DIRECT_DRAG)) == FALSE;
+  const wchar_t *hint =
+      panel == nullptr ? L"Add a cooldown to create a bar."
+      : panel->cooldown_ids.size() > 1
+          ? L"This bar is shared by several cooldowns. Tools > Split "
+            L"Grouped Bars gives each its own position."
+      : shell_.preview_visible
+          ? (direct_drag_unavailable
+                 ? L"Drag the bar in the preview to position it. Direct drag "
+                   L"works during Position on window."
+                 : L"Drag the bar in the preview to position it.")
+      : direct_drag_unavailable
+          ? L"Use Position on window to place the bar over its window. "
+            L"Widen the editor to show the preview."
+          : L"Drag the bar over its window to position it. Widen the "
+            L"editor to show the preview.";
+  set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), hint);
 }
 
 
