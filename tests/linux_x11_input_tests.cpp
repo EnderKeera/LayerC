@@ -83,7 +83,7 @@ automation_fixture(std::string profile_id) {
   layerc::core::AutomationRule input;
   input.id = "input";
   input.event = AutomationEventKind::input_pressed;
-  input.source_filter = "keyboard:69";
+  input.source_filter = "keyboard:18";
   input.actions = {increment, create_timer, hide_overlay};
 
   layerc::core::AutomationAction trigger_cooldown;
@@ -146,7 +146,7 @@ automation_fixture(std::string profile_id) {
   return selected;
 }
 
-// One profile: keyboard 69 (VK_E) -> dash, mouse left -> potion, mouse wheel
+// One profile: keyboard 18 (physical E scan code) -> dash, mouse left -> potion, mouse wheel
 // up (normalized code 6) -> zoom, controller button 1 -> ultimate. The
 // controller binding is deliberately unsupported on an XI2 host without a
 // gamepad and must survive untouched.
@@ -162,7 +162,7 @@ void replace_all(std::string &text, std::string_view placeholder,
 [[nodiscard]] std::string fixture_profile(std::string_view id,
                                           std::string_view match_json,
                                           std::string_view dash_id) {
-  std::string json = R"json({"schemaVersion":1,"id":"PROFILE_ID","name":"Fixture","game":PROFILE_MATCH,"cooldowns":[{"id":"DASH_ID","name":"Dash","durationMs":60000},{"id":"potion","name":"Potion","durationMs":60000},{"id":"zoom","name":"Zoom","durationMs":60000},{"id":"ultimate","name":"Ultimate","durationMs":60000}],"panels":[{"id":"main","name":"Main","cooldowns":["DASH_ID"]}],"bindings":[{"cooldownId":"DASH_ID","chord":[{"device":"keyboard","code":69}]},{"cooldownId":"potion","chord":[{"device":"mouse","code":1}]},{"cooldownId":"zoom","chord":[{"device":"mouse","code":6}]},{"cooldownId":"ultimate","chord":[{"device":"controller","code":1,"controllerIndex":0}]}]})json";
+  std::string json = R"json({"schemaVersion":1,"id":"PROFILE_ID","name":"Fixture","game":PROFILE_MATCH,"cooldowns":[{"id":"DASH_ID","name":"Dash","durationMs":60000},{"id":"potion","name":"Potion","durationMs":60000},{"id":"zoom","name":"Zoom","durationMs":60000},{"id":"ultimate","name":"Ultimate","durationMs":60000}],"panels":[{"id":"main","name":"Main","cooldowns":["DASH_ID"]}],"bindings":[{"cooldownId":"DASH_ID","chord":[{"device":"keyboard","code":18}]},{"cooldownId":"potion","chord":[{"device":"mouse","code":1}]},{"cooldownId":"zoom","chord":[{"device":"mouse","code":6}]},{"cooldownId":"ultimate","chord":[{"device":"controller","code":1,"controllerIndex":0}]}]})json";
   replace_all(json, "PROFILE_ID", id);
   replace_all(json, "PROFILE_MATCH", match_json);
   replace_all(json, "DASH_ID", dash_id);
@@ -179,41 +179,121 @@ void replace_all(std::string &text, std::string_view placeholder,
   return std::nullopt;
 }
 
+void check_passive_normalization(Display *raw, X11InputSource &source,
+                                 const GameProfile &fixture, bool &passed) {
+  using namespace layerc::core;
+  using layerc::test::expect;
+  int event{}, error{}, major{}, minor{};
+  if (!expect(XTestQueryExtension(raw, &event, &error, &major, &minor),
+              "normalization replay has the test-only XTest extension")) {
+    passed = false;
+    return;
+  }
+  passed &= expect(source.refresh_keymap(), "server physical key names are readable");
+  (void)source.poll();
+  auto replay = [&](InputDevice device, std::uint16_t code, unsigned int detail,
+                    bool supported) {
+    auto profile = fixture;
+    profile.bindings.resize(1);
+    profile.bindings.front().chord.tokens = {{device, code, 0}};
+    auto automation = automation_fixture(profile.id);
+    automation.automations.front().rules.front().source_filter =
+        std::string(input_device_label(device)) + ":" + std::to_string(code);
+    layerc::daemon::InputSession session(
+        {{}, std::move(profile)}, 1, true, std::nullopt, std::move(automation));
+    if (device == InputDevice::keyboard)
+      XTestFakeKeyEvent(raw, detail, True, CurrentTime);
+    else
+      XTestFakeButtonEvent(raw, detail, True, CurrentTime);
+    XSync(raw, False);
+    const auto polled = source.poll();
+    std::size_t matching{};
+    std::size_t triggered{};
+    for (const auto &input : polled.events) {
+      if (input.pressed && input.token == InputToken{device, code, 0}) ++matching;
+      triggered += session.feed(input, MonotonicClock::now()).size();
+    }
+    const auto count = session.automation_runtime->snapshot().variables.at("count");
+    const bool correct = supported ? matching == 1 && triggered == 1 &&
+                                         count == AutomationValue(std::int64_t{1})
+                                   : matching == 0 && triggered == 0 &&
+                                         count == AutomationValue(std::int64_t{0});
+    if (!correct)
+      std::fprintf(stderr, "replay %s:%u detail=%u events=%zu matching=%zu triggered=%zu count_one=%d\n",
+                   input_device_label(device).data(), static_cast<unsigned int>(code),
+                   detail, polled.events.size(), matching, triggered,
+                   count == AutomationValue(std::int64_t{1}));
+    passed &= expect(correct,
+                     supported ? "passive token drives Windows binding and automation filter"
+                               : "horizontal scroll cannot drive a side binding or filter");
+    if (device == InputDevice::keyboard)
+      XTestFakeKeyEvent(raw, detail, False, CurrentTime);
+    else
+      XTestFakeButtonEvent(raw, detail, False, CurrentTime);
+    XSync(raw, False);
+    (void)source.poll();
+  };
+  const struct KeyCase { KeySym symbol; std::uint16_t code; } keys[] = {
+      {XK_e, 0x12}, {XK_Alt_L, 0x38}, {XK_Alt_R, 0xE038},
+      {XK_Control_L, 0x1D}, {XK_Control_R, 0xE01D},
+      {XK_Shift_L, 0x2A}, {XK_Shift_R, 0x36},
+      {XK_Delete, 0xE053}, {XK_F5, 0x3F},
+  };
+  for (const auto &key : keys) {
+    const auto keycode = XKeysymToKeycode(raw, key.symbol);
+    if (!expect(keycode != 0, "replay key exists in the disposable server")) {
+      passed = false;
+      continue;
+    }
+    replay(InputDevice::keyboard, key.code, keycode, true);
+  }
+  const struct ButtonCase { unsigned int button; std::uint16_t code; bool supported; }
+      buttons[] = {{2, 3, true}, {3, 2, true}, {8, 4, true}, {9, 5, true},
+                   {6, 4, false}, {7, 5, false}};
+  for (const auto &button : buttons)
+    replay(InputDevice::mouse, button.code, button.button, button.supported);
+}
+
 void check_normalization(bool &passed) {
   using layerc::test::expect;
 
   // --- normalization (pure) ------------------------------------------------
-  using layerc::platform::keysym_to_vk;
-  passed &= expect(keysym_to_vk(XK_e) == 0x45, "lowercase e maps to VK_E (69)");
-  passed &= expect(keysym_to_vk(XK_A) == 0x41, "uppercase A maps to VK_A");
-  passed &= expect(keysym_to_vk(XK_7) == 0x37, "digit 7 maps to VK_7");
-  passed &= expect(keysym_to_vk(XK_F5) == 0x74, "F5 maps to VK_F5");
-  passed &= expect(keysym_to_vk(XK_Delete) == 0x2E, "Delete maps to VK_DELETE");
-  passed &= expect(keysym_to_vk(XK_Left) == 0x25, "Left maps to VK_LEFT");
-  passed &= expect(keysym_to_vk(XK_Shift_L) == 0x10 &&
-                       keysym_to_vk(XK_Shift_R) == 0x10,
-                   "both shifts map to VK_SHIFT");
-  passed &= expect(keysym_to_vk(XK_Control_R) == 0x11 &&
-                       keysym_to_vk(XK_Alt_L) == 0x12,
-                   "control and alt map to VK_CONTROL / VK_MENU");
-  passed &= expect(keysym_to_vk(XK_Escape) == 0x1B &&
-                       keysym_to_vk(XK_Return) == 0x0D &&
-                       keysym_to_vk(XK_space) == 0x20,
-                   "escape, return and space map to their VKs");
-  passed &= expect(keysym_to_vk(XK_KP_8) == 0x68 && keysym_to_vk(XK_KP_Up) == 0x26,
-                   "numpad keys map with and without NumLock");
-  passed &= expect(keysym_to_vk(XK_semicolon) == 0xBA,
-                   "semicolon maps to VK_OEM_1");
-  passed &= expect(!keysym_to_vk(0x0EFF).has_value(),
-                   "keysyms without a VK are dropped, not guessed");
+  using layerc::platform::xkb_key_name_to_scan_code;
+  passed &= expect(xkb_key_name_to_scan_code("AD03") == 0x12 &&
+                       xkb_key_name_to_scan_code("LALT") == 0x38,
+                   "physical E and Alt have distinct Windows scan codes");
+  passed &= expect(xkb_key_name_to_scan_code("AC01") == 0x1E &&
+                       xkb_key_name_to_scan_code("AE07") == 0x08 &&
+                       xkb_key_name_to_scan_code("FK05") == 0x3F,
+                   "letters, numbers and function keys use physical tokens");
+  passed &= expect(xkb_key_name_to_scan_code("DELE") == 0xE053 &&
+                       xkb_key_name_to_scan_code("LEFT") == 0xE04B,
+                   "navigation keys retain the extended prefix");
+  passed &= expect(xkb_key_name_to_scan_code("LFSH") == 0x2A &&
+                       xkb_key_name_to_scan_code("RTSH") == 0x36 &&
+                       xkb_key_name_to_scan_code("LCTL") == 0x1D &&
+                       xkb_key_name_to_scan_code("RCTL") == 0xE01D &&
+                       xkb_key_name_to_scan_code("RALT") == 0xE038,
+                   "left and right modifiers keep Windows-authored distinctions");
+  passed &= expect(xkb_key_name_to_scan_code(std::string_view{"ESC\0", 4}) == 0x01 &&
+                       xkb_key_name_to_scan_code("KP8 ") == 0x48 &&
+                       xkb_key_name_to_scan_code("KPEN") == 0xE01C,
+                   "padded XKB names and keypad positions are supported");
+  passed &= expect(!xkb_key_name_to_scan_code("I123") &&
+                       !xkb_key_name_to_scan_code("e"),
+                   "unknown names and symbols are never guessed as physical keys");
 
   using layerc::platform::button_to_mouse_code;
-  passed &= expect(button_to_mouse_code(1) == 1 && button_to_mouse_code(3) == 3,
-                   "left and middle buttons keep their code");
+  passed &= expect(button_to_mouse_code(1) == 1 && button_to_mouse_code(2) == 3 &&
+                       button_to_mouse_code(3) == 2,
+                   "conventional left, middle and right match Windows tokens");
   passed &= expect(button_to_mouse_code(4) == 6 && button_to_mouse_code(5) == 7,
                    "X wheel buttons 4/5 map to the profile wheel codes 6/7");
-  passed &= expect(button_to_mouse_code(6) == 4 && button_to_mouse_code(7) == 5,
-                   "X side buttons 6/7 map to the profile X1/X2 codes");
+  passed &= expect(button_to_mouse_code(8) == 4 && button_to_mouse_code(9) == 5,
+                   "conventional back/forward map to profile X1/X2");
+  passed &= expect(button_to_mouse_code(6) == 0 && button_to_mouse_code(7) == 0 &&
+                       button_to_mouse_code(0) == 0 && button_to_mouse_code(65536) == 0,
+                   "horizontal scroll and unknown buttons are not aliased");
 
   using layerc::platform::classify_device;
   using layerc::platform::X11DeviceKind;
@@ -357,9 +437,9 @@ int run_linux_x11_input_tests() {
 
   layerc::daemon::InputSession session(profiles[0], window.window, false);
   const layerc::core::InputEvent press_e{
-      {layerc::core::InputDevice::keyboard, 69, 0}, true};
+      {layerc::core::InputDevice::keyboard, 18, 0}, true};
   const layerc::core::InputEvent release_e{
-      {layerc::core::InputDevice::keyboard, 69, 0}, false};
+      {layerc::core::InputDevice::keyboard, 18, 0}, false};
   const auto now = layerc::core::MonotonicClock::now();
   auto triggered = session.feed(press_e, now);
   passed &= expect(triggered.size() == 1 && triggered.front() == "dash",
@@ -388,13 +468,13 @@ int run_linux_x11_input_tests() {
     inactive_scan.windows.front().active = false;
     auto chord_profile = profiles[0];
     chord_profile.profile.bindings.front().chord.tokens.push_back(
-        {layerc::core::InputDevice::keyboard, 17, 0});
+        {layerc::core::InputDevice::keyboard, 0x1D, 0});
     layerc::daemon::X11SessionRegistry focus_service_sessions;
     layerc::daemon::X11InputService focus_service(focus_service_sessions);
     focus_service_sessions.configure(std::span{&chord_profile, 1});
     focus_service_sessions.refresh(focus_scan);
     const layerc::core::InputEvent ctrl{
-        {layerc::core::InputDevice::keyboard, 17, 0}, true};
+        {layerc::core::InputDevice::keyboard, 0x1D, 0}, true};
     (void)focus_service_sessions.sessions().front().matcher.process(ctrl);
     focus_service_sessions.refresh(inactive_scan);
     focus_service_sessions.refresh(focus_scan);
@@ -529,7 +609,8 @@ int run_linux_x11_input_tests() {
   XSync(raw, False);
 
   passed &= expect(raw_input_selected(raw, root),
-                   "the XI2 source owns its raw-event selection");
+                    "the XI2 source owns its raw-event selection");
+  check_passive_normalization(raw, *source, *global, passed);
   source.reset();
   passed &= expect(!raw_input_selected(raw, root),
                    "destroying the XI2 source clears raw-event selection");
@@ -591,11 +672,33 @@ int run_linux_x11_input_tests() {
                                          &xtest_major, &xtest_minor) == True;
   passed &= expect(xtest, "XTest is available for event injection");
   if (xtest) {
+    // Drain overlay construction first: only the client title and passive
+    // keypress below can explain this mixed-batch discovery invalidation.
+    (void)live.dispatch(&tracker);
+    auto title_profile = profiles[0];
+    title_profile.path = profiles[0].path.parent_path() / "title-match.json";
+    title_profile.profile.id = "title-match";
+    title_profile.profile.game = {};
+    title_profile.profile.game.window_title = "Only After Rename";
+    layerc::daemon::X11SessionRegistry title_registry;
+    title_registry.configure(std::span{&title_profile, 1});
+    title_registry.refresh(tracker.scan());
+    passed &= expect(title_registry.session_count() == 0,
+                     "title-only profile is unmatched before the client mutation");
+    const char renamed[] = "Only After Rename";
+    XChangeProperty(raw, fixture, XInternAtom(raw, "_NET_WM_NAME", False),
+                    XInternAtom(raw, "UTF8_STRING", False), 8, PropModeReplace,
+                    reinterpret_cast<const unsigned char *>(renamed),
+                    static_cast<int>(sizeof(renamed) - 1));
     const KeyCode key_e = XKeysymToKeycode(raw, XK_e);
     XTestFakeKeyEvent(raw, key_e, True, CurrentTime);
     XSync(raw, False);
-    auto dispatch = live.dispatch();
-    passed &= expect(dispatch.events >= 1, "the injected keypress is received");
+    auto dispatch = live.dispatch(&tracker);
+    passed &= expect(dispatch.events >= 1 && dispatch.windows_changed,
+                     "one dispatcher preserves mixed keypress and client-title events");
+    title_registry.refresh(tracker.scan());
+    passed &= expect(title_registry.session_count() == 1,
+                     "active input does not conceal new title-based admission");
     bool got_dash = false;
     bool got_global = false;
     for (const auto &cooldown : dispatch.triggered) {
@@ -607,9 +710,45 @@ int run_linux_x11_input_tests() {
 
     XTestFakeKeyEvent(raw, key_e, False, CurrentTime);
     XSync(raw, False);
-    dispatch = live.dispatch();
+    dispatch = live.dispatch(&tracker);
     passed &= expect(dispatch.events >= 1 && dispatch.triggered.empty(),
                      "the key release triggers nothing");
+    const char unmatched[] = "No Longer Matching";
+    XChangeProperty(raw, fixture, XInternAtom(raw, "_NET_WM_NAME", False),
+                    XInternAtom(raw, "UTF8_STRING", False), 8, PropModeReplace,
+                    reinterpret_cast<const unsigned char *>(unmatched),
+                    static_cast<int>(sizeof(unmatched) - 1));
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed,
+                     "client-only rename-away is observed with input still active");
+    title_registry.refresh(tracker.scan());
+    passed &= expect(title_registry.session_count() == 0,
+                     "rename-away retires the title-only session without a timer");
+    XMoveResizeWindow(raw, fixture, 40, 60, 140, 90);
+    XSync(raw, False);
+    const auto geometry_dispatch = live.dispatch(&tracker);
+    passed &= expect(geometry_dispatch.windows_changed && geometry_dispatch.events == 0,
+                     "geometry-only invalidation survives an active XI2 decoder");
+    const auto moved = tracker.find(fixture);
+    passed &= expect(moved && moved->x == 40 && moved->y == 60 &&
+                         moved->width == 140 && moved->height == 90,
+                     "geometry-only wake refreshes the target rectangle");
+
+    const auto fallback_child = XCreateSimpleWindow(raw, root, 0, 0, 30, 30, 0, 0, 0);
+    XMapWindow(raw, fallback_child);
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed &&
+                         tracker.find(fallback_child).has_value(),
+                     "active input preserves fallback creation/map discovery");
+    XUnmapWindow(raw, fallback_child);
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed &&
+                         !tracker.find(fallback_child),
+                     "active input preserves fallback unmap discovery");
+    XDestroyWindow(raw, fallback_child);
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed,
+                     "active input preserves fallback destruction discovery");
 
     XTestFakeButtonEvent(raw, 1, True, CurrentTime);
     XSync(raw, False);

@@ -425,8 +425,15 @@ void control_socket_contracts() {
   (void)passed;
 }
 
+void control_response_acceptance_contracts();
+void control_response_backpressure_contracts();
+void control_server_identity_contracts();
+
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(control_framer_contracts),
     LAYERC_TEST_CASE(control_protocol_contracts),
     LAYERC_TEST_CASE(control_dispatch_contracts),
-    LAYERC_TEST_CASE(control_socket_contracts))
+    LAYERC_TEST_CASE(control_socket_contracts),
+    LAYERC_TEST_CASE(control_response_acceptance_contracts),
+    LAYERC_TEST_CASE(control_response_backpressure_contracts),
+    LAYERC_TEST_CASE(control_server_identity_contracts))

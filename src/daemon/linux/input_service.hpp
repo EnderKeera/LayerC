@@ -107,7 +107,8 @@ private:
 class X11SessionRegistry {
 public:
   // Load one configuration revision, including optional module sidecars and
-  // persistent state. Window rematches reuse this snapshot without disk I/O.
+  // state for explicit clean-runtime reloads. Retained window matches reuse
+  // configuration; fresh automation admissions reload transactional state.
   void configure(std::span<const layerc::platform::StoredProfile> profiles);
   // Rebuilds sessions from configured profiles that resolve in the scan. A
   // global profile follows the active window; an unmatched profile has none.
@@ -179,9 +180,10 @@ public:
   // The display outlives the service; the shared connection owner keeps it.
   void attach(layerc::platform::X11Display &display) noexcept;
 
-  // Drains the X connection and feeds every normalized event to the
-  // sessions. Unknown events are discarded so the socket cannot busy-poll.
-  [[nodiscard]] X11Dispatch dispatch();
+  // The shared dispatcher observes discovery before decoding passive input,
+  // so neither consumer drains events unseen by the other.
+  [[nodiscard]] X11Dispatch dispatch(
+      layerc::platform::X11WindowTracker *tracker = nullptr);
 
   [[nodiscard]] bool attached() const noexcept {
     return source_.has_value();

@@ -197,6 +197,72 @@ void ewmh_scan_and_fallback() {
 
 }
 
+void window_change_notifications() {
+  using layerc::test::expect;
+  auto publisher = open_display();
+  EwmhFixture fixture(publisher);
+  auto display = open_display();
+  X11WindowTracker tracker(display);
+  (void)tracker.scan();
+  (void)tracker.poll_changes();
+  auto sync = [&] {
+    XSync(fixture.raw, False);
+    XSync(display.raw(), False);
+  };
+
+  const char renamed[] = "Now Matchable";
+  set_window_property(fixture.raw, fixture.client, "_NET_WM_NAME",
+                      XInternAtom(fixture.raw, "UTF8_STRING", False), 8,
+                      renamed, static_cast<int>(std::strlen(renamed)));
+  sync();
+  expect(tracker.poll_changes(), "client-only title mutation wakes discovery");
+  const auto renamed_scan = tracker.scan();
+  layerc::core::GameMatch match;
+  match.window_title = renamed;
+  expect(layerc::platform::match_window(renamed_scan, match) != nullptr,
+         "the awakened scan admits a newly matching title");
+
+  XMoveResizeWindow(fixture.raw, fixture.client, 45, 65, 220, 160);
+  sync();
+  expect(tracker.poll_changes(), "client-only geometry mutation wakes discovery");
+  const auto moved = tracker.find(fixture.client);
+  expect(moved && moved->x == 45 && moved->y == 65 && moved->width == 220 &&
+             moved->height == 160,
+         "the awakened scan updates overlay anchoring geometry");
+
+  XClassHint hint{const_cast<char *>("changed"), const_cast<char *>("ChangedClass")};
+  XSetClassHint(fixture.raw, fixture.client, &hint);
+  sync();
+  expect(tracker.poll_changes(), "client-only WM_CLASS mutation wakes discovery");
+  const unsigned long missing_pid = 4000000;
+  set_window_property(fixture.raw, fixture.client, "_NET_WM_PID", XA_CARDINAL,
+                      32, &missing_pid, 1);
+  sync();
+  expect(tracker.poll_changes(), "client-only PID mutation wakes discovery");
+
+  XDeleteProperty(fixture.raw, fixture.root,
+                  XInternAtom(fixture.raw, "_NET_CLIENT_LIST", False));
+  sync();
+  (void)tracker.poll_changes();
+  (void)tracker.scan();
+  const auto child = XCreateSimpleWindow(fixture.raw, fixture.root, 5, 5, 40, 40,
+                                         0, 0, 0);
+  XMapWindow(fixture.raw, child);
+  sync();
+  expect(tracker.poll_changes(), "fallback creation/map wakes discovery without root properties");
+  expect(tracker.find(child).has_value(), "fallback admits the new mapped child");
+  (void)tracker.poll_changes();
+  XUnmapWindow(fixture.raw, child);
+  sync();
+  expect(tracker.poll_changes(), "fallback unmap wakes discovery");
+  expect(!tracker.find(child), "unmapped fallback child is no longer admitted");
+  (void)tracker.poll_changes();
+  XDestroyWindow(fixture.raw, child);
+  sync();
+  expect(tracker.poll_changes(), "fallback destruction wakes discovery");
+  expect(!tracker.poll_changes(), "an unchanged tracker has no periodic rescan hint");
+}
+
 void proc_resolution() {
   using layerc::test::expect;
   // --- /proc resolution ---------------------------------------------------
@@ -276,5 +342,6 @@ void window_matching() {
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(probe_extensions),
                  LAYERC_TEST_CASE(error_traps),
                  LAYERC_TEST_CASE(ewmh_scan_and_fallback),
+                 LAYERC_TEST_CASE(window_change_notifications),
                  LAYERC_TEST_CASE(proc_resolution),
                  LAYERC_TEST_CASE(window_matching))

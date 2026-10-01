@@ -294,6 +294,18 @@ std::string X11Display::atom_name(std::uint64_t atom) const {
   return result;
 }
 
+void X11Display::dispatch_events(
+    _XDisplay *display, const std::function<void(_XEvent &)> &observer) {
+  if (display == nullptr || !observer) return;
+  X11ErrorTrap trap{display};
+  while (XPending(display) > 0) {
+    XEvent event{};
+    XNextEvent(display, &event);
+    if (!trap.ok()) break;
+    observer(event);
+  }
+}
+
 int X11Display::pending_events() noexcept {
   if (display_ == nullptr) return 0;
   auto *raw = reinterpret_cast<Display *>(display_);
