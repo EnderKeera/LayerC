@@ -25,6 +25,10 @@ using namespace std::chrono_literals;
 
 using expr::binary;
 using expr::literal;
+
+// Functional fixtures must not depend on the CI host's scheduling latency;
+// the deadline tests below use their own controlled clocks.
+constexpr auto frozen_clock = [] { return TimePoint{}; };
 AutomationExpression unary(std::string operation,
                            AutomationExpression argument) {
   return {.kind = ExpressionKind::unary,
@@ -86,7 +90,7 @@ std::optional<AutomationValue> evaluate(AutomationExpression expression,
   if (!validate_automation_profile(profile, contract_base()).message.empty())
     return std::nullopt;
   // Operator contracts must not depend on the CI host's scheduling latency.
-  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime runtime(profile, {}, {}, frozen_clock);
   const auto result = runtime.process(event);
   if (!result.committed)
     return std::nullopt;
@@ -120,7 +124,7 @@ void test_automation_expression_and_action_contract() {
            "cooldown validation must reject effects from other domains");
     AutomationProfile graph;
     graph.profile_id = base.id;
-    AutomationRuntime runtime(graph);
+    AutomationRuntime runtime(graph, {}, {}, frozen_clock);
     expect(!next_automation_deadline(runtime, {}).has_value(),
            "idle automation must have no deadline");
     const std::array states{CooldownState{.next_charge_at = TimePoint{} + 100ms}};
@@ -136,7 +140,7 @@ void test_automation_expression_and_action_contract() {
           .target = "main", .name = "temporary", .property = "visible",
           .value = literal(AutomationValue(false)),
           .secondary = literal(AutomationValue(DurationValue{25ms}))}}}}}};
-    AutomationRuntime overlay_runtime(graph);
+    AutomationRuntime overlay_runtime(graph, {}, {}, frozen_clock);
     expect(overlay_runtime.process({.kind = AutomationEventKind::session_started}).committed,
            "overlay expiry fixture should commit");
     expect(next_automation_deadline(overlay_runtime, states) == TimePoint{} + 25ms,
@@ -343,7 +347,7 @@ void test_automation_expression_and_action_contract() {
   expect(validate_automation_profile(action_profile, contract_base())
              .message.empty(),
          "the complete internal action fixture should validate");
-  AutomationRuntime action_runtime(action_profile);
+  AutomationRuntime action_runtime(action_profile, {}, {}, frozen_clock);
   const auto started =
       action_runtime.process({.kind = AutomationEventKind::session_started,
                               .timestamp = TimePoint{},
@@ -391,7 +395,7 @@ void test_automation_expression_and_action_contract() {
                     .repeating = true}};
     rearm_profile.automations = {
         {.id = "clock", .name = "Clock", .rules = {arm}}};
-    AutomationRuntime rearm(rearm_profile);
+    AutomationRuntime rearm(rearm_profile, {}, {}, frozen_clock);
     (void)rearm.process({.kind = AutomationEventKind::session_started,
                          .timestamp = TimePoint{},
                          .origin_token = 1});
@@ -438,7 +442,8 @@ void test_automation_expression_and_action_contract() {
   expect(validate_automation_profile(external, contract_base()).message.empty(),
          "every cooldown/group action kind should validate");
   AutomationRuntime external_runtime(external, {},
-                                     contract_base().cooldown_groups);
+                                     contract_base().cooldown_groups,
+                                     frozen_clock);
   const auto effects =
       external_runtime.process({.kind = AutomationEventKind::input_pressed,
                                 .timestamp = TimePoint{},
@@ -478,7 +483,7 @@ void test_automation_timer_commit_rollback() {
       expect(validate_automation_profile(profile, contract_base())
                  .message.empty(),
              "timer rollback fixture should validate");
-      AutomationRuntime runtime(profile);
+      AutomationRuntime runtime(profile, {}, {}, frozen_clock);
       const auto armed = runtime.process(
           {.kind = AutomationEventKind::session_started});
       expect(armed.committed,
@@ -553,7 +558,7 @@ void test_automation_timer_commit_rollback() {
   expect(validate_automation_profile(full, contract_base()).message.empty(),
          "full timer fixture should validate");
   // Capacity is a functional boundary, not an execution-time benchmark.
-  AutomationRuntime runtime(full, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime runtime(full, {}, {}, frozen_clock);
   const auto armed = runtime.process(
       {.kind = AutomationEventKind::session_started});
   expect(armed.committed, "the timer capacity fixture should arm all timers");
@@ -683,7 +688,7 @@ void test_automation_limits_and_fault_rollback() {
   timer_profile.automations = {
       {.id = "timers", .name = "Timers", .rules = {fill, overflow}}};
   AutomationRuntime timer_runtime(timer_profile, {}, {},
-                                  [] { return TimePoint{}; });
+                                  frozen_clock);
   expect(timer_runtime
                  .process({.kind = AutomationEventKind::session_started,
                            .timestamp = TimePoint{},
@@ -734,7 +739,7 @@ void test_automation_limits_and_fault_rollback() {
                       {.kind = AutomationActionKind::set_variable,
                        .target = "healthy",
                        .value = literal(AutomationValue(std::int64_t{1}))}}}}}};
-  AutomationRuntime rollback_runtime(rollback);
+  AutomationRuntime rollback_runtime(rollback, {}, {}, frozen_clock);
   const auto isolated =
       rollback_runtime.process({.kind = AutomationEventKind::session_started,
                                 .timestamp = TimePoint{},
@@ -768,7 +773,7 @@ void test_automation_limits_and_fault_rollback() {
                              literal(AutomationValue(
                                  std::numeric_limits<std::int64_t>::max())),
                              literal(AutomationValue(std::int64_t{1})))}}}}});
-  AutomationRuntime math_runtime(overflow_math);
+  AutomationRuntime math_runtime(overflow_math, {}, {}, frozen_clock);
   const auto math_result =
       math_runtime.process({.kind = AutomationEventKind::session_started,
                             .timestamp = TimePoint{},
@@ -789,7 +794,8 @@ void test_automation_limits_and_fault_rollback() {
   }
 
   auto reconfigured = rollback;
-  AutomationRuntime group_runtime(reconfigured, {}, base.cooldown_groups);
+  AutomationRuntime group_runtime(reconfigured, {}, base.cooldown_groups,
+                                  frozen_clock);
   auto changed_groups = base.cooldown_groups;
   changed_groups.front().cooldown_ids = {"dash", "roll"};
   group_runtime.reconfigure(reconfigured, changed_groups);

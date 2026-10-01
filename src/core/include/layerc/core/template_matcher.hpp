@@ -39,6 +39,9 @@ struct TemplateMatchResult {
   double confidence{};
   std::string reference_sha256;
   std::size_t candidates_evaluated{};
+  // Candidates that reached a final confidence score. Zero means no evidence
+  // exists, which is distinct from a candidate that scored zero.
+  std::size_t candidates_scored{};
   std::size_t pixel_comparisons{};
 };
 
