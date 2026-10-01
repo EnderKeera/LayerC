@@ -384,6 +384,8 @@ TemplateImageResult load_template_asset(const std::string_view sha256_value) {
                                       sha256_value, decode_png);
 }
 
+namespace {
+
 VisualAssetGcReport garbage_collect_visual_assets(
     const std::span<const std::string> referenced_sha256) {
   VisualAssetGcReport report;
@@ -445,17 +447,33 @@ VisualAssetGcReport garbage_collect_visual_assets(
   return report;
 }
 
+} // namespace
+
 VisualAssetGcReport garbage_collect_unreferenced_visual_assets() {
   VisualAssetGcReport report;
-  std::vector<std::string> references;
-  // Follow the same base-profile and primary/backup sidecar recovery rules as
-  // LayerD. A corrupt stale backup cannot block collection when its primary
-  // is valid, while an invalid active bundle still aborts before deletion.
-  if (!collect_active_asset_references(references, report)) return report;
-  std::ranges::sort(references);
-  const auto unique = std::ranges::unique(references);
-  references.erase(unique.begin(), unique.end());
-  return garbage_collect_visual_assets(references);
+  const auto directory = profile_directory();
+  // Offline maintenance is an empty profile-mutation plan. Reuse the existing
+  // recovered writer boundary so recovery, reference scanning and deletion
+  // cannot interleave with another bundle commit. No profile files are changed.
+  const auto owned = commit_profile_transaction(
+      directory, [&](std::vector<ProfileFileMutation> &) {
+        std::vector<std::string> references;
+        // Keep the same primary/backup sidecar recovery rules as LayerD. An
+        // invalid active bundle aborts before any deletion, while an unusable
+        // stale backup does not conceal an otherwise valid primary.
+        if (collect_active_asset_references(references, report)) {
+          std::ranges::sort(references);
+          const auto unique = std::ranges::unique(references);
+          references.erase(unique.begin(), unique.end());
+          report = garbage_collect_visual_assets(references);
+        }
+        return ProfileWriteResult{};
+      });
+  if (!owned && report.completed()) {
+    report.blocked_by = directory;
+    report.fault = profile_write_error_text(*owned.error());
+  }
+  return report;
 }
 
 } // namespace layerc::platform

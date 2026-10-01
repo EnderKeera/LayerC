@@ -437,6 +437,7 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(live::profile_planning_after_recovery),
       LAYERC_TEST_CASE(hid_sampling),
       LAYERC_TEST_CASE(live::platform_visual_assets),
+      LAYERC_TEST_CASE(live::platform_visual_asset_writer_ownership),
       LAYERC_TEST_CASE(live::platform_sibling_authentication),
       LAYERC_TEST_CASE(live::platform_profile_writes),
       LAYERC_TEST_CASE(live::platform_visual_sidecar_recovery),
