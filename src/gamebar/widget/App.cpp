@@ -16,12 +16,12 @@ constexpr std::wstring_view settings_extension = L"Settings";
 App::App() {
   InitializeComponent();
   Suspending([weak = get_weak()](const auto &, const auto &) {
-    if (const auto self = weak.get()) {
-      self->widgets_.clear();
-      self->close_tokens_.clear();
-    }
+    if (const auto self = weak.get())
+      self->clear_widgets();
   });
 }
+
+App::~App() { clear_widgets(); }
 
 void App::OnActivated(
     Windows::ApplicationModel::Activation::IActivatedEventArgs const &args) {
@@ -51,21 +51,32 @@ void App::OnActivated(
   Window::Current().Content(frame);
   Microsoft::Gaming::XboxGameBar::XboxGameBarWidget widget(
       widget_args, Window::Current().CoreWindow(), frame);
-  widgets_.insert_or_assign(extension_id, widget);
+  auto window = std::make_shared<WidgetWindow>();
+  window->frame = frame;
+  window->widget = widget;
+  window->dispatcher = Window::Current().Dispatcher();
 
   if (is_panel_extension(extension_id)) {
     frame.Navigate(xaml_typename<LayerC::GameBar::PanelWidgetPage>(), widget);
   } else {
-    frame.Navigate(xaml_typename<LayerC::GameBar::SettingsWidgetPage>(),
-                   widget);
+    frame.Navigate(xaml_typename<LayerC::GameBar::SettingsWidgetPage>(), widget);
   }
 
-  close_tokens_.insert_or_assign(
-      extension_id, Window::Current().Closed([weak = get_weak(), extension_id](
-                                                 const auto &, const auto &) {
+  window->closed = Window::Current().Closed(
+      auto_revoke, [weak = get_weak(), extension_id,
+                    owner = std::weak_ptr<WidgetWindow>(window)](const auto &,
+                                                                const auto &) {
         if (const auto self = weak.get())
-          self->close_widget(extension_id);
-      }));
+          self->close_widget(extension_id, owner.lock());
+      });
+  std::shared_ptr<WidgetWindow> retired;
+  {
+    std::lock_guard lock(widgets_mutex_);
+    auto &current = widgets_[extension_id];
+    retired = std::exchange(current, std::move(window));
+  }
+  if (retired)
+    retired->close();
   Window::Current().Activate();
 }
 
@@ -89,91 +100,52 @@ void App::OnBackgroundActivated(
       details.CallerPackageFamilyName() != Package::Current().Id().FamilyName())
     return;
 
-  complete_service();
-  service_deferral_ = args.TaskInstance().GetDeferral();
-  app_service_ = details.AppServiceConnection();
-  service_request_token_ =
-      app_service_.RequestReceived({this, &App::service_request_received});
-  service_closed_token_ =
-      app_service_.ServiceClosed({this, &App::service_closed});
-  service_canceled_token_ =
-      args.TaskInstance().Canceled({this, &App::service_canceled});
-  layerc::gamebar::widget::SnapshotHub::instance().set_app_service(
-      app_service_);
+  layerc::gamebar::widget::SnapshotHub::instance().connect(
+      args.TaskInstance(), details.AppServiceConnection());
 }
 
-void App::close_widget(std::wstring const &extension_id) {
-  const auto token = close_tokens_.find(extension_id);
-  if (token != close_tokens_.end()) {
-    Windows::UI::Xaml::Window::Current().Closed(token->second);
-    close_tokens_.erase(token);
+void App::WidgetWindow::close() noexcept {
+  closed.revoke();
+  try {
+    if (dispatcher.HasThreadAccess())
+      frame.Content(nullptr);
+    else
+      (void)dispatcher.RunAsync(Windows::UI::Core::CoreDispatcherPriority::Normal,
+                                [frame = frame] { frame.Content(nullptr); });
+  } catch (...) {
   }
-  widgets_.erase(extension_id);
+}
+
+void App::close_widget(std::wstring const &extension_id,
+                       const std::shared_ptr<WidgetWindow> &owner) {
+  std::shared_ptr<WidgetWindow> retired;
+  {
+    std::lock_guard lock(widgets_mutex_);
+    const auto found = widgets_.find(extension_id);
+    if (found == widgets_.end() || found->second != owner)
+      return;
+    retired = std::move(found->second);
+    widgets_.erase(found);
+  }
+  retired->close();
+}
+
+void App::clear_widgets() noexcept {
+  decltype(widgets_) retired;
+  {
+    std::lock_guard lock(widgets_mutex_);
+    retired.swap(widgets_);
+  }
+  for (const auto &[id, window] : retired) {
+    (void)id;
+    window->close();
+  }
 }
 
 void App::navigation_failed(
     Windows::Foundation::IInspectable const &,
     Windows::UI::Xaml::Navigation::NavigationFailedEventArgs const &args) {
   throw hresult_error(E_FAIL, L"Failed to load " + args.SourcePageType().Name);
-}
-
-fire_and_forget App::service_request_received(
-    Windows::ApplicationModel::AppService::AppServiceConnection const &,
-    Windows::ApplicationModel::AppService::
-        AppServiceRequestReceivedEventArgs const &args) {
-  auto lifetime = get_strong();
-  const auto deferral = args.GetDeferral();
-  Windows::Foundation::Collections::ValueSet response;
-  bool accepted{};
-  std::string error;
-  try {
-    const auto message = args.Request().Message();
-    const auto kind =
-        winrt::unbox_value_or<hstring>(message.TryLookup(L"kind"), L"");
-    const auto payload =
-        winrt::unbox_value_or<hstring>(message.TryLookup(L"json"), L"");
-    if (kind != L"snapshot") {
-      error = "unsupported companion message";
-    } else {
-      const auto utf8 = winrt::to_string(payload);
-      if (utf8.size() > layerc::core::max_companion_snapshot_bytes)
-        error = "companion snapshot exceeds bounded message size";
-      else
-        accepted = layerc::gamebar::widget::SnapshotHub::instance()
-                       .accept_snapshot_json(utf8, error);
-    }
-    response.Insert(L"accepted", winrt::box_value(accepted));
-    if (!error.empty())
-      response.Insert(L"error", winrt::box_value(winrt::to_hstring(error)));
-    co_await args.Request().SendResponseAsync(response);
-  } catch (...) {
-  }
-  deferral.Complete();
-}
-
-void App::service_closed(
-    Windows::ApplicationModel::AppService::AppServiceConnection const &,
-    Windows::ApplicationModel::AppService::AppServiceClosedEventArgs const &) {
-  complete_service();
-}
-
-void App::service_canceled(
-    Windows::ApplicationModel::Background::IBackgroundTaskInstance const &,
-    Windows::ApplicationModel::Background::BackgroundTaskCancellationReason) {
-  complete_service();
-}
-
-void App::complete_service() noexcept {
-  layerc::gamebar::widget::SnapshotHub::instance().clear_app_service();
-  if (app_service_ != nullptr) {
-    app_service_.RequestReceived(service_request_token_);
-    app_service_.ServiceClosed(service_closed_token_);
-    app_service_ = nullptr;
-  }
-  if (service_deferral_ != nullptr) {
-    service_deferral_.Complete();
-    service_deferral_ = nullptr;
-  }
 }
 
 } // namespace winrt::LayerC::GameBar::implementation

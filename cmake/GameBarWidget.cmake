@@ -94,6 +94,8 @@ else()
         src/gamebar/widget/SettingsWidgetPage.xaml
         src/gamebar/widget/WidgetSnapshotHub.cpp
         src/gamebar/widget/WidgetSnapshotHub.hpp
+        src/gamebar/widget/WidgetSnapshotState.hpp
+        src/gamebar/widget/WidgetServiceSession.hpp
         src/gamebar/widget/pch.cpp
         src/gamebar/widget/pch.h
         src/gamebar/widget/packages.config

@@ -23,10 +23,19 @@ hstring remaining_text(const layerc::core::CompanionSnapshotItem &item) {
 
 } // namespace
 
-PanelWidgetPage::PanelWidgetPage() { InitializeComponent(); }
+PanelWidgetPage::PanelWidgetPage() {
+  InitializeComponent();
+  unloaded_ = Unloaded(auto_revoke, [weak = get_weak()](const auto &, const auto &) {
+    if (const auto self = weak.get())
+      self->cleanup();
+  });
+}
+
+PanelWidgetPage::~PanelWidgetPage() { cleanup(); }
 
 void PanelWidgetPage::OnNavigatedTo(
     Windows::UI::Xaml::Navigation::NavigationEventArgs const &args) {
+  cleanup();
   widget_ = args.Parameter()
                 .try_as<Microsoft::Gaming::XboxGameBar::XboxGameBarWidget>();
   if (widget_ == nullptr)
@@ -40,12 +49,20 @@ void PanelWidgetPage::OnNavigatedTo(
     if (const auto self = weak.get())
       self->apply_presentation();
   };
-  settings_token_ =
-      widget_.SettingsClicked({this, &PanelWidgetPage::open_settings});
-  theme_token_ = widget_.RequestedThemeChanged(refresh);
-  opacity_token_ = widget_.RequestedOpacityChanged(refresh);
-  compact_token_ = widget_.CompactModeEnabledChanged(refresh);
-  click_through_token_ = widget_.ClickThroughEnabledChanged(refresh);
+  settings_ = widget_.SettingsClicked(
+      auto_revoke, [weak = get_weak()](const auto &sender, const auto &args) {
+        if (const auto self = weak.get(); self && self->widget_ != nullptr)
+          self->open_settings(sender, args);
+      });
+  theme_ = widget_.RequestedThemeChanged(auto_revoke, refresh);
+  opacity_ = widget_.RequestedOpacityChanged(auto_revoke, refresh);
+  compact_ = widget_.CompactModeEnabledChanged(auto_revoke, refresh);
+  click_through_ = widget_.ClickThroughEnabledChanged(auto_revoke, refresh);
+  closed_ = Windows::UI::Xaml::Window::Current().Closed(
+      auto_revoke, [weak = get_weak()](const auto &, const auto &) {
+        if (const auto self = weak.get())
+          self->cleanup();
+      });
 
   subscription_ = layerc::gamebar::widget::subscribe_on_dispatcher(
       Dispatcher(), get_weak(), [](const auto &self, auto snapshot) {
@@ -56,18 +73,19 @@ void PanelWidgetPage::OnNavigatedTo(
 
 void PanelWidgetPage::OnNavigatedFrom(
     Windows::UI::Xaml::Navigation::NavigationEventArgs const &) {
-  if (subscription_ != 0) {
-    layerc::gamebar::widget::SnapshotHub::instance().unsubscribe(subscription_);
-    subscription_ = 0;
-  }
-  if (widget_ != nullptr) {
-    widget_.SettingsClicked(settings_token_);
-    widget_.RequestedThemeChanged(theme_token_);
-    widget_.RequestedOpacityChanged(opacity_token_);
-    widget_.CompactModeEnabledChanged(compact_token_);
-    widget_.ClickThroughEnabledChanged(click_through_token_);
-  }
+  cleanup();
+}
+
+void PanelWidgetPage::cleanup() noexcept {
+  subscription_.reset();
+  closed_.revoke();
+  settings_.revoke();
+  theme_.revoke();
+  opacity_.revoke();
+  compact_.revoke();
+  click_through_.revoke();
   widget_ = nullptr;
+  snapshot_.reset();
 }
 
 void PanelWidgetPage::render(
