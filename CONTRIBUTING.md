@@ -104,6 +104,13 @@ disposable profiles (`LAYERC_PROFILE_DIR`) and a disposable
 both removed afterwards; they never read or write the user's
 `HKCU\Software\LayerC`.
 
+The V2.3 automation resource gate measures baseline, activation, and disable
+within one owned daemon PID. Its disposable sidecar is absent at baseline,
+installed for activation, and removed before the supported profile reload on
+disable. Recovery is sampled only after observing the active event's reset on
+the retained handle; a restart is not teardown evidence. Evaluator thresholds
+in the result come from the measured executable, including Debug/Release limits.
+
 To reproduce the hardware benchmarks for a CI run:
 
 ```powershell

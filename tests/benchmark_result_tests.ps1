@@ -126,3 +126,5 @@ if ($IsWindows) {
     }
     Write-Output 'Benchmark settings sandbox passed.'
 }
+
+& (Join-Path $PSScriptRoot 'automation_benchmark_tests.ps1')
