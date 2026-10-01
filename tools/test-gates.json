@@ -1,0 +1,58 @@
+{
+  "gates": {
+    "windows": {
+      "description": "Every Windows CI and manual self-hosted CTest run (ci and vs2026 presets).",
+      "label": "required",
+      "required": [
+        "layerc_automation_benchmark",
+        "layerc_benchmark_result_tests",
+        "layerc_bundle_tests",
+        "layerc_calibration_tests",
+        "layerc_capture_tests",
+        "layerc_companion_tests",
+        "layerc_core_tests",
+        "layerc_daemon_runtime_tests",
+        "layerc_editor_tests",
+        "layerc_isolated_visual_tests",
+        "layerc_launcher_tests",
+        "layerc_launcher_win_tests",
+        "layerc_overlay_tests",
+        "layerc_platform_tests",
+        "layerc_runtime_tests"
+      ],
+      "allowSkip": {
+        "layerc_overlay_tests": "the runner cannot create an isolated desktop; unavailable interactive coverage, not a pass"
+      }
+    },
+    "linux-headless": {
+      "description": "Display-free Linux suites (tools/run-linux-tests.sh, CTest label headless).",
+      "label": "headless",
+      "required": [
+        "layerc_automation_benchmark",
+        "layerc_capture_tests",
+        "layerc_core_tests",
+        "layerc_launcher_tests",
+        "layerc_linux_control_channel_tests",
+        "layerc_linux_event_loop_tests",
+        "layerc_linux_profile_pack_tests",
+        "layerc_linux_profile_store_tests",
+        "layerc_linux_x11_registry_tests",
+        "layerc_runtime_tests"
+      ],
+      "optional": {
+        "layerc_benchmark_result_tests": "registered only where pwsh is installed; PowerShell is not a Linux build dependency"
+      }
+    },
+    "linux-x11": {
+      "description": "Linux suites that need an X display (Xvfb in CI, CTest label x11).",
+      "label": "x11",
+      "required": [
+        "layerc_linux_x11_capture_tests",
+        "layerc_linux_x11_input_tests",
+        "layerc_linux_x11_overlay_tests",
+        "layerc_linux_x11_tests",
+        "layerc_linux_x11_visual_tests"
+      ]
+    }
+  }
+}

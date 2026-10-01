@@ -77,9 +77,18 @@ and manual dispatch; a newer push to a pull request cancels its older run.
 | `linux-flatpak` | 25.08 manifest with required daemon/control/X11 smoke under Xvfb (`--flatpak-only`) |
 | `publish-rolling` | `main` pushes only; needs all five jobs above and publishes the `rolling` prerelease |
 
-CTest fails on empty runs, missing required suites, and unexpected skips. The
-only allowed skip is `layerc_overlay_tests` when the runner cannot create an
-isolated desktop; report it as unavailable interactive coverage, not a pass.
+Every CTest gate (`windows-msvc`, `windows-selfhosted.yml`, and the Linux
+`headless` and `x11` stages) is validated by
+[`tools/linux_test_report.py`](tools/linux_test_report.py) against the suites
+that [`tools/test-gates.json`](tools/test-gates.json) names for it, not against
+whatever happened to be registered. A gate fails on empty runs, a required
+suite that is unregistered, unlabelled, or did not run, a labelled suite the
+policy does not list, and skips the policy does not name. Adding or removing a
+suite therefore updates the policy in the same change. The only allowed skip is
+`layerc_overlay_tests` when the runner cannot create an isolated desktop;
+report it as unavailable interactive coverage, not a pass. The only optional
+suite is `layerc_benchmark_result_tests` on Linux, which registers only where
+`pwsh` is installed.
 [`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
 same setup and `build-package` actions, so benchmark gating cannot drift.
 Releases and `rolling` ship only the Windows x64 ZIP.

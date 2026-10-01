@@ -207,6 +207,10 @@ disposable workers and performs the following:
   display;
 - runs the five required X11 tracking, input, overlay, capture, and visual
   suites under Xvfb, failing if one is absent or skipped;
+- validates both stages against the `linux-headless` and `linux-x11` suite
+  lists in `tools/test-gates.json`, so a suite that is not registered (for
+  example because a dependency such as `libxtst-dev` is missing) fails the
+  gate instead of shrinking it;
 - starts the installed `layerd`, drives installed `layerctl`, and exercises
   installed `layercal` against a controlled Xvfb fixture window using private
   `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_RUNTIME_DIR`;
