@@ -117,7 +117,12 @@ private:
   struct Client {
     layerc::platform::ControlFramer framer;
     layerc::core::TimePoint expires_at;
+    std::string response;
+    std::size_t sent{};
   };
+
+  void flush_response(layerc::platform::EventLoop &loop, int fd,
+                      Client &client, ControlOutcome &outcome);
 
   layerc::platform::ControlListener listener_;
   std::map<int, Client> clients_{};
