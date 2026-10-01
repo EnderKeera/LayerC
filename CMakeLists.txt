@@ -872,6 +872,13 @@ if(LAYERC_BUILD_TESTS)
         TIMEOUT 30 LABELS required headless benchmark)
     set_tests_properties(layerc_automation_benchmark PROPERTIES RUN_SERIAL TRUE)
 
+    add_test(NAME layerc_visual_asset_gc_contract_tests
+        COMMAND ${CMAKE_COMMAND}
+            "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/visual_asset_gc_contracts.cmake")
+    set_tests_properties(layerc_visual_asset_gc_contract_tests PROPERTIES
+        TIMEOUT 30 LABELS "required;headless")
+
     if(WIN32)
         set(layerc_capture_test_link layerc_capture)
     else()
@@ -938,6 +945,7 @@ if(LAYERC_BUILD_TESTS)
         layerc_add_test(layerc_editor_tests
             SOURCES tests/editor_dialog_tests.cpp tests/editor_regression_tests.cpp
                 tests/editor_document_tests.cpp tests/editor_calibration_tests.cpp
+                tests/editor_asset_tests.cpp
                 src/editor/editor_resources.rc
             LINK layerc_editor_ui WIN32 TIMEOUT 30)
         target_include_directories(layerc_editor_tests PRIVATE src/editor)

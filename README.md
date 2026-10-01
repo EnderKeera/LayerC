@@ -258,6 +258,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
 | `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
+| `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |
 
 ### Windows
 
@@ -375,6 +376,14 @@ Windows sidecars use these directories beneath the profile root:
 - `_automation/<id>.json` — declarative automation graphs (schema 1)
 - `_companion/<id>.json` — Game Bar slot mappings and preferences (schema 1)
 - `_state/<id>.json` — persistent automation variables (schema 1)
+
+Windows template images are content-addressed under `_visual/assets/`. Editing,
+profile deletion, and calibration do not automatically reclaim them: undo/redo
+and unapplied calibration can still own images absent from current sidecars.
+Unused images therefore remain on disk. The internal offline-maintenance
+operation requires all interactive owners to be closed and holds recovered
+store writer ownership throughout its reference scan and deletion; it is not an
+interactive cleanup command.
 
 ## Documentation
 
