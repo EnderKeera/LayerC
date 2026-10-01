@@ -122,9 +122,33 @@ function Assert-LayerCQuiescent {
     }
 }
 
+# A sandbox also owns a disposable HKCU settings key, handed to every LayerC
+# process started inside it through LAYERC_SETTINGS_KEY, so benchmarks never
+# read or write the user's HKCU\Software\LayerC.
+function Get-LayerCSandboxSettingsKey {
+    param([Parameter(Mandatory)][string]$TemporaryDirectory)
+    return 'Software\LayerC.Benchmark\' + (Split-Path -Leaf $TemporaryDirectory)
+}
+
 function Enter-LayerCProfileSandbox {
     param([Parameter(Mandatory)][string]$ProfileDirectory)
     [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $ProfileDirectory, 'Process')
+    $key = Get-LayerCSandboxSettingsKey -TemporaryDirectory (Split-Path -Parent $ProfileDirectory)
+    $script:PreviousSettingsKey = [Environment]::GetEnvironmentVariable('LAYERC_SETTINGS_KEY', 'Process')
+    [void](New-Item -Path "HKCU:\$key" -Force)
+    [Environment]::SetEnvironmentVariable('LAYERC_SETTINGS_KEY', $key, 'Process')
+}
+
+function Set-LayerCSandboxSetting {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][int]$Value
+    )
+    $key = [Environment]::GetEnvironmentVariable('LAYERC_SETTINGS_KEY', 'Process')
+    if ($key -notlike 'Software\LayerC.Benchmark\*') {
+        throw 'LayerC settings are written only inside a benchmark sandbox.'
+    }
+    Set-ItemProperty -LiteralPath "HKCU:\$key" -Name $Name -Type DWord -Value $Value
 }
 
 function Exit-LayerCProfileSandbox {
@@ -134,7 +158,21 @@ function Exit-LayerCProfileSandbox {
         [Parameter(Mandatory)][string]$TemporaryDirectory,
         [switch]$KeepTemporary
     )
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $PreviousDirectory, 'Process')
+    # PowerShell passes $null to .NET strings as '', which now sets an empty
+    # variable instead of removing it; [NullString] removes it.
+    foreach ($restore in @(@('LAYERC_PROFILE_DIR', $PreviousDirectory),
+            @('LAYERC_SETTINGS_KEY', $script:PreviousSettingsKey))) {
+        $value = if ($null -eq $restore[1]) { [NullString]::Value } else { [string]$restore[1] }
+        [Environment]::SetEnvironmentVariable($restore[0], $value, 'Process')
+    }
+    $settings = 'HKCU:\' + (Get-LayerCSandboxSettingsKey -TemporaryDirectory $TemporaryDirectory)
+    if (Test-Path -LiteralPath $settings) {
+        Remove-Item -LiteralPath $settings -Recurse -Force
+    }
+    $parent = Split-Path -Parent $settings
+    if ((Test-Path -LiteralPath $parent) -and -not (Get-ChildItem -LiteralPath $parent)) {
+        Remove-Item -LiteralPath $parent -Force
+    }
     if (-not $KeepTemporary -and (Test-Path -LiteralPath $TemporaryDirectory)) {
         Remove-Item -LiteralPath $TemporaryDirectory -Recurse -Force
     }
@@ -425,6 +463,7 @@ function Set-BenchmarkForeground {
 Export-ModuleMember -Function Assert-NativeSuccess, Assert-LayerCExecutables,
     Resolve-LayerCBuildRoot, New-LayerCBenchmarkContext,
     Assert-LayerCQuiescent, Enter-LayerCProfileSandbox, Exit-LayerCProfileSandbox,
+    Set-LayerCSandboxSetting,
     Start-LayerCDaemon, Stop-LayerCBenchmarkProcess, Get-LayerCPackageVersion,
     Get-LayerCCommitSha, Write-LayerCBuildIdentity, Get-LayerCBuildIdentity,
     Assert-LayerCBuildIdentity, New-LayerCHardwareBenchmarkArguments,

@@ -98,7 +98,11 @@ with `run.cmd` under a signed-in user with autostart, never as a service,
 because visual capture needs the real screen. Keep it quiescent: CI fails,
 listing PIDs, when `layerd` or `layere` is running and never kills them. CI
 writes only inside `GITHUB_WORKSPACE`; syncing the rolling install locally is
-the manual `tools/pull-ci.ps1` step.
+the manual `tools/pull-ci.ps1` step. Benchmarks run their daemons with
+disposable profiles (`LAYERC_PROFILE_DIR`) and a disposable
+`HKCU\Software\LayerC.Benchmark\<run>` settings key (`LAYERC_SETTINGS_KEY`),
+both removed afterwards; they never read or write the user's
+`HKCU\Software\LayerC`.
 
 To reproduce the hardware benchmarks for a CI run:
 

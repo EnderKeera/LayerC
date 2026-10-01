@@ -3,6 +3,7 @@
 #include "layerc/platform/framed_pipe.hpp"
 #include "layerc/platform/hid_device.hpp"
 #include "layerc/platform/live_channel.hpp"
+#include "layerc/platform/settings_store.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "platform_live_scenarios.hpp"
 #include "test_support.hpp"
@@ -418,6 +419,41 @@ void window_matcher_policy() {
          "title-only matching");
 }
 
+// Runs entirely in a disposable HKCU key; the user's Software\LayerC is never
+// read or written. The read check runs first, so a broken override fails
+// before the write could reach the user's key.
+void settings_key_override() {
+  const std::wstring parent = L"Software\\LayerC.Test";
+  const std::wstring key = parent + L"\\settings-" +
+                           std::to_wstring(GetCurrentProcessId()) + L"-" +
+                           std::to_wstring(GetTickCount64());
+  constexpr DWORD probe = 0x5e771e;
+  expect(RegSetKeyValueW(HKEY_CURRENT_USER, key.c_str(), L"OverrideProbe",
+                         REG_DWORD, &probe, sizeof(probe)) == ERROR_SUCCESS,
+         "disposable settings key should be created");
+  expect(SetEnvironmentVariableW(L"LAYERC_SETTINGS_KEY", key.c_str()) != FALSE,
+         "settings override should be set");
+  const auto read =
+      layerc::platform::read_layerc_registry_dword(L"OverrideProbe");
+  const bool redirected = read.value == probe;
+  expect(redirected, "settings reads should come from LAYERC_SETTINGS_KEY");
+  if (redirected) {
+    expect(static_cast<bool>(layerc::platform::write_bool_setting(
+               layerc::platform::BoolSetting::visual_recognition, true)),
+           "redirected settings write should succeed");
+    DWORD stored{};
+    DWORD size = sizeof(stored);
+    expect(RegGetValueW(HKEY_CURRENT_USER, key.c_str(),
+                        L"VisualRecognitionEnabled", RRF_RT_REG_DWORD, nullptr,
+                        &stored, &size) == ERROR_SUCCESS &&
+               stored == 1,
+           "settings writes should land in LAYERC_SETTINGS_KEY");
+  }
+  SetEnvironmentVariableW(L"LAYERC_SETTINGS_KEY", nullptr);
+  RegDeleteTreeW(HKEY_CURRENT_USER, key.c_str());
+  RegDeleteKeyW(HKEY_CURRENT_USER, parent.c_str()); // only when now empty
+}
+
 } // namespace
 
 int main(const int argc, char *argv[]) {
@@ -447,6 +483,7 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(framed_calibration_pipe),
       LAYERC_TEST_CASE(live::platform_relative_profile_write),
       LAYERC_TEST_CASE(window_matcher_policy),
+      LAYERC_TEST_CASE(settings_key_override),
       LAYERC_TEST_CASE(live::platform_corrupt_profile_recovery),
       LAYERC_TEST_CASE(bounded_helper_failure),
       LAYERC_TEST_CASE(pipe_server_spoof),

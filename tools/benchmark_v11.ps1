@@ -370,27 +370,15 @@ function Measure-LayerProcesses(
 }
 
 $oldProfileDirectory = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR', 'Process')
-$settingsRegistryPath = 'HKCU:\Software\LayerC'
-$visualSettingName = 'VisualRecognitionEnabled'
-$visualSettingWasPresent = $false
-$visualSettingTouched = $false
-$oldVisualSetting = $null
 $game = $null
 $daemon = $null
 $helper = $null
 $captureEvent = $null
 $templateMatchVerified = $Workload -ne 'v21-template'
 try {
-    try {
-        $oldVisualSetting = (Get-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -ErrorAction Stop).$visualSettingName
-        $visualSettingWasPresent = $true
-    } catch {
-        $visualSettingWasPresent = $false
-    }
-    [void](New-Item -Path $settingsRegistryPath -Force)
-    Set-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -Type DWord -Value 1
-    $visualSettingTouched = $true
+    # The daemon reads visual recognition from the sandbox's own settings key.
     Enter-LayerCProfileSandbox -ProfileDirectory $profileDirectory
+    Set-LayerCSandboxSetting -Name 'VisualRecognitionEnabled' -Value 1
     $game = Start-Process -FilePath (Join-Path $BuildDirectory 'lctest.exe') -PassThru
     for ($attempt = 0; $attempt -lt 40; ++$attempt) {
         Start-Sleep -Milliseconds 100
@@ -601,13 +589,6 @@ try {
     if ($null -ne $captureEvent) { $captureEvent.Dispose() }
     Stop-LayerCBenchmarkProcess -Process $daemon
     Stop-LayerCBenchmarkProcess -Process $game
-    if ($visualSettingTouched) {
-        if ($visualSettingWasPresent) {
-            Set-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -Type DWord -Value ([int]$oldVisualSetting) -ErrorAction SilentlyContinue
-        } else {
-            Remove-ItemProperty -LiteralPath $settingsRegistryPath -Name $visualSettingName -ErrorAction SilentlyContinue
-        }
-    }
     Exit-LayerCProfileSandbox -PreviousDirectory $oldProfileDirectory `
         -TemporaryDirectory $temporary
 }

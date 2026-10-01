@@ -97,3 +97,32 @@ if ($bound.CandidateBuildDirectory -ne 'C:\candidate' -or
     throw "Baseline benchmark arguments bound incorrectly: $($bound | Out-String)"
 }
 Write-Output 'Hardware benchmark argument forwarding passed.'
+
+# Benchmarks keep settings in a disposable key and never name the user's.
+$repository = Split-Path -Parent $PSScriptRoot
+$production = Get-ChildItem -Path (Join-Path $repository 'tools') -Include *.ps1, *.psm1 -Recurse |
+    Select-String -Pattern 'HKCU:\\Software\\LayerC([''"\\]|$)'
+if ($production) { throw "Benchmark tooling addresses the user's settings key: $production" }
+if ($IsWindows) {
+    $sandbox = Join-Path ([IO.Path]::GetTempPath()) ('LayerC-sandbox-test-' + [guid]::NewGuid())
+    $previousProfiles = [Environment]::GetEnvironmentVariable('LAYERC_PROFILE_DIR', 'Process')
+    $null = New-Item -ItemType Directory -Path $sandbox
+    Assert-Throws { Set-LayerCSandboxSetting -Name 'VisualRecognitionEnabled' -Value 1 } 'only inside a benchmark sandbox'
+    Enter-LayerCProfileSandbox -ProfileDirectory (Join-Path $sandbox 'profiles')
+    try {
+        $key = [Environment]::GetEnvironmentVariable('LAYERC_SETTINGS_KEY', 'Process')
+        if ($key -ne ('Software\LayerC.Benchmark\' + (Split-Path -Leaf $sandbox))) {
+            throw "Sandbox settings key is wrong: $key"
+        }
+        Set-LayerCSandboxSetting -Name 'VisualRecognitionEnabled' -Value 1
+        $value = (Get-ItemProperty -LiteralPath "HKCU:\$key" -Name 'VisualRecognitionEnabled').VisualRecognitionEnabled
+        if ($value -ne 1) { throw 'Sandbox setting was not written to the sandbox key.' }
+    } finally {
+        Exit-LayerCProfileSandbox -PreviousDirectory $previousProfiles -TemporaryDirectory $sandbox
+    }
+    if (Test-Path -LiteralPath "HKCU:\$key") { throw 'Sandbox settings key outlived the sandbox.' }
+    if ($null -ne [Environment]::GetEnvironmentVariable('LAYERC_SETTINGS_KEY', 'Process')) {
+        throw 'LAYERC_SETTINGS_KEY outlived the sandbox.'
+    }
+    Write-Output 'Benchmark settings sandbox passed.'
+}

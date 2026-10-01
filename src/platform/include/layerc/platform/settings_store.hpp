@@ -42,9 +42,11 @@ enum class BoolSetting : std::uint8_t {
 [[nodiscard]] SettingWriteResult write_bool_setting(BoolSetting setting,
                                                     bool value);
 
-// Registry primitives below share the single HKCU\Software\LayerC root. They
-// are exposed for platform-owned structured settings such as appearance and HID
-// stable slots; product code should use the typed setting functions above.
+// Registry primitives below share the single HKCU\Software\LayerC root (or the
+// HKCU-relative key in LAYERC_SETTINGS_KEY, which benchmarks and tests use to
+// keep the user's settings untouched). They are exposed for platform-owned
+// structured settings such as appearance and HID stable slots; product code
+// should use the typed setting functions above.
 [[nodiscard]] SettingReadResult<std::uint32_t>
 read_layerc_registry_dword(std::wstring_view value_name,
                            std::wstring_view subkey = {});
