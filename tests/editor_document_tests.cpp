@@ -92,9 +92,9 @@ void expect_rejected(ProfileDocument &document, const std::string &dependency) {
              document.history().can_redo() == can_redo,
          "rejected deletion must not mutate the bundle, metadata or history");
 }
-} // namespace
-
-void editor_cooldown_removal_contracts() {
+// Each fixture family is a separate function so /analyze bounds the stack of
+// every case independently (C6262).
+void group_removal_cases() {
   for (const auto mode : {CooldownGroupMode::shared_pool,
                           CooldownGroupMode::trigger_propagation}) {
     auto document = fixture();
@@ -113,7 +113,9 @@ void editor_cooldown_removal_contracts() {
            "preflight must report both group membership and affected-group rules");
     expect_rejected(document, "fixture-group");
   }
+}
 
+void automation_target_cases() {
   for (const auto &spec : automation_action_specs) {
     if (spec.target != ActionTargetRole::cooldown)
       continue;
@@ -125,7 +127,9 @@ void editor_cooldown_removal_contracts() {
     expect_valid(document);
     expect_rejected(document, std::string(spec.wire_name));
   }
+}
 
+void automation_source_cases() {
   {
     auto document = fixture();
     add_rule(document, {.kind = AutomationActionKind::trigger_cooldown,
@@ -163,9 +167,11 @@ void editor_cooldown_removal_contracts() {
     expect_valid(document);
     expect_rejected(document, "ability-bar");
   }
+}
 
+void accepted_removal_case() {
+  auto document = fixture();
   {
-    auto document = fixture();
     add_rule(document, {.kind = AutomationActionKind::set_variable,
                         .target = "ability",
                         .value = expr::literal(AutomationValue(std::int64_t{1}))});
@@ -212,7 +218,9 @@ void editor_cooldown_removal_contracts() {
       }
     }
   }
+}
 
+void invalid_bundle_cases() {
   {
     auto document = fixture();
     document.profile().cooldowns.back().duration = std::chrono::milliseconds(0);
@@ -237,4 +245,14 @@ void editor_cooldown_removal_contracts() {
          .error = {.path = "$", .message = "fixture invalid sidecar"}});
     expect_rejected(document, "sidecar");
   }
+}
+
+} // namespace
+
+void editor_cooldown_removal_contracts() {
+  group_removal_cases();
+  automation_target_cases();
+  automation_source_cases();
+  accepted_removal_case();
+  invalid_bundle_cases();
 }

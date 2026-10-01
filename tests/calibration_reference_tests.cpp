@@ -149,8 +149,10 @@ void calibration_reference_geometry_contracts() {
   const HWND preview = CreateWindowExW(
       0, L"STATIC", L"Disposable calibration selection", WS_POPUP,
       0, 0, 128, 128, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-  if (!expect(preview != nullptr, "the hidden selection fixture must exist"))
+  if (preview == nullptr) {
+    expect(false, "the hidden selection fixture must exist");
     return;
+  }
   Access::redraw(window, preview, {16, 32}, {48, 64});
   DestroyWindow(preview);
   expect_geometry(window, {0.125, 0.25, 0.25, 0.25}, {0.0, 0.125, 0.5, 0.5});
