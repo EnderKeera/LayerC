@@ -273,7 +273,8 @@ endif()
 if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
     add_library(layerc_overlay STATIC
         src/daemon/overlay_window.cpp
-        src/daemon/overlay_render.cpp)
+        src/daemon/overlay_render.cpp
+        src/daemon/overlay_collection.cpp)
     target_include_directories(layerc_overlay PUBLIC src/daemon)
     target_link_libraries(layerc_overlay PUBLIC layerc_core layerc_windows
         PRIVATE user32 gdi32)
@@ -466,7 +467,6 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/daemon_hid.cpp
         src/daemon/hid_resolver.cpp
         src/daemon/daemon_overlays.cpp
-        src/daemon/overlay_collection.cpp
         src/daemon/daemon_live_edit.cpp
         src/daemon/daemon_diagnostics.cpp
         src/daemon/daemon_visual.cpp
@@ -886,7 +886,9 @@ if(LAYERC_BUILD_TESTS)
             WIN32 TIMEOUT 45)
 
         layerc_add_test(layerc_isolated_visual_tests
-            SOURCES tests/isolated_visual_protocol_tests.cpp LINK layerc_isolated
+            SOURCES tests/isolated_visual_protocol_tests.cpp
+                tests/capture_health_diagnostics_tests.cpp
+            LINK layerc_isolated layerc_runtime
             WIN32 TIMEOUT 30)
         target_include_directories(layerc_isolated_visual_tests PRIVATE
             src/daemon)

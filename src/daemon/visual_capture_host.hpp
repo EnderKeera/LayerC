@@ -68,7 +68,9 @@ struct VisualCaptureHostStatus {
   bool quarantined{};
   std::uint32_t fault_count{};
   DWORD helper_process_id{};
+  // Helper/process fault only; capture health does not fault the resident host.
   std::string last_error;
+  layerc::core::CaptureHealth capture_health;
 };
 
 // Presentation-independent roll-up of visual capture health. Format at the

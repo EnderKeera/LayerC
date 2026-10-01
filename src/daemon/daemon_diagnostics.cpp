@@ -1,4 +1,5 @@
 #include "daemon_app.hpp"
+#include "capture_diagnostics.hpp"
 
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_handle.hpp"
@@ -94,11 +95,17 @@ std::string DaemonApp::runtime_diagnostics_json() const {
     });
   }
   diagnostics.helpers.reserve(visual_capture_runtime_.captures.size());
+  diagnostics.captures.reserve(visual_capture_runtime_.captures.size());
   for (const auto &[window, worker] : visual_capture_runtime_.captures) {
-    if (worker == nullptr ||
-        worker->runtime() != layerc::core::VisualRuntime::isolated)
+    if (worker == nullptr)
       continue;
     const auto status = worker->status();
+    append_capture_diagnostics(
+        diagnostics, {.window = reinterpret_cast<std::uintptr_t>(window),
+                      .runtime = worker->runtime(),
+                      .health = status.capture_health});
+    if (worker->runtime() != layerc::core::VisualRuntime::isolated)
+      continue;
     diagnostics.helpers.push_back({
         .window = reinterpret_cast<std::uintptr_t>(window),
         .pid = status.helper_process_id,

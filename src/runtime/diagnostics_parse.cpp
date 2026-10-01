@@ -1,4 +1,5 @@
 #include "layerc/runtime/diagnostics.hpp"
+#include "layerc/core/profile_wire.hpp"
 
 #include <array>
 #include <chrono>
@@ -136,6 +137,27 @@ bool helper(json::Reader &r, const json::Value &root, const std::string &path,
          counter(r, root, "faultCount", path, value.fault_count) &&
          r.string(root, "lastError", path, value.last_error, Required::yes, EmptyString::allow);
 }
+bool capture(json::Reader &r, const json::Value &root, const std::string &path,
+             CaptureDiagnostics &value) {
+  std::string runtime, availability, backend;
+  if (!r.exact_fields(root, {"window", "runtime", "availability", "backend", "diagnostic"}, path) ||
+      !counter(r, root, "window", path, value.window, json::IntegerEncoding::decimal_string) ||
+      !r.string(root, "runtime", path, runtime, Required::yes, EmptyString::reject) ||
+      !r.string(root, "availability", path, availability, Required::yes, EmptyString::reject) ||
+      !r.string(root, "backend", path, backend, Required::yes, EmptyString::reject) ||
+      !r.string(root, "diagnostic", path, value.health.diagnostic, Required::yes, EmptyString::allow))
+    return false;
+  const auto parsed_runtime = core::parse_enum_wire(core::profile_wire::visual_runtime, runtime);
+  const auto parsed_availability = core::parse_enum_wire(core::capture_availability_wire, availability);
+  const auto parsed_backend = core::parse_enum_wire(core::capture_backend_wire, backend);
+  if (!parsed_runtime) return r.fail(path + ".runtime", "unknown visual runtime");
+  if (!parsed_availability) return r.fail(path + ".availability", "unknown capture availability");
+  if (!parsed_backend) return r.fail(path + ".backend", "unknown capture backend");
+  value.runtime = *parsed_runtime;
+  value.health.availability = *parsed_availability;
+  value.health.backend = *parsed_backend;
+  return true;
+}
 template <typename T, typename Read>
 bool array(json::Reader &r, const json::Value &root, const std::string_view key,
            std::vector<T> &output, Read read) {
@@ -178,7 +200,7 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
           *root,
           {"schemaVersion", "packageVersion", "protocolVersion", "process",
            "services", "gameBarTransport", "settings",
-           "aggregateOwnedResources", "sessions", "isolatedHelpers"},
+           "aggregateOwnedResources", "sessions", "isolatedHelpers", "captures"},
           "$") ||
       !r.integer(*root, "schemaVersion", "$", runtime_diagnostics_schema,
                   runtime_diagnostics_schema, Required::yes) ||
@@ -202,6 +224,10 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
       !array(r, *root, "services", result.services, service) ||
       !array(r, *root, "sessions", result.sessions, session) ||
       !array(r, *root, "isolatedHelpers", result.helpers, helper))
+    return r.error();
+  // Older schema-1 producers have no per-window capture diagnostics.
+  if (r.field(*root, "captures", "$", Required::no) &&
+      !array(r, *root, "captures", result.captures, capture))
     return r.error();
   std::array<bool, capability_count> seen{};
   for (std::size_t index{}; index < result.services.size(); ++index) {
