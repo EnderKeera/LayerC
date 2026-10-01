@@ -10,6 +10,7 @@
 namespace layerc::editor {
 
 enum class CalibrationFailureKind {
+  cancelled,
   missing_image,
   channel,
   launch,

@@ -412,7 +412,8 @@ bool EditorWindow::launch_calibration(const HWND target) {
   auto session = run_calibration_session(shell_.window, request);
   if (const auto *failure = std::get_if<CalibrationFailure>(&session)) {
     show_calibration_failure(shell_.window, *failure);
-    return false;
+    // Quit is handled by the outer loop, not by reopening the task picker.
+    return failure->kind == CalibrationFailureKind::cancelled;
   }
   const auto &result = std::get<layerc::core::CalibrationResponse>(session);
   if (result.applied) {
