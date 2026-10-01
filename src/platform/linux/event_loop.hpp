@@ -35,9 +35,9 @@ public:
     return signal_fd_ >= 0 && timer_fd_ >= 0;
   }
 
-  // Extra POLLIN/POLLHUP/POLLERR descriptors reported in ready_fds().
-  // Register and unregister only between poll_once calls.
-  void register_fd(int fd) noexcept;
+  // Extra descriptors reported in ready_fds(), including HUP/ERR. Re-register
+  // to change read/write interest, only between poll_once calls.
+  void register_fd(int fd, short events = POLLIN) noexcept;
   void unregister_fd(int fd) noexcept;
 
   // Arm for an absolute monotonic deadline (a past deadline fires
@@ -62,7 +62,7 @@ private:
   int signal_fd_{-1};
   int timer_fd_{-1};
   std::uint64_t expiries_{};
-  std::vector<int> extra_fds_;
+  std::vector<::pollfd> extra_fds_;
   std::vector<int> ready_fds_;
   std::vector<::pollfd> poll_fds_;
 };

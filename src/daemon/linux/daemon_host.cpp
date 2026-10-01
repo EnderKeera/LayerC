@@ -5,6 +5,7 @@
 
 #include <poll.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -248,7 +249,7 @@ ControlOutcome ControlService::service(
           outcome.diagnostic = "control client limit reached";
         } else {
           clients_.try_emplace(client.fd,
-                               Client{{}, now + control_client_timeout});
+                               Client{{}, now + control_client_timeout, {}, 0});
           loop.register_fd(client.fd);
         }
       }
@@ -256,6 +257,10 @@ ControlOutcome ControlService::service(
     }
     const auto found = clients_.find(fd);
     if (found == clients_.end()) continue;
+    if (!found->second.response.empty()) {
+      flush_response(loop, fd, found->second, outcome);
+      continue;
+    }
     std::array<char, 8192> chunk{};
     const ssize_t received = ::read(fd, chunk.data(), chunk.size());
     if (received == 0) {
@@ -279,15 +284,44 @@ ControlOutcome ControlService::service(
       continue; // partial frame
     }
     const auto reply = handle_control_request(*request, kernel, linux);
-    std::string send_error;
-    if (!layerc::platform::control_send_frame(fd, reply.response, send_error))
-      outcome.diagnostic = std::move(send_error);
+    if (reply.response.size() > layerc::platform::control_frame_limit) {
+      outcome.diagnostic = "control response exceeds the frame limit";
+      drop(loop, fd);
+      continue;
+    }
+    client.response.resize(layerc::core::frame_header_bytes);
+    layerc::core::append_frame_header(
+        reinterpret_cast<std::byte *>(client.response.data()),
+        static_cast<std::uint32_t>(reply.response.size()));
+    client.response += reply.response;
+    client.framer = {}; // stop accepting requests and release buffered bytes
+    client.expires_at = now + control_client_timeout;
+    loop.register_fd(fd, POLLOUT);
     outcome.stop_requested = outcome.stop_requested || reply.stop_requested;
     outcome.reload_requested =
         outcome.reload_requested || reply.reload_requested;
-    drop(loop, fd); // one request + one response per connection
+    flush_response(loop, fd, client, outcome);
   }
   return outcome;
+}
+
+void ControlService::flush_response(layerc::platform::EventLoop &loop,
+                                    const int fd, Client &client,
+                                    ControlOutcome &outcome) {
+  // One bounded write per wake. Never wait on a slow reader in this callback;
+  // the shared poll loop carries writable readiness and the absolute expiry.
+  constexpr std::size_t write_budget = 64U * 1024U;
+  const auto bytes = std::min(write_budget, client.response.size() - client.sent);
+  const auto sent = ::send(fd, client.response.data() + client.sent, bytes,
+                           MSG_NOSIGNAL | MSG_DONTWAIT);
+  if (sent > 0) {
+    client.sent += static_cast<std::size_t>(sent);
+    if (client.sent == client.response.size()) drop(loop, fd);
+  } else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK &&
+                           errno != EINTR)) {
+    outcome.diagnostic = "control response write failed";
+    drop(loop, fd);
+  }
 }
 
 void ControlService::expire_clients(
