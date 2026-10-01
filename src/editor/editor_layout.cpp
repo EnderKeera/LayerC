@@ -47,6 +47,8 @@ constexpr int heading_pitch = 28;
 constexpr int section_gap = 12;
 constexpr int field_cap = 480;
 constexpr int preview_threshold = 1100;
+constexpr int timing_label_width = 84;
+constexpr int binding_min_width = 120;
 
 struct MainLayout {
   DialogLayout ui;
@@ -181,10 +183,24 @@ struct GroupHeights {
   int overlay{};
 };
 
-GroupHeights group_heights(const MainLayout &f) {
+int capture_buttons_width(const MainLayout &f) {
+  return f.ui.scaled(100) + (f.advanced ? f.ui.scaled(60 + 8) : 0);
+}
+
+// Capture key (and HID) share the binding row only while the binding keeps a
+// readable width; in a narrow timing column they wrap below it instead of
+// overlapping the binding.
+bool binding_wraps(const MainLayout &f, const int timing_width) {
+  return timing_width - f.ui.scaled(timing_label_width) -
+             capture_buttons_width(f) - f.ui.scaled(8) <
+         f.ui.scaled(binding_min_width);
+}
+
+GroupHeights group_heights(const MainLayout &f, const int timing_width) {
   const int advanced_rows = f.advanced ? 4 : 0;
+  const int wrapped_rows = binding_wraps(f, timing_width) ? 1 : 0;
   return {
-      .timing = f.heading + f.pitch * (3 + advanced_rows),
+      .timing = f.heading + f.pitch * (3 + advanced_rows + wrapped_rows),
       .visual = f.heading + f.pitch * (f.advanced ? 3 : 2) + f.ui.scaled(40),
       .overlay = f.heading + (f.legacy_bars ? f.ui.scaled(24 + 80 + 8) : 0) +
                  f.pitch * 3 + f.ui.scaled(30) * 2 + f.ui.scaled(60) +
@@ -198,7 +214,7 @@ int layout_timing(const MainLayout &f, const int left, const int right,
   const DialogLayout &ui = f.ui;
   ui.move(IDC_TIMING_LABEL, left, top, right - left, ui.scaled(20));
   top += f.heading;
-  const int label_width = ui.scaled(84);
+  const int label_width = ui.scaled(timing_label_width);
   const int field_left = left + label_width;
   const int field_width = std::max(ui.scaled(60), right - field_left);
   label(f, IDC_COOLDOWN_NAME_LABEL, left, top, label_width - ui.scaled(8));
@@ -209,15 +225,22 @@ int layout_timing(const MainLayout &f, const int left, const int right,
   top += f.pitch;
   const int capture_width = ui.scaled(100);
   const int hid_width = f.advanced ? ui.scaled(60) : 0;
-  const int buttons =
-      capture_width + (f.advanced ? hid_width + ui.scaled(8) : 0);
+  const int buttons = capture_buttons_width(f);
   label(f, IDC_COOLDOWN_BINDING_LABEL, left, top, label_width - ui.scaled(8));
-  ui.move(IDC_COOLDOWN_BINDING, field_left, top,
-          std::max(ui.scaled(60), right - field_left - buttons - ui.scaled(8)),
-          f.row);
-  ui.move(IDC_CAPTURE_BINDING, right - buttons, top, capture_width, f.row);
-  if (f.advanced)
-    ui.move(IDC_CAPTURE_HID, right - hid_width, top, hid_width, f.row);
+  if (binding_wraps(f, right - left)) {
+    ui.move(IDC_COOLDOWN_BINDING, field_left, top, field_width, f.row);
+    top += f.pitch;
+    ui.move(IDC_CAPTURE_BINDING, field_left, top, capture_width, f.row);
+    if (f.advanced)
+      ui.move(IDC_CAPTURE_HID, field_left + capture_width + ui.scaled(8), top,
+              hid_width, f.row);
+  } else {
+    ui.move(IDC_COOLDOWN_BINDING, field_left, top,
+            right - field_left - buttons - ui.scaled(8), f.row);
+    ui.move(IDC_CAPTURE_BINDING, right - buttons, top, capture_width, f.row);
+    if (f.advanced)
+      ui.move(IDC_CAPTURE_HID, right - hid_width, top, hid_width, f.row);
+  }
   top += f.pitch;
   if (!f.advanced)
     return top;
@@ -311,8 +334,9 @@ void layout_overlay(const MainLayout &f, const int left, const int right,
 int layout_cooldowns(const MainLayout &f, const int top) {
   const DialogLayout &ui = f.ui;
   const int width = f.detail_right - f.detail_left;
-  const auto heights = group_heights(f);
   const bool two_columns = width >= ui.scaled(480);
+  const int column = (width - f.gap) / 2;
+  const auto heights = group_heights(f, two_columns ? column : width);
   const int groups_height =
       two_columns ? std::max(heights.timing + ui.scaled(section_gap) +
                                  heights.visual,
@@ -338,7 +362,6 @@ int layout_cooldowns(const MainLayout &f, const int top) {
 
   const int groups_top = list_top + list_height + ui.scaled(16);
   if (two_columns) {
-    const int column = (width - f.gap) / 2;
     const int left_right = f.detail_left + column;
     const int visual_top =
         layout_timing(f, f.detail_left, left_right, groups_top) +
@@ -388,6 +411,39 @@ void layout_status(const MainLayout &f) {
           ui.scaled(20));
 }
 
+// Revealing rows (Show advanced, a wrapped binding row, larger text) raises
+// the minimum height. A restored window grows to it, within its monitor's
+// work area, so the new rows are not left below the status strip.
+void grow_to_minimum_height(const HWND window, const int min_client_height) {
+  if (IsZoomed(window) != FALSE || IsIconic(window) != FALSE)
+    return;
+  RECT client{};
+  GetClientRect(window, &client);
+  const int missing =
+      min_client_height - static_cast<int>(client.bottom - client.top);
+  if (missing <= 0)
+    return;
+  MONITORINFO monitor{};
+  monitor.cbSize = sizeof(monitor);
+  RECT bounds{};
+  if (GetWindowRect(window, &bounds) == FALSE ||
+      GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                      &monitor) == FALSE)
+    return;
+  const RECT &work = monitor.rcWork;
+  const int current = static_cast<int>(bounds.bottom - bounds.top);
+  const int height = std::min(current + missing,
+                              static_cast<int>(work.bottom - work.top));
+  if (height <= current)
+    return;
+  // Keep the top edge unless the grown window would leave the work area.
+  const int top = std::max(static_cast<int>(work.top),
+                           std::min(static_cast<int>(bounds.top),
+                                    static_cast<int>(work.bottom) - height));
+  SetWindowPos(window, nullptr, bounds.left, top, bounds.right - bounds.left,
+               height, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 } // namespace
 
 void EditorWindow::apply_heading_fonts() {
@@ -427,6 +483,10 @@ void EditorWindow::layout() {
   // The smallest client height that keeps every row visible.
   shell_.min_client_height = detail_bottom + frame.margin +
                              (frame.height - frame.status_top);
+  if (shell_.preview_visible != frame.preview) {
+    shell_.preview_visible = frame.preview;
+    refresh_position_hint();
+  }
 
   RECT list_client{};
   GetClientRect(shell_.profile_list, &list_client);
@@ -434,6 +494,8 @@ void EditorWindow::layout() {
                           std::max(1L, list_client.right - list_client.left));
   RedrawWindow(shell_.window, nullptr, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+  // Last: growing re-enters layout() through WM_SIZE at the new height.
+  grow_to_minimum_height(shell_.window, shell_.min_client_height);
 }
 
 } // namespace layerc::editor
