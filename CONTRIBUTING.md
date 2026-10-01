@@ -91,7 +91,13 @@ suite is `layerc_benchmark_result_tests` on Linux, which registers only where
 `pwsh` is installed.
 [`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
 same setup and `build-package` actions, so benchmark gating cannot drift.
-Releases and `rolling` ship only the Windows x64 ZIP.
+Releases and `rolling` ship only the Windows x64 ZIP. A tag publishes a
+non-prerelease release whose notes state that `layerc.exe` is omitted until a
+release-signing key exists and that launcher self-updates are OFF by default.
+The notes also state that Linux is source/CLI only, with physical X11 evidence
+pending. Bump `project(LayerC VERSION ...)` and the README/`docs/Linux.md`
+status text in one change before tagging, and tag only a commit whose `ci.yml`
+run is green.
 
 [`tools/publish-rolling.sh`](tools/publish-rolling.sh) promotes `rolling` in
 one serialized job (`concurrency: publish-rolling`). It skips a commit older
