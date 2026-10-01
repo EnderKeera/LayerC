@@ -71,6 +71,10 @@ public:
            NormalizedRegion available_region,
            std::span<const NormalizedRegion> unavailable_regions);
   void clear();
+  // Cumulative count of quality-specific reference preparations. Useful for
+  // confirming that a retained configuration does not repeat CPU work.
+  [[nodiscard]] std::size_t preparation_count() const noexcept;
+  [[nodiscard]] std::uint64_t prepared_cache_bytes() const noexcept;
   // Drops prepared references whose content hash is not listed. Prepared
   // entries are content-addressed, so a reconfigure need not discard the rest.
   void retain(std::span<const std::string> asset_sha256);

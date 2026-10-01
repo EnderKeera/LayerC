@@ -39,9 +39,12 @@ public:
   void start(layerc::platform::EventLoop &loop, LinuxStatusSnapshot &status,
              std::vector<std::string> &diagnostics);
   void refresh(std::span<const layerc::platform::StoredProfile> profiles,
+               bool configuration_changed,
                layerc::runtime::DaemonKernel &kernel,
                LinuxStatusSnapshot &status,
                std::vector<std::string> &diagnostics);
+  void refresh_status(const layerc::runtime::DaemonKernel &kernel,
+                      LinuxStatusSnapshot &status) const;
   [[nodiscard]] X11Dispatch dispatch(std::span<const int> ready);
   // Queue-aware prepare/check phase for the blocking loop: Xlib synchronous
   // queries buffer events client-side without waking the socket, so the host
@@ -50,7 +53,8 @@ public:
   // both local queues and external sources are empty (no polling timer).
   [[nodiscard]] bool has_pending_events() noexcept;
   [[nodiscard]] X11Dispatch dispatch_pending();
-  void render(layerc::core::TimePoint now);
+  // True when a completed retired checkpoint changes automation demand.
+  [[nodiscard]] bool render(layerc::core::TimePoint now);
   void stop_sessions(layerc::core::TimePoint now);
   [[nodiscard]] std::optional<layerc::core::TimePoint>
   next_deadline(layerc::core::TimePoint now) const;

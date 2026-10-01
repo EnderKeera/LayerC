@@ -233,11 +233,12 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
     return FALSE;
   if (message == WM_INITDIALOG) {
     editor->pack_dialogs_.diagnostics_window = window;
-    const int dpi = window_base_dpi(window);
     resize_to_logical_size(window, 760, 460);
     apply_dialog_chrome(window, editor->shell_.capture_exclusion);
-    if (!editor->pack_dialogs_.diagnostics_chrome.attach(window, static_cast<UINT>(dpi)))
+    if (!editor->pack_dialogs_.diagnostics_chrome.attach(window))
       editor->style_dialog_children(window);
+    editor->pack_dialogs_.diagnostics_chrome.set_monospace(
+        {IDC_DIAGNOSTICS_TEXT});
     SendDlgItemMessageW(window, IDC_DIAGNOSTICS_RAW_TOGGLE, BM_SETCHECK,
                         BST_CHECKED, 0);
     editor->request_runtime_diagnostics();

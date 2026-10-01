@@ -98,21 +98,26 @@ void X11Adapters::start(layerc::platform::EventLoop &loop,
 
 void X11Adapters::refresh(
     const std::span<const layerc::platform::StoredProfile> profiles,
+    const bool configuration_changed,
     layerc::runtime::DaemonKernel &kernel, LinuxStatusSnapshot &status,
     std::vector<std::string> &diagnostics) {
+  if (configuration_changed) impl_->sessions.configure(profiles);
   if (!impl_->tracker.has_value()) {
     (void)kernel.reconcile({});
+    refresh_status(kernel, status);
     return;
   }
 
   const auto scan = impl_->tracker->scan();
-  impl_->sessions.refresh(profiles, scan);
+  impl_->sessions.refresh(scan);
   impl_->overlay.refresh(impl_->sessions.sessions(), scan,
                          layerc::platform::scan_monitors(*impl_->display));
   const auto requests = impl_->sessions.session_requests();
   const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  impl_->visual.refresh(impl_->sessions.sessions(), demand);
+  impl_->visual.refresh(impl_->sessions.sessions(), demand,
+                        configuration_changed,
+                        impl_->sessions.visual_configurations());
   (void)kernel.reconcile(demand);
 
   const auto input_unavailable = impl_->input.unavailable();
@@ -142,6 +147,21 @@ void X11Adapters::refresh(
                           " demanded but unavailable");
 }
 
+void X11Adapters::refresh_status(
+    const layerc::runtime::DaemonKernel &kernel,
+    LinuxStatusSnapshot &status) const {
+  auto visual_unavailable = impl_->visual.unavailable();
+  visual_unavailable.insert(visual_unavailable.end(),
+                            impl_->sessions.visual_diagnostics().begin(),
+                            impl_->sessions.visual_diagnostics().end());
+  derive_capability_status(
+      status, kernel.demand(),
+      {.input = impl_->input.unavailable(),
+       .overlay = impl_->overlay.unavailable(),
+       .automation = impl_->sessions.automation_diagnostics(),
+       .visual = visual_unavailable});
+}
+
 X11Dispatch X11Adapters::dispatch(const std::span<const int> ready) {
   if (impl_->fd < 0 || std::ranges::find(ready, impl_->fd) == ready.end())
     return {};
@@ -167,10 +187,11 @@ X11Dispatch X11Adapters::dispatch_pending() {
   return dispatch({&ready, 1});
 }
 
-void X11Adapters::render(const layerc::core::TimePoint now) {
+bool X11Adapters::render(const layerc::core::TimePoint now) {
   (void)impl_->visual.poll(impl_->sessions.sessions(), now);
-  impl_->sessions.poll_automation(now);
+  const bool demand_changed = impl_->sessions.poll_automation(now);
   impl_->overlay.render(impl_->sessions.sessions(), now);
+  return demand_changed;
 }
 
 void X11Adapters::stop_sessions(const layerc::core::TimePoint now) {
@@ -227,15 +248,19 @@ void X11Adapters::start(layerc::platform::EventLoop &, LinuxStatusSnapshot &,
 
 void X11Adapters::refresh(
     std::span<const layerc::platform::StoredProfile>,
+    bool,
     layerc::runtime::DaemonKernel &kernel, LinuxStatusSnapshot &,
     std::vector<std::string> &) {
   (void)kernel.reconcile({});
 }
 
+void X11Adapters::refresh_status(
+    const layerc::runtime::DaemonKernel &, LinuxStatusSnapshot &) const {}
+
 X11Dispatch X11Adapters::dispatch(std::span<const int>) { return {}; }
 bool X11Adapters::has_pending_events() noexcept { return false; }
 X11Dispatch X11Adapters::dispatch_pending() { return {}; }
-void X11Adapters::render(layerc::core::TimePoint) {}
+bool X11Adapters::render(layerc::core::TimePoint) { return false; }
 void X11Adapters::stop_sessions(layerc::core::TimePoint) {}
 
 std::optional<layerc::core::TimePoint>

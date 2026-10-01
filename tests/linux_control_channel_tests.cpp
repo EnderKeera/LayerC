@@ -164,7 +164,8 @@ void control_dispatch_contracts() {
     linux_status.capabilities = {
         {layerc::runtime::Capability::overlay,
          layerc::daemon::CapabilityAvailability::unavailable,
-         {"extension_missing"}},
+         {"extension_missing"},
+         {}},
     };
     const auto status = layerc::daemon::handle_control_request(
         control::encode_control_request(control::ControlCommand::status),

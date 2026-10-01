@@ -108,6 +108,9 @@ struct CapabilityStatus {
   Capability capability{};
   CapabilityAvailability availability{CapabilityAvailability::unavailable};
   std::vector<std::string> reasons;
+  // Current session faults in human-readable form; stable reason tokens stay
+  // in reasons for clients that classify availability.
+  std::vector<std::string> diagnostics;
 };
 struct LinuxStatusSnapshot {
   X11StatusSnapshot x11;

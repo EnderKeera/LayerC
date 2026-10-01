@@ -18,6 +18,10 @@ struct SessionCapabilityRequest {
   WindowId window;
   bool active{};
   bool global{};
+  // An active session can be driven only by automation or visual sampling.
+  // Defaults preserve callers that represent a full desktop session.
+  bool input{true};
+  bool overlay{true};
   bool visual{};
   bool generic_hid{};
   bool isolated_visual{};

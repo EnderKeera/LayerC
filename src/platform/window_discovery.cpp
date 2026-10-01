@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <vector>
 
+#include <dwmapi.h>
+
 namespace layerc::platform {
 namespace {
 
@@ -59,6 +61,14 @@ std::optional<WindowCandidate> describe_attachable_window(HWND window) {
       std::filesystem::path(candidate.executable_path).filename().wstring();
   candidate.title = window_text(window);
   candidate.window_class = window_class(window);
+  DWORD cloaked{};
+  const auto ex_style =
+      static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE));
+  candidate.background =
+      (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked,
+                                       sizeof(cloaked))) &&
+       cloaked != 0) ||
+      (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) != 0;
 
   RECT client{};
   GetClientRect(window, &client);

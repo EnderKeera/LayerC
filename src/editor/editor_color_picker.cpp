@@ -12,6 +12,8 @@
 #include <string_view>
 
 #include <windows.h>
+#include <commctrl.h>
+#include <windowsx.h>
 
 namespace layerc::editor {
 namespace {
@@ -24,26 +26,26 @@ struct PaletteColor {
 };
 
 constexpr std::array<PaletteColor, 24> color_palette{
-    PaletteColor{theme::copper_theme.background, L"Graphite"},
-    PaletteColor{theme::copper_theme.panel, L"Charcoal"},
-    PaletteColor{theme::copper_theme.border, L"Slate"},
-    PaletteColor{theme::copper_theme.muted, L"Silver"},
-    PaletteColor{theme::copper_theme.text, L"Warm white"},
+    PaletteColor{theme::neutral_theme.background, L"Graphite"},
+    PaletteColor{theme::neutral_theme.panel, L"Charcoal"},
+    PaletteColor{theme::neutral_theme.border, L"Gray"},
+    PaletteColor{theme::neutral_theme.secondary, L"Silver"},
+    PaletteColor{0xE9E4DD, L"Warm white"},
     PaletteColor{0xF1F5F7, L"Ice white"},
-    PaletteColor{theme::copper_theme.accent, L"Copper"},
+    PaletteColor{theme::copper_accent, L"Copper"},
     PaletteColor{0xE0A15A, L"Amber"},
     PaletteColor{0xE85D5D, L"Red"},
     PaletteColor{0xF08A5D, L"Coral"},
     PaletteColor{0xE7C84B, L"Gold"},
     PaletteColor{0x8BC34A, L"Lime"},
     PaletteColor{0x4FCB83, L"Green"},
-    PaletteColor{theme::teal_theme.accent, L"Seafoam"},
+    PaletteColor{theme::teal_accent, L"Seafoam"},
     PaletteColor{0x50BAC8, L"Teal"},
     PaletteColor{0x5DADE2, L"Sky blue"},
     PaletteColor{0x4B7BEC, L"Blue"},
     PaletteColor{0x6C5CE7, L"Indigo"},
     PaletteColor{0x9B72E8, L"Violet"},
-    PaletteColor{theme::plum_theme.accent, L"Plum"},
+    PaletteColor{theme::plum_accent, L"Plum"},
     PaletteColor{0xD65DB1, L"Magenta"},
     PaletteColor{0xF06292, L"Pink"},
     PaletteColor{0x8D6E63, L"Brown"},
@@ -77,6 +79,52 @@ std::wstring swatch_label(const PaletteColor &color) {
   return std::wstring(color.name) + L", " + hex_label(color.value);
 }
 
+// The swatch grid is one tab stop (the selected or focused swatch) navigated
+// with the arrow keys; moving selects, like a radio group.
+constexpr int swatch_columns = 8;
+constexpr int swatch_count = IDC_COLOR_SWATCH_LAST - IDC_COLOR_SWATCH_FIRST + 1;
+
+void set_swatch_tab_stop(const HWND window, const int active_id) {
+  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id) {
+    const HWND swatch = GetDlgItem(window, id);
+    auto style = GetWindowLongPtrW(swatch, GWL_STYLE);
+    style = id == active_id ? (style | WS_TABSTOP) : (style & ~WS_TABSTOP);
+    SetWindowLongPtrW(swatch, GWL_STYLE, style);
+  }
+}
+
+LRESULT CALLBACK swatch_proc(const HWND swatch, const UINT message,
+                             const WPARAM wparam, const LPARAM lparam,
+                             const UINT_PTR, const DWORD_PTR) {
+  if (message == WM_GETDLGCODE)
+    return DefSubclassProc(swatch, message, wparam, lparam) | DLGC_WANTARROWS;
+  if (message == WM_KEYDOWN) {
+    const int index = GetDlgCtrlID(swatch) - IDC_COLOR_SWATCH_FIRST;
+    int next = index;
+    switch (wparam) {
+    case VK_LEFT: next = index - 1; break;
+    case VK_RIGHT: next = index + 1; break;
+    case VK_UP: next = index - swatch_columns; break;
+    case VK_DOWN: next = index + swatch_columns; break;
+    case VK_HOME: next = 0; break;
+    case VK_END: next = swatch_count - 1; break;
+    default: return DefSubclassProc(swatch, message, wparam, lparam);
+    }
+    if (next < 0 || next >= swatch_count)
+      return 0;
+    const HWND dialog = GetParent(swatch);
+    const int id = IDC_COLOR_SWATCH_FIRST + next;
+    set_swatch_tab_stop(dialog, id);
+    SetFocus(GetDlgItem(dialog, id));
+    SendMessageW(dialog, WM_COMMAND, MAKEWPARAM(id, BN_CLICKED),
+                 reinterpret_cast<LPARAM>(GetDlgItem(dialog, id)));
+    return 0;
+  }
+  if (message == WM_NCDESTROY)
+    RemoveWindowSubclass(swatch, &swatch_proc, 1);
+  return DefSubclassProc(swatch, message, wparam, lparam);
+}
+
 void invalidate_picker(const HWND window) {
   for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
     InvalidateRect(GetDlgItem(window, id), nullptr, TRUE);
@@ -101,9 +149,18 @@ bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
 void EditorWindow::initialize_color_picker(const HWND window) {
   apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
-  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
-    set_text(GetDlgItem(window, id), swatch_label(
-             color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)]));
+  int active = IDC_COLOR_SWATCH_FIRST;
+  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id) {
+    const auto &color =
+        color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)];
+    set_text(GetDlgItem(window, id), swatch_label(color));
+    SetWindowSubclass(GetDlgItem(window, id), &swatch_proc, 1, 0);
+    if (color.value == appearance_editor_.picker_color())
+      active = id;
+  }
+  set_swatch_tab_stop(window, active);
+  SendMessageW(GetDlgItem(window, IDC_COLOR_HEX), EM_SETCUEBANNER, FALSE,
+               reinterpret_cast<LPARAM>(L"#RRGGBB"));
   refresh_color_picker(window);
 }
 
@@ -170,11 +227,11 @@ bool EditorWindow::draw_color_picker_item(const DRAWITEMSTRUCT &draw) const {
   fill_solid_rect(draw.hDC, sample, native_color_ref(*color));
   outline_rect(draw.hDC, sample, selected ? 2 : 1,
                selected ? role_colors.selection : role_colors.border);
-  if ((draw.itemState & ODS_FOCUS) != 0) {
-    RECT focus = draw.rcItem;
-    InflateRect(&focus, -1, -1);
-    frame_solid_rect(draw.hDC, focus, role_colors.text);
-  }
+  // The shared accent focus ring every other control uses.
+  if ((draw.itemState & ODS_FOCUS) != 0)
+    layerc::platform::paint_focus_ring(draw.hDC, draw.rcItem,
+                                       role_colors.accent,
+                                       GetDpiForWindow(draw.hwndItem));
   return true;
 }
 
@@ -190,6 +247,7 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
         notification == BN_CLICKED) {
       appearance_editor_.set_picker_color(
           color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)].value);
+      set_swatch_tab_stop(window, id);
       refresh_color_picker(window);
       return TRUE;
     }
@@ -208,7 +266,7 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
       const auto rgb = rgb_fields(window);
       const auto hex = hex_value(window_text(GetDlgItem(window, IDC_COLOR_HEX)));
       if (!rgb.has_value() || !hex.has_value() || *rgb != *hex) {
-        MessageBoxW(window, L"Enter RGB values from 0 to 255 or a #RRGGBB value.",
+        themed_message_box(window, L"Enter RGB values from 0 to 255 or a #RRGGBB value.",
                     L"Invalid color", MB_OK | MB_ICONWARNING);
         return TRUE;
       }

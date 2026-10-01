@@ -16,7 +16,7 @@
 ## Risk and completion
 
 - [ ] The requested behavior and nearest relevant failure/recovery path are covered
-- [ ] No unrelated files or generated `build/`, `out/`, `review/`, `.codewhale/`, or `.review_tmp/` output is staged
+- [ ] No unrelated files or generated `build*/`, `out/`, `review/`, `.review_tmp/`, `.codewhale/`, `.mimosa/`, or `.codegraph/` output is staged
 - [ ] Affected user/platform documentation is accurate
 
 <!-- Note only applicable risks: passive input, anti-cheat boundary, network/telemetry, monotonic timing, service demand, profile/bundle compatibility, manual hardware evidence. -->

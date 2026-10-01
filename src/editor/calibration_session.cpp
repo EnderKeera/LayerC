@@ -202,7 +202,7 @@ void show_calibration_failure(const HWND owner, const CalibrationFailure &failur
     message = to_wide(failure.detail);
     break;
   }
-  MessageBoxW(owner, message.c_str(), title, MB_OK | MB_ICONERROR);
+  themed_message_box(owner, message.c_str(), title, MB_OK | MB_ICONERROR);
 }
 
 } // namespace layerc::editor

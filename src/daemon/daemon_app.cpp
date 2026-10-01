@@ -193,7 +193,13 @@ void DaemonApp::add_tray_icon() {
   tray_.uID = 1;
   tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   tray_.uCallbackMessage = tray_message;
-  tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+  // The LayerC icon from layerd.rc; stock icon only if the resource is missing.
+  const int icon_size = GetSystemMetrics(SM_CXSMICON);
+  tray_.hIcon = static_cast<HICON>(LoadImageW(
+      GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON, icon_size,
+      icon_size, LR_DEFAULTCOLOR | LR_SHARED));
+  if (tray_.hIcon == nullptr)
+    tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
   wcscpy_s(tray_.szTip, L"LayerC");
   Shell_NotifyIconW(NIM_ADD, &tray_);
   tray_.uVersion = NOTIFYICON_VERSION_4;
