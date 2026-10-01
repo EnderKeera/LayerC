@@ -1,7 +1,7 @@
 # Contributing to LayerC
 
 Thanks for helping with LayerC. This page routes contributors to the source that
-owns each decision instead of duplicating the project contract.
+owns each decision and describes the CI and release gates.
 
 ## Choose the relevant reference
 
@@ -18,20 +18,119 @@ workflows resolve stale documentation.
 
 ## Work on a change
 
-Preserve unrelated worktree changes and keep generated `build/`, `out/`,
-`review/`, `.review_tmp/`, and `.codewhale/` content out of commits. Use
-disposable profiles under `examples/` for mutation-heavy local checks.
+Preserve unrelated worktree changes and keep generated `build/`, `build-*/`,
+`out/`, `review/`, `.review_tmp/`, `.codewhale/`, `.mimosa/`, and `.codegraph/`
+content out of commits. Use disposable profiles under `examples/` for
+mutation-heavy local checks.
 
 The non-negotiable boundaries in [`AGENTS.md`](AGENTS.md) apply to every
 change: passive input, no anti-cheat bypass, no telemetry/network beyond the
-same-package Game Bar service and the launch-time `layerc.exe` updater, monotonic timing, demand-driven services, and
-durable profile compatibility.
+same-package Game Bar service and the launch-time `layerc.exe` updater,
+monotonic timing, demand-driven services, and durable profile compatibility.
 
 Run the smallest configured check that exercises the behavior you changed and
 rerun failures caused by the change. CI owns the full cross-platform gate; use a
 full local build and every suite only for work with that breadth. Resolve current
 commands and targets from [`README.md`](README.md), CMake, and the affected
 test registration.
+
+### Optional Orca agent team
+
+Multi-agent work requires explicit user authorization for the current task.
+The user chooses the agent harness each time; built-in subagents and other
+orchestration tools are equally valid. The Orca launcher below is optional, not
+a repository requirement or permission to delegate by default.
+
+`tools/start-orca-team.ps1` (PowerShell 7, `orca` and `pi` on `PATH`, Orca
+runtime ready) opens one Orca terminal with a Pi coordinator on
+`openai-codex/gpt-6-astra`. The coordinator plans the objective, starts
+supervised Pi workers on `claude-bridge/claude-opus-5-5` (default 3, `-Workers`
+1–8), reviews their results, and reports evidence per task. Pi's default
+model is unchanged.
+
+```powershell
+pwsh -File .\tools\start-orca-team.ps1 -Objective "Describe the LayerC task" -Preview
+```
+
+`-Preview` validates the workspace and prints the coordinator prompt without
+starting an agent. Always pass a concrete objective. New Orca worktrees do not
+inherit uncommitted files, and no per-worktree setup is needed because builds
+use CMake presets.
+
+## CI and release gates
+
+Linux-side jobs run on Ubicloud `ubicloud-standard-4` (the Ubicloud GitHub App
+needs repository access). Windows jobs run on the interactive self-hosted
+`[self-hosted, windows, x64, layerc-bench]` runner and share it, so they run
+only for `main`, manual dispatch, and pull requests from this repository; fork
+pull requests get only the Linux-side jobs.
+
+[`ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`, pull requests,
+and manual dispatch; a newer push to a pull request cancels its older run.
+
+| Job | Gate |
+| --- | --- |
+| `workflow-lint` | `actionlint` over every workflow |
+| `windows-msvc` | [`build-package`](.github/actions/build-package/action.yml): `ci` preset (Ninja, sccache, unity), CTest with registration/JUnit policy, `benchmark_v22`, `benchmark_v23`, install, ZIP, artifacts |
+| `windows-analyze` | Non-unity Release build with MSVC `/analyze` for every LayerC target (compile-time only) |
+| `linux` | [`tools/ci-linux.sh`](tools/ci-linux.sh) in digest-pinned `debian:stable` and `ubuntu:24.04`: headless and required Xvfb suites, installed-binary smoke with private XDG roots, commit-bound evidence |
+| `linux-flatpak` | 25.08 manifest with required daemon/control/X11 smoke under Xvfb (`--flatpak-only`) |
+| `publish-rolling` | `main` pushes only; needs all five jobs above and publishes the `rolling` prerelease |
+
+CTest fails on empty runs, missing required suites, and unexpected skips. The
+only allowed skip is `layerc_overlay_tests` when the runner cannot create an
+isolated desktop; report it as unavailable interactive coverage, not a pass.
+[`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
+same setup and `build-package` actions, so benchmark gating cannot drift.
+Releases and `rolling` ship only the Windows x64 ZIP.
+
+Artifacts: `layerc-windows-x64` is the full bundle (install layout, benchmark
+JSON, ZIP); `layerc-windows-x64-tools` feeds hardware benchmarks and
+`tools/push-and-test.ps1`; only `publish-rolling` consumes
+`layerc-rolling-package`.
+
+Other workflows:
+
+- [`benchmarks.yml`](.github/workflows/benchmarks.yml): after a green `main` CI
+  run (or manually), runs V1.1 visual, V2.1 template, and latency checks
+  against the `baseline-v22` release on `layerc-bench` for that exact CI
+  commit and uploads `benchmark-evidence`.
+- [`windows-selfhosted.yml`](.github/workflows/windows-selfhosted.yml): manual
+  Debug build and full CTest of one ref on `layerc-bench` with a low-memory
+  MSBuild configuration; uploads `windows-selfhosted-logs-<run>-<attempt>`.
+  Run `gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>`.
+- [`pr-agent.yml`](.github/workflows/pr-agent.yml) reviews pull requests
+  through OpenRouter and answers `/review`, `/ask`, and `/describe` comments;
+  [`claude.yml`](.github/workflows/claude.yml) answers `@claude` mentions.
+
+### Hardware runner and local benchmarks
+
+`layerc-bench` is an interactive desktop, not a headless agent. Register it
+with `run.cmd` under a signed-in user with autostart, never as a service,
+because visual capture needs the real screen. Keep it quiescent: CI fails,
+listing PIDs, when `layerd` or `layere` is running and never kills them. CI
+writes only inside `GITHUB_WORKSPACE`; syncing the rolling install locally is
+the manual `tools/pull-ci.ps1` step.
+
+To reproduce the hardware benchmarks for a CI run:
+
+```powershell
+gh run download <run-id> -n layerc-windows-x64-tools -D out\bench-stage
+gh release download baseline-v22 -D out\baseline --clobber
+$baselineZip = Get-ChildItem out\baseline -Filter *.zip -File
+if ($baselineZip.Count -ne 1) { throw "Expected one baseline ZIP." }
+Expand-Archive $baselineZip.FullName -DestinationPath out\baseline -Force
+
+.\tools\run-hardware-benchmarks.ps1 `
+  -CandidateBuildDirectory .\out\bench-stage `
+  -BaselineBuildDirectory .\out\baseline
+```
+
+`tools/push-and-test.ps1` pushes the current branch, waits for CI on that
+exact commit, and can then run these checks (`-WatchOnly`, `-NoPush`,
+`-VisualOnly`). Linux CI is the automated compatibility gate; the physical
+GNOME Xorg/KDE X11 native and Flatpak checklist in
+[`docs/Linux.md`](docs/Linux.md) stays pending until evidence is archived.
 
 ## Pull requests
 

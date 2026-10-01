@@ -3,6 +3,7 @@
 
 #include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/settings_store.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "layerc/platform/text.hpp"
 
@@ -74,10 +75,31 @@ parse_duration_ms(const std::wstring_view seconds) {
 ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
   const int dpi = source_dpi == 0 ? 96 : static_cast<int>(source_dpi);
   return {
-      .image_size = std::max(1, MulDiv(16, dpi, 96)),
+      .image_size = std::max(1, MulDiv(20, dpi, 96)),
       .inset = std::max(1, MulDiv(2, dpi, 96)),
       .pen_width = std::max(1, MulDiv(2, dpi, 96)),
   };
+}
+
+int stored_text_scale() {
+  const auto stored =
+      layerc::platform::read_layerc_registry_dword(text_scale_setting);
+  if (!stored.value)
+    return 100;
+  const auto percent = static_cast<int>(*stored.value);
+  return std::ranges::find(text_scale_choices, percent) !=
+                 text_scale_choices.end()
+             ? percent
+             : 100;
+}
+
+bool profile_checkbox_hit(const RECT &row, const POINT point,
+                          const UINT dpi) {
+  // The state-image cell at the row's left edge; the painted box sits inside
+  // it. Anything to its right (the label) only selects the row.
+  const auto metrics = profile_checkbox_metrics(dpi);
+  return point.y >= row.top && point.y < row.bottom &&
+         point.x >= row.left && point.x < row.left + metrics.image_size;
 }
 
 void set_owner_draw_checkbox(const HWND control, const bool checked) {
@@ -174,7 +196,7 @@ std::wstring profile_list_label(const layerc::core::GameProfile &profile) {
   if (!profile.game.executable_name.empty())
     label += L"  —  " + to_wide(profile.game.executable_name);
   if (!profile.enabled)
-    label += L"  (disabled)";
+    label += L"  (off)";
   return label;
 }
 

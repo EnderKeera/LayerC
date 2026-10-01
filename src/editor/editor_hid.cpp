@@ -20,6 +20,10 @@
 namespace layerc::editor {
 namespace {
 
+// Device arrivals/removals are coalesced: one re-enumeration after the burst.
+constexpr UINT_PTR device_refresh_timer = 1;
+constexpr UINT device_refresh_delay_ms = 250;
+
 struct HidDialogState {
   EditorWindow *editor{};
   std::vector<layerc::platform::HidRawDevice> devices;
@@ -47,21 +51,28 @@ void unregister_devices(HidDialogState &state) {
   state.registrations.clear();
 }
 
-void register_devices(const HWND window, HidDialogState &state) {
+// Raw input is registered only while Capture is listening, and only for the
+// selected device's collection. Registration queues WM_INPUT_DEVICE_CHANGE
+// arrivals for every attached device, so nothing outside Capture registers.
+bool register_capture_device(const HWND window, HidDialogState &state,
+                             const layerc::platform::HidRawDevice &device) {
   unregister_devices(state);
-  for (const auto index : state.visible_devices) {
-    const auto &device = state.devices[index];
-    const auto usage = std::pair(device.info.usUsagePage, device.info.usUsage);
-    if (!state.registrations.insert(usage).second)
-      continue;
-    RAWINPUTDEVICE registration{.usUsagePage = usage.first,
-                                .usUsage = usage.second,
-                                .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
-                                .hwndTarget = window};
-    if (RegisterRawInputDevices(&registration, 1, sizeof(registration)) ==
-        FALSE)
-      state.registrations.erase(usage);
-  }
+  const auto usage = std::pair(device.info.usUsagePage, device.info.usUsage);
+  RAWINPUTDEVICE registration{.usUsagePage = usage.first,
+                              .usUsage = usage.second,
+                              .dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
+                              .hwndTarget = window};
+  if (RegisterRawInputDevices(&registration, 1, sizeof(registration)) ==
+      FALSE)
+    return false;
+  state.registrations.insert(usage);
+  return true;
+}
+
+bool known_device(const HidDialogState &state, const HANDLE handle) {
+  return std::ranges::any_of(state.devices, [handle](const auto &device) {
+    return device.handle == handle;
+  });
 }
 
 void populate_devices(const HWND window, HidDialogState &state) {
@@ -116,6 +127,46 @@ selected_device(const HWND window, const HidDialogState &state) {
   return &state.devices[state.visible_devices[static_cast<std::size_t>(row)]];
 }
 
+void stop_listening(const HWND window, HidDialogState &state) {
+  unregister_devices(state);
+  if (!state.listening)
+    return;
+  state.listening = false;
+  state.baselines.clear();
+  set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"C&apture");
+}
+
+// Re-enumerates after a coalesced device change. Never re-registers raw
+// input: that would queue a fresh burst of arrivals.
+void refresh_devices(const HWND window, HidDialogState &state) {
+  const auto *selected = selected_device(window, state);
+  const HANDLE listening_handle =
+      state.listening && selected != nullptr ? selected->handle : nullptr;
+  state.devices = layerc::platform::enumerate_raw_hid_devices();
+  if (!state.captured_device_path.empty() &&
+      std::ranges::none_of(state.devices, [&](const auto &device) {
+        return _wcsicmp(device.path.c_str(),
+                        state.captured_device_path.c_str()) == 0;
+      })) {
+    state.inferred.reset();
+    state.captured_device_path.clear();
+    EnableWindow(GetDlgItem(window, IDC_HID_APPLY), FALSE);
+    set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"C&apture");
+    set_text(GetDlgItem(window, IDC_HID_SUMMARY),
+             L"The captured device was disconnected. Capture again.");
+  }
+  populate_devices(window, state);
+  if (listening_handle == nullptr)
+    return;
+  const auto *still_selected = selected_device(window, state);
+  if (still_selected == nullptr || still_selected->handle != listening_handle) {
+    stop_listening(window, state);
+    set_text(GetDlgItem(window, IDC_HID_SUMMARY),
+             L"The selected device was disconnected. Choose a device and "
+             L"press Capture.");
+  }
+}
+
 bool read_percent(const HWND control, const unsigned maximum, double &value) {
   const auto parsed = parse_bounded(window_text(control), 0, maximum);
   if (!parsed)
@@ -164,7 +215,7 @@ void EditorWindow::capture_hid_binding() {
   });
   if (binding_index == SIZE_MAX) {
     if (document_.profile().hid_bindings.size() >= 128) {
-      MessageBoxW(shell_.window,
+      themed_message_box(shell_.window,
                   L"This profile already has the maximum 128 HID bindings.",
                   L"HID binding", MB_OK | MB_ICONERROR);
       return;
@@ -206,26 +257,22 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
     set_text(GetDlgItem(window, IDC_HID_SLOT), L"1");
     EnableWindow(GetDlgItem(window, IDC_HID_APPLY), FALSE);
     populate_devices(window, *state);
-    register_devices(window, *state);
+    // A modal dialog is shown on the first idle message; show it now so a
+    // busy queue can never leave a disabled owner with nothing to dismiss.
+    ShowWindow(window, SW_SHOW);
     return TRUE;
   }
   if (message == WM_INPUT_DEVICE_CHANGE) {
-    state->devices = layerc::platform::enumerate_raw_hid_devices();
-    state->baselines.clear();
-    if (!state->captured_device_path.empty() &&
-        std::ranges::none_of(state->devices, [&](const auto &device) {
-          return _wcsicmp(device.path.c_str(),
-                          state->captured_device_path.c_str()) == 0;
-        })) {
-      state->inferred.reset();
-      state->captured_device_path.clear();
-      state->listening = false;
-      EnableWindow(GetDlgItem(window, IDC_HID_APPLY), FALSE);
-      set_text(GetDlgItem(window, IDC_HID_SUMMARY),
-               L"The captured device was disconnected. Capture again.");
-    }
-    populate_devices(window, *state);
-    register_devices(window, *state);
+    const auto handle = reinterpret_cast<HANDLE>(lparam);
+    // Registration replays an arrival for every attached device; those and
+    // removals of devices never listed change nothing.
+    if ((wparam == GIDC_ARRIVAL) != known_device(*state, handle))
+      SetTimer(window, device_refresh_timer, device_refresh_delay_ms, nullptr);
+    return TRUE;
+  }
+  if (message == WM_TIMER && wparam == device_refresh_timer) {
+    KillTimer(window, device_refresh_timer);
+    refresh_devices(window, *state);
     return TRUE;
   }
   if (message == WM_INPUT && state->listening) {
@@ -282,7 +329,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
           owner_draw_checkbox_checked(GetDlgItem(window, IDC_HID_SYSTEM_CLASS));
       state->inferred = std::move(inferred);
       state->captured_device_path = device->path;
-      state->listening = false;
+      stop_listening(window, *state);
       set_text(GetDlgItem(window, IDC_HID_SUMMARY),
                L"Captured " + state->inferred->description +
                    L". Refine values if needed, then Use Binding.");
@@ -302,7 +349,12 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
     case IDC_HID_SYSTEM_CLASS:
       if (HIWORD(wparam) == BN_CLICKED) {
         populate_devices(window, *state);
-        register_devices(window, *state);
+        if (state->listening) {
+          const auto *device = selected_device(window, *state);
+          if (device == nullptr ||
+              !register_capture_device(window, *state, *device))
+            stop_listening(window, *state);
+        }
         if (state->inferred &&
             layerc::core::is_system_keyboard_or_mouse(
                 state->inferred->binding.device) &&
@@ -314,21 +366,33 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
       }
       return TRUE;
     case IDC_HID_DEVICE:
+      // Outside Capture nothing is registered for device notifications, so
+      // opening the list re-enumerates.
+      if (HIWORD(wparam) == CBN_DROPDOWN && !state->listening)
+        refresh_devices(window, *state);
       if (HIWORD(wparam) == CBN_SELCHANGE) {
-        state->listening = false;
+        stop_listening(window, *state);
         state->inferred.reset();
         state->captured_device_path.clear();
         state->baselines.clear();
         EnableWindow(GetDlgItem(window, IDC_HID_APPLY), FALSE);
-        set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"Capture");
+        set_text(GetDlgItem(window, IDC_HID_CAPTURE), L"C&apture");
         set_text(GetDlgItem(window, IDC_HID_SUMMARY),
                  L"Press Capture, leave controls idle for one report, then "
                  L"actuate one control.");
       }
       return TRUE;
-    case IDC_HID_CAPTURE:
-      if (selected_device(window, *state) == nullptr)
+    case IDC_HID_CAPTURE: {
+      const auto *device = selected_device(window, *state);
+      if (device == nullptr)
         return TRUE;
+      if (!register_capture_device(window, *state, *device)) {
+        stop_listening(window, *state);
+        set_text(GetDlgItem(window, IDC_HID_SUMMARY),
+                 L"Windows refused raw input for this device. Choose "
+                 L"another device.");
+        return TRUE;
+      }
       state->listening = true;
       state->inferred.reset();
       state->captured_device_path.clear();
@@ -339,6 +403,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
                L"Leave controls idle until the baseline is captured, then "
                L"actuate exactly one control.");
       return TRUE;
+    }
     case IDC_HID_APPLY: {
       if (!state->inferred)
         return TRUE;
@@ -350,7 +415,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
           !read_percent(GetDlgItem(window, IDC_HID_HYSTERESIS), 49,
                         hysteresis) ||
           slot < 1 || slot > 32) {
-        MessageBoxW(
+        themed_message_box(
             window,
             L"Threshold must be 0-100, hysteresis 0-49, and stable slot 1-32.",
             L"HID binding", MB_OK | MB_ICONERROR);
@@ -360,7 +425,7 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
       if ((activation == layerc::core::HidActivationMode::axis_positive ||
            activation == layerc::core::HidActivationMode::axis_negative) &&
           hysteresis > std::min(threshold, 1.0 - threshold)) {
-        MessageBoxW(window, L"Hysteresis crosses the selected axis threshold.",
+        themed_message_box(window, L"Hysteresis crosses the selected axis threshold.",
                     L"HID binding", MB_OK | MB_ICONERROR);
         return TRUE;
       }
@@ -373,30 +438,34 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
       if (layerc::core::is_system_keyboard_or_mouse(
               state->inferred->binding.device) &&
           !state->inferred->binding.allow_system_class) {
-        MessageBoxW(
+        themed_message_box(
             window,
             L"Keyboard/mouse-class HID requires the explicit Advanced opt-in.",
             L"HID binding", MB_OK | MB_ICONWARNING);
         return TRUE;
       }
       if (state->inferred->binding.allow_system_class &&
-          MessageBoxW(window,
+          themed_message_box(window,
                       L"This device may also produce normal keyboard or mouse "
                       L"events, so one action can be observed twice. Keep this "
                       L"device-specific HID binding?",
                       L"System-class HID warning",
                       MB_YESNO | MB_ICONWARNING) != IDYES)
         return TRUE;
+      // Nothing is registered after capture, so re-check the device now.
+      const auto current = layerc::platform::enumerate_raw_hid_devices();
       const auto device =
-          std::ranges::find_if(state->devices, [&](const auto &candidate) {
+          std::ranges::find_if(current, [&](const auto &candidate) {
             return _wcsicmp(candidate.path.c_str(),
                             state->captured_device_path.c_str()) == 0;
           });
-      if (state->captured_device_path.empty() ||
-          device == state->devices.end() ||
-          !layerc::platform::assign_hid_stable_slot(
+      if (state->captured_device_path.empty() || device == current.end()) {
+        refresh_devices(window, *state);
+        return TRUE;
+      }
+      if (!layerc::platform::assign_hid_stable_slot(
               state->inferred->binding.device, device->path)) {
-        MessageBoxW(window,
+        themed_message_box(window,
                     L"LayerC could not save this machine's stable device-slot "
                     L"assignment.",
                     L"HID binding", MB_OK | MB_ICONERROR);
@@ -413,8 +482,10 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
       return TRUE;
     }
   }
-  if (message == WM_DESTROY)
+  if (message == WM_DESTROY) {
+    KillTimer(window, device_refresh_timer);
     unregister_devices(*state);
+  }
   return state->editor->dialog_theme_message(window, message, wparam, lparam)
       .value_or(FALSE);
 }

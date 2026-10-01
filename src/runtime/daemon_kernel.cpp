@@ -27,8 +27,10 @@ CapabilityDemand calculate_capability_demand(
       demand.add(Capability::gamebar);
     if (!session.active)
       continue;
-    demand.add(Capability::input);
-    demand.add(Capability::overlay);
+    if (session.input)
+      demand.add(Capability::input);
+    if (session.overlay)
+      demand.add(Capability::overlay);
     if (session.generic_hid)
       demand.add(Capability::generic_hid);
     if (session.global || !session.visual)

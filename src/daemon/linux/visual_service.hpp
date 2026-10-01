@@ -8,6 +8,7 @@
 #include "layerc/runtime/daemon_kernel.hpp"
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -20,9 +21,21 @@ namespace layerc::daemon {
 // demand exists. Native X11 state remains outside core/runtime.
 class X11VisualService final : public layerc::runtime::IRuntimeService {
 public:
+  struct WorkStats {
+    std::size_t asset_checks{};
+    std::size_t asset_loads{};
+    std::size_t evaluation_builds{};
+    std::size_t template_preparations{};
+
+    bool operator==(const WorkStats &) const = default;
+  };
+
   void attach(layerc::platform::X11Display &display) noexcept;
   void refresh(std::span<InputSession> sessions,
-               const layerc::runtime::CapabilityDemand &demand);
+               const layerc::runtime::CapabilityDemand &demand,
+               bool configuration_changed = false,
+               std::optional<std::span<const VisualConfiguration>>
+                   configurations = std::nullopt);
   [[nodiscard]] std::vector<std::string>
   poll(std::span<InputSession> sessions, layerc::core::TimePoint now);
   [[nodiscard]] std::optional<layerc::core::TimePoint>
@@ -34,8 +47,16 @@ public:
   void quiesce() noexcept override;
   [[nodiscard]] layerc::runtime::RuntimeResourceStats
   resources() const noexcept override;
+  [[nodiscard]] WorkStats work_stats() const noexcept;
 
 private:
+  struct AssetStamp {
+    std::string sha256;
+    std::optional<std::string> contents_sha256;
+
+    bool operator==(const AssetStamp &) const = default;
+  };
+
   struct TemplateEvaluation {
     layerc::core::TemplateState state;
     std::vector<layerc::core::TemplateImage> references;
@@ -47,19 +68,27 @@ private:
     std::string profile_id;
     layerc::core::VisualProfile profile;
     std::vector<TemplateEvaluation> templates;
+    std::vector<AssetStamp> asset_stamps;
+    std::vector<std::string> diagnostics;
     layerc::core::TimePoint next_sample{};
+    std::uint64_t last_target_window{};
   };
 
   struct Target {
     std::uint64_t window{};
     layerc::core::CaptureQuality quality{layerc::core::CaptureQuality::low};
     std::unique_ptr<layerc::platform::X11CaptureSession> capture;
-    std::vector<Evaluation> evaluations;
+    std::vector<Evaluation *> evaluations;
   };
 
   layerc::platform::X11Display *display_{};
   std::vector<Target> targets_;
+  // Matched-profile configuration survives foreground/capture quiescence.
+  std::map<std::filesystem::path, Evaluation> evaluations_;
   layerc::core::CpuTemplateMatcher template_matcher_;
+  std::size_t asset_checks_{};
+  std::size_t asset_loads_{};
+  std::size_t evaluation_builds_{};
   std::vector<std::string> asset_diagnostics_;
   std::vector<std::string> capture_diagnostics_;
   std::string fault_;

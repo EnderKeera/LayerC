@@ -25,7 +25,7 @@ Replace the example target with the one justified by the change, and configure t
 1. Record branch, full commit SHA, and working-tree status. Distinguish local uncommitted changes from the code represented by a CI run.
 2. Resolve an existing run with [resolve-ci-candidate.ps1](../../../tools/resolve-ci-candidate.ps1), passing the intended branch and full `-Commit`. Omitting the commit selects a latest successful run and is unsuitable for proving a particular change.
 3. Inspect run/job conclusions and the artifact provenance. Reuse existing passing evidence; rerun only for a changed candidate, failure, or unresolved coverage gap.
-4. Download necessary artifacts into a unique task directory under `out/`, recording run ID and SHA. Check contents against the current artifact contract before launching binaries.
+4. Download necessary artifacts into a unique task directory under `out/`, recording run ID and SHA. Check contents against the current [artifact contract](../../../CONTRIBUTING.md#ci-and-release-gates) before launching binaries.
 
 [push-and-test.ps1](../../../tools/push-and-test.ps1) pushes by default. Use it only within existing push authorization. `-WatchOnly` implies no push; `-NoPush` still continues into downloads/hardware checks. Read its current clean-tree requirements and replacement of staging directories before use. For status-only work or a dirty checkout, use the resolver and read-only `gh run` commands directly rather than changing the checkout to satisfy the helper.
 

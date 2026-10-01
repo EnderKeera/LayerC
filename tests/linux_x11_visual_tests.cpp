@@ -16,7 +16,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <span>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -272,6 +274,45 @@ int run_linux_x11_visual_tests() {
   // native-service suites and are intentionally not registered here.
   demand.set(layerc::runtime::Capability::input, 0);
   demand.set(layerc::runtime::Capability::overlay, 0);
+  {
+    const layerc::daemon::VisualConfiguration configuration{
+        sessions.front().source_path, sessions.front().profile.id,
+        *sessions.front().visual_profile};
+    const std::span configurations{&configuration, 1};
+    layerc::daemon::X11VisualService initially_unmatched;
+    initially_unmatched.attach(*display);
+    initially_unmatched.refresh({}, {}, true, configurations);
+    const auto loaded_work = initially_unmatched.work_stats();
+    initially_unmatched.refresh({}, {}, true, configurations);
+    const auto verified_work = initially_unmatched.work_stats();
+    initially_unmatched.refresh(sessions, demand, false, configurations);
+    passed &= expect(loaded_work.asset_loads == 1 &&
+                         verified_work.asset_checks ==
+                             loaded_work.asset_checks + 1 &&
+                         verified_work.asset_loads == loaded_work.asset_loads &&
+                         verified_work.evaluation_builds ==
+                             loaded_work.evaluation_builds &&
+                         initially_unmatched.work_stats() == verified_work &&
+                         initially_unmatched.resources().decoded_assets == 1,
+                     "first window match reuses assets loaded while unmatched");
+  }
+  {
+    auto inactive_request = request;
+    inactive_request.active = false;
+    const auto inactive_demand = layerc::runtime::calculate_capability_demand(
+        std::span{&inactive_request, 1}, false);
+    sessions.front().active = false;
+    layerc::daemon::X11VisualService initially_inactive;
+    initially_inactive.attach(*display);
+    initially_inactive.refresh(sessions, inactive_demand, true);
+    const auto loaded_work = initially_inactive.work_stats();
+    sessions.front().active = true;
+    initially_inactive.refresh(sessions, demand);
+    passed &= expect(loaded_work.asset_loads == 1 &&
+                         initially_inactive.work_stats() == loaded_work &&
+                         initially_inactive.resources().decoded_assets == 1,
+                     "first focus after inactive configuration reuses loaded assets");
+  }
   visual.refresh(sessions, demand);
   layerc::runtime::RuntimeServiceRegistry services{};
   services[static_cast<std::size_t>(layerc::runtime::Capability::visual)] = &visual;
@@ -281,8 +322,9 @@ int run_linux_x11_visual_tests() {
   passed &= expect(
       kernel.services()
                    .stats(layerc::runtime::Capability::visual)
-                  .resources.decoded_assets == 1,
+                   .resources.decoded_assets == 1,
       "one referenced template is retained");
+  const auto cache_before_sample = visual.resources().cache_bytes;
 
   const layerc::core::TimePoint now{};
   const auto triggered = visual.poll(sessions, now);
@@ -296,15 +338,196 @@ int run_linux_x11_visual_tests() {
   passed &= expect(
       visual.poll(sessions, now + std::chrono::milliseconds{50}).empty(),
       "held pixel and template edges do not retrigger");
+  const auto retained_deadline =
+      visual.next_deadline(now + std::chrono::milliseconds{51});
+  const auto initial_work = visual.work_stats();
+  passed &= expect(initial_work.asset_checks == 1 &&
+                       initial_work.asset_loads == 1 &&
+                       initial_work.evaluation_builds == 1 &&
+                       initial_work.template_preparations == 1 &&
+                       retained_deadline == now + std::chrono::milliseconds{100},
+                    "the first sample prepares one template and schedules its next sample");
+  passed &= expect(visual.resources().cache_bytes > cache_before_sample,
+                   "resource status includes retained matcher preparation memory");
 
-  kernel.quiesce(now + std::chrono::milliseconds{51});
-  passed &= expect(kernel.services().aggregate_resources() ==
-                       layerc::runtime::RuntimeResourceStats{},
-                    "quiescence releases capture and template resources");
-  passed &= expect(visual.resources() ==
-                       layerc::runtime::RuntimeResourceStats{} &&
+  for (int scan = 0; scan < 3; ++scan) {
+    visual.refresh(sessions, demand);
+    passed &= expect(kernel.reconcile(demand),
+                     "unchanged window rematches keep visual capture active");
+  }
+  passed &= expect(visual.work_stats() == initial_work &&
+                       visual.next_deadline(now + std::chrono::milliseconds{51}) ==
+                           retained_deadline,
+                   "unchanged scans do not read assets, rebuild evaluations, or reset deadlines");
+  visual.refresh(sessions, demand, true);
+  const auto unchanged_reload = visual.work_stats();
+  passed &= expect(unchanged_reload.asset_checks ==
+                           initial_work.asset_checks + 1 &&
+                       unchanged_reload.asset_loads == initial_work.asset_loads &&
+                       unchanged_reload.evaluation_builds ==
+                           initial_work.evaluation_builds &&
+                       unchanged_reload.template_preparations ==
+                           initial_work.template_preparations &&
+                       visual.next_deadline(now + std::chrono::milliseconds{51}) ==
+                           retained_deadline,
+                   "an unchanged store reload verifies content without decoding or resetting sampling");
+
+  auto inactive_request = request;
+  inactive_request.active = false;
+  const auto inactive_demand = layerc::runtime::calculate_capability_demand(
+      std::span{&inactive_request, 1}, false);
+  visual.refresh(sessions, inactive_demand);
+  passed &= expect(kernel.reconcile(inactive_demand) &&
+                       visual.resources().objects == 0 &&
+                       visual.resources().decoded_assets == 1 &&
                        !visual.next_deadline(now).has_value(),
-                   "the native visual owner releases resources and its deadline");
+                   "losing focus stops capture while retaining matched configuration");
+  visual.refresh(sessions, demand);
+  passed &= expect(kernel.reconcile(demand) &&
+                        visual.work_stats() == unchanged_reload &&
+                        visual.next_deadline(now + std::chrono::milliseconds{51}) ==
+                            retained_deadline,
+                    "regaining focus reuses prepared references and the sample deadline");
+
+  visual.refresh({}, {});
+  passed &= expect(kernel.reconcile({}) &&
+                       visual.work_stats() == unchanged_reload &&
+                       visual.resources().decoded_assets == 1 &&
+                       !visual.next_deadline(now).has_value(),
+                   "losing the matched window retains visual configuration without capture");
+  visual.refresh(sessions, demand);
+  passed &= expect(kernel.reconcile(demand) &&
+                       visual.work_stats() == unchanged_reload &&
+                       visual.next_deadline(now + std::chrono::milliseconds{51}) ==
+                           retained_deadline,
+                   "rematching the window reuses assets, preparation, and deadline");
+
+  const ::Window rematched_window = XCreateSimpleWindow(
+      raw, root, 80, 0, window_axis, window_axis, 0, black.pixel, black.pixel);
+  XMapWindow(raw, rematched_window);
+  XSync(raw, False);
+  auto rematched_request = request;
+  rematched_request.window = {rematched_window};
+  auto rematched_demand = layerc::runtime::calculate_capability_demand(
+      std::span{&rematched_request, 1}, false);
+  rematched_demand.set(layerc::runtime::Capability::input, 0);
+  rematched_demand.set(layerc::runtime::Capability::overlay, 0);
+  sessions.front().window = rematched_window;
+  visual.refresh(sessions, rematched_demand);
+  passed &= expect(visual.work_stats() == unchanged_reload &&
+                       visual.next_deadline(now + std::chrono::milliseconds{51}) ==
+                           now + std::chrono::milliseconds{51},
+                   "a new capture target samples immediately without rebuilding its assets");
+  sessions.front().window = window;
+  visual.refresh(sessions, demand);
+  XDestroyWindow(raw, rematched_window);
+  XSync(raw, False);
+
+  const auto second_profile_path =
+      roots.config_profiles / "visual-fixture-second.json";
+  const auto second_asset_path = layerc::platform::profile_visual_asset_path(
+      second_profile_path, template_sha);
+  passed &= expect(layerc::test::write_file(
+                       second_asset_path,
+                       std::string_view(
+                           reinterpret_cast<const char *>(template_png.data()),
+                           template_png.size())),
+                   "the second profile has its own profile-local asset");
+  auto second_profile = profile_fixture();
+  second_profile.id = "visual-fixture-second";
+  auto second_visual = visual_fixture(background.rgb);
+  second_visual.profile_id = second_profile.id;
+  sessions.emplace_back(layerc::platform::StoredProfile{
+                            second_profile_path, std::move(second_profile)},
+                        window, false, std::move(second_visual));
+  sessions.back().active = true;
+  auto second_request = request;
+  second_request.profile_id = sessions.back().profile.id;
+  const layerc::runtime::SessionCapabilityRequest both_requests[]{
+      request, second_request};
+  auto both_demand =
+      layerc::runtime::calculate_capability_demand(both_requests, false);
+  both_demand.set(layerc::runtime::Capability::input, 0);
+  both_demand.set(layerc::runtime::Capability::overlay, 0);
+  visual.refresh(sessions, both_demand);
+  passed &= expect(kernel.reconcile(both_demand) &&
+                       visual.resources().decoded_assets == 2 &&
+                       visual.work_stats().evaluation_builds ==
+                           unchanged_reload.evaluation_builds + 1,
+                   "a second profile adds only its own visual evaluation");
+
+  const auto original_time = std::filesystem::last_write_time(asset_path);
+  std::string corrupted(reinterpret_cast<const char *>(template_png.data()),
+                        template_png.size());
+  corrupted[100] = static_cast<char>(corrupted[100] ^ 0x01);
+  passed &= expect(layerc::test::write_file(asset_path, corrupted),
+                   "the first asset can be replaced with different bytes");
+  std::filesystem::last_write_time(asset_path, original_time);
+  passed &= expect(std::filesystem::file_size(asset_path) ==
+                           template_png.size() &&
+                       std::filesystem::last_write_time(asset_path) ==
+                           original_time,
+                   "the changed asset keeps its original size and timestamp");
+  const auto before_asset_change = visual.work_stats();
+  visual.refresh(sessions, both_demand, true);
+  const auto after_asset_change = visual.work_stats();
+  passed &= expect(after_asset_change.asset_checks ==
+                           before_asset_change.asset_checks + 2 &&
+                       after_asset_change.asset_loads ==
+                           before_asset_change.asset_loads + 1 &&
+                       after_asset_change.evaluation_builds ==
+                           before_asset_change.evaluation_builds + 1 &&
+                       visual.resources().decoded_assets == 1 &&
+                       std::ranges::any_of(visual.unavailable(),
+                                           [](const auto &diagnostic) {
+                                             return diagnostic.find("hash") !=
+                                                    std::string::npos;
+                                           }),
+                   "a same-size, same-time asset change invalidates only its profile");
+
+  passed &= expect(layerc::test::write_file(
+                       asset_path,
+                       std::string_view(
+                           reinterpret_cast<const char *>(template_png.data()),
+                           template_png.size())),
+                   "the first asset can be restored");
+  std::filesystem::last_write_time(asset_path, original_time);
+  visual.refresh(sessions, both_demand, true);
+  const auto after_restore = visual.work_stats();
+  passed &= expect(after_restore.evaluation_builds ==
+                           after_asset_change.evaluation_builds + 1 &&
+                       after_restore.asset_loads ==
+                           after_asset_change.asset_loads + 1 &&
+                       after_restore.template_preparations ==
+                           after_asset_change.template_preparations &&
+                       visual.resources().decoded_assets == 2 &&
+                       visual.unavailable().empty(),
+                   "restoring one asset repairs its evaluation without evicting the shared preparation");
+
+  sessions.front().visual_profile->sample_rate_hz = 10;
+  visual.refresh(sessions, both_demand, true);
+  passed &= expect(visual.work_stats().evaluation_builds ==
+                           after_restore.evaluation_builds + 1 &&
+                       visual.resources().decoded_assets == 2,
+                   "a changed visual configuration rebuilds only its profile");
+
+  visual.refresh({}, {}, true);
+  passed &= expect(kernel.reconcile({}) &&
+                       kernel.services().aggregate_resources() ==
+                           layerc::runtime::RuntimeResourceStats{} &&
+                       visual.resources() ==
+                           layerc::runtime::RuntimeResourceStats{} &&
+                       !visual.next_deadline(now).has_value(),
+                   "removing all matched profiles releases captures, assets, caches, and deadlines");
+  const auto preparations_before_readd =
+      visual.work_stats().template_preparations;
+  visual.refresh(sessions, both_demand);
+  passed &= expect(kernel.reconcile(both_demand),
+                   "visual capture can reactivate after profile removal");
+  (void)visual.poll(sessions, now + std::chrono::milliseconds{200});
+  passed &= expect(visual.work_stats().template_preparations ==
+                           preparations_before_readd + 1,
+                   "reactivation prepares the template again after cache cleanup");
 
   auto isolated_request = request;
   isolated_request.profile_id = "isolated-consumer";
@@ -317,14 +540,15 @@ int run_linux_x11_visual_tests() {
   isolated_demand.set(layerc::runtime::Capability::overlay, 0);
   visual.refresh(sessions, isolated_demand);
   passed &= expect(!kernel.reconcile(isolated_demand) &&
-                       visual.resources() ==
-                           layerc::runtime::RuntimeResourceStats{} &&
+                       visual.resources().objects == 0 &&
+                       visual.resources().decoded_assets == 2 &&
                        !visual.next_deadline(now).has_value(),
-                   "isolated demand on a shared window cannot launch inline capture");
-  visual.refresh(sessions, demand);
-  passed &= expect(kernel.reconcile(demand) &&
-                       visual.resources().decoded_assets == 1,
+                   "isolated demand on a shared window stops inline capture but retains configuration");
+  visual.refresh(sessions, both_demand);
+  passed &= expect(kernel.reconcile(both_demand) &&
+                       visual.resources().decoded_assets == 2,
                    "removing the isolated consumer restores inline capture and assets");
+  visual.refresh({}, {}, true);
   kernel.quiesce();
 
   {
