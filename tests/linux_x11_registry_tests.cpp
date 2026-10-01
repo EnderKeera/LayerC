@@ -1,0 +1,498 @@
+// Session admission and automation health are independent of an X11 display.
+#include "daemon_host.hpp"
+#include "input_service.hpp"
+#include "control_channel.hpp"
+
+#include "layerc/core/automation_session.hpp"
+#include "layerc/platform/profile_store_linux.hpp"
+#include "layerc/runtime/daemon_kernel.hpp"
+
+#include "test_support.hpp"
+
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using namespace layerc::core;
+using layerc::platform::StoredProfile;
+
+AutomationExpression literal(AutomationValue value) {
+  AutomationExpression expression;
+  expression.kind = ExpressionKind::literal;
+  expression.literal = std::move(value);
+  return expression;
+}
+
+GameProfile base_profile(std::string id) {
+  GameProfile profile;
+  profile.id = std::move(id);
+  profile.name = "Automation only";
+  profile.game.global = true;
+  return profile;
+}
+
+AutomationProfile automation_profile(const GameProfile &base,
+                                     const AutomationEventKind event) {
+  AutomationProfile profile;
+  profile.profile_id = base.id;
+  profile.variables = {{.id = "count",
+                        .type = AutomationValueType::integer,
+                        .default_value = AutomationValue(std::int64_t{0}),
+                        .persistent = true}};
+  AutomationRule rule;
+  rule.id = "increment";
+  rule.event = event;
+  if (event == AutomationEventKind::input_pressed)
+    rule.source_filter = "keyboard:69";
+  rule.actions = {{.kind = AutomationActionKind::increment_variable,
+                   .target = "count",
+                   .name = {},
+                   .property = {},
+                   .value = literal(AutomationValue(std::int64_t{1})),
+                   .secondary = std::nullopt}};
+  profile.automations = {{.id = "counter", .name = "Counter", .rules = {rule}}};
+  return profile;
+}
+
+layerc::platform::X11WindowScan active_scan() {
+  layerc::platform::X11WindowScan scan;
+  layerc::platform::X11WindowSnapshot window;
+  window.window = 0x1234;
+  window.active = true;
+  scan.windows.push_back(window);
+  scan.active = window.window;
+  return scan;
+}
+
+std::string automation_status_response(
+    const layerc::daemon::X11SessionRegistry &registry) {
+  const auto requests = registry.session_requests();
+  const auto demand =
+      layerc::runtime::calculate_capability_demand(requests, false);
+  layerc::daemon::LinuxStatusSnapshot status;
+  status.capabilities.push_back(
+      {layerc::runtime::Capability::automation,
+       layerc::daemon::CapabilityAvailability::inactive, {}, {}});
+  const auto diagnostics = registry.automation_diagnostics();
+  layerc::daemon::derive_capability_status(
+      status, demand,
+      {.input = {},
+       .overlay = {},
+       .automation = std::span<const std::string>{diagnostics},
+       .visual = {}});
+  const layerc::runtime::DaemonKernel kernel;
+  return layerc::daemon::handle_control_request(
+             layerc::platform::encode_control_request(
+                 layerc::platform::ControlCommand::status),
+             kernel, status)
+      .response;
+}
+
+void test_registry_automation_only_and_health() {
+  using layerc::test::expect;
+  layerc::test::TempDirectory temp{"layerc-x11-registry"};
+  layerc::test::ScopedEnvironment config{"XDG_CONFIG_HOME",
+                                           temp.path() / "config"};
+  layerc::test::ScopedEnvironment data{"XDG_DATA_HOME", temp.path() / "data"};
+  if (!expect(config.applied() && data.applied(), "isolated XDG roots are set"))
+    return;
+  const auto roots = layerc::platform::profile_store_roots();
+  if (!expect(layerc::platform::ensure_profile_store_roots(roots),
+              "isolated profile store is available"))
+    return;
+  const auto scan = active_scan();
+
+  // Session-started rules can arm timers without any direct binding.
+  const auto timer_base = base_profile("timer-only");
+  auto timer_profile = automation_profile(timer_base,
+                                          AutomationEventKind::timer_fired);
+  auto &timer_rules = timer_profile.automations.front().rules;
+  timer_rules.front().source_filter = "pulse";
+  AutomationRule start;
+  start.id = "start";
+  start.event = AutomationEventKind::session_started;
+  start.actions = {{.kind = AutomationActionKind::create_timer,
+                    .target = "pulse",
+                    .name = {},
+                    .property = {},
+                    .value = literal(AutomationValue(
+                        DurationValue{std::chrono::milliseconds{50}})),
+                    .secondary = std::nullopt}};
+  timer_rules.push_back(start);
+  const StoredProfile timer_source{roots.config_profiles / "timer.json",
+                                   timer_base};
+  if (!expect(layerc::platform::write_profile_bundle(
+                  timer_source.path, timer_base, std::nullopt, timer_profile),
+              "timer-only sidecar is stored"))
+    return;
+  layerc::daemon::X11SessionRegistry timer_registry;
+  timer_registry.configure(std::span{&timer_source, 1});
+  timer_registry.refresh(scan);
+  const auto timer_request = timer_registry.session_requests();
+  const auto timer_demand =
+      layerc::runtime::calculate_capability_demand(timer_request, false);
+  if (!expect(timer_registry.session_count() == 1 &&
+                  timer_registry.automation_count() == 1 &&
+                  timer_request.size() == 1 && timer_request.front().automation &&
+                  !timer_request.front().input &&
+                  !timer_request.front().overlay &&
+                  timer_demand.consumers(
+                      layerc::runtime::Capability::automation) == 1 &&
+                  timer_demand.consumers(
+                      layerc::runtime::Capability::input) == 0 &&
+                  timer_demand.consumers(
+                      layerc::runtime::Capability::overlay) == 0,
+              "timer-only profile demands automation without XI2 or overlay"))
+    return;
+  layerc::daemon::X11InputService timer_input{timer_registry};
+  expect(timer_input.unavailable().empty(),
+         "timer-only session has no detached XI2 fault");
+  expect(timer_input.resources().handles == 0 &&
+             timer_input.resources().objects == 0,
+         "timer-only session owns no XI2 input resources");
+  const auto timer_now = MonotonicClock::now();
+  expect(timer_registry.next_automation_deadline(timer_now).has_value(),
+         "session-started timer publishes a monotonic deadline");
+  (void)timer_registry.poll_automation(timer_now + std::chrono::milliseconds{55});
+  expect(timer_registry.sessions().front()
+                 .automation_runtime->snapshot().variables.at("count") ==
+             AutomationValue(std::int64_t{1}),
+         "timer-only rule runs without an input binding");
+
+  // XI2 remains a passive source; the same session consumes an automation
+  // input rule through feed_input even when its direct matcher is empty.
+  const auto input_base = base_profile("input-only");
+  const auto input_profile =
+      automation_profile(input_base, AutomationEventKind::input_pressed);
+  const StoredProfile input_source{roots.config_profiles / "input.json",
+                                   input_base};
+  if (!expect(layerc::platform::write_profile_bundle(
+                  input_source.path, input_base, std::nullopt, input_profile),
+              "input-rule sidecar is stored"))
+    return;
+  layerc::daemon::X11SessionRegistry input_registry;
+  input_registry.configure(std::span{&input_source, 1});
+  input_registry.refresh(scan);
+  if (!expect(input_registry.session_count() == 1 &&
+                  input_registry.automation_count() == 1 &&
+                  input_registry.sessions().front().profile.bindings.empty(),
+              "input-rule automation is admitted without direct bindings"))
+    return;
+  const auto input_requests = input_registry.session_requests();
+  const auto input_demand =
+      layerc::runtime::calculate_capability_demand(input_requests, false);
+  expect(input_requests.size() == 1 && input_requests.front().input &&
+             !input_requests.front().overlay &&
+             input_demand.consumers(layerc::runtime::Capability::input) == 1 &&
+             input_demand.consumers(layerc::runtime::Capability::overlay) == 0,
+         "automation input rule alone demands passive XI2");
+  const auto input_now = MonotonicClock::now();
+  const InputEvent press{{InputDevice::keyboard, 69, 0}, true};
+  (void)input_registry.sessions().front().feed(press, input_now);
+  expect(input_registry.sessions().front()
+                 .automation_runtime->snapshot().variables.at("count") ==
+             AutomationValue(std::int64_t{1}),
+         "automation input rule consumes the passive event");
+
+  // A persistent write failure is one current fault, even after retries.
+  const auto state_path = layerc::platform::automation_state_path(input_source.path);
+  std::error_code error;
+  std::filesystem::create_directories(state_path, error);
+  if (!expect(!error, "state destination can be faulted in the fixture")) return;
+  for (int attempt = 1; attempt <= 10; ++attempt) {
+    (void)input_registry.poll_automation(
+        input_now + std::chrono::milliseconds{1'100 * attempt});
+    expect(input_registry.automation_diagnostics().size() == 1 &&
+               input_registry.sessions().front()
+                       .automation_health.checkpoint_error.has_value(),
+           "repeated checkpoint failures retain one reported fault");
+  }
+  expect(automation_status_response(input_registry).find(
+              "\"capability\":\"automation\",\"availability\":\"degraded\","
+              "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+          "checkpoint failure degrades automation in the status response");
+  expect(automation_status_response(input_registry).find(
+              "\"diagnostics\":[\"automation checkpoint failed") !=
+             std::string::npos,
+         "status response includes the current checkpoint fault detail");
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "checkpoint fault is removed")) return;
+  (void)input_registry.poll_automation(
+      input_now + std::chrono::milliseconds{12'000});
+  expect(input_registry.automation_diagnostics().empty() &&
+             !input_registry.sessions().front()
+                  .automation_health.checkpoint_error.has_value(),
+         "successful checkpoint clears the current fault");
+  expect(automation_status_response(input_registry).find(
+              "\"capability\":\"automation\",\"availability\":\"active\","
+              "\"reasons\":[]") != std::string::npos,
+          "successful checkpoint restores healthy automation status");
+  expect(automation_status_response(input_registry).find(
+              "\"diagnostics\"") == std::string::npos,
+         "successful checkpoint removes the fault detail from status");
+  const auto persisted =
+      layerc::platform::load_automation_state(input_source.path, input_profile);
+  expect(!persisted.error &&
+             persisted.values.at("count") == AutomationValue(std::int64_t{1}),
+         "recovered checkpoint writes the persistent value");
+
+  // A failed final checkpoint survives the matched session and keeps the
+  // automation timer/service alive until the durable write succeeds.
+  (void)input_registry.sessions().front().feed(
+      press, input_now + std::chrono::milliseconds{12'001});
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "stored state can be removed for the final fault"))
+    return;
+  std::filesystem::create_directories(state_path, error);
+  if (!expect(!error, "final checkpoint destination can be faulted")) return;
+  const auto retiring_now = input_now + std::chrono::milliseconds{12'002};
+  input_registry.stop_sessions(retiring_now);
+  const auto pending_requests = input_registry.session_requests();
+  const auto pending_demand =
+      layerc::runtime::calculate_capability_demand(pending_requests, false);
+  layerc::daemon::X11AutomationService pending_service{input_registry};
+  expect(input_registry.session_count() == 0 &&
+             input_registry.pending_checkpoint_count() == 1 &&
+             pending_demand.consumers(layerc::runtime::Capability::automation) ==
+                 1 &&
+             pending_demand.consumers(layerc::runtime::Capability::input) == 0 &&
+             input_registry.next_automation_deadline(retiring_now)
+                 .has_value() &&
+             input_registry.automation_diagnostics().size() == 1 &&
+             pending_service.resources().objects == 1 &&
+             pending_service.resources().timers == 1,
+         "retired write keeps one retry, demand, deadline, and visible fault");
+  expect(automation_status_response(input_registry).find(
+             "\"capability\":\"automation\",\"availability\":\"degraded\","
+             "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+         "retired checkpoint fault remains visible in status without sessions");
+  expect(!input_registry.poll_automation(
+             retiring_now + std::chrono::milliseconds{1'100}) &&
+             input_registry.pending_checkpoint_count() == 1 &&
+             input_registry.automation_diagnostics().size() == 1,
+         "idle failed retry remains bounded to one pending source");
+
+  input_registry.configure(std::span{&input_source, 1});
+  input_registry.refresh(scan);
+  expect(input_registry.session_count() == 1 &&
+             input_registry.automation_count() == 0 &&
+             input_registry.sessions().front().deferred_automation &&
+             input_registry.pending_checkpoint_count() == 1,
+         "same-path replacement waits for the older checkpoint");
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "retired checkpoint fault is removed")) return;
+  const auto retry_now = retiring_now + std::chrono::milliseconds{2'200};
+  expect(input_registry.poll_automation(retry_now) &&
+             input_registry.pending_checkpoint_count() == 0 &&
+             input_registry.automation_count() == 1 &&
+             !input_registry.sessions().front().deferred_automation &&
+             input_registry.automation_diagnostics().empty(),
+         "successful retry clears pending fault and starts replacement");
+  const auto replaced =
+      input_registry.sessions().front().automation_runtime->snapshot();
+  expect(replaced.variables.at("count") == AutomationValue(std::int64_t{2}),
+         "replacement reloads the saved state after the old write");
+
+  // A state-load fault is current health and clears after a good checkpoint.
+  if (!expect(layerc::test::write_file(state_path, "{invalid"),
+              "corrupt state is isolated"))
+    return;
+  input_registry.configure(std::span{&input_source, 1});
+  input_registry.refresh(scan);
+  expect(input_registry.automation_diagnostics().size() == 1 &&
+             input_registry.sessions().front()
+                 .automation_health.state_load_error.has_value(),
+         "matched corrupt state reports one load fault");
+  expect(!input_registry.poll_automation(
+             retry_now + std::chrono::milliseconds{1'100}) &&
+             input_registry.automation_diagnostics().empty(),
+         "successful checkpoint repairs state and clears its load fault");
+
+  // Removing the last matched consumer leaves only the failed write's demand;
+  // completing that retry returns the automation service to idle.
+  const auto final_now = retry_now + std::chrono::milliseconds{1'200};
+  (void)input_registry.sessions().front().feed(press, final_now);
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "state can be removed for the final idle retry"))
+    return;
+  std::filesystem::create_directories(state_path, error);
+  if (!expect(!error, "idle retry fault is isolated")) return;
+  input_registry.stop_sessions(final_now + std::chrono::milliseconds{1});
+  input_registry.configure({});
+  input_registry.refresh({});
+  expect(input_registry.pending_checkpoint_count() == 1 &&
+             layerc::runtime::calculate_capability_demand(
+                 input_registry.session_requests(), false)
+                     .consumers(layerc::runtime::Capability::automation) == 1,
+         "removed profile retains automation demand for the final write");
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "idle retry fault is removed")) return;
+  expect(input_registry.poll_automation(
+             final_now + std::chrono::milliseconds{1'100}) &&
+             input_registry.pending_checkpoint_count() == 0 &&
+             input_registry.automation_diagnostics().empty() &&
+             layerc::runtime::calculate_capability_demand(
+                 input_registry.session_requests(), false)
+                     .consumers(layerc::runtime::Capability::automation) == 0 &&
+             pending_service.resources().objects == 0 &&
+             pending_service.resources().timers == 0,
+         "successful idle retry clears fault and final automation demand");
+
+  // An invalid sidecar still participates in demand and visible diagnostics.
+  const auto invalid_base = base_profile("invalid-only");
+  const StoredProfile invalid_source{roots.config_profiles / "invalid.json",
+                                     invalid_base};
+  if (!expect(layerc::test::write_file(
+                  layerc::platform::automation_sidecar_path(invalid_source.path),
+                  "{invalid"),
+              "malformed automation sidecar is isolated"))
+    return;
+  layerc::daemon::X11SessionRegistry invalid_registry;
+  invalid_registry.configure(std::span{&invalid_source, 1});
+  invalid_registry.refresh({});
+  expect(invalid_registry.automation_diagnostics().empty(),
+         "unmatched invalid sidecar does not degrade automation");
+  invalid_registry.refresh(scan);
+  const auto invalid_requests = invalid_registry.session_requests();
+  const auto invalid_demand =
+      layerc::runtime::calculate_capability_demand(invalid_requests, false);
+  expect(invalid_registry.session_count() == 1 &&
+             invalid_registry.automation_count() == 0 &&
+             invalid_requests.size() == 1 && invalid_requests.front().automation &&
+             !invalid_requests.front().input &&
+             !invalid_requests.front().overlay &&
+             invalid_demand.consumers(layerc::runtime::Capability::automation) == 1 &&
+             invalid_demand.consumers(layerc::runtime::Capability::input) == 0 &&
+             !invalid_registry.automation_diagnostics().empty(),
+         "malformed sidecar has automation demand and a load error without XI2");
+  expect(automation_status_response(invalid_registry).find(
+             "\"capability\":\"automation\",\"availability\":\"degraded\","
+             "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+         "malformed sidecar degrades automation in the status response");
+
+  // Runtime faults stay keyed by automation while a healthy rule continues.
+  const auto fault_base = base_profile("fault-isolation");
+  auto fault_profile =
+      automation_profile(fault_base, AutomationEventKind::session_started);
+  fault_profile.variables.push_back(
+      {.id = "fault_value",
+       .type = AutomationValueType::number,
+       .default_value = AutomationValue(0.0)});
+  auto &good = fault_profile.automations.front();
+  good.id = "good";
+  good.rules.push_back(good.rules.front());
+  good.rules.back().id = "input";
+  good.rules.back().event = AutomationEventKind::input_pressed;
+  good.rules.back().source_filter = "keyboard:69";
+  AutomationRule broken;
+  broken.id = "broken";
+  broken.priority = 20;
+  broken.event = AutomationEventKind::session_started;
+  AutomationExpression divide;
+  divide.kind = ExpressionKind::binary;
+  divide.operation = "divide";
+  divide.arguments = {literal(AutomationValue(1.0)),
+                      literal(AutomationValue(0.0))};
+  broken.actions = {{.kind = AutomationActionKind::set_variable,
+                     .target = "fault_value",
+                     .name = {},
+                     .property = {},
+                     .value = divide,
+                     .secondary = std::nullopt}};
+  fault_profile.automations.push_back(
+      {.id = "bad", .name = "Bad", .rules = {broken}});
+  const StoredProfile fault_source{roots.config_profiles / "fault.json",
+                                   fault_base};
+  if (!expect(layerc::platform::write_profile_bundle(
+                  fault_source.path, fault_base, std::nullopt, fault_profile),
+              "fault-isolation sidecar is stored"))
+    return;
+  layerc::daemon::X11SessionRegistry fault_registry;
+  fault_registry.configure(std::span{&fault_source, 1});
+  fault_registry.refresh(scan);
+  if (!expect(fault_registry.session_count() == 1 &&
+                  fault_registry.automation_count() == 1,
+              "fault-isolation session is admitted"))
+    return;
+  expect(fault_registry.sessions().front().automation_health.runtime_faults.size() ==
+                 1 &&
+             fault_registry.automation_diagnostics().size() == 1 &&
+             fault_registry.sessions().front()
+                     .automation_runtime->snapshot().variables.at("count") ==
+                 AutomationValue(std::int64_t{1}),
+         "one runtime fault is reported while the healthy automation commits");
+  (void)fault_registry.sessions().front().feed(press, MonotonicClock::now());
+  expect(fault_registry.automation_diagnostics().size() == 1 &&
+             fault_registry.sessions().front()
+                     .automation_runtime->snapshot().variables.at("count") ==
+                 AutomationValue(std::int64_t{2}),
+         "runtime fault remains bounded and unrelated automation continues");
+  expect(automation_status_response(fault_registry).find(
+              "\"capability\":\"automation\",\"availability\":\"degraded\","
+              "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+          "runtime fault degrades automation in the status response");
+  expect(automation_status_response(fault_registry).find(
+              "automation fault: bad:") != std::string::npos,
+         "status response names the faulted automation");
+
+  // A new configuration drops identities from the old automation runtime.
+  fault_profile.automations.pop_back();
+  if (!expect(layerc::platform::write_profile_bundle(
+                  fault_source.path, fault_base, std::nullopt, fault_profile),
+              "faulted automation is removed from the sidecar"))
+    return;
+  fault_registry.configure(std::span{&fault_source, 1});
+  fault_registry.refresh(scan);
+  expect(fault_registry.session_count() == 1 &&
+             fault_registry.sessions().front().automation_runtime &&
+             fault_registry.sessions().front()
+                 .automation_health.runtime_faults.empty() &&
+             fault_registry.automation_diagnostics().empty() &&
+             automation_status_response(fault_registry).find(
+                 "\"capability\":\"automation\",\"availability\":\"active\","
+                 "\"reasons\":[]") != std::string::npos,
+         "replacing a faulted sidecar removes its stale runtime identity");
+}
+
+void test_status_diagnostic_bound() {
+  using layerc::test::expect;
+  std::vector<std::string> faults(1024, std::string(1024, 'x'));
+  layerc::runtime::CapabilityDemand demand;
+  demand.set(layerc::runtime::Capability::automation, 1);
+  layerc::daemon::LinuxStatusSnapshot status;
+  status.capabilities.push_back(
+      {layerc::runtime::Capability::automation,
+       layerc::daemon::CapabilityAvailability::inactive, {}, {}});
+  layerc::daemon::derive_capability_status(
+      status, demand,
+      {.input = {},
+       .overlay = {},
+       .automation = std::span<const std::string>{faults},
+       .visual = {}});
+  const auto &details = status.capabilities.front().diagnostics;
+  expect(details.size() == 17 && details.front().size() == 512 &&
+             details.back() == "additional diagnostics omitted",
+         "capability status bounds fault count and detail bytes");
+  const layerc::runtime::DaemonKernel kernel;
+  const auto response = layerc::daemon::handle_control_request(
+      layerc::platform::encode_control_request(
+          layerc::platform::ControlCommand::status),
+      kernel, status);
+  expect(response.response.size() < layerc::platform::control_frame_limit &&
+             response.response.find("additional diagnostics omitted") !=
+                 std::string::npos,
+         "bounded fault detail keeps the status control frame sendable");
+}
+
+} // namespace
+
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(test_registry_automation_only_and_health),
+                 LAYERC_TEST_CASE(test_status_diagnostic_bound))

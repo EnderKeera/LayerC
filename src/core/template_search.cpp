@@ -577,9 +577,10 @@ struct CpuTemplateMatcher::Impl {
   // Prepared samples by verified content hash, then quality. Heterogeneous
   // lookup keeps the per-frame search allocation-free.
   std::unordered_map<std::string,
-                     std::map<CaptureQuality, detail::TemplateMatcherReference>,
-                     TransparentHash, std::equal_to<>>
+                      std::map<CaptureQuality, detail::TemplateMatcherReference>,
+                      TransparentHash, std::equal_to<>>
       prepared;
+  std::size_t preparation_count{};
   std::map<SizesKey, std::vector<RenderedSize>> sizes;
 
   const std::vector<RenderedSize> &
@@ -600,6 +601,25 @@ CpuTemplateMatcher::CpuTemplateMatcher() : impl_(std::make_unique<Impl>()) {}
 CpuTemplateMatcher::~CpuTemplateMatcher() = default;
 CpuTemplateMatcher::CpuTemplateMatcher(CpuTemplateMatcher &&) noexcept = default;
 CpuTemplateMatcher &CpuTemplateMatcher::operator=(CpuTemplateMatcher &&) noexcept = default;
+
+std::uint64_t CpuTemplateMatcher::prepared_cache_bytes() const noexcept {
+  if (!impl_) return 0;
+  std::uint64_t bytes{};
+  for (const auto &[hash, qualities] : impl_->prepared) {
+    bytes += hash.size();
+    for (const auto &[quality, reference] : qualities) {
+      (void)quality;
+      bytes += (reference.samples.size() + reference.search_samples.size() +
+                reference.locator_samples.size()) *
+               sizeof(detail::TemplateMatcherSample);
+    }
+  }
+  for (const auto &[key, sizes] : impl_->sizes) {
+    (void)key;
+    bytes += sizes.size() * sizeof(RenderedSize);
+  }
+  return bytes;
+}
 
 TemplateMatchResult CpuTemplateMatcher::evaluate(
     const TemplateState &state, const std::span<const TemplateImage> images,
@@ -635,6 +655,7 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
       by_hash = impl_->prepared.try_emplace(definition.asset_sha256).first;
     auto [prepared_it, inserted] = by_hash->second.try_emplace(quality);
     if (inserted) {
+      ++impl_->preparation_count;
       // Runtimes hand in images they already compacted for this quality.
       prepared_it->second =
           detail::template_is_compact(*image, quality)
@@ -666,8 +687,16 @@ void CpuTemplateMatcher::clear() {
   impl_->sizes.clear();
 }
 
+std::size_t CpuTemplateMatcher::preparation_count() const noexcept {
+  return impl_ ? impl_->preparation_count : 0U;
+}
+
 void CpuTemplateMatcher::retain(const std::span<const std::string> asset_sha256) {
   if (!impl_) return;
+  if (asset_sha256.empty()) {
+    clear();
+    return;
+  }
   std::erase_if(impl_->prepared, [&](const auto &entry) {
     return std::ranges::find(asset_sha256, entry.first) == asset_sha256.end();
   });

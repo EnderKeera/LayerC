@@ -14,11 +14,14 @@ memory and historical plans.
 | Game Bar architecture and invariants | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
 | Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Build graph, options, versions, exact target registration | [`CMakeLists.txt`](CMakeLists.txt) and current source |
-| CI, benchmark, package, and release gates | the affected file under `.github/workflows/` and `tools/` |
+| CI, benchmark, package, and release gates | [`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates), then the affected file under `.github/workflows/` and `tools/` |
 
-`PLAN.md` and `PLAN-v26-linux.md` are historical design records, not current
-execution checklists. Project skills under `.agents/skills/` provide
-workflow-specific guidance and should be loaded only for matching tasks.
+Local-only `archive/PLAN.md` (which includes V2.5) and
+`archive/PLAN-v26-linux.md` are historical design records, not current
+execution checklists, and may be absent. Archived one-off handoffs are
+unverified references, not completion claims. Project skills under
+`.agents/skills/` (and `.claude/skills/verify` for Linux runtime checks)
+provide workflow-specific guidance; load them only for matching tasks.
 
 ## Non-negotiable product boundaries
 
@@ -84,9 +87,9 @@ contracts.
   fallible returns.
 - Use the existing `layerc::core`, `platform`, `capture`, `runtime`,
   `daemon`, `editor`, and `gamebar` namespaces as appropriate.
-- Preserve unrelated user changes. Exclude `build/`, `out/`, `review/`,
-  `.review_tmp/`, `.codewhale/`, and `.mimosa/` from source analysis and
-  never stage their generated content.
+- Preserve unrelated user changes. Exclude `build/`, `build-*/`, `out/`,
+  `review/`, `.review_tmp/`, `.codewhale/`, `.mimosa/`, `.codegraph/`, and
+  `.pi/` from source analysis and never stage their generated content.
 - Durable reviews use `review/layerN.review-YYYY-MM-DD.md` and move to
   `review/archiv/` only after every finding is verified fixed.
 
@@ -96,8 +99,10 @@ Local tests use disposable fixtures and have no production access. Run the
 smallest configured target that exercises the requested change, fix failures
 caused by the change, and rerun it without pausing for approval. Documentation or
 workflow-only edits may need only parser, link, or reference validation. Use a
-full local build and all CTest suites only when the change has comparable breadth;
-CI on push is the authoritative cross-platform gate.
+full local build and all CTest suites only when the change has comparable breadth.
+`ci.yml` on `main` pushes and pull requests is the authoritative cross-platform
+gate; its Windows jobs run only for same-repository branches, and
+`windows-selfhosted.yml` is the manual Windows build/test for any ref.
 
 Resolve exact commands, targets, thresholds, artifact names, and registration
 from current CMake, tests, tools, and workflows. Bind CI, benchmark, and package
@@ -113,11 +118,16 @@ names, packaging details, and specialized documentation synchronized.
 
 ## Decision boundaries and completion
 
-- Implement in the current task. Subagent delegation is allowed for research,
-  planning, implementation, file modification, review, or independent
-  validation; keep delegated work self-contained and preserve these repository
-  constraints. The primary agent is responsible for reviewing delegated work
-  before acceptance.
+- Implement in the current task. Do not use subagents, delegate work, or start
+  multi-worker teams unless the user explicitly authorizes their use for the
+  current task. Otherwise, perform research, implementation, review, and
+  validation directly. If authorized, keep delegated work self-contained and
+  preserve these repository constraints; the primary agent reviews it before
+  acceptance. The user chooses the agent harness for each task; no particular
+  launcher or orchestration tool is required. Give each worker a non-overlapping
+  ownership boundary and acceptance evidence. `tools/start-orca-team.ps1` is an
+  optional Orca workflow (see
+  [`CONTRIBUTING.md`](CONTRIBUTING.md#optional-orca-agent-team)).
 - Inspect source, tests, CMake, or specialized documentation when the requested
   change crosses that boundary—not as a universal preflight.
 - Carry implementation through focused validation and the nearest relevant

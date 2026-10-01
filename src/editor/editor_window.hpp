@@ -49,6 +49,7 @@ public:
 
 private:
   friend class AutomationEditor;
+  friend struct EditorWindowTestAccess;
 
   static constexpr UINT_PTR autosave_timer = 10;
   static constexpr UINT_PTR live_channel_timer = 11;
@@ -62,6 +63,11 @@ private:
   static INT_PTR CALLBACK hid_binding_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static LRESULT CALLBACK preview_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR,
                                            DWORD_PTR);
+  // Owns mouse toggling of profile enablement: a click inside a row's
+  // checkbox cell flips the check state (reported once through
+  // LVN_ITEMCHANGED, like Space) and never reaches the list view.
+  static LRESULT CALLBACK profile_list_subclass(HWND, UINT, WPARAM, LPARAM,
+                                                UINT_PTR, DWORD_PTR);
   bool handle_binding_capture_message(const MSG &message);
 
   [[nodiscard]] RoleColors
@@ -80,8 +86,42 @@ private:
   void style_list_view(HWND, bool hide_header) const;
   void rebuild_profile_check_hit_images();
   void rebuild_brushes();
+  // Hands the staged edit/toolbar colors to the platform control subclasses
+  // (field frames, menu bar, button parent fill).
+  void publish_chrome_palette() const;
   void refresh_theme();
+  // Recreates the body, heading and title fonts for the current DPI and text
+  // size, restyles the main window's children and lays it out again.
+  void reload_fonts();
   void layout();
+  // Semibold section headings and the 20 px profile title.
+  void apply_heading_fonts();
+  // Main-window behaviors (editor_shell.cpp): tooltips, numeric stepping,
+  // context menus, list shortcuts, the draft row, title, placement, status.
+  void install_shell_helpers();
+  [[nodiscard]] std::optional<LRESULT> handle_shell_notify(const NMHDR &header);
+  void browse_application();
+  void apply_application_text();
+  void refresh_title();
+  void sync_draft_row();
+  void focus_field(int id);
+  void show_context_menu(HWND source, POINT screen);
+  bool handle_list_key(const MSG &message);
+  void duplicate_profile();
+  void duplicate_cooldown();
+  void set_advanced_visible(bool visible, bool persist);
+  void set_text_scale(int percent);
+  void update_view_menu(HMENU popup) const;
+  void save_window_placement() const;
+  bool restore_window_placement(int show_command);
+  void refresh_connection_status();
+  void paint_status_strip(HDC dc) const;
+  void show_keyboard_shortcuts();
+  void show_about();
+  // Scan codes of the selected cooldown's binding, for its tooltip.
+  [[nodiscard]] std::wstring binding_codes_text();
+  // Selects the bar that shows the selected cooldown.
+  void follow_cooldown_bar();
   void layout_tasks(HWND);
   void set_status(std::wstring_view text) { set_text(shell_.status, text); }
   [[nodiscard]] HBRUSH brush(layerc::platform::EditorControlRole role) const {
@@ -192,6 +232,8 @@ private:
 
   [[nodiscard]] SIZE preview_target_size() const;
   [[nodiscard]] RECT preview_canvas() const;
+  // Height of the "Actual size" strip under the canvas (0 when hidden).
+  [[nodiscard]] int preview_actual_size_height() const;
   [[nodiscard]] RECT bar_preview_rect(const layerc::core::Panel &,
                                       const RECT &) const;
   void paint_preview(HWND);
@@ -224,7 +266,7 @@ private:
 
   void open_options();
   void open_appearance();
-  void apply_options(HWND);
+  bool apply_options(HWND);
   [[nodiscard]] layerc::platform::EditorControlRole appearance_role(HWND) const;
   static std::uint32_t *
   appearance_value(layerc::platform::EditorAppearanceOverrides &,
@@ -241,7 +283,7 @@ private:
                    std::optional<COLORREF> fill = std::nullopt) const;
   void draw_list_box_item(const DRAWITEMSTRUCT &) const;
   void draw_profile_item(const DRAWITEMSTRUCT &) const;
-  void draw_checkbox(const DRAWITEMSTRUCT &) const;
+
   void draw_appearance_preview(const DRAWITEMSTRUCT &, HWND) const;
   LRESULT color_message(UINT, WPARAM, LPARAM) const;
   LRESULT erase_dialog_background(HWND, WPARAM) const;

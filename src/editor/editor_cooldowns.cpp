@@ -44,23 +44,48 @@ bool is_modifier_virtual_key(const WPARAM key) noexcept {
   }
 }
 
+// Key names only; the scan codes live in the binding's tooltip.
 std::wstring key_name_for_scan_code(const std::uint16_t code) {
   const LONG key_data = static_cast<LONG>((code & 0x00FFU) << 16U) |
                         ((code & 0xE000U) != 0 ? (1L << 24) : 0L);
   std::array<wchar_t, 128> name{};
-  std::wstring label =
-      GetKeyNameTextW(key_data, name.data(), static_cast<int>(name.size())) > 0
-          ? std::wstring(name.data())
-          : L"Keyboard key";
-  wchar_t suffix[24]{};
-  swprintf_s(suffix, L"  (scan 0x%04X)", code);
-  label += suffix;
-  return label;
+  return GetKeyNameTextW(key_data, name.data(), static_cast<int>(name.size())) >
+                 0
+             ? std::wstring(name.data())
+             : L"Keyboard key";
 }
 
-std::wstring cooldown_label(const layerc::core::CooldownDefinition &cooldown) {
-  return to_wide(cooldown.name) + L"  —  " +
-         duration_seconds_text(cooldown.duration) + L" s";
+std::wstring binding_token_label(const layerc::core::InputToken &token,
+                                 const layerc::core::GameProfile &profile);
+
+// "Shift + C or Mouse button 4" for every binding of `cooldown_id`.
+std::wstring bindings_label(const layerc::core::GameProfile &profile,
+                            const std::string_view cooldown_id) {
+  std::wstring bindings;
+  for (const auto &candidate : profile.bindings) {
+    if (candidate.cooldown_id != cooldown_id)
+      continue;
+    if (!bindings.empty())
+      bindings += L" or ";
+    std::wstring chord;
+    for (const auto &token : candidate.chord.tokens) {
+      if (!chord.empty())
+        chord += L" + ";
+      chord += binding_token_label(token, profile);
+    }
+    bindings += chord;
+  }
+  return bindings;
+}
+
+// "Dash · 6.5 s · Shift + C"
+std::wstring cooldown_label(const layerc::core::CooldownDefinition &cooldown,
+                            const layerc::core::GameProfile &profile) {
+  std::wstring label = to_wide(cooldown.name) + L"  ·  " +
+                       duration_seconds_text(cooldown.duration) + L" s";
+  if (const auto keys = bindings_label(profile, cooldown.id); !keys.empty())
+    label += L"  ·  " + keys;
+  return label;
 }
 
 std::wstring binding_token_label(const layerc::core::InputToken &token,
@@ -208,22 +233,29 @@ void EditorWindow::refresh_profile_controls() {
   set_owner_draw_checkbox(
       GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH),
       !document_.profile().game.executable_path.empty());
+  // An empty field shows its cue banner rather than hint text as a value.
   const auto &game = document_.profile().game;
-  std::wstring application = L"Choose a running application.";
-  if (!game.executable_path.empty())
-    application = to_wide(game.executable_path);
-  else if (!game.executable_name.empty())
-    application = to_wide(game.executable_name);
-  set_text(shell_.application_path, application);
+  set_text(shell_.application_path,
+           to_wide(game.executable_path.empty() ? game.executable_name
+                                                : game.executable_path));
+  // Keep the executable name (the end of a path) in view; the tooltip has
+  // the whole path.
+  const auto length = GetWindowTextLengthW(shell_.application_path);
+  SendMessageW(shell_.application_path, EM_SETSEL, static_cast<WPARAM>(length),
+               length);
+  SendMessageW(shell_.application_path, EM_SCROLLCARET, 0, 0);
   refresh_cooldown_list();
   refresh_bar_list();
   InvalidateRect(panel_preview_.window, nullptr, TRUE);
+  layout();
+  refresh_title();
 }
 
 void EditorWindow::refresh_cooldown_list(const int selection) {
   SendMessageW(cooldown_editor_.list, LB_RESETCONTENT, 0, 0);
   for (std::size_t index = 0; index < document_.profile().cooldowns.size(); ++index) {
-    const auto label = cooldown_label(document_.profile().cooldowns[index]);
+    const auto label = cooldown_label(document_.profile().cooldowns[index],
+                                      document_.profile());
     const auto item = SendMessageW(cooldown_editor_.list, LB_ADDSTRING, 0,
                                    reinterpret_cast<LPARAM>(label.c_str()));
     if (item != LB_ERR && item != LB_ERRSPACE)
@@ -245,7 +277,8 @@ void EditorWindow::refresh_selected_cooldown_label() {
   if (!selected)
     return;
   const auto [row, index] = *selected;
-  const auto label = cooldown_label(document_.profile().cooldowns[index]);
+  const auto label = cooldown_label(document_.profile().cooldowns[index],
+                                    document_.profile());
   auto sync = shell_.sync_scope();
   SendMessageW(cooldown_editor_.list, LB_DELETESTRING, static_cast<WPARAM>(row), 0);
   const LRESULT inserted = SendMessageW(
@@ -280,6 +313,11 @@ void EditorWindow::refresh_binding_controls() {
                        IDC_COOLDOWN_BINDING, IDC_CAPTURE_BINDING,
                        IDC_CAPTURE_HID})
     EnableWindow(GetDlgItem(shell_.window, id), has_selection);
+  // A profile keeps at least one cooldown: removal is unavailable, not an
+  // error to report afterwards.
+  EnableWindow(GetDlgItem(shell_.window, IDC_REMOVE_COOLDOWN),
+               has_selection && document_.profile().cooldowns.size() > 1);
+  follow_cooldown_bar();
   set_text(capture,
            cooldown_editor_.capturing_binding() ? L"Press chord..."
                                                 : L"Capture key");
@@ -316,18 +354,30 @@ void EditorWindow::refresh_binding_controls() {
     return;
   }
 
-  std::wstring bindings;
-  for (const auto &candidate : document_.profile().bindings) {
-    if (candidate.cooldown_id != cooldown->id) continue;
-    if (!bindings.empty()) bindings += L" or ";
-    std::wstring chord;
-    for (const auto &token : candidate.chord.tokens) {
-      if (!chord.empty()) chord += L" + ";
-      chord += binding_token_label(token, document_.profile());
-    }
-    bindings += chord;
-  }
+  const auto bindings = bindings_label(document_.profile(), cooldown->id);
   set_text(binding_control, bindings.empty() ? L"Unbound" : bindings);
+}
+
+std::wstring EditorWindow::binding_codes_text() {
+  const auto *cooldown = selected_cooldown();
+  if (cooldown == nullptr)
+    return L"Select a cooldown";
+  std::wstring text;
+  for (const auto &binding : document_.profile().bindings) {
+    if (binding.cooldown_id != cooldown->id)
+      continue;
+    for (const auto &token : binding.chord.tokens) {
+      if (token.device != layerc::core::InputDevice::keyboard)
+        continue;
+      wchar_t line[64]{};
+      swprintf_s(line, L"%s: scan code 0x%04X\n",
+                 key_name_for_scan_code(token.code).c_str(), token.code);
+      text += line;
+    }
+  }
+  if (!text.empty())
+    text.pop_back();
+  return text.empty() ? L"Capture key records the key or chord." : text;
 }
 
 void EditorWindow::begin_binding_capture() {
@@ -455,23 +505,17 @@ void EditorWindow::add_cooldown() {
 }
 
 void EditorWindow::remove_cooldown() {
-  if (document_.profile().cooldowns.size() <= 1) {
-    MessageBoxW(shell_.window, L"A profile needs at least one cooldown.",
-                L"LayerC Editor",
-                MB_OK | MB_ICONINFORMATION);
+  // The Remove button, menu items and Del are unavailable in these states.
+  if (document_.profile().cooldowns.size() <= 1)
     return;
-  }
   const auto selected = selected_cooldown_row(
       cooldown_editor_.list, document_.profile().cooldowns.size());
-  if (!selected) {
-    MessageBoxW(shell_.window, L"Select a cooldown to remove.", L"LayerC Editor",
-                MB_OK | MB_ICONINFORMATION);
+  if (!selected)
     return;
-  }
   const std::size_t index = selected->index;
   const auto &cooldown = document_.profile().cooldowns[index];
   const auto prompt = L"Remove '" + to_wide(cooldown.name) + L"'?";
-  if (MessageBoxW(shell_.window, prompt.c_str(), L"Remove cooldown",
+  if (themed_message_box(shell_.window, prompt.c_str(), L"Remove cooldown",
                   MB_YESNO | MB_ICONQUESTION) != IDYES)
     return;
   const auto id = cooldown.id;

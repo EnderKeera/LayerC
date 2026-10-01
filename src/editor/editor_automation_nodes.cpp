@@ -101,7 +101,7 @@ void AutomationEditor::refresh_nodes(const HWND dialog) {
     SendMessageW(tree, LB_SETCURSEL, static_cast<WPARAM>(selected_item), 0);
 
   SendDlgItemMessageW(dialog, IDC_AUTOMATION_VALIDATION, LB_RESETCONTENT, 0, 0);
-  std::wstring validation = L"No automation module";
+  std::wstring validation = L"No automations yet.";
   validation_has_error_ = false;
   if (owner_.document_.automation()) {
     const auto error = layerc::core::validate_automation_profile(
