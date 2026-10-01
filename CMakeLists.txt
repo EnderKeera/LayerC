@@ -925,7 +925,8 @@ if(LAYERC_BUILD_TESTS)
             src/daemon)
 
         layerc_add_test(layerc_companion_tests
-            SOURCES tests/companion_tests.cpp LINK layerc_gamebar
+            SOURCES tests/companion_tests.cpp tests/companion_widget_tests.cpp
+            LINK layerc_gamebar
             WIN32 TIMEOUT 30)
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
 

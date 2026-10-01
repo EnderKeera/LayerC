@@ -9,6 +9,7 @@ namespace winrt::LayerC::GameBar::implementation {
 
 struct PanelWidgetPage : PanelWidgetPageT<PanelWidgetPage> {
   PanelWidgetPage();
+  ~PanelWidgetPage();
 
   void
   OnNavigatedTo(Windows::UI::Xaml::Navigation::NavigationEventArgs const &args);
@@ -16,6 +17,7 @@ struct PanelWidgetPage : PanelWidgetPageT<PanelWidgetPage> {
       Windows::UI::Xaml::Navigation::NavigationEventArgs const &args);
 
 private:
+  void cleanup() noexcept;
   void render(std::optional<layerc::core::CompanionSessionSnapshot> snapshot);
   void apply_presentation();
   fire_and_forget
@@ -24,13 +26,15 @@ private:
 
   Microsoft::Gaming::XboxGameBar::XboxGameBarWidget widget_{nullptr};
   std::uint32_t slot_index_{};
-  std::uint64_t subscription_{};
+  layerc::gamebar::widget::SnapshotHub::Subscription subscription_;
   std::optional<layerc::core::CompanionSessionSnapshot> snapshot_;
-  event_token settings_token_{};
-  event_token theme_token_{};
-  event_token opacity_token_{};
-  event_token compact_token_{};
-  event_token click_through_token_{};
+  Windows::UI::Xaml::FrameworkElement::Unloaded_revoker unloaded_;
+  Windows::UI::Xaml::Window::Closed_revoker closed_;
+  Microsoft::Gaming::XboxGameBar::XboxGameBarWidget::SettingsClicked_revoker settings_;
+  Microsoft::Gaming::XboxGameBar::XboxGameBarWidget::RequestedThemeChanged_revoker theme_;
+  Microsoft::Gaming::XboxGameBar::XboxGameBarWidget::RequestedOpacityChanged_revoker opacity_;
+  Microsoft::Gaming::XboxGameBar::XboxGameBarWidget::CompactModeEnabledChanged_revoker compact_;
+  Microsoft::Gaming::XboxGameBar::XboxGameBarWidget::ClickThroughEnabledChanged_revoker click_through_;
 };
 
 } // namespace winrt::LayerC::GameBar::implementation
