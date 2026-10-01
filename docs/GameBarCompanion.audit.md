@@ -45,6 +45,10 @@ commit and the successful link with the package evidence.
 
 ## Outstanding manual and certification evidence
 
+Real UWP/Game Bar callback timing, dispatcher failures, and window close/reopen
+behavior remain **pending**. Controlled-interleaving companion tests establish
+ownership and latest-state policy, not observed platform timing.
+
 A production Game Bar release remains incomplete until all of the following are
 recorded:
 

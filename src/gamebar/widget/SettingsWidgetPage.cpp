@@ -7,10 +7,24 @@
 
 namespace winrt::LayerC::GameBar::implementation {
 
-SettingsWidgetPage::SettingsWidgetPage() { InitializeComponent(); }
+SettingsWidgetPage::SettingsWidgetPage() {
+  InitializeComponent();
+  unloaded_ = Unloaded(auto_revoke, [weak = get_weak()](const auto &, const auto &) {
+    if (const auto self = weak.get())
+      self->cleanup();
+  });
+}
+
+SettingsWidgetPage::~SettingsWidgetPage() { cleanup(); }
 
 void SettingsWidgetPage::OnNavigatedTo(
     Windows::UI::Xaml::Navigation::NavigationEventArgs const &) {
+  cleanup();
+  closed_ = Windows::UI::Xaml::Window::Current().Closed(
+      auto_revoke, [weak = get_weak()](const auto &, const auto &) {
+        if (const auto self = weak.get())
+          self->cleanup();
+      });
   subscription_ = layerc::gamebar::widget::subscribe_on_dispatcher(
       Dispatcher(), get_weak(), [](const auto &self, auto snapshot) {
         self->render(std::move(snapshot));
@@ -19,10 +33,18 @@ void SettingsWidgetPage::OnNavigatedTo(
 
 void SettingsWidgetPage::OnNavigatedFrom(
     Windows::UI::Xaml::Navigation::NavigationEventArgs const &) {
-  if (subscription_ != 0) {
-    layerc::gamebar::widget::SnapshotHub::instance().unsubscribe(subscription_);
-    subscription_ = 0;
-  }
+  cleanup();
+}
+
+void SettingsWidgetPage::cleanup() noexcept {
+  subscription_.reset();
+  closed_.revoke();
+  snapshot_.reset();
+  panel_ids_.clear();
+  panel_choices_.clear();
+  click_through_choices_.clear();
+  opacity_choices_.clear();
+  save_pending_ = false;
 }
 
 void SettingsWidgetPage::render(
@@ -123,6 +145,7 @@ void SettingsWidgetPage::SaveClicked(
 
 fire_and_forget SettingsWidgetPage::save() {
   auto lifetime = get_strong();
+  const auto subscription_lifetime = subscription_.lifetime();
   layerc::core::CompanionProfile profile;
   profile.profile_id = snapshot_->profile_id;
   std::set<std::string, std::less<>> selected_panels;
@@ -154,6 +177,8 @@ fire_and_forget SettingsWidgetPage::save() {
 
   const bool saved = co_await layerc::gamebar::widget::SnapshotHub::instance()
                          .save_preferences(std::move(profile));
+  if (subscription_lifetime.expired())
+    co_return;
   save_pending_ = false;
   StatusText().Text(saved ? L"Preferences saved."
                           : L"LayerD rejected or could not save preferences.");

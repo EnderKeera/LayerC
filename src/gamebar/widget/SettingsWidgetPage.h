@@ -7,6 +7,7 @@ namespace winrt::LayerC::GameBar::implementation {
 
 struct SettingsWidgetPage : SettingsWidgetPageT<SettingsWidgetPage> {
   SettingsWidgetPage();
+  ~SettingsWidgetPage();
 
   void
   OnNavigatedTo(Windows::UI::Xaml::Navigation::NavigationEventArgs const &args);
@@ -16,10 +17,13 @@ struct SettingsWidgetPage : SettingsWidgetPageT<SettingsWidgetPage> {
                    Windows::UI::Xaml::RoutedEventArgs const &);
 
 private:
+  void cleanup() noexcept;
   void render(std::optional<layerc::core::CompanionSessionSnapshot> snapshot);
   fire_and_forget save();
 
-  std::uint64_t subscription_{};
+  layerc::gamebar::widget::SnapshotHub::Subscription subscription_;
+  Windows::UI::Xaml::FrameworkElement::Unloaded_revoker unloaded_;
+  Windows::UI::Xaml::Window::Closed_revoker closed_;
   bool save_pending_{};
   std::optional<layerc::core::CompanionSessionSnapshot> snapshot_;
   std::vector<std::string> panel_ids_;

@@ -25,7 +25,7 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
 
 ## 1. Data Model (`layerc/core/companion.hpp`)
 
-- `CompanionSlotMapping`: slot index (0..7), `panelId`, `pinned`, `clickThrough`, `opacity` ($[0.1, 1.0]$).
+- `CompanionSlotMapping`: slot index (0..7), `panelId`, `pinned`, `clickThrough`, `opacity` ($[0.0, 1.0]$).
 - `CompanionProfile`: schema-1 sidecar containing a list of `CompanionSlotMapping` entries for a profile.
 - `CompanionSessionSnapshot`: immutable wire message with `profileId`, `sessionKey`, `timestampMs`, active `panels` (up to 8 panels $\times$ 32 items), catalog `availablePanels` (up to 64), and `preferences`.
 - `progress`: fraction elapsed toward ready ($0.0 = \text{triggered}, 1.0 = \text{ready}$).
@@ -57,7 +57,7 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
 - **`App`**: handles `ms-gamebarwidget:` protocol activations and routes `PanelSlot1`–`PanelSlot8` and `Settings` to their respective XAML pages. Hosts the `LayerC.GameBar.v1` App Service endpoint.
 - **`PanelWidgetPage`**: renders cooldown progress bars, remaining time, and charge counters; honors Game Bar theme, opacity, compact mode, pinning, and click-through.
 - **`SettingsWidgetPage`**: UI to map each of the 8 slots to available panels, set opacity sliders, and toggle click-through; sends validated preference documents back to LayerD.
-- **`WidgetSnapshotHub`**: in-process snapshot bus that validates incoming JSON, fans out to widget CoreWindows, and clears stale widgets after 2.0 seconds.
+- **`WidgetSnapshotHub`**: validates incoming canonical JSON and owns one connection-scoped App Service session (connection, task, deferral, and event revocations). Superseded requests and terminal callbacks cannot mutate a newer session. Notifications are invalidations: each widget reads a synchronized, monotonic-fresh value copy on its dispatcher. Callbacks and resource cleanup run outside state mutexes. Page-owned subscriptions cover navigation, unload, close, and destruction; queued work cannot outlive its subscription. The hub clears stale widgets after 2.0 seconds.
 
 ---
 
