@@ -69,9 +69,24 @@ jobs:
       - name: Run all CTest suites
         run: |
           $ErrorActionPreference = 'Continue'
+          ctest --test-dir build/vs2026 -C Debug --show-only=json-v1 |
+            Set-Content -LiteralPath "$env:LOG_DIR\ctest-registration.json" -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --preset vs2026-debug --output-on-failure --no-tests=error `
             --output-junit "$env:LOG_DIR\ctest-junit.xml" 2>&1 |
             Tee-Object -FilePath "$env:LOG_DIR\ctest.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # Same suite policy as the windows-msvc CI gate (tools/test-gates.json).
+      - name: Validate CTest results against the windows gate
+        run: |
+          $ErrorActionPreference = 'Continue'
+          python -m unittest tools/tests/test_linux_test_report.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/linux_test_report.py `
+            --registration "$env:LOG_DIR\ctest-registration.json" `
+            --junit "$env:LOG_DIR\ctest-junit.xml" --gate windows `
+            --report "$env:LOG_DIR\ctest-gate-summary.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload build and test logs

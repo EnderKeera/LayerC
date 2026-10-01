@@ -77,6 +77,7 @@ jobs:
             build/ci/lctest.exe
             build/ci/layerc_capture_probe.exe
             build/ci/layerc_automation_benchmark.exe
+            build/ci/layerc-build-identity.json
           if-no-files-found: error
 
   windows-analyze:
@@ -194,6 +195,11 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubicloud-standard-4
     timeout-minutes: 5
+    # Publications are serialized; publish-rolling.sh skips a commit older
+    # than the one rolling already publishes.
+    concurrency:
+      group: publish-rolling
+      cancel-in-progress: false
     permissions:
       actions: read
       contents: write

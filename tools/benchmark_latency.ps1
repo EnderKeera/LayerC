@@ -152,7 +152,8 @@ try {
         p95RegressionMs = [Math]::Round($p95Regression, 3)
         note = 'Same-machine A/B through the real Raw Input chord and hidden-to-visible overlay transition.'
     }
-    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath `
+        -BuildDirectory $CandidateBuildDirectory -Data $data `
         -Thresholds $thresholds -Passed $passed -Depth 6
     $result | ConvertTo-Json -Depth 6
     if (-not $passed) { exit 1 }

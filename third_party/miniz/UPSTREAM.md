@@ -9,18 +9,32 @@ Tag: 3.1.2
 
 Commit: 77d0dce8627735138c51770d1799a1ef48f2117d
 
-The unmodified miniz C and header sources plus LICENSE in this directory were
-copied from that tag. CMake generates miniz_export.h, matching upstream.
+## Upstream files
 
-SHA-256 hashes:
+These files are unmodified copies from that commit. Upstream mixes CRLF and
+LF line endings and Git checkouts may convert them, so each hash is the
+SHA-256 of the file with CRLF normalized to LF. The hashes identify the
+upstream bytes and stay valid on every checkout;
+`tools/tests/test_vendored_provenance.py` verifies them offline.
 
-    0115478d567121238cf6cc1c0c361926cf07a49d9e4c9e66da97fac6a01646b3  LICENSE
-    fa5bf07d72efa51640f9d8ee11431fd2538e6218aea9e9328905edeb54187997  miniz_common.h
-    69e4d7c2774708cf695cec4ace4bfb0bc3d00479c615d62fdacbe4a1669239b0  miniz_tdef.c
-    13574142e909c529c3c08bbd76be8ac23939370e08fdc9837e635b2e00b4883d  miniz_tdef.h
-    457e745d8fef9657b07e4c641548b49f029d54dd70d3fc83568253f51194cda4  miniz_tinfl.c
-    ef18f995b0151095a0e9ed718114bd03437c607b302ee979a9d371f157bacf8a  miniz_tinfl.h
-    c89273ef53c5ecb5170f18fb3c3e32da0255e5925949866c50a04d136c547ae3  miniz_zip.c
-    eff19da6bcd7e127bb4447bf67a6093a6e589ee496fd251a444ec3b58c1d86f4  miniz_zip.h
-    6a0314b68c9b804f33e27d89aa3144ef7724fd787043ba8c95d1b19be2d64afd  miniz.c
-    f4a1c9924def38eb2da543add6077c90acae3f3e8775d348abc953ff659b5f89  miniz.h
+    6f20fa7672b00e2e975c291df737cf227addf3ad32e36fef3fe0f416e4664d3d  LICENSE
+    f23204efee2bfaffb72a974d2e28c64c3c1d9787144b5c5890f129c465e467bd  miniz.c
+    f0b67217bdd8e45b74eb9b7c2c7ae20ed6760a1d76f3276b93617039ebd082df  miniz.h
+    f1ba29821c8caef83585b328196aa346c5da7c82890a70a3d10d77c6cec0ed39  miniz_common.h
+    85b93205232d51d092f24041934d951f11f9edc02df1f475e8ceb7b281a1e7f6  miniz_tdef.c
+    d62da02953c3834dfcbde4db026c6d9345013ef9b0e53185131016a3a4e48c33  miniz_tdef.h
+    2296ebd21ef9af5ebbefd5b454d4bb67d8fb4af2d24945e7fb32114374f75a76  miniz_tinfl.c
+    da4850920fdf09f8877d9affabe1ebba1852ce4b1ebbd121f2ba7a7ea8e57e5d  miniz_tinfl.h
+    b70e502c425e2a31146178c1466dccaf1874390009950774be2be9bd4ec908a9  miniz_zip.c
+    b062a5def545445c73fd1d664e35a89165dfb0d996ab848f507244e819cfcf04  miniz_zip.h
+
+## Local files
+
+- `miniz_export.h` is LayerC's own header, not an upstream file. Upstream's
+  CMake build generates it with `GenerateExportHeader`; LayerC builds
+  `layerc_miniz` as a static library only and checks in a fixed equivalent
+  whose export macros are empty.
+- `UPSTREAM.md` is this record.
+
+No upstream file is patched. A local change to an upstream file must be listed
+here with its reason, and its hash above updated, in the same commit.

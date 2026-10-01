@@ -1,5 +1,6 @@
 #include "layerc/platform/settings_store.hpp"
 
+#include <array>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -36,8 +37,21 @@ bool is_missing(const LSTATUS status) {
   return status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND;
 }
 
+// LAYERC_SETTINGS_KEY moves this process's settings to another HKCU key, the
+// way LAYERC_PROFILE_DIR moves its profiles, so benchmarks and tests never
+// write the user's own settings.
+std::wstring settings_root() {
+  std::array<wchar_t, 256> override_key{};
+  const DWORD length = GetEnvironmentVariableW(
+      L"LAYERC_SETTINGS_KEY", override_key.data(),
+      static_cast<DWORD>(override_key.size()));
+  if (length > 0 && length < override_key.size() && override_key[0] != L'\\')
+    return std::wstring(override_key.data(), length);
+  return settings_registry_key;
+}
+
 std::wstring registry_path(const std::wstring_view subkey) {
-  std::wstring path(settings_registry_key);
+  std::wstring path = settings_root();
   if (!subkey.empty()) {
     path.push_back(L'\\');
     path.append(subkey);
