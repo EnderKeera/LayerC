@@ -4,6 +4,7 @@
 
 #include "layerc/core/types.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -37,14 +38,15 @@ struct X11InputDevice {
                                             bool has_buttons, int valuators,
                                             bool has_scroll) noexcept;
 
-// XKB keysym to the Win32 virtual-key space the profile format uses (XK_e
-// 0x65 -> 0x45). nullopt for keys with no VK equivalent.
+// XKB physical key name to the Windows-authored scan-code token contract:
+// AD03 -> 0x12, RCTL -> 0xE01D. Unknown names are not guessed from keycodes
+// or layout symbols; the imported profile remains unchanged.
 [[nodiscard]] std::optional<std::uint16_t>
-keysym_to_vk(std::uint32_t keysym) noexcept;
+xkb_key_name_to_scan_code(std::string_view name) noexcept;
 
-// XI2 physical button to the normalized mouse code: X reports the wheel as
-// buttons 4/5 and side buttons as 6/7, while the profile space follows the
-// Windows daemon (4/5 side, 6/7 wheel).
+// Conventional X pointer numbering to profile codes: 2/3 -> middle/right
+// (3/2), 4/5 -> wheel (6/7), 8/9 -> side (4/5). Zero means unsupported;
+// in particular horizontal wheel buttons 6/7 are never side-button tokens.
 [[nodiscard]] std::uint16_t button_to_mouse_code(std::uint32_t button) noexcept;
 
 struct X11InputCapabilities {
@@ -96,6 +98,8 @@ public:
 
   // Rescans the XI2 device roster; true when it changed.
   [[nodiscard]] bool refresh_devices() noexcept;
+  // Read the current XKB physical names/aliases; called on map/name notices.
+  [[nodiscard]] bool refresh_keymap() noexcept;
 
 private:
   X11InputSource(struct _XDisplay *display, int xi_opcode,
@@ -110,6 +114,9 @@ private:
   std::uint64_t root_{};
   std::vector<X11InputDevice> devices_;
   std::vector<int> gamepads_;
+  std::array<std::uint16_t, 256> key_codes_{};
+  bool keymap_available_{};
+  int xkb_event_base_{};
 };
 
 } // namespace layerc::platform

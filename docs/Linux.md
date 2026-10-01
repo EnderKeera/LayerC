@@ -42,12 +42,16 @@ registers its socket on the event loop:
 | Capture | done | Composite named pixmaps + Damage coalescing, with a 100 ms bounded direct-window fallback; exposed by `layercal` |
 
 Input is **passive only**: events are read, never synthesized, and XTest is
-linked into the test binary alone — never into `layerd`. Keys are normalized
-from XKB keysyms (group 0, level 0 — the physical key, not the shifted
-character) into the profile's Win32 virtual-key space, so `XK_e` becomes
-`0x45`, matching a profile authored on Windows. Pointer buttons follow the
-Windows daemon's numbering: X wheel buttons 4/5 map to profile codes 6/7 and
-X side buttons 6/7 map to 4/5.
+linked into the test binary alone — never into `layerd`. The current server's
+XKB physical key names and aliases are translated into the existing Windows
+scan-code tokens, independent of layout symbols or a fixed keycode offset:
+physical E (`AD03`) is `0x12`, left Alt is `0x38`, and right Control is
+`0xE01D`. Left/right modifiers and extended navigation keys remain distinct;
+unknown physical names leave their bindings inactive without rewriting profiles.
+XKB map/name changes refresh the translation. Pointer buttons follow the
+Windows daemon's numbering: conventional X middle/right buttons 2/3 map to
+profile 3/2, wheel buttons 4/5 to 6/7, and back/forward buttons 8/9 to 4/5.
+Horizontal wheel buttons 6/7 are unsupported, not aliases for side buttons.
 
 Gamepads are the gamepad-class devices XI2 exposes (buttons plus at least two
 axes, no scroll class, no pointer-like name); when none is visible the daemon
