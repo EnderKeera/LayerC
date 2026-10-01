@@ -176,6 +176,24 @@ function Get-LayerCCommitSha {
     return $sha.ToLowerInvariant()
 }
 
+# Parameters for run-hardware-benchmarks.ps1, keyed by name. Splat the
+# hashtable: an array splats positionally, so '-CandidateBuildDirectory' would
+# bind as a value instead of naming the parameter.
+function New-LayerCHardwareBenchmarkArguments {
+    param(
+        [Parameter(Mandatory)][string]$CandidateBuildDirectory,
+        [string]$BaselineBuildDirectory = '',
+        [switch]$VisualOnly
+    )
+    $arguments = @{ CandidateBuildDirectory = $CandidateBuildDirectory }
+    if ($VisualOnly) {
+        $arguments.VisualOnly = $true
+    } elseif (-not [string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
+        $arguments.BaselineBuildDirectory = $BaselineBuildDirectory
+    }
+    return $arguments
+}
+
 function New-LayerCBenchmarkResult {
     param(
         [Parameter(Mandatory)][string]$OutputPath,
@@ -319,5 +337,5 @@ Export-ModuleMember -Function Assert-NativeSuccess, Assert-LayerCExecutables,
     Resolve-LayerCBuildRoot, New-LayerCBenchmarkContext,
     Assert-LayerCQuiescent, Enter-LayerCProfileSandbox, Exit-LayerCProfileSandbox,
     Start-LayerCDaemon, Stop-LayerCBenchmarkProcess, Get-LayerCPackageVersion,
-    Get-LayerCCommitSha, New-LayerCBenchmarkResult, Measure-LayerCPlateau,
-    Set-BenchmarkForeground
+    Get-LayerCCommitSha, New-LayerCHardwareBenchmarkArguments,
+    New-LayerCBenchmarkResult, Measure-LayerCPlateau, Set-BenchmarkForeground

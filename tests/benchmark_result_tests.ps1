@@ -23,3 +23,26 @@ try {
 } finally {
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
 }
+
+# push-and-test.ps1 forwards to run-hardware-benchmarks.ps1; bind its real
+# param block without running any benchmark.
+$runner = Join-Path $PSScriptRoot '../tools/run-hardware-benchmarks.ps1'
+$parseErrors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile($runner, [ref]$null, [ref]$parseErrors)
+if ($parseErrors) { throw "Could not parse ${runner}: $parseErrors" }
+$capture = [scriptblock]::Create($ast.ParamBlock.Extent.Text + "`n`$PSBoundParameters")
+$visual = New-LayerCHardwareBenchmarkArguments -CandidateBuildDirectory 'C:\candidate' `
+    -BaselineBuildDirectory 'C:\ignored' -VisualOnly
+$bound = & $capture @visual
+if ($bound.CandidateBuildDirectory -ne 'C:\candidate' -or -not $bound.VisualOnly -or
+    $bound.ContainsKey('BaselineBuildDirectory')) {
+    throw "Visual-only benchmark arguments bound incorrectly: $($bound | Out-String)"
+}
+$compare = New-LayerCHardwareBenchmarkArguments -CandidateBuildDirectory 'C:\candidate' `
+    -BaselineBuildDirectory 'C:\baseline'
+$bound = & $capture @compare
+if ($bound.CandidateBuildDirectory -ne 'C:\candidate' -or
+    $bound.BaselineBuildDirectory -ne 'C:\baseline' -or $bound.ContainsKey('VisualOnly')) {
+    throw "Baseline benchmark arguments bound incorrectly: $($bound | Out-String)"
+}
+Write-Output 'Hardware benchmark argument forwarding passed.'
