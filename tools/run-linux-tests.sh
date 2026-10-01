@@ -188,8 +188,20 @@ git -c "safe.directory=$source_dir" -C "$source_dir" status --short >"$evidence_
   flatpak-builder --version 2>/dev/null || true
 } >"$evidence_dir/tool-versions.txt"
 
+# Statically linked miniz must ship its MIT notice in every Linux install tree.
+assert_notices() {
+  local root=$1 notice
+  for notice in THIRD_PARTY_NOTICES.md miniz/LICENSE miniz/UPSTREAM.md; do
+    if [[ ! -s $root/share/licenses/LayerC/$notice ]]; then
+      echo "error: $root lacks share/licenses/LayerC/$notice" >&2
+      return 1
+    fi
+  done
+  echo "third-party notices present under $root/share/licenses/LayerC"
+}
+
 run_logged report-helper-tests \
-  python3 -m unittest "$source_dir/tools/tests/test_linux_test_report.py"
+  python3 -m unittest discover -s "$source_dir/tools/tests"
 run_logged shell-helper-tests bash "$source_dir/tools/tests/test_linux_lib.sh"
 
 run_logged configure cmake -S "$source_dir" -B "$build_dir" -G Ninja \
@@ -205,6 +217,7 @@ if [[ $flatpak_only == true ]]; then
 else
   run_logged build cmake --build "$build_dir" --parallel
   run_logged install cmake --install "$build_dir"
+  run_logged install-notices assert_notices "$build_dir/install"
 
   ctest --test-dir "$build_dir" --show-only=json-v1 \
     >"$evidence_dir/ctest-registration.json"
@@ -215,7 +228,7 @@ else
     --output-junit "$headless_junit"
   run_logged verify-headless python3 "$source_dir/tools/linux_test_report.py" \
     --registration "$evidence_dir/ctest-registration.json" \
-    --junit "$headless_junit" --label headless \
+    --junit "$headless_junit" --gate linux-headless \
     --report "$evidence_dir/ctest-headless-summary.json"
 
   run_logged native-headless-smoke env -u DISPLAY \
@@ -230,7 +243,7 @@ else
     --output-junit "$x11_junit"
   run_logged verify-x11 python3 "$source_dir/tools/linux_test_report.py" \
     --registration "$evidence_dir/ctest-registration.json" \
-    --junit "$x11_junit" --label x11 \
+    --junit "$x11_junit" --gate linux-x11 \
     --report "$evidence_dir/ctest-x11-summary.json"
   run_logged native-x11-smoke xvfb-run -a \
     bash "$source_dir/tools/linux-runtime-smoke.sh" x11 \
@@ -295,6 +308,7 @@ PY
     "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
   run_logged flatpak-build flatpak-builder --force-clean \
     --repo="$flatpak_repo" "$flatpak_build" "$manifest"
+  run_logged flatpak-notices assert_notices "$flatpak_build/files"
   run_logged flatpak-add-remote flatpak --user remote-add \
     --if-not-exists --no-gpg-verify layerc-automation "file://$flatpak_repo"
   run_logged flatpak-install flatpak --user install \

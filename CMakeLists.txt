@@ -626,12 +626,9 @@ if(WIN32)
     endforeach()
     # The portable ZIP intentionally remains desktop-only. Game Bar package
     # inputs are staged only by the explicit layerc_gamebar_msix target.
-    install(FILES
-        README.md
-        THIRD_PARTY_NOTICES.md
-        DESTINATION . COMPONENT Runtime)
-    install(FILES third_party/miniz/LICENSE third_party/miniz/UPSTREAM.md
-        DESTINATION licenses/miniz COMPONENT Runtime)
+    install(FILES README.md DESTINATION . COMPONENT Runtime)
+    set(layerc_notice_dir .)
+    set(layerc_miniz_notice_dir licenses/miniz)
 
     if(MINGW AND LAYERC_MINGW_RUNTIME_DLLS)
         install(FILES ${LAYERC_MINGW_RUNTIME_DLLS}
@@ -662,7 +659,15 @@ else()
         install(FILES "${CMAKE_CURRENT_BINARY_DIR}/io.github.EnderKeera.LayerC.service"
             DESTINATION "${LAYERC_SYSTEMD_USER_UNIT_DIR}" COMPONENT Runtime)
     endif()
+    set(layerc_notice_dir ${CMAKE_INSTALL_DATADIR}/licenses/LayerC)
+    set(layerc_miniz_notice_dir ${layerc_notice_dir}/miniz)
 endif()
+# Every installed program statically links miniz (through layerc_bundle or the
+# Linux template decoder), so every install carries its MIT notice.
+install(FILES THIRD_PARTY_NOTICES.md
+    DESTINATION ${layerc_notice_dir} COMPONENT Runtime)
+install(FILES third_party/miniz/LICENSE third_party/miniz/UPSTREAM.md
+    DESTINATION ${layerc_miniz_notice_dir} COMPONENT Runtime)
 
 if(WIN32)
 set(CPACK_GENERATOR "ZIP")

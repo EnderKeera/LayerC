@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Validate that a CTest run exercised every registered suite in its gate."""
+"""Validate a CTest run against its gate's checked-in suite policy.
+
+The expected suites come from tools/test-gates.json, never from what the build
+happened to register: a suite that stops being registered, or loses its gate
+label, fails the gate instead of silently leaving it.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,41 @@ import argparse
 import json
 import sys
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
 from pathlib import Path
+
+DEFAULT_POLICY = Path(__file__).with_name("test-gates.json")
+
+@dataclass(frozen=True)
+class Gate:
+    """One gate's suites. Optional suites run only where registered."""
+
+    name: str
+    required: frozenset[str]
+    label: str | None = None
+    optional: frozenset[str] = field(default_factory=frozenset)
+    allow_skip: frozenset[str] = field(default_factory=frozenset)
+
+def load_gate(policy: Path, name: str) -> Gate:
+    document = json.loads(policy.read_text(encoding="utf-8"))
+    gates = document["gates"]
+    if name not in gates:
+        raise ValueError(f"unknown gate {name!r}; known: {', '.join(sorted(gates))}")
+    entry = gates[name]
+    gate = Gate(
+        name=name,
+        required=frozenset(entry["required"]),
+        label=entry.get("label"),
+        optional=frozenset(entry.get("optional", {})),
+        allow_skip=frozenset(entry.get("allowSkip", {})),
+    )
+    if not gate.required:
+        raise ValueError(f"gate {name!r} requires no suites")
+    if gate.required & gate.optional:
+        raise ValueError(f"gate {name!r} lists suites as both required and optional")
+    if not gate.allow_skip <= gate.required | gate.optional:
+        raise ValueError(f"gate {name!r} allows skips for suites outside the gate")
+    return gate
 
 
 def registered_names(path: Path, labels: tuple[str, ...] = ()) -> set[str]:
@@ -46,35 +85,39 @@ def skip_reason(case: ET.Element) -> str:
     )
 
 
-def validate(
-    registration: Path,
-    junit: Path,
-    required: list[str],
-    *,
-    labels: tuple[str, ...] = (),
-    allow_skip: tuple[str, ...] = (),
-) -> dict[str, object]:
+def validate(registration: Path, junit: Path, gate: Gate) -> dict[str, object]:
     registered = registered_names(registration)
-    selected = registered_names(registration, labels) if labels else registered
-    required_names = set(required) | selected if labels else set(required)
+    labelled = (
+        registered_names(registration, (gate.label,)) if gate.label else registered
+    )
+    expected = gate.required | (gate.optional & registered)
     counts, cases = junit_details(junit)
-    missing = sorted(required_names - registered)
-    missing_executed = sorted(required_names - cases.keys())
-    unexpected = sorted(cases.keys() - required_names)
+    missing = sorted(gate.required - registered)
+    unlabelled = sorted((expected & registered) - labelled) if gate.label else []
+    unlisted = sorted(labelled - gate.required - gate.optional)
+    missing_executed = sorted(expected - cases.keys())
+    unexpected = sorted(cases.keys() - expected)
     unregistered = sorted(cases.keys() - registered)
     unexpected_skips = sorted(
         name for name, case in cases.items()
-        if case.find("skipped") is not None and name not in allow_skip
+        if case.find("skipped") is not None and name not in gate.allow_skip
     )
     not_run = sorted(
         name for name, case in cases.items()
         if case.get("status") in ("notrun", "disabled")
     )
     problems: list[str] = []
-    if not required_names:
-        problems.append("no required tests were selected")
     if missing:
         problems.append("required tests are not registered: " + ", ".join(missing))
+    if unlabelled:
+        problems.append(
+            f"gate suites lack the {gate.label} label: " + ", ".join(unlabelled)
+        )
+    if unlisted:
+        problems.append(
+            f"registered {gate.label or 'suites'} not in the {gate.name} gate policy: "
+            + ", ".join(unlisted)
+        )
     if missing_executed:
         problems.append("required tests did not run: " + ", ".join(missing_executed))
     if counts["tests"] == 0:
@@ -101,7 +144,13 @@ def validate(
         )
     return {
         **counts,
-        "required": sorted(required_names),
+        "gate": gate.name,
+        "required": sorted(gate.required),
+        "optionalRun": sorted(gate.optional & cases.keys()),
+        "allowedSkips": sorted(
+            name for name in gate.allow_skip
+            if name in cases and cases[name].find("skipped") is not None
+        ),
         "missingRequired": missing,
         "missingExecuted": missing_executed,
         "unexpected": unexpected,
@@ -114,16 +163,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--registration", required=True, type=Path)
     parser.add_argument("--junit", required=True, type=Path)
-    parser.add_argument("--required", action="append", default=[])
-    parser.add_argument("--label", action="append", default=[])
-    parser.add_argument("--allow-skip", action="append", default=[])
+    parser.add_argument("--gate", required=True)
+    parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
 
     try:
         report = validate(
-            args.registration, args.junit, args.required,
-            labels=tuple(args.label), allow_skip=tuple(args.allow_skip),
+            args.registration, args.junit, load_gate(args.policy, args.gate)
         )
     except (OSError, ValueError, KeyError, ET.ParseError) as error:
         report = {
@@ -136,7 +183,7 @@ def main() -> int:
         assert isinstance(problems, list)
         print("error: " + "; ".join(str(problem) for problem in problems), file=sys.stderr)
         return 1
-    print(f"Verified {report['tests']} CTest suites against registration")
+    print(f"Verified {report['tests']} CTest suites against the {args.gate} gate")
     return 0
 
 

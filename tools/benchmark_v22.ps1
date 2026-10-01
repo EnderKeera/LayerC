@@ -96,7 +96,8 @@ try {
         }
         note = 'Empty profile directory. LayerE is opened without edit mode; RuntimeService demand-matrix tests verify no visual, template, HID, edit-overlay, timer, or worker ownership.'
     }
-    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath `
+        -BuildDirectory $context.BuildDirectory -Data $data `
         -Thresholds $thresholds -Passed $passed -Depth 7
     $result | ConvertTo-Json -Depth 7
     if (-not $passed) { exit 1 }

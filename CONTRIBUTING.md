@@ -53,17 +53,45 @@ and manual dispatch; a newer push to a pull request cancels its older run.
 | `linux-flatpak` | 25.08 manifest with required daemon/control/X11 smoke under Xvfb (`--flatpak-only`) |
 | `publish-rolling` | `main` pushes only; needs all five jobs above and publishes the `rolling` prerelease |
 
-CTest fails on empty runs, missing required suites, and unexpected skips. The
-only allowed skip is `layerc_overlay_tests` when the runner cannot create an
-isolated desktop; report it as unavailable interactive coverage, not a pass.
+Every CTest gate (`windows-msvc`, `windows-selfhosted.yml`, and the Linux
+`headless` and `x11` stages) is validated by
+[`tools/linux_test_report.py`](tools/linux_test_report.py) against the suites
+that [`tools/test-gates.json`](tools/test-gates.json) names for it, not against
+whatever happened to be registered. A gate fails on empty runs, a required
+suite that is unregistered, unlabelled, or did not run, a labelled suite the
+policy does not list, and skips the policy does not name. Adding or removing a
+suite therefore updates the policy in the same change. The only allowed skip is
+`layerc_overlay_tests` when the runner cannot create an isolated desktop;
+report it as unavailable interactive coverage, not a pass. The only optional
+suite is `layerc_benchmark_result_tests` on Linux, which registers only where
+`pwsh` is installed.
 [`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
 same setup and `build-package` actions, so benchmark gating cannot drift.
 Releases and `rolling` ship only the Windows x64 ZIP.
 
+[`tools/publish-rolling.sh`](tools/publish-rolling.sh) promotes `rolling` in
+one serialized job (`concurrency: publish-rolling`). It skips a commit older
+than the one already published, uploads the package under a non-ZIP staging
+name and verifies the served bytes, swaps it in as the only
+`layerc-windows-x64.zip`, moves the `rolling` tag explicitly (`gh release edit
+--target` never moves an existing tag), and finally writes notes naming
+`main@<commit>` and the ZIP's SHA-256. Those notes are the commit point:
+`publish-rolling.sh --verify` and `tools/pull-ci.ps1` accept `rolling` only when
+the tag, the noted commit, and the ZIP's SHA-256 agree, so an interrupted
+publication is refused rather than half-used, and rerunning the job converges.
+`tools/tests/test_publish_rolling.py` injects a failure at every mutation
+against a fake `gh`.
+
 Artifacts: `layerc-windows-x64` is the full bundle (install layout, benchmark
 JSON, ZIP); `layerc-windows-x64-tools` feeds hardware benchmarks and
 `tools/push-and-test.ps1`; only `publish-rolling` consumes
-`layerc-rolling-package`.
+`layerc-rolling-package`. The build writes `layerc-build-identity.json`
+(commit, run, attempt, configuration) next to its binaries and ships it in
+`layerc-windows-x64-tools`. Benchmark results take `commitSha` and `build` from
+that file, never from the workflow event; `benchmarks.yml` and
+`push-and-test.ps1` refuse to measure unless it and the checkout match the
+resolved candidate. Results from a local build directory are marked
+`local-build` with the checkout's commit and dirty state.
 
 Other workflows:
 
@@ -83,7 +111,18 @@ with `run.cmd` under a signed-in user with autostart, never as a service,
 because visual capture needs the real screen. Keep it quiescent: CI fails,
 listing PIDs, when `layerd` or `layere` is running and never kills them. CI
 writes only inside `GITHUB_WORKSPACE`; syncing the rolling install locally is
-the manual `tools/pull-ci.ps1` step.
+the manual `tools/pull-ci.ps1` step. Benchmarks run their daemons with
+disposable profiles (`LAYERC_PROFILE_DIR`) and a disposable
+`HKCU\Software\LayerC.Benchmark\<run>` settings key (`LAYERC_SETTINGS_KEY`),
+both removed afterwards; they never read or write the user's
+`HKCU\Software\LayerC`.
+
+The V2.3 automation resource gate measures baseline, activation, and disable
+within one owned daemon PID. Its disposable sidecar is absent at baseline,
+installed for activation, and removed before the supported profile reload on
+disable. Recovery is sampled only after observing the active event's reset on
+the retained handle; a restart is not teardown evidence. Evaluator thresholds
+in the result come from the measured executable, including Debug/Release limits.
 
 To reproduce the hardware benchmarks for a CI run:
 

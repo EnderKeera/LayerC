@@ -19,11 +19,20 @@ runs:
         }
         exit $LASTEXITCODE
 
+    # Travels with the binaries in every artifact, so later measurements name
+    # the commit and run that built them (tools/LayerC.Tools.psm1).
+    - name: Record build identity
+      shell: pwsh
+      run: |
+        Import-Module ./tools/LayerC.Tools.psm1 -Force
+        Write-LayerCBuildIdentity -BuildDirectory build/ci -Configuration ci |
+          ConvertTo-Json
+
     - name: Test
       shell: pwsh
       run: |
-        python -m unittest tools/tests/test_linux_test_report.py
-        if ($LASTEXITCODE -ne 0) { throw 'CTest result policy tests failed.' }
+        python -m unittest discover -s tools/tests
+        if ($LASTEXITCODE -ne 0) { throw 'Tooling policy tests failed.' }
         $registration = Join-Path $PWD 'build/ci/test-registration.json'
         ctest --test-dir build/ci --show-only=json-v1 |
           Set-Content -LiteralPath $registration -Encoding utf8
@@ -32,12 +41,11 @@ runs:
         ctest --preset ci --output-on-failure --no-tests=error `
           --output-junit $reportPath
         if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
-        # A runner may lack CreateDesktop authority; that single skipped suite
-        # is explicitly allowed, but every other registered required suite
-        # must have executed and passed.
+        # tools/test-gates.json names every suite this gate must run; its only
+        # allowed skip is layerc_overlay_tests on a runner without
+        # CreateDesktop authority.
         python tools/linux_test_report.py --registration $registration `
-          --junit $reportPath --label required `
-          --allow-skip layerc_overlay_tests `
+          --junit $reportPath --gate windows `
           --report build/ci/test-result-summary.json
         if ($LASTEXITCODE -ne 0) { throw 'CTest result validation failed.' }
 

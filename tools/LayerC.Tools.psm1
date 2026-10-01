@@ -122,9 +122,33 @@ function Assert-LayerCQuiescent {
     }
 }
 
+# A sandbox also owns a disposable HKCU settings key, handed to every LayerC
+# process started inside it through LAYERC_SETTINGS_KEY, so benchmarks never
+# read or write the user's HKCU\Software\LayerC.
+function Get-LayerCSandboxSettingsKey {
+    param([Parameter(Mandatory)][string]$TemporaryDirectory)
+    return 'Software\LayerC.Benchmark\' + (Split-Path -Leaf $TemporaryDirectory)
+}
+
 function Enter-LayerCProfileSandbox {
     param([Parameter(Mandatory)][string]$ProfileDirectory)
     [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $ProfileDirectory, 'Process')
+    $key = Get-LayerCSandboxSettingsKey -TemporaryDirectory (Split-Path -Parent $ProfileDirectory)
+    $script:PreviousSettingsKey = [Environment]::GetEnvironmentVariable('LAYERC_SETTINGS_KEY', 'Process')
+    [void](New-Item -Path "HKCU:\$key" -Force)
+    [Environment]::SetEnvironmentVariable('LAYERC_SETTINGS_KEY', $key, 'Process')
+}
+
+function Set-LayerCSandboxSetting {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][int]$Value
+    )
+    $key = [Environment]::GetEnvironmentVariable('LAYERC_SETTINGS_KEY', 'Process')
+    if ($key -notlike 'Software\LayerC.Benchmark\*') {
+        throw 'LayerC settings are written only inside a benchmark sandbox.'
+    }
+    Set-ItemProperty -LiteralPath "HKCU:\$key" -Name $Name -Type DWord -Value $Value
 }
 
 function Exit-LayerCProfileSandbox {
@@ -134,7 +158,21 @@ function Exit-LayerCProfileSandbox {
         [Parameter(Mandatory)][string]$TemporaryDirectory,
         [switch]$KeepTemporary
     )
-    [Environment]::SetEnvironmentVariable('LAYERC_PROFILE_DIR', $PreviousDirectory, 'Process')
+    # PowerShell passes $null to .NET strings as '', which now sets an empty
+    # variable instead of removing it; [NullString] removes it.
+    foreach ($restore in @(@('LAYERC_PROFILE_DIR', $PreviousDirectory),
+            @('LAYERC_SETTINGS_KEY', $script:PreviousSettingsKey))) {
+        $value = if ($null -eq $restore[1]) { [NullString]::Value } else { [string]$restore[1] }
+        [Environment]::SetEnvironmentVariable($restore[0], $value, 'Process')
+    }
+    $settings = 'HKCU:\' + (Get-LayerCSandboxSettingsKey -TemporaryDirectory $TemporaryDirectory)
+    if (Test-Path -LiteralPath $settings) {
+        Remove-Item -LiteralPath $settings -Recurse -Force
+    }
+    $parent = Split-Path -Parent $settings
+    if ((Test-Path -LiteralPath $parent) -and -not (Get-ChildItem -LiteralPath $parent)) {
+        Remove-Item -LiteralPath $parent -Force
+    }
     if (-not $KeepTemporary -and (Test-Path -LiteralPath $TemporaryDirectory)) {
         Remove-Item -LiteralPath $TemporaryDirectory -Recurse -Force
     }
@@ -163,22 +201,127 @@ function Get-LayerCPackageVersion {
     return $Matches[1]
 }
 
+$script:BuildIdentityFile = 'layerc-build-identity.json'
+
 function Get-LayerCCommitSha {
-    if ($env:GITHUB_SHA -match '^[0-9a-fA-F]{40}$') {
-        return $env:GITHUB_SHA.ToLowerInvariant()
-    }
     $repository = Split-Path -Parent $PSScriptRoot
     $sha = (& git -C $repository rev-parse --verify HEAD).Trim()
-    Assert-NativeSuccess 'Resolving the benchmark commit'
+    Assert-NativeSuccess 'Resolving the checked-out commit'
     if ($sha -notmatch '^[0-9a-fA-F]{40}$') {
-        throw "Git returned an invalid benchmark commit: $sha"
+        throw "Git returned an invalid commit: $sha"
     }
     return $sha.ToLowerInvariant()
+}
+
+# Written by the CI build next to its binaries and carried with them through
+# artifacts, so measurements name the commit that was built rather than the
+# workflow event that happened to run them.
+function Write-LayerCBuildIdentity {
+    param(
+        [Parameter(Mandatory)][string]$BuildDirectory,
+        [Parameter(Mandatory)][string]$Configuration
+    )
+    if ($env:GITHUB_RUN_ID -notmatch '^[0-9]+$' -or $env:GITHUB_RUN_ATTEMPT -notmatch '^[0-9]+$') {
+        throw 'A build identity is recorded only by a GitHub Actions build.'
+    }
+    $repository = Split-Path -Parent $PSScriptRoot
+    $changes = @(& git -C $repository status --porcelain --untracked-files=no)
+    Assert-NativeSuccess 'Checking the built source tree'
+    $identity = [ordered]@{
+        schemaVersion = 1
+        source = 'ci-artifact'
+        commitSha = Get-LayerCCommitSha
+        dirty = $changes.Count -ne 0
+        workflow = $env:GITHUB_WORKFLOW
+        runId = $env:GITHUB_RUN_ID
+        runAttempt = $env:GITHUB_RUN_ATTEMPT
+        configuration = $Configuration
+    }
+    $path = Join-Path $BuildDirectory $script:BuildIdentityFile
+    [IO.File]::WriteAllText($path, ($identity | ConvertTo-Json) + "`n",
+        (New-Object System.Text.UTF8Encoding($false)))
+    return $identity
+}
+
+# The identity of the binaries in BuildDirectory. Without a CI identity file
+# the binaries are a local build, recorded against the checkout (and whether
+# it was dirty) without claiming they were verified to come from it.
+function Get-LayerCBuildIdentity {
+    param([Parameter(Mandatory)][string]$BuildDirectory)
+    $path = Join-Path $BuildDirectory $script:BuildIdentityFile
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        $file = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+        if ($file.source -ne 'ci-artifact' -or $file.commitSha -notmatch '^[0-9a-f]{40}$' -or
+            [string]$file.runId -notmatch '^[0-9]+$') {
+            throw "Invalid build identity: $path"
+        }
+        return [ordered]@{
+            source = 'ci-artifact'
+            commitSha = [string]$file.commitSha
+            dirty = [bool]$file.dirty
+            workflow = [string]$file.workflow
+            runId = [string]$file.runId
+            runAttempt = [string]$file.runAttempt
+            configuration = [string]$file.configuration
+        }
+    }
+    $repository = Split-Path -Parent $PSScriptRoot
+    $changes = @(& git -C $repository status --porcelain --untracked-files=no)
+    Assert-NativeSuccess 'Checking the local source tree'
+    return [ordered]@{
+        source = 'local-build'
+        commitSha = Get-LayerCCommitSha
+        dirty = $changes.Count -ne 0
+        buildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
+    }
+}
+
+# Refuses to measure binaries whose recorded build is not the resolved
+# candidate, or a checkout whose scripts are not that candidate's.
+function Assert-LayerCBuildIdentity {
+    param(
+        [Parameter(Mandatory)][string]$BuildDirectory,
+        [Parameter(Mandatory)][string]$CommitSha,
+        [Parameter(Mandatory)][string]$RunId
+    )
+    $identity = Get-LayerCBuildIdentity -BuildDirectory $BuildDirectory
+    $expected = $CommitSha.ToLowerInvariant()
+    if ($identity.source -ne 'ci-artifact') {
+        throw "$BuildDirectory has no CI build identity; refusing to attribute it to $expected."
+    }
+    if ($identity.commitSha -ne $expected -or $identity.runId -ne $RunId) {
+        throw ("Downloaded binaries were built from $($identity.commitSha) in run " +
+            "$($identity.runId), not candidate $expected in run $RunId.")
+    }
+    $checkout = Get-LayerCCommitSha
+    if ($checkout -ne $expected) {
+        throw "The checkout is $checkout, not candidate $expected."
+    }
+    return $identity
+}
+
+# Parameters for run-hardware-benchmarks.ps1, keyed by name. Splat the
+# hashtable: an array splats positionally, so '-CandidateBuildDirectory' would
+# bind as a value instead of naming the parameter.
+function New-LayerCHardwareBenchmarkArguments {
+    param(
+        [Parameter(Mandatory)][string]$CandidateBuildDirectory,
+        [string]$BaselineBuildDirectory = '',
+        [switch]$VisualOnly
+    )
+    $arguments = @{ CandidateBuildDirectory = $CandidateBuildDirectory }
+    if ($VisualOnly) {
+        $arguments.VisualOnly = $true
+    } elseif (-not [string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
+        $arguments.BaselineBuildDirectory = $BaselineBuildDirectory
+    }
+    return $arguments
 }
 
 function New-LayerCBenchmarkResult {
     param(
         [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter(Mandatory)][string]$BuildDirectory,
         [Parameter(Mandatory)][Collections.IDictionary]$Data,
         [Parameter(Mandatory)][Collections.IDictionary]$Thresholds,
         [Parameter(Mandatory)][bool]$Passed,
@@ -194,10 +337,12 @@ function New-LayerCBenchmarkResult {
     foreach ($entry in $HostData.GetEnumerator()) {
         $hostInfo[$entry.Key] = $entry.Value
     }
+    $build = Get-LayerCBuildIdentity -BuildDirectory $BuildDirectory
     $result = [ordered]@{
         schemaVersion = 1
         packageVersion = Get-LayerCPackageVersion
-        commitSha = Get-LayerCCommitSha
+        commitSha = $build.commitSha
+        build = $build
         measuredAt = (Get-Date).ToUniversalTime().ToString('o')
         host = $hostInfo
     }
@@ -318,6 +463,8 @@ function Set-BenchmarkForeground {
 Export-ModuleMember -Function Assert-NativeSuccess, Assert-LayerCExecutables,
     Resolve-LayerCBuildRoot, New-LayerCBenchmarkContext,
     Assert-LayerCQuiescent, Enter-LayerCProfileSandbox, Exit-LayerCProfileSandbox,
+    Set-LayerCSandboxSetting,
     Start-LayerCDaemon, Stop-LayerCBenchmarkProcess, Get-LayerCPackageVersion,
-    Get-LayerCCommitSha, New-LayerCBenchmarkResult, Measure-LayerCPlateau,
-    Set-BenchmarkForeground
+    Get-LayerCCommitSha, Write-LayerCBuildIdentity, Get-LayerCBuildIdentity,
+    Assert-LayerCBuildIdentity, New-LayerCHardwareBenchmarkArguments,
+    New-LayerCBenchmarkResult, Measure-LayerCPlateau, Set-BenchmarkForeground

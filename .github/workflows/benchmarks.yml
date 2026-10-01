@@ -67,6 +67,19 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: tools-build
 
+      # The workflow event's SHA is not the candidate on workflow_run or a
+      # manual run; evidence is attributed only after the downloaded build and
+      # this checkout both match the resolved candidate.
+      - name: Verify candidate identity
+        shell: pwsh
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.headSha }}
+          CANDIDATE_RUN_ID: ${{ steps.candidate.outputs.runId }}
+        run: |
+          Import-Module .\tools\LayerC.Tools.psm1 -Force
+          Assert-LayerCBuildIdentity -BuildDirectory tools-build `
+            -CommitSha $env:CANDIDATE_SHA -RunId $env:CANDIDATE_RUN_ID | ConvertTo-Json
+
       - name: Fetch V2.2 baseline
         id: baseline
         shell: pwsh

@@ -75,11 +75,10 @@ gh run download $runId -n layerc-windows-x64-tools -D $candidateDirectory
 Assert-NativeSuccess 'Downloading CI benchmark tools'
 $candidateDirectory = Resolve-LayerCBuildRoot -Path $candidateDirectory `
     -RequiredExecutables @('layerd.exe')
+$null = Assert-LayerCBuildIdentity -BuildDirectory $candidateDirectory `
+    -CommitSha $candidate.HeadSha -RunId $candidate.RunId
 
-$arguments = @('-CandidateBuildDirectory', $candidateDirectory)
-if ($VisualOnly) {
-    $arguments += '-VisualOnly'
-} else {
+if (-not $VisualOnly) {
     if ([string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
         $baselineStage = Join-Path $root 'out\baseline'
         Write-Host "==> downloading V2.2 baseline into $baselineStage"
@@ -97,8 +96,10 @@ if ($VisualOnly) {
     }
     $BaselineBuildDirectory = Resolve-LayerCBuildRoot -Path $BaselineBuildDirectory `
         -RequiredExecutables @('layerd.exe')
-    $arguments += @('-BaselineBuildDirectory', $BaselineBuildDirectory)
 }
+$arguments = New-LayerCHardwareBenchmarkArguments `
+    -CandidateBuildDirectory $candidateDirectory `
+    -BaselineBuildDirectory $BaselineBuildDirectory -VisualOnly:$VisualOnly
 
 $global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot 'run-hardware-benchmarks.ps1') @arguments

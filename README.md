@@ -67,8 +67,10 @@ cmake --workflow --preset vs2026-release
 Installed binaries land in `out/layerc/`.
 
 ```powershell
-# Run the daemon with disposable example profiles
+# Run the daemon with disposable example profiles. LAYERC_SETTINGS_KEY likewise
+# moves settings from HKCU\Software\LayerC to another HKCU-relative key.
 $env:LAYERC_PROFILE_DIR = "$PWD\examples"
+$env:LAYERC_SETTINGS_KEY = 'Software\LayerC.Dev'
 .\build\vs2026\Debug\layerd.exe
 
 # In another terminal: Shift+E triggers the example Dash cooldown
