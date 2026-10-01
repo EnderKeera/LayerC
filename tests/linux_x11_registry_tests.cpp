@@ -51,7 +51,7 @@ AutomationProfile automation_profile(const GameProfile &base,
   rule.id = "increment";
   rule.event = event;
   if (event == AutomationEventKind::input_pressed)
-    rule.source_filter = "keyboard:69";
+    rule.source_filter = "keyboard:18";
   rule.actions = {{.kind = AutomationActionKind::increment_variable,
                    .target = "count",
                    .name = {},
@@ -195,7 +195,7 @@ void test_registry_automation_only_and_health() {
              input_demand.consumers(layerc::runtime::Capability::overlay) == 0,
          "automation input rule alone demands passive XI2");
   const auto input_now = MonotonicClock::now();
-  const InputEvent press{{InputDevice::keyboard, 69, 0}, true};
+  const InputEvent press{{InputDevice::keyboard, 18, 0}, true};
   (void)input_registry.sessions().front().feed(press, input_now);
   expect(input_registry.sessions().front()
                  .automation_runtime->snapshot().variables.at("count") ==
@@ -391,7 +391,7 @@ void test_registry_automation_only_and_health() {
   good.rules.push_back(good.rules.front());
   good.rules.back().id = "input";
   good.rules.back().event = AutomationEventKind::input_pressed;
-  good.rules.back().source_filter = "keyboard:69";
+  good.rules.back().source_filter = "keyboard:18";
   AutomationRule broken;
   broken.id = "broken";
   broken.priority = 20;
@@ -492,7 +492,7 @@ void test_registry_fresh_admission_state() {
   registry.refresh(scan);
   if (!expect(registry.automation_count() == 1, "first runtime is admitted"))
     return;
-  const InputEvent press{{InputDevice::keyboard, 69, 0}, true};
+  const InputEvent press{{InputDevice::keyboard, 18, 0}, true};
   auto count = [&registry] {
     return registry.sessions().front().automation_runtime->snapshot()
         .variables.at("count");

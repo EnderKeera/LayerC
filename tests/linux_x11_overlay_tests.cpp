@@ -203,7 +203,7 @@ void check_missing_shape_path(bool &passed) {
 
 [[nodiscard]] std::string fixture_profile(std::string_view executable_name) {
   std::string json =
-      R"json({"schemaVersion":4,"modules":[],"hidBindings":[],"cooldownGroups":[],"id":"overlay-fixture","name":"Overlay Fixture","game":{"executableName":"NAME"},"cooldowns":[{"id":"dash","name":"Dash","durationMs":60000,"recovery":"single"}],"panels":[{"id":"main","name":"Main","style":"bar","bar":{"width":260,"height":34,"fillColor":"#50bac8","backgroundColor":"#272d35","borderColor":"#50bac8","textColor":"#e4e8ec","showText":true,"hideWhenReady":true},"anchorX":0.5,"anchorY":0.5,"cooldowns":["dash"]}],"bindings":[{"cooldownId":"dash","chord":[{"device":"keyboard","code":69}]}]})json";
+      R"json({"schemaVersion":4,"modules":[],"hidBindings":[],"cooldownGroups":[],"id":"overlay-fixture","name":"Overlay Fixture","game":{"executableName":"NAME"},"cooldowns":[{"id":"dash","name":"Dash","durationMs":60000,"recovery":"single"}],"panels":[{"id":"main","name":"Main","style":"bar","bar":{"width":260,"height":34,"fillColor":"#50bac8","backgroundColor":"#272d35","borderColor":"#50bac8","textColor":"#e4e8ec","showText":true,"hideWhenReady":true},"anchorX":0.5,"anchorY":0.5,"cooldowns":["dash"]}],"bindings":[{"cooldownId":"dash","chord":[{"device":"keyboard","code":18}]}]})json";
   const auto at = json.find("NAME");
   json.replace(at, 4, executable_name);
   return json;
@@ -225,7 +225,7 @@ overlay_automation(std::string profile_id) {
   layerc::core::AutomationRule pressed;
   pressed.id = "pressed";
   pressed.event = AutomationEventKind::input_pressed;
-  pressed.source_filter = "keyboard:69";
+  pressed.source_filter = "keyboard:18";
   pressed.actions = {hide};
 
   layerc::core::AutomationAction clear;
@@ -235,7 +235,7 @@ overlay_automation(std::string profile_id) {
   layerc::core::AutomationRule released;
   released.id = "released";
   released.event = AutomationEventKind::input_released;
-  released.source_filter = "keyboard:69";
+  released.source_filter = "keyboard:18";
   released.actions = {clear};
 
   auto show = hide;
@@ -597,9 +597,9 @@ int run_linux_x11_overlay_tests() {
   // Visibility automation hides the winning panel, then clearing the layer
   // rebuilds the frame from the profile's visible base state.
   const layerc::core::InputEvent press_e{
-      {layerc::core::InputDevice::keyboard, 69, 0}, true};
+      {layerc::core::InputDevice::keyboard, 18, 0}, true};
   const layerc::core::InputEvent release_e{
-      {layerc::core::InputDevice::keyboard, 69, 0}, false};
+      {layerc::core::InputDevice::keyboard, 18, 0}, false};
   (void)session.feed(press_e, running);
   overlay.render(input_sessions.sessions(), running);
   XGetWindowAttributes(raw, overlay_window, &attributes);
