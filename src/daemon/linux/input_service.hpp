@@ -180,9 +180,10 @@ public:
   // The display outlives the service; the shared connection owner keeps it.
   void attach(layerc::platform::X11Display &display) noexcept;
 
-  // Drains the X connection and feeds every normalized event to the
-  // sessions. Unknown events are discarded so the socket cannot busy-poll.
-  [[nodiscard]] X11Dispatch dispatch();
+  // The shared dispatcher observes discovery before decoding passive input,
+  // so neither consumer drains events unseen by the other.
+  [[nodiscard]] X11Dispatch dispatch(
+      layerc::platform::X11WindowTracker *tracker = nullptr);
 
   [[nodiscard]] bool attached() const noexcept {
     return source_.has_value();

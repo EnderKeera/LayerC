@@ -13,6 +13,8 @@
 
 namespace layerc::platform {
 
+class X11WindowTracker;
+
 enum class X11DeviceKind : std::uint8_t {
   other,
   keyboard,
@@ -94,7 +96,7 @@ public:
   // Drains everything queued on the connection, converting XI2 raw events
   // into core input events. Unknown events are discarded so a readable
   // socket cannot busy-poll the loop.
-  [[nodiscard]] X11InputPoll poll();
+  [[nodiscard]] X11InputPoll poll(X11WindowTracker *tracker = nullptr);
 
   // Rescans the XI2 device roster; true when it changed.
   [[nodiscard]] bool refresh_devices() noexcept;

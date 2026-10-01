@@ -4,6 +4,7 @@
 
 #include "layerc/core/types.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -43,18 +44,32 @@ struct X11WindowScan {
 class X11WindowTracker {
 public:
   explicit X11WindowTracker(const X11Display &display) noexcept;
+  X11WindowTracker(const X11WindowTracker &) = delete;
+  X11WindowTracker &operator=(const X11WindowTracker &) = delete;
+  ~X11WindowTracker();
 
   // Bounded scan: at most `limit` mapped top-level windows, root-relative.
   [[nodiscard]] X11WindowScan scan(std::uint32_t limit = 64) const;
 
-  // Drains queued X events while input is inactive. true means a root
-  // property changed and the caller must rescan windows.
+  // Discovery observes the same dispatcher as input: client identity/state,
+  // root properties, and map/unmap/destroy/configure events invalidate scans.
+  [[nodiscard]] bool observe(const union _XEvent &event) const noexcept;
+  // Uses the shared dispatcher while input is inactive, without polling timers.
   [[nodiscard]] bool poll_changes() noexcept;
 
   [[nodiscard]] std::optional<X11WindowSnapshot> find(std::uint64_t window) const;
 
 private:
+  struct Watch {
+    std::uint64_t window{};
+    long previous_mask{};
+  };
+  void update_watches(const std::vector<std::uint64_t> &windows) const;
   const X11Display *display_{};
+  std::array<std::uint64_t, 5> identity_atoms_{};
+  long root_previous_mask_{};
+  bool root_selected_{};
+  mutable std::vector<Watch> watched_;
 };
 
 // Resolved /proc/<pid>/exe for PIDs owned by the effective UID (root may read

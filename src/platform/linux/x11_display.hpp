@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -9,6 +10,7 @@
 // Opaque Xlib Display. Xlib's headers define macros (Bool/True/False/None)
 // that leak into every translation unit, so only the .cpp includes them.
 struct _XDisplay;
+union _XEvent;
 
 namespace layerc::platform {
 
@@ -74,6 +76,12 @@ public:
   // poll. The host checks this before blocking so buffered work never
   // sleeps until a second external event arrives.
   [[nodiscard]] int pending_events() noexcept;
+
+  // Sole full-queue dispatcher. The caller fans each event out to the
+  // active input decoder and discovery observer before it is discarded.
+  static void dispatch_events(
+      struct _XDisplay *display,
+      const std::function<void(union _XEvent &)> &observer);
 
   [[nodiscard]] struct _XDisplay *raw() const noexcept { return display_; }
 

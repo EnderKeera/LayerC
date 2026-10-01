@@ -672,11 +672,33 @@ int run_linux_x11_input_tests() {
                                          &xtest_major, &xtest_minor) == True;
   passed &= expect(xtest, "XTest is available for event injection");
   if (xtest) {
+    // Drain overlay construction first: only the client title and passive
+    // keypress below can explain this mixed-batch discovery invalidation.
+    (void)live.dispatch(&tracker);
+    auto title_profile = profiles[0];
+    title_profile.path = profiles[0].path.parent_path() / "title-match.json";
+    title_profile.profile.id = "title-match";
+    title_profile.profile.game = {};
+    title_profile.profile.game.window_title = "Only After Rename";
+    layerc::daemon::X11SessionRegistry title_registry;
+    title_registry.configure(std::span{&title_profile, 1});
+    title_registry.refresh(tracker.scan());
+    passed &= expect(title_registry.session_count() == 0,
+                     "title-only profile is unmatched before the client mutation");
+    const char renamed[] = "Only After Rename";
+    XChangeProperty(raw, fixture, XInternAtom(raw, "_NET_WM_NAME", False),
+                    XInternAtom(raw, "UTF8_STRING", False), 8, PropModeReplace,
+                    reinterpret_cast<const unsigned char *>(renamed),
+                    static_cast<int>(sizeof(renamed) - 1));
     const KeyCode key_e = XKeysymToKeycode(raw, XK_e);
     XTestFakeKeyEvent(raw, key_e, True, CurrentTime);
     XSync(raw, False);
-    auto dispatch = live.dispatch();
-    passed &= expect(dispatch.events >= 1, "the injected keypress is received");
+    auto dispatch = live.dispatch(&tracker);
+    passed &= expect(dispatch.events >= 1 && dispatch.windows_changed,
+                     "one dispatcher preserves mixed keypress and client-title events");
+    title_registry.refresh(tracker.scan());
+    passed &= expect(title_registry.session_count() == 1,
+                     "active input does not conceal new title-based admission");
     bool got_dash = false;
     bool got_global = false;
     for (const auto &cooldown : dispatch.triggered) {
@@ -688,9 +710,45 @@ int run_linux_x11_input_tests() {
 
     XTestFakeKeyEvent(raw, key_e, False, CurrentTime);
     XSync(raw, False);
-    dispatch = live.dispatch();
+    dispatch = live.dispatch(&tracker);
     passed &= expect(dispatch.events >= 1 && dispatch.triggered.empty(),
                      "the key release triggers nothing");
+    const char unmatched[] = "No Longer Matching";
+    XChangeProperty(raw, fixture, XInternAtom(raw, "_NET_WM_NAME", False),
+                    XInternAtom(raw, "UTF8_STRING", False), 8, PropModeReplace,
+                    reinterpret_cast<const unsigned char *>(unmatched),
+                    static_cast<int>(sizeof(unmatched) - 1));
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed,
+                     "client-only rename-away is observed with input still active");
+    title_registry.refresh(tracker.scan());
+    passed &= expect(title_registry.session_count() == 0,
+                     "rename-away retires the title-only session without a timer");
+    XMoveResizeWindow(raw, fixture, 40, 60, 140, 90);
+    XSync(raw, False);
+    const auto geometry_dispatch = live.dispatch(&tracker);
+    passed &= expect(geometry_dispatch.windows_changed && geometry_dispatch.events == 0,
+                     "geometry-only invalidation survives an active XI2 decoder");
+    const auto moved = tracker.find(fixture);
+    passed &= expect(moved && moved->x == 40 && moved->y == 60 &&
+                         moved->width == 140 && moved->height == 90,
+                     "geometry-only wake refreshes the target rectangle");
+
+    const auto fallback_child = XCreateSimpleWindow(raw, root, 0, 0, 30, 30, 0, 0, 0);
+    XMapWindow(raw, fallback_child);
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed &&
+                         tracker.find(fallback_child).has_value(),
+                     "active input preserves fallback creation/map discovery");
+    XUnmapWindow(raw, fallback_child);
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed &&
+                         !tracker.find(fallback_child),
+                     "active input preserves fallback unmap discovery");
+    XDestroyWindow(raw, fallback_child);
+    XSync(raw, False);
+    passed &= expect(live.dispatch(&tracker).windows_changed,
+                     "active input preserves fallback destruction discovery");
 
     XTestFakeButtonEvent(raw, 1, True, CurrentTime);
     XSync(raw, False);

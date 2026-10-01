@@ -165,7 +165,7 @@ void X11Adapters::refresh_status(
 X11Dispatch X11Adapters::dispatch(const std::span<const int> ready) {
   if (impl_->fd < 0 || std::ranges::find(ready, impl_->fd) == ready.end())
     return {};
-  auto result = impl_->input.dispatch();
+  auto result = impl_->input.dispatch(&*impl_->tracker);
   result.windows_changed =
       result.windows_changed ||
       (!impl_->input.attached() && impl_->tracker->poll_changes());
