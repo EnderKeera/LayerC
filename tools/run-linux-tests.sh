@@ -215,7 +215,7 @@ else
     --output-junit "$headless_junit"
   run_logged verify-headless python3 "$source_dir/tools/linux_test_report.py" \
     --registration "$evidence_dir/ctest-registration.json" \
-    --junit "$headless_junit" --label headless \
+    --junit "$headless_junit" --gate linux-headless \
     --report "$evidence_dir/ctest-headless-summary.json"
 
   run_logged native-headless-smoke env -u DISPLAY \
@@ -230,7 +230,7 @@ else
     --output-junit "$x11_junit"
   run_logged verify-x11 python3 "$source_dir/tools/linux_test_report.py" \
     --registration "$evidence_dir/ctest-registration.json" \
-    --junit "$x11_junit" --label x11 \
+    --junit "$x11_junit" --gate linux-x11 \
     --report "$evidence_dir/ctest-x11-summary.json"
   run_logged native-x11-smoke xvfb-run -a \
     bash "$source_dir/tools/linux-runtime-smoke.sh" x11 \
