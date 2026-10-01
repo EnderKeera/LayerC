@@ -177,6 +177,7 @@ void EditorWindow::style_list_view(const HWND list,
   SetWindowTheme(list, L"DarkMode_Explorer", nullptr);
   if (const HWND header = ListView_GetHeader(list); header != nullptr)
     SetWindowTheme(header, L"DarkMode_ItemsView", nullptr);
+  layerc::platform::install_list_header_text(list);
   SetWindowPos(list, nullptr, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
                    SWP_FRAMECHANGED);

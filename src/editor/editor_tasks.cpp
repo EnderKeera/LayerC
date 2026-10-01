@@ -208,8 +208,23 @@ void EditorWindow::update_task_detail() {
   EnableWindow(GetDlgItem(task_picker_.window, IDC_USE_TASK), enabled);
   EnableWindow(GetDlgItem(task_picker_.window, IDC_TASK_ACTIONS), enabled);
   set_text(GetDlgItem(task_picker_.window, IDC_TASK_DETAIL),
-           candidate == nullptr ? L"Select a task to see its executable path."
-                                : candidate->executable_path);
+           candidate != nullptr ? candidate->executable_path
+           : task_picker_.candidates.empty()
+               ? std::wstring{empty_task_list_text()}
+               : std::wstring{L"Select a task to see its executable path."});
+}
+
+// An empty list says why it is empty: a profile-matching chooser names the
+// profile's application, which a blank list would leave unexplained.
+const wchar_t *EditorWindow::empty_task_list_text() const {
+  if (task_picker_.has_request() && !document_.profile().game.global)
+    return L"No running window matches this profile. Start the game, or "
+           L"check the profile's Application, then press Refresh.";
+  return owner_draw_checkbox_checked(
+             GetDlgItem(task_picker_.window, IDC_TASK_SHOW_ALL))
+             ? L"No windows detected."
+             : L"No eligible windows detected. Show all windows includes "
+               L"background and untitled windows.";
 }
 
 void EditorWindow::apply_task(
@@ -366,11 +381,16 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
   case WM_NOTIFY: {
     const auto *header = reinterpret_cast<const NMHDR *>(lparam);
     if (header->idFrom == IDC_TASK_LIST) {
+      // Dialog procedures return notification results through
+      // DWLP_MSGRESULT; a bare TRUE alone leaves the list blank.
       if (header->code == LVN_GETEMPTYMARKUP) {
         auto *markup = reinterpret_cast<NMLVEMPTYMARKUP *>(lparam);
         markup->dwFlags = EMF_CENTERED;
-        if (wcscpy_s(markup->szMarkup, L"No eligible windows detected.") != 0)
+        const bool copied =
+            wcscpy_s(markup->szMarkup, empty_task_list_text()) == 0;
+        if (!copied)
           markup->szMarkup[0] = L'\0';
+        SetWindowLongPtrW(window, DWLP_MSGRESULT, copied ? TRUE : FALSE);
         return TRUE;
       }
       if (header->code == LVN_ITEMCHANGED)
@@ -382,19 +402,6 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
           edit_selected_task();
         else
           use_selected_task();
-      } else if (header->code == NM_CUSTOMDRAW) {
-        auto *draw = reinterpret_cast<NMLVCUSTOMDRAW *>(lparam);
-        const auto list_colors =
-            colors(layerc::platform::EditorControlRole::list);
-        if (draw->nmcd.dwDrawStage == CDDS_PREPAINT)
-          return CDRF_NOTIFYITEMDRAW;
-        if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-          draw->clrText = list_colors.text;
-          draw->clrTextBk = (draw->nmcd.uItemState & CDIS_SELECTED) != 0
-                                ? list_colors.selection
-                                : list_colors.fill;
-          return CDRF_NEWFONT;
-        }
       }
     }
     break;
