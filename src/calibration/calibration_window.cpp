@@ -182,6 +182,7 @@ bool CalibrationWindow::initialize(const HWND window) {
                      .expected_width = rule_.region.width,
                      .expected_height = rule_.region.height,
                      .references = {}};
+  bool existing_template_assignment = false;
   if (existing_visual_) {
     const auto assignment = std::ranges::find_if(
         existing_visual_->triggers, [&](const auto &candidate_trigger) {
@@ -198,7 +199,8 @@ bool CalibrationWindow::initialize(const HWND window) {
                      layerc::core::find_template_state(
                          *existing_visual_, trigger_.observation_id)) {
         template_state_ = *existing_template;
-        rule_.region = template_state_.search_region;
+        existing_template_assignment = true;
+        restore_reference_selection();
         for (const auto &reference : template_state_.references) {
           auto loaded =
               layerc::platform::load_template_asset(reference.asset_sha256);
@@ -216,6 +218,8 @@ bool CalibrationWindow::initialize(const HWND window) {
       template_state_.id = trigger_.observation_id;
     }
   }
+  if (!existing_template_assignment)
+    set_reference_selection(rule_.region);
   if (const auto *average =
           std::get_if<layerc::core::AverageColorPredicate>(&rule_.predicate))
     target_color_ = average->target_color;
@@ -619,7 +623,6 @@ CalibrationMode CalibrationWindow::mode() const {
 layerc::core::TemplateState
 CalibrationWindow::current_template_from_controls() const {
   auto state = template_state_;
-  state.search_region = rule_.region;
   state.confidence_threshold =
       integer_control(IDC_CAL_CONFIDENCE, 90, 0, 100) / 100.0;
   state.scale_tolerance =

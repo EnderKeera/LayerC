@@ -8,6 +8,10 @@
 
 #include <windows.h>
 
+void calibration_reference_geometry_contracts();
+void calibration_reference_loaded_contracts();
+void calibration_reference_negative_contracts();
+
 namespace {
 
 void calibration_modes_round_trip() {
@@ -163,5 +167,11 @@ int main() {
       {"calibration_modes_round_trip", calibration_modes_round_trip},
       {"calibration_preview_components", calibration_preview_components},
       {"calibration_resource_contract", calibration_resource_contract},
+      {"calibration_reference_geometry_contracts",
+       calibration_reference_geometry_contracts},
+      {"calibration_reference_loaded_contracts",
+       calibration_reference_loaded_contracts},
+      {"calibration_reference_negative_contracts",
+       calibration_reference_negative_contracts},
   });
 }

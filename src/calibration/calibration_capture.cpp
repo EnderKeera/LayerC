@@ -182,12 +182,11 @@ void CalibrationWindow::update_region_from_pointer(POINT point,
   const auto bottom = std::max(start.y, point.y);
   if (right - left < 2 || bottom - top < 2)
     return;
-  rule_.region = {static_cast<double>(left - image.left) / width,
-                  static_cast<double>(top - image.top) / height,
-                  static_cast<double>(right - left) / width,
-                  static_cast<double>(bottom - top) / height};
-  if (mode() == CalibrationMode::template_match)
-    template_state_.search_region = rule_.region;
+  set_reference_selection(
+      {static_cast<double>(left - image.left) / width,
+       static_cast<double>(top - image.top) / height,
+       static_cast<double>(right - left) / width,
+       static_cast<double>(bottom - top) / height});
   preview_.invalidate();
   update_match_status(final);
 }

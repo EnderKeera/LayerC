@@ -944,6 +944,7 @@ if(LAYERC_BUILD_TESTS)
 
         layerc_add_test(layerc_calibration_tests
             SOURCES tests/calibration_window_tests.cpp
+                tests/calibration_reference_tests.cpp
                 src/calibration/calibration_resources.rc
             LINK layerc_calibration_ui WIN32 TIMEOUT 30)
 

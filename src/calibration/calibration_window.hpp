@@ -17,6 +17,10 @@
 
 #include <windows.h>
 
+namespace layerc::platform {
+struct ImportedTemplateAsset;
+}
+
 namespace layerc::calibration {
 
 
@@ -29,6 +33,8 @@ public:
   }
 
 private:
+  friend struct CalibrationWindowTestAccess;
+
   struct Palette {
     COLORREF background{};
     COLORREF panel{};
@@ -60,7 +66,12 @@ private:
   void sample_target_color();
   void capture_template_reference();
   void import_template_reference();
-  void install_template_reference(const layerc::core::NormalizedRegion &selected);
+  void set_reference_selection(const layerc::core::NormalizedRegion &selected);
+  void restore_reference_selection();
+  [[nodiscard]] std::optional<layerc::core::TemplateImage>
+  captured_reference_image() const;
+  [[nodiscard]] bool append_template_reference(
+      const layerc::platform::ImportedTemplateAsset &asset);
   void clear_template_references();
   void toggle_template_mask_editing();
   [[nodiscard]] bool finish_template_mask_editing();
@@ -84,6 +95,8 @@ private:
   std::optional<layerc::core::VisualProfile> existing_visual_;
   layerc::core::PixelRule rule_;
   layerc::core::TemplateState template_state_;
+  // The crop belongs to the explicit selection, never the expanded search area.
+  layerc::core::NormalizedRegion reference_selection_;
   layerc::core::VisualTrigger trigger_;
   std::uint8_t sample_rate_hz_{10};
   layerc::core::CaptureQuality quality_{layerc::core::CaptureQuality::balanced};
