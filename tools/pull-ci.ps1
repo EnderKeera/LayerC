@@ -53,6 +53,26 @@ try {
     if ($archives.Count -ne 1) {
         throw "Expected one rolling ZIP, found $($archives.Count)."
     }
+
+    # publish-rolling.sh commits a publication by writing notes that name the
+    # tagged commit and the ZIP's SHA-256. Anything else is a partial
+    # publication (or one replaced mid-download); refuse it.
+    $notes = gh release view rolling --repo $Repository --json body --jq .body
+    Assert-NativeSuccess 'Reading the rolling release notes'
+    $tagCommit = gh api "repos/$Repository/git/ref/tags/rolling" --jq .object.sha
+    Assert-NativeSuccess 'Resolving the rolling tag'
+    $notes = $notes -join "`n"
+    $claimedCommit = [regex]::Match($notes, 'main@([0-9a-f]{40})').Groups[1].Value
+    $claimedDigest = [regex]::Match(
+        $notes, 'layerc-windows-x64\.zip SHA-256: ([0-9a-f]{64})').Groups[1].Value
+    $digest = (Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ([string]::IsNullOrEmpty($claimedCommit) -or "$tagCommit".Trim() -cne $claimedCommit -or
+        [string]::IsNullOrEmpty($claimedDigest) -or $digest -cne $claimedDigest) {
+        throw ('The rolling release is incomplete or inconsistent (tag {0}, notes main@{1}, ' +
+               'ZIP {2}, notes SHA-256 {3}). Retry after publish-rolling finishes.') -f `
+            "$tagCommit".Trim(), $claimedCommit, $digest, $claimedDigest
+    }
+    Write-PullLog "verified rolling main@$claimedCommit ($digest)"
     Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $extract
 
     $installRoot = Resolve-LayerCBuildRoot -Path $extract `
