@@ -19,6 +19,15 @@ runs:
         }
         exit $LASTEXITCODE
 
+    # Travels with the binaries in every artifact, so later measurements name
+    # the commit and run that built them (tools/LayerC.Tools.psm1).
+    - name: Record build identity
+      shell: pwsh
+      run: |
+        Import-Module ./tools/LayerC.Tools.psm1 -Force
+        Write-LayerCBuildIdentity -BuildDirectory build/ci -Configuration ci |
+          ConvertTo-Json
+
     - name: Test
       shell: pwsh
       run: |

@@ -208,7 +208,8 @@ try {
         }
         evaluator = $micro
     }
-    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath `
+        -BuildDirectory $context.BuildDirectory -Data $data `
         -Thresholds $thresholds -Passed $passed -Depth 8
     $result | ConvertTo-Json -Depth 8
     if (-not $passed) { exit 1 }

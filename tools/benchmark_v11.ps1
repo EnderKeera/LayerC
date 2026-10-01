@@ -591,7 +591,8 @@ try {
             'Run both low and balanced on at least one integrated-GPU and one discrete-GPU system. Exact is intentionally outside this gate.'
         }
     }
-    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath -Data $data `
+    $result = New-LayerCBenchmarkResult -OutputPath $OutputPath `
+        -BuildDirectory $context.BuildDirectory -Data $data `
         -Thresholds $thresholds -Passed $gatePassed -Depth 8 `
         -HostData ([ordered]@{ gpuAdapters = $adapters })
     $result | ConvertTo-Json -Depth 8

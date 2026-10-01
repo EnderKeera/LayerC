@@ -72,7 +72,13 @@ Releases and `rolling` ship only the Windows x64 ZIP.
 Artifacts: `layerc-windows-x64` is the full bundle (install layout, benchmark
 JSON, ZIP); `layerc-windows-x64-tools` feeds hardware benchmarks and
 `tools/push-and-test.ps1`; only `publish-rolling` consumes
-`layerc-rolling-package`.
+`layerc-rolling-package`. The build writes `layerc-build-identity.json`
+(commit, run, attempt, configuration) next to its binaries and ships it in
+`layerc-windows-x64-tools`. Benchmark results take `commitSha` and `build` from
+that file, never from the workflow event; `benchmarks.yml` and
+`push-and-test.ps1` refuse to measure unless it and the checkout match the
+resolved candidate. Results from a local build directory are marked
+`local-build` with the checkout's commit and dirty state.
 
 Other workflows:
 

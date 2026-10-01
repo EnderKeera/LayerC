@@ -1,13 +1,60 @@
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot '../tools/LayerC.Tools.psm1') -Force
 $path = Join-Path ([IO.Path]::GetTempPath()) ('layerc-benchmark-' + [guid]::NewGuid() + '.json')
+$buildDirectory = Join-Path ([IO.Path]::GetTempPath()) ('layerc-build-' + [guid]::NewGuid())
+$null = New-Item -ItemType Directory -Path $buildDirectory
+$savedEnvironment = @{}
+foreach ($name in @('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_WORKFLOW')) {
+    $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+}
+function Assert-Throws([scriptblock]$Action, [string]$Pattern) {
+    try { & $Action } catch {
+        if ($_.Exception.Message -notmatch $Pattern) { throw "Unexpected error: $($_.Exception.Message)" }
+        return
+    }
+    throw "Expected an error matching '$Pattern'."
+}
 try {
-    $result = New-LayerCBenchmarkResult -OutputPath $path `
+    $head = Get-LayerCCommitSha
+    # An unrelated workflow-event SHA must never name the measured build.
+    $env:GITHUB_SHA = 'f' * 40
+
+    $local = Get-LayerCBuildIdentity -BuildDirectory $buildDirectory
+    if ($local.source -ne 'local-build' -or $local.commitSha -ne $head -or $local.dirty -isnot [bool]) {
+        throw "Local build identity is wrong: $($local | ConvertTo-Json)"
+    }
+
+    $env:GITHUB_RUN_ID = '123'
+    $env:GITHUB_RUN_ATTEMPT = '2'
+    $env:GITHUB_WORKFLOW = 'CI'
+    $written = Write-LayerCBuildIdentity -BuildDirectory $buildDirectory -Configuration ci
+    $read = Get-LayerCBuildIdentity -BuildDirectory $buildDirectory
+    if ($read.source -ne 'ci-artifact' -or $read.commitSha -ne $head -or $read.runId -ne '123' -or
+        $read.runAttempt -ne '2' -or $read.configuration -ne 'ci' -or $read.dirty -ne $written.dirty) {
+        throw "CI build identity did not round-trip: $($read | ConvertTo-Json)"
+    }
+    $null = Assert-LayerCBuildIdentity -BuildDirectory $buildDirectory -CommitSha $head -RunId '123'
+    Assert-Throws { Assert-LayerCBuildIdentity -BuildDirectory $buildDirectory -CommitSha ('a' * 40) -RunId '123' } 'not candidate'
+    Assert-Throws { Assert-LayerCBuildIdentity -BuildDirectory $buildDirectory -CommitSha $head -RunId '999' } 'not candidate'
+    $other = Join-Path $buildDirectory 'other'
+    $null = New-Item -ItemType Directory -Path $other
+    Assert-Throws { Assert-LayerCBuildIdentity -BuildDirectory $other -CommitSha $head -RunId '123' } 'no CI build identity'
+
+    # Downloaded binaries keep the commit that built them, not the checkout.
+    $artifact = [ordered]@{ schemaVersion = 1; source = 'ci-artifact'; commitSha = 'a' * 40
+        dirty = $false; workflow = 'CI'; runId = '77'; runAttempt = '1'; configuration = 'ci' }
+    Set-Content -LiteralPath (Join-Path $other 'layerc-build-identity.json') -Value ($artifact | ConvertTo-Json)
+    Assert-Throws { Assert-LayerCBuildIdentity -BuildDirectory $other -CommitSha ('a' * 40) -RunId '77' } 'checkout is'
+
+    $result = New-LayerCBenchmarkResult -OutputPath $path -BuildDirectory $other `
         -Data ([ordered]@{ evaluator = @{ p99Microseconds = 42 } }) `
         -Thresholds ([ordered]@{ hardP99Microseconds = 2000 }) `
         -Passed $true -HostData ([ordered]@{ gpuAdapters = @('test GPU') })
     $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    foreach ($key in @('schemaVersion', 'packageVersion', 'commitSha', 'measuredAt',
+    if ($json.commitSha -ne ('a' * 40) -or $json.build.source -ne 'ci-artifact' -or $json.build.runId -ne '77') {
+        throw "Benchmark result names the wrong build: $($json.build | ConvertTo-Json)"
+    }
+    foreach ($key in @('schemaVersion', 'packageVersion', 'commitSha', 'build', 'measuredAt',
             'host', 'evaluator', 'thresholds', 'passed')) {
         if ($null -eq $json.PSObject.Properties[$key]) { throw "Missing benchmark key: $key" }
     }
@@ -19,9 +66,13 @@ try {
         $json.host.gpuAdapters[0] -ne 'test GPU' -or $result.host -isnot [Collections.IDictionary]) {
         throw 'Benchmark result values were not preserved.'
     }
-    Write-Output 'Benchmark result serialization passed.'
+    Write-Output 'Benchmark result serialization and build identity passed.'
 } finally {
+    foreach ($entry in $savedEnvironment.GetEnumerator()) {
+        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value)
+    }
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $buildDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # push-and-test.ps1 forwards to run-hardware-benchmarks.ps1; bind its real
