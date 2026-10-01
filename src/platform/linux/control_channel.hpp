@@ -129,16 +129,18 @@ private:
 
 // Client side: connects to the resolved socket path (no directory
 // creation — offline commands must not invent runtime dirs).
-// Returns a connected fd, or nullopt with error text when no daemon
-// answers.
+// Authenticates the server's effective UID before returning a connected fd;
+// nullopt with error text when no same-UID daemon answers.
 [[nodiscard]] std::optional<int> control_connect(std::string &error);
 
-// Blocking request/response roundtrip for the CLI: sends one frame, then
-// polls for exactly one response frame with a bounded wait.
+// Blocking request/response roundtrip for CLI and store notifications: sends
+// one frame, then polls with a bounded wait. Accepts only a valid, successful
+// LayerC.Control v1 response; returns its original bytes for presentation.
 [[nodiscard]] std::optional<std::string>
 control_roundtrip(std::string_view request_json, std::string &error);
 
-// Framed write with a bounded POLLOUT wait (daemon response path).
+// Blocking framed write with a bounded POLLOUT wait (CLI/test helpers only;
+// daemon responses advance nonblocking writes on the shared event loop).
 [[nodiscard]] bool control_send_frame(int fd, std::string_view payload,
                                       std::string &error);
 

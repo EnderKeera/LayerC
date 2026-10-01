@@ -310,6 +310,11 @@ std::optional<int> control_connect(std::string &error) {
     error = "the LayerC daemon is not reachable";
     return std::nullopt;
   }
+  if (!peer_uid_matches(fd)) {
+    (void)::close(fd);
+    error = "rejected a control server with a different effective uid";
+    return std::nullopt;
+  }
   if (::fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
     (void)::close(fd);
     error = "could not make the control client nonblocking";
@@ -340,7 +345,14 @@ control_roundtrip(std::string_view request_json, std::string &error) {
                                  static_cast<std::size_t>(received)});
     if (auto payload = framer.next_frame(); payload.has_value()) {
       (void)::close(*fd);
-      return payload;
+      const auto response = decode_control_response(*payload);
+      if (!response.has_value() || !response->ok) {
+        error = response.has_value() && !response->error.empty()
+                    ? response->error
+                    : "the daemon returned an invalid response";
+        return std::nullopt;
+      }
+      return payload; // Preserve accepted response bytes for JSON presentation.
     }
     if (framer.fault() != ControlFramer::Fault::none) break;
   }

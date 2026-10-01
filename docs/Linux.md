@@ -275,7 +275,13 @@ Unparseable transaction journals are quarantined as `<name>.corrupt-<n>` for
 operator inspection rather than deleted.
 Import/export/reload commands work offline; after an import a running daemon
 is notified when its socket exists. One daemon per socket — a live daemon
-refuses a second bind.
+refuses a second bind. Both socket endpoints authenticate the peer's effective
+UID; clients reject a reachable foreign-UID listener before sending a request.
+A control command or reload notification succeeds only after accepting a valid,
+successful `LayerC.Control` v1 response, including with `--json`; accepted JSON
+retains the original response bytes. Daemon replies use bounded, expiring queues
+advanced by writable readiness on the shared event loop, so a slow reader does
+not block other clients, passive input, or deadlines.
 
 Foreground loss or XI2 detachment clears transient held-key state while matched
 sessions retain cooldowns and automation. When several windows match, a session
