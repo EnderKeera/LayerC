@@ -323,6 +323,10 @@ Manifest: `packaging/flatpak/io.github.EnderKeera.LayerC.json`
 (runtime `org.freedesktop.Platform` 25.08). GNUInstallDirs also installs
 `io.github.EnderKeera.LayerC.metainfo.xml` as a console application. V2.6 has no
 graphical launcher, so it intentionally installs no desktop entry or icon.
+Every Linux install, including the Flatpak, carries the notices for the
+statically linked miniz under `share/licenses/LayerC/`
+(`THIRD_PARTY_NOTICES.md`, `miniz/LICENSE`, `miniz/UPSTREAM.md`); the automated
+gate fails if the native or Flatpak install tree lacks them.
 
 The metainfo uses `LicenseRef-proprietary` because the repository has no
 project-level license; replace it only with an owner-approved SPDX license.
