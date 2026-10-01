@@ -388,6 +388,7 @@ if(NOT WIN32)
         src/platform/visual_asset_load.cpp
         src/platform/linux/event_loop.cpp
         src/platform/linux/control_channel.cpp
+        src/platform/linux/display_types.cpp
     )
     target_include_directories(layerc_linux PUBLIC src/platform/include)
     target_include_directories(layerc_linux PRIVATE src/platform/linux)
@@ -439,6 +440,14 @@ if(NOT WIN32)
         target_link_libraries(layercal PRIVATE layerc_x11)
         layerc_enable_warnings(layercal)
     endif()
+
+    # Wayland-era adapter libraries (docs/Wayland.md). Each lane owns one
+    # optional module; a missing module or dependency builds without it.
+    set(layerc_linux_modules
+        LayerCLinuxWayland LayerCLinuxEvdev LayerCLinuxBus LayerCGnomeShell)
+    foreach(layerc_linux_module IN LISTS layerc_linux_modules)
+        include(cmake/${layerc_linux_module}.cmake OPTIONAL)
+    endforeach()
 
     if(LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS)
         add_library(layerc_daemon_linux STATIC
@@ -790,6 +799,12 @@ if(LAYERC_BUILD_TESTS)
             SOURCES tests/linux_profile_pack_tests.cpp
             LINK layerc_bundle layerc_miniz TIMEOUT 45)
 
+        layerc_add_test(layerc_linux_display_types_tests
+            SOURCES tests/linux_display_types_tests.cpp
+            LINK layerc_linux TIMEOUT 30)
+        target_include_directories(layerc_linux_display_types_tests PRIVATE
+            src/platform/linux)
+
         layerc_add_test(layerc_linux_event_loop_tests
             SOURCES tests/linux_event_loop_tests.cpp
             LINK layerc_linux layerc_runtime TIMEOUT 30)
@@ -860,6 +875,10 @@ if(LAYERC_BUILD_TESTS)
         layerc_add_test(layerc_linux_control_channel_tests
             SOURCES tests/linux_control_channel_tests.cpp
             LINK layerc_daemon_linux TIMEOUT 30)
+
+        foreach(layerc_linux_module IN LISTS layerc_linux_modules)
+            include(cmake/${layerc_linux_module}Tests.cmake OPTIONAL)
+        endforeach()
     endif()
 
     layerc_add_test(layerc_automation_benchmark
