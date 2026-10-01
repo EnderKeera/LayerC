@@ -138,16 +138,6 @@ single_observation(const layerc::core::VisualProfile &profile) {
 
 } // namespace
 
-void EditorWindow::report_visual_asset_gc(
-    const layerc::platform::VisualAssetGcReport &report) {
-  if (report.completed()) return;
-  std::wstring message = L"Visual asset cleanup was blocked";
-  if (!report.blocked_by.empty())
-    message += L" at " + report.blocked_by.wstring();
-  if (!report.fault.empty()) message += L": " + to_wide(report.fault);
-  set_status(message);
-}
-
 void erase_visual_assignment(layerc::core::VisualProfile &visual,
                              const std::string_view cooldown_id) {
   std::string old_rule;
@@ -273,11 +263,9 @@ bool EditorWindow::save_visual_profile() {
   document_.mark_visual_edited();
   (void)document_.history().record(document_.profile(), document_.visual(), document_.automation(), false);
   mark_committed();
-  // Collection is deliberately post-commit. LayerCal may already have made a
-  // new content-addressed asset durable, and it must not be considered live
-  // until the sidecar reference above is durable too.
-  report_visual_asset_gc(
-      layerc::platform::garbage_collect_unreferenced_visual_assets());
+  // Persisted sidecars are not the whole retention set: undo/redo and other
+  // interactive calibration sessions can still own content-addressed assets.
+  // Do not run offline asset maintenance from an interactive commit.
   refresh_visual_controls();
   return true;
 }
@@ -377,8 +365,6 @@ bool EditorWindow::launch_calibration(const HWND target) {
   const auto *cooldown = selected_cooldown();
   if (cooldown == nullptr || target == nullptr || !IsWindow(target))
     return false;
-  report_visual_asset_gc(
-      layerc::platform::garbage_collect_unreferenced_visual_assets());
   const auto notice = layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::visual_capture_notice);
   if (notice.failed()) {
@@ -422,8 +408,6 @@ bool EditorWindow::launch_calibration(const HWND target) {
   } else {
     set_status(L"Visual calibration cancelled; no changes were made.");
   }
-  report_visual_asset_gc(
-      layerc::platform::garbage_collect_unreferenced_visual_assets());
   return true;
 }
 

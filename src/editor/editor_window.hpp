@@ -139,8 +139,6 @@ private:
   bool launch_calibration(HWND target);
   [[nodiscard]] bool merge_calibration_result(std::string_view visual_json);
   [[nodiscard]] bool save_visual_profile();
-  void report_visual_asset_gc(
-      const layerc::platform::VisualAssetGcReport &report);
   void set_visual_assignment_enabled(bool enabled);
   void remove_visual_assignment();
   // Single document-commit policy shared by explicit save, autosave, and

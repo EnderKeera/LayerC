@@ -40,8 +40,12 @@ import_template_asset(const std::filesystem::path &source);
 [[nodiscard]] TemplateAssetResult
 store_template_asset(const layerc::core::TemplateImage &image);
 [[nodiscard]] TemplateImageResult load_template_asset(std::string_view sha256);
-[[nodiscard]] VisualAssetGcReport garbage_collect_visual_assets(
-    std::span<const std::string> referenced_sha256);
+// Offline maintenance only: callers must have released all interactive
+// document/history and calibration owners. Their unpublished references are
+// not represented by the persisted sidecars. Production edit/calibration
+// paths deliberately never invoke this operation. The recovered store writer
+// boundary owns the complete scan and deletion; a caller cannot supply a stale
+// externally prepared reference set.
 [[nodiscard]] VisualAssetGcReport garbage_collect_unreferenced_visual_assets();
 
 } // namespace layerc::platform

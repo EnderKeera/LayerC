@@ -6,6 +6,7 @@ void platform_transactions();
 void journal_read_status_recovery();
 void profile_planning_after_recovery();
 void platform_visual_assets();
+void platform_visual_asset_writer_ownership();
 void platform_sibling_authentication();
 void platform_profile_writes();
 void platform_visual_sidecar_recovery();
