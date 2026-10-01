@@ -1,4 +1,4 @@
-#include "calibration_session.hpp"
+#include "calibration_session_internal.hpp"
 #include "editor_text.hpp"
 #include "editor_util.hpp"
 
@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -23,14 +24,13 @@ struct WaitResult {
   bool request_timed_out{};
   bool request_failed{};
   bool session_timed_out{};
+  std::optional<int> quit_code;
 };
 
 // Keep the disabled parent responsive to paint and task messages while the
 // calibration window is open. Both deadlines use the monotonic tick counter.
-WaitResult wait_modally(const HWND owner, const HANDLE process,
-                        const HANDLE request_finished,
+WaitResult wait_modally(const HANDLE process, const HANDLE request_finished,
                         const std::atomic_bool &write_succeeded) {
-  EnableWindow(owner, FALSE);
   constexpr ULONGLONG request_timeout_ms = 5'000ULL;
   constexpr ULONGLONG calibration_timeout_ms = 30ULL * 60ULL * 1'000ULL;
   const ULONGLONG request_deadline = GetTickCount64() + request_timeout_ms;
@@ -41,10 +41,16 @@ WaitResult wait_modally(const HWND owner, const HANDLE process,
         WAIT_OBJECT_0 + 1) {
       MSG message{};
       while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+        if (message.message == WM_QUIT) {
+          result.quit_code = static_cast<int>(message.wParam);
+          break;
+        }
         TranslateMessage(&message);
         DispatchMessageW(&message);
       }
     }
+    if (result.quit_code)
+      break;
     const ULONGLONG now = GetTickCount64();
     const DWORD request_state = WaitForSingleObject(request_finished, 0);
     if (request_state == WAIT_OBJECT_0 &&
@@ -58,8 +64,6 @@ WaitResult wait_modally(const HWND owner, const HANDLE process,
         result.session_timed_out)
       break;
   }
-  EnableWindow(owner, TRUE);
-  SetForegroundWindow(owner);
   return result;
 }
 
@@ -68,7 +72,14 @@ WaitResult wait_modally(const HWND owner, const HANDLE process,
 std::variant<layerc::core::CalibrationResponse, CalibrationFailure>
 run_calibration_session(const HWND owner,
                         const layerc::core::CalibrationRequest &request) {
-  const auto child = layerc::platform::sibling_image_path(L"layercal.exe");
+  return detail::run_calibration_session_with_image(
+      owner, request, layerc::platform::sibling_image_path(L"layercal.exe"));
+}
+
+std::variant<layerc::core::CalibrationResponse, CalibrationFailure>
+detail::run_calibration_session_with_image(
+    const HWND owner, const layerc::core::CalibrationRequest &request,
+    const std::filesystem::path &child) {
   if (child.empty() || !std::filesystem::exists(child))
     return CalibrationFailure{CalibrationFailureKind::missing_image, {}};
 
@@ -129,17 +140,36 @@ run_calibration_session(const HWND owner,
     SetEvent(io_finished.get());
   });
 
-  const auto wait = wait_modally(owner, helper.process.get(), request_finished.get(),
-                                 write_succeeded);
-  if (wait.request_failed || wait.request_timed_out || wait.session_timed_out)
-    helper.terminate(WAIT_TIMEOUT);
+  const bool owner_was_valid = IsWindow(owner) != FALSE;
+  const bool owner_was_enabled = owner_was_valid && IsWindowEnabled(owner) != FALSE;
+  if (owner_was_valid)
+    EnableWindow(owner, FALSE);
+  const auto wait = wait_modally(helper.process.get(), request_finished.get(),
+                                write_succeeded);
+  if (wait.quit_code || wait.request_failed || wait.request_timed_out ||
+      wait.session_timed_out)
+    helper.terminate(wait.quit_code ? ERROR_CANCELLED : WAIT_TIMEOUT);
   if (WaitForSingleObject(io_finished.get(), 2'000) != WAIT_OBJECT_0) {
+    // Stop every Job-owned pipe peer before cancelling: cancellation can race
+    // with the worker entering its next synchronous read/write.
+    helper.terminate(ERROR_OPERATION_ABORTED);
     (void)CancelSynchronousIo(reinterpret_cast<HANDLE>(io.native_handle()));
-    (void)WaitForSingleObject(io_finished.get(), 2'000);
   }
+  io.join();
+  // No handle may close while the worker is still using it.
   request_write.reset();
   response_read.reset();
-  io.join();
+  if (owner_was_valid && IsWindow(owner) != FALSE) {
+    EnableWindow(owner, owner_was_enabled ? TRUE : FALSE);
+    if (!wait.quit_code && owner_was_enabled)
+      SetForegroundWindow(owner);
+  }
+  if (wait.quit_code) {
+    // Only the outer application loop owns shutdown. Repost after the helper
+    // and the owned I/O thread have completed, including the original code.
+    PostQuitMessage(*wait.quit_code);
+    return CalibrationFailure{CalibrationFailureKind::cancelled, {}};
+  }
 
   if (wait.request_timed_out)
     return CalibrationFailure{CalibrationFailureKind::request_timeout, {}};
@@ -165,6 +195,8 @@ void show_calibration_failure(const HWND owner, const CalibrationFailure &failur
   const wchar_t *title = L"Calibration unavailable";
   std::wstring message;
   switch (failure.kind) {
+  case CalibrationFailureKind::cancelled:
+    return; // Shutdown must not open another modal dialog.
   case CalibrationFailureKind::missing_image:
     message = L"layercal.exe is missing beside LayerC Editor.";
     break;

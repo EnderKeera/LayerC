@@ -122,64 +122,6 @@ std::optional<CooldownRow> selected_cooldown_row(const HWND list,
   return CooldownRow{row, static_cast<std::size_t>(data)};
 }
 
-void sync_bar_panels(
-    layerc::core::GameProfile &profile,
-    const std::optional<std::string_view> added = std::nullopt) {
-  const bool independent =
-      !profile.panels.empty() &&
-      std::ranges::all_of(profile.panels, [](const layerc::core::Panel &panel) {
-        return panel.style == layerc::core::PanelStyle::bar &&
-               panel.cooldown_ids.size() == 1;
-      });
-  const auto exists = [&](const std::string_view id) {
-    return std::ranges::any_of(profile.cooldowns, [&](const auto &cooldown) {
-      return cooldown.id == id;
-    });
-  };
-  for (auto &panel : profile.panels)
-    std::erase_if(panel.cooldown_ids,
-                  [&](const auto &id) { return !exists(id); });
-  std::erase_if(profile.panels,
-                [](const auto &panel) { return panel.cooldown_ids.empty(); });
-  if (profile.cooldowns.empty())
-    return;
-
-  if (added && independent) {
-    const auto cooldown = std::ranges::find(
-        profile.cooldowns, *added, &layerc::core::CooldownDefinition::id);
-    if (cooldown != profile.cooldowns.end()) {
-      layerc::core::Panel panel;
-      panel.id = unique_panel_id(cooldown->id + "-bar", profile.panels);
-      panel.name = cooldown->name;
-      panel.style = layerc::core::PanelStyle::bar;
-      panel.anchor_x = 0.5;
-      panel.anchor_y = std::clamp(
-          0.2 + 0.10 * static_cast<double>(profile.cooldowns.size() - 1U), 0.0,
-          1.0);
-      panel.cooldown_ids = {cooldown->id};
-      profile.panels.push_back(std::move(panel));
-      return;
-    }
-  }
-
-  if (profile.panels.empty()) {
-    profile.panels.push_back({.id = "main",
-                              .name = "Main",
-                              .style = layerc::core::PanelStyle::bar,
-                              .bar = {},
-                              .cooldown_ids = {}});
-  }
-  const std::string_view required =
-      added.value_or(profile.cooldowns.front().id);
-  const bool assigned = std::ranges::any_of(
-      profile.panels, [&](const layerc::core::Panel &panel) {
-        return std::ranges::find(panel.cooldown_ids, required) !=
-               panel.cooldown_ids.end();
-      });
-  if (!assigned)
-    profile.panels.front().cooldown_ids.emplace_back(required);
-}
-
 } // namespace
 bool EditorWindow::handle_binding_capture_message(const MSG &message) {
   if (!cooldown_editor_.capturing_binding())
@@ -513,23 +455,25 @@ void EditorWindow::remove_cooldown() {
   if (!selected)
     return;
   const std::size_t index = selected->index;
-  const auto &cooldown = document_.profile().cooldowns[index];
+  const auto cooldown = document_.profile().cooldowns[index];
+  const auto show_error = [&](const CooldownRemovalError &error) {
+    const auto message = to_wide(error.message);
+    themed_message_box(shell_.window, message.c_str(), L"Cannot remove cooldown",
+                       MB_OK | MB_ICONWARNING);
+    set_status(L"Cooldown retained — no removal changes applied.");
+  };
+  if (const auto error = document_.cooldown_removal_error(cooldown.id)) {
+    show_error(*error);
+    return;
+  }
   const auto prompt = L"Remove '" + to_wide(cooldown.name) + L"'?";
   if (themed_message_box(shell_.window, prompt.c_str(), L"Remove cooldown",
-                  MB_YESNO | MB_ICONQUESTION) != IDYES)
+                        MB_YESNO | MB_ICONQUESTION) != IDYES)
     return;
-  const auto id = cooldown.id;
-  if (document_.visual()) {
-    erase_visual_assignment(*document_.visual(), id);
+  if (const auto error = document_.remove_cooldown(cooldown.id)) {
+    show_error(*error);
+    return;
   }
-  document_.profile().cooldowns.erase(document_.profile().cooldowns.begin() +
-                                      static_cast<std::ptrdiff_t>(index));
-  std::erase_if(document_.profile().bindings,
-                [&](const layerc::core::InputBinding &binding) {
-                  return binding.cooldown_id == id;
-                });
-  layerc::core::compact_hid_bindings(document_.profile());
-  sync_bar_panels(document_.profile());
 
   refresh_cooldown_list(static_cast<int>(index) - 1);
   refresh_bar_list();
