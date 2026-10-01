@@ -467,6 +467,45 @@ static void test_companion_package_identity() {
   }
 }
 
+static void test_companion_duplicate_slot_contract() {
+  const std::string panel =
+      R"({"panelId":"a","slotIndex":2,"visible":true,"items":[]})";
+  const std::string valid =
+      R"({"profileId":"p","sessionKey":"s","timestampMs":1,"panels":[)" +
+      panel +
+      R"(],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":2,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1.0}]})";
+  const auto parsed = parse_companion_snapshot_json(valid);
+  const auto *baseline = std::get_if<CompanionSessionSnapshot>(&parsed);
+  layerc::test::expect(baseline != nullptr,
+                       "duplicate-slot fixture starts from accepted JSON");
+  if (baseline == nullptr)
+    return;
+  layerc::test::expect(
+      serialized_json(serialize_companion_snapshot_json(*baseline)) != nullptr,
+      "duplicate-slot fixture starts from a serializable snapshot");
+
+  // Duplicate the same complete panel, retaining the catalog and preferences.
+  // A different panel with the same slot would fail correspondence first.
+  auto duplicate_json = valid;
+  duplicate_json.replace(duplicate_json.find(panel), panel.size(),
+                         panel + "," + panel);
+  const auto duplicate_parsed = parse_companion_snapshot_json(duplicate_json);
+  const auto *parse_error = std::get_if<CompanionError>(&duplicate_parsed);
+  layerc::test::expect(
+      parse_error && parse_error->path == "$.panels[1].slotIndex" &&
+          parse_error->message == "duplicate slotIndex in snapshot",
+      "parser reaches the exact duplicate-panel-slot guard");
+
+  auto duplicate = *baseline;
+  duplicate.panels.push_back(baseline->panels.front());
+  const auto serialized = serialize_companion_snapshot_json(duplicate);
+  const auto *serialize_error = std::get_if<CompanionError>(&serialized);
+  layerc::test::expect(
+      serialize_error && serialize_error->path == "$.panels[1].slotIndex" &&
+          serialize_error->message == "duplicate slotIndex in snapshot",
+      "serializer reaches the exact duplicate-panel-slot guard");
+}
+
 static void test_companion_snapshot_rejects_malformed_input() {
   const std::string valid =
       R"({"profileId":"p","sessionKey":"s","timestampMs":1,"panels":[],"availablePanels":[],"preferences":[]})";
@@ -496,11 +535,6 @@ static void test_companion_snapshot_rejects_malformed_input() {
   expect_rejected(
       R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":8,"visible":true,"items":[]}]})",
       "snapshot rejects out-of-range slot");
-  // layer21-F7: a cross-panel duplicate slot is accepted by the per-field
-  // parser but rejected by the validator; parse must agree with the validator.
-  expect_rejected(
-      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"a","slotIndex":1,"visible":true,"items":[]},{"panelId":"b","slotIndex":1,"visible":true,"items":[]}]})",
-      "snapshot rejects duplicate slot across panels");
   expect_rejected(
       R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":0,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1.0},{"slotIndex":1,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1.0}]})",
       "snapshot rejects one panel assigned to duplicate preference slots");
@@ -515,16 +549,6 @@ static void test_companion_snapshot_rejects_malformed_input() {
       std::holds_alternative<CompanionError>(invalid_result) &&
           std::get<CompanionError>(invalid_result).path == "$.profileId",
       "invalid snapshot serialization returns its validation error");
-  CompanionSessionSnapshot duplicate;
-  duplicate.profile_id = "p";
-  duplicate.session_key = "s";
-  duplicate.timestamp_ms = 1;
-  duplicate.panels = {{.panel_id = "a", .slot_index = 2, .items = {}},
-                      {.panel_id = "b", .slot_index = 2, .items = {}}};
-  layerc::test::expect(
-      std::holds_alternative<CompanionError>(
-          serialize_companion_snapshot_json(duplicate)),
-      "duplicate-slot snapshot serialization returns an error");
   CompanionSessionSnapshot oversized;
   oversized.profile_id = "p";
   oversized.session_key = "s";
@@ -618,8 +642,18 @@ static void test_gamebar_selects_multiple_game_sessions() {
       "ordinary foreground selection remains authoritative outside Game Bar");
 }
 
+void test_widget_connection_ownership();
+void test_widget_service_registration_cleanup();
+void test_widget_latest_state_delivery();
+void test_widget_owned_subscriptions();
+
 int main() {
   return layerc::test::run({
+      {"test_widget_connection_ownership", test_widget_connection_ownership},
+      {"test_widget_service_registration_cleanup", test_widget_service_registration_cleanup},
+      {"test_widget_latest_state_delivery", test_widget_latest_state_delivery},
+      {"test_widget_owned_subscriptions", test_widget_owned_subscriptions},
+      {"test_companion_duplicate_slot_contract", test_companion_duplicate_slot_contract},
       {"test_companion_json_roundtrip", test_companion_json_roundtrip},
       {"test_companion_snapshot_bridge", test_companion_snapshot_bridge},
       {"test_companion_shared_pool_runtime_view", test_companion_shared_pool_runtime_view},

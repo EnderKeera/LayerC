@@ -94,6 +94,8 @@
     <ClInclude Include="PanelWidgetPage.h"><DependentUpon>PanelWidgetPage.xaml</DependentUpon></ClInclude>
     <ClInclude Include="SettingsWidgetPage.h"><DependentUpon>SettingsWidgetPage.xaml</DependentUpon></ClInclude>
     <ClInclude Include="WidgetSnapshotHub.hpp" />
+    <ClInclude Include="WidgetSnapshotState.hpp" />
+    <ClInclude Include="WidgetServiceSession.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml"><SubType>Designer</SubType></ApplicationDefinition>
