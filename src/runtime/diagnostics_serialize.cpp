@@ -1,4 +1,5 @@
 #include "layerc/runtime/diagnostics.hpp"
+#include "layerc/core/profile_wire.hpp"
 
 #include <chrono>
 #include <utility>
@@ -53,6 +54,16 @@ Value helper(const HelperDiagnostics &value) {
       {"running", Value(value.running)}, {"quarantined", Value(value.quarantined)},
       {"faultCount", exact_unsigned_value(value.fault_count)}, {"lastError", Value(value.last_error)}});
 }
+Value capture(const CaptureDiagnostics &value) {
+  return Value(Value::Object{
+      {"window", Value(std::to_string(value.window))},
+      {"runtime", Value(std::string(core::enum_wire_name(core::profile_wire::visual_runtime, value.runtime).value_or("inline")))},
+      {"availability", Value(std::string(core::enum_wire_name(
+          core::capture_availability_wire, value.health.availability).value_or("inactive")))},
+      {"backend", Value(std::string(core::enum_wire_name(
+          core::capture_backend_wire, value.health.backend).value_or("none")))},
+      {"diagnostic", Value(value.health.diagnostic)}});
+}
 template <typename T, typename Encode>
 Value array(const std::vector<T> &values, Encode encode) {
   Value::Array result;
@@ -75,7 +86,8 @@ std::string serialize_runtime_diagnostics_json(const RuntimeDiagnostics &value) 
           {"visualRecognition", Value(value.settings.visual_recognition)},
           {"lastError", Value(value.settings.last_error)}})},
       {"aggregateOwnedResources", resources(value.aggregate_resources)},
-      {"sessions", array(value.sessions, session)}, {"isolatedHelpers", array(value.helpers, helper)}});
+      {"sessions", array(value.sessions, session)}, {"isolatedHelpers", array(value.helpers, helper)},
+      {"captures", array(value.captures, capture)}});
   std::string output;
   json::append_value(output, root);
   return output;

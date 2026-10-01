@@ -46,23 +46,23 @@ void DaemonApp::reconcile_input_runtime() {
                                 binding.device);
                    });
       });
-  const bool needs_raw_input =
+  // Keyboard and mouse registration are independent demands. System-class HID
+  // bindings sample both Raw Input streams directly.
+  const bool needs_raw_keyboard =
+      needs_system_hid ||
       std::ranges::any_of(session_registry_.active_inputs,
                           [](const Session *session) {
                             return session != nullptr &&
-                                   session->uses_raw_input;
-                          }) ||
-      needs_system_hid;
-  // System-class HID bindings sample the mouse's Raw Input directly.
+                                   session->uses_raw_keyboard;
+                          });
   const bool needs_raw_mouse =
-      needs_raw_input &&
-      (needs_system_hid ||
-       std::ranges::any_of(session_registry_.active_inputs,
-                           [](const Session *session) {
-                             return session != nullptr &&
-                                    session->uses_raw_mouse;
-                           }));
-  set_raw_input(needs_raw_input, needs_raw_mouse);
+      needs_system_hid ||
+      std::ranges::any_of(session_registry_.active_inputs,
+                          [](const Session *session) {
+                            return session != nullptr &&
+                                   session->uses_raw_mouse;
+                          });
+  set_raw_input(needs_raw_keyboard, needs_raw_mouse);
 
   const bool needs_polling =
       std::ranges::any_of(session_registry_.active_inputs, [](const Session *session) {

@@ -14,7 +14,7 @@
 
 namespace layerc::daemon {
 
-inline constexpr std::uint32_t isolated_visual_protocol_version = 1;
+inline constexpr std::uint32_t isolated_visual_protocol_version = 2;
 inline constexpr std::size_t isolated_visual_max_message_bytes =
     1024U * 1024U;
 inline constexpr std::uint32_t isolated_visual_heartbeat_ms = 1'000;
@@ -65,25 +65,40 @@ enum class IsolatedSnapshotDisposition : std::uint8_t {
   rejected,
 };
 
-// Shared sequence counters for both sides of the isolated capture stream.
-// The helper rebases its local capture counter onto the published monotonic
-// stream; the daemon validates and deduplicates what it receives. A helper
-// can recreate its in-process capture after an empty configuration — epoch
-// reset lives here so those restarts cannot move published sequences backwards.
+// Sequence domains of the isolated capture stream. Each side maps counters
+// that restart (a recreated capture, a replacement helper connection) onto a
+// monotonic stream it owns, so restarts never move published sequences
+// backwards and never reuse one.
+// - Helper (rebase): the capture sequence advances with each new frame; an
+//   evaluation's sequence advances only when that profile was re-sampled, so
+//   a slower profile's cached measurement is never presented as fresh.
+// - Daemon (validate): every authenticated helper connection is an epoch whose
+//   local sequences are validated against that connection only and mapped onto
+//   host sequences above everything an earlier helper published.
 class IsolatedSnapshotValidator {
 public:
-  void begin_worker_epoch() noexcept { last_worker_sequence_ = 0; }
-  // Worker side: rebase helper-local sequences; true when the capture advanced.
+  // Helper side: the in-process capture was recreated; local counters restart.
+  void begin_worker_epoch() noexcept;
+  // Helper side: map local sequences; true when the capture advanced.
   [[nodiscard]] bool rebase(VisualCaptureSnapshot &snapshot);
+  // Daemon side: a new authenticated helper connection starts its counters.
+  void begin_connection() noexcept;
   // Daemon side: accept, deduplicate, or reject a published snapshot.
   [[nodiscard]] IsolatedSnapshotDisposition
   validate(VisualCaptureSnapshot &snapshot, layerc::core::TimePoint now,
            std::string &error);
 
 private:
-  std::uint64_t last_worker_sequence_{};
+  struct EvaluationSequence {
+    std::uint64_t local{};     // last sequence of the restartable source
+    std::uint64_t published{}; // last sequence in the owned stream
+    std::uint64_t base{};      // daemon: published value at connection start
+  };
+
+  std::uint64_t local_capture_sequence_{};
   std::uint64_t capture_sequence_{};
-  std::map<std::string, std::uint64_t> evaluation_sequences_;
+  std::uint64_t capture_base_{};
+  std::map<std::string, EvaluationSequence> evaluations_;
 };
 
 [[nodiscard]] std::string isolated_hello_json(std::string_view nonce,

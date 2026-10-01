@@ -1,6 +1,7 @@
 #include "layerc/core/live_edit.hpp"
 #include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/window_query.hpp"
+#include "overlay_collection.hpp"
 #include "overlay_window.hpp"
 #include "test_support.hpp"
 
@@ -478,6 +479,92 @@ void target_window_matching() {
          "additional window title matcher should narrow selection");
 }
 
+void collection_overrides_survive_recreation() {
+  layerc::core::GameProfile profile;
+  profile.panels.push_back({.id = "main",
+                            .name = "Main",
+                            .style = layerc::core::PanelStyle::card,
+                            .bar = {},
+                            .anchor_x = 0.5,
+                            .anchor_y = 0.75,
+                            .cooldown_ids = {}});
+  layerc::core::OverlayPropertyOverride hidden;
+  hidden.name = "hide-main";
+  hidden.owner_automation = "automation";
+  hidden.panel_id = "main";
+  hidden.property = "visible";
+  hidden.value = layerc::core::AutomationValue(false);
+  auto anchor = hidden;
+  anchor.name = "move-main";
+  anchor.property = "anchorX";
+  anchor.value = layerc::core::AutomationValue(0.8);
+  std::vector overrides{hidden, anchor};
+  const std::vector<layerc::core::CooldownState> states;
+  const auto shown = [&](const layerc::daemon::OverlayCollection &collection) {
+    const auto *window = collection.find("main");
+    return window != nullptr && window->should_show(states);
+  };
+
+  const RECT target{100, 100, 1100, 900};
+  const auto check_geometry = [&](layerc::daemon::OverlayCollection &collection,
+                                   const double expected_x) {
+    // Make the panel visible just for a real window-geometry assertion, then
+    // restore the same active visibility override used across recreation.
+    overrides.front().value = layerc::core::AutomationValue(true);
+    collection.apply_overrides(profile, overrides);
+    collection.render_on_rect(target, states,
+                              layerc::core::MonotonicClock::now());
+    RECT bounds{};
+    const auto *window = collection.find("main");
+    if (expect(window != nullptr && window->screen_bounds(bounds),
+               "the overridden collection should create a visible window")) {
+      const auto expected = layerc::core::overlay_rectangle(
+          {expected_x, profile.panels.front().anchor_y},
+          {target.left, target.top, target.right, target.bottom},
+          bounds.right - bounds.left, bounds.bottom - bounds.top);
+      expect(rectangles_near(bounds, expected, 2),
+             "effective geometry should combine active overrides and base edits");
+    }
+    overrides.front().value = layerc::core::AutomationValue(false);
+    collection.apply_overrides(profile, overrides);
+  };
+
+  layerc::daemon::OverlayCollection collection;
+  collection.ensure(profile, false);
+  collection.apply_overrides(profile, overrides);
+  expect(collection.find("main") != nullptr && !shown(collection),
+         "an automation override hides the panel");
+  check_geometry(collection, 0.8);
+
+  // Overlay demand disappears and returns while the runtime keeps its state.
+  collection.release();
+  collection.ensure(profile, false);
+  collection.apply_overrides(profile, overrides);
+  expect(collection.find("main") != nullptr && !shown(collection),
+         "a recreated collection keeps the still-active override");
+  check_geometry(collection, 0.8);
+
+  profile.panels.front().anchor_x = 0.25;
+  profile.panels.front().anchor_y = 0.25;
+  collection.rebuild(profile, false);
+  collection.apply_overrides(profile, overrides);
+  expect(!shown(collection), "a rebuilt base panel keeps the unchanged override");
+  check_geometry(collection, 0.8);
+  collection.apply_overrides(profile, {});
+  expect(shown(collection), "removing the override restores the base panel");
+  collection.render_on_rect(target, states,
+                            layerc::core::MonotonicClock::now());
+  RECT bounds{};
+  if (expect(collection.find("main")->screen_bounds(bounds),
+             "the base panel should be visible after removing overrides")) {
+    const auto expected = layerc::core::overlay_rectangle(
+        {0.25, 0.25}, {target.left, target.top, target.right, target.bottom},
+        bounds.right - bounds.left, bounds.bottom - bounds.top);
+    expect(rectangles_near(bounds, expected, 2),
+           "clearing overrides restores the edited base geometry");
+  }
+}
+
 } // namespace
 
 int wmain(const int argc, wchar_t *argv[]) {
@@ -492,5 +579,6 @@ int wmain(const int argc, wchar_t *argv[]) {
                             LAYERC_TEST_CASE(attached_overlay_follows_target),
                             LAYERC_TEST_CASE(direct_edit_restores_click_through),
                             LAYERC_TEST_CASE(background_overlay_tracks_target),
-                            LAYERC_TEST_CASE(target_window_matching)});
+                            LAYERC_TEST_CASE(target_window_matching),
+                            LAYERC_TEST_CASE(collection_overrides_survive_recreation)});
 }
