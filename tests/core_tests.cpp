@@ -61,5 +61,15 @@ int main() {
       {"test_automation_action_value_type", test_automation_action_value_type},
       {"test_automation_limits_and_fault_rollback", test_automation_limits_and_fault_rollback},
       {"test_automation_persistent_sync_and_cascade_bounds", test_automation_persistent_sync_and_cascade_bounds},
+      {"test_automation_root_budget_isolation",
+       test_automation_root_budget_isolation},
+      {"test_automation_mutation_postconditions",
+       test_automation_mutation_postconditions},
+      {"test_automation_clock_boundaries", test_automation_clock_boundaries},
+      {"test_automation_numeric_promotion", test_automation_numeric_promotion},
+      {"test_automation_decode_postconditions",
+       test_automation_decode_postconditions},
+      {"test_automation_trace_root_provenance",
+       test_automation_trace_root_provenance},
   });
 }

@@ -194,7 +194,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
   removed modules stay disabled through durable tombstones.
 - Declarative Automation Graphs reacting to input, visual triggers, cooldowns,
   timers, and variables. Caps: 64 rules, 64 variables, 32 timers, 256 AST nodes,
-  depth 16, and a 2 ms root-event budget.
+  depth 16, and a cooperative 2 ms root-event budget. Exhaustion rejects the
+  current event without disabling unrelated automations. The deadline is checked
+  before external commit; synchronous callbacks are not forcibly preempted.
 
 ### Windows desktop
 
@@ -208,7 +210,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
 - Bar preview preserves the target client area's aspect ratio and scales bar
   dimensions in device-independent pixels; without a live target it uses a
   1920 × 1080 reference. The simulator replays its exported events from empty
-  persistent state, so it does not reproduce saved daemon state.
+  persistent state, so it does not reproduce saved daemon state. Trace replay
+  imports recorded roots only; derived events remain audit-only. Legacy traces
+  without explicit root provenance must be recaptured.
 - Optional isolated capture worker and Xbox Game Bar companion.
 
 ### Linux X11

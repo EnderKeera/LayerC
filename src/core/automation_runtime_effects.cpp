@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
 
 namespace layerc::core {
 namespace {
@@ -89,18 +90,30 @@ bool AutomationRuntime::Impl::apply_internal(
     const AutomationEffect &effect, TimePoint now,
     AutomationRuntimeSnapshot &target, AutomationError &error,
     std::vector<AutomationEvent> &derived) const {
+  if (!automation_value_valid(effect.value) ||
+      !automation_value_valid(effect.secondary)) {
+    error = {"$runtime", "action value exceeds automation bounds"};
+    return false;
+  }
   auto variable = target.variables.find(effect.target);
-  const auto changed = [&](const AutomationValue &before,
-                           const AutomationValue &after) {
-    if (before == after)
-      return;
+  const auto finish_mutation = [&](AutomationValue before) {
+    // Whole-value validity is the postcondition, including collection keys
+    // and nesting. Restore the attributable mutation before deriving events.
+    if (!automation_value_valid(variable->second)) {
+      variable->second = std::move(before);
+      error = {"$runtime", "variable mutation exceeds automation bounds"};
+      return false;
+    }
+    if (before == variable->second)
+      return true;
     AutomationEvent event;
     event.kind = AutomationEventKind::variable_changed;
     event.timestamp = now;
     event.source_id = effect.target;
-    event.fields.emplace("old", before);
-    event.fields.emplace("value", after);
+    event.fields.emplace("old", std::move(before));
+    event.fields.emplace("value", variable->second);
     derived.push_back(std::move(event));
+    return true;
   };
   const auto emit = [&](const AutomationEventKind kind,
                         const std::string &source_id) {
@@ -124,9 +137,8 @@ bool AutomationRuntime::Impl::apply_internal(
     {
       auto before = variable->second;
       variable->second = effect.value;
-      changed(before, variable->second);
+      return finish_mutation(std::move(before));
     }
-    return true;
   case AutomationActionKind::increment_variable: {
     if (variable == target.variables.end()) {
       error = {"$runtime", "unknown variable"};
@@ -185,8 +197,7 @@ bool AutomationRuntime::Impl::apply_internal(
       error = {"$runtime", "increment requires numeric values"};
       return false;
     }
-    changed(before, variable->second);
-    return true;
+    return finish_mutation(before);
   }
   case AutomationActionKind::append_list: {
     if (variable == target.variables.end()) {
@@ -194,14 +205,13 @@ bool AutomationRuntime::Impl::apply_internal(
       return false;
     }
     auto *list = std::get_if<AutomationList>(&variable->second.storage);
-    if (!list || list->size() >= max_automation_collection_entries) {
-      error = {"$runtime", "list is full or target is not a list"};
+    if (!list) {
+      error = {"$runtime", "target is not a list"};
       return false;
     }
     auto before = variable->second;
     list->push_back(effect.value);
-    changed(before, variable->second);
-    return true;
+    return finish_mutation(std::move(before));
   }
   case AutomationActionKind::set_map_entry: {
     if (variable == target.variables.end()) {
@@ -210,16 +220,13 @@ bool AutomationRuntime::Impl::apply_internal(
     }
     auto *map = std::get_if<AutomationMap>(&variable->second.storage);
     const auto *key = std::get_if<std::string>(&effect.secondary.storage);
-    if (!map || !key ||
-        (map->size() >= max_automation_collection_entries &&
-         !map->contains(*key))) {
-      error = {"$runtime", "map is full or map key is invalid"};
+    if (!map || !key) {
+      error = {"$runtime", "target is not a map or map key is invalid"};
       return false;
     }
     auto before = variable->second;
     (*map)[*key] = effect.value;
-    changed(before, variable->second);
-    return true;
+    return finish_mutation(std::move(before));
   }
   case AutomationActionKind::erase_map_entry: {
     if (variable == target.variables.end()) {
@@ -234,13 +241,17 @@ bool AutomationRuntime::Impl::apply_internal(
     }
     auto before = variable->second;
     map->erase(*key);
-    changed(before, variable->second);
-    return true;
+    return finish_mutation(std::move(before));
   }
   case AutomationActionKind::create_timer: {
     const auto interval = as_duration(effect.value);
     if (!interval || *interval < min_automation_timer_interval) {
       error = {"$runtime", "timer interval must be at least 50 ms"};
+      return false;
+    }
+    const auto due = automation_time_after(now, *interval);
+    if (!due) {
+      error = {"$runtime", "timer deadline is outside the clock range"};
       return false;
     }
     auto found =
@@ -250,10 +261,10 @@ bool AutomationRuntime::Impl::apply_internal(
         error = {"$runtime", "session timer limit reached"};
         return false;
       }
-      target.timers.push_back({effect.target, effect.automation_id,
-                               now + *interval, *interval, effect.repeating});
+      target.timers.push_back({effect.target, effect.automation_id, *due,
+                               *interval, effect.repeating});
     } else
-      *found = {effect.target, effect.automation_id, now + *interval, *interval,
+      *found = {effect.target, effect.automation_id, *due, *interval,
                 effect.repeating};
     return true;
   }
@@ -262,10 +273,26 @@ bool AutomationRuntime::Impl::apply_internal(
                   [&](const auto &timer) { return timer.id == effect.target; });
     return true;
   case AutomationActionKind::set_overlay_override: {
+    const auto *spec = find_overlay_property(effect.property);
+    if (!spec || !overlay_value_valid(*spec, effect.value)) {
+      error = {"$runtime", "invalid overlay property value"};
+      return false;
+    }
     std::optional<TimePoint> expiry;
-    if (const auto value = as_duration(effect.secondary);
-        value && *value > Milliseconds::zero())
-      expiry = now + *value;
+    if (!std::holds_alternative<std::nullptr_t>(effect.secondary.storage)) {
+      const auto duration = as_duration(effect.secondary);
+      if (!duration) {
+        error = {"$runtime", "invalid overlay expiry duration"};
+        return false;
+      }
+      if (*duration > Milliseconds::zero()) {
+        expiry = automation_time_after(now, *duration);
+        if (!expiry) {
+          error = {"$runtime", "overlay expiry is outside the clock range"};
+          return false;
+        }
+      }
+    }
     std::erase_if(target.overlay_overrides, [&](const auto &item) {
       return item.name == effect.name && item.property == effect.property;
     });
@@ -311,42 +338,50 @@ bool AutomationRuntime::Impl::apply_internal(
     for (const auto &id : group_cooldowns(effect.target, false))
       emit(AutomationEventKind::cooldown_ready, id);
     return true;
+  case AutomationActionKind::reduce_cooldown_next:
+  case AutomationActionKind::reduce_cooldown_all:
+    if (!as_duration(effect.value)) {
+      error = {"$runtime", "cooldown reduction is outside the clock range"};
+      return false;
+    }
+    return true;
   default:
     return true;
   }
 }
 
-std::optional<std::string> AutomationRuntime::Impl::commit_batch(
-    EvaluationStage &stage, const EffectValidator &validator,
-    const EffectCommitter &committer) {
+AttemptOutcome
+AutomationRuntime::Impl::commit_batch(EvaluationStage &stage,
+                                      const EffectValidator &validator,
+                                      const EffectCommitter &committer) {
   for (const auto &winner : stage.winners) {
+    if (auto exhausted = stage.budget.check())
+      return *exhausted;
     const auto &effect = winner.second;
-    if (faulted.contains(effect.automation_id))
-      continue;
-    if (validator && !validator(effect)) {
-      const AutomationError rejection{
-          "$runtime", "transaction validation rejected an action"};
-      stage.fault = rejection;
-      return effect.automation_id;
-    }
+    if (validator && !validator(effect))
+      return AutomationFault{
+          effect.automation_id,
+          {"$runtime", "transaction validation rejected an action"}};
     stage.result.effects.push_back(effect);
   }
   std::ranges::sort(stage.result.effects, runtime_effect_precedes);
   AutomationRuntimeSnapshot committed_state = stage.root_snapshot;
   for (const auto &effect : stage.result.effects) {
+    if (auto exhausted = stage.budget.check())
+      return *exhausted;
     std::vector<AutomationEvent> ignored;
     AutomationError apply_error;
     if (!apply_internal(effect, effect.timestamp, committed_state, apply_error,
-                        ignored)) {
-      stage.fault = apply_error;
-      return effect.automation_id;
-    }
+                        ignored))
+      return AutomationFault{effect.automation_id, std::move(apply_error)};
   }
-  if (committer && !committer(stage.result.effects)) {
-    stage.result.error = AutomationError{
-        "$runtime", "transaction commit rejected the action batch"};
-    return std::nullopt;
-  }
+  // The complete winning set is valid before crossing the external boundary.
+  // Callbacks are synchronous and cannot be forcibly preempted.
+  if (auto exhausted = stage.budget.check())
+    return *exhausted;
+  if (committer && !committer(stage.result.effects))
+    return AttemptRejected{
+        {"$runtime", "transaction commit rejected the action batch"}};
   state = std::move(committed_state);
   for (const auto &variable : profile.variables)
     if (variable.persistent) {
@@ -360,8 +395,9 @@ std::optional<std::string> AutomationRuntime::Impl::commit_batch(
       }
     }
   // queue[0] is the root event; only later entries are derived.
-  stage.result.derived_events.assign(stage.queue.begin() + 1, stage.queue.end());
+  stage.result.derived_events.assign(stage.queue.begin() + 1,
+                                     stage.queue.end());
   stage.result.committed = true;
-  return std::nullopt;
+  return AttemptComplete{};
 }
 } // namespace layerc::core
