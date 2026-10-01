@@ -19,7 +19,7 @@ For repeated saves and failure cases, capture the disposable profile's relevant 
 
 ## Follow the owning flow
 
-Start with [editor_live_edit.cpp](../../../src/editor/editor_live_edit.cpp): `record_profile_change`, `flush_autosave`, `notify_profile_committed`, `handle_live_message`, and `apply_history_snapshot`. Read [editor_history.hpp](../../../src/editor/editor_history.hpp), [editor_profiles.cpp](../../../src/editor/editor_profiles.cpp), or [editor_schema.cpp](../../../src/editor/editor_schema.cpp) only for the involved transition.
+Start with [editor_live_edit.cpp](../../../src/editor/editor_live_edit.cpp): `record_profile_change`, `flush_autosave`, `notify_profile_committed`, `handle_live_message`, and `apply_history_snapshot`. Read [editor_history.hpp](../../../src/editor/editor_history.hpp) or [editor_profiles.cpp](../../../src/editor/editor_profiles.cpp) (including schema-upgrade prompts) only for the involved transition.
 
 On the daemon side, trace [daemon_live_edit.cpp](../../../src/daemon/daemon_live_edit.cpp) and [daemon_sessions.cpp](../../../src/daemon/daemon_sessions.cpp). Use [live_edit.cpp](../../../src/core/live_edit.cpp) and [live_channel.cpp](../../../src/platform/live_channel.cpp) when the evidence points to revision/protocol or authentication behavior.
 
@@ -39,7 +39,7 @@ Avoid running every branch for a narrow defect. Stop at the first inconsistent b
 
 Use `layerc_core_tests` for live-message/history-independent semantic contracts and `layerc_platform_tests` for pipe/authentication or store boundaries. Use `layerc_editor_tests` for dialog resources, theme/schema helpers, and presets.
 
-The editor test target does not compile the complete `EditorWindow` live-edit implementation. Passing it is insufficient evidence for autosave or daemon synchronization; build `layere` and any changed `layerd` code and repeat the real path. Use [profile store roundtrip](../layerc-profile-store-roundtrip/SKILL.md) for transaction failure/recovery experiments.
+`layerc_editor_tests` links the live-edit code through `layerc_editor_ui` but does not exercise autosave or daemon synchronization, so passing it is insufficient evidence for autosave or daemon synchronization; build `layere` and any changed `layerd` code and repeat the real path. Use [profile store roundtrip](../layerc-profile-store-roundtrip/SKILL.md) for transaction failure/recovery experiments.
 
 For LC Test or another passive-input fixture, distinguish tool-injected keys from physical Raw Input/HID evidence. A missing countdown after synthetic input does not isolate a runtime defect. Confirm the actual assigned chord and target/session before interpreting the result; mark hardware input unverified when that evidence is unavailable. Preview motion can establish an editor change; observe the real target overlay to establish live publication, and check durable values separately when persistence is in scope.
 

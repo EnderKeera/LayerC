@@ -25,6 +25,10 @@ using namespace std::chrono_literals;
 
 using expr::binary;
 using expr::literal;
+
+// Functional fixtures must not depend on the CI host's scheduling latency;
+// the deadline tests below use their own controlled clocks.
+constexpr auto frozen_clock = [] { return TimePoint{}; };
 AutomationExpression unary(std::string operation,
                            AutomationExpression argument) {
   return {.kind = ExpressionKind::unary,
@@ -85,7 +89,8 @@ std::optional<AutomationValue> evaluate(AutomationExpression expression,
                                .value = std::move(expression)}}}}});
   if (!validate_automation_profile(profile, contract_base()).message.empty())
     return std::nullopt;
-  AutomationRuntime runtime(profile);
+  // Operator contracts must not depend on the CI host's scheduling latency.
+  AutomationRuntime runtime(profile, {}, {}, frozen_clock);
   const auto result = runtime.process(event);
   if (!result.committed)
     return std::nullopt;
@@ -119,7 +124,7 @@ void test_automation_expression_and_action_contract() {
            "cooldown validation must reject effects from other domains");
     AutomationProfile graph;
     graph.profile_id = base.id;
-    AutomationRuntime runtime(graph);
+    AutomationRuntime runtime(graph, {}, {}, frozen_clock);
     expect(!next_automation_deadline(runtime, {}).has_value(),
            "idle automation must have no deadline");
     const std::array states{CooldownState{.next_charge_at = TimePoint{} + 100ms}};
@@ -135,7 +140,7 @@ void test_automation_expression_and_action_contract() {
           .target = "main", .name = "temporary", .property = "visible",
           .value = literal(AutomationValue(false)),
           .secondary = literal(AutomationValue(DurationValue{25ms}))}}}}}};
-    AutomationRuntime overlay_runtime(graph);
+    AutomationRuntime overlay_runtime(graph, {}, {}, frozen_clock);
     expect(overlay_runtime.process({.kind = AutomationEventKind::session_started}).committed,
            "overlay expiry fixture should commit");
     expect(next_automation_deadline(overlay_runtime, states) == TimePoint{} + 25ms,
@@ -342,7 +347,7 @@ void test_automation_expression_and_action_contract() {
   expect(validate_automation_profile(action_profile, contract_base())
              .message.empty(),
          "the complete internal action fixture should validate");
-  AutomationRuntime action_runtime(action_profile);
+  AutomationRuntime action_runtime(action_profile, {}, {}, frozen_clock);
   const auto started =
       action_runtime.process({.kind = AutomationEventKind::session_started,
                               .timestamp = TimePoint{},
@@ -390,7 +395,7 @@ void test_automation_expression_and_action_contract() {
                     .repeating = true}};
     rearm_profile.automations = {
         {.id = "clock", .name = "Clock", .rules = {arm}}};
-    AutomationRuntime rearm(rearm_profile);
+    AutomationRuntime rearm(rearm_profile, {}, {}, frozen_clock);
     (void)rearm.process({.kind = AutomationEventKind::session_started,
                          .timestamp = TimePoint{},
                          .origin_token = 1});
@@ -437,7 +442,8 @@ void test_automation_expression_and_action_contract() {
   expect(validate_automation_profile(external, contract_base()).message.empty(),
          "every cooldown/group action kind should validate");
   AutomationRuntime external_runtime(external, {},
-                                     contract_base().cooldown_groups);
+                                     contract_base().cooldown_groups,
+                                     frozen_clock);
   const auto effects =
       external_runtime.process({.kind = AutomationEventKind::input_pressed,
                                 .timestamp = TimePoint{},
@@ -477,7 +483,7 @@ void test_automation_timer_commit_rollback() {
       expect(validate_automation_profile(profile, contract_base())
                  .message.empty(),
              "timer rollback fixture should validate");
-      AutomationRuntime runtime(profile);
+      AutomationRuntime runtime(profile, {}, {}, frozen_clock);
       const auto armed = runtime.process(
           {.kind = AutomationEventKind::session_started});
       expect(armed.committed,
@@ -551,7 +557,8 @@ void test_automation_timer_commit_rollback() {
       {.id = "clock", .name = "Clock", .rules = {arm, replace}}};
   expect(validate_automation_profile(full, contract_base()).message.empty(),
          "full timer fixture should validate");
-  AutomationRuntime runtime(full);
+  // Capacity is a functional boundary, not an execution-time benchmark.
+  AutomationRuntime runtime(full, {}, {}, frozen_clock);
   const auto armed = runtime.process(
       {.kind = AutomationEventKind::session_started});
   expect(armed.committed, "the timer capacity fixture should arm all timers");
@@ -680,7 +687,8 @@ void test_automation_limits_and_fault_rollback() {
        .value = literal(AutomationValue(DurationValue{50ms}))});
   timer_profile.automations = {
       {.id = "timers", .name = "Timers", .rules = {fill, overflow}}};
-  AutomationRuntime timer_runtime(timer_profile);
+  AutomationRuntime timer_runtime(timer_profile, {}, {},
+                                  frozen_clock);
   expect(timer_runtime
                  .process({.kind = AutomationEventKind::session_started,
                            .timestamp = TimePoint{},
@@ -731,7 +739,7 @@ void test_automation_limits_and_fault_rollback() {
                       {.kind = AutomationActionKind::set_variable,
                        .target = "healthy",
                        .value = literal(AutomationValue(std::int64_t{1}))}}}}}};
-  AutomationRuntime rollback_runtime(rollback);
+  AutomationRuntime rollback_runtime(rollback, {}, {}, frozen_clock);
   const auto isolated =
       rollback_runtime.process({.kind = AutomationEventKind::session_started,
                                 .timestamp = TimePoint{},
@@ -765,7 +773,7 @@ void test_automation_limits_and_fault_rollback() {
                              literal(AutomationValue(
                                  std::numeric_limits<std::int64_t>::max())),
                              literal(AutomationValue(std::int64_t{1})))}}}}});
-  AutomationRuntime math_runtime(overflow_math);
+  AutomationRuntime math_runtime(overflow_math, {}, {}, frozen_clock);
   const auto math_result =
       math_runtime.process({.kind = AutomationEventKind::session_started,
                             .timestamp = TimePoint{},
@@ -786,12 +794,114 @@ void test_automation_limits_and_fault_rollback() {
   }
 
   auto reconfigured = rollback;
-  AutomationRuntime group_runtime(reconfigured, {}, base.cooldown_groups);
+  AutomationRuntime group_runtime(reconfigured, {}, base.cooldown_groups,
+                                  frozen_clock);
   auto changed_groups = base.cooldown_groups;
   changed_groups.front().cooldown_ids = {"dash", "roll"};
   group_runtime.reconfigure(reconfigured, changed_groups);
   expect(std::ranges::equal(group_runtime.cooldown_groups(), changed_groups),
          "runtime reconfiguration should refresh base cooldown-group metadata");
+}
+
+void test_automation_root_budget_isolation() {
+  AutomationProfile profile;
+  profile.profile_id = "game";
+  const AutomationRule rule{
+      .id = "reset",
+      .event = AutomationEventKind::session_started,
+      .actions = {
+          {.kind = AutomationActionKind::reset_cooldown, .target = "dash"}}};
+  profile.automations = {
+      {.id = "owner", .name = "Owner", .rules = {rule}},
+      {.id = "untouched", .name = "Untouched", .rules = {rule}}};
+  expect(validate_automation_profile(profile, contract_base()).message.empty(),
+         "AR-01 budget fixture must be valid");
+  TimePoint now{};
+  const auto clock = [&] { return now; };
+  const AutomationEvent root{.kind = AutomationEventKind::session_started};
+  unsigned commits{};
+  AutomationRuntime rejected(profile, {}, {}, clock);
+  const auto failure = rejected.process(
+      root,
+      [&](const AutomationEffect &) {
+        now += 3ms;
+        return false; // attributable rejection after the shared budget expires
+      },
+      [&](std::span<const AutomationEffect>) {
+        ++commits;
+        return true;
+      });
+  expect(!failure.committed && failure.error && commits == 0U &&
+             failure.faulted_automations == std::vector<std::string>{"owner"},
+         "AR-01 expired retries must not fault untouched automations");
+  const auto recovered = rejected.process(root);
+  expect(
+      recovered.committed && recovered.effects.size() == 1U &&
+          recovered.effects.front().automation_id == "untouched",
+      "AR-01 the untouched automation must run on the next root without retry");
+
+  AutomationRuntime late(profile, {}, {}, clock);
+  late.set_trace_enabled(true);
+  const auto expired = late.process(
+      root,
+      [&](const AutomationEffect &) {
+        now += 3ms;
+        return true;
+      },
+      [&](std::span<const AutomationEffect>) {
+        ++commits;
+        return true;
+      });
+  expect(!expired.committed && expired.error && expired.effects.empty() &&
+             expired.faulted_automations.empty() && commits == 0U,
+         "AR-01 expiration during the last validator must prevent external "
+         "commit");
+  expect(std::ranges::count(late.trace(), std::string("root"),
+                            &AutomationTraceEntry::phase) == 1,
+         "AR-01 an exhausted root must still have one trace entry");
+  expect(late.process(root).committed,
+         "AR-01 budget exhaustion must not permanently disable any automation");
+
+  AutomationProfile nodes;
+  nodes.profile_id = "game";
+  for (std::size_t i{}; i < 33U; ++i) {
+    auto expensive = rule;
+    expensive.source_filter = "stress";
+    expensive.condition = boolean_tree(7U); // 255 nodes, under the rule cap
+    nodes.automations.push_back({.id = "a" + std::to_string(i),
+                                 .name = "Nodes",
+                                 .rules = {std::move(expensive)}});
+  }
+  auto healthy = rule;
+  healthy.source_filter = "healthy";
+  nodes.automations.push_back(
+      {.id = "healthy", .name = "Healthy", .rules = {healthy}});
+  expect(validate_automation_profile(nodes, contract_base()).message.empty(),
+         "AR-01 node exhaustion must be tested with a valid bounded graph");
+  AutomationRuntime exhausted(nodes, {}, {}, clock);
+  const auto capped =
+      exhausted.process({.kind = root.kind, .source_id = "stress"});
+  expect(!capped.committed && capped.error &&
+             capped.faulted_automations.empty() &&
+             capped.node_evaluations == max_automation_node_evaluations &&
+             capped.error->message.find("8192") != std::string::npos,
+         "AR-01 global node exhaustion must stop without a fault cascade");
+  const auto next =
+      exhausted.process({.kind = root.kind, .source_id = "healthy"});
+  expect(next.committed && next.effects.size() == 1U,
+         "AR-01 node exhaustion must leave untouched automations enabled");
+
+  profile.automations.resize(1U);
+  profile.automations.front().rules.front().condition = boolean_tree(7U);
+  unsigned reads{};
+  AutomationRuntime cooperative(
+      profile, {}, {}, [&] { return TimePoint(++reads >= 20U ? 3ms : 0ms); });
+  const auto interrupted = cooperative.process(root);
+  expect(!interrupted.committed && interrupted.error &&
+             interrupted.faulted_automations.empty() &&
+             interrupted.node_evaluations > 0U &&
+             interrupted.node_evaluations < 255U,
+         "AR-01 cooperative checks must stop within expression evaluation");
 }
 
 } // namespace layerc::test

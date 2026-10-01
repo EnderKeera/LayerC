@@ -300,6 +300,29 @@ void test_template_matching() {
              !no_candidates.matched,
          "zero candidates caused by exclusions should fail closed without being mislabeled as outside captured output");
 
+  // A zero threshold is valid, but it must not turn "nothing scored" into a
+  // match; a real candidate can still satisfy it.
+  auto zero_threshold_state = off_grid_state;
+  zero_threshold_state.confidence_threshold = 0.0;
+  CpuTemplateMatcher zero_threshold_matcher;
+  const auto zero_no_candidates = zero_threshold_matcher.evaluate(
+      zero_threshold_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>(&all_excluded, 1));
+  expect(zero_no_candidates.search_region_available &&
+             zero_no_candidates.candidates_scored == 0 &&
+             !zero_no_candidates.matched,
+         "a zero threshold must not match when no template candidate was scored");
+  const auto zero_scored = zero_threshold_matcher.evaluate(
+      zero_threshold_state, std::span<const TemplateImage>(&off_grid, 1),
+      PixelFrameView{search_pixels, search_width, search_height, 0},
+      CaptureQuality::balanced, {0.0, 0.0, 1.0, 1.0},
+      std::span<const NormalizedRegion>(&unrelated_exclusion, 1));
+  expect(zero_scored.candidates_scored > 0 && zero_scored.matched &&
+             !zero_scored.reference_sha256.empty(),
+         "a scored candidate still satisfies a zero threshold and names its reference");
+
   auto outside_state = off_grid_state;
   outside_state.search_region = {0.4, 0.4, 0.5, 0.5};
   const NormalizedRegion different_output{0.0, 0.0, 0.1, 0.1};

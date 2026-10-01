@@ -3,8 +3,10 @@
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/profile_wire.hpp"
 
+#include <limits>
 #include <map>
 #include <optional>
+#include <ratio>
 #include <string_view>
 #include <variant>
 
@@ -168,13 +170,42 @@ bool overlay_value_valid(const OverlayPropertySpec &spec,
   }
 }
 
+bool normalize_automation_value(AutomationValue &value,
+                                const AutomationValueType expected) noexcept {
+  if (!automation_value_type_compatible(value_type(value), expected))
+    return false;
+  if (expected == AutomationValueType::number)
+    if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
+      value = AutomationValue(static_cast<double>(*integer));
+  return true;
+}
+
+std::optional<TimePoint>
+automation_time_after(const TimePoint base,
+                      const Milliseconds duration) noexcept {
+  using NativeDuration = TimePoint::duration;
+  using Conversion =
+      std::ratio_divide<Milliseconds::period, NativeDuration::period>;
+  // MSVC, GCC and MinGW steady clocks have integral sub-millisecond ticks.
+  static_assert(Conversion::den == 1);
+  constexpr auto maximum = std::numeric_limits<NativeDuration::rep>::max();
+  if (duration.count() < 0 || duration.count() > maximum / Conversion::num)
+    return std::nullopt;
+  const auto ticks = duration.count() * Conversion::num;
+  if (base.time_since_epoch().count() > maximum - ticks)
+    return std::nullopt;
+  return TimePoint(NativeDuration(base.time_since_epoch().count() + ticks));
+}
+
 std::optional<Milliseconds> as_duration(const AutomationValue &value) noexcept {
+  std::optional<Milliseconds> result;
   if (const auto *duration = std::get_if<DurationValue>(&value.storage))
-    return duration->value;
-  if (const auto *integer = std::get_if<std::int64_t>(&value.storage);
-      integer != nullptr && *integer >= 0)
-    return Milliseconds(*integer);
-  return std::nullopt;
+    result = duration->value;
+  else if (const auto *integer = std::get_if<std::int64_t>(&value.storage))
+    result = Milliseconds(*integer);
+  if (!result || !automation_time_after(TimePoint{}, *result))
+    return std::nullopt;
+  return result;
 }
 
 bool apply_automation_cooldown_effect(CooldownEngine &cooldowns,

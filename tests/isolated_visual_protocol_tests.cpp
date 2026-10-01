@@ -4,7 +4,12 @@
 #include <chrono>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <variant>
+
+void snapshot_capture_health_round_trips();
+void capture_faults_do_not_fault_unrelated_services();
+void inline_capture_status_preserves_fault_reason();
 
 namespace {
 
@@ -43,8 +48,10 @@ void handshake_is_mutually_bound() {
          "a spoofed role should be rejected");
 
   auto wrong_version = hello;
-  const auto protocol = wrong_version.find("\"protocolVersion\":1");
-  wrong_version.replace(protocol, 19, "\"protocolVersion\":99");
+  const auto version_field = "\"protocolVersion\":" +
+                             std::to_string(isolated_visual_protocol_version);
+  const auto protocol = wrong_version.find(version_field);
+  wrong_version.replace(protocol, version_field.size(), "\"protocolVersion\":99");
   error.clear();
   expect(!validate_isolated_hello(wrong_version, "nonce", "worker", 73, error),
          "an incompatible helper protocol should be rejected");
@@ -190,6 +197,99 @@ void snapshots_reject_replay_and_staleness() {
          "capture sequences must not move backwards");
 }
 
+void replacement_helpers_start_new_epochs() {
+  using namespace layerc::daemon;
+  const auto now = layerc::core::MonotonicClock::now();
+  IsolatedSnapshotValidator daemon;
+  std::string error;
+  daemon.begin_connection();
+  auto first = snapshot(99, 99, now);
+  auto latest = snapshot(100, 100, now);
+  expect(daemon.validate(first, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             daemon.validate(latest, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             latest.sequence == 100,
+         "helper A publishes a long-running stream");
+
+  // Helper A died; the authenticated replacement B restarts its counters.
+  daemon.begin_connection();
+  auto replacement = snapshot(1, 1, now);
+  error.clear();
+  expect(daemon.validate(replacement, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             error.empty() && replacement.sequence == 101 &&
+             replacement.evaluations.size() == 1 &&
+             replacement.evaluations.front().sequence == 101,
+         "a replacement helper's first measurement is accepted above every "
+         "sequence helper A published");
+  auto repeated = snapshot(1, 1, now);
+  expect(daemon.validate(repeated, now, error) ==
+             IsolatedSnapshotDisposition::duplicate,
+         "the replacement's first measurement is delivered exactly once");
+  auto backwards = snapshot(1, 2, now);
+  auto advanced = snapshot(2, 2, now);
+  expect(daemon.validate(advanced, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             daemon.validate(backwards, now, error) ==
+                 IsolatedSnapshotDisposition::rejected,
+         "sequences still cannot move backwards within one helper epoch");
+
+  // Explicit retry after that fault launches helper C: it recovers at once.
+  daemon.begin_connection();
+  auto retried = snapshot(1, 1, now);
+  error.clear();
+  expect(daemon.validate(retried, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             retried.sequence > advanced.sequence &&
+             retried.evaluations.front().sequence >
+                 advanced.evaluations.front().sequence,
+         "retry recovers without another quarantine cycle or reused "
+         "sequences");
+}
+
+layerc::daemon::VisualEvaluationSnapshot
+evaluation(std::string key, const std::uint64_t sequence,
+           const layerc::core::TimePoint sampled_at) {
+  return {.source_key = std::move(key),
+          .sequence = sequence,
+          .measurements = {{.observation_id = "ready",
+                            .matched = true,
+                            .confidence = 0.95,
+                            .sampled_at = sampled_at}}};
+}
+
+void cached_evaluations_are_not_republished_as_fresh() {
+  using namespace layerc::daemon;
+  const auto now = layerc::core::MonotonicClock::now();
+  IsolatedSnapshotValidator helper;
+  IsolatedSnapshotValidator daemon;
+  daemon.begin_connection();
+  std::string error;
+  // Capture 1 samples a 15 Hz and a 5 Hz profile.
+  VisualCaptureSnapshot frame;
+  frame.sequence = 1;
+  frame.evaluations = {evaluation("fast.json", 1, now),
+                       evaluation("slow.json", 1, now)};
+  expect(helper.rebase(frame) &&
+             daemon.validate(frame, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             frame.evaluations.size() == 2,
+         "both profiles' first samples reach the daemon");
+  // Capture 2 re-samples only the fast profile; the slow profile keeps its
+  // cached measurement, local sequence, and timestamp.
+  VisualCaptureSnapshot next;
+  next.sequence = 2;
+  next.evaluations = {evaluation("fast.json", 2, now),
+                      evaluation("slow.json", 1, now)};
+  expect(helper.rebase(next) &&
+             daemon.validate(next, now, error) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             next.evaluations.size() == 1 &&
+             next.evaluations.front().source_key == "fast.json",
+         "only the genuinely re-sampled evaluation reaches the daemon");
+}
+
 } // namespace
 
 int main() {
@@ -199,5 +299,10 @@ int main() {
       {"inbound_messages_decode_in_one_pass", inbound_messages_decode_in_one_pass},
       {"worker_sequences_survive_quality_epochs", worker_sequences_survive_quality_epochs},
       {"snapshots_reject_replay_and_staleness", snapshots_reject_replay_and_staleness},
+      {"replacement_helpers_start_new_epochs", replacement_helpers_start_new_epochs},
+      {"cached_evaluations_are_not_republished_as_fresh", cached_evaluations_are_not_republished_as_fresh},
+      LAYERC_TEST_CASE(snapshot_capture_health_round_trips),
+      LAYERC_TEST_CASE(capture_faults_do_not_fault_unrelated_services),
+      LAYERC_TEST_CASE(inline_capture_status_preserves_fault_reason),
   });
 }

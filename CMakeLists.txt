@@ -54,9 +54,24 @@ function(layerc_win32 target)
     layerc_enable_warnings(${target})
 endfunction()
 
+# Native executables and tests need Common Controls 6 for themed controls,
+# cue banners, empty-list markup, and MinGW's named subclass API imports.
+# MSVC merges the dependency into its generated UAC manifest; MinGW embeds a
+# complete manifest that replaces mingw-w64's default one.
+function(layerc_common_controls target)
+    if(MSVC)
+        target_sources(${target} PRIVATE
+            "${PROJECT_SOURCE_DIR}/resources/windows/common_controls.manifest")
+    elseif(MINGW)
+        target_sources(${target} PRIVATE
+            "${PROJECT_SOURCE_DIR}/resources/windows/common_controls_mingw.rc")
+    endif()
+endfunction()
+
 # Executables entered through wWinMain/wmain; MinGW links those with -municode.
 function(layerc_win32_exe target)
     layerc_win32(${target})
+    layerc_common_controls(${target})
     if(MINGW)
         target_link_options(${target} PRIVATE -municode)
     endif()
@@ -118,8 +133,8 @@ add_executable(layerc_manifest tools/update_manifest.cpp)
 target_link_libraries(layerc_manifest PRIVATE layerc_core)
 layerc_enable_warnings(layerc_manifest)
 
-# Update engine for the Windows launcher. It is platform-neutral apart from
-# the atomic file replace, so its behavior is tested on every CI platform.
+# Update engine for the Windows launcher. OS durability lives in the existing
+# platform helpers, so its behavior is tested on every CI platform.
 add_library(layerc_launcher_core STATIC
     src/launcher/update_engine.cpp
     src/launcher/signature.cpp)
@@ -154,6 +169,11 @@ if(WIN32)
     target_include_directories(layerc_launcher_win PUBLIC src/launcher/win32)
     target_link_libraries(layerc_launcher_win PUBLIC
         layerc_launcher_core bcrypt winhttp advapi32 ole32 shell32 uuid)
+    # BCryptHash is declared only for Windows 10 targets (mingw-w64 headers).
+    target_compile_definitions(layerc_launcher_win PUBLIC
+        WINVER=0x0A00
+        _WIN32_WINNT=0x0A00
+    )
     layerc_win32(layerc_launcher_win)
 
     # Built as layerc.exe. Only this program links an HTTP client.
@@ -220,6 +240,7 @@ if(WIN32)
         src/platform/win32_error.cpp
         src/platform/platform_events.cpp
         src/platform/native_theme.cpp
+        src/platform/native_controls.cpp
         src/platform/window_discovery.cpp
         src/platform/text.cpp
         src/platform/path_text.cpp
@@ -264,6 +285,7 @@ if(WIN32)
     layerc_win32(layerc_capture)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_windows)
+    target_link_libraries(layerc_launcher_core PUBLIC layerc_windows)
     # layerc_win32 re-applies warnings (already set above) to propagate the
     # UNICODE/lean-headers contract to every dependent exe and test.
     layerc_win32(layerc_bundle)
@@ -272,7 +294,8 @@ endif()
 if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
     add_library(layerc_overlay STATIC
         src/daemon/overlay_window.cpp
-        src/daemon/overlay_render.cpp)
+        src/daemon/overlay_render.cpp
+        src/daemon/overlay_collection.cpp)
     target_include_directories(layerc_overlay PUBLIC src/daemon)
     target_link_libraries(layerc_overlay PUBLIC layerc_core layerc_windows
         PRIVATE user32 gdi32)
@@ -307,6 +330,8 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
     add_library(layerc_editor_ui STATIC
         src/editor/editor_dialog.cpp
         src/editor/editor_layout.cpp
+        src/editor/editor_shell.cpp
+        src/editor/editor_prompt.cpp
         src/editor/editor_profiles.cpp
         src/editor/editor_profile_fields.cpp
         src/editor/editor_util.cpp
@@ -373,6 +398,7 @@ if(NOT WIN32)
     layerc_enable_warnings(layerc_linux)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_linux)
+    target_link_libraries(layerc_launcher_core PUBLIC layerc_linux)
 
     # X11 adapters. Without the X11 development packages the daemon
     # builds without input/overlay/capture and reports those capabilities as
@@ -464,11 +490,11 @@ if(WIN32 AND LAYERC_BUILD_DAEMON)
         src/daemon/daemon_hid.cpp
         src/daemon/hid_resolver.cpp
         src/daemon/daemon_overlays.cpp
-        src/daemon/overlay_collection.cpp
         src/daemon/daemon_live_edit.cpp
         src/daemon/daemon_diagnostics.cpp
         src/daemon/daemon_visual.cpp
-        src/daemon/isolated_visual_worker.cpp)
+        src/daemon/isolated_visual_worker.cpp
+        resources/windows/layerd.rc)
     target_include_directories(layerd PRIVATE src/daemon src/gamebar)
     target_link_libraries(layerd PRIVATE
         layerc_core layerc_runtime layerc_windows layerc_capture
@@ -671,6 +697,7 @@ if(LAYERC_BUILD_TESTS)
             layerc_win32_exe(${target})
         elseif(TEST_WIN32)
             layerc_win32(${target})
+            layerc_common_controls(${target})
         else()
             layerc_enable_warnings(${target})
         endif()
@@ -800,6 +827,12 @@ if(LAYERC_BUILD_TESTS)
                 TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
                 SKIP_RETURN_CODE 77)
 
+            # Registry admission and automation health use a synthetic scan;
+            # keep this suite in the display-free headless gate.
+            layerc_add_test(layerc_linux_x11_registry_tests
+                SOURCES tests/linux_x11_registry_tests.cpp LINK layerc_daemon_linux
+                TIMEOUT 60)
+
             # XI2 input + session replay. XTest is a test-only dependency:
             # it is never linked into layerd, which only ever reads input.
             if(X11_Xtst_LIB)
@@ -884,7 +917,9 @@ if(LAYERC_BUILD_TESTS)
             WIN32 TIMEOUT 45)
 
         layerc_add_test(layerc_isolated_visual_tests
-            SOURCES tests/isolated_visual_protocol_tests.cpp LINK layerc_isolated
+            SOURCES tests/isolated_visual_protocol_tests.cpp
+                tests/capture_health_diagnostics_tests.cpp
+            LINK layerc_isolated layerc_runtime
             WIN32 TIMEOUT 30)
         target_include_directories(layerc_isolated_visual_tests PRIVATE
             src/daemon)
@@ -895,7 +930,8 @@ if(LAYERC_BUILD_TESTS)
         target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
 
         layerc_add_test(layerc_editor_tests
-            SOURCES tests/editor_dialog_tests.cpp src/editor/editor_resources.rc
+            SOURCES tests/editor_dialog_tests.cpp tests/editor_regression_tests.cpp
+                src/editor/editor_resources.rc
             LINK layerc_editor_ui WIN32 TIMEOUT 30)
         target_include_directories(layerc_editor_tests PRIVATE src/editor)
 

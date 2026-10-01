@@ -143,6 +143,14 @@ even an enabled launcher makes no update requests. Checks are also skipped
 while `layerd` is running. Exit it before checking for an update or rolling
 back with `--rollback`.
 
+Activation is ordered after durable payload publication: all downloaded and
+reused files, the installed manifest, and their directories cross the platform
+durability barriers before `current` is durably replaced. A failed or unconfirmed
+barrier stops activation and retains recovery evidence. For a new build ID, an
+interruption before activation keeps the previous build selected. Same-build-ID
+repairs park the old directory until the replacement is committed and recover
+it on the next read if the replacement directory is absent.
+
 To provision signing, the release owner generates an ECDSA P-256 key pair
 outside the repository (`openssl ecparam -name prime256v1 -genkey -noout -out
 <private-key-path>`), commits only the uncompressed public point (130 hex
@@ -194,7 +202,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
   removed modules stay disabled through durable tombstones.
 - Declarative Automation Graphs reacting to input, visual triggers, cooldowns,
   timers, and variables. Caps: 64 rules, 64 variables, 32 timers, 256 AST nodes,
-  depth 16, and a 2 ms root-event budget.
+  depth 16, and a cooperative 2 ms root-event budget. Exhaustion rejects the
+  current event without disabling unrelated automations. The deadline is checked
+  before external commit; synchronous callbacks are not forcibly preempted.
 
 ### Windows desktop
 
@@ -208,7 +218,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
 - Bar preview preserves the target client area's aspect ratio and scales bar
   dimensions in device-independent pixels; without a live target it uses a
   1920 × 1080 reference. The simulator replays its exported events from empty
-  persistent state, so it does not reproduce saved daemon state.
+  persistent state, so it does not reproduce saved daemon state. Trace replay
+  imports recorded roots only; derived events remain audit-only. Legacy traces
+  without explicit root provenance must be recaptured.
 - Optional isolated capture worker and Xbox Game Bar companion.
 
 ### Linux X11
@@ -271,102 +283,21 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_event_loop_tests` | Monotonic timerfd deadlines, signal shutdown, and zero idle wakeups |
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_x11_tests` | X11 probes, EWMH tracking, and game matching |
+| `layerc_linux_x11_registry_tests` | Display-free session admission, automation health, checkpoint retry, and bounded status diagnostics |
 | `layerc_linux_x11_input_tests` | XI2 normalization, hotplug, mouse/wheel mapping, and session replay |
 | `layerc_linux_x11_overlay_tests` | Shape click-through, panel geometry, monitor scaling, and painted output |
 | `layerc_linux_x11_capture_tests` | Composite/Damage capture, bounded fallback, resources, faults, and `layercal` output |
 | `layerc_linux_x11_visual_tests` | Visual demand/session integration and transition behavior |
 
-## CI and release evidence
+## CI and releases
 
-Ubuntu jobs use Ubicloud `ubicloud-standard-4` runners (Ubuntu 24.04); the
-Ubicloud GitHub App must have access to this repository. Windows CI and
-release builds use the interactive `layerc-bench` runner. Fork pull requests
-run the Ubuntu jobs, while Windows CI jobs run only for main, manual runs, and
-pull requests whose branch is in this repository.
-
-Every push queues these independent jobs; the Windows jobs share one runner:
-
-1. `actionlint` workflow validation.
-2. `windows-msvc`: the shared `.github/actions/build-package` pipeline (`ci`
-   Ninja+sccache+UNITY build, CTest, `benchmark_v22`, `benchmark_v23`,
-   install, ZIP, and artifact upload). `release.yml` reuses the same setup
-   and build actions, so benchmark gating cannot drift between CI and
-    release. Empty test runs, missing required suites, and unexpected skips fail
-    the gate. The Windows runner may explicitly skip only the overlay suite
-    when an isolated desktop cannot be created; that result is unavailable
-    interactive coverage, not a pass.
-3. `windows-analyze`: a non-unity Release build with MSVC `/analyze` enabled
-   for every LayerC target (compile-time analysis only; tests run in
-   `windows-msvc`).
-4. `linux`: `tools/ci-linux.sh` in digest-pinned `debian:stable` and
-   `ubuntu:24.04` containers. It separates headless and required Xvfb suites,
-   rejects missing/skipped coverage, smokes the installed binaries with private
-   XDG roots, and uploads commit-bound evidence.
-5. `linux-flatpak`: builds the 25.08 manifest and requires daemon/control/X11
-   runtime smoke under Xvfb; unavailable Flatpak coverage fails this job. It
-   uses `--flatpak-only`, so natively it builds only the smoke fixture and
-   leaves native coverage to `linux`.
-
-`publish-rolling` requires `actionlint`, `windows-msvc`, `windows-analyze`,
-`linux`, AND `linux-flatpak`:
-`rolling` means green main across those gates. Tagged releases and the rolling prerelease ship the Windows
-x64 ZIP only; Linux V2.6 stays pre-release with no packaged artifact.
-
-Artifact contract: `layerc-windows-x64` is the full debug bundle (install
-layout + benchmark evidence + package ZIP); `layerc-windows-x64-tools`
-feeds the hardware gates and `tools/push-and-test.ps1`; only
-`publish-rolling` consumes `layerc-rolling-package`.
-
-Post-merge Windows hardware monitoring runs V1.1 visual, V2.1 template, and
-latency checks on the interactive `layerc-bench` runner and uploads
-`out/benchmarks/*.json` as `benchmark-evidence`. Manual workflow runs first
-check out the resolver, then check out the resolved CI commit so benchmark
-scripts and binaries use the same candidate. For a manual equivalent:
-
-```powershell
-gh run download <run-id> -n layerc-windows-x64-tools -D out\bench-stage
-gh release download baseline-v22 -D out\baseline --clobber
-$baselineZip = Get-ChildItem out\baseline -Filter *.zip -File
-if ($baselineZip.Count -ne 1) { throw "Expected one baseline ZIP." }
-Expand-Archive $baselineZip.FullName -DestinationPath out\baseline -Force
-
-.\tools\run-hardware-benchmarks.ps1 `
-  -CandidateBuildDirectory .\out\bench-stage `
-  -BaselineBuildDirectory .\out\baseline
-```
-
-### Hardware benchmark runner contract
-
-The `layerc-bench` runner (`[self-hosted, windows, x64, layerc-bench]`) is an
-interactive desktop box, not a headless agent:
-
-- Register it with `run.cmd` under a signed-in user with autostart, never as
-  a service — visual capture needs the real screen.
-- The box must be quiescent: no `layerd`/`layere` may be running. CI fails
-  listing the owning PIDs instead of killing anything.
-- CI only writes inside `GITHUB_WORKSPACE` and uploads `benchmark-evidence`.
-  Syncing the rolling install into a local checkout stays a manual step for
-  the box owner: `.\tools\pull-ci.ps1`.
-- Linux CI is the automated compatibility gate, including installed-native and
-  Flatpak smoke. The GNOME Xorg/KDE X11 native+Flatpak physical checklist is
-  separate and remains pending until archived evidence exists.
-
-### Self-hosted Windows build and test
-
-`windows-selfhosted.yml` builds and tests one ref on the
-`[self-hosted, windows, x64, layerc-bench]` runner. It runs only on manual
-dispatch, so fork PRs do not automatically run code on that machine:
-
-```powershell
-gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>
-```
-
-It configures the `vs2026` preset, builds Debug with one MSBuild node and two
-compiler processes, runs every CTest suite with `--output-on-failure`, and
-uploads `windows-selfhosted-logs-<run>-<attempt>`: the tested commit, the
-configure/build/CTest logs, and CTest JUnit XML. The runner needs Visual Studio
-2026 with the C++ workload and PowerShell 7; the overlay and capture suites
-need a signed-in desktop session, as on `layerc-bench`.
+CI runs on pushes to `main`, pull requests, and manual dispatch: workflow
+lint, Windows MSVC build/test/benchmarks/package, MSVC `/analyze`, Linux
+containers, and Flatpak smoke. Green `main` publishes the `rolling`
+prerelease; `v*.*.*` tags publish a release. Both ship only the Windows x64
+ZIP; Linux V2.6 has no packaged artifact yet. Jobs, runners, artifacts, and
+hardware benchmarks are described in
+[`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates).
 
 ## Profile locations and format
 
@@ -453,6 +384,6 @@ treating the list as a required reading stack.
 - [`docs/Linux.md`](docs/Linux.md) — Linux support, commands, packaging, permissions, and evidence.
 - [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) — Game Bar architecture and invariants.
 - [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) — V2.4 release-evidence record.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — setup, style, tests, and PR rules (entry point; `AGENTS.md` is canonical).
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, CI/release gates, hardware runner, and PR rules.
 - [`AGENTS.md`](AGENTS.md) — contributor/agent architecture, validation, and repository rules.
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — vendored dependency notices.

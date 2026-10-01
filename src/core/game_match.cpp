@@ -52,6 +52,7 @@ void fold_into(std::optional<std::string> &slot, std::string_view text,
   fold_into(folded.name, name, folded.usable);
   if (!path.empty()) {
     if (exact_path) {
+      folded.usable = folded.usable && is_valid_utf8(path);
       folded.path = std::string(path);
     } else {
       fold_into(folded.path, path, folded.usable);
@@ -91,22 +92,14 @@ void fold_into(std::optional<std::string> &slot, std::string_view text,
 // specified matcher fields participate, so an empty match never matches.
 [[nodiscard]] int identity_level(const FoldedSide &candidate,
                                  const FoldedSide &match) noexcept {
-  if (match.name.has_value()) {
-    if (!field_equals(candidate.name, match.name)) return -1;
+  if (match.name.has_value() && field_equals(candidate.name, match.name))
     return 0;
-  }
-  if (match.path.has_value()) {
-    if (!field_equals(candidate.path, match.path)) return -1;
+  if (match.path.has_value() && field_equals(candidate.path, match.path))
     return 1;
-  }
-  if (match.clazz.has_value()) {
-    if (!field_contains(candidate.clazz, match.clazz)) return -1;
+  if (match.clazz.has_value() && field_contains(candidate.clazz, match.clazz))
     return 2;
-  }
-  if (match.title.has_value()) {
-    if (!field_contains(candidate.title, match.title)) return -1;
+  if (match.title.has_value() && field_contains(candidate.title, match.title))
     return 3;
-  }
   return -1;
 }
 

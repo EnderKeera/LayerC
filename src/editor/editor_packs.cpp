@@ -299,7 +299,7 @@ std::optional<std::filesystem::path> choose_pack_path(const HWND owner,
     if (error != 0) {
       const auto message = L"Could not open the profile pack chooser (error " +
                            std::to_wstring(error) + L").";
-      MessageBoxW(owner, message.c_str(), L"Profile pack", MB_OK | MB_ICONERROR);
+      themed_message_box(owner, message.c_str(), L"Profile pack", MB_OK | MB_ICONERROR);
     }
     return std::nullopt;
   }
@@ -312,7 +312,7 @@ std::optional<std::filesystem::path> choose_pack_path(const HWND owner,
 void show_pack_error(const HWND owner, const wchar_t *title,
                      const layerc::bundle::PackError &error) {
   const auto message = layerc::platform::utf8_to_wide(error.message);
-  MessageBoxW(owner, message.c_str(), title, MB_OK | MB_ICONERROR);
+  themed_message_box(owner, message.c_str(), title, MB_OK | MB_ICONERROR);
 }
 
 } // namespace
@@ -473,11 +473,14 @@ void EditorWindow::export_profile_pack() {
   state.items.reserve(shell_.profiles.size());
   for (std::size_t index = 0; index < shell_.profiles.size(); ++index) {
     const auto &entry = shell_.profiles[index];
+    // The provisional unsaved-draft row has no file to export.
+    if (entry.path.empty())
+      continue;
     ExportItem item{};
     item.path = entry.path;
     item.label = entry.label;
     if (entry.path.lexically_normal() == document_.path().lexically_normal())
-      state.current_index = index;
+      state.current_index = state.items.size();
     item.assets = template_asset_hashes(entry.path);
     for (const auto &hash : item.assets) {
       std::error_code size_error;
@@ -489,7 +492,7 @@ void EditorWindow::export_profile_pack() {
     state.items.push_back(std::move(item));
   }
   if (state.items.empty()) {
-    MessageBoxW(shell_.window, L"There are no saved profiles to export.",
+    themed_message_box(shell_.window, L"There are no saved profiles to export.",
                 L"Export Pack", MB_OK | MB_ICONINFORMATION);
     return;
   }

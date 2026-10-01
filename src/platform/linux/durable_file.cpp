@@ -90,6 +90,33 @@ bool create_durable_file(const std::filesystem::path &path,
   return success;
 }
 
+bool flush_durable_file(const std::filesystem::path &path) {
+  const int descriptor = ::open(path.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (descriptor < 0) return false;
+  struct stat status {};
+  const bool success = ::fstat(descriptor, &status) == 0 &&
+                       S_ISREG(status.st_mode) && ::fsync(descriptor) == 0;
+  ::close(descriptor);
+  return success;
+}
+
+DurablePublishOutcome publish_durable_directory_checked(
+    const std::filesystem::path &stage,
+    const std::filesystem::path &destination) {
+  struct stat status {};
+  if (::lstat(stage.c_str(), &status) != 0 || !S_ISDIR(status.st_mode) ||
+      ::lstat(destination.c_str(), &status) == 0 || errno != ENOENT ||
+      ::rename(stage.c_str(), destination.c_str()) != 0)
+    return DurablePublishOutcome::failed;
+  // Both entries changed when moving between app/ and staging/. Attempt both
+  // barriers even when one fails, and retain the already-visible directory.
+  const bool destination_flushed = fsync_parent_checked(destination);
+  const bool source_flushed = fsync_parent_checked(stage);
+  return destination_flushed && source_flushed
+             ? DurablePublishOutcome::published_durable
+             : DurablePublishOutcome::published_unconfirmed;
+}
+
 DurablePublishOutcome publish_durable_file_checked(
     const std::filesystem::path &stage,
     const std::filesystem::path &destination) {

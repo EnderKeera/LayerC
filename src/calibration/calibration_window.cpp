@@ -226,6 +226,7 @@ bool CalibrationWindow::initialize(const HWND window) {
 
   initialize_palette();
   layerc::platform::set_dark_title_bar(dialog_);
+  layerc::platform::set_window_app_icon(dialog_);
   background_brush_ = CreateSolidBrush(palette_.background);
   panel_brush_ = CreateSolidBrush(palette_.panel);
   input_brush_ = CreateSolidBrush(palette_.input);

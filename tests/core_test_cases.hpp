@@ -8,6 +8,9 @@ void test_restart_policy();
 void test_restart_with_empty_stacked_charges();
 void test_cooldown_control_operations();
 void test_cooldown_recovery_modes_and_groups();
+void test_cooldown_owner_id_collisions();
+void test_game_match_identity_fallback();
+void test_shared_pool_reconciliation();
 void test_snapshot_reuse();
 void test_input_chord_edges();
 void test_input_matcher_state_management();
@@ -53,5 +56,11 @@ void test_automation_timer_commit_rollback();
 void test_automation_action_value_type();
 void test_automation_limits_and_fault_rollback();
 void test_automation_persistent_sync_and_cascade_bounds();
+void test_automation_root_budget_isolation();
+void test_automation_mutation_postconditions();
+void test_automation_clock_boundaries();
+void test_automation_numeric_promotion();
+void test_automation_decode_postconditions();
+void test_automation_trace_root_provenance();
 
 } // namespace layerc::test

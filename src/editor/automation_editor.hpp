@@ -33,6 +33,7 @@ public:
   void restore_live_subscription();
 
 private:
+  void update_add_enabled(HWND dialog);
   // Outcome of mutate_automation; rejected and invalid edits both restore the
   // pre-edit snapshot.
   enum class Mutation { committed, rejected, invalid };

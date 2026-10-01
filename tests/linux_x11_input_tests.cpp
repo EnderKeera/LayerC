@@ -285,7 +285,8 @@ int run_linux_x11_input_tests() {
   const StoredProfile profiles[] = {
       {.path = roots.config_profiles / "by-name.json", .profile = *by_name},
       {.path = roots.config_profiles / "global.json", .profile = *global}};
-  service_sessions.refresh(profiles, scan);
+  service_sessions.configure(profiles);
+  service_sessions.refresh(scan);
   passed &= expect(service_sessions.session_count() == 2,
                    "both profiles resolve against the fixture window");
   passed &= expect(service_sessions.session_requests().size() == 2,
@@ -299,26 +300,28 @@ int run_linux_x11_input_tests() {
   const auto state_now = layerc::core::MonotonicClock::now();
   passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
                    "fixture cooldown starts");
-  service_sessions.refresh(profiles, scan);
+  service_sessions.refresh(scan);
   passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
                    "an unchanged refresh preserves cooldown state");
   auto changed = profiles[0];
   changed.profile.name = "Changed definition";
   const StoredProfile changed_profiles[] = {changed, profiles[1]};
-  service_sessions.refresh(changed_profiles, scan);
+  service_sessions.configure(changed_profiles);
+  service_sessions.refresh(scan);
   passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
                    "a changed profile definition starts a fresh session");
 
   X11WindowScan empty_scan;
-  service_sessions.refresh(profiles, empty_scan);
+  service_sessions.configure(profiles);
+  service_sessions.refresh(empty_scan);
   passed &= expect(service_sessions.session_count() == 0,
                    "no windows means no sessions");
-  service_sessions.refresh(profiles, scan);
+  service_sessions.refresh(scan);
 
   X11WindowScan background_scan = scan;
   background_scan.active = 0x9999;
   for (auto &snapshot : background_scan.windows) snapshot.active = false;
-  service_sessions.refresh(profiles, background_scan);
+  service_sessions.refresh(background_scan);
   passed &= expect(!service_sessions.session_requests().front().active &&
                        service_sessions.session_requests().back().active,
                    "only global profiles stay active in the background");
@@ -343,14 +346,14 @@ int run_linux_x11_input_tests() {
     const auto focus_now = layerc::core::MonotonicClock::now();
     passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
                      "focus regression starts a cooldown");
-    service_sessions.refresh(profiles, background_scan);
+    service_sessions.refresh(background_scan);
     passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
                      "a background refresh preserves cooldown state");
-    service_sessions.refresh(profiles, scan);
+    service_sessions.refresh(scan);
     passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
                      "focus gain preserves cooldown state");
   }
-  service_sessions.refresh(profiles, scan);
+  service_sessions.refresh(scan);
 
   layerc::daemon::InputSession session(profiles[0], window.window, false);
   const layerc::core::InputEvent press_e{
@@ -388,26 +391,28 @@ int run_linux_x11_input_tests() {
         {layerc::core::InputDevice::keyboard, 17, 0});
     layerc::daemon::X11SessionRegistry focus_service_sessions;
     layerc::daemon::X11InputService focus_service(focus_service_sessions);
-    focus_service_sessions.refresh(std::span{&chord_profile, 1}, focus_scan);
+    focus_service_sessions.configure(std::span{&chord_profile, 1});
+    focus_service_sessions.refresh(focus_scan);
     const layerc::core::InputEvent ctrl{
         {layerc::core::InputDevice::keyboard, 17, 0}, true};
     (void)focus_service_sessions.sessions().front().matcher.process(ctrl);
-    focus_service_sessions.refresh(std::span{&chord_profile, 1}, inactive_scan);
-    focus_service_sessions.refresh(std::span{&chord_profile, 1}, focus_scan);
+    focus_service_sessions.refresh(inactive_scan);
+    focus_service_sessions.refresh(focus_scan);
     passed &= expect(
         focus_service_sessions.sessions().front().matcher.process(press_e).empty(),
         "focus loss clears a modifier whose background release was skipped");
 
-    focus_service_sessions.refresh(std::span{profiles}.first(1), focus_scan);
+    focus_service_sessions.configure(std::span{profiles}.first(1));
+    focus_service_sessions.refresh(focus_scan);
     passed &= expect(
         focus_service_sessions.sessions().front().matcher.process(press_e).size() == 1,
         "single-key fixture latches a press");
-    focus_service_sessions.refresh(std::span{profiles}.first(1), focus_scan);
+    focus_service_sessions.refresh(focus_scan);
     passed &= expect(
         focus_service_sessions.sessions().front().matcher.process(press_e).empty(),
         "an unchanged active refresh keeps the held key latched");
-    focus_service_sessions.refresh(std::span{profiles}.first(1), inactive_scan);
-    focus_service_sessions.refresh(std::span{profiles}.first(1), focus_scan);
+    focus_service_sessions.refresh(inactive_scan);
+    focus_service_sessions.refresh(focus_scan);
     passed &= expect(
         focus_service_sessions.sessions().front().matcher.process(press_e).size() == 1,
         "focus loss clears a single key whose release was skipped");
@@ -419,7 +424,8 @@ int run_linux_x11_input_tests() {
                        profiles[0].path, profiles[0].profile, std::nullopt,
                        automation_profile),
                    "the automation sidecar is committed beside its profile");
-  service_sessions.refresh(profiles, scan);
+  service_sessions.configure(profiles);
+  service_sessions.refresh(scan);
   passed &= expect(service_sessions.automation_count() == 1 &&
                        service_sessions.automation_diagnostics().empty(),
                    "an active matched profile owns one sidecar runtime");
@@ -438,7 +444,8 @@ int run_linux_x11_input_tests() {
   passed &= expect(state_due.has_value(),
                    "runtime effects publish a monotonic service deadline");
 
-  service_sessions.poll_automation(automation_now + std::chrono::milliseconds{55});
+  (void)service_sessions.poll_automation(
+      automation_now + std::chrono::milliseconds{55});
   const auto &after_timer = automated.automation_runtime->snapshot();
   const auto count = after_timer.persistent_values.find("count");
   passed &= expect(count != after_timer.persistent_values.end() &&
@@ -451,7 +458,8 @@ int run_linux_x11_input_tests() {
                                          std::chrono::milliseconds{55}),
                    "the timer commits persistent, cooldown, and override effects");
 
-  service_sessions.poll_automation(automation_now + std::chrono::milliseconds{1'100});
+  (void)service_sessions.poll_automation(
+      automation_now + std::chrono::milliseconds{1'100});
   const auto persisted = layerc::platform::load_automation_state(
       profiles[0].path, automation_profile);
   const auto persisted_count = persisted.values.find("count");
@@ -464,7 +472,8 @@ int run_linux_x11_input_tests() {
   layerc::daemon::X11SessionRegistry reloaded_sessions;
 
   layerc::daemon::X11InputService reloaded(reloaded_sessions);
-  reloaded_sessions.refresh(std::span{profiles}.first(1), scan);
+  reloaded_sessions.configure(std::span{profiles}.first(1));
+  reloaded_sessions.refresh(scan);
   const auto &reloaded_values =
       reloaded_sessions.sessions().front().automation_runtime->snapshot().persistent_values;
   passed &= expect(reloaded_sessions.automation_count() == 1 &&
@@ -529,7 +538,8 @@ int run_linux_x11_input_tests() {
   layerc::daemon::X11SessionRegistry live_registry;
   layerc::daemon::X11InputService live(live_registry);
   live.attach(*display);
-  live_registry.refresh(profiles, tracker.scan());
+  live_registry.configure(profiles);
+  live_registry.refresh(tracker.scan());
   const auto live_sessions = live_registry.session_count();
   passed &= expect(live_sessions == 2,
                    "the fixture window resolves both live sessions");

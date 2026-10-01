@@ -3,6 +3,7 @@
 #include "../src/gamebar/GameBarTransport.hpp"
 #include "../src/gamebar/GameBarTransportState.hpp"
 #include "layerc/core/companion.hpp"
+#include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/window_query.hpp"
@@ -154,6 +155,82 @@ static void test_companion_snapshot_bridge() {
           std::get<CompanionSessionSnapshot>(transparent_parsed) == snapshot,
       "zero-opacity snapshot preference round trips exactly");
 
+}
+
+static void test_companion_shared_pool_runtime_view() {
+  using namespace std::chrono_literals;
+  const std::vector<CooldownDefinition> definitions{
+      {.id = "a", .name = "A", .duration = 1s},
+      {.id = "b", .name = "B", .duration = 10s}};
+  const std::vector<Panel> panels{{.id = "panel", .cooldown_ids = {"a", "b"}}};
+  const TimePoint start{};
+  for (const auto recovery : {RecoveryMode::single, RecoveryMode::sequential,
+                              RecoveryMode::parallel}) {
+    const std::vector<CooldownGroup> groups{
+        {.id = "pool", .name = "Pool", .mode = CooldownGroupMode::shared_pool,
+         .cooldown_ids = {"a", "b"}, .duration = 5s, .max_charges = 3,
+         .recovery = recovery}};
+    CooldownEngine engine(definitions, groups);
+    layerc::test::expect(engine.trigger("a", start),
+                         "pool presentation fixture consumes a charge");
+    const auto states = engine.snapshot(start + 1s);
+    const auto json = build_companion_snapshot(
+        "profile", "session", panels, definitions, states, std::nullopt, start + 1s);
+    const auto parsed = parse_companion_snapshot_json(json);
+    const auto *snapshot = std::get_if<CompanionSessionSnapshot>(&parsed);
+    layerc::test::expect(snapshot != nullptr && snapshot->panels.size() == 1 &&
+                             snapshot->panels.front().items.size() == 2,
+                         "CM-03: valid pool charges do not clear companion items");
+    if (snapshot == nullptr || snapshot->panels.empty() ||
+        snapshot->panels.front().items.size() != 2)
+      continue;
+    for (std::size_t index = 0; index < definitions.size(); ++index) {
+      const auto &item = snapshot->panels.front().items[index];
+      const auto native_progress =
+          cooldown_progress(definitions[index], states[index], start + 1s);
+      layerc::test::expect(
+          item.cooldown_id == definitions[index].id &&
+              item.name == definitions[index].name && item.max_charges == 3 &&
+              item.available_charges == 2 && item.remaining_ms == 4000 &&
+              !item.is_ready && item.progress > 0.199 && item.progress < 0.201 &&
+              native_progress > 0.799 && native_progress < 0.801 &&
+              cooldown_status_text(definitions[index], states[index], start + 1s) ==
+                  definitions[index].name + "  4.0s  [2]",
+          "CM-03: all presentation uses the owner duration and charges, with public labels");
+    }
+    const auto ready_states = engine.snapshot(start + 5s);
+    const auto ready_json = build_companion_snapshot(
+        "profile", "session", panels, definitions, ready_states, std::nullopt, start + 5s);
+    const auto ready_parsed = parse_companion_snapshot_json(ready_json);
+    const auto *ready = std::get_if<CompanionSessionSnapshot>(&ready_parsed);
+    layerc::test::expect(
+        ready != nullptr && ready->panels.front().items.size() == 2 &&
+            ready->panels.front().items.front().max_charges == 3 &&
+            ready->panels.front().items.front().available_charges == 3 &&
+            ready->panels.front().items.front().is_ready &&
+            ready->panels.front().items.front().progress == 1.0 &&
+            cooldown_progress(definitions.front(), ready_states.front(), start + 5s) == 1.0,
+        "CM-03: fully recovered pools retain effective charges and ready progress");
+  }
+}
+
+static void test_companion_bridge_rejects_invalid_not_oversize() {
+  using namespace std::chrono_literals;
+  const std::vector<CooldownDefinition> definitions{
+      {.id = "a", .name = "A", .duration = 5s, .max_charges = 2}};
+  const std::vector<Panel> panels{{.id = "panel", .cooldown_ids = {"a"}}};
+  const std::vector<CooldownState> invalid_states{
+      {.id = "a", .available_charges = 3, .max_charges = 2}};
+  layerc::test::expect(build_companion_snapshot(
+                          "profile", "session", panels, definitions, invalid_states,
+                          std::nullopt, TimePoint{}).empty(),
+                       "CM-03: invalid charges cannot be hidden by oversize shrinking");
+  auto invalid_text = definitions;
+  invalid_text.front().name.clear();
+  layerc::test::expect(build_companion_snapshot(
+                          "profile", "session", panels, invalid_text, {},
+                          std::nullopt, TimePoint{}).empty(),
+                       "CM-03: invalid item text cannot turn into a valid empty panel");
 }
 
 static void test_companion_snapshot_bounds_and_session_identity() {
@@ -545,6 +622,8 @@ int main() {
   return layerc::test::run({
       {"test_companion_json_roundtrip", test_companion_json_roundtrip},
       {"test_companion_snapshot_bridge", test_companion_snapshot_bridge},
+      {"test_companion_shared_pool_runtime_view", test_companion_shared_pool_runtime_view},
+      {"test_companion_bridge_rejects_invalid_not_oversize", test_companion_bridge_rejects_invalid_not_oversize},
       {"test_companion_snapshot_bounds_and_session_identity", test_companion_snapshot_bounds_and_session_identity},
       {"test_bridge_truncates_worst_case_snapshot", test_bridge_truncates_worst_case_snapshot},
       {"test_all_eight_slots_persist_and_publish", test_all_eight_slots_persist_and_publish},

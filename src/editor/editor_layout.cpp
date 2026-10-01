@@ -10,8 +10,7 @@
 namespace layerc::editor {
 namespace {
 
-// Controls that exist only in advanced mode. MainLayout::advanced is the one
-// advanced_visible() read that every section below consults.
+// Controls that exist only in advanced mode.
 constexpr std::array advanced_controls{
     IDC_PROFILE_ID_LABEL,
     IDC_PROFILE_ID,
@@ -30,355 +29,409 @@ constexpr std::array advanced_controls{
     IDC_COOLDOWN_GROUPS,
 };
 
-// Main window columns (sidebar | content | visual and preview) above the
-// status row, in physical pixels at the geometry DPI.
+// The bar list only appears while a legacy grouped bar exists; otherwise the
+// overlay bar follows the selected cooldown.
+constexpr std::array legacy_bar_controls{IDC_BARS_LABEL, IDC_BAR_LIST};
+constexpr std::array preview_controls{IDC_PREVIEW_LABEL, IDC_PREVIEW};
+
+constexpr std::array heading_controls{
+    IDC_SAVED_PROFILES_LABEL, IDC_COOLDOWNS_LABEL,  IDC_TIMING_LABEL,
+    IDC_OVERLAY_LABEL,        IDC_VISUAL_SECTION_LABEL, IDC_PREVIEW_LABEL,
+    IDC_BARS_LABEL};
+
+// Logical (96-DPI, 100 % text) metrics: one control height per surface and
+// an 8 px rhythm.
+constexpr int control_height = 30;
+constexpr int row_pitch = 38;
+constexpr int heading_pitch = 28;
+constexpr int section_gap = 12;
+constexpr int field_cap = 480;
+constexpr int preview_threshold = 1100;
+
 struct MainLayout {
   DialogLayout ui;
   bool advanced{};
+  bool legacy_bars{};
+  bool preview{};
   int width{};
+  int height{};
   int margin{};
   int gap{};
-  int section_top{};
-  int heading_height{};
-  int row_height{};
+  int row{};
+  int pitch{};
+  int heading{};
   int status_top{};
   int sidebar_width{};
-  int content_left{};
-  int content_right{};
-  int content_width{};
-  int right_left{};
-  int right_width{};
+  int detail_left{};
+  int detail_right{};
+  int preview_left{};
 };
 
-MainLayout make_main_layout(const HWND window, const bool advanced) {
+MainLayout make_main_layout(const HWND window, const bool advanced,
+                            const bool legacy_bars) {
   RECT client{};
   GetClientRect(window, &client);
   const int width = std::max(1, static_cast<int>(client.right - client.left));
   const int height = std::max(1, static_cast<int>(client.bottom - client.top));
-  const DialogLayout ui(window, geometry_dpi(window, 1080, 700));
-  const int margin = ui.scaled(12);
-  const int sidebar_width =
-      std::clamp(width / 5, ui.scaled(180), ui.scaled(270));
-  const int content_left = margin + sidebar_width + ui.scaled(18);
-  const int right_width =
-      std::clamp(width * 30 / 100, ui.scaled(285), ui.scaled(420));
-  const int right_left = width - margin - right_width;
-  const int content_right = right_left - ui.scaled(18);
-  return {.ui = ui,
-          .advanced = advanced,
-          .width = width,
-          .margin = margin,
-          .gap = ui.scaled(14),
-          .section_top = ui.scaled(12),
-          .heading_height = ui.scaled(18),
-          .row_height = ui.scaled(24),
-          .status_top = height - ui.scaled(27),
-          .sidebar_width = sidebar_width,
-          .content_left = content_left,
-          .content_right = content_right,
-          .content_width = std::max(1, content_right - content_left),
-          .right_left = right_left,
-          .right_width = right_width};
+  // Geometry follows DPI and text size and never shrinks below the text:
+  // narrow windows reflow (the preview column collapses) instead.
+  const DialogLayout ui(window, window_base_dpi(window));
+  MainLayout f{.ui = ui,
+               .advanced = advanced,
+               .legacy_bars = legacy_bars,
+               .preview = width >= ui.scaled(preview_threshold),
+               .width = width,
+               .height = height,
+               .margin = ui.scaled(12),
+               .gap = ui.scaled(16),
+               .row = ui.scaled(control_height),
+               .pitch = ui.scaled(row_pitch),
+               .heading = ui.scaled(heading_pitch),
+               .status_top = height - ui.scaled(28)};
+  f.sidebar_width = std::clamp(width / 5, ui.scaled(200), ui.scaled(280));
+  f.detail_left = f.margin + f.sidebar_width + f.gap;
+  if (f.preview) {
+    const int preview_width =
+        std::clamp(width * 26 / 100, ui.scaled(280), ui.scaled(440));
+    f.preview_left = width - f.margin - preview_width;
+    f.detail_right = f.preview_left - f.gap;
+  } else {
+    f.preview_left = width;
+    f.detail_right = width - f.margin;
+  }
+  return f;
 }
 
-void show_advanced_controls(const HWND window, const bool advanced) {
-  for (const int id : advanced_controls) {
+void show_controls(const HWND window, const auto &ids, const bool visible) {
+  for (const int id : ids) {
     if (const HWND control = GetDlgItem(window, id); control != nullptr)
-      ShowWindow(control, advanced ? SW_SHOWNA : SW_HIDE);
+      ShowWindow(control, visible ? SW_SHOWNA : SW_HIDE);
   }
+}
+
+// A label vertically centered on a control row.
+void label(const MainLayout &f, const int id, const int left, const int top,
+           const int width) {
+  f.ui.move(id, left, top + (f.row - f.ui.scaled(20)) / 2, width,
+            f.ui.scaled(20));
 }
 
 void layout_sidebar(const MainLayout &f) {
   const DialogLayout &ui = f.ui;
-  ui.move(IDC_SAVED_PROFILES_LABEL, f.margin, f.section_top, f.sidebar_width,
-          f.heading_height);
-  const int list_top = f.section_top + f.heading_height + ui.scaled(4);
+  ui.move(IDC_SAVED_PROFILES_LABEL, f.margin, f.margin, f.sidebar_width,
+          ui.scaled(20));
+  const int list_top = f.margin + f.heading;
+  const int buttons_top = f.status_top - f.margin - f.row;
   ui.move(IDC_PROFILE_LIST, f.margin, list_top, f.sidebar_width,
-          std::max(ui.scaled(120), f.status_top - list_top - ui.scaled(8)));
+          std::max(ui.scaled(80), buttons_top - ui.scaled(8) - list_top));
+  const int button = ui.scaled(36);
+  int left = f.margin;
+  for (const int id : {IDC_PROFILE_NEW, IDC_PROFILE_DELETE, IDC_PROFILE_MORE}) {
+    ui.move(id, left, buttons_top, button, f.row);
+    left += button + ui.scaled(4);
+  }
 }
 
-// Returns the top of the first row below the profile fields.
-int layout_profile_fields(const MainLayout &f) {
+// Title, profile fields and the advanced toggle; returns the next top.
+int layout_profile(const MainLayout &f) {
   const DialogLayout &ui = f.ui;
-  ui.move(IDC_PROFILE_SECTION_LABEL, f.content_left, f.section_top,
-          f.content_width, f.heading_height);
-  ui.move(IDC_ADVANCED, f.content_right - ui.scaled(104),
-          f.section_top - ui.scaled(2), ui.scaled(104), ui.scaled(24));
-  const int label_width = ui.scaled(86);
-  const int field_left = f.content_left + label_width + ui.scaled(8);
-  const int name_top = f.section_top + f.heading_height + ui.scaled(5);
-  ui.move(IDC_PROFILE_NAME_LABEL, f.content_left, name_top + ui.scaled(3),
-          label_width, f.heading_height);
-  ui.move(IDC_PROFILE_NAME, field_left, name_top, f.content_right - field_left,
-          f.row_height);
-
-  int row_top = name_top + ui.scaled(29);
+  const int width = f.detail_right - f.detail_left;
+  const int toggle_width = ui.scaled(132);
+  ui.move(IDC_ADVANCED, f.detail_right - toggle_width, f.margin, toggle_width,
+          f.row);
+  ui.move(IDC_PROFILE_TITLE, f.detail_left, f.margin,
+          std::max(1, width - toggle_width - ui.scaled(8)), f.row);
+  const int label_width = ui.scaled(96);
+  const int field_left = f.detail_left + label_width;
+  const int field_width =
+      std::min(ui.scaled(field_cap), f.detail_right - field_left);
+  int top = f.margin + f.row + ui.scaled(10);
+  label(f, IDC_PROFILE_NAME_LABEL, f.detail_left, top, label_width - ui.scaled(8));
+  ui.move(IDC_PROFILE_NAME, field_left, top, field_width, f.row);
+  top += f.pitch;
   if (f.advanced) {
-    ui.move(IDC_PROFILE_ID_LABEL, f.content_left, row_top + ui.scaled(3),
-            label_width, f.heading_height);
-    ui.move(IDC_PROFILE_ID, field_left, row_top, f.content_right - field_left,
-            f.row_height);
-    row_top += ui.scaled(29);
+    label(f, IDC_PROFILE_ID_LABEL, f.detail_left, top, label_width - ui.scaled(8));
+    ui.move(IDC_PROFILE_ID, field_left, top, field_width, f.row);
+    top += f.pitch;
   }
-  const int choose_width = ui.scaled(164);
-  ui.move(IDC_APPLICATION_LABEL, f.content_left, row_top + ui.scaled(3),
-          label_width, f.heading_height);
-  ui.move(IDC_APPLICATION_PATH, field_left, row_top,
-          f.content_right - choose_width - ui.scaled(7) - field_left,
-          f.row_height);
-  ui.move(IDC_CHOOSE_APPLICATION, f.content_right - choose_width, row_top,
-          choose_width, f.row_height);
-  row_top += ui.scaled(29);
+  const int browse_width = ui.scaled(88);
+  const int choose_width = ui.scaled(150);
+  const int buttons = browse_width + choose_width + ui.scaled(16);
+  const int application_width = std::max(
+      ui.scaled(120),
+      std::min(ui.scaled(field_cap) - buttons, f.detail_right - field_left - buttons));
+  label(f, IDC_APPLICATION_LABEL, f.detail_left, top, label_width - ui.scaled(8));
+  ui.move(IDC_APPLICATION_PATH, field_left, top, application_width, f.row);
+  int left = field_left + application_width + ui.scaled(8);
+  ui.move(IDC_BROWSE_APPLICATION, left, top, browse_width, f.row);
+  left += browse_width + ui.scaled(8);
+  ui.move(IDC_CHOOSE_APPLICATION, left, top, choose_width, f.row);
+  top += f.pitch;
   if (f.advanced) {
-    ui.move(IDC_APPLICATION_EXACT_PATH, field_left, row_top,
-            f.content_right - field_left, ui.scaled(24));
-    row_top += ui.scaled(29);
+    ui.move(IDC_APPLICATION_EXACT_PATH, field_left, top, field_width,
+            ui.scaled(24));
+    top += ui.scaled(30);
   }
-  return row_top;
+  return top + ui.scaled(4);
 }
 
-// Cooldown list, its buttons, and the name/duration row; returns the top of
-// the binding row.
-int layout_cooldown_list(const MainLayout &f, const int profile_bottom) {
-  const DialogLayout &ui = f.ui;
-  const int heading_top = profile_bottom + ui.scaled(9);
-  const int list_top = heading_top + f.heading_height + ui.scaled(4);
-  const int button_width = ui.scaled(64);
-  const int list_width = f.content_width - button_width - ui.scaled(8);
-  const int list_height = ui.scaled(f.advanced ? 78 : 90);
-  ui.move(IDC_COOLDOWNS_LABEL, f.content_left, heading_top, f.content_width,
-          f.heading_height);
-  ui.move(IDC_COOLDOWN_LIST, f.content_left, list_top, list_width,
-          list_height);
-  const int button_left = f.content_left + list_width + ui.scaled(8);
-  ui.move(IDC_ADD_COOLDOWN, button_left, list_top, button_width,
-          ui.scaled(27));
-  ui.move(IDC_REMOVE_COOLDOWN, button_left, list_top + ui.scaled(33),
-          button_width, ui.scaled(27));
+struct GroupHeights {
+  int timing{};
+  int visual{};
+  int overlay{};
+};
 
-  const int name_top = list_top + list_height + ui.scaled(7);
-  const int name_label_width = ui.scaled(48);
-  const int duration_label_width = ui.scaled(112);
-  const int duration_field_width = ui.scaled(72);
-  const int duration_left = f.content_right - duration_field_width;
-  ui.move(IDC_COOLDOWN_NAME_LABEL, f.content_left, name_top + ui.scaled(3),
-          name_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_NAME, f.content_left + name_label_width, name_top,
-          duration_left - duration_label_width - ui.scaled(8) -
-              (f.content_left + name_label_width),
-          f.row_height);
-  ui.move(IDC_COOLDOWN_DURATION_LABEL, duration_left - duration_label_width,
-          name_top + ui.scaled(3), duration_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_DURATION, duration_left, name_top,
-          duration_field_width, f.row_height);
-  return name_top + ui.scaled(31);
+GroupHeights group_heights(const MainLayout &f) {
+  const int advanced_rows = f.advanced ? 4 : 0;
+  return {
+      .timing = f.heading + f.pitch * (3 + advanced_rows),
+      .visual = f.heading + f.pitch * (f.advanced ? 3 : 2) + f.ui.scaled(40),
+      .overlay = f.heading + (f.legacy_bars ? f.ui.scaled(24 + 80 + 8) : 0) +
+                 f.pitch * 3 + f.ui.scaled(30) * 2 + f.ui.scaled(60) +
+                 (f.preview ? 0 : f.pitch),
+  };
 }
 
-// Advanced cooldown id/charges, policy, and group rows; returns the top of
-// the bars heading.
-int layout_cooldown_technical(const MainLayout &f, const int technical_top,
-                              const int groups_label_width) {
+// Returns the top of the next row.
+int layout_timing(const MainLayout &f, const int left, const int right,
+                  int top) {
   const DialogLayout &ui = f.ui;
-  const int technical_label_width = ui.scaled(78);
-  const int charges_label_width = ui.scaled(60);
-  const int charges_width = ui.scaled(54);
-  ui.move(IDC_COOLDOWN_ID_LABEL, f.content_left, technical_top + ui.scaled(3),
-          technical_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_ID, f.content_left + technical_label_width,
-          technical_top,
-          f.content_width - technical_label_width - charges_label_width -
-              charges_width - ui.scaled(8),
-          f.row_height);
-  ui.move(IDC_COOLDOWN_CHARGES_LABEL,
-          f.content_right - charges_label_width - charges_width,
-          technical_top + ui.scaled(3), charges_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_CHARGES, f.content_right - charges_width,
-          technical_top, charges_width, f.row_height);
-
-  const int policy_top = technical_top + ui.scaled(31);
-  const int half = (f.content_width - ui.scaled(10)) / 2;
-  const int policy_label_width = ui.scaled(62);
-  ui.move(IDC_COOLDOWN_RETRIGGER_LABEL, f.content_left,
-          policy_top + ui.scaled(3), policy_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_RETRIGGER, f.content_left + policy_label_width,
-          policy_top, half - policy_label_width, ui.scaled(90));
-  const int recovery_left = f.content_left + half + ui.scaled(10);
-  ui.move(IDC_COOLDOWN_RECOVERY_LABEL, recovery_left,
-          policy_top + ui.scaled(3), policy_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_RECOVERY, recovery_left + policy_label_width,
-          policy_top, f.content_right - recovery_left - policy_label_width,
-          ui.scaled(100));
-
-  const int groups_top = policy_top + ui.scaled(31);
-  ui.move(IDC_COOLDOWN_GROUPS_LABEL, f.content_left, groups_top + ui.scaled(3),
-          groups_label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_GROUPS, f.content_left + groups_label_width,
-          groups_top, f.content_width - groups_label_width, f.row_height);
-  return groups_top + f.row_height + ui.scaled(18);
-}
-
-// Binding row plus the advanced rows below it; returns the top of the bars
-// heading.
-int layout_cooldown_binding(const MainLayout &f, const int binding_top) {
-  const DialogLayout &ui = f.ui;
-  const int label_width = ui.scaled(58);
-  const int capture_width = ui.scaled(104);
-  const int hid_width = f.advanced ? ui.scaled(66) : 0;
-  const int buttons_width =
-      capture_width + (f.advanced ? ui.scaled(7) + hid_width : 0);
-  ui.move(IDC_COOLDOWN_BINDING_LABEL, f.content_left,
-          binding_top + ui.scaled(3), label_width, f.heading_height);
-  ui.move(IDC_COOLDOWN_BINDING, f.content_left + label_width, binding_top,
-          f.content_width - label_width - buttons_width - ui.scaled(8),
-          f.row_height);
-  ui.move(IDC_CAPTURE_BINDING, f.content_right - buttons_width, binding_top,
-          capture_width, f.row_height);
-  if (!f.advanced)
-    return binding_top + f.row_height + ui.scaled(18);
-  ui.move(IDC_CAPTURE_HID, f.content_right - hid_width, binding_top,
-          hid_width, f.row_height);
-  return layout_cooldown_technical(f, binding_top + ui.scaled(31),
-                                   label_width);
-}
-
-// Four color swatches in one row, or a 2x2 grid when compact; returns the top
-// of the checkbox row.
-int layout_bar_swatches(const MainLayout &f, const int left, const int top,
-                        const int width, const bool compact) {
-  const DialogLayout &ui = f.ui;
-  const int swatch_gap = ui.scaled(5);
-  const int swatch_height = ui.scaled(27);
-  if (compact) {
-    const int swatch_width = (width - swatch_gap) / 2;
-    const int second_left = left + swatch_width + swatch_gap;
-    const int second_width = width - swatch_width - swatch_gap;
-    ui.move(IDC_BAR_FILL, left, top, swatch_width, swatch_height);
-    ui.move(IDC_BAR_BACKGROUND, second_left, top, second_width,
-            swatch_height);
-    const int second_top = top + ui.scaled(34);
-    ui.move(IDC_BAR_BORDER, left, second_top, swatch_width, swatch_height);
-    ui.move(IDC_BAR_TEXT, second_left, second_top, second_width,
-            swatch_height);
-    return top + ui.scaled(68);
-  }
-  const int swatch_width = (width - swatch_gap * 3) / 4;
-  const int stride = swatch_width + swatch_gap;
-  ui.move(IDC_BAR_FILL, left, top, swatch_width, swatch_height);
-  ui.move(IDC_BAR_BACKGROUND, left + stride, top, swatch_width, swatch_height);
-  ui.move(IDC_BAR_BORDER, left + stride * 2, top, swatch_width, swatch_height);
-  ui.move(IDC_BAR_TEXT, left + stride * 3, top, width - stride * 3,
-          swatch_height);
-  return top + ui.scaled(34);
-}
-
-void layout_bar_properties(const MainLayout &f, const int left,
-                           const int list_top, const int width,
-                           const bool compact) {
-  const DialogLayout &ui = f.ui;
-  const int dimensions_top = list_top + ui.scaled(27);
-  const int dimension_half = (width - ui.scaled(8)) / 2;
-  ui.move(IDC_WIDTH_LABEL, left, dimensions_top + ui.scaled(3), ui.scaled(40),
-          f.heading_height);
-  ui.move(IDC_BAR_WIDTH, left + ui.scaled(44), dimensions_top,
-          std::max(ui.scaled(42), dimension_half - ui.scaled(44)),
-          f.row_height);
-  const int height_left = left + dimension_half + ui.scaled(8);
-  ui.move(IDC_HEIGHT_LABEL, height_left, dimensions_top + ui.scaled(3),
-          ui.scaled(42), f.heading_height);
-  ui.move(IDC_BAR_HEIGHT, height_left + ui.scaled(46), dimensions_top,
-          std::max(ui.scaled(42), width - dimension_half - ui.scaled(54)),
-          f.row_height);
-
-  const int checkbox_top = layout_bar_swatches(
-      f, left, list_top + ui.scaled(58), width, compact);
-  const int checkbox_width = (width - ui.scaled(8)) / 2;
-  ui.move(IDC_SHOW_TEXT, left, checkbox_top, checkbox_width, ui.scaled(25));
-  ui.move(IDC_HIDE_READY, left + checkbox_width + ui.scaled(8), checkbox_top,
-          width - checkbox_width - ui.scaled(8), ui.scaled(25));
-  ui.move(IDC_DIRECT_DRAG, left, checkbox_top + ui.scaled(29), width,
-          ui.scaled(25));
-}
-
-void layout_bars(const MainLayout &f, const int heading_top) {
-  const DialogLayout &ui = f.ui;
-  const int list_top = heading_top + f.heading_height + ui.scaled(4);
-  const int list_width =
-      std::clamp(f.content_width * 2 / 5, ui.scaled(185), ui.scaled(220));
-  const int properties_left = f.content_left + list_width + f.gap;
-  const int properties_width = f.content_width - list_width - f.gap;
-  const bool compact_swatches = properties_width < ui.scaled(360);
-  const int list_height = std::clamp(
-      f.status_top - list_top - ui.scaled(40),
-      ui.scaled(compact_swatches ? 184 : 118),
-      ui.scaled(compact_swatches ? 196 : 150));
-  ui.move(IDC_BARS_LABEL, f.content_left, heading_top, f.content_width,
-          f.heading_height);
-  ui.move(IDC_BAR_LIST, f.content_left, list_top, list_width, list_height);
-  ui.move(IDC_SELECTED_BAR_LABEL, properties_left, list_top, properties_width,
-          f.heading_height);
-  layout_bar_properties(f, properties_left, list_top, properties_width,
-                        compact_swatches);
-  ui.move(IDC_POSITION_STATUS, f.content_left,
-          list_top + list_height + ui.scaled(6), f.content_width,
-          ui.scaled(26));
-}
-
-void layout_visual_panel(const MainLayout &f) {
-  const DialogLayout &ui = f.ui;
-  const int left = f.right_left;
-  const int width = f.right_width;
-  ui.move(IDC_VISUAL_SECTION_LABEL, left, f.section_top, width,
-          f.heading_height);
-  const int summary_top = f.section_top + f.heading_height + ui.scaled(4);
-  ui.move(IDC_VISUAL_SUMMARY, left, summary_top, width - ui.scaled(90),
-          ui.scaled(22));
-  ui.move(IDC_VISUAL_ENABLED, left + width - ui.scaled(84), summary_top,
-          ui.scaled(84), ui.scaled(22));
-  const int actions_top = summary_top + ui.scaled(28);
-  ui.move(IDC_CALIBRATE_VISUAL, left, actions_top, ui.scaled(112),
-          ui.scaled(27));
-  ui.move(IDC_REMOVE_VISUAL, left + ui.scaled(120), actions_top, ui.scaled(78),
-          ui.scaled(27));
+  ui.move(IDC_TIMING_LABEL, left, top, right - left, ui.scaled(20));
+  top += f.heading;
+  const int label_width = ui.scaled(84);
+  const int field_left = left + label_width;
+  const int field_width = std::max(ui.scaled(60), right - field_left);
+  label(f, IDC_COOLDOWN_NAME_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_NAME, field_left, top, field_width, f.row);
+  top += f.pitch;
+  label(f, IDC_COOLDOWN_DURATION_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_DURATION, field_left, top, ui.scaled(80), f.row);
+  top += f.pitch;
+  const int capture_width = ui.scaled(100);
+  const int hid_width = f.advanced ? ui.scaled(60) : 0;
+  const int buttons =
+      capture_width + (f.advanced ? hid_width + ui.scaled(8) : 0);
+  label(f, IDC_COOLDOWN_BINDING_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_BINDING, field_left, top,
+          std::max(ui.scaled(60), right - field_left - buttons - ui.scaled(8)),
+          f.row);
+  ui.move(IDC_CAPTURE_BINDING, right - buttons, top, capture_width, f.row);
   if (f.advanced)
-    ui.move(IDC_VISUAL_ISOLATED, left + ui.scaled(206), actions_top,
-            width - ui.scaled(206), ui.scaled(27));
-  const int status_top = actions_top + ui.scaled(34);
-  ui.move(IDC_VISUAL_RUNTIME_STATUS, left, status_top, width, ui.scaled(36));
+    ui.move(IDC_CAPTURE_HID, right - hid_width, top, hid_width, f.row);
+  top += f.pitch;
+  if (!f.advanced)
+    return top;
+  const int charges_width = ui.scaled(56);
+  const int charges_label = ui.scaled(64);
+  label(f, IDC_COOLDOWN_ID_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_ID, field_left, top,
+          std::max(ui.scaled(40), right - field_left - charges_width -
+                                      charges_label - ui.scaled(8)),
+          f.row);
+  label(f, IDC_COOLDOWN_CHARGES_LABEL, right - charges_width - charges_label,
+        top, charges_label - ui.scaled(6));
+  ui.move(IDC_COOLDOWN_CHARGES, right - charges_width, top, charges_width,
+          f.row);
+  top += f.pitch;
+  label(f, IDC_COOLDOWN_RETRIGGER_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_RETRIGGER, field_left, top, field_width, ui.scaled(120));
+  top += f.pitch;
+  label(f, IDC_COOLDOWN_RECOVERY_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_RECOVERY, field_left, top, field_width, ui.scaled(140));
+  top += f.pitch;
+  label(f, IDC_COOLDOWN_GROUPS_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_GROUPS, field_left, top, field_width, f.row);
+  return top + f.pitch;
+}
 
-  const int preview_heading_top = status_top + ui.scaled(45);
-  const int position_width = ui.scaled(154);
-  ui.move(IDC_PREVIEW_LABEL, left, preview_heading_top,
-          width - position_width - ui.scaled(8), f.heading_height);
-  ui.move(IDC_POSITION_ON_WINDOW, left + width - position_width,
-          preview_heading_top - ui.scaled(4), position_width, ui.scaled(27));
-  const int preview_top = preview_heading_top + ui.scaled(30);
-  const int preview_height =
-      std::clamp(width * 3 / 4, ui.scaled(220), ui.scaled(340));
-  ui.move(IDC_PREVIEW, left, preview_top, width,
-          std::min(preview_height,
-                   std::max(ui.scaled(120),
-                            f.status_top - preview_top - ui.scaled(8))));
+void layout_visual(const MainLayout &f, const int left, const int right,
+                   int top) {
+  const DialogLayout &ui = f.ui;
+  ui.move(IDC_VISUAL_SECTION_LABEL, left, top, right - left, ui.scaled(20));
+  top += f.heading;
+  const int enabled_width = ui.scaled(96);
+  ui.move(IDC_VISUAL_SUMMARY, left, top + (f.row - ui.scaled(20)) / 2,
+          std::max(1, right - left - enabled_width - ui.scaled(8)),
+          ui.scaled(20));
+  ui.move(IDC_VISUAL_ENABLED, right - enabled_width, top, enabled_width, f.row);
+  top += f.pitch;
+  const int calibrate_width = ui.scaled(104);
+  ui.move(IDC_CALIBRATE_VISUAL, left, top, calibrate_width, f.row);
+  ui.move(IDC_REMOVE_VISUAL, left + calibrate_width + ui.scaled(8), top,
+          ui.scaled(124), f.row);
+  top += f.pitch;
+  if (f.advanced) {
+    ui.move(IDC_VISUAL_ISOLATED, left, top, right - left, f.row);
+    top += f.pitch;
+  }
+  ui.move(IDC_VISUAL_HINT, left, top, right - left, ui.scaled(40));
+}
+
+void layout_overlay(const MainLayout &f, const int left, const int right,
+                    int top) {
+  const DialogLayout &ui = f.ui;
+  const int width = right - left;
+  ui.move(IDC_OVERLAY_LABEL, left, top, width, ui.scaled(20));
+  top += f.heading;
+  if (f.legacy_bars) {
+    ui.move(IDC_BARS_LABEL, left, top, width, ui.scaled(20));
+    top += ui.scaled(24);
+    ui.move(IDC_BAR_LIST, left, top, width, ui.scaled(80));
+    top += ui.scaled(88);
+  }
+  const int half = (width - ui.scaled(8)) / 2;
+  const int label_width = ui.scaled(56);
+  const int number_width = std::min(ui.scaled(80), half - label_width);
+  label(f, IDC_WIDTH_LABEL, left, top, label_width - ui.scaled(6));
+  ui.move(IDC_BAR_WIDTH, left + label_width, top, number_width, f.row);
+  const int second = left + half + ui.scaled(8);
+  label(f, IDC_HEIGHT_LABEL, second, top, label_width - ui.scaled(6));
+  ui.move(IDC_BAR_HEIGHT, second + label_width, top, number_width, f.row);
+  top += f.pitch;
+  ui.move(IDC_BAR_FILL, left, top, half, f.row);
+  ui.move(IDC_BAR_BACKGROUND, second, top, width - half - ui.scaled(8), f.row);
+  top += f.pitch;
+  ui.move(IDC_BAR_BORDER, left, top, half, f.row);
+  ui.move(IDC_BAR_TEXT, second, top, width - half - ui.scaled(8), f.row);
+  top += f.pitch;
+  ui.move(IDC_SHOW_TEXT, left, top, half, f.row);
+  ui.move(IDC_HIDE_READY, second, top, width - half - ui.scaled(8), f.row);
+  top += ui.scaled(30);
+  ui.move(IDC_DIRECT_DRAG, left, top, width, f.row);
+  top += ui.scaled(30);
+  ui.move(IDC_POSITION_STATUS, left, top, width, ui.scaled(60));
+  top += ui.scaled(60);
+  if (!f.preview)
+    ui.move(IDC_POSITION_ON_WINDOW, left, top + ui.scaled(4),
+            std::min(width, ui.scaled(180)), f.row);
+}
+
+// Cooldowns, then the selected cooldown's detail in two columns (one when
+// narrow). Returns the height the detail column needs.
+int layout_cooldowns(const MainLayout &f, const int top) {
+  const DialogLayout &ui = f.ui;
+  const int width = f.detail_right - f.detail_left;
+  const auto heights = group_heights(f);
+  const bool two_columns = width >= ui.scaled(480);
+  const int groups_height =
+      two_columns ? std::max(heights.timing + ui.scaled(section_gap) +
+                                 heights.visual,
+                             heights.overlay)
+                  : heights.timing + heights.visual + heights.overlay +
+                        ui.scaled(section_gap) * 2;
+  const int list_top = top + f.heading;
+  const int min_list = ui.scaled(84);
+  const int max_list = ui.scaled(180);
+  const int list_height =
+      std::clamp(f.status_top - f.margin - groups_height - ui.scaled(16) -
+                     list_top,
+                 min_list, max_list);
+  const int button_width = ui.scaled(150);
+  const int list_width = std::min(ui.scaled(560),
+                                  width - button_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWNS_LABEL, f.detail_left, top, list_width, ui.scaled(20));
+  ui.move(IDC_COOLDOWN_LIST, f.detail_left, list_top, list_width, list_height);
+  const int button_left = f.detail_left + list_width + ui.scaled(8);
+  ui.move(IDC_ADD_COOLDOWN, button_left, list_top, button_width, f.row);
+  ui.move(IDC_REMOVE_COOLDOWN, button_left, list_top + f.pitch, button_width,
+          f.row);
+
+  const int groups_top = list_top + list_height + ui.scaled(16);
+  if (two_columns) {
+    const int column = (width - f.gap) / 2;
+    const int left_right = f.detail_left + column;
+    const int visual_top =
+        layout_timing(f, f.detail_left, left_right, groups_top) +
+        ui.scaled(section_gap);
+    layout_visual(f, f.detail_left, left_right, visual_top);
+    layout_overlay(f, left_right + f.gap, f.detail_right, groups_top);
+  } else {
+    const int visual_top =
+        layout_timing(f, f.detail_left, f.detail_right, groups_top) +
+        ui.scaled(section_gap);
+    layout_visual(f, f.detail_left, f.detail_right, visual_top);
+    layout_overlay(f, f.detail_left, f.detail_right,
+                   visual_top + heights.visual + ui.scaled(section_gap));
+  }
+  return list_top + min_list + ui.scaled(16) + groups_height;
+}
+
+void layout_preview(const MainLayout &f) {
+  if (!f.preview)
+    return;
+  const DialogLayout &ui = f.ui;
+  const int width = f.width - f.margin - f.preview_left;
+  const int button_width = ui.scaled(180);
+  ui.move(IDC_PREVIEW_LABEL, f.preview_left, f.margin,
+          width - button_width - ui.scaled(8), ui.scaled(20));
+  ui.move(IDC_POSITION_ON_WINDOW, f.preview_left + width - button_width,
+          f.margin, button_width, f.row);
+  const int top = f.margin + f.row + ui.scaled(10);
+  ui.move(IDC_PREVIEW, f.preview_left, top, width,
+          std::max(ui.scaled(120), f.status_top - f.margin - top));
+}
+
+void layout_status(const MainLayout &f) {
+  const DialogLayout &ui = f.ui;
+  const int text_top = f.status_top + ui.scaled(5);
+  const int connection_width = ui.scaled(170);
+  const int runtime_width = ui.scaled(250);
+  const int right = f.width - f.margin;
+  ui.move(IDC_CONNECTION_STATUS, right - connection_width, text_top,
+          connection_width, ui.scaled(20));
+  ui.move(IDC_VISUAL_RUNTIME_STATUS,
+          right - connection_width - runtime_width - ui.scaled(12), text_top,
+          runtime_width, ui.scaled(20));
+  ui.move(IDC_STATUS, f.margin, text_top,
+          std::max(1, right - connection_width - runtime_width -
+                          ui.scaled(24) - f.margin),
+          ui.scaled(20));
 }
 
 } // namespace
 
+void EditorWindow::apply_heading_fonts() {
+  if (shell_.window == nullptr)
+    return;
+  for (const int id : heading_controls) {
+    if (const HWND control = GetDlgItem(shell_.window, id);
+        control != nullptr && shell_.heading_font != nullptr)
+      SendMessageW(control, WM_SETFONT,
+                   reinterpret_cast<WPARAM>(shell_.heading_font), FALSE);
+  }
+  if (const HWND title = GetDlgItem(shell_.window, IDC_PROFILE_TITLE);
+      title != nullptr && shell_.title_font != nullptr)
+    SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(shell_.title_font),
+                 FALSE);
+}
+
 void EditorWindow::layout() {
   if (shell_.window == nullptr)
     return;
+  const bool legacy_bars = std::ranges::any_of(
+      document_.profile().panels, [](const layerc::core::Panel &panel) {
+        return panel.style == layerc::core::PanelStyle::bar &&
+               panel.cooldown_ids.size() > 1;
+      });
   const MainLayout frame =
-      make_main_layout(shell_.window, shell_.advanced_visible);
-  show_advanced_controls(shell_.window, frame.advanced);
+      make_main_layout(shell_.window, shell_.advanced_visible, legacy_bars);
+  show_controls(shell_.window, advanced_controls, frame.advanced);
+  show_controls(shell_.window, legacy_bar_controls, frame.legacy_bars);
+  show_controls(shell_.window, preview_controls, frame.preview);
   layout_sidebar(frame);
-  const int binding_top =
-      layout_cooldown_list(frame, layout_profile_fields(frame));
-  layout_bars(frame, layout_cooldown_binding(frame, binding_top));
-  layout_visual_panel(frame);
+  const int detail_bottom =
+      layout_cooldowns(frame, layout_profile(frame));
+  layout_preview(frame);
+  layout_status(frame);
+  shell_.status_strip_top = frame.status_top;
+  // The smallest client height that keeps every row visible.
+  shell_.min_client_height = detail_bottom + frame.margin +
+                             (frame.height - frame.status_top);
 
-  const DialogLayout &ui = frame.ui;
-  ui.move(IDC_STATUS, frame.margin, frame.status_top,
-          frame.width - frame.margin * 2, ui.scaled(19));
+  RECT list_client{};
+  GetClientRect(shell_.profile_list, &list_client);
   ListView_SetColumnWidth(shell_.profile_list, 0,
-                          std::max(1, frame.sidebar_width - ui.scaled(8)));
+                          std::max(1L, list_client.right - list_client.left));
   RedrawWindow(shell_.window, nullptr, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }

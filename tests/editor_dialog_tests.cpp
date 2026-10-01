@@ -7,11 +7,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cwctype>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include <commctrl.h>
 #include <windows.h>
@@ -22,7 +24,7 @@ int apply_commands{};
 
 INT_PTR CALLBACK test_dialog_proc(const HWND window, const UINT message,
                                   const WPARAM wparam, LPARAM) {
-  if (message == WM_COMMAND && LOWORD(wparam) == IDC_OPTIONS_APPLY) {
+  if (message == WM_COMMAND && LOWORD(wparam) == IDOK) {
     ++apply_commands;
     return TRUE;
   }
@@ -75,7 +77,7 @@ void editor_dialog_contracts() {
 
   layerc::editor::style_native_dialog_children(
       dialog, static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
-  const HWND apply = GetDlgItem(dialog, IDC_OPTIONS_APPLY);
+  const HWND apply = GetDlgItem(dialog, IDOK);
   const HWND checkbox = GetDlgItem(dialog, IDC_CAPTURE_PRIVACY);
   const HWND visual_checkbox = GetDlgItem(dialog, IDC_VISUAL_MASTER);
   const auto apply_type = GetWindowLongPtrW(apply, GWL_STYLE) & BS_TYPEMASK;
@@ -86,9 +88,10 @@ void editor_dialog_contracts() {
   bool passed = true;
   passed &=
       expect(apply_type == BS_OWNERDRAW &&
-                 LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) ==
-                     IDC_OPTIONS_APPLY,
-             "the themed Apply button must retain dialog-manager default semantics");
+                 LOWORD(SendMessageW(dialog, DM_GETDEFID, 0, 0)) == IDOK &&
+                 GetDlgItem(dialog, IDC_OPTIONS_APPLY) != nullptr &&
+                 GetDlgItem(dialog, IDC_EDITOR_CAPTURE_PRIVACY) != nullptr,
+             "the themed OK button must retain dialog-manager default semantics");
   passed &=
       expect(checkbox_type == BS_AUTOCHECKBOX,
              "the capture checkbox must retain native auto-toggle semantics");
@@ -109,8 +112,8 @@ void editor_dialog_contracts() {
   const LRESULT default_id = SendMessageW(dialog, DM_GETDEFID, 0, 0);
   passed &=
       expect(HIWORD(default_id) == DC_HASDEFID &&
-                 LOWORD(default_id) == IDC_OPTIONS_APPLY,
-             "the Options dialog should advertise Apply as its default action");
+                 LOWORD(default_id) == IDOK,
+             "the Options dialog should advertise OK as its default action");
   MSG enter{};
   enter.hwnd = checkbox;
   enter.message = WM_KEYDOWN;
@@ -290,13 +293,27 @@ void editor_dialog_contracts() {
   const auto normal_checkbox = layerc::editor::profile_checkbox_metrics(96);
   const auto high_dpi_checkbox = layerc::editor::profile_checkbox_metrics(192);
   passed &=
-      expect(normal_checkbox.image_size == 16 && normal_checkbox.inset == 2 &&
+      expect(normal_checkbox.image_size == 20 && normal_checkbox.inset == 2 &&
                  normal_checkbox.pen_width == 2,
              "profile checkbox resources should retain their 96-DPI metrics");
   passed &= expect(
-      high_dpi_checkbox.image_size == 32 && high_dpi_checkbox.inset == 4 &&
+      high_dpi_checkbox.image_size == 40 && high_dpi_checkbox.inset == 4 &&
           high_dpi_checkbox.pen_width == 4,
       "profile checkbox resources and hit target should scale with DPI");
+  const RECT profile_row{0, 20, 240, 44};
+  passed &= expect(
+      layerc::editor::profile_checkbox_hit(profile_row, {8, 30}, 96) &&
+          layerc::editor::profile_checkbox_hit(profile_row, {19, 43}, 96),
+      "a click on the profile checkbox cell should toggle enablement");
+  passed &= expect(
+      !layerc::editor::profile_checkbox_hit(profile_row, {20, 30}, 96) &&
+          !layerc::editor::profile_checkbox_hit(profile_row, {125, 30}, 96) &&
+          !layerc::editor::profile_checkbox_hit(profile_row, {8, 44}, 96),
+      "a click on the profile name should never toggle enablement");
+  passed &= expect(
+      layerc::editor::profile_checkbox_hit(profile_row, {39, 30}, 192) &&
+          !layerc::editor::profile_checkbox_hit(profile_row, {40, 30}, 192),
+      "the profile checkbox hit cell should scale with DPI");
   const auto legacy_base = [](const std::string_view source) {
     return layerc::platform::source_schema_before(
         source, layerc::core::profile_schema_version);
@@ -536,15 +553,45 @@ void editor_dialog_contracts() {
     const HMENU editor_menu = GetMenu(editor_dialog);
     const HMENU file_menu = GetSubMenu(editor_menu, 0);
     const HMENU edit_menu = GetSubMenu(editor_menu, 1);
-    const HMENU tools_menu = GetSubMenu(editor_menu, 2);
-    const HMENU help_menu = GetSubMenu(editor_menu, 3);
+    const HMENU view_menu = GetSubMenu(editor_menu, 2);
+    const HMENU tools_menu = GetSubMenu(editor_menu, 3);
+    const HMENU help_menu = GetSubMenu(editor_menu, 4);
     passed &= expect(
-        GetMenuItemCount(editor_menu) == 4 &&
+        GetMenuItemCount(editor_menu) == 5 &&
             menu_caption(editor_menu, 0) == L"&File" &&
             menu_caption(editor_menu, 1) == L"&Edit" &&
-            menu_caption(editor_menu, 2) == L"&Tools" &&
-            menu_caption(editor_menu, 3) == L"&Help",
-        "the editor should expose native File, Edit, Tools, and Help menus");
+            menu_caption(editor_menu, 2) == L"&View" &&
+            menu_caption(editor_menu, 3) == L"&Tools" &&
+            menu_caption(editor_menu, 4) == L"&Help",
+        "the editor should expose native File, Edit, View, Tools, and Help "
+        "menus");
+    passed &= expect(
+        menu_has_command(view_menu, IDM_VIEW_ADVANCED) &&
+            menu_has_command(view_menu, IDM_VIEW_TEXT_130) &&
+            menu_has_command(edit_menu, IDM_COOLDOWN_DUPLICATE) &&
+            menu_has_command(file_menu, IDM_FILE_SAVE_AS) &&
+            menu_has_command(help_menu, IDM_HELP_SHORTCUTS),
+        "View, cooldown and shortcut commands should be reachable from menus");
+    // Access keys within one popup must be unique (Export Pack vs Exit).
+    std::vector<wchar_t> file_keys;
+    for (int item = 0; item < GetMenuItemCount(file_menu); ++item) {
+      const auto caption = menu_caption(file_menu, item);
+      const auto amp = caption.find(L'&');
+      if (amp != std::wstring::npos && amp + 1 < caption.size())
+        file_keys.push_back(static_cast<wchar_t>(towlower(caption[amp + 1])));
+    }
+    std::ranges::sort(file_keys);
+    passed &= expect(std::ranges::adjacent_find(file_keys) == file_keys.end(),
+                     "File menu access keys should be unique");
+    const HMENU context_menus =
+        LoadMenuW(instance, MAKEINTRESOURCEW(IDR_CONTEXT_MENUS));
+    passed &= expect(
+        context_menus != nullptr &&
+            menu_has_command(GetSubMenu(context_menus, 0), IDM_PROFILE_TOGGLE) &&
+            menu_has_command(GetSubMenu(context_menus, 1), IDM_COOLDOWN_REMOVE),
+        "profile and cooldown context menus should load");
+    if (context_menus != nullptr)
+      DestroyMenu(context_menus);
     passed &= expect(
         menu_has_command(file_menu, IDM_FILE_NEW) &&
             menu_has_command(file_menu, IDM_FILE_IMPORT_PACK) &&
@@ -567,25 +614,36 @@ void editor_dialog_contracts() {
             GetDlgItem(editor_dialog, IDC_POSITION_ON_WINDOW) != nullptr,
         "the main resource should expose application, cooldown, advanced, and "
         "window-position controls");
-    const RECT application_field =
-        child_rect(editor_dialog, IDC_APPLICATION_PATH);
-    const RECT choose_application =
-        child_rect(editor_dialog, IDC_CHOOSE_APPLICATION);
-    const RECT visual_status =
-        child_rect(editor_dialog, IDC_VISUAL_RUNTIME_STATUS);
-    const RECT preview = child_rect(editor_dialog, IDC_PREVIEW);
-    const RECT position =
-        child_rect(editor_dialog, IDC_POSITION_ON_WINDOW);
     passed &= expect(
-        application_field.right <= choose_application.left &&
-            application_field.top < choose_application.bottom &&
-            choose_application.top < application_field.bottom,
-        "Choose Running Application should remain beside the application "
-        "field");
+        GetDlgItem(editor_dialog, IDC_BROWSE_APPLICATION) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_PROFILE_NEW) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_PROFILE_DELETE) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_PROFILE_MORE) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_CONNECTION_STATUS) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_TIMING_LABEL) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_OVERLAY_LABEL) != nullptr,
+        "the master-detail editor should expose profile actions, browsing, "
+        "cooldown detail groups and the status strip");
     passed &= expect(
-        visual_status.bottom <= preview.top && position.bottom <= preview.top &&
-            position.left >= preview.left && position.right <= preview.right,
-        "Visual Trigger and Position on Window should remain above Preview");
+        (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_APPLICATION_PATH),
+                           GWL_STYLE) &
+         ES_READONLY) == 0 &&
+            (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_COOLDOWN_BINDING),
+                               GWL_STYLE) &
+             WS_TABSTOP) == 0,
+        "the application accepts typed names and read-only displays are not "
+        "tab stops");
+    // Tab order: the view toggle follows the profile fields.
+    HWND walker = GetDlgItem(editor_dialog, IDC_APPLICATION_PATH);
+    bool advanced_after_fields = false;
+    for (int step = 0; step < 8 && walker != nullptr; ++step) {
+      walker = GetWindow(walker, GW_HWNDNEXT);
+      if (walker == GetDlgItem(editor_dialog, IDC_ADVANCED))
+        advanced_after_fields = true;
+    }
+    passed &= expect(advanced_after_fields,
+                     "Show advanced should follow the profile fields in tab "
+                     "order");
     passed &= expect(
         (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_COOLDOWN_DURATION),
                            GWL_STYLE) &
@@ -631,14 +689,12 @@ void editor_dialog_contracts() {
         static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)));
     const HWND advanced =
         GetDlgItem(appearance_dialog, IDC_APPEARANCE_ADVANCED);
+    const auto advanced_type =
+        GetWindowLongPtrW(advanced, GWL_STYLE) & BS_TYPEMASK;
     passed &= expect(
-        (GetWindowLongPtrW(advanced, GWL_STYLE) & BS_TYPEMASK) ==
-            BS_AUTOCHECKBOX,
-        "advanced appearance overrides must retain native checkbox behavior");
-    SendMessageW(advanced, BM_SETCHECK, BST_UNCHECKED, 0);
-    SendMessageW(advanced, BM_CLICK, 0, 0);
-    passed &= expect(SendMessageW(advanced, BM_GETCHECK, 0, 0) == BST_CHECKED,
-                     "advanced appearance should toggle through BM_CLICK");
+        advanced_type == BS_PUSHBUTTON || advanced_type == BS_OWNERDRAW,
+        "advanced appearance colors must be a disclosure button, not a "
+        "checkbox that looks like a saved setting");
     passed &= expect(
         LOWORD(SendMessageW(appearance_dialog, DM_GETDEFID, 0, 0)) == IDOK,
         "OK should remain the Appearance default action");
@@ -745,11 +801,11 @@ void editor_dialog_contracts() {
     const auto hierarchy_style = GetWindowLongPtrW(
         GetDlgItem(automation_dialog, IDC_AUTOMATION_NODES), GWL_STYLE);
     passed &= expect(
-        (hierarchy_style & LBS_NOTIFY) != 0 &&
-            (hierarchy_style &
-             (LBS_OWNERDRAWFIXED | LBS_OWNERDRAWVARIABLE)) == 0,
-        "the Basic Rule to Actions hierarchy should remain a native notifying "
-        "list");
+        (hierarchy_style & (LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS)) ==
+                (LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) &&
+            (hierarchy_style & LBS_OWNERDRAWVARIABLE) == 0,
+        "the Basic Rule to Actions hierarchy should retain native notification "
+        "and strings with themed fixed-height rows");
     passed &= expect(
         (GetWindowLongPtrW(GetDlgItem(automation_dialog, IDC_AUTOMATION_VIEW),
                            GWL_STYLE) &
@@ -910,8 +966,13 @@ void automation_palette_contracts() {
          "flag variable nodes should default to false");
 }
 
+void editor_draft_leave_contracts();
+void editor_dialog_font_contracts();
+
 int main() {
   return layerc::test::run(
       {{"editor_dialog_contracts", editor_dialog_contracts},
-       {"automation_palette_contracts", automation_palette_contracts}});
+       {"automation_palette_contracts", automation_palette_contracts},
+       {"editor_draft_leave_contracts", editor_draft_leave_contracts},
+       {"editor_dialog_font_contracts", editor_dialog_font_contracts}});
 }

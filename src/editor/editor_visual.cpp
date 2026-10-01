@@ -88,7 +88,7 @@ bool ensure_observation_capacity(
   const auto message = L"This profile already has the maximum " +
                        std::to_wstring(maximum) + L" " + kind +
                        L" observations.";
-  MessageBoxW(owner, message.c_str(), L"Visual observation limit",
+  themed_message_box(owner, message.c_str(), L"Visual observation limit",
               MB_OK | MB_ICONINFORMATION);
   return false;
 }
@@ -197,12 +197,16 @@ void EditorWindow::refresh_visual_controls() {
     }
   }
 
-  std::wstring text = L"Input only";
+  // The group edits the selected cooldown's trigger; say which one.
+  set_text(GetDlgItem(shell_.window, IDC_VISUAL_SECTION_LABEL),
+           cooldown != nullptr ? L"Visual trigger for " + to_wide(cooldown->name)
+                               : std::wstring(L"Visual trigger"));
+  std::wstring text = L"No visual trigger";
   if (document_.profile().game.global) {
     text = L"Visual capture is unavailable for global profiles";
   } else if (document_.visual_state() ==
              layerc::platform::ModuleSidecarState::invalid) {
-    text = L"Invalid visual sidecar — all triggers blocked";
+    text = L"Invalid visual settings — all triggers blocked";
     if (!document_.visual_error().empty())
       text += L": " + to_wide(document_.visual_error());
   } else if (trigger != nullptr) {
@@ -226,6 +230,16 @@ void EditorWindow::refresh_visual_controls() {
   // Calibration can repair an invalid sidecar by replacing the selected
   // assignment with a newly validated single-observation result.
   EnableWindow(calibrate, editable && !document_.path().empty());
+  // Every unavailable control in the group gets its reason inline.
+  const wchar_t *hint = L"";
+  if (cooldown == nullptr)
+    hint = L"Select a cooldown to give it a visual trigger.";
+  else if (document_.path().empty())
+    hint = L"Save the profile once to calibrate a visual trigger.";
+  else if (trigger == nullptr && !document_.profile().game.global)
+    hint = L"Calibrate captures what the game shows when this cooldown "
+           L"starts.";
+  set_text(GetDlgItem(shell_.window, IDC_VISUAL_HINT), hint);
   InvalidateRect(enabled, nullptr, TRUE);
   InvalidateRect(isolated, nullptr, TRUE);
 }
@@ -237,7 +251,7 @@ bool EditorWindow::save_visual_profile() {
     break;
   case CommitResult::invalid_fields:
   case CommitResult::invalid_profile:
-    MessageBoxW(shell_.window,
+    themed_message_box(shell_.window,
                 L"Finish the invalid profile field before committing visual "
                 L"recognition.",
                 L"Visual save failed", MB_OK | MB_ICONERROR);
@@ -245,14 +259,14 @@ bool EditorWindow::save_visual_profile() {
   case CommitResult::upgrade_declined:
     return false;
   case CommitResult::blocked_by_sidecar:
-    MessageBoxW(shell_.window,
-                L"Repair the invalid automation sidecar before committing "
+    themed_message_box(shell_.window,
+                L"Repair the invalid automation settings before saving "
                 L"visual recognition. This prevents an unrelated visual edit "
                 L"from silently discarding recovery data.",
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   case CommitResult::write_failed:
-    MessageBoxW(shell_.window, write_failure_message().c_str(),
+    themed_message_box(shell_.window, write_failure_message().c_str(),
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -295,7 +309,7 @@ void EditorWindow::remove_visual_assignment() {
   if (cooldown == nullptr || !document_.visual()) return;
   const auto *existing = find_trigger(*document_.visual(), cooldown->id);
   if (existing == nullptr) return;
-  if (MessageBoxW(shell_.window,
+  if (themed_message_box(shell_.window,
                   L"Remove visual recognition from this cooldown? Its ordinary input binding is preserved.",
                   L"Remove visual assignment", MB_OKCANCEL | MB_ICONQUESTION) !=
       IDOK)
@@ -315,7 +329,7 @@ void EditorWindow::calibrate_visual() {
   const auto *cooldown = selected_cooldown();
   if (cooldown == nullptr) return;
   if (document_.profile().game.global) {
-    MessageBoxW(shell_.window,
+    themed_message_box(shell_.window,
                 L"Visual recognition needs a specific matched game window and is unavailable for global profiles.",
                 L"Visual calibration", MB_OK | MB_ICONINFORMATION);
     return;
@@ -344,7 +358,7 @@ void EditorWindow::calibrate_selected_task() {
   auto matching = document_.profile();
   matching.enabled = true;
   if (!layerc::platform::profile_matches_window(*candidate, matching)) {
-    MessageBoxW(task_picker_.window,
+    themed_message_box(task_picker_.window,
                 L"That window does not match this profile. Use Selected Task first if you intend to change the matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
     return;
@@ -368,19 +382,19 @@ bool EditorWindow::launch_calibration(const HWND target) {
   const auto notice = layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::visual_capture_notice);
   if (notice.failed()) {
-    MessageBoxW(shell_.window, L"Could not read the visual capture acknowledgement.",
+    themed_message_box(shell_.window, L"Could not read the visual capture acknowledgement.",
                 L"LayerC Editor", MB_OK | MB_ICONWARNING);
     return false;
   }
   if (!notice.value.value_or(false)) {
-    if (MessageBoxW(
+    if (themed_message_box(
             shell_.window,
             L"Visual recognition captures pixels from the selected game window without injecting into or hooking the game. Protected content can appear black, and anti-cheat compatibility cannot be guaranteed. Continue?",
             L"Visual capture notice", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
       return false;
     if (!layerc::platform::write_bool_setting(
           layerc::platform::BoolSetting::visual_capture_notice, true)) {
-      MessageBoxW(shell_.window, L"Could not save the visual capture acknowledgement.",
+      themed_message_box(shell_.window, L"Could not save the visual capture acknowledgement.",
                   L"LayerC Editor", MB_OK | MB_ICONWARNING);
       return false;
     }
@@ -424,7 +438,7 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
   if (candidate_profile == nullptr || cooldown == nullptr || !candidate ||
       candidate_profile->triggers.size() != 1 ||
       candidate_profile->triggers.front().cooldown_id != cooldown->id) {
-    MessageBoxW(shell_.window,
+    themed_message_box(shell_.window,
                 L"LayerC Calibration returned an invalid result. No profile "
                 L"data was changed.",
                 L"Calibration rejected", MB_OK | MB_ICONERROR);
@@ -451,7 +465,7 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
         });
     bool update_shared = references <= 1;
     if (references > 1) {
-      const int choice = MessageBoxW(
+      const int choice = themed_message_box(
           shell_.window,
           L"This visual observation is shared by multiple cooldowns. Choose Yes to update the shared observation, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
           L"Shared visual observation", MB_YESNOCANCEL | MB_ICONQUESTION);
@@ -483,7 +497,7 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
 
   const auto error = layerc::core::validate_visual_profile(merged, document_.profile());
   if (!error.message.empty()) {
-    MessageBoxW(shell_.window, to_wide(error.message).c_str(),
+    themed_message_box(shell_.window, to_wide(error.message).c_str(),
                 L"Calibration rejected", MB_OK | MB_ICONERROR);
     return false;
   }
