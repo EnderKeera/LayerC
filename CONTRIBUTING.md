@@ -93,6 +93,19 @@ suite is `layerc_benchmark_result_tests` on Linux, which registers only where
 same setup and `build-package` actions, so benchmark gating cannot drift.
 Releases and `rolling` ship only the Windows x64 ZIP.
 
+[`tools/publish-rolling.sh`](tools/publish-rolling.sh) promotes `rolling` in
+one serialized job (`concurrency: publish-rolling`). It skips a commit older
+than the one already published, uploads the package under a non-ZIP staging
+name and verifies the served bytes, swaps it in as the only
+`layerc-windows-x64.zip`, moves the `rolling` tag explicitly (`gh release edit
+--target` never moves an existing tag), and finally writes notes naming
+`main@<commit>` and the ZIP's SHA-256. Those notes are the commit point:
+`publish-rolling.sh --verify` and `tools/pull-ci.ps1` accept `rolling` only when
+the tag, the noted commit, and the ZIP's SHA-256 agree, so an interrupted
+publication is refused rather than half-used, and rerunning the job converges.
+`tools/tests/test_publish_rolling.py` injects a failure at every mutation
+against a fake `gh`.
+
 Artifacts: `layerc-windows-x64` is the full bundle (install layout, benchmark
 JSON, ZIP); `layerc-windows-x64-tools` feeds hardware benchmarks and
 `tools/push-and-test.ps1`; only `publish-rolling` consumes
