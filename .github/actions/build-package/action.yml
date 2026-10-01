@@ -22,8 +22,8 @@ runs:
     - name: Test
       shell: pwsh
       run: |
-        python -m unittest tools/tests/test_linux_test_report.py
-        if ($LASTEXITCODE -ne 0) { throw 'CTest result policy tests failed.' }
+        python -m unittest discover -s tools/tests
+        if ($LASTEXITCODE -ne 0) { throw 'Tooling policy tests failed.' }
         $registration = Join-Path $PWD 'build/ci/test-registration.json'
         ctest --test-dir build/ci --show-only=json-v1 |
           Set-Content -LiteralPath $registration -Encoding utf8
