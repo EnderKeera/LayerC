@@ -968,11 +968,29 @@ void automation_palette_contracts() {
 
 void editor_draft_leave_contracts();
 void editor_dialog_font_contracts();
+void editor_cooldown_removal_contracts();
+void editor_calibration_shutdown_contracts();
+void editor_calibration_disabled_owner_contracts();
+void editor_calibration_destroyed_owner_contracts();
 
-int main() {
+int main(const int argc, char **argv) {
+  if (argc == 5 && std::string_view(argv[1]) == "--request-pipe" &&
+      std::string_view(argv[3]) == "--response-pipe") {
+    // Disposable helper mode: never reads its inherited pipe, captures input,
+    // opens settings, or runs editor tests. Its owning Job must stop it.
+    Sleep(INFINITE);
+    return ERROR_CANCELLED;
+  }
   return layerc::test::run(
       {{"editor_dialog_contracts", editor_dialog_contracts},
        {"automation_palette_contracts", automation_palette_contracts},
        {"editor_draft_leave_contracts", editor_draft_leave_contracts},
-       {"editor_dialog_font_contracts", editor_dialog_font_contracts}});
+       {"editor_dialog_font_contracts", editor_dialog_font_contracts},
+       {"editor_cooldown_removal_contracts", editor_cooldown_removal_contracts},
+       {"editor_calibration_shutdown_contracts",
+        editor_calibration_shutdown_contracts},
+       {"editor_calibration_disabled_owner_contracts",
+        editor_calibration_disabled_owner_contracts},
+       {"editor_calibration_destroyed_owner_contracts",
+        editor_calibration_destroyed_owner_contracts}});
 }

@@ -84,29 +84,61 @@ void show_asset_error(const HWND dialog,
               title, MB_OK | MB_ICONERROR);
 }
 
-void append_unique_reference(
-    layerc::core::TemplateState &state,
-    std::vector<layerc::core::TemplateImage> &images,
-    const layerc::platform::ImportedTemplateAsset &asset) {
-  if (std::ranges::any_of(state.references, [&](const auto &item) {
-        return item.asset_sha256 == asset.reference.asset_sha256;
-      }))
-    return;
-  state.references.push_back(asset.reference);
-  images.push_back(asset.image);
-}
-
 } // namespace
 
-void CalibrationWindow::install_template_reference(
+void CalibrationWindow::set_reference_selection(
     const layerc::core::NormalizedRegion &selected) {
+  reference_selection_ = selected;
+  rule_.region = selected;
   template_state_.expected_width = selected.width;
   template_state_.expected_height = selected.height;
   template_state_.search_region = expanded_template_search_region(selected);
-  rule_.region = template_state_.search_region;
+  template_matcher_.clear();
+}
+
+void CalibrationWindow::restore_reference_selection() {
+  // Older profiles persist dimensions/search, not the original crop origin.
+  // Seed a same-sized central crop without changing persisted geometry.
+  reference_selection_ = {
+      std::clamp(template_state_.search_region.x +
+                     (template_state_.search_region.width -
+                      template_state_.expected_width) * 0.5,
+                 0.0, 1.0 - template_state_.expected_width),
+      std::clamp(template_state_.search_region.y +
+                     (template_state_.search_region.height -
+                      template_state_.expected_height) * 0.5,
+                 0.0, 1.0 - template_state_.expected_height),
+      template_state_.expected_width, template_state_.expected_height};
+  rule_.region = reference_selection_;
+}
+
+std::optional<layerc::core::TemplateImage>
+CalibrationWindow::captured_reference_image() const {
+  const auto &frame = preview_.frame();
+  if (!frame)
+    return std::nullopt;
+  const auto [left, top, right, bottom] = layerc::core::to_pixel_bounds(
+      reference_selection_, frame->width, frame->height);
+  if (right <= left || bottom <= top ||
+      static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U)
+    return std::nullopt;
+  return downscale_capture_region(*frame, left, top, right - left, bottom - top);
+}
+
+bool CalibrationWindow::append_template_reference(
+    const layerc::platform::ImportedTemplateAsset &asset) {
+  if (template_state_.references.size() >= layerc::core::max_template_references ||
+      std::ranges::any_of(template_state_.references, [&](const auto &item) {
+        return item.asset_sha256 == asset.reference.asset_sha256;
+      }))
+    return false;
+  template_state_.references.push_back(asset.reference);
+  template_images_.push_back(asset.image);
   template_matcher_.clear();
   refresh_template_reference_label();
   update_match_status();
+  preview_.invalidate();
+  return true;
 }
 
 void CalibrationWindow::capture_template_reference() {
@@ -118,17 +150,14 @@ void CalibrationWindow::capture_template_reference() {
   }
   if (reject_when_reference_limit_reached(dialog_, template_state_))
     return;
-  const auto [left, top, right, bottom] =
-      layerc::core::to_pixel_bounds(rule_.region, frame->width, frame->height);
-  if (right <= left || bottom <= top ||
-      static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U) {
+  const auto image = captured_reference_image();
+  if (!image) {
     MessageBoxW(dialog_,
                 L"Select a region containing at least 64 captured pixels.",
                 L"Template region too small", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  auto stored = layerc::platform::store_template_asset(
-      downscale_capture_region(*frame, left, top, right - left, bottom - top));
+  auto stored = layerc::platform::store_template_asset(*image);
   const auto *asset =
       std::get_if<layerc::platform::ImportedTemplateAsset>(&stored);
   if (asset == nullptr) {
@@ -137,9 +166,7 @@ void CalibrationWindow::capture_template_reference() {
                      L"Template capture failed");
     return;
   }
-  append_unique_reference(template_state_, template_images_, *asset);
-  install_template_reference(rule_.region);
-  preview_.invalidate();
+  (void)append_template_reference(*asset);
 }
 
 void CalibrationWindow::import_template_reference() {
@@ -166,8 +193,7 @@ void CalibrationWindow::import_template_reference() {
                      L"Template import failed");
     return;
   }
-  append_unique_reference(template_state_, template_images_, *asset);
-  install_template_reference(rule_.region);
+  (void)append_template_reference(*asset);
 }
 
 void CalibrationWindow::clear_template_references() {
