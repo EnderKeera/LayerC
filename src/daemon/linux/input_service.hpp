@@ -107,7 +107,8 @@ private:
 class X11SessionRegistry {
 public:
   // Load one configuration revision, including optional module sidecars and
-  // persistent state. Window rematches reuse this snapshot without disk I/O.
+  // state for explicit clean-runtime reloads. Retained window matches reuse
+  // configuration; fresh automation admissions reload transactional state.
   void configure(std::span<const layerc::platform::StoredProfile> profiles);
   // Rebuilds sessions from configured profiles that resolve in the scan. A
   // global profile follows the active window; an unmatched profile has none.
