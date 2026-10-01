@@ -5,6 +5,7 @@
 #include "layerc/core/visual.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/profile_file_guard.hpp"
 #include "layerc/platform/profile_transaction.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets_windows.hpp"
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <future>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -320,6 +322,69 @@ void platform_visual_assets() {
   } else {
     expect(false, "both GC test assets should be stored");
   }
+}
+
+void platform_visual_asset_writer_ownership() {
+  layerc::test::TempDirectory fixture("LayerC-asset-writer");
+  layerc::test::ScopedEnvironment root("LAYERC_PROFILE_DIR", fixture.path());
+  if (!expect(root.applied(), "writer tests must use an isolated profile store"))
+    return;
+  layerc::core::TemplateImage pixels{
+      .width = 8, .height = 8,
+      .pixels = std::vector<layerc::core::RgbPixel>(64),
+      .alpha = std::vector<std::uint8_t>(64, 255)};
+  for (std::size_t index{}; index < pixels.pixels.size(); ++index)
+    pixels.pixels[index] = {static_cast<std::uint8_t>(index * 3U),
+                            static_cast<std::uint8_t>(255U - index * 2U),
+                            static_cast<std::uint8_t>(index * 4U)};
+  const auto first = layerc::platform::store_template_asset(pixels);
+  pixels.pixels.front().red ^= 0x7FU;
+  const auto pending = layerc::platform::store_template_asset(pixels);
+  const auto *a = std::get_if<layerc::platform::ImportedTemplateAsset>(&first);
+  const auto *b = std::get_if<layerc::platform::ImportedTemplateAsset>(&pending);
+  if (a == nullptr || b == nullptr) {
+    expect(false, "both writer-boundary asset fixtures must publish");
+    return;
+  }
+  const auto base = test_profile("Asset writer ownership");
+  layerc::core::VisualProfile visual;
+  visual.profile_id = base.id;
+  visual.templates.push_back({.id = "template", .name = "Template",
+                              .search_region = {0.0, 0.0, 1.0, 1.0},
+                              .expected_width = 0.25, .expected_height = 0.25,
+                              .references = {a->reference}});
+  visual.triggers.push_back({.cooldown_id = "dash", .observation_id = "template"});
+  const auto path = fixture.path() / "writer.json";
+  if (!expect(layerc::platform::write_profile_bundle(path, base, visual),
+              "the first writer fixture must commit"))
+    return;
+  const auto roots = layerc::platform::profile_transaction_scope(fixture.path());
+  if (!expect(roots.has_value(), "writer fixture scope must resolve")) return;
+  std::future<layerc::platform::VisualAssetGcReport> collection;
+  {
+    layerc::platform::TransactionFileLock writer(*roots);
+    if (!expect(writer.locked(), "the fixture must own the real writer boundary"))
+      return;
+    std::promise<void> announced;
+    auto began = announced.get_future();
+    collection = std::async(std::launch::async,
+                            [signal = std::move(announced)]() mutable {
+      signal.set_value();
+      return layerc::platform::garbage_collect_unreferenced_visual_assets();
+    });
+    expect(began.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+           "the maintenance worker must start under fixture writer ownership");
+    expect(collection.wait_for(std::chrono::milliseconds(250)) ==
+               std::future_status::timeout && std::filesystem::exists(b->path),
+           "maintenance must not scan/delete while another writer owns the store");
+    visual.templates.front().references = {b->reference};
+    expect(layerc::platform::write_profile_bundle(path, base, visual),
+           "the owning writer must publish its new reference before releasing");
+  }
+  const auto report = collection.get();
+  expect(report.completed() && report.deleted == 0 && report.retained == 2 &&
+             std::filesystem::exists(a->path) && std::filesystem::exists(b->path),
+         "collection must scan the committed B and recovery A after ownership releases");
 }
 
 void platform_sibling_authentication() {

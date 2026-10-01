@@ -515,8 +515,6 @@ void EditorWindow::delete_profile() {
   reload_profile_list(safe_remaining, true);
   set_status(safe_remaining.empty() ? L"Profile moved to the Recycle Bin."
                                     : L"Profile deleted and LayerD reloaded.");
-  report_visual_asset_gc(
-      layerc::platform::garbage_collect_unreferenced_visual_assets());
 }
 
 void EditorWindow::open_profiles_folder() {

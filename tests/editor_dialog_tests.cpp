@@ -972,6 +972,8 @@ void editor_cooldown_removal_contracts();
 void editor_calibration_shutdown_contracts();
 void editor_calibration_disabled_owner_contracts();
 void editor_calibration_destroyed_owner_contracts();
+void editor_asset_history_contracts();
+void editor_asset_pending_publication_contracts();
 
 int main(const int argc, char **argv) {
   if (argc == 5 && std::string_view(argv[1]) == "--request-pipe" &&
@@ -992,5 +994,8 @@ int main(const int argc, char **argv) {
        {"editor_calibration_disabled_owner_contracts",
         editor_calibration_disabled_owner_contracts},
        {"editor_calibration_destroyed_owner_contracts",
-        editor_calibration_destroyed_owner_contracts}});
+        editor_calibration_destroyed_owner_contracts},
+       {"editor_asset_history_contracts", editor_asset_history_contracts},
+       {"editor_asset_pending_publication_contracts",
+        editor_asset_pending_publication_contracts}});
 }
