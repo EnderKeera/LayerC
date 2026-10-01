@@ -75,6 +75,8 @@ gh run download $runId -n layerc-windows-x64-tools -D $candidateDirectory
 Assert-NativeSuccess 'Downloading CI benchmark tools'
 $candidateDirectory = Resolve-LayerCBuildRoot -Path $candidateDirectory `
     -RequiredExecutables @('layerd.exe')
+$null = Assert-LayerCBuildIdentity -BuildDirectory $candidateDirectory `
+    -CommitSha $candidate.HeadSha -RunId $candidate.RunId
 
 if (-not $VisualOnly) {
     if ([string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
