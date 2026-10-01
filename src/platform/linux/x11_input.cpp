@@ -4,6 +4,7 @@
 #include "x11_input.hpp"
 
 #include "x11_error.hpp"
+#include "x11_window.hpp"
 
 #include <X11/XKBlib.h>
 #include <X11/Xatom.h>
@@ -332,27 +333,26 @@ X11InputSource::unavailable(const X11InputCapabilities needed) const {
   return reasons;
 }
 
-X11InputPoll X11InputSource::poll() {
+X11InputPoll X11InputSource::poll(X11WindowTracker *tracker) {
   X11InputPoll result;
   if (display_ == nullptr) return result;
   auto *raw = reinterpret_cast<Display *>(display_);
-  X11ErrorTrap trap{raw};
-  while (XPending(raw) > 0) {
-    XEvent event{};
-    XNextEvent(raw, &event);
-    if (!trap.ok()) break;
+  X11Display::dispatch_events(raw, [&](XEvent &event) {
+    // Discovery sees every event even while input owns the active decoder.
+    if (tracker != nullptr)
+      result.windows_changed = tracker->observe(event) || result.windows_changed;
     if (xkb_event_base_ != 0 && event.type == xkb_event_base_) {
       (void)refresh_keymap();
-      continue;
+      return;
     }
     if (event.type == PropertyNotify) {
       if (static_cast<std::uint64_t>(event.xproperty.window) == root_)
         result.windows_changed = true;
-      continue;
+      return;
     }
     if (event.type != GenericEvent || event.xgeneric.extension != xi_opcode_)
-      continue;
-    if (!XGetEventData(raw, &event.xcookie)) continue;
+      return;
+    if (!XGetEventData(raw, &event.xcookie)) return;
     const int evtype = event.xcookie.evtype;
     if (evtype == XI_HierarchyChanged) {
       if (refresh_devices()) result.devices_changed = true;
@@ -390,7 +390,7 @@ X11InputPoll X11InputSource::poll() {
       }
     }
     XFreeEventData(raw, &event.xcookie);
-  }
+  });
   return result;
 }
 

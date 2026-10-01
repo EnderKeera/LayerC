@@ -502,10 +502,10 @@ X11SessionRegistry::session_requests() const {
   return requests;
 }
 
-X11Dispatch X11InputService::dispatch() {
+X11Dispatch X11InputService::dispatch(layerc::platform::X11WindowTracker *tracker) {
   X11Dispatch result;
   if (!source_.has_value()) return result;
-  auto poll = source_->poll();
+  auto poll = source_->poll(tracker);
   result.events = poll.events.size();
   result.windows_changed = poll.windows_changed;
   result.devices_changed = poll.devices_changed;
