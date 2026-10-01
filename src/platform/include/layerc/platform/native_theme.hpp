@@ -146,6 +146,9 @@ void track_native_list_hover(HWND list);
 // Flat 1 px border drawn over the classic client edge; 2 px accent bottom
 // edge while focused.
 void install_flat_frame(HWND control);
+// Paints a list view's column headers in the list's own text color, which
+// the dark header theme does not apply on its own.
+void install_list_header_text(HWND list);
 // Dark menu bar (WM_UAHDRAWMENU / WM_UAHDRAWMENUITEM) and the 1 px line
 // Windows draws under it.
 void install_dark_menu_bar(HWND window);

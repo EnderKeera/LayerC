@@ -17,6 +17,7 @@ constexpr UINT_PTR hover_subclass_id = 0x4C43'0001;
 constexpr UINT_PTR list_hover_subclass_id = 0x4C43'0002;
 constexpr UINT_PTR frame_subclass_id = 0x4C43'0003;
 constexpr UINT_PTR menu_bar_subclass_id = 0x4C43'0004;
+constexpr UINT_PTR list_header_subclass_id = 0x4C43'0005;
 
 // Undocumented but stable since Windows Vista; used by win32-darkmode and
 // Notepad++ to paint the menu bar.
@@ -213,6 +214,30 @@ void paint_flat_frame(const HWND window) {
   ReleaseDC(window, dc);
 }
 
+// The DarkMode_ItemsView header theme darkens the header strip but leaves its
+// text black; the header asks its list view (the parent) how to paint, so the
+// list answers with its own text color.
+LRESULT CALLBACK list_header_subclass(const HWND window, const UINT message,
+                                      const WPARAM wparam, const LPARAM lparam,
+                                      const UINT_PTR id, DWORD_PTR) {
+  if (message == WM_NOTIFY) {
+    const auto &header = *reinterpret_cast<const NMHDR *>(lparam);
+    if (header.code == NM_CUSTOMDRAW &&
+        header.hwndFrom == ListView_GetHeader(window)) {
+      const auto &draw = reinterpret_cast<const NMCUSTOMDRAW &>(header);
+      if (draw.dwDrawStage == CDDS_PREPAINT)
+        return CDRF_NOTIFYITEMDRAW;
+      if (draw.dwDrawStage == CDDS_ITEMPREPAINT) {
+        SetTextColor(draw.hdc, ListView_GetTextColor(window));
+        return CDRF_DODEFAULT;
+      }
+    }
+  } else if (message == WM_NCDESTROY) {
+    RemoveWindowSubclass(window, &list_header_subclass, id);
+  }
+  return DefSubclassProc(window, message, wparam, lparam);
+}
+
 LRESULT CALLBACK frame_subclass(const HWND window, const UINT message,
                                 const WPARAM wparam, const LPARAM lparam,
                                 const UINT_PTR id, DWORD_PTR) {
@@ -392,6 +417,7 @@ void style_listview_child(const HWND child) {
   SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
   if (const HWND header = ListView_GetHeader(child); header != nullptr)
     SetWindowTheme(header, L"DarkMode_ItemsView", nullptr);
+  install_list_header_text(child);
   if (const HWND tooltip = ListView_GetToolTips(child); tooltip != nullptr)
     SetWindowTheme(tooltip, L"DarkMode_Explorer", nullptr);
   install_flat_frame(child);
@@ -445,6 +471,16 @@ void install_flat_frame(const HWND control) {
     return;
   SetWindowSubclass(control, &frame_subclass, frame_subclass_id, 0);
   RedrawWindow(control, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
+}
+
+void install_list_header_text(const HWND list) {
+  DWORD_PTR existing{};
+  if (GetWindowSubclass(list, &list_header_subclass, list_header_subclass_id,
+                        &existing) != FALSE)
+    return;
+  SetWindowSubclass(list, &list_header_subclass, list_header_subclass_id, 0);
+  if (const HWND header = ListView_GetHeader(list); header != nullptr)
+    InvalidateRect(header, nullptr, TRUE);
 }
 
 void install_dark_menu_bar(const HWND window) {
