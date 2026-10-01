@@ -11,6 +11,7 @@ memory and historical plans.
 | --- | --- |
 | User behavior, support matrix, setup, programs, test targets, profile format | [`README.md`](README.md) |
 | Linux behavior, CLI, dependencies, packaging, permissions, physical evidence | [`docs/Linux.md`](docs/Linux.md) |
+| Wayland backend architecture, contracts, and invariants (V2.7, in development) | [`docs/Wayland.md`](docs/Wayland.md) |
 | Game Bar architecture and invariants | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
 | Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Build graph, options, versions, exact target registration | [`CMakeLists.txt`](CMakeLists.txt) and current source |
@@ -42,7 +43,12 @@ provide workflow-specific guidance; load them only for matching tasks.
 - Preserve profile compatibility and unsupported bindings. Move profiles between
   Windows and Linux through validated JSON or `.layercprofile` bundles, never by
   copying a platform store.
-- Gamescope and Wayland are unsupported in V2.6; do not imply otherwise.
+- Gamescope and Wayland are unsupported in V2.6; do not imply otherwise. The
+  V2.7 Wayland backend is in development under
+  [`docs/Wayland.md`](docs/Wayland.md); it makes no support claim until it
+  lands. Its only global Wayland input source is passive evdev, opt-in and
+  dependent on the user's own `input` group membership; uinput is test-only.
+  Gamescope stays unsupported.
 
 ## Architecture boundaries
 
