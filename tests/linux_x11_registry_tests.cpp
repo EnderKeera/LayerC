@@ -51,7 +51,7 @@ AutomationProfile automation_profile(const GameProfile &base,
   rule.id = "increment";
   rule.event = event;
   if (event == AutomationEventKind::input_pressed)
-    rule.source_filter = "keyboard:69";
+    rule.source_filter = "keyboard:18";
   rule.actions = {{.kind = AutomationActionKind::increment_variable,
                    .target = "count",
                    .name = {},
@@ -195,7 +195,7 @@ void test_registry_automation_only_and_health() {
              input_demand.consumers(layerc::runtime::Capability::overlay) == 0,
          "automation input rule alone demands passive XI2");
   const auto input_now = MonotonicClock::now();
-  const InputEvent press{{InputDevice::keyboard, 69, 0}, true};
+  const InputEvent press{{InputDevice::keyboard, 18, 0}, true};
   (void)input_registry.sessions().front().feed(press, input_now);
   expect(input_registry.sessions().front()
                  .automation_runtime->snapshot().variables.at("count") ==
@@ -391,7 +391,7 @@ void test_registry_automation_only_and_health() {
   good.rules.push_back(good.rules.front());
   good.rules.back().id = "input";
   good.rules.back().event = AutomationEventKind::input_pressed;
-  good.rules.back().source_filter = "keyboard:69";
+  good.rules.back().source_filter = "keyboard:18";
   AutomationRule broken;
   broken.id = "broken";
   broken.priority = 20;
@@ -462,6 +462,108 @@ void test_registry_automation_only_and_health() {
          "replacing a faulted sidecar removes its stale runtime identity");
 }
 
+void test_registry_fresh_admission_state() {
+  using layerc::test::expect;
+  layerc::test::TempDirectory temp{"layerc-registry-readmission"};
+  layerc::test::ScopedEnvironment config{"XDG_CONFIG_HOME", temp.path() / "config"};
+  layerc::test::ScopedEnvironment data{"XDG_DATA_HOME", temp.path() / "data"};
+  if (!expect(config.applied() && data.applied(), "readmission roots are isolated"))
+    return;
+  const auto roots = layerc::platform::profile_store_roots();
+  if (!expect(layerc::platform::ensure_profile_store_roots(roots),
+              "readmission store is available"))
+    return;
+  const auto base = base_profile("readmission");
+  auto automation = automation_profile(base, AutomationEventKind::input_pressed);
+  auto stopping = automation.automations.front().rules.front();
+  stopping.id = "stopping";
+  stopping.event = AutomationEventKind::session_stopping;
+  stopping.source_filter.clear();
+  stopping.actions.front().value = literal(AutomationValue(std::int64_t{10}));
+  automation.automations.front().rules.push_back(std::move(stopping));
+  const StoredProfile source{roots.config_profiles / "readmission.json", base};
+  if (!expect(layerc::platform::write_profile_bundle(
+                  source.path, base, std::nullopt, automation),
+              "readmission profile and stopping rule are stored"))
+    return;
+  layerc::daemon::X11SessionRegistry registry;
+  registry.configure(std::span{&source, 1});
+  const auto scan = active_scan();
+  registry.refresh(scan);
+  if (!expect(registry.automation_count() == 1, "first runtime is admitted"))
+    return;
+  const InputEvent press{{InputDevice::keyboard, 18, 0}, true};
+  auto count = [&registry] {
+    return registry.sessions().front().automation_runtime->snapshot()
+        .variables.at("count");
+  };
+  (void)registry.sessions().front().feed(press, MonotonicClock::now());
+  registry.sessions().front().checkpoint_automation_now(MonotonicClock::now());
+  registry.refresh({});
+  const auto stopped = layerc::platform::load_automation_state(source.path, automation);
+  expect(registry.session_count() == 0 && registry.pending_checkpoint_count() == 0 &&
+             !stopped.error && stopped.values.at("count") == AutomationValue(std::int64_t{11}),
+         "successful retirement persists both input and session-stopping changes");
+  registry.refresh(scan); // No configure(): its old state snapshot must not win.
+  if (!expect(registry.automation_count() == 1, "unmatched profile is readmitted"))
+    return;
+  expect(count() == AutomationValue(std::int64_t{11}),
+         "fresh admission reloads latest durable values without configure");
+
+  // An older failed final write gates admission, even across another unmatched
+  // interval; completing it while unmatched must update the next runtime.
+  (void)registry.sessions().front().feed(press, MonotonicClock::now());
+  const auto state_path = layerc::platform::automation_state_path(source.path);
+  std::error_code error;
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "readmission state can be faulted")) return;
+  std::filesystem::create_directories(state_path, error);
+  if (!expect(!error, "readmission checkpoint fault is installed")) return;
+  registry.refresh({});
+  expect(registry.pending_checkpoint_count() == 1,
+         "failed retirement retains one pending checkpoint");
+  registry.refresh(scan);
+  expect(registry.session_count() == 1 && registry.automation_count() == 0 &&
+             registry.sessions().front().deferred_automation,
+         "pending predecessor prevents a fresh stale runtime");
+  registry.refresh({});
+  std::filesystem::remove(state_path, error);
+  if (!expect(!error, "readmission checkpoint fault is removed")) return;
+  const auto retry_now = MonotonicClock::now() + std::chrono::milliseconds{1'100};
+  expect(registry.poll_automation(retry_now) && registry.session_count() == 0 &&
+             registry.pending_checkpoint_count() == 0,
+         "injected retry deadline completes the checkpoint while unmatched");
+  registry.refresh(scan);
+  if (!expect(registry.automation_count() == 1, "runtime starts after unmatched retry"))
+    return;
+  expect(count() == AutomationValue(std::int64_t{22}),
+         "admission after unmatched retry loads the successful stopping checkpoint");
+
+  // Explicit reloads still apply external state to retained clean runtimes,
+  // but never overwrite a retained runtime's uncheckpointed changes.
+  auto *retained = registry.sessions().front().automation_runtime.get();
+  if (!expect(layerc::platform::write_automation_state(
+                  source.path, automation, {{"count", AutomationValue(std::int64_t{31})}}),
+              "external state for explicit reload is stored"))
+    return;
+  registry.configure(std::span{&source, 1});
+  registry.refresh(scan);
+  expect(registry.sessions().front().automation_runtime.get() == retained &&
+             count() == AutomationValue(std::int64_t{31}),
+         "explicit configuration reload retains and updates a clean runtime");
+  (void)registry.sessions().front().feed(press, MonotonicClock::now());
+  if (!expect(layerc::platform::write_automation_state(
+                  source.path, automation, {{"count", AutomationValue(std::int64_t{44})}}),
+              "competing external state is isolated"))
+    return;
+  registry.configure(std::span{&source, 1});
+  registry.refresh(scan);
+  expect(registry.sessions().front().automation_runtime.get() == retained &&
+             count() == AutomationValue(std::int64_t{32}),
+         "explicit reload preserves a dirty retained runtime's values");
+  registry.stop_sessions(MonotonicClock::now());
+}
+
 void test_status_diagnostic_bound() {
   using layerc::test::expect;
   std::vector<std::string> faults(1024, std::string(1024, 'x'));
@@ -495,4 +597,5 @@ void test_status_diagnostic_bound() {
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(test_registry_automation_only_and_health),
+                 LAYERC_TEST_CASE(test_registry_fresh_admission_state),
                  LAYERC_TEST_CASE(test_status_diagnostic_bound))

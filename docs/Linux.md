@@ -36,18 +36,22 @@ registers its socket on the event loop:
 | Adapter | Status | Notes |
 | --- | --- | --- |
 | Connection + extension probes | done | `layerctl status --json` publishes XI2/Shape/RandR/Composite/Damage/XFixes versions, EWMH availability, service state, capability availability, stable reason tokens, and bounded current session fault diagnostics |
-| Window tracking | done | EWMH `_NET_CLIENT_LIST` with a bounded root-child fallback; `GameMatch` resolution is name → path → class → title, case-folded |
+| Window tracking | done | EWMH `_NET_CLIENT_LIST` with a bounded root-child fallback; client title/class/PID/state and structure changes, plus root-child creation/map/unmap/destruction, invalidate discovery through the shared input/event dispatcher without periodic rescans; `GameMatch` resolution is name → path → class → title, case-folded |
 | Input | done | XI2 raw key/button events plus hierarchy tracking for hotplug |
 | Overlay | done | One click-through window per panel; Shape is required, otherwise the overlay stays hidden |
 | Capture | done | Composite named pixmaps + Damage coalescing, with a 100 ms bounded direct-window fallback; exposed by `layercal` |
 
 Input is **passive only**: events are read, never synthesized, and XTest is
-linked into the test binary alone — never into `layerd`. Keys are normalized
-from XKB keysyms (group 0, level 0 — the physical key, not the shifted
-character) into the profile's Win32 virtual-key space, so `XK_e` becomes
-`0x45`, matching a profile authored on Windows. Pointer buttons follow the
-Windows daemon's numbering: X wheel buttons 4/5 map to profile codes 6/7 and
-X side buttons 6/7 map to 4/5.
+linked into the test binary alone — never into `layerd`. The current server's
+XKB physical key names and aliases are translated into the existing Windows
+scan-code tokens, independent of layout symbols or a fixed keycode offset:
+physical E (`AD03`) is `0x12`, left Alt is `0x38`, and right Control is
+`0xE01D`. Left/right modifiers and extended navigation keys remain distinct;
+unknown physical names leave their bindings inactive without rewriting profiles.
+XKB map/name changes refresh the translation. Pointer buttons follow the
+Windows daemon's numbering: conventional X middle/right buttons 2/3 map to
+profile 3/2, wheel buttons 4/5 to 6/7, and back/forward buttons 8/9 to 4/5.
+Horizontal wheel buttons 6/7 are unsupported, not aliases for side buttons.
 
 Gamepads are the gamepad-class devices XI2 exposes (buttons plus at least two
 axes, no scroll class, no pointer-like name); when none is visible the daemon
@@ -275,7 +279,13 @@ Unparseable transaction journals are quarantined as `<name>.corrupt-<n>` for
 operator inspection rather than deleted.
 Import/export/reload commands work offline; after an import a running daemon
 is notified when its socket exists. One daemon per socket — a live daemon
-refuses a second bind.
+refuses a second bind. Both socket endpoints authenticate the peer's effective
+UID; clients reject a reachable foreign-UID listener before sending a request.
+A control command or reload notification succeeds only after accepting a valid,
+successful `LayerC.Control` v1 response, including with `--json`; accepted JSON
+retains the original response bytes. Daemon replies use bounded, expiring queues
+advanced by writable readiness on the shared event loop, so a slow reader does
+not block other clients, passive input, or deadlines.
 
 Foreground loss or XI2 detachment clears transient held-key state while matched
 sessions retain cooldowns and automation. When several windows match, a session

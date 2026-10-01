@@ -45,13 +45,16 @@ void EventLoop::set_deadline(
   (void)::timerfd_settime(timer_fd_, 0, &spec, nullptr);
 }
 
-void EventLoop::register_fd(const int fd) noexcept {
-  if (std::ranges::find(extra_fds_, fd) == extra_fds_.end())
-    extra_fds_.push_back(fd);
+void EventLoop::register_fd(const int fd, const short events) noexcept {
+  const auto found = std::ranges::find(extra_fds_, fd, &::pollfd::fd);
+  if (found == extra_fds_.end())
+    extra_fds_.push_back({.fd = fd, .events = events, .revents = 0});
+  else
+    found->events = events;
 }
 
 void EventLoop::unregister_fd(const int fd) noexcept {
-  std::erase(extra_fds_, fd);
+  std::erase_if(extra_fds_, [fd](const auto &watch) { return watch.fd == fd; });
 }
 
 EventLoop::Wake
@@ -61,8 +64,8 @@ EventLoop::poll_once(const std::optional<int> timeout_override_ms) noexcept {
   poll_fds_.clear();
   poll_fds_.push_back({.fd = signal_fd_, .events = POLLIN, .revents = 0});
   poll_fds_.push_back({.fd = timer_fd_, .events = POLLIN, .revents = 0});
-  for (const int fd : extra_fds_)
-    poll_fds_.push_back({.fd = fd, .events = POLLIN, .revents = 0});
+  for (const auto &watch : extra_fds_)
+    poll_fds_.push_back(watch);
 
   Wake wake;
   const int ready =
@@ -70,7 +73,7 @@ EventLoop::poll_once(const std::optional<int> timeout_override_ms) noexcept {
              timeout_override_ms.value_or(-1));
   if (ready <= 0) return wake; // timeout or EINTR
   for (const auto &pfd : poll_fds_)
-    if ((pfd.revents & (POLLIN | POLLHUP | POLLERR)) != 0)
+    if ((pfd.revents & (pfd.events | POLLHUP | POLLERR | POLLNVAL)) != 0)
       ready_fds_.push_back(pfd.fd);
 
   if (std::ranges::find(ready_fds_, signal_fd_) != ready_fds_.end()) {

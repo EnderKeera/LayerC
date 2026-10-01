@@ -381,27 +381,26 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
                       : same_automation(session, bundle.automation_profile));
         });
     if (retained == previous.end()) {
-      auto state = bundle.automation_state;
-      auto state_error = bundle.automation_state_diagnostic;
       const auto stale = std::ranges::find(previous, source.path,
                                            &InputSession::source_path);
       if (stale != previous.end()) {
         (void)retire_session(*stale, layerc::core::MonotonicClock::now());
         previous.erase(stale);
-        if (bundle.automation_profile.has_value() &&
-            !pending_checkpoints_.contains(source.path)) {
-          const auto saved = layerc::platform::load_automation_state(
-              source.path, *bundle.automation_profile);
-          state = saved.values;
-          state_error = saved.error.has_value()
-                            ? std::optional<std::string>{
-                                  source.path.string() + ": " +
-                                  saved.error->message}
-                            : std::nullopt;
-        }
       }
       const bool deferred = bundle.automation_profile.has_value() &&
                             pending_checkpoints_.contains(source.path);
+      AutomationPersistentValues state;
+      std::optional<std::string> state_error;
+      if (bundle.automation_profile.has_value() && !deferred) {
+        // Configuration snapshots apply only to explicit retained-runtime
+        // reloads. Every fresh admission follows the latest durable checkpoint,
+        // including a predecessor that retired during an unmatched interval.
+        auto saved = layerc::platform::load_automation_state(
+            source.path, *bundle.automation_profile);
+        state = std::move(saved.values);
+        if (saved.error)
+          state_error = source.path.string() + ": " + saved.error->message;
+      }
       next.emplace_back(source, window->window, profile.game.global,
                         bundle.visual_profile,
                         deferred ? std::nullopt : bundle.automation_profile,
@@ -503,10 +502,10 @@ X11SessionRegistry::session_requests() const {
   return requests;
 }
 
-X11Dispatch X11InputService::dispatch() {
+X11Dispatch X11InputService::dispatch(layerc::platform::X11WindowTracker *tracker) {
   X11Dispatch result;
   if (!source_.has_value()) return result;
-  auto poll = source_->poll();
+  auto poll = source_->poll(tracker);
   result.events = poll.events.size();
   result.windows_changed = poll.windows_changed;
   result.devices_changed = poll.devices_changed;

@@ -49,6 +49,17 @@ using namespace x11_property;
                                          : std::string{path.substr(slash + 1)};
 }
 
+constexpr long client_events = PropertyChangeMask | StructureNotifyMask;
+constexpr long root_events = client_events | SubstructureNotifyMask;
+
+void restore_selection(Display *display, ::Window window, long previous,
+                       long owned) noexcept {
+  XWindowAttributes attributes{};
+  if (XGetWindowAttributes(display, window, &attributes) != 0)
+    XSelectInput(display, window,
+                 (attributes.your_event_mask & ~owned) | (previous & owned));
+}
+
 struct Atoms {
   Atom net_wm_name{};
   Atom net_wm_pid{};
@@ -98,7 +109,56 @@ X11WindowTracker::X11WindowTracker(const X11Display &display) noexcept
   auto *raw = reinterpret_cast<Display *>(display.raw());
   if (raw == nullptr) return;
   X11ErrorTrap trap{raw};
-  XSelectInput(raw, static_cast<::Window>(display.root()), PropertyChangeMask);
+  XWindowAttributes attributes{};
+  if (XGetWindowAttributes(raw, static_cast<::Window>(display.root()), &attributes)) {
+    root_previous_mask_ = attributes.your_event_mask;
+    XSelectInput(raw, static_cast<::Window>(display.root()),
+                 root_previous_mask_ | root_events);
+    root_selected_ = trap.ok();
+  }
+  const char *names[] = {"_NET_WM_NAME", "WM_NAME", "WM_CLASS", "_NET_WM_PID",
+                         "_NET_WM_STATE"};
+  for (std::size_t index = 0; index < identity_atoms_.size(); ++index)
+    identity_atoms_[index] = XInternAtom(raw, names[index], False);
+}
+
+X11WindowTracker::~X11WindowTracker() {
+  if (display_ == nullptr || !display_->valid()) return;
+  auto *raw = display_->raw();
+  X11ErrorTrap trap{raw};
+  for (const auto &watch : watched_)
+    restore_selection(raw, static_cast<::Window>(watch.window),
+                       watch.previous_mask, client_events);
+  if (root_selected_)
+    restore_selection(raw, static_cast<::Window>(display_->root()),
+                       root_previous_mask_, root_events);
+  (void)trap.ok();
+}
+
+void X11WindowTracker::update_watches(
+    const std::vector<std::uint64_t> &windows) const {
+  auto *raw = display_->raw();
+  X11ErrorTrap trap{raw};
+  for (auto watch = watched_.begin(); watch != watched_.end();) {
+    if (std::find(windows.begin(), windows.end(), watch->window) != windows.end()) {
+      ++watch;
+      continue;
+    }
+    restore_selection(raw, static_cast<::Window>(watch->window),
+                       watch->previous_mask, client_events);
+    watch = watched_.erase(watch);
+  }
+  for (const auto window : windows) {
+    if (std::any_of(watched_.begin(), watched_.end(),
+                    [&](const Watch &watch) { return watch.window == window; }))
+      continue;
+    XWindowAttributes attributes{};
+    if (XGetWindowAttributes(raw, static_cast<::Window>(window), &attributes) == 0)
+      continue;
+    XSelectInput(raw, static_cast<::Window>(window),
+                 attributes.your_event_mask | client_events);
+    watched_.push_back({window, attributes.your_event_mask});
+  }
   (void)trap.ok();
 }
 
@@ -138,6 +198,13 @@ X11WindowScan X11WindowTracker::scan(const std::uint32_t limit) const {
     XFree(children);
   }
 
+  // Keep a bounded set of listed (including unmapped) clients watched, plus
+  // every visible client admitted below. Root structure events discover new
+  // fallback children even before they have a title or a matching profile.
+  std::vector<std::uint64_t> watched;
+  for (std::size_t index = 0; index < candidates.size() && index < limit; ++index)
+    watched.push_back(static_cast<std::uint64_t>(candidates[index]));
+  X11ErrorTrap scan_trap{display};
   for (const ::Window window : candidates) {
     if (scan.windows.size() >= limit) {
       scan.truncated = static_cast<std::uint32_t>(candidates.size()) -
@@ -197,8 +264,11 @@ X11WindowScan X11WindowTracker::scan(const std::uint32_t limit) const {
         snapshot.hidden = true;
     }
 
+    if (std::find(watched.begin(), watched.end(), snapshot.window) == watched.end())
+      watched.push_back(snapshot.window);
     scan.windows.push_back(std::move(snapshot));
   }
+  update_watches(watched);
 
   if (atoms.net_active_window != None) {
     const auto active =
@@ -209,22 +279,43 @@ X11WindowScan X11WindowTracker::scan(const std::uint32_t limit) const {
         snapshot.active = snapshot.window == *scan.active;
     }
   }
+  if (!scan_trap.ok()) scan.warning = "x11: a window changed during the scan";
   return scan;
+}
+
+bool X11WindowTracker::observe(const _XEvent &event) const noexcept {
+  if (display_ == nullptr) return false;
+  const auto root = static_cast<::Window>(display_->root());
+  const auto tracked = [&](::Window window) {
+    return std::any_of(watched_.begin(), watched_.end(),
+                       [&](const Watch &watch) { return watch.window == window; });
+  };
+  switch (event.type) {
+  case PropertyNotify:
+    if (event.xproperty.window == root) return true;
+    return tracked(event.xproperty.window) &&
+           std::find(identity_atoms_.begin(), identity_atoms_.end(),
+                     event.xproperty.atom) != identity_atoms_.end();
+  case CreateNotify: return event.xcreatewindow.parent == root;
+  case MapNotify: return event.xmap.event == root || tracked(event.xmap.window);
+  case UnmapNotify: return event.xunmap.event == root || tracked(event.xunmap.window);
+  case DestroyNotify:
+    return event.xdestroywindow.event == root || tracked(event.xdestroywindow.window);
+  case ConfigureNotify:
+    return event.xconfigure.event == root || event.xconfigure.window == root ||
+           tracked(event.xconfigure.window);
+  case ReparentNotify:
+    return event.xreparent.event == root || tracked(event.xreparent.window);
+  default: return false;
+  }
 }
 
 bool X11WindowTracker::poll_changes() noexcept {
   if (display_ == nullptr || !display_->valid()) return false;
-  auto *raw = reinterpret_cast<Display *>(display_->raw());
-  const auto root = static_cast<::Window>(display_->root());
   bool changed = false;
-  X11ErrorTrap trap{raw};
-  while (XPending(raw) > 0) {
-    XEvent event{};
-    XNextEvent(raw, &event);
-    if (!trap.ok()) break;
-    if (event.type == PropertyNotify && event.xproperty.window == root)
-      changed = true;
-  }
+  X11Display::dispatch_events(display_->raw(), [&](XEvent &event) {
+    changed = observe(event) || changed;
+  });
   return changed;
 }
 
