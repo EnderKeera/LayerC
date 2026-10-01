@@ -2,8 +2,10 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
+#include "editor_prompt.hpp"
 #include "layerc/platform/native_theme.hpp"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -36,7 +38,16 @@ struct ProfileCheckboxMetrics {
 
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
+// Options > Text size, stored as a DWORD percent under HKCU\Software\LayerC.
+inline constexpr std::array text_scale_choices{100, 115, 130};
+inline constexpr std::wstring_view text_scale_setting = L"EditorTextScale";
+[[nodiscard]] int stored_text_scale();
+
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);
+// True when `point` (list client coordinates) lies on the enablement
+// checkbox of the profile row whose bounds are `row`.
+[[nodiscard]] bool profile_checkbox_hit(const RECT &row, POINT point,
+                                        UINT dpi);
 [[nodiscard]] bool start_daemon();
 [[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
 [[nodiscard]] layerc::core::GameProfile make_new_profile();

@@ -221,7 +221,7 @@ std::string update(const launcher::InstallLayout &layout) {
 
 int launch(const Options &options, const win32::RegistryKeys &keys,
            const win32::InstallPaths &paths) {
-  const launcher::InstallLayout layout{paths.root};
+  const launcher::InstallLayout layout{paths.root, {}};
   std::string outcome;
   const bool running = daemon_running();
   if (running) {

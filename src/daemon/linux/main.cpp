@@ -47,9 +47,10 @@ unsupported_capabilities() {
   for (std::size_t index = 0; index < layerc::runtime::capability_count;
        ++index)
     capabilities.push_back(
-        {static_cast<layerc::runtime::Capability>(index),
-         layerc::daemon::CapabilityAvailability::unavailable,
-         {"platform_unsupported"}});
+         {static_cast<layerc::runtime::Capability>(index),
+          layerc::daemon::CapabilityAvailability::unavailable,
+          {"platform_unsupported"},
+          {}});
   return capabilities;
 }
 
@@ -96,7 +97,7 @@ public:
 
 private:
   void step() {
-    if (profiles_dirty_ || sessions_dirty_)
+    while (profiles_dirty_ || sessions_dirty_)
       reload();
 
     // Queue-aware prepare phase: synchronous Xlib queries during
@@ -112,7 +113,7 @@ private:
     if (wake.timer) {
       const auto now = MonotonicClock::now();
       control_.expire_clients(loop_, now);
-      adapters_.render(now);
+      sessions_dirty_ = adapters_.render(now) || sessions_dirty_;
       arm_deadline(now);
     }
     // Check phase: socket readiness OR locally queued Xlib events both
@@ -138,7 +139,7 @@ private:
     profiles_dirty_ = sessions_dirty_ = false;
 
     diagnostics_.clear();
-    adapters_.refresh(profiles_, kernel_, status_, diagnostics_);
+    adapters_.refresh(profiles_, reread, kernel_, status_, diagnostics_);
     // Focus and window changes rematch often; log them only when the summary
     // or its diagnostics changed. A store re-read always logs.
     const std::pair summary{adapters_.session_count(), profiles_.size()};
@@ -151,11 +152,12 @@ private:
       logged_diagnostics_ = diagnostics_;
     }
     const auto now = MonotonicClock::now();
-    adapters_.render(now);
+    sessions_dirty_ = adapters_.render(now) || sessions_dirty_;
     arm_deadline(now);
   }
 
   void service_control() {
+    adapters_.refresh_status(kernel_, status_);
     status_.sessions = adapters_.session_diagnostics();
     const auto outcome =
         control_.service(loop_, loop_.ready_fds(), kernel_, status_);
@@ -177,7 +179,8 @@ private:
     for (const auto &cooldown : dispatch.triggered)
       std::fprintf(stderr, "layerd: triggered %s\n", cooldown.c_str());
     if (dispatch.events > 0)
-      adapters_.render(MonotonicClock::now());
+      sessions_dirty_ = adapters_.render(MonotonicClock::now()) ||
+                        sessions_dirty_;
   }
 
   void arm_deadline(const TimePoint now) {

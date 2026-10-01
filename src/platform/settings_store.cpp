@@ -12,8 +12,9 @@ namespace {
 constexpr wchar_t settings_registry_key[] = L"Software\\LayerC";
 // Registry value name per BoolSetting, in enum order.
 constexpr const wchar_t *bool_setting_values[] = {
-    L"ExcludeFromCapture", L"VisualRecognitionEnabled",
-    L"VisualCaptureNoticeSeen"};
+    L"ExcludeFromCapture",      L"VisualRecognitionEnabled",
+    L"VisualCaptureNoticeSeen", L"ExcludeEditorFromCapture",
+    L"EditorAdvancedView"};
 
 class UniqueHKey {
 public:
@@ -114,6 +115,15 @@ read_layerc_registry_dword(const std::wstring_view value_name,
   std::uint32_t value{};
   std::memcpy(&value, bytes.value->data(), sizeof(value));
   return {.value = value, .error = 0};
+}
+
+SettingWriteResult
+write_layerc_registry_dword(const std::wstring_view value_name,
+                            const std::uint32_t value,
+                            const std::wstring_view subkey) {
+  const DWORD stored = value;
+  return set_layerc_value(subkey, value_name, REG_DWORD, &stored,
+                          sizeof(stored));
 }
 
 SettingReadResult<std::vector<std::byte>>

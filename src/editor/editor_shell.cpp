@@ -1,0 +1,646 @@
+#include "dialog_layout.hpp"
+#include "editor_resource.h"
+#include "editor_window.hpp"
+
+#include "layerc/core/version.hpp"
+#include "layerc/platform/settings_store.hpp"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <cwchar>
+#include <filesystem>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
+#include <commctrl.h>
+#include <shobjidl.h>
+#include <uxtheme.h>
+#include <windows.h>
+#include <windowsx.h>
+
+namespace layerc::editor {
+namespace {
+
+constexpr std::wstring_view placement_setting = L"EditorWindowPlacement";
+constexpr UINT_PTR numeric_subclass_id = 0x4C45'0001;
+constexpr wchar_t editor_title[] = L"LayerC Editor";
+
+// Step and floor per numeric field; Shift multiplies the step by ten.
+struct NumericField {
+  int id;
+  double step;
+  double minimum;
+  double maximum;
+  int decimals;
+};
+
+constexpr std::array numeric_fields{
+    NumericField{IDC_COOLDOWN_DURATION, 0.1, 0.1, 86400.0, 1},
+    NumericField{IDC_BAR_WIDTH, 1.0, 1.0, 4096.0, 0},
+    NumericField{IDC_BAR_HEIGHT, 1.0, 1.0, 4096.0, 0},
+    NumericField{IDC_COOLDOWN_CHARGES, 1.0, 1.0, 99.0, 0},
+};
+
+const NumericField *numeric_field(const int id) {
+  const auto found = std::ranges::find(numeric_fields, id, &NumericField::id);
+  return found == numeric_fields.end() ? nullptr : &*found;
+}
+
+void step_numeric(const HWND edit, const NumericField &field, const int steps) {
+  const auto text = window_text(edit);
+  wchar_t *end = nullptr;
+  double value = std::wcstod(text.c_str(), &end);
+  if (end == text.c_str() || !std::isfinite(value))
+    value = field.minimum;
+  const double scale = std::pow(10.0, field.decimals);
+  value = std::round((value + field.step * steps) * scale) / scale;
+  value = std::clamp(value, field.minimum, field.maximum);
+  wchar_t formatted[32]{};
+  swprintf_s(formatted, L"%.*f", field.decimals, value);
+  // SetWindowText raises EN_CHANGE, which runs the field's normal binding.
+  SetWindowTextW(edit, formatted);
+  SendMessageW(edit, EM_SETSEL, 0, -1);
+}
+
+LRESULT CALLBACK numeric_edit_subclass(const HWND edit, const UINT message,
+                                       const WPARAM wparam,
+                                       const LPARAM lparam,
+                                       const UINT_PTR id, DWORD_PTR) {
+  const auto *field = numeric_field(GetDlgCtrlID(edit));
+  const int multiplier = (GetKeyState(VK_SHIFT) & 0x8000) != 0 ? 10 : 1;
+  switch (message) {
+  case WM_GETDLGCODE:
+    if (lparam != 0) {
+      const auto *msg = reinterpret_cast<const MSG *>(lparam);
+      if (msg->message == WM_KEYDOWN &&
+          (msg->wParam == VK_UP || msg->wParam == VK_DOWN))
+        return DefSubclassProc(edit, message, wparam, lparam) | DLGC_WANTARROWS;
+    }
+    break;
+  case WM_KEYDOWN:
+    if (field != nullptr && (wparam == VK_UP || wparam == VK_DOWN)) {
+      step_numeric(edit, *field, (wparam == VK_UP ? 1 : -1) * multiplier);
+      return 0;
+    }
+    break;
+  case WM_MOUSEWHEEL:
+    if (field != nullptr && GetFocus() == edit) {
+      const int notches = GET_WHEEL_DELTA_WPARAM(wparam) / WHEEL_DELTA;
+      if (notches != 0)
+        step_numeric(edit, *field, notches * multiplier);
+      return 0;
+    }
+    break;
+  case WM_NCDESTROY:
+    RemoveWindowSubclass(edit, &numeric_edit_subclass, id);
+    break;
+  default:
+    break;
+  }
+  return DefSubclassProc(edit, message, wparam, lparam);
+}
+
+void add_tool(const HWND tooltip, const HWND owner, const HWND control,
+              const wchar_t *text) {
+  if (tooltip == nullptr || control == nullptr)
+    return;
+  TTTOOLINFOW tool{};
+  tool.cbSize = sizeof(tool);
+  tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+  tool.hwnd = owner;
+  tool.uId = reinterpret_cast<UINT_PTR>(control);
+  tool.lpszText = const_cast<LPWSTR>(text);
+  SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&tool));
+}
+
+bool placement_visible(const WINDOWPLACEMENT &placement) {
+  return MonitorFromRect(&placement.rcNormalPosition,
+                         MONITOR_DEFAULTTONULL) != nullptr;
+}
+
+} // namespace
+
+void EditorWindow::install_shell_helpers() {
+  const HWND window = shell_.window;
+  set_text(GetDlgItem(window, IDC_PROFILE_DELETE), L"\u2212");
+  set_text(GetDlgItem(window, IDC_PROFILE_MORE), L"\u2026");
+  SendMessageW(shell_.application_path, EM_SETCUEBANNER, TRUE,
+               reinterpret_cast<LPARAM>(
+                   L"Type app.exe, Browse, or choose a running app"));
+  for (const auto &field : numeric_fields) {
+    if (const HWND edit = GetDlgItem(window, field.id); edit != nullptr)
+      SetWindowSubclass(edit, &numeric_edit_subclass, numeric_subclass_id, 0);
+  }
+  shell_.tooltip = CreateWindowExW(
+      WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+      WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT,
+      CW_USEDEFAULT, CW_USEDEFAULT, window, nullptr, shell_.instance, nullptr);
+  if (shell_.tooltip == nullptr)
+    return;
+  SetWindowTheme(shell_.tooltip, L"DarkMode_Explorer", nullptr);
+  SendMessageW(shell_.tooltip, TTM_SETMAXTIPWIDTH, 0,
+               dpi_scaled(360, window_base_dpi(window)));
+  const auto tool = [&](const int id, const wchar_t *text) {
+    add_tool(shell_.tooltip, window, GetDlgItem(window, id), text);
+  };
+  tool(IDC_PROFILE_NEW, L"New profile (Ctrl+N)");
+  tool(IDC_PROFILE_DELETE, L"Delete profile");
+  tool(IDC_PROFILE_MORE, L"More profile actions");
+  tool(IDC_ADVANCED,
+       L"Show profile ID, exact path matching, HID bindings and cooldown "
+       L"policies (Ctrl+Shift+A)");
+  tool(IDC_APPLICATION_PATH, LPSTR_TEXTCALLBACKW);
+  tool(IDC_BROWSE_APPLICATION, L"Choose the game's .exe file");
+  tool(IDC_CHOOSE_APPLICATION, L"Pick from applications running now");
+  tool(IDC_COOLDOWN_DURATION, L"Up/Down or the mouse wheel step 0.1 s "
+                              L"(Shift: 1 s)");
+  tool(IDC_CAPTURE_BINDING, L"Press the key or chord that starts this "
+                            L"cooldown");
+  tool(IDC_CAPTURE_HID, L"Bind a control on a generic HID device");
+  tool(IDC_POSITION_ON_WINDOW,
+       L"Place the bars directly on the running game window");
+  tool(IDC_PREVIEW, L"Drag the selected bar. Arrow keys nudge it 1 px "
+                    L"(Shift: 10 px).");
+  tool(IDC_BAR_WIDTH, L"Up/Down or the mouse wheel step 1 px");
+  tool(IDC_BAR_HEIGHT, L"Up/Down or the mouse wheel step 1 px");
+  // The binding shows key names; its tooltip carries the scan codes.
+  tool(IDC_COOLDOWN_BINDING, LPSTR_TEXTCALLBACKW);
+}
+
+std::optional<LRESULT> EditorWindow::handle_shell_notify(const NMHDR &header) {
+  if (header.code != TTN_GETDISPINFOW || shell_.tooltip == nullptr)
+    return std::nullopt;
+  auto &info = const_cast<NMTTDISPINFOW &>(
+      reinterpret_cast<const NMTTDISPINFOW &>(header));
+  const HWND control = reinterpret_cast<HWND>(header.idFrom);
+  shell_.tooltip_text.clear();
+  if (control == shell_.application_path) {
+    const auto &game = document_.profile().game;
+    shell_.tooltip_text =
+        !game.executable_path.empty()
+            ? L"Matches exactly " + to_wide(game.executable_path)
+        : !game.executable_name.empty()
+            ? L"Matches any " + to_wide(game.executable_name) +
+                  L" regardless of folder"
+            : L"No application chosen yet";
+  } else if (control == GetDlgItem(shell_.window, IDC_COOLDOWN_BINDING)) {
+    shell_.tooltip_text = binding_codes_text();
+  }
+  info.lpszText = shell_.tooltip_text.data();
+  return 0;
+}
+
+void EditorWindow::browse_application() {
+  IFileOpenDialog *dialog = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
+                              CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
+    return;
+  constexpr COMDLG_FILTERSPEC filters[] = {{L"Applications", L"*.exe"}};
+  dialog->SetFileTypes(1, filters);
+  dialog->SetTitle(L"Choose the game application");
+  FILEOPENDIALOGOPTIONS options{};
+  if (SUCCEEDED(dialog->GetOptions(&options)))
+    dialog->SetOptions(options | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM |
+                       FOS_NOCHANGEDIR);
+  std::wstring chosen;
+  if (SUCCEEDED(dialog->Show(shell_.window))) {
+    IShellItem *item = nullptr;
+    if (SUCCEEDED(dialog->GetResult(&item))) {
+      PWSTR path = nullptr;
+      if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
+        chosen = path;
+        CoTaskMemFree(path);
+      }
+      item->Release();
+    }
+  }
+  dialog->Release();
+  if (chosen.empty())
+    return;
+  auto &game = document_.profile().game;
+  game.executable_name =
+      wide_to_utf8(std::filesystem::path(chosen).filename().wstring());
+  if (owner_draw_checkbox_checked(
+          GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH)))
+    game.executable_path = wide_to_utf8(chosen);
+  else
+    game.executable_path.clear();
+  {
+    auto sync = shell_.sync_scope();
+    set_text(shell_.application_path,
+             to_wide(game.executable_path.empty() ? game.executable_name
+                                                  : game.executable_path));
+  }
+  record_profile_change(ChangeKind::immediate);
+  set_status(L"Application set to " + to_wide(game.executable_name) + L".");
+}
+
+// Typed text is an executable name ("game.exe") or a full path; a path only
+// pins the exact location when "Match exact path" is on.
+void EditorWindow::apply_application_text() {
+  if (shell_.syncing)
+    return;
+  std::wstring text = window_text(shell_.application_path);
+  const auto first = text.find_first_not_of(L" \t\"");
+  const auto last = text.find_last_not_of(L" \t\"");
+  text = first == std::wstring::npos ? std::wstring{}
+                                     : text.substr(first, last - first + 1);
+  auto &game = document_.profile().game;
+  const bool path_like = text.find_first_of(L"\\/") != std::wstring::npos;
+  const std::filesystem::path typed(text);
+  game.executable_name = wide_to_utf8(path_like ? typed.filename().wstring() : text);
+  const bool exact = owner_draw_checkbox_checked(
+      GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH));
+  game.executable_path =
+      exact && path_like && typed.is_absolute() ? wide_to_utf8(text) : std::string{};
+  record_profile_change(ChangeKind::text);
+}
+
+void EditorWindow::refresh_title() {
+  if (shell_.window == nullptr)
+    return;
+  const bool draft = document_.path().empty();
+  const bool modified =
+      document_.dirty() &&
+      !document_.history().is_baseline(document_.profile(), document_.visual(),
+                                       document_.automation());
+  std::wstring name = to_wide(document_.profile().name);
+  if (name.empty())
+    name = L"Untitled profile";
+  const std::wstring title = (modified ? L"* " : L"") + name +
+                             (draft ? L" (unsaved)" : L"") + L" - " +
+                             editor_title;
+  if (title != shell_.title_cache) {
+    shell_.title_cache = title;
+    SetWindowTextW(shell_.window, title.c_str());
+    set_text(GetDlgItem(shell_.window, IDC_PROFILE_TITLE),
+             (modified ? L"\u2022 " : L"") + name);
+  }
+}
+
+void EditorWindow::sync_draft_row() {
+  auto sync = shell_.sync_scope();
+  const bool has_draft_row =
+      !shell_.profiles.empty() && shell_.profiles.front().path.empty();
+  const bool draft = document_.path().empty();
+  if (has_draft_row && !draft) {
+    shell_.profiles.erase(shell_.profiles.begin());
+    ListView_DeleteItem(shell_.profile_list, 0);
+  } else if (!has_draft_row && draft) {
+    ProfileEntry entry;
+    entry.name = L"New profile";
+    entry.executable = L"unsaved";
+    entry.label = L"New profile (unsaved)";
+    entry.enabled = true;
+    shell_.profiles.insert(shell_.profiles.begin(), std::move(entry));
+    LVITEMW item{};
+    item.mask = LVIF_TEXT;
+    item.iItem = 0;
+    item.pszText = shell_.profiles.front().label.data();
+    ListView_InsertItem(shell_.profile_list, &item);
+  }
+  if (draft) {
+    ListView_SetItemState(shell_.profile_list, -1, 0,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(shell_.profile_list, 0, LVIS_SELECTED | LVIS_FOCUSED,
+                          LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(shell_.profile_list, 0, FALSE);
+  }
+  refresh_title();
+}
+
+void EditorWindow::focus_field(const int id) {
+  const HWND field = GetDlgItem(shell_.window, id);
+  if (field == nullptr || IsWindowEnabled(field) == FALSE)
+    return;
+  SendMessageW(shell_.window, WM_NEXTDLGCTL, reinterpret_cast<WPARAM>(field),
+               TRUE);
+  SendMessageW(field, EM_SETSEL, 0, -1);
+}
+
+void EditorWindow::show_context_menu(const HWND source, POINT screen) {
+  const bool profiles = source == shell_.profile_list;
+  if (!profiles && source != cooldown_editor_.list)
+    return;
+  const bool keyboard = screen.x == -1 && screen.y == -1;
+  if (profiles) {
+    int row = -1;
+    if (keyboard) {
+      row = ListView_GetNextItem(shell_.profile_list, -1, LVNI_SELECTED);
+    } else {
+      LVHITTESTINFO hit{};
+      hit.pt = screen;
+      ScreenToClient(shell_.profile_list, &hit.pt);
+      row = ListView_HitTest(shell_.profile_list, &hit);
+      // Right-click selects (and opens) the row first, like Explorer.
+      if (row >= 0)
+        ListView_SetItemState(shell_.profile_list, row,
+                              LVIS_SELECTED | LVIS_FOCUSED,
+                              LVIS_SELECTED | LVIS_FOCUSED);
+      row = ListView_GetNextItem(shell_.profile_list, -1, LVNI_SELECTED);
+    }
+    if (row < 0)
+      return;
+    if (keyboard) {
+      RECT bounds{};
+      ListView_GetItemRect(shell_.profile_list, row, &bounds, LVIR_BOUNDS);
+      screen = {bounds.left + 24, bounds.bottom};
+      ClientToScreen(shell_.profile_list, &screen);
+    }
+  } else {
+    if (!keyboard) {
+      POINT client = screen;
+      ScreenToClient(cooldown_editor_.list, &client);
+      const LRESULT hit = SendMessageW(cooldown_editor_.list, LB_ITEMFROMPOINT,
+                                       0, MAKELPARAM(client.x, client.y));
+      if (HIWORD(hit) == 0 &&
+          SendMessageW(cooldown_editor_.list, LB_GETCURSEL, 0, 0) !=
+              LOWORD(hit)) {
+        SendMessageW(cooldown_editor_.list, LB_SETCURSEL, LOWORD(hit), 0);
+        SendMessageW(shell_.window, WM_COMMAND,
+                     MAKEWPARAM(IDC_COOLDOWN_LIST, LBN_SELCHANGE),
+                     reinterpret_cast<LPARAM>(cooldown_editor_.list));
+      }
+    } else {
+      RECT bounds{};
+      const LRESULT row =
+          SendMessageW(cooldown_editor_.list, LB_GETCURSEL, 0, 0);
+      SendMessageW(cooldown_editor_.list, LB_GETITEMRECT,
+                   static_cast<WPARAM>(std::max<LRESULT>(0, row)),
+                   reinterpret_cast<LPARAM>(&bounds));
+      screen = {bounds.left + 24, bounds.bottom};
+      ClientToScreen(cooldown_editor_.list, &screen);
+    }
+    if (selected_cooldown() == nullptr)
+      return;
+  }
+  const HMENU menus =
+      LoadMenuW(shell_.instance, MAKEINTRESOURCEW(IDR_CONTEXT_MENUS));
+  if (menus == nullptr)
+    return;
+  const HMENU menu = GetSubMenu(menus, profiles ? 0 : 1);
+  const bool draft = document_.path().empty();
+  if (profiles) {
+    ModifyMenuW(menu, IDM_PROFILE_TOGGLE, MF_BYCOMMAND | MF_STRING,
+                IDM_PROFILE_TOGGLE,
+                document_.profile().enabled ? L"&Turn Off" : L"&Turn On");
+    EnableMenuItem(menu, IDM_PROFILE_TOGGLE,
+                   MF_BYCOMMAND | (draft ? MF_GRAYED : MF_ENABLED));
+    EnableMenuItem(menu, IDM_FILE_EXPORT_PACK,
+                   MF_BYCOMMAND | (draft ? MF_GRAYED : MF_ENABLED));
+  } else {
+    EnableMenuItem(menu, IDM_COOLDOWN_REMOVE,
+                   MF_BYCOMMAND | (document_.profile().cooldowns.size() > 1
+                                       ? MF_ENABLED
+                                       : MF_GRAYED));
+  }
+  const UINT command = static_cast<UINT>(TrackPopupMenuEx(
+      menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN, screen.x,
+      screen.y, shell_.window, nullptr));
+  DestroyMenu(menus);
+  if (command != 0)
+    SendMessageW(shell_.window, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+}
+
+bool EditorWindow::handle_list_key(const MSG &message) {
+  if (message.message != WM_KEYDOWN)
+    return false;
+  const bool plain = (GetKeyState(VK_CONTROL) & 0x8000) == 0 &&
+                     (GetKeyState(VK_MENU) & 0x8000) == 0;
+  if (!plain)
+    return false;
+  if (message.hwnd == shell_.profile_list) {
+    if (message.wParam == VK_DELETE) {
+      delete_profile();
+      return true;
+    }
+    if (message.wParam == VK_F2) {
+      focus_field(IDC_PROFILE_NAME);
+      return true;
+    }
+    if (message.wParam == VK_APPS ||
+        (message.wParam == VK_F10 && (GetKeyState(VK_SHIFT) & 0x8000) != 0)) {
+      show_context_menu(shell_.profile_list, {-1, -1});
+      return true;
+    }
+  } else if (message.hwnd == cooldown_editor_.list) {
+    if (message.wParam == VK_DELETE) {
+      remove_cooldown();
+      return true;
+    }
+    if (message.wParam == VK_F2) {
+      focus_field(IDC_COOLDOWN_NAME);
+      return true;
+    }
+  }
+  return false;
+}
+
+void EditorWindow::duplicate_profile() {
+  sync_profile_from_controls();
+  if (!confirm_unsaved_changes())
+    return;
+  auto copy = document_.profile();
+  copy.name += " copy";
+  copy.id = layerc::core::slugify(copy.name, "profile");
+  end_edit_on_window();
+  document_.profile() = std::move(copy);
+  // Visual triggers and automation reference this profile's own assets and
+  // rules; the copy starts without them.
+  document_.clear_sidecars();
+  document_.clear_legacy_schemas();
+  document_.path().clear();
+  document_.set_dirty(true);
+  reset_history();
+  refresh_profile_controls();
+  refresh_visual_controls();
+  sync_draft_row();
+  set_status(L"Profile duplicated without its visual trigger and automation "
+             L"— Save to create it.");
+}
+
+void EditorWindow::duplicate_cooldown() {
+  const auto *source = selected_cooldown();
+  if (source == nullptr)
+    return;
+  const auto original = *source;
+  add_cooldown();
+  auto &added = document_.profile().cooldowns.back();
+  added.name = original.name + " copy";
+  added.duration = original.duration;
+  added.max_charges = original.max_charges;
+  added.retrigger = original.retrigger;
+  added.recovery = original.recovery;
+  refresh_cooldown_list(static_cast<int>(document_.profile().cooldowns.size()) - 1);
+  record_profile_change(ChangeKind::immediate);
+  set_status(L"Cooldown duplicated with an unused key; Capture key can "
+             L"change it.");
+}
+
+void EditorWindow::set_advanced_visible(const bool visible, const bool persist) {
+  shell_.advanced_visible = visible;
+  set_text(GetDlgItem(shell_.window, IDC_ADVANCED),
+           visible ? L"Hide advanced" : L"Show advanced");
+  if (persist)
+    (void)layerc::platform::write_bool_setting(
+        layerc::platform::BoolSetting::editor_advanced_view, visible);
+  layout();
+}
+
+void EditorWindow::set_text_scale(const int percent) {
+  if (!layerc::platform::write_layerc_registry_dword(
+          text_scale_setting, static_cast<std::uint32_t>(percent)))
+    set_status(L"Could not save the text size.");
+  layerc::platform::set_native_text_scale(percent);
+  reload_fonts();
+  set_status(L"Text size " + std::to_wstring(percent) +
+             L" %. Dialogs use it the next time they open.");
+}
+
+void EditorWindow::update_view_menu(const HMENU popup) const {
+  CheckMenuItem(popup, IDM_VIEW_ADVANCED,
+                MF_BYCOMMAND |
+                    (shell_.advanced_visible ? MF_CHECKED : MF_UNCHECKED));
+  const int scale = layerc::platform::native_text_scale();
+  CheckMenuRadioItem(popup, IDM_VIEW_TEXT_100, IDM_VIEW_TEXT_130,
+                     scale >= 130   ? IDM_VIEW_TEXT_130
+                     : scale >= 115 ? IDM_VIEW_TEXT_115
+                                    : IDM_VIEW_TEXT_100,
+                     MF_BYCOMMAND);
+}
+
+void EditorWindow::save_window_placement() const {
+  WINDOWPLACEMENT placement{};
+  placement.length = sizeof(placement);
+  if (shell_.window == nullptr ||
+      GetWindowPlacement(shell_.window, &placement) == FALSE)
+    return;
+  const auto *bytes = reinterpret_cast<const std::byte *>(&placement);
+  (void)layerc::platform::write_layerc_registry_binary(
+      placement_setting, std::span(bytes, sizeof(placement)));
+}
+
+bool EditorWindow::restore_window_placement(const int show_command) {
+  const auto stored = layerc::platform::read_layerc_registry_binary(
+      placement_setting, sizeof(WINDOWPLACEMENT));
+  if (!stored.value || stored.value->size() != sizeof(WINDOWPLACEMENT))
+    return false;
+  WINDOWPLACEMENT placement{};
+  std::memcpy(&placement, stored.value->data(), sizeof(placement));
+  if (placement.length != sizeof(placement) || !placement_visible(placement))
+    return false;
+  placement.flags = 0;
+  placement.showCmd =
+      placement.showCmd == SW_SHOWMAXIMIZED ? SW_SHOWMAXIMIZED
+      : show_command == SW_SHOWMINIMIZED || show_command == SW_MINIMIZE ||
+              show_command == SW_SHOWMINNOACTIVE
+          ? static_cast<UINT>(show_command)
+          : SW_SHOWNORMAL;
+  return SetWindowPlacement(shell_.window, &placement) != FALSE;
+}
+
+void EditorWindow::refresh_connection_status() {
+  const wchar_t *text =
+      !live_edit_.channel().connected()      ? L"LayerD: not running"
+      : live_edit_.package_authenticated()   ? L"LayerD: connected"
+                                             : L"LayerD: connecting";
+  if (shell_.connection_cache != text) {
+    shell_.connection_cache = text;
+    set_text(GetDlgItem(shell_.window, IDC_CONNECTION_STATUS), text);
+  }
+}
+
+void EditorWindow::paint_status_strip(const HDC dc) const {
+  if (shell_.status_strip_top <= 0)
+    return;
+  RECT client{};
+  GetClientRect(shell_.window, &client);
+  const auto strip_colors = colors(layerc::platform::EditorControlRole::status);
+  RECT strip{client.left, shell_.status_strip_top, client.right, client.bottom};
+  fill_solid_rect(dc, strip, strip_colors.fill);
+  RECT divider{client.left, shell_.status_strip_top, client.right,
+               shell_.status_strip_top + 1};
+  fill_solid_rect(dc, divider, strip_colors.divider);
+}
+
+void EditorWindow::show_about() {
+  OSVERSIONINFOEXW os{};
+  os.dwOSVersionInfoSize = sizeof(os);
+  using RtlGetVersion = LONG(WINAPI *)(OSVERSIONINFOEXW *);
+  if (const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll"); ntdll != nullptr) {
+    const FARPROC procedure = GetProcAddress(ntdll, "RtlGetVersion");
+    RtlGetVersion get_version{};
+    static_assert(sizeof(get_version) == sizeof(procedure));
+    std::memcpy(&get_version, &procedure, sizeof(get_version));
+    if (get_version != nullptr)
+      (void)get_version(&os);
+  }
+#ifdef NDEBUG
+  constexpr std::wstring_view build = L"release";
+#else
+  constexpr std::wstring_view build = L"debug";
+#endif
+  const std::wstring version =
+      to_wide(std::string(layerc::core::product_version));
+  const std::wstring details =
+      L"LayerC Editor " + version + L" (" + std::wstring(build) +
+      L" build)\nWindows " + std::to_wstring(os.dwMajorVersion) + L"." +
+      std::to_wstring(os.dwMinorVersion) + L" build " +
+      std::to_wstring(os.dwBuildNumber) + L"\nText size " +
+      std::to_wstring(layerc::platform::native_text_percent(
+          GetDpiForWindow(shell_.window))) +
+      L" %, " + std::to_wstring(GetDpiForWindow(shell_.window)) + L" DPI\n" +
+      shell_.connection_cache + L"\n" + shell_.visual_runtime_status;
+  const std::wstring text =
+      L"LayerC Editor " + version +
+      L"\n\nCreates and edits cooldown overlay profiles. LayerC reads input "
+      L"passively: it never blocks, changes or sends input.\n\n"
+      L"Source and releases: github.com/EnderKeera/LayerC";
+  static constexpr PromptButton buttons[] = {{L"Copy details", 1},
+                                             {L"Close", IDCANCEL}};
+  if (themed_prompt(shell_.window, text, L"About LayerC Editor", buttons, 1) !=
+      1)
+    return;
+  if (OpenClipboard(shell_.window) == FALSE)
+    return;
+  EmptyClipboard();
+  const std::size_t bytes = (details.size() + 1) * sizeof(wchar_t);
+  if (const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+      memory != nullptr) {
+    if (void *target = GlobalLock(memory); target != nullptr) {
+      std::memcpy(target, details.c_str(), bytes);
+      GlobalUnlock(memory);
+      if (SetClipboardData(CF_UNICODETEXT, memory) == nullptr)
+        GlobalFree(memory);
+      else
+        set_status(L"Version and diagnostics details copied.");
+    } else {
+      GlobalFree(memory);
+    }
+  }
+  CloseClipboard();
+}
+
+void EditorWindow::show_keyboard_shortcuts() {
+  themed_message_box(shell_.window,
+              L"Ctrl+N\tNew profile\n"
+              L"Ctrl+S\tSave\n"
+              L"Ctrl+Shift+S\tSave as\n"
+              L"Ctrl+Z / Ctrl+Y\tUndo / Redo\n"
+              L"Ctrl+D\tDuplicate the selected cooldown\n"
+              L"Ctrl+Shift+A\tShow or hide advanced settings\n"
+              L"Ctrl+,\tOptions\n"
+              L"F2\tRename the selected profile or cooldown\n"
+              L"Del\tDelete the selected profile or cooldown\n"
+              L"Shift+F10\tContext menu\n"
+              L"Up / Down\tStep the focused number (Shift: x10)\n"
+              L"Arrow keys\tNudge the selected bar in the preview\n"
+              L"Alt+letter\tJump to the underlined field",
+              L"Keyboard shortcuts", MB_OK | MB_ICONINFORMATION);
+}
+
+} // namespace layerc::editor

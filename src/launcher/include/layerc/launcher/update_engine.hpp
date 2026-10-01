@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,23 +13,35 @@
 
 namespace layerc::launcher {
 
+enum class ActivationCheckpoint { before_publish, after_publish };
+
 // Per-user install tree owned by the launcher:
 //   <root>/app/<build-id>/   one complete build, including .layerc-manifest.json
-//   <root>/current           one line naming the active build id
-//   <root>/previous          one line naming the rollback build id, if kept
+//   <root>/activation.json   one versioned record naming active and rollback builds
+//   <root>/.activation.lock   per-install OS lock held during reads and writes
+//   <root>/current, previous legacy pointers, read only until the first publish
 //   <root>/staging/          scratch for an update in progress
 // A build becomes active only after every payload file, its installed manifest,
 // and its directory publication pass the platform durability barriers, then
-// `current` is durably replaced. Unconfirmed publication is not pruned. During
-// same-ID repair, <build-id>.old preserves the old directory until activation;
-// readers recover it if the replacement directory has not reached app/.
+// the complete activation record is durably replaced. Unconfirmed publication
+// is not pruned. During same-ID repair, app/<build-id>.old preserves the old
+// directory until activation; activation reads recover it if the replacement
+// directory has not reached app/. Interrupted staging is discarded on the next
+// update attempt.
 struct InstallLayout {
   std::filesystem::path root;
+  // Optional interruption seam for deterministic publication tests. Production
+  // layouts leave this empty; false stops after the selected checkpoint.
+  std::function<bool(ActivationCheckpoint)> activation_checkpoint;
 
   [[nodiscard]] std::filesystem::path app_directory() const { return root / "app"; }
   [[nodiscard]] std::filesystem::path staging_directory() const {
     return root / "staging";
   }
+  [[nodiscard]] std::filesystem::path activation_file() const {
+    return root / "activation.json";
+  }
+  // Legacy pointer paths are retained for one-way migration.
   [[nodiscard]] std::filesystem::path current_file() const { return root / "current"; }
   [[nodiscard]] std::filesystem::path previous_file() const {
     return root / "previous";
@@ -109,27 +122,30 @@ struct UpdateReport {
   std::uint64_t downloaded_bytes{};
 };
 
-// Reads the active build from `current`; nullopt when nothing is installed.
-// A present but unreadable or inconsistent install is an error so the caller
-// can report it instead of silently reinstalling over it.
+// Reads installed metadata from activation.json (or legacy pointers before
+// migration); nullopt when nothing is installed. This does not verify payload
+// health. A present but unreadable record or manifest is an error. Recovery
+// reads take the same install lock as updates.
 [[nodiscard]] std::variant<std::optional<InstalledBuild>, UpdateError>
 read_installed_build(const InstallLayout &layout);
 
 // Brings the install to the newest published build of `channel`. Never
 // changes the active build unless every file of the new build is present,
-// verified and durably flushed with its directory. A damaged install is treated
-// as no install, so the launcher repairs it with a full download instead of
-// refusing to start. A lower sequence than the installed one is refused as a
-// rollback attack; the same sequence is up to date without downloading.
+// verified and durably flushed with its directory. Damaged installed metadata is treated as no install; damaged
+// payload files are repaired through the verified staging flow. A lower
+// sequence than the installed one is refused as a rollback attack. The same
+// sequence is up to date only after every installed file passes size and hash
+// verification; otherwise the build is repaired.
 [[nodiscard]] std::variant<UpdateReport, UpdateError>
 apply_update(const InstallLayout &layout, std::string_view channel,
              ReleaseSource &source, SignatureVerifier &verifier);
 
-// Makes the kept previous build active again. Fails without changes when no
-// previous build is recorded or its directory is missing.
+// Makes the kept previous build active again after verifying all its files.
+// Fails without changes when no healthy previous build is available.
 [[nodiscard]] std::optional<UpdateError> rollback(const InstallLayout &layout);
 
-// Absolute path of a file inside the active build (e.g. "layerd.exe").
+// Absolute path of a file inside the active build (e.g. "layerd.exe"). A busy
+// install lock also returns nullopt because recovery may be in progress.
 [[nodiscard]] std::optional<std::filesystem::path>
 active_file(const InstallLayout &layout, std::string_view install_path);
 

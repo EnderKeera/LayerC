@@ -394,13 +394,14 @@ int run_linux_x11_overlay_tests() {
   layerc::test::TempDirectory temp{"layerc-x11-overlay"};
   const StoredProfile profiles[] = {
       {.path = temp.path() / "profile.json", .profile = *profile}};
-  input_sessions.refresh(profiles, scan);
+  input_sessions.configure(profiles);
+  input_sessions.refresh(scan);
   passed &= expect(input_sessions.session_count() == 1, "the fixture window matches");
 
   auto background_scan = scan;
   background_scan.active.reset();
   for (auto &snapshot : background_scan.windows) snapshot.active = false;
-  input_sessions.refresh(profiles, background_scan);
+  input_sessions.refresh(background_scan);
   passed &= expect(input_sessions.session_count() == 1 &&
                        !input_sessions.sessions().front().active,
                    "a background profile keeps an inactive session");
@@ -408,7 +409,7 @@ int run_linux_x11_overlay_tests() {
   passed &= expect(overlay.resources().objects == 0,
                    "an inactive session creates no overlay target");
 
-  input_sessions.refresh(profiles, scan);
+  input_sessions.refresh(scan);
   overlay.refresh(input_sessions.sessions(), scan, monitors);
   const auto demand = layerc::runtime::calculate_capability_demand(
       input_sessions.session_requests(), false);
