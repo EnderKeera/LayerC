@@ -2,13 +2,142 @@
 #include "dialog_layout.hpp"
 
 #include "layerc/platform/native_theme.hpp"
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <commctrl.h>
 #include <uxtheme.h>
 #include <windows.h>
 
 namespace layerc::editor {
+namespace {
+
+// Average character width and height of `font`, measured the way the dialog
+// manager derives dialog base units.
+std::optional<SIZE> font_base_units(const HWND window, const HFONT font) {
+  const HDC dc = GetDC(window);
+  if (dc == nullptr)
+    return std::nullopt;
+  const HGDIOBJ previous = SelectObject(dc, font);
+  static constexpr wchar_t sample[] =
+      L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+  TEXTMETRICW metrics{};
+  SIZE extent{};
+  std::optional<SIZE> units;
+  if (GetTextMetricsW(dc, &metrics) != FALSE &&
+      GetTextExtentPoint32W(dc, sample, 52, &extent) != FALSE)
+    units = SIZE{(extent.cx / 26 + 1) / 2, metrics.tmHeight};
+  SelectObject(dc, previous);
+  ReleaseDC(window, dc);
+  return units;
+}
+
+// Fixed dialog templates are laid out in dialog units of their 9 pt template
+// font, but render with the larger body font (14 px, times the text size).
+// Scale the template once so its text fits; resizable dialogs lay out in
+// code through window_base_dpi instead. Per-monitor DPI changes later rescale
+// the dialog proportionally, so this runs only at creation.
+void fit_dialog_to_font(const HWND dialog) {
+  const auto style = GetWindowLongPtrW(dialog, GWL_STYLE);
+  if ((style & WS_THICKFRAME) != 0 || (style & WS_CHILD) != 0)
+    return;
+  RECT template_units{0, 0, 4, 8};
+  if (MapDialogRect(dialog, &template_units) == FALSE ||
+      template_units.right <= 0 || template_units.bottom <= 0)
+    return;
+  const HFONT font =
+      layerc::platform::create_native_dialog_font(GetDpiForWindow(dialog));
+  if (font == nullptr)
+    return;
+  const auto units = font_base_units(dialog, font);
+  DeleteObject(font);
+  if (!units)
+    return;
+  const int scale = std::clamp(
+      std::max(MulDiv(units->cx, 1000, template_units.right),
+               MulDiv(units->cy, 1000, template_units.bottom)),
+      1000, 2500);
+  if (scale <= 1020)
+    return;
+  const auto scaled = [scale](const LONG value) {
+    return MulDiv(static_cast<int>(value), scale, 1000);
+  };
+  // Buttons and checkboxes keep the one 30 px control height used by the
+  // code-laid-out surfaces instead of growing with the template scale.
+  const int control_height = dpi_scaled(30, window_base_dpi(dialog));
+  for (HWND child = GetWindow(dialog, GW_CHILD); child != nullptr;
+       child = GetWindow(child, GW_HWNDNEXT)) {
+    RECT bounds{};
+    GetWindowRect(child, &bounds);
+    const auto klass = layerc::platform::window_class(child);
+    const auto button_type =
+        GetWindowLongPtrW(child, GWL_STYLE) & BS_TYPEMASK;
+    if (klass == L"Button" && button_type != BS_GROUPBOX) {
+      MapWindowPoints(HWND_DESKTOP, dialog, reinterpret_cast<POINT *>(&bounds),
+                      2);
+      const int slot_top = scaled(bounds.top);
+      const int slot_height =
+          std::max(1, scaled(bounds.bottom - bounds.top));
+      const int height = std::min(slot_height, control_height);
+      MoveWindow(child, scaled(bounds.left),
+                 slot_top + (slot_height - height) / 2,
+                 std::max(1, scaled(bounds.right - bounds.left)), height,
+                 FALSE);
+      continue;
+    }
+    if (klass == L"ComboBox") {
+      RECT dropped{};
+      if (SendMessageW(child, CB_GETDROPPEDCONTROLRECT, 0,
+                       reinterpret_cast<LPARAM>(&dropped)) != FALSE)
+        bounds.bottom = std::max(bounds.bottom, dropped.bottom);
+    }
+    MapWindowPoints(HWND_DESKTOP, dialog, reinterpret_cast<POINT *>(&bounds), 2);
+    MoveWindow(child, scaled(bounds.left), scaled(bounds.top),
+               std::max(1, scaled(bounds.right - bounds.left)),
+               std::max(1, scaled(bounds.bottom - bounds.top)), FALSE);
+  }
+  RECT client{};
+  GetClientRect(dialog, &client);
+  RECT frame{0, 0, scaled(client.right), scaled(client.bottom)};
+  AdjustWindowRectExForDpi(&frame, static_cast<DWORD>(style),
+                           GetMenu(dialog) != nullptr,
+                           static_cast<DWORD>(
+                               GetWindowLongPtrW(dialog, GWL_EXSTYLE)),
+                           GetDpiForWindow(dialog));
+  SetWindowPos(dialog, nullptr, 0, 0, frame.right - frame.left,
+               frame.bottom - frame.top,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// Owned dialogs open centered on their owner, inside its monitor's work area.
+void center_over_owner(const HWND dialog) {
+  const HWND owner = GetWindow(dialog, GW_OWNER);
+  if (owner == nullptr || IsIconic(owner) != FALSE)
+    return;
+  RECT owner_bounds{};
+  RECT bounds{};
+  GetWindowRect(owner, &owner_bounds);
+  GetWindowRect(dialog, &bounds);
+  const int width = bounds.right - bounds.left;
+  const int height = bounds.bottom - bounds.top;
+  int left = owner_bounds.left + (owner_bounds.right - owner_bounds.left - width) / 2;
+  int top = owner_bounds.top + (owner_bounds.bottom - owner_bounds.top - height) / 2;
+  MONITORINFO monitor{};
+  monitor.cbSize = sizeof(monitor);
+  if (GetMonitorInfoW(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST),
+                      &monitor) != FALSE) {
+    const RECT &work = monitor.rcWork;
+    left = std::max(static_cast<int>(work.left),
+                    std::min(left, static_cast<int>(work.right) - width));
+    top = std::max(static_cast<int>(work.top),
+                   std::min(top, static_cast<int>(work.bottom) - height));
+  }
+  SetWindowPos(dialog, nullptr, left, top, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+} // namespace
 
 void style_native_dialog_children(const HWND dialog, const HFONT font) {
   layerc::platform::style_native_dialog_children(dialog, font, true);
@@ -16,8 +145,14 @@ void style_native_dialog_children(const HWND dialog, const HFONT font) {
 
 void apply_dialog_chrome(const HWND window, const bool capture_exclusion) {
   layerc::platform::set_dark_title_bar(window);
+  // Windows 11: caption and border join the client surface (ignored on 10).
+  const auto frame = layerc::platform::native_chrome_palette().menu;
+  layerc::platform::set_window_frame_colors(window, frame.fill, frame.divider,
+                                            frame.text);
   // Best-effort: capture exclusion is a no-op where the DWM API is missing.
   (void)layerc::platform::apply_capture_exclusion(window, capture_exclusion);
+  fit_dialog_to_font(window);
+  center_over_owner(window);
 }
 
 void EditorWindow::style_dialog_children(const HWND dialog) const {
@@ -32,7 +167,10 @@ void EditorWindow::style_list_view(const HWND list,
   if (hide_header)
     style |= LVS_NOCOLUMNHEADER;
   SetWindowLongPtrW(list, GWL_STYLE, style);
-  const auto list_colors = colors(layerc::platform::EditorControlRole::list);
+  const auto list_colors =
+      colors(list == shell_.profile_list
+                 ? layerc::platform::EditorControlRole::sidebar
+                 : layerc::platform::EditorControlRole::list);
   ListView_SetBkColor(list, list_colors.fill);
   ListView_SetTextBkColor(list, list_colors.fill);
   ListView_SetTextColor(list, list_colors.text);
@@ -89,12 +227,28 @@ void EditorWindow::rebuild_brushes() {
   }
 }
 
+void EditorWindow::publish_chrome_palette() const {
+  layerc::platform::set_native_chrome_palette(
+      {.frame = colors(layerc::platform::EditorControlRole::edit),
+       .menu = colors(layerc::platform::EditorControlRole::toolbar),
+       .button = colors(layerc::platform::EditorControlRole::button)});
+}
+
 void EditorWindow::refresh_theme() {
+  publish_chrome_palette();
   rebuild_brushes();
   style_list_view(shell_.profile_list, true);
   rebuild_profile_check_hit_images();
   style_list_view(task_picker_.list, false);
+  const auto frame = colors(layerc::platform::EditorControlRole::toolbar);
+  for (const HWND window : {shell_.window, task_picker_.window}) {
+    if (window != nullptr && IsWindow(window))
+      layerc::platform::set_window_frame_colors(window, frame.fill,
+                                                frame.divider, frame.text);
+  }
   if (shell_.window != nullptr) {
+    RedrawWindow(shell_.window, nullptr, nullptr,
+                 RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
     DrawMenuBar(shell_.window);
     InvalidateRect(shell_.window, nullptr, TRUE);
     EnumChildWindows(

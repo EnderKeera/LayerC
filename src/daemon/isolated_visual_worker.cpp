@@ -335,6 +335,8 @@ void IsolatedProtocolClient::run(const HANDLE pipe,
                                  std::string &error) {
   std::uint64_t applied_revision = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t packet_sequence{};
+  // A replacement helper restarts its counters: validate it as a new epoch.
+  snapshot_validator_.begin_connection();
 
   while (error.empty() && !stopping.load(std::memory_order_acquire)) {
     if (!exchange_configuration(pipe, applied_revision, last_progress_ms,
@@ -443,6 +445,7 @@ VisualCaptureHostStatus IsolatedVisualWorker::status() const {
     status.last_error = last_error_;
   }
   status.helper_process_id = helper_.process_id();
+  status.capture_health = client_.snapshot().result.health();
   return status;
 }
 

@@ -105,6 +105,16 @@ inline constexpr std::uint8_t capture_backend_max =
 inline constexpr std::uint8_t capture_availability_max =
     static_cast<std::uint8_t>(CaptureAvailability::outside_output);
 
+// Frame-free, authoritative capture health shared by hosts and diagnostics.
+// Host/service activity is independent of backend availability.
+struct CaptureHealth {
+  CaptureAvailability availability{CaptureAvailability::inactive};
+  CaptureBackendKind backend{CaptureBackendKind::none};
+  std::string diagnostic;
+
+  bool operator==(const CaptureHealth &) const = default;
+};
+
 struct NormalizedRegion {
   double x{};
   double y{};

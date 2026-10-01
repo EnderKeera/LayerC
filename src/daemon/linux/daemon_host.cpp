@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -43,12 +44,35 @@ struct AvailabilityGate {
   bool platform_first;
 };
 
+// Status is carried in a 512 KiB control frame. Bound fault detail separately
+// from the stable reason token so a large set of faulty profiles stays visible
+// without making the whole status response unsendable.
+constexpr std::size_t max_status_diagnostics = 16;
+constexpr std::size_t max_status_diagnostic_bytes = 512;
+
+std::string status_detail(const std::string_view detail) {
+  if (detail.size() <= max_status_diagnostic_bytes) return std::string(detail);
+  std::size_t length = max_status_diagnostic_bytes - 3;
+  while (length > 0 &&
+         (static_cast<unsigned char>(detail[length]) & 0xC0U) == 0x80U)
+    --length;
+  return std::string(detail.substr(0, length)) + "...";
+}
+
 void resolve_availability(LinuxStatusSnapshot &linux,
                           const layerc::runtime::CapabilityDemand &demand,
                           const AvailabilityGate &gate) {
   const auto status = std::ranges::find(linux.capabilities, gate.capability,
                                         &CapabilityStatus::capability);
   if (status == linux.capabilities.end()) return;
+  status->diagnostics.clear();
+  for (const auto &detail : gate.session_errors) {
+    if (status->diagnostics.size() == max_status_diagnostics) {
+      status->diagnostics.emplace_back("additional diagnostics omitted");
+      break;
+    }
+    status->diagnostics.push_back(status_detail(detail));
+  }
   const auto set = [&](const CapabilityAvailability availability,
                        const std::string_view reason) {
     status->availability = availability;

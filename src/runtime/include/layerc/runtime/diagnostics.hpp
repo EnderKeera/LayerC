@@ -2,6 +2,7 @@
 
 #include "layerc/core/json_reader.hpp"
 #include "layerc/core/live_edit.hpp"
+#include "layerc/core/visual.hpp"
 #include "layerc/runtime/runtime_services.hpp"
 
 namespace layerc::runtime {
@@ -48,6 +49,13 @@ struct HelperDiagnostics {
   bool operator==(const HelperDiagnostics &) const = default;
 };
 
+struct CaptureDiagnostics {
+  std::uint64_t window{};
+  core::VisualRuntime runtime{core::VisualRuntime::inline_process};
+  core::CaptureHealth health;
+  bool operator==(const CaptureDiagnostics &) const = default;
+};
+
 // The contract belongs beside RuntimeServiceStats; core remains independent
 // of the service host and native process/window APIs.
 struct RuntimeDiagnostics {
@@ -61,6 +69,7 @@ struct RuntimeDiagnostics {
   RuntimeResourceStats aggregate_resources;
   std::vector<SessionDiagnostics> sessions;
   std::vector<HelperDiagnostics> helpers;
+  std::vector<CaptureDiagnostics> captures;
   bool operator==(const RuntimeDiagnostics &) const = default;
 };
 
@@ -99,6 +108,9 @@ struct CapabilityStatus {
   Capability capability{};
   CapabilityAvailability availability{CapabilityAvailability::unavailable};
   std::vector<std::string> reasons;
+  // Current session faults in human-readable form; stable reason tokens stay
+  // in reasons for clients that classify availability.
+  std::vector<std::string> diagnostics;
 };
 struct LinuxStatusSnapshot {
   X11StatusSnapshot x11;

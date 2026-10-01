@@ -1,0 +1,4 @@
+// Linked only by MinGW (see layerc_win32_exe): MSVC merges
+// common_controls.manifest into its own generated manifest instead.
+// 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID, 24 = RT_MANIFEST.
+1 24 "common_controls_mingw.manifest"

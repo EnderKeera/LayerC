@@ -1,5 +1,6 @@
 #include "companion_session_selection.hpp"
 #include "daemon_app.hpp"
+#include "input_demand.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/live_channel.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -222,63 +223,21 @@ void seed_binding_token(Session &session,
         {.token = token, .virtual_key = virtual_key, .pressed = pressed});
 }
 
-void mark_automation_input_usage(Session &session) {
-  using layerc::core::InputDevice;
-  using layerc::core::source_filter_names_device;
-  if (!session.modules.automation.profile.has_value())
-    return;
-  for (const auto &automation : session.modules.automation.profile->automations) {
-    if (!automation.enabled)
-      continue;
-    for (const auto &rule : automation.rules) {
-      // Press/release rules see every Raw Input device, so one that can
-      // match a mouse source keeps the mouse registered.
-      if (rule.event == layerc::core::AutomationEventKind::input_pressed ||
-          rule.event == layerc::core::AutomationEventKind::input_released) {
-        if (rule.source_filter.empty() ||
-            source_filter_names_device(rule.source_filter, InputDevice::mouse))
-          session.uses_raw_mouse = true;
-        continue;
-      }
-      if (rule.event !=
-          layerc::core::AutomationEventKind::input_value_changed)
-        continue;
-      if (rule.source_filter.empty() ||
-          source_filter_names_device(rule.source_filter,
-                                     InputDevice::controller))
-        session.uses_controller = true;
-      if (source_filter_names_device(rule.source_filter,
-                                     InputDevice::generic_hid) &&
-          !session.profile.hid_bindings.empty())
-        session.uses_hid = true;
-    }
-  }
-}
-
 } // namespace
 
 void Session::rebuild_input_configuration() {
-  uses_controller = false;
-  uses_raw_input = false;
-  uses_raw_mouse = false;
-  uses_hid = false;
   hid_states.assign(profile.hid_bindings.size(), {});
   global_keyboard.clear();
-  for (const auto &binding : profile.bindings) {
-    for (const auto &token : binding.chord.tokens) {
-      uses_controller = uses_controller ||
-                        token.device == layerc::core::InputDevice::controller;
-      uses_raw_input = uses_raw_input ||
-                       token.device == layerc::core::InputDevice::keyboard ||
-                       token.device == layerc::core::InputDevice::mouse;
-      uses_raw_mouse = uses_raw_mouse ||
-                       token.device == layerc::core::InputDevice::mouse;
-      uses_hid =
-          uses_hid || token.device == layerc::core::InputDevice::generic_hid;
+  for (const auto &binding : profile.bindings)
+    for (const auto &token : binding.chord.tokens)
       seed_binding_token(*this, token);
-    }
-  }
-  mark_automation_input_usage(*this);
+  const auto demand = input_device_demand(
+      profile, modules.automation.profile ? &*modules.automation.profile
+                                          : nullptr);
+  uses_raw_keyboard = demand.keyboard;
+  uses_raw_mouse = demand.mouse;
+  uses_controller = demand.controller;
+  uses_hid = demand.hid;
 }
 
 void Session::apply_profile(const layerc::core::GameProfile &updated,

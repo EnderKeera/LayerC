@@ -2,6 +2,7 @@
 
 #include "overlay_window.hpp"
 
+#include "layerc/core/automation.hpp"
 #include "layerc/core/types.hpp"
 
 #include <optional>
@@ -32,9 +33,13 @@ public:
                bool capture_exclusion,
                const OverlayEditMode *edit_mode = nullptr);
   void update_panel(const layerc::core::Panel &panel);
-  void apply_session_override(const layerc::core::Panel &panel,
-                              std::optional<bool> visible,
-                              std::optional<std::wstring> text);
+  // Resolves every base panel with the current automation overrides. Called
+  // on each render, so recreated windows, base-panel edits, and removed
+  // overrides are always reconciled; unchanged panels do no native work.
+  void apply_overrides(
+      const layerc::core::GameProfile &profile,
+      std::span<const layerc::core::OverlayPropertyOverride> overrides);
+  [[nodiscard]] const OverlayWindow *find(std::string_view panel_id) const;
   void set_capture_exclusion(bool enabled);
   void hide() noexcept;
   void release() noexcept;

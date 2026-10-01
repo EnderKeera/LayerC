@@ -63,6 +63,9 @@ LRESULT CALLBACK EditorWindow::preview_subclass(HWND window, UINT message, WPARA
                                                 LPARAM lparam, UINT_PTR subclass_id,
                                                 DWORD_PTR reference) {
   auto *editor = reinterpret_cast<EditorWindow *>(reference);
+  // Arrow keys nudge the selected bar; Tab still leaves the preview.
+  if (message == WM_GETDLGCODE)
+    return DefSubclassProc(window, message, wparam, lparam) | DLGC_WANTARROWS;
   if (editor != nullptr && editor->handle_preview_message(window, message, wparam, lparam)) return 0;
   if (message == WM_NCDESTROY) RemoveWindowSubclass(window, &EditorWindow::preview_subclass, subclass_id);
   return DefSubclassProc(window, message, wparam, lparam);
@@ -81,16 +84,39 @@ const layerc::core::Panel *EditorWindow::selected_bar() const {
 }
 
 
-void EditorWindow::refresh_bar_list(const std::size_t preferred_panel) {
+void EditorWindow::refresh_bar_list(std::size_t preferred_panel) {
   SendMessageW(panel_preview_.list, LB_RESETCONTENT, 0, 0);
   int selected_row = -1;
-  for (std::size_t index = 0; index < document_.profile().panels.size(); ++index) {
-    const auto &panel = document_.profile().panels[index];
+  const auto &profile = document_.profile();
+  if (preferred_panel == SIZE_MAX) {
+    if (const auto *cooldown = selected_cooldown(); cooldown != nullptr) {
+      const auto owner = std::ranges::find_if(
+          profile.panels, [&](const layerc::core::Panel &panel) {
+            return std::ranges::find(panel.cooldown_ids, cooldown->id) !=
+                   panel.cooldown_ids.end();
+          });
+      if (owner != profile.panels.end())
+        preferred_panel =
+            static_cast<std::size_t>(owner - profile.panels.begin());
+    }
+  }
+  for (std::size_t index = 0; index < profile.panels.size(); ++index) {
+    const auto &panel = profile.panels[index];
     if (panel.style != layerc::core::PanelStyle::bar) continue;
+    // Rows name the cooldowns a bar shows, never their internal ids.
     std::wstring label = to_wide(panel.name);
-    if (panel.cooldown_ids.size() > 1)
-      label += L"  (grouped: " + std::to_wstring(panel.cooldown_ids.size()) + L")";
-    else if (!panel.cooldown_ids.empty()) label += L"  —  " + to_wide(panel.cooldown_ids.front());
+    std::wstring shown;
+    for (const auto &id : panel.cooldown_ids) {
+      const auto cooldown = std::ranges::find(
+          profile.cooldowns, id, &layerc::core::CooldownDefinition::id);
+      if (cooldown == profile.cooldowns.end())
+        continue;
+      if (!shown.empty())
+        shown += L", ";
+      shown += to_wide(cooldown->name);
+    }
+    if (!shown.empty() && shown != label)
+      label += L"  ·  " + shown;
     const auto row = SendMessageW(panel_preview_.list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
     if (row != LB_ERR && row != LB_ERRSPACE) {
       SendMessageW(panel_preview_.list, LB_SETITEMDATA, static_cast<WPARAM>(row), static_cast<LPARAM>(index));
@@ -119,17 +145,47 @@ void EditorWindow::refresh_bar_controls() {
         shell_.window, document_.profile(), selected_cooldown(),
         &document_.profile().panels[panel_preview_.controls_panel]};
     write_profile_fields(context, ProfileFieldOwner::panel);
-    set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), panel->cooldown_ids.size() > 1
-      ? L"Legacy grouped bar. Split it to give each cooldown its own position."
-      : L"Drag the selected bar in the preview to save normalized position.");
+    const bool direct_drag_unavailable =
+        IsWindowEnabled(GetDlgItem(shell_.window, IDC_DIRECT_DRAG)) == FALSE;
+    set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS),
+             panel->cooldown_ids.size() > 1
+                 ? L"This bar is shared by several cooldowns. Tools > Split "
+                   L"Grouped Bars gives each its own position."
+             : direct_drag_unavailable
+                 ? L"Drag the bar in the preview to position it. Direct drag "
+                   L"works during Position on window."
+                 : L"Drag the bar in the preview to position it.");
     set_text(GetDlgItem(shell_.window, IDC_BAR_FILL), L"Fill");
-    set_text(GetDlgItem(shell_.window, IDC_BAR_BACKGROUND), L"BG");
+    set_text(GetDlgItem(shell_.window, IDC_BAR_BACKGROUND), L"Background");
     set_text(GetDlgItem(shell_.window, IDC_BAR_BORDER), L"Border");
     set_text(GetDlgItem(shell_.window, IDC_BAR_TEXT), L"Text");
   } else set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), L"Add a cooldown to create a bar.");
   InvalidateRect(panel_preview_.window, nullptr, TRUE);
 }
 
+
+void EditorWindow::follow_cooldown_bar() {
+  const auto *cooldown = selected_cooldown();
+  if (cooldown == nullptr || panel_preview_.list == nullptr)
+    return;
+  const auto &panels = document_.profile().panels;
+  const LRESULT count = SendMessageW(panel_preview_.list, LB_GETCOUNT, 0, 0);
+  for (LRESULT row = 0; row < count; ++row) {
+    const LRESULT index = SendMessageW(panel_preview_.list, LB_GETITEMDATA,
+                                       static_cast<WPARAM>(row), 0);
+    if (index < 0 || static_cast<std::size_t>(index) >= panels.size())
+      continue;
+    const auto &ids = panels[static_cast<std::size_t>(index)].cooldown_ids;
+    if (std::ranges::find(ids, cooldown->id) == ids.end())
+      continue;
+    if (SendMessageW(panel_preview_.list, LB_GETCURSEL, 0, 0) != row) {
+      SendMessageW(panel_preview_.list, LB_SETCURSEL, static_cast<WPARAM>(row),
+                   0);
+      refresh_bar_controls();
+    }
+    return;
+  }
+}
 
 void EditorWindow::split_independent_bars() {
   sync_profile_from_controls();
@@ -207,15 +263,33 @@ RECT EditorWindow::preview_canvas() const {
   RECT client{}; GetClientRect(panel_preview_.window, &client);
   constexpr int inset = 12;
   const int available_width = std::max(1L, client.right - client.left - inset * 2);
-  const int available_height = std::max(1L, client.bottom - client.top - inset * 2);
+  // The strip under the canvas shows the selected bar at actual size.
+  const int reserved = preview_actual_size_height();
+  const int available_height =
+      std::max(1L, client.bottom - client.top - inset * 2 - reserved);
   const auto target = preview_target_size();
   const double aspect = static_cast<double>(target.cx) / std::max(1L, target.cy);
   int width = available_width;
   int height = static_cast<int>(std::lround(width / aspect));
   if (height > available_height) { height = available_height; width = static_cast<int>(std::lround(height * aspect)); }
   const int left = (client.right - width) / 2;
-  const int top = (client.bottom - height) / 2;
+  const int top = inset + (available_height - height) / 2;
   return {left, top, left + width, top + height};
+}
+
+int EditorWindow::preview_actual_size_height() const {
+  const auto *panel = selected_bar();
+  if (panel == nullptr || panel_preview_.window == nullptr)
+    return 0;
+  const auto geometry =
+      layerc::core::panel_geometry(*panel, panel->cooldown_ids.size());
+  const int dpi = static_cast<int>(GetDpiForWindow(panel_preview_.window));
+  const int bar_height = static_cast<int>(
+      std::lround(geometry.size.height * (dpi == 0 ? 96 : dpi) / 96.0));
+  RECT client{}; GetClientRect(panel_preview_.window, &client);
+  // Only when it leaves at least half the preview for the scaled canvas.
+  const int needed = bar_height + MulDiv(40, dpi == 0 ? 96 : dpi, 96);
+  return needed * 2 <= client.bottom - client.top ? needed : 0;
 }
 
 RECT EditorWindow::bar_preview_rect(const layerc::core::Panel &panel, const RECT &canvas) const {
@@ -238,9 +312,9 @@ void EditorWindow::paint_preview(const HWND window) {
   outline_rect(dc, canvas, 1, preview_colors.border);
   const auto *selected = selected_bar();
   const auto target = preview_target_size();
-  for (const auto &panel : document_.profile().panels) {
+  const auto draw_panel = [&](const layerc::core::Panel &panel,
+                              const PreviewPlacement &placement) {
     const auto count = panel.cooldown_ids.size();
-    const auto placement = preview_placement(panel, count, canvas, target);
     for (std::size_t index = 0; index < count; ++index) {
       layerc::core::PanelRect outline = placement.geometry.items[index];
       layerc::core::PanelRect fill_rect{};
@@ -294,16 +368,71 @@ void EditorWindow::paint_preview(const HWND window) {
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
                     DT_NOPREFIX);
     }
+  };
+  for (const auto &panel : document_.profile().panels)
+    draw_panel(panel, preview_placement(panel, panel.cooldown_ids.size(),
+                                        canvas, target));
+  if (const int strip = preview_actual_size_height();
+      selected != nullptr && strip > 0) {
+    const UINT dpi = GetDpiForWindow(window);
+    const int pad = MulDiv(12, static_cast<int>(dpi == 0 ? 96U : dpi), 96);
+    RECT label{client.left + pad, client.bottom - strip, client.right - pad,
+               client.bottom - strip + MulDiv(20, static_cast<int>(dpi), 96)};
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, preview_colors.secondary);
+    DrawTextW(dc, L"Actual size", -1, &label,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    PreviewPlacement actual;
+    actual.geometry = layerc::core::panel_geometry(
+        *selected, selected->cooldown_ids.size());
+    actual.scale = (dpi == 0 ? 96.0 : static_cast<double>(dpi)) / 96.0;
+    actual.left = client.left + pad;
+    actual.top = label.bottom + MulDiv(4, static_cast<int>(dpi), 96);
+    HRGN clip = CreateRectRgn(client.left, label.bottom, client.right - pad,
+                              client.bottom);
+    SelectClipRgn(dc, clip);
+    draw_panel(*selected, actual);
+    SelectClipRgn(dc, nullptr);
+    DeleteObject(clip);
   }
+  if (GetFocus() == window)
+    layerc::platform::paint_focus_ring(dc, client, preview_colors.accent,
+                                       GetDpiForWindow(window));
   SelectObject(dc, previous_font);
   EndPaint(window, &paint);
 }
 
 bool EditorWindow::handle_preview_message(const HWND window, const UINT message,
-                                          const WPARAM, const LPARAM lparam) {
+                                          const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_PAINT: paint_preview(window); return true;
   case WM_ERASEBKGND: return true;
+  case WM_SETFOCUS:
+  case WM_KILLFOCUS:
+    InvalidateRect(window, nullptr, FALSE);
+    return false;
+
+  case WM_KEYDOWN: {
+    if (wparam != VK_LEFT && wparam != VK_RIGHT && wparam != VK_UP &&
+        wparam != VK_DOWN)
+      return false;
+    auto *panel = selected_bar();
+    if (panel == nullptr || panel->cooldown_ids.size() != 1) return true;
+    const auto target = preview_target_size();
+    const double step = (GetKeyState(VK_SHIFT) & 0x8000) != 0 ? 10.0 : 1.0;
+    if (wparam == VK_LEFT || wparam == VK_RIGHT)
+      panel->anchor_x = std::clamp(
+          panel->anchor_x + (wparam == VK_LEFT ? -step : step) /
+                                std::max(1L, target.cx),
+          0.0, 1.0);
+    else
+      panel->anchor_y = std::clamp(
+          panel->anchor_y + (wparam == VK_UP ? -step : step) /
+                                std::max(1L, target.cy),
+          0.0, 1.0);
+    finalize_dragged_bar();
+    return true;
+  }
   case WM_SETCURSOR: {
     if (LOWORD(lparam) != HTCLIENT) return false;
     const auto *panel = selected_bar();

@@ -1,4 +1,5 @@
 #include "daemon_app.hpp"
+#include "maintenance_schedule.hpp"
 
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/profile_transaction.hpp"
@@ -50,6 +51,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   bool running = true;
   int exit_code{};
   MSG message{};
+  MaintenanceSchedule maintenance;
   while (running) {
     // Flush here for work done outside window messages (loop-level polls,
     // WinEvent callbacks); handle_message flushes for modal-loop dispatch.
@@ -66,17 +68,21 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     const bool visual_wait = visual_capture_runtime_.snapshot_event() != nullptr;
     if (visual_wait)
       live_handles[wait_handle_count++] = visual_capture_runtime_.snapshot_event();
-    DWORD timeout = INFINITE;
+    std::optional<layerc::core::Milliseconds> interval;
     if (live_edit_host_.session != nullptr)
-      timeout = 250U;
+      interval = layerc::core::Milliseconds{250};
     else if (std::ranges::any_of(visual_capture_runtime_.captures, [](const auto &entry) {
                return entry.second != nullptr &&
                       entry.second->runtime() ==
                           layerc::core::VisualRuntime::isolated;
              }))
-      timeout = 500U;
+      interval = layerc::core::Milliseconds{500};
     else if (wait_handle_count == 0)
-      timeout = 1'000U;
+      interval = layerc::core::Milliseconds{1'000};
+    const auto wait =
+        maintenance.wait_for(layerc::core::MonotonicClock::now(), interval);
+    const DWORD timeout =
+        wait ? static_cast<DWORD>(wait->count()) : INFINITE;
     const DWORD result = MsgWaitForMultipleObjectsEx(
         wait_handle_count,
         wait_handle_count == 0 ? nullptr : live_handles.data(), timeout,
@@ -85,11 +91,14 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
       exit_code = 1;
       break;
     }
-    if (result == WAIT_TIMEOUT) {
+    // Watchdog and lease checks run on their deadline after any wake-up, so
+    // continuous input, timers, or snapshots cannot starve them.
+    if (maintenance.take_due(layerc::core::MonotonicClock::now())) {
       maintain_visual_captures();
       poll_live_channel();
-      continue;
     }
+    if (result == WAIT_TIMEOUT)
+      continue;
     if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + live_handle_count) {
       poll_live_channel();
       continue;
@@ -105,7 +114,13 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     }
     if (result != WAIT_OBJECT_0 + wait_handle_count)
       continue;
-    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE) {
+    // Return to the deadline/handle checks even if producers keep the queue
+    // non-empty. Draining without a bound can starve maintenance just as a
+    // timeout-only check can.
+    for (unsigned dispatched = 0;
+         dispatched < 64 &&
+         PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE) != FALSE;
+         ++dispatched) {
       if (message.message == WM_QUIT) {
         exit_code = static_cast<int>(message.wParam);
         running = false;
@@ -178,7 +193,13 @@ void DaemonApp::add_tray_icon() {
   tray_.uID = 1;
   tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   tray_.uCallbackMessage = tray_message;
-  tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+  // The LayerC icon from layerd.rc; stock icon only if the resource is missing.
+  const int icon_size = GetSystemMetrics(SM_CXSMICON);
+  tray_.hIcon = static_cast<HICON>(LoadImageW(
+      GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON, icon_size,
+      icon_size, LR_DEFAULTCOLOR | LR_SHARED));
+  if (tray_.hIcon == nullptr)
+    tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
   wcscpy_s(tray_.szTip, L"LayerC");
   Shell_NotifyIconW(NIM_ADD, &tray_);
   tray_.uVersion = NOTIFYICON_VERSION_4;

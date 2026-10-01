@@ -120,7 +120,6 @@ void DaemonApp::retire_automation_session(Session &session,
         source->automation_state, source->automation_state_due, now,
         /*force=*/true);
   session.automation_runtime.reset();
-  session.applied_overlay_overrides.clear();
 }
 void DaemonApp::schedule_automation_timer() {
   if (window_ == nullptr)

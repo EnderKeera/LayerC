@@ -1,4 +1,5 @@
 #include "layerc/core/companion_snapshot.hpp"
+#include "layerc/core/cooldown_engine.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -61,25 +62,19 @@ make_snapshot_item(const layerc::core::CooldownDefinition &definition,
     item.progress = 1.0;
     return item;
   }
+  // Engine states carry the effective owner view. Legacy/manual states may
+  // omit it (and max_charges); only those use the supplied member definition.
+  if (state->recharge_duration.has_value() || state->max_charges != 0)
+    item.max_charges = state->max_charges;
   item.available_charges = state->available_charges;
   item.is_ready =
       state->available_charges > 0 && !state->next_charge_at.has_value();
-  if (!state->next_charge_at.has_value() || *state->next_charge_at <= now) {
-    item.remaining_ms = 0;
-    item.progress = 1.0;
-    return item;
-  }
-  const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-      *state->next_charge_at - now);
-  item.remaining_ms = remaining.count();
-  const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(
-      definition.duration);
-  if (total.count() > 0) {
-    item.progress =
-        std::clamp(1.0 - (static_cast<double>(remaining.count()) /
-                          static_cast<double>(total.count())),
-                   0.0, 1.0);
-  }
+  item.remaining_ms = cooldown_remaining_ms(state->next_charge_at, now).count();
+  // Companion uses elapsed-toward-ready, while native bars show remaining.
+  // Both derive from the same effective runtime duration and deadline.
+  item.progress = item.remaining_ms == 0
+                      ? 1.0
+                      : 1.0 - cooldown_progress(definition, *state, now);
   return item;
 }
 
@@ -152,6 +147,11 @@ std::string build_companion_snapshot(
   build_preferences(snapshot, panels, companion);
   build_available_catalog(snapshot, panels);
   build_panel_snapshots(snapshot, panels, definitions, states, now);
+  // Invalid runtime data must fail closed, not be erased until it happens to
+  // serialize. After validation, removing catalog entries/items preserves all
+  // invariants, so subsequent serialization errors can only be the byte bound.
+  if (validate_companion_snapshot(snapshot))
+    return {};
   auto serialized = serialize_companion_snapshot_json(snapshot);
   if (auto *json = std::get_if<std::string>(&serialized))
     return std::move(*json);

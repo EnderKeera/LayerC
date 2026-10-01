@@ -2,6 +2,7 @@
 #include "test_support.hpp"
 
 #include "layerc/core/automation.hpp"
+#include "layerc/core/automation_session.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/live_edit.hpp"
 
@@ -160,7 +161,7 @@ void test_automation_profile_round_trip() {
 void test_automation_runtime_transaction_and_replay() {
   using namespace layerc::core;
   const auto profile = automation_fixture();
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   runtime.set_trace_enabled(true);
 
   std::vector<AutomationEffect> committed;
@@ -207,7 +208,7 @@ void test_automation_runtime_transaction_and_replay() {
         AutomationValue(std::string(max_automation_string_bytes, 'v')));
     large_trace.push_back({.sequence = index + 1U,
                            .timestamp = Milliseconds(index),
-                           .phase = "source",
+                           .phase = "root",
                            .detail = "inputValueChanged",
                            .source_event = std::move(source)});
   }
@@ -261,7 +262,8 @@ void test_automation_runtime_transaction_and_replay() {
   immutable.automations = {{.id = "immutable-root",
                             .name = "Immutable root",
                             .rules = {increment, observe}}};
-  AutomationRuntime immutable_runtime(immutable);
+  AutomationRuntime immutable_runtime(immutable, {}, {},
+                                      [] { return TimePoint{}; });
   const auto immutable_first = immutable_runtime.process(event);
   expect(immutable_first.committed &&
              immutable_runtime.snapshot().variables.at("value") ==
@@ -276,7 +278,7 @@ void test_automation_runtime_transaction_and_replay() {
                  AutomationValue(true),
          "a later root event should observe the previously committed snapshot");
 
-  AutomationRuntime rejected(profile);
+  AutomationRuntime rejected(profile, {}, {}, [] { return TimePoint{}; });
   rejected.set_trace_enabled(true);
   const auto rolled_back =
       rejected.process(event, [](const AutomationEffect &effect) {
@@ -369,7 +371,8 @@ void test_automation_runtime_transaction_and_replay() {
                       .value = literal(AutomationValue(std::int64_t{1}))}}});
   }
   AutomationRuntime propagation_runtime(propagation_profile, {},
-                                        propagation_base.cooldown_groups);
+                                        propagation_base.cooldown_groups,
+                                        [] { return TimePoint{}; });
   const auto propagated = propagation_runtime.process(event);
   expect(propagated.committed &&
              propagation_runtime.snapshot().variables.at("dashSeen") ==
@@ -396,7 +399,7 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
        .value = literal(AutomationValue(std::int64_t{99}))}};
   profile.automations.push_back(lower);
 
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   const AutomationEvent event{AutomationEventKind::input_pressed, TimePoint{},
                               "key-e", 1};
   const auto result = runtime.process(event);
@@ -435,7 +438,7 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
                    .value = literal(AutomationValue(std::int64_t{1}))}}};
   isolated.automations = {{.id = "bad", .name = "Bad", .rules = {broken}},
                           {.id = "good", .name = "Good", .rules = {healthy}}};
-  AutomationRuntime fault_runtime(isolated);
+  AutomationRuntime fault_runtime(isolated, {}, {}, [] { return TimePoint{}; });
   const auto fault = fault_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 2});
   expect(fault.committed &&
@@ -452,7 +455,7 @@ void test_automation_persistent_sync_and_cascade_bounds() {
   // A sibling persistent-value push is not a durable write of THIS runtime's
   // snapshot and must not clear the unsaved-edit marker.
   const auto profile = automation_fixture();
-  AutomationRuntime runtime(profile);
+  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
   (void)runtime.process(
       {AutomationEventKind::input_pressed, TimePoint{}, "key-e", 1});
   expect(runtime.persistent_dirty(),
@@ -508,7 +511,8 @@ void test_automation_persistent_sync_and_cascade_bounds() {
       {.id = "broken-2", .name = "B2", .rules = {broken_rule("two")}},
       {.id = "broken-3", .name = "B3", .rules = {broken_rule("three")}},
       {.id = "healthy-root", .name = "Healthy", .rules = {healthy}}};
-  AutomationRuntime cascade_runtime(cascade);
+  AutomationRuntime cascade_runtime(cascade, {}, {},
+                                    [] { return TimePoint{}; });
   const auto cascade_result = cascade_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 3});
   expect(cascade_result.committed &&
@@ -557,7 +561,8 @@ void test_automation_persistent_sync_and_cascade_bounds() {
        .cooldown_ids = burst_members}};
   fanout.automations = {{.id = "keeper", .name = "Keeper", .rules = {marker_rule}},
                         {.id = "fanout", .name = "Fanout", .rules = {fan_rule}}};
-  AutomationRuntime fanout_runtime(fanout, {}, burst_groups);
+  AutomationRuntime fanout_runtime(fanout, {}, burst_groups,
+                                    [] { return TimePoint{}; });
   const auto fanout_result = fanout_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 4});
   expect(fanout_result.committed &&
@@ -573,6 +578,300 @@ void test_automation_persistent_sync_and_cascade_bounds() {
                  AutomationEventKind::variable_changed,
          "the derived-event cap should fault only the offending automation "
          "while the healthy transaction commits");
+}
+
+void test_automation_numeric_promotion() {
+  auto base = automation_base();
+  base.panels.push_back(
+      {.id = "main", .name = "Main", .anchor_x = 0.5, .anchor_y = 0.5});
+  AutomationProfile profile;
+  profile.profile_id = base.id;
+  profile.variables = {{.id = "amount",
+                        .type = AutomationValueType::number,
+                        .default_value = AutomationValue(0.0),
+                        .persistent = true}};
+  profile.automations = {
+      {.id = "promote",
+       .name = "Promote",
+       .rules = {
+           {.id = "assign",
+            .event = AutomationEventKind::session_started,
+            .actions = {{.kind = AutomationActionKind::set_variable,
+                         .target = "amount",
+                         .value = literal(AutomationValue(std::int64_t{1}))}}},
+           {.id = "increment",
+            .event = AutomationEventKind::input_pressed,
+            .actions = {{.kind = AutomationActionKind::increment_variable,
+                         .target = "amount",
+                         .value = literal(AutomationValue(std::int64_t{2}))}}},
+           {.id = "anchors",
+            .event = AutomationEventKind::input_released,
+            .actions = {
+                {.kind = AutomationActionKind::set_overlay_override,
+                 .target = "main",
+                 .name = "position",
+                 .property = "anchorX",
+                 .value = literal(AutomationValue(std::int64_t{1}))},
+                {.kind = AutomationActionKind::set_overlay_override,
+                 .target = "main",
+                 .name = "position",
+                 .property = "anchorY",
+                 .value = literal(AutomationValue(std::int64_t{0}))}}}}}};
+  const auto parsed = parse_automation_profile_json(
+      serialize_automation_profile_json(profile), base);
+  expect(std::holds_alternative<AutomationProfile>(parsed),
+         "AR-04 integer-to-number actions must remain accepted valid profiles");
+  if (!std::holds_alternative<AutomationProfile>(parsed))
+    return;
+  const auto &accepted = std::get<AutomationProfile>(parsed);
+  const std::vector<AutomationEvent> events{
+      {.kind = AutomationEventKind::session_started},
+      {.kind = AutomationEventKind::input_pressed},
+      {.kind = AutomationEventKind::input_released}};
+  AutomationRuntime production(accepted, {}, {}, [] { return TimePoint{}; });
+  for (const auto &event : events) {
+    const auto result =
+        production.process(event, [&](const AutomationEffect &effect) {
+          return validate_automation_effect(effect, base.panels, base.cooldowns,
+                                            base.cooldown_groups);
+        });
+    expect(result.committed && !result.error &&
+               result.faulted_automations.empty() &&
+               std::ranges::all_of(result.effects,
+                                   [](const AutomationEffect &effect) {
+                                     return value_type(effect.value) ==
+                                            AutomationValueType::number;
+                                   }),
+           "AR-04 accepted promotions must produce one normalized winning "
+           "value before production validation");
+  }
+  const auto simulation = replay_automation_events(accepted, events);
+  expect(
+      simulation.passed &&
+          simulation.final_state.variables == production.snapshot().variables &&
+          simulation.final_state.overlay_overrides ==
+              production.snapshot().overlay_overrides &&
+          production.snapshot().variables.at("amount") == AutomationValue(3.0),
+      "AR-04 production validation and simulation must agree on assignment, "
+      "increment and overlay numbers");
+  const auto panel = resolve_panel_overrides(
+      base.panels.front(), production.snapshot().overlay_overrides);
+  expect(panel.panel.anchor_x == 1.0 && panel.panel.anchor_y == 0.0,
+         "AR-04 promoted anchor integers must apply rather than silently "
+         "preserving the old position");
+  const auto state = parse_automation_state_json(
+      serialize_automation_state_json(accepted,
+                                      production.snapshot().persistent_values),
+      accepted);
+  expect(std::holds_alternative<AutomationPersistentValues>(state) &&
+             std::get<AutomationPersistentValues>(state).at("amount") ==
+                 AutomationValue(3.0),
+         "AR-04 normalized numbers must retain persistent type and value");
+}
+
+void test_automation_trace_root_provenance() {
+  {
+    const std::array recorded_events{
+        AutomationEvent{.kind = AutomationEventKind::session_started},
+        AutomationEvent{
+            .kind = AutomationEventKind::input_pressed,
+            .timestamp = TimePoint(25ms),
+            .source_id = "keyboard:18",
+            .origin_token = 42,
+            .fields = {{"pressed", AutomationValue(true)},
+                       {"count", AutomationValue(std::int64_t{-7})},
+                       {"value", AutomationValue(0.5)},
+                       {"label",
+                        AutomationValue(std::string("line\n\"quoted\""))}}},
+        AutomationEvent{
+            .kind = AutomationEventKind::visual_observation,
+            .timestamp = TimePoint(1250ms),
+            .source_id = "locator",
+            .origin_token = 42,
+            .fields = {
+                {"ageMs", AutomationValue(DurationValue{75ms})},
+                {"confidence", AutomationValue(ConfidenceValue{0.875})},
+                {"matches",
+                 AutomationValue(AutomationList{
+                     AutomationValue(AutomationMap{
+                         {"found", AutomationValue(true)},
+                         {"label", AutomationValue(std::string("target"))}})})}}}};
+    std::vector<AutomationTraceEntry> entries;
+    for (std::size_t index{}; index < recorded_events.size(); ++index) {
+      entries.push_back(make_automation_root_trace_entry(recorded_events[index],
+                                                       index + 1U));
+      expect(entries.back().sequence == index + 1U &&
+                 entries.back().phase == "root",
+             "simulator recordings must carry ordered explicit replay roots");
+    }
+    const auto imported = parse_layerc_trace(export_layerc_trace(entries));
+    const auto *events = std::get_if<std::vector<AutomationEvent>>(&imported);
+    expect(events != nullptr && events->size() == recorded_events.size(),
+           "simulator-recorded trace export must import every event once");
+    if (events != nullptr && events->size() == recorded_events.size()) {
+      for (std::size_t index{}; index < recorded_events.size(); ++index) {
+        const auto &expected = recorded_events[index];
+        const auto &actual = (*events)[index];
+        expect(actual.kind == expected.kind &&
+                   actual.timestamp == expected.timestamp &&
+                   actual.source_id == expected.source_id &&
+                   actual.origin_token == expected.origin_token &&
+                   actual.fields == expected.fields,
+               "simulator trace round trip must preserve event order, "
+               "timestamps, source, origins and typed fields");
+      }
+    }
+  }
+
+  auto base = automation_base();
+  base.panels.push_back({.id = "main", .name = "Main"});
+  AutomationProfile profile;
+  profile.profile_id = base.id;
+  profile.variables = {{.id = "count",
+                        .type = AutomationValueType::integer,
+                        .default_value = AutomationValue(std::int64_t{})},
+                       {.id = "seen",
+                        .type = AutomationValueType::integer,
+                        .default_value = AutomationValue(std::int64_t{})},
+                       {.id = "done",
+                        .type = AutomationValueType::boolean,
+                        .default_value = AutomationValue(false)}};
+  profile.automations = {
+      {.id = "cascade",
+       .name = "Cascade",
+       .rules = {{.id = "root",
+                  .event = AutomationEventKind::session_started,
+                  .actions = {{.kind = AutomationActionKind::increment_variable,
+                               .target = "count",
+                               .value =
+                                   literal(AutomationValue(std::int64_t{1}))},
+                              {.kind = AutomationActionKind::create_timer,
+                               .target = "tick",
+                               .value =
+                                   literal(AutomationValue(std::int64_t{50})),
+                               .repeating = true},
+                              {.kind =
+                                   AutomationActionKind::set_overlay_override,
+                               .target = "main",
+                               .name = "visibility",
+                               .property = "visible",
+                               .value = literal(AutomationValue(false)),
+                               .secondary = literal(
+                                   AutomationValue(std::int64_t{100}))}}},
+                 {.id = "observe",
+                  .event = AutomationEventKind::variable_changed,
+                  .source_filter = "count",
+                  .actions = {{.kind = AutomationActionKind::increment_variable,
+                               .target = "seen",
+                               .value = literal(
+                                   AutomationValue(std::int64_t{1}))}}},
+                 {.id = "finish",
+                  .event = AutomationEventKind::variable_changed,
+                  .source_filter = "seen",
+                  .actions = {{.kind = AutomationActionKind::set_variable,
+                               .target = "done",
+                               .value = literal(AutomationValue(true))}}}}},
+      {.id = "broken",
+       .name = "Fault isolation",
+       .rules = {{.id = "fail",
+                  .event = AutomationEventKind::session_started,
+                  .condition = expr::binary(
+                      "equal",
+                      expr::binary("divide", literal(AutomationValue(1.0)),
+                                   literal(AutomationValue(0.0))),
+                      literal(AutomationValue(0.0))),
+                  .actions = {{.kind = AutomationActionKind::reset_cooldown,
+                               .target = "dash"}}}}}};
+  expect(validate_automation_profile(profile, base).message.empty(),
+         "AR-06 replay fixture must be statically valid");
+  for (const auto origin : {std::uint64_t{}, std::uint64_t{42}}) {
+    AutomationRuntime original(profile, {}, {}, [] { return TimePoint{}; });
+    original.set_trace_enabled(true);
+    AutomationEvent root{.kind = AutomationEventKind::session_started,
+                         .timestamp = TimePoint(100ms),
+                         .origin_token = origin};
+    const auto first = original.process(root);
+    expect(first.committed &&
+               first.faulted_automations ==
+                   std::vector<std::string>{"broken"} &&
+               original.snapshot().variables.at("seen") ==
+                   AutomationValue(std::int64_t{1}),
+           "AR-06 original cascade must observe count exactly once despite a "
+           "fault retry");
+    const auto first_trace =
+        parse_layerc_trace(export_layerc_trace(original.trace()));
+    expect(std::holds_alternative<std::vector<AutomationEvent>>(first_trace) &&
+               std::get<std::vector<AutomationEvent>>(first_trace).size() ==
+                   1U &&
+               std::ranges::any_of(original.trace(),
+                                   [](const AutomationTraceEntry &entry) {
+                                     return entry.phase == "derived" &&
+                                            entry.source_event.has_value();
+                                   }),
+           "AR-06 derived events stay in the audit but never import as extra "
+           "roots");
+    if (const auto *events =
+            std::get_if<std::vector<AutomationEvent>>(&first_trace);
+        events != nullptr && !events->empty()) {
+      const auto replay = replay_automation_events(profile, *events);
+      expect(replay.passed && replay.processed_events == 1U &&
+                 replay.final_state.variables ==
+                     original.snapshot().variables &&
+                 replay.final_state.overlay_overrides ==
+                     original.snapshot().overlay_overrides &&
+                 replay.final_state.timers.size() == 1U &&
+                 original.snapshot().timers.size() == 1U &&
+                 replay.final_state.timers.front().due ==
+                     original.snapshot().timers.front().due &&
+                 replay.final_state.timers.front().interval ==
+                     original.snapshot().timers.front().interval,
+             "AR-06 replay must match variables, timers and overrides after "
+             "one real root");
+      AutomationRuntime replayed(profile, {}, {}, [] { return TimePoint{}; });
+      const auto replay_fault = replayed.process(events->front());
+      expect(
+          replay_fault.faulted_automations == first.faulted_automations,
+          "AR-06 replay must reproduce attributable fault isolation as well");
+    }
+    root.timestamp =
+        TimePoint(200ms); // same origin token is still a distinct process entry
+    expect(original.process(root).committed, "AR-06 second root must commit");
+    const auto serialized = export_layerc_trace(original.trace());
+    const auto decoded = parse_layerc_trace(serialized);
+    expect(std::holds_alternative<std::vector<AutomationEvent>>(decoded) &&
+               std::get<std::vector<AutomationEvent>>(decoded).size() == 2U,
+           "AR-06 roots sharing an origin token must not be guessed away");
+    if (const auto *events =
+            std::get_if<std::vector<AutomationEvent>>(&decoded)) {
+      const auto replay = replay_automation_events(profile, *events);
+      expect(replay.passed && replay.processed_events == 2U &&
+                 replay.final_state.variables ==
+                     original.snapshot().variables &&
+                 replay.final_state.timers.size() == 1U &&
+                 original.snapshot().timers.size() == 1U &&
+                 replay.final_state.timers.front().due ==
+                     original.snapshot().timers.front().due &&
+                 replay.final_state.overlay_overrides ==
+                     original.snapshot().overlay_overrides,
+             "AR-06 multi-root replay must reproduce the final state without "
+             "child duplication");
+    }
+    auto legacy = serialized;
+    const auto phase = legacy.find("\"phase\":\"root\"");
+    expect(phase != std::string::npos,
+           "AR-06 a new trace must carry explicit root provenance");
+    if (phase != std::string::npos) {
+      legacy.replace(phase, 14U, "\"phase\":\"source\"");
+      const auto rejected = parse_layerc_trace(legacy);
+      expect(std::holds_alternative<AutomationError>(rejected) &&
+                 std::get<AutomationError>(rejected).path ==
+                     "$.entries[0].phase" &&
+                 std::get<AutomationError>(rejected).message.find("legacy") !=
+                     std::string::npos,
+             "AR-06 ambiguous legacy traces must be rejected explicitly, not "
+             "inferred from origins");
+    }
+  }
 }
 
 } // namespace layerc::test

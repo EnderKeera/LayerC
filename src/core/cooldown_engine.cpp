@@ -11,10 +11,6 @@
 namespace layerc::core {
 namespace {
 
-std::string pool_key(const std::string_view id) {
-  return "@shared-pool/" + std::string(id);
-}
-
 // Parallel recovery derives the public next-charge time from the earliest
 // pending deadline; every derivation site shares this rule so the empty
 // (fully charged) case maps to nullopt exactly once.
@@ -25,25 +21,22 @@ earliest_deadline(const std::vector<TimePoint> &deadlines) noexcept {
   return *std::ranges::min_element(deadlines);
 }
 
-// Single owner for "time until charged" so the label and progress bar
-// cannot disagree about the remaining time.
-[[nodiscard]] Milliseconds
-remaining_ms(const std::optional<TimePoint> &next_charge_at,
-             const TimePoint now) noexcept {
+} // namespace
+
+Milliseconds cooldown_remaining_ms(
+    const std::optional<TimePoint> &next_charge_at, const TimePoint now) noexcept {
   if (!next_charge_at.has_value()) return Milliseconds::zero();
   return std::max(
       Milliseconds::zero(),
       std::chrono::duration_cast<Milliseconds>(*next_charge_at - now));
 }
 
-} // namespace
-
 std::string cooldown_status_text(const CooldownDefinition &definition,
                                  const CooldownState &state,
                                  const TimePoint now) {
   std::string label = definition.name;
   if (state.next_charge_at.has_value()) {
-    const auto remaining = remaining_ms(state.next_charge_at, now);
+    const auto remaining = cooldown_remaining_ms(state.next_charge_at, now);
     const auto tenths = (remaining.count() + 99) / 100;
     label += "  " + std::to_string(tenths / 10) + "." +
              std::to_string(tenths % 10) + "s";
@@ -68,10 +61,11 @@ double cooldown_progress(const CooldownDefinition &definition,
                          const CooldownState &state,
                          const TimePoint now) noexcept {
   if (!state.next_charge_at.has_value()) return 1.0;
-  if (definition.duration <= Milliseconds::zero()) return 0.0;
-  const auto remaining = remaining_ms(state.next_charge_at, now);
+  const auto duration = state.recharge_duration.value_or(definition.duration);
+  if (duration <= Milliseconds::zero()) return 0.0;
+  const auto remaining = cooldown_remaining_ms(state.next_charge_at, now);
   return std::clamp(static_cast<double>(remaining.count()) /
-                        static_cast<double>(definition.duration.count()),
+                        static_cast<double>(duration.count()),
                     0.0, 1.0);
 }
 
@@ -79,8 +73,12 @@ CooldownEngine::CooldownEngine(
     const std::span<const CooldownDefinition> definitions,
     const std::span<const CooldownGroup> groups)
     : groups_(groups.begin(), groups.end()) {
-  entries_.reserve(definitions.size() + groups.size());
+  entries_.reserve(definitions.size());
   order_.reserve(definitions.size());
+  owner_slots_.reserve(definitions.size());
+  // Every pool has at least one member, so there can be no more owners than
+  // public cooldowns. This sentinel is outside every assigned slot.
+  const auto unassigned = definitions.size();
 
   for (const auto &source : definitions) {
     if (source.id.empty())
@@ -90,11 +88,7 @@ CooldownEngine::CooldownEngine(
     if (source.max_charges == 0)
       throw std::invalid_argument("cooldown max_charges must be positive");
 
-    Entry entry{.definition = source,
-                .available_charges = source.max_charges,
-                .next_charge_at = std::nullopt,
-                .recovery_deadlines = {}};
-    if (!entries_.emplace(source.id, std::move(entry)).second)
+    if (!owner_slots_.emplace(source.id, unassigned).second)
       throw std::invalid_argument("duplicate cooldown id: " + source.id);
     order_.push_back(source.id);
   }
@@ -108,7 +102,7 @@ CooldownEngine::CooldownEngine(
 
     std::unordered_set<std::string> members;
     for (const auto &id : group.cooldown_ids) {
-      if (!entries_.contains(id) || !members.insert(id).second)
+      if (!owner_slots_.contains(id) || !members.insert(id).second)
         throw std::invalid_argument("invalid cooldown group member: " + id);
     }
     if (group.mode != CooldownGroupMode::shared_pool)
@@ -116,24 +110,40 @@ CooldownEngine::CooldownEngine(
     if (group.duration <= Milliseconds::zero() || group.max_charges == 0)
       throw std::invalid_argument("shared pool requires duration and charges");
 
-    CooldownDefinition definition{
-        .id = pool_key(group.id),
-        .name = group.name,
-        .duration = group.duration,
-        .max_charges = group.max_charges,
-        .retrigger = group.retrigger,
-        .recovery = group.recovery,
-    };
-    Entry entry{.definition = definition,
-                .available_charges = definition.max_charges,
-                .next_charge_at = std::nullopt,
-                .recovery_deadlines = {}};
-    entries_.emplace(definition.id, std::move(entry));
+    const auto slot = entries_.size();
+    entries_.push_back({.definition = {.kind = CooldownOwnerKind::shared_pool,
+                                      .id = group.id,
+                                      .duration = group.duration,
+                                      .max_charges = group.max_charges,
+                                      .retrigger = group.retrigger,
+                                      .recovery = group.recovery},
+                        .available_charges = group.max_charges,
+                        .next_charge_at = std::nullopt,
+                        .recovery_deadlines = {}});
     for (const auto &id : group.cooldown_ids) {
-      if (!shared_entries_.emplace(id, definition.id).second)
+      auto &member_slot = owner_slots_.at(id);
+      if (member_slot != unassigned)
         throw std::invalid_argument(
             "cooldown cannot belong to multiple shared pools: " + id);
+      member_slot = slot;
     }
+  }
+  // Allocate standalone owners only after pool membership is known. Pooled
+  // members keep their public identity, but never acquire dormant state.
+  for (const auto &source : definitions) {
+    auto &slot = owner_slots_.at(source.id);
+    if (slot != unassigned)
+      continue;
+    slot = entries_.size();
+    entries_.push_back({.definition = {.kind = CooldownOwnerKind::cooldown,
+                                      .id = source.id,
+                                      .duration = source.duration,
+                                      .max_charges = source.max_charges,
+                                      .retrigger = source.retrigger,
+                                      .recovery = source.recovery},
+                        .available_charges = source.max_charges,
+                        .next_charge_at = std::nullopt,
+                        .recovery_deadlines = {}});
   }
 }
 
@@ -144,11 +154,14 @@ CooldownEngine::entry_for(const std::string_view cooldown_id) {
 
 const CooldownEngine::Entry *
 CooldownEngine::entry_for(const std::string_view cooldown_id) const {
-  const auto shared = shared_entries_.find(cooldown_id);
-  const auto found = entries_.find(shared != shared_entries_.end()
-                                       ? std::string_view(shared->second)
-                                       : cooldown_id);
-  return found == entries_.end() ? nullptr : &found->second;
+  const auto found = owner_slots_.find(cooldown_id);
+  return found == owner_slots_.end() ? nullptr : &entries_[found->second];
+}
+
+const CooldownOwnerDefinition *
+CooldownEngine::owner_definition(const std::string_view cooldown_id) const {
+  const auto *entry = entry_for(cooldown_id);
+  return entry == nullptr ? nullptr : &entry->definition;
 }
 
 bool CooldownEngine::trigger_entry(Entry &entry, const TimePoint now) {
@@ -343,10 +356,8 @@ bool CooldownEngine::reset_group(const std::string_view group_id) {
 }
 
 void CooldownEngine::update(const TimePoint now) {
-  for (auto &[id, entry] : entries_) {
-    (void)id;
+  for (auto &entry : entries_)
     update_entry(entry, now);
-  }
 }
 
 std::vector<CooldownState> CooldownEngine::snapshot(const TimePoint now) {
@@ -361,17 +372,14 @@ void CooldownEngine::snapshot(const TimePoint now,
   output.resize(order_.size());
   for (std::size_t index = 0; index < order_.size(); ++index) {
     const auto &id = order_[index];
-    const auto *entry = entry_for(id);
+    const auto &entry = entries_[owner_slots_.at(id)];
     auto &state = output[index];
     state.id = id;
-    // order_ and entries_ are populated together, so a miss is unreachable;
-    // leave a zeroed state rather than dereferencing should that ever drift.
-    if (entry == nullptr)
-      continue;
-    state.available_charges = entry->available_charges;
-    state.max_charges = entry->definition.max_charges;
-    state.next_charge_at = entry->next_charge_at;
-    state.recovery_deadlines = entry->recovery_deadlines;
+    state.available_charges = entry.available_charges;
+    state.max_charges = entry.definition.max_charges;
+    state.next_charge_at = entry.next_charge_at;
+    state.recovery_deadlines = entry.recovery_deadlines;
+    state.recharge_duration = entry.definition.duration;
   }
 }
 
@@ -382,7 +390,7 @@ CooldownEngine::remaining(const std::string_view cooldown_id,
   if (entry == nullptr)
     return std::nullopt;
   update_entry(*entry, now);
-  return remaining_ms(entry->next_charge_at, now);
+  return cooldown_remaining_ms(entry->next_charge_at, now);
 }
 
 void CooldownEngine::update_entry(Entry &entry, const TimePoint now) {
@@ -423,46 +431,24 @@ void CooldownEngine::reconfigure(
     const std::span<const CooldownGroup> groups) {
   update(now);
   CooldownEngine next(definitions, groups);
-  std::unordered_set<Entry *> restored;
-  for (const auto &id : next.order_) {
-    if (std::ranges::find(reset_ids, id) != reset_ids.end())
-      continue;
-    const auto *previous = entry_for(id);
-    auto *replacement = next.entry_for(id);
-    if (previous == nullptr || replacement == nullptr ||
-        !restored.insert(replacement).second)
-      continue;
-
-    replacement->available_charges = std::min(
-        replacement->definition.max_charges, previous->available_charges);
-    const auto missing =
-        replacement->definition.max_charges - replacement->available_charges;
-    if (missing == 0)
-      continue;
-
-    const auto first_deadline = previous->next_charge_at.value_or(
-        now + replacement->definition.duration);
-    if (replacement->definition.recovery == RecoveryMode::parallel) {
-      if (previous->definition.recovery == RecoveryMode::parallel) {
-        replacement->recovery_deadlines = previous->recovery_deadlines;
-        if (replacement->recovery_deadlines.size() > missing)
-          replacement->recovery_deadlines.resize(missing);
-      }
-      while (replacement->recovery_deadlines.size() < missing) {
-        replacement->recovery_deadlines.push_back(
-            first_deadline + replacement->definition.duration *
-                                 replacement->recovery_deadlines.size());
-      }
-      replacement->next_charge_at =
-          earliest_deadline(replacement->recovery_deadlines);
-    } else {
-      replacement->next_charge_at = first_deadline;
-    }
+  // Resolve the complete reset set before restoring anything. A later alias
+  // must never be able to undo a reset requested through another member.
+  std::vector<bool> reset_owners(next.entries_.size());
+  for (const auto &id : reset_ids) {
+    const auto found = next.owner_slots_.find(id);
+    if (found != next.owner_slots_.end())
+      reset_owners[found->second] = true;
   }
-  order_ = std::move(next.order_);
-  entries_ = std::move(next.entries_);
-  shared_entries_ = std::move(next.shared_entries_);
-  groups_ = std::move(next.groups_);
+  for (std::size_t slot = 0; slot < next.entries_.size(); ++slot) {
+    if (reset_owners[slot])
+      continue;
+    auto &replacement = next.entries_[slot];
+    const auto previous = std::ranges::find(
+        entries_, replacement.definition, &Entry::definition);
+    if (previous != entries_.end())
+      replacement = *previous;
+  }
+  *this = std::move(next);
 }
 
 } // namespace layerc::core

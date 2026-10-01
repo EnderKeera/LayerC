@@ -104,14 +104,12 @@ struct Session : layerc::core::AutomationSession {
   // reconfigured against; reconcile compares this instead of deep-comparing
   // profiles on every state change.
   layerc::core::ProfileRevision automation_revision{};
-  std::vector<layerc::core::OverlayPropertyOverride>
-      applied_overlay_overrides;
   std::uint64_t last_visual_sequence{};
   std::vector<PolledKeyState> global_keyboard;
   std::vector<layerc::core::HidControlState> hid_states;
   HWND game_window{};
   bool uses_controller{};
-  bool uses_raw_input{};
+  bool uses_raw_keyboard{};
   bool uses_raw_mouse{};
   bool uses_hid{};
   std::string last_input_match;
