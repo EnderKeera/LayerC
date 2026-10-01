@@ -26,9 +26,12 @@ published release.
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
 | Gamescope and Wayland | Not supported | Deferred beyond V2.6 |
 
-Package metadata currently reports **2.4.0**. Treat the V2.5 and V2.6 surfaces
-as pre-release until version metadata and their stated evidence gates are
-updated together.
+Package metadata reports **2.6.0**, the `v2.6.0` release. That release ships
+only the Windows x64 ZIP. The ZIP starts LayerC via `layerd.exe`. It omits
+`layerc.exe` until a release-signing key is provisioned, and launcher
+self-updates are OFF by default. Linux V2.6 is source/CLI only: there is no
+Linux package, and its physical X11 evidence is pending. The Game Bar
+companion's manual matrix, certification, and production signing remain open.
 
 ## Non-negotiable guarantees
 
@@ -298,8 +301,8 @@ CI runs on pushes to `main`, pull requests, and manual dispatch: workflow
 lint, Windows MSVC build/test/benchmarks/package, MSVC `/analyze`, Linux
 containers, and Flatpak smoke. Green `main` publishes the `rolling`
 prerelease; `v*.*.*` tags publish a release. Both ship only the Windows x64
-ZIP; Linux V2.6 has no packaged artifact yet. Jobs, runners, artifacts, and
-hardware benchmarks are described in
+ZIP; Linux V2.6 is source/CLI only, with no packaged artifact. Jobs, runners,
+artifacts, and hardware benchmarks are described in
 [`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates).
 
 ## Profile locations and format
