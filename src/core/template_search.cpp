@@ -361,7 +361,7 @@ bool ReferenceSearchContext::finalize_candidate(Candidate &candidate,
   result.pixel_comparisons += reference.samples.size();
   if (early) early_validation_work += final_candidate_cost;
   const double confidence = 0.70 * candidate.structure + 0.30 * coverage;
-  if (confidence > result.confidence) {
+  if (++result.candidates_scored == 1U || confidence > result.confidence) {
     result.confidence = confidence;
     result.reference_sha256 = definition.asset_sha256;
   }
@@ -675,7 +675,9 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
     if (search.run()) return result;
     if (result.pixel_comparisons >= budget) break;
   }
-  result.matched = result.confidence >= state.confidence_threshold;
+  // A zero threshold is legal, but only a scored candidate is match evidence.
+  result.matched = result.candidates_scored != 0U &&
+                   result.confidence >= state.confidence_threshold;
   return result;
 }
 

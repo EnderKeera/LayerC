@@ -13,7 +13,11 @@ AutomationReplayResult replay_automation_events(
     const std::span<const AutomationEvent> events,
     const std::span<const AutomationReplayAssertion> assertions,
     const std::span<const CooldownGroup> cooldown_groups) {
-  AutomationRuntime runtime(profile, {}, cooldown_groups);
+  // Replay is an offline reproduction. Deterministic node-evaluation and
+  // derived-event caps bound its work, so host scheduling latency must not
+  // decide its verdict through the live loop's wall-clock execution budget.
+  AutomationRuntime runtime(profile, {}, cooldown_groups,
+                            [] { return TimePoint{}; });
   AutomationReplayResult result;
   for (std::size_t index{}; index < events.size(); ++index) {
     const auto evaluation = runtime.process(events[index]);
