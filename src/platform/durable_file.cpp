@@ -97,6 +97,40 @@ bool create_durable_file(const std::filesystem::path &path,
   return success;
 }
 
+bool flush_durable_file(const std::filesystem::path &path) {
+  const OwnedHandle file(CreateFileW(
+      path.c_str(), GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+      nullptr));
+  FILE_ATTRIBUTE_TAG_INFO attributes{};
+  return file.valid() &&
+         GetFileInformationByHandleEx(file.get(), FileAttributeTagInfo,
+                                     &attributes, sizeof(attributes)) != FALSE &&
+         (attributes.FileAttributes &
+          (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) == 0 &&
+         FlushFileBuffers(file.get()) != FALSE;
+}
+
+DurablePublishOutcome publish_durable_directory_checked(
+    const std::filesystem::path &stage,
+    const std::filesystem::path &destination) {
+  const DWORD attributes = GetFileAttributesW(stage.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES ||
+      (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+      (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+      GetFileAttributesW(destination.c_str()) != INVALID_FILE_ATTRIBUTES)
+    return DurablePublishOutcome::failed;
+  const auto error = GetLastError();
+  if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+    return DurablePublishOutcome::failed;
+  // Match the file-publication NTFS contract, without replacing a directory.
+  return MoveFileExW(stage.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH)
+                 != FALSE
+             ? DurablePublishOutcome::published_durable
+             : DurablePublishOutcome::failed;
+}
+
 DurablePublishOutcome publish_durable_file_checked(
     const std::filesystem::path &stage,
     const std::filesystem::path &destination) {

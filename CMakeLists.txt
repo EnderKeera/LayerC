@@ -118,8 +118,8 @@ add_executable(layerc_manifest tools/update_manifest.cpp)
 target_link_libraries(layerc_manifest PRIVATE layerc_core)
 layerc_enable_warnings(layerc_manifest)
 
-# Update engine for the Windows launcher. It is platform-neutral apart from
-# the atomic file replace, so its behavior is tested on every CI platform.
+# Update engine for the Windows launcher. OS durability lives in the existing
+# platform helpers, so its behavior is tested on every CI platform.
 add_library(layerc_launcher_core STATIC
     src/launcher/update_engine.cpp
     src/launcher/signature.cpp)
@@ -264,6 +264,7 @@ if(WIN32)
     layerc_win32(layerc_capture)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_windows)
+    target_link_libraries(layerc_launcher_core PUBLIC layerc_windows)
     # layerc_win32 re-applies warnings (already set above) to propagate the
     # UNICODE/lean-headers contract to every dependent exe and test.
     layerc_win32(layerc_bundle)
@@ -373,6 +374,7 @@ if(NOT WIN32)
     layerc_enable_warnings(layerc_linux)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_linux)
+    target_link_libraries(layerc_launcher_core PUBLIC layerc_linux)
 
     # X11 adapters. Without the X11 development packages the daemon
     # builds without input/overlay/capture and reports those capabilities as

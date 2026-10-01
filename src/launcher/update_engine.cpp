@@ -1,15 +1,12 @@
 #include "layerc/launcher/update_engine.hpp"
 
 #include "layerc/core/hash.hpp"
+#include "update_engine_internal.hpp"
 
 #include <cstddef>
 #include <fstream>
 #include <span>
 #include <system_error>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace layerc::launcher {
 namespace {
@@ -44,31 +41,31 @@ using core::UpdateManifest;
 [[nodiscard]] bool write_bytes(const fs::path &path, const std::string_view bytes) {
   std::error_code error;
   fs::create_directories(path.parent_path(), error);
-  if (error) return false;
-  std::ofstream output(path, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  output.close();
-  return static_cast<bool>(output);
+  return !error && platform::write_durable_file(
+                       path, std::as_bytes(std::span(bytes.data(), bytes.size()))) ==
+                       platform::DurablePublishOutcome::published_durable;
 }
 
-// Replaces `target` in one step. std::filesystem::rename does not replace an
-// existing file under MinGW's runtime, so Windows asks for it explicitly.
-[[nodiscard]] bool replace_file(const fs::path &source, const fs::path &target) {
-#ifdef _WIN32
-  return MoveFileExW(source.c_str(), target.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
-#else
+[[nodiscard]] fs::path parked_build_directory(const InstallLayout &layout,
+                                              const std::string &id) {
+  auto path = layout.build_directory(id);
+  path += ".old";
+  return path;
+}
+
+// A same-ID repair never deletes the old directory before publishing its
+// replacement. Readers (including offline launch) recover the durable parked
+// directory if the process stopped between the two directory moves.
+[[nodiscard]] bool recover_build_directory(const InstallLayout &layout,
+                                           const std::string &id) {
   std::error_code error;
-  fs::rename(source, target, error);
-  return !error;
-#endif
-}
-
-[[nodiscard]] bool write_pointer(const fs::path &target, const std::string_view id) {
-  auto temporary = target;
-  temporary += ".tmp";
-  return write_bytes(temporary, std::string(id) + "\n") &&
-         replace_file(temporary, target);
+  if (fs::exists(layout.build_directory(id), error)) return !error;
+  if (error) return false;
+  const auto parked = parked_build_directory(layout, id);
+  if (!fs::exists(parked, error)) return !error;
+  return platform::publish_durable_directory_checked(
+             parked, layout.build_directory(id)) ==
+         platform::DurablePublishOutcome::published_durable;
 }
 
 [[nodiscard]] std::optional<std::string> read_pointer(const fs::path &path) {
@@ -85,6 +82,9 @@ using core::UpdateManifest;
 
 [[nodiscard]] std::variant<InstalledBuild, UpdateError>
 load_build(const InstallLayout &layout, const std::string &id) {
+  if (!recover_build_directory(layout, id))
+    return fail(UpdateStage::read_installed,
+                "cannot durably recover the parked build " + id);
   const auto manifest_path =
       layout.build_directory(id) / std::string(installed_manifest_name);
   const auto bytes = read_bounded(manifest_path, core::max_update_manifest_bytes);
@@ -111,6 +111,30 @@ load_build(const InstallLayout &layout, const std::string &id) {
 [[nodiscard]] fs::path install_path(const fs::path &directory,
                                     const std::string &relative) {
   return directory / fs::path(relative).make_preferred();
+}
+
+// All files, whether downloaded or copied, cross the same checked barrier.
+// Hash reads establish visibility, not crash durability. Flush the installed
+// manifest too, then each containing directory and its ancestors before any
+// build-directory publication or activation pointer write.
+[[nodiscard]] std::optional<UpdateError>
+flush_build(const fs::path &directory, const UpdateManifest &manifest,
+            UpdateDurability &durability) {
+  for (const auto &file : manifest.files) {
+    const auto path = install_path(directory, file.path);
+    if (!file_matches(path, file))
+      return fail(UpdateStage::verify_file, file.path + " failed staged verification");
+    if (!durability.flush_file(path))
+      return fail(UpdateStage::write_file, "cannot durably flush " + file.path);
+  }
+  if (!durability.flush_file(directory / std::string(installed_manifest_name)))
+    return fail(UpdateStage::write_file, "cannot durably flush the installed manifest");
+  for (const auto &file : manifest.files)
+    if (!durability.flush_directory(install_path(directory, file.path).parent_path()))
+      return fail(UpdateStage::write_file, "cannot durably flush the payload directory");
+  if (!durability.flush_directory(directory))
+    return fail(UpdateStage::write_file, "cannot durably flush the build directory");
+  return std::nullopt;
 }
 
 // Keeps the active and rollback builds; everything else under app/ and all of
@@ -142,6 +166,24 @@ void prune(const InstallLayout &layout, const std::string &current,
 }
 
 } // namespace
+
+bool UpdateDurability::flush_file(const fs::path &path) {
+  return platform::flush_durable_file(path);
+}
+
+bool UpdateDurability::flush_directory(const fs::path &path) {
+  return platform::flush_directory_hierarchy(path);
+}
+
+platform::DurablePublishOutcome UpdateDurability::publish_directory(
+    const fs::path &from, const fs::path &to) {
+  return platform::publish_durable_directory_checked(from, to);
+}
+
+bool UpdateDurability::write_pointer(const fs::path &path,
+                                     const std::string_view id) {
+  return write_bytes(path, std::string(id) + "\n");
+}
 
 std::string_view stage_name(const UpdateStage stage) noexcept {
   switch (stage) {
@@ -180,6 +222,14 @@ read_installed_build(const InstallLayout &layout) {
 std::variant<UpdateReport, UpdateError>
 apply_update(const InstallLayout &layout, const std::string_view channel,
              ReleaseSource &source, SignatureVerifier &verifier) {
+  UpdateDurability durability;
+  return apply_update_impl(layout, channel, source, verifier, durability);
+}
+
+std::variant<UpdateReport, UpdateError>
+apply_update_impl(const InstallLayout &layout, const std::string_view channel,
+                  ReleaseSource &source, SignatureVerifier &verifier,
+                  UpdateDurability &durability) {
   std::optional<InstalledBuild> installed;
   if (auto read = read_installed_build(layout);
       auto *build = std::get_if<std::optional<InstalledBuild>>(&read))
@@ -262,23 +312,39 @@ apply_update(const InstallLayout &layout, const std::string_view channel,
   if (!write_bytes(staging / std::string(installed_manifest_name), *manifest_bytes))
     return fail(UpdateStage::write_file, "cannot write the installed manifest");
 
-  // A build directory with this id is either a leftover from an attempt that
-  // stopped before switching `current`, or the damaged active build being
-  // repaired; both are replaced.
+  if (auto failure = flush_build(staging, target, durability)) return *failure;
+
   const auto destination = layout.build_directory(id);
-  fs::remove_all(destination, error);
   fs::create_directories(layout.app_directory(), error);
-  fs::rename(staging, destination, error);
-  if (error)
-    return fail(UpdateStage::activate, "cannot move the new build into place: " +
-                                           error.message());
+  if (error || !durability.flush_directory(layout.app_directory()))
+    return fail(UpdateStage::activate, "cannot durably prepare the app directory");
+  // Keep replacement evidence until activation is durably committed. This is
+  // essential when repairing the directory already named by `current`.
+  if (fs::exists(destination, error)) {
+    const auto parked = parked_build_directory(layout, id);
+    if (fs::exists(parked, error)) {
+      // A prior attempt reached the destination but not activation. Retire its
+      // older parking evidence only after the destination is itself durable.
+      if (auto failure = flush_build(destination, target, durability)) return *failure;
+      fs::remove_all(parked, error);
+      if (error || !durability.flush_directory(layout.app_directory()))
+        return fail(UpdateStage::activate, "cannot retire the old parked build");
+    }
+    if (error || durability.publish_directory(destination, parked) !=
+                     platform::DurablePublishOutcome::published_durable)
+      return fail(UpdateStage::activate, "cannot durably park the replaced build");
+  }
+  if (error || durability.publish_directory(staging, destination) !=
+                   platform::DurablePublishOutcome::published_durable ||
+      !durability.flush_directory(destination))
+    return fail(UpdateStage::activate, "cannot durably move the new build into place");
   // Repairing a damaged install keeps whatever rollback build was recorded.
   auto previous = installed ? std::optional(installed->id)
                             : read_pointer(layout.previous_file());
   if (previous == id) previous.reset();
-  if (installed && !write_pointer(layout.previous_file(), installed->id))
+  if (installed && !durability.write_pointer(layout.previous_file(), installed->id))
     return fail(UpdateStage::activate, "cannot record the rollback build");
-  if (!write_pointer(layout.current_file(), id))
+  if (!durability.write_pointer(layout.current_file(), id))
     return fail(UpdateStage::activate, "cannot switch to the new build");
   prune(layout, id, previous);
   return report;
@@ -290,10 +356,14 @@ std::optional<UpdateError> rollback(const InstallLayout &layout) {
     return fail(UpdateStage::read_installed, "no previous build is kept");
   auto build = load_build(layout, *previous);
   if (auto *failure = std::get_if<UpdateError>(&build)) return std::move(*failure);
+  UpdateDurability durability;
+  if (auto failure = flush_build(layout.build_directory(*previous),
+                                 std::get<InstalledBuild>(build).manifest, durability))
+    return failure;
   const auto current = read_pointer(layout.current_file());
-  if (current && !write_pointer(layout.previous_file(), *current))
+  if (current && !durability.write_pointer(layout.previous_file(), *current))
     return fail(UpdateStage::activate, "cannot record the rollback build");
-  if (!write_pointer(layout.current_file(), *previous))
+  if (!durability.write_pointer(layout.current_file(), *previous))
     return fail(UpdateStage::activate, "cannot switch to the previous build");
   return std::nullopt;
 }
@@ -302,7 +372,7 @@ std::optional<fs::path> active_file(const InstallLayout &layout,
                                     const std::string_view install_path_text) {
   if (!core::is_safe_update_path(install_path_text)) return std::nullopt;
   const auto id = read_pointer(layout.current_file());
-  if (!id) return std::nullopt;
+  if (!id || !recover_build_directory(layout, *id)) return std::nullopt;
   auto path = install_path(layout.build_directory(*id), std::string(install_path_text));
   std::error_code error;
   if (!fs::is_regular_file(path, error)) return std::nullopt;
