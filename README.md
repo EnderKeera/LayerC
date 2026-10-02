@@ -218,6 +218,9 @@ live in [`docs/Linux.md`](docs/Linux.md).
 - WGC capture with Desktop Duplication fallback; 64-pixel Low and 256-pixel
   Balanced sampling grids.
 - Numeric visual predicates and PNG template matching with alpha masks.
+  Template assets are stored as non-interlaced 8-bit RGBA PNG on both
+  platforms; imported PNGs and bundle assets in any other standard PNG format
+  are re-encoded on import, and their references follow the new content hash.
 - Native editor, live preview, simulator, diagnostics, resilient executable-name
   matching, and optional exact-path matching.
 - Bar preview preserves the target client area's aspect ratio and scales bar
@@ -261,6 +264,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_launcher_tests` | Launcher update engine: signed manifest checks, delta downloads, atomic build switch, repair, and rollback (v2.6b, not yet shipped) |
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
+| `layerc_template_png_tests` | Shared template PNG codec (every color type, depth, and Adam7), deterministic canonical encoding, and bundle-import asset canonicalization |
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
 | `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
 | `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |

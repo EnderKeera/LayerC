@@ -1,6 +1,7 @@
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
+#include "template_png_fixture.hpp"
 #include "test_support.hpp"
 
 #include <array>
@@ -45,8 +46,7 @@ layerc::core::VisualProfile visual_profile() {
       .expected_width = 0.2,
       .expected_height = 0.2,
       .references = {{.asset_sha256 =
-                          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb"
-                          "410ff61f20015ad"}},
+                          layerc::test::canonical_template_png_fixture().sha256}},
   });
   result.triggers.push_back(
       {.cooldown_id = "dash", .observation_id = "ready"});
@@ -77,16 +77,18 @@ void linux_profile_pack_contracts() {
   second_profile.name = "Linux pack two";
   auto second_visual = visual_profile();
   second_visual.profile_id = second_profile.id;
-  constexpr std::string_view asset_hash =
-      "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+  const std::string &asset_hash =
+      layerc::test::canonical_template_png_fixture().sha256;
+  const std::string &asset_png =
+      layerc::test::canonical_template_png_fixture().bytes;
   bool passed = expect(layerc::platform::ensure_profile_store_roots(roots),
                        "XDG profile-pack roots should be created");
   passed &= expect(write_file(layerc::platform::profile_visual_asset_path(
                                   profile_path, asset_hash),
-                              "abc") &&
+                              asset_png) &&
                        write_file(layerc::platform::profile_visual_asset_path(
                                       second_profile_path, asset_hash),
-                                  "abc"),
+                                  asset_png),
                    "profile-local visual assets should be written");
   passed &= expect(layerc::platform::write_profile_bundle(
                        profile_path, profile(), visual) &&

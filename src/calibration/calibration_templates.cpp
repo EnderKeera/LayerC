@@ -32,7 +32,7 @@ layerc::core::NormalizedRegion expanded_template_search_region(
 }
 
 // Samples the source pixel under the center of each downscaled pixel so the
-// stored reference never exceeds 512 pixels on its longer side.
+// stored reference never exceeds max_template_axis pixels on its longer side.
 layerc::core::TemplateImage
 downscale_capture_region(const layerc::capture::CaptureFrame &frame,
                          const std::uint32_t left, const std::uint32_t top,
@@ -48,7 +48,8 @@ downscale_capture_region(const layerc::capture::CaptureFrame &frame,
                         (static_cast<std::uint64_t>(extent) * 2U)));
   };
   const double factor =
-      std::min(1.0, 512.0 / std::max(source_width, source_height));
+      std::min(1.0, static_cast<double>(layerc::core::max_template_axis) /
+                        std::max(source_width, source_height));
   layerc::core::TemplateImage image;
   image.width = std::max<std::uint32_t>(
       1, static_cast<std::uint32_t>(std::lround(source_width * factor)));

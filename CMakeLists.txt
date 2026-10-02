@@ -254,6 +254,7 @@ if(WIN32)
         src/platform/profile_transaction.cpp
         src/platform/visual_assets.cpp
         src/platform/visual_asset_load.cpp
+        src/platform/template_png.cpp
         src/platform/live_channel.cpp
         src/platform/framed_pipe.cpp
         src/platform/bounded_helper.cpp
@@ -263,7 +264,9 @@ if(WIN32)
     target_include_directories(layerc_windows PUBLIC src/platform/include)
     target_link_libraries(layerc_windows PUBLIC
         layerc_core user32 advapi32 shell32 ole32 gdi32 shcore
-        windowscodecs bcrypt hid comctl32 dwmapi uxtheme)
+        bcrypt hid comctl32 dwmapi uxtheme)
+    # miniz serves the shared template-asset PNG codec.
+    target_link_libraries(layerc_windows PRIVATE layerc_miniz)
     target_compile_definitions(layerc_windows PUBLIC
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
@@ -387,13 +390,14 @@ if(NOT WIN32)
         src/platform/linux/path_text.cpp
         src/platform/linux/visual_assets.cpp
         src/platform/visual_asset_load.cpp
+        src/platform/template_png.cpp
         src/platform/linux/event_loop.cpp
         src/platform/linux/control_channel.cpp
     )
     target_include_directories(layerc_linux PUBLIC src/platform/include)
     target_include_directories(layerc_linux PRIVATE src/platform/linux)
     target_link_libraries(layerc_linux PUBLIC layerc_core)
-    # miniz serves the platform template-asset decoder; the daemon consumes
+    # miniz serves the shared template-asset PNG codec; the daemon consumes
     # only verified images through the visual-asset contract.
     target_link_libraries(layerc_linux PRIVATE layerc_miniz)
     layerc_enable_warnings(layerc_linux)
@@ -768,6 +772,9 @@ if(LAYERC_BUILD_TESTS)
     layerc_add_test(layerc_launcher_tests
         SOURCES tests/launcher_update_tests.cpp
         LINK layerc_launcher_core TIMEOUT 30)
+    layerc_add_test(layerc_template_png_tests
+        SOURCES tests/template_png_tests.cpp
+        LINK layerc_bundle layerc_miniz TIMEOUT 30)
     if(WIN32)
         layerc_add_test(layerc_launcher_win_tests
             SOURCES tests/launcher_win_tests.cpp

@@ -145,7 +145,8 @@ PreparedTemplate prepare_template(const TemplateImage &image,
 } // namespace detail
 
 bool TemplateImage::valid() const noexcept {
-  if (width == 0 || height == 0 || width > 512 || height > 512 ||
+  if (width == 0 || height == 0 || width > max_template_axis ||
+      height > max_template_axis ||
       pixels.size() != static_cast<std::size_t>(width) * height ||
       alpha.size() != pixels.size())
     return false;
@@ -158,7 +159,8 @@ bool TemplateImage::valid() const noexcept {
 std::optional<TemplateImage> template_image_from_rgba(
     const std::uint32_t width, const std::uint32_t height,
     const std::span<const std::uint8_t> rgba) {
-  if (width == 0 || height == 0 || width > 512 || height > 512 ||
+  if (width == 0 || height == 0 || width > max_template_axis ||
+      height > max_template_axis ||
       rgba.size() != static_cast<std::size_t>(width) * height * 4U)
     return std::nullopt;
   TemplateImage image;
