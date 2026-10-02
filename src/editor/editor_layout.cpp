@@ -1,5 +1,6 @@
 #include "editor_window.hpp"
 #include "dialog_layout.hpp"
+#include "editor_layout_rules.hpp"
 #include "editor_resource.h"
 
 #include <algorithm>
@@ -48,7 +49,6 @@ constexpr int section_gap = 12;
 constexpr int field_cap = 480;
 constexpr int preview_threshold = 1100;
 constexpr int timing_label_width = 84;
-constexpr int binding_min_width = 120;
 
 struct MainLayout {
   DialogLayout ui;
@@ -187,13 +187,12 @@ int capture_buttons_width(const MainLayout &f) {
   return f.ui.scaled(100) + (f.advanced ? f.ui.scaled(60 + 8) : 0);
 }
 
-// Capture key (and HID) share the binding row only while the binding keeps a
-// readable width; in a narrow timing column they wrap below it instead of
-// overlapping the binding.
+// Capture key (and HID) share the binding row as in the editor shell; only a
+// timing column too narrow for the field floor wraps them below the binding.
 bool binding_wraps(const MainLayout &f, const int timing_width) {
-  return timing_width - f.ui.scaled(timing_label_width) -
-             capture_buttons_width(f) - f.ui.scaled(8) <
-         f.ui.scaled(binding_min_width);
+  return capture_buttons_wrap(timing_width, f.ui.scaled(timing_label_width),
+                              capture_buttons_width(f), f.ui.scaled(8),
+                              f.ui.scaled(binding_field_floor));
 }
 
 GroupHeights group_heights(const MainLayout &f, const int timing_width) {
