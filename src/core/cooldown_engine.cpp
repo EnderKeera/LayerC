@@ -57,11 +57,10 @@ const CooldownState *cooldown_state_at(
   return found == states.end() ? nullptr : &*found;
 }
 
-double cooldown_progress(const CooldownDefinition &definition,
-                         const CooldownState &state,
+double cooldown_progress(const CooldownState &state,
                          const TimePoint now) noexcept {
   if (!state.next_charge_at.has_value()) return 1.0;
-  const auto duration = state.recharge_duration.value_or(definition.duration);
+  const auto duration = state.recharge_duration;
   if (duration <= Milliseconds::zero()) return 0.0;
   const auto remaining = cooldown_remaining_ms(state.next_charge_at, now);
   return std::clamp(static_cast<double>(remaining.count()) /

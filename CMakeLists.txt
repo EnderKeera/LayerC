@@ -98,6 +98,7 @@ add_library(layerc_core STATIC
     src/core/automation_effects.cpp
     src/core/cooldown_engine.cpp
     src/core/cooldown_groups.cpp
+    src/core/panel_presentation.cpp
     src/core/input_matcher.cpp
     src/core/hid.cpp
     src/core/hash_portable.cpp
@@ -766,6 +767,7 @@ if(LAYERC_BUILD_TESTS)
         tests/update_manifest_tests.cpp
         tests/game_match_tests.cpp
         tests/cooldown_group_tests.cpp
+        tests/panel_presentation_tests.cpp
         tests/live_edit_tests.cpp
         tests/visual_profile_tests.cpp
         tests/pixel_engine_tests.cpp

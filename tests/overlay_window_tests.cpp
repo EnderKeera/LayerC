@@ -502,7 +502,8 @@ void collection_overrides_survive_recreation() {
   const std::vector<layerc::core::CooldownState> states;
   const auto shown = [&](const layerc::daemon::OverlayCollection &collection) {
     const auto *window = collection.find("main");
-    return window != nullptr && window->should_show(states);
+    return window != nullptr &&
+           window->present(states, layerc::core::MonotonicClock::now()).visible;
   };
 
   const RECT target{100, 100, 1100, 900};

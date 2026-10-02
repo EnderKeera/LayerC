@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/panel_geometry.hpp"
+#include "layerc/core/panel_presentation.hpp"
 
 #include <memory>
 #include <optional>
@@ -32,7 +33,7 @@ public:
   void update_snapshot(const layerc::core::Panel &panel,
                        std::span<const layerc::core::CooldownDefinition> cooldowns);
   void set_session_override(std::optional<bool> visible,
-                            std::optional<std::wstring> text);
+                            std::optional<std::string> text);
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
                      DragCallback callback = {});
   [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
@@ -40,11 +41,12 @@ public:
     return window_ != nullptr && IsWindow(window_) != FALSE;
   }
   [[nodiscard]] bool screen_bounds(RECT &bounds) const noexcept;
-  [[nodiscard]] bool
-  should_show(const std::vector<layerc::core::CooldownState> &states) const;
+  // The shared core presentation of this panel for one frame.
+  [[nodiscard]] layerc::core::PanelPresentation
+  present(std::span<const layerc::core::CooldownState> states,
+          layerc::core::TimePoint now) const;
   void hide();
-  void render(const std::vector<layerc::core::CooldownState> &states,
-              layerc::core::TimePoint now);
+  void render(const layerc::core::PanelPresentation &presentation);
 
 private:
   static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
@@ -74,6 +76,8 @@ private:
   };
 
   layerc::core::Panel panel_;
+  // The profile's definitions, positioned like engine snapshots.
+  std::vector<layerc::core::CooldownDefinition> cooldowns_;
   std::vector<Bar> bars_;
   HWND window_{};
   HWND owner_{};
@@ -86,8 +90,7 @@ private:
   bool edit_mode_{};
   bool direct_drag_{};
   bool edit_selected_{};
-  std::optional<bool> visibility_override_;
-  std::optional<std::wstring> text_override_;
+  layerc::core::PanelPresentationOverrides overrides_;
   bool dragging_{};
   bool drag_moved_{};
   int last_region_width_{-1};

@@ -141,7 +141,7 @@ void DaemonApp::render_overlays() {
     const bool session_is_running =
         std::any_of(states.begin(), states.end(),
                     [](const layerc::core::CooldownState &state) {
-                      return state.next_charge_at.has_value();
+                      return !layerc::core::cooldown_ready(state);
                     });
     has_running_cooldown = has_running_cooldown || session_is_running;
 

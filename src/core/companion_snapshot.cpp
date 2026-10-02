@@ -1,9 +1,8 @@
 #include "layerc/core/companion_snapshot.hpp"
-#include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/panel_presentation.hpp"
 
 #include <algorithm>
 #include <chrono>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -47,34 +46,18 @@ void build_available_catalog(
   return found == preferences.end() ? nullptr : &*found;
 }
 
+// Companion items mirror the native bars from present_panel(); only the
+// progress direction differs (elapsed toward ready instead of remaining).
 layerc::core::CompanionSnapshotItem
-make_snapshot_item(const layerc::core::CooldownDefinition &definition,
-                   const layerc::core::CooldownState *state,
-                   const layerc::core::TimePoint now) {
+make_snapshot_item(const layerc::core::BarPresentation &bar) {
   layerc::core::CompanionSnapshotItem item;
-  item.cooldown_id = definition.id;
-  item.name = definition.name;
-  item.max_charges = definition.max_charges;
-  if (state == nullptr) {
-    item.available_charges = definition.max_charges;
-    item.is_ready = true;
-    item.remaining_ms = 0;
-    item.progress = 1.0;
-    return item;
-  }
-  // Engine states carry the effective owner view. Legacy/manual states may
-  // omit it (and max_charges); only those use the supplied member definition.
-  if (state->recharge_duration.has_value() || state->max_charges != 0)
-    item.max_charges = state->max_charges;
-  item.available_charges = state->available_charges;
-  item.is_ready =
-      state->available_charges > 0 && !state->next_charge_at.has_value();
-  item.remaining_ms = cooldown_remaining_ms(state->next_charge_at, now).count();
-  // Companion uses elapsed-toward-ready, while native bars show remaining.
-  // Both derive from the same effective runtime duration and deadline.
-  item.progress = item.remaining_ms == 0
-                      ? 1.0
-                      : 1.0 - cooldown_progress(definition, *state, now);
+  item.cooldown_id = bar.cooldown_id;
+  item.name = bar.name;
+  item.progress = bar.ready ? 1.0 : 1.0 - bar.remaining;
+  item.available_charges = bar.available_charges;
+  item.max_charges = bar.max_charges;
+  item.remaining_ms = bar.remaining_time.count();
+  item.is_ready = bar.ready;
   return item;
 }
 
@@ -84,15 +67,6 @@ void build_panel_snapshots(
     const std::span<const layerc::core::CooldownDefinition> definitions,
     const std::span<const layerc::core::CooldownState> states,
     const layerc::core::TimePoint now) {
-  std::unordered_map<std::string, const layerc::core::CooldownState *>
-      state_map;
-  for (const auto &state : states)
-    state_map[state.id] = &state;
-  std::unordered_map<std::string, const layerc::core::CooldownDefinition *>
-      def_map;
-  for (const auto &definition : definitions)
-    def_map[definition.id] = &definition;
-
   for (const auto &panel : panels) {
     if (snapshot.panels.size() >= layerc::core::max_companion_snapshot_panels)
       break;
@@ -103,17 +77,13 @@ void build_panel_snapshots(
     panel_snapshot.panel_id = panel.id;
     panel_snapshot.slot_index = mapping->slot_index;
     panel_snapshot.visible = true;
-    for (const auto &item_id : panel.cooldown_ids) {
+    const auto presentation =
+        present_panel(panel, definitions, states, {}, now);
+    for (const auto &bar : presentation.bars) {
       if (panel_snapshot.items.size() >=
           layerc::core::max_companion_snapshot_items)
         break;
-      const auto def_it = def_map.find(item_id);
-      if (def_it == def_map.end())
-        continue;
-      const auto state_it = state_map.find(item_id);
-      panel_snapshot.items.push_back(make_snapshot_item(
-          *def_it->second,
-          state_it == state_map.end() ? nullptr : state_it->second, now));
+      panel_snapshot.items.push_back(make_snapshot_item(bar));
     }
     snapshot.panels.push_back(std::move(panel_snapshot));
   }
