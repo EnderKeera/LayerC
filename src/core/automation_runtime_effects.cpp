@@ -47,45 +47,6 @@ bool runtime_effect_precedes(const AutomationEffect &left,
   return effect_order_precedes(left.order, right.order);
 }
 
-std::vector<std::string> AutomationRuntime::Impl::propagated_cooldowns(
-    const std::span<const std::string> seeds) const {
-  std::vector<std::string> result(seeds.begin(), seeds.end());
-  std::set<std::string, std::less<>> seen(result.begin(), result.end());
-  for (std::size_t index{}; index < result.size(); ++index) {
-    for (const auto &group : cooldown_groups) {
-      if (group.mode != CooldownGroupMode::trigger_propagation ||
-          std::ranges::find(group.cooldown_ids, result[index]) ==
-              group.cooldown_ids.end())
-        continue;
-      for (const auto &member : group.cooldown_ids)
-        if (seen.insert(member).second)
-          result.push_back(member);
-    }
-  }
-  return result;
-}
-
-std::vector<std::string>
-AutomationRuntime::Impl::group_cooldowns(const std::string_view group_id,
-                                         const bool propagate) const {
-  const auto group =
-      std::ranges::find(cooldown_groups, group_id, &CooldownGroup::id);
-  if (group == cooldown_groups.end())
-    return {};
-  return propagate ? propagated_cooldowns(group->cooldown_ids)
-                   : group->cooldown_ids;
-}
-
-std::vector<std::string> AutomationRuntime::Impl::reset_cooldowns(
-    const std::string_view cooldown_id) const {
-  for (const auto &group : cooldown_groups)
-    if (group.mode == CooldownGroupMode::shared_pool &&
-        std::ranges::find(group.cooldown_ids, cooldown_id) !=
-            group.cooldown_ids.end())
-      return group.cooldown_ids;
-  return {std::string(cooldown_id)};
-}
-
 bool AutomationRuntime::Impl::apply_internal(
     const AutomationEffect &effect, TimePoint now,
     AutomationRuntimeSnapshot &target, AutomationError &error,
@@ -320,22 +281,22 @@ bool AutomationRuntime::Impl::apply_internal(
     // cooldown_triggered inside the triggering batch therefore observes
     // "the trigger action was issued", not "a charge was consumed".
     const std::array<std::string, 1> seed{effect.target};
-    for (const auto &id : propagated_cooldowns(seed))
+    for (const auto &id : groups.trigger_closure(seed))
       emit(AutomationEventKind::cooldown_triggered, id);
     return true;
   }
   case AutomationActionKind::reset_cooldown:
-    for (const auto &id : reset_cooldowns(effect.target))
+    for (const auto &id : groups.reset_members(effect.target))
       emit(AutomationEventKind::cooldown_ready, id);
     return true;
   case AutomationActionKind::trigger_group:
     emit(AutomationEventKind::group_triggered, effect.target);
-    for (const auto &id : group_cooldowns(effect.target, true))
+    for (const auto &id : groups.group_trigger_members(effect.target))
       emit(AutomationEventKind::cooldown_triggered, id);
     return true;
   case AutomationActionKind::reset_group:
     emit(AutomationEventKind::group_ready, effect.target);
-    for (const auto &id : group_cooldowns(effect.target, false))
+    for (const auto &id : groups.group_reset_members(effect.target))
       emit(AutomationEventKind::cooldown_ready, id);
     return true;
   case AutomationActionKind::reduce_cooldown_next:

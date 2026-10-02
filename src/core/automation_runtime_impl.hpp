@@ -2,6 +2,7 @@
 
 // Internal definitions shared by the automation runtime translation units.
 #include "layerc/core/automation.hpp"
+#include "layerc/core/cooldown_groups.hpp"
 
 #include <map>
 #include <set>
@@ -56,7 +57,9 @@ struct EvaluationBudget {
 
 struct AutomationRuntime::Impl {
   AutomationProfile profile;
-  std::vector<CooldownGroup> cooldown_groups;
+  // Group semantics come only from the shared topology (F-A11): the runtime
+  // derives intra-batch events from the same sets the engine applies.
+  CooldownGroupTopology groups;
   AutomationRuntimeSnapshot state;
   AutomationSessionEdges edges;
   std::set<std::string, std::less<>> faulted;
@@ -67,7 +70,8 @@ struct AutomationRuntime::Impl {
   ClockReader clock;
 
   Impl(AutomationProfile source, AutomationPersistentValues persistent,
-       std::span<const CooldownGroup> groups, ClockReader clock_reader);
+       std::span<const CooldownGroup> group_definitions,
+       ClockReader clock_reader);
 
   void make_trace_room();
   [[nodiscard]] std::optional<AutomationTraceEntry>
@@ -80,12 +84,6 @@ struct AutomationRuntime::Impl {
                                       const AutomationEvent &event,
                                       const AutomationRuntimeSnapshot &snapshot,
                                       EvaluationBudget &budget) const;
-  [[nodiscard]] std::vector<std::string>
-  propagated_cooldowns(std::span<const std::string> seeds) const;
-  [[nodiscard]] std::vector<std::string>
-  group_cooldowns(std::string_view group_id, bool propagate) const;
-  [[nodiscard]] std::vector<std::string>
-  reset_cooldowns(std::string_view cooldown_id) const;
   bool apply_internal(const AutomationEffect &effect, TimePoint now,
                       AutomationRuntimeSnapshot &target, AutomationError &error,
                       std::vector<AutomationEvent> &derived) const;

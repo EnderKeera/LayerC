@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/cooldown_groups.hpp"
 #include "layerc/core/types.hpp"
 
 #include <functional>
@@ -47,21 +48,6 @@ struct CooldownIdEqual {
   }
 };
 
-// Runtime identities have separate domains. Persisted cooldown and group IDs
-// remain opaque: no synthetic string can collide with a public ID.
-enum class CooldownOwnerKind : std::uint8_t { cooldown, shared_pool };
-
-struct CooldownOwnerDefinition {
-  CooldownOwnerKind kind{CooldownOwnerKind::cooldown};
-  std::string id;
-  Milliseconds duration{};
-  std::uint32_t max_charges{1};
-  RetriggerPolicy retrigger{RetriggerPolicy::ignore};
-  RecoveryMode recovery{RecoveryMode::single};
-
-  bool operator==(const CooldownOwnerDefinition &) const = default;
-};
-
 class CooldownEngine {
 public:
   explicit CooldownEngine(std::span<const CooldownDefinition> definitions,
@@ -105,6 +91,8 @@ private:
 
   void update_entry(Entry &entry, TimePoint now);
   [[nodiscard]] bool trigger_entry(Entry &entry, TimePoint now);
+  // One root origin triggers an owner at most once; false when already done.
+  [[nodiscard]] static bool claim_origin(Entry &entry, std::uint64_t origin_token);
   [[nodiscard]] std::vector<std::string>
   trigger_many_with_propagation(std::span<const std::string> cooldown_ids,
                                 TimePoint now, std::uint64_t origin_token);
@@ -116,7 +104,7 @@ private:
   std::vector<Entry> entries_;
   std::unordered_map<std::string, std::size_t, CooldownIdHash, CooldownIdEqual>
       owner_slots_;
-  std::vector<CooldownGroup> groups_;
+  CooldownGroupTopology groups_;
 };
 
 } // namespace layerc::core

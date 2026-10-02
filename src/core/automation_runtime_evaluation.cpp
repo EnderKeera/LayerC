@@ -28,9 +28,9 @@ bool consume_timer_firing(AutomationRuntimeSnapshot &target,
 
 AutomationRuntime::Impl::Impl(AutomationProfile source,
                               AutomationPersistentValues persistent,
-                              const std::span<const CooldownGroup> groups,
+                              const std::span<const CooldownGroup> group_definitions,
                               ClockReader clock_reader)
-    : profile(std::move(source)), cooldown_groups(groups.begin(), groups.end()),
+    : profile(std::move(source)), groups(group_definitions),
       clock(std::move(clock_reader)) {
   for (const auto &variable : profile.variables) {
     auto value = variable.default_value;

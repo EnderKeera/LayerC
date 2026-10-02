@@ -60,7 +60,7 @@ const AutomationProfile &AutomationRuntime::profile() const noexcept {
 }
 std::span<const CooldownGroup>
 AutomationRuntime::cooldown_groups() const noexcept {
-  return impl_->cooldown_groups;
+  return impl_->groups.groups();
 }
 const AutomationRuntimeSnapshot &AutomationRuntime::snapshot() const noexcept {
   return impl_->state;
@@ -200,7 +200,7 @@ void AutomationRuntime::reconfigure(
     if (retained.contains(item.owner_automation))
       next.overlay_overrides.push_back(item);
   impl_->profile = std::move(profile);
-  impl_->cooldown_groups.assign(cooldown_groups.begin(), cooldown_groups.end());
+  impl_->groups = CooldownGroupTopology(cooldown_groups);
   impl_->state = std::move(next);
   // A profile switch invalidates the daemon's previous ready/value
   // observations: re-baseline the edge monitors with the new profile.

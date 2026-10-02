@@ -720,12 +720,11 @@ public:
   // automation, which is re-evaluated from the original snapshot. Global
   // exhaustion rejects the root without faulting automations. Checks are
   // cooperative, including immediately before the non-preemptible committer.
-  // cooldown_triggered
-  // events derived from trigger actions expand the profile's
-  // trigger-propagation closure: the runtime does not own the cooldown
-  // engine, so whether a charge was actually consumed is decided by the
-  // daemon-side committer (its own trigger paths emit engine-derived events
-  // with real origin tokens).
+  // Cooldown events derived from trigger/reset actions use the shared
+  // CooldownGroupTopology sets: the runtime does not own the cooldown engine,
+  // so whether a charge was actually consumed is decided by the daemon-side
+  // committer (its own trigger paths emit engine-derived events with real
+  // origin tokens).
   [[nodiscard]] AutomationEvaluationResult
   process(const AutomationEvent &event, const EffectValidator &validator = {},
           const EffectCommitter &committer = {});

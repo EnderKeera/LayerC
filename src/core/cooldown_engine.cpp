@@ -72,7 +72,7 @@ double cooldown_progress(const CooldownDefinition &definition,
 CooldownEngine::CooldownEngine(
     const std::span<const CooldownDefinition> definitions,
     const std::span<const CooldownGroup> groups)
-    : groups_(groups.begin(), groups.end()) {
+    : groups_(groups) {
   entries_.reserve(definitions.size());
   order_.reserve(definitions.size());
   owner_slots_.reserve(definitions.size());
@@ -94,7 +94,7 @@ CooldownEngine::CooldownEngine(
   }
 
   std::unordered_set<std::string> group_ids;
-  for (const auto &group : groups_) {
+  for (const auto &group : groups_.groups()) {
     if (group.id.empty() || !group_ids.insert(group.id).second)
       throw std::invalid_argument("duplicate or empty cooldown group id");
     if (group.cooldown_ids.empty())
@@ -111,12 +111,7 @@ CooldownEngine::CooldownEngine(
       throw std::invalid_argument("shared pool requires duration and charges");
 
     const auto slot = entries_.size();
-    entries_.push_back({.definition = {.kind = CooldownOwnerKind::shared_pool,
-                                      .id = group.id,
-                                      .duration = group.duration,
-                                      .max_charges = group.max_charges,
-                                      .retrigger = group.retrigger,
-                                      .recovery = group.recovery},
+    entries_.push_back({.definition = pool_owner(group),
                         .available_charges = group.max_charges,
                         .next_charge_at = std::nullopt,
                         .recovery_deadlines = {}});
@@ -135,12 +130,7 @@ CooldownEngine::CooldownEngine(
     if (slot != unassigned)
       continue;
     slot = entries_.size();
-    entries_.push_back({.definition = {.kind = CooldownOwnerKind::cooldown,
-                                      .id = source.id,
-                                      .duration = source.duration,
-                                      .max_charges = source.max_charges,
-                                      .retrigger = source.retrigger,
-                                      .recovery = source.recovery},
+    entries_.push_back({.definition = standalone_owner(source),
                         .available_charges = source.max_charges,
                         .next_charge_at = std::nullopt,
                         .recovery_deadlines = {}});
@@ -162,6 +152,14 @@ const CooldownOwnerDefinition *
 CooldownEngine::owner_definition(const std::string_view cooldown_id) const {
   const auto *entry = entry_for(cooldown_id);
   return entry == nullptr ? nullptr : &entry->definition;
+}
+
+bool CooldownEngine::claim_origin(Entry &entry,
+                                  const std::uint64_t origin_token) {
+  if (origin_token == 0) return true;
+  if (entry.last_trigger_origin == origin_token) return false;
+  entry.last_trigger_origin = origin_token;
+  return true;
 }
 
 bool CooldownEngine::trigger_entry(Entry &entry, const TimePoint now) {
@@ -214,27 +212,16 @@ std::vector<std::string> CooldownEngine::trigger_many_with_propagation(
     // such as {a,b} and {a,c} trigger this reliably under ASan).
     const auto id = pending[index];
     auto *entry = entry_for(id);
-    if (entry == nullptr || !visited_entries.insert(entry).second)
-      continue;
-    if (origin_token != 0) {
-      if (entry->last_trigger_origin == origin_token)
-        continue;
-      entry->last_trigger_origin = origin_token;
-    }
-    if (!trigger_entry(*entry, now))
+    if (entry == nullptr || !visited_entries.insert(entry).second ||
+        !claim_origin(*entry, origin_token) || !trigger_entry(*entry, now))
       continue;
 
     triggered.push_back(id);
     if (!expanded_members.insert(id).second)
       continue;
-    for (const auto &group : groups_) {
-      if (group.mode != CooldownGroupMode::trigger_propagation ||
-          std::ranges::find(group.cooldown_ids, id) == group.cooldown_ids.end())
-        continue;
-      for (const auto &member : group.cooldown_ids)
-        if (!expanded_members.contains(member))
-          pending.push_back(member);
-    }
+    for (auto &member : groups_.propagation_step(id))
+      if (!expanded_members.contains(member))
+        pending.push_back(std::move(member));
   }
   return triggered;
 }
@@ -325,33 +312,24 @@ std::vector<std::string>
 CooldownEngine::trigger_group(const std::string_view group_id,
                               const TimePoint now,
                               const std::uint64_t origin_token) {
-  const auto found = std::ranges::find(groups_, group_id, &CooldownGroup::id);
-  if (found == groups_.end())
+  const auto *found = groups_.find(group_id);
+  if (found == nullptr)
     return {};
   if (found->mode == CooldownGroupMode::shared_pool) {
+    // One pool charge for every member; pools never propagate.
     auto *entry = entry_for(found->cooldown_ids.front());
-    if (entry == nullptr ||
-        (origin_token != 0 && entry->last_trigger_origin == origin_token))
+    if (entry == nullptr || !claim_origin(*entry, origin_token) ||
+        !trigger_entry(*entry, now))
       return {};
-    if (origin_token != 0)
-      entry->last_trigger_origin = origin_token;
-    return trigger_entry(*entry, now) ? found->cooldown_ids
-                                      : std::vector<std::string>{};
+    return groups_.group_trigger_members(group_id);
   }
   return trigger_many_with_propagation(found->cooldown_ids, now, origin_token);
 }
 
 bool CooldownEngine::reset_group(const std::string_view group_id) {
-  const auto found = std::ranges::find(groups_, group_id, &CooldownGroup::id);
-  if (found == groups_.end())
-    return false;
   bool reset_any{};
-  std::unordered_set<Entry *> visited;
-  for (const auto &id : found->cooldown_ids) {
-    auto *entry = entry_for(id);
-    if (entry != nullptr && visited.insert(entry).second)
-      reset_any = reset(id) || reset_any;
-  }
+  for (const auto &id : groups_.group_reset_members(group_id))
+    reset_any = reset(id) || reset_any;
   return reset_any;
 }
 
