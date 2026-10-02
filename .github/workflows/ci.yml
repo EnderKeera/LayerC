@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   workflow-lint:
-    runs-on: ubicloud-standard-4
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -28,10 +28,8 @@ jobs:
         uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 # 1.7.12
 
   windows-msvc:
-    # Only trusted branches may execute on the interactive Windows runner.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, windows, x64, layerc-bench]
-    timeout-minutes: 30
+    runs-on: windows-2022
+    timeout-minutes: 10
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -81,9 +79,8 @@ jobs:
           if-no-files-found: error
 
   windows-analyze:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, windows, x64, layerc-bench]
-    timeout-minutes: 60
+    runs-on: windows-2022
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -103,8 +100,8 @@ jobs:
 
       # Keep going so one run reports every analysis finding. /analyze runs
       # at compile time; windows-msvc already runs the test suites. Two
-      # /analyze compilers can exhaust the self-hosted box's memory (C1060)
-      # when it is busy, so a failed pass is finished with one compiler;
+      # /analyze compilers can exhaust the runner's memory (C1060) under
+      # load, so a failed pass is finished with one compiler;
       # Ninja rebuilds only what failed, and real findings fail both passes.
       - name: Build with MSVC analysis
         shell: pwsh
@@ -117,8 +114,8 @@ jobs:
           exit $LASTEXITCODE
 
   linux:
-    runs-on: ubicloud-standard-4
-    timeout-minutes: 25
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -151,8 +148,8 @@ jobs:
           if-no-files-found: warn
 
   linux-flatpak:
-    runs-on: ubicloud-standard-4
-    timeout-minutes: 60
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -193,8 +190,8 @@ jobs:
   publish-rolling:
     needs: [workflow-lint, windows-msvc, windows-analyze, linux, linux-flatpak]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubicloud-standard-4
-    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Publications are serialized; publish-rolling.sh skips a commit older
     # than the one rolling already publishes.
     concurrency:
