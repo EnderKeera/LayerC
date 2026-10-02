@@ -1,20 +1,13 @@
 // Canonical GameMatch resolution policy shared by the Windows and Linux
-// window adapters. See game_match.hpp for the comparison rules.
-//
-// Two named semantics share one folded model:
-// - matches_all (candidate_matches_game): conjunctive single-candidate
-//   filter — every specified field must hold. Used by window enumeration
-//   to test one window at a time.
-// - best_identity (resolve_game_match): disjunctive cascade over a poll —
-//   identity precedence name → path → class → title, preferring the active
-//   window within each kind. Used by trackers polling many windows.
-// The match side is folded once; each candidate is folded once per call;
-// resolve scores every candidate once as (level, !active) and picks the
-// minimum instead of scanning per level.
+// window adapters. See game_match.hpp for the comparison rules. The match
+// side is folded once per call and each candidate once per evaluation;
+// selection only orders candidates the conjunctive matcher accepts.
 
 #include "layerc/core/game_match.hpp"
 
 #include "layerc/core/utf8.hpp"
+
+#include <algorithm>
 
 namespace layerc::core {
 namespace {
@@ -87,73 +80,58 @@ void fold_into(std::optional<std::string> &slot, std::string_view text,
   return candidate->find(*needle) != std::string::npos;
 }
 
-// Identity level of one folded candidate against the folded match, or -1.
-// Levels are precedence-ordered (name → path → class → title); only
-// specified matcher fields participate, so an empty match never matches.
-[[nodiscard]] int identity_level(const FoldedSide &candidate,
-                                 const FoldedSide &match) noexcept {
-  if (match.name.has_value() && field_equals(candidate.name, match.name))
-    return 0;
-  if (match.path.has_value() && field_equals(candidate.path, match.path))
-    return 1;
-  if (match.clazz.has_value() && field_contains(candidate.clazz, match.clazz))
-    return 2;
-  if (match.title.has_value() && field_contains(candidate.title, match.title))
-    return 3;
-  return -1;
+[[nodiscard]] bool has_identity(const FoldedSide &match) noexcept {
+  return match.name.has_value() || match.path.has_value() ||
+         match.clazz.has_value() || match.title.has_value();
+}
+
+[[nodiscard]] bool folded_matches(const FoldedSide &candidate,
+                                  const FoldedSide &match) {
+  // An empty matcher field is vacuous; a specified one must hold. No
+  // executable-path presence guard: a pure title/class match must not
+  // depend on the candidate carrying a path.
+  return candidate.usable && field_equals(candidate.name, match.name) &&
+         field_equals(candidate.path, match.path) &&
+         field_contains(candidate.clazz, match.clazz) &&
+         field_contains(candidate.title, match.title);
 }
 
 } // namespace
 
-bool game_match_usable(const GameMatch &match) {
-  for (const std::string_view field :
-       {std::string_view(match.executable_name),
-        std::string_view(match.executable_path),
-        std::string_view(match.window_class),
-        std::string_view(match.window_title)}) {
-    if (!field.empty() && !fold_field(field).has_value()) return false;
-  }
-  return true;
-}
-
 bool candidate_matches_game(const MatchCandidate &candidate,
                             const GameMatch &match, const bool exact_path) {
-  if (match.global || !game_match_usable(match)) return false;
+  if (match.global) return false;
   const FoldedSide folded_match = fold_match(match, exact_path);
-  const FoldedSide folded_candidate = fold_candidate(candidate, exact_path);
-  if (!folded_match.usable || !folded_candidate.usable) return false;
-  // Conjunctive: an empty matcher field is vacuous; a specified one must
-  // hold. No executable-path presence guard — a pure title/class match must
-  // not depend on the candidate carrying a path.
-  return field_equals(folded_candidate.name, folded_match.name) &&
-         field_equals(folded_candidate.path, folded_match.path) &&
-         field_contains(folded_candidate.clazz, folded_match.clazz) &&
-         field_contains(folded_candidate.title, folded_match.title);
+  if (!folded_match.usable || !has_identity(folded_match)) return false;
+  return folded_matches(fold_candidate(candidate, exact_path), folded_match);
 }
 
 std::optional<std::size_t>
-resolve_game_match(const std::vector<MatchCandidate> &candidates,
-                   const GameMatch &match, const bool exact_path) {
-  if (candidates.empty() || match.global || !game_match_usable(match))
-    return std::nullopt;
-  const FoldedSide folded_match = fold_match(match, exact_path);
-  if (!folded_match.usable) return std::nullopt;
-  // Single scored pass: (identity level, background penalty). Lower wins;
-  // ties keep the earlier candidate, so poll order stays deterministic.
+select_game_candidate(const std::vector<MatchCandidate> &candidates,
+                      const GameMatch &match,
+                      const GameMatchSelection &selection) {
+  if (candidates.empty()) return std::nullopt;
+  if (match.global) {
+    const auto active = std::ranges::find_if(
+        candidates, [](const MatchCandidate &candidate) { return candidate.active; });
+    return static_cast<std::size_t>(
+        active == candidates.end() ? 0 : active - candidates.begin());
+  }
+  const FoldedSide folded_match = fold_match(match, selection.exact_path);
+  if (!folded_match.usable || !has_identity(folded_match)) return std::nullopt;
+  // Rank (inactive, not preferred); ties keep the earlier candidate so poll
+  // order stays deterministic.
   std::optional<std::size_t> best;
-  int best_level = 4;
-  bool best_inactive = true;
+  int best_rank = 4;
   for (std::size_t index = 0; index < candidates.size(); ++index) {
-    const FoldedSide folded = fold_candidate(candidates[index], exact_path);
-    if (!folded.usable) continue;
-    const int level = identity_level(folded, folded_match);
-    if (level < 0) continue;
-    const bool inactive = !candidates[index].active;
-    if (!best.has_value() || level < best_level ||
-        (level == best_level && best_inactive && !inactive)) {
+    if (!folded_matches(fold_candidate(candidates[index], selection.exact_path),
+                        folded_match))
+      continue;
+    const int rank = (candidates[index].active ? 0 : 2) +
+                     (selection.preferred == index ? 0 : 1);
+    if (rank < best_rank) {
       best = index;
-      best_level = level;
-      best_inactive = inactive;
+      best_rank = rank;
     }
   }
   return best;

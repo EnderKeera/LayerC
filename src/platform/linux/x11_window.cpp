@@ -331,47 +331,26 @@ X11WindowTracker::find(const std::uint64_t window) const {
 const X11WindowSnapshot *match_window(const X11WindowScan &scan,
                                       const layerc::core::GameMatch &match,
                                       const std::uint64_t previous_window) {
-  if (scan.windows.empty()) return nullptr;
-  if (match.global) {
-    if (scan.active.has_value()) {
-      for (const auto &snapshot : scan.windows)
-        if (snapshot.window == *scan.active) return &snapshot;
-    }
-    return &scan.windows.front();
-  }
-
-  // Enumeration stays here; identity precedence and the
-  // foreground-preference rule live in core::resolve_game_match. POSIX
-  // filesystems compare case-sensitively, so the executable path stays
-  // byte-exact (exact_path=true) while every other field uses the shared
-  // fold.
+  // Enumeration stays here; the matching rule and the foreground/previous
+  // preference live in core::select_game_candidate. POSIX filesystems
+  // compare case-sensitively, so the executable path stays byte-exact.
   std::vector<layerc::core::MatchCandidate> candidates;
   candidates.reserve(scan.windows.size());
-  for (const auto &snapshot : scan.windows) {
+  std::optional<std::size_t> preferred;
+  for (std::size_t index{}; index < scan.windows.size(); ++index) {
+    const auto &snapshot = scan.windows[index];
     candidates.push_back({.executable_name = snapshot.executable_name,
                           .executable_path = snapshot.executable_path,
                           .class_name = snapshot.class_name,
                           .title = snapshot.title,
                           .active = scan.active.has_value() &&
                                   snapshot.window == *scan.active});
+    if (previous_window != 0 && snapshot.window == previous_window)
+      preferred = index;
   }
-  // The core resolver keeps the first candidate on an identity/foreground
-  // tie. Put the previous target first without changing either policy.
-  std::size_t previous_index{};
-  for (std::size_t index{}; index < scan.windows.size(); ++index)
-    if (scan.windows[index].window == previous_window) previous_index = index;
-  const auto previous = candidates.begin() +
-                        static_cast<std::ptrdiff_t>(previous_index);
-  std::rotate(candidates.begin(), previous, previous + 1);
-  const auto resolved = layerc::core::resolve_game_match(
-      candidates, match, /*exact_path=*/true);
-  if (!resolved.has_value()) return nullptr;
-  std::size_t index = *resolved;
-  if (*resolved == 0)
-    index = previous_index;
-  else if (*resolved <= previous_index)
-    index = *resolved - 1;
-  return &scan.windows[index];
+  const auto resolved = layerc::core::select_game_candidate(
+      candidates, match, {.exact_path = true, .preferred = preferred});
+  return resolved.has_value() ? &scan.windows[*resolved] : nullptr;
 }
 
 } // namespace layerc::platform

@@ -37,7 +37,7 @@ registers its socket on the event loop:
 | Adapter | Status | Notes |
 | --- | --- | --- |
 | Connection + extension probes | done | `layerctl status --json` publishes XI2/Shape/RandR/Composite/Damage/XFixes versions, EWMH availability, service state, capability availability, stable reason tokens, and bounded current session fault diagnostics |
-| Window tracking | done | EWMH `_NET_CLIENT_LIST` with a bounded root-child fallback; client title/class/PID/state and structure changes, plus root-child creation/map/unmap/destruction, invalidate discovery through the shared input/event dispatcher without periodic rescans; `GameMatch` resolution is name → path → class → title, case-folded |
+| Window tracking | done | EWMH `_NET_CLIENT_LIST` with a bounded root-child fallback; client title/class/PID/state and structure changes, plus root-child creation/map/unmap/destruction, invalidate discovery through the shared input/event dispatcher without periodic rescans; `GameMatch` uses the shared conjunctive rule (every specified field must hold, case-folded, byte-exact executable path), preferring the active window, then the previously followed one |
 | Input | done | XI2 raw key/button events plus hierarchy tracking for hotplug |
 | Overlay | done | One click-through window per panel; Shape is required, otherwise the overlay stays hidden |
 | Capture | done | Composite named pixmaps + Damage coalescing, with a 100 ms bounded direct-window fallback; exposed by `layercal` |
@@ -100,7 +100,8 @@ block implementation or container CI:
 - Passive keyboard and mouse triggers plus real hierarchy hotplug; confirm no
   input is blocked or synthesized.
 - Executable, title, and class matching, including the documented
-  title/class fallback when `/proc/<pid>/exe` is unreadable in Flatpak.
+  Flatpak case where `/proc/<pid>/exe` is unreadable and only title/class
+  profiles match.
 - Overlay visibility and click-through with a real pointer, including HiDPI
   panels and the missing-Shape hidden-overlay failure mode.
 - Headless/non-X11 and missing-extension snapshots showing the affected
@@ -359,7 +360,9 @@ The sandbox keeps private XDG roots under `~/.var/app/io.github.EnderKeera.Layer
 and its socket under the per-app `XDG_RUNTIME_DIR` — intentionally separate
 from the native store/socket. Host shell redirection is the file bridge in
 and out of the sandbox. Flatpak PID isolation can hide host executable paths;
-matching degrades to title/class and never broadens silently.
+a profile that specifies `executableName` or `executablePath` then does not
+match (fields are conjunctive and never fall back), so Flatpak-only profiles
+should identify the game by `windowClass`/`windowTitle`.
 
 CI builds the manifest and runs daemon/control/X11 smoke under Xvfb. A physical
 desktop is still required for real compositor, pointer, monitor, and GPU
