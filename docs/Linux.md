@@ -7,10 +7,11 @@ gate details.
 
 ## Support status
 
-Linux V2.6 is implemented in this tree but remains **pre-release**: package
-metadata still reports 2.4.0 and the physical GNOME Xorg/KDE X11 evidence below
-has not been archived. CI verifies headless, Xvfb, installed-native, and Flatpak
-runtime behavior; it is not a substitute for the hardware checklist.
+Linux V2.6 is part of the `v2.6.0` release as **source/CLI only**. No Linux
+package or Flatpak bundle is published; build it from source as described
+below. The physical GNOME Xorg/KDE X11 evidence below is **pending**: it has not
+been archived. CI verifies headless, Xvfb, installed-native, and Flatpak
+runtime behavior, but it is not a substitute for the hardware checklist.
 
 | Surface | State | Boundary |
 | --- | --- | --- |
