@@ -59,11 +59,13 @@ use CMake presets.
 
 ## CI and release gates
 
-Linux-side jobs run on Ubicloud `ubicloud-standard-4` (the Ubicloud GitHub App
-needs repository access). Windows jobs run on the interactive self-hosted
-`[self-hosted, windows, x64, layerc-bench]` runner and share it, so they run
-only for `main`, manual dispatch, and pull requests from this repository; fork
-pull requests get only the Linux-side jobs.
+CI, release, and review/comment automation use GitHub-hosted runners:
+`windows-2022` for Windows builds, `ubuntu-24.04` for Linux build and Flatpak
+jobs, and `ubuntu-latest` for workflow lint, publishing, and automation. Every
+GitHub-hosted job has a 10-minute timeout. Pull requests, including forks,
+receive both Windows and Linux CI checks. Only hardware benchmarks and the
+manual Windows workflow use the interactive self-hosted
+`[self-hosted, windows, x64, layerc-bench]` runner, with their existing timeouts.
 
 [`ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`, pull requests,
 and manual dispatch; a newer push to a pull request cancels its older run.
