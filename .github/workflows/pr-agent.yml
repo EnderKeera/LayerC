@@ -11,6 +11,15 @@ permissions:
   contents: read
   issues: read
 
+# A newer push supersedes the automatic review of the same pull request.
+# Each bot command keeps its own group, so a queued /ask is never dropped.
+concurrency:
+  group: >-
+    pr-agent-${{ github.event_name == 'pull_request'
+    && format('review-{0}', github.event.pull_request.number)
+    || format('comment-{0}', github.event.comment.id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   pr-agent:
     # PR events always review; comment events only answer explicit bot

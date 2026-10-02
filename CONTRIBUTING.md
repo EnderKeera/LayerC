@@ -136,7 +136,9 @@ Other workflows:
   MSBuild configuration; uploads `windows-selfhosted-logs-<run>-<attempt>`.
   Run `gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>`.
 - [`pr-agent.yml`](.github/workflows/pr-agent.yml) reviews pull requests
-  through OpenRouter and answers `/review`, `/ask`, and `/describe` comments;
+  through OpenRouter and answers `/review`, `/ask`, and `/describe` comments.
+  A newer push cancels the superseded automatic review of the same pull
+  request; each command runs in its own group and is never dropped.
   [`claude.yml`](.github/workflows/claude.yml) answers `@claude` mentions.
 
 ### Hardware runner and local benchmarks
