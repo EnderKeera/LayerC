@@ -27,7 +27,7 @@ These values remain evidence for that run, not a substitute for current CI.
 
 ## Mandatory pre-release widget gate
 
-Windows CI (`windows-msvc` on the self-hosted `layerc-bench` runner) does not
+Windows CI (`windows-msvc` on GitHub-hosted `windows-2022`) does not
 require the UWP C++/XAML workload; `layerc_gamebar_host` is conditionally
 registered only when the UWP toolset, Windows SDK C++/WinRT headers, and
 MSBuild are installed, so a green CI run does not prove the widget host links. Before each Game Bar
