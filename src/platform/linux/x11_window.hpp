@@ -76,9 +76,9 @@ private:
 // any). Empty for every other case — the caller degrades to title/class.
 [[nodiscard]] std::string process_executable_path(std::uint32_t pid);
 
-// Executable-name-first matching (V2.5 parity): name, then advanced
-// executable_path opt-in, then window class, then title substring. A profile
-// with no identity field never matches. A previous window breaks background
+// One window for a profile under the shared core::select_game_candidate
+// policy: every specified identity field must hold (byte-exact executable
+// path), the active window wins, and a previous window breaks background
 // ties so losing focus does not change an existing session's target.
 [[nodiscard]] const X11WindowSnapshot *
 match_window(const X11WindowScan &scan, const layerc::core::GameMatch &match,

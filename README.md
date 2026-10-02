@@ -369,6 +369,12 @@ Windows and Linux; do not copy an entire platform store.
 }
 ```
 
+`game` fields match conjunctively on both platforms: every specified field
+must hold (`executableName` by case-folded equality, `executablePath` exactly
+on Linux and case-folded on Windows, `windowClass` and `windowTitle` as
+case-folded substrings), so the sample above needs both `game.exe` and a title
+containing "Game Window". A profile with no identity field never matches.
+
 Keyboard `code` values are Win32 virtual-key codes on both platforms
 (`16` is Shift, `69` is E), so this binding fires on Shift+E. Schema 4 requires
 the empty `modules`, `cooldownGroups`, and `hidBindings` arrays; older schemas
