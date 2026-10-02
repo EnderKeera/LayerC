@@ -1,7 +1,7 @@
 #include "layerc/core/live_edit.hpp"
 
 #include "layerc/core/base64.hpp"
-#include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/cooldown_groups.hpp"
 #include "layerc/core/enum_wire.hpp"
 #include "layerc/core/frame.hpp"
 #include "layerc/core/json_reader.hpp"
@@ -80,10 +80,11 @@ bool ProfileDelta::empty() const noexcept {
 ProfileDelta diff_profiles(const GameProfile &before,
                            const GameProfile &after) {
   ProfileDelta delta;
-  delta.metadata_changed = before.schema_version != after.schema_version ||
+  delta.instance_shape_changed = before.visual_runtime != after.visual_runtime ||
+                                 before.modules != after.modules;
+  delta.metadata_changed = delta.instance_shape_changed ||
+                           before.schema_version != after.schema_version ||
                            before.id != after.id || before.name != after.name ||
-                           before.visual_runtime != after.visual_runtime ||
-                           before.modules != after.modules ||
                            before.cooldown_groups != after.cooldown_groups ||
                            before.cooldowns != after.cooldowns;
   delta.enablement_changed = before.enabled != after.enabled;
@@ -92,15 +93,16 @@ ProfileDelta diff_profiles(const GameProfile &before,
                            before.hid_bindings != after.hid_bindings;
   delta.panels_changed = before.panels != after.panels;
 
-  const CooldownEngine previous(before.cooldowns, before.cooldown_groups);
-  const CooldownEngine replacement(after.cooldowns, after.cooldown_groups);
+  // Pure owner resolution: an unvalidated profile cannot throw here.
+  const CooldownGroupTopology previous(before.cooldown_groups);
+  const CooldownGroupTopology replacement(after.cooldown_groups);
   for (const auto &definition : before.cooldowns) {
     const auto *updated = find_cooldown(after.cooldowns, definition.id);
     if (updated == nullptr) {
       delta.removed_cooldown_ids.push_back(definition.id);
     } else {
-      if (*previous.owner_definition(definition.id) !=
-          *replacement.owner_definition(definition.id))
+      if (previous.owner(before.cooldowns, definition.id) !=
+          replacement.owner(after.cooldowns, definition.id))
         delta.reset_cooldown_ids.push_back(definition.id);
       if (definition.name != updated->name)
         delta.cooldown_visuals_changed = true;
@@ -115,11 +117,10 @@ ProfileDelta diff_profiles(const GameProfile &before,
 
 SessionReconcilePlan plan_session_reconciliation(const GameProfile &before,
                                                  const GameProfile &after) {
-  const auto delta = diff_profiles(before, after);
+  auto delta = diff_profiles(before, after);
   SessionReconcilePlan plan;
   plan.recreate_instances = delta.enablement_changed || delta.matcher_changed ||
-                            before.visual_runtime != after.visual_runtime ||
-                            before.modules != after.modules;
+                            delta.instance_shape_changed;
   plan.rebuild_input_matcher = delta.bindings_changed ||
                                !delta.added_cooldown_ids.empty() ||
                                !delta.removed_cooldown_ids.empty();
@@ -127,9 +128,9 @@ SessionReconcilePlan plan_session_reconciliation(const GameProfile &before,
       delta.panels_changed || delta.cooldown_visuals_changed ||
       !delta.added_cooldown_ids.empty() ||
       !delta.removed_cooldown_ids.empty() || !delta.reset_cooldown_ids.empty();
-  plan.added_cooldown_ids = delta.added_cooldown_ids;
-  plan.removed_cooldown_ids = delta.removed_cooldown_ids;
-  plan.reset_cooldown_ids = delta.reset_cooldown_ids;
+  plan.added_cooldown_ids = std::move(delta.added_cooldown_ids);
+  plan.removed_cooldown_ids = std::move(delta.removed_cooldown_ids);
+  plan.reset_cooldown_ids = std::move(delta.reset_cooldown_ids);
   for (const auto &definition : after.cooldowns) {
     if (std::ranges::find(plan.added_cooldown_ids, definition.id) ==
             plan.added_cooldown_ids.end() &&

@@ -10,6 +10,8 @@ void test_cooldown_control_operations();
 void test_cooldown_recovery_modes_and_groups();
 void test_cooldown_owner_id_collisions();
 void test_game_match_selection();
+void test_cooldown_group_engine_runtime_parity();
+void test_cooldown_owner_resolution_is_pure();
 void test_shared_pool_reconciliation();
 void test_snapshot_reuse();
 void test_input_chord_edges();

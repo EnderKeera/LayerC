@@ -36,6 +36,8 @@ enum class RevisionDecision : std::uint8_t { accept, duplicate, stale };
 
 struct ProfileDelta {
   bool metadata_changed{};
+  // Visual runtime or module set: running instances must be recreated.
+  bool instance_shape_changed{};
   bool enablement_changed{};
   bool matcher_changed{};
   bool bindings_changed{};
