@@ -37,11 +37,14 @@ test registration.
 
 CI, release, and review/comment automation use GitHub-hosted runners:
 `windows-2022` for Windows builds, `ubuntu-24.04` for Linux build and Flatpak
-jobs, and `ubuntu-latest` for workflow lint, publishing, and automation. Every
-GitHub-hosted job has a 10-minute timeout. Pull requests, including forks,
-receive both Windows and Linux CI checks. Only hardware benchmarks and the
-manual Windows workflow use the interactive self-hosted
-`[self-hosted, windows, x64, layerc-bench]` runner, with their existing timeouts.
+jobs, and `ubuntu-latest` for workflow lint, publishing, and automation.
+GitHub-hosted jobs normally have a 10-minute timeout. The Windows CI and
+release build jobs allow 30 minutes; `windows-analyze` and `linux-flatpak`
+allow 60 minutes for cold builds, SDK setup, and analysis recovery retries.
+Pull requests, including forks, receive both Windows and Linux CI checks. Only
+hardware benchmarks and the manual Windows workflow use the interactive
+self-hosted `[self-hosted, windows, x64, layerc-bench]` runner, with their
+existing timeouts.
 
 [`ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`, pull requests,
 and manual dispatch; a newer push to a pull request cancels its older run.
