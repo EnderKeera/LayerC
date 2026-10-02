@@ -1,4 +1,5 @@
 #include "dialog_layout.hpp"
+#include "editor_layout_rules.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
 #include "test_support.hpp"
@@ -383,4 +384,32 @@ void editor_dialog_font_contracts() {
     DeleteObject(small);
   if (large != nullptr)
     DeleteObject(large);
+}
+
+// The default 1196x753 editor has a 287 px timing column at 96 DPI. As in the
+// editor shell, Capture key stays beside a 95 px binding; only the advanced
+// HID button, which would overlap the field, wraps both below it.
+void editor_binding_row_contracts() {
+  using layerc::editor::binding_field_floor;
+  using layerc::editor::capture_buttons_wrap;
+  constexpr int label = 84;
+  constexpr int gap = 8;
+  constexpr int capture = 100;
+  constexpr int advanced = capture + 60 + gap;
+  expect(!capture_buttons_wrap(287, label, capture, gap, binding_field_floor),
+         "the default timing column keeps Capture key on the binding row");
+  expect(capture_buttons_wrap(287, label, advanced, gap, binding_field_floor),
+         "Capture key and HID wrap where they would overlap the binding");
+  expect(!capture_buttons_wrap(label + capture + gap + binding_field_floor,
+                               label, capture, gap, binding_field_floor) &&
+             capture_buttons_wrap(label + capture + gap + binding_field_floor -
+                                      1,
+                                  label, capture, gap, binding_field_floor),
+         "the row wraps exactly when the binding would drop below its floor");
+  for (const int dpi : {96, 144, 192}) {
+    const auto scaled = [dpi](const int value) { return value * dpi / 96; };
+    expect(!capture_buttons_wrap(scaled(287), scaled(label), scaled(capture),
+                                 scaled(gap), scaled(binding_field_floor)),
+           "the binding row decision is independent of DPI scaling");
+  }
 }
