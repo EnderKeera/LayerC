@@ -12,6 +12,10 @@
 
 namespace layerc::core {
 
+// Longest accepted template side, shared by matching, asset codecs, and
+// calibration downscaling.
+inline constexpr std::uint32_t max_template_axis = 512U;
+
 struct TemplateImage {
   std::string asset_sha256;
   std::uint32_t width{};

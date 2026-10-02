@@ -6,6 +6,7 @@
 #include "layerc/core/json_reader.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/durable_file.hpp"
+#include "layerc/platform/template_png.hpp"
 #include "layerc/platform/text.hpp"
 #include "pack_detail.hpp"
 #include "pack_sidecar_table.hpp"
@@ -300,6 +301,44 @@ PackValidationResult validate_profile_descriptors(
 
 } // namespace
 
+PackValidationResult detail::canonicalize_pack_assets(ValidatedPack pack) {
+  std::map<std::string, std::string, std::less<>> renamed;
+  std::map<std::string, PackAsset, std::less<>> assets;
+  for (auto &[hash, asset] : pack.assets) {
+    const auto *data = reinterpret_cast<const std::uint8_t *>(asset.bytes.data());
+    auto canonical = platform::canonical_template_png({data, asset.bytes.size()});
+    if (const auto *error = std::get_if<platform::VisualAssetError>(&canonical))
+      return pack_error<PackValidationResult>(
+          "asset is not a usable template PNG (" + error->message + "): " + hash);
+    auto &bytes = std::get<std::vector<std::uint8_t>>(canonical);
+    std::vector<std::byte> stored(bytes.size());
+    std::transform(bytes.begin(), bytes.end(), stored.begin(),
+                   [](const std::uint8_t byte) { return std::byte{byte}; });
+    auto digest = core::sha256(stored);
+    if (digest != hash) renamed.emplace(hash, digest);
+    assets.insert_or_assign(digest,
+                            PackAsset{.sha256 = digest, .bytes = std::move(stored)});
+  }
+  pack.assets = std::move(assets);
+  if (renamed.empty()) return pack;
+  for (auto &item : pack.profiles) {
+    if (!item.visual.has_value()) continue;
+    for (auto &state : item.visual->profile.templates) {
+      // Two sources can canonicalize to one asset; keep the first reference.
+      std::set<std::string, std::less<>> seen;
+      std::erase_if(state.references, [&](core::TemplateReference &reference) {
+        if (const auto found = renamed.find(reference.asset_sha256);
+            found != renamed.end())
+          reference.asset_sha256 = found->second;
+        return !seen.insert(reference.asset_sha256).second;
+      });
+    }
+    item.visual->json = core::serialize_visual_profile_json(item.visual->profile);
+    item.asset_sha256 = detail::VisualSidecarTraits::assets(item.visual->profile);
+  }
+  return pack;
+}
+
 PackValidationResult
 validate_profile_pack(const std::filesystem::path &source) {
   json::Reader fields;
@@ -364,8 +403,11 @@ validate_profile_pack(const std::filesystem::path &source) {
       return invalid("duplicate asset declaration: " + *hash);
   }
 
-  return validate_profile_descriptors(*profile_values, entries, std::move(pack),
-                                      std::move(declared_paths));
+  auto validated = validate_profile_descriptors(
+      *profile_values, entries, std::move(pack), std::move(declared_paths));
+  if (auto *checked = std::get_if<ValidatedPack>(&validated))
+    return detail::canonicalize_pack_assets(std::move(*checked));
+  return validated;
 }
 
 } // namespace layerc::bundle

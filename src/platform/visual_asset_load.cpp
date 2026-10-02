@@ -2,6 +2,7 @@
 
 #include "layerc/core/hash.hpp"
 #include "layerc/platform/durable_file.hpp"
+#include "layerc/platform/template_png.hpp"
 
 #include <cstddef>
 #include <span>
@@ -18,9 +19,9 @@ read_template_asset_bytes(const std::filesystem::path &path) {
   return bytes;
 }
 
-TemplateImageResult verified_template_from_bytes(
-    const std::filesystem::path &path, const std::string_view sha256,
-    const DecodeTemplateRgba decode_rgba) {
+TemplateImageResult
+verified_template_from_bytes(const std::filesystem::path &path,
+                             const std::string_view sha256) {
   if (!layerc::core::is_lowercase_sha256(sha256))
     return VisualAssetError{"template asset id is not a lower-case SHA-256 digest"};
   auto bytes = read_template_asset_bytes(path);
@@ -28,7 +29,7 @@ TemplateImageResult verified_template_from_bytes(
     return VisualAssetError{"template asset is missing or exceeds the 4 MiB limit"};
   if (layerc::core::sha256(std::as_bytes(std::span(*bytes))) != sha256)
     return VisualAssetError{"template asset hash does not match its profile reference"};
-  auto decoded = decode_rgba(*bytes);
+  auto decoded = decode_template_png(*bytes);
   if (auto *image = std::get_if<layerc::core::TemplateImage>(&decoded)) {
     if (!layerc::core::template_image_has_structure(*image))
       return VisualAssetError{"template asset lacks enough visual structure for positional matching"};

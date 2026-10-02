@@ -48,6 +48,11 @@ using ImportCommitResult = std::variant<bool, PackError>;
     const ValidatedPack &pack, std::span<const ImportChoice> choices,
     const std::filesystem::path &profile_directory);
 
+// Stored template assets use one canonical PNG format on every platform.
+// Decodable non-canonical assets are re-encoded and their new content hashes
+// replace the old ones in every visual reference; undecodable assets fail.
+[[nodiscard]] PackValidationResult canonicalize_pack_assets(ValidatedPack pack);
+
 bool safe_entry_path(std::string_view path);
 std::filesystem::path
 asset_path_for_profile(const std::filesystem::path &profile_path,

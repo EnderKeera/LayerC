@@ -6,6 +6,7 @@
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_file_guard.hpp"
+#include "layerc/platform/template_png.hpp"
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_handle.hpp"
 
@@ -18,34 +19,12 @@
 #include <vector>
 
 #include <windows.h>
-#include <objidl.h>
-#include <wrl/client.h>
-#include <wincodec.h>
 #include <winioctl.h>
 
 #include <cstring>
 
 namespace layerc::platform {
 namespace {
-
-using Microsoft::WRL::ComPtr;
-
-class ComScope {
-public:
-  ComScope() {
-    const auto result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    initialized_ = SUCCEEDED(result);
-    usable_ = initialized_ || result == RPC_E_CHANGED_MODE;
-  }
-  ~ComScope() {
-    if (initialized_) CoUninitialize();
-  }
-  [[nodiscard]] bool usable() const noexcept { return usable_; }
-
-private:
-  bool initialized_{};
-  bool usable_{};
-};
 
 VisualAssetError failure(std::string message) {
   return {.message = std::move(message)};
@@ -138,113 +117,6 @@ bool collect_active_asset_references(std::vector<std::string> &references,
     }
   }
   return true;
-}
-
-std::variant<layerc::core::TemplateImage, VisualAssetError>
-decode_png(std::vector<std::uint8_t> &bytes) {
-  ComScope com;
-  if (!com.usable()) return failure("COM initialization failed");
-  ComPtr<IWICImagingFactory> factory;
-  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                              CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&factory))))
-    return failure("Windows Imaging Component is unavailable");
-  ComPtr<IWICStream> stream;
-  if (FAILED(factory->CreateStream(stream.ReleaseAndGetAddressOf())) ||
-      FAILED(stream->InitializeFromMemory(
-          bytes.data(), static_cast<DWORD>(bytes.size()))))
-    return failure("PNG input stream could not be opened");
-  ComPtr<IWICBitmapDecoder> decoder;
-  if (FAILED(factory->CreateDecoderFromStream(
-          stream.Get(), nullptr, WICDecodeMetadataCacheOnLoad,
-          decoder.ReleaseAndGetAddressOf())))
-    return failure("asset is not a supported PNG image");
-  ComPtr<IWICBitmapFrameDecode> frame;
-  if (FAILED(decoder->GetFrame(0, frame.ReleaseAndGetAddressOf())))
-    return failure("PNG has no decodable first frame");
-  UINT width{};
-  UINT height{};
-  if (FAILED(frame->GetSize(&width, &height)) || width == 0 || height == 0 ||
-      width > 512 || height > 512)
-    return failure("template dimensions must be between 1 and 512 pixels");
-  ComPtr<IWICFormatConverter> converter;
-  if (FAILED(factory->CreateFormatConverter(converter.ReleaseAndGetAddressOf())) ||
-      FAILED(converter->Initialize(
-          frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone,
-          nullptr, 0.0, WICBitmapPaletteTypeCustom)))
-    return failure("PNG could not be converted to RGBA");
-  const auto stride = static_cast<UINT>(width * 4U);
-  std::vector<std::uint8_t> rgba(static_cast<std::size_t>(stride) * height);
-  if (FAILED(converter->CopyPixels(nullptr, stride,
-                                   static_cast<UINT>(rgba.size()),
-                                   rgba.data())))
-    return failure("PNG pixels could not be decoded");
-
-  auto image = layerc::core::template_image_from_rgba(width, height, rgba);
-  if (!image.has_value())
-    return failure("template requires at least 64 nontransparent pixels");
-  return std::move(*image);
-}
-
-std::variant<std::vector<std::uint8_t>, VisualAssetError>
-encode_png(const layerc::core::TemplateImage &image) {
-  if (!image.valid())
-    return failure("template pixels or alpha mask are invalid");
-  ComScope com;
-  if (!com.usable()) return failure("COM initialization failed");
-  ComPtr<IWICImagingFactory> factory;
-  if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
-                              CLSCTX_INPROC_SERVER,
-                              IID_PPV_ARGS(&factory))))
-    return failure("Windows Imaging Component is unavailable");
-  ComPtr<IStream> stream;
-  if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, stream.ReleaseAndGetAddressOf())))
-    return failure("PNG output stream could not be created");
-  ComPtr<IWICBitmapEncoder> encoder;
-  if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr,
-                                    encoder.ReleaseAndGetAddressOf())) ||
-      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)))
-    return failure("PNG encoder could not be initialized");
-  ComPtr<IWICBitmapFrameEncode> frame;
-  ComPtr<IPropertyBag2> properties;
-  if (FAILED(encoder->CreateNewFrame(frame.ReleaseAndGetAddressOf(), properties.ReleaseAndGetAddressOf())) ||
-      FAILED(frame->Initialize(properties.Get())) ||
-      FAILED(frame->SetSize(image.width, image.height)))
-    return failure("PNG frame could not be initialized");
-  WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
-  if (FAILED(frame->SetPixelFormat(&format)) ||
-      format != GUID_WICPixelFormat32bppBGRA)
-    return failure("PNG encoder rejected BGRA pixels");
-  std::vector<std::uint8_t> bgra(image.pixels.size() * 4U);
-  for (std::size_t index = 0; index < image.pixels.size(); ++index) {
-    bgra[index * 4U] = image.pixels[index].blue;
-    bgra[index * 4U + 1U] = image.pixels[index].green;
-    bgra[index * 4U + 2U] = image.pixels[index].red;
-    bgra[index * 4U + 3U] = image.alpha[index];
-  }
-  const auto stride = image.width * 4U;
-  if (FAILED(frame->WritePixels(image.height, stride,
-                                static_cast<UINT>(bgra.size()),
-                                bgra.data())) ||
-      FAILED(frame->Commit()) || FAILED(encoder->Commit()))
-    return failure("PNG pixels could not be encoded");
-  HGLOBAL memory{};
-  if (FAILED(GetHGlobalFromStream(stream.Get(), &memory)) || memory == nullptr)
-    return failure("encoded PNG could not be read");
-  STATSTG statistics{};
-  if (FAILED(stream->Stat(&statistics, STATFLAG_NONAME)) ||
-      statistics.cbSize.HighPart != 0)
-    return failure("encoded PNG size is invalid");
-  const auto size = static_cast<std::size_t>(statistics.cbSize.LowPart);
-  const auto *data =
-      static_cast<const std::uint8_t *>(GlobalLock(memory));
-  if (data == nullptr || size == 0 || size > max_template_asset_bytes) {
-    if (data != nullptr) GlobalUnlock(memory);
-    return failure("encoded PNG exceeds the 4 MiB asset limit");
-  }
-  std::vector<std::uint8_t> output(data, data + size);
-  GlobalUnlock(memory);
-  return output;
 }
 
 bool write_asset_atomically(const std::filesystem::path &path,
@@ -343,7 +215,7 @@ store_template_asset(const layerc::core::TemplateImage &image) {
   if (!layerc::core::template_image_has_structure(image))
     return failure(
         "template needs visible light/color variation so its position can be recognized");
-  auto encoded = encode_png(image);
+  auto encoded = encode_template_png(image);
   if (const auto *error = std::get_if<VisualAssetError>(&encoded))
     return *error;
   auto &bytes = std::get<std::vector<std::uint8_t>>(encoded);
@@ -372,7 +244,7 @@ import_template_asset(const std::filesystem::path &source) {
   auto bytes = read_template_asset_bytes(source);
   if (!bytes.has_value())
     return failure("PNG is missing, unreadable, empty, or larger than 4 MiB");
-  auto decoded = decode_png(*bytes);
+  auto decoded = decode_template_png(*bytes);
   if (const auto *error = std::get_if<VisualAssetError>(&decoded))
     return *error;
   return store_template_asset(
@@ -381,7 +253,7 @@ import_template_asset(const std::filesystem::path &source) {
 
 TemplateImageResult load_template_asset(const std::string_view sha256_value) {
   return verified_template_from_bytes(visual_asset_path(sha256_value),
-                                      sha256_value, decode_png);
+                                      sha256_value);
 }
 
 namespace {

@@ -7,6 +7,7 @@
 #include "layerc/platform/text.hpp"
 
 #include "miniz.h"
+#include "template_png_fixture.hpp"
 #include "test_support.hpp"
 
 #include <array>
@@ -156,8 +157,8 @@ bool rewrite_zip(const std::filesystem::path &source,
   return written;
 }
 
-constexpr std::string_view asset_hash =
-    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const std::string &asset_hash = layerc::test::canonical_template_png_fixture().sha256;
+const std::string &asset_png = layerc::test::canonical_template_png_fixture().bytes;
 
 struct PackFixture {
   layerc::test::TempDirectory directory{"layerc-pack-tests"};
@@ -194,7 +195,7 @@ struct PackFixture {
         {.cooldown_id = "dash", .observation_id = "ready-template"});
     bool passed = expect(write_file(source / "_visual" / "assets" /
                                         (std::string(asset_hash) + ".png"),
-                                    "abc"),
+                                    asset_png),
                          "content-addressed test asset should be created");
     first_companion.profile_id = first_base.id;
     first_companion.slots.push_back({.slot_index = 0,
@@ -334,7 +335,7 @@ void deterministic_export_and_import() {
              std::filesystem::exists(imported / "_visual" / "assets" /
                                      (std::string(asset_hash) + ".png")) &&
              read_file(imported / "_visual" / "assets" /
-                       (std::string(asset_hash) + ".png")) == "abc",
+                       (std::string(asset_hash) + ".png")) == asset_png,
          "sidecars and assets should import beneath the requested "
          "destination root");
   expect(std::filesystem::exists(imported / "_automation" / "first.json") &&
