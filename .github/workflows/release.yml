@@ -43,6 +43,10 @@ jobs:
           files: release-input/*.zip
           generate_release_notes: true
           body: |
-            Windows x64 package only. Linux V2.6 remains pre-release with no
-            packaged artifact; see docs/Linux.md for the physical evidence
-            checklist.
+            Windows x64 package only. Start LayerC with `layerd.exe`. The
+            launcher's self-update is OFF by default, and `layerc.exe` is
+            omitted from the ZIP until a release-signing key is provisioned.
+
+            Linux V2.6 is source/CLI only: no Linux package is published.
+            Physical X11 evidence (GNOME Xorg, KDE Plasma X11) is pending;
+            see docs/Linux.md. Gamescope and Wayland are not supported.
