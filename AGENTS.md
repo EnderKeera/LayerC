@@ -101,7 +101,7 @@ caused by the change, and rerun it without pausing for approval. Documentation o
 workflow-only edits may need only parser, link, or reference validation. Use a
 full local build and all CTest suites only when the change has comparable breadth.
 `ci.yml` on `main` pushes and pull requests is the authoritative cross-platform
-gate; its Windows jobs run only for same-repository branches, and
+gate on GitHub-hosted Windows and Linux runners, including fork pull requests.
 `windows-selfhosted.yml` is the manual Windows build/test for any ref.
 
 Resolve exact commands, targets, thresholds, artifact names, and registration

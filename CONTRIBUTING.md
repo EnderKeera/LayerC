@@ -59,11 +59,16 @@ use CMake presets.
 
 ## CI and release gates
 
-Linux-side jobs run on Ubicloud `ubicloud-standard-4` (the Ubicloud GitHub App
-needs repository access). Windows jobs run on the interactive self-hosted
-`[self-hosted, windows, x64, layerc-bench]` runner and share it, so they run
-only for `main`, manual dispatch, and pull requests from this repository; fork
-pull requests get only the Linux-side jobs.
+CI, release, and review/comment automation use GitHub-hosted runners:
+`windows-2022` for Windows builds, `ubuntu-24.04` for Linux build and Flatpak
+jobs, and `ubuntu-latest` for workflow lint, publishing, and automation.
+GitHub-hosted jobs normally have a 10-minute timeout. The Windows CI and
+release build jobs allow 30 minutes; `windows-analyze` and `linux-flatpak`
+allow 60 minutes for cold builds, SDK setup, and analysis recovery retries.
+Pull requests, including forks, receive both Windows and Linux CI checks. Only
+hardware benchmarks and the manual Windows workflow use the interactive
+self-hosted `[self-hosted, windows, x64, layerc-bench]` runner, with their
+existing timeouts.
 
 [`ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`, pull requests,
 and manual dispatch; a newer push to a pull request cancels its older run.
@@ -134,7 +139,9 @@ Other workflows:
   MSBuild configuration; uploads `windows-selfhosted-logs-<run>-<attempt>`.
   Run `gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>`.
 - [`pr-agent.yml`](.github/workflows/pr-agent.yml) reviews pull requests
-  through OpenRouter and answers `/review`, `/ask`, and `/describe` comments;
+  through OpenRouter and answers `/review`, `/ask`, and `/describe` comments.
+  A newer push cancels the superseded automatic review of the same pull
+  request; each command runs in its own group and is never dropped.
   [`claude.yml`](.github/workflows/claude.yml) answers `@claude` mentions.
 
 ### Hardware runner and local benchmarks
