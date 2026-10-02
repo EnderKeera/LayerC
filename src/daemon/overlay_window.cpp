@@ -22,6 +22,7 @@ OverlayWindow::OverlayWindow(const layerc::core::Panel &panel,
 // match, so an unchanged panel keeps its cached labels.
 bool OverlayWindow::assign_bars(
     const std::span<const layerc::core::CooldownDefinition> cooldowns) {
+  cooldowns_.assign(cooldowns.begin(), cooldowns.end());
   std::size_t count{};
   bool same = true;
   for (const auto &cooldown_id : panel_.cooldown_ids) {
@@ -85,14 +86,15 @@ void OverlayWindow::update_snapshot(
 
 void OverlayWindow::set_session_override(
     const std::optional<bool> visible,
-    std::optional<std::wstring> text) {
-  visibility_override_ = visible;
-  text_override_ = std::move(text);
+    std::optional<std::string> text) {
+  overrides_.visible = visible;
+  overrides_.text = std::move(text);
 }
 void OverlayWindow::set_edit_mode(const bool enabled, const bool direct_drag,
                                   const bool selected,
                                   DragCallback callback) {
   edit_mode_ = enabled;
+  overrides_.edit_mode = enabled;
   edit_selected_ = enabled && selected;
   drag_callback_ = std::move(callback);
   set_direct_drag(enabled && direct_drag);
@@ -253,18 +255,11 @@ void OverlayWindow::show_on_rect(const RECT &target) {
   visible_ = true;
 }
 
-bool OverlayWindow::should_show(
-    const std::vector<layerc::core::CooldownState> &states) const {
-  if (visibility_override_.has_value()) return *visibility_override_;
-  if (edit_mode_ || panel_.style != layerc::core::PanelStyle::bar ||
-      !panel_.bar.hide_when_ready) {
-    return true;
-  }
-  return std::ranges::any_of(bars_, [&](const Bar &bar) {
-    const auto *state = layerc::core::cooldown_state_at(
-        states, bar.state_index, bar.definition.id);
-    return state != nullptr && state->next_charge_at.has_value();
-  });
+layerc::core::PanelPresentation OverlayWindow::present(
+    const std::span<const layerc::core::CooldownState> states,
+    const layerc::core::TimePoint now) const {
+  return layerc::core::present_panel(panel_, cooldowns_, states, overrides_,
+                                     now);
 }
 
 void OverlayWindow::clear_window_state() {

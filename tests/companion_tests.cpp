@@ -84,12 +84,16 @@ static void test_companion_snapshot_bridge() {
   CooldownState s1;
   s1.id = "cd_dash";
   s1.available_charges = 1;
+  s1.max_charges = 2;
   s1.next_charge_at = now + std::chrono::milliseconds(2500);
+  s1.recharge_duration = d1.duration;
 
   CooldownState s2;
   s2.id = "cd_heal";
   s2.available_charges = 1;
+  s2.max_charges = 1;
   s2.next_charge_at = std::nullopt;
+  s2.recharge_duration = d2.duration;
 
   std::vector<CooldownState> states = {s1, s2};
 
@@ -187,7 +191,7 @@ static void test_companion_shared_pool_runtime_view() {
     for (std::size_t index = 0; index < definitions.size(); ++index) {
       const auto &item = snapshot->panels.front().items[index];
       const auto native_progress =
-          cooldown_progress(definitions[index], states[index], start + 1s);
+          cooldown_progress(states[index], start + 1s);
       layerc::test::expect(
           item.cooldown_id == definitions[index].id &&
               item.name == definitions[index].name && item.max_charges == 3 &&
@@ -209,7 +213,7 @@ static void test_companion_shared_pool_runtime_view() {
             ready->panels.front().items.front().available_charges == 3 &&
             ready->panels.front().items.front().is_ready &&
             ready->panels.front().items.front().progress == 1.0 &&
-            cooldown_progress(definitions.front(), ready_states.front(), start + 5s) == 1.0,
+            cooldown_progress(ready_states.front(), start + 5s) == 1.0,
         "CM-03: fully recovered pools retain effective charges and ready progress");
   }
 }

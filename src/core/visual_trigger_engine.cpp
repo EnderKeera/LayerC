@@ -1,4 +1,5 @@
 #include "layerc/core/pixel_engine.hpp"
+#include "layerc/core/panel_presentation.hpp"
 
 #include <algorithm>
 
@@ -12,8 +13,7 @@ const CooldownState *find_cooldown(
 }
 
 bool fully_ready(const CooldownState *state) {
-  return state != nullptr && state->available_charges == state->max_charges &&
-         !state->next_charge_at.has_value();
+  return state != nullptr && cooldown_ready(*state);
 }
 
 } // namespace

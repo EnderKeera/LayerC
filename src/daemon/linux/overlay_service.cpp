@@ -3,6 +3,8 @@
 // daemon kernel as Capability::overlay.
 #include "overlay_service.hpp"
 
+#include "layerc/core/panel_presentation.hpp"
+
 #include <algorithm>
 #include <optional>
 #include <span>
@@ -13,8 +15,6 @@
 namespace layerc::daemon {
 namespace {
 
-using layerc::core::CooldownDefinition;
-using layerc::core::CooldownState;
 using layerc::core::TimePoint;
 
 const layerc::platform::X11WindowSnapshot *
@@ -40,7 +40,7 @@ struct PanelOverrides {
 // Resolves the panel and its overrides into `frame.panel` and `result`.
 // The panel is re-copied only while an override targets it (or to undo one),
 // so the common no-override frame does no allocation. false when the panel
-// is gone or an override hides it.
+// is gone; visibility itself is decided by core::present_panel.
 [[nodiscard]] bool apply_automation_overrides(
     layerc::platform::X11OverlayFrame &frame, bool &overridden,
     const InputSession &session, const std::string_view panel_id,
@@ -64,43 +64,27 @@ struct PanelOverrides {
   frame.panel = std::move(resolved.panel);
   overridden = true;
   result = {resolved.visible, std::move(resolved.text)};
-  return result.visible.value_or(true);
+  return true;
 }
 
-// Fills `frame.bars` from the session's cooldown snapshot, whose states
-// follow profile.cooldowns by position. false means the panel has nothing to
-// show right now (everything is ready and the style hides it).
+// Fills `frame.bars` from the shared panel presentation. false means the
+// panel is hidden right now.
 [[nodiscard]] bool
 fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
           const TimePoint now, const PanelOverrides &overrides) {
-  const auto &definitions = session.profile.cooldowns;
-  const auto &states = session.snapshot_buffer;
+  const auto presentation = layerc::core::present_panel(
+      frame.panel, session.profile.cooldowns, session.snapshot_buffer,
+      {.visible = overrides.visible, .text = overrides.text, .edit_mode = false},
+      now);
   frame.bars.clear();
-  bool running = false;
-  for (const auto &cooldown_id : frame.panel.cooldown_ids) {
-    const auto definition =
-        std::ranges::find(definitions, cooldown_id, &CooldownDefinition::id);
-    if (definition == definitions.end()) continue;
-    const auto *found = layerc::core::cooldown_state_at(
-        states, static_cast<std::size_t>(definition - definitions.begin()),
-        cooldown_id);
-    if (found == nullptr) continue;
-    const CooldownState &state = *found;
-    if (state.next_charge_at.has_value()) running = true;
-
+  for (const auto &item : presentation.bars) {
     layerc::platform::X11OverlayBar bar;
-    bar.label = overrides.text.has_value()
-                    ? *overrides.text
-                    : layerc::core::cooldown_status_text(*definition, state, now);
-    bar.running = state.next_charge_at.has_value();
-    bar.remaining = layerc::core::cooldown_progress(*definition, state, now);
+    bar.label = item.label;
+    bar.running = !item.ready;
+    bar.remaining = item.remaining;
     frame.bars.push_back(std::move(bar));
   }
-  if (frame.bars.empty()) return false;
-  if (!running && frame.panel.style == layerc::core::PanelStyle::bar &&
-      frame.panel.bar.hide_when_ready && !overrides.visible.value_or(false))
-    return false;
-  return true;
+  return presentation.visible;
 }
 
 } // namespace

@@ -18,10 +18,9 @@ namespace layerc::core {
     TimePoint now);
 [[nodiscard]] Milliseconds cooldown_remaining_ms(
     const std::optional<TimePoint> &next_charge_at, TimePoint now) noexcept;
-// Native bars show the remaining fraction; ready is 1.0. Engine snapshots
-// carry the effective owner duration, with the definition as a legacy fallback.
-[[nodiscard]] double cooldown_progress(const CooldownDefinition &definition,
-                                       const CooldownState &state,
+// Native bars show the remaining fraction of the effective owner duration;
+// ready is 1.0.
+[[nodiscard]] double cooldown_progress(const CooldownState &state,
                                        TimePoint now) noexcept;
 // Engine snapshots follow the definition order, so a definition's state is
 // normally at the definition's own position. Falls back to an id search if a

@@ -76,11 +76,8 @@ void OverlayCollection::apply_overrides(
     if (found == windows_.end()) continue;
     const auto resolved =
         layerc::core::resolve_panel_overrides(base_panel, overrides);
-    std::optional<std::wstring> text;
-    if (resolved.text.has_value())
-      text = layerc::platform::utf8_to_wide(*resolved.text);
     (*found)->update_snapshot(resolved.panel, cooldowns_);
-    (*found)->set_session_override(resolved.visible, std::move(text));
+    (*found)->set_session_override(resolved.visible, resolved.text);
   }
 }
 
@@ -111,14 +108,15 @@ void OverlayCollection::release() noexcept {
 
 void OverlayCollection::render_for(
     const HWND target, const std::vector<layerc::core::CooldownState> &states,
-    const layerc::core::TimePoint now, const bool always_show) {
+    const layerc::core::TimePoint now) {
   for (auto &overlay : windows_) {
-    if (!always_show && !overlay->should_show(states)) {
+    const auto presentation = overlay->present(states, now);
+    if (!presentation.visible) {
       overlay->hide();
       continue;
     }
     overlay->show_for(target);
-    overlay->render(states, now);
+    overlay->render(presentation);
   }
 }
 
@@ -126,12 +124,13 @@ void OverlayCollection::render_on_rect(
     const RECT &target, const std::vector<layerc::core::CooldownState> &states,
     const layerc::core::TimePoint now) {
   for (auto &overlay : windows_) {
-    if (!overlay->should_show(states)) {
+    const auto presentation = overlay->present(states, now);
+    if (!presentation.visible) {
       overlay->hide();
       continue;
     }
     overlay->show_on_rect(target);
-    overlay->render(states, now);
+    overlay->render(presentation);
   }
 }
 

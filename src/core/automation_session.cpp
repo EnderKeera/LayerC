@@ -3,6 +3,7 @@
 #include "layerc/core/automation_session.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/panel_presentation.hpp"
 
 #include <algorithm>
 #include <map>
@@ -107,10 +108,10 @@ ReadyTransitions poll_automation_ready_transitions(
     const std::span<const CooldownState> snapshot,
     const std::span<const CooldownGroup> groups) {
   ReadyTransitions ready;
-  std::map<std::string, bool, std::less<>> cooldown_ready;
+  std::map<std::string, bool, std::less<>> ready_by_id;
   for (const auto &state : snapshot) {
-    const bool is_ready = state.available_charges == state.max_charges;
-    cooldown_ready[state.id] = is_ready;
+    const bool is_ready = cooldown_ready(state);
+    ready_by_id[state.id] = is_ready;
     const auto previous = edges.cooldown_ready.find(state.id);
     if (previous != edges.cooldown_ready.end() && !previous->second &&
         is_ready)
@@ -125,15 +126,15 @@ ReadyTransitions poll_automation_ready_transitions(
     const bool is_ready =
         !group.cooldown_ids.empty() &&
         std::ranges::all_of(group.cooldown_ids, [&](const std::string &id) {
-          const auto found = cooldown_ready.find(id);
-          return found != cooldown_ready.end() && found->second;
+          const auto found = ready_by_id.find(id);
+          return found != ready_by_id.end() && found->second;
         });
     group_ready[group.id] = is_ready;
     const auto previous = edges.group_ready.find(group.id);
     if (previous != edges.group_ready.end() && !previous->second && is_ready)
       ready.groups.push_back(group.id);
   }
-  edges.cooldown_ready = std::move(cooldown_ready);
+  edges.cooldown_ready = std::move(ready_by_id);
   edges.group_ready = std::move(group_ready);
   return ready;
 }

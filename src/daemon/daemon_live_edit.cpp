@@ -323,8 +323,9 @@ void DaemonApp::update_edit_overlays() {
     return;
   }
   const auto now = layerc::core::MonotonicClock::now();
-  session.overlays.render_for(session.target, session.preview_states, now,
-                              true);
+  // Edit-mode overlays are always presented visible unless an override says
+  // otherwise.
+  session.overlays.render_for(session.target, session.preview_states, now);
 }
 
 void DaemonApp::on_direct_anchor(const std::string_view panel_id,

@@ -116,14 +116,8 @@ void OverlayWindow::release_render_resources() {
   }
 }
 
-void OverlayWindow::render(
-    const std::vector<layerc::core::CooldownState> &states,
-    const layerc::core::TimePoint now) {
+void OverlayWindow::render(const layerc::core::PanelPresentation &presentation) {
   if (!visible_ || !ensure_render_resources()) {
-    return;
-  }
-  if (!should_show(states)) {
-    hide();
     return;
   }
   update_position(target_);
@@ -148,29 +142,18 @@ void OverlayWindow::render(
   const HPEN visible_border = selection_pen != nullptr ? selection_pen
                                                         : border_pen_;
 
-  for (std::size_t index = 0; index < bars_.size(); ++index) {
+  const auto count = std::min(bars_.size(), presentation.bars.size());
+  for (std::size_t index = 0; index < count; ++index) {
     auto &bar_source = bars_[index];
-    const auto &cooldown = bar_source.definition;
-    const auto *state = layerc::core::cooldown_state_at(
-        states, bar_source.state_index, cooldown.id);
-    if (!text_override_.has_value()) {
-      auto label = state == nullptr
-                       ? cooldown.name
-                       : layerc::core::cooldown_status_text(cooldown, *state,
-                                                            now);
-      // The text changes only when the shown tenths or charges do; skip the
-      // wide conversion on the frames in between.
-      if (label != bar_source.label) {
-        bar_source.wide_label = layerc::platform::utf8_to_wide(label);
-        bar_source.label = std::move(label);
-      }
+    const auto &shown = presentation.bars[index];
+    // The text changes only when the shown tenths or charges do; skip the
+    // wide conversion on the frames in between.
+    if (shown.label != bar_source.label) {
+      bar_source.wide_label = layerc::platform::utf8_to_wide(shown.label);
+      bar_source.label = shown.label;
     }
-    const std::wstring &label_text =
-        text_override_.has_value() ? *text_override_ : bar_source.wide_label;
-    const double progress =
-        state == nullptr
-            ? 1.0
-            : layerc::core::cooldown_progress(cooldown, *state, now);
+    const std::wstring &label_text = bar_source.wide_label;
+    const double progress = shown.remaining;
 
     if (panel_.style == layerc::core::PanelStyle::bar) {
       const auto shape = layerc::core::bar_geometry(

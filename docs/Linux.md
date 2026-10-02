@@ -73,6 +73,8 @@ Overlays are painted with plain rectangles — no compositor, no toolkit. Bars
 fill from the left and drain towards ready; a bar panel also honours
 `hideWhenReady` and unmaps itself. Only active sessions get overlay targets.
 Automation can force a ready bar visible, hide any panel, or replace its text.
+Visibility and bar text come from the shared core panel presentation, so
+Windows, Linux, and the Game Bar companion apply one rule.
 While an overlay is mapped the daemon arms a 100 ms repaint deadline and
 nothing else: once every panel is hidden or no session is active, the loop
 blocks again.

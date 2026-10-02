@@ -45,7 +45,7 @@ public:
   void release() noexcept;
   void render_for(HWND target,
                   const std::vector<layerc::core::CooldownState> &states,
-                  layerc::core::TimePoint now, bool always_show = false);
+                  layerc::core::TimePoint now);
   void render_on_rect(const RECT &target,
                       const std::vector<layerc::core::CooldownState> &states,
                       layerc::core::TimePoint now);
