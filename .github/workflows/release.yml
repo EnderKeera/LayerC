@@ -10,7 +10,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 10
+    # Match the CI deadline for the shared build/test/benchmark/package pipeline.
+    timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
