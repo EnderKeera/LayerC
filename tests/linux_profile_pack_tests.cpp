@@ -39,7 +39,7 @@ layerc::core::GameProfile profile() {
 layerc::core::VisualProfile visual_profile() {
   layerc::core::VisualProfile result;
   result.profile_id = "linux-pack";
-  result.templates.push_back({
+  result.observations.push_back(layerc::core::TemplateState{
       .id = "ready",
       .name = "Ready",
       .search_region = {.x = 0.1, .y = 0.1, .width = 0.5, .height = 0.5},

@@ -326,8 +326,8 @@ void test_pack_assets_are_canonicalized() {
                                         .bytes = to_bytes(canonical.bytes)});
   core::VisualProfile visual;
   visual.profile_id = "pack";
-  visual.templates.push_back(
-      {.id = "ready",
+  visual.observations.push_back(
+      layerc::core::TemplateState{.id = "ready",
        .name = "Ready",
        .search_region = {.x = 0.1, .y = 0.1, .width = 0.4, .height = 0.4},
        .expected_width = 0.2,
@@ -347,7 +347,8 @@ void test_pack_assets_are_canonicalized() {
   expect(normalized->assets.size() == 1 &&
              normalized->assets.contains(canonical.sha256),
          "the RGB asset re-encodes to the same canonical bytes as its RGBA twin");
-  const auto &state = normalized->profiles.front().visual->profile.templates.front();
+  const auto &state = std::get<layerc::core::TemplateState>(
+      normalized->profiles.front().visual->profile.observations.front());
   expect(state.references.size() == 1 &&
              state.references.front().asset_sha256 == canonical.sha256,
          "references are rewritten to the canonical hash and deduplicated");

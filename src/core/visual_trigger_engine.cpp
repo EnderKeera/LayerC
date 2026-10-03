@@ -27,14 +27,16 @@ void VisualTriggerEngine::reconfigure(const VisualProfile &profile) {
   rules_.clear();
   triggers_.clear();
   trigger_indices_.clear();
-  rules_.reserve(profile_.rules.size() + profile_.templates.size());
+  rules_.reserve(profile_.observations.size());
   triggers_.reserve(profile_.triggers.size());
   trigger_indices_.reserve(profile_.triggers.size());
-  for (const auto &rule : profile_.rules)
-    rules_.try_emplace(rule.id, RuleState{.stable_samples = rule.stable_samples});
-  for (const auto &state : profile_.templates)
-    rules_.try_emplace(
-        state.id, RuleState{.stable_samples = state.stable_samples});
+  for (const auto &observation : profile_.observations)
+    std::visit(
+        [&](const auto &item) {
+          rules_.try_emplace(item.id,
+                             RuleState{.stable_samples = item.stable_samples});
+        },
+        observation);
   for (std::size_t index{}; index < profile_.triggers.size(); ++index) {
     const auto &trigger = profile_.triggers[index];
     triggers_.try_emplace(trigger.cooldown_id);
@@ -181,8 +183,9 @@ void VisualTriggerEngine::evaluate_pixel_trigger(
     return;
   }
 
-  if (observation_repeat_policy(profile_, trigger.observation_id) ==
-      PixelRepeatPolicy::edge) {
+  const auto *observation = find_observation(profile_, trigger.observation_id);
+  if (observation == nullptr ||
+      observation_repeat(*observation) == PixelRepeatPolicy::edge) {
     if (trigger_state.edge_armed) {
       output.push_back({trigger.cooldown_id, VisualTriggerSource::pixel_edge});
       trigger_state.edge_armed = false;

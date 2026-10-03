@@ -98,7 +98,9 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
     if (capture == captures.end() || capture->second == nullptr ||
         capture->second->runtime() != runtime)
       continue;
-    for (const auto &state : session->modules.visual.profile->templates) {
+    for (const auto &state :
+         layerc::core::observations_of<layerc::core::TemplateState>(
+             session->modules.visual.profile->observations)) {
       const auto available =
           std::numeric_limits<std::uint64_t>::max() - decoded_assets;
       decoded_assets += std::min<std::uint64_t>(

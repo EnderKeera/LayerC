@@ -32,7 +32,6 @@ public:
       return failure();
     }
 
-    schema_version_ = *version;
     VisualProfile result;
     if (!fields_.string(root_, "profileId", "$", result.profile_id))
       return failure();
@@ -55,7 +54,9 @@ public:
       if (rules->size() > max_pixel_rules)
         return error("$.rules", "at most four pixel rules are supported");
       for (std::size_t index = 0; index < rules->size(); ++index) {
-        if (!read_legacy_rule((*rules)[index], index, result.rules))
+        if (!read_rule((*rules)[index],
+                       "$.rules[" + std::to_string(index) + "]",
+                       result.observations, false))
           return failure();
       }
     } else {
@@ -76,33 +77,16 @@ public:
       if (!read_trigger((*triggers)[index], index, *version, result.triggers))
         return failure();
     }
-    const auto validation = validate_visual_profile(
-        result, base_, [this](bool pixel, std::size_t index) {
-          const auto &indices = pixel ? rule_indices_ : template_indices_;
-          return (schema_version_ == 2 ? "$.observations[" : "$.rules[") +
-                 std::to_string(indices[index]) + "]";
-        });
-    if (!validation.message.empty()) return validation;
-    return result;
+    auto validation = validate_visual_profile(result, base_);
+    if (validation.message.empty()) return result;
+    // Schema 1 holds only pixel rules, so its `rules[N]` is observation N.
+    constexpr std::string_view observations_path = "$.observations[";
+    if (*version == 1 && validation.path.starts_with(observations_path))
+      validation.path.replace(0, observations_path.size(), "$.rules[");
+    return validation;
   }
 
 private:
-  bool read_legacy_rule(const json::Value &value, const std::size_t index,
-                        std::vector<PixelRule> &output) {
-    if (!read_rule(value, "$.rules[" + std::to_string(index) + "]", output,
-                   false)) return false;
-    rule_indices_.push_back(index);
-    return true;
-  }
-
-  bool read_typed_rule(const json::Value &value, const std::size_t index,
-                       std::vector<PixelRule> &output) {
-    if (!read_rule(value, "$.observations[" + std::to_string(index) + "]",
-                   output, true)) return false;
-    rule_indices_.push_back(index);
-    return true;
-  }
-
   bool read_region(const json::Value &value, const std::string_view key,
                    const std::string &path, NormalizedRegion &out) {
     const auto *region = fields_.object(value, key, path);
@@ -180,7 +164,8 @@ private:
   }
 
   bool read_rule(const json::Value &value, const std::string &path,
-                 std::vector<PixelRule> &output, const bool includes_type) {
+                 std::vector<VisualObservation> &output,
+                 const bool includes_type) {
     if (!value.is_object()) return set(path, "pixel rule must be an object");
     if ((includes_type &&
          !fields_.exact_fields(value, {"type", "id", "name", "region", "predicate",
@@ -213,21 +198,20 @@ private:
     std::string type;
     if (!fields_.string(value, "type", path, type)) return false;
     if (type == "pixel") {
-      if (output.rules.size() >= max_pixel_rules)
+      if (count_observations<PixelRule>(output.observations) >= max_pixel_rules)
         return set(path, "at most four pixel observations are supported");
-      return read_typed_rule(value, index, output.rules);
+      return read_rule(value, path, output.observations, true);
     }
     if (type != "template")
       return set(path + ".type", "expected pixel or template");
-    if (output.templates.size() >= max_template_states)
+    if (count_observations<TemplateState>(output.observations) >=
+        max_template_states)
       return set(path, "at most four template observations are supported");
-    if (!read_template(value, index, output.templates)) return false;
-    template_indices_.push_back(index);
-    return true;
+    return read_template(value, index, output.observations);
   }
 
   bool read_template(const json::Value &value, const std::size_t index,
-                     std::vector<TemplateState> &output) {
+                     std::vector<VisualObservation> &output) {
     const auto path = "$.observations[" + std::to_string(index) + "]";
     if (!fields_.exact_fields(value,
                 {"type", "id", "name", "searchRegion", "expectedSize",
@@ -368,9 +352,6 @@ private:
   const json::Value &root_;
   const GameProfile &base_;
   json::Reader fields_;
-  std::int64_t schema_version_{};
-  std::vector<std::size_t> rule_indices_;
-  std::vector<std::size_t> template_indices_;
 };
 
 } // namespace
@@ -384,9 +365,87 @@ bool valid_normalized_region(const NormalizedRegion &region) noexcept {
          region.y + region.height <= 1.0 + 1e-12;
 }
 
-VisualError validate_visual_profile(
-    const VisualProfile &profile, const GameProfile &base_profile,
-    const std::function<std::string(bool, std::size_t)> &source_path) {
+namespace {
+
+[[nodiscard]] std::optional<VisualError>
+validate_observation(const PixelRule &rule, const std::string &path) {
+  const auto invalid = [](std::string where, std::string message) {
+    return VisualError{std::move(where), std::move(message)};
+  };
+  if (rule.id.empty() || rule.name.empty())
+    return invalid(path, "rule id and name are required");
+  if (!valid_normalized_region(rule.region))
+    return invalid(path + ".region",
+                   "normalized region must be positive and remain in frame");
+  if (rule.stable_samples < 1 || rule.stable_samples > 15)
+    return invalid(path + ".stableSamples",
+                   "stable sample count must be between 1 and 15");
+  if (const auto *coverage =
+          std::get_if<ColorCoveragePredicate>(&rule.predicate);
+      coverage != nullptr &&
+      (!std::isfinite(coverage->minimum_fraction) ||
+       coverage->minimum_fraction < 0.0 ||
+       coverage->minimum_fraction > 1.0))
+    return invalid(path + ".predicate.minimumPercent",
+                   "minimum percentage is outside the supported range");
+  return std::nullopt;
+}
+
+[[nodiscard]] std::optional<VisualError>
+validate_observation(const TemplateState &state, const std::string &path) {
+  const auto invalid = [](std::string where, std::string message) {
+    return VisualError{std::move(where), std::move(message)};
+  };
+  if (state.id.empty() || state.name.empty())
+    return invalid(path, "template id and name are required");
+  if (!valid_normalized_region(state.search_region))
+    return invalid(path + ".searchRegion",
+                   "normalized search region must remain in frame");
+  if (!std::isfinite(state.expected_width) ||
+      !std::isfinite(state.expected_height) ||
+      state.expected_width <= 0.0 || state.expected_width > 1.0 ||
+      state.expected_height <= 0.0 || state.expected_height > 1.0)
+    return invalid(path + ".expectedSize",
+                   "expected template size must be normalized and positive");
+  if (state.expected_width > state.search_region.width + 1e-12 ||
+      state.expected_height > state.search_region.height + 1e-12)
+    return invalid(path + ".expectedSize",
+                   "expected template size must fit inside its search region");
+  if (state.references.empty() ||
+      state.references.size() > max_template_references)
+    return invalid(path + ".references",
+                   "one to four template references are required");
+  std::set<std::string, std::less<>> references;
+  for (std::size_t reference_index = 0;
+       reference_index < state.references.size(); ++reference_index) {
+    const auto &reference = state.references[reference_index];
+    const auto reference_path =
+        path + ".references[" + std::to_string(reference_index) + "].asset";
+    if (!is_lowercase_sha256(reference.asset_sha256))
+      return invalid(reference_path,
+                     "asset must be a lower-case SHA-256 digest");
+    if (!references.insert(reference.asset_sha256).second)
+      return invalid(reference_path, "duplicate template reference");
+  }
+  if (!std::isfinite(state.confidence_threshold) ||
+      state.confidence_threshold < 0.0 ||
+      state.confidence_threshold > 1.0)
+    return invalid(path + ".confidence",
+                   "confidence must be between zero and one");
+  if (!std::isfinite(state.scale_tolerance) ||
+      state.scale_tolerance < 0.0 || state.scale_tolerance > 0.20)
+    return invalid(path + ".scaleTolerancePercent",
+                   "scale tolerance must be between zero and 20 percent");
+  if (state.stable_samples < 1 || state.stable_samples > 15)
+    return invalid(path + ".stableSamples",
+                   "stable sample count must be between 1 and 15");
+  return std::nullopt;
+}
+
+} // namespace
+
+VisualError validate_visual_profile(const VisualProfile &profile,
+                                    const GameProfile &base_profile) {
   const auto invalid = [](std::string path, std::string message) {
     return VisualError{std::move(path), std::move(message)};
   };
@@ -399,91 +458,23 @@ VisualError validate_visual_profile(
   if (profile.sample_rate_hz != 5 && profile.sample_rate_hz != 10 &&
       profile.sample_rate_hz != 15)
     return invalid("$.sampleRateHz", "sample rate must be 5, 10, or 15 Hz");
-  if (profile.rules.size() > max_pixel_rules)
+  if (count_observations<PixelRule>(profile.observations) > max_pixel_rules)
     return invalid("$.observations", "at most four pixel rules are supported");
-  if (profile.templates.size() > max_template_states)
+  if (count_observations<TemplateState>(profile.observations) >
+      max_template_states)
     return invalid("$.observations",
                    "at most four template observations are supported");
-  // Without a source mapper, cite the schema-2 position the serializer emits:
-  // pixel rules first, then templates, in one $.observations array.
-  const auto observation_path = [&](const bool pixel, const std::size_t index) {
-    if (source_path) return source_path(pixel, index);
-    return "$.observations[" +
-           std::to_string(pixel ? index : profile.rules.size() + index) + "]";
-  };
 
   std::set<std::string, std::less<>> observation_ids;
-  for (std::size_t index = 0; index < profile.rules.size(); ++index) {
-    const auto &rule = profile.rules[index];
-    const auto path = observation_path(true, index);
-    if (rule.id.empty() || rule.name.empty())
-      return invalid(path, "rule id and name are required");
-    if (!observation_ids.insert(rule.id).second)
+  for (std::size_t index = 0; index < profile.observations.size(); ++index) {
+    const auto &observation = profile.observations[index];
+    const auto path = "$.observations[" + std::to_string(index) + "]";
+    if (auto error = std::visit(
+            [&](const auto &item) { return validate_observation(item, path); },
+            observation))
+      return std::move(*error);
+    if (!observation_ids.insert(observation_id(observation)).second)
       return invalid(path + ".id", "duplicate visual observation id");
-    if (!valid_normalized_region(rule.region))
-      return invalid(path + ".region",
-                     "normalized region must be positive and remain in frame");
-    if (rule.stable_samples < 1 || rule.stable_samples > 15)
-      return invalid(path + ".stableSamples",
-                     "stable sample count must be between 1 and 15");
-    if (const auto *coverage =
-            std::get_if<ColorCoveragePredicate>(&rule.predicate);
-        coverage != nullptr &&
-        (!std::isfinite(coverage->minimum_fraction) ||
-         coverage->minimum_fraction < 0.0 ||
-         coverage->minimum_fraction > 1.0))
-      return invalid(path + ".predicate.minimumPercent",
-                     "minimum percentage is outside the supported range");
-  }
-
-  for (std::size_t index = 0; index < profile.templates.size(); ++index) {
-    const auto &state = profile.templates[index];
-    const auto path = observation_path(false, index);
-    if (state.id.empty() || state.name.empty())
-      return invalid(path, "template id and name are required");
-    if (!observation_ids.insert(state.id).second)
-      return invalid(path + ".id", "duplicate visual observation id");
-    if (!valid_normalized_region(state.search_region))
-      return invalid(path + ".searchRegion",
-                     "normalized search region must remain in frame");
-    if (!std::isfinite(state.expected_width) ||
-        !std::isfinite(state.expected_height) ||
-        state.expected_width <= 0.0 || state.expected_width > 1.0 ||
-        state.expected_height <= 0.0 || state.expected_height > 1.0)
-      return invalid(path + ".expectedSize",
-                     "expected template size must be normalized and positive");
-    if (state.expected_width > state.search_region.width + 1e-12 ||
-        state.expected_height > state.search_region.height + 1e-12)
-      return invalid(path + ".expectedSize",
-                     "expected template size must fit inside its search region");
-    if (state.references.empty() ||
-        state.references.size() > max_template_references)
-      return invalid(path + ".references",
-                     "one to four template references are required");
-    std::set<std::string, std::less<>> references;
-    for (std::size_t reference_index = 0;
-         reference_index < state.references.size(); ++reference_index) {
-      const auto &reference = state.references[reference_index];
-      const auto reference_path =
-          path + ".references[" + std::to_string(reference_index) + "].asset";
-      if (!is_lowercase_sha256(reference.asset_sha256))
-        return invalid(reference_path,
-                       "asset must be a lower-case SHA-256 digest");
-      if (!references.insert(reference.asset_sha256).second)
-        return invalid(reference_path, "duplicate template reference");
-    }
-    if (!std::isfinite(state.confidence_threshold) ||
-        state.confidence_threshold < 0.0 ||
-        state.confidence_threshold > 1.0)
-      return invalid(path + ".confidence",
-                     "confidence must be between zero and one");
-    if (!std::isfinite(state.scale_tolerance) ||
-        state.scale_tolerance < 0.0 || state.scale_tolerance > 0.20)
-      return invalid(path + ".scaleTolerancePercent",
-                     "scale tolerance must be between zero and 20 percent");
-    if (state.stable_samples < 1 || state.stable_samples > 15)
-      return invalid(path + ".stableSamples",
-                     "stable sample count must be between 1 and 15");
   }
 
   std::set<std::string, std::less<>> cooldown_ids;
@@ -495,7 +486,7 @@ VisualError validate_visual_profile(
     const auto path = "$.triggers[" + std::to_string(index) + "]";
     if (!cooldown_ids.contains(trigger.cooldown_id))
       return invalid(path + ".cooldownId", "unknown cooldown id");
-    if (!has_observation(profile, trigger.observation_id))
+    if (find_observation(profile, trigger.observation_id) == nullptr)
       return invalid(path + ".observationId", "unknown visual observation id");
     if (!assigned.insert(trigger.cooldown_id).second)
       return invalid(path + ".cooldownId",
@@ -516,31 +507,13 @@ VisualError validate_visual_profile(
   return {};
 }
 
-const PixelRule *find_pixel_rule(const VisualProfile &profile,
-                                 const std::string_view id) noexcept {
-  const auto found = std::ranges::find(profile.rules, id, &PixelRule::id);
-  return found == profile.rules.end() ? nullptr : &*found;
-}
-
-const TemplateState *find_template_state(const VisualProfile &profile,
-                                         const std::string_view id) noexcept {
-  const auto found =
-      std::ranges::find(profile.templates, id, &TemplateState::id);
-  return found == profile.templates.end() ? nullptr : &*found;
-}
-
-bool has_observation(const VisualProfile &profile,
-                     const std::string_view id) noexcept {
-  return find_pixel_rule(profile, id) != nullptr ||
-         find_template_state(profile, id) != nullptr;
-}
-
-PixelRepeatPolicy observation_repeat_policy(
-    const VisualProfile &profile, const std::string_view id) noexcept {
-  if (const auto *rule = find_pixel_rule(profile, id)) return rule->repeat;
-  if (const auto *state = find_template_state(profile, id))
-    return state->repeat;
-  return PixelRepeatPolicy::edge;
+const VisualObservation *find_observation(const VisualProfile &profile,
+                                          const std::string_view id) noexcept {
+  const auto found = std::ranges::find_if(
+      profile.observations, [id](const VisualObservation &observation) {
+        return observation_id(observation) == id;
+      });
+  return found == profile.observations.end() ? nullptr : &*found;
 }
 
 VisualResult parse_visual_profile_json(const std::string_view source,
@@ -558,6 +531,83 @@ VisualResult parse_visual_profile_value(const json::Value &root,
   return Reader(root, base_profile).read();
 }
 
+namespace {
+
+void append_observation(std::string &output, const PixelRule &rule) {
+  output += "    {\n      \"type\": \"pixel\",\n      \"id\": ";
+  json::append_quoted(output, rule.id);
+  output += ",\n      \"name\": "; json::append_quoted(output, rule.name);
+  output += ",\n      \"region\": {\"x\": "; json::append_number(output, rule.region.x);
+  output += ", \"y\": "; json::append_number(output, rule.region.y);
+  output += ", \"width\": "; json::append_number(output, rule.region.width);
+  output += ", \"height\": "; json::append_number(output, rule.region.height);
+  output += "},\n      \"predicate\": {";
+  std::visit(
+      [&](const auto &predicate) {
+        using T = std::decay_t<decltype(predicate)>;
+        if constexpr (std::is_same_v<T, AverageColorPredicate>) {
+          output += "\"type\": \"averageColor\", \"target\": ";
+          json::append_color_quoted(output, predicate.target_color);
+          output += ", \"tolerance\": " +
+                    std::to_string(predicate.tolerance);
+        } else if constexpr (std::is_same_v<T, BrightnessPredicate>) {
+          output += "\"type\": \"brightness\", \"comparison\": \"";
+output += enum_wire_name(brightness_wire, predicate.comparison).value_or("below");
+          output += "\", \"threshold\": " +
+                    std::to_string(predicate.threshold);
+        } else {
+          output += "\"type\": \"colorCoverage\", \"target\": ";
+          json::append_color_quoted(output, predicate.target_color);
+          output += ", \"tolerance\": " +
+                    std::to_string(predicate.tolerance) +
+                    ", \"minimumPercent\": ";
+          json::append_number(output, predicate.minimum_fraction * 100.0);
+        }
+      },
+      rule.predicate);
+  output += "},\n      \"stableSamples\": " +
+            std::to_string(rule.stable_samples) + ",\n      \"repeat\": \"" +
+            std::string(enum_wire_name(pixel_repeat_wire, rule.repeat).value_or("edge")) + "\"\n    }";
+}
+
+void append_observation(std::string &output, const TemplateState &state) {
+  output += "    {\n      \"type\": \"template\",\n      \"id\": ";
+  json::append_quoted(output, state.id);
+  output += ",\n      \"name\": ";
+  json::append_quoted(output, state.name);
+  output += ",\n      \"searchRegion\": {\"x\": ";
+  json::append_number(output, state.search_region.x);
+  output += ", \"y\": ";
+  json::append_number(output, state.search_region.y);
+  output += ", \"width\": ";
+  json::append_number(output, state.search_region.width);
+  output += ", \"height\": ";
+  json::append_number(output, state.search_region.height);
+  output += "},\n      \"expectedSize\": {\"width\": ";
+  json::append_number(output, state.expected_width);
+  output += ", \"height\": ";
+  json::append_number(output, state.expected_height);
+  output += "},\n      \"references\": [";
+  for (std::size_t index = 0; index < state.references.size(); ++index) {
+    if (index != 0) output += ", ";
+    output += "{\"asset\": ";
+    json::append_quoted(output, state.references[index].asset_sha256);
+    output += "}";
+  }
+  output += "],\n      \"confidence\": ";
+  json::append_number(output, state.confidence_threshold);
+  output += ",\n      \"scaleTolerancePercent\": ";
+  json::append_number(output, state.scale_tolerance * 100.0);
+  output += ",\n      \"colorTolerance\": " +
+            std::to_string(state.color_tolerance);
+  output += ",\n      \"stableSamples\": " +
+            std::to_string(state.stable_samples);
+  output += ",\n      \"repeat\": \"" +
+            std::string(enum_wire_name(pixel_repeat_wire, state.repeat).value_or("edge")) + "\"\n    }";
+}
+
+} // namespace
+
 std::string serialize_visual_profile_json(const VisualProfile &profile) {
   std::string output;
   output.reserve(2'048);
@@ -567,81 +617,10 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
             std::to_string(profile.sample_rate_hz) + ",\n  \"quality\": ";
   json::append_quoted(output, enum_wire_name(capture_quality_wire, profile.quality).value_or("balanced"));
   output += ",\n  \"observations\": [\n";
-  const auto observation_count =
-      profile.rules.size() + profile.templates.size();
-  std::size_t observation_index{};
-  for (const auto &rule : profile.rules) {
-    output += "    {\n      \"type\": \"pixel\",\n      \"id\": ";
-    json::append_quoted(output, rule.id);
-    output += ",\n      \"name\": "; json::append_quoted(output, rule.name);
-    output += ",\n      \"region\": {\"x\": "; json::append_number(output, rule.region.x);
-    output += ", \"y\": "; json::append_number(output, rule.region.y);
-    output += ", \"width\": "; json::append_number(output, rule.region.width);
-    output += ", \"height\": "; json::append_number(output, rule.region.height);
-    output += "},\n      \"predicate\": {";
-    std::visit(
-        [&](const auto &predicate) {
-          using T = std::decay_t<decltype(predicate)>;
-          if constexpr (std::is_same_v<T, AverageColorPredicate>) {
-            output += "\"type\": \"averageColor\", \"target\": ";
-            json::append_color_quoted(output, predicate.target_color);
-            output += ", \"tolerance\": " +
-                      std::to_string(predicate.tolerance);
-          } else if constexpr (std::is_same_v<T, BrightnessPredicate>) {
-            output += "\"type\": \"brightness\", \"comparison\": \"";
-output += enum_wire_name(brightness_wire, predicate.comparison).value_or("below");
-            output += "\", \"threshold\": " +
-                      std::to_string(predicate.threshold);
-          } else {
-            output += "\"type\": \"colorCoverage\", \"target\": ";
-            json::append_color_quoted(output, predicate.target_color);
-            output += ", \"tolerance\": " +
-                      std::to_string(predicate.tolerance) +
-                      ", \"minimumPercent\": ";
-            json::append_number(output, predicate.minimum_fraction * 100.0);
-          }
-        },
-        rule.predicate);
-    output += "},\n      \"stableSamples\": " +
-              std::to_string(rule.stable_samples) + ",\n      \"repeat\": \"" +
-              std::string(enum_wire_name(pixel_repeat_wire, rule.repeat).value_or("edge")) + "\"\n    }";
-    output += ++observation_index == observation_count ? "\n" : ",\n";
-  }
-  for (const auto &state : profile.templates) {
-    output += "    {\n      \"type\": \"template\",\n      \"id\": ";
-    json::append_quoted(output, state.id);
-    output += ",\n      \"name\": ";
-    json::append_quoted(output, state.name);
-    output += ",\n      \"searchRegion\": {\"x\": ";
-    json::append_number(output, state.search_region.x);
-    output += ", \"y\": ";
-    json::append_number(output, state.search_region.y);
-    output += ", \"width\": ";
-    json::append_number(output, state.search_region.width);
-    output += ", \"height\": ";
-    json::append_number(output, state.search_region.height);
-    output += "},\n      \"expectedSize\": {\"width\": ";
-    json::append_number(output, state.expected_width);
-    output += ", \"height\": ";
-    json::append_number(output, state.expected_height);
-    output += "},\n      \"references\": [";
-    for (std::size_t index = 0; index < state.references.size(); ++index) {
-      if (index != 0) output += ", ";
-      output += "{\"asset\": ";
-      json::append_quoted(output, state.references[index].asset_sha256);
-      output += "}";
-    }
-    output += "],\n      \"confidence\": ";
-    json::append_number(output, state.confidence_threshold);
-    output += ",\n      \"scaleTolerancePercent\": ";
-    json::append_number(output, state.scale_tolerance * 100.0);
-    output += ",\n      \"colorTolerance\": " +
-              std::to_string(state.color_tolerance);
-    output += ",\n      \"stableSamples\": " +
-              std::to_string(state.stable_samples);
-    output += ",\n      \"repeat\": \"" +
-              std::string(enum_wire_name(pixel_repeat_wire, state.repeat).value_or("edge")) + "\"\n    }";
-    output += ++observation_index == observation_count ? "\n" : ",\n";
+  for (std::size_t index = 0; index < profile.observations.size(); ++index) {
+    std::visit([&](const auto &item) { append_observation(output, item); },
+               profile.observations[index]);
+    output += index + 1 == profile.observations.size() ? "\n" : ",\n";
   }
   output += "  ],\n  \"triggers\": [\n";
   for (std::size_t index = 0; index < profile.triggers.size(); ++index) {

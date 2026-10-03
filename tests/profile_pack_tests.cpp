@@ -183,7 +183,7 @@ struct PackFixture {
 
     layerc::core::VisualProfile first_visual;
     first_visual.profile_id = "first";
-    first_visual.templates.push_back({
+    first_visual.observations.push_back(layerc::core::TemplateState{
         .id = "ready-template",
         .name = "Ready",
         .search_region = {.x = 0.1, .y = 0.1, .width = 0.4, .height = 0.4},

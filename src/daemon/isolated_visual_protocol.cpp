@@ -205,24 +205,32 @@ decode_visual_request(const Value &entry, Reader &reader,
   request.source_key = std::move(source_key);
   request.sample_rate_hz = visual->sample_rate_hz;
   request.quality = visual->quality;
-  request.rules = visual->rules;
+  for (const auto &rule :
+       layerc::core::observations_of<layerc::core::PixelRule>(
+           visual->observations))
+    request.rules.push_back(rule);
+  std::vector<const layerc::core::TemplateState *> templates;
+  for (const auto &state :
+       layerc::core::observations_of<layerc::core::TemplateState>(
+           visual->observations))
+    templates.push_back(&state);
   const auto *signature_sets =
       reader.array(entry, "assetSignatures", path, Required::yes);
   if (signature_sets == nullptr) {
     error = reader_error(reader);
     return std::nullopt;
   }
-  if (signature_sets->size() != visual->templates.size()) {
+  if (signature_sets->size() != templates.size()) {
     error = "assetSignatures must match the visual template count";
     return std::nullopt;
   }
-  request.templates.reserve(visual->templates.size());
-  for (std::size_t template_index = 0;
-       template_index < visual->templates.size(); ++template_index) {
+  request.templates.reserve(templates.size());
+  for (std::size_t template_index = 0; template_index < templates.size();
+       ++template_index) {
     const auto signature_path = path + ".assetSignatures[" +
                                 std::to_string(template_index) + "]";
     auto evaluation = decode_template_evaluation(
-        (*signature_sets)[template_index], visual->templates[template_index],
+        (*signature_sets)[template_index], *templates[template_index],
         reader, signature_path, error);
     if (!evaluation)
       return std::nullopt;
@@ -498,10 +506,12 @@ encode_isolated_configuration(const IsolatedConfiguration &configuration) {
     visual.profile_id = "ipc";
     visual.sample_rate_hz = request.sample_rate_hz;
     visual.quality = request.quality;
-    visual.rules = request.rules;
-    visual.templates.reserve(request.templates.size());
+    visual.observations.reserve(request.rules.size() +
+                                request.templates.size());
+    for (const auto &rule : request.rules)
+      visual.observations.emplace_back(rule);
     for (const auto &evaluation : request.templates)
-      visual.templates.push_back(evaluation.state);
+      visual.observations.emplace_back(evaluation.state);
     output += "{\"sourceKey\":";
     layerc::core::json::append_quoted(output, request.source_key);
     output += ",\"visualProfile\":";

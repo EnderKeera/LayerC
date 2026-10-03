@@ -192,12 +192,13 @@ bool CalibrationWindow::initialize(const HWND window) {
       trigger_ = *assignment;
       rule_.id = trigger_.observation_id;
       template_state_.id = trigger_.observation_id;
-      if (const auto *existing_rule = layerc::core::find_pixel_rule(
-              *existing_visual_, trigger_.observation_id)) {
+      const auto *existing = layerc::core::find_observation(
+          *existing_visual_, trigger_.observation_id);
+      if (const auto *existing_rule =
+              std::get_if<layerc::core::PixelRule>(existing)) {
         rule_ = *existing_rule;
       } else if (const auto *existing_template =
-                     layerc::core::find_template_state(
-                         *existing_visual_, trigger_.observation_id)) {
+                     std::get_if<layerc::core::TemplateState>(existing)) {
         template_state_ = *existing_template;
         existing_template_assignment = true;
         restore_reference_selection();
@@ -211,8 +212,8 @@ bool CalibrationWindow::initialize(const HWND window) {
     } else {
       std::string base = trigger_.observation_id;
       unsigned suffix = 2;
-      while (layerc::core::has_observation(*existing_visual_,
-                                           trigger_.observation_id))
+      while (layerc::core::find_observation(*existing_visual_,
+                                            trigger_.observation_id))
         trigger_.observation_id = base + "-" + std::to_string(suffix++);
       rule_.id = trigger_.observation_id;
       template_state_.id = trigger_.observation_id;
@@ -809,9 +810,9 @@ bool CalibrationWindow::apply() {
   result.sample_rate_hz = sample_rate_hz_;
   result.quality = quality_;
   if (use_template)
-    result.templates.push_back(template_state_);
+    result.observations.emplace_back(template_state_);
   else
-    result.rules.push_back(rule_);
+    result.observations.emplace_back(rule_);
   result.triggers.push_back(trigger_);
   const auto validation =
       layerc::core::validate_visual_profile(result, profile_);

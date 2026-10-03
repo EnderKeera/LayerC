@@ -8,7 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -230,6 +230,43 @@ struct TemplateState {
   bool operator==(const TemplateState &) const = default;
 };
 
+// One schema-2 `observations` entry. The vector order is the authored wire
+// order, and an observation's index is its `$.observations[N]` path.
+using VisualObservation = std::variant<PixelRule, TemplateState>;
+
+[[nodiscard]] inline const std::string &
+observation_id(const VisualObservation &observation) noexcept {
+  if (const auto *rule = std::get_if<PixelRule>(&observation)) return rule->id;
+  return std::get_if<TemplateState>(&observation)->id;
+}
+
+[[nodiscard]] inline PixelRepeatPolicy
+observation_repeat(const VisualObservation &observation) noexcept {
+  if (const auto *rule = std::get_if<PixelRule>(&observation))
+    return rule->repeat;
+  return std::get_if<TemplateState>(&observation)->repeat;
+}
+
+// The observations of one kind, in authored order, as references into the
+// given vector (const or mutable).
+template <typename T, typename Observations>
+[[nodiscard]] auto observations_of(Observations &observations) {
+  return observations | std::views::filter([](const VisualObservation &item) {
+           return std::holds_alternative<T>(item);
+         }) |
+         std::views::transform(
+             [](auto &item) -> auto & { return *std::get_if<T>(&item); });
+}
+
+template <typename T>
+[[nodiscard]] std::size_t
+count_observations(const std::vector<VisualObservation> &observations) noexcept {
+  return static_cast<std::size_t>(std::ranges::count_if(
+      observations, [](const VisualObservation &item) {
+        return std::holds_alternative<T>(item);
+      }));
+}
+
 struct VisualTrigger {
   std::string cooldown_id;
   std::string observation_id;
@@ -249,8 +286,7 @@ struct VisualProfile {
   std::string profile_id;
   std::uint8_t sample_rate_hz{10};
   CaptureQuality quality{CaptureQuality::balanced};
-  std::vector<PixelRule> rules;
-  std::vector<TemplateState> templates;
+  std::vector<VisualObservation> observations;
   std::vector<VisualTrigger> triggers;
 
   bool operator==(const VisualProfile &) const = default;
@@ -274,18 +310,12 @@ parse_visual_profile_json(std::string_view source,
 serialize_visual_profile_json(const VisualProfile &profile);
 [[nodiscard]] VisualError
 validate_visual_profile(const VisualProfile &profile,
-                        const GameProfile &base_profile,
-                        const std::function<std::string(bool, std::size_t)> &source_path = {});
+                        const GameProfile &base_profile);
 [[nodiscard]] bool
 has_enabled_visual_assignments(const VisualProfile &profile) noexcept;
-[[nodiscard]] const PixelRule *
-find_pixel_rule(const VisualProfile &profile, std::string_view id) noexcept;
-[[nodiscard]] const TemplateState *
-find_template_state(const VisualProfile &profile, std::string_view id) noexcept;
-[[nodiscard]] bool
-has_observation(const VisualProfile &profile, std::string_view id) noexcept;
-[[nodiscard]] PixelRepeatPolicy
-observation_repeat_policy(const VisualProfile &profile,
-                          std::string_view id) noexcept;
+// The one observation lookup. Narrow with std::get_if<PixelRule> or
+// std::get_if<TemplateState>, which also maps a missing id to nullptr.
+[[nodiscard]] const VisualObservation *
+find_observation(const VisualProfile &profile, std::string_view id) noexcept;
 
 } // namespace layerc::core

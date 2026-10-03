@@ -240,8 +240,8 @@ void platform_visual_assets() {
     auto gc_base = test_profile("Asset GC");
     layerc::core::VisualProfile gc_visual;
     gc_visual.profile_id = gc_base.id;
-    gc_visual.templates.push_back(
-        {.id = "template",
+    gc_visual.observations.push_back(
+        layerc::core::TemplateState{.id = "template",
          .name = "Template",
          .search_region = {0.0, 0.0, 1.0, 1.0},
          .expected_width = 0.25,
@@ -280,7 +280,7 @@ void platform_visual_assets() {
     stale_backup += L".bak";
     if (third_asset_info != nullptr) {
       auto recovery_visual = gc_visual;
-      recovery_visual.templates.front().references = {
+      std::get<layerc::core::TemplateState>(recovery_visual.observations.front()).references = {
           third_asset_info->reference};
       write_file(stale_backup,
                  layerc::core::serialize_visual_profile_json(recovery_visual));
@@ -349,7 +349,7 @@ void platform_visual_asset_writer_ownership() {
   const auto base = test_profile("Asset writer ownership");
   layerc::core::VisualProfile visual;
   visual.profile_id = base.id;
-  visual.templates.push_back({.id = "template", .name = "Template",
+  visual.observations.push_back(layerc::core::TemplateState{.id = "template", .name = "Template",
                               .search_region = {0.0, 0.0, 1.0, 1.0},
                               .expected_width = 0.25, .expected_height = 0.25,
                               .references = {a->reference}});
@@ -377,7 +377,8 @@ void platform_visual_asset_writer_ownership() {
     expect(collection.wait_for(std::chrono::milliseconds(250)) ==
                std::future_status::timeout && std::filesystem::exists(b->path),
            "maintenance must not scan/delete while another writer owns the store");
-    visual.templates.front().references = {b->reference};
+    std::get<layerc::core::TemplateState>(visual.observations.front()).references = {
+        b->reference};
     expect(layerc::platform::write_profile_bundle(path, base, visual),
            "the owning writer must publish its new reference before releasing");
   }

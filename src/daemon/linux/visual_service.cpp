@@ -74,7 +74,7 @@ void X11VisualService::refresh(
   const auto stamps_for = [this](const std::filesystem::path &source_path,
                                  const layerc::core::VisualProfile &profile) {
     std::vector<AssetStamp> stamps;
-    for (const auto &state : profile.templates) {
+    for (const auto &state : layerc::core::observations_of<layerc::core::TemplateState>(profile.observations)) {
       if (!uses_template(profile, state.id)) continue;
       for (const auto &reference : state.references) {
         AssetStamp stamp;
@@ -133,7 +133,8 @@ void X11VisualService::refresh(
     evaluation.profile_id = configuration.profile_id;
     evaluation.profile = profile;
     evaluation.asset_stamps = std::move(stamps);
-    for (const auto &state : evaluation.profile.templates) {
+    for (const auto &state :
+         layerc::core::observations_of<layerc::core::TemplateState>(evaluation.profile.observations)) {
       if (!uses_template(evaluation.profile, state.id)) continue;
       TemplateEvaluation loaded;
       loaded.state = state;
@@ -226,12 +227,12 @@ X11VisualService::poll(const std::span<InputSession> sessions,
     for (auto *evaluation : target.evaluations) {
       if (!due(evaluation)) continue;
       std::vector<ObservationMeasurement> measurements;
-      measurements.reserve(evaluation->profile.rules.size() +
-                           evaluation->templates.size());
+      measurements.reserve(evaluation->profile.observations.size());
       // Shared synchronous evaluator (F9): ROI/error-to-measurement policy
       // lives in capture/visual_evaluation.hpp, not in this host loop.
       // sampled_at is the capture poll time, fixed before evaluation.
-      for (const auto &rule : evaluation->profile.rules)
+      for (const auto &rule : layerc::core::observations_of<layerc::core::PixelRule>(
+               evaluation->profile.observations))
         measurements.push_back(layerc::capture::evaluate_pixel_measurement(
             rule, {capture, evaluation->profile.quality, now}));
       for (const auto &item : evaluation->templates)

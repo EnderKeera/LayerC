@@ -50,19 +50,19 @@ void test_visual_profile_parser() {
   profile.profile_id = base.id;
   profile.sample_rate_hz = 15;
   profile.quality = CaptureQuality::low;
-  profile.rules.push_back({.id = "ready",
+  profile.observations.push_back(layerc::core::PixelRule{.id = "ready",
                            .name = "Ready color",
                            .region = {0.0, 0.0, 1.0, 1.0},
                            .predicate = AverageColorPredicate{0x20A040, 8},
                            .stable_samples = 2,
                            .repeat = PixelRepeatPolicy::edge});
-  profile.rules.push_back({.id = "bright",
+  profile.observations.push_back(layerc::core::PixelRule{.id = "bright",
                            .name = "Bright",
                            .region = {0.2, 0.3, 0.4, 0.5},
                            .predicate = BrightnessPredicate{
                                180, BrightnessComparison::above},
                            .stable_samples = 4});
-  profile.rules.push_back({.id = "coverage",
+  profile.observations.push_back(layerc::core::PixelRule{.id = "coverage",
                            .name = "Coverage",
                            .region = {0.1, 0.1, 0.2, 0.2},
                            .predicate = ColorCoveragePredicate{0x112233, 12,
@@ -138,8 +138,8 @@ void test_visual_profile_parser() {
 
   VisualProfile template_profile;
   template_profile.profile_id = base.id;
-  template_profile.templates.push_back(
-      {.id = "ready-template",
+  template_profile.observations.push_back(
+      layerc::core::TemplateState{.id = "ready-template",
        .name = "Ready template",
        .search_region = {0.1, 0.2, 0.6, 0.5},
        .expected_width = 0.2,
@@ -163,31 +163,49 @@ void test_visual_profile_parser() {
                  template_profile,
          "template observations should round-trip all bounded matching settings");
 
-  // Parsed schema-2 observations retain their original source indices, even
-  // when mixed pixel/template entries are stored in separate vectors.
+  // An authored [template, pixel] order survives save and reload, and an
+  // observation's index is its path (layer45 F-V1).
   VisualProfile mixed = template_profile;
-  mixed.rules.push_back(profile.rules.front());
-  mixed.templates.front().references.front().asset_sha256 = std::string(64, 'A');
+  mixed.observations.push_back(profile.observations.front());
+  const auto mixed_json = serialize_visual_profile_json(mixed);
+  const auto mixed_round_trip = parse_visual_profile_json(mixed_json, base);
+  const auto *mixed_parsed = std::get_if<VisualProfile>(&mixed_round_trip);
+  expect(mixed_parsed != nullptr && *mixed_parsed == mixed &&
+             mixed_parsed->observations.size() == 2 &&
+             std::holds_alternative<TemplateState>(
+                 mixed_parsed->observations[0]) &&
+             std::holds_alternative<PixelRule>(mixed_parsed->observations[1]) &&
+             serialize_visual_profile_json(*mixed_parsed) == mixed_json &&
+             mixed_json.find("\"template\"") < mixed_json.find("\"pixel\""),
+         "authored observation order round-trips through save unchanged");
+  std::get<TemplateState>(mixed.observations.front())
+      .references.front()
+      .asset_sha256 = std::string(64, 'A');
   const auto mixed_error = parse_visual_profile_json(
       serialize_visual_profile_json(mixed), base);
   expect(std::holds_alternative<VisualError>(mixed_error) &&
              std::get<VisualError>(mixed_error).path ==
-                 "$.observations[1].references[0].asset",
-         "semantic template errors cite the original observation index");
-  // Direct validation of an in-memory (always schema-2) profile cites the
-  // serialized $.observations position: pixel rules first, then templates.
+                 "$.observations[0].references[0].asset",
+         "semantic template errors cite the authored observation index");
+  expect(validate_visual_profile(mixed, base).path ==
+             "$.observations[0].references[0].asset",
+         "in-memory validation cites the same authored observation index");
   VisualProfile duplicate = template_profile;
-  duplicate.rules.push_back(profile.rules.front());
-  duplicate.templates.front().id = duplicate.rules.front().id;
+  duplicate.observations.push_back(profile.observations.front());
+  std::get<TemplateState>(duplicate.observations.front()).id =
+      observation_id(duplicate.observations.back());
   const auto duplicate_error = validate_visual_profile(duplicate, base);
   expect(duplicate_error.path == "$.observations[1].id" &&
              duplicate_error.message == "duplicate visual observation id",
          "validator errors cite schema-2 observation paths without a mapper");
   VisualProfile crowded = template_profile;
-  crowded.templates.resize(max_template_states + 1, template_profile.templates.front());
+  crowded.observations.resize(max_template_states + 1,
+                              template_profile.observations.front());
   expect(validate_visual_profile(crowded, base).path == "$.observations",
          "observation count errors cite the schema-2 observations array");
-  template_profile.templates.front().references.front().asset_sha256 =
+  std::get<TemplateState>(template_profile.observations.front())
+      .references.front()
+      .asset_sha256 =
        std::string(64, 'A');
   expect(!validate_visual_profile(template_profile, base).message.empty(),
          "template references should reject noncanonical asset hashes");

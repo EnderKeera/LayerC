@@ -58,7 +58,8 @@ bool is_asset_stage_filename(const std::filesystem::path &filename) {
 
 void collect_asset_references(const layerc::core::VisualProfile &profile,
                               std::vector<std::string> &references) {
-  for (const auto &state : profile.templates) {
+  for (const auto &state : layerc::core::observations_of<layerc::core::TemplateState>(
+           profile.observations)) {
     for (const auto &reference : state.references)
       references.push_back(reference.asset_sha256);
   }

@@ -113,8 +113,8 @@ ProfileDocument::cooldown_removal_error(const std::string_view id) const {
                           rule.source_filter + "'";
         if (rule.event == AutomationEventKind::visual_observation &&
             visual_.profile && remaining_visual &&
-            has_observation(*visual_.profile, rule.source_filter) &&
-            !has_observation(*remaining_visual, rule.source_filter))
+            find_observation(*visual_.profile, rule.source_filter) &&
+            !find_observation(*remaining_visual, rule.source_filter))
           dependencies += "\n- Automation '" + automation.id + "', rule '" +
                           rule.id + "': visual observation '" +
                           rule.source_filter + "'";

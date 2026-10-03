@@ -323,7 +323,8 @@ PackValidationResult detail::canonicalize_pack_assets(ValidatedPack pack) {
   if (renamed.empty()) return pack;
   for (auto &item : pack.profiles) {
     if (!item.visual.has_value()) continue;
-    for (auto &state : item.visual->profile.templates) {
+    for (auto &state : core::observations_of<core::TemplateState>(
+             item.visual->profile.observations)) {
       // Two sources can canonicalize to one asset; keep the first reference.
       std::set<std::string, std::less<>> seen;
       std::erase_if(state.references, [&](core::TemplateReference &reference) {

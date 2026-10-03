@@ -41,7 +41,7 @@ layerc::core::VisualProfile visual_fixture(
     const layerc::core::TemplateReference &reference) {
   layerc::core::VisualProfile visual;
   visual.profile_id = base.id;
-  visual.templates.push_back({.id = "reference", .name = "Reference",
+  visual.observations.push_back(layerc::core::TemplateState{.id = "reference", .name = "Reference",
                              .search_region = {0.0, 0.0, 1.0, 1.0},
                              .expected_width = 0.25, .expected_height = 0.25,
                              .references = {reference}});
@@ -51,7 +51,8 @@ layerc::core::VisualProfile visual_fixture(
 }
 
 void require_available(const layerc::core::VisualProfile &visual) {
-  for (const auto &state : visual.templates)
+  for (const auto &state :
+       layerc::core::observations_of<layerc::core::TemplateState>(visual.observations))
     for (const auto &reference : state.references)
       expect(std::holds_alternative<layerc::core::TemplateImage>(
                  layerc::platform::load_template_asset(reference.asset_sha256)),

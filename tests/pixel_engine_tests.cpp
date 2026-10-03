@@ -20,7 +20,7 @@ layerc::core::VisualProfile visual_profile(
   VisualProfile profile;
   profile.profile_id = "game";
   profile.sample_rate_hz = 10;
-  profile.rules.push_back({.id = "ready",
+  profile.observations.push_back(layerc::core::PixelRule{.id = "ready",
                            .name = "Ready",
                            .region = {0.0, 0.0, 1.0, 1.0},
                            .predicate = AverageColorPredicate{0x20A040, 8},

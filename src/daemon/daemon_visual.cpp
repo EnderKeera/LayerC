@@ -24,11 +24,15 @@ VisualEvaluationRequest build_visual_request(const Session &session) {
   request.source_key = session.source_key;
   request.sample_rate_hz = visual.sample_rate_hz;
   request.quality = visual.quality;
-  for (const auto &rule : visual.rules) {
+  for (const auto &rule :
+       layerc::core::observations_of<layerc::core::PixelRule>(
+           visual.observations)) {
     if (observation_enabled(visual, rule.id))
       request.rules.push_back(rule);
   }
-  for (const auto &state : visual.templates) {
+  for (const auto &state :
+       layerc::core::observations_of<layerc::core::TemplateState>(
+           visual.observations)) {
     if (!observation_enabled(visual, state.id))
       continue;
     VisualTemplateEvaluation evaluation;
