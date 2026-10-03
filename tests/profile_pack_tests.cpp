@@ -205,15 +205,15 @@ struct PackFixture {
                                      .opacity = 0.75});
     passed &= expect(layerc::platform::write_profile_bundle(
                          first_path, first_base, first_visual, first_automation,
-                         first_companion),
+                         first_companion).ok(),
                      "first schema-4 profile and all module sidecars should save");
     passed &= expect(
         layerc::platform::write_automation_state(
             first_path, first_automation,
-            {{"count", layerc::core::AutomationValue(std::int64_t{9})}}),
+            {{"count", layerc::core::AutomationValue(std::int64_t{9})}}).ok(),
         "machine-local automation state should exist beside the export fixture");
     passed &= expect(layerc::platform::write_profile_bundle(
-                         second_path, profile("second", "Second", 31), std::nullopt),
+                         second_path, profile("second", "Second", 31), std::nullopt).ok(),
                      "second schema-3 profile should save");
     ready = passed;
   }
@@ -543,7 +543,7 @@ void import_planning_after_recovery() {
   preceding_companion.slots.push_back(
       {.slot_index = 0, .panel_id = "dash-bar", .opacity = 0.9});
   if (!expect(layerc::platform::write_profile_bundle(
-                  target, preceding_base, std::nullopt, std::nullopt, preceding_companion),
+                  target, preceding_base, std::nullopt, std::nullopt, preceding_companion).ok(),
               "import should start from a committed bundle")) return;
   const auto companion_path = layerc::platform::companion_sidecar_path(target);
   const auto preceding_json = read_file(target);

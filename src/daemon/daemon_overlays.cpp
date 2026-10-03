@@ -202,8 +202,9 @@ bool DaemonApp::apply_companion_preferences(const std::string_view json) {
         !layerc::platform::may_write_primary(source.modules.automation.state))
       return false;
     return layerc::platform::write_profile_bundle(
-        source.path, source.profile, source.modules.visual.profile,
-        source.modules.automation.profile, *profile);
+               source.path, source.profile, source.modules.visual.profile,
+               source.modules.automation.profile, *profile)
+        .ok();
   }
   return false;
 }

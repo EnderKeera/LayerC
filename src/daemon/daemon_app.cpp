@@ -22,7 +22,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   instance_ = instance;
   const auto recovered = layerc::platform::recover_profile_transactions(
       layerc::platform::profile_directory());
-  if (const auto error = recovered.error(); error.has_value()) {
+  if (const auto error = recovered.failure; error.has_value()) {
     const auto message =
         L"LayerD could not recover an interrupted profile import (" +
         layerc::platform::utf8_to_wide(

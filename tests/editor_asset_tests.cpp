@@ -79,7 +79,7 @@ void editor_asset_history_contracts() {
   {
     layerc::editor::EditorProfileHistory history;
     std::optional<layerc::core::VisualProfile> current = visuals.front();
-    if (!expect(layerc::platform::write_profile_bundle(path, base, current),
+    if (!expect(layerc::platform::write_profile_bundle(path, base, current).ok(),
                 "the initial assignment must commit as a complete bundle"))
       return;
     history.reset(base, current, std::nullopt);
@@ -87,7 +87,7 @@ void editor_asset_history_contracts() {
       current = visuals[index];
       expect(history.record(base, current, std::nullopt),
              "each A/B/C replacement must retain its history transaction");
-      expect(layerc::platform::write_profile_bundle(path, base, current),
+      expect(layerc::platform::write_profile_bundle(path, base, current).ok(),
              "successive assignments must commit valid bundles");
       history.rebase(base, current, std::nullopt);
     }
@@ -137,7 +137,7 @@ void editor_asset_pending_publication_contracts() {
     if (!pending) return;
     for (int edit{}; edit < 3; ++edit) {
       base.name += " edited";
-      expect(layerc::platform::write_profile_bundle(path, base, std::nullopt),
+      expect(layerc::platform::write_profile_bundle(path, base, std::nullopt).ok(),
              "unrelated profile edits must commit in the same fixture store");
       expect(std::holds_alternative<layerc::core::TemplateImage>(
                  layerc::platform::load_template_asset(

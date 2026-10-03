@@ -180,8 +180,10 @@ void InputSession::checkpoint_automation_state(const TimePoint now,
       source_path, automation_runtime->profile(),
       automation_runtime->snapshot().persistent_values, automation_state_due,
       now, force);
-  if (!written.has_value()) return;
-  if (const auto error = written->error(); error.has_value())
+  if (std::holds_alternative<layerc::platform::CheckpointNotDue>(written))
+    return;
+  if (const auto *error =
+          std::get_if<layerc::platform::ProfileWriteError>(&written))
     automation_health.checkpoint_error =
         std::string("automation checkpoint failed (") +
         layerc::platform::profile_write_error_text(*error) +
@@ -297,11 +299,12 @@ bool X11SessionRegistry::retry_pending_checkpoints(const TimePoint now,
     auto &retired = entry->second;
     const auto written = layerc::platform::checkpoint_automation_state(
         entry->first, retired.profile, retired.values, retired.due, now, force);
-    if (!written.has_value()) {
+    if (std::holds_alternative<layerc::platform::CheckpointNotDue>(written)) {
       ++entry;
       continue;
     }
-    if (const auto error = written->error(); error.has_value()) {
+    if (const auto *error =
+            std::get_if<layerc::platform::ProfileWriteError>(&written)) {
       retired.checkpoint_error =
           std::string("automation checkpoint failed (") +
           layerc::platform::profile_write_error_text(*error) +

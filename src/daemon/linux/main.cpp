@@ -29,7 +29,7 @@ using layerc::core::TimePoint;
     return false;
   }
   if (const auto error =
-          layerc::platform::recover_profile_transactions(roots).error();
+          layerc::platform::recover_profile_transactions(roots).failure;
       error.has_value()) {
     std::fprintf(stderr, "layerd: profile transaction recovery failed (%s)\n",
                  layerc::platform::profile_write_error_text(*error));

@@ -152,17 +152,17 @@ void journal_read_status_recovery() {
                  read_file(target) == "after-quarantine",
              "a quarantined oversized journal must not block later publications");
     } else if (status == platform::FileReadStatus::io_error) {
-      expect(recovered.error() == platform::ProfileWriteError::recovery_blocked &&
+      expect(recovered.failure == platform::ProfileWriteError::recovery_blocked &&
                  read_file(backup) == "old" && std::filesystem::exists(journal) &&
                  read_file(target) == "partial",
              "existing unreadable journals must retain all evidence");
-      expect(platform::recover_profile_transactions(*roots).error() ==
+      expect(platform::recover_profile_transactions(*roots).failure ==
                      platform::ProfileWriteError::recovery_blocked &&
                  read_file(backup) == "old",
              "repeated recovery must not degrade unreadable journal evidence");
       const std::array mutation{platform::ProfileFileMutation{
           .target = target, .contents = core::owned_bytes("must-not-publish")}};
-      expect(platform::commit_profile_transaction(*roots, mutation).error() ==
+      expect(platform::commit_profile_transaction(*roots, mutation).failure ==
                      platform::ProfileWriteError::recovery_blocked &&
                  read_file(target) == "partial",
              "blocked recovery must prevent further publications");
@@ -195,7 +195,7 @@ void profile_planning_after_recovery() {
   companion.profile_id = committed.id;
   companion.slots.push_back({.slot_index = 0, .panel_id = "main", .opacity = 0.9});
   if (!expect(platform::write_profile_bundle(path, committed, visual, automation,
-                                             companion),
+                                             companion).ok(),
               "latest daemon preferences should be committed first")) return;
   const std::array paths{path, platform::visual_sidecar_path(path),
                         platform::automation_sidecar_path(path),
@@ -226,7 +226,7 @@ void profile_planning_after_recovery() {
          "simulated writer loss should leave a real rollback journal");
   auto edited = committed;
   edited.name = "Editor edit";
-  expect(platform::write_profile_bundle(path, edited, visual, automation),
+  expect(platform::write_profile_bundle(path, edited, visual, automation).ok(),
          "the editor save should recover before preserving omitted sidecars");
   const auto preserved = platform::load_companion_sidecar(path, edited);
   expect(preserved.profile == companion,

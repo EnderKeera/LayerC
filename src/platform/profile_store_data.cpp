@@ -446,18 +446,19 @@ ProfileWriteResult write_automation_state(
   return commit_profile_transaction(profile_path.parent_path(), mutations);
 }
 
-std::optional<ProfileWriteResult> checkpoint_automation_state(
+AutomationCheckpoint checkpoint_automation_state(
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values,
     std::optional<layerc::core::TimePoint> &due,
     const layerc::core::TimePoint now, const bool force) {
   if (!layerc::core::automation_checkpoint_ready(due, now, force))
-    return std::nullopt;
+    return CheckpointNotDue{};
   auto written =
       write_automation_state(profile_path, automation_profile, values);
-  layerc::core::automation_checkpoint_report(due, now, written);
-  return written;
+  layerc::core::automation_checkpoint_report(due, now, written.ok());
+  if (written.failure.has_value()) return *written.failure;
+  return CheckpointSaved{};
 }
 
 SidecarMarkerInspection

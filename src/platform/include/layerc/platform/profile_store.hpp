@@ -341,10 +341,16 @@ struct AutomationStateLoad {
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values);
+struct CheckpointNotDue {};
+struct CheckpointSaved {};
+// One checkpoint opportunity: nothing was due, the state was saved, or the
+// write failed (the deadline then slides out by one debounce for a retry).
+using AutomationCheckpoint =
+    std::variant<CheckpointNotDue, CheckpointSaved, ProfileWriteError>;
+
 // The checkpoint policy every automation host shares: when `due` is ready
-// (or `force`), write the state and report the outcome into `due`. Returns
-// the write result, or nullopt when no checkpoint was due.
-[[nodiscard]] std::optional<ProfileWriteResult> checkpoint_automation_state(
+// (or `force`), write the state and report the outcome into `due`.
+[[nodiscard]] AutomationCheckpoint checkpoint_automation_state(
     const std::filesystem::path &profile_path,
     const layerc::core::AutomationProfile &automation_profile,
     const layerc::core::AutomationPersistentValues &values,

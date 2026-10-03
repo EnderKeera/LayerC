@@ -392,7 +392,7 @@ static void test_all_eight_slots_persist_and_publish() {
   const auto base_path = directory.path() / "profile.json";
   layerc::test::expect(
       write_profile_bundle(base_path, base_profile, std::nullopt,
-                           std::nullopt, profile),
+                           std::nullopt, profile).ok(),
       "all eight slot preferences save through the profile transaction");
   const auto loaded = load_companion_sidecar(base_path, base_profile);
   layerc::test::expect(loaded.state == ModuleSidecarState::valid &&
@@ -583,12 +583,12 @@ static void test_companion_sidecar_survives_unrelated_bundle_save() {
   companion.profile_id = base.id;
   companion.slots = {{.slot_index = 0, .panel_id = "panel"}};
   layerc::test::expect(write_profile_bundle(base_path, base, std::nullopt,
-                                            std::nullopt, companion),
+                                            std::nullopt, companion).ok(),
                        "companion bundle should be written");
 
   auto changed = base;
   changed.name = "Changed";
-  layerc::test::expect(write_profile_bundle(base_path, changed, std::nullopt),
+  layerc::test::expect(write_profile_bundle(base_path, changed, std::nullopt).ok(),
                        "unrelated bundle save should succeed");
   const auto loaded = load_companion_sidecar(base_path, changed);
   layerc::test::expect(loaded.profile.has_value() &&

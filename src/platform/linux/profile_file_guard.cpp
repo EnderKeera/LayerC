@@ -117,7 +117,7 @@ bool ensure_guard_transaction_roots(const ProfileStoreRoots &roots) {
 }
 
 std::optional<ProfileStoreRoots>
-guard_transaction_scope(const std::filesystem::path &profile_directory) {
+profile_transaction_scope(const std::filesystem::path &profile_directory) {
   const auto roots = profile_store_roots();
   if (profile_directory.empty() || !profile_directory.is_absolute() ||
       profile_directory.lexically_normal() !=

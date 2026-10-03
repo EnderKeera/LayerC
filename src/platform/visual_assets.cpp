@@ -344,7 +344,7 @@ VisualAssetGcReport garbage_collect_unreferenced_visual_assets() {
       });
   if (!owned && report.completed()) {
     report.blocked_by = directory;
-    report.fault = profile_write_error_text(*owned.error());
+    report.fault = profile_write_error_text(*owned.failure);
   }
   return report;
 }

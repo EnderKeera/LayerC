@@ -403,7 +403,7 @@ detail::ImportCommitResult detail::commit_profile_import(
         return {};
       });
   if (planning_error) return *planning_error;
-  if (const auto error = committed.error())
+  if (const auto error = committed.failure)
     return pack_error<ImportCommitResult>(
         std::string("profile-pack transaction failed: ") +
         platform::profile_write_error_text(*error));
@@ -425,7 +425,7 @@ import_profile_pack(const ValidatedPack &pack,
 PackOperationResult recover_profile_pack_transactions(
     const std::filesystem::path &profile_directory) {
   const auto recovered = platform::recover_profile_transactions(profile_directory);
-  if (const auto error = recovered.error())
+  if (const auto error = recovered.failure)
     return pack_error<PackOperationResult>(std::string("profile-pack recovery failed: ") +
                    platform::profile_write_error_text(*error));
   return std::monostate{};
