@@ -1,5 +1,4 @@
 #include "daemon_state.hpp"
-#include "daemon_app.hpp"
 
 #include "layerc/platform/platform_events.hpp"
 
@@ -44,11 +43,6 @@ bool SessionRegistry::invariant_holds() const noexcept {
   return true;
 }
 
-layerc::runtime::RuntimeResourceStats
-InputRuntime::resources() const noexcept {
-  return {.timers = timer_running ? 1U : 0U};
-}
-
 VisualCaptureRuntime::~VisualCaptureRuntime() {
   // Hosts may signal the snapshot event until they are destroyed.
   captures.clear();
@@ -78,8 +72,7 @@ void VisualCaptureRuntime::publish_activity(const bool active) noexcept {
 }
 
 layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
-    const layerc::core::VisualRuntime runtime,
-    const SessionRegistry &sessions) const noexcept {
+    const layerc::core::VisualRuntime runtime) const noexcept {
   std::uint32_t count{};
   std::uint32_t inline_count{};
   std::uint64_t decoded_assets{};
@@ -90,7 +83,7 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
       ++inline_count;
     if (worker->runtime() == runtime) ++count;
   }
-  for (const auto *session : sessions.active_inputs) {
+  for (const auto *session : sessions_.active_inputs) {
     if (session == nullptr || session->game_window == nullptr ||
         !session->modules.visual.profile.has_value())
       continue;
@@ -127,43 +120,6 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
           .handles = snapshot_handle,
           .capture_sessions = count,
           .decoded_assets = assets};
-}
-
-AutomationRuntimeHost::~AutomationRuntimeHost() {
-  publish_activity(false);
-}
-
-void AutomationRuntimeHost::publish_activity(const bool active) noexcept {
-  if (active && !active_event_.valid())
-    active_event_.reset(CreateEventW(
-        nullptr, TRUE, FALSE, layerc::platform::automation_active_event_name));
-  if (!active_event_.valid())
-    return;
-  if (active) {
-    SetEvent(active_event_.get());
-    return;
-  }
-  ResetEvent(active_event_.get());
-  active_event_.reset();
-}
-
-layerc::runtime::RuntimeResourceStats
-AutomationRuntimeHost::resources(const SessionRegistry &sessions) const
-    noexcept {
-  layerc::runtime::RuntimeResourceStats result{
-      .timers = timer_running ? 1U : 0U};
-  for (const auto &session : sessions.sessions) {
-    if (!session->automation_runtime) continue;
-    const auto &snapshot = session->automation_runtime->snapshot();
-    result += {
-        .objects = 1,
-        .cache_bytes =
-            snapshot.variables.size() * sizeof(layerc::core::AutomationValue) +
-            snapshot.timers.size() * sizeof(layerc::core::AutomationTimer) +
-            snapshot.overlay_overrides.size() *
-                sizeof(layerc::core::OverlayPropertyOverride)};
-  }
-  return result;
 }
 
 OverlayRuntime *OverlayRuntime::callback_target_{};
@@ -204,17 +160,16 @@ void OverlayRuntime::stop() noexcept {
   }
 }
 
-layerc::runtime::RuntimeResourceStats OverlayRuntime::resources(
-    const SessionRegistry &sessions,
-    const LiveEditHost &live_edit) const noexcept {
+layerc::runtime::RuntimeResourceStats
+OverlayRuntime::resources() const noexcept {
   layerc::runtime::RuntimeResourceStats result{
       .timers = timer_running ? 1U : 0U};
   const auto count = [&](const OverlayCollection &overlays) {
     result += {.windows = static_cast<std::uint32_t>(overlays.window_count()),
                .objects = static_cast<std::uint32_t>(overlays.object_count())};
   };
-  for (const auto &session : sessions.sessions) count(session->overlays);
-  if (live_edit.session) count(live_edit.session->overlays);
+  for (const auto &session : sessions_.sessions) count(session->overlays);
+  if (live_edit_.session) count(live_edit_.session->overlays);
   return result;
 }
 
@@ -232,8 +187,21 @@ void CALLBACK OverlayRuntime::event_proc(
   if (event == EVENT_SYSTEM_FOREGROUND ||
       ((event == EVENT_OBJECT_DESTROY || event == EVENT_OBJECT_LOCATIONCHANGE) &&
        object_id == OBJID_WINDOW)) {
-    target->app_.on_overlay_event(event, window);
+    target->events_.on_overlay_event(event, window);
   }
+}
+
+layerc::runtime::ServiceReconcileResult
+CompanionHost::reconcile(const layerc::runtime::CapabilityDemand &) {
+  return transport.start()
+             ? layerc::runtime::ServiceReconcileResult{}
+             : layerc::runtime::ServiceReconcileResult{
+                   false, "Game Bar transport could not start"};
+}
+
+void CompanionHost::quiesce() noexcept {
+  transport.stop();
+  set_active_session_count(0);
 }
 
 void CompanionHost::set_active_session_count(const std::size_t count) noexcept {

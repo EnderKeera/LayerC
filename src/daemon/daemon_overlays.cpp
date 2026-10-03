@@ -54,7 +54,7 @@ void DaemonApp::sync_overlay_location(const HWND changed_window) {
   const bool affects_edit =
       live_edit_host_.session != nullptr && live_edit_host_.session->target == changed_root;
   if (affects_runtime || affects_edit) {
-    mark_overlays_dirty();
+    overlay_runtime_.mark_dirty();
     update_edit_overlays();
   }
 }
@@ -81,31 +81,29 @@ RECT DaemonApp::overlay_target() const {
   return {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
 }
 
-void DaemonApp::reconcile_overlay_runtime() {
-  for (auto *session : session_registry_.active_inputs) {
+layerc::runtime::ServiceReconcileResult
+OverlayRuntime::reconcile(const layerc::runtime::CapabilityDemand &) {
+  for (auto *session : sessions_.active_inputs) {
     if (session != nullptr)
-      session->overlays.ensure(session->profile, capture_exclusion_);
+      session->overlays.ensure(session->profile, capture_exclusion);
   }
-  mark_overlays_dirty();
+  mark_dirty();
+  return {};
 }
 
-void DaemonApp::quiesce_overlay_runtime() noexcept {
-  if (overlay_runtime_.timer_running && window_ != nullptr)
+void OverlayRuntime::quiesce() noexcept {
+  if (timer_running && window_ != nullptr)
     KillTimer(window_, overlay_render_timer);
-  overlay_runtime_.timer_running = false;
-  for (auto &session : session_registry_.sessions)
+  timer_running = false;
+  for (auto &session : sessions_.sessions)
     session->overlays.release();
-  if (live_edit_host_.session != nullptr) {
-    live_edit_host_.session->overlays.release();
-  }
+  if (live_edit_.session != nullptr)
+    live_edit_.session->overlays.release();
 }
-
-void DaemonApp::mark_overlays_dirty() noexcept { overlays_dirty_ = true; }
 
 void DaemonApp::flush_overlays() {
-  if (!overlays_dirty_)
+  if (!overlay_runtime_.take_dirty())
     return;
-  overlays_dirty_ = false;
   // WM_DESTROY quiesces the runtime; never render after that.
   if (shutting_down_)
     return;
@@ -151,7 +149,7 @@ void DaemonApp::render_overlays() {
       session->overlays.render_for(session->game_window, states, now);
   }
 
-  sync_visual_exclusions();
+  visual_capture_runtime_.sync_exclusions();
 
   if (has_running_cooldown && !overlay_runtime_.timer_running) {
     SetTimer(window_, overlay_render_timer, 16, nullptr);

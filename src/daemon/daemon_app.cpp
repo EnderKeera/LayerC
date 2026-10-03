@@ -163,10 +163,10 @@ void DaemonApp::load_platform_settings() {
       append_error(name, result.error);
   };
 
-  apply(capture_exclusion_, layerc::platform::read_bool_setting(
+  apply(overlay_runtime_.capture_exclusion, layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::capture_exclusion),
         "capture exclusion");
-  apply(visual_recognition_enabled_,
+  apply(visual_capture_runtime_.recognition_enabled,
         layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::visual_recognition),
         "visual recognition");
@@ -304,9 +304,9 @@ LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
     } else if (wparam == input_poll_timer) {
       poll_input_devices();
     } else if (wparam == overlay_render_timer) {
-      mark_overlays_dirty();
+      overlay_runtime_.mark_dirty();
     } else if (wparam == automation_timer) {
-      poll_automation_timer();
+      automation_runtime_host_.poll_timer();
     }
     return 0;
   case WM_COMMAND:

@@ -285,7 +285,7 @@ void DaemonApp::begin_edit_session(const layerc::core::LiveMessage &message,
   live_edit_host_.session = std::move(session);
   rebuild_edit_overlays();
   sync_foreground_state();
-  mark_overlays_dirty();
+  overlay_runtime_.mark_dirty();
 }
 
 void DaemonApp::rebuild_edit_overlays() {
@@ -309,7 +309,7 @@ void DaemonApp::rebuild_edit_overlays() {
                               const double y, const bool final) {
         on_direct_anchor(id, x, y, final);
       }};
-  session.overlays.rebuild(session.profile, capture_exclusion_, &edit_mode);
+  session.overlays.rebuild(session.profile, overlay_runtime_.capture_exclusion, &edit_mode);
   update_edit_overlays();
 }
 
@@ -375,7 +375,7 @@ void DaemonApp::end_edit_session(const std::string_view reason) {
   if (shutting_down_)
     return;
   sync_foreground_state();
-  mark_overlays_dirty();
+  overlay_runtime_.mark_dirty();
   if (!reason.empty())
     update_tooltip(L"LayerD - " + layerc::platform::utf8_to_wide(reason));
 }

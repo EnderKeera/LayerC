@@ -2,12 +2,10 @@
 
 #include "daemon_session.hpp"
 #include "daemon_state.hpp"
-#include "daemon_runtime_services.hpp"
 #include "isolated_visual_worker.hpp"
 #include "visual_capture_worker.hpp"
 
 #include "GameBarTransport.hpp"
-#include "layerc/platform/automation_persistence.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/hid.hpp"
 #include "layerc/core/input_matcher.hpp"
@@ -34,7 +32,9 @@
 
 namespace layerc::daemon {
 
-class DaemonApp {
+// Composition root and message loop. Capability logic lives in the runtime
+// services (daemon_state.hpp), which the kernel calls directly.
+class DaemonApp final : private OverlayEventSink {
 public:
   DaemonApp();
   ~DaemonApp();
@@ -42,10 +42,6 @@ public:
 
 private:
   static constexpr UINT tray_message = WM_APP + 1;
-  static constexpr UINT_PTR game_scan_timer = 1;
-  static constexpr UINT_PTR input_poll_timer = 2;
-  static constexpr UINT_PTR overlay_render_timer = 3;
-  static constexpr UINT_PTR automation_timer = 4;
   static constexpr UINT command_open_editor = 1001;
   static constexpr UINT command_reload = 1002;
   static constexpr UINT command_exit = 1003;
@@ -57,9 +53,6 @@ private:
                            LPARAM lparam);
 
   bool create_message_window(HINSTANCE instance);
-  void set_raw_input(bool keyboard, bool mouse) noexcept;
-  void reconcile_input_runtime();
-  void quiesce_input_runtime() noexcept;
   void add_tray_icon();
   void ensure_tray_icon();
   void remove_tray_icon();
@@ -81,53 +74,22 @@ private:
       const layerc::core::HidControlBinding &binding,
       const layerc::core::HidControlSample &sample);
   void handle_hid_device_change(HANDLE device, bool arrived);
-  [[nodiscard]] bool reconcile_hid_runtime();
-  void quiesce_hid_runtime() noexcept;
   void poll_input_devices();
   void poll_global_keyboard(Session &session);
   void seed_controller_states();
   void poll_controllers();
   void emit_input(const layerc::core::InputEvent &event);
   void process_input(Session &session, const layerc::core::InputEvent &event);
-  void process_automation_input_value(Session &session, std::string source,
-                                      double value,
-                                      layerc::core::TimePoint now,
-                                      bool momentary = false);
-  void mark_overlays_dirty() noexcept;
   void flush_overlays();
   void render_overlays();
   void publish_companion_snapshots(layerc::core::TimePoint now);
   void poll_gamebar_transport();
   [[nodiscard]] bool apply_companion_preferences(std::string_view json);
-  void reconcile_overlay_runtime();
-  void quiesce_overlay_runtime() noexcept;
-  void reconcile_visual_captures(
-      const layerc::runtime::CapabilityDemand &demand,
-      layerc::core::VisualRuntime runtime);
-  void quiesce_visual_captures(layerc::core::VisualRuntime runtime) noexcept;
-  void reconcile_automation_runtime();
-  void quiesce_automation_runtime() noexcept;
-  void retire_automation_session(Session &session, layerc::core::TimePoint now);
-  void schedule_automation_timer();
-  void poll_automation_timer();
-  void poll_automation_cooldown_transitions(Session &session,
-                                            layerc::core::TimePoint now,
-                                            bool emit);
-  void process_automation_event(Session &session,
-                                const layerc::core::AutomationEvent &event);
-  void publish_automation_trace(Session &session);
-  void acknowledge_automation_saved(
-      std::span<const std::filesystem::path> saved);
-  void after_automation_step(Session &session, layerc::core::TimePoint now);
-  void synchronize_automation_state(Session &session,
-                                    layerc::core::TimePoint now);
   void reconcile_runtime_services();
   [[nodiscard]] layerc::runtime::CapabilityDemand runtime_demand();
   void poll_visual_captures();
   void maintain_visual_captures();
   void retry_quarantined_visual_captures();
-  void update_visual_status();
-  void publish_visual_status(std::span<const VisualCaptureSnapshot> snapshots);
   [[nodiscard]] std::string runtime_diagnostics_json() const;
   void poll_live_channel();
   void handle_live_message(const layerc::core::LiveMessage &message);
@@ -147,39 +109,33 @@ private:
   void load_platform_settings();
   [[nodiscard]] std::vector<Session *> foreground_sessions() const;
   [[nodiscard]] RECT overlay_target() const;
-  friend class OverlayRuntime;
-  void on_overlay_event(DWORD event, HWND window);
-  void sync_visual_exclusions();
-  // Typed capability dispatch for the kernel's per-capability adapters.
-  friend class OwnedCapabilityService<DaemonApp>;
-  [[nodiscard]] layerc::runtime::ServiceReconcileResult
-  reconcile_capability(layerc::runtime::Capability capability,
-                       const layerc::runtime::CapabilityDemand &demand);
-  void quiesce_capability(layerc::runtime::Capability capability) noexcept;
-  [[nodiscard]] layerc::runtime::RuntimeResourceStats
-  capability_resources(layerc::runtime::Capability capability) const noexcept;
+  void on_overlay_event(DWORD event, HWND window) override;
+  [[nodiscard]] layerc::runtime::RuntimeServiceRegistry
+  runtime_services() noexcept;
 
   HINSTANCE instance_{};
   HWND window_{};
   NOTIFYICONDATAW tray_{};
   SessionRegistry session_registry_;
-  InputRuntime input_runtime_;
-  VisualCaptureRuntime visual_capture_runtime_;
-  AutomationRuntimeHost automation_runtime_host_;
-  // Persistent automation values per profile path, outliving sessions.
-  layerc::platform::AutomationPersistence automation_persistence_;
-  OverlayRuntime overlay_runtime_{*this};
   LiveEditHost live_edit_host_;
+  OverlayRuntime overlay_runtime_{*this, session_registry_, live_edit_host_,
+                                  window_};
+  InputRuntime input_runtime_{session_registry_, window_};
+  HidRuntime hid_runtime_{session_registry_, window_};
+  VisualCaptureRuntime visual_capture_runtime_{session_registry_,
+                                               live_edit_host_};
+  VisualCaptureService visual_service_{
+      visual_capture_runtime_, layerc::core::VisualRuntime::inline_process};
+  VisualCaptureService isolated_visual_service_{
+      visual_capture_runtime_, layerc::core::VisualRuntime::isolated};
+  AutomationRuntimeHost automation_runtime_host_{
+      session_registry_, live_edit_host_, overlay_runtime_, window_};
   CompanionHost companion_host_;
   [[nodiscard]] std::vector<Session *> current_companion_sessions();
   layerc::platform::OwnedHandle reload_event_;
   layerc::platform::OwnedHandle settings_reload_event_;
-  bool capture_exclusion_{true};
-  bool visual_recognition_enabled_{};
   std::string settings_error_;
   bool shutting_down_{};
-  bool overlays_dirty_{};
-  OwnedCapabilityServices<DaemonApp> runtime_services_;
   layerc::runtime::DaemonKernel runtime_kernel_;
 };
 
