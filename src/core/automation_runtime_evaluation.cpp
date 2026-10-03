@@ -32,17 +32,18 @@ AutomationRuntime::Impl::Impl(AutomationProfile source,
                               ClockReader clock_reader)
     : profile(std::move(source)), groups(group_definitions),
       clock(std::move(clock_reader)) {
+  for (const auto &variable : profile.variables)
+    state.variables[variable.id] = variable.default_value;
+  apply_persistent(persistent);
+}
+
+void AutomationRuntime::Impl::apply_persistent(
+    const AutomationPersistentValues &values) {
   for (const auto &variable : profile.variables) {
-    auto value = variable.default_value;
-    if (variable.persistent) {
-      const auto found = persistent.find(variable.id);
-      if (found != persistent.end() &&
-          value_type(found->second) == variable.type &&
-          automation_value_valid(found->second))
-        value = found->second;
-      state.persistent_values[variable.id] = value;
-    }
-    state.variables[variable.id] = std::move(value);
+    const auto found = values.find(variable.id);
+    if (found != values.end() &&
+        automation_persistent_value_accepted(variable, found->second))
+      state.variables[variable.id] = found->second;
   }
 }
 

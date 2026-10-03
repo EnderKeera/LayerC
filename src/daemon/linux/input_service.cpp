@@ -133,7 +133,7 @@ public:
       return;
     *retired_ = RetiredAutomationState{
         session_.automation_runtime->profile(),
-        session_.automation_runtime->snapshot().persistent_values,
+        session_.automation_runtime->persistent_values(),
         session_.automation_state_due,
         session_.automation_health.checkpoint_error};
   }
@@ -178,7 +178,7 @@ void InputSession::checkpoint_automation_state(const TimePoint now,
     layerc::core::automation_checkpoint_arm(automation_state_due, now);
   const auto written = layerc::platform::checkpoint_automation_state(
       source_path, automation_runtime->profile(),
-      automation_runtime->snapshot().persistent_values, automation_state_due,
+      automation_runtime->persistent_values(), automation_state_due,
       now, force);
   if (std::holds_alternative<layerc::platform::CheckpointNotDue>(written))
     return;

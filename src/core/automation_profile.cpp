@@ -600,6 +600,11 @@ AutomationValueType value_type(const AutomationValue &value) noexcept {
 bool automation_value_valid(const AutomationValue &value) noexcept {
   return automation_value_valid_impl(value, 0);
 }
+bool automation_persistent_value_accepted(const AutomationVariable &variable,
+                                          const AutomationValue &value) noexcept {
+  return variable.persistent && value_type(value) == variable.type &&
+         automation_value_valid(value);
+}
 std::string automation_value_json(const AutomationValue &value) {
   std::string output;
   append_value(output, value);
@@ -779,8 +784,8 @@ serialize_automation_state_json(const AutomationProfile &profile,
     if (!variable.persistent)
       continue;
     const auto found = values.find(variable.id);
-    if (found == values.end() || value_type(found->second) != variable.type ||
-        !automation_value_valid(found->second))
+    if (found == values.end() ||
+        !automation_persistent_value_accepted(variable, found->second))
       continue;
     join_values(output);
     json::append_quoted(output, variable.id);

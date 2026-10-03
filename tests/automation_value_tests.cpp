@@ -229,7 +229,7 @@ void test_automation_mutation_postconditions() {
     expect(result.derived_events.size() == 1U &&
                result.derived_events.front().source_id == "healthy",
            "AR-02 rejected mutations must not publish derived variable events");
-    const auto state = runtime.snapshot().persistent_values;
+    const auto state = runtime.persistent_values();
     const auto decoded = parse_automation_state_json(
         serialize_automation_state_json(profile, state), profile);
     expect(
@@ -271,13 +271,13 @@ void test_automation_mutation_postconditions() {
             .process({.kind = AutomationEventKind::session_started}, {}, commit)
             .committed,
         "AR-02 valid recursive map depths must still commit");
-  const auto before = nesting.snapshot().persistent_values;
+  const auto before = nesting.persistent_values();
   const auto rejected = nesting.process(
       {.kind = AutomationEventKind::session_started}, {}, commit);
   expect(rejected.committed &&
              rejected.faulted_automations == std::vector<std::string>{"self"} &&
              commits == max_automation_ast_depth &&
-             nesting.snapshot().persistent_values == before &&
+             nesting.persistent_values() == before &&
              rejected.derived_events.empty(),
          "AR-02 self-nesting must stop at the canonical bound without "
          "persistence loss");

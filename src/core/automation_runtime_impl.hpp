@@ -73,6 +73,8 @@ struct AutomationRuntime::Impl {
        std::span<const CooldownGroup> group_definitions,
        ClockReader clock_reader);
 
+  // Accepted stored values replace persistent variables' current values.
+  void apply_persistent(const AutomationPersistentValues &values);
   void make_trace_room();
   [[nodiscard]] std::optional<AutomationTraceEntry>
   begin_trace(const AutomationEvent &event);
