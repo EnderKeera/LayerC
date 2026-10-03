@@ -73,8 +73,8 @@ std::string DaemonApp::runtime_diagnostics_json() const {
           layerc::platform::wide_to_utf8(companion_host_.transport.last_error()),
   };
   diagnostics.settings = {
-      .capture_exclusion = capture_exclusion_,
-      .visual_recognition = visual_recognition_enabled_,
+      .capture_exclusion = overlay_runtime_.capture_exclusion,
+      .visual_recognition = visual_capture_runtime_.recognition_enabled,
       .last_error = settings_error_,
   };
   diagnostics.aggregate_resources =
@@ -95,7 +95,7 @@ std::string DaemonApp::runtime_diagnostics_json() const {
         .last_input_match = session.last_input_match,
     });
   }
-  diagnostics.automation_faults = automation_persistence_.diagnostics();
+  diagnostics.automation_faults = automation_runtime_host_.persistence().diagnostics();
   for (const auto &entry : session_registry_.sessions) {
     const auto source = std::ranges::find(session_registry_.sources,
                                           entry->source_key, &ProfileSource::key);

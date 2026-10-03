@@ -334,14 +334,14 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
           return candidate.key == session->source_key;
         });
     if (source == loaded.end() || should_recreate(session->source_key)) {
-      retire_automation_session(*session, reconcile_now);
+      automation_runtime_host_.retire_session(*session, reconcile_now);
       return true;
     }
     if (session->profile != source->profile)
-      session->apply_profile(source->profile, capture_exclusion_, reconcile_now);
+      session->apply_profile(source->profile, overlay_runtime_.capture_exclusion, reconcile_now);
     if (session->modules.visual != source->modules.visual)
       session->apply_visual_profile(source->modules.visual,
-                                    visual_recognition_enabled_);
+                                    visual_capture_runtime_.recognition_enabled);
     if (session->modules.automation != source->modules.automation)
       session->apply_automation_profile(source->modules.automation);
     if (session->modules.companion != source->modules.companion)
@@ -358,11 +358,11 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
   for (const auto &source : session_registry_.sources) {
     if (!source.modules.automation.usable())
       continue;
-    (void)automation_persistence_.attach(
+    (void)automation_runtime_host_.persistence().attach(
         source.path, *source.modules.automation.profile, reconcile_now, true);
     automation_paths.push_back(source.path);
   }
-  automation_persistence_.retain(automation_paths);
+  automation_runtime_host_.persistence().retain(automation_paths);
   for (const auto &source : session_registry_.sources) {
     if (!source.profile.enabled || !source.profile.game.global)
       continue;
@@ -372,7 +372,7 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
         });
     if (!exists)
       session_registry_.sessions.push_back(std::make_unique<Session>(
-          source.to_session_init(visual_recognition_enabled_)));
+          source.to_session_init(visual_capture_runtime_.recognition_enabled)));
   }
 
   const bool has_enabled_profile = std::any_of(
@@ -391,12 +391,12 @@ bool DaemonApp::reload_settings_if_requested() {
   ResetEvent(settings_reload_event_.get());
   load_platform_settings();
   for (auto &session : session_registry_.sessions) {
-    session->set_capture_exclusion(capture_exclusion_);
+    session->set_capture_exclusion(overlay_runtime_.capture_exclusion);
     if (session->visual_triggers)
-      session->visual_triggers->set_visual_enabled(visual_recognition_enabled_);
+      session->visual_triggers->set_visual_enabled(visual_capture_runtime_.recognition_enabled);
   }
   if (live_edit_host_.session != nullptr) {
-    live_edit_host_.session->overlays.set_capture_exclusion(capture_exclusion_);
+    live_edit_host_.session->overlays.set_capture_exclusion(overlay_runtime_.capture_exclusion);
   }
   reconcile_runtime_services();
   return true;
@@ -470,7 +470,7 @@ void DaemonApp::refresh_game_windows() {
         {.profile_key = session->source_key,
          .window = {reinterpret_cast<std::uintptr_t>(session->game_window)}});
     if (removed)
-      retire_automation_session(*session, refresh_now);
+      automation_runtime_host_.retire_session(*session, refresh_now);
     return removed;
   });
 
@@ -486,7 +486,7 @@ void DaemonApp::refresh_game_windows() {
       continue;
     }
     auto instance = std::make_unique<Session>(
-        source->to_session_init(visual_recognition_enabled_));
+        source->to_session_init(visual_capture_runtime_.recognition_enabled));
     instance->game_window = window;
     session_registry_.sessions.push_back(std::move(instance));
   }

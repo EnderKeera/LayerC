@@ -14,7 +14,7 @@ namespace layerc::daemon {
 // Keyboard and mouse Raw Input register separately: a mouse sink receives
 // WM_INPUT for every movement, so it is registered only while something can
 // consume mouse input.
-void DaemonApp::set_raw_input(const bool keyboard, const bool mouse) noexcept {
+void InputRuntime::set_raw_input(const bool keyboard, const bool mouse) noexcept {
   const auto apply = [this](const USHORT usage, const bool wanted,
                             bool &registered) {
     if (wanted == registered)
@@ -31,13 +31,14 @@ void DaemonApp::set_raw_input(const bool keyboard, const bool mouse) noexcept {
         !wanted)
       registered = wanted;
   };
-  apply(0x06, keyboard, input_runtime_.raw_keyboard_registered);
-  apply(0x02, mouse, input_runtime_.raw_mouse_registered);
+  apply(0x06, keyboard, raw_keyboard_registered);
+  apply(0x02, mouse, raw_mouse_registered);
 }
 
-void DaemonApp::reconcile_input_runtime() {
+layerc::runtime::ServiceReconcileResult
+InputRuntime::reconcile(const layerc::runtime::CapabilityDemand &) {
   const bool needs_system_hid =
-      std::ranges::any_of(session_registry_.active_inputs, [](const Session *session) {
+      std::ranges::any_of(sessions_.active_inputs, [](const Session *session) {
         return session != nullptr &&
                std::ranges::any_of(
                    session->profile.hid_bindings, [](const auto &binding) {
@@ -50,14 +51,14 @@ void DaemonApp::reconcile_input_runtime() {
   // bindings sample both Raw Input streams directly.
   const bool needs_raw_keyboard =
       needs_system_hid ||
-      std::ranges::any_of(session_registry_.active_inputs,
+      std::ranges::any_of(sessions_.active_inputs,
                           [](const Session *session) {
                             return session != nullptr &&
                                    session->uses_raw_keyboard;
                           });
   const bool needs_raw_mouse =
       needs_system_hid ||
-      std::ranges::any_of(session_registry_.active_inputs,
+      std::ranges::any_of(sessions_.active_inputs,
                           [](const Session *session) {
                             return session != nullptr &&
                                    session->uses_raw_mouse;
@@ -65,30 +66,36 @@ void DaemonApp::reconcile_input_runtime() {
   set_raw_input(needs_raw_keyboard, needs_raw_mouse);
 
   const bool needs_polling =
-      std::ranges::any_of(session_registry_.active_inputs, [](const Session *session) {
+      std::ranges::any_of(sessions_.active_inputs, [](const Session *session) {
         return session != nullptr && session->requires_input_polling();
       });
-  if (needs_polling && !input_runtime_.timer_running) {
+  if (needs_polling && !timer_running) {
     SetTimer(window_, input_poll_timer, 16, nullptr);
-    input_runtime_.timer_running = true;
-  } else if (!needs_polling && input_runtime_.timer_running) {
+    timer_running = true;
+  } else if (!needs_polling && timer_running) {
     KillTimer(window_, input_poll_timer);
-    input_runtime_.timer_running = false;
-    input_runtime_.reset_controllers();
-    for (auto &session : session_registry_.sessions)
+    timer_running = false;
+    reset_controllers();
+    for (auto &session : sessions_.sessions)
       session->clear_input_state();
   }
+  return {};
 }
 
-void DaemonApp::quiesce_input_runtime() noexcept {
-  if (input_runtime_.timer_running && window_ != nullptr)
+void InputRuntime::quiesce() noexcept {
+  if (timer_running && window_ != nullptr)
     KillTimer(window_, input_poll_timer);
-  input_runtime_.timer_running = false;
+  timer_running = false;
   set_raw_input(false, false);
-  input_runtime_.reset_controllers();
-  session_registry_.input_foreground = nullptr;
-  for (auto &session : session_registry_.sessions)
+  reset_controllers();
+  sessions_.input_foreground = nullptr;
+  for (auto &session : sessions_.sessions)
     session->clear_input_state();
+}
+
+layerc::runtime::RuntimeResourceStats
+InputRuntime::resources() const noexcept {
+  return {.timers = timer_running ? 1U : 0U};
 }
 
 void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
@@ -111,7 +118,7 @@ void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
   }
 
   const auto &input = *reinterpret_cast<const RAWINPUT *>(buffer);
-  if (input_runtime_.hid())
+  if (hid_runtime_.state())
     handle_hid_input(input);
   if (input.header.dwType == RIM_TYPEKEYBOARD) {
     const auto &keyboard = input.data.keyboard;
@@ -248,7 +255,7 @@ void DaemonApp::poll_controllers() {
       if (session == nullptr || !session->automation_runtime)
         continue;
       for (const auto &axis : axes)
-        process_automation_input_value(
+        automation_runtime_host_.process_input_value(
             *session, layerc::core::controller_axis_source_id(index, axis.name),
             axis.value, now);
     }
@@ -265,20 +272,12 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
     process_input(*session, event);
 }
 
-void DaemonApp::process_automation_input_value(
-    Session &session, std::string source, const double value,
-    const layerc::core::TimePoint now, const bool momentary) {
-  if (auto event =
-          session.input_value_event(std::move(source), value, now, momentary))
-    process_automation_event(session, *event);
-}
-
 void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto now = layerc::core::MonotonicClock::now();
   const auto result = session.feed_input(session.input, event, now);
   if (result.changed)
-    mark_overlays_dirty();
+    overlay_runtime_.mark_dirty();
   if (result.matched)
     session.last_input_match =
         std::string(layerc::core::input_device_label(event.token.device)) + ":" +
@@ -287,10 +286,8 @@ void DaemonApp::process_input(Session &session,
   if (!result.triggered.empty())
     update_tooltip(L"LayerD - triggered " +
                    layerc::platform::utf8_to_wide(result.triggered.back()));
-  if (session.automation_runtime) {
-    after_automation_step(session, now);
-    schedule_automation_timer();
-  }
+  if (session.automation_runtime)
+    automation_runtime_host_.after_step(session, now);
 }
 
 } // namespace layerc::daemon
