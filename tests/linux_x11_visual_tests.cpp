@@ -24,6 +24,24 @@
 
 namespace {
 
+// A configured profile revision with already-valid module sidecars.
+[[maybe_unused]] layerc::daemon::ConfiguredProfile configured_profile(
+    layerc::platform::StoredProfile source,
+    std::optional<layerc::core::VisualProfile> visual = std::nullopt,
+    std::optional<layerc::core::AutomationProfile> automation = std::nullopt) {
+  layerc::daemon::ConfiguredProfile bundle;
+  bundle.source = std::move(source);
+  if (visual) {
+    bundle.visual.profile = std::move(visual);
+    bundle.visual.state = layerc::platform::ModuleSidecarState::valid;
+  }
+  if (automation) {
+    bundle.automation.profile = std::move(automation);
+    bundle.automation.state = layerc::platform::ModuleSidecarState::valid;
+  }
+  return bundle;
+}
+
 using layerc::test::skip_code;
 constexpr std::uint32_t window_axis = 64;
 constexpr std::uint32_t template_axis = 8;
@@ -257,10 +275,13 @@ int run_linux_x11_visual_tests() {
   }
   XSync(raw, False);
 
+  layerc::platform::AutomationPersistence persistence;
   std::vector<layerc::daemon::InputSession> sessions;
   sessions.emplace_back(
-      layerc::platform::StoredProfile{profile_path, profile_fixture()}, window,
-      false, visual_fixture(background.rgb));
+      configured_profile(
+          layerc::platform::StoredProfile{profile_path, profile_fixture()},
+          visual_fixture(background.rgb)),
+      window, persistence);
   sessions.front().active = true;
 
   layerc::daemon::X11VisualService visual;
@@ -437,9 +458,11 @@ int run_linux_x11_visual_tests() {
   second_profile.id = "visual-fixture-second";
   auto second_visual = visual_fixture(background.rgb);
   second_visual.profile_id = second_profile.id;
-  sessions.emplace_back(layerc::platform::StoredProfile{
-                            second_profile_path, std::move(second_profile)},
-                        window, false, std::move(second_visual));
+  sessions.emplace_back(
+      configured_profile(layerc::platform::StoredProfile{
+                             second_profile_path, std::move(second_profile)},
+                         std::move(second_visual)),
+      window, persistence);
   sessions.back().active = true;
   auto second_request = request;
   second_request.profile_id = sessions.back().profile.id;

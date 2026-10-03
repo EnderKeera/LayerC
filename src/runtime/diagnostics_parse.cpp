@@ -200,7 +200,8 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
           *root,
           {"schemaVersion", "packageVersion", "protocolVersion", "process",
            "services", "gameBarTransport", "settings",
-           "aggregateOwnedResources", "sessions", "isolatedHelpers", "captures"},
+           "aggregateOwnedResources", "sessions", "isolatedHelpers", "captures",
+           "automationFaults"},
           "$") ||
       !r.integer(*root, "schemaVersion", "$", runtime_diagnostics_schema,
                   runtime_diagnostics_schema, Required::yes) ||
@@ -228,6 +229,17 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
   // Older schema-1 producers have no per-window capture diagnostics.
   if (r.field(*root, "captures", "$", Required::no) &&
       !array(r, *root, "captures", result.captures, capture))
+    return r.error();
+  // Older producers predate the shared automation fault list.
+  if (r.field(*root, "automationFaults", "$", Required::no) &&
+      !array(r, *root, "automationFaults", result.automation_faults,
+             [](json::Reader &reader, const json::Value &value,
+                const std::string &path, std::string &line) {
+               if (!value.is_string())
+                 return reader.fail(path, "expected string");
+               line = value.as_string();
+               return true;
+             }))
     return r.error();
   std::array<bool, capability_count> seen{};
   for (std::size_t index{}; index < result.services.size(); ++index) {

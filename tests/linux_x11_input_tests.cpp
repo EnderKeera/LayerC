@@ -37,6 +37,24 @@
 
 namespace {
 
+// A configured profile revision with already-valid module sidecars.
+[[maybe_unused]] layerc::daemon::ConfiguredProfile configured_profile(
+    layerc::platform::StoredProfile source,
+    std::optional<layerc::core::VisualProfile> visual = std::nullopt,
+    std::optional<layerc::core::AutomationProfile> automation = std::nullopt) {
+  layerc::daemon::ConfiguredProfile bundle;
+  bundle.source = std::move(source);
+  if (visual) {
+    bundle.visual.profile = std::move(visual);
+    bundle.visual.state = layerc::platform::ModuleSidecarState::valid;
+  }
+  if (automation) {
+    bundle.automation.profile = std::move(automation);
+    bundle.automation.state = layerc::platform::ModuleSidecarState::valid;
+  }
+  return bundle;
+}
+
 using layerc::core::GameProfile;
 using layerc::platform::StoredProfile;
 using layerc::platform::X11Display;
@@ -199,8 +217,12 @@ void check_passive_normalization(Display *raw, X11InputSource &source,
     auto automation = automation_fixture(profile.id);
     automation.automations.front().rules.front().source_filter =
         std::string(input_device_label(device)) + ":" + std::to_string(code);
+    profile.game.global = true;
+    layerc::platform::AutomationPersistence persistence;
     layerc::daemon::InputSession session(
-        {{}, std::move(profile)}, 1, true, std::nullopt, std::move(automation));
+        configured_profile({{}, std::move(profile)}, std::nullopt,
+                           std::move(automation)),
+        1, persistence);
     if (device == InputDevice::keyboard)
       XTestFakeKeyEvent(raw, detail, True, CurrentTime);
     else
@@ -435,7 +457,9 @@ int run_linux_x11_input_tests() {
   }
   service_sessions.refresh(scan);
 
-  layerc::daemon::InputSession session(profiles[0], window.window, false);
+  layerc::platform::AutomationPersistence session_persistence;
+  layerc::daemon::InputSession session(configured_profile(profiles[0]),
+                                       window.window, session_persistence);
   const layerc::core::InputEvent press_e{
       {layerc::core::InputDevice::keyboard, 18, 0}, true};
   const layerc::core::InputEvent release_e{

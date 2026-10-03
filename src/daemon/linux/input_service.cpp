@@ -21,61 +21,24 @@ using layerc::core::TimePoint;
 using layerc::core::VisualProfile;
 using layerc::core::VisualTriggerRequest;
 
-struct LoadedVisual {
-  std::optional<VisualProfile> profile;
-  std::string diagnostic;
-  bool invalid{};
-};
-
-struct LoadedAutomation {
-  std::optional<AutomationProfile> profile;
-  AutomationPersistentValues state;
-  std::string sidecar_diagnostic;
-  std::optional<std::string> state_diagnostic;
-  bool invalid{};
-};
-
-[[nodiscard]] LoadedVisual
-load_visual(const layerc::platform::StoredProfile &source) {
-  LoadedVisual result;
-  auto sidecar =
-      layerc::platform::load_visual_sidecar(source.path, source.profile);
-  if (!sidecar.usable()) {
-    if (sidecar.state() == layerc::platform::ModuleSidecarState::invalid) {
-      result.invalid = true;
-      result.diagnostic = source.path.string() + ": " + sidecar.error()->message;
-    }
-    return result;
-  }
-  if (layerc::core::has_enabled_visual_assignments(*sidecar.profile()))
-    result.profile = sidecar.optional_profile();
-  return result;
-}
-
-[[nodiscard]] LoadedAutomation
-load_automation(const layerc::platform::StoredProfile &source) {
-  LoadedAutomation result;
-  auto sidecar = layerc::platform::load_automation_sidecar(source.path,
-                                                           source.profile);
-  if (!sidecar.usable()) {
-    if (sidecar.state() == layerc::platform::ModuleSidecarState::invalid) {
-      result.invalid = true;
-      result.sidecar_diagnostic = source.path.string() + ": " +
-                                  sidecar.error()->message;
-    }
-    return result;
-  }
-
-  if (layerc::core::has_enabled_automations(*sidecar.profile())) {
-    auto state = layerc::platform::load_automation_state(source.path,
-                                                         *sidecar.profile());
-    result.state = std::move(state.values);
-    if (state.error.has_value())
-      result.state_diagnostic = source.path.string() + ": " +
-                                state.error->message;
-    result.profile = sidecar.optional_profile();
-  }
-  return result;
+// One profile's module sidecars as value copies. Definitions without an
+// enabled entry are dropped so they demand no capability.
+[[nodiscard]] ConfiguredProfile
+load_configured(const layerc::platform::StoredProfile &source) {
+  ConfiguredProfile bundle{
+      .source = source,
+      .visual = layerc::platform::ModuleSidecar<VisualProfile>::from(
+          layerc::platform::load_visual_sidecar(source.path, source.profile)),
+      .automation = layerc::platform::ModuleSidecar<AutomationProfile>::from(
+          layerc::platform::load_automation_sidecar(source.path,
+                                                    source.profile))};
+  if (bundle.visual.profile &&
+      !layerc::core::has_enabled_visual_assignments(*bundle.visual.profile))
+    bundle.visual.profile.reset();
+  if (bundle.automation.profile &&
+      !layerc::core::has_enabled_automations(*bundle.automation.profile))
+    bundle.automation.profile.reset();
+  return bundle;
 }
 
 [[nodiscard]] bool
@@ -97,101 +60,52 @@ needed_devices(std::span<const InputSession> sessions);
 
 } // namespace
 
-// The adapter supplies only durable storage and fault reporting. All event,
-// validation, cooldown and origin policy lives in core::AutomationSession.
+// The adapter supplies only durable storage. All event, validation,
+// cooldown, origin, and fault policy lives in core::AutomationSession; the
+// persistent values belong to the registry's AutomationPersistence.
 namespace {
 class InputSessionSink final : public layerc::core::AutomationSessionSink {
 public:
-  explicit InputSessionSink(
-      InputSession &session,
-      std::optional<RetiredAutomationState> *retired = nullptr)
-      : session_(session), retired_(retired) {}
-  void on_result(const layerc::core::AutomationEvaluationResult &result) override {
-    auto &health = session_.automation_health;
-    const auto error = result.error.has_value()
-                           ? result.error->path + ": " + result.error->message
-                           : std::string{};
-    if (result.faulted_automations.empty()) {
-      if (result.error)
-        health.runtime_error = error;
-      else
-        health.runtime_error.reset();
-    } else {
-      health.runtime_error.reset();
-      for (const auto &id : result.faulted_automations)
-        health.runtime_faults.insert_or_assign(id, "faulted during event");
-    }
-  }
-  void on_persistent_change(const AutomationPersistentValues &,
+  explicit InputSessionSink(InputSession &session) : session_(session) {}
+  void on_persistent_change(const AutomationPersistentValues &values,
                             const TimePoint now) override {
-    layerc::core::automation_checkpoint_arm(session_.automation_state_due, now);
+    if (session_.persistence != nullptr)
+      session_.persistence->publish(session_.source_path, values, now);
   }
   void on_stopping(const TimePoint now) override {
-    session_.checkpoint_automation_now(now);
-    if (retired_ == nullptr || !session_.automation_runtime ||
-        !session_.automation_state_due.has_value())
+    if (session_.persistence == nullptr || !session_.automation_runtime)
       return;
-    *retired_ = RetiredAutomationState{
-        session_.automation_runtime->profile(),
-        session_.automation_runtime->persistent_values(),
-        session_.automation_state_due,
-        session_.automation_health.checkpoint_error};
+    session_.persistence->publish(
+        session_.source_path, session_.automation_runtime->persistent_values(),
+        now);
+    // The final write happens now; a failure stays pending in the owner and
+    // is retried after the session is gone.
+    (void)session_.persistence->checkpoint(now, true, &session_.source_path);
   }
+
 private:
   InputSession &session_;
-  std::optional<RetiredAutomationState> *retired_{};
 };
 } // namespace
 
-InputSession::InputSession(
-    layerc::platform::StoredProfile source, const std::uint64_t window,
-    const bool global, std::optional<VisualProfile> loaded_visual_profile,
-    std::optional<AutomationProfile> automation_profile,
-    AutomationPersistentValues automation_state, const bool invalid_visual_sidecar,
-    const bool loaded_invalid_automation_sidecar,
-    std::optional<std::string> automation_state_load_error)
-    : layerc::core::AutomationSession(std::move(source.profile)),
-      source_path(std::move(source.path)), window(window), global(global),
-      matcher(profile.bindings),
-      visual_profile(std::move(loaded_visual_profile)),
-      invalid_automation_sidecar(loaded_invalid_automation_sidecar) {
-  set_invalid_visual_sidecar(invalid_visual_sidecar);
-  automation_health.state_load_error =
-      std::move(automation_state_load_error);
-  if (automation_health.state_load_error)
-    layerc::core::automation_checkpoint_arm(
-        automation_state_due, layerc::core::MonotonicClock::now());
+InputSession::InputSession(const ConfiguredProfile &bundle,
+                           const std::uint64_t window,
+                           layerc::platform::AutomationPersistence &owner)
+    : layerc::core::AutomationSession(bundle.source.profile),
+      source_path(bundle.source.path), window(window),
+      global(bundle.source.profile.game.global), matcher(profile.bindings),
+      visual_profile(bundle.visual_profile()),
+      invalid_automation_sidecar(bundle.invalid_automation()),
+      persistence(&owner) {
+  set_invalid_visual_sidecar(bundle.invalid_visual());
   if (visual_profile)
     visual_triggers =
         std::make_unique<layerc::core::VisualTriggerEngine>(*visual_profile);
-  if (automation_profile) {
+  if (const auto &automation = bundle.automation_profile()) {
+    const auto now = layerc::core::MonotonicClock::now();
+    const auto &state = owner.attach(source_path, *automation, now);
     InputSessionSink sink(*this);
-    (void)start(std::move(*automation_profile), std::move(automation_state),
-                layerc::core::MonotonicClock::now(), &sink);
-  }
-}
-
-void InputSession::checkpoint_automation_state(const TimePoint now,
-                                               const bool force) {
-  if (!automation_runtime) return;
-  if (automation_runtime->persistent_dirty())
-    layerc::core::automation_checkpoint_arm(automation_state_due, now);
-  const auto written = layerc::platform::checkpoint_automation_state(
-      source_path, automation_runtime->profile(),
-      automation_runtime->persistent_values(), automation_state_due,
-      now, force);
-  if (std::holds_alternative<layerc::platform::CheckpointNotDue>(written))
-    return;
-  if (const auto *error =
-          std::get_if<layerc::platform::ProfileWriteError>(&written))
-    automation_health.checkpoint_error =
-        std::string("automation checkpoint failed (") +
-        layerc::platform::profile_write_error_text(*error) +
-        "): " + source_path.string();
-  else {
-    automation_health.checkpoint_error.reset();
-    automation_health.state_load_error.reset();
-    automation_runtime->mark_persistent_saved();
+    (void)start(*automation, state.values, now, &sink);
   }
 }
 
@@ -218,37 +132,16 @@ std::vector<std::string> InputSession::feed_measurements(
 void InputSession::poll_automation(const TimePoint now) {
   InputSessionSink sink(*this);
   (void)poll(now, &sink);
-  checkpoint_automation_state(now, false);
 }
 
 std::optional<TimePoint>
 InputSession::next_automation_deadline(const TimePoint now) {
-  return next_deadline(now, automation_state_due);
+  return next_deadline(now);
 }
 
-std::optional<RetiredAutomationState>
-InputSession::stop_automation(const TimePoint now) {
-  std::optional<RetiredAutomationState> retired;
-  InputSessionSink sink(*this, &retired);
-  (void)stop(now, &sink);
-  // The sink checkpoints after session_stopping and before runtime teardown.
-  automation_state_due.reset();
-  return retired;
-}
-
-void InputSession::start_deferred_automation(
-    const AutomationProfile &automation_profile, AutomationPersistentValues values,
-    const TimePoint now, std::optional<std::string> state_load_error) {
-  deferred_automation = false;
-  automation_health.state_load_error = std::move(state_load_error);
-  if (automation_health.state_load_error)
-    layerc::core::automation_checkpoint_arm(automation_state_due, now);
+void InputSession::stop_automation(const TimePoint now) {
   InputSessionSink sink(*this);
-  (void)start(automation_profile, std::move(values), now, &sink);
-}
-
-void InputSession::checkpoint_automation_now(const TimePoint now) {
-  checkpoint_automation_state(now, true);
+  (void)stop(now, &sink);
 }
 
 void X11InputService::attach(layerc::platform::X11Display &display) noexcept {
@@ -263,78 +156,16 @@ void X11SessionRegistry::configure(
   visual_configurations_.reserve(profiles.size());
   for (const auto &source : profiles) {
     if (!source.profile.enabled) continue;
-    auto visual = load_visual(source);
-    auto automation = load_automation(source);
-    configured_.push_back({source, std::move(visual.profile),
-                           std::move(automation.profile),
-                           std::move(automation.state),
-                           std::move(visual.diagnostic),
-                           std::move(automation.sidecar_diagnostic),
-                           std::move(automation.state_diagnostic),
-                           visual.invalid, automation.invalid});
+    configured_.push_back(load_configured(source));
     const auto &loaded = configured_.back();
-    if (loaded.visual_profile &&
+    if (loaded.visual_profile() &&
         loaded.source.profile.visual_runtime ==
             layerc::core::VisualRuntime::inline_process)
       visual_configurations_.push_back(
           {loaded.source.path, loaded.source.profile.id,
-           *loaded.visual_profile});
+           *loaded.visual_profile()});
   }
   configuration_changed_ = true;
-}
-
-std::optional<RetiredAutomationState>
-X11SessionRegistry::retire_session(InputSession &session, const TimePoint now) {
-  auto retired = session.stop_automation(now);
-  if (retired.has_value())
-    pending_checkpoints_.try_emplace(session.source_path, *retired);
-  return retired;
-}
-
-bool X11SessionRegistry::retry_pending_checkpoints(const TimePoint now,
-                                                    const bool force) {
-  bool changed{};
-  for (auto entry = pending_checkpoints_.begin();
-       entry != pending_checkpoints_.end();) {
-    auto &retired = entry->second;
-    const auto written = layerc::platform::checkpoint_automation_state(
-        entry->first, retired.profile, retired.values, retired.due, now, force);
-    if (std::holds_alternative<layerc::platform::CheckpointNotDue>(written)) {
-      ++entry;
-      continue;
-    }
-    if (const auto *error =
-            std::get_if<layerc::platform::ProfileWriteError>(&written)) {
-      retired.checkpoint_error =
-          std::string("automation checkpoint failed (") +
-          layerc::platform::profile_write_error_text(*error) +
-          "): " + entry->first.string();
-      ++entry;
-      continue;
-    }
-    const auto path = entry->first;
-    entry = pending_checkpoints_.erase(entry);
-    changed = true;
-    const auto configured = std::ranges::find_if(
-        configured_, [&](const ConfiguredProfile &bundle) {
-          return bundle.source.path == path;
-        });
-    if (configured == configured_.end() ||
-        !configured->automation_profile.has_value())
-      continue;
-    for (auto &session : sessions_) {
-      if (session.source_path != path || !session.deferred_automation) continue;
-      auto state = layerc::platform::load_automation_state(
-          path, *configured->automation_profile);
-      std::optional<std::string> load_error;
-      if (state.error)
-        load_error = path.string() + ": " + state.error->message;
-      session.start_deferred_automation(*configured->automation_profile,
-                                        std::move(state.values), now,
-                                        std::move(load_error));
-    }
-  }
-  return changed;
 }
 
 void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
@@ -342,15 +173,15 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
   std::vector<InputSession> next;
   visual_diagnostics_.clear();
   matched_automation_diagnostics_.clear();
+  const auto now = layerc::core::MonotonicClock::now();
   for (const auto &bundle : configured_) {
     const auto &source = bundle.source;
     const auto &profile = source.profile;
     // Admission follows the complete loaded bundle, independent of whether
     // XI2 has any direct binding to feed.
     if (profile.bindings.empty() && profile.panels.empty() &&
-        !bundle.visual_profile && !bundle.automation_profile &&
-        !bundle.invalid_visual_sidecar &&
-        !bundle.invalid_automation_sidecar)
+        !bundle.visual_profile() && !bundle.automation_profile() &&
+        !bundle.invalid_visual() && !bundle.invalid_automation())
       continue;
     const auto previous_session =
         std::ranges::find(previous, source.path, &InputSession::source_path);
@@ -359,11 +190,12 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
     const auto *window =
         layerc::platform::match_window(scan, profile.game, previous_window);
     if (window == nullptr) continue;
-    if (!bundle.visual_diagnostic.empty())
-      visual_diagnostics_.push_back(bundle.visual_diagnostic);
-    if (!bundle.automation_sidecar_diagnostic.empty())
-      matched_automation_diagnostics_.push_back(
-          bundle.automation_sidecar_diagnostic);
+    if (bundle.invalid_visual())
+      visual_diagnostics_.push_back(source.path.string() + ": " +
+                                    bundle.visual.diagnostic);
+    if (bundle.invalid_automation())
+      matched_automation_diagnostics_.push_back(source.path.string() + ": " +
+                                                bundle.automation.diagnostic);
 
     // Foreground eligibility is runtime state, not profile identity: a
     // background game keeps its automation profile and cooldown engine so
@@ -377,102 +209,102 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
               profile.game.global || session.window == window->window;
           return same_target && session.source_path == source.path &&
                  session.profile == profile &&
-                 same_visual(session, bundle.visual_profile) &&
-                 (session.deferred_automation
-                      ? bundle.automation_profile.has_value() &&
-                            pending_checkpoints_.contains(source.path)
-                      : same_automation(session, bundle.automation_profile));
+                 same_visual(session, bundle.visual_profile()) &&
+                 same_automation(session, bundle.automation_profile());
         });
     if (retained == previous.end()) {
       const auto stale = std::ranges::find(previous, source.path,
                                            &InputSession::source_path);
       if (stale != previous.end()) {
-        (void)retire_session(*stale, layerc::core::MonotonicClock::now());
+        stale->stop_automation(now);
         previous.erase(stale);
       }
-      const bool deferred = bundle.automation_profile.has_value() &&
-                            pending_checkpoints_.contains(source.path);
-      AutomationPersistentValues state;
-      std::optional<std::string> state_error;
-      if (bundle.automation_profile.has_value() && !deferred) {
-        // Configuration snapshots apply only to explicit retained-runtime
-        // reloads. Every fresh admission follows the latest durable checkpoint,
-        // including a predecessor that retired during an unmatched interval.
-        auto saved = layerc::platform::load_automation_state(
-            source.path, *bundle.automation_profile);
-        state = std::move(saved.values);
-        if (saved.error)
-          state_error = source.path.string() + ": " + saved.error->message;
-      }
-      next.emplace_back(source, window->window, profile.game.global,
-                        bundle.visual_profile,
-                        deferred ? std::nullopt : bundle.automation_profile,
-                        std::move(state), bundle.invalid_visual_sidecar,
-                        bundle.invalid_automation_sidecar,
-                        deferred ? std::nullopt : std::move(state_error));
-      next.back().deferred_automation = deferred;
+      // A replacement continues from the owner's values, including unsaved
+      // ones whose write is still being retried.
+      next.emplace_back(bundle, window->window, persistence_);
     } else {
-      if (configuration_changed_ && retained->automation_runtime &&
-          !retained->automation_runtime->persistent_dirty())
-        retained->automation_runtime->apply_persistent_values(
-            bundle.automation_state);
+      if (configuration_changed_ && retained->automation_runtime) {
+        // An explicit reload re-reads the durable state unless values are
+        // still unsaved.
+        auto &runtime = *retained->automation_runtime;
+        const auto &state =
+            persistence_.attach(source.path, runtime.profile(), now, true);
+        if (!runtime.persistent_dirty())
+          runtime.apply_persistent_values(state.values);
+        // Values the store lacked (an unreadable store) are rewritten from
+        // the runtime instead of from the empty reload.
+        persistence_.publish(source.path, runtime.persistent_values(), now);
+      }
       next.push_back(std::move(*retained));
       previous.erase(retained);
       next.back().window = window->window;
-      next.back().set_invalid_visual_sidecar(bundle.invalid_visual_sidecar);
-      next.back().invalid_automation_sidecar =
-          bundle.invalid_automation_sidecar;
-      if (configuration_changed_ && next.back().automation_runtime) {
-        next.back().automation_health.state_load_error =
-            bundle.automation_state_diagnostic;
-        if (bundle.automation_state_diagnostic)
-          layerc::core::automation_checkpoint_arm(
-              next.back().automation_state_due,
-              layerc::core::MonotonicClock::now());
-      }
+      next.back().set_invalid_visual_sidecar(bundle.invalid_visual());
+      next.back().invalid_automation_sidecar = bundle.invalid_automation();
     }
     if (!active) next.back().matcher.clear();
     next.back().active = active;
   }
-  const auto now = layerc::core::MonotonicClock::now();
-  for (auto &session : previous) (void)retire_session(session, now);
+  for (auto &session : previous) session.stop_automation(now);
   sessions_ = std::move(next);
+  std::vector<std::filesystem::path> live;
+  for (const auto &session : sessions_)
+    if (session.automation_runtime) live.push_back(session.source_path);
+  persistence_.retain(live);
   configuration_changed_ = false;
+}
+
+bool X11SessionRegistry::acknowledge_saved(
+    const std::span<const std::filesystem::path> saved) {
+  bool orphan{};
+  for (const auto &path : saved) {
+    const auto *entry = persistence_.find(path);
+    bool matched{};
+    for (auto &session : sessions_) {
+      if (session.source_path != path || !session.automation_runtime) continue;
+      matched = true;
+      if (entry != nullptr &&
+          session.automation_runtime->persistent_values() == entry->values)
+        session.automation_runtime->mark_persistent_saved();
+    }
+    orphan = orphan || !matched;
+  }
+  return orphan;
+}
+
+std::size_t X11SessionRegistry::pending_checkpoint_count() const {
+  return static_cast<std::size_t>(std::ranges::count_if(
+      persistence_.pending_paths(), [&](const std::filesystem::path &path) {
+        return std::ranges::none_of(sessions_, [&](const InputSession &session) {
+          return session.source_path == path && session.automation_runtime;
+        });
+      }));
 }
 
 std::vector<std::string> X11SessionRegistry::automation_diagnostics() const {
   auto diagnostics = matched_automation_diagnostics_;
-  for (const auto &session : sessions_) {
-    const auto &health = session.automation_health;
-    if (health.checkpoint_error)
-      diagnostics.push_back(*health.checkpoint_error);
-    if (health.state_load_error)
-      diagnostics.push_back(*health.state_load_error);
-    if (health.runtime_error)
-      diagnostics.push_back(session.source_path.string() + ": " +
-                            *health.runtime_error);
-    for (const auto &[id, error] : health.runtime_faults)
-      diagnostics.push_back(session.source_path.string() +
-                            ": automation fault: " + id + ": " + error);
-  }
-  for (const auto &[path, retired] : pending_checkpoints_) {
-    (void)path;
-    if (retired.checkpoint_error)
-      diagnostics.push_back(*retired.checkpoint_error);
-  }
+  for (auto &line : persistence_.diagnostics())
+    diagnostics.push_back(std::move(line));
+  for (const auto &session : sessions_)
+    for (auto &line :
+         session.automation_health.lines(session.source_path.string()))
+      diagnostics.push_back(std::move(line));
   return diagnostics;
 }
 
 void X11SessionRegistry::stop_sessions(const TimePoint now) {
-  for (auto &session : sessions_) (void)retire_session(session, now);
+  for (auto &session : sessions_) session.stop_automation(now);
   sessions_.clear();
-  (void)retry_pending_checkpoints(now, true);
+  (void)acknowledge_saved(persistence_.checkpoint(now, true));
+}
+
+void X11SessionRegistry::checkpoint_automation(const TimePoint now) {
+  (void)acknowledge_saved(persistence_.checkpoint(now, true));
 }
 
 std::vector<layerc::runtime::SessionCapabilityRequest>
 X11SessionRegistry::session_requests() const {
   std::vector<layerc::runtime::SessionCapabilityRequest> requests;
-  requests.reserve(sessions_.size() + pending_checkpoints_.size());
+  requests.reserve(sessions_.size());
   for (const auto &session : sessions_) {
     layerc::runtime::SessionCapabilityRequest request;
     request.window = layerc::runtime::WindowId{session.window};
@@ -487,17 +319,13 @@ X11SessionRegistry::session_requests() const {
         request.visual &&
         session.profile.visual_runtime == layerc::core::VisualRuntime::isolated;
     request.automation = session.automation_runtime != nullptr ||
-                         session.deferred_automation ||
                          session.invalid_automation_sidecar;
     request.profile_id = session.profile.id;
     requests.push_back(request);
   }
-  for (const auto &[path, retired] : pending_checkpoints_) {
-    (void)retired;
-    if (std::ranges::any_of(sessions_, [&](const InputSession &session) {
-          return session.source_path == path && session.deferred_automation;
-        }))
-      continue;
+  // Unsaved values without a session keep the automation service (and its
+  // retry deadline) alive until their write succeeds.
+  for (std::size_t index = 0; index < pending_checkpoint_count(); ++index) {
     layerc::runtime::SessionCapabilityRequest request;
     request.automation = true;
     requests.push_back(request);
@@ -585,21 +413,16 @@ std::size_t X11SessionRegistry::automation_count() const noexcept {
 }
 
 bool X11SessionRegistry::poll_automation(const TimePoint now) {
-  const bool changed = retry_pending_checkpoints(now);
   for (auto &session : sessions_) session.poll_automation(now);
-  return changed;
+  return acknowledge_saved(persistence_.checkpoint(now));
 }
 
 std::optional<TimePoint>
 X11SessionRegistry::next_automation_deadline(const TimePoint now) {
-  std::optional<TimePoint> next;
+  std::optional<TimePoint> next = persistence_.next_deadline();
   for (auto &session : sessions_)
     next = layerc::core::earliest_deadline(
         next, session.next_automation_deadline(now));
-  for (const auto &[path, retired] : pending_checkpoints_) {
-    (void)path;
-    next = layerc::core::earliest_deadline(next, retired.due);
-  }
   return next;
 }
 
@@ -645,12 +468,9 @@ X11AutomationService::reconcile(
 }
 
 void X11AutomationService::quiesce() noexcept {
-  const auto now = layerc::core::MonotonicClock::now();
-  for (auto &session : registry_.sessions()) {
-    try {
-      session.checkpoint_automation_now(now);
-    } catch (...) {
-    }
+  try {
+    registry_.checkpoint_automation(layerc::core::MonotonicClock::now());
+  } catch (...) {
   }
 }
 
@@ -658,11 +478,11 @@ layerc::runtime::RuntimeResourceStats
 X11AutomationService::resources() const noexcept {
   layerc::runtime::RuntimeResourceStats stats;
   const auto now = layerc::core::MonotonicClock::now();
-  stats.objects = static_cast<std::uint32_t>(
-      std::min<std::size_t>(registry_.pending_checkpoint_count(),
-                            0xFFFFFFFFU));
-  if (registry_.pending_checkpoint_count() != 0) stats.timers = 1U;
   try {
+    const auto pending = registry_.pending_checkpoint_count();
+    stats.objects =
+        static_cast<std::uint32_t>(std::min<std::size_t>(pending, 0xFFFFFFFFU));
+    if (pending != 0) stats.timers = 1U;
     for (auto &session : registry_.sessions()) {
       if (!session.automation_runtime) continue;
       ++stats.objects;

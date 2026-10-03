@@ -46,8 +46,6 @@ struct ProfileSource {
   std::filesystem::path path;
   layerc::core::GameProfile profile;
   ProfileModules modules;
-  layerc::core::AutomationPersistentValues automation_state;
-  std::optional<layerc::core::TimePoint> automation_state_due;
   layerc::core::ProfileRevision revision{};
   // Bumped whenever automation-relevant content changes (the automation
   // sidecar, its health, or the base revision that owns cooldown groups) so

@@ -5,6 +5,7 @@
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/pixel_engine.hpp"
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -23,6 +24,18 @@ public:
   virtual void on_persistent_change(const AutomationPersistentValues &,
                                     TimePoint) {}
   virtual void on_stopping(TimePoint) {}
+};
+
+// Current runtime faults of one session's automation: the last evaluation
+// error, and at most one fault per automation that faulted during an event.
+// Both daemons report these lines; they never block unrelated automations.
+struct AutomationRuntimeHealth {
+  std::optional<std::string> runtime_error;
+  std::map<std::string, std::string, std::less<>> runtime_faults;
+
+  void record(const AutomationEvaluationResult &result);
+  // One line per fault, prefixed with the session's profile source.
+  [[nodiscard]] std::vector<std::string> lines(std::string_view source) const;
 };
 
 struct SessionFeedResult {
@@ -87,6 +100,7 @@ public:
   [[nodiscard]] bool sync_persistent_to(AutomationSession &sibling) const;
 
   GameProfile profile;
+  AutomationRuntimeHealth automation_health;
   CooldownEngine cooldowns;
   std::unique_ptr<VisualTriggerEngine> visual_triggers;
   std::unique_ptr<AutomationRuntime> automation_runtime;

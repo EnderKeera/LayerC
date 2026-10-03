@@ -6,7 +6,10 @@
 #include <chrono>
 #include <limits>
 #include <ranges>
+#include <span>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace layerc::daemon {
 namespace {
@@ -15,6 +18,12 @@ using layerc::core::AutomationEventKind;
 using layerc::core::AutomationSession;
 using layerc::core::Milliseconds;
 using layerc::core::TimePoint;
+
+ProfileSource *find_source(std::vector<ProfileSource> &sources,
+                           const std::string_view key) {
+  const auto found = std::ranges::find(sources, key, &ProfileSource::key);
+  return found == sources.end() ? nullptr : &*found;
+}
 
 } // namespace
 
@@ -33,37 +42,34 @@ void DaemonApp::reconcile_automation_runtime() {
       session->automation_runtime.reset();
       continue;
     }
-    const auto source = std::ranges::find(session_registry_.sources, session->source_key,
-                                          &ProfileSource::key);
-    if (source == session_registry_.sources.end() ||
-        !source->modules.automation.profile.has_value()) {
+    auto *source = find_source(session_registry_.sources, session->source_key);
+    if (source == nullptr || !source->modules.automation.profile.has_value()) {
       session->automation_runtime.reset();
       continue;
     }
+    const auto &profile = *source->modules.automation.profile;
     if (!session->automation_runtime) {
       session->automation_revision = source->automation_revision;
-      if (session->start(*source->modules.automation.profile,
-                         source->automation_state, now, nullptr,
-                         automation_runtime_host_.trace_subscribed))
+      if (session->start(profile,
+                         automation_persistence_.attach(source->path, profile, now)
+                             .values,
+                         now, nullptr, automation_runtime_host_.trace_subscribed))
         mark_overlays_dirty();
-      publish_automation_trace(*session);
-      synchronize_automation_state(*session, now);
+      after_automation_step(*session, now);
     } else if (session->automation_revision != source->automation_revision) {
       // The revision gate replaced a deep AutomationProfile compare plus a
       // cooldown-group compare that used to run on every reconcile: now they
       // run only after the source's automation-relevant content changed, and
       // they still decide whether a full reconfigure is needed.
       session->automation_revision = source->automation_revision;
-      if (session->automation_runtime->profile() !=
-              *source->modules.automation.profile ||
+      if (session->automation_runtime->profile() != profile ||
           !std::ranges::equal(
               session->automation_runtime->cooldown_groups(),
               session->profile.cooldown_groups)) {
         session->automation_runtime->reconfigure(
-            *source->modules.automation.profile,
-            session->profile.cooldown_groups);
+            profile, session->profile.cooldown_groups);
         session->automation_runtime->apply_persistent_values(
-            source->automation_state);
+            automation_persistence_.attach(source->path, profile, now).values);
         // Reconfigure resets session-scoped state (variables, timers, edge
         // monitors), so replay session_started like a fresh runtime: rules
         // keyed on it re-run against the edited profile instead of waiting
@@ -90,16 +96,11 @@ void DaemonApp::quiesce_automation_runtime() noexcept {
     process_automation_event(
         *session,
         AutomationSession::event(AutomationEventKind::session_stopping, {}, now));
-    synchronize_automation_state(*session, now);
     session->automation_runtime.reset();
   }
-  // Shutdown flush: force bypasses the debounce deadline.
-  for (auto &source : session_registry_.sources)
-    if (source.modules.automation.profile.has_value())
-      (void)layerc::platform::checkpoint_automation_state(
-          source.path, *source.modules.automation.profile,
-          source.automation_state, source.automation_state_due,
-          layerc::core::MonotonicClock::now(), /*force=*/true);
+  // Shutdown flush: force bypasses the debounce deadline. A failed write
+  // stays pending in the owner with its fault visible in diagnostics.
+  acknowledge_automation_saved(automation_persistence_.checkpoint(now, true));
   automation_runtime_host_.publish_activity(false);
 }
 
@@ -110,31 +111,21 @@ void DaemonApp::retire_automation_session(Session &session,
   process_automation_event(
       session,
       AutomationSession::event(AutomationEventKind::session_stopping, {}, now));
-  synchronize_automation_state(session, now);
-  const auto source = std::ranges::find(session_registry_.sources, session.source_key,
-                                        &ProfileSource::key);
-  if (source != session_registry_.sources.end() &&
-      source->modules.automation.profile.has_value())
-    (void)layerc::platform::checkpoint_automation_state(
-        source->path, *source->modules.automation.profile,
-        source->automation_state, source->automation_state_due, now,
-        /*force=*/true);
+  if (const auto *source =
+          find_source(session_registry_.sources, session.source_key))
+    acknowledge_automation_saved(
+        automation_persistence_.checkpoint(now, true, &source->path));
   session.automation_runtime.reset();
 }
 void DaemonApp::schedule_automation_timer() {
   if (window_ == nullptr)
     return;
   const auto now = layerc::core::MonotonicClock::now();
-  std::optional<TimePoint> next;
+  std::optional<TimePoint> next = automation_persistence_.next_deadline();
   for (auto &session : session_registry_.sessions) {
     if (!session->automation_runtime)
       continue;
     next = session->next_deadline(now, next);
-  }
-  for (const auto &source : session_registry_.sources) {
-    if (source.automation_state_due.has_value() &&
-        (!next.has_value() || *source.automation_state_due < *next))
-      next = source.automation_state_due;
   }
   if (!next.has_value()) {
     if (automation_runtime_host_.timer_running)
@@ -160,18 +151,9 @@ void DaemonApp::poll_automation_timer() {
       continue;
     if (session->poll(now))
       mark_overlays_dirty();
-    publish_automation_trace(*session);
-    synchronize_automation_state(*session, now);
+    after_automation_step(*session, now);
   }
-  for (auto &source : session_registry_.sources) {
-    if (!source.modules.automation.profile.has_value())
-      continue;
-    const auto stored = layerc::platform::checkpoint_automation_state(
-        source.path, *source.modules.automation.profile,
-        source.automation_state, source.automation_state_due, now);
-    if (std::holds_alternative<layerc::platform::CheckpointSaved>(stored))
-      acknowledge_automation_state(source);
-  }
+  acknowledge_automation_saved(automation_persistence_.checkpoint(now));
   schedule_automation_timer();
 }
 
@@ -183,8 +165,7 @@ void DaemonApp::poll_automation_cooldown_transitions(Session &session,
   if (session.poll_ready(now, emit))
     mark_overlays_dirty();
   if (emit) {
-    publish_automation_trace(session);
-    synchronize_automation_state(session, now);
+    after_automation_step(session, now);
     schedule_automation_timer();
   }
 }
@@ -235,18 +216,32 @@ void DaemonApp::process_automation_event(Session &session,
     return;
   if (session.process(event))
     mark_overlays_dirty();
-  publish_automation_trace(session);
-  synchronize_automation_state(session, event.timestamp);
+  after_automation_step(session, event.timestamp);
   schedule_automation_timer();
 }
 
-void DaemonApp::acknowledge_automation_state(const ProfileSource &source) {
-  for (auto &session : session_registry_.sessions) {
-    if (!session->automation_runtime || session->source_key != source.key ||
-        session->automation_runtime->persistent_values() !=
-            source.automation_state)
+// The one post-step glue: trace to the editor, then persistent values to the
+// owner and same-profile siblings.
+void DaemonApp::after_automation_step(Session &session, const TimePoint now) {
+  publish_automation_trace(session);
+  synchronize_automation_state(session, now);
+}
+
+void DaemonApp::acknowledge_automation_saved(
+    const std::span<const std::filesystem::path> saved) {
+  for (const auto &path : saved) {
+    const auto *entry = automation_persistence_.find(path);
+    if (entry == nullptr)
       continue;
-    session->automation_runtime->mark_persistent_saved();
+    for (auto &session : session_registry_.sessions) {
+      const auto *source =
+          find_source(session_registry_.sources, session->source_key);
+      if (!session->automation_runtime || source == nullptr ||
+          source->path != path ||
+          session->automation_runtime->persistent_values() != entry->values)
+        continue;
+      session->automation_runtime->mark_persistent_saved();
+    }
   }
 }
 void DaemonApp::synchronize_automation_state(Session &session,
@@ -254,16 +249,13 @@ void DaemonApp::synchronize_automation_state(Session &session,
   if (!session.automation_runtime ||
       !session.automation_runtime->persistent_dirty())
     return;
-  const auto source = std::ranges::find(session_registry_.sources, session.source_key,
-                                        &ProfileSource::key);
-  if (source == session_registry_.sources.end())
+  const auto *source =
+      find_source(session_registry_.sources, session.source_key);
+  if (source == nullptr)
     return;
-  source->automation_state =
-      session.automation_runtime->persistent_values();
-  // Shared 1 s debounce (core::automation_checkpoint_arm): the first
-  // mutation in a burst arms the deadline; later mutations keep it instead
-  // of postponing the checkpoint forever under continuous input.
-  layerc::core::automation_checkpoint_arm(source->automation_state_due, now);
+  // The owner arms the shared debounce on the first change of a burst.
+  automation_persistence_.publish(
+      source->path, session.automation_runtime->persistent_values(), now);
   for (auto &other : session_registry_.sessions) {
     if (other.get() == &session || !other->automation_runtime ||
         other->source_key != session.source_key)
