@@ -169,7 +169,7 @@ void DaemonApp::poll_automation_timer() {
     const auto stored = layerc::platform::checkpoint_automation_state(
         source.path, *source.modules.automation.profile,
         source.automation_state, source.automation_state_due, now);
-    if (stored.has_value() && *stored)
+    if (std::holds_alternative<layerc::platform::CheckpointSaved>(stored))
       acknowledge_automation_state(source);
   }
   schedule_automation_timer();

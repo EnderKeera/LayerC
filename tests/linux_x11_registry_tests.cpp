@@ -130,7 +130,7 @@ void test_registry_automation_only_and_health() {
   const StoredProfile timer_source{roots.config_profiles / "timer.json",
                                    timer_base};
   if (!expect(layerc::platform::write_profile_bundle(
-                  timer_source.path, timer_base, std::nullopt, timer_profile),
+                  timer_source.path, timer_base, std::nullopt, timer_profile).ok(),
               "timer-only sidecar is stored"))
     return;
   layerc::daemon::X11SessionRegistry timer_registry;
@@ -175,7 +175,7 @@ void test_registry_automation_only_and_health() {
   const StoredProfile input_source{roots.config_profiles / "input.json",
                                    input_base};
   if (!expect(layerc::platform::write_profile_bundle(
-                  input_source.path, input_base, std::nullopt, input_profile),
+                  input_source.path, input_base, std::nullopt, input_profile).ok(),
               "input-rule sidecar is stored"))
     return;
   layerc::daemon::X11SessionRegistry input_registry;
@@ -412,7 +412,7 @@ void test_registry_automation_only_and_health() {
   const StoredProfile fault_source{roots.config_profiles / "fault.json",
                                    fault_base};
   if (!expect(layerc::platform::write_profile_bundle(
-                  fault_source.path, fault_base, std::nullopt, fault_profile),
+                  fault_source.path, fault_base, std::nullopt, fault_profile).ok(),
               "fault-isolation sidecar is stored"))
     return;
   layerc::daemon::X11SessionRegistry fault_registry;
@@ -446,7 +446,7 @@ void test_registry_automation_only_and_health() {
   // A new configuration drops identities from the old automation runtime.
   fault_profile.automations.pop_back();
   if (!expect(layerc::platform::write_profile_bundle(
-                  fault_source.path, fault_base, std::nullopt, fault_profile),
+                  fault_source.path, fault_base, std::nullopt, fault_profile).ok(),
               "faulted automation is removed from the sidecar"))
     return;
   fault_registry.configure(std::span{&fault_source, 1});
@@ -483,7 +483,7 @@ void test_registry_fresh_admission_state() {
   automation.automations.front().rules.push_back(std::move(stopping));
   const StoredProfile source{roots.config_profiles / "readmission.json", base};
   if (!expect(layerc::platform::write_profile_bundle(
-                  source.path, base, std::nullopt, automation),
+                  source.path, base, std::nullopt, automation).ok(),
               "readmission profile and stopping rule are stored"))
     return;
   layerc::daemon::X11SessionRegistry registry;
@@ -543,7 +543,7 @@ void test_registry_fresh_admission_state() {
   // but never overwrite a retained runtime's uncheckpointed changes.
   auto *retained = registry.sessions().front().automation_runtime.get();
   if (!expect(layerc::platform::write_automation_state(
-                  source.path, automation, {{"count", AutomationValue(std::int64_t{31})}}),
+                  source.path, automation, {{"count", AutomationValue(std::int64_t{31})}}).ok(),
               "external state for explicit reload is stored"))
     return;
   registry.configure(std::span{&source, 1});
@@ -553,7 +553,7 @@ void test_registry_fresh_admission_state() {
          "explicit configuration reload retains and updates a clean runtime");
   (void)registry.sessions().front().feed(press, MonotonicClock::now());
   if (!expect(layerc::platform::write_automation_state(
-                  source.path, automation, {{"count", AutomationValue(std::int64_t{44})}}),
+                  source.path, automation, {{"count", AutomationValue(std::int64_t{44})}}).ok(),
               "competing external state is isolated"))
     return;
   registry.configure(std::span{&source, 1});

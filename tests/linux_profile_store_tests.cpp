@@ -192,11 +192,11 @@ void test_transaction_validation_and_locking() {
       .contents = owned_bytes("x")};
   expect(layerc::platform::commit_profile_transaction(roots,
                                                       std::span(&outside, 1))
-                 .error() == layerc::platform::ProfileWriteError::scope_rejected,
+                 .failure == layerc::platform::ProfileWriteError::scope_rejected,
          "transaction targets outside config/data roots should be rejected");
   expect(layerc::platform::commit_profile_transaction(
              roots, std::span<const layerc::platform::ProfileFileMutation>{})
-                 .error() == layerc::platform::ProfileWriteError::invalid_input,
+                 .failure == layerc::platform::ProfileWriteError::invalid_input,
          "an empty transaction should report invalid input");
   const layerc::platform::ProfileFileMutation create = {
       .target = roots.config_profiles / "create-only.json",
@@ -208,7 +208,7 @@ void test_transaction_validation_and_locking() {
   create_again.must_be_absent = true;
   expect(layerc::platform::commit_profile_transaction(
              roots, std::span(&create_again, 1))
-                 .error() == layerc::platform::ProfileWriteError::target_exists,
+                 .failure == layerc::platform::ProfileWriteError::target_exists,
          "a create-only write over an existing file should report target_exists");
   const layerc::platform::ProfileFileMutation traversal = {
       .target = roots.config_profiles / ".." / "escape.json",
@@ -237,7 +237,7 @@ void test_transaction_validation_and_locking() {
          "test should acquire the store lock");
   expect(layerc::platform::commit_profile_transaction(roots,
                                                       std::span(&mutation, 1))
-                 .error() == layerc::platform::ProfileWriteError::lock_busy,
+                 .failure == layerc::platform::ProfileWriteError::lock_busy,
          "a second writer should not bypass the store lock");
   if (lock >= 0) {
     (void)::flock(lock, LOCK_UN);
@@ -255,7 +255,7 @@ void test_corrupt_journal_self_heals() {
   const auto transaction = roots.store / "transactions" / "corrupt";
   expect(write_file(transaction / "journal.json", "not json"),
          "corrupt journal fixture should be written");
-  expect(layerc::platform::recover_profile_transactions(roots),
+  expect(layerc::platform::recover_profile_transactions(roots).ok(),
          "recovery should survive an unparseable journal");
   bool quarantined{};
   for (std::filesystem::directory_iterator iterator(roots.store /
@@ -270,7 +270,7 @@ void test_corrupt_journal_self_heals() {
                        "half-published transaction");
   expect(!std::filesystem::exists(transaction),
          "the original corrupt directory should be renamed aside");
-  expect(layerc::platform::recover_profile_transactions(roots),
+  expect(layerc::platform::recover_profile_transactions(roots).ok(),
          "a second recovery should leave quarantined evidence alone");
 
   const auto target = roots.config_profiles / "recovered.json";
@@ -390,7 +390,7 @@ void test_cross_root_publish_and_recovery() {
                  stage_file_count(profile.parent_path()) == 1,
              "unpublished files should remain staged beside destinations");
 
-    expect(layerc::platform::recover_profile_transactions(roots),
+    expect(layerc::platform::recover_profile_transactions(roots).ok(),
            "faulted cross-root transaction should recover");
     expect(read_file(profile) == "old-profile" &&
                read_file(visual) == "old-visual" &&
@@ -400,7 +400,7 @@ void test_cross_root_publish_and_recovery() {
            "recovery should remove transaction residue");
   }
 
-  expect(layerc::platform::commit_profile_transaction(roots, mutations),
+  expect(layerc::platform::commit_profile_transaction(roots, mutations).ok(),
          "cross-root transaction should commit");
   expect(read_file(profile) == "new-profile" &&
              read_file(visual) == "new-visual" &&
@@ -429,18 +429,18 @@ void test_directory_durability_failures() {
     expect(write_file(target, "old"), "reset pre-publication fixture");
     inject(fault);
     const bool committed = layerc::platform::commit_profile_transaction(
-        roots, std::span{&mutation, 1});
+        roots, std::span{&mutation, 1}).ok();
     directory_fault = DirectoryFault::none;
     expect(!committed && injected_failures > 0 && read_file(target) == "old",
            "a failed backup or ancestor barrier prevents target publication");
-    expect(layerc::platform::recover_profile_transactions(roots),
+    expect(layerc::platform::recover_profile_transactions(roots).ok(),
            "a failed preparation remains recoverable");
   }
 
   expect(write_file(target, "old"), "reset publication fixture");
   inject(DirectoryFault::target);
   const bool committed = layerc::platform::commit_profile_transaction(
-      roots, std::span{&mutation, 1});
+      roots, std::span{&mutation, 1}).ok();
   directory_fault = DirectoryFault::none;
   expect(!committed && injected_failures >= 2 && read_file(target) == "new" &&
              std::filesystem::exists(roots.store / "transactions"),
@@ -452,7 +452,7 @@ void test_directory_durability_failures() {
 
   inject(DirectoryFault::target, 1);
   const bool retried = layerc::platform::commit_profile_transaction(
-      roots, std::span{&mutation, 1});
+      roots, std::span{&mutation, 1}).ok();
   directory_fault = DirectoryFault::none;
   expect(retried && injected_failures == 1 && read_file(target) == "new" &&
              !std::filesystem::exists(roots.store / "transactions"),
@@ -461,7 +461,7 @@ void test_directory_durability_failures() {
   expect(write_file(target, "old"), "reset commit-marker fixture");
   inject(DirectoryFault::commit);
   const bool marker_confirmed = layerc::platform::commit_profile_transaction(
-      roots, std::span{&mutation, 1});
+      roots, std::span{&mutation, 1}).ok();
   expect(!marker_confirmed && injected_failures > 0 &&
              std::filesystem::exists(roots.store / "transactions"),
          "an unconfirmed commit marker retains evidence");

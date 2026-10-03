@@ -274,7 +274,7 @@ int profile_command(int argc, char **argv) {
     const auto target = scan->path_for(roots.config_profiles, profile->id);
     const auto written =
         platform::write_profile_bundle_create_only(target, *profile);
-    if (const auto error = written.error()) {
+    if (const auto error = written.failure) {
       std::fprintf(stderr, "layerctl: profile import failed: %s\n",
                    platform::profile_write_error_text(*error));
       return 1;

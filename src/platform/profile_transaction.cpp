@@ -146,17 +146,19 @@ std::filesystem::path stage_path(const std::filesystem::path &target,
 
 std::string journal_json(const std::vector<JournalOperation> &operations) {
   std::string output = "{\"schemaVersion\":2,\"operations\":[";
-  for (std::size_t index{}; index < operations.size(); ++index) {
-    if (index != 0) output += ',';
-    output += "{\"root\":\"";
-    output += operations[index].root == RootKind::config ? "config" : "data";
-    output += "\",\"target\":";
-    const auto relative = path_to_utf8(operations[index].relative);
+  core::json::Join separator;
+  for (const auto &operation : operations) {
+    const auto relative = path_to_utf8(operation.relative);
     if (!relative.has_value()) return {};
+    separator(output);
+    output += "{\"root\":";
+    core::json::append_quoted(
+        output, operation.root == RootKind::config ? "config" : "data");
+    output += ",\"target\":";
     core::json::append_quoted(output, *relative);
-    output += operations[index].existed
-                  ? ",\"existed\":true}"
-                  : ",\"existed\":false}";
+    output += ",\"existed\":";
+    core::json::append_bool(output, operation.existed);
+    output += '}';
   }
   output += "]}\n";
   return output;
@@ -166,7 +168,7 @@ std::string journal_json(const std::vector<JournalOperation> &operations) {
 // the per-entry `root` field and pins every operation to the config root;
 // v2 tags each entry with its root. The walk below is shared.
 struct JournalSchema {
-  double version_tag{};
+  std::uint32_t version_tag{};
   // When set, the entry `root` field is absent and every operation is
   // defaulted to this root. The unified-roots topology gate must hold.
   std::optional<RootKind> root_default;
@@ -197,7 +199,8 @@ parse_journal_operations(const ProfileStoreRoots &roots,
   const auto *version = value->find("schemaVersion");
   const auto *entries = value->find("operations");
   if (version == nullptr || !version->is_number() ||
-      version->as_number() != schema.version_tag || entries == nullptr ||
+      version->as_number() != static_cast<double>(schema.version_tag) ||
+      entries == nullptr ||
       !entries->is_array() ||
       entries->as_array().size() > max_transaction_operations)
     return std::nullopt;
@@ -364,8 +367,8 @@ bool recover_locked(const ProfileStoreRoots &roots) {
     if (!journal.has_value()) return false;
     const auto journal_text = layerc::core::as_text(*journal);
     const auto name = transaction.filename().string();
-    constexpr JournalSchema schema_v2{2.0, std::nullopt};
-    constexpr JournalSchema schema_v1{1.0, RootKind::config};
+    constexpr JournalSchema schema_v2{2, std::nullopt};
+    constexpr JournalSchema schema_v1{1, RootKind::config};
     auto operations =
         parse_journal_operations(roots, name, journal_text, schema_v2);
     if (!operations.has_value())
@@ -663,79 +666,51 @@ struct PublishProgress {
   return finish_or_recover(transaction, transactions, *operations, *progress);
 }
 
+// The one locked prologue: scope -> writer ownership -> journal recovery
+// -> plan -> publish. Recovery is an empty plan.
+[[nodiscard]] ProfileWriteResult
+run_owned(const ProfileTransactionScope &scope, const ProfileMutationPlan &plan,
+          const std::optional<std::size_t> fail_after_publish) {
+  const auto roots = scope.resolve();
+  if (!roots.has_value() || !ensure_guard_transaction_roots(*roots))
+    return {ProfileWriteError::scope_rejected};
+  TransactionFileLock lock(*roots);
+  if (!lock.locked()) return {ProfileWriteError::lock_busy};
+  if (!recover_locked(*roots)) return {ProfileWriteError::recovery_blocked};
+  std::vector<ProfileFileMutation> mutations;
+  const auto planned = plan(mutations);
+  if (!planned || mutations.empty()) return planned;
+  return commit_owned(*roots, mutations, fail_after_publish);
+}
+
 } // namespace
 
-// Internal bridge for test-only fault injection. Immutable mutations need no
-// store reads before ownership; store-dependent callers use the planner form.
+std::optional<ProfileStoreRoots> ProfileTransactionScope::resolve() const {
+  if (const auto *roots = std::get_if<const ProfileStoreRoots *>(&target_))
+    return **roots;
+  return profile_transaction_scope(std::get<std::filesystem::path>(target_));
+}
+
+// Internal bridge for test-only fault injection.
 ProfileWriteResult commit_profile_transaction_impl(
     const ProfileStoreRoots &roots,
     const std::span<const ProfileFileMutation> &mutations,
     const std::optional<std::size_t> &fail_after_publish) {
-  if (mutations.empty() || mutations.size() > max_transaction_operations)
-    return {ProfileWriteError::invalid_input};
-  if (!ensure_guard_transaction_roots(roots))
-    return {ProfileWriteError::scope_rejected};
-  TransactionFileLock lock(roots);
-  if (!lock.locked()) return {ProfileWriteError::lock_busy};
-  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
-  return commit_owned(roots, mutations, fail_after_publish);
-}
-
-ProfileWriteResult commit_profile_transaction(
-    const ProfileStoreRoots &roots, const ProfileMutationPlanner &planner) {
-  if (!planner) return {ProfileWriteError::invalid_input};
-  if (!ensure_guard_transaction_roots(roots))
-    return {ProfileWriteError::scope_rejected};
-  TransactionFileLock lock(roots);
-  if (!lock.locked()) return {ProfileWriteError::lock_busy};
-  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
-  std::vector<ProfileFileMutation> mutations;
-  const auto planned = planner(mutations);
-  if (!planned || mutations.empty()) return planned;
-  return commit_owned(roots, mutations, std::nullopt);
-}
-
-std::optional<ProfileStoreRoots>
-profile_transaction_scope(const std::filesystem::path &profile_directory) {
-  return guard_transaction_scope(profile_directory);
-}
-
-ProfileWriteResult recover_profile_transactions(const ProfileStoreRoots &roots) {
-  if (!ensure_guard_transaction_roots(roots))
-    return {ProfileWriteError::scope_rejected};
-  TransactionFileLock lock(roots);
-  if (!lock.locked()) return {ProfileWriteError::lock_busy};
-  if (!recover_locked(roots)) return {ProfileWriteError::recovery_blocked};
-  return {};
-}
-
-ProfileWriteResult commit_profile_transaction(
-    const ProfileStoreRoots &roots,
-    const std::span<const ProfileFileMutation> mutations) {
-  return commit_profile_transaction_impl(roots, mutations, std::nullopt);
-}
-
-ProfileWriteResult commit_profile_transaction(
-    const std::filesystem::path &profile_directory,
-    const std::span<const ProfileFileMutation> mutations) {
-  const auto roots = profile_transaction_scope(profile_directory);
-  if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
-  return commit_profile_transaction(*roots, mutations);
-}
-
-ProfileWriteResult commit_profile_transaction(
-    const std::filesystem::path &profile_directory,
-    const ProfileMutationPlanner &planner) {
-  const auto roots = profile_transaction_scope(profile_directory);
-  if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
-  return commit_profile_transaction(*roots, planner);
+  return run_owned(roots, mutations, fail_after_publish);
 }
 
 ProfileWriteResult
-recover_profile_transactions(const std::filesystem::path &profile_directory) {
-  const auto roots = profile_transaction_scope(profile_directory);
-  if (!roots.has_value()) return {ProfileWriteError::scope_rejected};
-  return recover_profile_transactions(*roots);
+commit_profile_transaction(const ProfileTransactionScope &scope,
+                           const ProfileMutationPlan &plan) {
+  return run_owned(scope, plan, std::nullopt);
+}
+
+ProfileWriteResult
+recover_profile_transactions(const ProfileTransactionScope &scope) {
+  return run_owned(
+      scope,
+      [](std::vector<ProfileFileMutation> &) { return ProfileWriteResult{}; },
+      std::nullopt);
 }
 
 } // namespace layerc::platform

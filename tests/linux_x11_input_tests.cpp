@@ -502,7 +502,7 @@ int run_linux_x11_input_tests() {
   const auto automation_profile = automation_fixture(profiles[0].profile.id);
   passed &= expect(layerc::platform::write_profile_bundle(
                        profiles[0].path, profiles[0].profile, std::nullopt,
-                       automation_profile),
+                       automation_profile).ok(),
                    "the automation sidecar is committed beside its profile");
   service_sessions.configure(profiles);
   service_sessions.refresh(scan);

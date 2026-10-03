@@ -1,10 +1,15 @@
 #pragma once
 
+#include <array>
+#include <concepts>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <span>
+#include <type_traits>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace layerc::platform {
@@ -35,15 +40,12 @@ enum class ProfileWriteError {
   return "unknown profile write failure";
 }
 
-// Expected-like result: boolean success checks remain valid while callers
-// can inspect the typed error for diagnostics.
+// Expected-like result: `failure` is the typed error, ok() is success.
 struct ProfileWriteResult {
   std::optional<ProfileWriteError> failure;
 
-  [[nodiscard]] operator bool() const noexcept { return !failure.has_value(); }
-  [[nodiscard]] std::optional<ProfileWriteError> error() const noexcept {
-    return failure;
-  }
+  [[nodiscard]] bool ok() const noexcept { return !failure.has_value(); }
+  [[nodiscard]] explicit operator bool() const noexcept { return ok(); }
 };
 
 struct ProfileFileMutation {
@@ -57,16 +59,24 @@ struct ProfileFileMutation {
 // Resolves the roots governing transactions for a requested profile directory.
 // The contract differs by roots topology, not by call site: unified stores
 // accept an arbitrary profile directory and keep transaction state below it,
-// while split stores accept only the configured profile directory. See
-// guard_transaction_scope (profile_file_guard.hpp) for the per-platform rule.
+// while split stores accept only the configured profile directory. Each
+// platform's profile_file_guard TU defines the rule.
 [[nodiscard]] std::optional<ProfileStoreRoots>
 profile_transaction_scope(const std::filesystem::path &profile_directory);
 
-// Publishes all mutations behind one durable recovery journal. No profile
-// reload should be signaled until this function succeeds.
-[[nodiscard]] ProfileWriteResult commit_profile_transaction(
-    const ProfileStoreRoots &roots,
-    std::span<const ProfileFileMutation> mutations);
+// Where a transaction runs: already-resolved roots, or a profile directory
+// resolved through profile_transaction_scope (refusal is scope_rejected).
+class ProfileTransactionScope {
+public:
+  ProfileTransactionScope(const ProfileStoreRoots &roots) : target_(&roots) {}
+  ProfileTransactionScope(std::filesystem::path profile_directory)
+      : target_(std::move(profile_directory)) {}
+
+  [[nodiscard]] std::optional<ProfileStoreRoots> resolve() const;
+
+private:
+  std::variant<const ProfileStoreRoots *, std::filesystem::path> target_;
+};
 
 // Store-dependent planning runs only after acquiring writer ownership and
 // recovering prior journals. The planner returns value-owned mutations; the
@@ -74,22 +84,51 @@ profile_transaction_scope(const std::filesystem::path &profile_directory);
 // An empty successful plan is a no-op. Do not call another writer in a planner.
 using ProfileMutationPlanner =
     std::function<ProfileWriteResult(std::vector<ProfileFileMutation> &)>;
-[[nodiscard]] ProfileWriteResult commit_profile_transaction(
-    const ProfileStoreRoots &roots, const ProfileMutationPlanner &planner);
 
-// Rolls back uncommitted journals and removes completed transaction residue.
-// Safe to call at every LayerD and LayerE startup.
-[[nodiscard]] ProfileWriteResult recover_profile_transactions(const ProfileStoreRoots &roots);
+// A planner, or a fixed mutation list (a constant planner; empty is invalid).
+class ProfileMutationPlan {
+public:
+  template <typename Planner>
+    requires std::is_invocable_r_v<ProfileWriteResult, Planner &,
+                                   std::vector<ProfileFileMutation> &>
+  ProfileMutationPlan(Planner planner) : planner_(std::move(planner)) {}
+  template <typename Mutations>
+    requires std::is_convertible_v<const Mutations &,
+                                   std::span<const ProfileFileMutation>>
+  ProfileMutationPlan(const Mutations &mutations)
+      : planner_(constant(mutations)) {}
 
-// Directory forms: resolve profile_transaction_scope(profile_directory) first
-// and fail with scope_rejected when the directory is refused.
-[[nodiscard]] ProfileWriteResult commit_profile_transaction(
-    const std::filesystem::path &profile_directory,
-    std::span<const ProfileFileMutation> mutations);
-[[nodiscard]] ProfileWriteResult commit_profile_transaction(
-    const std::filesystem::path &profile_directory,
-    const ProfileMutationPlanner &planner);
+  [[nodiscard]] ProfileWriteResult
+  operator()(std::vector<ProfileFileMutation> &mutations) const {
+    if (!planner_) return {ProfileWriteError::invalid_input};
+    return planner_(mutations);
+  }
+
+private:
+  static ProfileMutationPlanner
+  constant(const std::span<const ProfileFileMutation> mutations) {
+    return [mutations](std::vector<ProfileFileMutation> &out)
+               -> ProfileWriteResult {
+      if (mutations.empty()) return {ProfileWriteError::invalid_input};
+      out.assign(mutations.begin(), mutations.end());
+      return {};
+    };
+  }
+
+  ProfileMutationPlanner planner_;
+};
+
+// The one locked entry point: resolve the scope, acquire writer ownership,
+// recover prior journals, plan, then publish behind one durable recovery
+// journal. No profile reload should be signaled until it succeeds.
 [[nodiscard]] ProfileWriteResult
-recover_profile_transactions(const std::filesystem::path &profile_directory);
+commit_profile_transaction(const ProfileTransactionScope &scope,
+                           const ProfileMutationPlan &plan);
+
+// Rolls back uncommitted journals and removes completed transaction residue
+// (commit_profile_transaction with an empty plan). Safe to call at every
+// LayerD and LayerE startup.
+[[nodiscard]] ProfileWriteResult
+recover_profile_transactions(const ProfileTransactionScope &scope);
 
 } // namespace layerc::platform

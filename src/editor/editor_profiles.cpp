@@ -593,7 +593,7 @@ CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
   }
   if (!can_commit_document_bundle()) return CommitResult::blocked_by_sidecar;
   const auto write = commit_document_bundle(path);
-  last_write_error_ = write.error();
+  last_write_error_ = write.failure;
   if (!write) return CommitResult::write_failed;
   return CommitResult::ok;
 }
@@ -616,7 +616,7 @@ CommitResult EditorWindow::commit_bundle(
                                layerc::platform::ProfileWriteError::invalid_input}
                          : layerc::platform::write_profile_bundle(
                                path, profile, visual, automation);
-  last_write_error_ = write.error();
+  last_write_error_ = write.failure;
   if (!write) return CommitResult::write_failed;
   return CommitResult::ok;
 }

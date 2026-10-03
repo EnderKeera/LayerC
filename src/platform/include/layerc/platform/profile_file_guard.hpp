@@ -79,7 +79,7 @@ ensure_guard_transaction_roots(const ProfileStoreRoots &roots);
 // stores accept an arbitrary directory and keep transaction state below it;
 // split stores accept only the configured profile directory.
 [[nodiscard]] std::optional<ProfileStoreRoots>
-guard_transaction_scope(const std::filesystem::path &profile_directory);
+profile_transaction_scope(const std::filesystem::path &profile_directory);
 
 // One-writer lock for the transaction engine. Unified stores take a named
 // OS mutex with a bounded wait; split stores take a non-blocking flock on

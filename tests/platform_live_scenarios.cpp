@@ -105,7 +105,7 @@ void platform_transactions() {
   };
   expect(layerc::platform::commit_profile_transaction(*transaction_scope,
                                                       colliding_mutations)
-                 .error() == layerc::platform::ProfileWriteError::invalid_input,
+                 .failure == layerc::platform::ProfileWriteError::invalid_input,
          "transaction target validation should reject "
          "invariant-casefolded Unicode collisions");
   const layerc::platform::ProfileFileMutation outside = {
@@ -113,7 +113,7 @@ void platform_transactions() {
       .contents = std::vector<std::byte>{std::byte{'x'}}};
   expect(layerc::platform::commit_profile_transaction(*transaction_scope,
                                                       std::span(&outside, 1))
-                 .error() ==
+                 .failure ==
              layerc::platform::ProfileWriteError::scope_rejected,
          "a target outside the transaction scope should report "
          "scope_rejected");
@@ -127,7 +127,7 @@ void platform_transactions() {
   create_again.must_be_absent = true;
   expect(layerc::platform::commit_profile_transaction(
              *transaction_scope, std::span(&create_again, 1))
-                 .error() == layerc::platform::ProfileWriteError::target_exists,
+                 .failure == layerc::platform::ProfileWriteError::target_exists,
          "a create-only write over an existing file should report "
          "target_exists");
 
@@ -260,7 +260,7 @@ void platform_visual_assets() {
         filesystem_error);
     expect(!filesystem_error, "stale asset temporary timestamp should be set");
     const bool gc_bundle_written = layerc::platform::write_profile_bundle(
-        gc_profile_path, gc_base, gc_visual);
+        gc_profile_path, gc_base, gc_visual).ok();
     const bool first_gc_completed = completed_visual_gc(2U, 1U);
     expect(
         gc_bundle_written && first_gc_completed &&
@@ -355,7 +355,7 @@ void platform_visual_asset_writer_ownership() {
                               .references = {a->reference}});
   visual.triggers.push_back({.cooldown_id = "dash", .observation_id = "template"});
   const auto path = fixture.path() / "writer.json";
-  if (!expect(layerc::platform::write_profile_bundle(path, base, visual),
+  if (!expect(layerc::platform::write_profile_bundle(path, base, visual).ok(),
               "the first writer fixture must commit"))
     return;
   const auto roots = layerc::platform::profile_transaction_scope(fixture.path());
@@ -379,7 +379,7 @@ void platform_visual_asset_writer_ownership() {
            "maintenance must not scan/delete while another writer owns the store");
     std::get<layerc::core::TemplateState>(visual.observations.front()).references = {
         b->reference};
-    expect(layerc::platform::write_profile_bundle(path, base, visual),
+    expect(layerc::platform::write_profile_bundle(path, base, visual).ok(),
            "the owning writer must publish its new reference before releasing");
   }
   const auto report = collection.get();
@@ -479,10 +479,10 @@ void platform_profile_writes() {
   const auto first = test_profile("First");
   const auto second = test_profile("Second");
   expect(layerc::platform::write_profile_file(
-             path, layerc::core::serialize_profile_json(first)),
+             path, layerc::core::serialize_profile_json(first)).ok(),
          "first atomic profile write should succeed");
   expect(layerc::platform::write_profile_file(
-             path, layerc::core::serialize_profile_json(second)),
+             path, layerc::core::serialize_profile_json(second)).ok(),
          "second atomic profile write should succeed");
   const auto backup_contents = layerc::platform::read_profile_file(backup);
   const auto backup_profile =
@@ -546,7 +546,7 @@ void platform_visual_sidecar_recovery() {
   const auto path = directory / L"profile.json";
   const auto second = test_profile("Second");
   expect(layerc::platform::write_profile_file(
-             path, layerc::core::serialize_profile_json(second)),
+             path, layerc::core::serialize_profile_json(second)).ok(),
          "visual recovery base profile should be created");
   const auto expected_sidecar = directory / L"_visual" / L"profile.json";
   expect(layerc::platform::visual_sidecar_path(path) == expected_sidecar,
@@ -556,10 +556,10 @@ void platform_visual_sidecar_recovery() {
   expect(absent_visual.state == layerc::platform::ModuleSidecarState::absent,
          "profiles without a visual sidecar should remain input-only");
   auto visual = test_visual_profile();
-  expect(layerc::platform::write_profile_bundle(path, second, visual),
+  expect(layerc::platform::write_profile_bundle(path, second, visual).ok(),
          "the first visual sidecar write should succeed");
   visual.sample_rate_hz = 15;
-  expect(layerc::platform::write_profile_bundle(path, second, visual),
+  expect(layerc::platform::write_profile_bundle(path, second, visual).ok(),
          "a replacement visual sidecar should create a protected backup");
   auto visual_backup = expected_sidecar;
   visual_backup += L".bak";
@@ -603,7 +603,7 @@ void platform_visual_sidecar_recovery() {
              !invalid_visual.error.message.empty(),
          "two invalid visual copies should produce a blocking diagnostic");
   visual.sample_rate_hz = 5;
-  expect(layerc::platform::write_profile_bundle(path, second, visual),
+  expect(layerc::platform::write_profile_bundle(path, second, visual).ok(),
          "repairing an invalid visual sidecar should replace its stale backup");
   write_file(expected_sidecar, "{broken-again");
   const auto repaired_backup =
@@ -628,7 +628,7 @@ void platform_atomic_temporary_collision() {
   legacy_temporary += L".tmp";
   write_file(legacy_temporary, "do-not-replace");
   expect(layerc::platform::write_profile_file(
-             collision_path, layerc::core::serialize_profile_json(first)),
+             collision_path, layerc::core::serialize_profile_json(first)).ok(),
          "profile writes should not collide with a legacy deterministic "
          ".tmp file");
   expect(read_file(legacy_temporary) == "do-not-replace",
@@ -695,7 +695,7 @@ void platform_bundle_recovery() {
           rolled_back_visual.profile->profile_id == "bundle-old",
       "a partial bundle failure must restore a matching profile and sidecar");
   expect(layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
-                                                new_bundle_visual),
+                                                new_bundle_visual).ok(),
          "a complete bundle replacement should succeed after the lock clears");
   const auto committed_visual =
       layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
@@ -747,7 +747,7 @@ void platform_bundle_recovery() {
          "the committed visual sidecar should be lockable");
   if (locked_visual != INVALID_HANDLE_VALUE) {
     expect(layerc::platform::write_profile_bundle(
-               bundle_path, new_bundle_profile, std::nullopt),
+               bundle_path, new_bundle_profile, std::nullopt).ok(),
            "a durable removal marker should commit even while stale "
            "visual bytes are locked");
     const auto removed_while_locked =
@@ -759,7 +759,7 @@ void platform_bundle_recovery() {
     CloseHandle(locked_visual);
   }
   expect(layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
-                                                std::nullopt),
+                                                std::nullopt).ok(),
          "an input-only bundle should replace the base and remove visual data");
   expect(
       std::filesystem::exists(
@@ -784,12 +784,12 @@ void platform_automation_state_recovery() {
   auto new_bundle_visual = test_visual_profile();
   new_bundle_visual.profile_id = new_bundle_profile.id;
   expect(layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
-                                                new_bundle_visual),
+                                                new_bundle_visual).ok(),
          "automation test base and visual should be created");
   auto automation_bundle = test_automation_profile(new_bundle_profile.id);
   expect(layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
                                                 new_bundle_visual,
-                                                automation_bundle),
+                                                automation_bundle).ok(),
          "a base, visual, and automation module should commit as one bundle");
   const auto committed_automation = layerc::platform::load_automation_sidecar(
       bundle_path, new_bundle_profile);
@@ -839,7 +839,7 @@ void platform_automation_state_recovery() {
                  .error.has_value(),
          "corrupt machine-local automation state should fail closed");
   expect(layerc::platform::write_automation_state(
-             bundle_path, automation_bundle, persistent_values),
+             bundle_path, automation_bundle, persistent_values).ok(),
          "a valid checkpoint should recover after corrupt state is rejected");
   const auto automation_path =
       layerc::platform::automation_sidecar_path(bundle_path);
@@ -853,7 +853,7 @@ void platform_automation_state_recovery() {
   if (locked_automation != INVALID_HANDLE_VALUE) {
     expect(
         layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
-                                               new_bundle_visual, std::nullopt),
+                                               new_bundle_visual, std::nullopt).ok(),
         "a durable removal marker should commit while stale automation bytes "
         "are locked");
     expect(layerc::platform::load_automation_sidecar(bundle_path,
@@ -888,7 +888,7 @@ void platform_relative_profile_write() {
     ScopedCurrentDirectory cwd(directory);
     if (cwd.changed())
       relative_write = layerc::platform::write_profile_file(
-          L"relative.json", layerc::core::serialize_profile_json(first));
+          L"relative.json", layerc::core::serialize_profile_json(first)).ok();
     expect(cwd.changed() && relative_write,
            "atomic profile writes should support a path with an empty "
            "parent component");
@@ -913,7 +913,7 @@ void platform_corrupt_profile_recovery() {
          "an externally corrupted profile should return a bounded "
          "validation error");
   expect(layerc::platform::write_profile_file(
-             corrupt_path, layerc::core::serialize_profile_json(first)),
+             corrupt_path, layerc::core::serialize_profile_json(first)).ok(),
          "a valid save should safely replace an externally corrupted profile");
   auto corrupt_backup = corrupt_path;
   corrupt_backup += L".bak";

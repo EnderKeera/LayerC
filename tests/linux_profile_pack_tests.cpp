@@ -183,7 +183,7 @@ void linux_profile_pack_contracts() {
       "import should restore a shared asset into each profile-local store");
 
   passed &= expect(layerc::platform::write_profile_bundle(
-                       profile_path, profile(), visual),
+                       profile_path, profile(), visual).ok(),
                    "bundle save creates primary and recovery sidecars");
   const auto sidecar = layerc::platform::visual_sidecar_path(profile_path);
   auto backup = sidecar;
