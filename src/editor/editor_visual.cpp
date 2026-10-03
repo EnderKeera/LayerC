@@ -30,12 +30,8 @@ layerc::core::VisualTrigger *find_trigger(
   return found == visual.triggers.end() ? nullptr : &*found;
 }
 
-using VisualObservation =
-    std::variant<layerc::core::PixelRule, layerc::core::TemplateState>;
-
-std::string observation_id(const VisualObservation &observation) {
-  return std::visit([](const auto &item) { return item.id; }, observation);
-}
+using layerc::core::observation_id;
+using layerc::core::VisualObservation;
 
 void set_observation_id(VisualObservation &observation,
                         const std::string_view id) {
@@ -51,7 +47,7 @@ std::string unique_observation_id(
   return next_unique_id(
       base, [&](const std::string_view value) {
         if (!allowed.empty() && value == allowed) return false;
-        return layerc::core::has_observation(profile, value);
+        return layerc::core::find_observation(profile, value) != nullptr;
       });
 }
 
@@ -74,12 +70,15 @@ bool ensure_observation_capacity(
     const VisualObservation &candidate,
     const std::string_view replacing_id = {}) {
   const bool is_pixel = std::holds_alternative<layerc::core::PixelRule>(candidate);
-  std::size_t count = is_pixel ? profile.rules.size() : profile.templates.size();
+  const auto same_kind = [&](const VisualObservation &observation) {
+    return observation.index() == candidate.index();
+  };
+  auto count = static_cast<std::size_t>(
+      std::ranges::count_if(profile.observations, same_kind));
   if (!replacing_id.empty()) {
-    const bool replaces_same_type =
-        is_pixel ? layerc::core::find_pixel_rule(profile, replacing_id) != nullptr
-                 : layerc::core::find_template_state(profile, replacing_id) != nullptr;
-    if (replaces_same_type) --count;
+    const auto *replaced =
+        layerc::core::find_observation(profile, replacing_id);
+    if (replaced != nullptr && same_kind(*replaced)) --count;
   }
   const auto maximum = is_pixel ? layerc::core::max_pixel_rules
                                 : layerc::core::max_template_states;
@@ -95,22 +94,21 @@ bool ensure_observation_capacity(
 
 void append_observation(layerc::core::VisualProfile &profile,
                         const VisualObservation &observation) {
-  std::visit([&](const auto &item) {
-    using T = std::decay_t<decltype(item)>;
-    if constexpr (std::is_same_v<T, layerc::core::PixelRule>)
-      profile.rules.push_back(item);
-    else
-      profile.templates.push_back(item);
-  }, observation);
+  profile.observations.push_back(observation);
 }
 
+// Recalibration keeps the observation's authored position.
 void replace_observation(layerc::core::VisualProfile &profile,
                          const std::string_view old_id,
                          const VisualObservation &observation) {
-  std::erase_if(profile.rules, [&](const auto &item) { return item.id == old_id; });
-  std::erase_if(profile.templates,
-                [&](const auto &item) { return item.id == old_id; });
-  append_observation(profile, observation);
+  const auto found = std::ranges::find_if(
+      profile.observations, [&](const VisualObservation &item) {
+        return observation_id(item) == old_id;
+      });
+  if (found == profile.observations.end())
+    append_observation(profile, observation);
+  else
+    *found = observation;
 }
 
 // Fresh observation id, append, and trigger link for a calibration result
@@ -131,9 +129,8 @@ bool install_new_observation(const HWND owner,
 
 std::optional<VisualObservation>
 single_observation(const layerc::core::VisualProfile &profile) {
-  if (profile.rules.size() + profile.templates.size() != 1) return std::nullopt;
-  if (!profile.rules.empty()) return VisualObservation{profile.rules.front()};
-  return VisualObservation{profile.templates.front()};
+  if (profile.observations.size() != 1) return std::nullopt;
+  return profile.observations.front();
 }
 
 } // namespace
@@ -156,10 +153,9 @@ void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
         return t.observation_id == observation_id;
       }))
     return;
-  std::erase_if(visual.rules,
-                [&](const auto &r) { return r.id == observation_id; });
-  std::erase_if(visual.templates,
-                [&](const auto &state) { return state.id == observation_id; });
+  std::erase_if(visual.observations, [&](const VisualObservation &item) {
+    return layerc::core::observation_id(item) == observation_id;
+  });
 }
 
 void EditorWindow::refresh_visual_controls() {
@@ -180,10 +176,10 @@ void EditorWindow::refresh_visual_controls() {
   if (editable && document_.visual()) {
     trigger = find_trigger(*document_.visual(), cooldown->id);
     if (trigger != nullptr) {
-      rule = layerc::core::find_pixel_rule(*document_.visual(),
-                                           trigger->observation_id);
-      template_state = layerc::core::find_template_state(
+      const auto *observation = layerc::core::find_observation(
           *document_.visual(), trigger->observation_id);
+      rule = std::get_if<layerc::core::PixelRule>(observation);
+      template_state = std::get_if<layerc::core::TemplateState>(observation);
     }
   }
 

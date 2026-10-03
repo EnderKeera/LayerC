@@ -183,7 +183,9 @@ manifest_json(const std::vector<PackProfile> &profiles,
 std::vector<std::string>
 VisualSidecarTraits::assets(const Profile &profile) {
   std::set<std::string, std::less<>> unique;
-  for (const auto &state : profile.templates)
+  for (const auto &state :
+       layerc::core::observations_of<layerc::core::TemplateState>(
+           profile.observations))
     for (const auto &reference : state.references)
       unique.insert(reference.asset_sha256);
   return {unique.begin(), unique.end()};

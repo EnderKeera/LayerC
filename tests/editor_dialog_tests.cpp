@@ -204,14 +204,14 @@ void editor_dialog_contracts() {
   layerc::core::PixelRule ready_rule;
   ready_rule.id = "ready";
   ready_rule.name = "Ready";
-  assigned_visual.rules.push_back(std::move(ready_rule));
+  assigned_visual.observations.emplace_back(std::move(ready_rule));
   assigned_visual.triggers.push_back(
       {.cooldown_id = "dash", .observation_id = "ready"});
   history.reset(original, assigned_visual, no_automation);
   auto without_cooldown = original;
   without_cooldown.name = "Cooldown removed";
   auto without_visual = assigned_visual;
-  without_visual.rules.clear();
+  without_visual.observations.clear();
   without_visual.triggers.clear();
   passed &= expect(
       history.record(without_cooldown, without_visual, no_automation, false),

@@ -190,7 +190,9 @@ template_asset_hashes(const std::filesystem::path &path) {
   if (visual.state != layerc::platform::ModuleSidecarState::valid ||
       !visual.profile.has_value())
     return assets;
-  for (const auto &definition : visual.profile->templates)
+  for (const auto &definition :
+       layerc::core::observations_of<layerc::core::TemplateState>(
+           visual.profile->observations))
     for (const auto &reference : definition.references)
       assets.push_back(reference.asset_sha256);
   std::ranges::sort(assets);

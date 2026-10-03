@@ -117,8 +117,8 @@ visual_fixture(const layerc::core::RgbPixel background) {
   profile.profile_id = "visual-fixture";
   profile.sample_rate_hz = 20;
   profile.quality = CaptureQuality::exact;
-  profile.rules.push_back(
-      {.id = "green",
+  profile.observations.push_back(
+      layerc::core::PixelRule{.id = "green",
        .name = "Green upper half",
        .region = {0.0, 0.0, 1.0, 0.5},
        .predicate = AverageColorPredicate{
@@ -127,8 +127,8 @@ visual_fixture(const layerc::core::RgbPixel background) {
                background.blue,
            0},
        .stable_samples = 1});
-  profile.templates.push_back(
-      {.id = "pattern",
+  profile.observations.push_back(
+      layerc::core::TemplateState{.id = "pattern",
        .name = "Pattern",
        .search_region = {0.0, 0.5, 1.0, 0.5},
        .expected_width = static_cast<double>(template_axis) / window_axis,

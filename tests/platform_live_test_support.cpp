@@ -36,7 +36,7 @@ core::GameProfile test_profile(const std::string &name) {
 core::VisualProfile test_visual_profile() {
   core::VisualProfile profile;
   profile.profile_id = "store-test";
-  profile.rules.push_back({.id = "ready",
+  profile.observations.push_back(layerc::core::PixelRule{.id = "ready",
                            .name = "Ready",
                            .region = {0.1, 0.2, 0.3, 0.4},
                            .predicate = core::AverageColorPredicate{0x123456,

@@ -27,7 +27,8 @@ ProfileDocument fixture() {
        .chord = InputChord{{{InputDevice::keyboard, 0x13, 0}}}});
   document.visual().emplace();
   document.visual()->profile_id = document.profile().id;
-  document.visual()->rules.push_back({.id = "ready", .name = "Ready"});
+  document.visual()->observations.push_back(
+      layerc::core::PixelRule{.id = "ready", .name = "Ready"});
   document.visual()->triggers.push_back(
       {.cooldown_id = "ability", .observation_id = "ready"});
   document.mark_visual_edited();
