@@ -23,17 +23,8 @@
 
 namespace layerc::daemon {
 
-template <typename Profile> struct ModuleSidecar {
-  std::optional<Profile> profile;
-  layerc::platform::ModuleSidecarState state{
-      layerc::platform::ModuleSidecarState::absent};
-
-  [[nodiscard]] bool usable() const noexcept {
-    return layerc::platform::is_usable(state) && profile.has_value();
-  }
-
-  bool operator==(const ModuleSidecar &) const = default;
-};
+template <typename Profile>
+using ModuleSidecar = layerc::platform::ModuleSidecar<Profile>;
 
 struct ProfileModules {
   ModuleSidecar<layerc::core::VisualProfile> visual;

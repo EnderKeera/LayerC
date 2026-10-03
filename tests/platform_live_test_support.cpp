@@ -229,7 +229,7 @@ void profile_planning_after_recovery() {
   expect(platform::write_profile_bundle(path, edited, visual, automation).ok(),
          "the editor save should recover before preserving omitted sidecars");
   const auto preserved = platform::load_companion_sidecar(path, edited);
-  expect(preserved.profile == companion,
+  expect(preserved.optional_profile() == companion,
          "omitted companion preferences must preserve the latest committed daemon value");
   for (std::size_t index{}; index < paths.size(); ++index)
     expect(read_file(platform::recovery_backup_path(paths[index])) == preceding[index],

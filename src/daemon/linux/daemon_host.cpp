@@ -211,7 +211,7 @@ std::vector<layerc::platform::StoredProfile>
 load_profiles(std::string &warning) {
   auto scan = layerc::platform::scan_profile_directory(
       layerc::platform::profile_directory());
-  warning = std::move(scan.warning);
+  warning = scan.warning_text();
   if (!scan.error.empty()) {
     if (!warning.empty()) warning += "; ";
     warning += scan.error;

@@ -79,7 +79,7 @@ public:
     return visual_.state;
   }
   [[nodiscard]] const std::string &visual_error() const noexcept {
-    return visual_.error.message;
+    return visual_.diagnostic;
   }
 
   [[nodiscard]] layerc::platform::ModuleSidecarState
@@ -118,15 +118,16 @@ public:
 
   // Sidecar value, state, and error move together so no caller can leave a
   // valid state beside a stale error or an invalid state beside a value.
-  void set_visual(layerc::platform::VisualSidecarLoad loaded, const bool legacy) {
-    visual_ = std::move(loaded);
+  void set_visual(const layerc::platform::VisualSidecarLoad &loaded,
+                  const bool legacy) {
+    visual_ = decltype(visual_)::from(loaded);
     legacy_visual_schema_ = legacy;
   }
-  void set_automation(layerc::platform::AutomationSidecarLoad loaded) {
-    automation_ = std::move(loaded);
+  void set_automation(const layerc::platform::AutomationSidecarLoad &loaded) {
+    automation_ = decltype(automation_)::from(loaded);
   }
-  void mark_visual_edited() { mark_edited(visual_); }
-  void mark_automation_edited() { mark_edited(automation_); }
+  void mark_visual_edited() { visual_.mark_edited(); }
+  void mark_automation_edited() { automation_.mark_edited(); }
   void clear_sidecars() {
     set_visual({}, false);
     set_automation({});
@@ -141,23 +142,16 @@ public:
                      layerc::platform::ProfileBundleLoad bundle) {
     profile_ = std::move(bundle.profile);
     path_ = std::move(path);
-    set_visual(std::move(bundle.visual), bundle.legacy_visual_schema);
-    set_automation(std::move(bundle.automation));
+    set_visual(bundle.visual, bundle.legacy_visual_schema);
+    set_automation(bundle.automation);
     legacy_base_schema_ = bundle.legacy_base_schema;
     upgrade_acknowledged_ = false;
   }
 
 private:
-  // After an in-memory edit the sidecar is valid when present, else absent.
-  template <typename Load> static void mark_edited(Load &load) {
-    load.state = load.profile ? layerc::platform::ModuleSidecarState::valid
-                              : layerc::platform::ModuleSidecarState::absent;
-    load.error = {};
-  }
-
   layerc::core::GameProfile profile_;
-  layerc::platform::VisualSidecarLoad visual_;
-  layerc::platform::AutomationSidecarLoad automation_;
+  layerc::platform::ModuleSidecar<layerc::core::VisualProfile> visual_;
+  layerc::platform::ModuleSidecar<layerc::core::AutomationProfile> automation_;
   std::filesystem::path path_;
   bool legacy_base_schema_{};
   bool legacy_visual_schema_{};

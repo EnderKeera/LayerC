@@ -105,10 +105,13 @@ struct ProfileDirectoryScan {
   // Every regular top-level JSON path, including files that could not be read
   // or parsed. Import planning reserves all of their names.
   std::vector<std::filesystem::path> base_paths;
+  // Per-file problems; the scan itself still succeeded.
   std::vector<ProfileScanFault> faults;
-  std::string warning;
+  // Whole-scan failure: no profile list can be trusted.
   std::string error;
 
+  // The fault messages joined with "; " for one-line diagnostics.
+  [[nodiscard]] std::string warning_text() const;
   [[nodiscard]] const StoredProfile *find(std::string_view id) const noexcept;
   // Store path for `id` inside `directory`: the file that already holds the
   // id, else the first `<slug>.json`, `<slug>-2.json`, ... whose casefolded
@@ -206,15 +209,109 @@ may_write_primary(const ModuleSidecarState state) noexcept {
          state == ModuleSidecarState::valid;
 }
 
-template <typename Profile, typename Error> struct ModuleSidecarLoad {
-  ModuleSidecarState state{ModuleSidecarState::absent};
-  std::optional<Profile> profile;
-  Error error;
-  std::filesystem::path source_path;
+// One sidecar load outcome. Only the four legal states are constructible:
+// a usable state always carries a profile, an invalid one always an error.
+template <typename Profile, typename Error> class ModuleSidecarLoad {
+public:
+  ModuleSidecarLoad() = default;
 
+  [[nodiscard]] static ModuleSidecarLoad
+  absent(std::filesystem::path source_path) {
+    return {Absent{}, std::move(source_path)};
+  }
+  [[nodiscard]] static ModuleSidecarLoad
+  valid(Profile profile, std::filesystem::path source_path) {
+    return {Valid{std::move(profile)}, std::move(source_path)};
+  }
+  // The backup was loaded because the primary failed with `primary_error`.
+  [[nodiscard]] static ModuleSidecarLoad
+  recovered(Profile profile, Error primary_error,
+            std::filesystem::path source_path) {
+    return {Recovered{std::move(profile), std::move(primary_error)},
+            std::move(source_path)};
+  }
+  [[nodiscard]] static ModuleSidecarLoad
+  invalid(Error error, std::filesystem::path source_path) {
+    return {Invalid{std::move(error)}, std::move(source_path)};
+  }
+
+  [[nodiscard]] ModuleSidecarState state() const noexcept {
+    return static_cast<ModuleSidecarState>(outcome_.index());
+  }
+  [[nodiscard]] bool usable() const noexcept { return profile() != nullptr; }
+  // The loaded profile for valid and recovered sidecars.
+  [[nodiscard]] const Profile *profile() const noexcept {
+    if (const auto *valid = std::get_if<Valid>(&outcome_))
+      return &valid->profile;
+    if (const auto *recovered = std::get_if<Recovered>(&outcome_))
+      return &recovered->profile;
+    return nullptr;
+  }
+  [[nodiscard]] std::optional<Profile> optional_profile() const {
+    if (const auto *loaded = profile()) return *loaded;
+    return std::nullopt;
+  }
+  // Why the primary is unusable: invalid, or recovered from the backup.
+  [[nodiscard]] const Error *error() const noexcept {
+    if (const auto *invalid = std::get_if<Invalid>(&outcome_))
+      return &invalid->error;
+    if (const auto *recovered = std::get_if<Recovered>(&outcome_))
+      return &recovered->primary_error;
+    return nullptr;
+  }
+  [[nodiscard]] const std::filesystem::path &source_path() const noexcept {
+    return source_path_;
+  }
+
+private:
+  struct Absent {};
+  struct Valid {
+    Profile profile;
+  };
+  struct Recovered {
+    Profile profile;
+    Error primary_error;
+  };
+  struct Invalid {
+    Error error;
+  };
+  // Alternative order matches ModuleSidecarState.
+  using Outcome = std::variant<Absent, Valid, Recovered, Invalid>;
+
+  ModuleSidecarLoad(Outcome outcome, std::filesystem::path source_path)
+      : outcome_(std::move(outcome)), source_path_(std::move(source_path)) {}
+
+  Outcome outcome_;
+  std::filesystem::path source_path_;
+};
+
+// A value copy of one sidecar for hosts that edit or reconfigure from it:
+// the profile (present only while usable or after an in-memory edit), the
+// stored state it was loaded in, and that load's diagnostic.
+template <typename Profile> struct ModuleSidecar {
+  std::optional<Profile> profile;
+  ModuleSidecarState state{ModuleSidecarState::absent};
+  std::string diagnostic;
+
+  template <typename Error>
+  [[nodiscard]] static ModuleSidecar
+  from(const ModuleSidecarLoad<Profile, Error> &load) {
+    return {.profile = load.optional_profile(),
+            .state = load.state(),
+            .diagnostic = load.error() != nullptr ? load.error()->message
+                                                  : std::string{}};
+  }
   [[nodiscard]] bool usable() const noexcept {
     return is_usable(state) && profile.has_value();
   }
+  // After an in-memory edit the sidecar is valid when present, else absent.
+  void mark_edited() {
+    state = profile.has_value() ? ModuleSidecarState::valid
+                                : ModuleSidecarState::absent;
+    diagnostic.clear();
+  }
+
+  bool operator==(const ModuleSidecar &) const = default;
 };
 
 template <typename Module>
@@ -252,18 +349,16 @@ load_sidecar_file(const std::filesystem::path &primary,
            std::string(detail);
   };
   const auto files = read_sidecar_files(primary, Module::descriptor.max_bytes);
+  using Load = ModuleSidecarLoadFor<Module>;
   switch (files.marker_state) {
   case SidecarMarker::unreadable:
-    return {.state = ModuleSidecarState::invalid, .profile = std::nullopt,
-            .error = {"$.state", message("state could not be read")},
-            .source_path = files.marker};
+    return Load::invalid({"$.state", message("state could not be read")},
+                         files.marker);
   case SidecarMarker::invalid:
-    return {.state = ModuleSidecarState::invalid, .profile = std::nullopt,
-            .error = {"$.state", message("state is invalid")},
-            .source_path = files.marker};
+    return Load::invalid({"$.state", message("state is invalid")},
+                         files.marker);
   case SidecarMarker::removed:
-    return {.state = ModuleSidecarState::absent, .profile = std::nullopt,
-            .error = {}, .source_path = files.marker};
+    return Load::absent(files.marker);
   case SidecarMarker::absent:
   case SidecarMarker::active:
     break;
@@ -276,26 +371,20 @@ load_sidecar_file(const std::filesystem::path &primary,
     auto parsed =
         Module::parse_json(layerc::core::as_text(*files.primary_read), base);
     if (auto *profile = std::get_if<Profile>(&parsed))
-      return {.state = ModuleSidecarState::valid,
-              .profile = std::move(*profile), .error = {},
-              .source_path = files.primary};
+      return Load::valid(std::move(*profile), files.primary);
     primary_error = std::get<Error>(std::move(parsed));
   }
   if (files.backup_read.has_value()) {
     auto parsed =
         Module::parse_json(layerc::core::as_text(*files.backup_read), base);
     if (auto *profile = std::get_if<Profile>(&parsed))
-      return {.state = ModuleSidecarState::recovered_backup,
-              .profile = std::move(*profile),
-              .error = std::move(primary_error),
-              .source_path = files.backup};
+      return Load::recovered(std::move(*profile), std::move(primary_error),
+                             files.backup);
   }
   if (files.primary_read.status == FileReadStatus::missing &&
       files.backup_read.status == FileReadStatus::missing)
-    return {.state = ModuleSidecarState::absent, .profile = std::nullopt,
-            .error = {}, .source_path = files.primary};
-  return {.state = ModuleSidecarState::invalid, .profile = std::nullopt,
-          .error = std::move(primary_error), .source_path = files.primary};
+    return Load::absent(files.primary);
+  return Load::invalid(std::move(primary_error), files.primary);
 }
 
 template <typename Module>

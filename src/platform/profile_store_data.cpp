@@ -41,6 +41,15 @@ read_profile_file(const std::filesystem::path &path) {
 
 // --- Profile directory scan ---
 
+std::string ProfileDirectoryScan::warning_text() const {
+  std::string text;
+  for (const auto &fault : faults) {
+    if (!text.empty()) text += "; ";
+    text += fault.message;
+  }
+  return text;
+}
+
 const StoredProfile *ProfileDirectoryScan::find(
     const std::string_view id) const noexcept {
   const auto found = std::find_if(
@@ -97,9 +106,7 @@ scan_profile_directory(const std::filesystem::path &directory) {
 
   const auto append_warning = [&result](const std::filesystem::path &path,
                                         std::string message) {
-    result.faults.push_back({.path = path, .message = message});
-    if (!result.warning.empty()) result.warning += "; ";
-    result.warning += message;
+    result.faults.push_back({.path = path, .message = std::move(message)});
   };
   const auto filename = [](const std::filesystem::path &path) {
     return path_to_utf8(path.filename()).value_or("<invalid filename>");
@@ -264,8 +271,8 @@ template <typename Module>
     // instead of being silently dropped or overwritten.
     const auto existing = load_module_sidecar<Module>(
         path, previous_profile.has_value() ? *previous_profile : stored);
-    if (existing.state == ModuleSidecarState::invalid) return false;
-    effective = existing.profile;
+    if (existing.state() == ModuleSidecarState::invalid) return false;
+    effective = existing.optional_profile();
   }
   if (effective.has_value()) {
     if (!Module::valid(*effective, stored)) return false;
@@ -298,7 +305,7 @@ template <typename Module>
         load_sidecar_file<Module>(paths.primary, *previous_profile);
     if (loaded.usable()) {
       auto source =
-          read_durable_file(loaded.source_path, Module::descriptor.max_bytes);
+          read_durable_file(loaded.source_path(), Module::descriptor.max_bytes);
       if (!source.has_value()) return false;
       recovery = as_text(*source);
     }

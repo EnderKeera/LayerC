@@ -21,8 +21,8 @@ namespace {
 
 // True when the loaded visual sidecar's source file uses an older schema.
 bool visual_sidecar_is_legacy(const VisualSidecarLoad &visual) {
-  if (visual.source_path.empty()) return false;
-  const auto source = read_durable_text(visual.source_path,
+  if (visual.source_path().empty()) return false;
+  const auto source = read_durable_text(visual.source_path(),
                                         layerc::core::max_visual_json_bytes);
   return source && source_schema_before(*source,
                                         layerc::core::visual_schema_version);
