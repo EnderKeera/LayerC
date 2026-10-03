@@ -38,6 +38,23 @@ enum class CommitResult {
   write_failed,
 };
 
+// The one commit input: a base profile plus each edited module's write
+// intent (present = replace, absent = remove; the companion module is not
+// edited here and is always kept). An unreadable module has no parsed
+// profile, so its absence is not a removal intent: it blocks the commit and
+// its recovery bytes and backups survive.
+struct ProfileBundle {
+  layerc::core::GameProfile profile;
+  std::optional<layerc::core::VisualProfile> visual;
+  std::optional<layerc::core::AutomationProfile> automation;
+  bool unreadable_module{};
+  // A legacy schema that needs the one-way upgrade confirmation.
+  bool upgrade_needed{};
+};
+
+[[nodiscard]] ProfileBundle
+loaded_bundle(layerc::platform::ProfileBundleLoad loaded);
+
 struct CommitOptions {
   // Prompt before a one-way legacy schema upgrade. When false, a required
   // upgrade fails the commit (autosave without explicit approval).
@@ -125,6 +142,22 @@ public:
   }
   void set_automation(const layerc::platform::AutomationSidecarLoad &loaded) {
     automation_ = decltype(automation_)::from(loaded);
+  }
+  // An invalid module without a parsed profile (see ProfileBundle).
+  [[nodiscard]] bool has_unreadable_module() const noexcept {
+    return (!visual_.profile &&
+            visual_.state == layerc::platform::ModuleSidecarState::invalid) ||
+           (!automation_.profile &&
+            automation_.state == layerc::platform::ModuleSidecarState::invalid);
+  }
+  // The document as a commit input (the caller syncs controls first).
+  [[nodiscard]] ProfileBundle bundle() const {
+    return {.profile = profile_,
+            .visual = visual_.profile,
+            .automation = automation_.profile,
+            .unreadable_module = has_unreadable_module(),
+            .upgrade_needed = (legacy_base_schema_ || legacy_visual_schema_) &&
+                              !upgrade_acknowledged_};
   }
   void mark_visual_edited() { visual_.mark_edited(); }
   void mark_automation_edited() { automation_.mark_edited(); }

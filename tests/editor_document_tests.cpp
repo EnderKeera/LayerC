@@ -247,6 +247,41 @@ void invalid_bundle_cases() {
   }
 }
 
+// The document and a loaded row build the same commit input: an unreadable
+// module blocks, a usable one becomes a replacement, and legacy schemas need
+// the upgrade confirmation until it is acknowledged.
+void commit_bundle_cases() {
+  {
+    auto document = fixture();
+    const auto bundle = document.bundle();
+    expect(!bundle.unreadable_module && !bundle.upgrade_needed &&
+               bundle.profile == document.profile() &&
+               bundle.visual == document.visual() && !bundle.automation,
+           "a valid document commits its profile and modules as-is");
+  }
+  {
+    auto document = fixture();
+    document.set_automation(layerc::platform::AutomationSidecarLoad::invalid(
+        {.path = "$", .message = "fixture invalid sidecar"}, {}));
+    expect(document.has_unreadable_module() &&
+               document.bundle().unreadable_module,
+           "an unreadable automation module blocks the document commit");
+  }
+  {
+    auto document = fixture();
+    layerc::platform::ProfileBundleLoad loaded{
+        .profile = document.profile(),
+        .visual =
+            layerc::platform::VisualSidecarLoad::invalid(layerc::core::VisualError{}, {}),
+        .automation = layerc::platform::AutomationSidecarLoad::absent({}),
+        .legacy_base_schema = true};
+    const auto bundle = layerc::editor::loaded_bundle(std::move(loaded));
+    expect(bundle.unreadable_module && bundle.upgrade_needed &&
+               !bundle.visual && !bundle.automation,
+           "a loaded row with an unreadable visual module blocks its commit");
+  }
+}
+
 } // namespace
 
 void editor_cooldown_removal_contracts() {
@@ -255,4 +290,5 @@ void editor_cooldown_removal_contracts() {
   automation_source_cases();
   accepted_removal_case();
   invalid_bundle_cases();
+  commit_bundle_cases();
 }
