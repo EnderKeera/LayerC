@@ -70,6 +70,9 @@ struct RuntimeDiagnostics {
   std::vector<SessionDiagnostics> sessions;
   std::vector<HelperDiagnostics> helpers;
   std::vector<CaptureDiagnostics> captures;
+  // Current automation faults (checkpoint, state load, runtime), one line
+  // each, reported identically by both daemons.
+  std::vector<std::string> automation_faults;
   bool operator==(const RuntimeDiagnostics &) const = default;
 };
 

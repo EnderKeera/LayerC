@@ -157,8 +157,7 @@ void DaemonApp::poll_visual_captures() {
           update_tooltip(L"LayerD - visual trigger " +
                          layerc::platform::utf8_to_wide(result.triggered.back()));
         if (session->automation_runtime) {
-          publish_automation_trace(*session);
-          synchronize_automation_state(*session, now);
+          after_automation_step(*session, now);
           schedule_automation_timer();
         }
       }

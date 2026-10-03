@@ -5,6 +5,7 @@
 #include "layerc/platform/win32_handle.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -93,6 +94,16 @@ std::string DaemonApp::runtime_diagnostics_json() const {
             static_cast<std::uint32_t>(session.overlays.window_count()),
         .last_input_match = session.last_input_match,
     });
+  }
+  diagnostics.automation_faults = automation_persistence_.diagnostics();
+  for (const auto &entry : session_registry_.sessions) {
+    const auto source = std::ranges::find(session_registry_.sources,
+                                          entry->source_key, &ProfileSource::key);
+    const auto label = source == session_registry_.sources.end()
+                           ? entry->source_key
+                           : source->path.string();
+    for (auto &line : entry->automation_health.lines(label))
+      diagnostics.automation_faults.push_back(std::move(line));
   }
   diagnostics.helpers.reserve(visual_capture_runtime_.captures.size());
   diagnostics.captures.reserve(visual_capture_runtime_.captures.size());

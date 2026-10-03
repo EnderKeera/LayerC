@@ -87,7 +87,10 @@ std::string serialize_runtime_diagnostics_json(const RuntimeDiagnostics &value) 
           {"lastError", Value(value.settings.last_error)}})},
       {"aggregateOwnedResources", resources(value.aggregate_resources)},
       {"sessions", array(value.sessions, session)}, {"isolatedHelpers", array(value.helpers, helper)},
-      {"captures", array(value.captures, capture)}});
+      {"captures", array(value.captures, capture)},
+      {"automationFaults",
+       array(value.automation_faults,
+             [](const std::string &line) { return Value(line); })}});
   std::string output;
   json::append_value(output, root);
   return output;

@@ -248,6 +248,7 @@ if(WIN32)
         src/platform/path_text.cpp
         src/platform/profile_store.cpp
         src/platform/profile_store_data.cpp
+        src/platform/automation_persistence.cpp
         src/platform/profile_store_layout.cpp
         src/platform/profile_bundle_load.cpp
         src/platform/durable_file.cpp
@@ -382,6 +383,7 @@ if(NOT WIN32)
     add_library(layerc_linux STATIC
         src/platform/linux/profile_store.cpp
         src/platform/profile_store_data.cpp
+        src/platform/automation_persistence.cpp
         src/platform/profile_store_layout.cpp
         src/platform/profile_bundle_load.cpp
         src/platform/linux/durable_file.cpp
@@ -780,6 +782,9 @@ if(LAYERC_BUILD_TESTS)
     layerc_add_test(layerc_template_png_tests
         SOURCES tests/template_png_tests.cpp
         LINK layerc_bundle layerc_miniz TIMEOUT 30)
+    layerc_add_test(layerc_automation_persistence_tests
+        SOURCES tests/automation_persistence_tests.cpp
+        LINK layerc_bundle TIMEOUT 30)
     if(WIN32)
         layerc_add_test(layerc_launcher_win_tests
             SOURCES tests/launcher_win_tests.cpp

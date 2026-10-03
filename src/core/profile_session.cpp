@@ -46,6 +46,29 @@ bool AutomationSession::start(AutomationProfile automation,
   return process(event(AutomationEventKind::session_started, {}, now), sink);
 }
 
+void AutomationRuntimeHealth::record(const AutomationEvaluationResult &result) {
+  if (result.faulted_automations.empty()) {
+    if (result.error.has_value())
+      runtime_error = result.error->path + ": " + result.error->message;
+    else
+      runtime_error.reset();
+    return;
+  }
+  runtime_error.reset();
+  for (const auto &id : result.faulted_automations)
+    runtime_faults.insert_or_assign(id, "faulted during event");
+}
+
+std::vector<std::string>
+AutomationRuntimeHealth::lines(const std::string_view source) const {
+  std::vector<std::string> result;
+  const std::string prefix(source);
+  if (runtime_error) result.push_back(prefix + ": " + *runtime_error);
+  for (const auto &[id, error] : runtime_faults)
+    result.push_back(prefix + ": automation fault: " + id + ": " + error);
+  return result;
+}
+
 bool AutomationSession::stop(const TimePoint now, AutomationSessionSink *sink) {
   if (!automation_runtime) return false;
   const bool changed = process(event(AutomationEventKind::session_stopping, {}, now), sink);
@@ -70,6 +93,7 @@ bool AutomationSession::process(const AutomationEvent &value,
             value.timestamp, value.origin_token);
       });
   (void)poll_ready(value.timestamp, false, sink);
+  automation_health.record(result);
   if (sink != nullptr) {
     sink->on_result(result);
     if (automation_runtime->persistent_dirty())

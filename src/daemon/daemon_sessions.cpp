@@ -66,30 +66,6 @@ void advance_source_revisions(
   }
 }
 
-void carry_automation_state(ProfileSource &source,
-                            const ProfileSource &previous) {
-  if (!source.modules.automation.profile.has_value() ||
-      !previous.modules.automation.profile.has_value())
-    return;
-  bool carried{};
-  for (const auto &variable : source.modules.automation.profile->variables) {
-    if (!variable.persistent) continue;
-    const auto previous_declaration = std::ranges::find(
-        previous.modules.automation.profile->variables, variable.id,
-        &layerc::core::AutomationVariable::id);
-    const auto value = previous.automation_state.find(variable.id);
-    if (previous_declaration ==
-            previous.modules.automation.profile->variables.end() ||
-        previous_declaration->type != variable.type ||
-        value == previous.automation_state.end())
-      continue;
-    source.automation_state[variable.id] = value->second;
-    carried = true;
-  }
-  if (carried && previous.automation_state_due.has_value())
-    source.automation_state_due = previous.automation_state_due;
-}
-
 std::vector<std::string> compute_recreate_keys(
     std::span<ProfileSource> loaded,
     const std::span<const ProfileSource> previous_sources) {
@@ -101,7 +77,6 @@ std::vector<std::string> compute_recreate_keys(
       keys.push_back(source.key);
       continue;
     }
-    carry_automation_state(source, *previous);
     if (layerc::core::plan_session_reconciliation(previous->profile,
                                                   source.profile)
             .recreate_instances)
@@ -276,15 +251,8 @@ namespace {
 void load_source_modules(ProfileSource &source) {
   source.modules.visual = module_sidecar_from(
       layerc::platform::load_visual_sidecar(source.path, source.profile));
-  source.automation_state.clear();
-  source.automation_state_due.reset();
   source.modules.automation = module_sidecar_from(
       layerc::platform::load_automation_sidecar(source.path, source.profile));
-  if (source.modules.automation.usable()) {
-    const auto state = layerc::platform::load_automation_state(
-        source.path, *source.modules.automation.profile);
-    source.automation_state = state.values;
-  }
   source.modules.companion = module_sidecar_from(
       layerc::platform::load_companion_sidecar(source.path, source.profile));
 }
@@ -384,6 +352,17 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
     session_registry_.instances.erase_profile(key);
 
   session_registry_.sources = std::move(loaded);
+  // A reconcile is an explicit reload: settled automation state is re-read
+  // from its store, unsaved values stay with the owner until written.
+  std::vector<std::filesystem::path> automation_paths;
+  for (const auto &source : session_registry_.sources) {
+    if (!source.modules.automation.usable())
+      continue;
+    (void)automation_persistence_.attach(
+        source.path, *source.modules.automation.profile, reconcile_now, true);
+    automation_paths.push_back(source.path);
+  }
+  automation_persistence_.retain(automation_paths);
   for (const auto &source : session_registry_.sources) {
     if (!source.profile.enabled || !source.profile.game.global)
       continue;

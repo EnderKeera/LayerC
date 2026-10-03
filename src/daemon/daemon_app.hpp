@@ -7,6 +7,7 @@
 #include "visual_capture_worker.hpp"
 
 #include "GameBarTransport.hpp"
+#include "layerc/platform/automation_persistence.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/hid.hpp"
 #include "layerc/core/input_matcher.hpp"
@@ -115,7 +116,9 @@ private:
   void process_automation_event(Session &session,
                                 const layerc::core::AutomationEvent &event);
   void publish_automation_trace(Session &session);
-  void acknowledge_automation_state(const ProfileSource &source);
+  void acknowledge_automation_saved(
+      std::span<const std::filesystem::path> saved);
+  void after_automation_step(Session &session, layerc::core::TimePoint now);
   void synchronize_automation_state(Session &session,
                                     layerc::core::TimePoint now);
   void reconcile_runtime_services();
@@ -163,6 +166,8 @@ private:
   InputRuntime input_runtime_;
   VisualCaptureRuntime visual_capture_runtime_;
   AutomationRuntimeHost automation_runtime_host_;
+  // Persistent automation values per profile path, outliving sessions.
+  layerc::platform::AutomationPersistence automation_persistence_;
   OverlayRuntime overlay_runtime_{*this};
   LiveEditHost live_edit_host_;
   CompanionHost companion_host_;

@@ -10,6 +10,7 @@
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/pixel_engine.hpp"
 #include "layerc/core/profile_session.hpp"
+#include "layerc/platform/automation_persistence.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 
@@ -25,15 +26,6 @@
 
 namespace layerc::daemon {
 
-// A stopped runtime's last value copy stays owned until its durable write
-// succeeds; the core runtime is destroyed after session_stopping.
-struct RetiredAutomationState {
-  layerc::core::AutomationProfile profile;
-  layerc::core::AutomationPersistentValues values;
-  std::optional<layerc::core::TimePoint> due;
-  std::optional<std::string> checkpoint_error;
-};
-
 // References into one loaded registry revision. Visual assets can be prepared
 // before a profile has a matching window.
 struct VisualConfiguration {
@@ -42,9 +34,31 @@ struct VisualConfiguration {
   const layerc::core::VisualProfile &profile;
 };
 
+// One configured profile revision: the base profile plus its module
+// sidecars as value copies (the platform's shared ModuleSidecar).
+struct ConfiguredProfile {
+  layerc::platform::StoredProfile source;
+  layerc::platform::ModuleSidecar<layerc::core::VisualProfile> visual;
+  layerc::platform::ModuleSidecar<layerc::core::AutomationProfile> automation;
+
+  // Sidecars whose definitions are enabled; invalid ones contribute nothing.
+  [[nodiscard]] const std::optional<layerc::core::VisualProfile> &
+  visual_profile() const noexcept { return visual.profile; }
+  [[nodiscard]] const std::optional<layerc::core::AutomationProfile> &
+  automation_profile() const noexcept { return automation.profile; }
+  [[nodiscard]] bool invalid_visual() const noexcept {
+    return visual.state == layerc::platform::ModuleSidecarState::invalid;
+  }
+  [[nodiscard]] bool invalid_automation() const noexcept {
+    return automation.state == layerc::platform::ModuleSidecarState::invalid;
+  }
+};
+
 // One matched profile owns cooldown, automation, and visual state. Direct
 // bindings are optional; bindings the X11 adapter cannot produce (controller
-// or HID tokens) stay in the matcher and simply never fire.
+// or HID tokens) stay in the matcher and simply never fire. Persistent
+// automation values belong to the registry's AutomationPersistence, which
+// outlives the session.
 struct InputSession : layerc::core::AutomationSession {
   std::filesystem::path source_path;
   std::uint64_t window{};
@@ -53,27 +67,13 @@ struct InputSession : layerc::core::AutomationSession {
   layerc::core::InputMatcher matcher;
   std::optional<layerc::core::VisualProfile> visual_profile;
   bool invalid_automation_sidecar{};
-  std::optional<layerc::core::TimePoint> automation_state_due;
-  struct AutomationHealth {
-    std::optional<std::string> checkpoint_error;
-    std::optional<std::string> state_load_error;
-    std::optional<std::string> runtime_error;
-    // At most one current fault per automation in the validated profile.
-    std::map<std::string, std::string, std::less<>> runtime_faults;
-  } automation_health;
-  bool deferred_automation{};
   // "<device>:<code>:press|release" of the last event a binding consumed,
   // as the Windows daemon reports it.
   std::string last_input_match;
+  layerc::platform::AutomationPersistence *persistence{};
 
-  InputSession(
-      layerc::platform::StoredProfile source, std::uint64_t window, bool global,
-      std::optional<layerc::core::VisualProfile> visual_profile = {},
-      std::optional<layerc::core::AutomationProfile> automation_profile = {},
-      layerc::core::AutomationPersistentValues automation_state = {},
-      bool invalid_visual_sidecar = false,
-      bool invalid_automation_sidecar = false,
-      std::optional<std::string> automation_state_load_error = {});
+  InputSession(const ConfiguredProfile &bundle, std::uint64_t window,
+               layerc::platform::AutomationPersistence &persistence);
 
   // Cooldown ids the event actually triggered (a chord that is not yet
   // complete, or a cooldown still running, yields nothing).
@@ -85,20 +85,9 @@ struct InputSession : layerc::core::AutomationSession {
   void poll_automation(layerc::core::TimePoint now);
   [[nodiscard]] std::optional<layerc::core::TimePoint>
   next_automation_deadline(layerc::core::TimePoint now);
-  [[nodiscard]] std::optional<RetiredAutomationState>
-  stop_automation(layerc::core::TimePoint now);
-  void start_deferred_automation(
-      const layerc::core::AutomationProfile &profile,
-      layerc::core::AutomationPersistentValues values,
-      layerc::core::TimePoint now,
-      std::optional<std::string> state_load_error = {});
-  // Capability quiesce must checkpoint persistent automation values without
-  // destroying the session: matched application sessions live above the
-  // input adapter, so input/XI2 teardown releases only the device source.
-  void checkpoint_automation_now(layerc::core::TimePoint now);
-
-private:
-  void checkpoint_automation_state(layerc::core::TimePoint now, bool force);
+  // Runs session_stopping and hands the final values to the persistence
+  // owner, which writes them now and keeps retrying on failure.
+  void stop_automation(layerc::core::TimePoint now);
 };
 
 // Owns the profile sessions for the whole daemon, mirroring the Windows
@@ -130,11 +119,14 @@ public:
   session_requests() const;
 
   [[nodiscard]] std::size_t automation_count() const noexcept;
-  [[nodiscard]] std::size_t pending_checkpoint_count() const noexcept {
-    return pending_checkpoints_.size();
-  }
+  // Unsaved values of profiles that no longer have a session.
+  [[nodiscard]] std::size_t pending_checkpoint_count() const;
+  [[nodiscard]] const layerc::platform::AutomationPersistence &
+  automation_persistence() const noexcept { return persistence_; }
   // True when a pending checkpoint completes and capability demand changes.
   [[nodiscard]] bool poll_automation(layerc::core::TimePoint now);
+  // Capability quiesce: write every pending value without ending sessions.
+  void checkpoint_automation(layerc::core::TimePoint now);
   [[nodiscard]] std::optional<layerc::core::TimePoint>
   next_automation_deadline(layerc::core::TimePoint now);
   [[nodiscard]] std::vector<std::string> automation_diagnostics() const;
@@ -143,27 +135,14 @@ public:
   }
 
 private:
-  struct ConfiguredProfile {
-    layerc::platform::StoredProfile source;
-    std::optional<layerc::core::VisualProfile> visual_profile;
-    std::optional<layerc::core::AutomationProfile> automation_profile;
-    layerc::core::AutomationPersistentValues automation_state;
-    std::string visual_diagnostic;
-    std::string automation_sidecar_diagnostic;
-    std::optional<std::string> automation_state_diagnostic;
-    bool invalid_visual_sidecar{};
-    bool invalid_automation_sidecar{};
-  };
-
-  [[nodiscard]] std::optional<RetiredAutomationState>
-  retire_session(InputSession &session, layerc::core::TimePoint now);
-  [[nodiscard]] bool retry_pending_checkpoints(layerc::core::TimePoint now,
-                                               bool force = false);
+  // Marks runtimes whose values the persistence owner just made durable;
+  // returns whether a saved path had no session (demand may drop).
+  bool acknowledge_saved(std::span<const std::filesystem::path> saved);
 
   std::vector<ConfiguredProfile> configured_;
   std::vector<VisualConfiguration> visual_configurations_;
   std::vector<InputSession> sessions_;
-  std::map<std::filesystem::path, RetiredAutomationState> pending_checkpoints_;
+  layerc::platform::AutomationPersistence persistence_;
   std::vector<std::string> matched_automation_diagnostics_;
   std::vector<std::string> visual_diagnostics_;
   bool configuration_changed_{};

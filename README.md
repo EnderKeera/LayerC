@@ -265,6 +265,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
 | `layerc_template_png_tests` | Shared template PNG codec (every color type, depth, and Adam7), deterministic canonical encoding, and bundle-import asset canonicalization |
+| `layerc_automation_persistence_tests` | Shared per-profile automation persistence: debounced checkpoints, retried write faults, state-load repair, and values that outlive sessions |
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
 | `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
 | `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |

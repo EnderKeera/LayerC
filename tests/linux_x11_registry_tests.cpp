@@ -211,8 +211,7 @@ void test_registry_automation_only_and_health() {
     (void)input_registry.poll_automation(
         input_now + std::chrono::milliseconds{1'100 * attempt});
     expect(input_registry.automation_diagnostics().size() == 1 &&
-               input_registry.sessions().front()
-                       .automation_health.checkpoint_error.has_value(),
+               input_registry.automation_persistence().find(input_source.path)->checkpoint_error.has_value(),
            "repeated checkpoint failures retain one reported fault");
   }
   expect(automation_status_response(input_registry).find(
@@ -228,8 +227,7 @@ void test_registry_automation_only_and_health() {
   (void)input_registry.poll_automation(
       input_now + std::chrono::milliseconds{12'000});
   expect(input_registry.automation_diagnostics().empty() &&
-             !input_registry.sessions().front()
-                  .automation_health.checkpoint_error.has_value(),
+             !input_registry.automation_persistence().find(input_source.path)->checkpoint_error.has_value(),
          "successful checkpoint clears the current fault");
   expect(automation_status_response(input_registry).find(
               "\"capability\":\"automation\",\"availability\":\"active\","
@@ -282,24 +280,26 @@ void test_registry_automation_only_and_health() {
 
   input_registry.configure(std::span{&input_source, 1});
   input_registry.refresh(scan);
+  const auto replaced =
+      input_registry.sessions().front().automation_runtime->snapshot();
   expect(input_registry.session_count() == 1 &&
-             input_registry.automation_count() == 0 &&
-             input_registry.sessions().front().deferred_automation &&
-             input_registry.pending_checkpoint_count() == 1,
-         "same-path replacement waits for the older checkpoint");
+             input_registry.automation_count() == 1 &&
+             input_registry.pending_checkpoint_count() == 0 &&
+             input_registry.automation_persistence().pending_count() == 1 &&
+             replaced.variables.at("count") == AutomationValue(std::int64_t{2}),
+         "a same-path replacement continues from the unsaved values");
   std::filesystem::remove(state_path, error);
   if (!expect(!error, "retired checkpoint fault is removed")) return;
   const auto retry_now = retiring_now + std::chrono::milliseconds{2'200};
-  expect(input_registry.poll_automation(retry_now) &&
-             input_registry.pending_checkpoint_count() == 0 &&
-             input_registry.automation_count() == 1 &&
-             !input_registry.sessions().front().deferred_automation &&
+  expect(!input_registry.poll_automation(retry_now) &&
+             input_registry.automation_persistence().pending_count() == 0 &&
              input_registry.automation_diagnostics().empty(),
-         "successful retry clears pending fault and starts replacement");
-  const auto replaced =
-      input_registry.sessions().front().automation_runtime->snapshot();
-  expect(replaced.variables.at("count") == AutomationValue(std::int64_t{2}),
-         "replacement reloads the saved state after the old write");
+         "the retried write succeeds under the replacement session");
+  const auto retried =
+      layerc::platform::load_automation_state(input_source.path, input_profile);
+  expect(!retried.error &&
+             retried.values.at("count") == AutomationValue(std::int64_t{2}),
+         "the retried write stores the predecessor's unsaved value");
 
   // A state-load fault is current health and clears after a good checkpoint.
   if (!expect(layerc::test::write_file(state_path, "{invalid"),
@@ -308,8 +308,7 @@ void test_registry_automation_only_and_health() {
   input_registry.configure(std::span{&input_source, 1});
   input_registry.refresh(scan);
   expect(input_registry.automation_diagnostics().size() == 1 &&
-             input_registry.sessions().front()
-                 .automation_health.state_load_error.has_value(),
+             input_registry.automation_persistence().find(input_source.path)->state_load_error.has_value(),
          "matched corrupt state reports one load fault");
   expect(!input_registry.poll_automation(
              retry_now + std::chrono::milliseconds{1'100}) &&
@@ -498,7 +497,7 @@ void test_registry_fresh_admission_state() {
         .variables.at("count");
   };
   (void)registry.sessions().front().feed(press, MonotonicClock::now());
-  registry.sessions().front().checkpoint_automation_now(MonotonicClock::now());
+  registry.checkpoint_automation(MonotonicClock::now());
   registry.refresh({});
   const auto stopped = layerc::platform::load_automation_state(source.path, automation);
   expect(registry.session_count() == 0 && registry.pending_checkpoint_count() == 0 &&
@@ -510,8 +509,9 @@ void test_registry_fresh_admission_state() {
   expect(count() == AutomationValue(std::int64_t{11}),
          "fresh admission reloads latest durable values without configure");
 
-  // An older failed final write gates admission, even across another unmatched
-  // interval; completing it while unmatched must update the next runtime.
+  // An older failed final write stays with the owner across unmatched
+  // intervals: a readmission continues from its unsaved values, and a retry
+  // that completes while unmatched updates the next runtime.
   (void)registry.sessions().front().feed(press, MonotonicClock::now());
   const auto state_path = layerc::platform::automation_state_path(source.path);
   std::error_code error;
@@ -523,9 +523,10 @@ void test_registry_fresh_admission_state() {
   expect(registry.pending_checkpoint_count() == 1,
          "failed retirement retains one pending checkpoint");
   registry.refresh(scan);
-  expect(registry.session_count() == 1 && registry.automation_count() == 0 &&
-             registry.sessions().front().deferred_automation,
-         "pending predecessor prevents a fresh stale runtime");
+  expect(registry.session_count() == 1 && registry.automation_count() == 1 &&
+             count() == AutomationValue(std::int64_t{22}) &&
+             registry.automation_persistence().pending_count() == 1,
+         "a readmission continues from the pending predecessor's values");
   registry.refresh({});
   std::filesystem::remove(state_path, error);
   if (!expect(!error, "readmission checkpoint fault is removed")) return;
@@ -536,7 +537,7 @@ void test_registry_fresh_admission_state() {
   registry.refresh(scan);
   if (!expect(registry.automation_count() == 1, "runtime starts after unmatched retry"))
     return;
-  expect(count() == AutomationValue(std::int64_t{22}),
+  expect(count() == AutomationValue(std::int64_t{32}),
          "admission after unmatched retry loads the successful stopping checkpoint");
 
   // Explicit reloads still apply external state to retained clean runtimes,

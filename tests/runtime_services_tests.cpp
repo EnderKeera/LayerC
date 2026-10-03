@@ -400,6 +400,9 @@ void diagnostics_contract_round_trips() {
       .last_error = "helper fault",
   });
 
+  diagnostics.automation_faults = {
+      "automation checkpoint failed (profile store I/O failed): game.json",
+      "game.json: automation fault: tick: faulted during event"};
   const auto json =
       layerc::runtime::serialize_runtime_diagnostics_json(diagnostics);
   const auto parsed = layerc::runtime::parse_runtime_diagnostics_json(json);
