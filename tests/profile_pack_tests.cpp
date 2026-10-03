@@ -322,9 +322,11 @@ void deterministic_export_and_import() {
   const auto first =
       std::ranges::find(validated->profiles, std::string("first"),
                         [](const auto &entry) { return entry.profile.id; });
-  expect(first != validated->profiles.end() && first->automation.has_value() &&
-             first->companion.has_value() &&
-             first->companion->profile == fixture.first_companion,
+  expect(first != validated->profiles.end() &&
+             first->module<layerc::core::AutomationModule>().has_value() &&
+             first->module<layerc::core::CompanionModule>().has_value() &&
+             first->module<layerc::core::CompanionModule>()->profile ==
+                 fixture.first_companion,
          "automation and companion definitions should be included "
          "in a profile pack");
   if (!fixture.import_both(*validated)) return;
@@ -549,12 +551,16 @@ void import_planning_after_recovery() {
   auto incoming = preceding_base;
   incoming.name = "Imported edit";
   layerc::bundle::ValidatedPack pack;
-  pack.profiles.push_back({.suggested_filename = "a.json",
-                          .base_json = layerc::core::serialize_profile_json(incoming),
-                          .profile = incoming,
-                          .companion = layerc::bundle::ModulePayload{
-                              .json = layerc::core::serialize_companion_profile_json(preceding_companion),
-                              .profile = preceding_companion}});
+  layerc::bundle::PackProfile incoming_item{
+      .suggested_filename = "a.json",
+      .base_json = layerc::core::serialize_profile_json(incoming),
+      .profile = incoming};
+  incoming_item.module<layerc::core::CompanionModule>() =
+      layerc::bundle::ModulePayload<layerc::core::CompanionProfile>{
+          .json = layerc::core::serialize_companion_profile_json(
+              preceding_companion),
+          .profile = preceding_companion};
+  pack.profiles.push_back(std::move(incoming_item));
   const std::array choice{layerc::bundle::ImportChoice{
       .profile_index = 0, .action = layerc::bundle::ImportAction::replace}};
   const auto preview = layerc::bundle::preview_profile_import(pack, choice, temp.path());

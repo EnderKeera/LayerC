@@ -42,7 +42,7 @@ ModuleSource module_source(const PackProfile &profile, const SidecarDesc &desc,
       profile, desc, [&](const auto &module, const auto &) -> ModuleSource {
         return {module ? std::optional<std::string_view>(module->json)
                        : std::nullopt,
-                sidecar_paths[desc.index][index],
+                sidecar_paths[detail::sidecar_index(desc)][index],
                 module ? document_schema(module->json) : 0U};
       });
 }
@@ -152,7 +152,7 @@ manifest_json(const std::vector<PackProfile> &profiles,
     for (const auto &desc : kSidecars) {
       const auto source = module_source(profile, desc, index, sidecar_paths);
       if (source.json.has_value())
-        append_module(output, first_module, desc.kind, source.path,
+        append_module(output, first_module, desc.name, source.path,
                       *source.json, source.schema);
     }
     output += "],\"assets\":[";
@@ -178,17 +178,6 @@ manifest_json(const std::vector<PackProfile> &profiles,
   }
   output += "  ]\n}\n";
   return output;
-}
-
-std::vector<std::string>
-VisualSidecarTraits::assets(const Profile &profile) {
-  std::set<std::string, std::less<>> unique;
-  for (const auto &state :
-       layerc::core::observations_of<layerc::core::TemplateState>(
-           profile.observations))
-    for (const auto &reference : state.references)
-      unique.insert(reference.asset_sha256);
-  return {unique.begin(), unique.end()};
 }
 
 } // namespace layerc::bundle::detail

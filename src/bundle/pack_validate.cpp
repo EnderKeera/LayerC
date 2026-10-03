@@ -258,21 +258,21 @@ PackValidationResult validate_profile_descriptors(
             return true;
           });
       if (!parsed_sidecar)
-        return invalid(std::string(desc->kind) + " module is invalid");
+        return invalid(std::string(desc->name) + " module is invalid");
       packed_schemas[std::string(*module_kind)] =
           module_source_value.schema;
     }
     for (const auto &desc : kSidecars) {
-      if (base_source_value.schema < desc.minimum_profile_schema) continue;
-      const auto declared = std::ranges::find(profile->modules, desc.module_kind,
+      if (base_source_value.schema < desc.pack_agreement_from_profile_schema) continue;
+      const auto declared = std::ranges::find(profile->modules, desc.kind,
                                                &core::ProfileModule::kind);
       const bool declares = declared != profile->modules.end();
-      const auto packed = packed_schemas.find(std::string(desc.kind));
+      const auto packed = packed_schemas.find(std::string(desc.name));
       const bool has_packed = packed != packed_schemas.end();
       if (declares != has_packed ||
           (declares && declared->schema_version != packed->second))
         return pack_error<PackValidationResult>(std::string("base ") +
-                                  std::string(desc.kind) +
+                                  std::string(desc.name) +
                                   " metadata disagrees with pack modules");
     }
     std::set<std::string, std::less<>> declared_references;
@@ -285,8 +285,8 @@ PackValidationResult validate_profile_descriptors(
             "profile contains an invalid asset reference");
       item.asset_sha256.push_back(reference.as_string());
     }
-    const auto actual_references = item.visual.has_value()
-        ? detail::VisualSidecarTraits::assets(item.visual->profile)
+    const auto actual_references = item.module<core::VisualModule>().has_value()
+        ? core::VisualModule::assets(item.module<core::VisualModule>()->profile)
         : std::vector<std::string>{};
     if (actual_references != item.asset_sha256)
       return pack_error<PackValidationResult>(
@@ -322,9 +322,9 @@ PackValidationResult detail::canonicalize_pack_assets(ValidatedPack pack) {
   pack.assets = std::move(assets);
   if (renamed.empty()) return pack;
   for (auto &item : pack.profiles) {
-    if (!item.visual.has_value()) continue;
+    if (!item.module<core::VisualModule>().has_value()) continue;
     for (auto &state : core::observations_of<core::TemplateState>(
-             item.visual->profile.observations)) {
+             item.module<core::VisualModule>()->profile.observations)) {
       // Two sources can canonicalize to one asset; keep the first reference.
       std::set<std::string, std::less<>> seen;
       std::erase_if(state.references, [&](core::TemplateReference &reference) {
@@ -334,8 +334,8 @@ PackValidationResult detail::canonicalize_pack_assets(ValidatedPack pack) {
         return !seen.insert(reference.asset_sha256).second;
       });
     }
-    item.visual->json = core::serialize_visual_profile_json(item.visual->profile);
-    item.asset_sha256 = detail::VisualSidecarTraits::assets(item.visual->profile);
+    item.module<core::VisualModule>()->json = core::serialize_visual_profile_json(item.module<core::VisualModule>()->profile);
+    item.asset_sha256 = core::VisualModule::assets(item.module<core::VisualModule>()->profile);
   }
   return pack;
 }

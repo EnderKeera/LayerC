@@ -68,13 +68,20 @@ std::filesystem::path profile_visual_asset_path(
 }
 
 std::filesystem::path
+module_sidecar_path(const std::filesystem::path &profile_path,
+                    const core::ModuleDescriptor &module) {
+  const std::string name(module.name);
+  return module_file_path(profile_path, "_" + name, "", name + ".json");
+}
+
+std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path) {
-  return module_file_path(profile_path, "_visual", "", "visual.json");
+  return module_sidecar_path(profile_path, core::VisualModule::descriptor);
 }
 
 std::filesystem::path
 automation_sidecar_path(const std::filesystem::path &profile_path) {
-  return module_file_path(profile_path, "_automation", "", "automation.json");
+  return module_sidecar_path(profile_path, core::AutomationModule::descriptor);
 }
 
 std::filesystem::path
@@ -85,7 +92,7 @@ automation_state_path(const std::filesystem::path &profile_path) {
 
 std::filesystem::path
 companion_sidecar_path(const std::filesystem::path &profile_path) {
-  return module_file_path(profile_path, "_companion", "", "companion.json");
+  return module_sidecar_path(profile_path, core::CompanionModule::descriptor);
 }
 
 std::filesystem::path profile_store_filename(const std::string_view profile_id) {

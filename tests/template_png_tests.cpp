@@ -336,7 +336,7 @@ void test_pack_assets_are_canonicalized() {
                       {.asset_sha256 = canonical.sha256}}});
   bundle::PackProfile item;
   item.profile.id = "pack";
-  item.visual = bundle::ModulePayload<core::VisualProfile>{
+  item.module<core::VisualModule>() = bundle::ModulePayload<core::VisualProfile>{
       .json = core::serialize_visual_profile_json(visual), .profile = visual};
   item.asset_sha256 = {foreign_hash, canonical.sha256};
   pack.profiles.push_back(item);
@@ -348,11 +348,14 @@ void test_pack_assets_are_canonicalized() {
              normalized->assets.contains(canonical.sha256),
          "the RGB asset re-encodes to the same canonical bytes as its RGBA twin");
   const auto &state = std::get<layerc::core::TemplateState>(
-      normalized->profiles.front().visual->profile.observations.front());
+      normalized->profiles.front()
+          .module<core::VisualModule>()
+          ->profile.observations.front());
   expect(state.references.size() == 1 &&
              state.references.front().asset_sha256 == canonical.sha256,
          "references are rewritten to the canonical hash and deduplicated");
-  const auto &json = normalized->profiles.front().visual->json;
+  const auto &json =
+      normalized->profiles.front().module<core::VisualModule>()->json;
   expect(json.find(canonical.sha256) != std::string::npos &&
              json.find(foreign_hash) == std::string::npos,
          "the visual sidecar payload carries only the canonical hash");

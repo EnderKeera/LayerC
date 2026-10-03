@@ -46,18 +46,6 @@ inline constexpr std::array visual_runtime{
     EnumWireEntry{VisualRuntime::isolated, "isolated"},
 };
 
-struct ModuleEntry {
-  ProfileModuleKind value;
-  std::string_view name;
-  std::uint32_t maximum_version;
-  std::uint32_t minimum_profile_schema;
-};
-inline constexpr std::array modules{
-    ModuleEntry{ProfileModuleKind::visual, "visual", 2, 1},
-    ModuleEntry{ProfileModuleKind::automation, "automation", 1, 4},
-    ModuleEntry{ProfileModuleKind::companion, "companion", 1, 1},
-};
-
 template <typename Enum, std::size_t Size>
 [[nodiscard]] constexpr std::optional<std::string_view>
 name(const std::array<EnumWireEntry<Enum>, Size> &entries,
@@ -70,19 +58,6 @@ template <typename Enum, std::size_t Size>
 parse(const std::array<EnumWireEntry<Enum>, Size> &entries,
       const std::string_view value) noexcept {
   return parse_enum_wire<Enum>(entries, value);
-}
-
-[[nodiscard]] constexpr const ModuleEntry *
-module(const ProfileModuleKind kind) noexcept {
-  for (const auto &entry : modules)
-    if (entry.value == kind) return &entry;
-  return nullptr;
-}
-[[nodiscard]] constexpr const ModuleEntry *
-module(const std::string_view name) noexcept {
-  for (const auto &entry : modules)
-    if (entry.name == name) return &entry;
-  return nullptr;
 }
 
 } // namespace layerc::core::profile_wire

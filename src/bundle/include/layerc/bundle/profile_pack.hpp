@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/profile_modules.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/companion.hpp"
 #include "layerc/core/types.hpp"
@@ -13,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -37,14 +39,25 @@ template <typename Profile> struct ModulePayload {
   Profile profile;
 };
 
+template <typename Module>
+using PackModuleSlot = std::optional<ModulePayload<typename Module::Profile>>;
+
 struct PackProfile {
   std::string suggested_filename;
   std::string base_json;
   layerc::core::GameProfile profile;
-  std::optional<ModulePayload<layerc::core::VisualProfile>> visual;
-  std::optional<ModulePayload<layerc::core::AutomationProfile>> automation;
-  std::optional<ModulePayload<layerc::core::CompanionProfile>> companion;
+  // One optional payload per core::ProfileModuleTable entry.
+  layerc::core::ProfileModuleTable::each<PackModuleSlot> modules;
   std::vector<std::string> asset_sha256;
+
+  template <typename Module>
+  [[nodiscard]] PackModuleSlot<Module> &module() noexcept {
+    return std::get<PackModuleSlot<Module>>(modules);
+  }
+  template <typename Module>
+  [[nodiscard]] const PackModuleSlot<Module> &module() const noexcept {
+    return std::get<PackModuleSlot<Module>>(modules);
+  }
 };
 
 struct ValidatedPack {

@@ -13,6 +13,7 @@ void test_game_match_selection();
 void test_cooldown_group_engine_runtime_parity();
 void test_cooldown_owner_resolution_is_pure();
 void test_panel_presentation_rule();
+void test_profile_module_table();
 void test_shared_pool_reconciliation();
 void test_snapshot_reuse();
 void test_input_chord_edges();

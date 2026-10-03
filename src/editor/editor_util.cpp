@@ -134,10 +134,8 @@ bool start_daemon() {
 bool recycle_profile_bundle(const std::filesystem::path &path) {
   std::vector<std::filesystem::path> candidates{
       path, layerc::platform::recovery_backup_path(path)};
-  for (const auto kind : {layerc::core::ProfileModuleKind::visual,
-                          layerc::core::ProfileModuleKind::automation,
-                          layerc::core::ProfileModuleKind::companion}) {
-    const auto sidecar = layerc::platform::sidecar_paths(path, kind);
+  for (const auto &module : layerc::core::ProfileModuleTable::descriptors) {
+    const auto sidecar = layerc::platform::sidecar_paths(path, module.kind);
     candidates.push_back(sidecar.primary);
     candidates.push_back(sidecar.backup);
     candidates.push_back(sidecar.marker);
