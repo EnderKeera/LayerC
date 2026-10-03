@@ -27,10 +27,8 @@ std::filesystem::path profile_path_for_key(const std::string_view key) {
 
 template <typename Profile, typename Error>
 ModuleSidecar<Profile> module_sidecar_from(
-    layerc::platform::ModuleSidecarLoad<Profile, Error> loaded) {
-  const auto state = loaded.state;
-  if (!loaded.usable()) loaded.profile.reset();
-  return {.profile = std::move(loaded.profile), .state = state};
+    const layerc::platform::ModuleSidecarLoad<Profile, Error> &loaded) {
+  return ModuleSidecar<Profile>::from(loaded);
 }
 
 std::vector<ProfileSource>

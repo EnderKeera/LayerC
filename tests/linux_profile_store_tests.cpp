@@ -160,7 +160,8 @@ void test_profile_directory_scan_resolves_ids() {
 
   const auto scan = layerc::platform::scan_profile_directory(profiles);
   const auto *resolved = scan.find("actual-id");
-  expect(scan.error.empty() && !scan.warning.empty() && resolved != nullptr &&
+  expect(scan.error.empty() && !scan.faults.empty() &&
+             !scan.warning_text().empty() && resolved != nullptr &&
              resolved->path.filename() == "Friendly Name.JSON" &&
              scan.find("nested-id") == nullptr,
          "profile scan should casefold JSON extensions, warn on invalid data, "

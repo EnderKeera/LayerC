@@ -40,15 +40,15 @@ load_visual(const layerc::platform::StoredProfile &source) {
   LoadedVisual result;
   auto sidecar =
       layerc::platform::load_visual_sidecar(source.path, source.profile);
-  if (!sidecar.profile.has_value()) {
-    if (sidecar.state == layerc::platform::ModuleSidecarState::invalid) {
+  if (!sidecar.usable()) {
+    if (sidecar.state() == layerc::platform::ModuleSidecarState::invalid) {
       result.invalid = true;
-      result.diagnostic = source.path.string() + ": " + sidecar.error.message;
+      result.diagnostic = source.path.string() + ": " + sidecar.error()->message;
     }
     return result;
   }
-  if (layerc::core::has_enabled_visual_assignments(*sidecar.profile))
-    result.profile = std::move(sidecar.profile);
+  if (layerc::core::has_enabled_visual_assignments(*sidecar.profile()))
+    result.profile = sidecar.optional_profile();
   return result;
 }
 
@@ -57,23 +57,23 @@ load_automation(const layerc::platform::StoredProfile &source) {
   LoadedAutomation result;
   auto sidecar = layerc::platform::load_automation_sidecar(source.path,
                                                            source.profile);
-  if (!sidecar.profile.has_value()) {
-    if (sidecar.state == layerc::platform::ModuleSidecarState::invalid) {
+  if (!sidecar.usable()) {
+    if (sidecar.state() == layerc::platform::ModuleSidecarState::invalid) {
       result.invalid = true;
       result.sidecar_diagnostic = source.path.string() + ": " +
-                                  sidecar.error.message;
+                                  sidecar.error()->message;
     }
     return result;
   }
 
-  if (layerc::core::has_enabled_automations(*sidecar.profile)) {
+  if (layerc::core::has_enabled_automations(*sidecar.profile())) {
     auto state = layerc::platform::load_automation_state(source.path,
-                                                         *sidecar.profile);
+                                                         *sidecar.profile());
     result.state = std::move(state.values);
     if (state.error.has_value())
       result.state_diagnostic = source.path.string() + ": " +
                                 state.error->message;
-    result.profile = std::move(sidecar.profile);
+    result.profile = sidecar.optional_profile();
   }
   return result;
 }

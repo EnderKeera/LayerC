@@ -553,7 +553,7 @@ void platform_visual_sidecar_recovery() {
          "visual sidecars should pair by base profile filename");
   const auto absent_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  expect(absent_visual.state == layerc::platform::ModuleSidecarState::absent,
+  expect(absent_visual.state() == layerc::platform::ModuleSidecarState::absent,
          "profiles without a visual sidecar should remain input-only");
   auto visual = test_visual_profile();
   expect(layerc::platform::write_profile_bundle(path, second, visual).ok(),
@@ -579,10 +579,10 @@ void platform_visual_sidecar_recovery() {
     CloseHandle(locked_visual_state);
     const auto after_state_failure =
         layerc::platform::load_visual_sidecar(path, second);
-    expect(after_state_failure.state ==
+    expect(after_state_failure.state() ==
                    layerc::platform::ModuleSidecarState::valid &&
-               after_state_failure.profile.has_value() &&
-               after_state_failure.profile->sample_rate_hz == 15,
+               after_state_failure.usable() &&
+               after_state_failure.profile()->sample_rate_hz == 15,
            "a state-publication failure must restore the previous "
            "visual and backup");
     visual.sample_rate_hz = 15;
@@ -590,17 +590,17 @@ void platform_visual_sidecar_recovery() {
   write_file(expected_sidecar, "{broken");
   const auto recovered_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  expect(recovered_visual.state ==
+  expect(recovered_visual.state() ==
                  layerc::platform::ModuleSidecarState::recovered_backup &&
-             recovered_visual.profile.has_value() &&
-             recovered_visual.profile->sample_rate_hz == 10,
+             recovered_visual.usable() &&
+             recovered_visual.profile()->sample_rate_hz == 10,
          "an invalid visual sidecar should recover its last valid backup");
   write_file(visual_backup, "{also-broken");
   const auto invalid_visual =
       layerc::platform::load_visual_sidecar(path, second);
-  expect(invalid_visual.state ==
+  expect(invalid_visual.state() ==
                  layerc::platform::ModuleSidecarState::invalid &&
-             !invalid_visual.error.message.empty(),
+             !(invalid_visual.error() == nullptr || invalid_visual.error()->message.empty()),
          "two invalid visual copies should produce a blocking diagnostic");
   visual.sample_rate_hz = 5;
   expect(layerc::platform::write_profile_bundle(path, second, visual).ok(),
@@ -608,10 +608,10 @@ void platform_visual_sidecar_recovery() {
   write_file(expected_sidecar, "{broken-again");
   const auto repaired_backup =
       layerc::platform::load_visual_sidecar(path, second);
-  expect(repaired_backup.state ==
+  expect(repaired_backup.state() ==
                  layerc::platform::ModuleSidecarState::recovered_backup &&
-             repaired_backup.profile.has_value() &&
-             repaired_backup.profile->sample_rate_hz == 5,
+             repaired_backup.usable() &&
+             repaired_backup.profile()->sample_rate_hz == 5,
          "a second corruption should recover the repaired visual definition");
 }
 
@@ -685,22 +685,22 @@ void platform_bundle_recovery() {
       std::get_if<layerc::core::GameProfile>(&rolled_back_profile);
   layerc::platform::VisualSidecarLoad rolled_back_visual;
   if (rolled_back == nullptr)
-    rolled_back_visual.state = layerc::platform::ModuleSidecarState::invalid;
+    rolled_back_visual = layerc::platform::VisualSidecarLoad::invalid({}, {});
   else
     rolled_back_visual =
         layerc::platform::load_visual_sidecar(bundle_path, *rolled_back);
   expect(
       rolled_back != nullptr && rolled_back->id == "bundle-old" &&
-          rolled_back_visual.profile.has_value() &&
-          rolled_back_visual.profile->profile_id == "bundle-old",
+          rolled_back_visual.usable() &&
+          rolled_back_visual.profile()->profile_id == "bundle-old",
       "a partial bundle failure must restore a matching profile and sidecar");
   expect(layerc::platform::write_profile_bundle(bundle_path, new_bundle_profile,
                                                 new_bundle_visual).ok(),
          "a complete bundle replacement should succeed after the lock clears");
   const auto committed_visual =
       layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
-  expect(committed_visual.profile.has_value() &&
-             committed_visual.profile->profile_id == "bundle-new",
+  expect(committed_visual.usable() &&
+             committed_visual.profile()->profile_id == "bundle-new",
          "a successful bundle replacement should commit the matching sidecar");
   auto committed_visual_backup =
       layerc::platform::visual_sidecar_path(bundle_path);
@@ -733,8 +733,8 @@ void platform_bundle_recovery() {
             ? layerc::platform::load_visual_sidecar(bundle_path, *unchanged)
             : layerc::platform::VisualSidecarLoad{};
     expect(unchanged != nullptr && unchanged->id == "bundle-new" &&
-               unchanged_visual.profile.has_value() &&
-               unchanged_visual.profile->profile_id == "bundle-new",
+               unchanged_visual.usable() &&
+               unchanged_visual.profile()->profile_id == "bundle-new",
            "a backup-refresh failure must leave the active profile "
            "bundle unchanged");
   }
@@ -753,7 +753,7 @@ void platform_bundle_recovery() {
     const auto removed_while_locked =
         layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile);
     expect(
-        removed_while_locked.state ==
+        removed_while_locked.state() ==
             layerc::platform::ModuleSidecarState::absent,
         "locked stale visual bytes must remain inactive after removal commits");
     CloseHandle(locked_visual);
@@ -766,7 +766,7 @@ void platform_bundle_recovery() {
           layerc::platform::visual_sidecar_path(bundle_path)) &&
           std::filesystem::exists(committed_visual_backup) &&
           layerc::platform::load_visual_sidecar(bundle_path, new_bundle_profile)
-                  .state == layerc::platform::ModuleSidecarState::absent,
+                  .state() == layerc::platform::ModuleSidecarState::absent,
       "a durable removal marker must keep retained visual recovery bytes "
       "inactive");
 }
@@ -793,8 +793,8 @@ void platform_automation_state_recovery() {
          "a base, visual, and automation module should commit as one bundle");
   const auto committed_automation = layerc::platform::load_automation_sidecar(
       bundle_path, new_bundle_profile);
-  expect(committed_automation.profile.has_value() &&
-             committed_automation.profile->profile_id == new_bundle_profile.id,
+  expect(committed_automation.usable() &&
+             committed_automation.profile()->profile_id == new_bundle_profile.id,
          "the committed automation sidecar should match its base profile");
   const layerc::core::AutomationPersistentValues persistent_values{
       {"count", layerc::core::AutomationValue(std::int64_t{7})}};
@@ -858,7 +858,7 @@ void platform_automation_state_recovery() {
         "are locked");
     expect(layerc::platform::load_automation_sidecar(bundle_path,
                                                      new_bundle_profile)
-                   .state == layerc::platform::ModuleSidecarState::absent,
+                   .state() == layerc::platform::ModuleSidecarState::absent,
            "locked stale automation bytes must remain inactive after removal "
            "commits");
     CloseHandle(locked_automation);
@@ -870,7 +870,7 @@ void platform_automation_state_recovery() {
              std::filesystem::exists(automation_backup) &&
              layerc::platform::load_automation_sidecar(bundle_path,
                                                        new_bundle_profile)
-                     .state == layerc::platform::ModuleSidecarState::absent,
+                     .state() == layerc::platform::ModuleSidecarState::absent,
          "automation removal must keep retained recovery bytes inactive after "
          "unlock");
 }

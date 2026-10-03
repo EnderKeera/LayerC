@@ -187,12 +187,12 @@ template_asset_hashes(const std::filesystem::path &path) {
   if (profile == nullptr)
     return assets;
   const auto visual = layerc::platform::load_visual_sidecar(path, *profile);
-  if (visual.state != layerc::platform::ModuleSidecarState::valid ||
-      !visual.profile.has_value())
+  if (visual.state() != layerc::platform::ModuleSidecarState::valid ||
+      !visual.usable())
     return assets;
   for (const auto &definition :
        layerc::core::observations_of<layerc::core::TemplateState>(
-           visual.profile->observations))
+           visual.profile()->observations))
     for (const auto &reference : definition.references)
       assets.push_back(reference.asset_sha256);
   std::ranges::sort(assets);

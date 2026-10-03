@@ -86,18 +86,18 @@ bool collect_active_asset_references(std::vector<std::string> &references,
   }
   for (const auto &stored : scan.profiles) {
     const auto visual = load_visual_sidecar(stored.path, stored.profile);
-    if (visual.state == ModuleSidecarState::invalid) {
-      report.blocked_by = visual.source_path;
-      report.fault = visual.error.message.empty()
+    if (visual.state() == ModuleSidecarState::invalid) {
+      report.blocked_by = visual.source_path();
+      report.fault = (visual.error() == nullptr || visual.error()->message.empty())
                          ? "an active visual sidecar is invalid"
-                         : visual.error.message;
+                         : visual.error()->message;
       return false;
     }
     if (visual.usable())
-      collect_asset_references(*visual.profile, references);
+      collect_asset_references(*visual.profile(), references);
     // A valid recovery copy must retain its assets even while the primary is
     // healthy. A malformed stale backup is unusable and can be ignored.
-    if (visual.state == ModuleSidecarState::valid) {
+    if (visual.state() == ModuleSidecarState::valid) {
       const auto paths =
           sidecar_paths(stored.path, core::ProfileModuleKind::visual);
       const auto backup = read_durable_file(

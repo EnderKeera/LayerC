@@ -292,14 +292,14 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
                     : L"Could not update an invalid profile.";
     } else {
       auto &bundle = std::get<layerc::platform::ProfileBundleLoad>(loaded);
-      if (bundle.visual.state == layerc::platform::ModuleSidecarState::invalid)
+      if (bundle.visual.state() == layerc::platform::ModuleSidecarState::invalid)
         failure = L"Could not update a profile whose visual settings are invalid.";
-      else if (bundle.automation.state ==
+      else if (bundle.automation.state() ==
                layerc::platform::ModuleSidecarState::invalid)
         failure = L"Could not update a profile whose automation settings are invalid.";
       stored_profile = std::move(bundle.profile);
-      stored_visual = std::move(bundle.visual.profile);
-      stored_automation = std::move(bundle.automation.profile);
+      stored_visual = std::move(bundle.visual.optional_profile());
+      stored_automation = std::move(bundle.automation.optional_profile());
       upgrade_needed = bundle.legacy_base_schema || bundle.legacy_visual_schema;
     }
     if (failure != nullptr) {

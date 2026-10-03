@@ -64,8 +64,8 @@ const char *import_verb(const bool dry_run, const bool collides) {
 [[nodiscard]] std::optional<platform::ProfileDirectoryScan> scan_or_die(
     const platform::ProfileStoreRoots &roots) {
   auto scan = platform::scan_profile_directory(roots.config_profiles);
-  if (!scan.warning.empty())
-    std::fprintf(stderr, "layerctl: %s\n", scan.warning.c_str());
+  if (const auto warning = scan.warning_text(); !warning.empty())
+    std::fprintf(stderr, "layerctl: %s\n", warning.c_str());
   if (!scan.error.empty()) {
     std::fprintf(stderr, "layerctl: profile directory is invalid (%s)\n",
                  scan.error.c_str());

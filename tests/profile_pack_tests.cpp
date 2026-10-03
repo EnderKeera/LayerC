@@ -348,10 +348,10 @@ void deterministic_export_and_import() {
 
   const auto imported_companion = layerc::platform::load_companion_sidecar(
       imported / "first.json", fixture.first_base);
-  expect(imported_companion.state ==
+  expect(imported_companion.state() ==
                  layerc::platform::ModuleSidecarState::valid &&
-             imported_companion.profile.has_value() &&
-             *imported_companion.profile == fixture.first_companion,
+             imported_companion.usable() &&
+             *imported_companion.profile() == fixture.first_companion,
          "packs should import companion preferences with the profile bundle");
 }
 
@@ -412,12 +412,12 @@ void copy_import_guards() {
     const auto copied_companion =
         layerc::platform::load_companion_sidecar(entry.path(), *candidate);
     found_companion_copy =
-        copied_companion.state ==
+        copied_companion.state() ==
             layerc::platform::ModuleSidecarState::valid &&
-        copied_companion.profile.has_value() &&
-        copied_companion.profile->profile_id == candidate->id &&
-        copied_companion.profile->slots.size() == 1U &&
-        copied_companion.profile->slots.front().panel_id == "dash-bar";
+        copied_companion.usable() &&
+        copied_companion.profile()->profile_id == candidate->id &&
+        copied_companion.profile()->slots.size() == 1U &&
+        copied_companion.profile()->slots.front().panel_id == "dash-bar";
   }
   expect(found_copy && found_companion_copy,
          "Import Copy should regenerate both base and companion profile IDs");

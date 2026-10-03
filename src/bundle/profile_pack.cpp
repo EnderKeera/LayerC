@@ -33,10 +33,10 @@ std::optional<PackError>
 sidecar_export_error(const Sidecar &sidecar,
                      const std::filesystem::path &profile_path,
                      const std::string_view kind) {
-  if (sidecar.state == platform::ModuleSidecarState::invalid)
+  if (sidecar.state() == platform::ModuleSidecarState::invalid)
     return PackError{std::string(kind) +
                      " sidecar is invalid: " + profile_path.string()};
-  if (sidecar.state == platform::ModuleSidecarState::recovered_backup)
+  if (sidecar.state() == platform::ModuleSidecarState::recovered_backup)
     return PackError{"save the recovered " + std::string(kind) +
                      " sidecar before exporting: " + profile_path.string()};
   return std::nullopt;
@@ -118,17 +118,17 @@ PackOperationResult export_profile_pack(
             const auto sidecar = Traits::load(path, *profile);
             if (auto error = sidecar_export_error(sidecar, path, desc.name))
               return error;
-            if (sidecar.state != platform::ModuleSidecarState::valid ||
-                !sidecar.profile.has_value())
+            if (sidecar.state() != platform::ModuleSidecarState::valid ||
+                !sidecar.usable())
               return std::nullopt;
             std::string module_json;
             if (auto error = load_sidecar_json_for_export(
-                    sidecar.source_path, path, desc.name, Traits::read,
+                    sidecar.source_path(), path, desc.name, Traits::read,
                     module_json, reserve_entry))
               return error;
             payload = ModulePayload<SidecarProfile>{
-                .json = std::move(module_json), .profile = *sidecar.profile};
-            const auto references = Traits::assets(*sidecar.profile);
+                .json = std::move(module_json), .profile = *sidecar.profile()};
+            const auto references = Traits::assets(*sidecar.profile());
             if (!references.empty()) item.asset_sha256 = references;
             for (const auto &hash : references) {
               if (assets.contains(hash)) continue;

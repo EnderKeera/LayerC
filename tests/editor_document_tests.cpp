@@ -241,9 +241,8 @@ void invalid_bundle_cases() {
 
   {
     auto document = fixture();
-    document.set_automation(
-        {.state = layerc::platform::ModuleSidecarState::invalid,
-         .error = {.path = "$", .message = "fixture invalid sidecar"}});
+    document.set_automation(layerc::platform::AutomationSidecarLoad::invalid(
+        {.path = "$", .message = "fixture invalid sidecar"}, {}));
     expect_rejected(document, "sidecar");
   }
 }
