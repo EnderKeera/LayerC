@@ -460,7 +460,7 @@ void test_automation_persistent_sync_and_cascade_bounds() {
       {AutomationEventKind::input_pressed, TimePoint{}, "key-e", 1});
   expect(runtime.persistent_dirty(),
          "committing a persistent change should mark the runtime dirty");
-  runtime.apply_persistent_values(runtime.snapshot().persistent_values);
+  runtime.apply_persistent_values(runtime.persistent_values());
   expect(runtime.persistent_dirty(),
          "a sibling persistent push must not clear the dirty flag");
   runtime.mark_persistent_saved();
@@ -661,7 +661,7 @@ void test_automation_numeric_promotion() {
          "preserving the old position");
   const auto state = parse_automation_state_json(
       serialize_automation_state_json(accepted,
-                                      production.snapshot().persistent_values),
+                                      production.persistent_values()),
       accepted);
   expect(std::holds_alternative<AutomationPersistentValues>(state) &&
              std::get<AutomationPersistentValues>(state).at("amount") ==

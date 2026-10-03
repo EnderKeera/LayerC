@@ -243,7 +243,7 @@ void DaemonApp::process_automation_event(Session &session,
 void DaemonApp::acknowledge_automation_state(const ProfileSource &source) {
   for (auto &session : session_registry_.sessions) {
     if (!session->automation_runtime || session->source_key != source.key ||
-        session->automation_runtime->snapshot().persistent_values !=
+        session->automation_runtime->persistent_values() !=
             source.automation_state)
       continue;
     session->automation_runtime->mark_persistent_saved();
@@ -259,7 +259,7 @@ void DaemonApp::synchronize_automation_state(Session &session,
   if (source == session_registry_.sources.end())
     return;
   source->automation_state =
-      session.automation_runtime->snapshot().persistent_values;
+      session.automation_runtime->persistent_values();
   // Shared 1 s debounce (core::automation_checkpoint_arm): the first
   // mutation in a burst arms the deadline; later mutations keep it instead
   // of postponing the checkpoint forever under continuous input.

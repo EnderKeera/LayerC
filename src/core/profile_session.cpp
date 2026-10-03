@@ -74,7 +74,7 @@ bool AutomationSession::process(const AutomationEvent &value,
     sink->on_result(result);
     if (automation_runtime->persistent_dirty())
       sink->on_persistent_change(
-          automation_runtime->snapshot().persistent_values, value.timestamp);
+          automation_runtime->persistent_values(), value.timestamp);
   }
   return result.committed &&
          std::ranges::any_of(result.effects, [](const AutomationEffect &effect) {
@@ -226,7 +226,7 @@ bool AutomationSession::sync_persistent_to(AutomationSession &sibling) const {
   if (!automation_runtime || !automation_runtime->persistent_dirty() ||
       !sibling.automation_runtime) return false;
   sibling.automation_runtime->apply_persistent_values(
-      automation_runtime->snapshot().persistent_values);
+      automation_runtime->persistent_values());
   return true;
 }
 

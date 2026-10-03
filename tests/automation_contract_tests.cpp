@@ -502,7 +502,6 @@ void test_automation_timer_commit_rollback() {
                snapshot.timers.front().interval == 50ms &&
                snapshot.timers.front().repeating == repeating &&
                snapshot.variables == before.variables &&
-               snapshot.persistent_values == before.persistent_values &&
                !runtime.persistent_dirty();
       };
       unsigned commit_calls{};

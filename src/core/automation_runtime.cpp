@@ -183,8 +183,6 @@ void AutomationRuntime::reconfigure(
         value_type(old->second) == variable.type)
       value = old->second;
     next.variables[variable.id] = value;
-    if (variable.persistent)
-      next.persistent_values[variable.id] = value;
   }
   std::set<std::string, std::less<>> retained;
   for (const auto &automation : profile.automations) {
@@ -207,18 +205,20 @@ void AutomationRuntime::reconfigure(
   impl_->edges = {};
   impl_->faulted.clear();
 }
-void AutomationRuntime::apply_persistent_values(
-    const AutomationPersistentValues &values) {
+AutomationPersistentValues AutomationRuntime::persistent_values() const {
+  AutomationPersistentValues values;
   for (const auto &variable : impl_->profile.variables) {
     if (!variable.persistent)
       continue;
-    const auto found = values.find(variable.id);
-    if (found == values.end() || value_type(found->second) != variable.type ||
-        !automation_value_valid(found->second))
-      continue;
-    impl_->state.variables[variable.id] = found->second;
-    impl_->state.persistent_values[variable.id] = found->second;
+    if (const auto found = impl_->state.variables.find(variable.id);
+        found != impl_->state.variables.end())
+      values.emplace(variable.id, found->second);
   }
+  return values;
+}
+void AutomationRuntime::apply_persistent_values(
+    const AutomationPersistentValues &values) {
+  impl_->apply_persistent(values);
   // Deliberately does not clear persistent_dirty: values pushed in from a
   // sibling session are not a durable write of THIS runtime's snapshot, and
   // clearing here would drop this session's unsaved-edit marker (silent data

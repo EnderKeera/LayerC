@@ -526,13 +526,14 @@ int run_linux_x11_input_tests() {
 
   (void)service_sessions.poll_automation(
       automation_now + std::chrono::milliseconds{55});
-  const auto &after_timer = automated.automation_runtime->snapshot();
-  const auto count = after_timer.persistent_values.find("count");
-  passed &= expect(count != after_timer.persistent_values.end() &&
+  const auto after_timer = automated.automation_runtime->persistent_values();
+  const auto count = after_timer.find("count");
+  passed &= expect(count != after_timer.end() &&
                        count->second == layerc::core::AutomationValue(
                                             std::int64_t{2}) &&
-                       after_timer.timers.empty() &&
-                       after_timer.overlay_overrides.empty() &&
+                       automated.automation_runtime->snapshot().timers.empty() &&
+                       automated.automation_runtime->snapshot()
+                           .overlay_overrides.empty() &&
                        !automated.cooldowns.trigger(
                            "potion", automation_now +
                                          std::chrono::milliseconds{55}),
@@ -555,7 +556,7 @@ int run_linux_x11_input_tests() {
   reloaded_sessions.configure(std::span{profiles}.first(1));
   reloaded_sessions.refresh(scan);
   const auto &reloaded_values =
-      reloaded_sessions.sessions().front().automation_runtime->snapshot().persistent_values;
+      reloaded_sessions.sessions().front().automation_runtime->persistent_values();
   passed &= expect(reloaded_sessions.automation_count() == 1 &&
                        reloaded_values.at("count") ==
                            layerc::core::AutomationValue(std::int64_t{2}),
@@ -787,7 +788,7 @@ int run_linux_x11_input_tests() {
       live_registry.sessions().front().matcher.process(press_e).size() == 1,
       "detaching XI2 clears transient key state");
   passed &= expect(
-      live_registry.sessions().front().automation_runtime->snapshot().persistent_values.at(
+      live_registry.sessions().front().automation_runtime->persistent_values().at(
           "stopped") == layerc::core::AutomationValue(std::int64_t{0}),
       "temporary quiescence does not run session-stopping rules");
   live_registry.stop_sessions(layerc::core::MonotonicClock::now());

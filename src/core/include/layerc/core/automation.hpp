@@ -460,6 +460,12 @@ struct AutomationVariable {
   bool operator==(const AutomationVariable &) const = default;
 };
 
+// The one rule for accepting a stored value into a persistent variable:
+// runtime start, sibling/state application, and the state file share it.
+[[nodiscard]] bool
+automation_persistent_value_accepted(const AutomationVariable &variable,
+                                     const AutomationValue &value) noexcept;
+
 struct ContinuousInputSettings {
   double deadzone{0.15};
   double change_threshold{0.02};
@@ -674,7 +680,6 @@ struct AutomationEvaluationResult {
 
 struct AutomationRuntimeSnapshot {
   std::map<std::string, AutomationValue, std::less<>> variables;
-  std::map<std::string, AutomationValue, std::less<>> persistent_values;
   std::vector<AutomationTimer> timers;
   std::vector<OverlayPropertyOverride> overlay_overrides;
 };
@@ -710,6 +715,8 @@ public:
   [[nodiscard]] const AutomationProfile &profile() const noexcept;
   [[nodiscard]] std::span<const CooldownGroup> cooldown_groups() const noexcept;
   [[nodiscard]] const AutomationRuntimeSnapshot &snapshot() const noexcept;
+  // The persistent variables' current values, derived from snapshot().
+  [[nodiscard]] AutomationPersistentValues persistent_values() const;
   [[nodiscard]] AutomationSessionEdges &edges() noexcept;
   [[nodiscard]] const AutomationSessionEdges &edges() const noexcept;
   // Evaluates one root event as a transaction: every condition and value

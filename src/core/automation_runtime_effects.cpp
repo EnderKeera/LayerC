@@ -343,18 +343,18 @@ AutomationRuntime::Impl::commit_batch(EvaluationStage &stage,
   if (committer && !committer(stage.result.effects))
     return AttemptRejected{
         {"$runtime", "transaction commit rejected the action batch"}};
+  // Dirtiness is the commit's diff over the persistent variables.
+  for (const auto &variable : profile.variables) {
+    if (!variable.persistent)
+      continue;
+    const auto before = state.variables.find(variable.id);
+    const auto after = committed_state.variables.find(variable.id);
+    const bool had = before != state.variables.end();
+    const bool has = after != committed_state.variables.end();
+    if (had != has || (had && before->second != after->second))
+      persistent_dirty = true;
+  }
   state = std::move(committed_state);
-  for (const auto &variable : profile.variables)
-    if (variable.persistent) {
-      const auto found = state.variables.find(variable.id);
-      if (found == state.variables.end())
-        continue;
-      auto &saved = state.persistent_values[variable.id];
-      if (saved != found->second) {
-        saved = found->second;
-        persistent_dirty = true;
-      }
-    }
   // queue[0] is the root event; only later entries are derived.
   stage.result.derived_events.assign(stage.queue.begin() + 1,
                                      stage.queue.end());

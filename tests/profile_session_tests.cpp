@@ -130,7 +130,7 @@ void test_automation_session_origin_and_persistence() {
          "a triggered cooldown should run cooldown_triggered automations");
   expect(left.sync_persistent_to(right),
          "a dirty session should sync persistent values to a sibling");
-  const auto values = right.automation_runtime->snapshot().persistent_values;
+  const auto values = right.automation_runtime->persistent_values();
   const auto count = values.find("count");
   expect(count != values.end() &&
              count->second == AutomationValue(std::int64_t{1}),
