@@ -22,11 +22,6 @@
 namespace layerc::editor {
 namespace {
 
-bool document_needs_schema_upgrade(const ProfileDocument &document) {
-  return (document.legacy_base_schema() || document.legacy_visual_schema()) &&
-         !document.upgrade_acknowledged();
-}
-
 bool is_document_path(const ProfileDocument &document,
                       const std::filesystem::path &path) {
   return !document.path().empty() &&
@@ -256,10 +251,7 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   const bool is_current =
       layerc::platform::canonical_profile_key(entry.path) ==
       layerc::platform::canonical_profile_key(document_.path());
-  layerc::core::GameProfile stored_profile;
-  std::optional<layerc::core::VisualProfile> stored_visual;
-  std::optional<layerc::core::AutomationProfile> stored_automation;
-  bool upgrade_needed = false;
+  ProfileBundle bundle;
   if (is_current) {
     if (!draft_controls_valid()) {
       restore_checkbox();
@@ -267,86 +259,64 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
       return;
     }
     sync_profile_from_controls();
-    if (normalize_for_commit().has_value()) {
-      restore_checkbox();
-      set_status(L"Finish the invalid field before turning the profile on or off.");
-      return;
-    }
-    if (!can_commit_document_bundle()) {
-      restore_checkbox();
-      set_status(
-          L"Repair the invalid visual or automation settings before turning the profile on or off.");
-      return;
-    }
-    stored_profile = document_.profile();
-    stored_visual = document_.visual();
-    stored_automation = document_.automation();
-    upgrade_needed = document_needs_schema_upgrade(document_);
+    bundle = document_.bundle();
   } else {
     auto loaded = layerc::platform::load_profile_bundle(entry.path);
-    const wchar_t *failure = nullptr;
     if (const auto *error =
             std::get_if<layerc::platform::ProfileBundleLoadError>(&loaded)) {
-      failure = *error == layerc::platform::ProfileBundleLoadError::unreadable
-                    ? L"Could not update the selected profile."
-                    : L"Could not update an invalid profile.";
-    } else {
-      auto &bundle = std::get<layerc::platform::ProfileBundleLoad>(loaded);
-      if (bundle.visual.state() == layerc::platform::ModuleSidecarState::invalid)
-        failure = L"Could not update a profile whose visual settings are invalid.";
-      else if (bundle.automation.state() ==
-               layerc::platform::ModuleSidecarState::invalid)
-        failure = L"Could not update a profile whose automation settings are invalid.";
-      stored_profile = std::move(bundle.profile);
-      stored_visual = std::move(bundle.visual.optional_profile());
-      stored_automation = std::move(bundle.automation.optional_profile());
-      upgrade_needed = bundle.legacy_base_schema || bundle.legacy_visual_schema;
-    }
-    if (failure != nullptr) {
       restore_checkbox();
-      set_status(failure);
+      set_status(*error == layerc::platform::ProfileBundleLoadError::unreadable
+                     ? L"Could not update the selected profile."
+                     : L"Could not update an invalid profile.");
       return;
     }
+    bundle = loaded_bundle(
+        std::move(std::get<layerc::platform::ProfileBundleLoad>(loaded)));
   }
-  stored_profile.enabled = enabled;
-  switch (commit_bundle(entry.path, stored_profile, stored_visual,
-                        stored_automation, upgrade_needed)) {
+  bundle.profile.enabled = enabled;
+  switch (commit_bundle(entry.path, bundle)) {
   case CommitResult::ok:
     break;
-  case CommitResult::upgrade_declined:
   case CommitResult::invalid_fields:
   case CommitResult::invalid_profile:
+    restore_checkbox();
+    set_status(is_current
+                   ? L"Finish the invalid field before turning the profile on or off."
+                   : L"Profile enablement was not changed.");
+    return;
+  case CommitResult::upgrade_declined:
     restore_checkbox();
     set_status(L"Profile enablement was not changed.");
     return;
   case CommitResult::blocked_by_sidecar:
     restore_checkbox();
-    set_status(L"Could not save the profile enablement change.");
+    set_status(L"Repair the invalid visual or automation settings before "
+               L"turning the profile on or off.");
     return;
   case CommitResult::write_failed:
     restore_checkbox();
     set_status(write_failure_message());
     return;
   }
-  entry.describe(stored_profile);
+  entry.describe(bundle.profile);
   {
     auto sync = shell_.sync_scope();
     ListView_SetItemText(shell_.profile_list, row, 0, entry.label.data());
   }
   if (is_current) {
-    document_.visual() = stored_visual;
-    document_.automation() = stored_automation;
+    document_.visual() = bundle.visual;
+    document_.automation() = bundle.automation;
     document_.mark_visual_edited();
     document_.mark_automation_edited();
-    const bool enablement_changes = document_.profile() != stored_profile;
+    const bool enablement_changes = document_.profile() != bundle.profile;
     if (enablement_changes) {
-      (void)document_.history().record(stored_profile, document_.visual(),
+      (void)document_.history().record(bundle.profile, document_.visual(),
                             document_.automation(), false);
     }
-    document_.profile() = stored_profile;
+    document_.profile() = bundle.profile;
     mark_committed();
   } else {
-    mark_committed(entry.path, stored_profile);
+    mark_committed(entry.path, bundle.profile);
   }
   set_status(enabled ? L"Profile enabled — LayerD updated live."
                      : L"Profile disabled — LayerD retired its instances.");
@@ -424,7 +394,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
     return false;
   // Shared document-commit gate: every UI entry point blocks on invalid
   // modules so unrelated edits never discard recovery data.
-  if (!can_commit_document_bundle()) {
+  if (document_.has_unreadable_module()) {
     show_sidecar_repair_message(shell_.window);
     return false;
   }
@@ -447,7 +417,7 @@ bool EditorWindow::save_profile(const bool force_save_as) {
       return false;
     }
   }
-  switch (commit_bundle(destination)) {
+  switch (commit_document(destination)) {
   case CommitResult::ok:
     break;
   case CommitResult::invalid_fields:
@@ -531,28 +501,6 @@ void EditorWindow::open_profiles_folder() {
                 SW_SHOWNORMAL);
 }
 
-bool EditorWindow::can_commit_document_bundle() const {
-  // Invalid (unreadable) modules have no usable parsed profile; committing
-  // with a nullopt would plan an explicit removal and discard recovery
-  // bytes/backups. Absent modules are a valid keep-absent intent.
-  if (!document_.visual() &&
-      document_.visual_state() == layerc::platform::ModuleSidecarState::invalid)
-    return false;
-  if (!document_.automation() &&
-      document_.automation_state() ==
-          layerc::platform::ModuleSidecarState::invalid)
-    return false;
-  return true;
-}
-
-layerc::platform::ProfileWriteResult EditorWindow::commit_document_bundle(
-    const std::filesystem::path &destination) {
-  if (destination.empty() || !can_commit_document_bundle())
-    return {layerc::platform::ProfileWriteError::invalid_input};
-  return layerc::platform::write_profile_bundle(
-      destination, document_.profile(), document_.visual(), document_.automation());
-}
-
 std::wstring EditorWindow::write_failure_message() const {
   return L"Profile write failed: " +
          to_wide(layerc::platform::profile_write_error_text(
@@ -561,6 +509,7 @@ std::wstring EditorWindow::write_failure_message() const {
 
 namespace {
 
+// serialize → parse → reassign, keeping sidecar profile ids aligned.
 std::optional<layerc::core::ProfileError> normalize_profile_bundle(
     layerc::core::GameProfile &profile,
     std::optional<layerc::core::VisualProfile> &visual,
@@ -583,42 +532,44 @@ std::optional<layerc::core::ProfileError> EditorWindow::normalize_for_commit() {
 }
 
 CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
+                                         ProfileBundle &bundle,
                                          const CommitOptions &options) {
-  if (!draft_controls_valid()) return CommitResult::invalid_fields;
-  sync_profile_from_controls();
-  if (normalize_for_commit().has_value()) return CommitResult::invalid_profile;
-  if (document_needs_schema_upgrade(document_)) {
-    if (!options.prompt_upgrade || !confirm_v2_upgrade())
+  if (normalize_profile_bundle(bundle.profile, bundle.visual,
+                               bundle.automation)
+          .has_value())
+    return CommitResult::invalid_profile;
+  if (bundle.unreadable_module)
+    return CommitResult::blocked_by_sidecar;
+  if (bundle.upgrade_needed) {
+    if (!options.prompt_upgrade) return CommitResult::upgrade_declined;
+    if (!(is_document_path(document_, path) ? confirm_v2_upgrade()
+                                            : confirm_schema_upgrade(shell_.window)))
       return CommitResult::upgrade_declined;
   }
-  if (!can_commit_document_bundle()) return CommitResult::blocked_by_sidecar;
-  const auto write = commit_document_bundle(path);
+  const auto write =
+      path.empty()
+          ? layerc::platform::ProfileWriteResult{
+                layerc::platform::ProfileWriteError::invalid_input}
+          : layerc::platform::write_profile_bundle(
+                path, bundle.profile, bundle.visual, bundle.automation,
+                layerc::platform::KeepModule{});
   last_write_error_ = write.failure;
   if (!write) return CommitResult::write_failed;
   return CommitResult::ok;
 }
 
-CommitResult EditorWindow::commit_bundle(
-    const std::filesystem::path &path, layerc::core::GameProfile &profile,
-    std::optional<layerc::core::VisualProfile> &visual,
-    std::optional<layerc::core::AutomationProfile> &automation,
-    const bool upgrade_needed, const CommitOptions &options) {
-  if (upgrade_needed) {
-    if (!options.prompt_upgrade) return CommitResult::upgrade_declined;
-    if (!(is_document_path(document_, path) ? confirm_v2_upgrade()
-                              : confirm_schema_upgrade(shell_.window)))
-      return CommitResult::upgrade_declined;
+CommitResult EditorWindow::commit_document(const std::filesystem::path &path,
+                                           const CommitOptions &options) {
+  if (!draft_controls_valid()) return CommitResult::invalid_fields;
+  sync_profile_from_controls();
+  auto bundle = document_.bundle();
+  const auto result = commit_bundle(path, bundle, options);
+  if (result != CommitResult::invalid_profile) {
+    document_.profile() = std::move(bundle.profile);
+    document_.visual() = std::move(bundle.visual);
+    document_.automation() = std::move(bundle.automation);
   }
-  if (normalize_profile_bundle(profile, visual, automation).has_value())
-    return CommitResult::invalid_profile;
-  const auto write = path.empty()
-                         ? layerc::platform::ProfileWriteResult{
-                               layerc::platform::ProfileWriteError::invalid_input}
-                         : layerc::platform::write_profile_bundle(
-                               path, profile, visual, automation);
-  last_write_error_ = write.failure;
-  if (!write) return CommitResult::write_failed;
-  return CommitResult::ok;
+  return result;
 }
 
 void EditorWindow::mark_committed(const CommitOptions &options) {

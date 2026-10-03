@@ -11,6 +11,20 @@
 
 namespace layerc::editor {
 
+ProfileBundle loaded_bundle(layerc::platform::ProfileBundleLoad loaded) {
+  const auto unreadable = [](const auto &sidecar) {
+    return sidecar.state() == layerc::platform::ModuleSidecarState::invalid &&
+           !sidecar.optional_profile().has_value();
+  };
+  const bool blocked = unreadable(loaded.visual) || unreadable(loaded.automation);
+  return {.profile = std::move(loaded.profile),
+          .visual = std::move(loaded.visual.optional_profile()),
+          .automation = std::move(loaded.automation.optional_profile()),
+          .unreadable_module = blocked,
+          .upgrade_needed =
+              loaded.legacy_base_schema || loaded.legacy_visual_schema};
+}
+
 void sync_bar_panels(layerc::core::GameProfile &profile,
                      const std::optional<std::string_view> added) {
   const bool independent =

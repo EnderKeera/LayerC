@@ -232,7 +232,7 @@ void EditorWindow::refresh_visual_controls() {
 
 bool EditorWindow::save_visual_profile() {
   if (!document_.visual() || document_.path().empty()) return false;
-  switch (commit_bundle(document_.path())) {
+  switch (commit_document(document_.path())) {
   case CommitResult::ok:
     break;
   case CommitResult::invalid_fields:

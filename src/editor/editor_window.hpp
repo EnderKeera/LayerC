@@ -40,7 +40,7 @@ struct VisualAssetGcReport;
 
 namespace layerc::editor {
 
-class EditorWindow {
+class EditorWindow final : private DialogTheme {
 public:
   EditorWindow();
   ~EditorWindow();
@@ -48,7 +48,6 @@ public:
   int run(HINSTANCE instance, int show_command);
 
 private:
-  friend class AutomationEditor;
   friend struct EditorWindowTestAccess;
 
   static constexpr UINT_PTR autosave_timer = 10;
@@ -141,30 +140,20 @@ private:
   [[nodiscard]] bool save_visual_profile();
   void set_visual_assignment_enabled(bool enabled);
   void remove_visual_assignment();
-  // Single document-commit policy shared by explicit save, autosave, and
-  // immediate visual actions. Loaded state (absent/valid/recovered/invalid)
-  // is separate from mutation intent: an unreadable module (invalid with no
-  // parsed profile) must block the commit so a nullopt never becomes an
-  // explicit removal request that discards recovery bytes and backups.
-  [[nodiscard]] bool can_commit_document_bundle() const;
-  [[nodiscard]] layerc::platform::ProfileWriteResult
-  commit_document_bundle(const std::filesystem::path &destination);
   [[nodiscard]] std::wstring write_failure_message() const;
   // serialize → parse → reassign, keeping sidecar profile ids aligned.
   // Nullopt when the profile round-trips cleanly.
   [[nodiscard]] std::optional<layerc::core::ProfileError> normalize_for_commit();
-  // Shared pipeline: draft → sync → normalize → upgrade → can_commit → write.
+  // The one commit pipeline: normalize → unreadable-module gate → upgrade
+  // confirmation → write. `bundle` is left normalized.
+  [[nodiscard]] CommitResult commit_bundle(const std::filesystem::path &path,
+                                           ProfileBundle &bundle,
+                                           const CommitOptions &options = {});
+  // Commits the open document: draft controls → sync → commit_bundle, then
+  // adopts the normalized profile.
   [[nodiscard]] CommitResult
-  commit_bundle(const std::filesystem::path &path,
-                const CommitOptions &options = {});
-  // Staged one-field edits (row enablement): normalize the prepared bundle and
-  // write it without re-reading document controls.
-  [[nodiscard]] CommitResult
-  commit_bundle(const std::filesystem::path &path,
-                layerc::core::GameProfile &profile,
-                std::optional<layerc::core::VisualProfile> &visual,
-                std::optional<layerc::core::AutomationProfile> &automation,
-                bool upgrade_needed, const CommitOptions &options = {});
+  commit_document(const std::filesystem::path &path,
+                  const CommitOptions &options = {});
   // Shared postlude: dirty/legacy/rebase/timer/notify. A path that is not the
   // open document only notifies so a row edit cannot clear its dirty state.
   void mark_committed(const CommitOptions &options = {});
@@ -281,14 +270,14 @@ private:
 
   void draw_button(const DRAWITEMSTRUCT &, layerc::platform::EditorControlRole,
                    std::optional<COLORREF> fill = std::nullopt) const;
-  void draw_list_box_item(const DRAWITEMSTRUCT &) const;
+  void draw_list_box_item(const DRAWITEMSTRUCT &) const override;
   void draw_profile_item(const DRAWITEMSTRUCT &) const;
 
   void draw_appearance_preview(const DRAWITEMSTRUCT &, HWND) const;
   LRESULT color_message(UINT, WPARAM, LPARAM) const;
   LRESULT erase_dialog_background(HWND, WPARAM) const;
   [[nodiscard]] std::optional<LRESULT>
-  dialog_theme_message(HWND, UINT, WPARAM, LPARAM) const;
+  dialog_theme_message(HWND, UINT, WPARAM, LPARAM) const override;
   [[nodiscard]] std::optional<LRESULT> handle_main_command(WPARAM);
   [[nodiscard]] std::optional<LRESULT> handle_main_notify(LPARAM);
   [[nodiscard]] std::optional<LRESULT> handle_main_draw_item(LPARAM);

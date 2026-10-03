@@ -104,7 +104,7 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
                    : L"Not autosaved — finish the invalid field.");
     return false;
   }
-  switch (commit_bundle(document_.path(),
+  switch (commit_document(document_.path(),
                         {.prompt_upgrade = allow_upgrade_prompt})) {
   case CommitResult::ok:
     mark_committed();

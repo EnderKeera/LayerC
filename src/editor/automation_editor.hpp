@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dialog_layout.hpp"
+#include "editor_state.hpp"
 #include "profile_document.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/live_edit.hpp"
@@ -16,13 +17,29 @@
 
 namespace layerc::editor {
 
-class EditorWindow;
+// Themed painting for a sub-editor dialog, provided by its host window.
+class DialogTheme {
+public:
+  virtual void draw_list_box_item(const DRAWITEMSTRUCT &item) const = 0;
+  [[nodiscard]] virtual std::optional<LRESULT>
+  dialog_theme_message(HWND window, UINT message, WPARAM wparam,
+                       LPARAM lparam) const = 0;
 
-// The automation dialog. It is a friend of its owning EditorWindow and works
-// directly on that window's document, shell, and live-edit channel.
+protected:
+  ~DialogTheme() = default;
+};
+
+// The automation dialog. It edits the injected document's automation module,
+// talks to the daemon only through the live-edit session, and reports every
+// accepted edit through the change recorder; it has no access to its host
+// window's private state.
 class AutomationEditor final {
 public:
-  explicit AutomationEditor(EditorWindow &owner) noexcept;
+  using ChangeRecorder = std::function<void(DocumentChangeKind)>;
+
+  AutomationEditor(ProfileDocument &document, LiveEditSession &live_edit,
+                   const EditorShell &shell, const DialogTheme &theme,
+                   ChangeRecorder record_change) noexcept;
   ~AutomationEditor();
 
   AutomationEditor(const AutomationEditor &) = delete;
@@ -72,7 +89,11 @@ private:
   [[nodiscard]] Mutation mutate_automation(HWND dialog, const wchar_t *title,
                                            const AutomationEdit &edit);
 
-  EditorWindow &owner_;
+  ProfileDocument &document_;
+  LiveEditSession &live_edit_;
+  const EditorShell &shell_;
+  const DialogTheme &theme_;
+  ChangeRecorder record_change_;
   HWND dialog_{};
   DialogChrome chrome_;
   std::string trace_json_;
