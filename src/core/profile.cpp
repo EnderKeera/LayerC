@@ -1,6 +1,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/core/hash.hpp"
 #include "layerc/core/hid.hpp"
+#include "layerc/core/profile_modules.hpp"
 #include "layerc/core/profile_wire.hpp"
 
 #include "profile_reader.hpp"
@@ -264,15 +265,15 @@ bool ProfileReader::read_modules(GameProfile &profile,
                           json::EmptyString::reject))
         return false;
       ProfileModule module;
-      const auto *wire = profile_wire::module(kind);
-      if (wire == nullptr)
+      const auto *descriptor = find_module(kind);
+      if (descriptor == nullptr)
         return fields_.fail(path + ".kind", "unsupported module kind");
-      if (source_schema < wire->minimum_profile_schema)
+      if (source_schema < descriptor->declarable_from_profile_schema)
         return fields_.fail(path + ".kind",
                             "module requires a newer profile schema");
-      module.kind = wire->value;
+      module.kind = descriptor->kind;
       const auto version = fields_.integer(
-          entry, keys::schema_version, path, 1, wire->maximum_version,
+          entry, keys::schema_version, path, 1, descriptor->max_schema,
           json::Required::yes);
       if (!version.has_value()) return false;
       module.schema_version = static_cast<std::uint32_t>(*version);

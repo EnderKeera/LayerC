@@ -41,6 +41,7 @@ int main() {
       {"test_cooldown_group_engine_runtime_parity", test_cooldown_group_engine_runtime_parity},
       {"test_cooldown_owner_resolution_is_pure", test_cooldown_owner_resolution_is_pure},
       {"test_panel_presentation_rule", test_panel_presentation_rule},
+      {"test_profile_module_table", test_profile_module_table},
       {"test_live_profile_reconciliation", test_live_profile_reconciliation},
       {"test_shared_pool_reconciliation", test_shared_pool_reconciliation},
       {"test_live_protocol_framing", test_live_protocol_framing},

@@ -2,8 +2,10 @@
 
 #include "layerc/core/automation.hpp"
 #include "layerc/core/companion.hpp"
+#include "layerc/core/profile_modules.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
+#include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_transaction.hpp"
 
 #include <cstddef>
@@ -13,6 +15,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace layerc::platform {
@@ -56,6 +60,10 @@ visual_asset_file(const std::filesystem::path &directory,
                   std::string_view sha256);
 [[nodiscard]] std::filesystem::path profile_visual_asset_path(
     const std::filesystem::path &profile_path, std::string_view sha256);
+// `<data>/<name>.json` (split stores) or `_<name>/<profile file>` (unified).
+[[nodiscard]] std::filesystem::path
+module_sidecar_path(const std::filesystem::path &profile_path,
+                    const core::ModuleDescriptor &module);
 [[nodiscard]] std::filesystem::path
 visual_sidecar_path(const std::filesystem::path &profile_path);
 [[nodiscard]] std::filesystem::path
@@ -121,15 +129,55 @@ scan_profile_directory(const std::filesystem::path &directory);
 [[nodiscard]] ProfileWriteResult write_profile_file(const std::filesystem::path &path,
                                       std::string_view contents);
 
-// Commits a mutually compatible base profile and its declared first-party
-// module sidecars. Optional module failure never disables base input/overlays.
+// What a bundle save does with one module sidecar.
+struct KeepModule {};   // retain the stored sidecar (invalid data blocks the save)
+struct RemoveModule {}; // tombstone the sidecar
+
+template <typename Profile> class ModuleIntent {
+public:
+  ModuleIntent(KeepModule) : value_(KeepModule{}) {}
+  ModuleIntent(RemoveModule) : value_(RemoveModule{}) {}
+  ModuleIntent(Profile replacement) : value_(std::move(replacement)) {}
+  // An optional sidecar replaces when present and is removed when absent.
+  ModuleIntent(const std::optional<Profile> &replacement)
+      : value_(replacement.has_value()
+                   ? std::variant<KeepModule, RemoveModule, Profile>(
+                         *replacement)
+                   : std::variant<KeepModule, RemoveModule, Profile>(
+                         RemoveModule{})) {}
+  ModuleIntent(std::nullopt_t) : value_(RemoveModule{}) {}
+
+  [[nodiscard]] bool keeps() const noexcept {
+    return std::holds_alternative<KeepModule>(value_);
+  }
+  [[nodiscard]] const Profile *replacement() const noexcept {
+    return std::get_if<Profile>(&value_);
+  }
+
+private:
+  std::variant<KeepModule, RemoveModule, Profile> value_;
+};
+
+template <typename Module>
+using ModuleIntentFor = ModuleIntent<typename Module::Profile>;
+
+// One intent per ProfileModuleTable entry, in table order.
+using ProfileModuleIntents = core::ProfileModuleTable::each<ModuleIntentFor>;
+
+// Commits a mutually compatible base profile and its first-party module
+// sidecars. Optional module failure never disables base input/overlays.
+[[nodiscard]] ProfileWriteResult
+write_profile_bundle(const std::filesystem::path &path,
+                     const layerc::core::GameProfile &profile,
+                     ProfileModuleIntents modules);
+
+// Editors that own visual and automation but not companion data: the
+// companion sidecar is kept unless a replacement is given.
 [[nodiscard]] ProfileWriteResult write_profile_bundle(
     const std::filesystem::path &path, const layerc::core::GameProfile &profile,
-    const std::optional<layerc::core::VisualProfile> &visual_profile,
-    const std::optional<layerc::core::AutomationProfile> &automation_profile =
-        std::nullopt,
-    const std::optional<layerc::core::CompanionProfile> &companion_profile =
-        std::nullopt);
+    ModuleIntent<layerc::core::VisualProfile> visual,
+    ModuleIntent<layerc::core::AutomationProfile> automation = RemoveModule{},
+    ModuleIntent<layerc::core::CompanionProfile> companion = KeepModule{});
 
 // Like write_profile_bundle for a base profile without module sidecars, but
 // fails atomically if the base profile already exists when the transaction
@@ -169,24 +217,115 @@ template <typename Profile, typename Error> struct ModuleSidecarLoad {
   }
 };
 
-using VisualSidecarLoad =
-    ModuleSidecarLoad<layerc::core::VisualProfile, layerc::core::VisualError>;
-using AutomationSidecarLoad = ModuleSidecarLoad<
-    layerc::core::AutomationProfile, layerc::core::AutomationError>;
-using CompanionSidecarLoad = ModuleSidecarLoad<
-    layerc::core::CompanionProfile, layerc::core::CompanionError>;
+template <typename Module>
+using ModuleSidecarLoadFor =
+    ModuleSidecarLoad<typename Module::Profile, typename Module::Error>;
+using VisualSidecarLoad = ModuleSidecarLoadFor<layerc::core::VisualModule>;
+using AutomationSidecarLoad =
+    ModuleSidecarLoadFor<layerc::core::AutomationModule>;
+using CompanionSidecarLoad = ModuleSidecarLoadFor<layerc::core::CompanionModule>;
 
-[[nodiscard]] VisualSidecarLoad
+enum class SidecarMarker { absent, active, removed, unreadable, invalid };
+
+// The raw primary/backup/marker reads behind every module sidecar load.
+struct SidecarFiles {
+  std::filesystem::path primary;
+  std::filesystem::path backup;
+  std::filesystem::path marker;
+  SidecarMarker marker_state{SidecarMarker::absent};
+  FileReadResult primary_read;
+  FileReadResult backup_read;
+};
+
+[[nodiscard]] SidecarFiles read_sidecar_files(const std::filesystem::path &primary,
+                                              std::size_t max_bytes);
+
+// Typed load with primary/backup/state recovery, shared by every module.
+template <typename Module>
+[[nodiscard]] ModuleSidecarLoadFor<Module>
+load_sidecar_file(const std::filesystem::path &primary,
+                  const layerc::core::GameProfile &base) {
+  using Profile = typename Module::Profile;
+  using Error = typename Module::Error;
+  const auto message = [](const std::string_view detail) {
+    return std::string(Module::descriptor.name) + " sidecar " +
+           std::string(detail);
+  };
+  const auto files = read_sidecar_files(primary, Module::descriptor.max_bytes);
+  switch (files.marker_state) {
+  case SidecarMarker::unreadable:
+    return {.state = ModuleSidecarState::invalid, .profile = std::nullopt,
+            .error = {"$.state", message("state could not be read")},
+            .source_path = files.marker};
+  case SidecarMarker::invalid:
+    return {.state = ModuleSidecarState::invalid, .profile = std::nullopt,
+            .error = {"$.state", message("state is invalid")},
+            .source_path = files.marker};
+  case SidecarMarker::removed:
+    return {.state = ModuleSidecarState::absent, .profile = std::nullopt,
+            .error = {}, .source_path = files.marker};
+  case SidecarMarker::absent:
+  case SidecarMarker::active:
+    break;
+  }
+  Error primary_error{
+      "$", message(files.primary_read.status == FileReadStatus::too_large
+                       ? "exceeds its byte limit"
+                       : "could not be read")};
+  if (files.primary_read.has_value()) {
+    auto parsed =
+        Module::parse_json(layerc::core::as_text(*files.primary_read), base);
+    if (auto *profile = std::get_if<Profile>(&parsed))
+      return {.state = ModuleSidecarState::valid,
+              .profile = std::move(*profile), .error = {},
+              .source_path = files.primary};
+    primary_error = std::get<Error>(std::move(parsed));
+  }
+  if (files.backup_read.has_value()) {
+    auto parsed =
+        Module::parse_json(layerc::core::as_text(*files.backup_read), base);
+    if (auto *profile = std::get_if<Profile>(&parsed))
+      return {.state = ModuleSidecarState::recovered_backup,
+              .profile = std::move(*profile),
+              .error = std::move(primary_error),
+              .source_path = files.backup};
+  }
+  if (files.primary_read.status == FileReadStatus::missing &&
+      files.backup_read.status == FileReadStatus::missing)
+    return {.state = ModuleSidecarState::absent, .profile = std::nullopt,
+            .error = {}, .source_path = files.primary};
+  return {.state = ModuleSidecarState::invalid, .profile = std::nullopt,
+          .error = std::move(primary_error), .source_path = files.primary};
+}
+
+template <typename Module>
+[[nodiscard]] ModuleSidecarLoadFor<Module>
+load_module_sidecar(const std::filesystem::path &profile_path,
+                    const layerc::core::GameProfile &base_profile) {
+  return load_sidecar_file<Module>(
+      module_sidecar_path(profile_path, Module::descriptor), base_profile);
+}
+
+[[nodiscard]] inline VisualSidecarLoad
 load_visual_sidecar(const std::filesystem::path &profile_path,
-                    const layerc::core::GameProfile &base_profile);
+                    const layerc::core::GameProfile &base_profile) {
+  return load_module_sidecar<layerc::core::VisualModule>(profile_path,
+                                                         base_profile);
+}
 
-[[nodiscard]] AutomationSidecarLoad
+[[nodiscard]] inline AutomationSidecarLoad
 load_automation_sidecar(const std::filesystem::path &profile_path,
-                        const layerc::core::GameProfile &base_profile);
+                        const layerc::core::GameProfile &base_profile) {
+  return load_module_sidecar<layerc::core::AutomationModule>(profile_path,
+                                                             base_profile);
+}
 
-[[nodiscard]] CompanionSidecarLoad
+[[nodiscard]] inline CompanionSidecarLoad
 load_companion_sidecar(const std::filesystem::path &profile_path,
-                       const layerc::core::GameProfile &base_profile);
+                       const layerc::core::GameProfile &base_profile) {
+  return load_module_sidecar<layerc::core::CompanionModule>(profile_path,
+                                                            base_profile);
+}
 
 struct AutomationStateLoad {
   layerc::core::AutomationPersistentValues values;

@@ -1,6 +1,7 @@
 #include "layerc/core/profile.hpp"
 
 #include "layerc/core/json.hpp"
+#include "layerc/core/profile_modules.hpp"
 #include "layerc/core/profile_wire.hpp"
 #include "profile_keys.hpp"
 
@@ -49,10 +50,10 @@ Value modules_section(const std::vector<ProfileModule> &modules) {
   Value::Array result;
   result.reserve(modules.size());
   for (const auto &module : modules) {
-    const auto *wire = profile_wire::module(module.kind);
+    const auto *descriptor = find_module(module.kind);
     result.emplace_back(Value::Object{
-        member(keys::kind, text(wire == nullptr ? std::string_view{}
-                                                : wire->name)),
+        member(keys::kind, text(descriptor == nullptr ? std::string_view{}
+                                                      : descriptor->name)),
         member(keys::schema_version, integer(module.schema_version)),
     });
   }

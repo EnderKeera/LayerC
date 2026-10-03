@@ -155,18 +155,10 @@ recovery_backup_path(const std::filesystem::path &path) {
 
 SidecarPaths sidecar_paths(const std::filesystem::path &profile_path,
                            const core::ProfileModuleKind kind) {
-  std::filesystem::path primary;
-  switch (kind) {
-  case core::ProfileModuleKind::visual:
-    primary = visual_sidecar_path(profile_path);
-    break;
-  case core::ProfileModuleKind::automation:
-    primary = automation_sidecar_path(profile_path);
-    break;
-  case core::ProfileModuleKind::companion:
-    primary = companion_sidecar_path(profile_path);
-    break;
-  }
+  const auto *module = core::find_module(kind);
+  auto primary = module == nullptr
+                     ? std::filesystem::path{}
+                     : module_sidecar_path(profile_path, *module);
   auto marker = sidecar_state_path(primary);
   return {.primary = primary,
           .backup = recovery_backup_path(primary),
@@ -177,138 +169,36 @@ std::string_view sidecar_marker_contents(const bool active) noexcept {
   return active ? "active\n" : "removed\n";
 }
 
-// --- Sidecar store: typed load with primary/backup/state recovery ---
-namespace {
+// --- Sidecar files: the raw reads behind load_sidecar_file ---
 
-constexpr std::size_t max_sidecar_state_bytes = 32;
-
-struct SidecarStateSnapshot {
-  bool exists{};
-  std::optional<std::string> contents;
-};
-
-SidecarStateSnapshot read_sidecar_state(const std::filesystem::path &sidecar) {
-  auto read =
-      read_durable_file(sidecar_state_path(sidecar), max_sidecar_state_bytes);
-  const bool exists = read.status != FileReadStatus::missing;
-  return {.exists = exists,
-          .contents = read.has_value()
-                          ? std::optional<std::string>(as_text(*read))
-                          : std::nullopt};
+SidecarFiles read_sidecar_files(const std::filesystem::path &primary,
+                                const std::size_t max_bytes) {
+  constexpr std::size_t max_sidecar_state_bytes = 32;
+  SidecarFiles files;
+  files.primary = primary;
+  files.backup = recovery_backup_path(primary);
+  files.marker = sidecar_state_path(primary);
+  auto marker = read_durable_file(files.marker, max_sidecar_state_bytes);
+  if (marker.status != FileReadStatus::missing) {
+    if (!marker.has_value()) {
+      files.marker_state = SidecarMarker::unreadable;
+      return files;
+    }
+    const auto contents = as_text(*marker);
+    if (contents == sidecar_marker_contents(false)) {
+      files.marker_state = SidecarMarker::removed;
+      return files;
+    }
+    if (contents != sidecar_marker_contents(true)) {
+      files.marker_state = SidecarMarker::invalid;
+      return files;
+    }
+    files.marker_state = SidecarMarker::active;
+  }
+  files.primary_read = read_durable_file(files.primary, max_bytes);
+  files.backup_read = read_durable_file(files.backup, max_bytes);
+  return files;
 }
-
-
-// Generic loader shared by every module sidecar. The codec supplies its
-// typed parser, byte cap, and diagnostic name; recovery policy lives once.
-struct VisualSidecarCodec {
-  using Profile = layerc::core::VisualProfile;
-  using Error = layerc::core::VisualError;
-  static constexpr std::string_view kind = "visual";
-  static constexpr std::size_t max_bytes = layerc::core::max_visual_json_bytes;
-  static auto parse(const std::string_view source,
-                    const layerc::core::GameProfile &base) {
-    return layerc::core::parse_visual_profile_json(source, base);
-  }
-};
-
-struct AutomationSidecarCodec {
-  using Profile = layerc::core::AutomationProfile;
-  using Error = layerc::core::AutomationError;
-  static constexpr std::string_view kind = "automation";
-  static constexpr std::size_t max_bytes =
-      layerc::core::max_automation_json_bytes;
-  static auto parse(const std::string_view source,
-                    const layerc::core::GameProfile &base) {
-    return layerc::core::parse_automation_profile_json(source, base);
-  }
-};
-
-struct CompanionSidecarCodec {
-  using Profile = layerc::core::CompanionProfile;
-  using Error = layerc::core::CompanionError;
-  static constexpr std::string_view kind = "companion";
-  static constexpr std::size_t max_bytes =
-      layerc::core::max_companion_sidecar_bytes;
-  static auto parse(const std::string_view source,
-                    const layerc::core::GameProfile &base) {
-    return layerc::core::parse_companion_profile_json(source, base);
-  }
-};
-
-template <typename CodecT> class SidecarStore {
-public:
-  using Profile = typename CodecT::Profile;
-  using Error = typename CodecT::Error;
-
-  using LoadResult = ModuleSidecarLoad<Profile, Error>;
-
-  [[nodiscard]] LoadResult load(const std::filesystem::path &sidecar,
-                                const layerc::core::GameProfile &base) const {
-    const auto backup = recovery_backup_path(sidecar);
-    const auto state = read_sidecar_state(sidecar);
-    if (state.exists) {
-      const auto state_path = sidecar_state_path(sidecar);
-      if (!state.contents.has_value())
-        return {.state = ModuleSidecarState::invalid,
-                .profile = std::nullopt,
-                .error = {"$.state", module_message("state could not be read")},
-                .source_path = state_path};
-      if (*state.contents == sidecar_marker_contents(false))
-        return {.state = ModuleSidecarState::absent,
-                .profile = std::nullopt,
-                .error = {},
-                .source_path = state_path};
-      if (*state.contents != sidecar_marker_contents(true))
-        return {.state = ModuleSidecarState::invalid,
-                .profile = std::nullopt,
-                .error = {"$.state", module_message("state is invalid")},
-                .source_path = state_path};
-    }
-
-    const auto primary = read_durable_file(sidecar, CodecT::max_bytes);
-    const auto recovery = read_durable_file(backup, CodecT::max_bytes);
-    Error primary_error{
-        "$", module_message(primary.status == FileReadStatus::too_large
-                                ? "exceeds its byte limit"
-                                : "could not be read")};
-    if (primary.has_value()) {
-      auto parsed = CodecT::parse(as_text(*primary), base);
-      if (auto *profile = std::get_if<Profile>(&parsed))
-        return {.state = ModuleSidecarState::valid,
-                .profile = std::move(*profile),
-                .error = {},
-                .source_path = sidecar};
-      primary_error = std::get<Error>(std::move(parsed));
-    }
-    if (recovery.has_value()) {
-      auto parsed = CodecT::parse(as_text(*recovery), base);
-      if (auto *profile = std::get_if<Profile>(&parsed))
-        return {.state = ModuleSidecarState::recovered_backup,
-                .profile = std::move(*profile),
-                .error = std::move(primary_error),
-                .source_path = backup};
-    }
-
-    if (primary.status == FileReadStatus::missing &&
-        recovery.status == FileReadStatus::missing)
-      return {.state = ModuleSidecarState::absent,
-              .profile = std::nullopt,
-              .error = {},
-              .source_path = sidecar};
-    return {.state = ModuleSidecarState::invalid,
-            .profile = std::nullopt,
-            .error = std::move(primary_error),
-            .source_path = sidecar};
-  }
-
-
-private:
-  static std::string module_message(const std::string_view detail) {
-    return std::string(CodecT::kind) + " sidecar " + std::string(detail);
-  }
-};
-
-} // namespace
 
 // Single-file durable writers. Both publish through commit_profile_transaction
 // so profile/state mutations share one journal, one-writer lock, and crash
@@ -342,56 +232,12 @@ ProfileWriteResult write_profile_file(const std::filesystem::path &path,
 // --- Bundle planning and publication share recovered writer ownership ---
 namespace {
 
-// N6: one struct instead of five optionals plus a flag parameter. The two
-// public entry points (replace vs create-only) differ only in create_only.
 struct BundleInputs {
   std::filesystem::path path;
   layerc::core::GameProfile profile;
-  std::optional<layerc::core::VisualProfile> visual{};
-  std::optional<layerc::core::AutomationProfile> automation{};
-  std::optional<layerc::core::CompanionProfile> companion{};
+  ProfileModuleIntents modules;
   bool create_only{};
 };
-
-struct SidecarPlan {
-  SidecarPaths paths;
-  std::optional<std::string> contents;
-  std::optional<std::string> recovery_contents;
-  bool primary_exists{};
-  bool backup_exists{};
-  bool marker_exists{};
-};
-
-struct BundlePlan {
-  layerc::core::GameProfile stored_profile;
-  std::vector<ProfileFileMutation> mutations;
-};
-
-// Prefer the last usable sidecar bytes as the user-visible recovery copy.
-// Falls back to the new contents when nothing usable was stored; fails when
-// a usable source cannot be re-read.
-template <typename Codec>
-[[nodiscard]] bool retain_sidecar_recovery(
-    SidecarPlan &sidecar,
-    const std::optional<layerc::core::GameProfile> &previous_profile) {
-  if (!sidecar.contents.has_value()) return true;
-  sidecar.recovery_contents = sidecar.contents;
-  if (!previous_profile.has_value()) return true;
-  const auto loaded =
-      SidecarStore<Codec>{}.load(sidecar.paths.primary, *previous_profile);
-  if (!loaded.usable()) return true;
-  auto source = read_durable_file(loaded.source_path, Codec::max_bytes);
-  if (!source.has_value()) return false;
-  sidecar.recovery_contents = as_text(*source);
-  return true;
-}
-
-template <typename T, typename Serialize>
-[[nodiscard]] std::optional<std::string>
-serialize_if_present(const std::optional<T> &value, Serialize serialize) {
-  if (!value.has_value()) return std::nullopt;
-  return serialize(*value);
-}
 
 [[nodiscard]] std::optional<bool>
 path_exists(const std::filesystem::path &target) {
@@ -401,15 +247,78 @@ path_exists(const std::filesystem::path &target) {
   return found;
 }
 
+// One module's part of a bundle plan: resolves the intent against the stored
+// sidecar, validates it against the new base, declares it in `stored`, and
+// appends its recovery copy, primary, and marker (or tombstone) mutations.
+template <typename Module>
+[[nodiscard]] bool plan_module_sidecar(
+    const ModuleIntentFor<Module> &intent, const std::filesystem::path &path,
+    const std::optional<layerc::core::GameProfile> &previous_profile,
+    layerc::core::GameProfile &stored,
+    std::vector<ProfileFileMutation> &mutations, ProfileWriteError &failure) {
+  std::optional<typename Module::Profile> effective;
+  if (const auto *replacement = intent.replacement()) {
+    effective = *replacement;
+  } else if (intent.keeps()) {
+    // Keeping is owned by the bundle: invalid stored data blocks the save
+    // instead of being silently dropped or overwritten.
+    const auto existing = load_module_sidecar<Module>(
+        path, previous_profile.has_value() ? *previous_profile : stored);
+    if (existing.state == ModuleSidecarState::invalid) return false;
+    effective = existing.profile;
+  }
+  if (effective.has_value()) {
+    if (!Module::valid(*effective, stored)) return false;
+    stored.modules.push_back({.kind = Module::descriptor.kind,
+                              .schema_version = effective->schema_version});
+  }
+
+  const auto paths = sidecar_paths(path, Module::descriptor.kind);
+  if (paths.primary.empty()) return false;
+  const auto primary_exists = path_exists(paths.primary);
+  const auto backup_exists = path_exists(paths.backup);
+  const auto marker_exists = path_exists(paths.marker);
+  if (!primary_exists || !backup_exists || !marker_exists) {
+    failure = ProfileWriteError::io_failed;
+    return false;
+  }
+  if (!effective.has_value()) {
+    if (*primary_exists || *backup_exists || *marker_exists)
+      mutations.push_back(text_mutation(
+          paths.marker, std::string(sidecar_marker_contents(false))));
+    return true;
+  }
+
+  // Prefer the last usable sidecar bytes as the user-visible recovery copy;
+  // fall back to the new contents when nothing usable was stored.
+  const auto contents = Module::serialize(*effective);
+  std::string recovery = contents;
+  if (previous_profile.has_value()) {
+    const auto loaded =
+        load_sidecar_file<Module>(paths.primary, *previous_profile);
+    if (loaded.usable()) {
+      auto source =
+          read_durable_file(loaded.source_path, Module::descriptor.max_bytes);
+      if (!source.has_value()) return false;
+      recovery = as_text(*source);
+    }
+  }
+  mutations.push_back(text_mutation(paths.backup, recovery));
+  mutations.push_back(text_mutation(paths.primary, contents));
+  mutations.push_back(
+      text_mutation(paths.marker, std::string(sidecar_marker_contents(true))));
+  return true;
+}
+
 // Validate + assemble under recovered writer ownership. Nullopt when the
 // inputs cannot become a committable bundle.
-[[nodiscard]] std::optional<BundlePlan>
+[[nodiscard]] std::optional<std::vector<ProfileFileMutation>>
 plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
-  BundlePlan plan;
-  plan.stored_profile = std::move(inputs.profile);
-  plan.stored_profile.schema_version = 4;
-  plan.stored_profile.modules.clear();
+  auto stored = std::move(inputs.profile);
+  stored.schema_version = layerc::core::profile_schema_version;
+  stored.modules.clear();
   const auto &path = inputs.path;
+  if (path.parent_path().empty()) return std::nullopt;
 
   const auto previous_json = read_profile_file(path);
   std::optional<layerc::core::GameProfile> previous_profile;
@@ -419,123 +328,28 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
       previous_profile = std::move(*profile);
   }
 
-  // Existing companion data is owned by the profile bundle even when the
-  // caller is saving an unrelated base, visual, or automation edit. Until
-  // LayerE exposes companion editing/removal, omitted companion state means
-  // preserve a valid active sidecar; invalid existing data blocks the save.
-  std::optional<layerc::core::CompanionProfile> preserved_companion;
-  const auto &previous_base =
-      previous_profile.has_value() ? *previous_profile : plan.stored_profile;
-  if (!inputs.companion.has_value()) {
-    const auto existing = load_companion_sidecar(path, previous_base);
-    if (existing.state == ModuleSidecarState::invalid)
-      return std::nullopt;
-    if (existing.profile.has_value())
-      preserved_companion = existing.profile;
-  }
-  const auto &effective_companion =
-      inputs.companion.has_value() ? inputs.companion : preserved_companion;
-
-  if (inputs.visual.has_value()) {
-    if (!layerc::core::validate_visual_profile(*inputs.visual, plan.stored_profile)
-             .message.empty())
-      return std::nullopt;
-    plan.stored_profile.modules.push_back(
-        {.kind = layerc::core::ProfileModuleKind::visual,
-         .schema_version = inputs.visual->schema_version});
-  }
-  if (inputs.automation.has_value()) {
-    if (!layerc::core::validate_automation_profile(*inputs.automation,
-                                                   plan.stored_profile)
-             .message.empty())
-      return std::nullopt;
-    plan.stored_profile.modules.push_back(
-        {.kind = layerc::core::ProfileModuleKind::automation,
-         .schema_version = inputs.automation->schema_version});
-  }
-  if (effective_companion.has_value()) {
-    if (layerc::core::validate_companion_profile(*effective_companion,
-                                                 plan.stored_profile))
-      return std::nullopt;
-    plan.stored_profile.modules.push_back(
-        {.kind = layerc::core::ProfileModuleKind::companion,
-         .schema_version = effective_companion->schema_version});
-  }
-
-  const auto root = path.parent_path();
-  const auto visual = sidecar_paths(path, core::ProfileModuleKind::visual);
-  const auto automation = sidecar_paths(path, core::ProfileModuleKind::automation);
-  const auto companion = sidecar_paths(path, core::ProfileModuleKind::companion);
-  if (root.empty() || visual.primary.empty() || automation.primary.empty() ||
-      companion.primary.empty())
-    return std::nullopt;
-  std::array<SidecarPlan, 3> sidecars{{
-      {.paths = visual,
-       .contents = serialize_if_present(
-           inputs.visual, layerc::core::serialize_visual_profile_json),
-       .recovery_contents = std::nullopt},
-      {.paths = automation,
-       .contents = serialize_if_present(
-           inputs.automation, layerc::core::serialize_automation_profile_json),
-       .recovery_contents = std::nullopt},
-      {.paths = companion,
-       .contents = serialize_if_present(
-           effective_companion,
-           layerc::core::serialize_companion_profile_json),
-       .recovery_contents = std::nullopt},
-  }};
-  for (auto &sidecar : sidecars) {
-    const auto primary = path_exists(sidecar.paths.primary);
-    const auto backup = path_exists(sidecar.paths.backup);
-    const auto marker = path_exists(sidecar.paths.marker);
-    if (!primary || !backup || !marker) {
-      failure = ProfileWriteError::io_failed;
-      return std::nullopt;
-    }
-    sidecar.primary_exists = *primary;
-    sidecar.backup_exists = *backup;
-    sidecar.marker_exists = *marker;
-  }
-
-  if (!retain_sidecar_recovery<VisualSidecarCodec>(sidecars[0],
-                                                   previous_profile) ||
-      !retain_sidecar_recovery<AutomationSidecarCodec>(sidecars[1],
-                                                       previous_profile) ||
-      !retain_sidecar_recovery<CompanionSidecarCodec>(sidecars[2],
-                                                      previous_profile))
-    return std::nullopt;
-
   std::vector<ProfileFileMutation> mutations;
-  mutations.reserve(12);
-
   // Preserve the last parseable base as the user-visible recovery copy. The
   // transaction journal itself separately owns rollback snapshots.
   if (previous_profile.has_value())
-    mutations.push_back(text_mutation(recovery_backup_path(path), *previous_json));
+    mutations.push_back(
+        text_mutation(recovery_backup_path(path), *previous_json));
 
   // Recovery copies are published first. If one is locked or unwritable, the
   // journal rolls back before the new base can become authoritative.
-  for (const auto &sidecar : sidecars) {
-    if (sidecar.contents.has_value()) {
-      mutations.push_back(
-          text_mutation(sidecar.paths.backup, *sidecar.recovery_contents));
-      mutations.push_back(text_mutation(sidecar.paths.primary, *sidecar.contents));
-      mutations.push_back(text_mutation(
-          sidecar.paths.marker,
-          std::string(sidecar_marker_contents(true))));
-    } else if (sidecar.primary_exists || sidecar.backup_exists ||
-               sidecar.marker_exists) {
-      mutations.push_back(text_mutation(
-          sidecar.paths.marker,
-          std::string(sidecar_marker_contents(false))));
-    }
-  }
+  bool planned = true;
+  layerc::core::ProfileModuleTable::for_each([&]<typename Module>(Module) {
+    planned = planned &&
+              plan_module_sidecar<Module>(
+                  std::get<ModuleIntentFor<Module>>(inputs.modules), path,
+                  previous_profile, stored, mutations, failure);
+  });
+  if (!planned) return std::nullopt;
 
-  mutations.push_back(text_mutation(
-      path, layerc::core::serialize_profile_json(plan.stored_profile)));
+  mutations.push_back(
+      text_mutation(path, layerc::core::serialize_profile_json(stored)));
   mutations.back().must_be_absent = inputs.create_only;
-  plan.mutations = std::move(mutations);
-  return plan;
+  return mutations;
 }
 
 // The durable tombstone is authoritative. Retain removed sidecar bytes:
@@ -549,56 +363,42 @@ ProfileWriteResult write_profile_bundle_impl(BundleInputs inputs) {
         ProfileWriteError failure = ProfileWriteError::invalid_input;
         auto plan = plan_profile_bundle(std::move(inputs), failure);
         if (!plan.has_value()) return {failure};
-        mutations = std::move(plan->mutations);
+        mutations = std::move(*plan);
         return {};
       });
 }
 
 } // namespace
 
-ProfileWriteResult write_profile_bundle(
-    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
-    const std::optional<layerc::core::VisualProfile> &visual_profile,
-    const std::optional<layerc::core::AutomationProfile> &automation_profile,
-    const std::optional<layerc::core::CompanionProfile> &companion_profile) {
+ProfileWriteResult write_profile_bundle(const std::filesystem::path &path,
+                                        const layerc::core::GameProfile &profile,
+                                        ProfileModuleIntents modules) {
   return write_profile_bundle_impl({.path = path,
                                     .profile = profile,
-                                    .visual = visual_profile,
-                                    .automation = automation_profile,
-                                    .companion = companion_profile,
+                                    .modules = std::move(modules),
                                     .create_only = false});
+}
+
+ProfileWriteResult write_profile_bundle(
+    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
+    ModuleIntent<layerc::core::VisualProfile> visual,
+    ModuleIntent<layerc::core::AutomationProfile> automation,
+    ModuleIntent<layerc::core::CompanionProfile> companion) {
+  return write_profile_bundle(
+      path, profile,
+      ProfileModuleIntents{std::move(visual), std::move(automation),
+                           std::move(companion)});
 }
 
 ProfileWriteResult
 write_profile_bundle_create_only(const std::filesystem::path &path,
                                  const layerc::core::GameProfile &profile) {
   return write_profile_bundle_impl(
-      {.path = path, .profile = profile, .create_only = true});
-}
-
-VisualSidecarLoad
-load_visual_sidecar(const std::filesystem::path &profile_path,
-                    const layerc::core::GameProfile &base_profile) {
-  return SidecarStore<VisualSidecarCodec>{}.load(
-      sidecar_paths(profile_path, core::ProfileModuleKind::visual).primary,
-      base_profile);
-}
-
-
-AutomationSidecarLoad
-load_automation_sidecar(const std::filesystem::path &profile_path,
-                        const layerc::core::GameProfile &base_profile) {
-  return SidecarStore<AutomationSidecarCodec>{}.load(
-      sidecar_paths(profile_path, core::ProfileModuleKind::automation).primary,
-      base_profile);
-}
-
-CompanionSidecarLoad
-load_companion_sidecar(const std::filesystem::path &profile_path,
-                       const layerc::core::GameProfile &base_profile) {
-  return SidecarStore<CompanionSidecarCodec>{}.load(
-      sidecar_paths(profile_path, core::ProfileModuleKind::companion).primary,
-      base_profile);
+      {.path = path,
+       .profile = profile,
+       .modules = ProfileModuleIntents{RemoveModule{}, RemoveModule{},
+                                       KeepModule{}},
+       .create_only = true});
 }
 
 AutomationStateLoad load_automation_state(

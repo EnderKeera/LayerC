@@ -116,14 +116,14 @@ PackOperationResult export_profile_pack(
             using Traits = std::remove_cvref_t<decltype(traits)>;
             using SidecarProfile = typename Traits::Profile;
             const auto sidecar = Traits::load(path, *profile);
-            if (auto error = sidecar_export_error(sidecar, path, desc.kind))
+            if (auto error = sidecar_export_error(sidecar, path, desc.name))
               return error;
             if (sidecar.state != platform::ModuleSidecarState::valid ||
                 !sidecar.profile.has_value())
               return std::nullopt;
             std::string module_json;
             if (auto error = load_sidecar_json_for_export(
-                    sidecar.source_path, path, desc.kind, Traits::read,
+                    sidecar.source_path, path, desc.name, Traits::read,
                     module_json, reserve_entry))
               return error;
             payload = ModulePayload<SidecarProfile>{
@@ -170,7 +170,7 @@ PackOperationResult export_profile_pack(
     for (const auto &desc : kSidecars) {
       detail::visit_sidecar(
           profiles[index], desc, [&](const auto &module, const auto &) {
-            stage_module(module, sidecar_paths[desc.index][index], desc.suffix);
+            stage_module(module, sidecar_paths[detail::sidecar_index(desc)][index], detail::sidecar_suffix(desc));
           });
     }
   }
