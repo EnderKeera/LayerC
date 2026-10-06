@@ -5,6 +5,7 @@
       "label": "required",
       "required": [
         "layerc_automation_benchmark",
+        "layerc_automation_persistence_tests",
         "layerc_benchmark_result_tests",
         "layerc_bundle_tests",
         "layerc_calibration_tests",
@@ -19,6 +20,7 @@
         "layerc_overlay_tests",
         "layerc_platform_tests",
         "layerc_runtime_tests",
+        "layerc_template_png_tests",
         "layerc_visual_asset_gc_contract_tests"
       ],
       "allowSkip": {
@@ -30,6 +32,7 @@
       "label": "headless",
       "required": [
         "layerc_automation_benchmark",
+        "layerc_automation_persistence_tests",
         "layerc_capture_tests",
         "layerc_core_tests",
         "layerc_launcher_tests",
@@ -39,6 +42,7 @@
         "layerc_linux_profile_store_tests",
         "layerc_linux_x11_registry_tests",
         "layerc_runtime_tests",
+        "layerc_template_png_tests",
         "layerc_visual_asset_gc_contract_tests"
       ],
       "optional": {
