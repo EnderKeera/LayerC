@@ -26,6 +26,8 @@ int main() {
       {"test_profile_enabled_and_independent_bar_placement", test_profile_enabled_and_independent_bar_placement},
       {"test_profile_schema3_hid", test_profile_schema3_hid},
       {"test_panel_geometry", test_panel_geometry},
+      {"test_profile_validation_owns_semantics",
+       test_profile_validation_owns_semantics},
       {"test_runtime_instance_tracking", test_runtime_instance_tracking},
       {"test_json_unicode_and_errors", test_json_unicode_and_errors},
       {"test_json_field_reader", test_json_field_reader},

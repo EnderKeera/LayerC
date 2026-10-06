@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/document_error.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/enum_wire.hpp"
 
@@ -491,10 +492,7 @@ has_enabled_automations(const AutomationProfile &profile) noexcept {
   });
 }
 
-struct AutomationError {
-  std::string path;
-  std::string message;
-};
+using AutomationError = DocumentError;
 using AutomationProfileResult =
     std::variant<AutomationProfile, AutomationError>;
 using AutomationValueParseResult =

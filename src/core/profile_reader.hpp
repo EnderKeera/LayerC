@@ -5,12 +5,13 @@
 
 #include <cstdint>
 #include <map>
-#include <set>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace layerc::core::detail {
 
+// Reads profile JSON shape and types; validate_profile owns the semantics.
 class ProfileReader {
 public:
   explicit ProfileReader(const json::Value &root);
@@ -19,6 +20,10 @@ public:
 private:
   [[nodiscard]] ProfileError failure() const;
   bool read_cooldowns(GameProfile &profile, std::uint32_t source_schema);
+  std::optional<std::int64_t> read_duration(const json::Value &value,
+                                            const std::string &path);
+  std::optional<std::int64_t> read_charges(const json::Value &value,
+                                           const std::string &path);
   bool read_cooldown_groups(GameProfile &profile,
                             std::uint32_t source_schema);
   bool read_panels(GameProfile &profile);
@@ -30,12 +35,9 @@ private:
                         HidControlBinding &out);
   bool read_bindings(GameProfile &profile);
   bool read_chord_token(const json::Value &token_value,
-                        const std::string &token_path,
-                        std::set<InputToken> &tokens,
-                        InputBinding &binding);
+                        const std::string &token_path, InputBinding &binding);
 
   const json::Value &root_;
-  std::set<std::string, std::less<>> cooldown_ids_;
   std::map<std::string, std::uint16_t, std::less<>> hid_binding_ids_;
   json::Reader fields_;
 };

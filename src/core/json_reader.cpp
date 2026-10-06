@@ -83,9 +83,6 @@ std::variant<Value, FieldError> parse_bounded(const std::string_view source,
   return std::get<Value>(std::move(parsed));
 }
 
-std::string FieldError::describe() const {
-  return message.empty() ? std::string{} : path + ": " + message;
-}
 bool Reader::fail(std::string path, std::string message) {
   if (ok()) error_ = {std::move(path), std::move(message)};
   return false;

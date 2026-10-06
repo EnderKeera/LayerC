@@ -227,9 +227,8 @@ load_build(const InstallLayout &layout, const std::string &id) {
                 "build " + id + " has no readable manifest");
   auto parsed = core::parse_update_manifest_json(*bytes);
   if (const auto *error = std::get_if<core::UpdateManifestError>(&parsed))
-    return fail(UpdateStage::read_installed, "build " + id + " manifest " +
-                                                 error->path + ": " +
-                                                 error->message);
+    return fail(UpdateStage::read_installed,
+                "build " + id + " manifest " + error->describe());
   auto &manifest = std::get<UpdateManifest>(parsed);
   if (build_id_for(manifest) != id)
     return fail(UpdateStage::read_installed,
@@ -416,7 +415,7 @@ apply_update_impl(const InstallLayout &layout, const std::string_view channel,
 
   auto parsed = core::parse_update_manifest_json(*manifest_bytes);
   if (const auto *error = std::get_if<core::UpdateManifestError>(&parsed))
-    return fail(UpdateStage::parse_manifest, error->path + ": " + error->message);
+    return fail(UpdateStage::parse_manifest, error->describe());
   const auto &target = std::get<UpdateManifest>(parsed);
   if (target.channel != channel)
     return fail(UpdateStage::check_channel,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/document_error.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -46,12 +47,7 @@ struct UpdateManifest {
   bool operator==(const UpdateManifest &) const = default;
 };
 
-struct UpdateManifestError {
-  std::string path;
-  std::string message;
-
-  bool operator==(const UpdateManifestError &) const = default;
-};
+using UpdateManifestError = DocumentError;
 
 // A path that is safe to join under an install root on Windows and Linux:
 // 1..max_update_path_depth segments of [A-Za-z0-9._-], none empty, none

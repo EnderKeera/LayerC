@@ -27,6 +27,7 @@ void test_profile_serialization();
 void test_profile_enabled_and_independent_bar_placement();
 void test_profile_schema3_hid();
 void test_panel_geometry();
+void test_profile_validation_owns_semantics();
 void test_runtime_instance_tracking();
 void test_json_unicode_and_errors();
 void test_json_field_reader();

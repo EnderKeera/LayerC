@@ -110,6 +110,7 @@ add_library(layerc_core STATIC
     src/core/json_value.cpp
     src/core/utf8.cpp
     src/core/profile.cpp
+    src/core/profile_validation.cpp
     src/core/profile_serialize.cpp
     src/core/panel_geometry.cpp
     src/core/runtime_instances.cpp

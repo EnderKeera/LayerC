@@ -27,7 +27,7 @@ read_exact_unsigned(const json::Value &value) {
 // json::parse_bounded, which reports syntax errors at "$@<byte offset>".
 [[nodiscard]] inline AutomationError
 json_parse_error(const json::FieldError &error) {
-  return AutomationError{error.path, error.message};
+  return error;
 }
 
 // The wire-name vocabulary lives in the public automation.hpp; these

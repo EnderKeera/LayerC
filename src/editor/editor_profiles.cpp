@@ -509,16 +509,12 @@ std::wstring EditorWindow::write_failure_message() const {
 
 namespace {
 
-// serialize → parse → reassign, keeping sidecar profile ids aligned.
+// Validates the in-memory profile and keeps sidecar profile ids aligned.
 std::optional<layerc::core::ProfileError> normalize_profile_bundle(
-    layerc::core::GameProfile &profile,
+    const layerc::core::GameProfile &profile,
     std::optional<layerc::core::VisualProfile> &visual,
     std::optional<layerc::core::AutomationProfile> &automation) {
-  const auto parsed = layerc::core::parse_profile_json(
-      layerc::core::serialize_profile_json(profile));
-  if (const auto *error = std::get_if<layerc::core::ProfileError>(&parsed))
-    return *error;
-  profile = std::get<layerc::core::GameProfile>(parsed);
+  if (auto error = layerc::core::validate_profile(profile)) return error;
   if (visual) visual->profile_id = profile.id;
   if (automation) automation->profile_id = profile.id;
   return std::nullopt;

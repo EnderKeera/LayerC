@@ -49,7 +49,7 @@ bool AutomationSession::start(AutomationProfile automation,
 void AutomationRuntimeHealth::record(const AutomationEvaluationResult &result) {
   if (result.faulted_automations.empty()) {
     if (result.error.has_value())
-      runtime_error = result.error->path + ": " + result.error->message;
+      runtime_error = result.error->describe();
     else
       runtime_error.reset();
     return;

@@ -389,4 +389,76 @@ void test_panel_geometry() {
          "column layout should place every card on one vertical axis");
 }
 
+// validate_profile is the one owner of profile semantics: an in-memory edit
+// and the same edit read from JSON report the identical error.
+void test_profile_validation_owns_semantics() {
+  using namespace layerc::core;
+  const auto base = std::get<GameProfile>(parse_profile_json(valid_profile));
+  expect(!validate_profile(base), "a parsed profile must validate");
+
+  struct Case {
+    std::string_view name;
+    void (*edit)(GameProfile &);
+    std::string_view path;
+  };
+  const Case cases[] = {
+      {"empty id", [](GameProfile &p) { p.id.clear(); }, "$.id"},
+      {"no executable", [](GameProfile &p) { p.game = {}; }, "$.game"},
+      {"duplicate cooldown",
+       [](GameProfile &p) { p.cooldowns.push_back(p.cooldowns.front()); },
+       "$.cooldowns[1].id"},
+      {"zero duration",
+       [](GameProfile &p) { p.cooldowns.front().duration = {}; },
+       "$.cooldowns[0].durationMs"},
+      {"too many charges",
+       [](GameProfile &p) { p.cooldowns.front().max_charges = 100; },
+       "$.cooldowns[0].maxCharges"},
+      {"panel anchor", [](GameProfile &p) { p.panels.front().anchor_x = 2.0; },
+       "$.panels[0].anchorX"},
+      {"bar width", [](GameProfile &p) { p.panels.front().bar.width = 1; },
+       "$.panels[0].bar.width"},
+      {"unknown panel cooldown",
+       [](GameProfile &p) { p.panels.front().cooldown_ids = {"ghost"}; },
+       "$.panels[0].cooldowns[0]"},
+      {"unknown binding cooldown",
+       [](GameProfile &p) { p.bindings.front().cooldown_id = "ghost"; },
+       "$.bindings[0].cooldownId"},
+      {"mouse code",
+       [](GameProfile &p) {
+         p.bindings.front().chord.tokens.front() = {InputDevice::mouse, 8, 0};
+       },
+       "$.bindings[0].chord[0].code"},
+      {"controller gap",
+       [](GameProfile &p) {
+         p.bindings.front().chord.tokens.front() = {InputDevice::controller,
+                                                    11, 0};
+       },
+       "$.bindings[0].chord[0].code"},
+      {"duplicate token",
+       [](GameProfile &p) {
+         auto &tokens = p.bindings.front().chord.tokens;
+         tokens.push_back(tokens.front());
+       },
+       "$.bindings[0].chord[1]"},
+      {"unknown HID binding",
+       [](GameProfile &p) {
+         p.bindings.front().chord.tokens.front() = {InputDevice::generic_hid,
+                                                    1, 0};
+       },
+       "$.bindings[0].chord[0].bindingId"},
+  };
+  for (const auto &test : cases) {
+    auto profile = base;
+    test.edit(profile);
+    const auto direct = validate_profile(profile);
+    expect(direct && direct->path == test.path,
+           std::string(test.name) + " must fail at " + std::string(test.path));
+    if (test.name == "unknown HID binding") continue; // has no JSON spelling
+    const auto parsed = parse_profile_json(serialize_profile_json(profile));
+    const auto *error = std::get_if<ProfileError>(&parsed);
+    expect(error != nullptr && direct && *error == *direct,
+           std::string(test.name) + " must fail identically when parsed");
+  }
+}
+
 } // namespace layerc::test

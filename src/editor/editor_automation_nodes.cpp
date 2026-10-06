@@ -108,7 +108,7 @@ void AutomationEditor::refresh_nodes(const HWND dialog) {
         *document_.automation(), document_.profile());
     validation_has_error_ = !error.message.empty();
     validation = validation_has_error_
-                     ? to_wide(error.path + ": " + error.message)
+                     ? to_wide(error.describe())
                      : L"Valid — no errors";
   }
   SendDlgItemMessageW(dialog, IDC_AUTOMATION_VALIDATION, LB_ADDSTRING, 0,
