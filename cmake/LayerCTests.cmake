@@ -1,0 +1,300 @@
+# Test targets and CTest registration. Included from the top-level
+# CMakeLists.txt when LAYERC_BUILD_TESTS is on; paths stay relative to the
+# source root because include() keeps the including directory scope.
+
+enable_testing()
+
+# Test construction and registration live together so newly added suites
+# inherit the same warnings, harness, labels, and MinGW runtime PATH.
+function(layerc_add_test target)
+    set(options NO_REGISTER WIN32 MINGW_UNICODE)
+    set(one_value_args TIMEOUT SKIP_RETURN_CODE RESOURCE_LOCK)
+    set(multi_value_args SOURCES LINK ARGUMENTS LABELS)
+    cmake_parse_arguments(TEST "${options}" "${one_value_args}"
+        "${multi_value_args}" ${ARGN})
+    if(TEST_UNPARSED_ARGUMENTS OR NOT TEST_SOURCES)
+        message(FATAL_ERROR "${target}: layerc_add_test requires SOURCES (unexpected: ${TEST_UNPARSED_ARGUMENTS})")
+    endif()
+    add_executable(${target} ${TEST_SOURCES} tests/test_support.cpp)
+    if(TEST_LINK)
+        target_link_libraries(${target} PRIVATE ${TEST_LINK})
+    endif()
+    if(TEST_MINGW_UNICODE)
+        layerc_win32_exe(${target})
+    elseif(TEST_WIN32)
+        layerc_win32(${target})
+        layerc_common_controls(${target})
+    else()
+        layerc_enable_warnings(${target})
+    endif()
+    if(TEST_NO_REGISTER)
+        return()
+    endif()
+
+    add_test(NAME ${target} COMMAND ${target} ${TEST_ARGUMENTS})
+    set(properties)
+    if(TEST_TIMEOUT)
+        list(APPEND properties TIMEOUT ${TEST_TIMEOUT})
+    endif()
+    if(TEST_SKIP_RETURN_CODE)
+        list(APPEND properties SKIP_RETURN_CODE ${TEST_SKIP_RETURN_CODE})
+    endif()
+    if(TEST_LABELS)
+        set(test_labels "${TEST_LABELS}")
+    else()
+        set(test_labels "required;headless")
+    endif()
+    if(TEST_RESOURCE_LOCK)
+        list(APPEND properties RESOURCE_LOCK ${TEST_RESOURCE_LOCK})
+    endif()
+    if(MINGW)
+        get_filename_component(mingw_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        list(APPEND properties ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${mingw_runtime_dir}")
+    endif()
+    set_tests_properties(${target} PROPERTIES ${properties} LABELS "${test_labels}")
+endfunction()
+
+layerc_add_test(layerc_runtime_tests
+    SOURCES tests/runtime_services_tests.cpp LINK layerc_runtime)
+
+# Tooling contract: the shared benchmark result writer emits the documented
+# keys without touching PowerShell's read-only $Host.
+find_program(LAYERC_PWSH NAMES pwsh)
+if(LAYERC_PWSH)
+    add_test(NAME layerc_benchmark_result_tests
+        COMMAND "${LAYERC_PWSH}" -NoProfile -NonInteractive -File
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_result_tests.ps1")
+    set_tests_properties(layerc_benchmark_result_tests PROPERTIES
+        TIMEOUT 60 LABELS "required;headless;tooling")
+endif()
+layerc_add_test(layerc_core_tests
+    SOURCES tests/core_tests.cpp
+    tests/cooldown_input_tests.cpp
+    tests/automation_tests.cpp
+    tests/automation_value_tests.cpp
+    tests/automation_contract_tests.cpp
+    tests/automation_session_tests.cpp
+    tests/profile_tests.cpp
+    tests/runtime_json_tests.cpp
+    tests/utf8_tests.cpp
+    tests/update_manifest_tests.cpp
+    tests/game_match_tests.cpp
+    tests/cooldown_group_tests.cpp
+    tests/panel_presentation_tests.cpp
+    tests/profile_module_tests.cpp
+    tests/live_edit_tests.cpp
+    tests/visual_profile_tests.cpp
+    tests/pixel_engine_tests.cpp
+    LINK layerc_core TIMEOUT 30)
+
+layerc_add_test(layerc_launcher_tests
+    SOURCES tests/launcher_update_tests.cpp
+    LINK layerc_launcher_core TIMEOUT 30)
+layerc_add_test(layerc_template_png_tests
+    SOURCES tests/template_png_tests.cpp
+    LINK layerc_bundle layerc_miniz TIMEOUT 30)
+layerc_add_test(layerc_automation_persistence_tests
+    SOURCES tests/automation_persistence_tests.cpp
+    LINK layerc_bundle TIMEOUT 30)
+if(WIN32)
+    layerc_add_test(layerc_launcher_win_tests
+        SOURCES tests/launcher_win_tests.cpp
+        LINK layerc_launcher_win TIMEOUT 30)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # Fixtures deliberately name only fields relevant to each case; C++20
+    # value-initializes the remaining aggregate members. Keep other -Wextra
+    # diagnostics enabled without requiring hundreds of empty initializers.
+    target_compile_options(layerc_core_tests PRIVATE -Wno-missing-field-initializers)
+endif()
+
+if(NOT WIN32)
+    layerc_add_test(layerc_linux_profile_store_tests
+        SOURCES tests/linux_profile_store_tests.cpp
+            src/platform/profile_transaction_testing.cpp
+        LINK layerc_linux TIMEOUT 30)
+    target_include_directories(layerc_linux_profile_store_tests PRIVATE
+        src/platform/linux)
+    # Test-only fsync fault injection; production binaries use libc directly.
+    target_link_options(layerc_linux_profile_store_tests PRIVATE
+        "LINKER:--wrap=fsync")
+
+    layerc_add_test(layerc_linux_profile_pack_tests
+        SOURCES tests/linux_profile_pack_tests.cpp
+        LINK layerc_bundle layerc_miniz TIMEOUT 45)
+
+    layerc_add_test(layerc_linux_event_loop_tests
+        SOURCES tests/linux_event_loop_tests.cpp
+        LINK layerc_linux layerc_runtime TIMEOUT 30)
+    target_include_directories(layerc_linux_event_loop_tests PRIVATE
+        src/daemon/linux
+        src/platform/linux)
+
+    # X11 tracking probes run against Xvfb; the test skips (77) when no
+    # display is available, so non-X builders stay green.
+    if(TARGET layerc_x11)
+        # Test-only target window for installed-binary capture smoke.
+        add_executable(layerc_linux_x11_smoke_fixture
+            tools/linux_x11_smoke_fixture.cpp)
+        target_link_libraries(layerc_linux_x11_smoke_fixture PRIVATE
+            ${X11_LIBRARIES})
+        layerc_enable_warnings(layerc_linux_x11_smoke_fixture)
+
+        layerc_add_test(layerc_linux_x11_tests
+            SOURCES tests/linux_x11_tests.cpp LINK layerc_x11
+            TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
+            SKIP_RETURN_CODE 77)
+        target_include_directories(layerc_linux_x11_tests PRIVATE
+            src/platform/linux)
+
+        layerc_add_test(layerc_linux_x11_capture_tests
+            SOURCES tests/linux_x11_capture_tests.cpp LINK layerc_x11
+            TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
+            SKIP_RETURN_CODE 77 ARGUMENTS $<TARGET_FILE:layercal>)
+        target_include_directories(layerc_linux_x11_capture_tests PRIVATE
+            src/platform/linux)
+        add_dependencies(layerc_linux_x11_capture_tests layercal)
+
+        layerc_add_test(layerc_linux_x11_visual_tests
+            SOURCES tests/linux_x11_visual_tests.cpp LINK layerc_daemon_linux
+            TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
+            SKIP_RETURN_CODE 77)
+
+        # Registry admission and automation health use a synthetic scan;
+        # keep this suite in the display-free headless gate.
+        layerc_add_test(layerc_linux_x11_registry_tests
+            SOURCES tests/linux_x11_registry_tests.cpp LINK layerc_daemon_linux
+            TIMEOUT 60)
+
+        # XI2 input + session replay. XTest is a test-only dependency:
+        # it is never linked into layerd, which only ever reads input.
+        if(X11_Xtst_LIB)
+        layerc_add_test(layerc_linux_x11_input_tests
+            SOURCES tests/linux_x11_input_tests.cpp
+            LINK layerc_daemon_linux ${X11_Xtst_LIB}
+            TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
+            SKIP_RETURN_CODE 77)
+        endif()
+
+        # Shape overlays + monitor scale; XTest checks real event routing
+        # when available and remains linked only into this test executable.
+        layerc_add_test(layerc_linux_x11_overlay_tests
+            SOURCES tests/linux_x11_overlay_tests.cpp LINK layerc_daemon_linux
+            TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
+            SKIP_RETURN_CODE 77)
+        if(X11_Xtst_LIB)
+            target_link_libraries(layerc_linux_x11_overlay_tests PRIVATE
+                ${X11_Xtst_LIB})
+            target_compile_definitions(layerc_linux_x11_overlay_tests PRIVATE
+                LAYERC_TEST_XTEST=1)
+        endif()
+    endif()
+
+    layerc_add_test(layerc_linux_control_channel_tests
+        SOURCES tests/linux_control_channel_tests.cpp
+            tests/linux_control_service_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30)
+    target_compile_definitions(layerc_linux_control_channel_tests PRIVATE
+        LAYERC_TEST_LAYERCTL_PATH="$<TARGET_FILE:layerctl>")
+    add_dependencies(layerc_linux_control_channel_tests layerctl)
+endif()
+
+layerc_add_test(layerc_automation_benchmark
+    SOURCES tools/automation_benchmark.cpp LINK layerc_core
+    TIMEOUT 30 LABELS required headless benchmark)
+set_tests_properties(layerc_automation_benchmark PROPERTIES RUN_SERIAL TRUE)
+
+add_test(NAME layerc_visual_asset_gc_contract_tests
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/visual_asset_gc_contracts.cmake")
+set_tests_properties(layerc_visual_asset_gc_contract_tests PROPERTIES
+    TIMEOUT 30 LABELS "required;headless")
+
+if(WIN32)
+    set(layerc_capture_test_link layerc_capture)
+else()
+    set(layerc_capture_test_link layerc_capture_common)
+endif()
+layerc_add_test(layerc_capture_tests
+    SOURCES tests/capture_math_tests.cpp
+    LINK ${layerc_capture_test_link} layerc_runtime TIMEOUT 30)
+
+if(WIN32)
+    if(LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS)
+        layerc_add_test(layerc_capture_integration_tests
+            SOURCES tests/capture_integration_tests.cpp LINK layerc_capture
+            TIMEOUT 30 LABELS interactive)
+    else()
+        layerc_add_test(layerc_capture_integration_tests
+            SOURCES tests/capture_integration_tests.cpp LINK layerc_capture
+            NO_REGISTER)
+    endif()
+
+    add_executable(layerc_capture_probe tools/capture_probe.cpp)
+    target_link_libraries(layerc_capture_probe PRIVATE layerc_capture)
+    layerc_win32_exe(layerc_capture_probe)
+
+    add_executable(lctest WIN32 tools/lctest.cpp)
+    layerc_win32_exe(lctest)
+
+    layerc_add_test(layerc_overlay_tests
+        SOURCES tests/overlay_window_tests.cpp LINK layerc_overlay
+        MINGW_UNICODE TIMEOUT 45 SKIP_RETURN_CODE 77
+        ARGUMENTS $<TARGET_FILE:lctest>)
+    target_include_directories(layerc_overlay_tests PRIVATE src/daemon)
+    add_dependencies(layerc_overlay_tests lctest)
+
+    layerc_add_test(layerc_platform_tests
+        SOURCES tests/platform_live_tests.cpp tests/platform_live_scenarios.cpp
+            tests/platform_live_test_support.cpp
+            src/platform/profile_transaction_testing.cpp
+        LINK layerc_core layerc_windows WIN32 TIMEOUT 30)
+
+    layerc_add_test(layerc_daemon_runtime_tests
+        SOURCES tests/daemon_runtime_services_tests.cpp
+        LINK layerc_runtime WIN32 TIMEOUT 30)
+    target_include_directories(layerc_daemon_runtime_tests PRIVATE src/daemon)
+
+    layerc_add_test(layerc_bundle_tests
+        SOURCES tests/profile_pack_tests.cpp LINK layerc_bundle layerc_miniz
+        WIN32 TIMEOUT 45)
+
+    layerc_add_test(layerc_isolated_visual_tests
+        SOURCES tests/isolated_visual_protocol_tests.cpp
+            tests/capture_health_diagnostics_tests.cpp
+        LINK layerc_isolated layerc_runtime
+        WIN32 TIMEOUT 30)
+    target_include_directories(layerc_isolated_visual_tests PRIVATE
+        src/daemon)
+
+    layerc_add_test(layerc_companion_tests
+        SOURCES tests/companion_tests.cpp tests/companion_widget_tests.cpp
+        LINK layerc_gamebar
+        WIN32 TIMEOUT 30)
+    target_include_directories(layerc_companion_tests PRIVATE src/gamebar)
+
+    layerc_add_test(layerc_editor_tests
+        SOURCES tests/editor_dialog_tests.cpp tests/editor_regression_tests.cpp
+            tests/editor_main_dialog_tests.cpp
+            tests/editor_appearance_dialog_tests.cpp
+            tests/editor_tasks_dialog_tests.cpp
+            tests/editor_pack_dialog_tests.cpp
+            tests/editor_automation_dialog_tests.cpp
+            tests/editor_hid_dialog_tests.cpp
+            tests/editor_diagnostics_dialog_tests.cpp
+            tests/editor_document_tests.cpp tests/editor_calibration_tests.cpp
+            tests/editor_asset_tests.cpp
+            src/editor/editor_resources.rc
+        LINK layerc_editor_ui WIN32 TIMEOUT 30)
+    target_include_directories(layerc_editor_tests PRIVATE src/editor)
+
+    layerc_add_test(layerc_calibration_tests
+        SOURCES tests/calibration_window_tests.cpp
+            tests/calibration_reference_tests.cpp
+            src/calibration/calibration_resources.rc
+        LINK layerc_calibration_ui WIN32 TIMEOUT 30)
+
+endif()
