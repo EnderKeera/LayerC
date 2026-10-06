@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/cooldown_groups.hpp"
 #include "layerc/core/document_error.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/enum_wire.hpp"
@@ -790,7 +791,7 @@ public:
   using ClockReader = std::function<TimePoint()>;
   AutomationRuntime(AutomationProfile profile,
                     AutomationPersistentValues persistent_values = {},
-                    std::span<const CooldownGroup> cooldown_groups = {},
+                    CooldownGroupTopology cooldown_groups = {},
                     ClockReader clock = MonotonicClock::now);
   ~AutomationRuntime();
 
@@ -827,8 +828,10 @@ public:
   // expired so callers can refresh overlays.
   [[nodiscard]] bool expire_overlay_overrides(TimePoint now);
   [[nodiscard]] std::optional<TimePoint> next_deadline() const noexcept;
+  // Native sessions pass the engine's immutable topology handle; no second
+  // group-definition copy or borrowed lifetime is held by the runtime.
   void reconfigure(AutomationProfile profile,
-                   std::span<const CooldownGroup> cooldown_groups = {});
+                   CooldownGroupTopology cooldown_groups = {});
   void apply_persistent_values(const AutomationPersistentValues &values);
   void retry(std::string_view automation_id);
   [[nodiscard]] bool persistent_dirty() const noexcept;

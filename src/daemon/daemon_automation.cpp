@@ -106,7 +106,7 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
               session->automation.runtime()->cooldown_groups(),
               session->automation.profile().cooldown_groups)) {
         session->automation.runtime()->reconfigure(
-            profile, session->automation.profile().cooldown_groups);
+            profile, session->automation.cooldowns().group_topology());
         session->automation.runtime()->apply_persistent_values(
             persistence_.attach(source->path, profile, now).values);
         // Reconfigure resets session-scoped state (variables, timers, edge

@@ -57,8 +57,8 @@ struct EvaluationBudget {
 
 struct AutomationRuntime::Impl {
   AutomationProfile profile;
-  // Group semantics come only from the shared topology (F-A11): the runtime
-  // derives intra-batch events from the same sets the engine applies.
+  // The engine's shared immutable topology (F-A11): no runtime-owned copy of
+  // group definitions; staged engines and sessions keep safe value boundaries.
   CooldownGroupTopology groups;
   AutomationRuntimeSnapshot state;
   AutomationSessionEdges edges;
@@ -70,7 +70,7 @@ struct AutomationRuntime::Impl {
   ClockReader clock;
 
   Impl(AutomationProfile source, AutomationPersistentValues persistent,
-       std::span<const CooldownGroup> group_definitions,
+       CooldownGroupTopology group_definitions,
        ClockReader clock_reader);
 
   // Accepted stored values replace persistent variables' current values.

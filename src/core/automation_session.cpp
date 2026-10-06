@@ -237,7 +237,7 @@ bool AutomationSession::start(AutomationProfile automation,
                               const bool trace_enabled, AutomationRuntime::ClockReader clock) {
   if (!clock) clock = std::chrono::steady_clock::now;
   automation_runtime_ = std::make_unique<AutomationRuntime>(
-      std::move(automation), std::move(values), profile_.cooldown_groups,
+      std::move(automation), std::move(values), cooldowns_.group_topology(),
       std::move(clock));
   automation_runtime_->set_trace_enabled(trace_enabled);
   (void)poll_ready(now, false, sink);

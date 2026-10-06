@@ -57,6 +57,9 @@ public:
   // dormant member settings do not participate in owner reconciliation.
   [[nodiscard]] const CooldownOwnerDefinition *
   owner_definition(std::string_view cooldown_id) const;
+  [[nodiscard]] const CooldownGroupTopology &group_topology() const noexcept {
+    return groups_;
+  }
   // Preserve only unchanged owners; any reset alias resets its entire owner.
   void reconfigure(std::span<const CooldownDefinition> definitions,
                    std::span<const std::string> reset_ids, TimePoint now,

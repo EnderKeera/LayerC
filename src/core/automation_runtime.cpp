@@ -54,9 +54,9 @@ void AutomationRuntime::Impl::add_trace(const AutomationEvent &event,
 
 AutomationRuntime::AutomationRuntime(
     AutomationProfile profile, AutomationPersistentValues persistent,
-    const std::span<const CooldownGroup> cooldown_groups, ClockReader clock)
+    CooldownGroupTopology cooldown_groups, ClockReader clock)
     : impl_(std::make_unique<Impl>(std::move(profile), std::move(persistent),
-                                   cooldown_groups, std::move(clock))) {}
+                                   std::move(cooldown_groups), std::move(clock))) {}
 AutomationRuntime::~AutomationRuntime() = default;
 const AutomationProfile &AutomationRuntime::profile() const noexcept {
   return impl_->profile;
@@ -177,7 +177,7 @@ std::optional<TimePoint> AutomationRuntime::next_deadline() const noexcept {
 }
 void AutomationRuntime::reconfigure(
     AutomationProfile profile,
-    const std::span<const CooldownGroup> cooldown_groups) {
+    CooldownGroupTopology cooldown_groups) {
   AutomationRuntimeSnapshot next;
   for (const auto &variable : profile.variables) {
     auto value = variable.default_value;
@@ -201,7 +201,7 @@ void AutomationRuntime::reconfigure(
     if (retained.contains(item.owner_automation))
       next.overlay_overrides.push_back(item);
   impl_->profile = std::move(profile);
-  impl_->groups = CooldownGroupTopology(cooldown_groups);
+  impl_->groups = std::move(cooldown_groups);
   impl_->state = std::move(next);
   // A profile switch invalidates the daemon's previous ready/value
   // observations: re-baseline the edge monitors with the new profile.
