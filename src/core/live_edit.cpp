@@ -2,7 +2,8 @@
 
 #include "layerc/core/automation.hpp"
 
-#include "layerc/core/base64.hpp"
+#include "layerc/core/nested_document.hpp"
+#include "layerc/core/profile.hpp"
 #include "layerc/core/cooldown_groups.hpp"
 #include "layerc/core/frame.hpp"
 #include "layerc/core/json_reader.hpp"
@@ -50,7 +51,7 @@ constexpr std::array k_field_keys{
     LiveFieldKeys{target_window_field, {"targetWindow"}},
     LiveFieldKeys{profile_key_field, {"profileKey"}},
     LiveFieldKeys{panel_id_field, {"panelId"}},
-    LiveFieldKeys{profile_field, {"profileBase64"}},
+    LiveFieldKeys{profile_field, {"profile"}},
     LiveFieldKeys{text_field, {"text"}},
     LiveFieldKeys{anchor_field, {"anchorX", "anchorY"}},
     LiveFieldKeys{final_field, {"final"}},
@@ -250,60 +251,34 @@ std::string encode_live_message_json(const LiveMessage &message) {
   const auto carries = [&](const LiveField field) {
     return (spec.fields & field) != 0U;
   };
-  const auto encoded_profile = carries(profile_field)
-                                   ? base64_encode(message.profile_json)
-                                   : std::string{};
-  std::string output;
-  output.reserve(192U + message.profile_key.size() + message.panel_id.size() +
-                 encoded_profile.size() + message.text.size());
-  const auto append_quoted_unsigned = [&](const std::uint64_t value) {
-    output.push_back('"');
-    json::append_unsigned(output, value);
-    output.push_back('"');
-  };
-
-  output += "{\"protocolVersion\":";
-  json::append_unsigned(output, message.protocol_version);
-  output += ",\"type\":";
-  json::append_quoted(output, spec.wire);
-  output += ",\"revision\":";
-  append_quoted_unsigned(message.revision);
-  if (carries(edit_session_field)) {
-    output += ",\"editSession\":";
-    append_quoted_unsigned(message.edit_session);
-  }
-  if (carries(target_window_field)) {
-    output += ",\"targetWindow\":";
-    append_quoted_unsigned(message.target_window);
-  }
-  if (carries(profile_key_field)) {
-    output += ",\"profileKey\":";
-    json::append_quoted(output, message.profile_key);
-  }
-  if (carries(panel_id_field)) {
-    output += ",\"panelId\":";
-    json::append_quoted(output, message.panel_id);
-  }
-  if (carries(profile_field)) {
-    output += ",\"profileBase64\":";
-    json::append_quoted(output, encoded_profile);
-  }
-  if (carries(text_field)) {
-    output += ",\"text\":";
-    json::append_quoted(output, message.text);
-  }
+  using json::Value;
+  Value::Object object{
+      {"protocolVersion", Value(static_cast<std::int64_t>(message.protocol_version))},
+      {"type", Value(std::string(spec.wire))},
+      {"revision", json::decimal_unsigned_value(message.revision)}};
+  if (carries(edit_session_field))
+    object.emplace("editSession", json::decimal_unsigned_value(message.edit_session));
+  if (carries(target_window_field))
+    object.emplace("targetWindow", json::decimal_unsigned_value(message.target_window));
+  if (carries(profile_key_field))
+    object.emplace("profileKey", Value(message.profile_key));
+  if (carries(panel_id_field))
+    object.emplace("panelId", Value(message.panel_id));
+  if (carries(profile_field))
+    object.emplace("profile", json::nested_document_value(
+                                  message.profile_json, max_profile_json_bytes));
+  if (carries(text_field))
+    object.emplace("text", Value(message.text));
   if (carries(anchor_field)) {
-    output += ",\"anchorX\":";
-    json::append_number(output, message.anchor_x);
-    output += ",\"anchorY\":";
-    json::append_number(output, message.anchor_y);
+    object.emplace("anchorX", Value(message.anchor_x));
+    object.emplace("anchorY", Value(message.anchor_y));
   }
   if (carries(direct_drag_field))
-    output += message.direct_drag ? ",\"directDrag\":true"
-                                  : ",\"directDrag\":false";
+    object.emplace("directDrag", Value(message.direct_drag));
   if (carries(final_field))
-    output += message.final ? ",\"final\":true" : ",\"final\":false";
-  output.push_back('}');
+    object.emplace("final", Value(message.final));
+  std::string output;
+  json::append_value(output, Value(std::move(object)));
   return output;
 }
 
@@ -344,7 +319,6 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
     return (spec->fields & field) != 0U ? json::Required::yes
                                         : json::Required::no;
   };
-  std::string encoded_profile;
   const auto revision = fields.unsigned_integer(
       root, "revision", "$", std::numeric_limits<std::uint64_t>::max(),
       json::Required::yes, 0, json::IntegerEncoding::decimal_string);
@@ -365,8 +339,6 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
                      required(profile_key_field), json::EmptyString::allow) ||
       !fields.string(root, "panelId", "$", message.panel_id,
                      required(panel_id_field), json::EmptyString::allow) ||
-      !fields.string(root, "profileBase64", "$", encoded_profile,
-                     required(profile_field), json::EmptyString::allow) ||
       !fields.string(root, "text", "$", message.text, required(text_field),
                      json::EmptyString::allow) ||
       !fields.boolean(root, "directDrag", "$", message.direct_drag,
@@ -378,10 +350,10 @@ LiveMessageResult decode_live_message_json(const std::string_view source) {
   message.target_window = *window;
   message.anchor_x = *anchor_x;
   message.anchor_y = *anchor_y;
-  const auto decoded_profile = base64_decode(encoded_profile);
-  if (!decoded_profile.has_value())
-    return LiveProtocolError{"profileBase64 is invalid"};
-  message.profile_json = *decoded_profile;
+  if ((spec->fields & profile_field) != 0U &&
+      !json::read_nested_document(fields, root, "profile", message.profile_json,
+                                  max_profile_json_bytes))
+    return LiveProtocolError{fields.error().describe()};
   return message;
 }
 
@@ -415,7 +387,12 @@ live_trace_prefix_count(const LiveMessage &base_message,
 }
 
 LiveFrameResult encode_live_frame(const LiveMessage &message) {
-  const auto payload = encode_live_message_json(message);
+  std::string payload;
+  try {
+    payload = encode_live_message_json(message);
+  } catch (const std::invalid_argument &error) {
+    return LiveProtocolError{error.what()};
+  }
   if (payload.size() > max_live_message_bytes)
     return LiveProtocolError{"live message exceeds the 512 KiB limit"};
   const auto length = static_cast<std::uint32_t>(payload.size());

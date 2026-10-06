@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace layerc::core {
 namespace {
@@ -532,123 +533,114 @@ VisualResult parse_visual_profile_value(const json::Value &root,
 
 namespace {
 
-void append_observation(std::string &output, const PixelRule &rule) {
-  output += "    {\n      \"type\": \"pixel\",\n      \"id\": ";
-  json::append_quoted(output, rule.id);
-  output += ",\n      \"name\": "; json::append_quoted(output, rule.name);
-  output += ",\n      \"region\": {\"x\": "; json::append_number(output, rule.region.x);
-  output += ", \"y\": "; json::append_number(output, rule.region.y);
-  output += ", \"width\": "; json::append_number(output, rule.region.width);
-  output += ", \"height\": "; json::append_number(output, rule.region.height);
-  output += "},\n      \"predicate\": {";
-  std::visit(
-      [&](const auto &predicate) {
-        using T = std::decay_t<decltype(predicate)>;
+json::Value region_value(const NormalizedRegion &region) {
+  return json::Value(json::Value::Object{
+      {"x", json::Value(region.x)},
+      {"y", json::Value(region.y)},
+      {"width", json::Value(region.width)},
+      {"height", json::Value(region.height)}});
+}
+
+json::Value observation_value(const PixelRule &rule) {
+  auto predicate = std::visit(
+      [](const auto &value) -> json::Value {
+        using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, AverageColorPredicate>) {
-          output += "\"type\": \"averageColor\", \"target\": ";
-          json::append_color_quoted(output, predicate.target_color);
-          output += ", \"tolerance\": " +
-                    std::to_string(predicate.tolerance);
+          return json::Value(json::Value::Object{
+              {"type", json::Value(std::string("averageColor"))},
+              {"target", json::Value(json::color_text(value.target_color))},
+              {"tolerance", json::Value(std::int64_t{value.tolerance})}});
         } else if constexpr (std::is_same_v<T, BrightnessPredicate>) {
-          output += "\"type\": \"brightness\", \"comparison\": \"";
-output += enum_wire_name(brightness_wire, predicate.comparison).value_or("below");
-          output += "\", \"threshold\": " +
-                    std::to_string(predicate.threshold);
+          return json::Value(json::Value::Object{
+              {"type", json::Value(std::string("brightness"))},
+              {"comparison", json::Value(std::string(
+                  enum_wire_name(brightness_wire, value.comparison)
+                      .value_or("below")))},
+              {"threshold", json::Value(std::int64_t{value.threshold})}});
         } else {
-          output += "\"type\": \"colorCoverage\", \"target\": ";
-          json::append_color_quoted(output, predicate.target_color);
-          output += ", \"tolerance\": " +
-                    std::to_string(predicate.tolerance) +
-                    ", \"minimumPercent\": ";
-          json::append_number(output, predicate.minimum_fraction * 100.0);
+          return json::Value(json::Value::Object{
+              {"type", json::Value(std::string("colorCoverage"))},
+              {"target", json::Value(json::color_text(value.target_color))},
+              {"tolerance", json::Value(std::int64_t{value.tolerance})},
+              {"minimumPercent", json::Value(value.minimum_fraction * 100.0)}});
         }
       },
       rule.predicate);
-  output += "},\n      \"stableSamples\": " +
-            std::to_string(rule.stable_samples) + ",\n      \"repeat\": \"" +
-            std::string(enum_wire_name(pixel_repeat_wire, rule.repeat).value_or("edge")) + "\"\n    }";
+  return json::Value(json::Value::Object{
+      {"type", json::Value(std::string("pixel"))},
+      {"id", json::Value(rule.id)},
+      {"name", json::Value(rule.name)},
+      {"region", region_value(rule.region)},
+      {"predicate", std::move(predicate)},
+      {"stableSamples", json::Value(std::int64_t{rule.stable_samples})},
+      {"repeat", json::Value(std::string(
+          enum_wire_name(pixel_repeat_wire, rule.repeat).value_or("edge")))}});
 }
 
-void append_observation(std::string &output, const TemplateState &state) {
-  output += "    {\n      \"type\": \"template\",\n      \"id\": ";
-  json::append_quoted(output, state.id);
-  output += ",\n      \"name\": ";
-  json::append_quoted(output, state.name);
-  output += ",\n      \"searchRegion\": {\"x\": ";
-  json::append_number(output, state.search_region.x);
-  output += ", \"y\": ";
-  json::append_number(output, state.search_region.y);
-  output += ", \"width\": ";
-  json::append_number(output, state.search_region.width);
-  output += ", \"height\": ";
-  json::append_number(output, state.search_region.height);
-  output += "},\n      \"expectedSize\": {\"width\": ";
-  json::append_number(output, state.expected_width);
-  output += ", \"height\": ";
-  json::append_number(output, state.expected_height);
-  output += "},\n      \"references\": [";
-  for (std::size_t index = 0; index < state.references.size(); ++index) {
-    if (index != 0) output += ", ";
-    output += "{\"asset\": ";
-    json::append_quoted(output, state.references[index].asset_sha256);
-    output += "}";
-  }
-  output += "],\n      \"confidence\": ";
-  json::append_number(output, state.confidence_threshold);
-  output += ",\n      \"scaleTolerancePercent\": ";
-  json::append_number(output, state.scale_tolerance * 100.0);
-  output += ",\n      \"colorTolerance\": " +
-            std::to_string(state.color_tolerance);
-  output += ",\n      \"stableSamples\": " +
-            std::to_string(state.stable_samples);
-  output += ",\n      \"repeat\": \"" +
-            std::string(enum_wire_name(pixel_repeat_wire, state.repeat).value_or("edge")) + "\"\n    }";
+json::Value observation_value(const TemplateState &state) {
+  json::Value::Array references;
+  references.reserve(state.references.size());
+  for (const auto &reference : state.references)
+    references.emplace_back(json::Value::Object{
+        {"asset", json::Value(reference.asset_sha256)}});
+  return json::Value(json::Value::Object{
+      {"type", json::Value(std::string("template"))},
+      {"id", json::Value(state.id)},
+      {"name", json::Value(state.name)},
+      {"searchRegion", region_value(state.search_region)},
+      {"expectedSize", json::Value(json::Value::Object{
+          {"width", json::Value(state.expected_width)},
+          {"height", json::Value(state.expected_height)}})},
+      {"references", json::Value(std::move(references))},
+      {"confidence", json::Value(state.confidence_threshold)},
+      {"scaleTolerancePercent", json::Value(state.scale_tolerance * 100.0)},
+      {"colorTolerance", json::Value(std::int64_t{state.color_tolerance})},
+      {"stableSamples", json::Value(std::int64_t{state.stable_samples})},
+      {"repeat", json::Value(std::string(
+          enum_wire_name(pixel_repeat_wire, state.repeat).value_or("edge")))}});
 }
 
 } // namespace
 
 std::string serialize_visual_profile_json(const VisualProfile &profile) {
+  json::Value::Array observations;
+  observations.reserve(profile.observations.size());
+  for (const auto &observation : profile.observations)
+    observations.push_back(std::visit(
+        [](const auto &item) { return observation_value(item); }, observation));
+  json::Value::Array triggers;
+  triggers.reserve(profile.triggers.size());
+  for (const auto &trigger : profile.triggers) {
+    json::Value::Object value{
+      {"cooldownId", json::Value(trigger.cooldown_id)},
+      {"observationId", json::Value(trigger.observation_id)},
+      {"enabled", json::Value(trigger.enabled)},
+      {"mode", json::Value(std::string(
+          enum_wire_name(visual_trigger_mode_wire, trigger.mode)
+              .value_or("confirmInput")))},
+      {"onUnavailable", json::Value(std::string(
+          enum_wire_name(capture_unavailable_policy_wire,
+                         trigger.unavailable_policy).value_or("ignore")))}};
+    if (trigger.mode == VisualTriggerMode::pixel_only)
+      value.emplace("keepInput", json::Value(trigger.keep_input));
+    else
+      value.emplace("confirmationTimeoutMs", json::Value(
+          static_cast<std::int64_t>(trigger.confirmation_timeout.count())));
+    triggers.emplace_back(std::move(value));
+  }
+  const auto root = json::Value(json::Value::Object{
+      {"schemaVersion", json::Value(std::int64_t{2})},
+      {"profileId", json::Value(profile.profile_id)},
+      {"sampleRateHz", json::Value(std::int64_t{profile.sample_rate_hz})},
+      {"quality", json::Value(std::string(
+          enum_wire_name(capture_quality_wire, profile.quality)
+              .value_or("balanced")))},
+      {"observations", json::Value(std::move(observations))},
+      {"triggers", json::Value(std::move(triggers))}});
   std::string output;
   output.reserve(2'048);
-  output += "{\n  \"schemaVersion\": 2,\n  \"profileId\": ";
-  json::append_quoted(output, profile.profile_id);
-  output += ",\n  \"sampleRateHz\": " +
-            std::to_string(profile.sample_rate_hz) + ",\n  \"quality\": ";
-  json::append_quoted(output, enum_wire_name(capture_quality_wire, profile.quality).value_or("balanced"));
-  output += ",\n  \"observations\": [\n";
-  for (std::size_t index = 0; index < profile.observations.size(); ++index) {
-    std::visit([&](const auto &item) { append_observation(output, item); },
-               profile.observations[index]);
-    output += index + 1 == profile.observations.size() ? "\n" : ",\n";
-  }
-  output += "  ],\n  \"triggers\": [\n";
-  for (std::size_t index = 0; index < profile.triggers.size(); ++index) {
-    const auto &trigger = profile.triggers[index];
-    output += "    {\n      \"cooldownId\": "; json::append_quoted(output, trigger.cooldown_id);
-    output += ",\n      \"observationId\": ";
-    json::append_quoted(output, trigger.observation_id);
-    output += ",\n      \"enabled\": ";
-    json::append_bool(output, trigger.enabled);
-    output += ",\n      \"mode\": \"" +
-              std::string(enum_wire_name(visual_trigger_mode_wire, trigger.mode)
-                              .value_or("confirmInput")) +
-              "\"";
-    if (trigger.mode == VisualTriggerMode::pixel_only) {
-      output += ",\n      \"keepInput\": ";
-      json::append_bool(output, trigger.keep_input);
-    } else {
-      output += ",\n      \"confirmationTimeoutMs\": " +
-                std::to_string(trigger.confirmation_timeout.count());
-    }
-    output += ",\n      \"onUnavailable\": \"" +
-              std::string(enum_wire_name(capture_unavailable_policy_wire,
-                                         trigger.unavailable_policy)
-                              .value_or("ignore")) +
-              "\"";
-    output += "\n    }";
-    output += index + 1 == profile.triggers.size() ? "\n" : ",\n";
-  }
-  output += "  ]\n}\n";
+  json::append_value(output, root, 2);
+  output += "\r\n";
   return output;
 }
 

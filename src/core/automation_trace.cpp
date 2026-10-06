@@ -40,43 +40,31 @@ AutomationReplayResult replay_automation_events(
 }
 
 
+namespace {
+json::Value trace_entry_tree(const AutomationTraceEntry &entry) {
+  using json::Value;
+  Value::Object object{
+      {"sequence", json::exact_unsigned_value(entry.sequence)},
+      {"timeMs", json::exact_unsigned_value(static_cast<std::uint64_t>(
+                    std::max<std::int64_t>(0, entry.timestamp.count())))},
+      {"automation", Value(entry.automation_id)}, {"rule", Value(entry.rule_id)},
+      {"phase", Value(entry.phase)}, {"detail", Value(entry.detail)}};
+  if (entry.source_event) {
+    object.emplace("event", Value(std::string(automation_event_name(entry.source_event->kind))));
+    object.emplace("source", Value(entry.source_event->source_id));
+    object.emplace("origin", json::exact_unsigned_value(entry.source_event->origin_token));
+    Value::Object fields;
+    for (const auto &[name, value] : entry.source_event->fields)
+      fields.emplace(name, detail::tagged_automation_value_tree(value, detail::trace_value_tags));
+    object.emplace("fields", Value(std::move(fields)));
+  }
+  return Value(std::move(object));
+}
+} // namespace
+
 void append_layerc_trace_entry(std::string &output,
                                const AutomationTraceEntry &entry) {
-  output += "{\"sequence\":";
-  detail::append_exact_unsigned(output, entry.sequence);
-  output += ",\"timeMs\":";
-  detail::append_exact_unsigned(
-      output, static_cast<std::uint64_t>(
-                  std::max<std::int64_t>(0, entry.timestamp.count())));
-  output += ",\"automation\":";
-  json::append_quoted(output, entry.automation_id);
-  output += ",\"rule\":";
-  json::append_quoted(output, entry.rule_id);
-  output += ",\"phase\":";
-  json::append_quoted(output, entry.phase);
-  output += ",\"detail\":";
-  json::append_quoted(output, entry.detail);
-  if (!entry.source_event.has_value()) {
-    output.push_back('}');
-    return;
-  }
-  output += ",\"event\":";
-  json::append_quoted(output,
-                      detail::automation_event_name(entry.source_event->kind));
-  output += ",\"source\":";
-  json::append_quoted(output, entry.source_event->source_id);
-  output += ",\"origin\":";
-  detail::append_exact_unsigned(output, entry.source_event->origin_token);
-  output += ",\"fields\":{";
-  json::Join join;
-  for (const auto &[name, value] : entry.source_event->fields) {
-    join(output);
-    json::append_quoted(output, name);
-    output.push_back(':');
-    detail::append_tagged_automation_value(output, value,
-                                           detail::trace_value_tags);
-  }
-  output += "}}";
+  json::append_value(output, trace_entry_tree(entry));
 }
 
 AutomationTraceEntry
@@ -92,16 +80,17 @@ make_automation_root_trace_entry(const AutomationEvent &event,
   return entry;
 }
 
-std::string
-export_layerc_trace(const std::span<const AutomationTraceEntry> entries) {
-  std::string output =
-      "{\"schemaVersion\":1,\"kind\":\"layerctrace\",\"entries\":[";
-  json::Join join;
-  for (const auto &entry : entries) {
-    join(output);
-    append_layerc_trace_entry(output, entry);
-  }
-  output += "]}\n";
+std::string export_layerc_trace(const std::span<const AutomationTraceEntry> entries) {
+  using json::Value;
+  Value::Array array;
+  array.reserve(entries.size());
+  for (const auto &entry : entries)
+    array.push_back(trace_entry_tree(entry));
+  std::string output;
+  json::append_value(output, Value(Value::Object{
+      {"schemaVersion", Value(std::int64_t{1})}, {"kind", Value(std::string("layerctrace"))},
+      {"entries", Value(std::move(array))}}));
+  output.push_back('\n');
   return output;
 }
 

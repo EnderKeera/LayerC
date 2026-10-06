@@ -2,6 +2,7 @@
 #include "test_support.hpp"
 
 #include "layerc/core/visual.hpp"
+#include "layerc/core/json.hpp"
 #include "layerc/core/calibration.hpp"
 
 #include <string>
@@ -82,9 +83,9 @@ void test_visual_profile_parser() {
   VisualProfile empty;
   empty.profile_id = "game";
   expect(serialize_visual_profile_json(empty) ==
-             "{\n  \"schemaVersion\": 2,\n  \"profileId\": \"game\",\n"
-             "  \"sampleRateHz\": 10,\n  \"quality\": \"balanced\",\n"
-             "  \"observations\": [\n  ],\n  \"triggers\": [\n  ]\n}\n",
+             "{\r\n  \"observations\": [],\r\n  \"profileId\": \"game\",\r\n"
+             "  \"quality\": \"balanced\",\r\n  \"sampleRateHz\": 10,\r\n"
+             "  \"schemaVersion\": 2,\r\n  \"triggers\": []\r\n}\r\n",
          "visual sidecar empty-array layout is byte-stable");
   const auto parsed = parse_visual_profile_json(serialized, base);
   expect(std::holds_alternative<VisualProfile>(parsed) &&
@@ -244,22 +245,25 @@ void test_calibration_protocol() {
              round_trip->visual_json == request.visual_json,
          "calibration requests should preserve bounded JSON and 64-bit HWNDs");
 
+  std::string escaped_document;
+  json::append_value(escaped_document, json::Value(json::Value::Object{
+      {"payload", json::Value(std::string(100U * 1024U, '\\'))}}));
   CalibrationRequest escaped_request{
       .target_window = 1,
       .cooldown_id = "dash",
-      .profile_json = std::string(200U * 1024U, '\\'),
-      .visual_json = std::string(200U * 1024U, '\\')};
+      .profile_json = escaped_document,
+      .visual_json = escaped_document};
   const auto escaped_packet = encode_calibration_request(escaped_request);
   const auto escaped_round_trip =
       decode_calibration_request(escaped_packet);
-  expect(escaped_packet.size() > 512U * 1024U &&
+  expect(escaped_packet.size() < 512U * 1024U &&
              std::holds_alternative<CalibrationRequest>(
                  escaped_round_trip) &&
              std::get<CalibrationRequest>(escaped_round_trip).profile_json ==
                  escaped_request.profile_json &&
              std::get<CalibrationRequest>(escaped_round_trip).visual_json ==
                  escaped_request.visual_json,
-         "the bounded calibration envelope should hold two heavily escaped profile documents");
+         "nested calibration documents must avoid a second layer of escaping");
 
   CalibrationResponse response{.applied = true,
                                .visual_json = "{\"schemaVersion\":1}"};
@@ -271,11 +275,25 @@ void test_calibration_protocol() {
          "calibration Apply responses should round-trip their single-observation sidecar");
   expect(std::holds_alternative<CalibrationProtocolError>(
              decode_calibration_response(
-                 R"({"protocolVersion":1,"applied":true,"visualJson":"","error":""})")),
+                 R"({"protocolVersion":2,"applied":true,"visual":null,"error":""})")),
          "an applied calibration response must contain a rule assignment");
+  const auto old_peer = decode_calibration_request(
+      R"({"protocolVersion":1,"targetWindow":"1","cooldownId":"dash","profileJson":"{}"})");
+  expect(std::holds_alternative<CalibrationProtocolError>(old_peer) &&
+             !std::get<CalibrationProtocolError>(old_peer).message.empty(),
+         "mismatched calibration peers must be rejected visibly");
+  auto absent = request;
+  absent.visual_json.clear();
+  const auto absent_round_trip = decode_calibration_request(
+      encode_calibration_request(absent));
+  expect(std::holds_alternative<CalibrationRequest>(absent_round_trip) &&
+             std::get<CalibrationRequest>(absent_round_trip).visual_json.empty(),
+         "an absent calibration sidecar must round-trip as JSON null");
   for (const auto packet : {
-           R"({"protocolVersion":1,"targetWindow":"","cooldownId":"dash","profileJson":""})",
-           R"({"protocolVersion":1,"targetWindow":"1","cooldownId":"","profileJson":""})"}) {
+           R"({"protocolVersion":2,"targetWindow":"","cooldownId":"dash","profile":{},"visual":null})",
+           R"({"protocolVersion":2,"targetWindow":"1","cooldownId":"","profile":{},"visual":null})",
+           R"({"protocolVersion":2,"targetWindow":"1","cooldownId":"dash","profile":"{}","visual":null})",
+           R"({"protocolVersion":2,"targetWindow":"1","cooldownId":"dash","profile":{},"visual":[]})"}) {
     const auto invalid = decode_calibration_request(packet);
     const auto *error = std::get_if<CalibrationProtocolError>(&invalid);
     expect(error != nullptr && !error->message.empty() &&

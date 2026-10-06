@@ -303,22 +303,28 @@ void test_live_protocol_framing() {
              encoded.find("anchorY") == std::string::npos,
          "live JSON should preserve UTF-8, profile bytes, and 64-bit identifiers exactly");
 
+  const auto initial_tree = json::parse(encoded);
+  expect(std::holds_alternative<json::Value>(initial_tree) &&
+             std::get<json::Value>(initial_tree).find("profile")->is_object() &&
+             encoded.find("profileBase64") == std::string::npos,
+         "live profiles must be nested objects, never encoded strings");
   for (const auto &payload : {std::string{}, std::string{"f"},
-                              std::string{"fo"}, std::string{"foo"},
-                              std::string{"\0\xff", 2}}) {
-    auto payload_message = source;
-    payload_message.profile_json = payload;
-    const auto round_trip =
-        decode_live_message_json(encode_live_message_json(payload_message));
-    const auto *decoded_payload = std::get_if<LiveMessage>(&round_trip);
-    expect(decoded_payload != nullptr &&
-               decoded_payload->profile_json == payload,
-           "portable base64 should round-trip every padding case and binary bytes");
+                              std::string{"[]"}, std::string{"\0\xff", 2}}) {
+    auto invalid = source;
+    invalid.profile_json = payload;
+    expect(std::holds_alternative<LiveProtocolError>(encode_live_frame(invalid)),
+           "invalid local nested documents must produce a typed framing error");
   }
-
-  expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
-             R"({"protocolVersion":4,"type":"committedProfile","revision":"0","profileKey":"x","profileBase64":"A==="})")),
-         "invalid base64 padding should be rejected");
+  for (const auto packet : {
+           R"({"protocolVersion":4,"type":"committedProfile","revision":"0","profileKey":"x","profileBase64":"e30="})",
+           R"({"protocolVersion":5,"type":"committedProfile","revision":"0","profileKey":"x","profile":"{}"})",
+           R"({"protocolVersion":5,"type":"committedProfile","revision":"0","profileKey":"x","profile":[]})",
+           R"({"protocolVersion":5,"type":"committedProfile","revision":"0","profileKey":"x","profile":null})"}) {
+    const auto rejected = decode_live_message_json(packet);
+    const auto *error = std::get_if<LiveProtocolError>(&rejected);
+    expect(error != nullptr && !error->message.empty(),
+           "old peers and nonobject nested profiles must fail visibly");
+  }
 
   const LiveMessage status{.type = LiveMessageType::runtime_status,
                            .text = "Visual recognition: WGC active"};
@@ -405,7 +411,7 @@ void test_live_protocol_framing() {
   }
 
   auto wrong_version = encoded;
-  const auto version = wrong_version.find("\"protocolVersion\":4");
+  const auto version = wrong_version.find("\"protocolVersion\":5");
   if (version != std::string::npos)
     wrong_version.replace(version, 19, "\"protocolVersion\":1");
   expect(std::holds_alternative<LiveProtocolError>(
@@ -420,7 +426,7 @@ void test_live_protocol_framing() {
          "peer-origin revisions must be compared with their peer stream, not a local send counter");
 
   expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
-             R"({"protocolVersion":4,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
+             R"({"protocolVersion":5,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
          "anchor messages missing a mandatory coordinate should be rejected");
 
   LiveMessage too_large{.type = LiveMessageType::live_profile,

@@ -222,7 +222,10 @@ live in [`docs/Linux.md`](docs/Linux.md).
   platforms; imported PNGs and bundle assets in any other standard PNG format
   are re-encoded on import, and their references follow the new content hash.
 - Native editor, live preview, simulator, diagnostics, resilient executable-name
-  matching, and optional exact-path matching.
+  matching, and optional exact-path matching. Local live-edit protocol 5 and
+  calibration protocol 2 carry profile documents as nested JSON objects (null
+  for absent sidecars); mismatched peers report an error instead of applying
+  edits. Restart the daemon and editor/calibrator together after an update.
 - Bar preview preserves the target client area's aspect ratio and scales bar
   dimensions in device-independent pixels; without a live target it uses a
   1920 × 1080 reference. The simulator replays its exported events from empty
@@ -392,6 +395,11 @@ Windows sidecars use these directories beneath the profile root:
 - `_automation/<id>.json` — declarative automation graphs (schema 1)
 - `_companion/<id>.json` — Game Bar slot mappings and preferences (schema 1)
 - `_state/<id>.json` — persistent automation variables (schema 1)
+
+Saving canonicalizes sidecar JSON whitespace and object-key order once. Existing
+sidecars remain readable; ordered visual observations and typed automation
+values retain their meaning. Local IPC uses the same nested-document encoding
+without quoting or base64-wrapping profile JSON.
 
 Windows template images are content-addressed under `_visual/assets/`. Editing,
 profile deletion, and calibration do not automatically reclaim them: undo/redo

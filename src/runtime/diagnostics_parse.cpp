@@ -183,17 +183,95 @@ bool settings(json::Reader &r, const json::Value &root, SettingsDiagnostics &val
          r.boolean(*object, "visualRecognition", "$.settings", value.visual_recognition, Required::yes) &&
          r.string(*object, "lastError", "$.settings", value.last_error, Required::yes, EmptyString::allow);
 }
+bool extension(json::Reader &r, const json::Value &root,
+               const std::string &path, X11ExtensionStatus &value) {
+  if (!r.boolean(root, "available", path, value.available, Required::yes))
+    return false;
+  if (!value.available) {
+    if (!r.exact_fields(root, {"available", "reason"}, path)) return false;
+    value.reason = r.string(root, "reason", path, Required::yes, EmptyString::allow);
+    return value.reason.has_value();
+  }
+  if (!r.exact_fields(root, {"available", "major", "minor"}, path)) return false;
+  const auto major = r.integer(root, "major", path, 0,
+                               std::numeric_limits<int>::max(), Required::yes);
+  const auto minor = r.integer(root, "minor", path, 0,
+                               std::numeric_limits<int>::max(), Required::yes);
+  if (!major || !minor) return false;
+  value.major = static_cast<int>(*major);
+  value.minor = static_cast<int>(*minor);
+  return true;
+}
+bool x11(json::Reader &r, const json::Value &root, X11StatusSnapshot &value) {
+  const std::string path = "$.x11";
+  if (!r.exact_fields(root,
+                      {"connected", "reason", "xi2", "shape", "randr",
+                       "composite", "damage", "xfixes", "ewmh"}, path) ||
+      !r.boolean(root, "connected", path, value.connected, Required::yes) ||
+      !r.string(root, "reason", path, value.reason, Required::no, EmptyString::allow))
+    return false;
+  const auto probe = [&](const std::string_view name, X11ExtensionStatus &status) {
+    const auto *object = r.object(root, name, path, Required::yes);
+    return object && extension(r, *object, path + "." + std::string(name), status);
+  };
+  if (!probe("xi2", value.xi2) || !probe("shape", value.shape) ||
+      !probe("randr", value.randr) || !probe("composite", value.composite) ||
+      !probe("damage", value.damage) || !probe("xfixes", value.xfixes))
+    return false;
+  const auto *ewmh = r.object(root, "ewmh", path, Required::yes);
+  if (!ewmh || !r.boolean(*ewmh, "available", path + ".ewmh", value.ewmh, Required::yes))
+    return false;
+  if (value.ewmh) return r.exact_fields(*ewmh, {"available"}, path + ".ewmh");
+  if (!r.exact_fields(*ewmh, {"available", "reason"}, path + ".ewmh")) return false;
+  value.ewmh_reason = r.string(*ewmh, "reason", path + ".ewmh", Required::yes, EmptyString::allow);
+  return value.ewmh_reason.has_value();
+}
+bool strings(json::Reader &r, const json::Value &root, const std::string_view key,
+             const std::string &path, std::vector<std::string> &output,
+             const Required required = Required::yes) {
+  const auto *values = r.array(root, key, path, required);
+  if (!values) return r.ok();
+  return r.each(*values, path + "." + std::string(key),
+                [&](const json::Value &value, const std::string &item_path) {
+    if (!value.is_string()) r.fail(item_path, "expected string");
+    else output.push_back(value.as_string());
+  });
+}
+bool capability(json::Reader &r, const json::Value &root, const std::string &path,
+                CapabilityStatus &value) {
+  if (!r.exact_fields(root, {"capability", "availability", "reasons", "diagnostics"}, path))
+    return false;
+  std::string name;
+  if (!r.string(root, "capability", path, name, Required::yes, EmptyString::reject) ||
+      !parse_capability(r, path, name, value.capability))
+    return false;
+  const auto availability = r.enumeration<CapabilityAvailability>(
+      root, "availability", path, capability_availability_wire, Required::yes,
+      CapabilityAvailability::unavailable);
+  if (!availability) return false;
+  value.availability = *availability;
+  return strings(r, root, "reasons", path, value.reasons) &&
+         strings(r, root, "diagnostics", path, value.diagnostics, Required::no);
+}
+bool linux_extension(json::Reader &r, const json::Value &root,
+                     std::optional<LinuxDiagnostics> &value) {
+  const auto *probe = r.field(root, "x11", "$", Required::no);
+  const auto *capabilities = r.field(root, "capabilities", "$", Required::no);
+  if (!probe && !capabilities) return r.ok();
+  const auto *object = r.object(root, "x11", "$", Required::yes);
+  if (!object) return false;
+  value.emplace();
+  return x11(r, *object, value->x11) &&
+         array(r, root, "capabilities", value->capabilities, capability);
+}
 } // namespace
 
 RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view source) {
   if (source.size() > core::max_live_message_bytes)
     return json::FieldError{"$", "diagnostics snapshot exceeds the live message limit"};
-  const auto parsed = json::parse(source);
+  const auto parsed = json::parse_bounded(source, core::max_live_message_bytes);
   const auto *root = std::get_if<json::Value>(&parsed);
-  if (!root) {
-    const auto &error = std::get<json::ParseError>(parsed);
-    return json::FieldError{"$@" + std::to_string(error.offset), error.message};
-  }
+  if (!root) return std::get<json::FieldError>(parsed);
   json::Reader r;
   RuntimeDiagnostics result;
   if (!r.exact_fields(
@@ -201,7 +279,7 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
           {"schemaVersion", "packageVersion", "protocolVersion", "process",
            "services", "gameBarTransport", "settings",
            "aggregateOwnedResources", "sessions", "isolatedHelpers", "captures",
-           "automationFaults"},
+           "automationFaults", "x11", "capabilities"},
           "$") ||
       !r.integer(*root, "schemaVersion", "$", runtime_diagnostics_schema,
                   runtime_diagnostics_schema, Required::yes) ||
@@ -222,6 +300,7 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
       !r.string(*transport, "lastError", "$.gameBarTransport", result.gamebar.last_error,
                  Required::yes, EmptyString::allow) ||
       !settings(r, *root, result.settings) ||
+      !linux_extension(r, *root, result.linux_extension) ||
       !array(r, *root, "services", result.services, service) ||
       !array(r, *root, "sessions", result.sessions, session) ||
       !array(r, *root, "isolatedHelpers", result.helpers, helper))

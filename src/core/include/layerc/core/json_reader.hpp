@@ -34,6 +34,9 @@ void append_exact_unsigned(std::string &output, std::uint64_t value);
 // Value form of append_exact_unsigned: a number while exactly representable,
 // otherwise a decimal string.
 [[nodiscard]] Value exact_unsigned_value(std::uint64_t value);
+[[nodiscard]] Value exact_integer_value(std::int64_t value);
+// Always a decimal string for full-width IPC identifiers.
+[[nodiscard]] Value decimal_unsigned_value(std::uint64_t value);
 
 // One accumulator can read nested objects using their domain paths. Optional
 // fields preserve the supplied fallback/output; errors always retain the first

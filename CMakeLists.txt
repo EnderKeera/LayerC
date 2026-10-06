@@ -499,7 +499,7 @@ if(NOT WIN32)
         )
         target_include_directories(layerctl PRIVATE
             src/platform/linux)
-        target_link_libraries(layerctl PRIVATE layerc_bundle)
+        target_link_libraries(layerctl PRIVATE layerc_bundle layerc_runtime)
         layerc_enable_warnings(layerctl)
     endif()
 endif()

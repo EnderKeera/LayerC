@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace layerc::core {
 
@@ -182,30 +183,39 @@ validate_companion_profile(const CompanionProfile &profile,
       });
 }
 
+namespace {
+
+json::Value slot_mapping_value(const CompanionSlotMapping &slot) {
+  return json::Value(json::Value::Object{
+      {"slotIndex", json::Value(std::int64_t{slot.slot_index})},
+      {"panelId", json::Value(slot.panel_id)},
+      {"pinned", json::Value(slot.pinned)},
+      {"clickThrough", json::Value(slot.click_through)},
+      {"opacity", json::Value(slot.opacity)}});
+}
+
+json::Value slot_mappings_value(
+    const std::vector<CompanionSlotMapping> &slots) {
+  json::Value::Array values;
+  values.reserve(slots.size());
+  for (const auto &slot : slots)
+    values.push_back(slot_mapping_value(slot));
+  return json::Value(std::move(values));
+}
+
+} // namespace
+
 std::string serialize_companion_profile_json(const CompanionProfile &profile) {
-  std::string out = "{\"schemaVersion\":";
-  out += std::to_string(profile.schema_version);
-  out += ",\"profileId\":";
-  json::append_quoted(out, profile.profile_id);
-  out += ",\"slots\":[";
-  json::Join join_slots;
-  for (const auto &slot : profile.slots) {
-    join_slots(out);
-    out += "{\"slotIndex\":";
-    out += std::to_string(slot.slot_index);
-    out += ",\"panelId\":";
-    json::append_quoted(out, slot.panel_id);
-    out += ",\"pinned\":";
-    json::append_bool(out, slot.pinned);
-    out += ",\"clickThrough\":";
-    json::append_bool(out, slot.click_through);
-    out += ",\"opacity\":";
-    json::append_number(out, slot.opacity);
-    out += "}";
-  }
-  out += "]}";
+  const json::Value root(json::Value::Object{
+      {"schemaVersion", json::Value(std::int64_t{profile.schema_version})},
+      {"profileId", json::Value(profile.profile_id)},
+      {"slots", slot_mappings_value(profile.slots)}});
+  std::string out;
+  json::append_value(out, root);
   return out;
 }
+
+namespace {
 
 CompanionValidationResult
 validate_available_panels(const std::vector<CompanionAvailablePanel> &panels,
@@ -285,12 +295,18 @@ validate_snapshot_panels(const std::vector<CompanionPanelSnapshot> &panels,
   return std::nullopt;
 }
 
+} // namespace
+
 CompanionValidationResult
 validate_companion_snapshot(const CompanionSessionSnapshot &snapshot) {
   if (auto error = bounded_text("$", "profileId", snapshot.profile_id, false))
     return error;
   if (auto error = bounded_text("$", "sessionKey", snapshot.session_key, false))
     return error;
+  // Match the existing integer-token reader before narrowing into a Value.
+  if (snapshot.timestamp_ms >
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+    return CompanionError{"$.timestampMs", "timestampMs exceeds its integer bound"};
   if (snapshot.panels.size() > max_companion_snapshot_panels)
     return CompanionError{"$.panels", "panel count exceeds its bound"};
   if (snapshot.available_panels.size() > max_companion_available_panels)
@@ -315,75 +331,43 @@ serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
   if (const auto error = validate_companion_snapshot(snapshot))
     return *error;
 
-  std::string out = "{\"profileId\":";
-  json::append_quoted(out, snapshot.profile_id);
-  out += ",\"sessionKey\":";
-  json::append_quoted(out, snapshot.session_key);
-  out += ",\"timestampMs\":";
-  json::append_unsigned(out, snapshot.timestamp_ms);
-  out += ",\"panels\":[";
-  json::Join join_panels;
+  json::Value::Array panels;
+  panels.reserve(snapshot.panels.size());
   for (const auto &panel : snapshot.panels) {
-    join_panels(out);
-    out += "{\"panelId\":";
-    json::append_quoted(out, panel.panel_id);
-    out += ",\"slotIndex\":";
-    json::append_unsigned(out, panel.slot_index);
-    out += ",\"visible\":";
-    json::append_bool(out, panel.visible);
-    out += ",\"items\":[";
-    json::Join join_items;
-    for (const auto &item : panel.items) {
-      join_items(out);
-      out += "{\"cooldownId\":";
-      json::append_quoted(out, item.cooldown_id);
-      out += ",\"name\":";
-      json::append_quoted(out, item.name);
-      out += ",\"icon\":";
-      json::append_quoted(out, item.icon);
-      out += ",\"progress\":";
-      json::append_number(out, item.progress);
-      out += ",\"availableCharges\":";
-      json::append_unsigned(out, item.available_charges);
-      out += ",\"maxCharges\":";
-      json::append_unsigned(out, item.max_charges);
-      out += ",\"remainingMs\":";
-      json::append_number(out, static_cast<double>(item.remaining_ms));
-      out += ",\"isReady\":";
-      json::append_bool(out, item.is_ready);
-      out += ",\"color\":";
-      json::append_quoted(out, item.color);
-      out += "}";
-    }
-    out += "]}";
+    json::Value::Array items;
+    items.reserve(panel.items.size());
+    for (const auto &item : panel.items)
+      items.emplace_back(json::Value::Object{
+          {"cooldownId", json::Value(item.cooldown_id)},
+          {"name", json::Value(item.name)},
+          {"icon", json::Value(item.icon)},
+          {"progress", json::Value(item.progress)},
+          {"availableCharges", json::Value(std::int64_t{item.available_charges})},
+          {"maxCharges", json::Value(std::int64_t{item.max_charges})},
+          {"remainingMs", json::Value(item.remaining_ms)},
+          {"isReady", json::Value(item.is_ready)},
+          {"color", json::Value(item.color)}});
+    panels.emplace_back(json::Value::Object{
+        {"panelId", json::Value(panel.panel_id)},
+        {"slotIndex", json::Value(std::int64_t{panel.slot_index})},
+        {"visible", json::Value(panel.visible)},
+        {"items", json::Value(std::move(items))}});
   }
-  out += "],\"availablePanels\":[";
-  json::Join join_available;
-  for (const auto &panel : snapshot.available_panels) {
-    join_available(out);
-    out += "{\"panelId\":";
-    json::append_quoted(out, panel.panel_id);
-    out += ",\"name\":";
-    json::append_quoted(out, panel.name);
-    out += "}";
-  }
-  out += "],\"preferences\":[";
-  json::Join join_preferences;
-  for (const auto &preference : snapshot.preferences) {
-    join_preferences(out);
-    out += "{\"slotIndex\":";
-    json::append_unsigned(out, preference.slot_index);
-    out += ",\"panelId\":";
-    json::append_quoted(out, preference.panel_id);
-    out += ",\"pinned\":";
-    json::append_bool(out, preference.pinned);
-    out += ",\"clickThrough\":";
-    json::append_bool(out, preference.click_through);
-    out += ",\"opacity\":";
-    json::append_number(out, preference.opacity);
-    out += "}";
-  }
-  out += "]}";
+  json::Value::Array available_panels;
+  available_panels.reserve(snapshot.available_panels.size());
+  for (const auto &panel : snapshot.available_panels)
+    available_panels.emplace_back(json::Value::Object{
+        {"panelId", json::Value(panel.panel_id)},
+        {"name", json::Value(panel.name)}});
+  const json::Value root(json::Value::Object{
+      {"profileId", json::Value(snapshot.profile_id)},
+      {"sessionKey", json::Value(snapshot.session_key)},
+      {"timestampMs", json::Value(static_cast<std::int64_t>(snapshot.timestamp_ms))},
+      {"panels", json::Value(std::move(panels))},
+      {"availablePanels", json::Value(std::move(available_panels))},
+      {"preferences", slot_mappings_value(snapshot.preferences)}});
+  std::string out;
+  json::append_value(out, root);
   if (out.size() > max_companion_snapshot_bytes)
     return CompanionError{"$", "serialized companion snapshot exceeds its byte bound"};
   return out;
