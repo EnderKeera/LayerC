@@ -87,6 +87,7 @@ endif()
 
 add_library(layerc_core STATIC
     src/core/automation_profile.cpp
+    src/core/automation_value_codec.cpp
     src/core/automation_session.cpp
     src/core/profile_session.cpp
     src/core/automation_ops.cpp

@@ -209,8 +209,9 @@ AutomationSession::input_value_event(std::string source, double value,
   edges.input_emitted[source] = now;
   auto changed =
       event(AutomationEventKind::input_value_changed, std::move(source), now);
-  changed.fields.emplace("previous", AutomationValue(previous_value));
-  changed.fields.emplace("value", AutomationValue(value));
+  changed.fields.emplace(automation_event_field::previous,
+                         AutomationValue(previous_value));
+  changed.fields.emplace(automation_event_field::value, AutomationValue(value));
   return changed;
 }
 
@@ -224,11 +225,15 @@ SessionFeedResult AutomationSession::feed_measurements(
     for (const auto &measurement : measurements) {
       auto observation = event(AutomationEventKind::visual_observation,
                                measurement.observation_id, now);
-      observation.fields.emplace("available", AutomationValue(
-          measurement.availability == CaptureAvailability::available));
-      observation.fields.emplace("matched", AutomationValue(measurement.matched));
-      observation.fields.emplace("confidence", AutomationValue(
-          ConfidenceValue{measurement.confidence}));
+      observation.fields.emplace(
+          automation_event_field::available,
+          AutomationValue(measurement.availability ==
+                          CaptureAvailability::available));
+      observation.fields.emplace(automation_event_field::matched,
+                                 AutomationValue(measurement.matched));
+      observation.fields.emplace(
+          automation_event_field::confidence,
+          AutomationValue(ConfidenceValue{measurement.confidence}));
       result.changed = process(observation, sink) || result.changed;
     }
   }

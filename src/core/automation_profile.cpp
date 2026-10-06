@@ -22,196 +22,20 @@ using detail::numeric_type;
 using detail::parse_automation_event_name;
 using json::Value;
 
-void append_tagged_value(std::string &out, const AutomationValue &value);
-
+// Profile literals, defaults, and persisted state use the shared codec with
+// $type/$value tags.
 void append_value(std::string &out, const AutomationValue &value) {
-  std::visit(
-      [&](const auto &entry) {
-        using T = std::decay_t<decltype(entry)>;
-        if constexpr (std::is_same_v<T, std::nullptr_t>)
-          out += "null";
-        else if constexpr (std::is_same_v<T, bool>)
-          json::append_bool(out, entry);
-        else if constexpr (std::is_same_v<T, std::int64_t>) {
-          detail::append_exact_integer(out, entry);
-        } else if constexpr (std::is_same_v<T, double>)
-          json::append_number(out, entry);
-        else if constexpr (std::is_same_v<T, DurationValue>)
-          json::append_number(out, static_cast<double>(entry.value.count()));
-        else if constexpr (std::is_same_v<T, ConfidenceValue>)
-          json::append_number(out, entry.value);
-        else if constexpr (std::is_same_v<T, std::string>)
-          json::append_quoted(out, entry);
-        else if constexpr (std::is_same_v<T, AutomationList>) {
-          out.push_back('[');
-          json::Join join;
-          for (const auto &child : entry) {
-            join(out);
-            append_tagged_value(out, child);
-          }
-          out.push_back(']');
-        } else if constexpr (std::is_same_v<T, AutomationMap>) {
-          out.push_back('{');
-          json::Join join;
-          for (const auto &[key, child] : entry) {
-            join(out);
-            json::append_quoted(out, key);
-            out.push_back(':');
-            append_tagged_value(out, child);
-          }
-          out.push_back('}');
-        }
-      },
-      value.storage);
-}
-
-void append_tagged_value(std::string &out, const AutomationValue &value) {
-  out += "{\"$type\":";
-  json::append_quoted(out, automation_value_type_name(value_type(value)));
-  out += ",\"$value\":";
-  append_value(out, value);
-  out.push_back('}');
-}
-
-AutomationValueType infer_type(const Value &value) {
-  if (value.is_null())
-    return AutomationValueType::null_value;
-  if (value.is_bool())
-    return AutomationValueType::boolean;
-  if (value.is_number())
-    return AutomationValueType::number;
-  if (value.is_string())
-    return AutomationValueType::string;
-  if (value.is_array())
-    return AutomationValueType::list;
-  return AutomationValueType::map;
-}
-std::optional<AutomationValue>
-read_value(const Value &value, AutomationValueType type, AutomationError &error,
-           const std::string &path, std::size_t depth = 0);
-
-std::optional<AutomationValue> read_nested_value(const Value &value,
-                                                 AutomationError &error,
-                                                 const std::string &path,
-                                                 const std::size_t depth) {
-  if (value.is_object() && value.as_object().size() == 2U) {
-    const auto *tag = value.find("$type");
-    const auto *payload = value.find("$value");
-    if (tag != nullptr && tag->is_string() && payload != nullptr) {
-      const auto type =
-          detail::parse_automation_value_type_name(tag->as_string());
-      if (!type.has_value()) {
-        error = {path + ".$type", "unsupported nested value type"};
-        return std::nullopt;
-      }
-      return read_value(*payload, *type, error, path + ".$value", depth);
-    }
-  }
-  return read_value(value, infer_type(value), error, path, depth);
+  detail::append_automation_value(out, value, detail::state_value_tags);
 }
 
 std::optional<AutomationValue> read_value(const Value &value,
                                           const AutomationValueType type,
                                           AutomationError &error,
-                                          const std::string &path,
-                                          const std::size_t depth) {
-  if (depth > max_automation_ast_depth) {
-    error = {path, "value nesting exceeds 16"};
-    return std::nullopt;
-  }
-  const auto bounded =
-      [&](AutomationValue candidate,
-          std::string message) -> std::optional<AutomationValue> {
-    if (!automation_value_valid(candidate)) {
-      error = {path, std::move(message)};
-      return std::nullopt;
-    }
-    return candidate;
-  };
-  switch (type) {
-  case AutomationValueType::null_value:
-    if (value.is_null())
-      return AutomationValue{};
-    break;
-  case AutomationValueType::boolean:
-    if (value.is_bool())
-      return AutomationValue(value.as_bool());
-    break;
-  case AutomationValueType::integer:
-    if (const auto integer = detail::read_exact_integer(value))
-      return AutomationValue(*integer);
-    break;
-  case AutomationValueType::number:
-    if (value.is_number() && std::isfinite(value.as_number()))
-      return AutomationValue(value.as_number());
-    break;
-  case AutomationValueType::duration:
-    if (const auto integer =
-            json::read_integer(value, json::IntegerEncoding::number_or_string))
-      return bounded(AutomationValue(DurationValue{Milliseconds(*integer)}),
-                     "duration must be between 0 and 86400000 ms");
-    break;
-  case AutomationValueType::confidence:
-    if (value.is_number() && std::isfinite(value.as_number()))
-      return bounded(AutomationValue(ConfidenceValue{value.as_number()}),
-                     "confidence must be between 0 and 1");
-    break;
-  case AutomationValueType::string:
-    if (value.is_string()) {
-      if (value.as_string().size() > max_automation_string_bytes) {
-        error = {path, "string must be valid UTF-8 within 512 bytes"};
-        return std::nullopt;
-      }
-      return bounded(AutomationValue(value.as_string()),
-                     "string must be valid UTF-8 within 512 bytes");
-    }
-    break;
-  case AutomationValueType::list:
-    if (value.is_array()) {
-      if (value.as_array().size() > max_automation_collection_entries) {
-        error = {path, "list exceeds 64 entries"};
-        return std::nullopt;
-      }
-      AutomationList result;
-      result.reserve(value.as_array().size());
-      for (std::size_t i{}; i < value.as_array().size(); ++i) {
-        auto child =
-            read_nested_value(value.as_array()[i], error,
-                              path + "[" + std::to_string(i) + "]", depth + 1U);
-        if (!child)
-          return std::nullopt;
-        result.push_back(std::move(*child));
-      }
-      return AutomationValue(std::move(result));
-    }
-    break;
-  case AutomationValueType::map:
-    if (value.is_object()) {
-      if (value.as_object().size() > max_automation_collection_entries) {
-        error = {path, "map exceeds 64 entries"};
-        return std::nullopt;
-      }
-      AutomationMap result;
-      for (const auto &[key, raw] : value.as_object()) {
-        if (key.size() > max_automation_string_bytes || !is_valid_utf8(key)) {
-          error = {path + "." + key,
-                   "map key must be valid UTF-8 within 512 bytes"};
-          return std::nullopt;
-        }
-        auto child =
-            read_nested_value(raw, error, path + "." + key, depth + 1U);
-        if (!child)
-          return std::nullopt;
-        result.emplace(key, std::move(*child));
-      }
-      return AutomationValue(std::move(result));
-    }
-    break;
-  }
-  error = {path, "value does not match declared type " +
-                     std::string(automation_value_type_name(type))};
-  return std::nullopt;
+                                          const std::string &path) {
+  return detail::read_automation_value(value, type, detail::state_value_tags,
+                                       error, path);
 }
+
 // Reads the automation document's shape and types only. Every semantic
 // bound (IDs, ranges, arity, references) is owned by
 // validate_automation_profile, which parse() runs on the complete result. The
@@ -585,8 +409,12 @@ bool automation_value_valid_impl(const AutomationValue &value,
 AutomationValueType value_type(const AutomationValue &value) noexcept {
   return static_cast<AutomationValueType>(value.storage.index());
 }
+bool detail::automation_value_valid_at_depth(
+    const AutomationValue &value, const std::size_t depth) noexcept {
+  return automation_value_valid_impl(value, depth);
+}
 bool automation_value_valid(const AutomationValue &value) noexcept {
-  return automation_value_valid_impl(value, 0);
+  return detail::automation_value_valid_at_depth(value, 0);
 }
 bool automation_persistent_value_accepted(const AutomationVariable &variable,
                                           const AutomationValue &value) noexcept {

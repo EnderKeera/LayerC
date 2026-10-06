@@ -71,8 +71,8 @@ bool AutomationRuntime::Impl::apply_internal(
     event.kind = AutomationEventKind::variable_changed;
     event.timestamp = now;
     event.source_id = effect.target;
-    event.fields.emplace("old", std::move(before));
-    event.fields.emplace("value", variable->second);
+    event.fields.emplace(automation_event_field::old_value, std::move(before));
+    event.fields.emplace(automation_event_field::value, variable->second);
     derived.push_back(std::move(event));
     return true;
   };
