@@ -983,6 +983,13 @@ if(LAYERC_BUILD_TESTS)
 
         layerc_add_test(layerc_editor_tests
             SOURCES tests/editor_dialog_tests.cpp tests/editor_regression_tests.cpp
+                tests/editor_main_dialog_tests.cpp
+                tests/editor_appearance_dialog_tests.cpp
+                tests/editor_tasks_dialog_tests.cpp
+                tests/editor_pack_dialog_tests.cpp
+                tests/editor_automation_dialog_tests.cpp
+                tests/editor_hid_dialog_tests.cpp
+                tests/editor_diagnostics_dialog_tests.cpp
                 tests/editor_document_tests.cpp tests/editor_calibration_tests.cpp
                 tests/editor_asset_tests.cpp
                 src/editor/editor_resources.rc
