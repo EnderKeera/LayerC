@@ -187,7 +187,10 @@ class CheckedInPolicyTests(unittest.TestCase):
     repo = Path(__file__).parents[2]
 
     def test_policy_matches_cmake_registration(self) -> None:
-        cmake = (self.repo / "CMakeLists.txt").read_text(encoding="utf-8")
+        cmake = "".join(
+            (self.repo / name).read_text(encoding="utf-8")
+            for name in ("CMakeLists.txt", "cmake/LayerCTests.cmake")
+        )
         declared = set(re.findall(r"layerc_add_test\((\w+)", cmake))
         declared |= set(re.findall(r"add_test\(NAME (\w+)", cmake))
         declared.discard("${target}")

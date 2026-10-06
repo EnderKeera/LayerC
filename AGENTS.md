@@ -13,7 +13,7 @@ memory and historical plans.
 | Linux behavior, CLI, dependencies, packaging, permissions, physical evidence | [`docs/Linux.md`](docs/Linux.md) |
 | Game Bar architecture and invariants | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
 | Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
-| Build graph, options, versions, exact target registration | [`CMakeLists.txt`](CMakeLists.txt) and current source |
+| Build graph, options, versions, exact target registration | [`CMakeLists.txt`](CMakeLists.txt), test registration in [`cmake/LayerCTests.cmake`](cmake/LayerCTests.cmake), and current source |
 | CI, benchmark, package, and release gates | [`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates), then the affected file under `.github/workflows/` and `tools/` |
 
 Local-only `archive/PLAN.md` (which includes V2.5) and

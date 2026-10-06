@@ -27,7 +27,7 @@ Linux `layercal` is a snapshot CLI; do not route it through the Windows calibrat
 
 ## Automated checks
 
-Resolve available targets from [CMakeLists.txt](../../../CMakeLists.txt). Select the corresponding `layerc_linux_*_tests` target for store, pack, loop, control, X11 tracking, input, overlay, capture, or visual integration; use `ctest -N` to confirm registration before a targeted run.
+Resolve available targets from [CMakeLists.txt](../../../CMakeLists.txt) and the test registrations in [cmake/LayerCTests.cmake](../../../cmake/LayerCTests.cmake). Select the corresponding `layerc_linux_*_tests` target for store, pack, loop, control, X11 tracking, input, overlay, capture, or visual integration; use `ctest -N` to confirm registration before a targeted run.
 
 Read [ci-linux.sh](../../../tools/ci-linux.sh) when reproducing container CI. Its full container gate is appropriate for a requested CI reproduction, not the default conclusion to every Linux change. Report skips as unavailable coverage; required CI rejects skipped registered tests.
 
