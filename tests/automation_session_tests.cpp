@@ -1,7 +1,7 @@
 #include "core_test_cases.hpp"
 #include "test_support.hpp"
 
-#include "layerc/core/profile_session.hpp"
+#include "layerc/core/automation_session.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -71,7 +71,7 @@ InputMatcher dash_matcher(const InputToken key) {
 }
 } // namespace
 
-// Windows and Linux daemon sessions both derive from core::AutomationSession,
+// Windows and Linux daemon sessions both compose core::AutomationSession,
 // so this fixes the trigger policy for every platform in one place.
 void test_automation_session_trigger_policy() {
   const auto base = session_base();
@@ -95,9 +95,9 @@ void test_automation_session_trigger_policy() {
          "an invalid visual sidecar should match input without triggering");
   expect(blocked.trigger("dash", now).triggered.empty(),
          "an invalid visual sidecar should block explicit triggers");
-  blocked.cooldowns.snapshot(now, blocked.snapshot_buffer);
-  expect(blocked.snapshot_buffer.size() == 1 &&
-             blocked.snapshot_buffer.front().available_charges == 1,
+  (void)blocked.snapshot(now);
+  expect(blocked.snapshot_buffer().size() == 1 &&
+             blocked.snapshot_buffer().front().available_charges == 1,
          "blocked triggers must not consume cooldown charges");
 
   blocked.set_invalid_visual_sidecar(false);
@@ -130,7 +130,7 @@ void test_automation_session_origin_and_persistence() {
          "a triggered cooldown should run cooldown_triggered automations");
   expect(left.sync_persistent_to(right),
          "a dirty session should sync persistent values to a sibling");
-  const auto values = right.automation_runtime->persistent_values();
+  const auto values = right.runtime()->persistent_values();
   const auto count = values.find("count");
   expect(count != values.end() &&
              count->second == AutomationValue(std::int64_t{1}),

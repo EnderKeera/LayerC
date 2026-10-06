@@ -163,7 +163,7 @@ void test_registry_automation_only_and_health() {
          "session-started timer publishes a monotonic deadline");
   (void)timer_registry.poll_automation(timer_now + std::chrono::milliseconds{55});
   expect(timer_registry.sessions().front()
-                 .automation_runtime->snapshot().variables.at("count") ==
+                 .automation.runtime()->snapshot().variables.at("count") ==
              AutomationValue(std::int64_t{1}),
          "timer-only rule runs without an input binding");
 
@@ -183,7 +183,7 @@ void test_registry_automation_only_and_health() {
   input_registry.refresh(scan);
   if (!expect(input_registry.session_count() == 1 &&
                   input_registry.automation_count() == 1 &&
-                  input_registry.sessions().front().profile.bindings.empty(),
+                  input_registry.sessions().front().automation.profile().bindings.empty(),
               "input-rule automation is admitted without direct bindings"))
     return;
   const auto input_requests = input_registry.session_requests();
@@ -198,7 +198,7 @@ void test_registry_automation_only_and_health() {
   const InputEvent press{{InputDevice::keyboard, 18, 0}, true};
   (void)input_registry.sessions().front().feed(press, input_now);
   expect(input_registry.sessions().front()
-                 .automation_runtime->snapshot().variables.at("count") ==
+                 .automation.runtime()->snapshot().variables.at("count") ==
              AutomationValue(std::int64_t{1}),
          "automation input rule consumes the passive event");
 
@@ -215,8 +215,9 @@ void test_registry_automation_only_and_health() {
            "repeated checkpoint failures retain one reported fault");
   }
   expect(automation_status_response(input_registry).find(
-              "\"capability\":\"automation\",\"availability\":\"degraded\","
-              "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+              "\"availability\":\"degraded\",\"capability\":\"automation\","
+              "\"diagnostics\":[") != std::string::npos &&
+              automation_status_response(input_registry).find("\"reasons\":[\"profile_invalid\"]") != std::string::npos,
           "checkpoint failure degrades automation in the status response");
   expect(automation_status_response(input_registry).find(
               "\"diagnostics\":[\"automation checkpoint failed") !=
@@ -230,7 +231,7 @@ void test_registry_automation_only_and_health() {
              !input_registry.automation_persistence().find(input_source.path)->checkpoint_error.has_value(),
          "successful checkpoint clears the current fault");
   expect(automation_status_response(input_registry).find(
-              "\"capability\":\"automation\",\"availability\":\"active\","
+              "\"availability\":\"active\",\"capability\":\"automation\","
               "\"reasons\":[]") != std::string::npos,
           "successful checkpoint restores healthy automation status");
   expect(automation_status_response(input_registry).find(
@@ -269,8 +270,9 @@ void test_registry_automation_only_and_health() {
              pending_service.resources().timers == 1,
          "retired write keeps one retry, demand, deadline, and visible fault");
   expect(automation_status_response(input_registry).find(
-             "\"capability\":\"automation\",\"availability\":\"degraded\","
-             "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+             "\"availability\":\"degraded\",\"capability\":\"automation\","
+             "\"diagnostics\":[") != std::string::npos &&
+             automation_status_response(input_registry).find("\"reasons\":[\"profile_invalid\"]") != std::string::npos,
          "retired checkpoint fault remains visible in status without sessions");
   expect(!input_registry.poll_automation(
              retiring_now + std::chrono::milliseconds{1'100}) &&
@@ -281,7 +283,7 @@ void test_registry_automation_only_and_health() {
   input_registry.configure(std::span{&input_source, 1});
   input_registry.refresh(scan);
   const auto replaced =
-      input_registry.sessions().front().automation_runtime->snapshot();
+      input_registry.sessions().front().automation.runtime()->snapshot();
   expect(input_registry.session_count() == 1 &&
              input_registry.automation_count() == 1 &&
              input_registry.pending_checkpoint_count() == 0 &&
@@ -373,8 +375,9 @@ void test_registry_automation_only_and_health() {
              !invalid_registry.automation_diagnostics().empty(),
          "malformed sidecar has automation demand and a load error without XI2");
   expect(automation_status_response(invalid_registry).find(
-             "\"capability\":\"automation\",\"availability\":\"degraded\","
-             "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+             "\"availability\":\"degraded\",\"capability\":\"automation\","
+             "\"diagnostics\":[") != std::string::npos &&
+             automation_status_response(invalid_registry).find("\"reasons\":[\"profile_invalid\"]") != std::string::npos,
          "malformed sidecar degrades automation in the status response");
 
   // Runtime faults stay keyed by automation while a healthy rule continues.
@@ -421,22 +424,23 @@ void test_registry_automation_only_and_health() {
                   fault_registry.automation_count() == 1,
               "fault-isolation session is admitted"))
     return;
-  expect(fault_registry.sessions().front().automation_health.runtime_faults.size() ==
+  expect(fault_registry.sessions().front().automation.health().runtime_faults.size() ==
                  1 &&
              fault_registry.automation_diagnostics().size() == 1 &&
              fault_registry.sessions().front()
-                     .automation_runtime->snapshot().variables.at("count") ==
+                     .automation.runtime()->snapshot().variables.at("count") ==
                  AutomationValue(std::int64_t{1}),
          "one runtime fault is reported while the healthy automation commits");
   (void)fault_registry.sessions().front().feed(press, MonotonicClock::now());
   expect(fault_registry.automation_diagnostics().size() == 1 &&
              fault_registry.sessions().front()
-                     .automation_runtime->snapshot().variables.at("count") ==
+                     .automation.runtime()->snapshot().variables.at("count") ==
                  AutomationValue(std::int64_t{2}),
          "runtime fault remains bounded and unrelated automation continues");
   expect(automation_status_response(fault_registry).find(
-              "\"capability\":\"automation\",\"availability\":\"degraded\","
-              "\"reasons\":[\"profile_invalid\"]") != std::string::npos,
+              "\"availability\":\"degraded\",\"capability\":\"automation\","
+              "\"diagnostics\":[") != std::string::npos &&
+              automation_status_response(fault_registry).find("\"reasons\":[\"profile_invalid\"]") != std::string::npos,
           "runtime fault degrades automation in the status response");
   expect(automation_status_response(fault_registry).find(
               "automation fault: bad:") != std::string::npos,
@@ -451,12 +455,12 @@ void test_registry_automation_only_and_health() {
   fault_registry.configure(std::span{&fault_source, 1});
   fault_registry.refresh(scan);
   expect(fault_registry.session_count() == 1 &&
-             fault_registry.sessions().front().automation_runtime &&
+             fault_registry.sessions().front().automation.runtime() &&
              fault_registry.sessions().front()
-                 .automation_health.runtime_faults.empty() &&
+                 .automation.health().runtime_faults.empty() &&
              fault_registry.automation_diagnostics().empty() &&
              automation_status_response(fault_registry).find(
-                 "\"capability\":\"automation\",\"availability\":\"active\","
+                 "\"availability\":\"active\",\"capability\":\"automation\","
                  "\"reasons\":[]") != std::string::npos,
          "replacing a faulted sidecar removes its stale runtime identity");
 }
@@ -493,7 +497,7 @@ void test_registry_fresh_admission_state() {
     return;
   const InputEvent press{{InputDevice::keyboard, 18, 0}, true};
   auto count = [&registry] {
-    return registry.sessions().front().automation_runtime->snapshot()
+    return registry.sessions().front().automation.runtime()->snapshot()
         .variables.at("count");
   };
   (void)registry.sessions().front().feed(press, MonotonicClock::now());
@@ -542,14 +546,14 @@ void test_registry_fresh_admission_state() {
 
   // Explicit reloads still apply external state to retained clean runtimes,
   // but never overwrite a retained runtime's uncheckpointed changes.
-  auto *retained = registry.sessions().front().automation_runtime.get();
+  auto *retained = registry.sessions().front().automation.runtime();
   if (!expect(layerc::platform::write_automation_state(
                   source.path, automation, {{"count", AutomationValue(std::int64_t{31})}}).ok(),
               "external state for explicit reload is stored"))
     return;
   registry.configure(std::span{&source, 1});
   registry.refresh(scan);
-  expect(registry.sessions().front().automation_runtime.get() == retained &&
+  expect(registry.sessions().front().automation.runtime() == retained &&
              count() == AutomationValue(std::int64_t{31}),
          "explicit configuration reload retains and updates a clean runtime");
   (void)registry.sessions().front().feed(press, MonotonicClock::now());
@@ -559,7 +563,7 @@ void test_registry_fresh_admission_state() {
     return;
   registry.configure(std::span{&source, 1});
   registry.refresh(scan);
-  expect(registry.sessions().front().automation_runtime.get() == retained &&
+  expect(registry.sessions().front().automation.runtime() == retained &&
              count() == AutomationValue(std::int64_t{32}),
          "explicit reload preserves a dirty retained runtime's values");
   registry.stop_sessions(MonotonicClock::now());

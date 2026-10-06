@@ -28,7 +28,7 @@ find_snapshot(const layerc::platform::X11WindowScan &scan,
 InputSession *find_session(const std::span<InputSession> sessions,
                            const std::string_view profile_id) noexcept {
   for (auto &session : sessions)
-    if (session.profile.id == profile_id) return &session;
+    if (session.automation.profile().id == profile_id) return &session;
   return nullptr;
 }
 
@@ -45,12 +45,12 @@ struct PanelOverrides {
     layerc::platform::X11OverlayFrame &frame, bool &overridden,
     const InputSession &session, const std::string_view panel_id,
     PanelOverrides &result) {
-  const auto base = std::ranges::find(session.profile.panels, panel_id,
+  const auto base = std::ranges::find(session.automation.profile().panels, panel_id,
                                       &layerc::core::Panel::id);
-  if (base == session.profile.panels.end()) return false;
+  if (base == session.automation.profile().panels.end()) return false;
   const auto overrides =
-      session.automation_runtime
-          ? std::span(session.automation_runtime->snapshot().overlay_overrides)
+      session.automation.runtime()
+          ? std::span(session.automation.runtime()->snapshot().overlay_overrides)
           : std::span<const layerc::core::OverlayPropertyOverride>{};
   if (std::ranges::none_of(overrides, [&](const auto &item) {
         return item.panel_id == panel_id;
@@ -73,7 +73,7 @@ struct PanelOverrides {
 fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
           const TimePoint now, const PanelOverrides &overrides) {
   const auto presentation = layerc::core::present_panel(
-      frame.panel, session.profile.cooldowns, session.snapshot_buffer,
+      frame.panel, session.automation.profile().cooldowns, session.automation.snapshot_buffer(),
       {.visible = overrides.visible, .text = overrides.text, .edit_mode = false},
       now);
   frame.bars.clear();
@@ -108,9 +108,9 @@ void X11OverlayService::refresh(
         snapshot->x, snapshot->y, snapshot->width, snapshot->height};
     const int dpi = layerc::platform::monitor_dpi_for_rect(
         monitors, target.x, target.y, target.width, target.height);
-    for (const auto &panel : session.profile.panels) {
+    for (const auto &panel : session.automation.profile().panels) {
       Target entry;
-      entry.profile_id = session.profile.id;
+      entry.profile_id = session.automation.profile().id;
       entry.panel_id = panel.id;
       entry.session_window = session.window;
       entry.frame.target = target;
@@ -142,7 +142,7 @@ void X11OverlayService::render(const std::span<InputSession> sessions,
     auto *session = find_session(sessions, target.profile_id);
     if (session == nullptr) continue;
     if (session != snapshotted) {
-      session->cooldowns.snapshot(now, session->snapshot_buffer);
+      (void)session->automation.snapshot(now);
       snapshotted = session;
     }
     PanelOverrides overrides;

@@ -89,7 +89,7 @@ add_library(layerc_core STATIC
     src/core/automation_profile.cpp
     src/core/automation_value_codec.cpp
     src/core/automation_session.cpp
-    src/core/profile_session.cpp
+    src/core/automation_checkpoint.cpp
     src/core/automation_ops.cpp
     src/core/automation_runtime.cpp
     src/core/automation_runtime_effects.cpp
@@ -781,7 +781,7 @@ if(LAYERC_BUILD_TESTS)
         tests/automation_tests.cpp
         tests/automation_value_tests.cpp
         tests/automation_contract_tests.cpp
-        tests/profile_session_tests.cpp
+        tests/automation_session_tests.cpp
         tests/profile_tests.cpp
         tests/runtime_json_tests.cpp
         tests/utf8_tests.cpp

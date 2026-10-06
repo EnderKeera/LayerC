@@ -289,7 +289,7 @@ int run_linux_x11_visual_tests() {
   visual.attach(*display);
   const layerc::runtime::SessionCapabilityRequest request{
       .window = {window}, .active = true, .visual = true,
-      .profile_id = sessions.front().profile.id};
+      .profile_id = sessions.front().automation.profile().id};
   auto demand =
       layerc::runtime::calculate_capability_demand(std::span{&request, 1}, false);
   // This fixture exercises the visual owner; input/overlay have their own
@@ -298,7 +298,7 @@ int run_linux_x11_visual_tests() {
   demand.set(layerc::runtime::Capability::overlay, 0);
   {
     const layerc::daemon::VisualConfiguration configuration{
-        sessions.front().source_path, sessions.front().profile.id,
+        sessions.front().source_path, sessions.front().automation.profile().id,
         *sessions.front().visual_profile};
     const std::span configurations{&configuration, 1};
     layerc::daemon::X11VisualService initially_unmatched;
@@ -354,8 +354,8 @@ int run_linux_x11_visual_tests() {
                    "the captured pixel rule triggers its cooldown");
   passed &= expect(std::ranges::find(triggered, "template") != triggered.end(),
                    "the resolved template matches and triggers its cooldown");
-  passed &= expect(!sessions.front().cooldowns.trigger("pixel", now) &&
-                       !sessions.front().cooldowns.trigger("template", now),
+  passed &= expect(!sessions.front().automation.cooldowns().trigger("pixel", now) &&
+                       !sessions.front().automation.cooldowns().trigger("template", now),
                    "accepted visual requests consume both cooldowns");
   passed &= expect(
       visual.poll(sessions, now + std::chrono::milliseconds{50}).empty(),
@@ -466,7 +466,7 @@ int run_linux_x11_visual_tests() {
       window, persistence);
   sessions.back().active = true;
   auto second_request = request;
-  second_request.profile_id = sessions.back().profile.id;
+  second_request.profile_id = sessions.back().automation.profile().id;
   const layerc::runtime::SessionCapabilityRequest both_requests[]{
       request, second_request};
   auto both_demand =

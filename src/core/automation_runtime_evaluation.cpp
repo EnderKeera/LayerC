@@ -118,11 +118,10 @@ ExpressionResult AutomationRuntime::Impl::eval(
   const auto *spec = detail::find_automation_op(expression.operation);
   if (spec == nullptr)
     return AutomationError{"$runtime", "unsupported expression operation"};
-  AutomationValue evaluated;
-  std::string message;
-  if (!spec->evaluate(*spec, args, evaluated, message))
-    return AutomationError{"$runtime", std::move(message)};
-  return evaluated;
+  auto evaluated = spec->evaluate(*spec, args);
+  if (const auto *error = std::get_if<AutomationError>(&evaluated))
+    return *error;
+  return std::move(std::get<AutomationValue>(evaluated));
 }
 
 AttemptOutcome
@@ -156,11 +155,8 @@ AutomationRuntime::Impl::evaluate_event(const AutomationEvent &root,
     }
   }
   std::ranges::stable_sort(matches, [](const Match &a, const Match &b) {
-    if (a.rule->priority != b.rule->priority)
-      return a.rule->priority > b.rule->priority;
-    if (a.ai != b.ai)
-      return a.ai < b.ai;
-    return a.ri < b.ri;
+    return effect_order_precedes({a.rule->priority, a.ai, a.ri},
+                                 {b.rule->priority, b.ai, b.ri});
   });
   for (const auto &match : matches) {
     const auto fault_match = [&](AutomationError failure) -> AttemptOutcome {
@@ -213,12 +209,9 @@ AutomationRuntime::Impl::evaluate_event(const AutomationEvent &root,
           return expression_failure(value);
         *output = std::move(*result);
       }
-      const auto *spec = automation_action_spec(action.kind);
-      if (spec && (spec->value == ActionValuePolicy::match_variable ||
-                   spec->value == ActionValuePolicy::match_numeric_variable ||
-                   spec->value == ActionValuePolicy::overlay_property)) {
-        const auto expected = automation_action_value_type(action, profile);
-        if (expected && !normalize_automation_value(effect.value, *expected))
+      if (const auto expected = automation_action_value_type(action, profile,
+                                                            true)) {
+        if (!normalize_automation_value(effect.value, *expected))
           return fault_match(
               {"$runtime", "action value does not match its declared type"});
       }

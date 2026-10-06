@@ -52,8 +52,8 @@ AutomationRuntimeHost::resources() const noexcept {
   layerc::runtime::RuntimeResourceStats result{
       .timers = timer_running_ ? 1U : 0U};
   for (const auto &session : sessions_.sessions) {
-    if (!session->automation_runtime) continue;
-    const auto &snapshot = session->automation_runtime->snapshot();
+    if (!session->automation.runtime()) continue;
+    const auto &snapshot = session->automation.runtime()->snapshot();
     result += {
         .objects = 1,
         .cache_bytes =
@@ -78,18 +78,18 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
   };
   for (auto &session : sessions_.sessions) {
     if (!session->has_enabled_automations()) {
-      session->automation_runtime.reset();
+      session->automation.discard_runtime();
       continue;
     }
     auto *source = find_source(sessions_.sources, session->source_key);
     if (source == nullptr || !source->modules.automation.profile.has_value()) {
-      session->automation_runtime.reset();
+      session->automation.discard_runtime();
       continue;
     }
     const auto &profile = *source->modules.automation.profile;
-    if (!session->automation_runtime) {
+    if (!session->automation.runtime()) {
       session->automation_revision = source->automation_revision;
-      if (session->start(profile,
+      if (session->automation.start(profile,
                          persistence_.attach(source->path, profile, now)
                              .values,
                          now, nullptr, trace_subscribed))
@@ -101,13 +101,13 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
       // run only after the source's automation-relevant content changed, and
       // they still decide whether a full reconfigure is needed.
       session->automation_revision = source->automation_revision;
-      if (session->automation_runtime->profile() != profile ||
+      if (session->automation.runtime()->profile() != profile ||
           !std::ranges::equal(
-              session->automation_runtime->cooldown_groups(),
-              session->profile.cooldown_groups)) {
-        session->automation_runtime->reconfigure(
-            profile, session->profile.cooldown_groups);
-        session->automation_runtime->apply_persistent_values(
+              session->automation.runtime()->cooldown_groups(),
+              session->automation.profile().cooldown_groups)) {
+        session->automation.runtime()->reconfigure(
+            profile, session->automation.profile().cooldown_groups);
+        session->automation.runtime()->apply_persistent_values(
             persistence_.attach(source->path, profile, now).values);
         // Reconfigure resets session-scoped state (variables, timers, edge
         // monitors), so replay session_started like a fresh runtime: rules
@@ -118,7 +118,7 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
     }
   }
   const bool active = std::ranges::any_of(sessions_.sessions, [](const auto &session) {
-    return session != nullptr && session->automation_runtime != nullptr;
+    return session != nullptr && session->automation.runtime() != nullptr;
   });
   publish_activity(active);
   schedule_timer();
@@ -131,12 +131,12 @@ void AutomationRuntimeHost::quiesce() noexcept {
   timer_running_ = false;
   const auto now = layerc::core::MonotonicClock::now();
   for (auto &session : sessions_.sessions) {
-    if (!session->automation_runtime)
+    if (!session->automation.runtime())
       continue;
     process_event(
         *session,
         AutomationSession::event(AutomationEventKind::session_stopping, {}, now));
-    session->automation_runtime.reset();
+    session->automation.discard_runtime();
   }
   // Shutdown flush: force bypasses the debounce deadline. A failed write
   // stays pending in the owner with its fault visible in diagnostics.
@@ -146,7 +146,7 @@ void AutomationRuntimeHost::quiesce() noexcept {
 
 void AutomationRuntimeHost::retire_session(Session &session,
                                            const TimePoint now) {
-  if (!session.automation_runtime)
+  if (!session.automation.runtime())
     return;
   process_event(
       session,
@@ -155,7 +155,7 @@ void AutomationRuntimeHost::retire_session(Session &session,
           find_source(sessions_.sources, session.source_key))
     acknowledge_saved(
         persistence_.checkpoint(now, true, &source->path));
-  session.automation_runtime.reset();
+  session.automation.discard_runtime();
 }
 void AutomationRuntimeHost::schedule_timer() {
   if (window_ == nullptr)
@@ -163,9 +163,9 @@ void AutomationRuntimeHost::schedule_timer() {
   const auto now = layerc::core::MonotonicClock::now();
   std::optional<TimePoint> next = persistence_.next_deadline();
   for (auto &session : sessions_.sessions) {
-    if (!session->automation_runtime)
+    if (!session->automation.runtime())
       continue;
-    next = session->next_deadline(now, next);
+    next = session->automation.next_deadline(now, next);
   }
   if (!next.has_value()) {
     if (timer_running_)
@@ -187,9 +187,9 @@ void AutomationRuntimeHost::poll_timer() {
   timer_running_ = false;
   const auto now = layerc::core::MonotonicClock::now();
   for (auto &session : sessions_.sessions) {
-    if (!session->automation_runtime)
+    if (!session->automation.runtime())
       continue;
-    if (session->poll(now))
+    if (session->automation.poll(now))
       overlays_.mark_dirty();
     after_step(*session, now);
   }
@@ -200,9 +200,9 @@ void AutomationRuntimeHost::poll_timer() {
 void AutomationRuntimeHost::poll_cooldown_transitions(Session &session,
                                                       const TimePoint now,
                                                       const bool emit) {
-  if (!session.automation_runtime)
+  if (!session.automation.runtime())
     return;
-  if (session.poll_ready(now, emit))
+  if (session.automation.poll_ready(now, emit))
     overlays_.mark_dirty();
   if (emit)
     after_step(session, now);
@@ -210,7 +210,7 @@ void AutomationRuntimeHost::poll_cooldown_transitions(Session &session,
 void AutomationRuntimeHost::publish_trace(Session &session) {
   if (!trace_subscribed ||
       !live_edit_.authenticated ||
-      session.automation_runtime->trace().empty())
+      session.automation.runtime()->trace().empty())
     return;
   layerc::core::LiveMessage message;
   message.type = layerc::core::LiveMessageType::automation_trace_event;
@@ -219,9 +219,9 @@ void AutomationRuntimeHost::publish_trace(Session &session) {
   message.profile_key = session.source_key;
   constexpr std::size_t max_chunks_per_event = 4U;
   for (std::size_t chunk{}; chunk < max_chunks_per_event &&
-                            !session.automation_runtime->trace().empty();
+                            !session.automation.runtime()->trace().empty();
        ++chunk) {
-    const auto &trace = session.automation_runtime->trace();
+    const auto &trace = session.automation.runtime()->trace();
     const auto selected =
         layerc::core::live_trace_prefix_count(message, trace);
     if (selected == 0U) {
@@ -236,7 +236,7 @@ void AutomationRuntimeHost::publish_trace(Session &session) {
           std::span<const layerc::core::AutomationTraceEntry>(&omitted, 1U));
       if (!live_edit_.channel.send(message))
         break;
-      session.automation_runtime->consume_trace(1U);
+      session.automation.runtime()->consume_trace(1U);
       continue;
     }
     message.text = layerc::core::export_layerc_trace(
@@ -244,15 +244,15 @@ void AutomationRuntimeHost::publish_trace(Session &session) {
                                                             selected));
     if (!live_edit_.channel.send(message))
       break;
-    session.automation_runtime->consume_trace(selected);
+    session.automation.runtime()->consume_trace(selected);
   }
 }
 
 void AutomationRuntimeHost::process_event(Session &session,
                                           const AutomationEvent &event) {
-  if (!session.automation_runtime)
+  if (!session.automation.runtime())
     return;
-  if (session.process(event))
+  if (session.automation.process(event))
     overlays_.mark_dirty();
   after_step(session, event.timestamp);
 }
@@ -263,7 +263,7 @@ void AutomationRuntimeHost::process_input_value(Session &session,
                                                 const TimePoint now,
                                                 const bool momentary) {
   if (auto event =
-          session.input_value_event(std::move(source), value, now, momentary))
+          session.automation.input_value_event(std::move(source), value, now, momentary))
     process_event(session, *event);
 }
 
@@ -282,18 +282,18 @@ void AutomationRuntimeHost::acknowledge_saved(
     for (auto &session : sessions_.sessions) {
       const auto *source =
           find_source(sessions_.sources, session->source_key);
-      if (!session->automation_runtime || source == nullptr ||
+      if (!session->automation.runtime() || source == nullptr ||
           source->path != path ||
-          session->automation_runtime->persistent_values() != entry->values)
+          session->automation.runtime()->persistent_values() != entry->values)
         continue;
-      session->automation_runtime->mark_persistent_saved();
+      session->automation.runtime()->mark_persistent_saved();
     }
   }
 }
 void AutomationRuntimeHost::synchronize_state(Session &session,
                                               const TimePoint now) {
-  if (!session.automation_runtime ||
-      !session.automation_runtime->persistent_dirty())
+  if (!session.automation.runtime() ||
+      !session.automation.runtime()->persistent_dirty())
     return;
   const auto *source =
       find_source(sessions_.sources, session.source_key);
@@ -301,12 +301,12 @@ void AutomationRuntimeHost::synchronize_state(Session &session,
     return;
   // The owner arms the shared debounce on the first change of a burst.
   persistence_.publish(
-      source->path, session.automation_runtime->persistent_values(), now);
+      source->path, session.automation.runtime()->persistent_values(), now);
   for (auto &other : sessions_.sessions) {
-    if (other.get() == &session || !other->automation_runtime ||
+    if (other.get() == &session || !other->automation.runtime() ||
         other->source_key != session.source_key)
       continue;
-    (void)session.sync_persistent_to(*other);
+    (void)session.automation.sync_persistent_to(other->automation);
   }
 }
 

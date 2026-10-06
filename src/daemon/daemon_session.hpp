@@ -8,7 +8,7 @@
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/live_edit.hpp"
 #include "layerc/core/pixel_engine.hpp"
-#include "layerc/core/profile_session.hpp"
+#include "layerc/core/automation_session.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/platform/profile_store.hpp"
 
@@ -57,7 +57,8 @@ struct ProfileSource {
   [[nodiscard]] SessionInit to_session_init(bool visual_enabled) const;
 };
 
-struct Session : layerc::core::AutomationSession {
+struct Session {
+  layerc::core::AutomationSession automation;
   struct PolledKeyState {
     layerc::core::InputToken token;
     // Resolved once at seed time; nonzero (unmappable keys are not polled).
@@ -80,7 +81,7 @@ struct Session : layerc::core::AutomationSession {
       ModuleSidecar<layerc::core::CompanionProfile> companion);
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
-  [[nodiscard]] bool is_global() const noexcept { return profile.game.global; }
+  [[nodiscard]] bool is_global() const noexcept { return automation.profile().game.global; }
   [[nodiscard]] bool requires_input_polling() const noexcept {
     return uses_controller || !global_keyboard.empty();
   }

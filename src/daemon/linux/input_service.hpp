@@ -9,7 +9,7 @@
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
 #include "layerc/core/pixel_engine.hpp"
-#include "layerc/core/profile_session.hpp"
+#include "layerc/core/automation_session.hpp"
 #include "layerc/platform/automation_persistence.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
@@ -59,7 +59,8 @@ struct ConfiguredProfile {
 // or HID tokens) stay in the matcher and simply never fire. Persistent
 // automation values belong to the registry's AutomationPersistence, which
 // outlives the session.
-struct InputSession : layerc::core::AutomationSession {
+struct InputSession {
+  layerc::core::AutomationSession automation;
   std::filesystem::path source_path;
   std::uint64_t window{};
   bool global{};

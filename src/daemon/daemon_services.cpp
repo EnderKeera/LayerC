@@ -49,11 +49,11 @@ layerc::runtime::CapabilityDemand DaemonApp::runtime_demand() {
         .global = session->is_global(),
         .visual = visual,
         .generic_hid = session->uses_hid,
-        .isolated_visual = session->profile.visual_runtime ==
+        .isolated_visual = session->automation.profile().visual_runtime ==
                            layerc::core::VisualRuntime::isolated,
         .automation = session->has_enabled_automations(),
         .companion = std::ranges::find(companion, session) != companion.end(),
-        .profile_id = session->profile.id,
+        .profile_id = session->automation.profile().id,
     });
   }
   return layerc::runtime::calculate_capability_demand(

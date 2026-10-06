@@ -140,9 +140,10 @@ bool validate_expression_tree(
   if (expression.arguments.size() < spec->min_args ||
       expression.arguments.size() > spec->max_args)
     return fail("operator has an invalid argument count");
-  std::string message;
-  if (!spec->infer(*spec, arguments, result, message))
-    return fail(message);
+  const auto inferred = spec->infer(*spec, arguments);
+  if (const auto *failure = std::get_if<AutomationError>(&inferred))
+    return fail(failure->message);
+  result = std::get<std::optional<AutomationValueType>>(inferred);
   return true;
 }
 

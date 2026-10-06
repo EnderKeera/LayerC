@@ -235,7 +235,7 @@ void check_passive_normalization(Display *raw, X11InputSource &source,
       if (input.pressed && input.token == InputToken{device, code, 0}) ++matching;
       triggered += session.feed(input, MonotonicClock::now()).size();
     }
-    const auto count = session.automation_runtime->snapshot().variables.at("count");
+    const auto count = session.automation.runtime()->snapshot().variables.at("count");
     const bool correct = supported ? matching == 1 && triggered == 1 &&
                                          count == AutomationValue(std::int64_t{1})
                                    : matching == 0 && triggered == 0 &&
@@ -400,17 +400,17 @@ int run_linux_x11_input_tests() {
                        service_sessions.session_requests().front().active,
                    "a non-global profile prefers and reports the active match");
   const auto state_now = layerc::core::MonotonicClock::now();
-  passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
+  passed &= expect(service_sessions.sessions().front().automation.cooldowns().trigger("dash", state_now),
                    "fixture cooldown starts");
   service_sessions.refresh(scan);
-  passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
+  passed &= expect(!service_sessions.sessions().front().automation.cooldowns().trigger("dash", state_now),
                    "an unchanged refresh preserves cooldown state");
   auto changed = profiles[0];
   changed.profile.name = "Changed definition";
   const StoredProfile changed_profiles[] = {changed, profiles[1]};
   service_sessions.configure(changed_profiles);
   service_sessions.refresh(scan);
-  passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", state_now),
+  passed &= expect(service_sessions.sessions().front().automation.cooldowns().trigger("dash", state_now),
                    "a changed profile definition starts a fresh session");
 
   X11WindowScan empty_scan;
@@ -446,13 +446,13 @@ int run_linux_x11_input_tests() {
   // reconstruct the session (which would reset the cooldown engine).
   {
     const auto focus_now = layerc::core::MonotonicClock::now();
-    passed &= expect(service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
+    passed &= expect(service_sessions.sessions().front().automation.cooldowns().trigger("dash", focus_now),
                      "focus regression starts a cooldown");
     service_sessions.refresh(background_scan);
-    passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
+    passed &= expect(!service_sessions.sessions().front().automation.cooldowns().trigger("dash", focus_now),
                      "a background refresh preserves cooldown state");
     service_sessions.refresh(scan);
-    passed &= expect(!service_sessions.sessions().front().cooldowns.trigger("dash", focus_now),
+    passed &= expect(!service_sessions.sessions().front().automation.cooldowns().trigger("dash", focus_now),
                      "focus gain preserves cooldown state");
   }
   service_sessions.refresh(scan);
@@ -479,7 +479,7 @@ int run_linux_x11_input_tests() {
       {{layerc::core::InputDevice::controller, 1, 0}, true}, now);
   passed &= expect(triggered.size() == 1 && triggered.front() == "ultimate",
                    "controller bindings survive the round trip");
-  passed &= expect(session.profile.bindings.size() == 4,
+  passed &= expect(session.automation.profile().bindings.size() == 4,
                    "every binding stays in the session");
 
   // Retain one window across focus changes, including when another global
@@ -539,9 +539,9 @@ int run_linux_x11_input_tests() {
   passed &= expect(automation_triggered.size() == 1 &&
                        automation_triggered.front() == "dash",
                    "automation observes input before the binding cooldown");
-  passed &= expect(automated.automation_runtime != nullptr &&
-                       automated.automation_runtime->snapshot().timers.size() == 1 &&
-                       automated.automation_runtime->snapshot().overlay_overrides.size() ==
+  passed &= expect(automated.automation.runtime() != nullptr &&
+                       automated.automation.runtime()->snapshot().timers.size() == 1 &&
+                       automated.automation.runtime()->snapshot().overlay_overrides.size() ==
                            1,
                    "input commits timer and overlay effects");
   const auto state_due = service_sessions.next_automation_deadline(automation_now);
@@ -550,15 +550,15 @@ int run_linux_x11_input_tests() {
 
   (void)service_sessions.poll_automation(
       automation_now + std::chrono::milliseconds{55});
-  const auto after_timer = automated.automation_runtime->persistent_values();
+  const auto after_timer = automated.automation.runtime()->persistent_values();
   const auto count = after_timer.find("count");
   passed &= expect(count != after_timer.end() &&
                        count->second == layerc::core::AutomationValue(
                                             std::int64_t{2}) &&
-                       automated.automation_runtime->snapshot().timers.empty() &&
-                       automated.automation_runtime->snapshot()
+                       automated.automation.runtime()->snapshot().timers.empty() &&
+                       automated.automation.runtime()->snapshot()
                            .overlay_overrides.empty() &&
-                       !automated.cooldowns.trigger(
+                       !automated.automation.cooldowns().trigger(
                            "potion", automation_now +
                                          std::chrono::milliseconds{55}),
                    "the timer commits persistent, cooldown, and override effects");
@@ -580,7 +580,7 @@ int run_linux_x11_input_tests() {
   reloaded_sessions.configure(std::span{profiles}.first(1));
   reloaded_sessions.refresh(scan);
   const auto &reloaded_values =
-      reloaded_sessions.sessions().front().automation_runtime->persistent_values();
+      reloaded_sessions.sessions().front().automation.runtime()->persistent_values();
   passed &= expect(reloaded_sessions.automation_count() == 1 &&
                        reloaded_values.at("count") ==
                            layerc::core::AutomationValue(std::int64_t{2}),
@@ -812,7 +812,7 @@ int run_linux_x11_input_tests() {
       live_registry.sessions().front().matcher.process(press_e).size() == 1,
       "detaching XI2 clears transient key state");
   passed &= expect(
-      live_registry.sessions().front().automation_runtime->persistent_values().at(
+      live_registry.sessions().front().automation.runtime()->persistent_values().at(
           "stopped") == layerc::core::AutomationValue(std::int64_t{0}),
       "temporary quiescence does not run session-stopping rules");
   live_registry.stop_sessions(layerc::core::MonotonicClock::now());

@@ -1,96 +1,140 @@
 #pragma once
 
-// Shared per-session automation lifecycle policy for the Windows and Linux
-// daemons (B1). Validation rules, staged cooldown commit, and ready-edge
-// emission have one owner here; each daemon keeps only platform glue
-// (trace/live-channel/timer on Windows, triggered-reporting on Linux).
-
 #include "layerc/core/automation.hpp"
+#include "layerc/core/automation_checkpoint.hpp"
+#include "layerc/core/cooldown_engine.hpp"
+#include "layerc/core/input_matcher.hpp"
+#include "layerc/core/pixel_engine.hpp"
 
-#include <cstdint>
+#include <map>
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace layerc::core {
 
-class CooldownEngine;
-
-// An overlay override effect is well-formed: the property exists, the value
-// fits its spec, and a timed secondary carries a duration.
-[[nodiscard]] bool automation_overlay_effect_valid(
-    const AutomationEffect &effect) noexcept;
-
-// Effect-domain validation shared by both daemons: overlay effects must be
-// well-formed and target a panel of the session; cooldown effects must carry
-// durations where required and target a known cooldown or group; internal
-// effects always validate.
-[[nodiscard]] bool validate_automation_effect(
-    const AutomationEffect &effect, std::span<const Panel> panels,
-    std::span<const CooldownDefinition> cooldowns,
-    std::span<const CooldownGroup> groups);
-
-[[nodiscard]] bool validate_automation_cooldown_effect(
-    const AutomationEffect &effect,
-    std::span<const CooldownDefinition> cooldowns,
-    std::span<const CooldownGroup> groups);
-
-// Validate-then-apply commit of the winning effect set: every
-// cooldown-domain effect is validated against the live definitions before
-// anything mutates, so a failure never leaves a partial commit observable.
-// Apply to a staged engine; a false return means nothing was applied.
-[[nodiscard]] bool commit_automation_cooldown_effects(
-    CooldownEngine &engine, std::span<const AutomationEffect> effects,
-    std::span<const CooldownDefinition> cooldowns,
-    std::span<const CooldownGroup> groups, TimePoint now,
-    std::uint64_t origin_token);
-
-// Earliest timer, overlay expiry, charge recovery, or persistent checkpoint.
-[[nodiscard]] std::optional<TimePoint> next_automation_deadline(
-    const AutomationRuntime &runtime, std::span<const CooldownState> cooldowns,
-    std::optional<TimePoint> checkpoint = std::nullopt);
-
-// Debounce between a persistent-value mutation and its durable checkpoint:
-// bursts of timer/input writes collapse into one store write per second.
-inline constexpr Milliseconds automation_checkpoint_debounce{1'000};
-
-// Arms the debounce on first mutation; later mutations while armed keep the
-// original deadline instead of postponing the checkpoint forever.
-inline void automation_checkpoint_arm(std::optional<TimePoint> &due,
-                                      const TimePoint now) noexcept {
-  if (!due.has_value()) due = now + automation_checkpoint_debounce;
-}
-
-// Whether a durable write should be attempted now (force bypasses the
-// deadline for shutdown/flush paths).
-[[nodiscard]] inline bool automation_checkpoint_ready(
-    const std::optional<TimePoint> &due, const TimePoint now,
-    const bool force = false) noexcept {
-  return due.has_value() && (force || *due <= now);
-}
-
-// Report the write outcome with one policy each way: success clears the
-// deadline; failure slides it out by one debounce for a retry (never
-// re-arms from the old deadline, so a persistently failing store cannot
-// pin the checkpoint in the past and busy-loop the daemon).
-inline void automation_checkpoint_report(std::optional<TimePoint> &due,
-                                         const TimePoint now,
-                                         const bool ok) noexcept {
-  due = ok ? std::optional<TimePoint>{}
-           : std::optional<TimePoint>{now + automation_checkpoint_debounce};
-}
-
-// Newly-ready ids since the previous poll. The runtime owns the edge maps;
-// this updates them in place and reports what transitioned so the caller can
-// emit cooldown_ready / group_ready events through its own event path.
-struct ReadyTransitions {
-  std::vector<std::string> cooldowns;
-  std::vector<std::string> groups;
+// Platform-neutral output: native adapters publish traces, diagnostics and
+// durable checkpoints without making the session depend on a profile store.
+class AutomationSessionSink {
+public:
+  virtual ~AutomationSessionSink() = default;
+  virtual void on_result(const AutomationEvaluationResult &) {}
+  virtual void on_persistent_change(const AutomationPersistentValues &,
+                                    TimePoint) {}
+  virtual void on_stopping(TimePoint) {}
 };
 
-[[nodiscard]] ReadyTransitions poll_automation_ready_transitions(
-    AutomationSessionEdges &edges,
-    std::span<const CooldownState> snapshot,
-    std::span<const CooldownGroup> groups);
+// Current runtime faults of one session's automation: the last evaluation
+// error, and at most one fault per automation that faulted during an event.
+// Both daemons report these lines; they never block unrelated automations.
+struct AutomationRuntimeHealth {
+  std::optional<std::string> runtime_error;
+  std::map<std::string, std::string, std::less<>> runtime_faults;
+
+  void record(const AutomationEvaluationResult &result);
+  // One line per fault, prefixed with the session's profile source.
+  [[nodiscard]] std::vector<std::string> lines(std::string_view source) const;
+};
+
+struct SessionFeedResult {
+  std::vector<std::string> triggered;
+  bool changed{};
+  bool matched{};
+};
+
+// One owner for a matched profile's cooldown/automation/visual state. Native
+// sessions compose it; platform glue never participates in its lifecycle.
+// Every call evaluates against the session's own `profile`.
+class AutomationSession {
+public:
+  explicit AutomationSession(GameProfile matched);
+  AutomationSession(AutomationSession &&) = default;
+  AutomationSession &operator=(AutomationSession &&) = default;
+  AutomationSession(const AutomationSession &) = delete;
+  AutomationSession &operator=(const AutomationSession &) = delete;
+  ~AutomationSession() = default;
+
+  void set_invalid_visual_sidecar(bool invalid) noexcept {
+    invalid_visual_sidecar_ = invalid;
+  }
+  [[nodiscard]] bool blocks_all_triggers() const noexcept {
+    return invalid_visual_sidecar_;
+  }
+  [[nodiscard]] static std::uint64_t next_origin() noexcept;
+  [[nodiscard]] static AutomationEvent event(AutomationEventKind kind,
+                                             std::string source, TimePoint now,
+                                             std::optional<std::uint64_t> origin = std::nullopt);
+
+  [[nodiscard]] bool start(AutomationProfile automation,
+                           AutomationPersistentValues values, TimePoint now,
+                           AutomationSessionSink *sink = nullptr,
+                           bool trace_enabled = false,
+                           AutomationRuntime::ClockReader clock = {});
+  [[nodiscard]] bool stop(TimePoint now, AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] bool process(const AutomationEvent &value,
+                             AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] bool poll_ready(TimePoint now, bool emit,
+                                AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] SessionFeedResult trigger(std::string_view id, TimePoint now,
+                                           AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] SessionFeedResult feed_input(InputMatcher &matcher,
+                                              const InputEvent &input,
+                                              TimePoint now,
+                                              AutomationSessionSink *sink = nullptr);
+  // Continuous input (controller axes, HID values): applies the automation
+  // profile's demand check, deadzone, rate limit and change threshold, and
+  // returns the input_value_changed event to process, if any. A momentary
+  // (relative) sample reports from 0 on every accepted sample.
+  [[nodiscard]] std::optional<AutomationEvent>
+  input_value_event(std::string source, double value, TimePoint now,
+                    bool momentary = false);
+  [[nodiscard]] SessionFeedResult feed_measurements(
+      std::span<const ObservationMeasurement> measurements, TimePoint now,
+      AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] bool poll(TimePoint now, AutomationSessionSink *sink = nullptr);
+  [[nodiscard]] std::optional<TimePoint> next_deadline(
+      TimePoint now, std::optional<TimePoint> checkpoint = std::nullopt);
+  // Call only for sessions of the same ProfileSource; the owning registry
+  // chooses siblings and persists the source's winning value once.
+  [[nodiscard]] bool sync_persistent_to(AutomationSession &sibling) const;
+
+  // Native reconciliation supplies the cooldown reset set; the session keeps
+  // definitions, engine and reusable snapshot storage consistent.
+  void reconfigure_profile(GameProfile matched,
+                           std::span<const std::string> reset_cooldown_ids,
+                           TimePoint now);
+  void configure_visual(const std::optional<VisualProfile> &visual,
+                        bool enabled = true);
+  // Used when a sidecar/capability disappears, without synthesizing lifecycle
+  // events. Normal retirement uses stop() and publishes through the sink.
+  void discard_runtime() noexcept { automation_runtime_.reset(); }
+  [[nodiscard]] std::span<const CooldownState> snapshot(TimePoint now);
+
+  [[nodiscard]] const GameProfile &profile() const noexcept { return profile_; }
+  [[nodiscard]] const AutomationRuntimeHealth &health() const noexcept { return automation_health_; }
+  [[nodiscard]] CooldownEngine &cooldowns() noexcept { return cooldowns_; }
+  [[nodiscard]] const CooldownEngine &cooldowns() const noexcept { return cooldowns_; }
+  [[nodiscard]] VisualTriggerEngine *visual_triggers() noexcept { return visual_triggers_.get(); }
+  [[nodiscard]] const VisualTriggerEngine *visual_triggers() const noexcept { return visual_triggers_.get(); }
+  [[nodiscard]] AutomationRuntime *runtime() noexcept { return automation_runtime_.get(); }
+  [[nodiscard]] const AutomationRuntime *runtime() const noexcept { return automation_runtime_.get(); }
+  [[nodiscard]] const std::vector<CooldownState> &snapshot_buffer() const noexcept { return snapshot_buffer_; }
+
+private:
+  GameProfile profile_;
+  AutomationRuntimeHealth automation_health_;
+  CooldownEngine cooldowns_;
+  std::unique_ptr<VisualTriggerEngine> visual_triggers_;
+  std::unique_ptr<AutomationRuntime> automation_runtime_;
+  std::vector<CooldownState> snapshot_buffer_;
+
+  [[nodiscard]] SessionFeedResult trigger_requests(
+      std::span<const VisualTriggerRequest> requests, TimePoint now,
+      AutomationSessionSink *sink);
+  bool invalid_visual_sidecar_{};
+};
 
 } // namespace layerc::core

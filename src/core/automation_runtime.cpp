@@ -165,7 +165,7 @@ bool AutomationRuntime::expire_overlay_overrides(const TimePoint now) {
   });
   return impl_->state.overlay_overrides.size() != before;
 }
-std::optional<TimePoint> AutomationRuntime::next_timer_due() const noexcept {
+std::optional<TimePoint> AutomationRuntime::next_deadline() const noexcept {
   std::optional<TimePoint> result;
   for (const auto &timer : impl_->state.timers)
     if (!result || timer.due < *result)

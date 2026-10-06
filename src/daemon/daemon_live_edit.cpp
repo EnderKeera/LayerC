@@ -28,10 +28,10 @@ void DaemonApp::poll_live_channel() {
     if (!live_edit_host_.channel.connected()) {
       automation_runtime_host_.trace_subscribed = false;
       for (auto &session : session_registry_.sessions) {
-        if (!session->automation_runtime)
+        if (!session->automation.runtime())
           continue;
-        session->automation_runtime->set_trace_enabled(false);
-        session->automation_runtime->clear_trace();
+        session->automation.runtime()->set_trace_enabled(false);
+        session->automation.runtime()->clear_trace();
       }
       end_edit_session("editor disconnected");
     }
@@ -101,10 +101,10 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
     automation_runtime_host_.trace_subscribed = 
         message.type == LiveMessageType::automation_trace_subscribe;
     for (auto &session : session_registry_.sessions) {
-      if (!session->automation_runtime)
+      if (!session->automation.runtime())
         continue;
-      session->automation_runtime->clear_trace();
-      session->automation_runtime->set_trace_enabled(
+      session->automation.runtime()->clear_trace();
+      session->automation.runtime()->set_trace_enabled(
           automation_runtime_host_.trace_subscribed);
     }
     send_live_reply(LiveMessageType::acknowledgement, message,
@@ -116,12 +116,12 @@ void DaemonApp::handle_live_message(const layerc::core::LiveMessage &message) {
   if (message.type == LiveMessageType::retry_automation) {
     bool retried{};
     for (auto &session : session_registry_.sessions) {
-      if (!session->automation_runtime)
+      if (!session->automation.runtime())
         continue;
       if (!message.profile_key.empty() &&
           session->source_key != message.profile_key)
         continue;
-      session->automation_runtime->retry(message.text);
+      session->automation.runtime()->retry(message.text);
       retried = true;
     }
     send_live_reply(retried ? LiveMessageType::acknowledgement

@@ -109,30 +109,25 @@ void test_automation_expression_and_action_contract() {
   {
     auto base = contract_base();
     base.cooldown_groups.back().duration = 5s;
-    CooldownEngine engine(base.cooldowns, base.cooldown_groups);
-    const std::array effects{
-        AutomationEffect{.kind = AutomationActionKind::trigger_cooldown, .target = "dash"},
-        AutomationEffect{.kind = AutomationActionKind::reduce_cooldown_next, .target = "blink"}};
-    expect(!commit_automation_cooldown_effects(
-               engine, effects, base.cooldowns, base.cooldown_groups, TimePoint{}, 1),
-           "a rejected later effect must leave all cooldowns untouched");
-    expect(engine.remaining("dash", TimePoint{}) == 0ms,
-           "failed atomic effect commit must not consume an earlier charge");
-    expect(!validate_automation_cooldown_effect(
-               AutomationEffect{.kind = AutomationActionKind::set_overlay_override},
-               base.cooldowns, base.cooldown_groups),
-           "cooldown validation must reject effects from other domains");
     AutomationProfile graph;
     graph.profile_id = base.id;
-    AutomationRuntime runtime(graph, {}, {}, frozen_clock);
-    expect(!next_automation_deadline(runtime, {}).has_value(),
+    graph.automations = {{.id = "atomic", .name = "Atomic",
+      .rules = {{.id = "start", .event = AutomationEventKind::session_started,
+        .actions = {{.kind = AutomationActionKind::trigger_cooldown, .target = "dash"},
+                    {.kind = AutomationActionKind::reduce_cooldown_next, .target = "blink"}}}}}};
+    AutomationSession session(base);
+    (void)session.start(graph, {}, TimePoint{}, nullptr, false, frozen_clock);
+    expect(session.health().runtime_faults.contains("atomic") &&
+               session.cooldowns().remaining("dash", TimePoint{}) == 0ms,
+           "a rejected later effect must fault its automation without consuming an earlier charge");
+    graph.automations.clear();
+    (void)session.start(graph, {}, TimePoint{}, nullptr, false, frozen_clock);
+    expect(!session.next_deadline(TimePoint{}).has_value(),
            "idle automation must have no deadline");
-    const std::array states{CooldownState{.next_charge_at = TimePoint{} + 100ms}};
-    expect(next_automation_deadline(runtime, states, TimePoint{} + 200ms) ==
-               TimePoint{} + 100ms,
+    (void)session.trigger("dash", TimePoint{});
+    expect(session.next_deadline(TimePoint{}, TimePoint{} + 6s) == TimePoint{} + 5s,
            "charge recovery must precede a later checkpoint");
-    expect(next_automation_deadline(runtime, states, TimePoint{} + 50ms) ==
-               TimePoint{} + 50ms,
+    expect(session.next_deadline(TimePoint{}, TimePoint{} + 50ms) == TimePoint{} + 50ms,
            "an earlier checkpoint must precede charge recovery");
     graph.automations = {{.id = "overlay", .name = "Overlay",
       .rules = {{.id = "start", .event = AutomationEventKind::session_started,
@@ -140,11 +135,13 @@ void test_automation_expression_and_action_contract() {
           .target = "main", .name = "temporary", .property = "visible",
           .value = literal(AutomationValue(false)),
           .secondary = literal(AutomationValue(DurationValue{25ms}))}}}}}};
-    AutomationRuntime overlay_runtime(graph, {}, {}, frozen_clock);
-    expect(overlay_runtime.process({.kind = AutomationEventKind::session_started}).committed,
-           "overlay expiry fixture should commit");
-    expect(next_automation_deadline(overlay_runtime, states) == TimePoint{} + 25ms,
+    (void)session.start(graph, {}, TimePoint{}, nullptr, false, frozen_clock);
+    expect(session.runtime()->next_deadline() == TimePoint{} + 25ms &&
+               session.next_deadline(TimePoint{}) == TimePoint{} + 25ms,
            "overlay expiry must schedule a wakeup without any runtime timer");
+    expect(!session.poll(TimePoint{} + 24ms) && session.poll(TimePoint{} + 25ms) &&
+               session.next_deadline(TimePoint{} + 25ms) == TimePoint{} + 5s,
+           "overlay expiry must clear at its deadline and reveal charge recovery");
   }
 
   const auto boolean = [&](AutomationExpression expression) {
@@ -373,7 +370,7 @@ void test_automation_expression_and_action_contract() {
   const auto timer_events = action_runtime.due_timer_events(TimePoint(250ms));
   expect(timer_events.size() == 1U &&
              timer_events.front().source_id == "pulse" &&
-             action_runtime.next_timer_due() == TimePoint(50ms),
+             action_runtime.next_deadline() == TimePoint(50ms),
          "collection must be pure: the firing is consumed by process(), so "
          "the timer stays due until its event is delivered");
   const auto cleaned = action_runtime.process(timer_events.front());
@@ -402,7 +399,7 @@ void test_automation_expression_and_action_contract() {
     const auto firing = rearm.due_timer_events(TimePoint(120ms));
     const auto fired = rearm.process(firing.front());
     expect(firing.size() == 1U && fired.committed &&
-               rearm.next_timer_due() == TimePoint(170ms),
+               rearm.next_deadline() == TimePoint(170ms),
            "a repeating timer firing should rearm from the event timestamp "
            "when process() consumes it");
     const auto stale = rearm.process(
@@ -410,7 +407,7 @@ void test_automation_expression_and_action_contract() {
          .timestamp = TimePoint(121ms),
          .source_id = "tick",
          .origin_token = 2});
-    expect(stale.committed && rearm.next_timer_due() == TimePoint(170ms),
+    expect(stale.committed && rearm.next_deadline() == TimePoint(170ms),
            "a redelivered firing before the rearmed deadline must not "
            "consume the timer again");
   }
@@ -517,7 +514,7 @@ void test_automation_timer_commit_rollback() {
       expect(commit_calls == 1U && !rejected.committed && rejected.error &&
                  rejected.derived_events.empty() && unchanged(),
              "rejected firings must preserve timer and persistent state");
-      expect(runtime.next_timer_due() == TimePoint(50ms) &&
+      expect(runtime.next_deadline() == TimePoint(50ms) &&
                  runtime.due_timer_events(TimePoint(120ms)).size() == 1U,
              "a rejected firing must remain scheduled for redelivery");
       const auto accepted = runtime.process(
@@ -530,7 +527,7 @@ void test_automation_timer_commit_rollback() {
                      AutomationValue(std::int64_t{with_actions ? 1 : 0}) &&
                  runtime.persistent_dirty() == with_actions,
              "redelivery should commit the effects exactly once");
-      expect(repeating ? runtime.next_timer_due() == TimePoint(170ms)
+      expect(repeating ? runtime.next_deadline() == TimePoint(170ms)
                        : runtime.snapshot().timers.empty(),
              "accepted firings retire one-shots and rearm repeats from "
              "event time");

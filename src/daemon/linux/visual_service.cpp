@@ -60,7 +60,7 @@ void X11VisualService::refresh(
     if (consumer.runtime != layerc::core::VisualRuntime::inline_process) continue;
     const auto found = std::ranges::find_if(sessions, [&](const auto &session) {
       return session.window == consumer.window.opaque &&
-             session.profile.id == consumer.profile_id;
+             session.automation.profile().id == consumer.profile_id;
     });
     if (found == sessions.end() || !found->visual_profile) continue;
     auto &entry = desired[found->window];
@@ -97,9 +97,9 @@ void X11VisualService::refresh(
   if (!configurations) {
     for (const auto &session : sessions)
       if (session.visual_profile &&
-          session.profile.visual_runtime ==
+          session.automation.profile().visual_runtime ==
               layerc::core::VisualRuntime::inline_process)
-        inferred.push_back({session.source_path, session.profile.id,
+        inferred.push_back({session.source_path, session.automation.profile().id,
                             *session.visual_profile});
     configurations = std::span<const VisualConfiguration>{inferred};
   }
@@ -110,7 +110,7 @@ void X11VisualService::refresh(
   std::set<std::filesystem::path> matched_paths;
   for (const auto &session : sessions) {
     if (!session.visual_profile ||
-        session.profile.visual_runtime !=
+        session.automation.profile().visual_runtime !=
             layerc::core::VisualRuntime::inline_process)
       continue;
     matched_paths.insert(session.source_path);

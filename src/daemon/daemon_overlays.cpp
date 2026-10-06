@@ -13,11 +13,11 @@ namespace {
 // No "already applied" cache: a released and recreated collection, or a
 // rebuilt base panel, must receive the still-active overrides again.
 void apply_automation_overrides(Session &session) {
-  if (session.automation_runtime)
+  if (session.automation.runtime())
     session.overlays.apply_overrides(
-        session.profile, session.automation_runtime->snapshot().overlay_overrides);
+        session.automation.profile(), session.automation.runtime()->snapshot().overlay_overrides);
   else
-    session.overlays.apply_overrides(session.profile, {});
+    session.overlays.apply_overrides(session.automation.profile(), {});
 }
 
 } // namespace
@@ -85,7 +85,7 @@ layerc::runtime::ServiceReconcileResult
 OverlayRuntime::reconcile(const layerc::runtime::CapabilityDemand &) {
   for (auto *session : sessions_.active_inputs) {
     if (session != nullptr)
-      session->overlays.ensure(session->profile, capture_exclusion);
+      session->overlays.ensure(session->automation.profile(), capture_exclusion);
   }
   mark_dirty();
   return {};
@@ -134,8 +134,8 @@ void DaemonApp::render_overlays() {
       continue;
     }
 
-    session->cooldowns.snapshot(now, session->snapshot_buffer);
-    const auto &states = session->snapshot_buffer;
+    (void)session->automation.snapshot(now);
+    const auto &states = session->automation.snapshot_buffer();
     const bool session_is_running =
         std::any_of(states.begin(), states.end(),
                     [](const layerc::core::CooldownState &state) {
@@ -167,12 +167,12 @@ void DaemonApp::publish_companion_snapshots(const layerc::core::TimePoint now) {
   auto *session = foreground.empty() ? nullptr : foreground.front();
   if (session == nullptr)
     return;
-  session->cooldowns.snapshot(now, session->snapshot_buffer);
+  (void)session->automation.snapshot(now);
   const auto session_key =
       layerc::platform::window_session_key(session->game_window);
   const auto json = layerc::core::build_companion_snapshot(
-      session->profile.id, session_key, session->profile.panels,
-      session->profile.cooldowns, session->snapshot_buffer,
+      session->automation.profile().id, session_key, session->automation.profile().panels,
+      session->automation.profile().cooldowns, session->automation.snapshot_buffer(),
       session->modules.companion.profile, now);
   if (!json.empty())
     (void)companion_host_.transport.publish(json);

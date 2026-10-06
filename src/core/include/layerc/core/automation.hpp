@@ -653,19 +653,16 @@ struct OverlayPropertyOverride {
 // registry drives static validation (property name and value type), the
 // daemon's effect validation and overlay application, and the editor's value
 // type hints, so the bounds cannot drift between processes.
+struct ResolvedPanelOverrides;
+
 struct OverlayPropertySpec {
   std::string_view name;
   AutomationValueType type;
   // Inclusive numeric bounds for integer/number values (ignored otherwise).
   double min_value{};
   double max_value{};
-  // Session-level presentation layers rather than Panel fields; the daemon's
-  // overlay renderer owns their application.
-  bool panel_visibility{};
-  bool panel_text{};
-  // True when the value is drawn from profile_wire::panel_layout.
-  bool panel_layout{};
-  void (*apply)(Panel &, const AutomationValue &) noexcept;
+  bool (*validate)(const OverlayPropertySpec &, const AutomationValue &) noexcept;
+  void (*apply)(ResolvedPanelOverrides &, const AutomationValue &);
 };
 
 [[nodiscard]] const OverlayPropertySpec *
@@ -678,7 +675,8 @@ find_overlay_property(std::string_view name) noexcept;
 // absent/unconstrained values and unresolved variables have no hint.
 [[nodiscard]] inline std::optional<AutomationValueType>
 automation_action_value_type(const AutomationAction &action,
-                             const AutomationProfile &profile) {
+                             const AutomationProfile &profile,
+                             const bool normalization_only = false) {
   const auto *spec = automation_action_spec(action.kind);
   if (spec == nullptr)
     return std::nullopt;
@@ -693,9 +691,11 @@ automation_action_value_type(const AutomationAction &action,
                : std::optional<AutomationValueType>(variable->type);
   }
   case ActionValuePolicy::string_key:
-    return AutomationValueType::string;
+    return normalization_only ? std::nullopt
+                              : std::optional(AutomationValueType::string);
   case ActionValuePolicy::duration_or_integer:
-    return AutomationValueType::duration;
+    return normalization_only ? std::nullopt
+                              : std::optional(AutomationValueType::duration);
   case ActionValuePolicy::overlay_property: {
     const auto *property = find_overlay_property(action.property);
     return property == nullptr ? std::optional(AutomationValueType::integer)
@@ -732,6 +732,11 @@ struct AutomationEffect {
   bool repeating{};
   EffectOrder order{};
 };
+
+// One well-formedness rule for action values, reduction/timer durations,
+// and overlay values/optional expiry durations. Targets are session-owned.
+[[nodiscard]] std::optional<AutomationError>
+automation_effect_error(const AutomationEffect &effect);
 
 // Only explicit external roots are replayable; derived/audit entries are not.
 inline constexpr char automation_trace_root_phase[] = "root";
@@ -821,7 +826,7 @@ public:
   // happens outside the evaluation transaction. Returns whether anything
   // expired so callers can refresh overlays.
   [[nodiscard]] bool expire_overlay_overrides(TimePoint now);
-  [[nodiscard]] std::optional<TimePoint> next_timer_due() const noexcept;
+  [[nodiscard]] std::optional<TimePoint> next_deadline() const noexcept;
   void reconfigure(AutomationProfile profile,
                    std::span<const CooldownGroup> cooldown_groups = {});
   void apply_persistent_values(const AutomationPersistentValues &values);
@@ -838,11 +843,6 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-class CooldownEngine;
-[[nodiscard]] bool
-apply_automation_cooldown_effect(CooldownEngine &cooldowns,
-                                 const AutomationEffect &effect, TimePoint now,
-                                 std::uint64_t origin_token);
 
 struct AutomationReplayAssertion {
   std::string variable_id;

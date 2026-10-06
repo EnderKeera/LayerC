@@ -218,13 +218,13 @@ X11Adapters::session_diagnostics() const {
   rows.reserve(sessions.size());
   for (const auto &session : sessions)
     rows.push_back({
-        .profile_id = session.profile.id,
+        .profile_id = session.automation.profile().id,
         .source_key = layerc::platform::canonical_profile_key(
             session.source_path),
         .window = session.window,
         .foreground = session.active,
         .overlay_windows = static_cast<std::uint32_t>(std::min<std::size_t>(
-            impl_->overlay.window_count(session.profile.id, session.window),
+            impl_->overlay.window_count(session.automation.profile().id, session.window),
             0xFFFFFFFFU)),
         .last_input_match = session.last_input_match,
     });

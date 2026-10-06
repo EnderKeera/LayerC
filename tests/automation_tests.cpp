@@ -21,6 +21,8 @@ using namespace std::chrono_literals;
 using expr::literal;
 using expr::variable;
 
+constexpr auto frozen_clock = [] { return TimePoint{}; };
+
 GameProfile automation_base() {
   GameProfile profile;
   profile.id = "game";
@@ -180,7 +182,7 @@ void test_automation_runtime_transaction_and_replay() {
              count != runtime.snapshot().variables.end() &&
              count->second == AutomationValue(std::int64_t{1}),
          "one root event should validate and commit its complete transaction");
-  expect(runtime.persistent_dirty() && runtime.next_timer_due().has_value() &&
+  expect(runtime.persistent_dirty() && runtime.next_deadline().has_value() &&
              !runtime.trace().empty(),
          "persistent values, timers, and opt-in trace should update on commit");
   const auto trace_json = export_layerc_trace(runtime.trace());
@@ -325,31 +327,30 @@ void test_automation_runtime_transaction_and_replay() {
     cooldown.max_charges = 2;
     cooldown.recovery = RecoveryMode::sequential;
   }
-  CooldownEngine propagated_cooldowns(propagation_base.cooldowns,
-                                      propagation_base.cooldown_groups);
-  AutomationEffect trigger_effect{
-      .kind = AutomationActionKind::trigger_cooldown, .target = "dash"};
-  expect(apply_automation_cooldown_effect(propagated_cooldowns, trigger_effect,
-                                          TimePoint{}, 77U),
-         "the daemon cooldown adapter should accept triggerCooldown");
-  auto propagated_states = propagated_cooldowns.snapshot(TimePoint{});
-  expect(std::ranges::all_of(
-             propagated_states,
-             [](const auto &state) { return state.available_charges == 1U; }),
+  AutomationProfile trigger_profile;
+  trigger_profile.profile_id = propagation_base.id;
+  trigger_profile.automations = {{.id = "trigger", .name = "Trigger",
+    .rules = {{.id = "press", .event = AutomationEventKind::input_pressed,
+      .actions = {{.kind = AutomationActionKind::trigger_cooldown, .target = "dash"}}}}}};
+  AutomationSession propagation_session(propagation_base);
+  (void)propagation_session.start(trigger_profile, {}, TimePoint{}, nullptr, false, frozen_clock);
+  auto trigger_event = AutomationSession::event(AutomationEventKind::input_pressed, {}, TimePoint{}, 77U);
+  expect(propagation_session.process(trigger_event),
+         "the session cooldown adapter should accept triggerCooldown");
+  auto propagated_states = propagation_session.cooldowns().snapshot(TimePoint{});
+  expect(std::ranges::all_of(propagated_states,
+              [](const auto &state) { return state.available_charges == 1U; }),
          "committed triggerCooldown should trigger every propagation member");
-  (void)apply_automation_cooldown_effect(propagated_cooldowns, trigger_effect,
-                                         TimePoint{}, 77U);
-  propagated_states = propagated_cooldowns.snapshot(TimePoint{});
-  expect(std::ranges::all_of(
-             propagated_states,
-             [](const auto &state) { return state.available_charges == 1U; }),
+  (void)propagation_session.process(trigger_event);
+  propagated_states = propagation_session.cooldowns().snapshot(TimePoint{});
+  expect(std::ranges::all_of(propagated_states,
+              [](const auto &state) { return state.available_charges == 1U; }),
          "one origin token must not trigger a propagation fan twice");
-  (void)apply_automation_cooldown_effect(propagated_cooldowns, trigger_effect,
-                                         TimePoint{}, 78U);
-  propagated_states = propagated_cooldowns.snapshot(TimePoint{});
-  expect(std::ranges::all_of(
-             propagated_states,
-             [](const auto &state) { return state.available_charges == 0U; }),
+  trigger_event.origin_token = 78U;
+  (void)propagation_session.process(trigger_event);
+  propagated_states = propagation_session.cooldowns().snapshot(TimePoint{});
+  expect(std::ranges::all_of(propagated_states,
+              [](const auto &state) { return state.available_charges == 0U; }),
          "a later root origin should be allowed to trigger the fan again");
   auto propagation_profile = automation_fixture();
   for (const auto *id : {"dashSeen", "blinkSeen", "rollSeen"})
@@ -373,8 +374,8 @@ void test_automation_runtime_transaction_and_replay() {
   AutomationRuntime propagation_runtime(propagation_profile, {},
                                         propagation_base.cooldown_groups,
                                         [] { return TimePoint{}; });
-  const auto propagated = propagation_runtime.process(event);
-  expect(propagated.committed &&
+  const auto propagation_result = propagation_runtime.process(event);
+  expect(propagation_result.committed &&
              propagation_runtime.snapshot().variables.at("dashSeen") ==
                  AutomationValue(std::int64_t{1}) &&
              propagation_runtime.snapshot().variables.at("blinkSeen") ==
@@ -387,6 +388,48 @@ void test_automation_runtime_transaction_and_replay() {
 
 void test_automation_priority_fault_isolation_and_reconfigure() {
   using namespace layerc::core;
+  const EffectOrder first{5, 0, 0};
+  expect(effect_order_precedes(first, {4, 0, 0}) &&
+             effect_order_precedes(first, {5, 1, 0}) &&
+             effect_order_precedes(first, {5, 0, 1}) &&
+             !effect_order_precedes(first, first),
+         "effect precedence must use descending priority then declaration order");
+  Panel panel{.id = "main", .name = "Main"};
+  const std::vector<OverlayPropertyOverride> properties{
+      {.panel_id = "main", .property = "visible", .value = AutomationValue(false)},
+      {.panel_id = "main", .property = "text", .value = AutomationValue(std::string("override"))},
+      {.panel_id = "main", .property = "showText", .value = AutomationValue(false)},
+      {.panel_id = "main", .property = "hideWhenReady", .value = AutomationValue(true)},
+      {.panel_id = "main", .property = "layout", .value = AutomationValue(std::string("row"))},
+      {.panel_id = "main", .property = "width", .value = AutomationValue(std::int64_t{200})},
+      {.panel_id = "main", .property = "height", .value = AutomationValue(std::int64_t{30})},
+      {.panel_id = "main", .property = "fillColor", .value = AutomationValue(std::int64_t{1})},
+      {.panel_id = "main", .property = "backgroundColor", .value = AutomationValue(std::int64_t{2})},
+      {.panel_id = "main", .property = "borderColor", .value = AutomationValue(std::int64_t{3})},
+      {.panel_id = "main", .property = "textColor", .value = AutomationValue(std::int64_t{4})},
+      {.panel_id = "main", .property = "anchorX", .value = AutomationValue(0.25)},
+      {.panel_id = "main", .property = "anchorY", .value = AutomationValue(0.75)}};
+  for (const auto &property : properties) {
+    const auto *spec = find_overlay_property(property.property);
+    expect(spec != nullptr && overlay_value_valid(*spec, property.value) &&
+               !overlay_value_valid(*spec, AutomationValue()),
+           "each overlay spec must validate its own value and reject null");
+  }
+  const auto resolved = resolve_panel_overrides(panel, properties);
+  expect(resolved.visible == false && resolved.text == "override" &&
+             !resolved.panel.bar.show_text && resolved.panel.bar.hide_when_ready &&
+             resolved.panel.layout == PanelLayout::row &&
+             resolved.panel.bar.width == 200 && resolved.panel.bar.height == 30 &&
+             resolved.panel.bar.fill_color == 1 && resolved.panel.bar.background_color == 2 &&
+             resolved.panel.bar.border_color == 3 && resolved.panel.bar.text_color == 4 &&
+             resolved.panel.anchor_x == 0.25 && resolved.panel.anchor_y == 0.75,
+         "every property must dispatch through its spec's single apply callback");
+  auto ties = properties;
+  ties.front().order = {5, 1, 0};
+  ties.push_back({.panel_id = "main", .property = "visible",
+                  .value = AutomationValue(true), .order = first});
+  expect(resolve_panel_overrides(panel, ties).visible == true,
+         "overlay resolution must share canonical declaration-order precedence");
   auto profile = automation_fixture();
   auto lower = profile.automations.front();
   lower.id = "lower";
@@ -406,6 +449,18 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
   expect(result.committed && runtime.snapshot().variables.at("count") ==
                                  AutomationValue(std::int64_t{1}),
          "the higher-priority action should win a per-target conflict");
+
+  auto tied = profile;
+  tied.automations.back().rules.front().priority =
+      tied.automations.front().rules.front().priority;
+  auto later_rule = tied.automations.back().rules.front();
+  later_rule.id = "later-rule";
+  tied.automations.front().rules.push_back(later_rule);
+  AutomationRuntime tied_runtime(tied, {}, {}, frozen_clock);
+  expect(tied_runtime.process(event).committed &&
+             tied_runtime.snapshot().variables.at("count") ==
+                 AutomationValue(std::int64_t{1}),
+         "runtime conflicts must prefer earlier automation and rule declarations at equal priority");
 
   auto changed = profile;
   changed.automations.front().name = "Changed";
@@ -628,13 +683,16 @@ void test_automation_numeric_promotion() {
       {.kind = AutomationEventKind::session_started},
       {.kind = AutomationEventKind::input_pressed},
       {.kind = AutomationEventKind::input_released}};
-  AutomationRuntime production(accepted, {}, {}, [] { return TimePoint{}; });
+  AutomationSession production_session(base);
+  (void)production_session.start(accepted, {}, TimePoint{}, nullptr, false, frozen_clock);
+  auto &production = *production_session.runtime();
+  struct ResultSink final : AutomationSessionSink {
+    AutomationEvaluationResult result;
+    void on_result(const AutomationEvaluationResult &value) override { result = value; }
+  } sink;
   for (const auto &event : events) {
-    const auto result =
-        production.process(event, [&](const AutomationEffect &effect) {
-          return validate_automation_effect(effect, base.panels, base.cooldowns,
-                                            base.cooldown_groups);
-        });
+    (void)production_session.process(event, &sink);
+    const auto &result = sink.result;
     expect(result.committed && !result.error &&
                result.faulted_automations.empty() &&
                std::ranges::all_of(result.effects,

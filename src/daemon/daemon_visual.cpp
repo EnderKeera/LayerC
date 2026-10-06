@@ -57,7 +57,7 @@ layerc::runtime::ServiceReconcileResult VisualCaptureService::reconcile(
   for (const auto &consumer : demand.visual_consumers()) {
     if (consumer.runtime != runtime) continue;
     const auto found = std::ranges::find_if(sessions.sessions, [&](const auto &session) {
-      return session != nullptr && session->profile.id == consumer.profile_id &&
+      return session != nullptr && session->automation.profile().id == consumer.profile_id &&
              reinterpret_cast<std::uintptr_t>(session->game_window) ==
                  consumer.window.opaque;
     });
@@ -151,14 +151,13 @@ void DaemonApp::poll_visual_captures() {
             evaluation->sequence == session->last_visual_sequence)
           continue;
         session->last_visual_sequence = evaluation->sequence;
-        const auto result = session->layerc::core::AutomationSession::
-            feed_measurements(evaluation->measurements, now);
+        const auto result = session->automation.feed_measurements(evaluation->measurements, now);
         if (result.changed)
           overlay_runtime_.mark_dirty();
         if (!result.triggered.empty())
           update_tooltip(L"LayerD - visual trigger " +
                          layerc::platform::utf8_to_wide(result.triggered.back()));
-        if (session->automation_runtime)
+        if (session->automation.runtime())
           automation_runtime_host_.after_step(*session, now);
       }
     }
