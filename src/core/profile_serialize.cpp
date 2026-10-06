@@ -31,12 +31,6 @@ Value text_list(const std::vector<std::string> &values) {
 }
 using json::color_text;
 
-template <typename Enum, std::size_t Size>
-std::string_view wire_name(
-    const std::array<EnumWireEntry<Enum>, Size> &entries, const Enum value) {
-  return profile_wire::name(entries, value).value_or(std::string_view{});
-}
-
 Value game_section(const GameMatch &game) {
   return Value(Value::Object{
       member(keys::global, Value(game.global)),
@@ -69,9 +63,13 @@ Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns) {
         member(keys::duration_ms, integer(cooldown.duration.count())),
         member(keys::max_charges, integer(cooldown.max_charges)),
         member(keys::retrigger,
-               text(wire_name(profile_wire::retrigger, cooldown.retrigger))),
+               text(enum_wire_name(profile_wire::retrigger,
+                                   cooldown.retrigger)
+                        .value_or(""))),
         member(keys::recovery,
-               text(wire_name(profile_wire::recovery, cooldown.recovery))),
+               text(enum_wire_name(profile_wire::recovery,
+                                   cooldown.recovery)
+                        .value_or(""))),
     });
   return Value(std::move(result));
 }
@@ -82,7 +80,9 @@ Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
     Value::Object object{
         member(keys::id, text(group.id)),
         member(keys::name, text(group.name)),
-        member(keys::mode, text(wire_name(profile_wire::group_mode, group.mode))),
+        member(keys::mode, text(enum_wire_name(profile_wire::group_mode,
+                                               group.mode)
+                                    .value_or(""))),
         member(keys::cooldowns, text_list(group.cooldown_ids)),
     };
     if (group.mode == CooldownGroupMode::shared_pool) {
@@ -92,10 +92,13 @@ Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
       object.insert(member(keys::max_charges, integer(group.max_charges)));
       object.insert(member(
           keys::recovery,
-          text(wire_name(profile_wire::recovery, group.recovery))));
+          text(enum_wire_name(profile_wire::recovery,
+                              group.recovery)
+                   .value_or(""))));
       object.insert(member(keys::retrigger,
-                           text(wire_name(profile_wire::retrigger,
-                                          group.retrigger))));
+                           text(enum_wire_name(profile_wire::retrigger,
+                                               group.retrigger)
+                                    .value_or(""))));
     }
     result.emplace_back(std::move(object));
   }
@@ -122,8 +125,9 @@ Value hid_bindings_section(const std::vector<HidControlBinding> &bindings) {
         member(keys::usage, integer(binding.usage)),
         member(keys::link_collection, integer(binding.link_collection)),
         member(keys::activation,
-               text(wire_name(profile_wire::hid_activation,
-                              binding.activation))),
+               text(enum_wire_name(profile_wire::hid_activation,
+                                   binding.activation)
+                        .value_or(""))),
         member(keys::value,
                Value(static_cast<std::int64_t>(binding.discrete_value))),
         member(keys::threshold, Value(binding.threshold)),
@@ -157,9 +161,13 @@ Value panels_section(const std::vector<Panel> &panels) {
         member(keys::id, text(panel.id)),
         member(keys::name, text(panel.name)),
         member(keys::layout,
-               text(wire_name(profile_wire::panel_layout, panel.layout))),
+               text(enum_wire_name(profile_wire::panel_layout,
+                                   panel.layout)
+                        .value_or(""))),
         member(keys::style,
-               text(wire_name(profile_wire::panel_style, panel.style))),
+               text(enum_wire_name(profile_wire::panel_style,
+                                   panel.style)
+                        .value_or(""))),
         member(keys::bar, Value(std::move(bar))),
         member(keys::anchor_x, Value(panel.anchor_x)),
         member(keys::anchor_y, Value(panel.anchor_y)),
@@ -209,8 +217,9 @@ std::string serialize_profile_json(const GameProfile &profile) {
       member(keys::enabled, Value(profile.enabled)),
       member(keys::game, game_section(profile.game)),
       member(keys::visual_runtime,
-             text(wire_name(profile_wire::visual_runtime,
-                            profile.visual_runtime))),
+             text(enum_wire_name(profile_wire::visual_runtime,
+                                 profile.visual_runtime)
+                      .value_or(""))),
       member(keys::modules, modules_section(profile.modules)),
       member(keys::cooldowns, cooldowns_section(profile.cooldowns)),
       member(keys::cooldown_groups,

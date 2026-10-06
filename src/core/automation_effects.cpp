@@ -28,7 +28,7 @@ void apply_layout(ResolvedPanelOverrides &resolved, const AutomationValue &value
   if (text == nullptr)
     return;
   if (const auto layout =
-          profile_wire::parse(profile_wire::panel_layout, *text))
+          parse_enum_wire(profile_wire::panel_layout, *text))
     panel.layout = *layout;
 }
 
@@ -55,7 +55,7 @@ bool validate_text(const OverlayPropertySpec &, const AutomationValue &value) no
 }
 bool validate_layout(const OverlayPropertySpec &, const AutomationValue &value) noexcept {
   const auto *text = std::get_if<std::string>(&value.storage);
-  return text != nullptr && profile_wire::parse(profile_wire::panel_layout, *text).has_value();
+  return text != nullptr && parse_enum_wire(profile_wire::panel_layout, *text).has_value();
 }
 bool validate_integer(const OverlayPropertySpec &spec, const AutomationValue &value) noexcept {
   const auto *integer = std::get_if<std::int64_t>(&value.storage);

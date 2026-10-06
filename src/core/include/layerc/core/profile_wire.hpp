@@ -46,18 +46,4 @@ inline constexpr std::array visual_runtime{
     EnumWireEntry{VisualRuntime::isolated, "isolated"},
 };
 
-template <typename Enum, std::size_t Size>
-[[nodiscard]] constexpr std::optional<std::string_view>
-name(const std::array<EnumWireEntry<Enum>, Size> &entries,
-     const Enum value) noexcept {
-  return enum_wire_name<Enum>(entries, value);
-}
-
-template <typename Enum, std::size_t Size>
-[[nodiscard]] constexpr std::optional<Enum>
-parse(const std::array<EnumWireEntry<Enum>, Size> &entries,
-      const std::string_view value) noexcept {
-  return parse_enum_wire<Enum>(entries, value);
-}
-
 } // namespace layerc::core::profile_wire

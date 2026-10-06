@@ -95,11 +95,9 @@ std::string export_layerc_trace(const std::span<const AutomationTraceEntry> entr
 }
 
 AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
-  if (source.size() > max_automation_trace_bytes)
-    return AutomationError{"$", "trace exceeds the 4 MiB limit"};
   const auto parsed = json::parse_bounded(source, max_automation_trace_bytes);
   if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
-    return detail::json_parse_error(*parse_error);
+    return *parse_error;
   const auto &root = std::get<json::Value>(parsed);
   const auto *schema = root.is_object() ? root.find("schemaVersion") : nullptr;
   const auto *kind = root.is_object() ? root.find("kind") : nullptr;
@@ -154,7 +152,7 @@ AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
     if (!source_entry_valid())
       return AutomationError{path, "invalid source trace entry"};
     const auto event_kind =
-        detail::parse_automation_event_name(event_name_value->as_string());
+        parse_automation_event_name(event_name_value->as_string());
     if (!event_kind.has_value())
       return AutomationError{path + ".event", "unsupported event kind"};
     const auto timestamp = automation_time_after(

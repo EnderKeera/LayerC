@@ -13,46 +13,46 @@ namespace layerc::core::json {
 
 class Value {
 public:
-    using Array = std::vector<Value>;
-    using Object = std::map<std::string, Value, std::less<>>;
-    using Storage = std::variant<std::nullptr_t, bool, std::int64_t, double,
-                                 std::string, Array, Object>;
+  using Array = std::vector<Value>;
+  using Object = std::map<std::string, Value, std::less<>>;
+  using Storage = std::variant<std::nullptr_t, bool, std::int64_t, double,
+                               std::string, Array, Object>;
 
-    Value() noexcept;
-    explicit Value(std::nullptr_t) noexcept;
-    explicit Value(bool value) noexcept;
-    explicit Value(std::int64_t value) noexcept;
-    explicit Value(double value) noexcept;
-    explicit Value(std::string value);
-    explicit Value(Array value);
-    explicit Value(Object value);
+  Value() noexcept;
+  explicit Value(std::nullptr_t) noexcept;
+  explicit Value(bool value) noexcept;
+  explicit Value(std::int64_t value) noexcept;
+  explicit Value(double value) noexcept;
+  explicit Value(std::string value);
+  explicit Value(Array value);
+  explicit Value(Object value);
 
-    [[nodiscard]] bool is_null() const noexcept;
-    [[nodiscard]] bool is_bool() const noexcept;
-    // Both integer and double storage satisfy is_number(); exact integer
-    // readers use is_integer()/as_integer() instead of re-deriving the value
-    // from a double.
-    [[nodiscard]] bool is_integer() const noexcept;
-    [[nodiscard]] bool is_number() const noexcept;
-    [[nodiscard]] bool is_string() const noexcept;
-    [[nodiscard]] bool is_array() const noexcept;
-    [[nodiscard]] bool is_object() const noexcept;
+  [[nodiscard]] bool is_null() const noexcept;
+  [[nodiscard]] bool is_bool() const noexcept;
+  // Both integer and double storage satisfy is_number(); exact integer
+  // readers use is_integer()/as_integer() instead of re-deriving the value
+  // from a double.
+  [[nodiscard]] bool is_integer() const noexcept;
+  [[nodiscard]] bool is_number() const noexcept;
+  [[nodiscard]] bool is_string() const noexcept;
+  [[nodiscard]] bool is_array() const noexcept;
+  [[nodiscard]] bool is_object() const noexcept;
 
-    [[nodiscard]] bool as_bool() const;
-    [[nodiscard]] std::int64_t as_integer() const;
-    [[nodiscard]] double as_number() const;
-    [[nodiscard]] const std::string& as_string() const;
-    [[nodiscard]] const Array& as_array() const;
-    [[nodiscard]] const Object& as_object() const;
-    [[nodiscard]] const Value* find(std::string_view key) const;
+  [[nodiscard]] bool as_bool() const;
+  [[nodiscard]] std::int64_t as_integer() const;
+  [[nodiscard]] double as_number() const;
+  [[nodiscard]] const std::string& as_string() const;
+  [[nodiscard]] const Array& as_array() const;
+  [[nodiscard]] const Object& as_object() const;
+  [[nodiscard]] const Value* find(std::string_view key) const;
 
 private:
-    Storage storage_;
+  Storage storage_;
 };
 
 struct ParseError {
-    std::size_t offset{};
-    std::string message;
+  std::size_t offset{};
+  std::string message;
 };
 
 using ParseResult = std::variant<Value, ParseError>;
@@ -85,17 +85,17 @@ void append_value(std::string &output, const Value &value, unsigned indent = 0);
 // element before writing it; the first call emits nothing. Replaces the
 // "if (index != 0) output.push_back(',');" boilerplate in serializers.
 class Join {
-  public:
-    void operator()(std::string &output) {
-        if (first_) {
-            first_ = false;
-            return;
-        }
-        output.push_back(',');
+public:
+  void operator()(std::string &output) {
+    if (first_) {
+      first_ = false;
+      return;
     }
+    output.push_back(',');
+  }
 
-  private:
-    bool first_{true};
+private:
+  bool first_{true};
 };
 
 }  // namespace layerc::core::json

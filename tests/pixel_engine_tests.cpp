@@ -3,6 +3,7 @@
 
 #include "layerc/core/pixel_engine.hpp"
 #include "layerc/core/template_matcher.hpp"
+#include "layerc/core/visual_trigger_engine.hpp"
 
 #include <chrono>
 #include <iostream>
@@ -37,7 +38,7 @@ layerc::core::VisualProfile visual_profile(
   return profile;
 }
 
-layerc::core::PixelRuleMeasurement measurement(
+layerc::core::ObservationMeasurement measurement(
     const bool matched, const layerc::core::TimePoint at,
     const layerc::core::CaptureAvailability availability =
         layerc::core::CaptureAvailability::available) {

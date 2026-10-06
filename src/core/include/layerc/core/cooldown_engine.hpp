@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/cooldown_groups.hpp"
+#include "layerc/core/string_hash.hpp"
 #include "layerc/core/types.hpp"
 
 #include <functional>
@@ -28,24 +29,6 @@ namespace layerc::core {
 [[nodiscard]] const CooldownState *
 cooldown_state_at(std::span<const CooldownState> states, std::size_t index,
                   std::string_view cooldown_id) noexcept;
-
-// Transparent hashing lets the engine look entries up by string_view without
-// constructing temporary std::string keys on the per-trigger hot path.
-struct CooldownIdHash {
-  using is_transparent = void;
-  [[nodiscard]] std::size_t
-  operator()(std::string_view value) const noexcept {
-    return std::hash<std::string_view>{}(value);
-  }
-};
-
-struct CooldownIdEqual {
-  using is_transparent = void;
-  [[nodiscard]] bool operator()(std::string_view left,
-                                std::string_view right) const noexcept {
-    return left == right;
-  }
-};
 
 class CooldownEngine {
 public:
@@ -101,7 +84,8 @@ private:
   std::vector<std::string> order_;
   // Exactly one definition and state per effective owner, no dormant entries.
   std::vector<Entry> entries_;
-  std::unordered_map<std::string, std::size_t, CooldownIdHash, CooldownIdEqual>
+  std::unordered_map<std::string, std::size_t, TransparentStringHash,
+                     std::equal_to<>>
       owner_slots_;
   CooldownGroupTopology groups_;
 };

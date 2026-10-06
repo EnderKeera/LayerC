@@ -16,10 +16,7 @@
 
 namespace layerc::core {
 namespace {
-using detail::automation_event_name;
-using detail::automation_value_type_name;
 using detail::numeric_type;
-using detail::parse_automation_event_name;
 using json::Value;
 
 // Profile literals, defaults, and persisted state use the shared codec with
@@ -133,7 +130,7 @@ struct Parser {
       std::string declared;
       if (!string(raw, "valueType", path, declared))
         return false;
-      const auto type = detail::parse_automation_value_type_name(declared);
+      const auto type = parse_automation_value_type_name(declared);
       const auto *literal = required(raw, "value", path);
       if (!type || !literal)
         return fail(path, "literal requires a supported valueType and value");
@@ -218,7 +215,7 @@ struct Parser {
         !string(entry, "type", path, declared) ||
         !boolean(entry, "persistent", path, variable.persistent, true))
       return false;
-    const auto type = detail::parse_automation_value_type_name(declared);
+    const auto type = parse_automation_value_type_name(declared);
     if (!type)
       return fail(path + ".type", "variables require a non-null supported type");
     variable.type = *type;
@@ -418,11 +415,9 @@ std::string automation_value_json(const AutomationValue &value) {
 AutomationValueParseResult
 parse_automation_value_json(const std::string_view source,
                             const AutomationValueType expected_type) {
-  if (source.size() > max_automation_state_bytes)
-    return AutomationError{"$", "automation value exceeds the 64 KiB limit"};
   const auto parsed = json::parse_bounded(source, max_automation_state_bytes);
   if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
-    return detail::json_parse_error(*parse_error);
+    return *parse_error;
   AutomationError error;
   auto value = read_value(std::get<Value>(parsed), expected_type, error, "$");
   if (!value.has_value())
@@ -431,11 +426,9 @@ parse_automation_value_json(const std::string_view source,
 }
 AutomationProfileResult parse_automation_profile_json(std::string_view source,
                                                       const GameProfile &base) {
-  if (source.size() > max_automation_json_bytes)
-    return AutomationError{"$", "automation sidecar exceeds the 256 KiB limit"};
   auto parsed = json::parse_bounded(source, max_automation_json_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
-    return detail::json_parse_error(*error);
+    return *error;
   return parse_automation_profile_value(std::get<Value>(parsed), base);
 }
 AutomationProfileResult parse_automation_profile_value(const json::Value &root,
@@ -496,11 +489,9 @@ std::string serialize_automation_profile_json(const AutomationProfile &profile) 
 AutomationStateResult
 parse_automation_state_json(const std::string_view source,
                             const AutomationProfile &profile) {
-  if (source.size() > max_automation_state_bytes)
-    return AutomationError{"$", "automation state exceeds the 64 KiB limit"};
   auto parsed = json::parse_bounded(source, max_automation_state_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
-    return detail::json_parse_error(*error);
+    return *error;
   const auto &root = std::get<Value>(parsed);
   if (!root.is_object())
     return AutomationError{"$", "automation state root must be an object"};
