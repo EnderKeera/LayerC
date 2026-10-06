@@ -14,7 +14,7 @@
 
 namespace layerc::core {
 
-inline constexpr std::uint32_t live_protocol_version = 4;
+inline constexpr std::uint32_t live_protocol_version = 5;
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;
@@ -134,6 +134,8 @@ struct LiveProtocolError {
 using LiveMessageResult = std::variant<LiveMessage, LiveProtocolError>;
 using LiveFrameResult = std::variant<std::vector<std::byte>, LiveProtocolError>;
 
+// Profile-carrying messages require a bounded JSON object; invalid local
+// documents throw std::invalid_argument. encode_live_frame returns the failure.
 [[nodiscard]] std::string encode_live_message_json(const LiveMessage &message);
 [[nodiscard]] LiveMessageResult
 decode_live_message_json(std::string_view source);

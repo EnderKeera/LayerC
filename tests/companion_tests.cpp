@@ -510,6 +510,57 @@ static void test_companion_duplicate_slot_contract() {
       "serializer reaches the exact duplicate-panel-slot guard");
 }
 
+static void test_companion_declarative_wire() {
+  GameProfile base;
+  base.id = "p";
+  Panel panel;
+  panel.id = "a";
+  base.panels.push_back(panel);
+  const std::string historical_profile =
+      R"({"schemaVersion":1,"profileId":"p","slots":[{"slotIndex":2,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1}]})";
+  const auto parsed_profile = parse_companion_profile_json(historical_profile, base);
+  const auto *profile = std::get_if<CompanionProfile>(&parsed_profile);
+  layerc::test::expect(profile != nullptr,
+                       "historical companion sidecar order remains accepted");
+  if (profile == nullptr)
+    return;
+  const std::string golden_profile =
+      R"({"profileId":"p","schemaVersion":1,"slots":[{"clickThrough":true,"opacity":1,"panelId":"a","pinned":false,"slotIndex":2}]})";
+  layerc::test::expect(serialize_companion_profile_json(*profile) == golden_profile,
+                       "companion sidecar uses deterministic Value key order");
+  const auto reparsed_profile = parse_companion_profile_json(golden_profile, base);
+  layerc::test::expect(std::get_if<CompanionProfile>(&reparsed_profile) &&
+                           std::get<CompanionProfile>(reparsed_profile) == *profile,
+                       "new sidecar bytes preserve historical semantics");
+
+  const std::string historical_snapshot =
+      R"({"profileId":"p","sessionKey":"s","timestampMs":9223372036854775807,"panels":[{"panelId":"a","slotIndex":2,"visible":true,"items":[{"cooldownId":"c","name":"C\n\"","icon":"","progress":0.5,"availableCharges":0,"maxCharges":1,"remainingMs":9007199254740993,"isReady":false,"color":""}]}],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":2,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1}]})";
+  const auto parsed_snapshot = parse_companion_snapshot_json(historical_snapshot);
+  const auto *snapshot = std::get_if<CompanionSessionSnapshot>(&parsed_snapshot);
+  layerc::test::expect(snapshot != nullptr,
+                       "historical snapshot order and exact integers parse");
+  if (snapshot == nullptr)
+    return;
+  const std::string golden_snapshot =
+      R"({"availablePanels":[{"name":"A","panelId":"a"}],"panels":[{"items":[{"availableCharges":0,"color":"","cooldownId":"c","icon":"","isReady":false,"maxCharges":1,"name":"C\n\"","progress":0.5,"remainingMs":9007199254740993}],"panelId":"a","slotIndex":2,"visible":true}],"preferences":[{"clickThrough":true,"opacity":1,"panelId":"a","pinned":false,"slotIndex":2}],"profileId":"p","sessionKey":"s","timestampMs":9223372036854775807})";
+  const auto serialized = serialize_companion_snapshot_json(*snapshot);
+  const auto *wire = serialized_json(serialized);
+  layerc::test::expect(wire && *wire == golden_snapshot,
+                       "snapshot golden preserves escaping, reserved fields and integers");
+  if (wire) {
+    const auto reparsed = parse_companion_snapshot_json(*wire);
+    layerc::test::expect(std::get_if<CompanionSessionSnapshot>(&reparsed) &&
+                             std::get<CompanionSessionSnapshot>(reparsed) == *snapshot,
+                         "snapshot emission round-trips without numeric rounding");
+  }
+  auto invalid = *snapshot;
+  invalid.timestamp_ms = std::numeric_limits<std::uint64_t>::max();
+  const auto rejected = serialize_companion_snapshot_json(invalid);
+  const auto *error = std::get_if<CompanionError>(&rejected);
+  layerc::test::expect(error && error->path == "$.timestampMs",
+                       "serializer rejects timestamps outside the reader integer range");
+}
+
 static void test_companion_snapshot_rejects_malformed_input() {
   const std::string valid =
       R"({"profileId":"p","sessionKey":"s","timestampMs":1,"panels":[],"availablePanels":[],"preferences":[]})";
@@ -659,6 +710,7 @@ int main() {
       {"test_widget_owned_subscriptions", test_widget_owned_subscriptions},
       {"test_companion_duplicate_slot_contract", test_companion_duplicate_slot_contract},
       {"test_companion_json_roundtrip", test_companion_json_roundtrip},
+      {"test_companion_declarative_wire", test_companion_declarative_wire},
       {"test_companion_snapshot_bridge", test_companion_snapshot_bridge},
       {"test_companion_shared_pool_runtime_view", test_companion_shared_pool_runtime_view},
       {"test_companion_bridge_rejects_invalid_not_oversize", test_companion_bridge_rejects_invalid_not_oversize},

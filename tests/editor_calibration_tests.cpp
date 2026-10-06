@@ -98,14 +98,21 @@ void exercise_quit(const bool initially_enabled, const bool destroy_owner,
 
   auto profile = layerc::editor::make_new_profile();
   profile.game.executable_name = "fixture.exe";
+  // Nested-document canonicalization discards padding. Populate real valid
+  // cooldown data so the encoded frame still exceeds the pipe buffer.
+  const auto seed = profile.cooldowns.front();
+  for (unsigned index{}; index < 100U; ++index) {
+    auto definition = seed;
+    definition.id = "pipe-padding-" + std::to_string(index);
+    definition.name = std::string(48U, 'p');
+    profile.cooldowns.push_back(std::move(definition));
+  }
   layerc::core::CalibrationRequest request{
       .target_window = reinterpret_cast<std::uintptr_t>(owner.get()),
       .cooldown_id = profile.cooldowns.front().id,
-      // Valid trailing whitespace makes the frame larger than the anonymous
-      // pipe buffer. The fixture never reads, so shutdown must unblock owned
-      // synchronous I/O, not just leave a worker detached or close its handles.
-      .profile_json = layerc::core::serialize_profile_json(profile) +
-                      std::string(32U * 1024U, ' '),
+      // The fixture never reads: shutdown must unblock owned synchronous I/O,
+      // not leave a detached worker or merely close its handles.
+      .profile_json = layerc::core::serialize_profile_json(profile),
       .visual_json = {},
   };
   const auto parsed = layerc::core::parse_profile_json(request.profile_json);

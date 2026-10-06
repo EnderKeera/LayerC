@@ -49,28 +49,33 @@ std::optional<std::int64_t> read_integer(const Value &value, const IntegerEncodi
 std::optional<std::uint64_t> read_unsigned(const Value &value, const IntegerEncoding encoding) {
   return integral<std::uint64_t>(value, encoding);
 }
-void append_exact_unsigned(std::string &output, const std::uint64_t value) {
-  if (value <= static_cast<std::uint64_t>(max_exact_json_integer))
-    append_unsigned(output, value);
-  else
-    append_quoted(output, std::to_string(value));
+Value decimal_unsigned_value(const std::uint64_t value) {
+  std::string text;
+  append_unsigned(text, value);
+  return Value(std::move(text));
 }
 Value exact_unsigned_value(const std::uint64_t value) {
-  if (value > static_cast<std::uint64_t>(max_exact_json_integer))
-    return Value(std::to_string(value));
-  return Value(static_cast<std::int64_t>(value));
+  return value > static_cast<std::uint64_t>(max_exact_json_integer)
+             ? decimal_unsigned_value(value)
+             : Value(static_cast<std::int64_t>(value));
+}
+Value exact_integer_value(const std::int64_t value) {
+  if (value >= -max_exact_json_integer && value <= max_exact_json_integer)
+    return Value(value);
+  std::string text;
+  if (value < 0) {
+    text.push_back('-');
+    append_unsigned(text, static_cast<std::uint64_t>(-(value + 1)) + 1U);
+  } else {
+    append_unsigned(text, static_cast<std::uint64_t>(value));
+  }
+  return Value(std::move(text));
+}
+void append_exact_unsigned(std::string &output, const std::uint64_t value) {
+  append_value(output, exact_unsigned_value(value));
 }
 void append_exact_integer(std::string &output, const std::int64_t value) {
-  if (value < -max_exact_json_integer || value > max_exact_json_integer) {
-    append_quoted(output, std::to_string(value));
-    return;
-  }
-  if (value < 0) {
-    output.push_back('-');
-    append_unsigned(output, static_cast<std::uint64_t>(-(value + 1)) + 1U);
-  } else {
-    append_unsigned(output, static_cast<std::uint64_t>(value));
-  }
+  append_value(output, exact_integer_value(value));
 }
 
 std::variant<Value, FieldError> parse_bounded(const std::string_view source,

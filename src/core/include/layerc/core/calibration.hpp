@@ -8,13 +8,14 @@
 
 namespace layerc::core {
 
-// A request embeds both bounded JSON documents as escaped JSON strings. In
-// the worst supported case that can approach twice their combined source
-// size, so the transport envelope needs more room than either file alone.
+// Profile and visual documents are bounded nested objects (null for an absent
+// visual sidecar), using the same encoding as live-edit. The envelope remains
+// bounded independently of each embedded document.
+inline constexpr std::uint32_t calibration_protocol_version = 2;
 inline constexpr std::size_t max_calibration_packet_bytes = 2U * 1024U * 1024U;
 
 struct CalibrationRequest {
-  std::uint32_t protocol_version{1};
+  std::uint32_t protocol_version{calibration_protocol_version};
   std::uint64_t target_window{};
   std::string cooldown_id;
   std::string profile_json;
@@ -23,7 +24,7 @@ struct CalibrationRequest {
 };
 
 struct CalibrationResponse {
-  std::uint32_t protocol_version{1};
+  std::uint32_t protocol_version{calibration_protocol_version};
   bool applied{};
   // On Apply this is a valid one-observation, one-trigger VisualProfile.
   std::string visual_json;

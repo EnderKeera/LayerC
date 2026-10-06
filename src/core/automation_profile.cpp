@@ -338,41 +338,29 @@ struct Parser {
   }
 };
 
-void append_expression(std::string &out,
-                       const AutomationExpression &expression) {
-  out += "{\"op\":";
-  if (expression.kind == ExpressionKind::literal) {
-    json::append_quoted(out, "literal");
-    out += ",\"valueType\":";
-    json::append_quoted(
-        out, automation_value_type_name(value_type(expression.literal)));
-    out += ",\"value\":";
-    append_value(out, expression.literal);
-  } else if (expression.kind == ExpressionKind::variable ||
-             expression.kind == ExpressionKind::event_field) {
-    json::append_quoted(out, expression.kind == ExpressionKind::variable
-                                 ? "variable"
-                                 : "event");
-    out += expression.kind == ExpressionKind::variable ? ",\"id\":"
-                                                       : ",\"field\":";
-    json::append_quoted(out, expression.reference);
-  } else if (expression.kind == ExpressionKind::index) {
-    json::append_quoted(out, "index");
-    out += ",\"target\":";
-    append_expression(out, expression.arguments[0]);
-    out += ",\"key\":";
-    append_expression(out, expression.arguments[1]);
-  } else {
-    json::append_quoted(out, expression.operation);
-    out += ",\"args\":[";
-    json::Join join;
-    for (const auto &argument : expression.arguments) {
-      join(out);
-      append_expression(out, argument);
-    }
-    out.push_back(']');
+Value expression_tree(const AutomationExpression &expression) {
+  if (expression.kind == ExpressionKind::literal)
+    return Value(Value::Object{
+        {"op", Value(std::string("literal"))},
+        {"valueType", Value(std::string(automation_value_type_name(value_type(expression.literal))))},
+        {"value", detail::automation_value_tree(expression.literal)}});
+  if (expression.kind == ExpressionKind::variable ||
+      expression.kind == ExpressionKind::event_field) {
+    const bool variable = expression.kind == ExpressionKind::variable;
+    return Value(Value::Object{
+        {"op", Value(std::string(variable ? "variable" : "event"))},
+        {variable ? "id" : "field", Value(expression.reference)}});
   }
-  out.push_back('}');
+  if (expression.kind == ExpressionKind::index)
+    return Value(Value::Object{
+        {"op", Value(std::string("index"))},
+        {"target", expression_tree(expression.arguments[0])},
+        {"key", expression_tree(expression.arguments[1])}});
+  Value::Array arguments;
+  for (const auto &argument : expression.arguments)
+    arguments.push_back(expression_tree(argument));
+  return Value(Value::Object{
+      {"op", Value(expression.operation)}, {"args", Value(std::move(arguments))}});
 }
 
 bool automation_value_valid_impl(const AutomationValue &value,
@@ -454,97 +442,55 @@ AutomationProfileResult parse_automation_profile_value(const json::Value &root,
                                                        const GameProfile &base) {
   return Parser{root, base}.parse();
 }
-std::string
-serialize_automation_profile_json(const AutomationProfile &profile) {
-  std::string out;
-  out.reserve(4096);
-  out += "{\n  \"schemaVersion\":1,\n  \"profileId\":";
-  json::append_quoted(out, profile.profile_id);
-  out += ",\n  \"continuousInput\":{\"deadzone\":";
-  json::append_number(out, profile.continuous_input.deadzone);
-  out += ",\"changeThreshold\":";
-  json::append_number(out, profile.continuous_input.change_threshold);
-  out += ",\"maxEventsPerSecond\":";
-  json::append_unsigned(out, profile.continuous_input.max_events_per_second);
-  out += "},\n  \"variables\":[";
-  json::Join join_variables;
-  for (const auto &variable : profile.variables) {
-    join_variables(out);
-    out += "\n    {\"id\":";
-    json::append_quoted(out, variable.id);
-    out += ",\"type\":";
-    json::append_quoted(out, automation_value_type_name(variable.type));
-    out += ",\"persistent\":";
-    json::append_bool(out, variable.persistent);
-    out += ",\"default\":";
-    append_value(out, variable.default_value);
-    out.push_back('}');
-  }
-  if (!profile.variables.empty())
-    out.push_back('\n');
-  out += "  ],\n  \"automations\":[";
-  json::Join join_automations;
+std::string serialize_automation_profile_json(const AutomationProfile &profile) {
+  Value::Array variables;
+  for (const auto &variable : profile.variables)
+    variables.emplace_back(Value::Object{
+        {"id", Value(variable.id)},
+        {"type", Value(std::string(automation_value_type_name(variable.type)))},
+        {"persistent", Value(variable.persistent)},
+        {"default", detail::automation_value_tree(variable.default_value)}});
+  Value::Array automations;
   for (const auto &automation : profile.automations) {
-    join_automations(out);
-    out += "\n    {\"id\":";
-    json::append_quoted(out, automation.id);
-    out += ",\"name\":";
-    json::append_quoted(out, automation.name);
-    out += ",\"enabled\":";
-    json::append_bool(out, automation.enabled);
-    out += ",\"rules\":[";
-    json::Join join_rules;
+    Value::Array rules;
     for (const auto &rule : automation.rules) {
-      join_rules(out);
-      out += "{\"id\":";
-      json::append_quoted(out, rule.id);
-      out += ",\"priority\":";
-      detail::append_exact_integer(out, rule.priority);
-      out += ",\"event\":";
-      json::append_quoted(out, automation_event_name(rule.event));
-      if (!rule.source_filter.empty()) {
-        out += ",\"source\":";
-        json::append_quoted(out, rule.source_filter);
-      }
-      out += ",\"condition\":";
-      append_expression(out, rule.condition);
-      out += ",\"actions\":[";
-      json::Join join_actions;
+      Value::Array actions;
       for (const auto &action : rule.actions) {
-        join_actions(out);
-        out += "{\"type\":";
-        json::append_quoted(
-            out, automation_action_name(action.kind).value_or(std::string_view{}));
-        out += ",\"target\":";
-        json::append_quoted(out, action.target);
-        if (!action.name.empty()) {
-          out += ",\"name\":";
-          json::append_quoted(out, action.name);
-        }
-        if (!action.property.empty()) {
-          out += ",\"property\":";
-          json::append_quoted(out, action.property);
-        }
-        if (action.repeating)
-          out += ",\"repeating\":true";
-        if (action.value.has_value()) {
-          out += ",\"value\":";
-          append_expression(out, *action.value);
-        }
-        if (action.secondary.has_value()) {
-          out += ",\"secondary\":";
-          append_expression(out, *action.secondary);
-        }
-        out.push_back('}');
+        Value::Object object{
+            {"type", Value(std::string(automation_action_name(action.kind).value_or(std::string_view{})))},
+            {"target", Value(action.target)}};
+        if (!action.name.empty()) object.emplace("name", Value(action.name));
+        if (!action.property.empty()) object.emplace("property", Value(action.property));
+        if (action.repeating) object.emplace("repeating", Value(true));
+        if (action.value) object.emplace("value", expression_tree(*action.value));
+        if (action.secondary) object.emplace("secondary", expression_tree(*action.secondary));
+        actions.emplace_back(std::move(object));
       }
-      out += "]}";
+      Value::Object object{
+          {"id", Value(rule.id)}, {"priority", json::exact_integer_value(rule.priority)},
+          {"event", Value(std::string(automation_event_name(rule.event)))},
+          {"condition", expression_tree(rule.condition)},
+          {"actions", Value(std::move(actions))}};
+      if (!rule.source_filter.empty()) object.emplace("source", Value(rule.source_filter));
+      rules.emplace_back(std::move(object));
     }
-    out += "]}";
+    automations.emplace_back(Value::Object{
+        {"id", Value(automation.id)}, {"name", Value(automation.name)},
+        {"enabled", Value(automation.enabled)}, {"rules", Value(std::move(rules))}});
   }
-  if (!profile.automations.empty())
-    out.push_back('\n');
-  out += "  ]\n}\n";
-  return out;
+  Value root(Value::Object{
+      {"schemaVersion", Value(static_cast<std::int64_t>(profile.schema_version))},
+      {"profileId", Value(profile.profile_id)},
+      {"continuousInput", Value(Value::Object{
+          {"deadzone", Value(profile.continuous_input.deadzone)},
+          {"changeThreshold", Value(profile.continuous_input.change_threshold)},
+          {"maxEventsPerSecond", Value(static_cast<std::int64_t>(profile.continuous_input.max_events_per_second))}})},
+      {"variables", Value(std::move(variables))},
+      {"automations", Value(std::move(automations))}});
+  std::string output;
+  json::append_value(output, root);
+  output.push_back('\n');
+  return output;
 }
 
 AutomationStateResult
@@ -589,26 +535,20 @@ parse_automation_state_json(const std::string_view source,
   return result;
 }
 
-std::string
-serialize_automation_state_json(const AutomationProfile &profile,
-                                const AutomationPersistentValues &values) {
-  std::string output = "{\"schemaVersion\":1,\"profileId\":";
-  json::append_quoted(output, profile.profile_id);
-  output += ",\"values\":{";
-  json::Join join_values;
+std::string serialize_automation_state_json(
+    const AutomationProfile &profile, const AutomationPersistentValues &values) {
+  Value::Object saved;
   for (const auto &variable : profile.variables) {
-    if (!variable.persistent)
-      continue;
     const auto found = values.find(variable.id);
-    if (found == values.end() ||
-        !automation_persistent_value_accepted(variable, found->second))
-      continue;
-    join_values(output);
-    json::append_quoted(output, variable.id);
-    output.push_back(':');
-    append_value(output, found->second);
+    if (found != values.end() &&
+        automation_persistent_value_accepted(variable, found->second))
+      saved.emplace(variable.id, detail::automation_value_tree(found->second));
   }
-  output += "}}\n";
+  std::string output;
+  json::append_value(output, Value(Value::Object{
+      {"schemaVersion", Value(std::int64_t{1})}, {"profileId", Value(profile.profile_id)},
+      {"values", Value(std::move(saved))}}));
+  output.push_back('\n');
   return output;
 }
 

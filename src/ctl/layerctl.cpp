@@ -11,6 +11,7 @@
 #include "layerc/core/utf8.hpp"
 #include "layerc/platform/durable_file.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
+#include "layerc/runtime/diagnostics.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -155,64 +156,48 @@ private:
 // payload; `--json` keeps the full, byte-stable document.
 void print_status_summary(const std::string_view response) {
   namespace json = layerc::core::json;
-  const auto parsed = json::parse(response);
-  const auto *root = std::get_if<json::Value>(&parsed);
-  const auto *payload = root != nullptr && root->is_object()
-                            ? root->find("payload")
-                            : nullptr;
-  if (payload == nullptr || !payload->is_object()) {
+  namespace runtime = layerc::runtime;
+  const auto unavailable = [] {
     std::puts("layerd: running (status payload unavailable; use --json)");
+  };
+  const auto envelope = json::parse_bounded(response, platform::control_frame_limit);
+  const auto *root = std::get_if<json::Value>(&envelope);
+  json::Reader reader;
+  const auto *payload = root ? reader.object(*root, "payload", "$") : nullptr;
+  if (!payload) {
+    unavailable();
     return;
   }
-  const auto text = [](const json::Value *value) {
-    return value != nullptr && value->is_string() ? value->as_string()
-                                                  : std::string{};
-  };
-  const auto *process = payload->find("process");
-  const auto *pid = process != nullptr && process->is_object()
-                        ? process->find("pid")
-                        : nullptr;
-  std::printf("layerd %s, pid %lld\n",
-              text(payload->find("packageVersion")).c_str(),
-              pid != nullptr && pid->is_integer()
-                  ? static_cast<long long>(pid->as_integer())
-                  : 0LL);
-  if (const auto *x11 = payload->find("x11"); x11 != nullptr && x11->is_object()) {
-    const auto *connected = x11->find("connected");
-    const bool up = connected != nullptr && connected->is_bool() &&
-                    connected->as_bool();
-    const auto reason = text(x11->find("reason"));
-    std::printf("x11: %s%s%s\n", up ? "connected" : "not connected",
-                reason.empty() ? "" : " - ", reason.c_str());
+  std::string payload_json;
+  json::append_value(payload_json, *payload);
+  const auto parsed = runtime::parse_runtime_diagnostics_json(payload_json);
+  const auto *diagnostics = std::get_if<runtime::RuntimeDiagnostics>(&parsed);
+  if (!diagnostics) {
+    unavailable();
+    return;
   }
-  if (const auto *sessions = payload->find("sessions");
-      sessions != nullptr && sessions->is_array()) {
-    std::printf("sessions: %zu\n", sessions->as_array().size());
-    for (const auto &session : sessions->as_array()) {
-      if (!session.is_object()) continue;
-      const auto *foreground = session.find("foreground");
-      std::printf("  %s window %s%s\n", text(session.find("profileId")).c_str(),
-                  text(session.find("window")).c_str(),
-                  foreground != nullptr && foreground->is_bool() &&
-                          foreground->as_bool()
-                      ? " (foreground)"
-                      : "");
-    }
+  std::printf("layerd %s, pid %u\n", diagnostics->package_version.c_str(),
+              static_cast<unsigned int>(diagnostics->process.pid));
+  if (diagnostics->linux_extension) {
+    const auto &x11 = diagnostics->linux_extension->x11;
+    std::printf("x11: %s%s%s\n", x11.connected ? "connected" : "not connected",
+                x11.reason.empty() ? "" : " - ", x11.reason.c_str());
   }
-  if (const auto *capabilities = payload->find("capabilities");
-      capabilities != nullptr && capabilities->is_array()) {
+  std::printf("sessions: %zu\n", diagnostics->sessions.size());
+  for (const auto &session : diagnostics->sessions) {
+    std::printf("  %s window %llu%s\n", session.profile_id.c_str(),
+                static_cast<unsigned long long>(session.window),
+                session.foreground ? " (foreground)" : "");
+  }
+  if (diagnostics->linux_extension) {
     std::puts("capabilities:");
-    for (const auto &capability : capabilities->as_array()) {
-      if (!capability.is_object()) continue;
+    for (const auto &capability : diagnostics->linux_extension->capabilities) {
       std::string reasons;
-      if (const auto *list = capability.find("reasons");
-          list != nullptr && list->is_array())
-        for (const auto &reason : list->as_array())
-          if (reason.is_string())
-            reasons += (reasons.empty() ? " (" : ", ") + reason.as_string();
+      for (const auto &reason : capability.reasons)
+        reasons += (reasons.empty() ? " (" : ", ") + reason;
       if (!reasons.empty()) reasons += ')';
-      std::printf("  %-15s %s%s\n", text(capability.find("capability")).c_str(),
-                  text(capability.find("availability")).c_str(),
+      std::printf("  %-15s %s%s\n", runtime::capability_name(capability.capability).data(),
+                  runtime::availability_name(capability.availability).data(),
                   reasons.c_str());
     }
   }

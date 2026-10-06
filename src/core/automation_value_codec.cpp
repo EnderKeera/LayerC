@@ -152,60 +152,49 @@ bounded(std::optional<AutomationValue> value, const json::Value &raw,
 
 } // namespace
 
+json::Value automation_value_tree(const AutomationValue &value,
+                                   const AutomationValueTags tags) {
+  return std::visit([&](const auto &entry) -> json::Value {
+    using T = std::decay_t<decltype(entry)>;
+    if constexpr (std::is_same_v<T, std::int64_t>)
+      return json::exact_integer_value(entry);
+    else if constexpr (std::is_same_v<T, DurationValue>)
+      return json::Value(entry.value.count());
+    else if constexpr (std::is_same_v<T, ConfidenceValue>)
+      return json::Value(entry.value);
+    else if constexpr (std::is_same_v<T, AutomationList>) {
+      json::Value::Array children;
+      children.reserve(entry.size());
+      for (const auto &child : entry)
+        children.push_back(tagged_automation_value_tree(child, tags));
+      return json::Value(std::move(children));
+    } else if constexpr (std::is_same_v<T, AutomationMap>) {
+      json::Value::Object children;
+      for (const auto &[key, child] : entry)
+        children.emplace(key, tagged_automation_value_tree(child, tags));
+      return json::Value(std::move(children));
+    } else {
+      return json::Value(entry);
+    }
+  }, value.storage);
+}
+
 void append_automation_value(std::string &out, const AutomationValue &value,
                              const AutomationValueTags tags) {
-  std::visit(
-      [&](const auto &entry) {
-        using T = std::decay_t<decltype(entry)>;
-        if constexpr (std::is_same_v<T, std::nullptr_t>)
-          out += "null";
-        else if constexpr (std::is_same_v<T, bool>)
-          json::append_bool(out, entry);
-        else if constexpr (std::is_same_v<T, std::int64_t>)
-          append_exact_integer(out, entry);
-        else if constexpr (std::is_same_v<T, double>)
-          json::append_number(out, entry);
-        else if constexpr (std::is_same_v<T, DurationValue>)
-          json::append_number(out, static_cast<double>(entry.value.count()));
-        else if constexpr (std::is_same_v<T, ConfidenceValue>)
-          json::append_number(out, entry.value);
-        else if constexpr (std::is_same_v<T, std::string>)
-          json::append_quoted(out, entry);
-        else if constexpr (std::is_same_v<T, AutomationList>) {
-          out.push_back('[');
-          json::Join join;
-          for (const auto &child : entry) {
-            join(out);
-            append_tagged_automation_value(out, child, tags);
-          }
-          out.push_back(']');
-        } else if constexpr (std::is_same_v<T, AutomationMap>) {
-          out.push_back('{');
-          json::Join join;
-          for (const auto &[key, child] : entry) {
-            join(out);
-            json::append_quoted(out, key);
-            out.push_back(':');
-            append_tagged_automation_value(out, child, tags);
-          }
-          out.push_back('}');
-        }
-      },
-      value.storage);
+  json::append_value(out, automation_value_tree(value, tags));
+}
+
+json::Value tagged_automation_value_tree(const AutomationValue &value,
+                                          const AutomationValueTags tags) {
+  return json::Value(json::Value::Object{
+      {std::string(tags.type), json::Value(std::string(automation_value_type_name(value_type(value))))},
+      {std::string(tags.value), automation_value_tree(value, tags)}});
 }
 
 void append_tagged_automation_value(std::string &out,
                                     const AutomationValue &value,
                                     const AutomationValueTags tags) {
-  out.push_back('{');
-  json::append_quoted(out, tags.type);
-  out.push_back(':');
-  json::append_quoted(out, automation_value_type_name(value_type(value)));
-  out.push_back(',');
-  json::append_quoted(out, tags.value);
-  out.push_back(':');
-  append_automation_value(out, value, tags);
-  out.push_back('}');
+  json::append_value(out, tagged_automation_value_tree(value, tags));
 }
 
 std::optional<AutomationValue>

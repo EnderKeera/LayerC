@@ -56,6 +56,59 @@ struct CaptureDiagnostics {
   bool operator==(const CaptureDiagnostics &) const = default;
 };
 
+// Linux's native probe/availability extension is typed but has no X11 handles.
+// Its wire fields belong to the shared runtime diagnostics snapshot.
+struct X11ExtensionStatus {
+  bool available{};
+  int major{};
+  int minor{};
+  // Native probes omit per-extension reasons; the serializer supplies the
+  // connection reason or extension_missing. Parsed wire reasons are retained.
+  std::optional<std::string> reason{};
+  bool operator==(const X11ExtensionStatus &) const = default;
+};
+struct X11StatusSnapshot {
+  bool connected{};
+  X11ExtensionStatus xi2;
+  X11ExtensionStatus shape;
+  X11ExtensionStatus randr;
+  X11ExtensionStatus composite;
+  X11ExtensionStatus damage;
+  X11ExtensionStatus xfixes;
+  bool ewmh{};
+  std::string reason;
+  std::optional<std::string> ewmh_reason{};
+  bool operator==(const X11StatusSnapshot &) const = default;
+};
+enum class CapabilityAvailability : std::uint8_t {
+  unavailable, degraded, active, inactive,
+};
+inline constexpr std::array capability_availability_wire{
+    core::EnumWireEntry{CapabilityAvailability::unavailable, "unavailable"},
+    core::EnumWireEntry{CapabilityAvailability::degraded, "degraded"},
+    core::EnumWireEntry{CapabilityAvailability::active, "active"},
+    core::EnumWireEntry{CapabilityAvailability::inactive, "inactive"},
+};
+[[nodiscard]] constexpr std::string_view
+availability_name(CapabilityAvailability availability) noexcept {
+  return core::enum_wire_name(capability_availability_wire, availability)
+      .value_or("unavailable");
+}
+struct CapabilityStatus {
+  Capability capability{};
+  CapabilityAvailability availability{CapabilityAvailability::unavailable};
+  std::vector<std::string> reasons;
+  // Current session faults in human-readable form; stable reason tokens stay
+  // in reasons for clients that classify availability.
+  std::vector<std::string> diagnostics;
+  bool operator==(const CapabilityStatus &) const = default;
+};
+struct LinuxDiagnostics {
+  X11StatusSnapshot x11;
+  std::vector<CapabilityStatus> capabilities;
+  bool operator==(const LinuxDiagnostics &) const = default;
+};
+
 // The contract belongs beside RuntimeServiceStats; core remains independent
 // of the service host and native process/window APIs.
 struct RuntimeDiagnostics {
@@ -73,48 +126,12 @@ struct RuntimeDiagnostics {
   // Current automation faults (checkpoint, state load, runtime), one line
   // each, reported identically by both daemons.
   std::vector<std::string> automation_faults;
+  // Absent for producers without Linux probes. Emitted as the existing
+  // top-level x11/capabilities fields, not a new nested wire section.
+  std::optional<LinuxDiagnostics> linux_extension;
   bool operator==(const RuntimeDiagnostics &) const = default;
 };
 
-// Linux's native probe/availability extension is typed but has no X11 handles.
-// It is emitted alongside the shared runtime diagnostics snapshot.
-struct X11ExtensionStatus {
-  bool available{};
-  int major{};
-  int minor{};
-};
-struct X11StatusSnapshot {
-  bool connected{};
-  X11ExtensionStatus xi2;
-  X11ExtensionStatus shape;
-  X11ExtensionStatus randr;
-  X11ExtensionStatus composite;
-  X11ExtensionStatus damage;
-  X11ExtensionStatus xfixes;
-  bool ewmh{};
-  std::string reason;
-};
-enum class CapabilityAvailability : std::uint8_t {
-  unavailable, degraded, active, inactive,
-};
-[[nodiscard]] constexpr std::string_view
-availability_name(CapabilityAvailability availability) noexcept {
-  switch (availability) {
-  case CapabilityAvailability::unavailable: return "unavailable";
-  case CapabilityAvailability::degraded: return "degraded";
-  case CapabilityAvailability::active: return "active";
-  case CapabilityAvailability::inactive: return "inactive";
-  }
-  return "unavailable";
-}
-struct CapabilityStatus {
-  Capability capability{};
-  CapabilityAvailability availability{CapabilityAvailability::unavailable};
-  std::vector<std::string> reasons;
-  // Current session faults in human-readable form; stable reason tokens stay
-  // in reasons for clients that classify availability.
-  std::vector<std::string> diagnostics;
-};
 struct LinuxStatusSnapshot {
   X11StatusSnapshot x11;
   std::vector<CapabilityStatus> capabilities;
@@ -123,7 +140,7 @@ struct LinuxStatusSnapshot {
   std::vector<SessionDiagnostics> sessions;
 };
 
-// Appends Linux/X11 probes and availability to the shared diagnostics JSON.
+// Adapts native Linux probes to the shared typed diagnostics serializer.
 [[nodiscard]] std::string serialize_linux_status_json(
     const RuntimeDiagnostics &diagnostics, const LinuxStatusSnapshot &linux);
 

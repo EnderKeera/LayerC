@@ -10,15 +10,15 @@ namespace layerc::core {
 namespace {
 
 void build_preferences(
-    layerc::core::CompanionSessionSnapshot &snapshot,
-    const std::span<const layerc::core::Panel> panels,
-    const std::optional<layerc::core::CompanionProfile> &companion) {
+    CompanionSessionSnapshot &snapshot,
+    const std::span<const Panel> panels,
+    const std::optional<CompanionProfile> &companion) {
   if (companion.has_value()) {
     snapshot.preferences = companion->slots;
     return;
   }
   for (std::size_t i = 0;
-       i < panels.size() && i < layerc::core::max_companion_slots; ++i) {
+       i < panels.size() && i < max_companion_slots; ++i) {
     snapshot.preferences.push_back(
         {.slot_index = static_cast<std::uint32_t>(i),
          .panel_id = panels[i].id});
@@ -26,10 +26,10 @@ void build_preferences(
 }
 
 void build_available_catalog(
-    layerc::core::CompanionSessionSnapshot &snapshot,
-    const std::span<const layerc::core::Panel> panels) {
+    CompanionSessionSnapshot &snapshot,
+    const std::span<const Panel> panels) {
   const auto count =
-      std::min(panels.size(), layerc::core::max_companion_available_panels);
+      std::min(panels.size(), max_companion_available_panels);
   snapshot.available_panels.reserve(count);
   for (const auto &panel : panels.first(count))
     snapshot.available_panels.push_back(
@@ -37,8 +37,8 @@ void build_available_catalog(
          .name = panel.name.empty() ? panel.id : panel.name});
 }
 
-[[nodiscard]] const layerc::core::CompanionSlotMapping *find_slot_mapping(
-    const std::vector<layerc::core::CompanionSlotMapping> &preferences,
+[[nodiscard]] const CompanionSlotMapping *find_slot_mapping(
+    const std::vector<CompanionSlotMapping> &preferences,
     const std::string_view panel_id) {
   const auto found = std::ranges::find_if(preferences, [&](const auto &mapping) {
     return mapping.panel_id == panel_id;
@@ -48,9 +48,9 @@ void build_available_catalog(
 
 // Companion items mirror the native bars from present_panel(); only the
 // progress direction differs (elapsed toward ready instead of remaining).
-layerc::core::CompanionSnapshotItem
-make_snapshot_item(const layerc::core::BarPresentation &bar) {
-  layerc::core::CompanionSnapshotItem item;
+CompanionSnapshotItem
+make_snapshot_item(const BarPresentation &bar) {
+  CompanionSnapshotItem item;
   item.cooldown_id = bar.cooldown_id;
   item.name = bar.name;
   item.progress = bar.ready ? 1.0 : 1.0 - bar.remaining;
@@ -62,18 +62,18 @@ make_snapshot_item(const layerc::core::BarPresentation &bar) {
 }
 
 void build_panel_snapshots(
-    layerc::core::CompanionSessionSnapshot &snapshot,
-    const std::span<const layerc::core::Panel> panels,
-    const std::span<const layerc::core::CooldownDefinition> definitions,
-    const std::span<const layerc::core::CooldownState> states,
-    const layerc::core::TimePoint now) {
+    CompanionSessionSnapshot &snapshot,
+    const std::span<const Panel> panels,
+    const std::span<const CooldownDefinition> definitions,
+    const std::span<const CooldownState> states,
+    const TimePoint now) {
   for (const auto &panel : panels) {
-    if (snapshot.panels.size() >= layerc::core::max_companion_snapshot_panels)
+    if (snapshot.panels.size() >= max_companion_snapshot_panels)
       break;
     const auto *mapping = find_slot_mapping(snapshot.preferences, panel.id);
     if (mapping == nullptr)
       continue;
-    layerc::core::CompanionPanelSnapshot panel_snapshot;
+    CompanionPanelSnapshot panel_snapshot;
     panel_snapshot.panel_id = panel.id;
     panel_snapshot.slot_index = mapping->slot_index;
     panel_snapshot.visible = true;
@@ -81,7 +81,7 @@ void build_panel_snapshots(
         present_panel(panel, definitions, states, {}, now);
     for (const auto &bar : presentation.bars) {
       if (panel_snapshot.items.size() >=
-          layerc::core::max_companion_snapshot_items)
+          max_companion_snapshot_items)
         break;
       panel_snapshot.items.push_back(make_snapshot_item(bar));
     }
@@ -90,7 +90,7 @@ void build_panel_snapshots(
 }
 
 void drop_unmapped_catalog_entries(
-    layerc::core::CompanionSessionSnapshot &snapshot) {
+    CompanionSessionSnapshot &snapshot) {
   std::erase_if(snapshot.available_panels, [&](const auto &panel) {
     return std::ranges::none_of(snapshot.preferences, [&](const auto &mapping) {
       return mapping.panel_id == panel.panel_id;
@@ -107,7 +107,7 @@ std::string build_companion_snapshot(
     const std::span<const CooldownState> states,
     const std::optional<CompanionProfile> &companion,
     const TimePoint now) {
-  layerc::core::CompanionSessionSnapshot snapshot;
+  CompanionSessionSnapshot snapshot;
   snapshot.profile_id = std::string(profile_id);
   snapshot.session_key = std::string(session_key);
   snapshot.timestamp_ms = static_cast<std::uint64_t>(
