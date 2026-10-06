@@ -3,7 +3,7 @@
 // consumes only the verified TemplateImageResult; no parser or storage policy
 // lives in the daemon.
 
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_linux.hpp"
 
 #include "layerc/platform/profile_store.hpp"
 

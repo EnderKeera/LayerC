@@ -3,7 +3,7 @@
 // journal directory sits outside both target roots and no first-component
 // reservation is needed.
 
-#include "layerc/platform/profile_file_guard.hpp"
+#include "layerc/platform/profile_file_guard_linux.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
 
 #include "layerc/platform/text.hpp"

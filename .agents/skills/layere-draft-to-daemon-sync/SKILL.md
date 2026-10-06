@@ -21,7 +21,7 @@ For repeated saves and failure cases, capture the disposable profile's relevant 
 
 Start with [editor_live_edit.cpp](../../../src/editor/editor_live_edit.cpp): `record_profile_change`, `flush_autosave`, `notify_profile_committed`, `handle_live_message`, and `apply_history_snapshot`. Read [editor_history.hpp](../../../src/editor/editor_history.hpp) or [editor_profiles.cpp](../../../src/editor/editor_profiles.cpp) (including schema-upgrade prompts) only for the involved transition.
 
-On the daemon side, trace [daemon_live_edit.cpp](../../../src/daemon/daemon_live_edit.cpp) and [daemon_sessions.cpp](../../../src/daemon/daemon_sessions.cpp). Use [live_edit.cpp](../../../src/core/live_edit.cpp) and [live_channel.cpp](../../../src/platform/live_channel.cpp) when the evidence points to revision/protocol or authentication behavior.
+On the daemon side, trace [daemon_live_edit.cpp](../../../src/daemon/daemon_live_edit.cpp) and [daemon_sessions.cpp](../../../src/daemon/daemon_sessions.cpp). Use [live_edit.cpp](../../../src/core/live_edit.cpp) and [live_channel.cpp](../../../src/platform/win32/live_channel.cpp) when the evidence points to revision/protocol or authentication behavior.
 
 ## Exercise the relevant transitions
 

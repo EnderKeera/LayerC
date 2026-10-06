@@ -18,7 +18,7 @@ Identify the entry point and follow it to the shared transaction boundary:
 | Editor save/autosave or accepted calibration | [editor_profiles.cpp](../../../src/editor/editor_profiles.cpp), [editor_live_edit.cpp](../../../src/editor/editor_live_edit.cpp), [editor_visual.cpp](../../../src/editor/editor_visual.cpp) |
 | Linux profile/bundle command | [layerctl.cpp](../../../src/ctl/layerctl.cpp) |
 | Bundle validation and asset mapping | [profile_pack.cpp](../../../src/bundle/profile_pack.cpp), [pack_detail.cpp](../../../src/bundle/pack_detail.cpp) |
-| Windows commit/recovery | [profile_transaction.cpp](../../../src/platform/profile_transaction.cpp), [profile_file_guard.cpp](../../../src/platform/profile_file_guard.cpp) |
+| Windows commit/recovery | [profile_transaction.cpp](../../../src/platform/profile_transaction.cpp), [profile_file_guard.cpp](../../../src/platform/win32/profile_file_guard.cpp) |
 | Linux commit/recovery | [linux/profile_store.cpp](../../../src/platform/linux/profile_store.cpp), [linux/profile_file_guard.cpp](../../../src/platform/linux/profile_file_guard.cpp) |
 
 ## Choose the relevant experiment

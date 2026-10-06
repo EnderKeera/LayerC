@@ -1,5 +1,5 @@
 #include "layerc/platform/profile_store_linux.hpp"
-#include "layerc/platform/profile_file_guard.hpp"
+#include "layerc/platform/profile_file_guard_linux.hpp"
 #include "../profile_store_layout.hpp"
 #include "control_channel.hpp"
 
