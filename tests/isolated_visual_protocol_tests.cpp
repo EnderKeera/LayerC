@@ -1,8 +1,11 @@
 #include "isolated_visual_protocol.hpp"
+#include "layerc/core/json.hpp"
 #include "test_support.hpp"
 
 #include <chrono>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -14,6 +17,26 @@ void inline_capture_status_preserves_fault_reason();
 namespace {
 
 using layerc::test::expect;
+using layerc::core::json::Value;
+
+Value::Object packet_object(const std::string &encoded) {
+  return std::get<Value>(layerc::core::json::parse(encoded)).as_object();
+}
+
+std::string packet_json(Value::Object packet) {
+  std::string encoded;
+  layerc::core::json::append_value(encoded, Value(std::move(packet)));
+  return encoded;
+}
+
+template <typename Result>
+void expect_protocol_error(const Result &result, const std::string_view detail) {
+  const auto *error =
+      std::get_if<layerc::daemon::IsolatedProtocolError>(&result);
+  expect(error != nullptr && !error->message.empty() &&
+             error->message.find(detail) != std::string::npos,
+         "a decoder failure must carry the original typed error detail");
+}
 
 layerc::daemon::VisualCaptureSnapshot
 snapshot(const std::uint64_t capture_sequence,
@@ -33,32 +56,46 @@ snapshot(const std::uint64_t capture_sequence,
   return value;
 }
 
+// The validation disposition, or nullopt when the snapshot was rejected.
+std::optional<layerc::daemon::IsolatedSnapshotDisposition>
+verdict(layerc::daemon::IsolatedSnapshotValidator &validator,
+        layerc::daemon::VisualCaptureSnapshot &value,
+        const layerc::core::TimePoint now) {
+  const auto result = validator.validate(value, now);
+  if (const auto *disposition =
+          std::get_if<layerc::daemon::IsolatedSnapshotDisposition>(&result))
+    return *disposition;
+  return std::nullopt;
+}
+
 void handshake_is_mutually_bound() {
   using namespace layerc::daemon;
-  std::string error;
   const auto hello = isolated_hello_json("nonce", "worker", 73);
-  expect(
-      validate_isolated_hello(hello, "nonce", "worker", 73, error),
-      "matching nonce, role, PID, protocol, and package should authenticate");
-  error.clear();
-  expect(!validate_isolated_hello(hello, "spoof", "worker", 73, error),
+  expect(std::holds_alternative<std::monostate>(
+             validate_isolated_hello(hello, "nonce", "worker", 73)),
+         "matching nonce, role, PID, protocol, and package should authenticate");
+  expect(std::holds_alternative<IsolatedProtocolError>(
+             validate_isolated_hello(hello, "spoof", "worker", 73)),
          "a spoofed nonce should be rejected");
-  error.clear();
-  expect(!validate_isolated_hello(hello, "nonce", "daemon", 73, error),
+  expect(std::holds_alternative<IsolatedProtocolError>(
+             validate_isolated_hello(hello, "nonce", "daemon", 73)),
          "a spoofed role should be rejected");
+  expect(std::holds_alternative<IsolatedProtocolError>(
+             validate_isolated_hello(hello, "nonce", "worker", 74)),
+         "a spoofed PID should be rejected");
 
   auto wrong_version = hello;
   const auto version_field = "\"protocolVersion\":" +
                              std::to_string(isolated_visual_protocol_version);
   const auto protocol = wrong_version.find(version_field);
   wrong_version.replace(protocol, version_field.size(), "\"protocolVersion\":99");
-  error.clear();
-  expect(!validate_isolated_hello(wrong_version, "nonce", "worker", 73, error),
+  expect(std::holds_alternative<IsolatedProtocolError>(
+             validate_isolated_hello(wrong_version, "nonce", "worker", 73)),
          "an incompatible helper protocol should be rejected");
 
   const std::string oversized(isolated_visual_max_message_bytes + 1U, 'x');
-  error.clear();
-  expect(!validate_isolated_hello(oversized, "nonce", "worker", 73, error),
+  expect(std::holds_alternative<IsolatedProtocolError>(
+             validate_isolated_hello(oversized, "nonce", "worker", 73)),
          "oversized helper messages should fail before parsing");
 }
 
@@ -82,9 +119,10 @@ void configuration_and_packet_sequences_round_trip() {
   evaluation.state = std::move(state);
   evaluation.asset_signatures = {{.present = true,
                                   .volume_serial = 7,
-                                  .file_index = 11,
+                                  .file_index = 9'007'199'254'740'993ULL,
                                   .file_size = 13,
-                                  .last_write_ticks = 17}};
+                                  .last_write_ticks = 17,
+                                  .change_usn = 19}};
   request.templates.push_back(std::move(evaluation));
   configuration.requests.push_back(std::move(request));
   const auto decoded = decode_isolated_message(
@@ -105,11 +143,11 @@ void configuration_and_packet_sequences_round_trip() {
   expect(polled != nullptr && polled->sequence == 42 &&
              encode_isolated_poll(42).find("waitSnapshot") != std::string::npos,
          "event-driven waitSnapshot sequence should round-trip");
-  std::string error;
-  expect(decode_isolated_ack(encode_isolated_ack(42), 42, error),
+  expect(std::holds_alternative<std::monostate>(
+             decode_isolated_ack(encode_isolated_ack(42), 42)),
          "matching acknowledgement should be accepted");
-  error.clear();
-  expect(!decode_isolated_ack(encode_isolated_ack(41), 42, error),
+  expect(std::holds_alternative<IsolatedProtocolError>(
+             decode_isolated_ack(encode_isolated_ack(41), 42)),
          "out-of-order acknowledgement should be rejected");
 }
 
@@ -139,18 +177,23 @@ void inbound_messages_decode_in_one_pass() {
 void worker_sequences_survive_quality_epochs() {
   using namespace layerc::daemon;
   const auto now = layerc::core::MonotonicClock::now();
-  IsolatedSnapshotValidator validator;
+  IsolatedSnapshotRebaser rebaser;
   auto low = snapshot(1, 1, now);
-  expect(validator.rebase(low) && low.sequence == 1 &&
+  expect(rebaser.rebase(low) && low.sequence == 1 &&
              low.evaluations.front().sequence == 1,
          "the first worker epoch should publish sequence one");
   auto duplicate = snapshot(1, 1, now);
-  expect(!validator.rebase(duplicate) && duplicate.sequence == 1 &&
+  expect(!rebaser.rebase(duplicate) && duplicate.sequence == 1 &&
              duplicate.evaluations.front().sequence == 1,
          "duplicate worker snapshots should preserve protocol sequences");
-  validator.begin_worker_epoch();
+  rebaser.begin_worker_epoch();
+  VisualCaptureSnapshot empty;
+  expect(!rebaser.rebase(empty) && empty.sequence == 1 &&
+             empty.evaluations.empty(),
+         "an empty replacement epoch must not manufacture a fresh frame");
+  rebaser.begin_worker_epoch();
   auto balanced = snapshot(1, 1, now);
-  expect(validator.rebase(balanced) && balanced.sequence == 2 &&
+  expect(rebaser.rebase(balanced) && balanced.sequence == 2 &&
              balanced.evaluations.front().sequence == 2,
          "quality-driven worker replacement must keep protocol sequences "
          "monotonic");
@@ -169,31 +212,28 @@ void snapshots_reject_replay_and_staleness() {
          "a snapshot for another poll sequence should be rejected");
 
   IsolatedSnapshotValidator validator;
-  std::string error;
-  expect(validator.validate(first, now, error) ==
+  expect(verdict(validator, first, now) ==
              IsolatedSnapshotDisposition::accepted,
          "the first fresh capture should be accepted");
   auto duplicate = snapshot(1, 1, now);
-  expect(validator.validate(duplicate, now, error) ==
+  expect(verdict(validator, duplicate, now) ==
              IsolatedSnapshotDisposition::duplicate,
          "a duplicate capture should not be republished");
 
   auto partially_new = snapshot(2, 1, now);
-  expect(validator.validate(partially_new, now, error) ==
+  expect(verdict(validator, partially_new, now) ==
                  IsolatedSnapshotDisposition::accepted &&
              partially_new.evaluations.empty(),
          "duplicate per-profile measurements should be removed from a newer "
          "capture");
 
   auto stale = snapshot(3, 2, now - std::chrono::seconds(3));
-  error.clear();
-  expect(validator.validate(stale, now, error) ==
-             IsolatedSnapshotDisposition::rejected,
+  expect(verdict(validator, stale, now) ==
+             std::nullopt,
          "stale QPC measurements should be rejected");
   auto backwards = snapshot(1, 2, now);
-  error.clear();
-  expect(validator.validate(backwards, now, error) ==
-             IsolatedSnapshotDisposition::rejected,
+  expect(verdict(validator, backwards, now) ==
+             std::nullopt,
          "capture sequences must not move backwards");
 }
 
@@ -201,13 +241,12 @@ void replacement_helpers_start_new_epochs() {
   using namespace layerc::daemon;
   const auto now = layerc::core::MonotonicClock::now();
   IsolatedSnapshotValidator daemon;
-  std::string error;
   daemon.begin_connection();
   auto first = snapshot(99, 99, now);
   auto latest = snapshot(100, 100, now);
-  expect(daemon.validate(first, now, error) ==
+  expect(verdict(daemon, first, now) ==
                  IsolatedSnapshotDisposition::accepted &&
-             daemon.validate(latest, now, error) ==
+             verdict(daemon, latest, now) ==
                  IsolatedSnapshotDisposition::accepted &&
              latest.sequence == 100,
          "helper A publishes a long-running stream");
@@ -215,31 +254,29 @@ void replacement_helpers_start_new_epochs() {
   // Helper A died; the authenticated replacement B restarts its counters.
   daemon.begin_connection();
   auto replacement = snapshot(1, 1, now);
-  error.clear();
-  expect(daemon.validate(replacement, now, error) ==
+  expect(verdict(daemon, replacement, now) ==
                  IsolatedSnapshotDisposition::accepted &&
-             error.empty() && replacement.sequence == 101 &&
+             replacement.sequence == 101 &&
              replacement.evaluations.size() == 1 &&
              replacement.evaluations.front().sequence == 101,
          "a replacement helper's first measurement is accepted above every "
          "sequence helper A published");
   auto repeated = snapshot(1, 1, now);
-  expect(daemon.validate(repeated, now, error) ==
+  expect(verdict(daemon, repeated, now) ==
              IsolatedSnapshotDisposition::duplicate,
          "the replacement's first measurement is delivered exactly once");
   auto backwards = snapshot(1, 2, now);
   auto advanced = snapshot(2, 2, now);
-  expect(daemon.validate(advanced, now, error) ==
+  expect(verdict(daemon, advanced, now) ==
                  IsolatedSnapshotDisposition::accepted &&
-             daemon.validate(backwards, now, error) ==
-                 IsolatedSnapshotDisposition::rejected,
+             verdict(daemon, backwards, now) ==
+                 std::nullopt,
          "sequences still cannot move backwards within one helper epoch");
 
   // Explicit retry after that fault launches helper C: it recovers at once.
   daemon.begin_connection();
   auto retried = snapshot(1, 1, now);
-  error.clear();
-  expect(daemon.validate(retried, now, error) ==
+  expect(verdict(daemon, retried, now) ==
                  IsolatedSnapshotDisposition::accepted &&
              retried.sequence > advanced.sequence &&
              retried.evaluations.front().sequence >
@@ -262,17 +299,16 @@ evaluation(std::string key, const std::uint64_t sequence,
 void cached_evaluations_are_not_republished_as_fresh() {
   using namespace layerc::daemon;
   const auto now = layerc::core::MonotonicClock::now();
-  IsolatedSnapshotValidator helper;
+  IsolatedSnapshotRebaser helper;
   IsolatedSnapshotValidator daemon;
   daemon.begin_connection();
-  std::string error;
   // Capture 1 samples a 15 Hz and a 5 Hz profile.
   VisualCaptureSnapshot frame;
   frame.sequence = 1;
   frame.evaluations = {evaluation("fast.json", 1, now),
                        evaluation("slow.json", 1, now)};
   expect(helper.rebase(frame) &&
-             daemon.validate(frame, now, error) ==
+             verdict(daemon, frame, now) ==
                  IsolatedSnapshotDisposition::accepted &&
              frame.evaluations.size() == 2,
          "both profiles' first samples reach the daemon");
@@ -283,11 +319,173 @@ void cached_evaluations_are_not_republished_as_fresh() {
   next.evaluations = {evaluation("fast.json", 2, now),
                       evaluation("slow.json", 1, now)};
   expect(helper.rebase(next) &&
-             daemon.validate(next, now, error) ==
+             verdict(daemon, next, now) ==
                  IsolatedSnapshotDisposition::accepted &&
              next.evaluations.size() == 1 &&
              next.evaluations.front().source_key == "fast.json",
          "only the genuinely re-sampled evaluation reaches the daemon");
+}
+
+void decoder_errors_are_single_typed_results() {
+  using namespace layerc::daemon;
+  for (const auto &malformed : {std::string{"{"}, std::string{"[]"},
+                                std::string{"{}"}}) {
+    expect_protocol_error(
+        validate_isolated_hello(malformed, "nonce", "worker", 73), "$");
+    expect_protocol_error(decode_isolated_ack(malformed, 7), "$");
+    expect_protocol_error(decode_isolated_message(malformed), "$");
+    expect_protocol_error(decode_isolated_snapshot(malformed, 7), "$");
+  }
+  const auto valid = packet_object(encode_isolated_poll(7));
+  for (const auto &invalid : {Value(std::string{"7"}), Value(7.5),
+                              Value(std::int64_t{-1}), Value()}) {
+    auto packet = valid;
+    packet.insert_or_assign("sequence", invalid);
+    expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                          "$.sequence");
+  }
+  auto packet = valid;
+  packet.erase("sequence");
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "$.sequence");
+  packet = valid;
+  packet.insert_or_assign("packageVersion", Value(std::string{"wrong-package"}));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "$.packageVersion");
+  packet = valid;
+  packet.insert_or_assign("type", Value(std::string{"snapshot"}));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "unexpected isolated visual message type");
+  const auto maximum = static_cast<std::uint64_t>(
+      std::numeric_limits<std::int64_t>::max());
+  const auto decoded = decode_isolated_message(encode_isolated_poll(maximum));
+  const auto *poll = std::get_if<IsolatedPoll>(&decoded);
+  expect(poll != nullptr && poll->sequence == maximum,
+         "the largest accepted integer token must not lose precision");
+  expect(std::holds_alternative<std::monostate>(
+             decode_isolated_ack(encode_isolated_ack(maximum), maximum)),
+         "a decoder failure must not poison the next valid acknowledgement");
+}
+
+void nested_configuration_errors_preserve_detail_and_bounds() {
+  using namespace layerc::daemon;
+  IsolatedConfiguration configuration;
+  configuration.sequence = 7;
+  VisualEvaluationRequest request;
+  request.source_key = "profile.json";
+  VisualTemplateEvaluation evaluation;
+  evaluation.state = {.id = "ready", .name = "Ready",
+                      .search_region = {0.0, 0.0, 1.0, 1.0},
+                      .expected_width = 0.1, .expected_height = 0.1,
+                      .references = {{std::string(64, 'a')}}};
+  evaluation.asset_signatures.push_back({});
+  request.templates.push_back(std::move(evaluation));
+  configuration.requests.push_back(std::move(request));
+  const auto valid = packet_object(encode_isolated_configuration(configuration));
+  auto requests = valid.at("requests").as_array();
+  auto encoded_request = requests.front().as_object();
+  auto signature_sets = encoded_request.at("assetSignatures").as_array();
+  auto signatures = signature_sets.front().as_array();
+  auto signature = signatures.front().as_object();
+  signature.erase("fileSize");
+  signatures.front() = Value(std::move(signature));
+  signature_sets.front() = Value(std::move(signatures));
+  encoded_request.insert_or_assign("assetSignatures", Value(std::move(signature_sets)));
+  requests.front() = Value(std::move(encoded_request));
+  auto packet = valid;
+  packet.insert_or_assign("requests", Value(std::move(requests)));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "$.requests[0].assetSignatures[0][0].fileSize");
+  requests = valid.at("requests").as_array();
+  encoded_request = requests.front().as_object();
+  encoded_request.insert_or_assign(
+      "assetSignatures", Value(Value::Array{Value(Value::Array{})}));
+  requests.front() = Value(std::move(encoded_request));
+  packet = valid;
+  packet.insert_or_assign("requests", Value(std::move(requests)));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "asset signatures must match template references");
+  packet = valid;
+  packet.insert_or_assign(
+      "exclusions", Value(Value::Array{Value(Value::Array{Value(1.0)})}));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "$.exclusions[0]: exclusion must contain four coordinates");
+  packet = valid;
+  packet.insert_or_assign("requests", Value(Value::Array(65)));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "requests must be an array of at most 64");
+  packet = valid;
+  packet.insert_or_assign("exclusions", Value(Value::Array(129)));
+  expect_protocol_error(decode_isolated_message(packet_json(std::move(packet))),
+                        "exclusions must be an array of at most 128");
+  expect(std::holds_alternative<IsolatedConfiguration>(
+             decode_isolated_message(packet_json(valid))),
+         "a nested decode failure must not retain partial state across messages");
+}
+
+void nested_snapshot_errors_preserve_detail_and_bounds() {
+  using namespace layerc::daemon;
+  const auto now = layerc::core::MonotonicClock::now();
+  const auto valid = packet_object(encode_isolated_snapshot(7, snapshot(1, 1, now)));
+  auto evaluations = valid.at("evaluations").as_array();
+  auto encoded_evaluation = evaluations.front().as_object();
+  auto measurements = encoded_evaluation.at("measurements").as_array();
+  auto measurement = measurements.front().as_object();
+  measurement.insert_or_assign("confidence", Value(2.0));
+  measurements.front() = Value(std::move(measurement));
+  encoded_evaluation.insert_or_assign("measurements", Value(std::move(measurements)));
+  evaluations.front() = Value(std::move(encoded_evaluation));
+  auto packet = valid;
+  packet.insert_or_assign("evaluations", Value(std::move(evaluations)));
+  expect_protocol_error(decode_isolated_snapshot(packet_json(std::move(packet)), 7),
+                        "$.evaluations[0].measurements[0].confidence");
+  evaluations = valid.at("evaluations").as_array();
+  encoded_evaluation = evaluations.front().as_object();
+  encoded_evaluation.insert_or_assign("measurements", Value(Value::Array(9)));
+  evaluations.front() = Value(std::move(encoded_evaluation));
+  packet = valid;
+  packet.insert_or_assign("evaluations", Value(std::move(evaluations)));
+  expect_protocol_error(decode_isolated_snapshot(packet_json(std::move(packet)), 7),
+                        "invalid isolated measurements");
+  packet = valid;
+  packet.insert_or_assign("evaluations", Value(Value::Array(65)));
+  expect_protocol_error(decode_isolated_snapshot(packet_json(std::move(packet)), 7),
+                        "invalid isolated evaluations");
+  expect(std::holds_alternative<VisualCaptureSnapshot>(
+             decode_isolated_snapshot(packet_json(valid), 7)),
+         "a nested decode failure must not poison the next valid snapshot");
+}
+
+void rejected_snapshots_do_not_advance_connection_state() {
+  using namespace layerc::daemon;
+  const auto now = layerc::core::MonotonicClock::now();
+  IsolatedSnapshotValidator validator;
+  validator.begin_connection();
+  auto first = snapshot(1, 1, now);
+  expect(verdict(validator, first, now) == IsolatedSnapshotDisposition::accepted,
+         "a fresh connection should accept its first frame");
+  auto future = snapshot(2, 2, now + std::chrono::milliseconds(251));
+  expect(verdict(validator, future, now) == std::nullopt,
+         "future-dated samples must not advance the connection");
+  auto valid = snapshot(2, 2, now);
+  expect(verdict(validator, valid, now) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             valid.sequence == 2 && valid.evaluations.front().sequence == 2,
+         "a valid retry of the same sequence should recover after rejection");
+  auto partial = snapshot(3, 3, now);
+  partial.evaluations.push_back(evaluation("late.json", 1, {}));
+  expect(verdict(validator, partial, now) ==
+             std::nullopt,
+         "one invalid evaluation must reject the whole snapshot");
+  auto recovered = snapshot(3, 3, now);
+  expect(verdict(validator, recovered, now) ==
+                 IsolatedSnapshotDisposition::accepted &&
+             recovered.sequence == 3 && recovered.evaluations.front().sequence == 3,
+         "a partial rejection must not mutate any evaluation's sequence");
+  auto backwards = snapshot(4, 2, now);
+  expect(verdict(validator, backwards, now) ==
+             std::nullopt,
+         "an evaluation sequence must not move backwards within a connection");
 }
 
 } // namespace
@@ -301,6 +499,10 @@ int main() {
       {"snapshots_reject_replay_and_staleness", snapshots_reject_replay_and_staleness},
       {"replacement_helpers_start_new_epochs", replacement_helpers_start_new_epochs},
       {"cached_evaluations_are_not_republished_as_fresh", cached_evaluations_are_not_republished_as_fresh},
+      LAYERC_TEST_CASE(decoder_errors_are_single_typed_results),
+      LAYERC_TEST_CASE(nested_configuration_errors_preserve_detail_and_bounds),
+      LAYERC_TEST_CASE(nested_snapshot_errors_preserve_detail_and_bounds),
+      LAYERC_TEST_CASE(rejected_snapshots_do_not_advance_connection_state),
       LAYERC_TEST_CASE(snapshot_capture_health_round_trips),
       LAYERC_TEST_CASE(capture_faults_do_not_fault_unrelated_services),
       LAYERC_TEST_CASE(inline_capture_status_preserves_fault_reason),

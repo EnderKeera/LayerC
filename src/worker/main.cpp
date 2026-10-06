@@ -88,9 +88,11 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
     return 8;
   const auto hello = layerc::platform::read_framed_pipe(
       pipe, layerc::daemon::isolated_visual_max_message_bytes);
-  if (!hello || !layerc::daemon::validate_isolated_hello(
-                    hello.payload, nonce, "daemon", parent_process_id,
-                    error))
+  if (!hello)
+    return 9;
+  const auto authenticated = layerc::daemon::validate_isolated_hello(
+      hello.payload, nonce, "daemon", parent_process_id);
+  if (std::holds_alternative<layerc::daemon::IsolatedProtocolError>(authenticated))
     return 9;
 
   std::unique_ptr<layerc::daemon::VisualCaptureWorker> worker;
@@ -99,7 +101,7 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
   if (!owned_capture_event.valid()) return 10;
   const HANDLE capture_event = owned_capture_event.get();
   std::uint64_t last_configuration_sequence{};
-  layerc::daemon::IsolatedSnapshotValidator snapshot_validator;
+  layerc::daemon::IsolatedSnapshotRebaser snapshot_rebaser;
   while (true) {
     auto packet = layerc::platform::read_framed_pipe(
         pipe, layerc::daemon::isolated_visual_max_message_bytes);
@@ -115,7 +117,7 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
       auto snapshot = worker == nullptr
                           ? layerc::daemon::VisualCaptureSnapshot{}
                           : worker->snapshot();
-      (void)snapshot_validator.rebase(snapshot);
+      (void)snapshot_rebaser.rebase(snapshot);
       if (!layerc::platform::write_framed_pipe(
               pipe,
               layerc::daemon::encode_isolated_snapshot(poll->sequence,
@@ -132,13 +134,13 @@ int worker_main(const std::wstring &pipe_name, const std::string &nonce,
     if (configuration->requests.empty()) {
       worker.reset();
       ResetEvent(capture_event);
-      snapshot_validator.begin_worker_epoch();
+      snapshot_rebaser.begin_worker_epoch();
     } else {
       if (!worker) {
         ResetEvent(capture_event);
         worker = std::make_unique<layerc::daemon::VisualCaptureWorker>(
             target_window, capture_event);
-        snapshot_validator.begin_worker_epoch();
+        snapshot_rebaser.begin_worker_epoch();
       }
       worker->configure(configuration->requests,
                         configuration->capture_quality);

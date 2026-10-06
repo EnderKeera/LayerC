@@ -143,11 +143,15 @@ bool IsolatedHelperProcess::connect_and_authenticate(
 
   auto hello = layerc::platform::read_framed_pipe(
       pipe, isolated_visual_max_message_bytes);
-  if (!hello ||
-      !validate_isolated_hello(hello.payload, nonce, "worker",
-                               helper_process_id, error)) {
-    if (error.empty())
-      error = std::move(hello.error);
+  if (!hello) {
+    error = std::move(hello.error);
+    terminate(ERROR_ACCESS_DENIED);
+    return false;
+  }
+  const auto authenticated = validate_isolated_hello(
+      hello.payload, nonce, "worker", helper_process_id);
+  if (const auto *failure = std::get_if<IsolatedProtocolError>(&authenticated)) {
+    error = failure->message;
     terminate(ERROR_ACCESS_DENIED);
     return false;
   }
@@ -276,10 +280,14 @@ bool IsolatedProtocolClient::exchange_configuration(
   }
   auto reply = layerc::platform::read_framed_pipe(
       pipe, isolated_visual_max_message_bytes);
-  if (!reply ||
-      !decode_isolated_ack(reply.payload, configuration.sequence, error)) {
-    if (error.empty())
-      error = std::move(reply.error);
+  if (!reply) {
+    error = std::move(reply.error);
+    return false;
+  }
+  const auto acknowledged =
+      decode_isolated_ack(reply.payload, configuration.sequence);
+  if (const auto *failure = std::get_if<IsolatedProtocolError>(&acknowledged)) {
+    error = failure->message;
     return false;
   }
   applied_revision = configuration.sequence;
@@ -312,10 +320,13 @@ bool IsolatedProtocolClient::poll_snapshot(
     return false;
   }
   auto snapshot = std::move(std::get<VisualCaptureSnapshot>(decoded));
-  const auto disposition = snapshot_validator_.validate(
-      snapshot, layerc::core::MonotonicClock::now(), error);
-  if (disposition == IsolatedSnapshotDisposition::rejected)
+  const auto validated = snapshot_validator_.validate(
+      snapshot, layerc::core::MonotonicClock::now());
+  if (const auto *rejected = std::get_if<IsolatedProtocolError>(&validated)) {
+    error = rejected->message;
     return false;
+  }
+  const auto disposition = std::get<IsolatedSnapshotDisposition>(validated);
   // A poll may legitimately observe the same bounded capture snapshot. Do
   // not republish duplicate measurements into LayerD's authoritative state.
   if (disposition == IsolatedSnapshotDisposition::accepted) {
