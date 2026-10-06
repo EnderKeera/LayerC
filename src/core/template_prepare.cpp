@@ -15,10 +15,6 @@ std::size_t search_sample_limit(const CaptureQuality quality) noexcept {
   return quality_profile(quality).search_samples;
 }
 
-double luminance(const RgbPixel pixel) noexcept {
-  return rgb_luminance(pixel.red, pixel.green, pixel.blue);
-}
-
 std::uint32_t axis_bound(const CaptureQuality quality,
                          const TemplateImage &image) noexcept {
   const auto bound = quality_profile(quality).template_axis;
@@ -76,7 +72,7 @@ PreparedTemplate prepare_template(const TemplateImage &image,
       output.samples.push_back(
           {static_cast<float>((static_cast<double>(column) + 0.5) / samples_x),
            static_cast<float>((static_cast<double>(row) + 0.5) / samples_y),
-           pixel, static_cast<float>(luminance(pixel))});
+           pixel, static_cast<float>(rgb_luminance(pixel))});
     }
   }
 
@@ -102,7 +98,7 @@ PreparedTemplate prepare_template(const TemplateImage &image,
         output.samples.push_back(
             {static_cast<float>((static_cast<double>(x) + 0.5) / image.width),
              static_cast<float>((static_cast<double>(y) + 0.5) / image.height),
-             pixel, static_cast<float>(luminance(pixel))});
+             pixel, static_cast<float>(rgb_luminance(pixel))});
       }
     }
   }
@@ -185,7 +181,7 @@ bool template_image_has_structure(const TemplateImage &image) noexcept {
   for (std::size_t index = 0; index < image.pixels.size(); ++index) {
     if (image.alpha[index] == 0) continue;
     ++count;
-    const double value = luminance(image.pixels[index]);
+    const double value = rgb_luminance(image.pixels[index]);
     const double delta = value - mean;
     mean += delta / static_cast<double>(count);
     squared_delta += delta * (value - mean);

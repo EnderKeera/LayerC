@@ -4,7 +4,7 @@
 #include "layerc/core/automation_checkpoint.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/input_matcher.hpp"
-#include "layerc/core/pixel_engine.hpp"
+#include "layerc/core/visual_trigger_engine.hpp"
 
 #include <map>
 #include <memory>

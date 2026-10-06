@@ -518,8 +518,6 @@ const VisualObservation *find_observation(const VisualProfile &profile,
 
 VisualResult parse_visual_profile_json(const std::string_view source,
                                        const GameProfile &base_profile) {
-  if (source.size() > max_visual_json_bytes)
-    return VisualError{"$", "visual sidecar exceeds 256 KiB limit"};
   const auto parsed = json::parse_bounded(source, max_visual_json_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
     return *error;
@@ -612,15 +610,15 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
   triggers.reserve(profile.triggers.size());
   for (const auto &trigger : profile.triggers) {
     json::Value::Object value{
-      {"cooldownId", json::Value(trigger.cooldown_id)},
-      {"observationId", json::Value(trigger.observation_id)},
-      {"enabled", json::Value(trigger.enabled)},
-      {"mode", json::Value(std::string(
-          enum_wire_name(visual_trigger_mode_wire, trigger.mode)
-              .value_or("confirmInput")))},
-      {"onUnavailable", json::Value(std::string(
-          enum_wire_name(capture_unavailable_policy_wire,
-                         trigger.unavailable_policy).value_or("ignore")))}};
+        {"cooldownId", json::Value(trigger.cooldown_id)},
+        {"observationId", json::Value(trigger.observation_id)},
+        {"enabled", json::Value(trigger.enabled)},
+        {"mode", json::Value(std::string(
+            enum_wire_name(visual_trigger_mode_wire, trigger.mode)
+                .value_or("confirmInput")))},
+        {"onUnavailable", json::Value(std::string(
+            enum_wire_name(capture_unavailable_policy_wire,
+                           trigger.unavailable_policy).value_or("ignore")))}};
     if (trigger.mode == VisualTriggerMode::pixel_only)
       value.emplace("keepInput", json::Value(trigger.keep_input));
     else

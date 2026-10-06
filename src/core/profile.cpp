@@ -20,77 +20,77 @@ ProfileReader::ProfileReader(const json::Value &root) : root_(root) {}
 ProfileError ProfileReader::failure() const { return fields_.error(); }
 
 ProfileResult ProfileReader::read() {
-    if (!root_.is_object()) {
-      return ProfileError{"$", "profile root must be an object"};
-    }
-
-    GameProfile profile;
-    const auto schema_version =
-        fields_.integer(root_, keys::schema_version, "$", 1,
-                        profile_schema_version, json::Required::yes);
-    if (!schema_version.has_value()) {
-      return failure();
-    }
-    // Schemas 1 and 2 are migrated in memory. LayerE retains the source schema
-    // separately so only an explicit Save can approve the V2.2 boundary.
-    profile.schema_version = profile_schema_version;
-
-    if (!fields_.string(root_, keys::id, "$", profile.id,
-                        json::Required::yes, json::EmptyString::allow) ||
-        !fields_.string(root_, keys::name, "$", profile.name,
-                        json::Required::yes, json::EmptyString::allow)) {
-      return failure();
-    }
-    fields_.boolean(root_, keys::enabled, "$", profile.enabled,
-                    json::Required::no);
-    if (!fields_.ok()) {
-      return failure();
-    }
-
-    const auto *game =
-        fields_.object(root_, keys::game, "$", json::Required::yes);
-    if (game == nullptr) {
-      return failure();
-    }
-    fields_.string(*game, keys::executable_path, "$.game",
-                   profile.game.executable_path, json::Required::no,
-                   json::EmptyString::allow);
-    fields_.string(*game, keys::executable_name, "$.game",
-                   profile.game.executable_name, json::Required::no,
-                   json::EmptyString::allow);
-    fields_.string(*game, keys::window_class, "$.game",
-                   profile.game.window_class, json::Required::no,
-                   json::EmptyString::allow);
-    fields_.string(*game, keys::window_title, "$.game",
-                   profile.game.window_title, json::Required::no,
-                   json::EmptyString::allow);
-    fields_.boolean(*game, keys::global, "$.game", profile.game.global,
-                    json::Required::no);
-    if (!fields_.ok()) {
-      return failure();
-    }
-
-    std::string visual_runtime = "inline";
-    fields_.string(root_, keys::visual_runtime, "$", visual_runtime,
-                   json::Required::no, json::EmptyString::allow);
-    if (!fields_.ok()) return failure();
-    const auto parsed_visual_runtime =
-        profile_wire::parse(profile_wire::visual_runtime, visual_runtime);
-    if (!parsed_visual_runtime.has_value()) {
-      return ProfileError{"$.visualRuntime", "expected 'inline' or 'isolated'"};
-    }
-    profile.visual_runtime = *parsed_visual_runtime;
-
-    const auto source_schema = static_cast<std::uint32_t>(*schema_version);
-    if (!read_modules(profile, source_schema) ||
-        !read_hid_bindings(profile, source_schema) ||
-        !read_cooldowns(profile, source_schema) ||
-        !read_cooldown_groups(profile, source_schema) ||
-        !read_panels(profile) || !read_bindings(profile)) {
-      return failure();
-    }
-    return profile;
+  if (!root_.is_object()) {
+    return ProfileError{"$", "profile root must be an object"};
   }
+
+  GameProfile profile;
+  const auto schema_version =
+      fields_.integer(root_, keys::schema_version, "$", 1,
+                      profile_schema_version, json::Required::yes);
+  if (!schema_version.has_value()) {
+    return failure();
+  }
+  // Schemas 1 and 2 are migrated in memory. LayerE retains the source schema
+  // separately so only an explicit Save can approve the V2.2 boundary.
+  profile.schema_version = profile_schema_version;
+
+  if (!fields_.string(root_, keys::id, "$", profile.id,
+                      json::Required::yes, json::EmptyString::allow) ||
+      !fields_.string(root_, keys::name, "$", profile.name,
+                      json::Required::yes, json::EmptyString::allow)) {
+    return failure();
+  }
+  fields_.boolean(root_, keys::enabled, "$", profile.enabled,
+                  json::Required::no);
+  if (!fields_.ok()) {
+    return failure();
+  }
+
+  const auto *game =
+      fields_.object(root_, keys::game, "$", json::Required::yes);
+  if (game == nullptr) {
+    return failure();
+  }
+  fields_.string(*game, keys::executable_path, "$.game",
+                 profile.game.executable_path, json::Required::no,
+                 json::EmptyString::allow);
+  fields_.string(*game, keys::executable_name, "$.game",
+                 profile.game.executable_name, json::Required::no,
+                 json::EmptyString::allow);
+  fields_.string(*game, keys::window_class, "$.game",
+                 profile.game.window_class, json::Required::no,
+                 json::EmptyString::allow);
+  fields_.string(*game, keys::window_title, "$.game",
+                 profile.game.window_title, json::Required::no,
+                 json::EmptyString::allow);
+  fields_.boolean(*game, keys::global, "$.game", profile.game.global,
+                  json::Required::no);
+  if (!fields_.ok()) {
+    return failure();
+  }
+
+  std::string visual_runtime = "inline";
+  fields_.string(root_, keys::visual_runtime, "$", visual_runtime,
+                 json::Required::no, json::EmptyString::allow);
+  if (!fields_.ok()) return failure();
+  const auto parsed_visual_runtime =
+      parse_enum_wire(profile_wire::visual_runtime, visual_runtime);
+  if (!parsed_visual_runtime.has_value()) {
+    return ProfileError{"$.visualRuntime", "expected 'inline' or 'isolated'"};
+  }
+  profile.visual_runtime = *parsed_visual_runtime;
+
+  const auto source_schema = static_cast<std::uint32_t>(*schema_version);
+  if (!read_modules(profile, source_schema) ||
+      !read_hid_bindings(profile, source_schema) ||
+      !read_cooldowns(profile, source_schema) ||
+      !read_cooldown_groups(profile, source_schema) ||
+      !read_panels(profile) || !read_bindings(profile)) {
+    return failure();
+  }
+  return profile;
+}
 
 // The reader owns shape, types, wire enums, and which fields each source
 // schema carries. Integers are bounded only by their model type; every
@@ -168,7 +168,7 @@ bool ProfileReader::read_hid_control(const json::Value &control,
                       json::Required::yes, json::EmptyString::reject))
     return false;
   const auto parsed_activation =
-      profile_wire::parse(profile_wire::hid_activation, activation);
+      parse_enum_wire(profile_wire::hid_activation, activation);
   if (!parsed_activation.has_value())
     return fields_.fail(path + ".activation",
                         "unsupported HID activation mode");
@@ -225,108 +225,108 @@ bool ProfileReader::read_hid_bindings(GameProfile &profile,
 
 bool ProfileReader::read_modules(GameProfile &profile,
                                  const std::uint32_t source_schema) {
-    const auto *value = root_.find(keys::modules);
-    if (value == nullptr) {
-      if (source_schema >= 3)
-        return fields_.fail("$.modules", "schema 3 requires module metadata");
-      return true;
-    }
-    if (!value->is_array())
-      return fields_.fail("$.modules", "expected array");
-
-    for (std::size_t index = 0; index < value->as_array().size(); ++index) {
-      const auto path = "$.modules[" + std::to_string(index) + "]";
-      const auto &entry = value->as_array()[index];
-      if (!entry.is_object())
-        return fields_.fail(path, "module descriptor must be an object");
-      std::string kind;
-      if (!fields_.string(entry, keys::kind, path, kind, json::Required::yes,
-                          json::EmptyString::reject))
-        return false;
-      ProfileModule module;
-      const auto *descriptor = find_module(kind);
-      if (descriptor == nullptr)
-        return fields_.fail(path + ".kind", "unsupported module kind");
-      if (source_schema < descriptor->declarable_from_profile_schema)
-        return fields_.fail(path + ".kind",
-                            "module requires a newer profile schema");
-      module.kind = descriptor->kind;
-      const auto version = fields_.integer(
-          entry, keys::schema_version, path, 0,
-          std::numeric_limits<std::uint32_t>::max(), json::Required::yes);
-      if (!version.has_value()) return false;
-      module.schema_version = static_cast<std::uint32_t>(*version);
-      profile.modules.push_back(module);
-    }
+  const auto *value = root_.find(keys::modules);
+  if (value == nullptr) {
+    if (source_schema >= 3)
+      return fields_.fail("$.modules", "schema 3 requires module metadata");
     return true;
   }
+  if (!value->is_array())
+    return fields_.fail("$.modules", "expected array");
+
+  for (std::size_t index = 0; index < value->as_array().size(); ++index) {
+    const auto path = "$.modules[" + std::to_string(index) + "]";
+    const auto &entry = value->as_array()[index];
+    if (!entry.is_object())
+      return fields_.fail(path, "module descriptor must be an object");
+    std::string kind;
+    if (!fields_.string(entry, keys::kind, path, kind, json::Required::yes,
+                        json::EmptyString::reject))
+      return false;
+    ProfileModule module;
+    const auto *descriptor = find_module(kind);
+    if (descriptor == nullptr)
+      return fields_.fail(path + ".kind", "unsupported module kind");
+    if (source_schema < descriptor->declarable_from_profile_schema)
+      return fields_.fail(path + ".kind",
+                          "module requires a newer profile schema");
+    module.kind = descriptor->kind;
+    const auto version = fields_.integer(
+        entry, keys::schema_version, path, 0,
+        std::numeric_limits<std::uint32_t>::max(), json::Required::yes);
+    if (!version.has_value()) return false;
+    module.schema_version = static_cast<std::uint32_t>(*version);
+    profile.modules.push_back(module);
+  }
+  return true;
+}
 
 bool ProfileReader::read_cooldowns(GameProfile &profile,
                                    const std::uint32_t source_schema) {
-    const auto *values =
-        fields_.array(root_, keys::cooldowns, "$", json::Required::yes);
-    if (values == nullptr) {
+  const auto *values =
+      fields_.array(root_, keys::cooldowns, "$", json::Required::yes);
+  if (values == nullptr) {
+    return false;
+  }
+
+  profile.cooldowns.reserve(values->size());
+  for (std::size_t index = 0; index < values->size(); ++index) {
+    const auto path = "$.cooldowns[" + std::to_string(index) + "]";
+    const auto &value = (*values)[index];
+    if (!value.is_object()) {
+      return fields_.fail(path, "cooldown must be an object");
+    }
+
+    CooldownDefinition definition;
+    if (!fields_.string(value, keys::id, path, definition.id,
+                        json::Required::yes, json::EmptyString::allow) ||
+        !fields_.string(value, keys::name, path, definition.name,
+                        json::Required::yes, json::EmptyString::allow)) {
       return false;
     }
-
-    profile.cooldowns.reserve(values->size());
-    for (std::size_t index = 0; index < values->size(); ++index) {
-      const auto path = "$.cooldowns[" + std::to_string(index) + "]";
-      const auto &value = (*values)[index];
-      if (!value.is_object()) {
-        return fields_.fail(path, "cooldown must be an object");
-      }
-
-      CooldownDefinition definition;
-      if (!fields_.string(value, keys::id, path, definition.id,
-                          json::Required::yes, json::EmptyString::allow) ||
-          !fields_.string(value, keys::name, path, definition.name,
-                          json::Required::yes, json::EmptyString::allow)) {
-        return false;
-      }
-      const auto duration = read_duration(value, path);
-      const auto charges = read_charges(value, path);
-      if (!duration.has_value() || !charges.has_value()) {
-        return false;
-      }
-      definition.duration = Milliseconds(*duration);
-      definition.max_charges = static_cast<std::uint32_t>(*charges);
-
-      std::string retrigger = "ignore";
-      fields_.string(value, keys::retrigger, path, retrigger,
-                     json::Required::no, json::EmptyString::allow);
-      if (source_schema >= 4) {
-        std::string recovery;
-        if (!fields_.string(value, keys::recovery, path, recovery,
-                            json::Required::yes, json::EmptyString::reject))
-          return false;
-        const auto parsed_recovery =
-            profile_wire::parse(profile_wire::recovery, recovery);
-        if (!parsed_recovery.has_value())
-          return fields_.fail(path + ".recovery",
-                              "expected single, sequential, or parallel");
-        definition.recovery = *parsed_recovery;
-      } else {
-        // Schema <4 expressed recovery as a stackCharges boolean; derive the
-        // canonical field here so runtime code never sees the mirror.
-        bool stack_charges{};
-        fields_.boolean(value, keys::stack_charges, path, stack_charges,
-                        json::Required::no);
-        definition.recovery = stack_charges ? RecoveryMode::sequential
-                                            : RecoveryMode::single;
-      }
-      if (!fields_.ok()) return false;
-      const auto parsed_retrigger =
-          profile_wire::parse(profile_wire::retrigger, retrigger);
-      if (!parsed_retrigger.has_value()) {
-        return fields_.fail(path + ".retrigger",
-                            "expected 'ignore' or 'restart'");
-      }
-      definition.retrigger = *parsed_retrigger;
-      profile.cooldowns.push_back(std::move(definition));
+    const auto duration = read_duration(value, path);
+    const auto charges = read_charges(value, path);
+    if (!duration.has_value() || !charges.has_value()) {
+      return false;
     }
-    return true;
+    definition.duration = Milliseconds(*duration);
+    definition.max_charges = static_cast<std::uint32_t>(*charges);
+
+    std::string retrigger = "ignore";
+    fields_.string(value, keys::retrigger, path, retrigger,
+                   json::Required::no, json::EmptyString::allow);
+    if (source_schema >= 4) {
+      std::string recovery;
+      if (!fields_.string(value, keys::recovery, path, recovery,
+                          json::Required::yes, json::EmptyString::reject))
+        return false;
+      const auto parsed_recovery =
+          parse_enum_wire(profile_wire::recovery, recovery);
+      if (!parsed_recovery.has_value())
+        return fields_.fail(path + ".recovery",
+                            "expected single, sequential, or parallel");
+      definition.recovery = *parsed_recovery;
+    } else {
+      // Schema <4 expressed recovery as a stackCharges boolean; derive the
+      // canonical field here so runtime code never sees the mirror.
+      bool stack_charges{};
+      fields_.boolean(value, keys::stack_charges, path, stack_charges,
+                      json::Required::no);
+      definition.recovery = stack_charges ? RecoveryMode::sequential
+                                          : RecoveryMode::single;
+    }
+    if (!fields_.ok()) return false;
+    const auto parsed_retrigger =
+        parse_enum_wire(profile_wire::retrigger, retrigger);
+    if (!parsed_retrigger.has_value()) {
+      return fields_.fail(path + ".retrigger",
+                          "expected 'ignore' or 'restart'");
+    }
+    definition.retrigger = *parsed_retrigger;
+    profile.cooldowns.push_back(std::move(definition));
   }
+  return true;
+}
 
 std::optional<std::int64_t>
 ProfileReader::read_duration(const json::Value &value, const std::string &path) {
@@ -375,7 +375,7 @@ bool ProfileReader::read_cooldown_groups(
                         json::EmptyString::reject))
       return false;
     const auto parsed_mode =
-        profile_wire::parse(profile_wire::group_mode, mode);
+        parse_enum_wire(profile_wire::group_mode, mode);
     if (!parsed_mode.has_value())
       return fields_.fail(path + ".mode",
                           "expected sharedPool or triggerPropagation");
@@ -406,13 +406,13 @@ bool ProfileReader::read_cooldown_groups(
       group.duration = Milliseconds(*duration);
       group.max_charges = static_cast<std::uint32_t>(*charges);
       const auto parsed_recovery =
-          profile_wire::parse(profile_wire::recovery, recovery);
+          parse_enum_wire(profile_wire::recovery, recovery);
       if (!parsed_recovery.has_value())
         return fields_.fail(path + ".recovery",
                             "expected single, sequential, or parallel");
       group.recovery = *parsed_recovery;
       const auto parsed_retrigger =
-          profile_wire::parse(profile_wire::retrigger, retrigger);
+          parse_enum_wire(profile_wire::retrigger, retrigger);
       if (!parsed_retrigger.has_value())
         return fields_.fail(path + ".retrigger",
                             "expected ignore or restart");
@@ -423,121 +423,121 @@ bool ProfileReader::read_cooldown_groups(
   return true;
 }
 bool ProfileReader::read_panels(GameProfile &profile) {
-    const auto *values =
-        fields_.array(root_, keys::panels, "$", json::Required::yes);
-    if (values == nullptr) {
+  const auto *values =
+      fields_.array(root_, keys::panels, "$", json::Required::yes);
+  if (values == nullptr) {
+    return false;
+  }
+
+  profile.panels.reserve(values->size());
+  for (std::size_t index = 0; index < values->size(); ++index) {
+    const auto path = "$.panels[" + std::to_string(index) + "]";
+    const auto &value = (*values)[index];
+    if (!value.is_object()) {
+      return fields_.fail(path, "panel must be an object");
+    }
+
+    Panel panel;
+    if (!fields_.string(value, keys::id, path, panel.id,
+                        json::Required::yes, json::EmptyString::allow) ||
+        !fields_.string(value, keys::name, path, panel.name,
+                        json::Required::yes, json::EmptyString::allow)) {
       return false;
     }
 
-    profile.panels.reserve(values->size());
-    for (std::size_t index = 0; index < values->size(); ++index) {
-      const auto path = "$.panels[" + std::to_string(index) + "]";
-      const auto &value = (*values)[index];
-      if (!value.is_object()) {
-        return fields_.fail(path, "panel must be an object");
-      }
-
-      Panel panel;
-      if (!fields_.string(value, keys::id, path, panel.id,
-                          json::Required::yes, json::EmptyString::allow) ||
-          !fields_.string(value, keys::name, path, panel.name,
-                          json::Required::yes, json::EmptyString::allow)) {
-        return false;
-      }
-
-      std::string layout = "row";
-      fields_.string(value, keys::layout, path, layout, json::Required::no,
-                     json::EmptyString::allow);
-      if (!fields_.ok()) {
-        return false;
-      }
-      const auto parsed_layout =
-          profile_wire::parse(profile_wire::panel_layout, layout);
-      if (!parsed_layout.has_value()) {
-        return fields_.fail(path + ".layout",
-                            "expected 'row', 'column', or 'grid'");
-      }
-      panel.layout = *parsed_layout;
-
-      std::string style = "card";
-      fields_.string(value, keys::style, path, style, json::Required::no,
-                     json::EmptyString::allow);
-      if (!fields_.ok()) {
-        return false;
-      }
-      const auto parsed_style =
-          profile_wire::parse(profile_wire::panel_style, style);
-      if (!parsed_style.has_value()) {
-        return fields_.fail(path + ".style", "expected 'card' or 'bar'");
-      }
-      panel.style = *parsed_style;
-
-      const auto *bar = value.find(keys::bar);
-      if (bar != nullptr) {
-        if (!bar->is_object()) {
-          return fields_.fail(path + ".bar", "expected object");
-        }
-        const auto bar_path = path + ".bar";
-        constexpr std::int64_t largest = std::numeric_limits<std::uint32_t>::max();
-        const auto width = fields_.integer(*bar, keys::width, bar_path, 0,
-                                           largest, json::Required::no,
-                                           panel.bar.width);
-        const auto height = fields_.integer(*bar, keys::height, bar_path, 0,
-                                            largest, json::Required::no,
-                                            panel.bar.height);
-        if (!width.has_value() || !height.has_value()) {
-          return false;
-        }
-        panel.bar.width = static_cast<std::uint32_t>(*width);
-        panel.bar.height = static_cast<std::uint32_t>(*height);
-        const auto read_color = [&](const std::string_view key,
-                                    std::uint32_t &color) {
-          if (const auto parsed = fields_.color(*bar, key, bar_path,
-                                                json::Required::no, color))
-            color = *parsed;
-        };
-        read_color(keys::fill_color, panel.bar.fill_color);
-        read_color(keys::background_color, panel.bar.background_color);
-        read_color(keys::border_color, panel.bar.border_color);
-        read_color(keys::text_color, panel.bar.text_color);
-        fields_.boolean(*bar, keys::show_text, bar_path,
-                        panel.bar.show_text, json::Required::no);
-        fields_.boolean(*bar, keys::hide_when_ready, bar_path,
-                        panel.bar.hide_when_ready, json::Required::no);
-        if (!fields_.ok()) {
-          return false;
-        }
-      }
-
-      constexpr auto lowest = std::numeric_limits<double>::lowest();
-      constexpr auto highest = std::numeric_limits<double>::max();
-      const auto x = fields_.number(value, keys::anchor_x, path, lowest,
-                                    highest, json::Required::no, 0.5);
-      const auto y = fields_.number(value, keys::anchor_y, path, lowest,
-                                    highest, json::Required::no, 0.5);
-      if (!x.has_value() || !y.has_value()) {
-        return false;
-      }
-      panel.anchor_x = *x;
-      panel.anchor_y = *y;
-
-      const auto *cooldowns =
-          fields_.array(value, keys::cooldowns, path, json::Required::yes);
-      if (cooldowns == nullptr) {
-        return false;
-      }
-      for (std::size_t item = 0; item < cooldowns->size(); ++item) {
-        const auto item_path =
-            path + ".cooldowns[" + std::to_string(item) + "]";
-        if (!(*cooldowns)[item].is_string()) {
-          return fields_.fail(item_path, "expected string cooldown id");
-        }
-        panel.cooldown_ids.push_back((*cooldowns)[item].as_string());
-      }
-      profile.panels.push_back(std::move(panel));
+    std::string layout = "row";
+    fields_.string(value, keys::layout, path, layout, json::Required::no,
+                   json::EmptyString::allow);
+    if (!fields_.ok()) {
+      return false;
     }
-    return true;
+    const auto parsed_layout =
+        parse_enum_wire(profile_wire::panel_layout, layout);
+    if (!parsed_layout.has_value()) {
+      return fields_.fail(path + ".layout",
+                          "expected 'row', 'column', or 'grid'");
+    }
+    panel.layout = *parsed_layout;
+
+    std::string style = "card";
+    fields_.string(value, keys::style, path, style, json::Required::no,
+                   json::EmptyString::allow);
+    if (!fields_.ok()) {
+      return false;
+    }
+    const auto parsed_style =
+        parse_enum_wire(profile_wire::panel_style, style);
+    if (!parsed_style.has_value()) {
+      return fields_.fail(path + ".style", "expected 'card' or 'bar'");
+    }
+    panel.style = *parsed_style;
+
+    const auto *bar = value.find(keys::bar);
+    if (bar != nullptr) {
+      if (!bar->is_object()) {
+        return fields_.fail(path + ".bar", "expected object");
+      }
+      const auto bar_path = path + ".bar";
+      constexpr std::int64_t largest = std::numeric_limits<std::uint32_t>::max();
+      const auto width = fields_.integer(*bar, keys::width, bar_path, 0,
+                                         largest, json::Required::no,
+                                         panel.bar.width);
+      const auto height = fields_.integer(*bar, keys::height, bar_path, 0,
+                                          largest, json::Required::no,
+                                          panel.bar.height);
+      if (!width.has_value() || !height.has_value()) {
+        return false;
+      }
+      panel.bar.width = static_cast<std::uint32_t>(*width);
+      panel.bar.height = static_cast<std::uint32_t>(*height);
+      const auto read_color = [&](const std::string_view key,
+                                  std::uint32_t &color) {
+        if (const auto parsed = fields_.color(*bar, key, bar_path,
+                                              json::Required::no, color))
+          color = *parsed;
+      };
+      read_color(keys::fill_color, panel.bar.fill_color);
+      read_color(keys::background_color, panel.bar.background_color);
+      read_color(keys::border_color, panel.bar.border_color);
+      read_color(keys::text_color, panel.bar.text_color);
+      fields_.boolean(*bar, keys::show_text, bar_path,
+                      panel.bar.show_text, json::Required::no);
+      fields_.boolean(*bar, keys::hide_when_ready, bar_path,
+                      panel.bar.hide_when_ready, json::Required::no);
+      if (!fields_.ok()) {
+        return false;
+      }
+    }
+
+    constexpr auto lowest = std::numeric_limits<double>::lowest();
+    constexpr auto highest = std::numeric_limits<double>::max();
+    const auto x = fields_.number(value, keys::anchor_x, path, lowest,
+                                  highest, json::Required::no, 0.5);
+    const auto y = fields_.number(value, keys::anchor_y, path, lowest,
+                                  highest, json::Required::no, 0.5);
+    if (!x.has_value() || !y.has_value()) {
+      return false;
+    }
+    panel.anchor_x = *x;
+    panel.anchor_y = *y;
+
+    const auto *cooldowns =
+        fields_.array(value, keys::cooldowns, path, json::Required::yes);
+    if (cooldowns == nullptr) {
+      return false;
+    }
+    for (std::size_t item = 0; item < cooldowns->size(); ++item) {
+      const auto item_path =
+          path + ".cooldowns[" + std::to_string(item) + "]";
+      if (!(*cooldowns)[item].is_string()) {
+        return fields_.fail(item_path, "expected string cooldown id");
+      }
+      panel.cooldown_ids.push_back((*cooldowns)[item].as_string());
+    }
+    profile.panels.push_back(std::move(panel));
   }
+  return true;
+}
 
 bool ProfileReader::read_chord_token(const json::Value &token_value,
                                      const std::string &token_path,

@@ -1,5 +1,7 @@
 #include "template_matcher_internal.hpp"
 
+#include "layerc/core/string_hash.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -19,10 +21,6 @@ namespace {
 
 constexpr std::size_t refinement_candidates = 8;
 constexpr std::size_t coarse_candidates = 32;
-
-double luminance(const RgbPixel pixel) noexcept {
-  return rgb_luminance(pixel.red, pixel.green, pixel.blue);
-}
 
 std::size_t comparison_budget(const CaptureQuality quality) noexcept {
   return quality_profile(quality).comparisons;
@@ -94,7 +92,7 @@ double structure_score(const std::span<const PreparedSample> samples,
   double covariance{};
   for_each_target_sample(samples, frame, {0.0, left, top, width, height},
                          [&](const auto &sample, const auto pixel) {
-    const auto target = luminance(pixel);
+    const auto target = rgb_luminance(pixel);
     target_sum += target;
     target_square_sum += target * target;
     covariance += (sample.luma - reference_mean) * target;
@@ -141,7 +139,7 @@ double locator_score(const std::span<const PreparedSample> samples,
   double difference{};
   for_each_target_sample(samples, frame, candidate,
                          [&](const auto &sample, const auto target) {
-    const auto target_luma = luminance(target);
+    const auto target_luma = rgb_luminance(target);
     target_sum += target_luma;
     target_square_sum += target_luma * target_luma;
     covariance += (sample.luma - reference_mean) * target_luma;
@@ -221,17 +219,27 @@ std::vector<RenderedSize> rendered_sizes(
 
 namespace {
 
+// One reference's search inputs; [left, right) x [top, bottom) is the frame
+// pixel search window.
+struct ReferenceSearchInputs {
+  const TemplateState &state;
+  const TemplateReference &definition;
+  const PreparedTemplate &reference;
+  PixelFrameView frame;
+  NormalizedRegion available_region;
+  std::span<const NormalizedRegion> unavailable_regions;
+  std::uint32_t left{};
+  std::uint32_t top{};
+  std::uint32_t right{};
+  std::uint32_t bottom{};
+  std::span<const RenderedSize> sizes;
+  std::size_t total_budget{};
+  std::size_t references_remaining{};
+};
+
 struct ReferenceSearchContext {
-  ReferenceSearchContext(
-      const TemplateState &state_value,
-      const TemplateReference &definition_value,
-      const PreparedTemplate &reference_value, PixelFrameView frame_value,
-      NormalizedRegion available_region_value,
-      std::span<const NormalizedRegion> unavailable_regions_value,
-      std::uint32_t left_value, std::uint32_t top_value,
-      std::uint32_t right_value, std::uint32_t bottom_value,
-      std::span<const RenderedSize> sizes_value, std::size_t total_budget,
-      std::size_t references_remaining, TemplateMatchResult &result_value);
+  ReferenceSearchContext(const ReferenceSearchInputs &inputs,
+                         TemplateMatchResult &result_value);
 
   bool run();
 
@@ -269,29 +277,20 @@ private:
 };
 
 ReferenceSearchContext::ReferenceSearchContext(
-    const TemplateState &state_value,
-    const TemplateReference &definition_value,
-    const PreparedTemplate &reference_value, const PixelFrameView frame_value,
-    const NormalizedRegion available_region_value,
-    const std::span<const NormalizedRegion> unavailable_regions_value,
-    const std::uint32_t left_value, const std::uint32_t top_value,
-    const std::uint32_t right_value, const std::uint32_t bottom_value,
-    const std::span<const RenderedSize> sizes_value,
-    const std::size_t total_budget,
-    const std::size_t references_remaining, TemplateMatchResult &result_value)
-    : state(state_value), definition(definition_value),
-      reference(reference_value), frame(frame_value),
-      available_region(available_region_value),
-      unavailable_regions(unavailable_regions_value), left(left_value),
-      top(top_value), right(right_value), bottom(bottom_value),
-      result(result_value),
-      sizes(sizes_value),
+    const ReferenceSearchInputs &inputs, TemplateMatchResult &result_value)
+    : state(inputs.state), definition(inputs.definition),
+      reference(inputs.reference), frame(inputs.frame),
+      available_region(inputs.available_region),
+      unavailable_regions(inputs.unavailable_regions), left(inputs.left),
+      top(inputs.top), right(inputs.right), bottom(inputs.bottom),
+      result(result_value), sizes(inputs.sizes),
       reference_start(result.pixel_comparisons),
-      reference_budget(result.pixel_comparisons +
-                       (total_budget > result.pixel_comparisons
-                            ? total_budget - result.pixel_comparisons
-                            : 0U) /
-                           std::max<std::size_t>(1, references_remaining)),
+      reference_budget(
+          result.pixel_comparisons +
+          (inputs.total_budget > result.pixel_comparisons
+               ? inputs.total_budget - result.pixel_comparisons
+               : 0U) /
+              std::max<std::size_t>(1, inputs.references_remaining)),
       final_candidate_cost(reference.samples.size() * 2U),
       search_budget(calculate_search_budget()),
       coarse_limit(reference_start + search_budget * 3U / 4U),
@@ -563,12 +562,6 @@ bool ReferenceSearchContext::run() {
 } // namespace
 
 struct CpuTemplateMatcher::Impl {
-  struct TransparentHash {
-    using is_transparent = void;
-    std::size_t operator()(const std::string_view value) const noexcept {
-      return std::hash<std::string_view>{}(value);
-    }
-  };
   // Every input rendered_sizes() reads; equal keys yield equal sizes.
   using SizesKey = std::tuple<double, double, double, std::uint32_t,
                               std::uint32_t, std::uint32_t, std::uint32_t>;
@@ -578,7 +571,7 @@ struct CpuTemplateMatcher::Impl {
   // lookup keeps the per-frame search allocation-free.
   std::unordered_map<std::string,
                       std::map<CaptureQuality, detail::TemplateMatcherReference>,
-                      TransparentHash, std::equal_to<>>
+                      TransparentStringHash, std::equal_to<>>
       prepared;
   std::size_t preparation_count{};
   std::map<SizesKey, std::vector<RenderedSize>> sizes;
@@ -669,9 +662,21 @@ TemplateMatchResult CpuTemplateMatcher::evaluate(
       continue;
 
     ReferenceSearchContext search(
-        state, definition, reference, frame, available_region,
-        unavailable_regions, left, top, right, bottom, sizes, budget,
-        state.references.size() - reference_index + 1U, result);
+        {.state = state,
+         .definition = definition,
+         .reference = reference,
+         .frame = frame,
+         .available_region = available_region,
+         .unavailable_regions = unavailable_regions,
+         .left = left,
+         .top = top,
+         .right = right,
+         .bottom = bottom,
+         .sizes = sizes,
+         .total_budget = budget,
+         .references_remaining =
+             state.references.size() - reference_index + 1U},
+        result);
     if (search.run()) return result;
     if (result.pixel_comparisons >= budget) break;
   }
