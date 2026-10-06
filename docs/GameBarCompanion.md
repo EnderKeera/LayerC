@@ -47,6 +47,7 @@ The Game Bar companion displays LayerC cooldowns inside the Xbox Game Bar overla
   - Active only in the packaged MSIX build when an active game session exists.
   - Connects to same-package App Service `LayerC.GameBar.v1`.
   - Sends bounded snapshots on game scans/overlay updates and drains preference updates via a single wait-handle event.
+  - Envelope keys (`kind`, `json`, `accepted`, `error`) are shared with the widget through `src/gamebar/GameBarEnvelope.hpp`; a rejected snapshot's `error` reason is kept in the transport's last-error diagnostic.
   - Reconnects with capped exponential backoff (100 ms to 2000 ms) after daemon/Game Bar/Explorer restarts.
 
 ---
