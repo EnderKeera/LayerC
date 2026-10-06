@@ -169,7 +169,7 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
   }
   simulator_ = std::make_unique<layerc::core::AutomationRuntime>(
       *graph, layerc::core::AutomationPersistentValues{},
-      document_.profile().cooldown_groups);
+      layerc::core::CooldownGroupTopology(document_.profile().cooldown_groups));
   simulator_->set_trace_enabled(true);
   simulator_index_ = 0;
   if (simulator_events_.empty()) {

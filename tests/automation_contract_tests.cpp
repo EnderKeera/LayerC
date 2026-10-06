@@ -439,7 +439,8 @@ void test_automation_expression_and_action_contract() {
   expect(validate_automation_profile(external, contract_base()).message.empty(),
          "every cooldown/group action kind should validate");
   AutomationRuntime external_runtime(external, {},
-                                     contract_base().cooldown_groups,
+                                     CooldownGroupTopology(
+                                         contract_base().cooldown_groups),
                                      frozen_clock);
   const auto effects =
       external_runtime.process({.kind = AutomationEventKind::input_pressed,
@@ -790,11 +791,12 @@ void test_automation_limits_and_fault_rollback() {
   }
 
   auto reconfigured = rollback;
-  AutomationRuntime group_runtime(reconfigured, {}, base.cooldown_groups,
+  AutomationRuntime group_runtime(reconfigured, {},
+                                  CooldownGroupTopology(base.cooldown_groups),
                                   frozen_clock);
   auto changed_groups = base.cooldown_groups;
   changed_groups.front().cooldown_ids = {"dash", "roll"};
-  group_runtime.reconfigure(reconfigured, changed_groups);
+  group_runtime.reconfigure(reconfigured, CooldownGroupTopology(changed_groups));
   expect(std::ranges::equal(group_runtime.cooldown_groups(), changed_groups),
          "runtime reconfiguration should refresh base cooldown-group metadata");
 }

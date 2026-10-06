@@ -62,7 +62,11 @@ IdSet runtime_events(const AutomationActionKind action, const std::string &targe
   profile.automations.push_back(
       {.id = "parity", .name = "Parity", .enabled = true, .rules = {rule}});
   const auto groups = parity_groups();
-  AutomationRuntime runtime(profile, {}, groups, [] { return TimePoint{}; });
+  const CooldownEngine engine(parity_definitions(), groups);
+  AutomationRuntime runtime(profile, {}, engine.group_topology(),
+                            [] { return TimePoint{}; });
+  expect(runtime.cooldown_groups().data() == engine.group_topology().groups().data(),
+         "engine and runtime share definitions rather than deep-copying them");
   const auto result = runtime.process(
       {.kind = AutomationEventKind::input_pressed,
        .timestamp = TimePoint{},
@@ -131,6 +135,24 @@ void test_cooldown_group_engine_runtime_parity() {
                               AutomationEventKind::cooldown_ready),
            "reset_group parity: " + group.id);
   }
+
+  // Engine staging and reconciliation do not invalidate the runtime's
+  // immutable topology. Only explicit runtime reconciliation changes its view.
+  CooldownEngine engine(definitions, groups);
+  AutomationRuntime runtime({}, {}, engine.group_topology(),
+                            [] { return TimePoint{}; });
+  const auto staged = engine;
+  expect(staged.group_topology().groups().data() == runtime.cooldown_groups().data(),
+         "staging an engine shares immutable group storage");
+  auto changed_groups = groups;
+  changed_groups.front().cooldown_ids = {"a", "c"};
+  engine.reconfigure(definitions, {}, TimePoint{}, changed_groups);
+  expect(std::ranges::equal(runtime.cooldown_groups(), groups),
+         "engine reconciliation retains the runtime's old safe topology");
+  runtime.reconfigure({}, engine.group_topology());
+  expect(runtime.cooldown_groups().data() == engine.group_topology().groups().data() &&
+             std::ranges::equal(runtime.cooldown_groups(), changed_groups),
+         "runtime reconciliation adopts the engine's new storage without copying");
 
   const CooldownGroupTopology topology(groups);
   expect(topology.group_trigger_members("pool-de") ==

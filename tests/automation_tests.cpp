@@ -372,7 +372,8 @@ void test_automation_runtime_transaction_and_replay() {
                       .value = literal(AutomationValue(std::int64_t{1}))}}});
   }
   AutomationRuntime propagation_runtime(propagation_profile, {},
-                                        propagation_base.cooldown_groups,
+                                        CooldownGroupTopology(
+                                            propagation_base.cooldown_groups),
                                         [] { return TimePoint{}; });
   const auto propagation_result = propagation_runtime.process(event);
   expect(propagation_result.committed &&
@@ -616,7 +617,7 @@ void test_automation_persistent_sync_and_cascade_bounds() {
        .cooldown_ids = burst_members}};
   fanout.automations = {{.id = "keeper", .name = "Keeper", .rules = {marker_rule}},
                         {.id = "fanout", .name = "Fanout", .rules = {fan_rule}}};
-  AutomationRuntime fanout_runtime(fanout, {}, burst_groups,
+  AutomationRuntime fanout_runtime(fanout, {}, CooldownGroupTopology(burst_groups),
                                     [] { return TimePoint{}; });
   const auto fanout_result = fanout_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 4});

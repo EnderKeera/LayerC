@@ -42,21 +42,26 @@ CooldownOwnerDefinition pool_owner(const CooldownGroup &pool) {
 
 CooldownGroupTopology::CooldownGroupTopology(
     const std::span<const CooldownGroup> groups)
-    : groups_(groups.begin(), groups.end()) {}
+    : groups_(groups.empty()
+                  ? nullptr
+                  : std::make_shared<const std::vector<CooldownGroup>>(
+                        groups.begin(), groups.end())) {}
 
 const CooldownGroup *
 CooldownGroupTopology::find(const std::string_view group_id) const {
-  const auto found = std::ranges::find(groups_, group_id, &CooldownGroup::id);
-  return found == groups_.end() ? nullptr : &*found;
+  const auto definitions = groups();
+  const auto found = std::ranges::find(definitions, group_id, &CooldownGroup::id);
+  return found == definitions.end() ? nullptr : &*found;
 }
 
 const CooldownGroup *
 CooldownGroupTopology::pool_of(const std::string_view cooldown_id) const {
-  const auto found = std::ranges::find_if(groups_, [&](const auto &group) {
+  const auto definitions = groups();
+  const auto found = std::ranges::find_if(definitions, [&](const auto &group) {
     return group.mode == CooldownGroupMode::shared_pool &&
            contains(group, cooldown_id);
   });
-  return found == groups_.end() ? nullptr : &*found;
+  return found == definitions.end() ? nullptr : &*found;
 }
 
 std::optional<CooldownOwnerDefinition>
@@ -72,7 +77,7 @@ CooldownGroupTopology::owner(const std::span<const CooldownDefinition> definitio
 std::vector<std::string>
 CooldownGroupTopology::propagation_step(const std::string_view cooldown_id) const {
   std::vector<std::string> result;
-  for (const auto &group : groups_)
+  for (const auto &group : groups())
     if (group.mode == CooldownGroupMode::trigger_propagation &&
         contains(group, cooldown_id))
       result.insert(result.end(), group.cooldown_ids.begin(),

@@ -7,6 +7,7 @@
 
 #include "layerc/core/types.hpp"
 
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -39,10 +40,13 @@ public:
   CooldownGroupTopology() = default;
   explicit CooldownGroupTopology(std::span<const CooldownGroup> groups);
 
+  // Copies share immutable definitions: a staged engine and its automation
+  // runtime use one topology without borrowing storage that can be replaced.
   [[nodiscard]] std::span<const CooldownGroup> groups() const noexcept {
-    return groups_;
+    return groups_ ? std::span<const CooldownGroup>(*groups_)
+                   : std::span<const CooldownGroup>{};
   }
-  [[nodiscard]] bool empty() const noexcept { return groups_.empty(); }
+  [[nodiscard]] bool empty() const noexcept { return groups().empty(); }
   [[nodiscard]] const CooldownGroup *find(std::string_view group_id) const;
   // The shared pool a cooldown belongs to, if any.
   [[nodiscard]] const CooldownGroup *pool_of(std::string_view cooldown_id) const;
@@ -72,7 +76,7 @@ public:
   group_reset_members(std::string_view group_id) const;
 
 private:
-  std::vector<CooldownGroup> groups_;
+  std::shared_ptr<const std::vector<CooldownGroup>> groups_;
 };
 
 } // namespace layerc::core
