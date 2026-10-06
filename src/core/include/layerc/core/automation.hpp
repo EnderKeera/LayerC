@@ -23,6 +23,10 @@ namespace layerc::core {
 namespace json { class Value; }
 
 inline constexpr std::size_t max_automation_json_bytes = 256U * 1024U;
+// A runtime keeps at most this many trace entries and drops the oldest
+// trim-sized block when full; imported traces have the same bound.
+inline constexpr std::size_t max_automation_trace_entries = 2048;
+inline constexpr std::size_t automation_trace_trim_entries = 256;
 inline constexpr std::size_t max_automation_state_bytes = 64U * 1024U;
 inline constexpr std::size_t max_automation_trace_bytes = 4U * 1024U * 1024U;
 inline constexpr std::size_t max_automation_rules = 64;
@@ -121,6 +125,81 @@ struct AutomationEvent {
   std::uint64_t origin_token{};
   AutomationMap fields;
 };
+
+// The event-field vocabulary: producers emit these names, the validator types
+// event-field expressions from them, and the simulator fills them in.
+namespace automation_event_field {
+inline constexpr std::string_view source_id = "sourceId";
+inline constexpr std::string_view age_ms = "ageMs";
+inline constexpr std::string_view previous = "previous";
+inline constexpr std::string_view value = "value";
+inline constexpr std::string_view old_value = "old";
+inline constexpr std::string_view available = "available";
+inline constexpr std::string_view matched = "matched";
+inline constexpr std::string_view confidence = "confidence";
+inline constexpr std::string_view late_by = "lateBy";
+} // namespace automation_event_field
+
+struct AutomationEventFieldSpec {
+  std::string_view name;
+  // nullopt: the field carries the changed variable's own type.
+  std::optional<AutomationValueType> type;
+};
+
+// Fields every event exposes: sourceId is the event's source, and ageMs is
+// recorded by replay (zero for live events).
+inline constexpr std::array automation_common_event_fields{
+    AutomationEventFieldSpec{automation_event_field::source_id,
+                             AutomationValueType::string},
+    AutomationEventFieldSpec{automation_event_field::age_ms,
+                             AutomationValueType::duration}};
+
+namespace detail {
+inline constexpr std::array input_value_fields{
+    AutomationEventFieldSpec{automation_event_field::previous,
+                             AutomationValueType::number},
+    AutomationEventFieldSpec{automation_event_field::value,
+                             AutomationValueType::number}};
+inline constexpr std::array visual_observation_fields{
+    AutomationEventFieldSpec{automation_event_field::available,
+                             AutomationValueType::boolean},
+    AutomationEventFieldSpec{automation_event_field::matched,
+                             AutomationValueType::boolean},
+    AutomationEventFieldSpec{automation_event_field::confidence,
+                             AutomationValueType::confidence}};
+inline constexpr std::array variable_changed_fields{
+    AutomationEventFieldSpec{automation_event_field::old_value, std::nullopt},
+    AutomationEventFieldSpec{automation_event_field::value, std::nullopt}};
+inline constexpr std::array timer_fired_fields{AutomationEventFieldSpec{
+    automation_event_field::late_by, AutomationValueType::duration}};
+} // namespace detail
+
+// The fields one event kind carries beyond the common ones.
+[[nodiscard]] constexpr std::span<const AutomationEventFieldSpec>
+automation_event_fields(const AutomationEventKind kind) noexcept {
+  switch (kind) {
+  case AutomationEventKind::input_value_changed:
+    return detail::input_value_fields;
+  case AutomationEventKind::visual_observation:
+    return detail::visual_observation_fields;
+  case AutomationEventKind::variable_changed:
+    return detail::variable_changed_fields;
+  case AutomationEventKind::timer_fired:
+    return detail::timer_fired_fields;
+  default:
+    return {};
+  }
+}
+
+[[nodiscard]] constexpr const AutomationEventFieldSpec *
+find_automation_event_field(const AutomationEventKind kind,
+                            const std::string_view name) noexcept {
+  for (const auto &field : automation_common_event_fields)
+    if (field.name == name) return &field;
+  for (const auto &field : automation_event_fields(kind))
+    if (field.name == name) return &field;
+  return nullptr;
+}
 
 // Wire-name vocabulary shared by the profile serializer, trace, packs and UIs.
 inline constexpr std::array automation_event_wire{
@@ -785,10 +864,10 @@ make_automation_root_trace_entry(const AutomationEvent &event,
                                 std::uint64_t sequence);
 [[nodiscard]] std::string
 export_layerc_trace(std::span<const AutomationTraceEntry> entries);
-struct LiveMessage;
-[[nodiscard]] std::size_t
-live_trace_prefix_count(const LiveMessage &base_message,
-                        std::span<const AutomationTraceEntry> entries);
+// One entry exactly as export_layerc_trace writes it, so a transport can
+// size trace chunks without re-encoding whole documents.
+void append_layerc_trace_entry(std::string &output,
+                               const AutomationTraceEntry &entry);
 using AutomationTraceParseResult =
     std::variant<std::vector<AutomationEvent>, AutomationError>;
 [[nodiscard]] AutomationTraceParseResult

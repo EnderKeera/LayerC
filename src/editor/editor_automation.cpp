@@ -456,7 +456,7 @@ void AutomationEditor::initialize(const HWND dialog) {
   cue(IDC_AUTOMATION_VALUE, L"Number, text, true or false");
   cue(IDC_AUTOMATION_PRIORITY, L"0");
   cue(IDC_AUTOMATION_SIM_SOURCE, L"Any source");
-  cue(IDC_AUTOMATION_SIM_FIELDS, L"field:type=JSON; ...");
+  cue(IDC_AUTOMATION_SIM_FIELDS, L"name=JSON; name:type=JSON; ...");
   cue(IDC_AUTOMATION_SIM_BREAKPOINT, L"Rule id to pause at");
   cue(IDC_AUTOMATION_SIM_ASSERTIONS, L"id=JSON; ...");
 

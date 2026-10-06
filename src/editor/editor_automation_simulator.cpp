@@ -252,26 +252,37 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
   event.origin_token = simulator_events_.size() + 1U;
   auto fields =
       wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_FIELDS)));
-  if (fields != "field:type=JSON; ..." && !fields.empty()) {
+  if (!fields.empty()) {
     bool valid = true;
     for_each_list_item(fields, [&](const std::string_view item) {
-      const auto colon = item.find(':');
+      // name=JSON for a field the event kind types; name:type=JSON otherwise.
       const auto equal = item.find('=');
-      if (colon == std::string_view::npos || equal == std::string_view::npos ||
-          colon == 0 || equal <= colon + 1U) {
-        themed_message_box(dialog,
-                    L"Fields use name:type=JSON; for example value:number=0.5",
-                    L"Synthetic event", MB_OK | MB_ICONWARNING);
+      const auto colon = item.substr(0, equal).find(':');
+      const auto name = item.substr(0, std::min(colon, equal));
+      const auto *spec =
+          layerc::core::find_automation_event_field(event.kind, name);
+      auto type = spec != nullptr ? spec->type : std::nullopt;
+      if (equal == std::string_view::npos || name.empty() ||
+          (colon == std::string_view::npos && !type.has_value())) {
+        themed_message_box(
+            dialog,
+            L"Fields use name=JSON, or name:type=JSON for fields this event "
+            L"does not define; for example value=0.5",
+            L"Synthetic event", MB_OK | MB_ICONWARNING);
         valid = false;
         return false;
       }
-      const auto type = layerc::core::parse_automation_value_type_name(
-          item.substr(colon + 1U, equal - colon - 1U));
-      if (!type.has_value()) {
-        themed_message_box(dialog, L"Unsupported synthetic field type.",
-                    L"Synthetic event", MB_OK | MB_ICONWARNING);
-        valid = false;
-        return false;
+      if (colon != std::string_view::npos) {
+        const auto declared = layerc::core::parse_automation_value_type_name(
+            item.substr(colon + 1U, equal - colon - 1U));
+        if (!declared.has_value() || (type.has_value() && type != declared)) {
+          themed_message_box(dialog,
+                             L"Unsupported synthetic field type for this event.",
+                             L"Synthetic event", MB_OK | MB_ICONWARNING);
+          valid = false;
+          return false;
+        }
+        type = declared;
       }
       const auto parsed = layerc::core::parse_automation_value_json(
           item.substr(equal + 1U), *type);
@@ -283,7 +294,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
         valid = false;
         return false;
       }
-      event.fields.emplace(std::string(item.substr(0, colon)), *value);
+      event.fields.emplace(std::string(name), *value);
       return true;
     });
     if (!valid)

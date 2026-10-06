@@ -35,7 +35,9 @@ bool group_exists(const GameProfile &profile, std::string_view id) {
                              [&](const auto &item) { return item.id == id; });
 }
 
+// Per-rule validation context: the AST node budget and the rule's event.
 struct AstBudget {
+  AutomationEventKind event{};
   std::size_t nodes{};
 
   [[nodiscard]] bool consume(const std::string &path,
@@ -89,17 +91,11 @@ bool validate_expression_tree(
         expression.reference.size() > max_automation_string_bytes ||
         !is_valid_utf8(expression.reference))
       return fail("invalid event field reference");
-    if (expression.reference == "sourceId")
-      result = AutomationValueType::string;
-    else if (expression.reference == "ageMs" ||
-             expression.reference == "lateBy")
-      result = AutomationValueType::duration;
-    else if (expression.reference == "available" ||
-             expression.reference == "matched" ||
-             expression.reference == "pressed")
-      result = AutomationValueType::boolean;
-    else if (expression.reference == "confidence")
-      result = AutomationValueType::confidence;
+    // A field the rule's event does not carry, or one that carries the
+    // changed variable's type, is untyped and evaluates to null if absent.
+    if (const auto *field =
+            find_automation_event_field(budget.event, expression.reference))
+      result = field->type;
     else
       result.reset();
     return true;
@@ -369,7 +365,7 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
           rule.actions.size() > max_automation_actions_per_rule)
         return {path + ".actions", "rules require 1 through 32 actions"};
 
-      AstBudget budget;
+      AstBudget budget{.event = rule.event};
       AutomationError expression_error;
       std::optional<AutomationValueType> condition_type;
       if (!validate_expression_tree(rule.condition, variables,

@@ -8,8 +8,11 @@
 namespace layerc::core {
 
 void AutomationRuntime::Impl::make_trace_room() {
-  if (trace_entries.size() == 2048)
-    trace_entries.erase(trace_entries.begin(), trace_entries.begin() + 256);
+  if (trace_entries.size() == max_automation_trace_entries)
+    trace_entries.erase(
+        trace_entries.begin(),
+        trace_entries.begin() +
+            static_cast<std::ptrdiff_t>(automation_trace_trim_entries));
 }
 
 std::optional<AutomationTraceEntry>
@@ -147,7 +150,7 @@ AutomationRuntime::due_timer_events(TimePoint now) {
     event.timestamp = now;
     event.source_id = timer->id;
     event.fields.emplace(
-        "lateBy",
+        automation_event_field::late_by,
         AutomationValue(DurationValue{std::max(
             Milliseconds::zero(),
             std::chrono::duration_cast<Milliseconds>(now - deadline))}));

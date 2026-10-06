@@ -473,6 +473,34 @@ void test_automation_decode_postconditions() {
             automation_value_valid(std::get<AutomationValue>(valid)) &&
             std::get<AutomationValue>(valid) == test.valid,
         "AR-05 accepted boundary values must remain canonical and byte-stable");
+    // Trace tags differ, but the bound owner must be the same as for state.
+    auto trace_payload = test.invalid;
+    for (const auto &tag : {std::string("$type"), std::string("$value")}) {
+      std::size_t offset{};
+      while ((offset = trace_payload.find("\"" + tag + "\"", offset)) !=
+             std::string::npos)
+        trace_payload.erase(offset + 1U, 1U);
+    }
+    const auto bad_trace =
+        std::string(R"({"schemaVersion":1,"kind":"layerctrace","entries":[{"phase":"root","event":"inputPressed","timeMs":0,"source":"x","origin":1,"fields":{"bad":{"type":")") +
+        std::string(automation_value_type_name(test.type)) +
+        R"(","value":)" + trace_payload + "}}}]}";
+    const auto rejected_trace = parse_layerc_trace(bad_trace);
+    expect(std::holds_alternative<AutomationError>(rejected_trace),
+           "trace and state codecs must reject the same invalid bounded values");
+    if (const auto *error = std::get_if<AutomationError>(&rejected_trace))
+      expect(error->path.starts_with("$.entries[0].fields.bad.value"),
+             "trace codec must locate the invalid payload, not its envelope");
+    AutomationEvent trace_event;
+    trace_event.fields.emplace("valid", test.valid);
+    const auto trace_entry = make_automation_root_trace_entry(trace_event, 1U);
+    const auto valid_trace = parse_layerc_trace(
+        export_layerc_trace({&trace_entry, 1U}));
+    const auto *events = std::get_if<std::vector<AutomationEvent>>(&valid_trace);
+    expect(events != nullptr && events->size() == 1U &&
+               events->front().fields.at("valid") == test.valid,
+           "trace codec must preserve the same accepted boundary values");
+
     AutomationProfile profile;
     profile.profile_id = base.id;
     profile.variables = {{.id = "bad",

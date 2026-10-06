@@ -14,7 +14,7 @@
 
 namespace layerc::core {
 
-inline constexpr std::uint32_t live_protocol_version = 3;
+inline constexpr std::uint32_t live_protocol_version = 4;
 [[nodiscard]] inline std::string
 package_identity(const std::string_view component) {
   std::string result;
@@ -138,6 +138,13 @@ using LiveFrameResult = std::variant<std::vector<std::byte>, LiveProtocolError>;
 [[nodiscard]] LiveMessageResult
 decode_live_message_json(std::string_view source);
 [[nodiscard]] LiveFrameResult encode_live_frame(const LiveMessage &message);
+
+struct AutomationTraceEntry;
+// How many leading entries fit when exported into base_message.text without
+// the encoded message exceeding max_live_message_bytes.
+[[nodiscard]] std::size_t
+live_trace_prefix_count(const LiveMessage &base_message,
+                        std::span<const AutomationTraceEntry> entries);
 
 class LiveFrameDecoder {
 public:

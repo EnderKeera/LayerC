@@ -3,6 +3,7 @@
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/live_edit.hpp"
+#include "layerc/core/json.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -298,7 +299,8 @@ void test_live_protocol_framing() {
              message->target_window == source.target_window &&
              message->profile_key == source.profile_key &&
              message->profile_json == source.profile_json &&
-             message->anchor_y == source.anchor_y,
+             message->anchor_y == 0.5 &&
+             encoded.find("anchorY") == std::string::npos,
          "live JSON should preserve UTF-8, profile bytes, and 64-bit identifiers exactly");
 
   for (const auto &payload : {std::string{}, std::string{"f"},
@@ -315,7 +317,7 @@ void test_live_protocol_framing() {
   }
 
   expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
-             R"({"protocolVersion":3,"type":"committedProfile","revision":"0","profileKey":"x","profileBase64":"A==="})")),
+             R"({"protocolVersion":4,"type":"committedProfile","revision":"0","profileKey":"x","profileBase64":"A==="})")),
          "invalid base64 padding should be rejected");
 
   const LiveMessage status{.type = LiveMessageType::runtime_status,
@@ -331,9 +333,11 @@ void test_live_protocol_framing() {
   for (const auto type : {LiveMessageType::diagnostics_request,
                           LiveMessageType::diagnostics_reply,
                           LiveMessageType::retry_visual}) {
-    const LiveMessage diagnostic{.type = type,
-                                 .revision = 7,
-                                 .text = "{\"workingSet\":1}"};
+    const LiveMessage diagnostic{
+        .type = type,
+        .revision = 7,
+        .text = type == LiveMessageType::diagnostics_reply
+                    ? "{\"workingSet\":1}" : ""};
     const auto round_trip =
         decode_live_message_json(encode_live_message_json(diagnostic));
     const auto *decoded_diagnostic = std::get_if<LiveMessage>(&round_trip);
@@ -341,6 +345,50 @@ void test_live_protocol_framing() {
                decoded_diagnostic->type == type &&
                decoded_diagnostic->text == diagnostic.text,
            "diagnostics messages should round-trip over the current live protocol");
+  }
+
+  // Exercise every descriptor. Its emitted fields are all required, and
+  // unrelated fields are rejected rather than silently ignored.
+  for (const auto type : {
+           LiveMessageType::handshake, LiveMessageType::committed_profile,
+           LiveMessageType::begin_edit, LiveMessageType::live_profile,
+           LiveMessageType::select_panel, LiveMessageType::anchor_changed,
+           LiveMessageType::set_direct_drag, LiveMessageType::end_edit,
+           LiveMessageType::heartbeat, LiveMessageType::runtime_status,
+           LiveMessageType::diagnostics_request,
+           LiveMessageType::diagnostics_reply, LiveMessageType::retry_visual,
+           LiveMessageType::automation_trace_subscribe,
+           LiveMessageType::automation_trace_unsubscribe,
+           LiveMessageType::automation_trace_event,
+           LiveMessageType::retry_automation,
+           LiveMessageType::acknowledgement, LiveMessageType::error}) {
+    auto example = source;
+    example.type = type;
+    example.text = "payload";
+    const auto wire = encode_live_message_json(example);
+    const auto round_trip = decode_live_message_json(wire);
+    const auto *received = std::get_if<LiveMessage>(&round_trip);
+    expect(received != nullptr && received->type == type &&
+               encode_live_message_json(*received) == wire,
+           "every descriptor must round-trip exactly its own fields");
+    auto unexpected = wire;
+    unexpected.insert(unexpected.size() - 1U, ",\"unexpected\":true");
+    expect(std::holds_alternative<LiveProtocolError>(
+               decode_live_message_json(unexpected)),
+           "every descriptor must reject unknown fields");
+    const auto tree = json::parse(wire);
+    if (const auto *object = std::get_if<json::Value>(&tree)) {
+      for (const auto &[key, ignored] : object->as_object()) {
+        (void)ignored;
+        auto missing = object->as_object();
+        missing.erase(key);
+        std::string incomplete;
+        json::append_value(incomplete, json::Value(std::move(missing)));
+        expect(std::holds_alternative<LiveProtocolError>(
+                   decode_live_message_json(incomplete)),
+               "every emitted descriptor field must be mandatory");
+      }
+    }
   }
 
   const auto encoded_frame = encode_live_frame(source);
@@ -357,7 +405,7 @@ void test_live_protocol_framing() {
   }
 
   auto wrong_version = encoded;
-  const auto version = wrong_version.find("\"protocolVersion\":3");
+  const auto version = wrong_version.find("\"protocolVersion\":4");
   if (version != std::string::npos)
     wrong_version.replace(version, 19, "\"protocolVersion\":1");
   expect(std::holds_alternative<LiveProtocolError>(
@@ -372,7 +420,7 @@ void test_live_protocol_framing() {
          "peer-origin revisions must be compared with their peer stream, not a local send counter");
 
   expect(std::holds_alternative<LiveProtocolError>(decode_live_message_json(
-             R"({"protocolVersion":3,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
+             R"({"protocolVersion":4,"type":"anchorChanged","revision":"1","editSession":"2","panelId":"main","anchorX":0.5,"final":true})")),
          "anchor messages missing a mandatory coordinate should be rejected");
 
   LiveMessage too_large{.type = LiveMessageType::live_profile,

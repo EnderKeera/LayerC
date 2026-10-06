@@ -63,13 +63,15 @@ ExpressionResult AutomationRuntime::Impl::eval(
     return found->second;
   }
   case ExpressionKind::event_field: {
-    if (expression.reference == "ageMs") {
-      const auto recorded = event.fields.find("ageMs");
+    // The common fields always have a value; see
+    // automation_common_event_fields.
+    if (expression.reference == automation_event_field::age_ms) {
+      const auto recorded = event.fields.find(automation_event_field::age_ms);
       if (recorded != event.fields.end())
         return recorded->second;
       return AutomationValue(DurationValue{Milliseconds::zero()});
     }
-    if (expression.reference == "sourceId")
+    if (expression.reference == automation_event_field::source_id)
       return AutomationValue(event.source_id);
     const auto found = event.fields.find(expression.reference);
     return found == event.fields.end() ? AutomationValue{} : found->second;
