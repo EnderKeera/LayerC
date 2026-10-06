@@ -428,13 +428,16 @@ layerc::runtime::ServiceReconcileResult
 X11InputService::reconcile(
     const layerc::runtime::CapabilityDemand &demand) {
   if (!demand.required(layerc::runtime::Capability::input))
-    return {false, "input: service invoked without demand"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "input: service invoked without demand");
   if (source_.has_value()) return {};
   if (display_ == nullptr || !display_->valid())
-    return {false, "input: no X display for the input service"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "input: no X display for the input service");
   std::string error;
   auto source = layerc::platform::X11InputSource::create(*display_, error);
-  if (!source.has_value()) return {false, error};
+  if (!source.has_value())
+    return layerc::runtime::ServiceReconcileResult::failed(std::move(error));
   source_ = std::move(*source);
   return {};
 }
@@ -461,7 +464,8 @@ layerc::runtime::ServiceReconcileResult
 X11AutomationService::reconcile(
     const layerc::runtime::CapabilityDemand &demand) {
   if (!demand.required(layerc::runtime::Capability::automation))
-    return {false, "automation: service invoked without demand"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "automation: service invoked without demand");
   return {};
 }
 

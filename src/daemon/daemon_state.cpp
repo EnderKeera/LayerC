@@ -195,8 +195,8 @@ layerc::runtime::ServiceReconcileResult
 CompanionHost::reconcile(const layerc::runtime::CapabilityDemand &) {
   return transport.start()
              ? layerc::runtime::ServiceReconcileResult{}
-             : layerc::runtime::ServiceReconcileResult{
-                   false, "Game Bar transport could not start"};
+             : layerc::runtime::ServiceReconcileResult::failed(
+                   "Game Bar transport could not start");
 }
 
 void CompanionHost::quiesce() noexcept {

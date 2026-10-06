@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace layerc::runtime {
@@ -117,11 +118,22 @@ struct RuntimeServiceStats {
   bool operator==(const RuntimeServiceStats &) const = default;
 };
 
+enum class ServiceReconcileStatus : std::uint8_t {
+  ok,       // active; clears the slot's last_error
+  degraded, // active; reason is kept as the slot's last_error
+  failed,   // quiesced and faulted with reason
+};
+
 struct ServiceReconcileResult {
-  bool success{true};
-  // On failure: the fault reason. On success: a non-empty value reports a
-  // degraded-but-active service and is kept as the slot's last_error.
-  std::string error;
+  ServiceReconcileStatus status{ServiceReconcileStatus::ok};
+  std::string reason;
+
+  [[nodiscard]] static ServiceReconcileResult degraded(std::string reason) {
+    return {ServiceReconcileStatus::degraded, std::move(reason)};
+  }
+  [[nodiscard]] static ServiceReconcileResult failed(std::string reason) {
+    return {ServiceReconcileStatus::failed, std::move(reason)};
+  }
 };
 
 class IRuntimeService {

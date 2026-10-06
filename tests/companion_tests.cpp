@@ -473,7 +473,7 @@ static void test_companion_package_identity() {
 
 static void test_companion_duplicate_slot_contract() {
   const std::string panel =
-      R"({"panelId":"a","slotIndex":2,"visible":true,"items":[]})";
+      R"({"panelId":"a","slotIndex":2,"items":[]})";
   const std::string valid =
       R"({"profileId":"p","sessionKey":"s","timestampMs":1,"panels":[)" +
       panel +
@@ -534,7 +534,7 @@ static void test_companion_declarative_wire() {
                        "new sidecar bytes preserve historical semantics");
 
   const std::string historical_snapshot =
-      R"({"profileId":"p","sessionKey":"s","timestampMs":9223372036854775807,"panels":[{"panelId":"a","slotIndex":2,"visible":true,"items":[{"cooldownId":"c","name":"C\n\"","icon":"","progress":0.5,"availableCharges":0,"maxCharges":1,"remainingMs":9007199254740993,"isReady":false,"color":""}]}],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":2,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1}]})";
+      R"({"profileId":"p","sessionKey":"s","timestampMs":9223372036854775807,"panels":[{"panelId":"a","slotIndex":2,"items":[{"cooldownId":"c","name":"C\n\"","progress":0.5,"availableCharges":0,"maxCharges":1,"remainingMs":9007199254740993,"isReady":false}]}],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":2,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1}]})";
   const auto parsed_snapshot = parse_companion_snapshot_json(historical_snapshot);
   const auto *snapshot = std::get_if<CompanionSessionSnapshot>(&parsed_snapshot);
   layerc::test::expect(snapshot != nullptr,
@@ -542,11 +542,11 @@ static void test_companion_declarative_wire() {
   if (snapshot == nullptr)
     return;
   const std::string golden_snapshot =
-      R"({"availablePanels":[{"name":"A","panelId":"a"}],"panels":[{"items":[{"availableCharges":0,"color":"","cooldownId":"c","icon":"","isReady":false,"maxCharges":1,"name":"C\n\"","progress":0.5,"remainingMs":9007199254740993}],"panelId":"a","slotIndex":2,"visible":true}],"preferences":[{"clickThrough":true,"opacity":1,"panelId":"a","pinned":false,"slotIndex":2}],"profileId":"p","sessionKey":"s","timestampMs":9223372036854775807})";
+      R"({"availablePanels":[{"name":"A","panelId":"a"}],"panels":[{"items":[{"availableCharges":0,"cooldownId":"c","isReady":false,"maxCharges":1,"name":"C\n\"","progress":0.5,"remainingMs":9007199254740993}],"panelId":"a","slotIndex":2}],"preferences":[{"clickThrough":true,"opacity":1,"panelId":"a","pinned":false,"slotIndex":2}],"profileId":"p","sessionKey":"s","timestampMs":9223372036854775807})";
   const auto serialized = serialize_companion_snapshot_json(*snapshot);
   const auto *wire = serialized_json(serialized);
   layerc::test::expect(wire && *wire == golden_snapshot,
-                       "snapshot golden preserves escaping, reserved fields and integers");
+                       "snapshot golden preserves escaping and integers");
   if (wire) {
     const auto reparsed = parse_companion_snapshot_json(*wire);
     layerc::test::expect(std::get_if<CompanionSessionSnapshot>(&reparsed) &&
@@ -582,13 +582,13 @@ static void test_companion_snapshot_rejects_malformed_input() {
       R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[null]})",
       "snapshot rejects malformed panel");
   expect_rejected(
-      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":0,"visible":true,"items":[{"cooldownId":"c","name":"C","icon":"","progress":1.1,"availableCharges":0,"maxCharges":1,"remainingMs":0,"isReady":true,"color":""}]}]})",
+      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":0,"items":[{"cooldownId":"c","name":"C","progress":1.1,"availableCharges":0,"maxCharges":1,"remainingMs":0,"isReady":true}]}]})",
       "snapshot rejects out-of-range progress");
   expect_rejected(
-      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":0,"visible":true,"items":[{"cooldownId":"c","name":"C","icon":"","progress":0,"availableCharges":0.5,"maxCharges":1,"remainingMs":0,"isReady":true,"color":""}]}]})",
+      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":0,"items":[{"cooldownId":"c","name":"C","progress":0,"availableCharges":0.5,"maxCharges":1,"remainingMs":0,"isReady":true}]}]})",
       "snapshot rejects fractional charges");
   expect_rejected(
-      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":8,"visible":true,"items":[]}]})",
+      R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[{"panelId":"x","slotIndex":8,"items":[]}]})",
       "snapshot rejects out-of-range slot");
   expect_rejected(
       R"({"profileId":"p","sessionKey":"s","timestampMs":0,"panels":[],"availablePanels":[{"panelId":"a","name":"A"}],"preferences":[{"slotIndex":0,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1.0},{"slotIndex":1,"panelId":"a","pinned":false,"clickThrough":true,"opacity":1.0}]})",

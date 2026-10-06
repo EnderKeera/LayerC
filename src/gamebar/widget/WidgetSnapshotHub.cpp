@@ -2,6 +2,7 @@
 
 #include "WidgetSnapshotHub.hpp"
 #include "WidgetServiceSession.hpp"
+#include "../GameBarEnvelope.hpp"
 
 namespace layerc::gamebar::widget {
 namespace {
@@ -103,10 +104,10 @@ private:
       std::string error;
       const auto message = args.Request().Message();
       const auto kind = winrt::unbox_value_or<winrt::hstring>(
-          message.TryLookup(L"kind"), L"");
+          message.TryLookup(envelope::kind_key), L"");
       const auto payload = winrt::unbox_value_or<winrt::hstring>(
-          message.TryLookup(L"json"), L"");
-      if (kind != L"snapshot") {
+          message.TryLookup(envelope::json_key), L"");
+      if (kind != envelope::snapshot_kind) {
         error = "unsupported companion message";
       } else {
         const auto utf8 = winrt::to_string(payload);
@@ -116,9 +117,10 @@ private:
           accepted = SnapshotHub::instance().accept_snapshot_json(session, utf8,
                                                                   error);
       }
-      response.Insert(L"accepted", winrt::box_value(accepted));
+      response.Insert(envelope::accepted_key, winrt::box_value(accepted));
       if (!error.empty())
-        response.Insert(L"error", winrt::box_value(winrt::to_hstring(error)));
+        response.Insert(envelope::error_key,
+                        winrt::box_value(winrt::to_hstring(error)));
       co_await args.Request().SendResponseAsync(response);
     } catch (...) {
     }
@@ -199,9 +201,10 @@ SnapshotHub::save_preferences(core::CompanionProfile profile) {
     co_return false;
   try {
     winrt::Windows::Foundation::Collections::ValueSet message;
-    message.Insert(L"kind", winrt::box_value(L"preferences"));
+    message.Insert(envelope::kind_key,
+                   winrt::box_value(envelope::preferences_kind));
     message.Insert(
-        L"json", winrt::box_value(winrt::to_hstring(
+        envelope::json_key, winrt::box_value(winrt::to_hstring(
                      core::serialize_companion_profile_json(profile))));
     const auto response = co_await connection.SendMessageAsync(message);
     if (response.Status() != winrt::Windows::ApplicationModel::AppService::
@@ -209,7 +212,7 @@ SnapshotHub::save_preferences(core::CompanionProfile profile) {
         state_.session() != session)
       co_return false;
     co_return winrt::unbox_value_or<bool>(
-        response.Message().TryLookup(L"accepted"), false);
+        response.Message().TryLookup(envelope::accepted_key), false);
   } catch (...) {
     co_return false;
   }

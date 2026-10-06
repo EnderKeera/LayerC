@@ -46,9 +46,6 @@ using CompanionError = DocumentError;
 struct CompanionSnapshotItem {
   std::string cooldown_id;
   std::string name;
-  // Reserved: no per-cooldown icon/color source exists yet; the bridge emits
-  // empty strings until a renderer defines the data source.
-  std::string icon;
   // Fraction of the cooldown elapsed toward ready: 1.0 = ready, 0.0 = just
   // triggered (see build_companion_snapshot).
   double progress{0.0};
@@ -56,7 +53,6 @@ struct CompanionSnapshotItem {
   std::uint32_t max_charges{1};
   std::int64_t remaining_ms{0};
   bool is_ready{true};
-  std::string color;
 
   bool operator==(const CompanionSnapshotItem &) const = default;
 };
@@ -70,9 +66,6 @@ struct CompanionAvailablePanel {
 struct CompanionPanelSnapshot {
   std::string panel_id;
   std::uint32_t slot_index{};
-  // Reserved: the bridge currently marks every published panel visible until
-  // session-level panel visibility is plumbed through.
-  bool visible{true};
   std::vector<CompanionSnapshotItem> items;
 
   bool operator==(const CompanionPanelSnapshot &) const = default;

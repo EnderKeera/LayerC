@@ -20,10 +20,18 @@
 
 namespace {
 
-using layerc::platform::ControlFramer;
+using Fault = layerc::core::FrameDecoder::Fault;
 using layerc::platform::ControlListener;
 
 namespace control = layerc::platform;
+
+layerc::core::FrameDecoder control_decoder() {
+  return {control::control_frame_limit, control::control_buffer_limit};
+}
+
+void feed(layerc::core::FrameDecoder &decoder, const std::string_view bytes) {
+  decoder.feed(layerc::core::text_bytes(bytes));
+}
 
 std::string make_frame(std::string_view payload) {
   std::string framed;
@@ -47,33 +55,33 @@ void control_framer_contracts() {
         control::ControlCommand::status);
     const std::string framed = make_frame(request);
 
-    ControlFramer framer;
+    auto framer = control_decoder();
     for (std::size_t index = 0; index + 1 < framed.size(); ++index)
-      framer.feed(std::string_view{framed}.substr(index, 1));
+      feed(framer, std::string_view{framed}.substr(index, 1));
     passed &= expect(!framer.next_frame().has_value() &&
-                         framer.fault() == ControlFramer::Fault::none,
+                         framer.fault() == Fault::none,
                      "partial frames must not decode");
-    framer.feed(std::string_view{framed}.substr(framed.size() - 1));
+    feed(framer, std::string_view{framed}.substr(framed.size() - 1));
     passed &= expect(framer.next_frame() == request &&
                          !framer.next_frame().has_value(),
                      "the final byte should complete exactly one frame");
 
-    ControlFramer batched;
-    batched.feed(framed + framed);
+    auto batched = control_decoder();
+    feed(batched, framed + framed);
     passed &= expect(batched.next_frame() == request &&
                          batched.next_frame() == request &&
                          !batched.next_frame().has_value(),
                      "coalesced frames must decode independently");
 
-    ControlFramer oversized;
-    oversized.feed(std::string("\xFF\xFF\xFF\xFF", 4));
+    auto oversized = control_decoder();
+    feed(oversized, std::string("\xFF\xFF\xFF\xFF", 4));
     (void)oversized.next_frame();
-    passed &= expect(oversized.fault() == ControlFramer::Fault::frame_too_large,
+    passed &= expect(oversized.fault() == Fault::frame_too_large,
                      "declared frames above 512 KiB must fault");
 
-    ControlFramer flooded;
-    flooded.feed(std::string(4 * 1024 * 1024 + 8, 'x'));
-    passed &= expect(flooded.fault() == ControlFramer::Fault::buffer_too_large,
+    auto flooded = control_decoder();
+    feed(flooded, std::string(4 * 1024 * 1024 + 8, 'x'));
+    passed &= expect(flooded.fault() == Fault::buffer_too_large,
                      "undrained buffers above 4 MiB must fault");
   }
 
@@ -287,15 +295,15 @@ void control_socket_contracts() {
         passed &= expect(server_side.has_value() && accepted.error.empty(),
                          "listener should accept the client");
         if (server_side.has_value()) {
-          ControlFramer server_framer;
+          auto server_framer = control_decoder();
           std::string request_json;
           char chunk[4096];
           while (request_json.empty()) {
             const ssize_t received =
                 ::read(*server_side, chunk, sizeof(chunk));
             if (received <= 0) break;
-            server_framer.feed(
-                std::string_view{chunk, static_cast<std::size_t>(received)});
+            feed(server_framer,
+                 std::string_view{chunk, static_cast<std::size_t>(received)});
             request_json = server_framer.next_frame().value_or(std::string{});
           }
           layerc::runtime::DaemonKernel kernel;
@@ -308,14 +316,14 @@ void control_socket_contracts() {
                                                            error),
                            "the daemon should answer the request");
 
-          ControlFramer client_framer;
+          auto client_framer = control_decoder();
           std::string response_json;
           while (response_json.empty()) {
             const ssize_t received =
                 ::read(*client, chunk, sizeof(chunk));
             if (received <= 0) break;
-            client_framer.feed(
-                std::string_view{chunk, static_cast<std::size_t>(received)});
+            feed(client_framer,
+                 std::string_view{chunk, static_cast<std::size_t>(received)});
             response_json = client_framer.next_frame().value_or(std::string{});
           }
           passed &= expect(response_json.find("\"ok\":true") !=

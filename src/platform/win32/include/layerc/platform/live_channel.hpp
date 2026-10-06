@@ -8,6 +8,7 @@
 #include <deque>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <windows.h>
@@ -53,20 +54,19 @@ private:
   friend struct NamedPipeEditorDaemonChannelTestAccess;
   bool create_server_pipe();
   bool connect_client();
-  struct PeerSpec {
-    bool server;
-    const wchar_t *image;
-    const wchar_t *identity_error;
-    const wchar_t *unexpected_error;
-    const wchar_t *session_error;
-    const wchar_t *authenticate_error;
-    const wchar_t *untrusted_error;
+  // Why the opposite pipe end (LayerD server or LayerE client) was refused.
+  enum class PeerFault : std::uint8_t {
+    identity,
+    unexpected,
+    session,
+    authenticate,
+    untrusted,
   };
-  bool authenticate_peer(const PeerSpec &spec);
-  bool verify_peer_identity(DWORD peer_pid, const wchar_t *sibling_image,
-                            std::wstring_view session_error,
-                            std::wstring_view authenticate_error,
-                            std::wstring_view untrusted_error);
+  // Authenticates the opposite end of pipe_, recording the accepted peer id or
+  // the refusal reason in last_error_.
+  bool authenticate_peer();
+  // The authenticated peer process id, or why it was refused.
+  [[nodiscard]] std::variant<DWORD, PeerFault> verify_peer() const;
   void complete_connection();
   void start_read(std::vector<layerc::core::LiveMessageResult> &messages);
   void continue_write();

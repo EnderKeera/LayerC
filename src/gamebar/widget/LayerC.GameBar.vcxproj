@@ -96,6 +96,7 @@
     <ClInclude Include="WidgetSnapshotHub.hpp" />
     <ClInclude Include="WidgetSnapshotState.hpp" />
     <ClInclude Include="WidgetServiceSession.hpp" />
+    <ClInclude Include="..\GameBarEnvelope.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml"><SubType>Designer</SubType></ApplicationDefinition>

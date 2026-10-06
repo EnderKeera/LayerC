@@ -275,8 +275,8 @@ ControlOutcome ControlService::service(
           (void)::close(client.fd);
           outcome.diagnostic = "control client limit reached";
         } else {
-          clients_.try_emplace(client.fd,
-                               Client{{}, now + control_client_timeout, {}, 0});
+          clients_.try_emplace(client.fd).first->second.expires_at =
+              now + control_client_timeout;
           loop.register_fd(client.fd);
         }
       }
@@ -301,12 +301,11 @@ ControlOutcome ControlService::service(
     }
     auto &client = found->second;
     client.expires_at = now + control_client_timeout;
-    client.framer.feed(std::string_view{chunk.data(),
-                                        static_cast<std::size_t>(received)});
+    client.framer.feed(layerc::core::text_bytes(std::string_view{
+        chunk.data(), static_cast<std::size_t>(received)}));
     const auto request = client.framer.next_frame();
     if (!request.has_value()) {
-      if (client.framer.fault() !=
-          layerc::platform::ControlFramer::Fault::none)
+      if (client.framer.fault() != layerc::core::FrameDecoder::Fault::none)
         drop(loop, fd);
       continue; // partial frame
     }
@@ -321,7 +320,7 @@ ControlOutcome ControlService::service(
         reinterpret_cast<std::byte *>(client.response.data()),
         static_cast<std::uint32_t>(reply.response.size()));
     client.response += reply.response;
-    client.framer = {}; // stop accepting requests and release buffered bytes
+    client.framer.clear(); // release buffered bytes; the fd now polls only POLLOUT
     client.expires_at = now + control_client_timeout;
     loop.register_fd(fd, POLLOUT);
     outcome.stop_requested = outcome.stop_requested || reply.stop_requested;

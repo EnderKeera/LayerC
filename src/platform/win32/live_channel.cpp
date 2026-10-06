@@ -18,6 +18,13 @@ HANDLE make_event() {
   return CreateEventW(nullptr, TRUE, FALSE, nullptr);
 }
 
+// The peer is the opposite pipe end: LayerD's server for a client channel and
+// LayerE's client for a server channel.
+[[nodiscard]] bool peer_is_server(
+    const NamedPipeEditorDaemonChannel::Role role) noexcept {
+  return role == NamedPipeEditorDaemonChannel::Role::client;
+}
+
 } // namespace
 
 bool is_layerc_editor_process(const DWORD process_id,
@@ -110,13 +117,7 @@ bool NamedPipeEditorDaemonChannel::connect_client() {
       set_error(error);
     return false;
   }
-  if (!authenticate_peer(PeerSpec{
-          .server = true, .image = L"layerd.exe",
-          .identity_error = L"Could not identify the LayerD live-channel server.",
-          .unexpected_error = L"Rejected an unexpected live-channel server process.",
-          .session_error = L"Rejected a live-channel server from another logon session.",
-          .authenticate_error = L"Could not authenticate the LayerD live-channel server.",
-          .untrusted_error = L"Rejected an untrusted LayerD live-channel server."})) {
+  if (!authenticate_peer()) {
     close_handles();
     return false;
   }
@@ -124,57 +125,68 @@ bool NamedPipeEditorDaemonChannel::connect_client() {
   return true;
 }
 
-bool NamedPipeEditorDaemonChannel::authenticate_peer(const PeerSpec &spec) {
-  ULONG peer_pid{};
-  const BOOL identified = spec.server
-      ? GetNamedPipeServerProcessId(pipe_, &peer_pid)
-      : GetNamedPipeClientProcessId(pipe_, &peer_pid);
-  if (identified == FALSE || peer_pid == 0) {
-    last_error_ = spec.identity_error;
-    return false;
+bool NamedPipeEditorDaemonChannel::authenticate_peer() {
+  const auto verified = verify_peer();
+  if (const auto *peer_pid = std::get_if<DWORD>(&verified)) {
+    peer_process_id_ = *peer_pid;
+    return true;
   }
-  if (expected_peer_process_id_ != 0 && peer_pid != expected_peer_process_id_) {
-    last_error_ = spec.unexpected_error;
-    return false;
+  const bool server = peer_is_server(role_);
+  const std::wstring product = server ? L"LayerD" : L"LayerE";
+  const std::wstring peer = server ? L"server" : L"client";
+  switch (std::get<PeerFault>(verified)) {
+  case PeerFault::identity:
+    last_error_ = L"Could not identify the " + product + L" live-channel " +
+                  peer + L".";
+    break;
+  case PeerFault::unexpected:
+    last_error_ = L"Rejected an unexpected live-channel " + peer + L" process.";
+    break;
+  case PeerFault::session:
+    last_error_ =
+        L"Rejected a live-channel " + peer + L" from another logon session.";
+    break;
+  case PeerFault::authenticate:
+    last_error_ = L"Could not authenticate the " + product +
+                  L" live-channel " + peer + L".";
+    break;
+  case PeerFault::untrusted:
+    last_error_ = L"Rejected an untrusted " + product + L" live-channel " +
+                  peer + L".";
+    break;
   }
-  return verify_peer_identity(peer_pid, spec.image, spec.session_error,
-                              spec.authenticate_error, spec.untrusted_error);
+  return false;
 }
 
-bool NamedPipeEditorDaemonChannel::verify_peer_identity(
-    const DWORD peer_pid, const wchar_t *sibling_image,
-    const std::wstring_view session_error,
-    const std::wstring_view authenticate_error,
-    const std::wstring_view untrusted_error) {
-  if (!same_session_as_current_process(peer_pid)) {
-    last_error_ = std::wstring(session_error);
-    return false;
-  }
+std::variant<DWORD, NamedPipeEditorDaemonChannel::PeerFault>
+NamedPipeEditorDaemonChannel::verify_peer() const {
+  const bool server = peer_is_server(role_);
+  ULONG peer_pid{};
+  const BOOL identified = server
+      ? GetNamedPipeServerProcessId(pipe_, &peer_pid)
+      : GetNamedPipeClientProcessId(pipe_, &peer_pid);
+  if (identified == FALSE || peer_pid == 0)
+    return PeerFault::identity;
+  if (expected_peer_process_id_ != 0 && peer_pid != expected_peer_process_id_)
+    return PeerFault::unexpected;
+  if (!same_session_as_current_process(peer_pid))
+    return PeerFault::session;
   const OwnedHandle peer_process(
       OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, peer_pid));
-  if (!peer_process.valid()) {
-    last_error_ = std::wstring(authenticate_error);
-    return false;
-  }
+  if (!peer_process.valid())
+    return PeerFault::authenticate;
   const bool trusted_user = same_user_as_current_process(peer_process.get());
-  const bool trusted_image = expected_peer_process_id_ != 0 ||
-                             is_sibling_process_image(peer_pid, sibling_image);
-  if (!trusted_user || !trusted_image) {
-    last_error_ = std::wstring(untrusted_error);
-    return false;
-  }
-  peer_process_id_ = peer_pid;
-  return true;
+  const bool trusted_image =
+      expected_peer_process_id_ != 0 ||
+      is_sibling_process_image(peer_pid,
+                               server ? L"layerd.exe" : L"layere.exe");
+  if (!trusted_user || !trusted_image)
+    return PeerFault::untrusted;
+  return DWORD{peer_pid};
 }
 
 void NamedPipeEditorDaemonChannel::complete_connection() {
-  if (role_ == Role::server && !authenticate_peer(PeerSpec{
-          .server = false, .image = L"layere.exe",
-          .identity_error = L"Could not identify the LayerE live-channel client.",
-          .unexpected_error = L"Rejected an unexpected live-channel client process.",
-          .session_error = L"Rejected a live-channel client from another logon session.",
-          .authenticate_error = L"Could not authenticate the LayerE live-channel client.",
-          .untrusted_error = L"Rejected an untrusted LayerE live-channel client."})) {
+  if (role_ == Role::server && !authenticate_peer()) {
     disconnect(ERROR_SUCCESS);
     return;
   }

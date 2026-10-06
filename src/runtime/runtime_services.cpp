@@ -125,13 +125,13 @@ bool RuntimeServiceHost::reconcile(
     }
 
     const auto result = slot.service->reconcile(demand);
-    if (!result.success) {
+    if (result.status == ServiceReconcileStatus::failed) {
       slot.service->quiesce();
       slot.active = false;
       slot.stats.last_quiescence = now;
-      mark_faulted(slot.stats, result.error.empty()
+      mark_faulted(slot.stats, result.reason.empty()
                                    ? "service reconciliation failed"
-                                   : result.error);
+                                   : result.reason);
       success = false;
       continue;
     }
@@ -139,7 +139,10 @@ bool RuntimeServiceHost::reconcile(
     slot.active = true;
     slot.stats.state = ServiceState::active;
     slot.stats.resources = slot.service->resources();
-    slot.stats.last_error = result.error;
+    if (result.status == ServiceReconcileStatus::degraded)
+      slot.stats.last_error = result.reason;
+    else
+      slot.stats.last_error.clear();
   }
   return success;
 }

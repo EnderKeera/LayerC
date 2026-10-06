@@ -243,10 +243,6 @@ validate_snapshot_item(const CompanionSnapshotItem &item,
     return error;
   if (auto error = bounded_text(item_path, "name", item.name, false))
     return error;
-  if (auto error = bounded_text(item_path, "icon", item.icon, true))
-    return error;
-  if (auto error = bounded_text(item_path, "color", item.color, true))
-    return error;
   if (!std::isfinite(item.progress) || item.progress < 0.0 ||
       item.progress > 1.0)
     return CompanionError{item_path + ".progress",
@@ -340,17 +336,14 @@ serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
       items.emplace_back(json::Value::Object{
           {"cooldownId", json::Value(item.cooldown_id)},
           {"name", json::Value(item.name)},
-          {"icon", json::Value(item.icon)},
           {"progress", json::Value(item.progress)},
           {"availableCharges", json::Value(std::int64_t{item.available_charges})},
           {"maxCharges", json::Value(std::int64_t{item.max_charges})},
           {"remainingMs", json::Value(item.remaining_ms)},
-          {"isReady", json::Value(item.is_ready)},
-          {"color", json::Value(item.color)}});
+          {"isReady", json::Value(item.is_ready)}});
     panels.emplace_back(json::Value::Object{
         {"panelId", json::Value(panel.panel_id)},
         {"slotIndex", json::Value(std::int64_t{panel.slot_index})},
-        {"visible", json::Value(panel.visible)},
         {"items", json::Value(std::move(items))}});
   }
   json::Value::Array available_panels;
@@ -401,7 +394,6 @@ bool parse_snapshot_item(json::Reader &reader, const json::Value &value,
   if (!value.is_object()) return reader.fail(path, "item must be an object");
   return read_text(reader, value, "cooldownId", path, false, item.cooldown_id) &&
          read_text(reader, value, "name", path, false, item.name) &&
-         read_text(reader, value, "icon", path, true, item.icon) &&
          read_unit(reader, value, "progress", path, item.progress) &&
          read_count(reader, value, "availableCharges", path, 0,
                     std::numeric_limits<std::uint32_t>::max(),
@@ -413,8 +405,7 @@ bool parse_snapshot_item(json::Reader &reader, const json::Value &value,
                     std::numeric_limits<std::int64_t>::max(),
                     item.remaining_ms) &&
          reader.boolean(value, "isReady", path, item.is_ready,
-                        json::Required::yes) &&
-         read_text(reader, value, "color", path, true, item.color);
+                        json::Required::yes);
 }
 
 bool parse_snapshot_panel(json::Reader &reader, const json::Value &value,
@@ -425,8 +416,6 @@ bool parse_snapshot_panel(json::Reader &reader, const json::Value &value,
          read_count(reader, value, "slotIndex", path, 0,
                     static_cast<std::int64_t>(max_companion_slots - 1),
                     panel.slot_index) &&
-         reader.boolean(value, "visible", path, panel.visible,
-                        json::Required::yes) &&
          read_bounded_array(reader, value, "items", path,
                             max_companion_snapshot_items,
                             "item count exceeds its bound", parse_snapshot_item,

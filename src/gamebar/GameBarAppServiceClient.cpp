@@ -1,5 +1,6 @@
 // MSVC-only App Service client (C++/WinRT). MinGW builds link
 // GameBarAppServiceClient_stub.cpp instead.
+#include "GameBarEnvelope.hpp"
 #include "GameBarTransportState.hpp"
 
 #include <roapi.h>
@@ -92,7 +93,7 @@ winrt::fire_and_forget send_preference_response(AppServiceRequest request,
                                                 const bool accepted) {
   try {
     winrt::Windows::Foundation::Collections::ValueSet response;
-    response.Insert(L"accepted", winrt::box_value(accepted));
+    response.Insert(envelope::accepted_key, winrt::box_value(accepted));
     co_await request.SendResponseAsync(response);
   } catch (...) {
   }
@@ -165,12 +166,12 @@ void handle_preference_request(std::weak_ptr<GameBarTransportState> weak_state,
   const auto deferral = args.GetDeferral();
   try {
     const auto message = args.Request().Message();
-    const auto kind =
-        winrt::unbox_value_or<winrt::hstring>(message.TryLookup(L"kind"), L"");
-    const auto json =
-        winrt::unbox_value_or<winrt::hstring>(message.TryLookup(L"json"), L"");
+    const auto kind = winrt::unbox_value_or<winrt::hstring>(
+        message.TryLookup(envelope::kind_key), L"");
+    const auto json = winrt::unbox_value_or<winrt::hstring>(
+        message.TryLookup(envelope::json_key), L"");
     const auto utf8 = winrt::to_string(json);
-    if (kind == L"preferences" && !utf8.empty() &&
+    if (kind == envelope::preferences_kind && !utf8.empty() &&
         utf8.size() <= layerc::core::max_companion_sidecar_bytes &&
         queue_preference_update(weak_state, generation, connection_epoch, utf8,
                                 args.Request(), deferral))
@@ -311,7 +312,11 @@ void apply_send_result(const std::shared_ptr<GameBarTransportState> &state,
                                    ? L"Game Bar snapshot send failed"
                                    : std::move(error_text));
     } else if (!accepted) {
-      state->enter(Link::connected, L"Game Bar widget rejected a snapshot");
+      // On rejection error_text carries the widget's optional reason.
+      std::wstring message = L"Game Bar widget rejected a snapshot";
+      if (!error_text.empty())
+        message += L": " + error_text;
+      state->enter(Link::connected, std::move(message));
     } else {
       state->enter(Link::connected, L"");
     }
@@ -339,8 +344,10 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
 
   try {
     winrt::Windows::Foundation::Collections::ValueSet message;
-    message.Insert(L"kind", winrt::box_value(L"snapshot"));
-    message.Insert(L"json", winrt::box_value(winrt::to_hstring(payload)));
+    message.Insert(envelope::kind_key,
+                   winrt::box_value(envelope::snapshot_kind));
+    message.Insert(envelope::json_key,
+                   winrt::box_value(winrt::to_hstring(payload)));
     const auto operation = connection.SendMessageAsync(message);
     {
       std::lock_guard lock(state->mutex);
@@ -361,9 +368,14 @@ void begin_send(const std::shared_ptr<GameBarTransportState> &state) {
         try {
           const auto response = completed.GetResults();
           transport_ok = response.Status() == AppServiceResponseStatus::Success;
-          if (transport_ok)
+          if (transport_ok) {
+            const auto reply = response.Message();
             accepted = winrt::unbox_value_or<bool>(
-                response.Message().TryLookup(L"accepted"), false);
+                reply.TryLookup(envelope::accepted_key), false);
+            if (!accepted)
+              error_text = std::wstring(winrt::unbox_value_or<winrt::hstring>(
+                  reply.TryLookup(envelope::error_key), L""));
+          }
         } catch (const winrt::hresult_error &error) {
           error_text = std::wstring(error.message());
         }

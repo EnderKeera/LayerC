@@ -28,8 +28,9 @@ public:
   reconcile(const CapabilityDemand &demand) override {
     ++reconciled;
     saw_demand = demand.consumers(capability_);
-    return fail ? ServiceReconcileResult{false, "test fault"}
-                : ServiceReconcileResult{true, diagnostic};
+    if (fail) return ServiceReconcileResult::failed("test fault");
+    return diagnostic.empty() ? ServiceReconcileResult{}
+                              : ServiceReconcileResult::degraded(diagnostic);
   }
 
   void quiesce() noexcept override {

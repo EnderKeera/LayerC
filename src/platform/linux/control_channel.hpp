@@ -17,6 +17,8 @@ namespace layerc::platform {
 // AF_UNIX SOCK_STREAM socket. Framing reuses the shared 4-byte little-endian
 // length prefix (core/frame.hpp) around UTF-8 JSON; one request and one
 // response per connection. Distinct from the editor's LayerE protocol.
+// Readers decode with core::FrameDecoder{control_frame_limit,
+// control_buffer_limit}; oversized frames or buffers fault stickily.
 inline constexpr std::string_view control_protocol_name = "LayerC.Control";
 inline constexpr std::uint32_t control_protocol_version = 1;
 inline constexpr std::uint32_t control_frame_limit = 512U * 1024U;
@@ -68,24 +70,6 @@ struct ControlResponse {
 // LayerC.Control v1 response envelope.
 [[nodiscard]] std::optional<ControlResponse>
 decode_control_response(std::string_view json);
-
-// Incremental byte-stream → frame decoder with the plan's bounds: partial
-// frames accumulate, an oversized declared frame or buffer is sticky-faulted.
-class ControlFramer {
-public:
-  using Fault = layerc::core::FrameDecoder::Fault;
-
-  void feed(std::string_view bytes) {
-    decoder_.feed(layerc::core::text_bytes(bytes));
-  }
-  [[nodiscard]] std::optional<std::string> next_frame() {
-    return decoder_.next_frame();
-  }
-  [[nodiscard]] Fault fault() const noexcept { return decoder_.fault(); }
-
-private:
-  layerc::core::FrameDecoder decoder_{control_frame_limit, control_buffer_limit};
-};
 
 // Resolves the control socket path without touching the filesystem:
 // $XDG_RUNTIME_DIR/layerc/control.sock, falling back to

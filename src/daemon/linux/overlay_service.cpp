@@ -212,18 +212,19 @@ layerc::runtime::ServiceReconcileResult
 X11OverlayService::reconcile(
     const layerc::runtime::CapabilityDemand &demand) {
   if (!demand.required(layerc::runtime::Capability::overlay))
-    return {false, "overlay: service invoked without demand"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "overlay: service invoked without demand");
   if (display_ == nullptr || !display_->valid()) {
     // Never fault: an overlay failure must not unwind the input service the
     // kernel activated in the same pass. Publish the reason instead.
     fault_ = "overlay: no X display for the overlay service";
-    return {true, fault_};
+    return layerc::runtime::ServiceReconcileResult::degraded(fault_);
   }
   if (const auto reasons =
           layerc::platform::overlay_unavailable(display_->probe());
       !reasons.empty()) {
     fault_ = reasons.front();
-    return {true, fault_};
+    return layerc::runtime::ServiceReconcileResult::degraded(fault_);
   }
   std::string error;
   for (auto &target : targets_) {

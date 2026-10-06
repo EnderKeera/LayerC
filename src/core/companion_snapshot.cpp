@@ -76,7 +76,6 @@ void build_panel_snapshots(
     CompanionPanelSnapshot panel_snapshot;
     panel_snapshot.panel_id = panel.id;
     panel_snapshot.slot_index = mapping->slot_index;
-    panel_snapshot.visible = true;
     const auto presentation =
         present_panel(panel, definitions, states, {}, now);
     for (const auto &bar : presentation.bars) {

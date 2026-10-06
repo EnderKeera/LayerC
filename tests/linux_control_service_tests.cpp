@@ -45,14 +45,16 @@ public:
         if (::poll(&watch, 1, 50) <= 0) continue;
         const auto peer = listener_->accept();
         if (peer.state != control::ControlAcceptResult::State::accepted) continue;
-        control::ControlFramer framer;
+        layerc::core::FrameDecoder framer{control::control_frame_limit,
+                                          control::control_buffer_limit};
         std::array<char, 4096> bytes{};
         while (Clock::now() < deadline) {
           pollfd request{peer.fd, POLLIN, 0};
           if (::poll(&request, 1, 50) <= 0) continue;
           const auto count = ::read(peer.fd, bytes.data(), bytes.size());
           if (count <= 0) break;
-          framer.feed({bytes.data(), static_cast<std::size_t>(count)});
+          framer.feed(layerc::core::text_bytes(
+              std::string_view{bytes.data(), static_cast<std::size_t>(count)}));
           if (framer.next_frame().has_value()) {
             answered_ = control::control_send_frame(peer.fd, response, error_);
             break;
@@ -203,7 +205,8 @@ void control_response_backpressure_contracts() {
     const auto deadline = Clock::now() + std::chrono::milliseconds(20);
     loop.set_deadline(deadline);
     bool timer_fired = false;
-    control::ControlFramer response;
+    layerc::core::FrameDecoder response{control::control_frame_limit,
+                                        control::control_buffer_limit};
     std::optional<std::string> reply;
     const auto limit = Clock::now() + std::chrono::milliseconds(500);
     while (Clock::now() < limit && (!timer_fired || !reply.has_value())) {
@@ -212,7 +215,8 @@ void control_response_backpressure_contracts() {
       (void)service.service(loop, loop.ready_fds(), kernel);
       std::array<char, 4096> bytes{};
       const auto count = ::read(*quick, bytes.data(), bytes.size());
-      if (count > 0) response.feed({bytes.data(), static_cast<std::size_t>(count)});
+      if (count > 0) response.feed(layerc::core::text_bytes(
+          std::string_view{bytes.data(), static_cast<std::size_t>(count)}));
       if (!reply.has_value()) reply = response.next_frame();
     }
     const auto decoded = reply.has_value() ? control::decode_control_response(*reply)
@@ -222,13 +226,15 @@ void control_response_backpressure_contracts() {
     (void)::close(*quick);
   }
   // Resume reading: partial writes must retain the exact frame offset.
-  control::ControlFramer response;
+  layerc::core::FrameDecoder response{control::control_frame_limit,
+                                      control::control_buffer_limit};
   std::optional<std::string> reply;
   const auto limit = Clock::now() + std::chrono::seconds(2);
   while (Clock::now() < limit && !reply.has_value()) {
     std::array<char, 8192> bytes{};
     const auto count = ::read(*slow, bytes.data(), bytes.size());
-    if (count > 0) response.feed({bytes.data(), static_cast<std::size_t>(count)});
+    if (count > 0) response.feed(layerc::core::text_bytes(
+        std::string_view{bytes.data(), static_cast<std::size_t>(count)}));
     reply = response.next_frame();
     (void)loop.poll_once(10);
     (void)service.service(loop, loop.ready_fds(), kernel, large);
