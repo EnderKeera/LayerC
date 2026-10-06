@@ -1,10 +1,12 @@
-#include "layerc/platform/durable_file.hpp"
+// POSIX side of layerc/durable/durable_file.hpp.
+#include "layerc/durable/durable_file.hpp"
 
 #include <cerrno>
 #include <cstdint>
 #include <utility>
 
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -148,6 +150,30 @@ bool remove_durable_file(const std::filesystem::path &path) {
   // result here means the file may already be gone; callers that need the
   // barrier (profile transaction deletes) treat it as a failed delete.
   return fsync_parent_checked(path);
+}
+
+// The lock dies with the descriptor, so a crashed writer never strands it.
+ExclusiveFileLock::ExclusiveFileLock(const std::filesystem::path &path) {
+  const int descriptor =
+      ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+             S_IRUSR | S_IWUSR);
+  if (descriptor < 0) return;
+  struct stat status {};
+  if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode) ||
+      status.st_uid != ::geteuid() ||
+      ::fchmod(descriptor, S_IRUSR | S_IWUSR) != 0 ||
+      ::flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
+    ::close(descriptor);
+    return;
+  }
+  native_ = descriptor;
+}
+
+ExclusiveFileLock::~ExclusiveFileLock() {
+  if (!locked()) return;
+  const auto descriptor = static_cast<int>(native_);
+  (void)::flock(descriptor, LOCK_UN);
+  ::close(descriptor);
 }
 
 } // namespace layerc::platform

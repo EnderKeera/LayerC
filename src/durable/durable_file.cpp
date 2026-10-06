@@ -1,4 +1,5 @@
-#include "layerc/platform/durable_file.hpp"
+// Windows side of layerc/durable/durable_file.hpp.
+#include "layerc/durable/durable_file.hpp"
 #include "io_chunk_size.hpp"
 #include "layerc/platform/win32_handle.hpp"
 
@@ -155,6 +156,25 @@ bool fsync_directory_checked(const std::filesystem::path &directory) noexcept {
 bool remove_durable_file(const std::filesystem::path &path) {
   return DeleteFileW(path.c_str()) != FALSE ||
          GetLastError() == ERROR_FILE_NOT_FOUND;
+}
+
+// Share mode 0 is the lock: no other handle can open the file while this one
+// is alive, and the kernel releases it when the process dies.
+ExclusiveFileLock::ExclusiveFileLock(const std::filesystem::path &path) {
+  if (!publishable_destination(path)) return;
+  OwnedHandle file(CreateFileW(
+      path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!file.valid() || GetFileInformationByHandle(file.get(), &info) == FALSE ||
+      (info.dwFileAttributes &
+       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
+    return;
+  native_ = reinterpret_cast<std::intptr_t>(file.release());
+}
+
+ExclusiveFileLock::~ExclusiveFileLock() {
+  if (locked()) CloseHandle(reinterpret_cast<HANDLE>(native_));
 }
 
 } // namespace layerc::platform

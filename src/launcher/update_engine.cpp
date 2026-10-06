@@ -4,20 +4,11 @@
 #include "layerc/core/json.hpp"
 #include "update_engine_internal.hpp"
 
-#include <cerrno>
 #include <cstddef>
 #include <fstream>
 #include <span>
 #include <system_error>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <fcntl.h>
-#include <sys/file.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 
 namespace layerc::launcher {
 namespace {
@@ -66,71 +57,24 @@ using core::UpdateManifest;
 }
 
 // The lock file lives beside the activation record, so separate install roots
-// can update independently. Keep its OS handle for the whole transaction:
-// staging, recovery reads, publication, and pruning all mutate shared state.
+// can update independently. Keep it for the whole transaction: staging,
+// recovery reads, publication, and pruning all mutate shared state.
 class InstallWriterLock {
 public:
-  explicit InstallWriterLock(const InstallLayout &layout) {
-    std::error_code error;
-    fs::create_directories(layout.root, error);
-    if (error) return;
-    const auto path = layout.root / ".activation.lock";
-#ifdef _WIN32
-    if (!plain_file_or_absent(path)) return;
-    handle_ = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                          OPEN_ALWAYS,
-                          FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
-                          nullptr);
-    if (handle_ == INVALID_HANDLE_VALUE) return;
-    BY_HANDLE_FILE_INFORMATION info{};
-    if (!GetFileInformationByHandle(handle_, &info) ||
-        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY |
-                                  FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
-      CloseHandle(handle_);
-      handle_ = INVALID_HANDLE_VALUE;
-    }
-#else
-    descriptor_ = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
-                         S_IRUSR | S_IWUSR);
-    if (descriptor_ < 0) return;
-    struct stat status {};
-    if (::fstat(descriptor_, &status) != 0 || !S_ISREG(status.st_mode) ||
-        status.st_uid != ::geteuid() ||
-        ::fchmod(descriptor_, S_IRUSR | S_IWUSR) != 0 ||
-        ::flock(descriptor_, LOCK_EX | LOCK_NB) != 0) {
-      ::close(descriptor_);
-      descriptor_ = -1;
-    }
-#endif
-  }
+  explicit InstallWriterLock(const InstallLayout &layout)
+      : lock_(prepare(layout)) {}
 
-  ~InstallWriterLock() {
-#ifdef _WIN32
-    if (handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
-#else
-    if (descriptor_ >= 0) {
-      (void)::flock(descriptor_, LOCK_UN);
-      ::close(descriptor_);
-    }
-#endif
-  }
-  InstallWriterLock(const InstallWriterLock &) = delete;
-  InstallWriterLock &operator=(const InstallWriterLock &) = delete;
-
-  [[nodiscard]] bool locked() const noexcept {
-#ifdef _WIN32
-    return handle_ != INVALID_HANDLE_VALUE;
-#else
-    return descriptor_ >= 0;
-#endif
-  }
+  [[nodiscard]] bool locked() const noexcept { return lock_.locked(); }
 
 private:
-#ifdef _WIN32
-  HANDLE handle_{INVALID_HANDLE_VALUE};
-#else
-  int descriptor_{-1};
-#endif
+  [[nodiscard]] static fs::path prepare(const InstallLayout &layout) {
+    std::error_code error;
+    fs::create_directories(layout.root, error);
+    // An empty path never locks, so an unusable root stays unlocked.
+    return error ? fs::path{} : layout.root / ".activation.lock";
+  }
+
+  platform::ExclusiveFileLock lock_;
 };
 
 [[nodiscard]] bool write_activation_stage(const fs::path &path,
@@ -141,58 +85,21 @@ private:
   // A previous crash may have left a complete or partial stage. Never follow
   // an existing symlink or truncate a stage owned by another writer.
   fs::remove(path, error);
-  if (error) return false;
-#ifdef _WIN32
-  const HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                                  CREATE_NEW,
-                                  FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH,
-                                  nullptr);
-  if (file == INVALID_HANDLE_VALUE) return false;
-  DWORD written{};
-  const auto ok = WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()),
-                            &written, nullptr) != 0 &&
-                  written == bytes.size() && FlushFileBuffers(file) != 0;
-  CloseHandle(file);
-  if (!ok) (void)DeleteFileW(path.c_str());
-  return ok;
-#else
-  const int file = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL |
-                                           O_CLOEXEC | O_NOFOLLOW,
-                          S_IRUSR | S_IWUSR);
-  if (file < 0) return false;
-  std::size_t offset{};
-  while (offset < bytes.size()) {
-    const auto count = ::write(file, bytes.data() + offset, bytes.size() - offset);
-    if (count < 0 && errno == EINTR) continue;
-    if (count <= 0) break;
-    offset += static_cast<std::size_t>(count);
-  }
-  const bool ok = offset == bytes.size() && ::fsync(file) == 0;
-  (void)::close(file);
-  if (!ok) (void)::unlink(path.c_str());
-  return ok;
-#endif
+  return !error && platform::create_durable_file(
+                       path, std::as_bytes(std::span(bytes.data(), bytes.size())));
 }
 
 [[nodiscard]] ActivationOutcome publish_activation_file(
     const fs::path &source, const fs::path &target) {
-  if (!plain_file_or_absent(target)) return ActivationOutcome::failed;
-#ifdef _WIN32
-  return MoveFileExW(source.c_str(), target.c_str(),
-                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0
-             ? ActivationOutcome::published_durable
-             : ActivationOutcome::failed;
-#else
-  if (::rename(source.c_str(), target.c_str()) != 0)
-    return ActivationOutcome::failed;
-  const int directory = ::open(target.parent_path().c_str(),
-                               O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (directory < 0) return ActivationOutcome::published_unconfirmed;
-  const bool durable = ::fsync(directory) == 0;
-  (void)::close(directory);
-  return durable ? ActivationOutcome::published_durable
-                 : ActivationOutcome::published_unconfirmed;
-#endif
+  switch (platform::publish_durable_file_checked(source, target)) {
+  case platform::DurablePublishOutcome::published_durable:
+    return ActivationOutcome::published_durable;
+  case platform::DurablePublishOutcome::published_unconfirmed:
+    return ActivationOutcome::published_unconfirmed;
+  case platform::DurablePublishOutcome::failed:
+    break;
+  }
+  return ActivationOutcome::failed;
 }
 
 [[nodiscard]] std::optional<std::string> read_pointer(const fs::path &path) {

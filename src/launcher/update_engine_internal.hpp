@@ -1,7 +1,7 @@
 #pragma once
 
 #include "layerc/launcher/update_engine.hpp"
-#include "layerc/platform/durable_file.hpp"
+#include "layerc/durable/durable_file.hpp"
 
 namespace layerc::launcher {
 
