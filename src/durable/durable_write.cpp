@@ -1,4 +1,5 @@
-#include "layerc/platform/durable_file.hpp"
+// Portable compositions of the per-platform durable primitives.
+#include "layerc/durable/durable_file.hpp"
 
 #include <atomic>
 #include <string>

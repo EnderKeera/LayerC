@@ -135,13 +135,34 @@ add_executable(layerc_manifest tools/update_manifest.cpp)
 target_link_libraries(layerc_manifest PRIVATE layerc_core)
 layerc_enable_warnings(layerc_manifest)
 
-# Update engine for the Windows launcher. OS durability lives in the existing
-# platform helpers, so its behavior is tested on every CI platform.
+# Durable file write, publish, flush, and lock primitives: one TU per platform
+# plus portable compositions. No dependencies, so the platform library and the
+# launcher share one implementation without the launcher pulling in the rest
+# of the platform layer. The Windows TU reuses two header-only platform helpers.
+add_library(layerc_durable STATIC src/durable/durable_write.cpp)
+target_include_directories(layerc_durable PUBLIC src/durable/include)
+target_compile_features(layerc_durable PUBLIC cxx_std_20)
+if(WIN32)
+    target_sources(layerc_durable PRIVATE src/durable/durable_file.cpp)
+    target_include_directories(layerc_durable PRIVATE
+        src/platform src/platform/include)
+    target_compile_definitions(layerc_durable PRIVATE
+        WINVER=0x0A00
+        _WIN32_WINNT=0x0A00
+    )
+    layerc_win32(layerc_durable)
+else()
+    target_sources(layerc_durable PRIVATE src/durable/linux/durable_file.cpp)
+    layerc_enable_warnings(layerc_durable)
+endif()
+
+# Update engine for the Windows launcher. OS durability lives in
+# layerc_durable, so its behavior is tested on every CI platform.
 add_library(layerc_launcher_core STATIC
     src/launcher/update_engine.cpp
     src/launcher/signature.cpp)
 target_include_directories(layerc_launcher_core PUBLIC src/launcher/include)
-target_link_libraries(layerc_launcher_core PUBLIC layerc_core)
+target_link_libraries(layerc_launcher_core PUBLIC layerc_core layerc_durable)
 layerc_enable_warnings(layerc_launcher_core)
 
 # The release key and source are baked into layerc.exe. The public key is
@@ -251,8 +272,6 @@ if(WIN32)
         src/platform/automation_persistence.cpp
         src/platform/profile_store_layout.cpp
         src/platform/profile_bundle_load.cpp
-        src/platform/durable_file.cpp
-        src/platform/durable_write.cpp
         src/platform/profile_file_guard.cpp
         src/platform/profile_transaction.cpp
         src/platform/visual_assets.cpp
@@ -266,7 +285,7 @@ if(WIN32)
     )
     target_include_directories(layerc_windows PUBLIC src/platform/include)
     target_link_libraries(layerc_windows PUBLIC
-        layerc_core user32 advapi32 shell32 ole32 gdi32 shcore
+        layerc_core layerc_durable user32 advapi32 shell32 ole32 gdi32 shcore
         bcrypt hid comctl32 dwmapi uxtheme)
     # miniz serves the shared template-asset PNG codec.
     target_link_libraries(layerc_windows PRIVATE layerc_miniz)
@@ -291,7 +310,6 @@ if(WIN32)
     layerc_win32(layerc_capture)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_windows)
-    target_link_libraries(layerc_launcher_core PUBLIC layerc_windows)
     # layerc_win32 re-applies warnings (already set above) to propagate the
     # UNICODE/lean-headers contract to every dependent exe and test.
     layerc_win32(layerc_bundle)
@@ -386,8 +404,6 @@ if(NOT WIN32)
         src/platform/automation_persistence.cpp
         src/platform/profile_store_layout.cpp
         src/platform/profile_bundle_load.cpp
-        src/platform/linux/durable_file.cpp
-        src/platform/durable_write.cpp
         src/platform/linux/profile_file_guard.cpp
         src/platform/profile_transaction.cpp
         src/platform/text.cpp
@@ -400,14 +416,13 @@ if(NOT WIN32)
     )
     target_include_directories(layerc_linux PUBLIC src/platform/include)
     target_include_directories(layerc_linux PRIVATE src/platform/linux)
-    target_link_libraries(layerc_linux PUBLIC layerc_core)
+    target_link_libraries(layerc_linux PUBLIC layerc_core layerc_durable)
     # miniz serves the shared template-asset PNG codec; the daemon consumes
     # only verified images through the visual-asset contract.
     target_link_libraries(layerc_linux PRIVATE layerc_miniz)
     layerc_enable_warnings(layerc_linux)
 
     target_link_libraries(layerc_bundle PUBLIC layerc_linux)
-    target_link_libraries(layerc_launcher_core PUBLIC layerc_linux)
 
     # X11 adapters. Without the X11 development packages the daemon
     # builds without input/overlay/capture and reports those capabilities as
