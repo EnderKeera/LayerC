@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/document_error.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/core/enum_wire.hpp"
 
@@ -13,11 +14,7 @@ enum class Required { no, yes };
 enum class EmptyString { allow, reject };
 enum class IntegerEncoding { number, integer_token, decimal_string, number_or_string };
 
-struct FieldError {
-  std::string path;
-  std::string message;
-  [[nodiscard]] std::string describe() const;
-};
+using FieldError = layerc::core::DocumentError;
 
 // Syntax errors use the shared $@<byte-offset> path convention. A size
 // violation has no parse offset and is reported at the document root.

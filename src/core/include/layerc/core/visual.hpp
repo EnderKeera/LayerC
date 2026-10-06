@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/document_error.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/enum_wire.hpp"
 
@@ -163,7 +164,7 @@ struct RegionPixelBounds {
           edge(region.y + region.height, height, true)};
 }
 
-// Finite, nonempty, and within the 0..1 frame (inclusive, 1e-12 tolerance).
+// Finite, nonempty, and within the 0..1 frame (inclusive, region_geometry_epsilon tolerance).
 // Shared by profile validation and the calibration CLI so the accepted
 // region set stays identical in both paths.
 [[nodiscard]] bool
@@ -292,10 +293,7 @@ struct VisualProfile {
   bool operator==(const VisualProfile &) const = default;
 };
 
-struct VisualError {
-  std::string path;
-  std::string message;
-};
+using VisualError = DocumentError;
 
 using VisualResult = std::variant<VisualProfile, VisualError>;
 

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -37,11 +39,11 @@ public:
       return failure();
     // Schema 1 is migrated in memory. Every subsequent save emits schema 2.
     result.schema_version = 2;
-    const auto rate = fields_.integer(root_, "sampleRateHz", "$", 5, 15);
+    const auto rate = fields_.integer(root_, "sampleRateHz", "$", 0, 255);
     std::string quality;
     if (!rate || !fields_.string(root_, "quality", "$", quality)) return failure();
-    // The 5/10/15 Hz set, reference counts, and cross-field rules are
-    // semantic invariants owned by validate_visual_profile.
+    // The reader owns shape and types; every bound, count, and cross-field
+    // rule is a semantic invariant owned by validate_visual_profile.
     result.sample_rate_hz = static_cast<std::uint8_t>(*rate);
     if (auto parsed = parse_enum_wire(capture_quality_wire, quality))
       result.quality = *parsed;
@@ -51,8 +53,6 @@ public:
     if (*version == 1) {
       const auto *rules = fields_.array(root_, "rules", "$");
       if (rules == nullptr) return failure();
-      if (rules->size() > max_pixel_rules)
-        return error("$.rules", "at most four pixel rules are supported");
       for (std::size_t index = 0; index < rules->size(); ++index) {
         if (!read_rule((*rules)[index],
                        "$.rules[" + std::to_string(index) + "]",
@@ -62,9 +62,6 @@ public:
     } else {
       const auto *observations = fields_.array(root_, "observations", "$");
       if (observations == nullptr) return failure();
-      if (observations->size() > max_pixel_rules + max_template_states)
-        return error("$.observations",
-                     "at most eight visual observations are supported");
       for (std::size_t index = 0; index < observations->size(); ++index) {
         if (!read_observation((*observations)[index], index, result))
           return failure();
@@ -80,9 +77,9 @@ public:
     auto validation = validate_visual_profile(result, base_);
     if (validation.message.empty()) return result;
     // Schema 1 holds only pixel rules, so its `rules[N]` is observation N.
-    constexpr std::string_view observations_path = "$.observations[";
+    constexpr std::string_view observations_path = "$.observations";
     if (*version == 1 && validation.path.starts_with(observations_path))
-      validation.path.replace(0, observations_path.size(), "$.rules[");
+      validation.path.replace(0, observations_path.size(), "$.rules");
     return validation;
   }
 
@@ -94,10 +91,10 @@ private:
     if (region == nullptr ||
         !fields_.exact_fields(*region, {"x", "y", "width", "height"}, region_path))
       return false;
-    const auto x = fields_.number(*region, "x", region_path, 0.0, 1.0);
-    const auto y = fields_.number(*region, "y", region_path, 0.0, 1.0);
-    const auto width = fields_.number(*region, "width", region_path, 0.0, 1.0);
-    const auto height = fields_.number(*region, "height", region_path, 0.0, 1.0);
+    const auto x = number(*region, "x", region_path);
+    const auto y = number(*region, "y", region_path);
+    const auto width = number(*region, "width", region_path);
+    const auto height = number(*region, "height", region_path);
     if (!x || !y || !width || !height) return false;
     out = {*x, *y, *width, *height};
     return true;
@@ -153,7 +150,7 @@ private:
       const auto tolerance =
           fields_.integer(*predicate, "tolerance", predicate_path, 0, 255);
       const auto minimum =
-          fields_.number(*predicate, "minimumPercent", predicate_path, 0.0, 100.0);
+          number(*predicate, "minimumPercent", predicate_path);
       if (!target || !tolerance || !minimum) return false;
       out = ColorCoveragePredicate{*target, static_cast<std::uint8_t>(*tolerance),
                                   *minimum / 100.0};
@@ -182,7 +179,7 @@ private:
 
     if (!read_predicate(value, path, rule.predicate)) return false;
 
-    const auto stable = fields_.integer(value, "stableSamples", path, 1, 15);
+    const auto stable = fields_.integer(value, "stableSamples", path, 0, 255);
     if (!stable) return false;
     rule.stable_samples = static_cast<std::uint8_t>(*stable);
     if (!read_repeat_policy(value, path, rule.repeat)) return false;
@@ -198,15 +195,10 @@ private:
     std::string type;
     if (!fields_.string(value, "type", path, type)) return false;
     if (type == "pixel") {
-      if (count_observations<PixelRule>(output.observations) >= max_pixel_rules)
-        return set(path, "at most four pixel observations are supported");
       return read_rule(value, path, output.observations, true);
     }
     if (type != "template")
       return set(path + ".type", "expected pixel or template");
-    if (count_observations<TemplateState>(output.observations) >=
-        max_template_states)
-      return set(path, "at most four template observations are supported");
     return read_template(value, index, output.observations);
   }
 
@@ -233,9 +225,9 @@ private:
     if (!fields_.exact_fields(*expected, {"width", "height"}, path + ".expectedSize"))
       return false;
     const auto expected_width =
-        fields_.number(*expected, "width", path + ".expectedSize", 0.000001, 1.0);
+        number(*expected, "width", path + ".expectedSize");
     const auto expected_height =
-        fields_.number(*expected, "height", path + ".expectedSize", 0.000001, 1.0);
+        number(*expected, "height", path + ".expectedSize");
     if (!expected_width || !expected_height) return false;
     state.expected_width = *expected_width;
     state.expected_height = *expected_height;
@@ -256,13 +248,11 @@ private:
       state.references.push_back(std::move(parsed));
     }
 
-    const auto confidence =
-        fields_.number(value, "confidence", path, 0.0, 1.0);
-    const auto scale =
-        fields_.number(value, "scaleTolerancePercent", path, 0.0, 20.0);
+    const auto confidence = number(value, "confidence", path);
+    const auto scale = number(value, "scaleTolerancePercent", path);
     const auto color_tolerance =
         fields_.integer(value, "colorTolerance", path, 0, 255);
-    const auto stable = fields_.integer(value, "stableSamples", path, 1, 15);
+    const auto stable = fields_.integer(value, "stableSamples", path, 0, 255);
     if (!confidence || !scale || !color_tolerance || !stable) return false;
     state.confidence_threshold = *confidence;
     state.scale_tolerance = *scale / 100.0;
@@ -315,8 +305,10 @@ private:
       if (value.find("keepInput") != nullptr)
         return set(path + ".keepInput",
                    "field is only valid for pixelOnly");
-      const auto timeout = fields_.integer(value, "confirmationTimeoutMs", path,
-                                   50, 5'000);
+      const auto timeout = fields_.integer(
+          value, "confirmationTimeoutMs", path,
+          std::numeric_limits<std::int64_t>::min(),
+          std::numeric_limits<std::int64_t>::max());
       if (!timeout)
         return false;
       trigger.confirmation_timeout = Milliseconds(*timeout);
@@ -339,9 +331,16 @@ private:
     return true;
   }
 
-  VisualError failure() const {
-    return {fields_.error().path, fields_.error().message};
+  // Any finite number; the validator owns its range.
+  std::optional<double> number(const json::Value &value,
+                               const std::string_view key,
+                               const std::string &path) {
+    return fields_.number(value, key, path,
+                          std::numeric_limits<double>::lowest(),
+                          std::numeric_limits<double>::max());
   }
+
+  VisualError failure() const { return fields_.error(); }
   VisualError error(std::string path, std::string message) {
     return {.path = std::move(path), .message = std::move(message)};
   }
@@ -361,8 +360,8 @@ bool valid_normalized_region(const NormalizedRegion &region) noexcept {
          std::isfinite(region.width) && std::isfinite(region.height) &&
          region.x >= 0.0 && region.y >= 0.0 && region.width > 0.0 &&
          region.height > 0.0 &&
-         region.x + region.width <= 1.0 + 1e-12 &&
-         region.y + region.height <= 1.0 + 1e-12;
+         region.x + region.width <= 1.0 + region_geometry_epsilon &&
+         region.y + region.height <= 1.0 + region_geometry_epsilon;
 }
 
 namespace {
@@ -407,8 +406,8 @@ validate_observation(const TemplateState &state, const std::string &path) {
       state.expected_height <= 0.0 || state.expected_height > 1.0)
     return invalid(path + ".expectedSize",
                    "expected template size must be normalized and positive");
-  if (state.expected_width > state.search_region.width + 1e-12 ||
-      state.expected_height > state.search_region.height + 1e-12)
+  if (state.expected_width > state.search_region.width + region_geometry_epsilon ||
+      state.expected_height > state.search_region.height + region_geometry_epsilon)
     return invalid(path + ".expectedSize",
                    "expected template size must fit inside its search region");
   if (state.references.empty() ||
@@ -522,7 +521,7 @@ VisualResult parse_visual_profile_json(const std::string_view source,
     return VisualError{"$", "visual sidecar exceeds 256 KiB limit"};
   const auto parsed = json::parse_bounded(source, max_visual_json_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
-    return VisualError{error->path, error->message};
+    return *error;
   return parse_visual_profile_value(std::get<json::Value>(parsed), base_profile);
 }
 

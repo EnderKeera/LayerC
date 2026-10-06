@@ -296,10 +296,8 @@ void EditorWindow::flush_live_profile() {
   KillTimer(shell_.window, live_profile_timer);
   live_profile_pending_ = false;
   if (live_edit_.session_id() == 0 || !draft_controls_valid()) return;
+  if (layerc::core::validate_profile(document_.profile())) return;
   const auto serialized = layerc::core::serialize_profile_json(document_.profile());
-  if (!std::holds_alternative<layerc::core::GameProfile>(
-          layerc::core::parse_profile_json(serialized)))
-    return;
   live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::live_profile,

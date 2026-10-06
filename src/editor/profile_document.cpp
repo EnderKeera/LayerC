@@ -181,20 +181,18 @@ ProfileDocument::remove_cooldown(const std::string_view id) {
   if (visual)
     erase_visual_assignment(*visual, removed_id);
 
-  const auto parsed = layerc::core::parse_profile_json(
-      layerc::core::serialize_profile_json(candidate));
-  if (const auto *error = std::get_if<layerc::core::ProfileError>(&parsed))
-    return CooldownRemovalError{error->path + ": " + error->message};
+  if (const auto error = layerc::core::validate_profile(candidate))
+    return CooldownRemovalError{error->describe()};
   if (visual) {
     const auto error = layerc::core::validate_visual_profile(*visual, candidate);
     if (!error.message.empty())
-      return CooldownRemovalError{error.path + ": " + error.message};
+      return CooldownRemovalError{error.describe()};
   }
   if (automation_.profile) {
     const auto error = layerc::core::validate_automation_profile(
         *automation_.profile, candidate);
     if (!error.message.empty())
-      return CooldownRemovalError{error.path + ": " + error.message};
+      return CooldownRemovalError{error.describe()};
   }
 
   profile_ = std::move(candidate);

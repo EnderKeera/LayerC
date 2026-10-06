@@ -54,21 +54,17 @@ void add_rule(ProfileDocument &document, AutomationAction action,
 }
 
 void expect_valid(const ProfileDocument &document) {
-  const auto parsed =
-      parse_profile_json(serialize_profile_json(document.profile()));
-  const auto *base_error = std::get_if<ProfileError>(&parsed);
-  expect(base_error == nullptr,
-         base_error ? base_error->path + ": " + base_error->message
-                    : "the complete base profile must remain parser-valid");
+  const auto base_error = validate_profile(document.profile());
+  expect(!base_error, base_error ? base_error->describe() : std::string{});
   if (document.visual()) {
     const auto error =
         validate_visual_profile(*document.visual(), document.profile());
-    expect(error.message.empty(), error.path + ": " + error.message);
+    expect(error.message.empty(), error.describe());
   }
   if (document.automation()) {
     const auto error =
         validate_automation_profile(*document.automation(), document.profile());
-    expect(error.message.empty(), error.path + ": " + error.message);
+    expect(error.message.empty(), error.describe());
   }
 }
 

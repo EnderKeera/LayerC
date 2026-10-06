@@ -153,7 +153,7 @@ std::variant<UpdateManifest, UpdateManifestError>
 parse_update_manifest_json(const std::string_view json) {
   const auto parsed = json::parse_bounded(json, max_update_manifest_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
-    return UpdateManifestError{error->path, error->message};
+    return *error;
   const auto &root = std::get<json::Value>(parsed);
   if (!root.is_object())
     return UpdateManifestError{"$", "update manifest root must be an object"};

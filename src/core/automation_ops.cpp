@@ -210,8 +210,7 @@ bool infer_arithmetic(const AutomationOpSpec &self, const Types types,
 bool infer_any_all(const AutomationOpSpec &self, const Types types,
                           std::optional<AutomationValueType> &result,
                           std::string &error) {
-  if (types.size() != 1 ||
-      (types[0].has_value() && *types[0] != AutomationValueType::list)) {
+  if (types[0].has_value() && *types[0] != AutomationValueType::list) {
     error = std::string(self.name) + " requires one list";
     return false;
   }
@@ -222,8 +221,7 @@ bool infer_any_all(const AutomationOpSpec &self, const Types types,
 bool infer_map_filter(const AutomationOpSpec &self, const Types types,
                              std::optional<AutomationValueType> &result,
                              std::string &error) {
-  if (types.size() != 2 ||
-      (types[0].has_value() && *types[0] != AutomationValueType::list) ||
+  if ((types[0].has_value() && *types[0] != AutomationValueType::list) ||
       !known(types, 1, AutomationValueType::string)) {
     error = std::string(self.name) + " requires a list and a string field name";
     return false;
@@ -235,13 +233,7 @@ bool infer_map_filter(const AutomationOpSpec &self, const Types types,
 bool infer_min_max_clamp(const AutomationOpSpec &self, const Types types,
                                 std::optional<AutomationValueType> &result,
                                 std::string &error) {
-  const bool valid_count =
-      (self.opcode == AutomationOpcode::clamp && types.size() == 3U) ||
-      ((self.opcode == AutomationOpcode::minimum ||
-        self.opcode == AutomationOpcode::maximum) &&
-       !types.empty() && types.size() <= 3U);
-  if (!valid_count ||
-      !std::ranges::all_of(
+  if (!std::ranges::all_of(
           std::views::iota(std::size_t{}, types.size()),
           [&](const std::size_t index) { return numeric(types, index); })) {
     error = std::string(self.name) + " requires bounded numeric arguments";

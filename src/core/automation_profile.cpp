@@ -212,36 +212,37 @@ std::optional<AutomationValue> read_value(const Value &value,
                      std::string(automation_value_type_name(type))};
   return std::nullopt;
 }
+// Reads the automation document's shape and types only. Every semantic
+// bound (IDs, ranges, arity, references) is owned by
+// validate_automation_profile, which parse() runs on the complete result. The
+// json::Reader is the only error channel.
 struct Parser {
   const Value &root;
   const GameProfile &base;
-  AutomationError error;
   json::Reader fields{};
+
   bool fail(std::string path, std::string message) {
-    if (error.message.empty())
-      error = {std::move(path), std::move(message)};
-    return false;
+    return fields.fail(std::move(path), std::move(message));
   }
   const Value *required(const Value &parent, std::string_view key,
                         const std::string &path) {
-    const auto *value = fields.field(parent, key, path, json::Required::yes);
-    if (!value)
-      fail(fields.error().path, fields.error().message);
-    return value;
+    return fields.field(parent, key, path, json::Required::yes);
   }
   bool string(const Value &parent, std::string_view key,
               const std::string &path, std::string &out,
               bool optional = false) {
     return fields.string(parent, key, path, out,
                          optional ? json::Required::no : json::Required::yes,
-                         json::EmptyString::allow) ||
-           fail(fields.error().path, fields.error().message);
+                         json::EmptyString::allow);
   }
   bool boolean(const Value &parent, std::string_view key,
                const std::string &path, bool &out, bool optional = false) {
     return fields.boolean(parent, key, path, out,
-                          optional ? json::Required::no : json::Required::yes) ||
-           fail(fields.error().path, fields.error().message);
+                          optional ? json::Required::no : json::Required::yes);
+  }
+  const Value::Array *array(const Value &parent, std::string_view key,
+                            const std::string &path) {
+    return fields.array(parent, key, path, json::Required::yes);
   }
   // Unknown-field policy: like the profile, visual, and companion sidecars,
   // automation rejects unknown fields at every object level. The serializer
@@ -250,8 +251,16 @@ struct Parser {
   // loudly instead of silently falling back to its default.
   bool known(const Value &value, std::initializer_list<std::string_view> allowed,
              const std::string &path) {
-    return fields.exact_fields(value, allowed, path) ||
-           fail(fields.error().path, fields.error().message);
+    return fields.exact_fields(value, allowed, path);
+  }
+  bool value(const Value &raw, const AutomationValueType type,
+             const std::string &path, AutomationValue &out) {
+    AutomationError error;
+    auto parsed = read_value(raw, type, error, path);
+    if (!parsed)
+      return fail(std::move(error.path), std::move(error.message));
+    out = std::move(*parsed);
+    return true;
   }
   bool continuous_input(const Value &input, ContinuousInputSettings &out) {
     const std::string path = "$.continuousInput";
@@ -261,63 +270,64 @@ struct Parser {
                path))
       return false;
     if (const auto *raw = input.find("deadzone")) {
-      if (!raw->is_number() || raw->as_number() < 0 || raw->as_number() > .95)
+      if (!raw->is_number())
         return fail(path + ".deadzone", "expected 0 through 0.95");
       out.deadzone = raw->as_number();
     }
     if (const auto *raw = input.find("changeThreshold")) {
-      if (!raw->is_number() || raw->as_number() <= 0 || raw->as_number() > 1)
+      if (!raw->is_number())
         return fail(path + ".changeThreshold", "expected above 0 through 1");
       out.change_threshold = raw->as_number();
     }
     if (const auto *raw = input.find("maxEventsPerSecond")) {
       const auto events = json::read_integer(*raw);
-      if (!events || *events < 1 || *events > 240)
+      if (!events)
         return fail(path + ".maxEventsPerSecond",
                     "expected integer 1 through 240");
-      out.max_events_per_second = static_cast<std::uint32_t>(*events);
+      // Out-of-range integers become 0, which the validator rejects with the
+      // same message.
+      out.max_events_per_second =
+          *events < 0 || *events > std::numeric_limits<std::uint32_t>::max()
+              ? 0U
+              : static_cast<std::uint32_t>(*events);
     }
     return true;
   }
-  bool expression(const Value &value, AutomationExpression &out,
+  bool expression(const Value &raw, AutomationExpression &out,
                   const std::string &path) {
     out = AutomationExpression{};
 
-    if (!value.is_object())
+    if (!raw.is_object())
       return fail(path, "expression must be an object");
     std::string op;
-    if (!string(value, "op", path, op))
+    if (!string(raw, "op", path, op))
       return false;
     if (op == "literal") {
       out.kind = ExpressionKind::literal;
-      if (!known(value, {"op", "valueType", "value"}, path))
+      if (!known(raw, {"op", "valueType", "value"}, path))
         return false;
       std::string declared;
-      if (!string(value, "valueType", path, declared))
+      if (!string(raw, "valueType", path, declared))
         return false;
       const auto type = detail::parse_automation_value_type_name(declared);
-      const auto *literal = required(value, "value", path);
+      const auto *literal = required(raw, "value", path);
       if (!type || !literal)
         return fail(path, "literal requires a supported valueType and value");
-      auto parsed = read_value(*literal, *type, error, path + ".value");
-      if (!parsed)
-        return false;
-      out.literal = std::move(*parsed);
-      return true;
+      return value(*literal, *type, path + ".value", out.literal);
     }
     if (op == "variable" || op == "event") {
       out.kind = op == "variable" ? ExpressionKind::variable
                                   : ExpressionKind::event_field;
       const std::string_view reference = op == "variable" ? "id" : "field";
-      return known(value, {"op", reference}, path) &&
-             string(value, reference, path, out.reference);
+      return known(raw, {"op", reference}, path) &&
+             string(raw, reference, path, out.reference);
     }
     if (op == "index") {
       out.kind = ExpressionKind::index;
-      if (!known(value, {"op", "target", "key"}, path))
+      if (!known(raw, {"op", "target", "key"}, path))
         return false;
-      const auto *target = required(value, "target", path);
-      const auto *key = required(value, "key", path);
+      const auto *target = required(raw, "target", path);
+      const auto *key = required(raw, "key", path);
       if (!target || !key)
         return false;
       out.arguments.resize(2);
@@ -329,101 +339,79 @@ struct Parser {
       return fail(path + ".op", "unsupported expression operator");
     out.kind = spec->kind;
     out.operation = op;
-    if (!known(value, {"op", "args"}, path))
+    if (!known(raw, {"op", "args"}, path))
       return false;
-    const auto *args = required(value, "args", path);
-    if (!args || !args->is_array())
-      return fail(path + ".args", "expected array");
-    const auto count = args->as_array().size();
-    if (count < spec->min_args || count > spec->max_args)
-      return fail(path + ".args", "operator has an invalid argument count");
-    out.arguments.resize(args->as_array().size());
+    const auto *args = array(raw, "args", path);
+    if (!args)
+      return false;
+    out.arguments.resize(args->size());
     for (std::size_t i{}; i < out.arguments.size(); ++i)
-      if (!expression(args->as_array()[i], out.arguments[i],
+      if (!expression((*args)[i], out.arguments[i],
                       path + ".args[" + std::to_string(i) + "]"))
         return false;
     return true;
   }
-  bool action(const Value &value, AutomationAction &out,
+  bool action(const Value &raw, AutomationAction &out,
               const std::string &path) {
-    if (!value.is_object())
+    if (!raw.is_object())
       return fail(path, "action must be an object");
-    if (!known(value,
+    if (!known(raw,
                {"type", "target", "name", "property", "repeating", "value",
                 "secondary"},
                path))
       return false;
     std::string kind;
-    if (!string(value, "type", path, kind))
+    if (!string(raw, "type", path, kind))
       return false;
     const auto parsed = parse_automation_action_name(kind);
     if (!parsed)
       return fail(path + ".type", "unsupported automation action");
     out.kind = *parsed;
-    if (!string(value, "target", path, out.target) ||
-        !string(value, "name", path, out.name, true) ||
-        !string(value, "property", path, out.property, true) ||
-        !boolean(value, "repeating", path, out.repeating, true))
+    if (!string(raw, "target", path, out.target) ||
+        !string(raw, "name", path, out.name, true) ||
+        !string(raw, "property", path, out.property, true) ||
+        !boolean(raw, "repeating", path, out.repeating, true))
       return false;
-    if (const auto *raw = value.find("value")) {
+    if (const auto *value = raw.find("value")) {
       out.value.emplace();
-      if (!expression(*raw, *out.value, path + ".value"))
+      if (!expression(*value, *out.value, path + ".value"))
         return false;
     }
-    if (const auto *raw = value.find("secondary")) {
+    if (const auto *secondary = raw.find("secondary")) {
       out.secondary.emplace();
-      if (!expression(*raw, *out.secondary, path + ".secondary"))
+      if (!expression(*secondary, *out.secondary, path + ".secondary"))
         return false;
     }
-    return true;
-  }
-  // The field reader's error wins when an id is not a string; otherwise the
-  // id failed valid_automation_id and the domain message is recorded.
-  bool read_id(const Value &entry, const std::string &path, std::string &id,
-               std::set<std::string, std::less<>> &seen,
-               const std::string_view kind) {
-    if (!string(entry, "id", path, id) || !detail::valid_automation_id(id))
-      return fail(path + ".id", "invalid " + std::string(kind) + " ID");
-    if (!seen.insert(id).second)
-      return fail(path + ".id", "duplicate " + std::string(kind) + " ID");
     return true;
   }
   bool read_variable(const Value &entry, const std::string &path,
-                     std::set<std::string, std::less<>> &ids,
                      AutomationVariable &variable) {
     if (!entry.is_object())
       return fail(path, "variable must be an object");
-    if (!known(entry, {"id", "type", "persistent", "default"}, path) ||
-        !read_id(entry, path, variable.id, ids, "variable"))
-      return false;
     std::string declared;
-    if (!string(entry, "type", path, declared) ||
+    if (!known(entry, {"id", "type", "persistent", "default"}, path) ||
+        !string(entry, "id", path, variable.id) ||
+        !string(entry, "type", path, declared) ||
         !boolean(entry, "persistent", path, variable.persistent, true))
       return false;
     const auto type = detail::parse_automation_value_type_name(declared);
-    if (!type || *type == AutomationValueType::null_value)
+    if (!type)
       return fail(path + ".type", "variables require a non-null supported type");
     variable.type = *type;
     const auto *raw = required(entry, "default", path);
-    if (!raw)
-      return false;
-    auto parsed = read_value(*raw, variable.type, error, path + ".default");
-    if (!parsed)
-      return false;
-    variable.default_value = std::move(*parsed);
-    return true;
+    return raw != nullptr &&
+           value(*raw, variable.type, path + ".default", variable.default_value);
   }
   bool read_rule(const Value &entry, const std::string &path,
-                 std::set<std::string, std::less<>> &ids, AutomationRule &rule) {
+                 AutomationRule &rule) {
     if (!entry.is_object())
       return fail(path, "rule must be an object");
+    std::string event;
     if (!known(entry,
                {"id", "priority", "event", "source", "condition", "actions"},
                path) ||
-        !read_id(entry, path, rule.id, ids, "rule"))
-      return false;
-    std::string event;
-    if (!string(entry, "event", path, event) ||
+        !string(entry, "id", path, rule.id) ||
+        !string(entry, "event", path, event) ||
         !string(entry, "source", path, rule.source_filter, true))
       return false;
     const auto parsed_event = parse_automation_event_name(event);
@@ -431,96 +419,96 @@ struct Parser {
       return fail(path + ".event", "unsupported event source");
     rule.event = *parsed_event;
     if (const auto *raw = entry.find("priority")) {
+      // Shape only: the value must be an int32; its bound is the validator's.
       const auto priority = json::read_integer(*raw);
-      if (!priority || *priority < -1'000'000 || *priority > 1'000'000)
+      if (!priority || *priority < std::numeric_limits<std::int32_t>::min() ||
+          *priority > std::numeric_limits<std::int32_t>::max())
         return fail(path + ".priority", "priority must be a bounded integer");
       rule.priority = static_cast<std::int32_t>(*priority);
     }
     if (const auto *condition = entry.find("condition"))
       if (!expression(*condition, rule.condition, path + ".condition"))
         return false;
-    const auto *actions = entry.find("actions");
-    if (actions == nullptr || !actions->is_array())
-      return fail(path + ".actions", "expected array");
-    rule.actions.resize(actions->as_array().size());
+    const auto *actions = array(entry, "actions", path);
+    if (!actions)
+      return false;
+    rule.actions.resize(actions->size());
     for (std::size_t i{}; i < rule.actions.size(); ++i)
-      if (!action(actions->as_array()[i], rule.actions[i],
+      if (!action((*actions)[i], rule.actions[i],
                   path + ".actions[" + std::to_string(i) + "]"))
         return false;
     return true;
   }
   bool read_automation(const Value &entry, const std::string &path,
-                       std::set<std::string, std::less<>> &ids,
                        AutomationDefinition &automation) {
     if (!entry.is_object())
       return fail(path, "automation must be an object");
     if (!known(entry, {"id", "name", "enabled", "rules"}, path) ||
-        !read_id(entry, path, automation.id, ids, "automation"))
-      return false;
-    if (!string(entry, "name", path, automation.name) ||
+        !string(entry, "id", path, automation.id) ||
+        !string(entry, "name", path, automation.name) ||
         !boolean(entry, "enabled", path, automation.enabled, true))
       return false;
-    const auto *rules = entry.find("rules");
-    if (rules == nullptr || !rules->is_array())
-      return fail(path + ".rules", "expected array");
-    std::set<std::string, std::less<>> rule_ids;
-    for (std::size_t i{}; i < rules->as_array().size(); ++i) {
-      AutomationRule rule;
-      if (!read_rule(rules->as_array()[i],
-                     path + ".rules[" + std::to_string(i) + "]", rule_ids, rule))
+    const auto *rules = array(entry, "rules", path);
+    if (!rules)
+      return false;
+    automation.rules.resize(rules->size());
+    for (std::size_t i{}; i < rules->size(); ++i)
+      if (!read_rule((*rules)[i], path + ".rules[" + std::to_string(i) + "]",
+                     automation.rules[i]))
         return false;
-      automation.rules.push_back(std::move(rule));
-    }
     return true;
   }
-  AutomationProfileResult parse() {
+  bool read(AutomationProfile &profile) {
     if (!root.is_object())
-      return AutomationError{"$", "automation root must be an object"};
-    std::optional<std::int64_t> version;
-    if (const auto *schema = root.find("schemaVersion"))
-      version = json::read_integer(*schema);
-    if (!version || *version != 1)
-      return AutomationError{"$.schemaVersion",
-                             "unsupported automation schema version"};
-    AutomationProfile profile;
+      return fail("$", "automation root must be an object");
+    // The schema version selects the reader, so it is checked before the
+    // remaining fields; detail::automation_header_error owns the rule.
+    const auto *schema = root.find("schemaVersion");
+    const auto version = schema ? json::read_integer(*schema) : std::nullopt;
+    profile.schema_version =
+        version && *version >= 0 &&
+                *version <= std::numeric_limits<std::uint32_t>::max()
+            ? static_cast<std::uint32_t>(*version)
+            : 0U;
+    if (auto header = detail::automation_header_error(profile, nullptr);
+        !header.message.empty())
+      return fail(std::move(header.path), std::move(header.message));
     if (!known(root,
                {"schemaVersion", "profileId", "continuousInput", "variables",
                 "automations"},
                "$") ||
         !string(root, "profileId", "$", profile.profile_id))
-      return error;
-    if (profile.profile_id != base.id)
-      return AutomationError{
-          "$.profileId", "automation profile ID does not match base profile"};
+      return false;
+    if (auto header = detail::automation_header_error(profile, &base);
+        !header.message.empty())
+      return fail(std::move(header.path), std::move(header.message));
     if (const auto *input = root.find("continuousInput"))
       if (!continuous_input(*input, profile.continuous_input))
-        return error;
-    const auto *variables = root.find("variables");
-    const auto *automations = root.find("automations");
-    if (variables == nullptr || !variables->is_array())
-      return AutomationError{"$.variables", "expected array"};
-    if (automations == nullptr || !automations->is_array())
-      return AutomationError{"$.automations", "expected array"};
-    std::set<std::string, std::less<>> variable_ids;
-    for (std::size_t i{}; i < variables->as_array().size(); ++i) {
-      AutomationVariable variable;
-      if (!read_variable(variables->as_array()[i],
+        return false;
+    const auto *variables = array(root, "variables", "$");
+    const auto *automations = variables ? array(root, "automations", "$") : nullptr;
+    if (!automations)
+      return false;
+    profile.variables.resize(variables->size());
+    for (std::size_t i{}; i < variables->size(); ++i)
+      if (!read_variable((*variables)[i],
                          "$.variables[" + std::to_string(i) + "]",
-                         variable_ids, variable))
-        return error;
-      profile.variables.push_back(std::move(variable));
-    }
-    std::set<std::string, std::less<>> automation_ids;
-    for (std::size_t i{}; i < automations->as_array().size(); ++i) {
-      AutomationDefinition automation;
-      if (!read_automation(automations->as_array()[i],
+                         profile.variables[i]))
+        return false;
+    profile.automations.resize(automations->size());
+    for (std::size_t i{}; i < automations->size(); ++i)
+      if (!read_automation((*automations)[i],
                            "$.automations[" + std::to_string(i) + "]",
-                           automation_ids, automation))
-        return error;
-      profile.automations.push_back(std::move(automation));
-    }
-    const auto validation = validate_automation_profile(profile, base);
-    if (!validation.message.empty())
+                           profile.automations[i]))
+        return false;
+    return true;
+  }
+  AutomationProfileResult parse() {
+    AutomationProfile profile;
+    if (!read(profile))
+      return fields.error();
+    if (auto validation = validate_automation_profile(profile, base);
+        !validation.message.empty())
       return validation;
     return profile;
   }
@@ -636,7 +624,7 @@ AutomationProfileResult parse_automation_profile_json(std::string_view source,
 }
 AutomationProfileResult parse_automation_profile_value(const json::Value &root,
                                                        const GameProfile &base) {
-  return Parser{root, base, {}}.parse();
+  return Parser{root, base}.parse();
 }
 std::string
 serialize_automation_profile_json(const AutomationProfile &profile) {

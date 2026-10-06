@@ -162,7 +162,7 @@ void AutomationEditor::reset_simulator(const HWND dialog) {
   if (graph == nullptr) {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
     trace_display_ =
-        "Simulator reset failed: " + error.path + ": " + error.message;
+        "Simulator reset failed: " + error.describe();
     set_text(GetDlgItem(dialog, IDC_AUTOMATION_TRACE_TEXT),
              to_wide(trace_display_));
     return;
@@ -278,7 +278,7 @@ void AutomationEditor::add_simulator_event(const HWND dialog) {
       const auto *value = std::get_if<layerc::core::AutomationValue>(&parsed);
       if (value == nullptr) {
         const auto &error = std::get<layerc::core::AutomationError>(parsed);
-        themed_message_box(dialog, to_wide(error.path + ": " + error.message).c_str(),
+        themed_message_box(dialog, to_wide(error.describe()).c_str(),
                     L"Synthetic event", MB_OK | MB_ICONWARNING);
         valid = false;
         return false;
@@ -309,7 +309,7 @@ void AutomationEditor::load_trace(const HWND dialog) {
       std::get_if<std::vector<layerc::core::AutomationEvent>>(&parsed);
   if (events == nullptr) {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
-    themed_message_box(dialog, to_wide(error.path + ": " + error.message).c_str(),
+    themed_message_box(dialog, to_wide(error.describe()).c_str(),
                 L"Invalid trace", MB_OK | MB_ICONWARNING);
     return;
   }
@@ -345,7 +345,7 @@ bool AutomationEditor::handle_live_message(
   } else {
     const auto &error = std::get<layerc::core::AutomationError>(parsed);
     trace_display_ =
-        "Rejected malformed LayerD trace: " + error.path + ": " + error.message;
+        "Rejected malformed LayerD trace: " + error.describe();
   }
   if (dialog_ != nullptr && IsWindow(dialog_))
     set_text(GetDlgItem(dialog_, IDC_AUTOMATION_TRACE_TEXT),

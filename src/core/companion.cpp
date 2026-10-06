@@ -58,36 +58,52 @@ bool read_unit(json::Reader &reader, const json::Value &object,
   return value.has_value();
 }
 
+// The one slot-mapping rule set, shared by the companion sidecar and the
+// Game Bar preferences; only panel membership differs (base-profile panels
+// vs available panels). Membership implies a bounded non-empty panel ID.
+template <typename PanelExists>
 CompanionValidationResult
-validate_slot_mapping(const CompanionSlotMapping &slot,
-                      const GameProfile &base_profile,
-                      const std::string &path) {
-  if (slot.slot_index >= max_companion_slots)
-    return CompanionError{path + ".slotIndex",
-                          "slotIndex must be between 0 and 7"};
-  if (auto error = bounded_text(path, "panelId", slot.panel_id, false))
-    return error;
-  const bool panel_exists =
-      std::ranges::any_of(base_profile.panels, [&](const Panel &p) {
-        return p.id == slot.panel_id;
-      });
-  if (!panel_exists)
-    return CompanionError{path + ".panelId",
-                          "referenced panelId does not exist in base profile"};
-  if (!std::isfinite(slot.opacity) || slot.opacity < 0.0 || slot.opacity > 1.0)
-    return CompanionError{path + ".opacity",
-                          "opacity must be finite and within [0,1]"};
+validate_slot_set(const std::vector<CompanionSlotMapping> &slots,
+                  const std::string_view root, PanelExists &&panel_exists) {
+  if (slots.size() > max_companion_slots)
+    return CompanionError{std::string(root),
+                          "companion slots exceed maximum limit (8)"};
+  std::vector<std::uint32_t> seen_slots;
+  std::vector<std::string_view> seen_panels;
+  for (std::size_t index = 0; index < slots.size(); ++index) {
+    const auto &slot = slots[index];
+    const std::string path =
+        std::string(root) + "[" + std::to_string(index) + "]";
+    if (slot.slot_index >= max_companion_slots)
+      return CompanionError{path + ".slotIndex",
+                            "slotIndex must be between 0 and 7"};
+    if (std::ranges::find(seen_slots, slot.slot_index) != seen_slots.end())
+      return CompanionError{path + ".slotIndex", "duplicate slotIndex"};
+    if (!panel_exists(slot.panel_id))
+      return CompanionError{path + ".panelId",
+                            "panelId must name an available panel"};
+    if (std::ranges::find(seen_panels, slot.panel_id) != seen_panels.end())
+      return CompanionError{path + ".panelId",
+                            "a panel may be assigned to only one slot"};
+    if (!std::isfinite(slot.opacity) || slot.opacity < 0.0 || slot.opacity > 1.0)
+      return CompanionError{path + ".opacity",
+                            "opacity must be finite and within [0,1]"};
+    seen_slots.push_back(slot.slot_index);
+    seen_panels.push_back(slot.panel_id);
+  }
   return std::nullopt;
 }
 
 // Shape and type only; validate_companion_profile owns the slot invariants.
 bool parse_slot_mapping(json::Reader &fields, const json::Value &value,
                         const std::string &path, CompanionSlotMapping &slot) {
-  const auto index = fields.integer(value, "slotIndex", path, 0,
-                                    max_companion_slots - 1, json::Required::yes,
-                                    0, json::IntegerEncoding::integer_token);
-  const auto opacity = fields.number(value, "opacity", path, 0.0, 1.0,
-                                     json::Required::no, slot.opacity);
+  const auto index = fields.integer(
+      value, "slotIndex", path, 0, std::numeric_limits<std::uint32_t>::max(),
+      json::Required::yes, 0, json::IntegerEncoding::integer_token);
+  const auto opacity =
+      fields.number(value, "opacity", path, std::numeric_limits<double>::lowest(),
+                    std::numeric_limits<double>::max(), json::Required::no,
+                    slot.opacity);
   if (!index || !opacity ||
       !read_text(fields, value, "panelId", path, false, slot.panel_id) ||
       !fields.boolean(value, "pinned", path, slot.pinned, json::Required::no) ||
@@ -109,7 +125,7 @@ parse_companion_profile_json(const std::string_view json_str,
   }
   const auto parsed = json::parse_bounded(json_str, max_companion_sidecar_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
-    return CompanionError{error->path, error->message};
+    return *error;
   return parse_companion_profile_value(std::get<json::Value>(parsed), base_profile);
 }
 
@@ -118,33 +134,24 @@ parse_companion_profile_value(const json::Value &value,
                               const GameProfile &base_profile) {
   if (!value.is_object())
     return CompanionError{"$", "companion profile root must be an object"};
-  const auto &root = value.as_object();
-  const auto schema_it = root.find("schemaVersion");
-  if (schema_it == root.end() || !schema_it->second.is_integer() ||
-      schema_it->second.as_integer() !=
-          static_cast<std::int64_t>(companion_schema_version)) {
-    return CompanionError{"$.schemaVersion",
-                          "unsupported companion schemaVersion"};
-  }
-
-  const auto id_it = root.find("profileId");
-  if (id_it == root.end() || !id_it->second.is_string() ||
-      id_it->second.as_string() != base_profile.id) {
-    return CompanionError{"$.profileId",
-                          "companion profileId must match base profile id"};
-  }
-
+  // Shape only: a missing or mistyped header leaves a value that
+  // validate_companion_profile rejects with the header's own message.
   CompanionProfile profile;
-  profile.schema_version = companion_schema_version;
-  profile.profile_id = base_profile.id;
+  const auto *schema = value.find("schemaVersion");
+  const auto version = schema != nullptr && schema->is_integer()
+                           ? schema->as_integer()
+                           : std::int64_t{-1};
+  profile.schema_version =
+      version >= 0 && version <= std::numeric_limits<std::uint32_t>::max()
+          ? static_cast<std::uint32_t>(version)
+          : 0U;
+  if (const auto *id = value.find("profileId"); id != nullptr && id->is_string())
+    profile.profile_id = id->as_string();
 
   json::Reader fields;
   const auto *slots = fields.array(value, "slots", "$", json::Required::no);
   if (!fields.ok()) return reader_error(fields);
   if (slots != nullptr) {
-    if (slots->size() > max_companion_slots)
-      return CompanionError{"$.slots",
-                            "companion slots exceed maximum limit (8)"};
     fields.each(*slots, "$.slots",
                 [&](const json::Value &entry, const std::string &path) {
                   CompanionSlotMapping mapping;
@@ -167,25 +174,12 @@ validate_companion_profile(const CompanionProfile &profile,
   if (profile.profile_id.empty() || profile.profile_id != base_profile.id)
     return CompanionError{"$.profileId",
                           "companion profileId must match base profile id"};
-  if (profile.slots.size() > max_companion_slots)
-    return CompanionError{"$.slots",
-                          "companion slots exceed maximum limit (8)"};
-  std::vector<std::uint32_t> seen_slots;
-  std::vector<std::string> seen_panels;
-  for (std::size_t index = 0; index < profile.slots.size(); ++index) {
-    const auto &slot = profile.slots[index];
-    const std::string path = "$.slots[" + std::to_string(index) + "]";
-    if (auto error = validate_slot_mapping(slot, base_profile, path))
-      return error;
-    if (std::ranges::find(seen_slots, slot.slot_index) != seen_slots.end())
-      return CompanionError{path + ".slotIndex", "duplicate slotIndex mapping"};
-    seen_slots.push_back(slot.slot_index);
-    if (std::ranges::find(seen_panels, slot.panel_id) != seen_panels.end())
-      return CompanionError{path + ".panelId",
-                            "a panel may be assigned to only one slot"};
-    seen_panels.push_back(slot.panel_id);
-  }
-  return std::nullopt;
+  return validate_slot_set(
+      profile.slots, "$.slots", [&](const std::string_view panel_id) {
+        return std::ranges::any_of(base_profile.panels, [&](const Panel &panel) {
+          return panel.id == panel_id;
+        });
+      });
 }
 
 std::string serialize_companion_profile_json(const CompanionProfile &profile) {
@@ -228,43 +222,6 @@ validate_available_panels(const std::vector<CompanionAvailablePanel> &panels,
     if (std::ranges::find(available_ids, panel.panel_id) != available_ids.end())
       return CompanionError{path + ".panelId", "duplicate available panelId"};
     available_ids.push_back(panel.panel_id);
-  }
-  return std::nullopt;
-}
-
-CompanionValidationResult validate_preferences(
-    const std::vector<CompanionSlotMapping> &preferences,
-    const std::vector<std::string_view> &available_ids) {
-  std::vector<std::uint32_t> preference_slots;
-  std::vector<std::string_view> preference_panels;
-  for (std::size_t preference_index = 0;
-       preference_index < preferences.size(); ++preference_index) {
-    const auto &preference = preferences[preference_index];
-    const std::string path =
-        "$.preferences[" + std::to_string(preference_index) + "]";
-    if (preference.slot_index >= max_companion_slots)
-      return CompanionError{path + ".slotIndex",
-                            "slotIndex must be between 0 and 7"};
-    if (std::ranges::find(preference_slots, preference.slot_index) !=
-        preference_slots.end())
-      return CompanionError{path + ".slotIndex",
-                            "duplicate preference slotIndex"};
-    // Available ids are already bounded and non-empty, so membership is the
-    // whole text check.
-    if (std::ranges::find(available_ids, preference.panel_id) ==
-        available_ids.end())
-      return CompanionError{path + ".panelId",
-                            "panelId must name one available bounded panel"};
-    if (std::ranges::find(preference_panels, preference.panel_id) !=
-        preference_panels.end())
-      return CompanionError{path + ".panelId",
-                            "duplicate preference panelId"};
-    if (!std::isfinite(preference.opacity) || preference.opacity < 0.0 ||
-        preference.opacity > 1.0)
-      return CompanionError{path + ".opacity",
-                            "opacity must be finite and within [0,1]"};
-    preference_slots.push_back(preference.slot_index);
-    preference_panels.push_back(preference.panel_id);
   }
   return std::nullopt;
 }
@@ -339,14 +296,16 @@ validate_companion_snapshot(const CompanionSessionSnapshot &snapshot) {
   if (snapshot.available_panels.size() > max_companion_available_panels)
     return CompanionError{"$.availablePanels",
                           "available panel count exceeds its bound"};
-  if (snapshot.preferences.size() > max_companion_slots)
-    return CompanionError{"$.preferences",
-                          "preference count exceeds its bound"};
   std::vector<std::string_view> available_ids;
   if (auto error =
           validate_available_panels(snapshot.available_panels, available_ids))
     return error;
-  if (auto error = validate_preferences(snapshot.preferences, available_ids))
+  if (auto error = validate_slot_set(
+          snapshot.preferences, "$.preferences",
+          [&](const std::string_view panel_id) {
+            return std::ranges::find(available_ids, panel_id) !=
+                   available_ids.end();
+          }))
     return error;
   return validate_snapshot_panels(snapshot.panels, snapshot.preferences);
 }
@@ -504,15 +463,21 @@ bool parse_preference(json::Reader &reader, const json::Value &value,
                       CompanionSlotMapping &preference) {
   if (!value.is_object())
     return reader.fail(path, "preference must be an object");
-  return read_count(reader, value, "slotIndex", path, 0,
-                    static_cast<std::int64_t>(max_companion_slots - 1),
-                    preference.slot_index) &&
-         read_text(reader, value, "panelId", path, false, preference.panel_id) &&
-         reader.boolean(value, "pinned", path, preference.pinned,
-                        json::Required::yes) &&
-         reader.boolean(value, "clickThrough", path, preference.click_through,
-                        json::Required::yes) &&
-         read_unit(reader, value, "opacity", path, preference.opacity);
+  // Shape only: validate_companion_snapshot owns the slot rules.
+  if (!read_count(reader, value, "slotIndex", path, 0,
+                  std::numeric_limits<std::uint32_t>::max(),
+                  preference.slot_index) ||
+      !read_text(reader, value, "panelId", path, false, preference.panel_id) ||
+      !reader.boolean(value, "pinned", path, preference.pinned,
+                      json::Required::yes) ||
+      !reader.boolean(value, "clickThrough", path, preference.click_through,
+                      json::Required::yes))
+    return false;
+  const auto opacity = reader.number(
+      value, "opacity", path, std::numeric_limits<double>::lowest(),
+      std::numeric_limits<double>::max(), json::Required::yes);
+  if (opacity) preference.opacity = *opacity;
+  return opacity.has_value();
 }
 
 } // namespace
@@ -525,7 +490,7 @@ parse_companion_snapshot_json(const std::string_view json_str) {
   const auto parsed_result =
       json::parse_bounded(json_str, max_companion_snapshot_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed_result))
-    return CompanionError{error->path, error->message};
+    return *error;
   const auto &root = std::get<json::Value>(parsed_result);
   if (!root.is_object())
     return CompanionError{"$", "companion snapshot root must be an object"};

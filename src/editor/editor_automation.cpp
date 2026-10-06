@@ -66,14 +66,14 @@ JsonErrorPresentation
 present_json_error(const std::string_view source,
                    const layerc::core::AutomationError &error) {
   if (!error.path.starts_with("$@") || error.path.size() == 2)
-    return {.message = to_wide(error.path + ": " + error.message),
+    return {.message = to_wide(error.describe()),
             .selection_start = std::nullopt,
             .selection_end = std::nullopt};
 
   std::size_t byte_offset{};
   for (const char digit : std::string_view(error.path).substr(2)) {
     if (!std::isdigit(static_cast<unsigned char>(digit)))
-      return {.message = to_wide(error.path + ": " + error.message),
+      return {.message = to_wide(error.describe()),
               .selection_start = std::nullopt,
               .selection_end = std::nullopt};
     byte_offset = byte_offset * 10U + static_cast<std::size_t>(digit - '0');
@@ -190,7 +190,7 @@ AutomationEditor::mutate_automation(const HWND dialog, const wchar_t *title,
   if (!validation.message.empty()) {
     *profile = std::move(before);
     themed_message_box(dialog,
-                to_wide(validation.path + ": " + validation.message).c_str(),
+                to_wide(validation.describe()).c_str(),
                 title, MB_OK | MB_ICONWARNING);
     return Mutation::invalid;
   }
@@ -401,7 +401,7 @@ void AutomationEditor::apply_node_properties(const HWND dialog) {
         const auto *value = std::get_if<layerc::core::AutomationValue>(&parsed);
         if (value == nullptr) {
           const auto &error = std::get<layerc::core::AutomationError>(parsed);
-          return to_wide(error.path + ": " + error.message);
+          return to_wide(error.describe());
         }
         action->value = literal(*value);
         return std::nullopt;

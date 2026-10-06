@@ -1,5 +1,6 @@
 #pragma once
 
+#include "layerc/core/document_error.hpp"
 #include "layerc/core/types.hpp"
 
 #include <cstdint>
@@ -40,12 +41,7 @@ struct CompanionProfile {
   bool operator==(const CompanionProfile &) const = default;
 };
 
-struct CompanionError {
-  std::string path;
-  std::string message;
-
-  bool operator==(const CompanionError &) const = default;
-};
+using CompanionError = DocumentError;
 
 struct CompanionSnapshotItem {
   std::string cooldown_id;

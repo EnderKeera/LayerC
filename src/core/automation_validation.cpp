@@ -140,12 +140,10 @@ bool validate_expression_tree(
   const auto *spec = detail::find_automation_op(expression.operation);
   if (spec == nullptr || spec->kind != expression.kind)
     return fail("unsupported expression operator");
-  if (expression.kind == ExpressionKind::unary &&
-      expression.arguments.size() != 1U)
-    return fail("unary operator requires one argument");
-  if (expression.kind == ExpressionKind::binary &&
-      expression.arguments.size() != 2U)
-    return fail("binary operator requires two arguments");
+  // The operator table owns arity; infer functions see a valid count.
+  if (expression.arguments.size() < spec->min_args ||
+      expression.arguments.size() > spec->max_args)
+    return fail("operator has an invalid argument count");
   std::string message;
   if (!spec->infer(*spec, arguments, result, message))
     return fail(message);
@@ -302,10 +300,9 @@ AutomationError validate_action(const AutomationAction &action,
 
 AutomationError validate_automation_profile(const AutomationProfile &profile,
                                             const GameProfile &base) {
-  if (profile.schema_version != 1)
-    return {"$.schemaVersion", "unsupported automation schema version"};
-  if (profile.profile_id != base.id)
-    return {"$.profileId", "automation profile ID does not match base profile"};
+  if (auto header = detail::automation_header_error(profile, &base);
+      !header.message.empty())
+    return header;
   if (!std::isfinite(profile.continuous_input.deadzone) ||
       profile.continuous_input.deadzone < 0.0 ||
       profile.continuous_input.deadzone > 0.95)
@@ -328,8 +325,9 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
     if (!detail::valid_automation_id(variable.id) ||
         !variables.emplace(variable.id, variable.type).second)
       return {path + ".id", "duplicate or invalid variable ID"};
-    if (variable.type == AutomationValueType::null_value ||
-        value_type(variable.default_value) != variable.type ||
+    if (variable.type == AutomationValueType::null_value)
+      return {path + ".type", "variables require a non-null supported type"};
+    if (value_type(variable.default_value) != variable.type ||
         !automation_value_valid(variable.default_value))
       return {path + ".default", "invalid variable default"};
   }
