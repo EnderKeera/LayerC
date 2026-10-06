@@ -15,13 +15,13 @@
 #include <cstdint>
 #include <iterator>
 #include <set>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
 namespace layerc::bundle {
 namespace {
 
-using core::owned_bytes;
 using detail::asset_path_for_profile;
 using detail::kSidecars;
 using detail::pack_error;
@@ -61,6 +61,14 @@ struct ImportPlan {
 };
 
 using ImportPlanResult = std::variant<ImportPlan, PackError>;
+
+// A packed module replaces the stored sidecar; an absent one tombstones it.
+template <typename Profile>
+platform::ModuleIntent<Profile>
+module_intent(const std::optional<ModulePayload<Profile>> &slot) {
+  if (slot.has_value()) return slot->profile;
+  return platform::RemoveModule{};
+}
 
 // Copy imports get a fresh profile id and matching sidecar profileIds so the
 // copied bundle stays internally consistent with the new base identity.
@@ -168,16 +176,6 @@ ImportPlanResult build_import_plan(
   std::set<std::string, std::less<>> selected_targets;
   std::vector<platform::ProfileFileMutation> mutations;
   std::map<std::filesystem::path, std::string> required_assets;
-  const auto add_backup_mutation = [&](const std::filesystem::path &target,
-                                       const std::size_t limit) -> bool {
-    auto previous = platform::read_durable_file(target, limit);
-    if (previous.status == platform::FileReadStatus::missing) return true;
-    if (!previous.has_value()) return false;
-    mutations.push_back(
-        {.target = platform::recovery_backup_path(target),
-         .contents = std::move(previous.bytes)});
-    return true;
-  };
 
   for (const auto *ordered_choice : ordered_choices) {
     const auto &choice = *ordered_choice;
@@ -263,73 +261,32 @@ ImportPlanResult build_import_plan(
     used_filenames.insert(*target_folded);
     used_ids.insert(imported.profile.id);
 
-    imported.profile.schema_version = 4;
-    imported.profile.modules.clear();
     for (const auto &desc : kSidecars) {
       detail::visit_sidecar(
-          imported, desc, [&](const auto &module, const auto &) {
-            if (module.has_value())
-              imported.profile.modules.push_back(
-                  {.kind = desc.kind,
-                   .schema_version = module->profile.schema_version});
-          });
-    }
-    const auto base_json = core::serialize_profile_json(imported.profile);
-    if (!add_backup_mutation(target, core::max_profile_json_bytes))
-      return pack_error<ImportPlanResult>("existing profile could not be protected by a backup");
-    mutations.push_back({.target = target,
-                         .contents = owned_bytes(base_json),
-                         .must_be_absent = choice.require_absent ||
-                             choice.action == ImportAction::copy || !collides});
-    auto stage_sidecar = [&](const platform::SidecarPaths &paths,
-                             const auto &module, const std::string_view kind,
-                             const std::size_t max_bytes,
-                             auto serialize) -> std::optional<PackError> {
-      if (module.has_value()) {
-        const auto json = serialize(module->profile);
-        if (!add_backup_mutation(paths.primary, max_bytes))
-          return PackError{"existing " + std::string(kind) +
-                           " sidecar could not be protected by a backup"};
-        mutations.push_back(
-            {.target = paths.primary, .contents = owned_bytes(json)});
-        mutations.push_back({.target = paths.marker,
-                             .contents = owned_bytes(
-                                  platform::sidecar_marker_contents(true))});
-      } else {
-        const auto markers =
-            platform::inspect_sidecar_markers(paths.primary);
-        if (markers.error)
-          return PackError{"existing " + std::string(kind) +
-                           " sidecar state could not be inspected"};
-        if (markers.present) {
-          mutations.push_back(
-              {.target = paths.primary, .contents = std::nullopt});
-          mutations.push_back(
-              {.target = paths.backup, .contents = std::nullopt});
-          mutations.push_back({.target = paths.marker,
-                               .contents = owned_bytes(
-                                    platform::sidecar_marker_contents(false))});
-        }
-      }
-      return std::nullopt;
-    };
-    for (const auto &desc : kSidecars) {
-      const auto sidecar_error = detail::visit_sidecar(
-          imported, desc,
-          [&](const auto &module,
-              const auto &traits) -> std::optional<PackError> {
+          imported, desc, [&](const auto &module, const auto &traits) {
             using Traits = std::remove_cvref_t<decltype(traits)>;
-            const auto error = stage_sidecar(
-                platform::sidecar_paths(target, desc.kind), module,
-                desc.name, desc.max_bytes, Traits::serialize);
             if (module.has_value())
               for (const auto &hash : Traits::assets(module->profile))
                 required_assets.emplace(asset_path_for_profile(target, hash),
                                         hash);
-            return error;
           });
-      if (sidecar_error) return *sidecar_error;
     }
+    // The store's save policy owns base metadata, recovery copies, markers,
+    // and tombstones; the batch adds only content-addressed assets.
+    auto intents = std::apply(
+        [](const auto &...slots) {
+          return platform::ProfileModuleIntents{module_intent(slots)...};
+        },
+        imported.modules);
+    const auto planned = platform::plan_profile_bundle_mutations(
+        target, imported.profile, std::move(intents),
+        choice.require_absent || choice.action == ImportAction::copy ||
+            !collides,
+        mutations);
+    if (const auto failure = planned.failure)
+      return pack_error<ImportPlanResult>(
+          std::string("selected profile could not be planned: ") +
+          platform::profile_write_error_text(*failure));
   }
 
 

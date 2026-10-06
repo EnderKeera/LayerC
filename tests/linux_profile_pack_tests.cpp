@@ -1,6 +1,7 @@
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
+#include "profile_pack_recovery_cases.hpp"
 #include "template_png_fixture.hpp"
 #include "test_support.hpp"
 
@@ -209,7 +210,28 @@ void linux_profile_pack_contracts() {
   (void)passed;
 }
 
+// Import and save share the store's recovery policy across split XDG roots.
+void linux_pack_sidecar_recovery() {
+  const layerc::test::TempDirectory temp("layerc-linux-pack-recovery");
+  const auto &root = temp.path();
+  const layerc::test::ScopedEnvironment home("HOME", root);
+  const layerc::test::ScopedEnvironment config_home("XDG_CONFIG_HOME",
+                                                  root / "config");
+  const layerc::test::ScopedEnvironment data_home("XDG_DATA_HOME",
+                                                root / "data");
+  const auto roots = layerc::platform::profile_store_roots();
+  if (!expect(home.applied() && config_home.applied() &&
+                  data_home.applied() &&
+                  layerc::platform::ensure_profile_store_roots(roots),
+              "recovery test XDG roots should be created"))
+    return;
+  layerc::test::pack_recovery::batch_import_all_or_nothing(
+      roots.config_profiles);
+  layerc::test::pack_recovery::sidecar_recovery_cases(roots.config_profiles);
+}
+
 int main() {
   return layerc::test::run(
-      {{"linux_profile_pack_contracts", linux_profile_pack_contracts}});
+      {{"linux_profile_pack_contracts", linux_profile_pack_contracts},
+       {"linux_pack_sidecar_recovery", linux_pack_sidecar_recovery}});
 }
