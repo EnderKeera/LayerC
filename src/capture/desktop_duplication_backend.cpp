@@ -87,7 +87,9 @@ public:
       stop_resources();
       return false;
     }
-    if (!create_hardware_device(adapter_.Get(), d3d_, slot_.error_output())) {
+    if (std::string error;
+        !create_hardware_device(adapter_.Get(), d3d_, error)) {
+      slot_.set_error(std::move(error));
       stop_resources();
       return false;
     }
@@ -187,12 +189,15 @@ public:
         static_cast<double>(destination_y) / window_height,
         static_cast<double>(logical_copy_width) / window_width,
         static_cast<double>(logical_copy_height) / window_height};
+    std::string error;
     auto captured = readback_.read(
         d3d_, texture.Get(), source, window_width, window_height, destination_x,
-        destination_y, available, output_rotation_, slot_.quality(), now, slot_.error_output());
+        destination_y, available, output_rotation_, slot_.quality(), now, error);
     (void)duplication_->ReleaseFrame();
-    if (!captured)
+    if (!captured) {
+      slot_.set_error(std::move(error));
       return unavailable(slot_.last_error());
+    }
 
     apply_excluded_rectangles(*captured, window_bounds);
     slot_.publish(std::move(captured));

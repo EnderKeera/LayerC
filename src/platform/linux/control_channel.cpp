@@ -332,7 +332,7 @@ control_roundtrip(std::string_view request_json, std::string &error) {
     (void)::close(*fd);
     return std::nullopt;
   }
-  ControlFramer framer;
+  layerc::core::FrameDecoder framer{control_frame_limit, control_buffer_limit};
   std::array<char, 4096> chunk{};
   const auto deadline = Clock::now() + std::chrono::seconds(5);
   while (poll_until(*fd, POLLIN, deadline)) {
@@ -341,8 +341,8 @@ control_roundtrip(std::string_view request_json, std::string &error) {
                          errno == EWOULDBLOCK))
       continue;
     if (received <= 0) break; // closed or failed before a full frame
-    framer.feed(std::string_view{chunk.data(),
-                                 static_cast<std::size_t>(received)});
+    framer.feed(layerc::core::text_bytes(std::string_view{
+        chunk.data(), static_cast<std::size_t>(received)}));
     if (auto payload = framer.next_frame(); payload.has_value()) {
       (void)::close(*fd);
       const auto response = decode_control_response(*payload);
@@ -354,10 +354,10 @@ control_roundtrip(std::string_view request_json, std::string &error) {
       }
       return payload; // Preserve accepted response bytes for JSON presentation.
     }
-    if (framer.fault() != ControlFramer::Fault::none) break;
+    if (framer.fault() != layerc::core::FrameDecoder::Fault::none) break;
   }
   (void)::close(*fd);
-  error = framer.fault() == ControlFramer::Fault::none
+  error = framer.fault() == layerc::core::FrameDecoder::Fault::none
               ? "the daemon did not return a control response"
               : "the daemon violated the control frame limits";
   return std::nullopt;

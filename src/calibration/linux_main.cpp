@@ -18,9 +18,9 @@
 namespace {
 
 using layerc::core::CaptureAvailability;
-using layerc::core::CaptureBackendKind;
 using layerc::core::CaptureQuality;
 using layerc::core::NormalizedRegion;
+using layerc::core::json::Value;
 
 struct Options {
   layerc::core::WindowId window;
@@ -120,25 +120,6 @@ struct Options {
   return options;
 }
 
-// Wire names come from the shared visual tables so the JSON report and
-// saved sidecars use one vocabulary.
-[[nodiscard]] std::string_view quality_name(const CaptureQuality quality) {
-  return layerc::core::enum_wire_name(layerc::core::capture_quality_wire, quality)
-      .value_or("balanced");
-}
-
-[[nodiscard]] std::string_view
-availability_name(const CaptureAvailability availability) {
-  return layerc::core::enum_wire_name(layerc::core::capture_availability_wire,
-                                      availability)
-      .value_or("unavailable");
-}
-
-[[nodiscard]] std::string_view backend_name(const CaptureBackendKind backend) {
-  return layerc::core::enum_wire_name(layerc::core::capture_backend_wire, backend)
-      .value_or("none");
-}
-
 [[nodiscard]] std::string ppm_header(const std::uint32_t width,
                                      const std::uint32_t height) {
   return "P6\n" + std::to_string(width) + " " + std::to_string(height) +
@@ -154,16 +135,17 @@ availability_name(const CaptureAvailability availability) {
          std::fflush(stdout) == 0;
 }
 
-void append_region(std::string &out, const NormalizedRegion &region) {
-  out += "{\"x\":";
-  layerc::core::json::append_number(out, region.x);
-  out += ",\"y\":";
-  layerc::core::json::append_number(out, region.y);
-  out += ",\"width\":";
-  layerc::core::json::append_number(out, region.width);
-  out += ",\"height\":";
-  layerc::core::json::append_number(out, region.height);
-  out += "}";
+[[nodiscard]] Value integer(const std::uint64_t value) {
+  return Value(static_cast<std::int64_t>(value));
+}
+
+// Wire names come from the shared visual tables so the JSON report and
+// saved sidecars use one vocabulary.
+template <typename Table, typename Enum>
+[[nodiscard]] Value wire_name(const Table &table, const Enum value,
+                              const std::string_view fallback) {
+  return Value(std::string(
+      layerc::core::enum_wire_name(table, value).value_or(fallback)));
 }
 
 void write_metadata(const Options &options,
@@ -179,42 +161,38 @@ void write_metadata(const Options &options,
           : static_cast<std::uint64_t>(header.size()) +
                 static_cast<std::uint64_t>(frame->pixels.size()) * 3U;
 
-  std::string out{"{\"schemaVersion\":1,\"window\":"};
-  layerc::core::json::append_quoted(out,
-                                    std::to_string(options.window.opaque));
-  out += ",\"quality\":";
-  layerc::core::json::append_quoted(out, quality_name(options.quality));
-  out += ",\"availability\":";
-  layerc::core::json::append_quoted(
-      out, availability_name(poll.result.availability));
-  out += ",\"backend\":";
-  layerc::core::json::append_quoted(out, backend_name(poll.result.backend));
-  out += ",\"width\":";
-  layerc::core::json::append_unsigned(out, width);
-  out += ",\"height\":";
-  layerc::core::json::append_unsigned(out, height);
-  out += ",\"region\":";
-  append_region(out, options.region);
-  const auto pixels = layerc::core::to_pixel_bounds(options.region, width, height);
-  out += ",\"pixelRegion\":{\"left\":";
-  layerc::core::json::append_unsigned(out, pixels.left);
-  out += ",\"top\":";
-  layerc::core::json::append_unsigned(out, pixels.top);
-  out += ",\"right\":";
-  layerc::core::json::append_unsigned(out, pixels.right);
-  out += ",\"bottom\":";
-  layerc::core::json::append_unsigned(out, pixels.bottom);
-  out += "},\"snapshot\":{\"format\":\"ppm\",\"bytes\":";
-  layerc::core::json::append_unsigned(out, snapshot_bytes);
-  out += "},\"resources\":{\"captureSessions\":";
-  layerc::core::json::append_unsigned(out, resources.capture_sessions);
-  out += ",\"objects\":";
-  layerc::core::json::append_unsigned(out, resources.objects);
-  out += ",\"cacheBytes\":";
-  layerc::core::json::append_unsigned(out, resources.cache_bytes);
-  out += "},\"diagnostic\":";
-  layerc::core::json::append_quoted(out, poll.result.diagnostic);
-  out += "}\n";
+  const auto &region = options.region;
+  const auto pixels = layerc::core::to_pixel_bounds(region, width, height);
+  const Value metadata(Value::Object{
+      {"schemaVersion", integer(1)},
+      {"window", Value(std::to_string(options.window.opaque))},
+      {"quality", wire_name(layerc::core::capture_quality_wire,
+                            options.quality, "balanced")},
+      {"availability", wire_name(layerc::core::capture_availability_wire,
+                                 poll.result.availability, "unavailable")},
+      {"backend", wire_name(layerc::core::capture_backend_wire,
+                            poll.result.backend, "none")},
+      {"width", integer(width)},
+      {"height", integer(height)},
+      {"region", Value(Value::Object{{"x", Value(region.x)},
+                                     {"y", Value(region.y)},
+                                     {"width", Value(region.width)},
+                                     {"height", Value(region.height)}})},
+      {"pixelRegion", Value(Value::Object{{"left", integer(pixels.left)},
+                                          {"top", integer(pixels.top)},
+                                          {"right", integer(pixels.right)},
+                                          {"bottom", integer(pixels.bottom)}})},
+      {"snapshot", Value(Value::Object{{"format", Value(std::string("ppm"))},
+                                       {"bytes", integer(snapshot_bytes)}})},
+      {"resources",
+       Value(Value::Object{
+           {"captureSessions", integer(resources.capture_sessions)},
+           {"objects", integer(resources.objects)},
+           {"cacheBytes", integer(resources.cache_bytes)}})},
+      {"diagnostic", Value(poll.result.diagnostic)}});
+  std::string out;
+  layerc::core::json::append_value(out, metadata);
+  out += '\n';
   (void)std::fwrite(out.data(), 1, out.size(), stdout);
 }
 

@@ -280,9 +280,11 @@ layerc::runtime::ServiceReconcileResult
 X11VisualService::reconcile(
     const layerc::runtime::CapabilityDemand &demand) {
   if (!demand.required(layerc::runtime::Capability::visual))
-    return {false, "visual: service invoked without demand"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "visual: service invoked without demand");
   if (display_ == nullptr || !display_->valid())
-    return {false, "visual: no X display for capture"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "visual: no X display for capture");
   fault_.clear();
   for (auto &target : targets_) {
     if (target.capture && target.capture->start()) continue;

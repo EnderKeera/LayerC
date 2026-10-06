@@ -102,7 +102,8 @@ HidRuntime::reconcile(const layerc::runtime::CapabilityDemand &) {
   hid.registered_usages = std::move(retained);
 
   if (!registration_ok)
-    return {false, "Raw Input rejected a required HID usage"};
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "Raw Input rejected a required HID usage");
   hid.active_selectors = std::move(active_selectors);
   if (selector_set_changed || usage_set_changed)
     hid.devices_dirty = true;

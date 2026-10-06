@@ -133,8 +133,9 @@ public:
       return false;
     }
     runtime_ = std::make_unique<WinRtRuntime>();
-    if (!runtime_->initialize(slot_.error_output()) ||
-        !create_hardware_device(nullptr, d3d_, slot_.error_output())) {
+    if (std::string error; !runtime_->initialize(error) ||
+                           !create_hardware_device(nullptr, d3d_, error)) {
+      slot_.set_error(std::move(error));
       stop();
       return false;
     }
@@ -269,12 +270,15 @@ public:
       const auto height = std::min<std::uint32_t>(
           description.Height, static_cast<std::uint32_t>(content.height));
       const D3D11_BOX source{0, 0, 0, width, height, 1};
+      std::string error;
       auto captured =
           readback_.read(d3d_, texture.Get(), source, width, height, 0, 0,
                          {0.0, 0.0, 1.0, 1.0}, OutputRotation::identity,
-                         slot_.quality(), now, slot_.error_output());
-      if (!captured)
+                         slot_.quality(), now, error);
+      if (!captured) {
+        slot_.set_error(std::move(error));
         return slot_.unavailable(slot_.last_error());
+      }
       slot_.publish(std::move(captured));
     }
 

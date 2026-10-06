@@ -57,8 +57,6 @@ public:
   }
   void set_error(std::string error) { error_ = std::move(error); }
   void clear_error() noexcept { error_.clear(); }
-  // Out-parameter for device and readback helpers that report failures.
-  [[nodiscard]] std::string &error_output() noexcept { return error_; }
 
   [[nodiscard]] CapturePollResult unavailable(std::string diagnostic) const {
     return {.availability = core::CaptureAvailability::unavailable,

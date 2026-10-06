@@ -115,7 +115,8 @@ private:
   void drop(layerc::platform::EventLoop &loop, int fd) noexcept;
 
   struct Client {
-    layerc::platform::ControlFramer framer;
+    layerc::core::FrameDecoder framer{layerc::platform::control_frame_limit,
+                                      layerc::platform::control_buffer_limit};
     layerc::core::TimePoint expires_at;
     std::string response;
     std::size_t sent{};
