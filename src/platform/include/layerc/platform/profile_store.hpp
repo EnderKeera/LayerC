@@ -174,6 +174,19 @@ write_profile_bundle(const std::filesystem::path &path,
                      const layerc::core::GameProfile &profile,
                      ProfileModuleIntents modules);
 
+// The store's bundle save policy, for planners that compose several bundles
+// into one commit_profile_transaction: validates `profile` and its module
+// intents against the stored bundle at `path`, then appends the base and
+// sidecar recovery copies (the last usable primary or recovered backup, else
+// the new contents), primaries, and markers or tombstones. `create_only`
+// requires the base to be absent at commit. Call only while owning the
+// store (inside a planner) unless the plan is advisory; nothing is appended
+// on failure.
+[[nodiscard]] ProfileWriteResult plan_profile_bundle_mutations(
+    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
+    ProfileModuleIntents modules, bool create_only,
+    std::vector<ProfileFileMutation> &mutations);
+
 // Editors that own visual and automation but not companion data: the
 // companion sidecar is kept unless a replacement is given.
 [[nodiscard]] ProfileWriteResult write_profile_bundle(
@@ -445,14 +458,6 @@ using AutomationCheckpoint =
     const layerc::core::AutomationPersistentValues &values,
     std::optional<layerc::core::TimePoint> &due, layerc::core::TimePoint now,
     bool force = false);
-
-struct SidecarMarkerInspection {
-  bool present{};
-  std::error_code error;
-};
-
-[[nodiscard]] SidecarMarkerInspection
-inspect_sidecar_markers(const std::filesystem::path &sidecar) noexcept;
 
 [[nodiscard]] bool signal_profile_reload();
 

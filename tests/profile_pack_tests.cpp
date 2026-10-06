@@ -7,6 +7,7 @@
 #include "layerc/platform/text.hpp"
 
 #include "miniz.h"
+#include "profile_pack_recovery_cases.hpp"
 #include "template_png_fixture.hpp"
 #include "test_support.hpp"
 
@@ -754,6 +755,20 @@ void pack_transaction_recovery() {
          "journal");
 }
 
+void sidecar_import_save_recovery() {
+  layerc::test::TempDirectory temp("LayerC-pack-sidecar-recovery");
+  layerc::test::ScopedEnvironment profile_dir("LAYERC_PROFILE_DIR", temp.path());
+  if (!expect(profile_dir.applied(), "recovery cases must use a disposable store")) return;
+  layerc::test::pack_recovery::sidecar_recovery_cases(temp.path());
+}
+
+void batch_import_all_or_nothing() {
+  layerc::test::TempDirectory temp("LayerC-pack-batch-atomic");
+  layerc::test::ScopedEnvironment profile_dir("LAYERC_PROFILE_DIR", temp.path());
+  if (!expect(profile_dir.applied(), "batch cases must use a disposable store")) return;
+  layerc::test::pack_recovery::batch_import_all_or_nothing(temp.path());
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(legacy_visual_schema_validation),
@@ -764,4 +779,6 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(legacy_visual_schema_validation),
                  LAYERC_TEST_CASE(copy_original_id_reservations),
                  LAYERC_TEST_CASE(copy_choice_order_is_canonical),
                  LAYERC_TEST_CASE(malformed_packs_rejected),
-                 LAYERC_TEST_CASE(pack_transaction_recovery))
+                 LAYERC_TEST_CASE(pack_transaction_recovery),
+                 LAYERC_TEST_CASE(sidecar_import_save_recovery),
+                 LAYERC_TEST_CASE(batch_import_all_or_nothing))

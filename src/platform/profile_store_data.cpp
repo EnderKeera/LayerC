@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -367,15 +368,29 @@ ProfileWriteResult write_profile_bundle_impl(BundleInputs inputs) {
   return commit_profile_transaction(
       directory, [&](std::vector<ProfileFileMutation> &mutations)
                      -> ProfileWriteResult {
-        ProfileWriteError failure = ProfileWriteError::invalid_input;
-        auto plan = plan_profile_bundle(std::move(inputs), failure);
-        if (!plan.has_value()) return {failure};
-        mutations = std::move(*plan);
-        return {};
+        return plan_profile_bundle_mutations(
+            inputs.path, inputs.profile, std::move(inputs.modules),
+            inputs.create_only, mutations);
       });
 }
 
 } // namespace
+
+ProfileWriteResult plan_profile_bundle_mutations(
+    const std::filesystem::path &path, const layerc::core::GameProfile &profile,
+    ProfileModuleIntents modules, const bool create_only,
+    std::vector<ProfileFileMutation> &mutations) {
+  ProfileWriteError failure = ProfileWriteError::invalid_input;
+  auto plan = plan_profile_bundle({.path = path,
+                                   .profile = profile,
+                                   .modules = std::move(modules),
+                                   .create_only = create_only},
+                                  failure);
+  if (!plan.has_value()) return {failure};
+  mutations.insert(mutations.end(), std::make_move_iterator(plan->begin()),
+                   std::make_move_iterator(plan->end()));
+  return {};
+}
 
 ProfileWriteResult write_profile_bundle(const std::filesystem::path &path,
                                         const layerc::core::GameProfile &profile,
@@ -466,19 +481,6 @@ AutomationCheckpoint checkpoint_automation_state(
   layerc::core::automation_checkpoint_report(due, now, written.ok());
   if (written.failure.has_value()) return *written.failure;
   return CheckpointSaved{};
-}
-
-SidecarMarkerInspection
-inspect_sidecar_markers(const std::filesystem::path &sidecar) noexcept {
-  const std::array paths{
-      sidecar, recovery_backup_path(sidecar), sidecar_state_path(sidecar)};
-  bool present{};
-  for (const auto &path : paths) {
-    std::error_code error;
-    present = std::filesystem::exists(path, error) || present;
-    if (error) return {.present = false, .error = error};
-  }
-  return {.present = present, .error = {}};
 }
 
 } // namespace layerc::platform
