@@ -147,7 +147,7 @@ target_compile_features(layerc_durable PUBLIC cxx_std_20)
 if(WIN32)
     target_sources(layerc_durable PRIVATE src/durable/durable_file.cpp)
     target_include_directories(layerc_durable PRIVATE
-        src/platform src/platform/include)
+        src/platform/win32 src/platform/win32/include)
     target_compile_definitions(layerc_durable PRIVATE
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
@@ -259,33 +259,34 @@ layerc_enable_warnings(layerc_bundle)
 
 if(WIN32)
     add_library(layerc_windows STATIC
-        src/platform/settings_store.cpp
-        src/platform/editor_appearance.cpp
-        src/platform/window_query.cpp
-        src/platform/win32_error.cpp
-        src/platform/platform_events.cpp
-        src/platform/native_theme.cpp
-        src/platform/native_controls.cpp
-        src/platform/window_discovery.cpp
+        src/platform/win32/settings_store.cpp
+        src/platform/win32/editor_appearance.cpp
+        src/platform/win32/window_query.cpp
+        src/platform/win32/win32_error.cpp
+        src/platform/win32/platform_events.cpp
+        src/platform/win32/native_theme.cpp
+        src/platform/win32/native_controls.cpp
+        src/platform/win32/window_discovery.cpp
         src/platform/text.cpp
-        src/platform/path_text.cpp
-        src/platform/profile_store.cpp
+        src/platform/win32/path_text.cpp
+        src/platform/win32/profile_store.cpp
         src/platform/profile_store_data.cpp
         src/platform/automation_persistence.cpp
         src/platform/profile_store_layout.cpp
         src/platform/profile_bundle_load.cpp
-        src/platform/profile_file_guard.cpp
+        src/platform/win32/profile_file_guard.cpp
         src/platform/profile_transaction.cpp
-        src/platform/visual_assets.cpp
+        src/platform/win32/visual_assets.cpp
         src/platform/visual_asset_load.cpp
         src/platform/template_png.cpp
-        src/platform/live_channel.cpp
-        src/platform/framed_pipe.cpp
-        src/platform/bounded_helper.cpp
-        src/platform/hid_device.cpp
-        src/platform/hid_device_inference.cpp
+        src/platform/win32/live_channel.cpp
+        src/platform/win32/framed_pipe.cpp
+        src/platform/win32/bounded_helper.cpp
+        src/platform/win32/hid_device.cpp
+        src/platform/win32/hid_device_inference.cpp
     )
-    target_include_directories(layerc_windows PUBLIC src/platform/include)
+    target_include_directories(layerc_windows PUBLIC
+        src/platform/include src/platform/win32/include)
     target_link_libraries(layerc_windows PUBLIC
         layerc_core layerc_durable user32 advapi32 shell32 ole32 gdi32 shcore
         bcrypt hid comctl32 dwmapi uxtheme)
@@ -416,7 +417,8 @@ if(NOT WIN32)
         src/platform/linux/event_loop.cpp
         src/platform/linux/control_channel.cpp
     )
-    target_include_directories(layerc_linux PUBLIC src/platform/include)
+    target_include_directories(layerc_linux PUBLIC
+        src/platform/include src/platform/linux/include)
     target_include_directories(layerc_linux PRIVATE src/platform/linux)
     target_link_libraries(layerc_linux PUBLIC layerc_core layerc_durable)
     # miniz serves the shared template-asset PNG codec; the daemon consumes

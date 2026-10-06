@@ -1,7 +1,7 @@
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/platform/platform_events.hpp"
 #include "layerc/platform/win32_handle.hpp"
-#include "profile_store_layout.hpp"
+#include "../profile_store_layout.hpp"
 
 #include <vector>
 

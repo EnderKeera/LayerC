@@ -5,7 +5,7 @@
 // profile_transaction.cpp owns journal orchestration only; every
 // platform question (symlink/ownership gates, case folding, journal
 // directory spelling, lock primitive, transaction scope) lives here with
-// one TU per platform (profile_file_guard.cpp on Windows,
+// one TU per platform (win32/profile_file_guard.cpp on Windows,
 // linux/profile_file_guard.cpp on Linux) and zero `#ifdef`s in the shared
 // engine — the same split durable_file already established.
 //
@@ -40,16 +40,6 @@ transaction_relative_key(const std::filesystem::path &relative);
 // outside both target roots, so no reservation is needed.
 [[nodiscard]] bool transaction_reserved_first_component(
     std::string_view name_utf8);
-
-// Linux-only shared owner/mode and component-symlink gate for store and
-// control listener directory setup. `repair` creates missing parents and
-// tightens an owned directory to 0700; `require_private` creates only the
-// leaf (0700) and refuses an existing directory already open to others, so
-// a pre-planted permissive runtime directory is never adopted.
-enum class OwnedDirectoryPolicy { repair, require_private };
-[[nodiscard]] bool ensure_owned_directory(
-    const std::filesystem::path &path,
-    OwnedDirectoryPolicy policy = OwnedDirectoryPolicy::repair);
 
 // Ownership/symlink gates. Windows: directory, not a reparse point.
 // Linux: lstat-owned by the euid, never a symlink.

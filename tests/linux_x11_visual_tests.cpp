@@ -4,6 +4,7 @@
 #include "x11_error.hpp"
 
 #include "layerc/platform/profile_store_linux.hpp"
+#include "layerc/platform/visual_assets_linux.hpp"
 
 #include "test_support.hpp"
 

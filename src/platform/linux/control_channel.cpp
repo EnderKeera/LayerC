@@ -2,7 +2,7 @@
 
 #include "layerc/core/frame.hpp"
 #include "layerc/core/json.hpp"
-#include "layerc/platform/profile_file_guard.hpp"
+#include "layerc/platform/profile_file_guard_linux.hpp"
 
 #include <fcntl.h>
 #include <poll.h>

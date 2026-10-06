@@ -4,7 +4,7 @@
 #include "x11_capture.hpp"
 
 #include "layerc/core/template_matcher.hpp"
-#include "layerc/platform/visual_assets.hpp"
+#include "layerc/platform/visual_assets_linux.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 
 #include <filesystem>
