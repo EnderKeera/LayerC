@@ -452,7 +452,7 @@ int run_linux_x11_overlay_tests() {
   // --- geometry + paint --------------------------------------------------
   const auto now = layerc::core::MonotonicClock::now();
   for (auto &session : input_sessions.sessions())
-    (void)session.cooldowns.trigger("dash", now);
+    (void)session.automation.cooldowns().trigger("dash", now);
   overlay.render(input_sessions.sessions(), now);
   passed &= expect(overlay.next_render_deadline(now).has_value(),
                    "a mapped overlay arms the repaint deadline");
@@ -532,8 +532,10 @@ int run_linux_x11_overlay_tests() {
   // A true visibility override keeps a ready bar mapped. A text override
   // changes its painted label and clearing it restores the normal label.
   auto &session = input_sessions.sessions().front();
-  session.automation_runtime = std::make_unique<layerc::core::AutomationRuntime>(
-      overlay_automation(session.profile.id));
+  // start() reports whether session_started changed state; this fixture has
+  // no session rule, so only the later input-driven overrides matter.
+  (void)session.automation.start(
+      overlay_automation(session.automation.profile().id), {}, ready);
   const layerc::core::InputEvent show_press{
       {layerc::core::InputDevice::keyboard, 70, 0}, true};
   const layerc::core::InputEvent show_release{
@@ -587,7 +589,7 @@ int run_linux_x11_overlay_tests() {
 
   // A new trigger brings it back: cooldown clocks only move forward.
   for (auto &session : input_sessions.sessions())
-    (void)session.cooldowns.trigger("dash", ready);
+    (void)session.automation.cooldowns().trigger("dash", ready);
   const auto running = ready + std::chrono::seconds{10};
   overlay.render(input_sessions.sessions(), running);
   XGetWindowAttributes(raw, overlay_window, &attributes);

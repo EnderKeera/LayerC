@@ -386,7 +386,7 @@ void test_automation_clock_boundaries() {
   expect(
       rearm.process({.kind = AutomationEventKind::session_started}).committed,
       "AR-03 representable repeating timers must start");
-  const auto due = rearm.next_timer_due();
+  const auto due = rearm.next_deadline();
   unsigned rearm_commits{};
   const auto failed_rearm =
       rearm.process({.kind = AutomationEventKind::timer_fired,
@@ -397,7 +397,7 @@ void test_automation_clock_boundaries() {
                       return true;
                     });
   expect(!failed_rearm.committed && failed_rearm.error && rearm_commits == 0U &&
-             rearm.next_timer_due() == due &&
+             rearm.next_deadline() == due &&
              failed_rearm.faulted_automations.empty(),
          "AR-03 overflowing rearm must leave the timer and external effects "
          "untouched");

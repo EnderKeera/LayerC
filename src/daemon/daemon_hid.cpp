@@ -50,7 +50,7 @@ HidRuntime::reconcile(const layerc::runtime::CapabilityDemand &) {
   std::vector<layerc::core::HidDeviceSelector> active_selectors;
   for (const auto *session : sessions_.active_inputs) {
     if (session == nullptr) continue;
-    for (const auto &binding : session->profile.hid_bindings) {
+    for (const auto &binding : session->automation.profile().hid_bindings) {
       if (std::ranges::find(active_selectors, binding.device) ==
           active_selectors.end())
         active_selectors.push_back(binding.device);
@@ -142,7 +142,7 @@ void DaemonApp::handle_hid_device_change(const HANDLE, const bool) {
   hid_runtime_.state()->devices_dirty = true;
   hid_runtime_.state()->resolver.clear();
   for (auto &session : session_registry_.sessions) {
-    session->hid_states.assign(session->profile.hid_bindings.size(), {});
+    session->hid_states.assign(session->automation.profile().hid_bindings.size(), {});
     session->clear_input_state();
   }
   // Re-enter through RuntimeServiceHost so a registration/enumeration failure
@@ -175,7 +175,7 @@ void DaemonApp::process_hid_sample(
     const layerc::core::HidControlSample &sample) {
   auto &state = session.hid_states[index];
   const bool initialized = state.initialized;
-  if (session.automation_runtime && sample.available &&
+  if (session.automation.runtime() && sample.available &&
       sample.logical_max > sample.logical_min) {
     const bool momentary = sample.relative;
     if (!momentary || sample.value != 0)
@@ -224,11 +224,11 @@ void DaemonApp::handle_hid_input(const RAWINPUT &input) {
   const auto evaluate_for_sessions = [&](const auto &sample_for) {
     for (auto *session : session_registry_.active_inputs) {
       if (session == nullptr || !session->uses_hid) continue;
-      if (session->hid_states.size() != session->profile.hid_bindings.size())
-        session->hid_states.assign(session->profile.hid_bindings.size(), {});
+      if (session->hid_states.size() != session->automation.profile().hid_bindings.size())
+        session->hid_states.assign(session->automation.profile().hid_bindings.size(), {});
       for (std::size_t index = 0;
-           index < session->profile.hid_bindings.size(); ++index) {
-        const auto &binding = session->profile.hid_bindings[index];
+           index < session->automation.profile().hid_bindings.size(); ++index) {
+        const auto &binding = session->automation.profile().hid_bindings[index];
         if (!hid_runtime_.state()->resolver.resolves_to(
                 device->second, binding.device, hid_runtime_.state()->devices))
           continue;

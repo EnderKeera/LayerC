@@ -51,9 +51,8 @@ bool AutomationRuntime::Impl::apply_internal(
     const AutomationEffect &effect, TimePoint now,
     AutomationRuntimeSnapshot &target, AutomationError &error,
     std::vector<AutomationEvent> &derived) const {
-  if (!automation_value_valid(effect.value) ||
-      !automation_value_valid(effect.secondary)) {
-    error = {"$runtime", "action value exceeds automation bounds"};
+  if (auto invalid = automation_effect_error(effect)) {
+    error = std::move(*invalid);
     return false;
   }
   auto variable = target.variables.find(effect.target);
@@ -86,8 +85,7 @@ bool AutomationRuntime::Impl::apply_internal(
   };
   switch (effect.kind) {
   case AutomationActionKind::set_variable:
-    if (variable == target.variables.end() ||
-        !automation_value_valid(effect.value)) {
+    if (variable == target.variables.end()) {
       error = {"$runtime", "invalid variable assignment"};
       return false;
     }
@@ -206,10 +204,6 @@ bool AutomationRuntime::Impl::apply_internal(
   }
   case AutomationActionKind::create_timer: {
     const auto interval = as_duration(effect.value);
-    if (!interval || *interval < min_automation_timer_interval) {
-      error = {"$runtime", "timer interval must be at least 50 ms"};
-      return false;
-    }
     const auto due = automation_time_after(now, *interval);
     if (!due) {
       error = {"$runtime", "timer deadline is outside the clock range"};
@@ -234,18 +228,9 @@ bool AutomationRuntime::Impl::apply_internal(
                   [&](const auto &timer) { return timer.id == effect.target; });
     return true;
   case AutomationActionKind::set_overlay_override: {
-    const auto *spec = find_overlay_property(effect.property);
-    if (!spec || !overlay_value_valid(*spec, effect.value)) {
-      error = {"$runtime", "invalid overlay property value"};
-      return false;
-    }
     std::optional<TimePoint> expiry;
     if (!std::holds_alternative<std::nullptr_t>(effect.secondary.storage)) {
       const auto duration = as_duration(effect.secondary);
-      if (!duration) {
-        error = {"$runtime", "invalid overlay expiry duration"};
-        return false;
-      }
       if (*duration > Milliseconds::zero()) {
         expiry = automation_time_after(now, *duration);
         if (!expiry) {
@@ -301,10 +286,6 @@ bool AutomationRuntime::Impl::apply_internal(
     return true;
   case AutomationActionKind::reduce_cooldown_next:
   case AutomationActionKind::reduce_cooldown_all:
-    if (!as_duration(effect.value)) {
-      error = {"$runtime", "cooldown reduction is outside the clock range"};
-      return false;
-    }
     return true;
   default:
     return true;

@@ -41,7 +41,7 @@ InputRuntime::reconcile(const layerc::runtime::CapabilityDemand &) {
       std::ranges::any_of(sessions_.active_inputs, [](const Session *session) {
         return session != nullptr &&
                std::ranges::any_of(
-                   session->profile.hid_bindings, [](const auto &binding) {
+                   session->automation.profile().hid_bindings, [](const auto &binding) {
                      return binding.allow_system_class &&
                             layerc::core::is_system_keyboard_or_mouse(
                                 binding.device);
@@ -252,7 +252,7 @@ void DaemonApp::poll_controllers() {
         {"rightTrigger", trigger(state.Gamepad.bRightTrigger)},
     };
     for (auto *session : session_registry_.active_inputs) {
-      if (session == nullptr || !session->automation_runtime)
+      if (session == nullptr || !session->automation.runtime())
         continue;
       for (const auto &axis : axes)
         automation_runtime_host_.process_input_value(
@@ -275,7 +275,7 @@ void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
 void DaemonApp::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto now = layerc::core::MonotonicClock::now();
-  const auto result = session.feed_input(session.input, event, now);
+  const auto result = session.automation.feed_input(session.input, event, now);
   if (result.changed)
     overlay_runtime_.mark_dirty();
   if (result.matched)
@@ -286,7 +286,7 @@ void DaemonApp::process_input(Session &session,
   if (!result.triggered.empty())
     update_tooltip(L"LayerD - triggered " +
                    layerc::platform::utf8_to_wide(result.triggered.back()));
-  if (session.automation_runtime)
+  if (session.automation.runtime())
     automation_runtime_host_.after_step(session, now);
 }
 

@@ -101,12 +101,11 @@ SessionInit ProfileSource::to_session_init(const bool visual_enabled) const {
 }
 
 Session::Session(SessionInit init)
-    : layerc::core::AutomationSession(std::move(init.profile)),
-      source_key(std::move(init.source_key)), input(profile.bindings) {
+    : automation(std::move(init.profile)),
+      source_key(std::move(init.source_key)), input(automation.profile().bindings) {
   apply_visual_profile(std::move(init.modules.visual), init.visual_enabled);
   apply_automation_profile(std::move(init.modules.automation));
   apply_companion_profile(std::move(init.modules.companion));
-  snapshot_buffer.reserve(profile.cooldowns.size());
   rebuild_input_configuration();
 }
 
@@ -114,26 +113,19 @@ void Session::apply_visual_profile(
     ModuleSidecar<layerc::core::VisualProfile> updated,
     const bool visual_enabled) {
   modules.visual = std::move(updated);
-  set_invalid_visual_sidecar(
+  automation.set_invalid_visual_sidecar(
       modules.visual.state == layerc::platform::ModuleSidecarState::invalid);
   last_visual_sequence = 0;
-  if (modules.visual.usable()) {
-    if (visual_triggers)
-      visual_triggers->reconfigure(*modules.visual.profile);
-    else
-      visual_triggers = std::make_unique<layerc::core::VisualTriggerEngine>(
-          *modules.visual.profile);
-    visual_triggers->set_visual_enabled(visual_enabled);
-  } else {
-    visual_triggers.reset();
-  }
+  automation.configure_visual(modules.visual.usable() ? modules.visual.profile
+                                                      : std::nullopt,
+                              visual_enabled);
 }
 
 void Session::apply_automation_profile(
     ModuleSidecar<layerc::core::AutomationProfile> updated) {
   if (!updated.usable()) updated.profile.reset();
   if (!updated.profile.has_value())
-    automation_runtime.reset();
+    automation.discard_runtime();
   modules.automation = std::move(updated);
   rebuild_input_configuration();
 }
@@ -149,9 +141,9 @@ bool Session::has_enabled_automations() const noexcept {
          layerc::core::has_enabled_automations(*modules.automation.profile);
 }
 bool Session::has_active_visual_rules() const noexcept {
-  return visual_triggers != nullptr && modules.visual.usable() &&
+  return automation.visual_triggers() != nullptr && modules.visual.usable() &&
          layerc::core::has_enabled_visual_assignments(*modules.visual.profile) &&
-         visual_triggers->visual_enabled();
+         automation.visual_triggers()->visual_enabled();
 }
 
 namespace {
@@ -199,13 +191,13 @@ void seed_binding_token(Session &session,
 } // namespace
 
 void Session::rebuild_input_configuration() {
-  hid_states.assign(profile.hid_bindings.size(), {});
+  hid_states.assign(automation.profile().hid_bindings.size(), {});
   global_keyboard.clear();
-  for (const auto &binding : profile.bindings)
+  for (const auto &binding : automation.profile().bindings)
     for (const auto &token : binding.chord.tokens)
       seed_binding_token(*this, token);
   const auto demand = input_device_demand(
-      profile, modules.automation.profile ? &*modules.automation.profile
+      automation.profile(), modules.automation.profile ? &*modules.automation.profile
                                           : nullptr);
   uses_raw_keyboard = demand.keyboard;
   uses_raw_mouse = demand.mouse;
@@ -216,21 +208,16 @@ void Session::rebuild_input_configuration() {
 void Session::apply_profile(const layerc::core::GameProfile &updated,
                             const bool capture_exclusion,
                             const layerc::core::TimePoint now) {
-  const auto plan = layerc::core::plan_session_reconciliation(profile, updated);
-  cooldowns.reconfigure(updated.cooldowns, plan.reset_cooldown_ids,
-                        now, updated.cooldown_groups);
-  profile = updated;
+  const auto plan = layerc::core::plan_session_reconciliation(automation.profile(), updated);
+  automation.reconfigure_profile(updated, plan.reset_cooldown_ids, now);
   if (plan.rebuild_input_matcher) {
-    input.replace_bindings(profile.bindings);
+    input.replace_bindings(automation.profile().bindings);
     rebuild_input_configuration();
   }
-  snapshot_buffer.clear();
-  snapshot_buffer.reserve(profile.cooldowns.size());
-
   if (!plan.rebuild_overlays)
     return;
   if (!overlays.empty())
-    overlays.rebuild(profile, capture_exclusion);
+    overlays.rebuild(automation.profile(), capture_exclusion);
 }
 
 void Session::set_capture_exclusion(const bool enabled) {
@@ -247,7 +234,7 @@ void Session::clear_input_state() {
 namespace {
 
 // Loads every sidecar module, plus persisted automation state, for a source
-// whose path and base profile are already set.
+// whose path and base automation.profile() are already set.
 void load_source_modules(ProfileSource &source) {
   source.modules.visual = module_sidecar_from(
       layerc::platform::load_visual_sidecar(source.path, source.profile));
@@ -337,7 +324,7 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
       automation_runtime_host_.retire_session(*session, reconcile_now);
       return true;
     }
-    if (session->profile != source->profile)
+    if (session->automation.profile() != source->profile)
       session->apply_profile(source->profile, overlay_runtime_.capture_exclusion, reconcile_now);
     if (session->modules.visual != source->modules.visual)
       session->apply_visual_profile(source->modules.visual,
@@ -392,8 +379,8 @@ bool DaemonApp::reload_settings_if_requested() {
   load_platform_settings();
   for (auto &session : session_registry_.sessions) {
     session->set_capture_exclusion(overlay_runtime_.capture_exclusion);
-    if (session->visual_triggers)
-      session->visual_triggers->set_visual_enabled(visual_capture_runtime_.recognition_enabled);
+    if (session->automation.visual_triggers())
+      session->automation.visual_triggers()->set_visual_enabled(visual_capture_runtime_.recognition_enabled);
   }
   if (live_edit_host_.session != nullptr) {
     live_edit_host_.session->overlays.set_capture_exclusion(overlay_runtime_.capture_exclusion);

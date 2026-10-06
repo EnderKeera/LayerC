@@ -85,7 +85,7 @@ std::string DaemonApp::runtime_diagnostics_json() const {
   for (const auto &entry : session_registry_.sessions) {
     const auto &session = *entry;
     diagnostics.sessions.push_back({
-        .profile_id = session.profile.id,
+        .profile_id = session.automation.profile().id,
         .source_key = session.source_key,
         .window = reinterpret_cast<std::uintptr_t>(session.game_window),
         .foreground = session.game_window != nullptr &&
@@ -102,7 +102,7 @@ std::string DaemonApp::runtime_diagnostics_json() const {
     const auto label = source == session_registry_.sources.end()
                            ? entry->source_key
                            : source->path.string();
-    for (auto &line : entry->automation_health.lines(label))
+    for (auto &line : entry->automation.health().lines(label))
       diagnostics.automation_faults.push_back(std::move(line));
   }
   diagnostics.helpers.reserve(visual_capture_runtime_.captures.size());

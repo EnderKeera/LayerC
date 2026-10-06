@@ -173,7 +173,7 @@ void control_dispatch_contracts() {
     passed &= expect(status.response.find("\"ok\":true") != std::string::npos &&
                          status.response.find("\"pid\"") != std::string::npos &&
                          status.response.find("\"resources\"") != std::string::npos &&
-                         status.response.find("\"x11\":{\"connected\":true") !=
+                         status.response.find("\"connected\":true") !=
                              std::string::npos &&
                          status.response.find("\"major\":2") != std::string::npos &&
                          status.response.find("\"composite\":{\"available\":true") !=

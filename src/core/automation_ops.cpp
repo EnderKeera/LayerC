@@ -1,6 +1,7 @@
 #include "automation_ops.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <ranges>
@@ -98,7 +99,10 @@ numeric_type(const AutomationValueType type) {
          type == AutomationValueType::confidence;
 }
 
+namespace {
 namespace op_impl {
+using Args = std::span<const AutomationValue>;
+using Types = std::span<const std::optional<AutomationValueType>>;
 
 bool known(const Types types, const std::size_t index,
                   const AutomationValueType expected) {
@@ -109,83 +113,69 @@ bool numeric(const Types types, const std::size_t index) {
   return !types[index].has_value() || numeric_type(*types[index]);
 }
 
-bool infer_boolean_unary(const AutomationOpSpec &self, const Types types,
-                                std::optional<AutomationValueType> &result,
-                                std::string &error) {
+AutomationOpTypeResult infer_boolean_unary(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if (!known(types, 0, AutomationValueType::boolean)) {
-    error = std::string(self.name) + " requires a Boolean";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires a Boolean"};
   }
   result = AutomationValueType::boolean;
-  return true;
+  return result;
 }
 
-bool infer_negate(const AutomationOpSpec &, const Types types,
-                         std::optional<AutomationValueType> &result,
-                         std::string &error) {
+AutomationOpTypeResult infer_negate(const AutomationOpSpec &, const Types types) {
+  std::optional<AutomationValueType> result;
   if (types[0].has_value() && *types[0] != AutomationValueType::integer &&
       *types[0] != AutomationValueType::number) {
-    error = "negate requires an integer or number";
-    return false;
+    return AutomationError{"$runtime", "negate requires an integer or number"};
   }
   result = types[0];
-  return true;
+  return result;
 }
 
-bool infer_size(const AutomationOpSpec &, const Types types,
-                       std::optional<AutomationValueType> &result,
-                       std::string &error) {
+AutomationOpTypeResult infer_size(const AutomationOpSpec &, const Types types) {
+  std::optional<AutomationValueType> result;
   if (types[0].has_value() && *types[0] != AutomationValueType::string &&
       *types[0] != AutomationValueType::list &&
       *types[0] != AutomationValueType::map) {
-    error = "size requires a string, list, or map";
-    return false;
+    return AutomationError{"$runtime", "size requires a string, list, or map"};
   }
   result = AutomationValueType::integer;
-  return true;
+  return result;
 }
 
-bool infer_boolean_binary(const AutomationOpSpec &self, const Types types,
-                                 std::optional<AutomationValueType> &result,
-                                 std::string &error) {
+AutomationOpTypeResult infer_boolean_binary(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if (!known(types, 0, AutomationValueType::boolean) ||
       !known(types, 1, AutomationValueType::boolean)) {
-    error = std::string(self.name) + " requires Booleans";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires Booleans"};
   }
   result = AutomationValueType::boolean;
-  return true;
+  return result;
 }
 
-bool infer_equality(const AutomationOpSpec &, const Types types,
-                           std::optional<AutomationValueType> &result,
-                           std::string &error) {
+AutomationOpTypeResult infer_equality(const AutomationOpSpec &, const Types types) {
+  std::optional<AutomationValueType> result;
   if (types[0].has_value() && types[1].has_value() &&
       *types[0] != *types[1]) {
-    error = "equality operands must have the same type";
-    return false;
+    return AutomationError{"$runtime", "equality operands must have the same type"};
   }
   result = AutomationValueType::boolean;
-  return true;
+  return result;
 }
 
-bool infer_comparison(const AutomationOpSpec &self, const Types types,
-                             std::optional<AutomationValueType> &result,
-                             std::string &error) {
+AutomationOpTypeResult infer_comparison(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if (!numeric(types, 0) || !numeric(types, 1)) {
-    error = std::string(self.name) + " requires numeric operands";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires numeric operands"};
   }
   result = AutomationValueType::boolean;
-  return true;
+  return result;
 }
 
-bool infer_arithmetic(const AutomationOpSpec &self, const Types types,
-                             std::optional<AutomationValueType> &result,
-                             std::string &error) {
+AutomationOpTypeResult infer_arithmetic(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if (!numeric(types, 0) || !numeric(types, 1)) {
-    error = std::string(self.name) + " requires numeric operands";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires numeric operands"};
   }
   const bool left_duration = types[0] == AutomationValueType::duration;
   const bool right_duration = types[1] == AutomationValueType::duration;
@@ -193,8 +183,7 @@ bool infer_arithmetic(const AutomationOpSpec &self, const Types types,
       (!left_duration || !right_duration ||
        (self.opcode != AutomationOpcode::add &&
         self.opcode != AutomationOpcode::subtract))) {
-    error = "durations only support add and subtract";
-    return false;
+    return AutomationError{"$runtime", "durations only support add and subtract"};
   }
   if (self.opcode != AutomationOpcode::divide &&
       types[0] == AutomationValueType::integer &&
@@ -204,115 +193,105 @@ bool infer_arithmetic(const AutomationOpSpec &self, const Types types,
     result = AutomationValueType::duration;
   else
     result = AutomationValueType::number;
-  return true;
+  return result;
 }
 
-bool infer_any_all(const AutomationOpSpec &self, const Types types,
-                          std::optional<AutomationValueType> &result,
-                          std::string &error) {
+AutomationOpTypeResult infer_any_all(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if (types[0].has_value() && *types[0] != AutomationValueType::list) {
-    error = std::string(self.name) + " requires one list";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires one list"};
   }
   result = AutomationValueType::boolean;
-  return true;
+  return result;
 }
 
-bool infer_map_filter(const AutomationOpSpec &self, const Types types,
-                             std::optional<AutomationValueType> &result,
-                             std::string &error) {
+AutomationOpTypeResult infer_map_filter(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if ((types[0].has_value() && *types[0] != AutomationValueType::list) ||
       !known(types, 1, AutomationValueType::string)) {
-    error = std::string(self.name) + " requires a list and a string field name";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires a list and a string field name"};
   }
   result = AutomationValueType::list;
-  return true;
+  return result;
 }
 
-bool infer_min_max_clamp(const AutomationOpSpec &self, const Types types,
-                                std::optional<AutomationValueType> &result,
-                                std::string &error) {
+AutomationOpTypeResult infer_min_max_clamp(const AutomationOpSpec &self, const Types types) {
+  std::optional<AutomationValueType> result;
   if (!std::ranges::all_of(
           std::views::iota(std::size_t{}, types.size()),
           [&](const std::size_t index) { return numeric(types, index); })) {
-    error = std::string(self.name) + " requires bounded numeric arguments";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires bounded numeric arguments"};
   }
   result = AutomationValueType::number;
-  return true;
+  return result;
 }
 
 // --- evaluation ---
 
-bool eval_not(const AutomationOpSpec &, const Args arguments,
-                     AutomationValue &result, std::string &) {
+AutomationOpResult eval_not(const AutomationOpSpec &, const Args arguments) {
+  AutomationValue result;
   result = AutomationValue(!truthy(arguments[0]));
-  return true;
+  return result;
 }
 
-bool eval_negate(const AutomationOpSpec &, const Args arguments,
-                        AutomationValue &result, std::string &error) {
+AutomationOpResult eval_negate(const AutomationOpSpec &, const Args arguments) {
+  AutomationValue result;
   if (const auto *integer = std::get_if<std::int64_t>(&arguments[0].storage)) {
     if (*integer == std::numeric_limits<std::int64_t>::min()) {
-      error = "integer negation overflow";
-      return false;
+      return AutomationError{"$runtime", "integer negation overflow"};
     }
     result = AutomationValue(-*integer);
-    return true;
+    return result;
   }
   if (const auto *value = std::get_if<double>(&arguments[0].storage)) {
     if (!std::isfinite(-*value)) {
-      error = "numeric result is not finite";
-      return false;
+      return AutomationError{"$runtime", "numeric result is not finite"};
     }
     result = AutomationValue(-*value);
-    return true;
+    return result;
   }
-  error = "negate requires an integer or number";
-  return false;
+  return AutomationError{"$runtime", "negate requires an integer or number"};
 }
 
-bool eval_size(const AutomationOpSpec &, const Args arguments,
-                      AutomationValue &result, std::string &error) {
+AutomationOpResult eval_size(const AutomationOpSpec &, const Args arguments) {
+  AutomationValue result;
   if (const auto *v = std::get_if<std::string>(&arguments[0].storage)) {
     result = AutomationValue(static_cast<std::int64_t>(v->size()));
-    return true;
+    return result;
   }
   if (const auto *v = std::get_if<AutomationList>(&arguments[0].storage)) {
     result = AutomationValue(static_cast<std::int64_t>(v->size()));
-    return true;
+    return result;
   }
   if (const auto *v = std::get_if<AutomationMap>(&arguments[0].storage)) {
     result = AutomationValue(static_cast<std::int64_t>(v->size()));
-    return true;
+    return result;
   }
-  error = "size requires a collection";
-  return false;
+  return AutomationError{"$runtime", "size requires a collection"};
 }
 
-bool eval_and(const AutomationOpSpec &, const Args arguments,
-                     AutomationValue &result, std::string &) {
+AutomationOpResult eval_and(const AutomationOpSpec &, const Args arguments) {
+  AutomationValue result;
   result = AutomationValue(truthy(arguments[0]) && truthy(arguments[1]));
-  return true;
+  return result;
 }
 
-bool eval_or(const AutomationOpSpec &, const Args arguments,
-                    AutomationValue &result, std::string &) {
+AutomationOpResult eval_or(const AutomationOpSpec &, const Args arguments) {
+  AutomationValue result;
   result = AutomationValue(truthy(arguments[0]) || truthy(arguments[1]));
-  return true;
+  return result;
 }
 
-bool eval_equality(const AutomationOpSpec &self, const Args arguments,
-                           AutomationValue &result, std::string &) {
+AutomationOpResult eval_equality(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
   const bool equal = arguments[0] == arguments[1];
   result = AutomationValue(self.opcode == AutomationOpcode::equal ? equal
                                                                    : !equal);
-  return true;
+  return result;
 }
 
-bool eval_comparison(const AutomationOpSpec &self, const Args arguments,
-                             AutomationValue &result, std::string &error) {
+AutomationOpResult eval_comparison(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
   const auto compare = [operation = self.opcode](const auto left,
                                                   const auto right)
       -> std::optional<bool> {
@@ -324,14 +303,13 @@ bool eval_comparison(const AutomationOpSpec &self, const Args arguments,
     default: return std::nullopt;
     }
   };
-  const auto finish = [&](const auto left, const auto right) {
+  const auto finish = [&](const auto left, const auto right) -> AutomationOpResult {
     const auto compared = compare(left, right);
     if (!compared.has_value()) {
-      error = "unsupported expression operation";
-      return false;
+      return AutomationError{"$runtime", "unsupported expression operation"};
     }
     result = AutomationValue(*compared);
-    return true;
+    return result;
   };
   const auto *left_integer = std::get_if<std::int64_t>(&arguments[0].storage);
   const auto *right_integer = std::get_if<std::int64_t>(&arguments[1].storage);
@@ -340,14 +318,13 @@ bool eval_comparison(const AutomationOpSpec &self, const Args arguments,
   const auto left = number(arguments[0]);
   const auto right = number(arguments[1]);
   if (!left || !right) {
-    error = std::string(self.name) + " requires numeric arguments";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires numeric arguments"};
   }
   return finish(*left, *right);
 }
 
-bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
-                            AutomationValue &result, std::string &error) {
+AutomationOpResult eval_arithmetic(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
   const auto *left_integer = std::get_if<std::int64_t>(&arguments[0].storage);
   const auto *right_integer = std::get_if<std::int64_t>(&arguments[1].storage);
   if (left_integer != nullptr && right_integer != nullptr &&
@@ -355,18 +332,16 @@ bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
     const auto value =
         checked_integer_binary(*left_integer, *right_integer, self.opcode);
     if (!value.has_value()) {
-      error = "integer arithmetic overflow or invalid divisor";
-      return false;
+      return AutomationError{"$runtime", "integer arithmetic overflow or invalid divisor"};
     }
     result = AutomationValue(*value);
-    return true;
+    return result;
   }
 
   const auto left = number(arguments[0]);
   const auto right = number(arguments[1]);
   if (!left || !right) {
-    error = std::string(self.name) + " requires numeric arguments";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires numeric arguments"};
   }
   const bool duration_operands =
       std::holds_alternative<DurationValue>(arguments[0].storage) ||
@@ -376,8 +351,7 @@ bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
        !std::holds_alternative<DurationValue>(arguments[1].storage) ||
        (self.opcode != AutomationOpcode::add &&
         self.opcode != AutomationOpcode::subtract))) {
-    error = "durations only support add and subtract";
-    return false;
+    return AutomationError{"$runtime", "durations only support add and subtract"};
   }
 
   double value{};
@@ -393,79 +367,60 @@ bool eval_arithmetic(const AutomationOpSpec &self, const Args arguments,
     break;
   case AutomationOpcode::divide:
     if (*right == 0.0) {
-      error = "division by zero";
-      return false;
+      return AutomationError{"$runtime", "division by zero"};
     }
     value = *left / *right;
     break;
   case AutomationOpcode::modulo:
     if (*right == 0.0) {
-      error = "modulo by zero";
-      return false;
+      return AutomationError{"$runtime", "modulo by zero"};
     }
     value = std::fmod(*left, *right);
     break;
   default:
-    error = "unsupported expression operation";
-    return false;
+    return AutomationError{"$runtime", "unsupported expression operation"};
   }
   if (duration_operands) {
     auto duration = duration_result(value);
     if (!duration.has_value()) {
-      error = "duration arithmetic is out of range";
-      return false;
+      return AutomationError{"$runtime", "duration arithmetic is out of range"};
     }
     result = *duration;
-    return true;
+    return result;
   }
   if (!std::isfinite(value)) {
-    error = "numeric result is not finite";
-    return false;
+    return AutomationError{"$runtime", "numeric result is not finite"};
   }
   result = AutomationValue(value);
-  return true;
+  return result;
 }
 
-namespace {
-
-const AutomationList *list_argument(const AutomationOpSpec &self,
-                                   const AutomationValue &argument,
-                                   std::string &error) {
-  const auto *list = std::get_if<AutomationList>(&argument.storage);
+AutomationOpResult eval_any(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
+  const auto *list = std::get_if<AutomationList>(&arguments[0].storage);
   if (list == nullptr)
-    error = std::string(self.name) + " requires a list";
-  return list;
-}
-
-} // namespace
-
-bool eval_any(const AutomationOpSpec &self, const Args arguments,
-                     AutomationValue &result, std::string &error) {
-  const auto *list = list_argument(self, arguments[0], error);
-  if (list == nullptr)
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires a list"};
   result = AutomationValue(std::ranges::any_of(*list, truthy));
-  return true;
+  return result;
 }
 
-bool eval_all(const AutomationOpSpec &self, const Args arguments,
-                     AutomationValue &result, std::string &error) {
-  const auto *list = list_argument(self, arguments[0], error);
+AutomationOpResult eval_all(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
+  const auto *list = std::get_if<AutomationList>(&arguments[0].storage);
   if (list == nullptr)
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires a list"};
   result = AutomationValue(std::ranges::all_of(*list, truthy));
-  return true;
+  return result;
 }
 
-bool eval_map_filter(const AutomationOpSpec &self, const Args arguments,
-                            AutomationValue &result, std::string &error) {
-  const auto *list = list_argument(self, arguments[0], error);
+AutomationOpResult eval_map_filter(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
+  const auto *list = std::get_if<AutomationList>(&arguments[0].storage);
   if (list == nullptr)
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires a list"};
   const auto *field = std::get_if<std::string>(&arguments[1].storage);
   if (field == nullptr) {
-    error = std::string(self.name) + " requires a string field name";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires a string field name"};
   }
   AutomationList items;
   items.reserve(list->size());
@@ -482,23 +437,21 @@ bool eval_map_filter(const AutomationOpSpec &self, const Args arguments,
       items.push_back(item);
   }
   result = AutomationValue(std::move(items));
-  return true;
+  return result;
 }
 
-bool eval_min_max_clamp(const AutomationOpSpec &self, const Args arguments,
-                               AutomationValue &result, std::string &error) {
+AutomationOpResult eval_min_max_clamp(const AutomationOpSpec &self, const Args arguments) {
+  AutomationValue result;
   auto value = number(arguments[0]);
   if (!value.has_value()) {
-    error = std::string(self.name) + " requires numbers";
-    return false;
+    return AutomationError{"$runtime", std::string(self.name) + " requires numbers"};
   }
   // min/max fold every argument; clamp(x, lo, hi) is max with lo then min
   // with hi, so only the remaining bounds participate in order.
   for (std::size_t index = 1; index < arguments.size(); ++index) {
     const auto next = number(arguments[index]);
     if (!next.has_value()) {
-      error = std::string(self.name) + " requires numbers";
-      return false;
+      return AutomationError{"$runtime", std::string(self.name) + " requires numbers"};
     }
     if (self.opcode == AutomationOpcode::clamp) {
       if (index == 1)
@@ -512,9 +465,65 @@ bool eval_min_max_clamp(const AutomationOpSpec &self, const Args arguments,
     }
   }
   result = AutomationValue(*value);
-  return true;
+  return result;
 }
 
 } // namespace op_impl
+
+constexpr std::array<AutomationOpSpec, 23> automation_ops{{
+    {"not", AutomationOpcode::logical_not, ExpressionKind::unary, 1, 1,
+     op_impl::infer_boolean_unary, op_impl::eval_not},
+    {"negate", AutomationOpcode::negate, ExpressionKind::unary, 1, 1,
+     op_impl::infer_negate, op_impl::eval_negate},
+    {"size", AutomationOpcode::size, ExpressionKind::unary, 1, 1,
+     op_impl::infer_size, op_impl::eval_size},
+    {"add", AutomationOpcode::add, ExpressionKind::binary, 2, 2,
+     op_impl::infer_arithmetic, op_impl::eval_arithmetic},
+    {"subtract", AutomationOpcode::subtract, ExpressionKind::binary, 2, 2,
+     op_impl::infer_arithmetic, op_impl::eval_arithmetic},
+    {"multiply", AutomationOpcode::multiply, ExpressionKind::binary, 2, 2,
+     op_impl::infer_arithmetic, op_impl::eval_arithmetic},
+    {"divide", AutomationOpcode::divide, ExpressionKind::binary, 2, 2,
+     op_impl::infer_arithmetic, op_impl::eval_arithmetic},
+    {"modulo", AutomationOpcode::modulo, ExpressionKind::binary, 2, 2,
+     op_impl::infer_arithmetic, op_impl::eval_arithmetic},
+    {"equal", AutomationOpcode::equal, ExpressionKind::binary, 2, 2,
+     op_impl::infer_equality, op_impl::eval_equality},
+    {"notEqual", AutomationOpcode::not_equal, ExpressionKind::binary, 2, 2,
+     op_impl::infer_equality, op_impl::eval_equality},
+    {"less", AutomationOpcode::less, ExpressionKind::binary, 2, 2,
+     op_impl::infer_comparison, op_impl::eval_comparison},
+    {"lessEqual", AutomationOpcode::less_equal, ExpressionKind::binary, 2, 2,
+     op_impl::infer_comparison, op_impl::eval_comparison},
+    {"greater", AutomationOpcode::greater, ExpressionKind::binary, 2, 2,
+     op_impl::infer_comparison, op_impl::eval_comparison},
+    {"greaterEqual", AutomationOpcode::greater_equal, ExpressionKind::binary, 2, 2,
+     op_impl::infer_comparison, op_impl::eval_comparison},
+    {"and", AutomationOpcode::logical_and, ExpressionKind::binary, 2, 2,
+     op_impl::infer_boolean_binary, op_impl::eval_and},
+    {"or", AutomationOpcode::logical_or, ExpressionKind::binary, 2, 2,
+     op_impl::infer_boolean_binary, op_impl::eval_or},
+    {"min", AutomationOpcode::minimum, ExpressionKind::call, 2, 3,
+     op_impl::infer_min_max_clamp, op_impl::eval_min_max_clamp},
+    {"max", AutomationOpcode::maximum, ExpressionKind::call, 2, 3,
+     op_impl::infer_min_max_clamp, op_impl::eval_min_max_clamp},
+    {"clamp", AutomationOpcode::clamp, ExpressionKind::call, 3, 3,
+     op_impl::infer_min_max_clamp, op_impl::eval_min_max_clamp},
+    {"any", AutomationOpcode::any, ExpressionKind::call, 1, 1,
+     op_impl::infer_any_all, op_impl::eval_any},
+    {"all", AutomationOpcode::all, ExpressionKind::call, 1, 1,
+     op_impl::infer_any_all, op_impl::eval_all},
+    {"map", AutomationOpcode::map, ExpressionKind::call, 2, 2,
+     op_impl::infer_map_filter, op_impl::eval_map_filter},
+    {"filter", AutomationOpcode::filter, ExpressionKind::call, 2, 2,
+     op_impl::infer_map_filter, op_impl::eval_map_filter},
+}};
+} // namespace
+
+const AutomationOpSpec *find_automation_op(const std::string_view name) noexcept {
+  for (const auto &spec : automation_ops)
+    if (spec.name == name) return &spec;
+  return nullptr;
+}
 
 } // namespace layerc::core::detail
