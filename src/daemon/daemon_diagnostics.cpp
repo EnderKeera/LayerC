@@ -68,14 +68,14 @@ std::string DaemonApp::runtime_diagnostics_json() const {
   const auto services = runtime_kernel_.services().all_stats();
   diagnostics.services.assign(services.begin(), services.end());
   diagnostics.gamebar = {
-      .connected = companion_host_.transport.connected(),
+      .connected = companion_host_.connected(),
       .last_error =
-          layerc::platform::wide_to_utf8(companion_host_.transport.last_error()),
+          layerc::platform::wide_to_utf8(companion_host_.last_error()),
   };
   diagnostics.settings = {
-      .capture_exclusion = overlay_runtime_.capture_exclusion,
-      .visual_recognition = visual_capture_runtime_.recognition_enabled,
-      .last_error = settings_error_,
+      .capture_exclusion = overlay_runtime_.capture_exclusion(),
+      .visual_recognition = visual_capture_runtime_.recognition_enabled(),
+      .last_error = session_coordinator_.settings_error(),
   };
   diagnostics.aggregate_resources =
       runtime_kernel_.services().aggregate_resources();
@@ -105,9 +105,9 @@ std::string DaemonApp::runtime_diagnostics_json() const {
     for (auto &line : entry->automation.health().lines(label))
       diagnostics.automation_faults.push_back(std::move(line));
   }
-  diagnostics.helpers.reserve(visual_capture_runtime_.captures.size());
-  diagnostics.captures.reserve(visual_capture_runtime_.captures.size());
-  for (const auto &[window, worker] : visual_capture_runtime_.captures) {
+  diagnostics.helpers.reserve(visual_capture_runtime_.captures().size());
+  diagnostics.captures.reserve(visual_capture_runtime_.captures().size());
+  for (const auto &[window, worker] : visual_capture_runtime_.captures()) {
     if (worker == nullptr)
       continue;
     const auto status = worker->status();

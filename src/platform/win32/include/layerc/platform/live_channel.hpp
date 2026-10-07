@@ -48,6 +48,12 @@ public:
   [[nodiscard]] const std::wstring &last_error() const noexcept {
     return last_error_;
   }
+  [[nodiscard]] std::uint32_t resource_handle_count() const noexcept {
+    return static_cast<std::uint32_t>(pipe_ != INVALID_HANDLE_VALUE) +
+           static_cast<std::uint32_t>(connect_event_ != nullptr) +
+           static_cast<std::uint32_t>(read_event_ != nullptr) +
+           static_cast<std::uint32_t>(write_event_ != nullptr);
+  }
 
 private:
   // Tests inspect terminal I/O state at the same boundary used by destruction.
