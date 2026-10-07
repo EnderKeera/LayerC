@@ -69,10 +69,12 @@ void test_profile_parser() {
            "saving a migrated base profile should emit schema v4");
   }
 
-  const std::string oversized(max_profile_json_bytes + 1U, 'x');
+  const std::string oversized(max_profile_json_bytes + 1U, ' ');
   result = parse_profile_json(oversized);
-  expect(std::holds_alternative<ProfileError>(result),
-         "oversized profiles should be rejected before parsing");
+  const auto *oversized_error = std::get_if<ProfileError>(&result);
+  expect(oversized_error && oversized_error->path == "$" &&
+             oversized_error->message.find("exceeds") != std::string::npos,
+         "oversized profiles should be rejected by the bounded parser");
 
   result = parse_profile_json(
       R"json({"schemaVersion":1,"id":"x","name":"x","game":{"executableName":"x.exe"},"cooldowns":[],"panels":[],"bindings":[]})json");
