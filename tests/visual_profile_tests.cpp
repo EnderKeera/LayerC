@@ -229,6 +229,116 @@ void test_visual_profile_parser() {
          "schema-v1 visual sidecars should migrate in memory and save as v2");
 }
 
+// The visual reader reads shape and types only; validate_visual_profile is the
+// sole owner of semantic rules, so a parsed sidecar and the same profile built
+// in memory report the identical path and message (layer45 F-C1/F-V2).
+void test_visual_profile_parse_validate_parity() {
+  using namespace layerc::core;
+  const auto base = visual_base_profile();
+  VisualProfile valid;
+  valid.profile_id = base.id;
+  valid.observations.push_back(TemplateState{
+      .id = "ready-template",
+      .name = "Ready template",
+      .search_region = {0.1, 0.2, 0.6, 0.5},
+      .expected_width = 0.2,
+      .expected_height = 0.1,
+      .references = {{std::string(64, 'a')}},
+      .confidence_threshold = 0.9,
+      .scale_tolerance = 0.1,
+      .color_tolerance = 30,
+      .stable_samples = 3});
+  valid.observations.push_back(PixelRule{
+      .id = "ready",
+      .name = "Ready",
+      .region = {0.0, 0.0, 1.0, 1.0},
+      .predicate = AverageColorPredicate{0x20A040, 8},
+      .stable_samples = 2});
+  valid.triggers.push_back({.cooldown_id = "dash",
+                            .observation_id = "ready",
+                            .mode = VisualTriggerMode::pixel_only});
+  expect(validate_visual_profile(valid, base).message.empty() &&
+             std::holds_alternative<VisualProfile>(parse_visual_profile_json(
+                 serialize_visual_profile_json(valid), base)),
+         "the parity fixture is a valid visual sidecar");
+
+  struct Case {
+    std::string_view name;
+    void (*edit)(VisualProfile &);
+    std::string_view path;
+  };
+  static constexpr auto pixel_rule = [](VisualProfile &p) -> PixelRule & {
+    return std::get<PixelRule>(p.observations[1]);
+  };
+  static constexpr auto template_state =
+      [](VisualProfile &p) -> TemplateState & {
+    return std::get<TemplateState>(p.observations[0]);
+  };
+  const Case cases[] = {
+      {"empty profile id", [](VisualProfile &p) { p.profile_id.clear(); },
+       "$.profileId"},
+      {"empty pixel id", [](VisualProfile &p) { pixel_rule(p).id.clear(); },
+       "$.observations[1]"},
+      {"empty pixel name", [](VisualProfile &p) { pixel_rule(p).name.clear(); },
+       "$.observations[1]"},
+      {"empty template id",
+       [](VisualProfile &p) { template_state(p).id.clear(); },
+       "$.observations[0]"},
+      {"empty template name",
+       [](VisualProfile &p) { template_state(p).name.clear(); },
+       "$.observations[0]"},
+      {"empty template asset",
+       [](VisualProfile &p) {
+         template_state(p).references.front().asset_sha256.clear();
+       },
+       "$.observations[0].references[0].asset"},
+      {"empty trigger cooldown",
+       [](VisualProfile &p) { p.triggers.front().cooldown_id.clear(); },
+       "$.triggers[0].cooldownId"},
+      {"empty trigger observation",
+       [](VisualProfile &p) { p.triggers.front().observation_id.clear(); },
+       "$.triggers[0].observationId"},
+  };
+  for (const auto &test : cases) {
+    auto profile = valid;
+    test.edit(profile);
+    const auto direct = validate_visual_profile(profile, base);
+    expect(direct.path == test.path && !direct.message.empty(),
+           std::string(test.name) + " must fail validation at " +
+               std::string(test.path));
+    const auto parsed = parse_visual_profile_json(
+        serialize_visual_profile_json(profile), base);
+    const auto *error = std::get_if<VisualError>(&parsed);
+    expect(error != nullptr && error->path == direct.path &&
+               error->message == direct.message,
+           std::string(test.name) + " must fail identically when parsed");
+  }
+
+  // Schema 1 reaches the same validator; only the array name is remapped.
+  constexpr std::string_view legacy_empty_id = R"json({
+    "schemaVersion":1,"profileId":"game","sampleRateHz":10,
+    "quality":"balanced","rules":[{
+      "id":"","name":"Legacy","region":{"x":0,"y":0,"width":1,"height":1},
+      "predicate":{"type":"brightness","comparison":"above","threshold":100},
+      "stableSamples":2,"repeat":"edge"}],
+    "triggers":[]
+  })json";
+  VisualProfile legacy;
+  legacy.profile_id = base.id;
+  legacy.observations.push_back(PixelRule{
+      .name = "Legacy",
+      .region = {0.0, 0.0, 1.0, 1.0},
+      .predicate = BrightnessPredicate{100, BrightnessComparison::above},
+      .stable_samples = 2});
+  const auto legacy_direct = validate_visual_profile(legacy, base);
+  const auto legacy_parsed = parse_visual_profile_json(legacy_empty_id, base);
+  const auto *legacy_error = std::get_if<VisualError>(&legacy_parsed);
+  expect(legacy_error != nullptr && legacy_error->path == "$.rules[0]" &&
+             legacy_direct.path == "$.observations[0]" &&
+             legacy_error->message == legacy_direct.message,
+         "an empty schema-1 rule id fails once, in the validator");
+}
+
 void test_calibration_protocol() {
   using namespace layerc::core;
   CalibrationRequest request{.target_window = 0xFEDCBA9876543210ULL,

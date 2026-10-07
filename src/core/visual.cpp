@@ -36,13 +36,16 @@ public:
     }
 
     VisualProfile result;
-    if (!fields_.string(root_, "profileId", "$", result.profile_id))
+    if (!fields_.string(root_, "profileId", "$", result.profile_id,
+                        json::EmptyString::allow))
       return failure();
     // Schema 1 is migrated in memory. Every subsequent save emits schema 2.
     result.schema_version = 2;
     const auto rate = fields_.integer(root_, "sampleRateHz", "$", 0, 255);
     std::string quality;
-    if (!rate || !fields_.string(root_, "quality", "$", quality)) return failure();
+    if (!rate || !fields_.string(root_, "quality", "$", quality,
+                                   json::EmptyString::allow))
+      return failure();
     // The reader owns shape and types; every bound, count, and cross-field
     // rule is a semantic invariant owned by validate_visual_profile.
     result.sample_rate_hz = static_cast<std::uint8_t>(*rate);
@@ -104,7 +107,9 @@ private:
   bool read_repeat_policy(const json::Value &value, const std::string &path,
                           PixelRepeatPolicy &out) {
     std::string repeat;
-    if (!fields_.string(value, "repeat", path, repeat)) return false;
+    if (!fields_.string(value, "repeat", path, repeat,
+                        json::EmptyString::allow))
+      return false;
     const auto parsed = parse_enum_wire(pixel_repeat_wire, repeat);
     if (!parsed)
       return set(path + ".repeat", "expected edge or whenFullyReady");
@@ -118,7 +123,9 @@ private:
     if (predicate == nullptr) return false;
     const auto predicate_path = path + ".predicate";
     std::string kind;
-    if (!fields_.string(*predicate, "type", predicate_path, kind)) return false;
+    if (!fields_.string(*predicate, "type", predicate_path, kind,
+                        json::EmptyString::allow))
+      return false;
     if (kind == "averageColor") {
       if (!fields_.exact_fields(*predicate, {"type", "target", "tolerance"}, predicate_path))
         return false;
@@ -135,7 +142,8 @@ private:
       const auto threshold =
           fields_.integer(*predicate, "threshold", predicate_path, 0, 255);
       if (!threshold ||
-          !fields_.string(*predicate, "comparison", predicate_path, comparison))
+          !fields_.string(*predicate, "comparison", predicate_path, comparison,
+                         json::EmptyString::allow))
         return false;
       BrightnessComparison parsed{};
       if (const auto wire = parse_enum_wire(brightness_wire, comparison))
@@ -173,8 +181,8 @@ private:
                          "stableSamples", "repeat"}, path)))
       return false;
     PixelRule rule;
-    if (!fields_.string(value, "id", path, rule.id) ||
-        !fields_.string(value, "name", path, rule.name))
+    if (!fields_.string(value, "id", path, rule.id, json::EmptyString::allow) ||
+        !fields_.string(value, "name", path, rule.name, json::EmptyString::allow))
       return false;
     if (!read_region(value, "region", path, rule.region)) return false;
 
@@ -194,7 +202,8 @@ private:
     if (!value.is_object())
       return set(path, "visual observation must be an object");
     std::string type;
-    if (!fields_.string(value, "type", path, type)) return false;
+    if (!fields_.string(value, "type", path, type, json::EmptyString::allow))
+      return false;
     if (type == "pixel") {
       return read_rule(value, path, output.observations, true);
     }
@@ -213,8 +222,9 @@ private:
                 path))
       return false;
     TemplateState state;
-    if (!fields_.string(value, "id", path, state.id) ||
-        !fields_.string(value, "name", path, state.name))
+    if (!fields_.string(value, "id", path, state.id, json::EmptyString::allow) ||
+        !fields_.string(value, "name", path, state.name,
+                        json::EmptyString::allow))
       return false;
 
     if (!read_region(value, "searchRegion", path, state.search_region))
@@ -244,7 +254,8 @@ private:
           !fields_.exact_fields(reference, {"asset"}, reference_path))
         return set(reference_path, "template reference must be an object");
       TemplateReference parsed;
-      if (!fields_.string(reference, "asset", reference_path, parsed.asset_sha256))
+      if (!fields_.string(reference, "asset", reference_path,
+                          parsed.asset_sha256, json::EmptyString::allow))
         return false;
       state.references.push_back(std::move(parsed));
     }
@@ -281,16 +292,18 @@ private:
                  path)))
       return false;
     VisualTrigger trigger;
-    if (!fields_.string(value, "cooldownId", path, trigger.cooldown_id) ||
+    if (!fields_.string(value, "cooldownId", path, trigger.cooldown_id,
+                        json::EmptyString::allow) ||
         !fields_.string(value, schema_version == 1 ? "ruleId" : "observationId",
-                        path, trigger.observation_id))
+                        path, trigger.observation_id, json::EmptyString::allow))
       return false;
     trigger.enabled = true;
     if (!fields_.boolean(value, "enabled", path, trigger.enabled,
                          json::Required::no))
       return false;
     std::string mode;
-    if (!fields_.string(value, "mode", path, mode)) return false;
+    if (!fields_.string(value, "mode", path, mode, json::EmptyString::allow))
+      return false;
     const auto parsed_mode = parse_enum_wire(visual_trigger_mode_wire, mode);
     if (parsed_mode == VisualTriggerMode::pixel_only) {
       trigger.mode = VisualTriggerMode::pixel_only;

@@ -49,6 +49,8 @@ int main() {
       {"test_live_protocol_framing", test_live_protocol_framing},
       {"test_live_placement_math", test_live_placement_math},
       {"test_visual_profile_parser", test_visual_profile_parser},
+      {"test_visual_profile_parse_validate_parity",
+       test_visual_profile_parse_validate_parity},
       {"test_pixel_rule_evaluation", test_pixel_rule_evaluation},
       {"test_template_matching", test_template_matching},
       {"test_visual_trigger_state_machine", test_visual_trigger_state_machine},

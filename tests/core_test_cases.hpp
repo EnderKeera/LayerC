@@ -43,6 +43,7 @@ void test_live_profile_reconciliation();
 void test_live_protocol_framing();
 void test_live_placement_math();
 void test_visual_profile_parser();
+void test_visual_profile_parse_validate_parity();
 void test_pixel_rule_evaluation();
 void test_template_matching();
 void test_visual_trigger_state_machine();

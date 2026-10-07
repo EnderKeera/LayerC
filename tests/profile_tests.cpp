@@ -358,6 +358,26 @@ void test_profile_schema3_hid() {
   expect(std::holds_alternative<ProfileError>(
              parse_profile_json(unknown_module)),
          "schema 3 should reject unknown module kinds");
+
+  // The reader reads any bindingId string; validate_profile alone rejects an
+  // empty or unknown ID, with one diagnostic for both paths.
+  auto empty_binding_id = std::string(source);
+  constexpr std::string_view pedal_ref = R"json("bindingId":"pedal")json";
+  if (const auto pedal = empty_binding_id.find(pedal_ref);
+      pedal != std::string::npos)
+    empty_binding_id.replace(pedal, pedal_ref.size(),
+                             R"json("bindingId":"")json");
+  const auto empty_id_result = parse_profile_json(empty_binding_id);
+  const auto *empty_id_error = std::get_if<ProfileError>(&empty_id_result);
+  if (profile != nullptr) {
+    auto direct = *profile;
+    direct.bindings.front().chord.tokens.front().code = 0;
+    const auto expected = validate_profile(direct);
+    expect(empty_id_error != nullptr && expected &&
+               *empty_id_error == *expected &&
+               empty_id_error->path == "$.bindings[0].chord[0].bindingId",
+           "an empty HID bindingId fails once, in validate_profile");
+  }
 }
 
 void test_panel_geometry() {

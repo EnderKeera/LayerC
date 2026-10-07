@@ -165,7 +165,7 @@ bool ProfileReader::read_hid_control(const json::Value &control,
 
   std::string activation;
   if (!fields_.string(control, keys::activation, path, activation,
-                      json::Required::yes, json::EmptyString::reject))
+                      json::Required::yes, json::EmptyString::allow))
     return false;
   const auto parsed_activation =
       parse_enum_wire(profile_wire::hid_activation, activation);
@@ -241,7 +241,7 @@ bool ProfileReader::read_modules(GameProfile &profile,
       return fields_.fail(path, "module descriptor must be an object");
     std::string kind;
     if (!fields_.string(entry, keys::kind, path, kind, json::Required::yes,
-                        json::EmptyString::reject))
+                        json::EmptyString::allow))
       return false;
     ProfileModule module;
     const auto *descriptor = find_module(kind);
@@ -298,7 +298,7 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
     if (source_schema >= 4) {
       std::string recovery;
       if (!fields_.string(value, keys::recovery, path, recovery,
-                          json::Required::yes, json::EmptyString::reject))
+                          json::Required::yes, json::EmptyString::allow))
         return false;
       const auto parsed_recovery =
           parse_enum_wire(profile_wire::recovery, recovery);
@@ -372,7 +372,7 @@ bool ProfileReader::read_cooldown_groups(
 
     std::string mode;
     if (!fields_.string(value, keys::mode, path, mode, json::Required::yes,
-                        json::EmptyString::reject))
+                        json::EmptyString::allow))
       return false;
     const auto parsed_mode =
         parse_enum_wire(profile_wire::group_mode, mode);
@@ -398,7 +398,7 @@ bool ProfileReader::read_cooldown_groups(
       std::string retrigger = "ignore";
       if (!duration.has_value() || !charges.has_value() ||
           !fields_.string(value, keys::recovery, path, recovery,
-                          json::Required::yes, json::EmptyString::reject))
+                          json::Required::yes, json::EmptyString::allow))
         return false;
       fields_.string(value, keys::retrigger, path, retrigger,
                      json::Required::no, json::EmptyString::allow);
@@ -544,7 +544,7 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
                                      InputBinding &binding) {
   std::string device;
   if (!fields_.string(token_value, keys::device, token_path, device,
-                      json::Required::yes, json::EmptyString::reject))
+                      json::Required::yes, json::EmptyString::allow))
     return false;
   InputToken token;
   if (const auto parsed = parse_enum_wire(input_device_wire, device))
@@ -555,7 +555,7 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
   if (token.device == InputDevice::generic_hid) {
     std::string binding_id;
     if (!fields_.string(token_value, keys::binding_id, token_path, binding_id,
-                        json::Required::yes, json::EmptyString::reject))
+                        json::Required::yes, json::EmptyString::allow))
       return false;
     // An unknown ID resolves to position 0, which names no binding;
     // validate_profile reports it at bindingId.
