@@ -121,9 +121,6 @@ bool parse_slot_mapping(json::Reader &fields, const json::Value &value,
 std::variant<CompanionProfile, CompanionError>
 parse_companion_profile_json(const std::string_view json_str,
                              const GameProfile &base_profile) {
-  if (json_str.size() > max_companion_sidecar_bytes) {
-    return CompanionError{"$", "companion sidecar exceeds bounded size limit"};
-  }
   const auto parsed = json::parse_bounded(json_str, max_companion_sidecar_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed))
     return *error;
@@ -457,9 +454,6 @@ bool parse_preference(json::Reader &reader, const json::Value &value,
 
 std::variant<CompanionSessionSnapshot, CompanionError>
 parse_companion_snapshot_json(const std::string_view json_str) {
-  if (json_str.size() > max_companion_snapshot_bytes)
-    return CompanionError{"$",
-                          "companion snapshot exceeds bounded message size"};
   const auto parsed_result =
       json::parse_bounded(json_str, max_companion_snapshot_bytes);
   if (const auto *error = std::get_if<json::FieldError>(&parsed_result))
