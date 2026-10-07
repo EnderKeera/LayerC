@@ -45,12 +45,14 @@ namespace {
   layerc::daemon::ConfiguredProfile bundle;
   bundle.source = std::move(source);
   if (visual) {
-    bundle.visual.profile = std::move(visual);
-    bundle.visual.state = layerc::platform::ModuleSidecarState::valid;
+    auto &slot = bundle.modules.get<layerc::core::VisualModule>();
+    slot.profile = std::move(visual);
+    slot.state = layerc::platform::ModuleSidecarState::valid;
   }
   if (automation) {
-    bundle.automation.profile = std::move(automation);
-    bundle.automation.state = layerc::platform::ModuleSidecarState::valid;
+    auto &slot = bundle.modules.get<layerc::core::AutomationModule>();
+    slot.profile = std::move(automation);
+    slot.state = layerc::platform::ModuleSidecarState::valid;
   }
   return bundle;
 }

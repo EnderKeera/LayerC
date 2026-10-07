@@ -62,9 +62,9 @@ void X11VisualService::refresh(
       return session.window == consumer.window.opaque &&
              session.automation.profile().id == consumer.profile_id;
     });
-    if (found == sessions.end() || !found->visual_profile) continue;
+    if (found == sessions.end() || !found->visual_profile()) continue;
     auto &entry = desired[found->window];
-    entry.quality = std::max(entry.quality, found->visual_profile->quality);
+    entry.quality = std::max(entry.quality, found->visual_profile()->quality);
     entry.sessions.push_back(&*found);
   }
 
@@ -96,11 +96,11 @@ void X11VisualService::refresh(
   std::vector<VisualConfiguration> inferred;
   if (!configurations) {
     for (const auto &session : sessions)
-      if (session.visual_profile &&
+      if (session.visual_profile() &&
           session.automation.profile().visual_runtime ==
               layerc::core::VisualRuntime::inline_process)
         inferred.push_back({session.source_path, session.automation.profile().id,
-                            *session.visual_profile});
+                            *session.visual_profile()});
     configurations = std::span<const VisualConfiguration>{inferred};
   }
   // Only a store reload hashes configured assets. Window/device scans rematch
@@ -109,7 +109,7 @@ void X11VisualService::refresh(
   std::set<std::filesystem::path> configured_paths;
   std::set<std::filesystem::path> matched_paths;
   for (const auto &session : sessions) {
-    if (!session.visual_profile ||
+    if (!session.visual_profile() ||
         session.automation.profile().visual_runtime !=
             layerc::core::VisualRuntime::inline_process)
       continue;

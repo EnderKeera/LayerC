@@ -10,10 +10,78 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace layerc::test {
+namespace {
+
+struct FourthModule {
+  static constexpr layerc::core::ModuleDescriptor descriptor{
+      .kind = static_cast<layerc::core::ProfileModuleKind>(255),
+      .name = "fourth-fixture",
+      .max_bytes = 1024,
+      .max_schema = 1,
+      .declarable_from_profile_schema = 1,
+      .pack_agreement_from_profile_schema = 1};
+};
+
+template <typename Module> struct FixtureSlot {
+  int state{};
+  std::string diagnostic;
+  bool operator==(const FixtureSlot &) const = default;
+};
+
+template <typename Module>
+using SharedFixtureSlot = FixtureSlot<layerc::core::VisualModule>;
+
+void fourth_module_propagation() {
+  using namespace layerc::core;
+  // Only this table grows. Storage, loading, iteration, value-copy boundaries,
+  // and reconciliation are the exact generic machinery used by the hosts.
+  using ExtendedTable =
+      ModuleTable<VisualModule, AutomationModule, CompanionModule, FourthModule>;
+  using Values = ModuleValues<ExtendedTable, FixtureSlot>;
+  std::size_t loaded{};
+  auto source = Values::load([&]<typename Module>(Module) {
+    ++loaded;
+    return FixtureSlot<Module>{1, std::string(Module::descriptor.name)};
+  });
+  expect(loaded == 4 && source.get<FourthModule>().state == 1 &&
+             source.get<FourthModule>().diagnostic == "fourth-fixture",
+         "a fourth descriptor automatically participates in loading/storage");
+  auto session = source;
+  source.get<FourthModule>() = {2, "fourth sidecar fault"};
+  std::size_t changed{};
+  session.reconcile(source, [&]<typename Module>(Module,
+                                               const FixtureSlot<Module> &slot) {
+    ++changed;
+    expect((std::is_same_v<Module, FourthModule>) && slot.state == 2 &&
+               slot.diagnostic == "fourth sidecar fault",
+           "fourth-module state and diagnostics propagate to the session");
+  });
+  expect(changed == 1 && session == source,
+         "reconciliation updates every changed slot without a module list");
+  session.reconcile(source, [&](auto, const auto &) { ++changed; });
+  expect(changed == 1, "unchanged modules do not reconfigure consumers");
+  const auto snapshot = session;
+  session.get<FourthModule>() = {};
+  expect(snapshot.get<FourthModule>().state == 2,
+         "module snapshots retain value-copy ownership");
+  std::size_t visited{};
+  snapshot.for_each([&](auto, const auto &) { ++visited; });
+  expect(visited == 4, "const snapshots expose every registered module");
+
+  ModuleValues<ExtendedTable, SharedFixtureSlot> shared_types;
+  shared_types.get<FourthModule>().state = 4;
+  expect(shared_types.get<VisualModule>().state == 0 &&
+             shared_types.get<FourthModule>().state == 4,
+         "distinct codecs remain independent even with the same slot type");
+}
+
+} // namespace
 
 void test_profile_module_table() {
+  fourth_module_propagation();
   using namespace layerc::core;
   std::set<ProfileModuleKind> kinds;
   std::set<std::string_view> names;

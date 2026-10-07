@@ -19,7 +19,7 @@ bool observation_enabled(const layerc::core::VisualProfile &profile,
 }
 
 VisualEvaluationRequest build_visual_request(const Session &session) {
-  const auto &visual = *session.modules.visual.profile;
+  const auto &visual = *session.modules.get<layerc::core::VisualModule>().profile;
   VisualEvaluationRequest request;
   request.source_key = session.source_key;
   request.sample_rate_hz = visual.sample_rate_hz;
@@ -61,7 +61,7 @@ layerc::runtime::ServiceReconcileResult VisualCaptureService::reconcile(
              reinterpret_cast<std::uintptr_t>(session->game_window) ==
                  consumer.window.opaque;
     });
-    if (found == sessions.sessions.end() || !(*found)->modules.visual.profile)
+    if (found == sessions.sessions.end() || !(*found)->modules.get<layerc::core::VisualModule>().profile)
       continue;
     const auto *session = found->get();
     desired[session->game_window].push_back(build_visual_request(*session));
@@ -204,7 +204,7 @@ void VisualCaptureRuntime::publish_status(
   VisualStatusSummary summary;
   summary.invalid_sidecar = std::ranges::any_of(
       sessions_.active_inputs, [](const Session *session) {
-        return session->modules.visual.state ==
+        return session->modules.get<layerc::core::VisualModule>().state ==
                layerc::platform::ModuleSidecarState::invalid;
       });
   summary.disabled = !recognition_enabled;

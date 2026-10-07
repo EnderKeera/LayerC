@@ -267,10 +267,9 @@ void commit_bundle_cases() {
     auto document = fixture();
     layerc::platform::ProfileBundleLoad loaded{
         .profile = document.profile(),
-        .visual =
-            layerc::platform::VisualSidecarLoad::invalid(layerc::core::VisualError{}, {}),
-        .automation = layerc::platform::AutomationSidecarLoad::absent({}),
         .legacy_base_schema = true};
+    loaded.modules.get<layerc::core::VisualModule>() =
+        layerc::platform::VisualSidecarLoad::invalid(layerc::core::VisualError{}, {});
     const auto bundle = layerc::editor::loaded_bundle(std::move(loaded));
     expect(bundle.unreadable_module && bundle.upgrade_needed &&
                !bundle.visual && !bundle.automation,

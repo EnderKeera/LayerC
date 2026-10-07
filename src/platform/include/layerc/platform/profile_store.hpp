@@ -138,6 +138,7 @@ struct RemoveModule {}; // tombstone the sidecar
 
 template <typename Profile> class ModuleIntent {
 public:
+  ModuleIntent() : value_(KeepModule{}) {}
   ModuleIntent(KeepModule) : value_(KeepModule{}) {}
   ModuleIntent(RemoveModule) : value_(RemoveModule{}) {}
   ModuleIntent(Profile replacement) : value_(std::move(replacement)) {}
@@ -330,6 +331,13 @@ template <typename Profile> struct ModuleSidecar {
 template <typename Module>
 using ModuleSidecarLoadFor =
     ModuleSidecarLoad<typename Module::Profile, typename Module::Error>;
+template <typename Module>
+using ModuleSidecarFor = ModuleSidecar<typename Module::Profile>;
+using ProfileModuleLoads =
+    core::ModuleValues<core::ProfileModuleTable, ModuleSidecarLoadFor>;
+using ProfileModuleSidecars =
+    core::ModuleValues<core::ProfileModuleTable, ModuleSidecarFor>;
+
 using VisualSidecarLoad = ModuleSidecarLoadFor<layerc::core::VisualModule>;
 using AutomationSidecarLoad =
     ModuleSidecarLoadFor<layerc::core::AutomationModule>;
@@ -406,6 +414,21 @@ load_module_sidecar(const std::filesystem::path &profile_path,
                     const layerc::core::GameProfile &base_profile) {
   return load_sidecar_file<Module>(
       module_sidecar_path(profile_path, Module::descriptor), base_profile);
+}
+
+// Both editor bundle loads and daemon sources carry every registered module.
+[[nodiscard]] inline ProfileModuleLoads load_profile_modules(
+    const std::filesystem::path &path, const core::GameProfile &base) {
+  return ProfileModuleLoads::load([&]<typename Module>(Module) {
+    return load_module_sidecar<Module>(path, base);
+  });
+}
+
+[[nodiscard]] inline ProfileModuleSidecars
+module_sidecars(const ProfileModuleLoads &loaded) {
+  return ProfileModuleSidecars::load([&]<typename Module>(Module) {
+    return ModuleSidecarFor<Module>::from(loaded.get<Module>());
+  });
 }
 
 [[nodiscard]] inline VisualSidecarLoad

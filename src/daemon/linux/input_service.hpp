@@ -38,19 +38,24 @@ struct VisualConfiguration {
 // sidecars as value copies (the platform's shared ModuleSidecar).
 struct ConfiguredProfile {
   layerc::platform::StoredProfile source;
-  layerc::platform::ModuleSidecar<layerc::core::VisualProfile> visual;
-  layerc::platform::ModuleSidecar<layerc::core::AutomationProfile> automation;
+  layerc::platform::ProfileModuleSidecars modules;
 
   // Sidecars whose definitions are enabled; invalid ones contribute nothing.
   [[nodiscard]] const std::optional<layerc::core::VisualProfile> &
-  visual_profile() const noexcept { return visual.profile; }
+  visual_profile() const noexcept {
+    return modules.get<layerc::core::VisualModule>().profile;
+  }
   [[nodiscard]] const std::optional<layerc::core::AutomationProfile> &
-  automation_profile() const noexcept { return automation.profile; }
+  automation_profile() const noexcept {
+    return modules.get<layerc::core::AutomationModule>().profile;
+  }
   [[nodiscard]] bool invalid_visual() const noexcept {
-    return visual.state == layerc::platform::ModuleSidecarState::invalid;
+    return modules.get<layerc::core::VisualModule>().state ==
+           layerc::platform::ModuleSidecarState::invalid;
   }
   [[nodiscard]] bool invalid_automation() const noexcept {
-    return automation.state == layerc::platform::ModuleSidecarState::invalid;
+    return modules.get<layerc::core::AutomationModule>().state ==
+           layerc::platform::ModuleSidecarState::invalid;
   }
 };
 
@@ -66,7 +71,15 @@ struct InputSession {
   bool global{};
   bool active{};
   layerc::core::InputMatcher matcher;
-  std::optional<layerc::core::VisualProfile> visual_profile;
+  layerc::platform::ProfileModuleSidecars modules;
+  [[nodiscard]] std::optional<layerc::core::VisualProfile> &
+  visual_profile() noexcept {
+    return modules.get<layerc::core::VisualModule>().profile;
+  }
+  [[nodiscard]] const std::optional<layerc::core::VisualProfile> &
+  visual_profile() const noexcept {
+    return modules.get<layerc::core::VisualModule>().profile;
+  }
   bool invalid_automation_sidecar{};
   // "<device>:<code>:press|release" of the last event a binding consumed,
   // as the Windows daemon reports it.

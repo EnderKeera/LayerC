@@ -175,8 +175,9 @@ public:
                      layerc::platform::ProfileBundleLoad bundle) {
     profile_ = std::move(bundle.profile);
     path_ = std::move(path);
-    set_visual(bundle.visual, bundle.legacy_visual_schema);
-    set_automation(bundle.automation);
+    set_visual(bundle.modules.get<layerc::core::VisualModule>(),
+               bundle.legacy_visual_schema);
+    set_automation(bundle.modules.get<layerc::core::AutomationModule>());
     legacy_base_schema_ = bundle.legacy_base_schema;
     upgrade_acknowledged_ = false;
   }

@@ -33,12 +33,14 @@ namespace {
   layerc::daemon::ConfiguredProfile bundle;
   bundle.source = std::move(source);
   if (visual) {
-    bundle.visual.profile = std::move(visual);
-    bundle.visual.state = layerc::platform::ModuleSidecarState::valid;
+    auto &slot = bundle.modules.get<layerc::core::VisualModule>();
+    slot.profile = std::move(visual);
+    slot.state = layerc::platform::ModuleSidecarState::valid;
   }
   if (automation) {
-    bundle.automation.profile = std::move(automation);
-    bundle.automation.state = layerc::platform::ModuleSidecarState::valid;
+    auto &slot = bundle.modules.get<layerc::core::AutomationModule>();
+    slot.profile = std::move(automation);
+    slot.state = layerc::platform::ModuleSidecarState::valid;
   }
   return bundle;
 }
@@ -299,7 +301,7 @@ int run_linux_x11_visual_tests() {
   {
     const layerc::daemon::VisualConfiguration configuration{
         sessions.front().source_path, sessions.front().automation.profile().id,
-        *sessions.front().visual_profile};
+        *sessions.front().visual_profile()};
     const std::span configurations{&configuration, 1};
     layerc::daemon::X11VisualService initially_unmatched;
     initially_unmatched.attach(*display);
@@ -528,7 +530,7 @@ int run_linux_x11_visual_tests() {
                        visual.unavailable().empty(),
                    "restoring one asset repairs its evaluation without evicting the shared preparation");
 
-  sessions.front().visual_profile->sample_rate_hz = 10;
+  sessions.front().visual_profile()->sample_rate_hz = 10;
   visual.refresh(sessions, both_demand, true);
   passed &= expect(visual.work_stats().evaluation_builds ==
                            after_restore.evaluation_builds + 1 &&

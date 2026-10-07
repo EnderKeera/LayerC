@@ -15,8 +15,7 @@ namespace layerc::platform {
 // never compare schema literals themselves.
 struct ProfileBundleLoad {
   layerc::core::GameProfile profile;
-  VisualSidecarLoad visual;
-  AutomationSidecarLoad automation;
+  ProfileModuleLoads modules;
   bool legacy_base_schema{};
   bool legacy_visual_schema{};
 };

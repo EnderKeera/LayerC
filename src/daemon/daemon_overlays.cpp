@@ -173,7 +173,7 @@ void DaemonApp::publish_companion_snapshots(const layerc::core::TimePoint now) {
   const auto json = layerc::core::build_companion_snapshot(
       session->automation.profile().id, session_key, session->automation.profile().panels,
       session->automation.profile().cooldowns, session->automation.snapshot_buffer(),
-      session->modules.companion.profile, now);
+      session->modules.get<layerc::core::CompanionModule>().profile, now);
   if (!json.empty())
     (void)companion_host_.transport.publish(json);
 }
@@ -196,12 +196,12 @@ bool DaemonApp::apply_companion_preferences(const std::string_view json) {
     const auto *profile = std::get_if<layerc::core::CompanionProfile>(&parsed);
     if (profile == nullptr)
       continue;
-    if (!layerc::platform::may_write_primary(source.modules.visual.state) ||
-        !layerc::platform::may_write_primary(source.modules.automation.state))
+    if (!layerc::platform::may_write_primary(source.modules.get<layerc::core::VisualModule>().state) ||
+        !layerc::platform::may_write_primary(source.modules.get<layerc::core::AutomationModule>().state))
       return false;
     return layerc::platform::write_profile_bundle(
-               source.path, source.profile, source.modules.visual.profile,
-               source.modules.automation.profile, *profile)
+               source.path, source.profile, source.modules.get<layerc::core::VisualModule>().profile,
+               source.modules.get<layerc::core::AutomationModule>().profile, *profile)
         .ok();
   }
   return false;

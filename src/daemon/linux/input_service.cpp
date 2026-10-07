@@ -27,24 +27,21 @@ using layerc::core::VisualTriggerRequest;
 load_configured(const layerc::platform::StoredProfile &source) {
   ConfiguredProfile bundle{
       .source = source,
-      .visual = layerc::platform::ModuleSidecar<VisualProfile>::from(
-          layerc::platform::load_visual_sidecar(source.path, source.profile)),
-      .automation = layerc::platform::ModuleSidecar<AutomationProfile>::from(
-          layerc::platform::load_automation_sidecar(source.path,
-                                                    source.profile))};
-  if (bundle.visual.profile &&
-      !layerc::core::has_enabled_visual_assignments(*bundle.visual.profile))
-    bundle.visual.profile.reset();
-  if (bundle.automation.profile &&
-      !layerc::core::has_enabled_automations(*bundle.automation.profile))
-    bundle.automation.profile.reset();
+      .modules = layerc::platform::module_sidecars(
+          layerc::platform::load_profile_modules(source.path, source.profile))};
+  auto &visual = bundle.modules.get<layerc::core::VisualModule>().profile;
+  auto &automation = bundle.modules.get<layerc::core::AutomationModule>().profile;
+  if (visual && !layerc::core::has_enabled_visual_assignments(*visual))
+    visual.reset();
+  if (automation && !layerc::core::has_enabled_automations(*automation))
+    automation.reset();
   return bundle;
 }
 
 [[nodiscard]] bool
 same_visual(const InputSession &session,
             const std::optional<VisualProfile> &profile) noexcept {
-  return session.visual_profile == profile;
+  return session.visual_profile() == profile;
 }
 
 [[nodiscard]] bool same_automation(
@@ -95,11 +92,11 @@ InputSession::InputSession(const ConfiguredProfile &bundle,
     : automation(bundle.source.profile),
       source_path(bundle.source.path), window(window),
       global(bundle.source.profile.game.global), matcher(automation.profile().bindings),
-      visual_profile(bundle.visual_profile()),
+      modules(bundle.modules),
       invalid_automation_sidecar(bundle.invalid_automation()),
       persistence(&owner) {
   automation.set_invalid_visual_sidecar(bundle.invalid_visual());
-  automation.configure_visual(visual_profile);
+  automation.configure_visual(visual_profile());
   if (const auto &automation = bundle.automation_profile()) {
     const auto now = layerc::core::MonotonicClock::now();
     const auto &state = owner.attach(source_path, *automation, now);
@@ -191,10 +188,10 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
     if (window == nullptr) continue;
     if (bundle.invalid_visual())
       visual_diagnostics_.push_back(source.path.string() + ": " +
-                                    bundle.visual.diagnostic);
+                                    bundle.modules.get<layerc::core::VisualModule>().diagnostic);
     if (bundle.invalid_automation())
       matched_automation_diagnostics_.push_back(source.path.string() + ": " +
-                                                bundle.automation.diagnostic);
+                                                bundle.modules.get<layerc::core::AutomationModule>().diagnostic);
 
     // Foreground eligibility is runtime state, not profile identity: a
     // background game keeps its automation profile and cooldown engine so
@@ -240,6 +237,9 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
       next.back().automation.set_invalid_visual_sidecar(bundle.invalid_visual());
       next.back().invalid_automation_sidecar = bundle.invalid_automation();
     }
+    // Every loaded module travels with the retained session, even when no
+    // platform capability currently consumes that module.
+    next.back().modules = bundle.modules;
     if (!active) next.back().matcher.clear();
     next.back().active = active;
   }
@@ -310,7 +310,7 @@ X11SessionRegistry::session_requests() const {
         needed_devices(std::span<const InputSession>{&session, 1});
     request.input = devices.keyboard || devices.mouse || devices.gamepad;
     request.overlay = !session.automation.profile().panels.empty();
-    request.visual = !session.global && session.visual_profile.has_value();
+    request.visual = !session.global && session.visual_profile().has_value();
     request.isolated_visual =
         request.visual &&
         session.automation.profile().visual_runtime == layerc::core::VisualRuntime::isolated;

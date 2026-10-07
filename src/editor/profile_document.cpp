@@ -16,10 +16,12 @@ ProfileBundle loaded_bundle(layerc::platform::ProfileBundleLoad loaded) {
     return sidecar.state() == layerc::platform::ModuleSidecarState::invalid &&
            !sidecar.optional_profile().has_value();
   };
-  const bool blocked = unreadable(loaded.visual) || unreadable(loaded.automation);
+  const auto &visual = loaded.modules.get<layerc::core::VisualModule>();
+  const auto &automation = loaded.modules.get<layerc::core::AutomationModule>();
+  const bool blocked = unreadable(visual) || unreadable(automation);
   return {.profile = std::move(loaded.profile),
-          .visual = std::move(loaded.visual.optional_profile()),
-          .automation = std::move(loaded.automation.optional_profile()),
+          .visual = visual.optional_profile(),
+          .automation = automation.optional_profile(),
           .unreadable_module = blocked,
           .upgrade_needed =
               loaded.legacy_base_schema || loaded.legacy_visual_schema};
