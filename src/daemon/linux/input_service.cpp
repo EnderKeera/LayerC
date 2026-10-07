@@ -78,9 +78,10 @@ public:
     session_.persistence->publish(
         session_.source_path, session_.automation.runtime()->persistent_values(),
         now);
-    // The final write happens now; a failure stays pending in the owner and
-    // is retried after the session is gone.
-    (void)session_.persistence->checkpoint(now, true, &session_.source_path);
+    // The final write happens now; a failure stays pending in the owner,
+    // visible in its diagnostics, and is retried after the session is gone.
+    // The runtime is retiring, so there is nothing to acknowledge.
+    session_.persistence->checkpoint(now, true, &session_.source_path);
   }
 
 private:
@@ -251,22 +252,17 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
   configuration_changed_ = false;
 }
 
-bool X11SessionRegistry::acknowledge_saved(
+void X11SessionRegistry::acknowledge_saved(
     const std::span<const std::filesystem::path> saved) {
-  bool orphan{};
   for (const auto &path : saved) {
     const auto *entry = persistence_.find(path);
-    bool matched{};
+    if (entry == nullptr) continue;
     for (auto &session : sessions_) {
       if (session.source_path != path || !session.automation.runtime()) continue;
-      matched = true;
-      if (entry != nullptr &&
-          session.automation.runtime()->persistent_values() == entry->values)
+      if (session.automation.runtime()->persistent_values() == entry->values)
         session.automation.runtime()->mark_persistent_saved();
     }
-    orphan = orphan || !matched;
   }
-  return orphan;
 }
 
 std::size_t X11SessionRegistry::pending_checkpoint_count() const {
@@ -292,11 +288,13 @@ std::vector<std::string> X11SessionRegistry::automation_diagnostics() const {
 void X11SessionRegistry::stop_sessions(const TimePoint now) {
   for (auto &session : sessions_) session.stop_automation(now);
   sessions_.clear();
-  (void)acknowledge_saved(persistence_.checkpoint(now, true));
+  // Shutdown flush: no session is left to acknowledge; a failed write stays
+  // pending in the owner with its fault visible in diagnostics.
+  persistence_.checkpoint(now, true);
 }
 
 void X11SessionRegistry::checkpoint_automation(const TimePoint now) {
-  (void)acknowledge_saved(persistence_.checkpoint(now, true));
+  acknowledge_saved(persistence_.checkpoint(now, true));
 }
 
 std::vector<layerc::runtime::SessionCapabilityRequest>
@@ -412,7 +410,10 @@ std::size_t X11SessionRegistry::automation_count() const noexcept {
 
 bool X11SessionRegistry::poll_automation(const TimePoint now) {
   for (auto &session : sessions_) session.poll_automation(now);
-  return acknowledge_saved(persistence_.checkpoint(now));
+  // A completed write of a session-less entry drops its automation demand.
+  const auto orphaned = pending_checkpoint_count();
+  acknowledge_saved(persistence_.checkpoint(now));
+  return pending_checkpoint_count() != orphaned;
 }
 
 std::optional<TimePoint>

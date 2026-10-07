@@ -136,9 +136,8 @@ public:
   }
 
 private:
-  // Marks runtimes whose values the persistence owner just made durable;
-  // returns whether a saved path had no session (demand may drop).
-  bool acknowledge_saved(std::span<const std::filesystem::path> saved);
+  // Marks runtimes whose values the persistence owner just made durable.
+  void acknowledge_saved(std::span<const std::filesystem::path> saved);
 
   std::vector<ConfiguredProfile> configured_;
   std::vector<VisualConfiguration> visual_configurations_;
