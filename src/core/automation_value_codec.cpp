@@ -7,10 +7,41 @@
 #include <utility>
 
 // The one AutomationValue JSON codec. Profile literals, persisted state, and
-// traces differ only in their tag keys; every bound comes from
-// automation_value_valid, and the JSON parser bounds nesting.
+// traces differ only in their tag keys. Decoding reads shape and type only;
+// the bounded entry points then apply automation_value_valid, the single
+// bounds predicate. The profile reader uses the shape-only entry point because
+// validate_automation_profile owns its semantic bounds. The JSON parser bounds
+// nesting.
 namespace layerc::core::detail {
 namespace {
+
+struct TaggedPayload {
+  const json::Value *payload;
+  AutomationValueType type;
+  std::string path;
+};
+
+// The {type-tag, value-tag} envelope of a value whose type the reader does not
+// know. Shape only: the payload is decoded by the caller.
+std::optional<TaggedPayload> tagged_payload(const json::Value &value,
+                                            const AutomationValueTags tags,
+                                            AutomationError &error,
+                                            const std::string &path) {
+  const auto *tag = value.is_object() ? value.find(tags.type) : nullptr;
+  const auto *payload = value.is_object() ? value.find(tags.value) : nullptr;
+  if (tag == nullptr || !tag->is_string() || payload == nullptr ||
+      value.as_object().size() != 2U) {
+    error = {path, "value requires exactly " + std::string(tags.type) +
+                       " and " + std::string(tags.value)};
+    return std::nullopt;
+  }
+  const auto type = parse_automation_value_type_name(tag->as_string());
+  if (!type) {
+    error = {path + "." + std::string(tags.type), "unsupported value type"};
+    return std::nullopt;
+  }
+  return TaggedPayload{payload, *type, path + "." + std::string(tags.value)};
+}
 
 [[nodiscard]] AutomationValueType infer_type(const json::Value &value) {
   if (value.is_null()) return AutomationValueType::null_value;
@@ -34,8 +65,12 @@ std::optional<AutomationValue> read_child(const json::Value &value,
                                           const std::string &path) {
   if (value.is_object() && value.as_object().size() == 2U) {
     const auto *tag = value.find(tags.type);
-    if (tag != nullptr && tag->is_string() && value.find(tags.value) != nullptr)
-      return read_tagged_automation_value(value, tags, error, path);
+    if (tag != nullptr && tag->is_string() && value.find(tags.value) != nullptr) {
+      const auto tagged = tagged_payload(value, tags, error, path);
+      if (!tagged) return std::nullopt;
+      return read_shape(*tagged->payload, tagged->type, tags, error,
+                        tagged->path);
+    }
   }
   return read_shape(value, infer_type(value), tags, error, path);
 }
@@ -142,9 +177,7 @@ bounded(std::optional<AutomationValue> value, const json::Value &raw,
         const std::string &path) {
   if (value && !automation_value_valid(*value)) {
     error = {invalid_path(*value, raw, tags, path, 0),
-             "value exceeds automation bounds: depth 16, 64 entries, "
-                   "512-byte UTF-8 strings and keys, duration 0 through "
-                   "86400000 ms, confidence 0 through 1"};
+             std::string(automation_value_bounds_message)};
     return std::nullopt;
   }
   return value;
@@ -192,6 +225,14 @@ json::Value tagged_automation_value_tree(const AutomationValue &value,
 }
 
 std::optional<AutomationValue>
+read_automation_value_shape(const json::Value &value,
+                            const AutomationValueType type,
+                            const AutomationValueTags tags,
+                            AutomationError &error, const std::string &path) {
+  return read_shape(value, type, tags, error, path);
+}
+
+std::optional<AutomationValue>
 read_automation_value(const json::Value &value, const AutomationValueType type,
                       const AutomationValueTags tags, AutomationError &error,
                       const std::string &path) {
@@ -203,22 +244,11 @@ std::optional<AutomationValue>
 read_tagged_automation_value(const json::Value &value,
                              const AutomationValueTags tags,
                              AutomationError &error, const std::string &path) {
-  const auto *tag = value.is_object() ? value.find(tags.type) : nullptr;
-  const auto *payload = value.is_object() ? value.find(tags.value) : nullptr;
-  if (tag == nullptr || !tag->is_string() || payload == nullptr ||
-      value.as_object().size() != 2U) {
-    error = {path, "value requires exactly " + std::string(tags.type) +
-                       " and " + std::string(tags.value)};
-    return std::nullopt;
-  }
-  const auto type = parse_automation_value_type_name(tag->as_string());
-  if (!type) {
-    error = {path + "." + std::string(tags.type), "unsupported value type"};
-    return std::nullopt;
-  }
-  const auto payload_path = path + "." + std::string(tags.value);
-  return bounded(read_shape(*payload, *type, tags, error, payload_path),
-                 *payload, tags, error, payload_path);
+  const auto tagged = tagged_payload(value, tags, error, path);
+  if (!tagged) return std::nullopt;
+  return bounded(read_shape(*tagged->payload, tagged->type, tags, error,
+                            tagged->path),
+                 *tagged->payload, tags, error, tagged->path);
 }
 
 } // namespace layerc::core::detail

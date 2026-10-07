@@ -71,9 +71,11 @@ bool validate_expression_tree(
 
   switch (expression.kind) {
   case ExpressionKind::literal:
-    if (!expression.arguments.empty() ||
-        !automation_value_valid(expression.literal))
+    if (!expression.arguments.empty())
       return fail("invalid literal expression");
+    // The sole owner of literal value bounds; the reader decodes shape only.
+    if (!automation_value_valid(expression.literal))
+      return fail(std::string(detail::automation_value_bounds_message));
     result = value_type(expression.literal);
     return true;
   case ExpressionKind::variable: {
@@ -324,9 +326,12 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
       return {path + ".id", "duplicate or invalid variable ID"};
     if (variable.type == AutomationValueType::null_value)
       return {path + ".type", "variables require a non-null supported type"};
-    if (value_type(variable.default_value) != variable.type ||
-        !automation_value_valid(variable.default_value))
+    if (value_type(variable.default_value) != variable.type)
       return {path + ".default", "invalid variable default"};
+    // The sole owner of default value bounds; the reader decodes shape only.
+    if (!automation_value_valid(variable.default_value))
+      return {path + ".default",
+              std::string(detail::automation_value_bounds_message)};
   }
 
   std::set<std::string, std::less<>> automation_ids;

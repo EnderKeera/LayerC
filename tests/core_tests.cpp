@@ -77,6 +77,8 @@ int main() {
       {"test_automation_numeric_promotion", test_automation_numeric_promotion},
       {"test_automation_decode_postconditions",
        test_automation_decode_postconditions},
+      {"test_automation_parse_validate_parity",
+       test_automation_parse_validate_parity},
       {"test_automation_trace_root_provenance",
        test_automation_trace_root_provenance},
   });

@@ -533,4 +533,98 @@ void test_automation_decode_postconditions() {
   }
 }
 
+void test_automation_parse_validate_parity() {
+  // layer45b F-C1/F-A2: the profile reader decodes shape only and
+  // validate_automation_profile alone admits value bounds, so a JSON document
+  // and the equivalent in-memory profile fail with one path and message.
+  struct Case {
+    AutomationValue valid;
+    AutomationValue invalid;
+  };
+  AutomationMap wide_map;
+  for (std::size_t index{}; index <= max_automation_collection_entries; ++index)
+    wide_map.emplace("k" + std::to_string(index), AutomationValue(false));
+  const std::vector<Case> cases{
+      {AutomationValue(std::string()), AutomationValue(std::string(513U, 'a'))},
+      {AutomationValue(AutomationMap{}),
+       AutomationValue(
+           AutomationMap{{std::string(513U, 'k'), AutomationValue(false)}})},
+      {AutomationValue(AutomationList{}),
+       AutomationValue(AutomationList(65U, AutomationValue(false)))},
+      {AutomationValue(AutomationMap{}), AutomationValue(std::move(wide_map))},
+      {AutomationValue(AutomationList{}), deeply_nested_value(17U)},
+      {AutomationValue(DurationValue{0ms}),
+       AutomationValue(DurationValue{86400001ms})},
+      {AutomationValue(DurationValue{0ms}), AutomationValue(DurationValue{-1ms})},
+      {AutomationValue(ConfidenceValue{0.0}),
+       AutomationValue(ConfidenceValue{1.5})},
+      {AutomationValue(ConfidenceValue{0.0}),
+       AutomationValue(ConfidenceValue{-0.1})},
+      {AutomationValue(AutomationList{}),
+       AutomationValue(AutomationList{AutomationValue(ConfidenceValue{2.0})})},
+      {AutomationValue(AutomationMap{}),
+       AutomationValue(AutomationMap{
+           {"child", AutomationValue(DurationValue{86400001ms})}})}};
+  const auto base = value_base();
+  const auto expect_parity = [&](const AutomationProfile &profile,
+                                 const std::string &path,
+                                 const std::string &label) {
+    const auto direct = validate_automation_profile(profile, base);
+    const auto parsed = parse_automation_profile_json(
+        serialize_automation_profile_json(profile), base);
+    const auto *error = std::get_if<AutomationError>(&parsed);
+    expect(direct.path == path &&
+               direct.message.find("exceeds automation bounds") !=
+                   std::string::npos,
+           label + " must fail direct validation with the bounds diagnostic");
+    expect(error != nullptr && error->path == direct.path &&
+               error->message == direct.message,
+           label + " must fail parsing with the direct-validation path and "
+                   "message");
+  };
+  for (std::size_t index{}; index < cases.size(); ++index) {
+    const auto &test = cases[index];
+    const auto type = value_type(test.valid);
+    expect(value_type(test.invalid) == type &&
+               automation_value_valid(test.valid) &&
+               !automation_value_valid(test.invalid),
+           "parity fixture " + std::to_string(index) +
+               " must pair a valid and an out-of-bounds value of one type");
+
+    AutomationProfile with_default;
+    with_default.profile_id = base.id;
+    with_default.variables = {
+        {.id = "v", .type = type, .default_value = test.invalid}};
+    expect_parity(with_default, "$.variables[0].default",
+                  "variable default " + std::to_string(index));
+
+    AutomationProfile with_literal;
+    with_literal.profile_id = base.id;
+    with_literal.variables = {
+        {.id = "v", .type = type, .default_value = test.valid}};
+    with_literal.automations = {
+        {.id = "a",
+         .name = "A",
+         .rules = {{.id = "r",
+                    .event = AutomationEventKind::session_started,
+                    .actions = {{.kind = AutomationActionKind::set_variable,
+                                 .target = "v",
+                                 .value = expr::literal(test.invalid)}}}}}};
+    expect_parity(with_literal, "$.automations[0].rules[0].actions[0].value",
+                  "literal " + std::to_string(index));
+  }
+
+  // The base profile ID is the validator's bound as well.
+  AutomationProfile foreign;
+  foreign.profile_id = "other";
+  const auto direct = validate_automation_profile(foreign, base);
+  const auto parsed = parse_automation_profile_json(
+      serialize_automation_profile_json(foreign), base);
+  const auto *error = std::get_if<AutomationError>(&parsed);
+  expect(direct.path == "$.profileId" && error != nullptr &&
+             error->path == direct.path && error->message == direct.message,
+         "a foreign profile ID must fail parsing and direct validation "
+         "identically");
+}
+
 } // namespace layerc::test

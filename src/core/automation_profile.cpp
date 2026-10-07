@@ -25,18 +25,19 @@ void append_value(std::string &out, const AutomationValue &value) {
   detail::append_automation_value(out, value, detail::state_value_tags);
 }
 
-std::optional<AutomationValue> read_value(const Value &value,
-                                          const AutomationValueType type,
-                                          AutomationError &error,
-                                          const std::string &path) {
+// Persisted state and standalone values have no document validator, so they
+// decode through the bounded codec entry point.
+std::optional<AutomationValue> read_bounded_value(
+    const Value &value, const AutomationValueType type, AutomationError &error,
+    const std::string &path) {
   return detail::read_automation_value(value, type, detail::state_value_tags,
                                        error, path);
 }
 
 // Reads the automation document's shape and types only. Every semantic
-// bound (IDs, ranges, arity, references) is owned by
-// validate_automation_profile, which parse() runs on the complete result. The
-// json::Reader is the only error channel.
+// bound (IDs, ranges, arity, references, the base profile ID, and literal and
+// default value bounds) is owned by validate_automation_profile, which parse()
+// runs on the complete result. The json::Reader is the only error channel.
 struct Parser {
   const Value &root;
   const GameProfile &base;
@@ -74,10 +75,13 @@ struct Parser {
              const std::string &path) {
     return fields.exact_fields(value, allowed, path);
   }
+  // Shape and type only: automation_value_valid is applied once, by the
+  // validator, so a parsed and an in-memory value fail identically.
   bool value(const Value &raw, const AutomationValueType type,
              const std::string &path, AutomationValue &out) {
     AutomationError error;
-    auto parsed = read_value(raw, type, error, path);
+    auto parsed = detail::read_automation_value_shape(
+        raw, type, detail::state_value_tags, error, path);
     if (!parsed)
       return fail(std::move(error.path), std::move(error.message));
     out = std::move(*parsed);
@@ -283,7 +287,8 @@ struct Parser {
     if (!root.is_object())
       return fail("$", "automation root must be an object");
     // The schema version selects the reader, so it is checked before the
-    // remaining fields; detail::automation_header_error owns the rule.
+    // remaining fields; detail::automation_header_error owns the rule. The
+    // base profile ID is a semantic bound left to the validator.
     const auto *schema = root.find("schemaVersion");
     const auto version = schema ? json::read_integer(*schema) : std::nullopt;
     profile.schema_version =
@@ -300,9 +305,6 @@ struct Parser {
                "$") ||
         !string(root, "profileId", "$", profile.profile_id))
       return false;
-    if (auto header = detail::automation_header_error(profile, &base);
-        !header.message.empty())
-      return fail(std::move(header.path), std::move(header.message));
     if (const auto *input = root.find("continuousInput"))
       if (!continuous_input(*input, profile.continuous_input))
         return false;
@@ -419,7 +421,8 @@ parse_automation_value_json(const std::string_view source,
   if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
     return *parse_error;
   AutomationError error;
-  auto value = read_value(std::get<Value>(parsed), expected_type, error, "$");
+  auto value =
+      read_bounded_value(std::get<Value>(parsed), expected_type, error, "$");
   if (!value.has_value())
     return error;
   return std::move(*value);
@@ -518,7 +521,8 @@ parse_automation_state_json(const std::string_view source,
       return AutomationError{"$.values." + id,
                              "unknown or non-persistent variable"};
     AutomationError error;
-    auto value = read_value(raw, declaration->type, error, "$.values." + id);
+    auto value =
+        read_bounded_value(raw, declaration->type, error, "$.values." + id);
     if (!value.has_value())
       return error;
     result.emplace(id, std::move(*value));
