@@ -18,9 +18,9 @@ inline bool valid_automation_id(const std::string_view value) {
 }
 
 // The automation document header rule: schema 1, and (when `base` is given)
-// the base profile's ID. The parser applies it before reading the body so a
-// different schema reports its version; validate_automation_profile applies it
-// to every in-memory profile.
+// the base profile's ID. The parser applies only the schema rule (no `base`)
+// before reading the body so a different schema reports its version;
+// validate_automation_profile applies the complete rule to every profile.
 [[nodiscard]] inline AutomationError
 automation_header_error(const AutomationProfile &profile,
                         const GameProfile *base) {

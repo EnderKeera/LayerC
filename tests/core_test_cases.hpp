@@ -67,6 +67,7 @@ void test_automation_mutation_postconditions();
 void test_automation_clock_boundaries();
 void test_automation_numeric_promotion();
 void test_automation_decode_postconditions();
+void test_automation_parse_validate_parity();
 void test_automation_trace_root_provenance();
 
 } // namespace layerc::test
