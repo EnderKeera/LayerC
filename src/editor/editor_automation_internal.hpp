@@ -1,5 +1,6 @@
 #pragma once
 
+#include "automation_presets.hpp"
 #include "layerc/core/automation.hpp"
 
 #include <windows.h>
@@ -14,26 +15,6 @@ namespace layerc::editor {
 inline constexpr UINT_PTR automation_simulator_timer = 94'001;
 
 using layerc::core::expr::literal;
-
-enum class AutomationPreset {
-  blank,
-  input_cooldown,
-  repeating_session_timer,
-  ready_overlay_pulse,
-};
-
-[[nodiscard]] layerc::core::AutomationDefinition make_automation_preset(
-    AutomationPreset preset, std::string automation_id,
-    std::string cooldown_id = {}, std::string panel_id = {});
-
-enum class AutomationPaletteNode {
-  input_rule,
-  timer_rule,
-  trigger_action,
-  timer_action,
-  overlay_action,
-  flag_variable,
-};
 
 enum class AutomationPaletteTarget { rule, action, variable };
 
@@ -74,17 +55,6 @@ automation_palette_entry(const LRESULT index) noexcept {
              ? nullptr
              : &automation_palette[static_cast<std::size_t>(index)];
 }
-
-[[nodiscard]] layerc::core::AutomationRule
-make_palette_rule(AutomationPaletteNode node, std::string rule_id,
-                  const std::string &cooldown_id);
-// existing_actions numbers generated timer and overlay names.
-[[nodiscard]] layerc::core::AutomationAction
-make_palette_action(AutomationPaletteNode node, std::size_t existing_actions,
-                    const std::string &cooldown_id,
-                    const std::string &panel_id);
-[[nodiscard]] layerc::core::AutomationVariable
-make_palette_variable(std::string variable_id);
 
 [[nodiscard]] inline constexpr LPARAM automation_tree_item_data(
     const int rule, const int action) noexcept {

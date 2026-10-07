@@ -139,29 +139,6 @@ single_observation(const layerc::core::VisualProfile &profile) {
 
 } // namespace
 
-void erase_visual_assignment(layerc::core::VisualProfile &visual,
-                             const std::string_view cooldown_id) {
-  std::string old_rule;
-  if (const auto *trigger = find_trigger(visual, cooldown_id))
-    old_rule = trigger->observation_id;
-  std::erase_if(visual.triggers, [&](const auto &t) {
-    return t.cooldown_id == cooldown_id;
-  });
-  gc_orphan_visual_observation(visual, old_rule);
-}
-
-void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
-                                  const std::string_view observation_id) {
-  if (observation_id.empty()) return;
-  if (std::ranges::any_of(visual.triggers, [&](const auto &t) {
-        return t.observation_id == observation_id;
-      }))
-    return;
-  std::erase_if(visual.observations, [&](const VisualObservation &item) {
-    return layerc::core::observation_id(item) == observation_id;
-  });
-}
-
 VisualEditor::VisualEditor(ProfileDocument &document, EditorShell &shell,
                            const LiveEditSession &live_edit,
                            TaskPicker &task_picker, Host host) noexcept

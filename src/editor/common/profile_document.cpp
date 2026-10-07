@@ -1,5 +1,5 @@
 #include "profile_document.hpp"
-#include "editor_util.hpp"
+#include "profile_edit.hpp"
 #include "layerc/core/hid.hpp"
 
 #include <algorithm>

@@ -272,6 +272,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_automation_benchmark` | Automation evaluator budget (`<= 0.25 ms` average, `<= 2.0 ms` p99); runs serially in CTest; maximum is reported, not gated |
 | `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
 | `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |
+| `layerc_editor_document_tests` | Shared editor document: cooldown-removal dependencies, undo/redo, the commit pipeline, store round trip, sidecar recovery, and upgrade consent |
 
 ### Windows
 
@@ -285,7 +286,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_bundle_tests` | Deterministic bundle export/import and SHA-256 asset deduplication |
 | `layerc_isolated_visual_tests` | `layerw` protocol, bounds, authentication, and quarantine behavior |
 | `layerc_companion_tests` | Companion sidecars, snapshots, transport, and stale expiration |
-| `layerc_editor_tests` | Editor dialogs, theme behavior, schema helpers, and automation presets |
+| `layerc_editor_tests` | Editor dialogs, theme behavior, schema helpers, and automation palette |
 | `layerc_calibration_tests` | Calibration window layout, behavior, and worker interaction |
 
 ### Linux
