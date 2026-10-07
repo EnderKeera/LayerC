@@ -627,12 +627,15 @@ void diagnostics_linux_parser_failure_paths() {
     expect(expected && error && error->path == expected->path && error->message == expected->message,
            "diagnostics syntax errors use the shared bounded-reader conversion");
   }
-  const auto too_large = parse_runtime_diagnostics_json(
-      std::string(layerc::core::max_live_message_bytes + 1, ' '));
+  const std::string oversized(layerc::core::max_live_message_bytes + 1, ' ');
+  const auto shared_limit =
+      json::parse_bounded(oversized, layerc::core::max_live_message_bytes);
+  const auto too_large = parse_runtime_diagnostics_json(oversized);
+  const auto *expected_limit = std::get_if<json::FieldError>(&shared_limit);
   const auto *limit_error = std::get_if<json::FieldError>(&too_large);
-  expect(limit_error && limit_error->path == "$" &&
-             limit_error->message == "diagnostics snapshot exceeds the live message limit",
-         "the existing diagnostics size-limit failure remains unchanged");
+  expect(expected_limit && limit_error && limit_error->path == "$" &&
+             limit_error->message == expected_limit->message,
+         "diagnostics size admission is owned by the shared bounded reader");
   const auto wrong_root = parse_runtime_diagnostics_json("[]");
   const auto *root_error = std::get_if<json::FieldError>(&wrong_root);
   expect(root_error && root_error->path == "$", "diagnostics still reject a non-object root");

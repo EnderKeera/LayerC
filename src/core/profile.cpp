@@ -614,10 +614,6 @@ bool ProfileReader::read_bindings(GameProfile &profile) {
 namespace layerc::core {
 
 ProfileResult parse_profile_json(const std::string_view source) {
-  if (source.size() > max_profile_json_bytes) {
-    return ProfileError{.path = "$",
-                        .message = "profile exceeds the 256 KiB limit"};
-  }
   auto parsed = json::parse_bounded(source, max_profile_json_bytes);
   if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
     return *parse_error;

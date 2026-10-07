@@ -267,8 +267,6 @@ bool linux_extension(json::Reader &r, const json::Value &root,
 } // namespace
 
 RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view source) {
-  if (source.size() > core::max_live_message_bytes)
-    return json::FieldError{"$", "diagnostics snapshot exceeds the live message limit"};
   const auto parsed = json::parse_bounded(source, core::max_live_message_bytes);
   const auto *root = std::get_if<json::Value>(&parsed);
   if (!root) return std::get<json::FieldError>(parsed);
