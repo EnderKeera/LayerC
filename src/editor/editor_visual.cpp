@@ -1,5 +1,9 @@
-#include "editor_window.hpp"
+#include "visual_editor.hpp"
+
+#include "editor_prompt.hpp"
 #include "editor_resource.h"
+#include "editor_text.hpp"
+#include "editor_util.hpp"
 #include "calibration_session.hpp"
 
 #include "layerc/core/profile.hpp"
@@ -158,7 +162,17 @@ void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
   });
 }
 
-void EditorWindow::refresh_visual_controls() {
+VisualEditor::VisualEditor(ProfileDocument &document, EditorShell &shell,
+                           const LiveEditSession &live_edit,
+                           TaskPicker &task_picker, Host host) noexcept
+    : document_(document), shell_(shell), live_edit_(live_edit),
+      task_picker_(task_picker), host_(std::move(host)) {}
+
+void VisualEditor::set_status(const std::wstring_view text) const {
+  set_text(shell_.status, text);
+}
+
+void VisualEditor::refresh() {
   if (shell_.window == nullptr) return;
   const HWND summary = GetDlgItem(shell_.window, IDC_VISUAL_SUMMARY);
   const HWND enabled = GetDlgItem(shell_.window, IDC_VISUAL_ENABLED);
@@ -168,7 +182,7 @@ void EditorWindow::refresh_visual_controls() {
   set_text(GetDlgItem(shell_.window, IDC_VISUAL_RUNTIME_STATUS),
            shell_.visual_runtime_status);
 
-  const auto *cooldown = selected_cooldown();
+  const auto *cooldown = host_.selected_cooldown();
   const bool editable = cooldown != nullptr && !document_.profile().game.global;
   const layerc::core::VisualTrigger *trigger{};
   const layerc::core::PixelRule *rule{};
@@ -230,9 +244,9 @@ void EditorWindow::refresh_visual_controls() {
   InvalidateRect(isolated, nullptr, TRUE);
 }
 
-bool EditorWindow::save_visual_profile() {
+bool VisualEditor::save() {
   if (!document_.visual() || document_.path().empty()) return false;
-  switch (commit_document(document_.path())) {
+  switch (host_.commit_document()) {
   case CommitResult::ok:
     break;
   case CommitResult::invalid_fields:
@@ -252,44 +266,44 @@ bool EditorWindow::save_visual_profile() {
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   case CommitResult::write_failed:
-    themed_message_box(shell_.window, write_failure_message().c_str(),
+    themed_message_box(shell_.window, host_.write_failure_message().c_str(),
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   }
   document_.mark_visual_edited();
   (void)document_.history().record(document_.profile(), document_.visual(), document_.automation(), false);
-  mark_committed();
+  host_.mark_committed();
   // Persisted sidecars are not the whole retention set: undo/redo and other
   // interactive calibration sessions can still own content-addressed assets.
   // Do not run offline asset maintenance from an interactive commit.
-  refresh_visual_controls();
+  refresh();
   return true;
 }
 
-void EditorWindow::set_visual_assignment_enabled(const bool enabled) {
-  const auto *cooldown = selected_cooldown();
+void VisualEditor::set_enabled(const bool enabled) {
+  const auto *cooldown = host_.selected_cooldown();
   if (cooldown == nullptr || !document_.visual()) {
-    refresh_visual_controls();
+    refresh();
     return;
   }
   auto *trigger = find_trigger(*document_.visual(), cooldown->id);
   if (trigger == nullptr) {
-    refresh_visual_controls();
+    refresh();
     return;
   }
   const bool previous = trigger->enabled;
   trigger->enabled = enabled;
-  if (!save_visual_profile()) {
+  if (!save()) {
     trigger->enabled = previous;
-    refresh_visual_controls();
+    refresh();
     return;
   }
   set_status(enabled ? L"Visual assignment enabled."
                      : L"Visual assignment disabled; ordinary input restored.");
 }
 
-void EditorWindow::remove_visual_assignment() {
-  const auto *cooldown = selected_cooldown();
+void VisualEditor::remove_assignment() {
+  const auto *cooldown = host_.selected_cooldown();
   if (cooldown == nullptr || !document_.visual()) return;
   const auto *existing = find_trigger(*document_.visual(), cooldown->id);
   if (existing == nullptr) return;
@@ -301,16 +315,16 @@ void EditorWindow::remove_visual_assignment() {
 
   const auto previous_visual = document_.visual();
   erase_visual_assignment(*document_.visual(), cooldown->id);
-  if (save_visual_profile())
+  if (save())
     set_status(L"Visual assignment removed; ordinary input remains active.");
   else {
     document_.visual() = previous_visual;
-    refresh_visual_controls();
+    refresh();
   }
 }
 
-void EditorWindow::calibrate_visual() {
-  const auto *cooldown = selected_cooldown();
+void VisualEditor::calibrate() {
+  const auto *cooldown = host_.selected_cooldown();
   if (cooldown == nullptr) return;
   if (document_.profile().game.global) {
     themed_message_box(shell_.window,
@@ -318,7 +332,7 @@ void EditorWindow::calibrate_visual() {
                 L"Visual calibration", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (!require_stored_profile(L"Save this new profile before calibrating it."))
+  if (!host_.require_stored_profile(L"Save this new profile before calibrating it."))
     return;
 
   auto matching = document_.profile();
@@ -332,16 +346,15 @@ void EditorWindow::calibrate_visual() {
     }
   }
   task_picker_.request_calibration();
-  show_tasks();
+  host_.show_tasks();
   set_status(L"Select a matching game window, then choose Calibrate Visual.");
 }
 
-void EditorWindow::calibrate_selected_task() {
-  const auto *candidate = require_selected_task();
-  if (candidate == nullptr) return;
+void VisualEditor::calibrate_task(
+    const layerc::platform::WindowCandidate &candidate) {
   auto matching = document_.profile();
   matching.enabled = true;
-  if (!layerc::platform::profile_matches_window(*candidate, matching)) {
+  if (!layerc::platform::profile_matches_window(candidate, matching)) {
     themed_message_box(task_picker_.window,
                 L"That window does not match this profile. Use Selected Task first if you intend to change the matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
@@ -350,15 +363,15 @@ void EditorWindow::calibrate_selected_task() {
   if (task_picker_.awaiting_calibration())
     task_picker_.clear_request();
   ShowWindow(task_picker_.window, SW_HIDE);
-  if (!launch_calibration(candidate->window)) {
+  if (!launch_calibration(candidate.window)) {
     ShowWindow(task_picker_.window, SW_SHOWNORMAL);
     SetForegroundWindow(task_picker_.window);
     set_status(L"Visual calibration was not started.");
   }
 }
 
-bool EditorWindow::launch_calibration(const HWND target) {
-  const auto *cooldown = selected_cooldown();
+bool VisualEditor::launch_calibration(const HWND target) {
+  const auto *cooldown = host_.selected_cooldown();
   if (cooldown == nullptr || target == nullptr || !IsWindow(target))
     return false;
   const auto notice = layerc::platform::read_bool_setting(
@@ -407,12 +420,12 @@ bool EditorWindow::launch_calibration(const HWND target) {
   return true;
 }
 
-bool EditorWindow::merge_calibration_result(const std::string_view visual_json) {
+bool VisualEditor::merge_calibration_result(const std::string_view visual_json) {
   const auto parsed =
       layerc::core::parse_visual_profile_json(visual_json, document_.profile());
   const auto *candidate_profile =
       std::get_if<layerc::core::VisualProfile>(&parsed);
-  const auto *cooldown = selected_cooldown();
+  const auto *cooldown = host_.selected_cooldown();
   const auto candidate = candidate_profile == nullptr
                              ? std::optional<VisualObservation>{}
                              : single_observation(*candidate_profile);
@@ -484,9 +497,9 @@ bool EditorWindow::merge_calibration_result(const std::string_view visual_json) 
   }
   const auto previous = document_.visual();
   document_.visual() = std::move(merged);
-  if (!save_visual_profile()) {
+  if (!save()) {
     document_.visual() = previous;
-    refresh_visual_controls();
+    refresh();
     return false;
   }
   return true;

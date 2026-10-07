@@ -286,7 +286,7 @@ if(WIN32)
             tests/editor_hid_dialog_tests.cpp
             tests/editor_diagnostics_dialog_tests.cpp
             tests/editor_document_tests.cpp tests/editor_calibration_tests.cpp
-            tests/editor_asset_tests.cpp
+            tests/editor_asset_tests.cpp tests/editor_component_tests.cpp
             src/editor/editor_resources.rc
         LINK layerc_editor_ui WIN32 TIMEOUT 30)
     target_include_directories(layerc_editor_tests PRIVATE src/editor)

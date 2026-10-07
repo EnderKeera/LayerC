@@ -81,7 +81,7 @@ void EditorWindow::sync_profile_from_controls() {
   auto *panel = panel_preview_.controls_panel < document_.profile().panels.size()
                     ? &document_.profile().panels[panel_preview_.controls_panel]
                     : nullptr;
-  ProfileFieldContext context{shell_.window, document_.profile(), selected_cooldown(), panel};
+  ProfileFieldContext context{shell_.window, document_.profile(), cooldown_editor_.selected(), panel};
   read_profile_fields(context);
   if (document_.visual()) document_.visual()->profile_id = document_.profile().id;
   if (document_.automation()) document_.automation()->profile_id = document_.profile().id;
@@ -135,7 +135,7 @@ void EditorWindow::new_profile(const bool confirm) {
   document_.set_dirty(false);
   reset_history();
   refresh_profile_controls();
-  refresh_visual_controls();
+  visual_editor_.refresh();
   sync_draft_row();
   set_status(
       L"New profile ready — Save once to create it and enable autosave.");
@@ -222,7 +222,7 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
   }
   document_.assign_bundle(
       target_path, std::get<layerc::platform::ProfileBundleLoad>(std::move(loaded)));
-  refresh_visual_controls();
+  visual_editor_.refresh();
   document_.set_dirty(false);
   end_edit_on_window();
   reset_history();
@@ -587,6 +587,32 @@ void EditorWindow::mark_committed(const std::filesystem::path &path,
       sync_current_profile_entry();
   }
   notify_profile_committed(path, profile);
+}
+
+void EditorWindow::refresh_profile_controls() {
+  cooldown_editor_.reset_capture();
+  auto sync = shell_.sync_scope();
+  const ProfileFieldContext context{shell_.window, document_.profile()};
+  write_profile_fields(context, ProfileFieldOwner::profile);
+  set_owner_draw_checkbox(
+      GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH),
+      !document_.profile().game.executable_path.empty());
+  // An empty field shows its cue banner rather than hint text as a value.
+  const auto &game = document_.profile().game;
+  set_text(shell_.application_path,
+           to_wide(game.executable_path.empty() ? game.executable_name
+                                                : game.executable_path));
+  // Keep the executable name (the end of a path) in view; the tooltip has
+  // the whole path.
+  const auto length = GetWindowTextLengthW(shell_.application_path);
+  SendMessageW(shell_.application_path, EM_SETSEL, static_cast<WPARAM>(length),
+               length);
+  SendMessageW(shell_.application_path, EM_SCROLLCARET, 0, 0);
+  cooldown_editor_.refresh_list();
+  refresh_bar_list();
+  InvalidateRect(panel_preview_.window, nullptr, TRUE);
+  layout();
+  refresh_title();
 }
 
 } // namespace layerc::editor

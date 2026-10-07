@@ -81,7 +81,7 @@ bool EditorWindow::draft_controls_valid() const {
                     ? &self.document_.profile().panels[self.panel_preview_.controls_panel]
                     : nullptr;
   const ProfileFieldContext context{
-      self.shell_.window, self.document_.profile(), self.selected_cooldown(), panel};
+      self.shell_.window, self.document_.profile(), self.cooldown_editor_.selected(), panel};
   return profile_fields_valid(context);
 }
 
@@ -217,7 +217,7 @@ void EditorWindow::handle_live_message(
     const layerc::core::LiveMessage &message) {
   if (message.type == layerc::core::LiveMessageType::runtime_status) {
     shell_.visual_runtime_status = to_wide(message.text);
-    refresh_visual_controls();
+    visual_editor_.refresh();
     return;
   }
   if (message.type == layerc::core::LiveMessageType::diagnostics_reply) {

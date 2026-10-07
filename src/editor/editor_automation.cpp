@@ -128,7 +128,32 @@ void select_json_error(const HWND dialog,
 } // namespace
 
 EditorWindow::EditorWindow()
-    : automation_editor_(std::make_unique<AutomationEditor>(
+    : cooldown_editor_(
+          document_, shell_, static_cast<const DialogTheme &>(*this),
+          [this](const DocumentChangeKind kind) { record_profile_change(kind); },
+          {.sync_fields = [this] { sync_profile_from_controls(); },
+           .follow_bar = [this] { follow_cooldown_bar(); },
+           .refresh_visual = [this] { visual_editor_.refresh(); },
+           .refresh_bars =
+               [this](const std::size_t preferred_panel) {
+                 refresh_bar_list(preferred_panel);
+               }}),
+      visual_editor_(
+          document_, shell_, live_edit_, task_picker_,
+          {.selected_cooldown =
+               [this]() -> const layerc::core::CooldownDefinition * {
+                 return cooldown_editor_.selected();
+               },
+           .commit_document =
+               [this] { return commit_document(document_.path()); },
+           .mark_committed = [this] { mark_committed(); },
+           .write_failure_message = [this] { return write_failure_message(); },
+           .require_stored_profile =
+               [this](const wchar_t *first_save_message) {
+                 return require_stored_profile(first_save_message);
+               },
+           .show_tasks = [this] { show_tasks(); }}),
+      automation_editor_(std::make_unique<AutomationEditor>(
           document_, live_edit_, shell_,
           static_cast<const DialogTheme &>(*this),
           [this](const DocumentChangeKind kind) {

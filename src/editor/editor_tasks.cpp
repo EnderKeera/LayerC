@@ -318,7 +318,7 @@ void EditorWindow::finish_picker() {
     const bool calibrate = task_picker_.awaiting_calibration();
     task_picker_.clear_request();
     if (calibrate)
-      launch_calibration(candidate->window);
+      visual_editor_.launch_calibration(candidate->window);
     else
       begin_edit_on_window(candidate->window);
     return;
@@ -429,6 +429,11 @@ LRESULT EditorWindow::handle_task_message(const HWND window, const UINT message,
     break;
   }
   return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
+}
+
+void EditorWindow::calibrate_selected_task() {
+  if (const auto *candidate = require_selected_task())
+    visual_editor_.calibrate_task(*candidate);
 }
 
 } // namespace layerc::editor

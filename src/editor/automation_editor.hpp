@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dialog_layout.hpp"
+#include "dialog_theme.hpp"
 #include "editor_state.hpp"
 #include "profile_document.hpp"
 #include "layerc/core/automation.hpp"
@@ -16,18 +17,6 @@
 #include <vector>
 
 namespace layerc::editor {
-
-// Themed painting for a sub-editor dialog, provided by its host window.
-class DialogTheme {
-public:
-  virtual void draw_list_box_item(const DRAWITEMSTRUCT &item) const = 0;
-  [[nodiscard]] virtual std::optional<LRESULT>
-  dialog_theme_message(HWND window, UINT message, WPARAM wparam,
-                       LPARAM lparam) const = 0;
-
-protected:
-  ~DialogTheme() = default;
-};
 
 // The automation dialog. It edits the injected document's automation module,
 // talks to the daemon only through the live-edit session, and reports every

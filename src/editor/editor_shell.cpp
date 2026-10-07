@@ -188,7 +188,7 @@ std::optional<LRESULT> EditorWindow::handle_shell_notify(const NMHDR &header) {
                   L" regardless of folder"
             : L"No application chosen yet";
   } else if (control == GetDlgItem(shell_.window, IDC_COOLDOWN_BINDING)) {
-    shell_.tooltip_text = binding_codes_text();
+    shell_.tooltip_text = cooldown_editor_.binding_codes_text();
   }
   info.lpszText = shell_.tooltip_text.data();
   return 0;
@@ -324,7 +324,7 @@ void EditorWindow::focus_field(const int id) {
 
 void EditorWindow::show_context_menu(const HWND source, POINT screen) {
   const bool profiles = source == shell_.profile_list;
-  if (!profiles && source != cooldown_editor_.list)
+  if (!profiles && source != cooldown_editor_.list())
     return;
   const bool keyboard = screen.x == -1 && screen.y == -1;
   if (profiles) {
@@ -354,28 +354,28 @@ void EditorWindow::show_context_menu(const HWND source, POINT screen) {
   } else {
     if (!keyboard) {
       POINT client = screen;
-      ScreenToClient(cooldown_editor_.list, &client);
-      const LRESULT hit = SendMessageW(cooldown_editor_.list, LB_ITEMFROMPOINT,
+      ScreenToClient(cooldown_editor_.list(), &client);
+      const LRESULT hit = SendMessageW(cooldown_editor_.list(), LB_ITEMFROMPOINT,
                                        0, MAKELPARAM(client.x, client.y));
       if (HIWORD(hit) == 0 &&
-          SendMessageW(cooldown_editor_.list, LB_GETCURSEL, 0, 0) !=
+          SendMessageW(cooldown_editor_.list(), LB_GETCURSEL, 0, 0) !=
               LOWORD(hit)) {
-        SendMessageW(cooldown_editor_.list, LB_SETCURSEL, LOWORD(hit), 0);
+        SendMessageW(cooldown_editor_.list(), LB_SETCURSEL, LOWORD(hit), 0);
         SendMessageW(shell_.window, WM_COMMAND,
                      MAKEWPARAM(IDC_COOLDOWN_LIST, LBN_SELCHANGE),
-                     reinterpret_cast<LPARAM>(cooldown_editor_.list));
+                     reinterpret_cast<LPARAM>(cooldown_editor_.list()));
       }
     } else {
       RECT bounds{};
       const LRESULT row =
-          SendMessageW(cooldown_editor_.list, LB_GETCURSEL, 0, 0);
-      SendMessageW(cooldown_editor_.list, LB_GETITEMRECT,
+          SendMessageW(cooldown_editor_.list(), LB_GETCURSEL, 0, 0);
+      SendMessageW(cooldown_editor_.list(), LB_GETITEMRECT,
                    static_cast<WPARAM>(std::max<LRESULT>(0, row)),
                    reinterpret_cast<LPARAM>(&bounds));
       screen = {bounds.left + 24, bounds.bottom};
-      ClientToScreen(cooldown_editor_.list, &screen);
+      ClientToScreen(cooldown_editor_.list(), &screen);
     }
-    if (selected_cooldown() == nullptr)
+    if (cooldown_editor_.selected() == nullptr)
       return;
   }
   const HMENU menus =
@@ -427,9 +427,9 @@ bool EditorWindow::handle_list_key(const MSG &message) {
       show_context_menu(shell_.profile_list, {-1, -1});
       return true;
     }
-  } else if (message.hwnd == cooldown_editor_.list) {
+  } else if (message.hwnd == cooldown_editor_.list()) {
     if (message.wParam == VK_DELETE) {
-      remove_cooldown();
+      cooldown_editor_.remove();
       return true;
     }
     if (message.wParam == VK_F2) {
@@ -457,28 +457,10 @@ void EditorWindow::duplicate_profile() {
   document_.set_dirty(true);
   reset_history();
   refresh_profile_controls();
-  refresh_visual_controls();
+  visual_editor_.refresh();
   sync_draft_row();
   set_status(L"Profile duplicated without its visual trigger and automation "
              L"— Save to create it.");
-}
-
-void EditorWindow::duplicate_cooldown() {
-  const auto *source = selected_cooldown();
-  if (source == nullptr)
-    return;
-  const auto original = *source;
-  add_cooldown();
-  auto &added = document_.profile().cooldowns.back();
-  added.name = original.name + " copy";
-  added.duration = original.duration;
-  added.max_charges = original.max_charges;
-  added.retrigger = original.retrigger;
-  added.recovery = original.recovery;
-  refresh_cooldown_list(static_cast<int>(document_.profile().cooldowns.size()) - 1);
-  record_profile_change(ChangeKind::immediate);
-  set_status(L"Cooldown duplicated with an unused key; Capture key can "
-             L"change it.");
 }
 
 void EditorWindow::set_advanced_visible(const bool visible, const bool persist) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "appearance_draft.hpp"
+#include "dialog_layout.hpp"
 #include "editor_util.hpp"
 
 #include "layerc/core/live_edit.hpp"
@@ -78,12 +79,11 @@ struct EditorShell final {
   bool syncing{};
 };
 
-// Owns the cooldown list and exclusive binding-capture mode. Capture is either
-// idle or belongs to this editor; no second binding can be captured concurrently.
-class CooldownEditor final {
+// Exclusive keyboard binding-capture mode. Capture is either idle or holds
+// the ordered chord pressed so far; no second binding can be captured
+// concurrently.
+class BindingCapture final {
 public:
-  HWND list{};
-
   [[nodiscard]] bool capturing_binding() const noexcept {
     return capturing_binding_;
   }

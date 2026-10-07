@@ -469,7 +469,7 @@ void panel_preview_contracts(bool &passed) {
 }
 
 void binding_capture_contracts(bool &passed) {
-  layerc::editor::CooldownEditor binding_state;
+  layerc::editor::BindingCapture binding_state;
   binding_state.begin_binding_capture();
   binding_state.record_binding_key(0x002AU);
   binding_state.record_binding_key(0x002AU);

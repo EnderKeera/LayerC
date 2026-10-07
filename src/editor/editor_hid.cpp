@@ -1,6 +1,9 @@
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
-#include "editor_window.hpp"
+#include "cooldown_editor.hpp"
+#include "editor_prompt.hpp"
+#include "editor_text.hpp"
+#include "editor_util.hpp"
 
 #include "layerc/core/hid.hpp"
 #include "layerc/platform/hid_device.hpp"
@@ -25,7 +28,8 @@ constexpr UINT_PTR device_refresh_timer = 1;
 constexpr UINT device_refresh_delay_ms = 250;
 
 struct HidDialogState {
-  EditorWindow *editor{};
+  const DialogTheme *theme{};
+  bool capture_exclusion{};
   std::vector<layerc::platform::HidRawDevice> devices;
   std::vector<std::size_t> visible_devices;
   std::set<std::pair<USHORT, USHORT>> registrations;
@@ -175,19 +179,22 @@ bool read_percent(const HWND control, const unsigned maximum, double &value) {
   return true;
 }
 
+INT_PTR CALLBACK hid_binding_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+
 } // namespace
 
-void EditorWindow::capture_hid_binding() {
-  auto *cooldown = selected_cooldown();
+void CooldownEditor::capture_hid() {
+  auto *cooldown = selected();
   if (cooldown == nullptr) {
     set_status(L"Select a cooldown before capturing a HID binding.");
     return;
   }
   HidDialogState state{};
-  state.editor = this;
+  state.theme = &theme_;
+  state.capture_exclusion = shell_.capture_exclusion;
   state.devices = layerc::platform::enumerate_raw_hid_devices();
   if (DialogBoxParamW(shell_.instance, MAKEINTRESOURCEW(IDD_HID_BINDING), shell_.window,
-                      &EditorWindow::hid_binding_dialog_proc,
+                      &hid_binding_dialog_proc,
                       reinterpret_cast<LPARAM>(&state)) != IDOK ||
       !state.inferred)
     return;
@@ -234,23 +241,24 @@ void EditorWindow::capture_hid_binding() {
            {{layerc::core::InputDevice::generic_hid,
              static_cast<std::uint16_t>(binding_index + 1U), 0}}}});
   layerc::core::compact_hid_bindings(document_.profile());
-  refresh_binding_controls();
-  record_profile_change(ChangeKind::immediate);
+  refresh_controls();
+  record_change_(DocumentChangeKind::immediate);
   set_status(document_.path().empty()
                  ? L"HID binding captured — Save once to create the profile."
                  : L"HID binding captured and autosaving.");
 }
 
-INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
-                                                       const UINT message,
-                                                       const WPARAM wparam,
-                                                       const LPARAM lparam) {
+namespace {
+
+INT_PTR CALLBACK hid_binding_dialog_proc(const HWND window, const UINT message,
+                                         const WPARAM wparam,
+                                         const LPARAM lparam) {
   auto *state = bind_dialog_state<HidDialogState>(window, message, lparam);
   if (state == nullptr)
     return FALSE;
   if (message == WM_INITDIALOG) {
-    apply_dialog_chrome(window, state->editor->shell_.capture_exclusion);
-    state->editor->style_dialog_children(window);
+    apply_dialog_chrome(window, state->capture_exclusion);
+    state->theme->style_dialog_children(window);
     set_owner_draw_checkbox(GetDlgItem(window, IDC_HID_SYSTEM_CLASS), false);
     set_text(GetDlgItem(window, IDC_HID_THRESHOLD), L"50");
     set_text(GetDlgItem(window, IDC_HID_HYSTERESIS), L"10");
@@ -486,8 +494,10 @@ INT_PTR CALLBACK EditorWindow::hid_binding_dialog_proc(const HWND window,
     KillTimer(window, device_refresh_timer);
     unregister_devices(*state);
   }
-  return state->editor->dialog_theme_message(window, message, wparam, lparam)
+  return state->theme->dialog_theme_message(window, message, wparam, lparam)
       .value_or(FALSE);
 }
+
+} // namespace
 
 } // namespace layerc::editor
