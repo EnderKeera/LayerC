@@ -529,15 +529,15 @@ VisualResult parse_visual_profile_value(const json::Value &root,
   return Reader(root, base_profile).read();
 }
 
-namespace {
-
-json::Value region_value(const NormalizedRegion &region) {
+json::Value normalized_region_value(const NormalizedRegion &region) {
   return json::Value(json::Value::Object{
       {"x", json::Value(region.x)},
       {"y", json::Value(region.y)},
       {"width", json::Value(region.width)},
       {"height", json::Value(region.height)}});
 }
+
+namespace {
 
 json::Value observation_value(const PixelRule &rule) {
   auto predicate = std::visit(
@@ -568,7 +568,7 @@ json::Value observation_value(const PixelRule &rule) {
       {"type", json::Value(std::string("pixel"))},
       {"id", json::Value(rule.id)},
       {"name", json::Value(rule.name)},
-      {"region", region_value(rule.region)},
+      {"region", normalized_region_value(rule.region)},
       {"predicate", std::move(predicate)},
       {"stableSamples", json::Value(std::int64_t{rule.stable_samples})},
       {"repeat", json::Value(std::string(
@@ -585,7 +585,7 @@ json::Value observation_value(const TemplateState &state) {
       {"type", json::Value(std::string("template"))},
       {"id", json::Value(state.id)},
       {"name", json::Value(state.name)},
-      {"searchRegion", region_value(state.search_region)},
+      {"searchRegion", normalized_region_value(state.search_region)},
       {"expectedSize", json::Value(json::Value::Object{
           {"width", json::Value(state.expected_width)},
           {"height", json::Value(state.expected_height)}})},

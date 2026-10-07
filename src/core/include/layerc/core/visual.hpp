@@ -169,6 +169,10 @@ struct RegionPixelBounds {
 // region set stays identical in both paths.
 [[nodiscard]] bool
 valid_normalized_region(const NormalizedRegion &region) noexcept;
+// The {x, y, width, height} wire object used by sidecars and calibration
+// reports.
+[[nodiscard]] json::Value
+normalized_region_value(const NormalizedRegion &region);
 
 struct AverageColorPredicate {
   std::uint32_t target_color{};
