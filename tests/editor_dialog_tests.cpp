@@ -119,7 +119,6 @@ void automation_palette_contracts();
 
 void editor_draft_leave_contracts();
 void editor_dialog_font_contracts();
-void editor_cooldown_removal_contracts();
 void editor_calibration_shutdown_contracts();
 void editor_calibration_disabled_owner_contracts();
 void editor_calibration_destroyed_owner_contracts();
@@ -142,7 +141,6 @@ int main(const int argc, char **argv) {
        {"automation_palette_contracts", automation_palette_contracts},
        {"editor_draft_leave_contracts", editor_draft_leave_contracts},
        {"editor_dialog_font_contracts", editor_dialog_font_contracts},
-       {"editor_cooldown_removal_contracts", editor_cooldown_removal_contracts},
        {"editor_calibration_shutdown_contracts",
         editor_calibration_shutdown_contracts},
        {"editor_calibration_disabled_owner_contracts",

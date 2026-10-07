@@ -1,3 +1,4 @@
+#include "document_commit.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
 
@@ -21,24 +22,6 @@
 
 namespace layerc::editor {
 namespace {
-
-bool is_document_path(const ProfileDocument &document,
-                      const std::filesystem::path &path) {
-  return !document.path().empty() &&
-         layerc::platform::canonical_profile_key(path) ==
-             layerc::platform::canonical_profile_key(document.path());
-}
-
-// A new profile never lands on another id's file just because both ids
-// sanitize to the same name; an unreadable directory keeps the plain name.
-std::filesystem::path default_profile_path(
-    const std::filesystem::path &directory,
-    const layerc::core::GameProfile &profile) {
-  const auto scan = layerc::platform::scan_profile_directory(directory);
-  if (!scan.error.empty())
-    return directory / layerc::platform::profile_store_filename(profile.id);
-  return scan.path_for(directory, profile.id);
-}
 
 void show_invalid_field_message(const HWND owner) {
   const auto limit = std::chrono::duration_cast<std::chrono::seconds>(
@@ -502,25 +485,8 @@ void EditorWindow::open_profiles_folder() {
 }
 
 std::wstring EditorWindow::write_failure_message() const {
-  return L"Profile write failed: " +
-         to_wide(layerc::platform::profile_write_error_text(
-             last_write_error_.value_or(layerc::platform::ProfileWriteError::io_failed)));
+  return to_wide(write_failure_text(last_write_error_));
 }
-
-namespace {
-
-// Validates the in-memory profile and keeps sidecar profile ids aligned.
-std::optional<layerc::core::ProfileError> normalize_profile_bundle(
-    const layerc::core::GameProfile &profile,
-    std::optional<layerc::core::VisualProfile> &visual,
-    std::optional<layerc::core::AutomationProfile> &automation) {
-  if (auto error = layerc::core::validate_profile(profile)) return error;
-  if (visual) visual->profile_id = profile.id;
-  if (automation) automation->profile_id = profile.id;
-  return std::nullopt;
-}
-
-} // namespace
 
 std::optional<layerc::core::ProfileError> EditorWindow::normalize_for_commit() {
   return normalize_profile_bundle(document_.profile(), document_.visual(),
@@ -530,42 +496,27 @@ std::optional<layerc::core::ProfileError> EditorWindow::normalize_for_commit() {
 CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
                                          ProfileBundle &bundle,
                                          const CommitOptions &options) {
-  if (normalize_profile_bundle(bundle.profile, bundle.visual,
-                               bundle.automation)
-          .has_value())
-    return CommitResult::invalid_profile;
-  if (bundle.unreadable_module)
-    return CommitResult::blocked_by_sidecar;
-  if (bundle.upgrade_needed) {
-    if (!options.prompt_upgrade) return CommitResult::upgrade_declined;
-    if (!(is_document_path(document_, path) ? confirm_v2_upgrade()
-                                            : confirm_schema_upgrade(shell_.window)))
-      return CommitResult::upgrade_declined;
-  }
-  const auto write =
-      path.empty()
-          ? layerc::platform::ProfileWriteResult{
-                layerc::platform::ProfileWriteError::invalid_input}
-          : layerc::platform::write_profile_bundle(
-                path, bundle.profile, bundle.visual, bundle.automation,
-                layerc::platform::KeepModule{});
-  last_write_error_ = write.failure;
-  if (!write) return CommitResult::write_failed;
-  return CommitResult::ok;
+  const auto outcome = commit_profile_bundle(path, bundle, options, [&] {
+    return is_document_path(document_, path)
+               ? confirm_v2_upgrade()
+               : confirm_schema_upgrade(shell_.window);
+  });
+  last_write_error_ = outcome.write_error;
+  return outcome.result;
 }
 
 CommitResult EditorWindow::commit_document(const std::filesystem::path &path,
                                            const CommitOptions &options) {
   if (!draft_controls_valid()) return CommitResult::invalid_fields;
   sync_profile_from_controls();
-  auto bundle = document_.bundle();
-  const auto result = commit_bundle(path, bundle, options);
-  if (result != CommitResult::invalid_profile) {
-    document_.profile() = std::move(bundle.profile);
-    document_.visual() = std::move(bundle.visual);
-    document_.automation() = std::move(bundle.automation);
-  }
-  return result;
+  const auto outcome = layerc::editor::commit_document(
+      document_, path, options, [&] {
+        return is_document_path(document_, path)
+                   ? confirm_v2_upgrade()
+                   : confirm_schema_upgrade(shell_.window);
+      });
+  last_write_error_ = outcome.write_error;
+  return outcome.result;
 }
 
 void EditorWindow::mark_committed(const CommitOptions &options) {
@@ -576,10 +527,7 @@ void EditorWindow::mark_committed(const std::filesystem::path &path,
                                   const layerc::core::GameProfile &profile,
                                   const CommitOptions &options) {
   if (is_document_path(document_, path)) {
-    document_.set_dirty(false);
-    document_.clear_legacy_schemas();
-    document_.history().rebase(document_.profile(), document_.visual(),
-                               document_.automation());
+    document_.mark_saved();
     KillTimer(shell_.window, autosave_timer);
     if (options.refresh_list)
       reload_profile_list(path, false);

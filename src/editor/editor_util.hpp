@@ -3,6 +3,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/core/visual.hpp"
 #include "editor_prompt.hpp"
+#include "profile_edit.hpp"
 #include "layerc/platform/native_theme.hpp"
 
 #include <array>
@@ -50,30 +51,11 @@ inline constexpr std::wstring_view text_scale_setting = L"EditorTextScale";
                                         UINT dpi);
 [[nodiscard]] bool start_daemon();
 [[nodiscard]] bool recycle_profile_bundle(const std::filesystem::path &path);
-[[nodiscard]] layerc::core::GameProfile make_new_profile();
 [[nodiscard]] std::wstring
 profile_list_label(const layerc::core::GameProfile &profile);
 
-// Smallest "<base>" then "<base>-<n>" id unused by the predicate.
-template <typename IsUsed>
-[[nodiscard]] std::string
-next_unique_id(const std::string_view base, IsUsed &&is_used) {
-  std::string candidate(base);
-  for (std::size_t suffix = 2; is_used(candidate); ++suffix)
-    candidate = std::string(base) + "-" + std::to_string(suffix);
-  return candidate;
-}
-
-[[nodiscard]] std::string
-unique_panel_id(std::string_view base,
-                const std::vector<layerc::core::Panel> &existing,
-                const std::vector<layerc::core::Panel> *generated = nullptr);
 [[nodiscard]] std::wstring
 profile_error_text(const layerc::core::ProfileError &error);
 [[nodiscard]] bool confirm_schema_upgrade(HWND owner);
-void erase_visual_assignment(layerc::core::VisualProfile &visual,
-                             std::string_view cooldown_id);
-void gc_orphan_visual_observation(layerc::core::VisualProfile &visual,
-                                  std::string_view observation_id);
 
 } // namespace layerc::editor

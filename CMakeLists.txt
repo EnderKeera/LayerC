@@ -361,7 +361,6 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_prompt.cpp
         src/editor/editor_profiles.cpp
         src/editor/editor_profile_fields.cpp
-        src/editor/profile_document.cpp
         src/editor/editor_util.cpp
         src/editor/editor_cooldowns.cpp
         src/editor/editor_bars.cpp
@@ -375,7 +374,6 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/calibration_session.cpp
         src/editor/editor_automation.cpp
         src/editor/editor_automation_layout.cpp
-        src/editor/editor_automation_presets.cpp
         src/editor/editor_automation_nodes.cpp
         src/editor/editor_automation_simulator.cpp
         src/editor/editor_packs.cpp
@@ -383,7 +381,7 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_hid.cpp)
     target_include_directories(layerc_editor_ui PUBLIC src/editor)
     target_link_libraries(layerc_editor_ui PUBLIC
-        layerc_core layerc_runtime layerc_windows layerc_bundle
+        layerc_editor_core layerc_core layerc_runtime layerc_windows layerc_bundle
         comctl32 comdlg32 dwmapi shell32 uxtheme user32 gdi32)
     layerc_win32(layerc_editor_ui)
 
@@ -503,6 +501,25 @@ if(NOT WIN32)
             src/platform/linux)
         target_link_libraries(layerctl PRIVATE layerc_bundle layerc_runtime)
         layerc_enable_warnings(layerctl)
+    endif()
+endif()
+
+# Portable LayerE behavior shared by every editor frontend: the document,
+# history, commit pipeline, and profile/automation helpers. It has no toolkit
+# or platform headers; the platform library supplies the profile store.
+if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
+    add_library(layerc_editor_core STATIC
+        src/editor/common/automation_presets.cpp
+        src/editor/common/document_commit.cpp
+        src/editor/common/profile_document.cpp
+        src/editor/common/profile_edit.cpp)
+    target_include_directories(layerc_editor_core PUBLIC src/editor/common)
+    if(WIN32)
+        target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_windows)
+        layerc_win32(layerc_editor_core)
+    else()
+        target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_linux)
+        layerc_enable_warnings(layerc_editor_core)
     endif()
 endif()
 

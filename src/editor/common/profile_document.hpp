@@ -121,6 +121,17 @@ public:
   void set_dirty(const bool dirty) noexcept { dirty_ = dirty; }
   [[nodiscard]] bool dirty() const noexcept { return dirty_; }
   [[nodiscard]] EditorProfileHistory &history() noexcept { return history_; }
+  // A freshly opened or created document: its values are the only history.
+  void reset_history() {
+    history_.reset(profile_, visual_.profile, automation_.profile);
+  }
+  // After the document's own path was committed: clean, written in the
+  // current schemas, and the saved values become the history baseline.
+  void mark_saved() {
+    dirty_ = false;
+    clear_legacy_schemas();
+    history_.rebase(profile_, visual_.profile, automation_.profile);
+  }
   [[nodiscard]] const EditorProfileHistory &history() const noexcept {
     return history_;
   }

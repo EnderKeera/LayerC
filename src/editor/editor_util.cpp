@@ -52,24 +52,10 @@ std::uint32_t parse_uint(const std::wstring_view text,
 
 std::optional<layerc::core::Milliseconds>
 parse_duration_ms(const std::wstring_view seconds) {
-  if (seconds.empty())
-    return std::nullopt;
   const auto source = layerc::platform::ascii_narrow(seconds);
   if (!source)
     return std::nullopt;
-  double parsed{};
-  const auto [end, code] = std::from_chars(
-      source->data(), source->data() + source->size(), parsed);
-  if (code != std::errc{} || end != source->data() + source->size() ||
-      !std::isfinite(parsed) || parsed <= 0.0 ||
-      parsed * 1000.0 >
-          static_cast<double>(layerc::core::max_cooldown_duration.count()))
-    return std::nullopt;
-  const auto milliseconds = std::llround(parsed * 1000.0);
-  if (milliseconds < 1 ||
-      milliseconds > layerc::core::max_cooldown_duration.count())
-    return std::nullopt;
-  return layerc::core::Milliseconds(milliseconds);
+  return parse_duration_seconds(*source);
 }
 
 ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
@@ -164,59 +150,12 @@ bool recycle_profile_bundle(const std::filesystem::path &path) {
   return SHFileOperationW(&operation) == 0 && !operation.fAnyOperationsAborted;
 }
 
-layerc::core::GameProfile make_new_profile() {
-  using namespace std::chrono_literals;
-  using namespace layerc::core;
-  GameProfile profile;
-  profile.id = "new-profile";
-  profile.name = "New Profile";
-  profile.enabled = true;
-  profile.cooldowns.push_back({.id = "ability",
-                               .name = "Ability",
-                               .duration = 5s,
-                               .max_charges = 1,
-                               .retrigger = RetriggerPolicy::ignore});
-  profile.panels.push_back({.id = "main",
-                            .name = "Main",
-                            .style = PanelStyle::bar,
-                            .bar = {},
-                            .anchor_x = 0.5,
-                            .anchor_y = 0.75,
-                            .cooldown_ids = {"ability"}});
-  profile.bindings.push_back(
-      {.cooldown_id = "ability",
-       .chord = InputChord{{{InputDevice::keyboard, 0x12, 0}}}});
-  return profile;
-}
-
 std::wstring profile_list_label(const layerc::core::GameProfile &profile) {
-  std::wstring label = to_wide(profile.name);
-  if (!profile.game.executable_name.empty())
-    label += L"  —  " + to_wide(profile.game.executable_name);
-  if (!profile.enabled)
-    label += L"  (off)";
-  return label;
-}
-
-std::string unique_panel_id(
-    const std::string_view base,
-    const std::vector<layerc::core::Panel> &existing,
-    const std::vector<layerc::core::Panel> *generated) {
-  return next_unique_id(base, [&](const std::string_view candidate) {
-    const auto contains = [&](const std::vector<layerc::core::Panel> &panels) {
-      return std::ranges::any_of(panels, [&](const layerc::core::Panel &panel) {
-        return panel.id == candidate;
-      });
-    };
-    return contains(existing) ||
-           (generated != nullptr && contains(*generated));
-  });
+  return to_wide(profile_list_text(profile));
 }
 
 std::wstring profile_error_text(const layerc::core::ProfileError &error) {
-  const auto path = to_wide(error.path);
-  const auto message = to_wide(error.message);
-  return path.empty() ? message : path + L": " + message;
+  return to_wide(profile_error_line(error));
 }
 
 } // namespace layerc::editor

@@ -27,7 +27,7 @@ bool live_publish_allowed(const ProfileDocument &document) {
 } // namespace
 
 void EditorWindow::reset_history() {
-  document_.history().reset(document_.profile(), document_.visual(), document_.automation());
+  document_.reset_history();
 }
 
 void EditorWindow::sync_current_profile_entry() {

@@ -1,10 +1,11 @@
-#include "editor_automation_internal.hpp"
+#include "automation_presets.hpp"
 
 #include <chrono>
 #include <utility>
 
 namespace layerc::editor {
 using namespace std::chrono_literals;
+using layerc::core::expr::literal;
 
 layerc::core::AutomationDefinition make_automation_preset(
     const AutomationPreset preset, std::string automation_id,
