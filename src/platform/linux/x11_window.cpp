@@ -332,7 +332,7 @@ const X11WindowSnapshot *match_window(const X11WindowScan &scan,
                                       const layerc::core::GameMatch &match,
                                       const std::uint64_t previous_window) {
   // Enumeration stays here; the matching rule and the foreground/previous
-  // preference live in core::select_game_candidate. POSIX filesystems
+  // preference live in core::resolve_game_match. POSIX filesystems
   // compare case-sensitively, so the executable path stays byte-exact.
   std::vector<layerc::core::MatchCandidate> candidates;
   candidates.reserve(scan.windows.size());
@@ -348,7 +348,7 @@ const X11WindowSnapshot *match_window(const X11WindowScan &scan,
     if (previous_window != 0 && snapshot.window == previous_window)
       preferred = index;
   }
-  const auto resolved = layerc::core::select_game_candidate(
+  const auto resolved = layerc::core::resolve_game_match(
       candidates, match, {.exact_path = true, .preferred = preferred});
   return resolved.has_value() ? &scan.windows[*resolved] : nullptr;
 }

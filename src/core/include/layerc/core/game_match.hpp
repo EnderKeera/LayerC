@@ -14,8 +14,11 @@
 //   a matcher with no identity field never matches.
 // - Any specified but undecodable matcher or candidate field fails closed:
 //   the match is rejected rather than weakening to the remaining fields.
-// - `global` profiles are not window-bound: candidate_matches_game rejects
-//   them, and select_game_candidate follows the active window.
+// - `global` profiles are a policy case selected by GlobalMatchPolicy: they
+//   either follow the active window or are bound to no window.
+//
+// resolve_game_match is the only exported entry point; both platform
+// adapters call it, so ranking never bypasses the conjunctive rule.
 
 #include "layerc/core/types.hpp"
 
@@ -34,25 +37,28 @@ struct MatchCandidate {
   bool active{};
 };
 
-// The matcher: true when every specified field holds for `candidate`.
-[[nodiscard]] bool candidate_matches_game(const MatchCandidate &candidate,
-                                          const GameMatch &match,
-                                          bool exact_path);
+enum class GlobalMatchPolicy {
+  // A session target: a global profile follows the active candidate, else
+  // the first one.
+  follow_active,
+  // A window-binding query: a global profile is bound to no window.
+  not_window_bound,
+};
 
 struct GameMatchSelection {
   bool exact_path{};
   // Index of the window a session already follows. Among equally active
   // matches it wins, so focus loss does not retarget a session.
   std::optional<std::size_t> preferred;
+  GlobalMatchPolicy global{GlobalMatchPolicy::follow_active};
 };
 
-// Picks one window for a single-target session. Only candidates accepted by
-// candidate_matches_game are eligible; the active window wins, then the
-// preferred candidate, then poll order. Global profiles pick the active
-// candidate, else the first. Nullopt when nothing is eligible.
+// The GameMatch matcher. Only candidates for which every specified field
+// holds are eligible; among them the active window wins, then the
+// preferred candidate, then poll order. Asking whether one window matches
+// is a one-candidate call. Nullopt when nothing is eligible.
 [[nodiscard]] std::optional<std::size_t>
-select_game_candidate(const std::vector<MatchCandidate> &candidates,
-                      const GameMatch &match,
-                      const GameMatchSelection &selection);
+resolve_game_match(const std::vector<MatchCandidate> &candidates,
+                   const GameMatch &match, const GameMatchSelection &selection);
 
 } // namespace layerc::core

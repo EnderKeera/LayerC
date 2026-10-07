@@ -76,7 +76,7 @@ private:
 // any). Empty for every other case — the caller degrades to title/class.
 [[nodiscard]] std::string process_executable_path(std::uint32_t pid);
 
-// One window for a profile under the shared core::select_game_candidate
+// One window for a profile under the shared core::resolve_game_match
 // policy: every specified identity field must hold (byte-exact executable
 // path), the active window wins, and a previous window breaks background
 // ties so losing focus does not change an existing session's target.

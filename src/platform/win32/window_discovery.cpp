@@ -123,7 +123,8 @@ bool profile_matches_window(const WindowCandidate &candidate,
   if (!profile.enabled) return false;
   // Windows filesystems compare case-insensitively: the shared policy folds
   // the executable path (exact_path=false). Enumeration stays here; the
-  // matching rules live in core::candidate_matches_game.
+  // matching rules live in core::resolve_game_match, asked about this one
+  // window, where a global profile is bound to no window.
   const auto executable_path = core::try_wide_to_utf8(candidate.executable_path);
   const auto executable_name = core::try_wide_to_utf8(candidate.executable_name);
   const auto window_class = core::try_wide_to_utf8(candidate.window_class);
@@ -131,14 +132,17 @@ bool profile_matches_window(const WindowCandidate &candidate,
   if (!executable_path.has_value() || !executable_name.has_value() ||
       !window_class.has_value() || !title.has_value())
     return false;
-  const layerc::core::MatchCandidate fields{
-      .executable_name = *executable_name,
-      .executable_path = *executable_path,
-      .class_name = *window_class,
-      .title = *title,
-      .active = false};
-  return layerc::core::candidate_matches_game(fields, profile.game,
-                                               /*exact_path=*/false);
+  const std::vector<layerc::core::MatchCandidate> fields{
+      {.executable_name = *executable_name,
+       .executable_path = *executable_path,
+       .class_name = *window_class,
+       .title = *title,
+       .active = false}};
+  return layerc::core::resolve_game_match(
+             fields, profile.game,
+             {.exact_path = false,
+              .global = layerc::core::GlobalMatchPolicy::not_window_bound})
+      .has_value();
 }
 
 } // namespace layerc::platform

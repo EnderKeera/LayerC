@@ -10,7 +10,9 @@ namespace layerc::test {
 namespace {
 
 using layerc::core::GameMatch;
+using layerc::core::GlobalMatchPolicy;
 using layerc::core::MatchCandidate;
+using layerc::core::resolve_game_match;
 
 struct MatchCase {
   const char *name;
@@ -20,8 +22,9 @@ struct MatchCase {
   bool expected;
 };
 
-// Shared single-policy table: both platform adapters call this matcher, so
-// these rows define Windows and Linux matching alike.
+// Shared single-policy table: both platform adapters call
+// resolve_game_match, so these rows define Windows and Linux matching
+// alike.
 [[nodiscard]] std::vector<MatchCase> match_cases() {
   const MatchCandidate game{.executable_name = "game.exe",
                             .executable_path = "/usr/bin/game.exe",
@@ -54,8 +57,8 @@ struct MatchCase {
       {"title-only matching needs no executable path",
        {.window_title = "Game"}, {.title = "Some Game"}, true, true},
       {"no identity field never matches", {}, game, true, false},
-      {"global profiles are not window-bound", {.global = true}, game, true,
-       false},
+      {"global profiles are bound to no window", {.global = true}, game,
+       true, false},
       {"undecodable matcher fails closed",
        {.executable_name = std::string(1, '\xFF'), .window_title = "Game"},
        game, false, false},
@@ -75,46 +78,56 @@ struct MatchCase {
 
 void test_game_match_policy_table() {
   for (const auto &row : match_cases()) {
-    expect(layerc::core::candidate_matches_game(row.candidate, row.match,
-                                                row.exact_path) == row.expected,
+    // A window-binding query, as the Windows adapter asks it.
+    expect(resolve_game_match({row.candidate}, row.match,
+                              {.exact_path = row.exact_path,
+                               .global = GlobalMatchPolicy::not_window_bound})
+                   .has_value() == row.expected,
            std::string("GameMatch: ") + row.name);
-    // Selection never widens the matcher: a lone candidate is selected
-    // exactly when it matches.
+    // A session target, as the Linux adapter asks it, never widens the
+    // rule: a lone active or preferred candidate is chosen exactly when it
+    // matches.
     if (!row.match.global) {
-      const auto selected = layerc::core::select_game_candidate(
-          {row.candidate}, row.match, {.exact_path = row.exact_path});
-      expect(selected.has_value() == row.expected,
-             std::string("GameMatch selection agrees: ") + row.name);
+      MatchCandidate active = row.candidate;
+      active.active = true;
+      expect(resolve_game_match({active}, row.match,
+                                {.exact_path = row.exact_path, .preferred = 0})
+                     .has_value() == row.expected,
+             std::string("GameMatch session target agrees: ") + row.name);
     }
   }
 }
 
 void test_game_match_selection() {
-  using layerc::core::select_game_candidate;
   GameMatch match{.executable_name = "game.exe"};
   std::vector<MatchCandidate> windows{
       {.executable_name = "game.exe", .title = "first"},
       {.executable_name = "other.exe", .title = "game.exe", .active = true},
       {.executable_name = "GAME.EXE", .title = "third"},
   };
-  expect(select_game_candidate(windows, match, {}) == 0,
+  expect(resolve_game_match(windows, match, {}) == 0,
          "selection keeps poll order among background matches");
-  expect(select_game_candidate(windows, match, {.preferred = 2}) == 2,
+  expect(resolve_game_match(windows, match, {.preferred = 2}) == 2,
          "a previous target wins background ties");
-  expect(select_game_candidate(windows, match, {.preferred = 1}) == 0,
+  expect(resolve_game_match(windows, match, {.preferred = 1}) == 0,
          "an unmatched previous target preserves normal order");
   windows[2].active = true;
-  expect(select_game_candidate(windows, match, {.preferred = 0}) == 2,
+  expect(resolve_game_match(windows, match, {.preferred = 0}) == 2,
          "the active match wins over a previous background target");
-  expect(!select_game_candidate({}, match, {}).has_value(),
+  expect(!resolve_game_match({}, match, {}).has_value(),
          "no windows selects nothing");
 
   const GameMatch global{.global = true};
-  expect(select_game_candidate(windows, global, {}) == 1,
+  expect(resolve_game_match(windows, global, {}) == 1,
          "global profiles follow the first active window");
   for (auto &window : windows) window.active = false;
-  expect(select_game_candidate(windows, global, {}) == 0,
+  expect(resolve_game_match(windows, global, {}) == 0,
          "global profiles fall back to the first window");
+  expect(!resolve_game_match(
+              windows, global,
+              {.global = GlobalMatchPolicy::not_window_bound})
+              .has_value(),
+         "a window-binding query binds a global profile to no window");
 }
 
 } // namespace layerc::test

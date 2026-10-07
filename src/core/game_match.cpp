@@ -1,7 +1,7 @@
 // Canonical GameMatch resolution policy shared by the Windows and Linux
 // window adapters. See game_match.hpp for the comparison rules. The match
-// side is folded once per call and each candidate once per evaluation;
-// selection only orders candidates the conjunctive matcher accepts.
+// side is folded once per call and each candidate once; ranking only
+// orders candidates the conjunctive rule accepts.
 
 #include "layerc/core/game_match.hpp"
 
@@ -98,20 +98,13 @@ void fold_into(std::optional<std::string> &slot, std::string_view text,
 
 } // namespace
 
-bool candidate_matches_game(const MatchCandidate &candidate,
-                            const GameMatch &match, const bool exact_path) {
-  if (match.global) return false;
-  const FoldedSide folded_match = fold_match(match, exact_path);
-  if (!folded_match.usable || !has_identity(folded_match)) return false;
-  return folded_matches(fold_candidate(candidate, exact_path), folded_match);
-}
-
 std::optional<std::size_t>
-select_game_candidate(const std::vector<MatchCandidate> &candidates,
-                      const GameMatch &match,
-                      const GameMatchSelection &selection) {
+resolve_game_match(const std::vector<MatchCandidate> &candidates,
+                   const GameMatch &match, const GameMatchSelection &selection) {
   if (candidates.empty()) return std::nullopt;
   if (match.global) {
+    if (selection.global == GlobalMatchPolicy::not_window_bound)
+      return std::nullopt;
     const auto active = std::ranges::find_if(
         candidates, [](const MatchCandidate &candidate) { return candidate.active; });
     return static_cast<std::size_t>(
