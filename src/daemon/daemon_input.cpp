@@ -1,4 +1,4 @@
-#include "daemon_app.hpp"
+#include "daemon_state.hpp"
 
 #include "layerc/core/hid.hpp"
 #include "layerc/platform/text.hpp"
@@ -98,7 +98,7 @@ InputRuntime::resources() const noexcept {
   return {.timers = timer_running ? 1U : 0U};
 }
 
-void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
+void InputRuntime::handle_raw_input(const HRAWINPUT handle) {
   UINT size{};
   if (GetRawInputData(handle, RID_INPUT, nullptr, &size,
                       sizeof(RAWINPUTHEADER)) != 0 ||
@@ -118,8 +118,7 @@ void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
   }
 
   const auto &input = *reinterpret_cast<const RAWINPUT *>(buffer);
-  if (hid_runtime_.state())
-    handle_hid_input(input);
+  hid_.handle_input(input);
   if (input.header.dwType == RIM_TYPEKEYBOARD) {
     const auto &keyboard = input.data.keyboard;
     std::uint16_t code = keyboard.MakeCode;
@@ -154,26 +153,27 @@ void DaemonApp::handle_raw_input(const HRAWINPUT handle) {
   }
 }
 
-void DaemonApp::poll_input_devices() {
-  if (session_registry_.active_inputs.empty())
+void InputRuntime::poll_input_devices() {
+  if (sessions_.active_inputs.empty())
     return;
-  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != session_registry_.input_foreground) {
-    sync_foreground_state();
+  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != sessions_.input_foreground) {
+    notifications_.sync_foreground_state();
     return;
   }
-  for (auto *session : session_registry_.active_inputs) {
+  for (auto *session : sessions_.active_inputs) {
     if (session->is_global()) {
       poll_global_keyboard(*session);
     }
   }
-  if (std::any_of(
-          session_registry_.active_inputs.begin(), session_registry_.active_inputs.end(),
-          [](const Session *session) { return session->uses_controller; })) {
+  if (std::ranges::any_of(sessions_.active_inputs,
+                         [](const Session *session) {
+                           return session->uses_controller;
+                         })) {
     poll_controllers();
   }
 }
 
-void DaemonApp::poll_global_keyboard(Session &session) {
+void InputRuntime::poll_global_keyboard(Session &session) {
   for (auto &key : session.global_keyboard) {
     const bool pressed =
         (GetAsyncKeyState(static_cast<int>(key.virtual_key)) & 0x8000) != 0;
@@ -185,22 +185,22 @@ void DaemonApp::poll_global_keyboard(Session &session) {
   }
 }
 
-void DaemonApp::seed_controller_states() {
+void InputRuntime::seed_controller_states() {
   for (DWORD index = 0; index < XUSER_MAX_COUNT; ++index) {
     XINPUT_STATE state{};
     if (XInputGetState(index, &state) != ERROR_SUCCESS) {
       state = {};
     }
-    input_runtime_.controllers[index] = state;
+    controllers_[index] = state;
   }
 }
-void DaemonApp::poll_controllers() {
+void InputRuntime::poll_controllers() {
   for (DWORD index = 0; index < XUSER_MAX_COUNT; ++index) {
     XINPUT_STATE state{};
     if (XInputGetState(index, &state) != ERROR_SUCCESS) {
       state = {};
     }
-    auto &previous_state = input_runtime_.controllers[index];
+    auto &previous_state = controllers_[index];
     const WORD previous = previous_state.Gamepad.wButtons;
     const WORD current = state.Gamepad.wButtons;
     for (unsigned bit = 0; bit < 16; ++bit) {
@@ -251,11 +251,11 @@ void DaemonApp::poll_controllers() {
         {"leftTrigger", trigger(state.Gamepad.bLeftTrigger)},
         {"rightTrigger", trigger(state.Gamepad.bRightTrigger)},
     };
-    for (auto *session : session_registry_.active_inputs) {
+    for (auto *session : sessions_.active_inputs) {
       if (session == nullptr || !session->automation.runtime())
         continue;
       for (const auto &axis : axes)
-        automation_runtime_host_.process_input_value(
+        automation_.process_input_value(
             *session, layerc::core::controller_axis_source_id(index, axis.name),
             axis.value, now);
     }
@@ -263,31 +263,31 @@ void DaemonApp::poll_controllers() {
   }
 }
 
-void DaemonApp::emit_input(const layerc::core::InputEvent &event) {
-  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != session_registry_.input_foreground)
-    sync_foreground_state();
-  if (session_registry_.active_inputs.empty())
+void InputRuntime::emit_input(const layerc::core::InputEvent &event) {
+  if (GetAncestor(GetForegroundWindow(), GA_ROOT) != sessions_.input_foreground)
+    notifications_.sync_foreground_state();
+  if (sessions_.active_inputs.empty())
     return;
-  for (auto *session : session_registry_.active_inputs)
+  for (auto *session : sessions_.active_inputs)
     process_input(*session, event);
 }
 
-void DaemonApp::process_input(Session &session,
+void InputRuntime::process_input(Session &session,
                               const layerc::core::InputEvent &event) {
   const auto now = layerc::core::MonotonicClock::now();
   const auto result = session.automation.feed_input(session.input, event, now);
   if (result.changed)
-    overlay_runtime_.mark_dirty();
+    overlays_.mark_dirty();
   if (result.matched)
     session.last_input_match =
         std::string(layerc::core::input_device_label(event.token.device)) + ":" +
         std::to_string(event.token.code) +
         (event.pressed ? ":press" : ":release");
   if (!result.triggered.empty())
-    update_tooltip(L"LayerD - triggered " +
+    notifications_.update_tooltip(L"LayerD - triggered " +
                    layerc::platform::utf8_to_wide(result.triggered.back()));
   if (session.automation.runtime())
-    automation_runtime_host_.after_step(session, now);
+    automation_.after_step(session, now);
 }
 
 } // namespace layerc::daemon

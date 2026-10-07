@@ -506,28 +506,38 @@ if(NOT WIN32)
     endif()
 endif()
 
-if(WIN32 AND LAYERC_BUILD_DAEMON)
-    add_executable(layerd WIN32
-        src/daemon/main.cpp
-        src/daemon/daemon_app.cpp
+# The Windows services are independent of the shell and are linked unchanged
+# by both layerd and its direct-owner tests.
+if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
+    add_library(layerc_daemon_windows STATIC
         src/daemon/daemon_state.cpp
-        src/daemon/daemon_services.cpp
         src/daemon/daemon_automation.cpp
         src/daemon/daemon_sessions.cpp
+        src/daemon/session_coordinator.cpp
         src/daemon/daemon_input.cpp
         src/daemon/daemon_hid.cpp
         src/daemon/hid_resolver.cpp
         src/daemon/daemon_overlays.cpp
+        src/daemon/daemon_companion.cpp
         src/daemon/daemon_live_edit.cpp
-        src/daemon/daemon_diagnostics.cpp
         src/daemon/daemon_visual.cpp
-        src/daemon/isolated_visual_worker.cpp
-        resources/windows/layerd.rc)
-    target_include_directories(layerd PRIVATE src/daemon src/gamebar)
-    target_link_libraries(layerd PRIVATE
+        src/daemon/isolated_visual_worker.cpp)
+    target_include_directories(layerc_daemon_windows PUBLIC src/daemon)
+    target_link_libraries(layerc_daemon_windows PUBLIC
         layerc_core layerc_runtime layerc_windows layerc_capture
         layerc_overlay layerc_isolated layerc_gamebar
-        shell32 user32 gdi32 xinput9_1_0 psapi hid bcrypt)
+        user32 gdi32 xinput9_1_0 psapi hid bcrypt)
+    layerc_win32(layerc_daemon_windows)
+endif()
+
+if(WIN32 AND LAYERC_BUILD_DAEMON)
+    add_executable(layerd WIN32
+        src/daemon/main.cpp
+        src/daemon/daemon_app.cpp
+        src/daemon/daemon_services.cpp
+        src/daemon/daemon_diagnostics.cpp
+        resources/windows/layerd.rc)
+    target_link_libraries(layerd PRIVATE layerc_daemon_windows shell32)
     layerc_win32_exe(layerd)
     if(MSVC)
         target_link_libraries(layerd PRIVATE delayimp)

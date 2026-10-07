@@ -13,6 +13,8 @@
 #include <array>
 #include <cwchar>
 #include <filesystem>
+#include <optional>
+#include <span>
 #include <string_view>
 
 namespace layerc::daemon {
@@ -36,17 +38,23 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   if (!create_message_window(instance)) {
     return 1;
   }
-  load_platform_settings();
+  const auto control_started = live_edit_host_.reconcile({});
+  if (control_started.status == layerc::runtime::ServiceReconcileStatus::failed) {
+    const auto reason = layerc::platform::utf8_to_wide(control_started.reason);
+    MessageBoxW(window_, reason.c_str(), L"LayerC live edit", MB_OK | MB_ICONERROR);
+    return 1;
+  }
+  session_coordinator_.load_settings();
   reload_event_.reset(CreateEventW(
       nullptr, TRUE, FALSE, layerc::platform::profile_reload_event_name));
   settings_reload_event_.reset(CreateEventW(
       nullptr, TRUE, FALSE, layerc::platform::settings_reload_event_name));
   (void)visual_capture_runtime_.open_activity_event();
   add_tray_icon();
-  reload_profiles();
+  session_coordinator_.reload_profiles();
   overlay_runtime_.start();
   SetTimer(window_, game_scan_timer, 1000, nullptr);
-  poll_live_channel();
+  live_edit_host_.poll();
 
   bool running = true;
   int exit_code{};
@@ -55,13 +63,13 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   while (running) {
     // Flush here for work done outside window messages (loop-level polls,
     // WinEvent callbacks); handle_message flushes for modal-loop dispatch.
-    flush_overlays();
+    overlay_runtime_.flush();
     std::array<HANDLE, 5> live_handles{};
     const auto live_handle_count = static_cast<DWORD>(
-        live_edit_host_.channel.wait_handles(std::span<HANDLE>(live_handles).first(3)));
+        live_edit_host_.wait_handles(std::span<HANDLE>(live_handles).first(3)));
     DWORD wait_handle_count = live_handle_count;
     const DWORD gamebar_wait_index = wait_handle_count;
-    const HANDLE gamebar_wait = companion_host_.transport.wait_handle();
+    const HANDLE gamebar_wait = companion_host_.wait_handle();
     if (gamebar_wait != nullptr)
       live_handles[wait_handle_count++] = gamebar_wait;
     const DWORD visual_wait_index = wait_handle_count;
@@ -69,13 +77,9 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     if (visual_wait)
       live_handles[wait_handle_count++] = visual_capture_runtime_.snapshot_event();
     std::optional<layerc::core::Milliseconds> interval;
-    if (live_edit_host_.session != nullptr)
+    if (live_edit_host_.edit_session() != nullptr)
       interval = layerc::core::Milliseconds{250};
-    else if (std::ranges::any_of(visual_capture_runtime_.captures, [](const auto &entry) {
-               return entry.second != nullptr &&
-                      entry.second->runtime() ==
-                          layerc::core::VisualRuntime::isolated;
-             }))
+    else if (visual_capture_runtime_.needs_maintenance())
       interval = layerc::core::Milliseconds{500};
     else if (wait_handle_count == 0)
       interval = layerc::core::Milliseconds{1'000};
@@ -94,22 +98,22 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     // Watchdog and lease checks run on their deadline after any wake-up, so
     // continuous input, timers, or snapshots cannot starve them.
     if (maintenance.take_due(layerc::core::MonotonicClock::now())) {
-      maintain_visual_captures();
-      poll_live_channel();
+      visual_capture_runtime_.maintain();
+      live_edit_host_.poll();
     }
     if (result == WAIT_TIMEOUT)
       continue;
     if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + live_handle_count) {
-      poll_live_channel();
+      live_edit_host_.poll();
       continue;
     }
     if (gamebar_wait != nullptr &&
         result == WAIT_OBJECT_0 + gamebar_wait_index) {
-      poll_gamebar_transport();
+      companion_host_.poll();
       continue;
     }
     if (visual_wait && result == WAIT_OBJECT_0 + visual_wait_index) {
-      poll_visual_captures();
+      visual_capture_runtime_.poll();
       continue;
     }
     if (result != WAIT_OBJECT_0 + wait_handle_count)
@@ -131,8 +135,7 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
     }
   }
 
-  runtime_kernel_.quiesce();
-  overlay_runtime_.stop();
+  stop_runtime_services();
   visual_capture_runtime_.publish_activity(false);
   automation_runtime_host_.publish_activity(false);
   reload_event_.reset();
@@ -141,36 +144,6 @@ int DaemonApp::run(const HINSTANCE instance, const int show_command) {
   return exit_code;
 }
 
-void DaemonApp::load_platform_settings() {
-  settings_error_.clear();
-  const auto append_error = [&](const std::string_view name,
-                                const std::uint32_t error) {
-    if (!settings_error_.empty())
-      settings_error_ += "; ";
-    settings_error_ += name;
-    settings_error_ += ": ";
-    settings_error_ += layerc::platform::wide_to_utf8(
-        layerc::platform::windows_error_text(error));
-  };
-  // Both flags default to enabled when the setting is absent from the store.
-  const auto apply = [&](bool &target, const auto &result,
-                         const std::string_view name) {
-    if (result.value)
-      target = *result.value;
-    else if (result.missing())
-      target = true;
-    else
-      append_error(name, result.error);
-  };
-
-  apply(overlay_runtime_.capture_exclusion, layerc::platform::read_bool_setting(
-          layerc::platform::BoolSetting::capture_exclusion),
-        "capture exclusion");
-  apply(visual_capture_runtime_.recognition_enabled,
-        layerc::platform::read_bool_setting(
-          layerc::platform::BoolSetting::visual_recognition),
-        "visual recognition");
-}
 
 bool DaemonApp::create_message_window(const HINSTANCE instance) {
   WNDCLASSW definition{};
@@ -229,7 +202,7 @@ void DaemonApp::show_tray_menu() {
   if (menu == nullptr) {
     return;
   }
-  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_capture_runtime_.status.c_str());
+  AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, visual_capture_runtime_.status().c_str());
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, command_open_editor, L"Open editor");
   AppendMenuW(menu, MF_STRING, command_reload, L"Reload profiles");
@@ -278,7 +251,7 @@ LRESULT CALLBACK DaemonApp::window_proc(const HWND window, const UINT message,
 LRESULT DaemonApp::handle_message(const HWND window, const UINT message,
                                   const WPARAM wparam, const LPARAM lparam) {
   const LRESULT result = dispatch_message(window, message, wparam, lparam);
-  flush_overlays();
+  overlay_runtime_.flush();
   return result;
 }
 
@@ -286,23 +259,23 @@ LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
                                     const WPARAM wparam, const LPARAM lparam) {
   switch (message) {
   case WM_INPUT:
-    handle_raw_input(reinterpret_cast<HRAWINPUT>(lparam));
+    input_runtime_.handle_raw_input(reinterpret_cast<HRAWINPUT>(lparam));
     return 0;
   case WM_INPUT_DEVICE_CHANGE:
-    handle_hid_device_change(reinterpret_cast<HANDLE>(lparam),
-                             wparam == GIDC_ARRIVAL);
+    hid_runtime_.handle_device_change(reinterpret_cast<HANDLE>(lparam),
+                                    wparam == GIDC_ARRIVAL);
     return 0;
   case WM_TIMER:
     if (wparam == game_scan_timer) {
-      publish_companion_snapshots(layerc::core::MonotonicClock::now());
+      companion_host_.publish_snapshot(layerc::core::MonotonicClock::now());
       ensure_tray_icon();
       const bool profiles_reloaded = reload_profiles_if_requested();
       const bool settings_reloaded = reload_settings_if_requested();
       if (!profiles_reloaded && !settings_reloaded) {
-        refresh_game_windows();
+        session_coordinator_.refresh_game_windows();
       }
     } else if (wparam == input_poll_timer) {
-      poll_input_devices();
+      input_runtime_.poll_input_devices();
     } else if (wparam == overlay_render_timer) {
       overlay_runtime_.mark_dirty();
     } else if (wparam == automation_timer) {
@@ -315,7 +288,7 @@ LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
       launch_editor();
       break;
     case command_reload:
-      reload_profiles();
+      session_coordinator_.reload_profiles();
       break;
     case command_exit:
       DestroyWindow(window);
@@ -332,17 +305,26 @@ LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
     }
     return 0;
   case WM_DESTROY:
-    shutting_down_ = true;
     KillTimer(window, game_scan_timer);
-    KillTimer(window, overlay_render_timer);
-    KillTimer(window, automation_timer);
-    end_edit_session();
-    runtime_kernel_.quiesce();
+    stop_runtime_services();
     PostQuitMessage(0);
     return 0;
   default:
     return DefWindowProcW(window, message, wparam, lparam);
   }
+}
+
+void DaemonApp::on_overlay_event(const DWORD event, const HWND window) {
+  if (shutting_down_)
+    return;
+  if (event == EVENT_SYSTEM_FOREGROUND)
+    session_coordinator_.sync_foreground_state();
+  else if (event == EVENT_OBJECT_DESTROY)
+    session_coordinator_.refresh_game_windows();
+  else if (event == EVENT_OBJECT_LOCATIONCHANGE)
+    overlay_runtime_.sync_location(window);
+  // WinEvents also arrive inside modal loops, bypassing the run-loop flush.
+  overlay_runtime_.flush();
 }
 
 } // namespace layerc::daemon

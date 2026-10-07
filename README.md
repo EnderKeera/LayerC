@@ -281,7 +281,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_capture_integration_tests` | Interactive WGC/DD integration; registered only with `LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS=ON` |
 | `layerc_overlay_tests` | HWND attachment, GDI rendering, capture exclusion, and `lctest` matching |
 | `layerc_platform_tests` | Profile store, transaction recovery, named-pipe IPC, and peer authentication |
-| `layerc_daemon_runtime_tests` | Daemon maintenance scheduling under busy wakeups and per-session input-device demand |
+| `layerc_daemon_runtime_tests` | Daemon maintenance/input demand plus independently composed Windows runtime owners: input dispatch, idle/quiesced resources, automation lifecycle/trace, and live-control startup/fault recovery |
 | `layerc_bundle_tests` | Deterministic bundle export/import and SHA-256 asset deduplication |
 | `layerc_isolated_visual_tests` | `layerw` protocol, bounds, authentication, and quarantine behavior |
 | `layerc_companion_tests` | Companion sidecars, snapshots, transport, and stale expiration |

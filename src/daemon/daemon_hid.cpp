@@ -1,4 +1,4 @@
-#include "daemon_app.hpp"
+#include "daemon_state.hpp"
 #include "hid_resolver.hpp"
 
 #include "layerc/platform/hid_device.hpp"
@@ -37,8 +37,11 @@ struct HidRuntimeState {
   bool devices_dirty{true};
 };
 
-HidRuntime::HidRuntime(SessionRegistry &sessions, const HWND &window) noexcept
-    : sessions_(sessions), window_(window) {}
+HidRuntime::HidRuntime(SessionRegistry &sessions, const HWND &window,
+                       InputRuntime &input, AutomationRuntimeHost &automation,
+                       RuntimeNotifications &notifications) noexcept
+    : sessions_(sessions), window_(window), input_(input), automation_(automation),
+      notifications_(notifications) {}
 HidRuntime::~HidRuntime() = default;
 
 layerc::runtime::ServiceReconcileResult
@@ -138,18 +141,18 @@ void HidRuntime::quiesce() noexcept {
   state_.reset();
 }
 
-void DaemonApp::handle_hid_device_change(const HANDLE, const bool) {
-  if (!hid_runtime_.state()) return;
-  hid_runtime_.state()->devices_dirty = true;
-  hid_runtime_.state()->resolver.clear();
-  for (auto &session : session_registry_.sessions) {
+void HidRuntime::handle_device_change(const HANDLE, const bool) {
+  if (!state_) return;
+  state_->devices_dirty = true;
+  state_->resolver.clear();
+  for (auto &session : sessions_.sessions) {
     session->hid_states.assign(session->automation.profile().hid_bindings.size(), {});
     session->clear_input_state();
   }
   // Re-enter through RuntimeServiceHost so a registration/enumeration failure
   // is rolled back and appears in diagnostics instead of leaving partial HID
   // state active.
-  reconcile_runtime_services();
+  notifications_.reconcile_runtime_services();
 }
 
 namespace {
@@ -170,7 +173,7 @@ double normalized_hid_value(const layerc::core::HidControlSample &sample) {
 
 } // namespace
 
-void DaemonApp::process_hid_sample(
+void HidRuntime::process_sample(
     Session &session, const std::size_t index,
     const layerc::core::HidControlBinding &binding,
     const layerc::core::HidControlSample &sample) {
@@ -180,7 +183,7 @@ void DaemonApp::process_hid_sample(
       sample.logical_max > sample.logical_min) {
     const bool momentary = sample.relative;
     if (!momentary || sample.value != 0)
-      automation_runtime_host_.process_input_value(
+      automation_.process_input_value(
           session, layerc::core::hid_source_id(index + 1U),
           normalized_hid_value(sample),
           layerc::core::MonotonicClock::now(), momentary);
@@ -200,42 +203,41 @@ void DaemonApp::process_hid_sample(
     session.input.seed(token, *edge);
     return;
   }
-  process_input(session, {.token = token, .pressed = *edge});
+  input_.process_input(session, {.token = token, .pressed = *edge});
   if (relative && *edge) {
-    process_input(session, {.token = token, .pressed = false});
+    input_.process_input(session, {.token = token, .pressed = false});
     state.initialized = true;
     state.pressed = false;
   }
 }
 
-void DaemonApp::handle_hid_input(const RAWINPUT &input) {
-  if (!hid_runtime_.state() || session_registry_.active_inputs.empty())
+void HidRuntime::handle_input(const RAWINPUT &input) {
+  if (!state_ || sessions_.active_inputs.empty())
     return;
-  auto device = hid_runtime_.state()->devices.find(input.header.hDevice);
-  if (device == hid_runtime_.state()->devices.end()) {
+  auto device = state_->devices.find(input.header.hDevice);
+  if (device == state_->devices.end()) {
     auto loaded =
         layerc::platform::load_raw_hid_device(input.header.hDevice);
     if (!loaded) return;
-    device = hid_runtime_.state()->devices
-                 .emplace(input.header.hDevice, std::move(*loaded))
+    device = state_->devices.emplace(input.header.hDevice, std::move(*loaded))
                  .first;
-    hid_runtime_.state()->resolver.clear();
+    state_->resolver.clear();
   }
 
   const auto evaluate_for_sessions = [&](const auto &sample_for) {
-    for (auto *session : session_registry_.active_inputs) {
+    for (auto *session : sessions_.active_inputs) {
       if (session == nullptr || !session->uses_hid) continue;
       if (session->hid_states.size() != session->automation.profile().hid_bindings.size())
         session->hid_states.assign(session->automation.profile().hid_bindings.size(), {});
       for (std::size_t index = 0;
            index < session->automation.profile().hid_bindings.size(); ++index) {
         const auto &binding = session->automation.profile().hid_bindings[index];
-        if (!hid_runtime_.state()->resolver.resolves_to(
-                device->second, binding.device, hid_runtime_.state()->devices))
+        if (!state_->resolver.resolves_to(
+                device->second, binding.device, state_->devices))
           continue;
         const auto sample = sample_for(binding);
         if (sample.has_value())
-          process_hid_sample(*session, index, binding, *sample);
+          process_sample(*session, index, binding, *sample);
       }
     }
   };

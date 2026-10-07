@@ -45,7 +45,7 @@ bool SessionRegistry::invariant_holds() const noexcept {
 
 VisualCaptureRuntime::~VisualCaptureRuntime() {
   // Hosts may signal the snapshot event until they are destroyed.
-  captures.clear();
+  captures_.clear();
 }
 
 bool VisualCaptureRuntime::ensure_snapshot_event() {
@@ -76,7 +76,7 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
   std::uint32_t count{};
   std::uint32_t inline_count{};
   std::uint64_t decoded_assets{};
-  for (const auto &[window, worker] : captures) {
+  for (const auto &[window, worker] : captures_) {
     (void)window;
     if (worker == nullptr) continue;
     if (worker->runtime() == layerc::core::VisualRuntime::inline_process)
@@ -87,8 +87,8 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
     if (session == nullptr || session->game_window == nullptr ||
         !session->modules.get<layerc::core::VisualModule>().profile.has_value())
       continue;
-    const auto capture = captures.find(session->game_window);
-    if (capture == captures.end() || capture->second == nullptr ||
+    const auto capture = captures_.find(session->game_window);
+    if (capture == captures_.end() || capture->second == nullptr ||
         capture->second->runtime() != runtime)
       continue;
     for (const auto &state :
@@ -163,13 +163,13 @@ void OverlayRuntime::stop() noexcept {
 layerc::runtime::RuntimeResourceStats
 OverlayRuntime::resources() const noexcept {
   layerc::runtime::RuntimeResourceStats result{
-      .timers = timer_running ? 1U : 0U};
+      .timers = timer_running_ ? 1U : 0U};
   const auto count = [&](const OverlayCollection &overlays) {
     result += {.windows = static_cast<std::uint32_t>(overlays.window_count()),
                .objects = static_cast<std::uint32_t>(overlays.object_count())};
   };
   for (const auto &session : sessions_.sessions) count(session->overlays);
-  if (live_edit_.session) count(live_edit_.session->overlays);
+
   return result;
 }
 
@@ -189,34 +189,6 @@ void CALLBACK OverlayRuntime::event_proc(
        object_id == OBJID_WINDOW)) {
     target->events_.on_overlay_event(event, window);
   }
-}
-
-layerc::runtime::ServiceReconcileResult
-CompanionHost::reconcile(const layerc::runtime::CapabilityDemand &) {
-  return transport.start()
-             ? layerc::runtime::ServiceReconcileResult{}
-             : layerc::runtime::ServiceReconcileResult::failed(
-                   "Game Bar transport could not start");
-}
-
-void CompanionHost::quiesce() noexcept {
-  transport.stop();
-  set_active_session_count(0);
-}
-
-void CompanionHost::set_active_session_count(const std::size_t count) noexcept {
-  active_session_count_ = static_cast<std::uint32_t>(std::min<std::size_t>(
-      count, std::numeric_limits<std::uint32_t>::max()));
-}
-
-layerc::runtime::RuntimeResourceStats CompanionHost::resources() const noexcept {
-  const auto owned_sessions =
-      layerc::gamebar::GameBarTransport::current_process_is_expected_package()
-          ? active_session_count_
-          : 0U;
-  return {.handles =
-              static_cast<std::uint32_t>(transport.resource_handle_count()),
-          .objects = owned_sessions};
 }
 
 } // namespace layerc::daemon

@@ -29,6 +29,29 @@ ProfileSource *find_source(std::vector<ProfileSource> &sources,
 
 } // namespace
 
+void AutomationRuntimeHost::set_trace_subscribed(const bool enabled) {
+  trace_subscribed_ = enabled;
+  for (auto &session : sessions_.sessions) {
+    if (!session->automation.runtime())
+      continue;
+    session->automation.runtime()->clear_trace();
+    session->automation.runtime()->set_trace_enabled(enabled);
+  }
+}
+
+bool AutomationRuntimeHost::retry(const std::string_view profile_key,
+                                  const std::string_view rule) {
+  bool retried{};
+  for (auto &session : sessions_.sessions) {
+    if (!session->automation.runtime() ||
+        (!profile_key.empty() && session->source_key != profile_key))
+      continue;
+    session->automation.runtime()->retry(rule);
+    retried = true;
+  }
+  return retried;
+}
+
 AutomationRuntimeHost::~AutomationRuntimeHost() {
   publish_activity(false);
 }
@@ -92,7 +115,7 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
       if (session->automation.start(profile,
                          persistence_.attach(source->path, profile, now)
                              .values,
-                         now, nullptr, trace_subscribed))
+                         now, nullptr, trace_subscribed_))
         overlays_.mark_dirty();
       after_step(*session, now);
     } else if (session->automation_revision != source->automation_revision) {
@@ -208,8 +231,8 @@ void AutomationRuntimeHost::poll_cooldown_transitions(Session &session,
     after_step(session, now);
 }
 void AutomationRuntimeHost::publish_trace(Session &session) {
-  if (!trace_subscribed ||
-      !live_edit_.authenticated ||
+  if (!trace_subscribed_ ||
+      !live_edit_.authenticated() ||
       session.automation.runtime()->trace().empty())
     return;
   layerc::core::LiveMessage message;
@@ -234,7 +257,7 @@ void AutomationRuntimeHost::publish_trace(Session &session) {
       omitted.source_event.reset();
       message.text = layerc::core::export_layerc_trace(
           std::span<const layerc::core::AutomationTraceEntry>(&omitted, 1U));
-      if (!live_edit_.channel.send(message))
+      if (!live_edit_.send_authenticated(message))
         break;
       session.automation.runtime()->consume_trace(1U);
       continue;
@@ -242,7 +265,7 @@ void AutomationRuntimeHost::publish_trace(Session &session) {
     message.text = layerc::core::export_layerc_trace(
         std::span<const layerc::core::AutomationTraceEntry>(trace.data(),
                                                             selected));
-    if (!live_edit_.channel.send(message))
+    if (!live_edit_.send_authenticated(message))
       break;
     session.automation.runtime()->consume_trace(selected);
   }

@@ -255,7 +255,8 @@ if(WIN32)
 
     layerc_add_test(layerc_daemon_runtime_tests
         SOURCES tests/daemon_runtime_services_tests.cpp
-        LINK layerc_runtime WIN32 TIMEOUT 30)
+            tests/daemon_owner_tests.cpp
+        LINK layerc_daemon_windows WIN32 TIMEOUT 30)
     target_include_directories(layerc_daemon_runtime_tests PRIVATE src/daemon)
 
     layerc_add_test(layerc_bundle_tests

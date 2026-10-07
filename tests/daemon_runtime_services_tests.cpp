@@ -1,3 +1,4 @@
+#include "daemon_owner_tests.hpp"
 #include "input_demand.hpp"
 #include "maintenance_schedule.hpp"
 #include "test_support.hpp"
@@ -135,4 +136,12 @@ void automation_input_rules_request_their_own_devices() {
 
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(busy_wakeups_cannot_postpone_maintenance),
-    LAYERC_TEST_CASE(automation_input_rules_request_their_own_devices))
+    LAYERC_TEST_CASE(automation_input_rules_request_their_own_devices),
+    LAYERC_TEST_CASE(
+        layerc::test::daemon_owner::input_owner_dispatches_without_a_daemon_app),
+    LAYERC_TEST_CASE(
+        layerc::test::daemon_owner::dormant_owners_do_not_recreate_resources),
+    LAYERC_TEST_CASE(
+        layerc::test::daemon_owner::automation_owner_controls_runtime_and_trace),
+    LAYERC_TEST_CASE(
+        layerc::test::daemon_owner::live_owner_owns_control_resources_and_faults))
