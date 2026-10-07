@@ -726,6 +726,96 @@ void test_widget_service_registration_cleanup();
 void test_widget_latest_state_delivery();
 void test_widget_owned_subscriptions();
 
+// Readers check shape and type only; validate_companion_snapshot owns every
+// semantic bound, so a parsed snapshot and a directly constructed one report
+// the same path and message for the same violation.
+static void test_companion_snapshot_parse_validate_parity() {
+  CompanionSessionSnapshot base;
+  base.profile_id = "p";
+  base.session_key = "s";
+  base.timestamp_ms = 1;
+  base.available_panels = {{.panel_id = "a", .name = "A"}};
+  base.preferences = {CompanionSlotMapping{.slot_index = 2,
+                                           .panel_id = "a",
+                                           .pinned = false,
+                                           .click_through = true,
+                                           .opacity = 1.0}};
+  CompanionPanelSnapshot panel;
+  panel.panel_id = "a";
+  panel.slot_index = 2;
+  panel.items.push_back({.cooldown_id = "c",
+                         .name = "C",
+                         .progress = 0.5,
+                         .available_charges = 0,
+                         .max_charges = 1,
+                         .remaining_ms = 10,
+                         .is_ready = false});
+  base.panels.push_back(panel);
+  const auto serialized = serialize_companion_snapshot_json(base);
+  const auto *wire = serialized_json(serialized);
+  layerc::test::expect(wire != nullptr, "parity base snapshot serializes");
+  if (wire == nullptr) return;
+
+  const auto replaced = [&](const std::string_view from, const std::string &to) {
+    std::string text = *wire;
+    const auto at = text.find(from);
+    layerc::test::expect(at != std::string::npos &&
+                             text.find(from, at + 1) == std::string::npos,
+                         "parity mutation targets one wire token");
+    if (at != std::string::npos) text.replace(at, from.size(), to);
+    return text;
+  };
+  const std::string item_json =
+      R"({"availableCharges":0,"cooldownId":"c","isReady":false,"maxCharges":1,"name":"C","progress":0.5,"remainingMs":10})";
+  std::string many_items = "[" + item_json;
+  for (std::size_t index = 0; index < max_companion_snapshot_items; ++index)
+    many_items += "," + item_json;
+  many_items += "]";
+
+  struct Case {
+    const char *rule;
+    std::string json;
+    void (*mutate)(CompanionSessionSnapshot &);
+  };
+  const std::vector<Case> cases{
+      {"progress within [0,1]", replaced(R"("progress":0.5)", R"("progress":1.5)"),
+       [](auto &s) { s.panels[0].items[0].progress = 1.5; }},
+      {"maxCharges nonzero", replaced(R"("maxCharges":1)", R"("maxCharges":0)"),
+       [](auto &s) { s.panels[0].items[0].max_charges = 0; }},
+      {"remainingMs nonnegative",
+       replaced(R"("remainingMs":10)", R"("remainingMs":-1)"),
+       [](auto &s) { s.panels[0].items[0].remaining_ms = -1; }},
+      {"panel slot within eight",
+       replaced(R"("panelId":"a","slotIndex":2)", R"("panelId":"a","slotIndex":8)"),
+       [](auto &s) { s.panels[0].slot_index = 8; }},
+      {"item count bound", replaced("[" + item_json + "]", many_items),
+       [](auto &s) {
+         const auto item = s.panels[0].items[0];
+         s.panels[0].items.assign(max_companion_snapshot_items + 1U, item);
+       }},
+      {"non-empty cooldownId",
+       replaced(R"("cooldownId":"c")", R"("cooldownId":"")"),
+       [](auto &s) { s.panels[0].items[0].cooldown_id.clear(); }},
+      {"bounded profileId",
+       replaced(R"("profileId":"p")",
+                "\"profileId\":\"" + std::string(max_companion_text_bytes + 1U, 'p') + "\""),
+       [](auto &s) { s.profile_id.assign(max_companion_text_bytes + 1U, 'p'); }},
+  };
+  for (const auto &test : cases) {
+    auto direct = base;
+    test.mutate(direct);
+    const auto expected = validate_companion_snapshot(direct);
+    const auto parsed = parse_companion_snapshot_json(test.json);
+    const auto *error = std::get_if<CompanionError>(&parsed);
+    layerc::test::expect(
+        expected && error && error->path == expected->path &&
+            error->message == expected->message,
+        (std::string("parsed and constructed snapshots share validation: ") +
+         test.rule)
+            .c_str());
+  }
+}
+
 int main() {
   return layerc::test::run({
       {"test_widget_connection_ownership", test_widget_connection_ownership},
@@ -744,6 +834,7 @@ int main() {
       {"test_companion_transport_transitions", test_companion_transport_transitions},
       {"test_companion_package_identity", test_companion_package_identity},
       {"test_companion_snapshot_rejects_malformed_input", test_companion_snapshot_rejects_malformed_input},
+      {"test_companion_snapshot_parse_validate_parity", test_companion_snapshot_parse_validate_parity},
       {"test_companion_profile_write_validation", test_companion_profile_write_validation},
       {"test_companion_sidecar_survives_unrelated_bundle_save", test_companion_sidecar_survives_unrelated_bundle_save},
       {"test_gamebar_selects_multiple_game_sessions", test_gamebar_selects_multiple_game_sessions},

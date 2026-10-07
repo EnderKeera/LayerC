@@ -28,16 +28,17 @@ CompanionError reader_error(const json::Reader &reader) {
   return {reader.error().path, reader.error().message};
 }
 
-// Companion text and integer-token policies are wire requirements; the
-// generic type/range checks and path diagnostics live in json::Reader. One
-// reader spans each document, so its first failure is converted exactly once.
+// Readers check shape, type, and representability only: integer tokens must
+// fit the destination type. Semantic bounds (text length, non-empty IDs,
+// [0,1] ranges, charge and slot limits, element counts) belong solely to
+// validate_companion_profile/validate_companion_snapshot, so parsed and
+// directly constructed documents get identical diagnostics. One reader spans
+// each document, so its first failure is converted exactly once.
 bool read_text(json::Reader &reader, const json::Value &object,
                const std::string_view key, const std::string &path,
-               const bool allow_empty, std::string &out) {
+               std::string &out) {
   return reader.string(object, key, path, out, json::Required::yes,
-                       allow_empty ? json::EmptyString::allow
-                                   : json::EmptyString::reject,
-                       max_companion_text_bytes);
+                       json::EmptyString::allow);
 }
 template <typename Integer>
 bool read_count(json::Reader &reader, const json::Value &object,
@@ -50,11 +51,13 @@ bool read_count(json::Reader &reader, const json::Value &object,
   if (value) out = static_cast<Integer>(*value);
   return value.has_value();
 }
-bool read_unit(json::Reader &reader, const json::Value &object,
-               const std::string_view key, const std::string &path,
-               double &out) {
-  const auto value =
-      reader.number(object, key, path, 0.0, 1.0, json::Required::yes);
+bool read_number(json::Reader &reader, const json::Value &object,
+                 const std::string_view key, const std::string &path,
+                 double &out) {
+  const auto value = reader.number(object, key, path,
+                                   std::numeric_limits<double>::lowest(),
+                                   std::numeric_limits<double>::max(),
+                                   json::Required::yes);
   if (value) out = *value;
   return value.has_value();
 }
@@ -106,7 +109,7 @@ bool parse_slot_mapping(json::Reader &fields, const json::Value &value,
                     std::numeric_limits<double>::max(), json::Required::no,
                     slot.opacity);
   if (!index || !opacity ||
-      !read_text(fields, value, "panelId", path, false, slot.panel_id) ||
+      !read_text(fields, value, "panelId", path, slot.panel_id) ||
       !fields.boolean(value, "pinned", path, slot.pinned, json::Required::no) ||
       !fields.boolean(value, "clickThrough", path, slot.click_through,
                       json::Required::no))
@@ -365,19 +368,16 @@ serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
 
 namespace {
 
-// Reads the required array `key`, enforcing `maximum` before parsing each
-// element into `out` with the document's shared reader.
+// Reads the required array `key`, parsing each element into `out` with the
+// document's shared reader. Element counts are validator bounds; the byte
+// bound already enforced by json::parse_bounded limits the work here.
 template <typename Item, typename Parse>
-bool read_bounded_array(json::Reader &reader, const json::Value &object,
-                        const std::string_view key, const std::string &path,
-                        const std::size_t maximum,
-                        const std::string_view bound_message, Parse parse,
-                        std::vector<Item> &out) {
+bool read_array(json::Reader &reader, const json::Value &object,
+                const std::string_view key, const std::string &path,
+                Parse parse, std::vector<Item> &out) {
   const auto *values = reader.array(object, key, path, json::Required::yes);
   if (values == nullptr) return false;
   const auto field_path = path + "." + std::string(key);
-  if (values->size() > maximum)
-    return reader.fail(field_path, std::string(bound_message));
   return reader.each(*values, field_path,
                      [&](const json::Value &value, const std::string &item_path) {
                        Item item;
@@ -389,16 +389,17 @@ bool read_bounded_array(json::Reader &reader, const json::Value &object,
 bool parse_snapshot_item(json::Reader &reader, const json::Value &value,
                          const std::string &path, CompanionSnapshotItem &item) {
   if (!value.is_object()) return reader.fail(path, "item must be an object");
-  return read_text(reader, value, "cooldownId", path, false, item.cooldown_id) &&
-         read_text(reader, value, "name", path, false, item.name) &&
-         read_unit(reader, value, "progress", path, item.progress) &&
+  return read_text(reader, value, "cooldownId", path, item.cooldown_id) &&
+         read_text(reader, value, "name", path, item.name) &&
+         read_number(reader, value, "progress", path, item.progress) &&
          read_count(reader, value, "availableCharges", path, 0,
                     std::numeric_limits<std::uint32_t>::max(),
                     item.available_charges) &&
-         read_count(reader, value, "maxCharges", path, 1,
+         read_count(reader, value, "maxCharges", path, 0,
                     std::numeric_limits<std::uint32_t>::max(),
                     item.max_charges) &&
-         read_count(reader, value, "remainingMs", path, 0,
+         read_count(reader, value, "remainingMs", path,
+                    std::numeric_limits<std::int64_t>::min(),
                     std::numeric_limits<std::int64_t>::max(),
                     item.remaining_ms) &&
          reader.boolean(value, "isReady", path, item.is_ready,
@@ -409,14 +410,12 @@ bool parse_snapshot_panel(json::Reader &reader, const json::Value &value,
                           const std::string &path,
                           CompanionPanelSnapshot &panel) {
   if (!value.is_object()) return reader.fail(path, "panel must be an object");
-  return read_text(reader, value, "panelId", path, false, panel.panel_id) &&
+  return read_text(reader, value, "panelId", path, panel.panel_id) &&
          read_count(reader, value, "slotIndex", path, 0,
-                    static_cast<std::int64_t>(max_companion_slots - 1),
+                    std::numeric_limits<std::uint32_t>::max(),
                     panel.slot_index) &&
-         read_bounded_array(reader, value, "items", path,
-                            max_companion_snapshot_items,
-                            "item count exceeds its bound", parse_snapshot_item,
-                            panel.items);
+         read_array(reader, value, "items", path, parse_snapshot_item,
+                    panel.items);
 }
 
 bool parse_available_panel(json::Reader &reader, const json::Value &value,
@@ -424,8 +423,8 @@ bool parse_available_panel(json::Reader &reader, const json::Value &value,
                            CompanionAvailablePanel &panel) {
   if (!value.is_object())
     return reader.fail(path, "available panel must be an object");
-  return read_text(reader, value, "panelId", path, false, panel.panel_id) &&
-         read_text(reader, value, "name", path, false, panel.name);
+  return read_text(reader, value, "panelId", path, panel.panel_id) &&
+         read_text(reader, value, "name", path, panel.name);
 }
 
 bool parse_preference(json::Reader &reader, const json::Value &value,
@@ -437,7 +436,7 @@ bool parse_preference(json::Reader &reader, const json::Value &value,
   if (!read_count(reader, value, "slotIndex", path, 0,
                   std::numeric_limits<std::uint32_t>::max(),
                   preference.slot_index) ||
-      !read_text(reader, value, "panelId", path, false, preference.panel_id) ||
+      !read_text(reader, value, "panelId", path, preference.panel_id) ||
       !reader.boolean(value, "pinned", path, preference.pinned,
                       json::Required::yes) ||
       !reader.boolean(value, "clickThrough", path, preference.click_through,
@@ -464,25 +463,21 @@ parse_companion_snapshot_json(const std::string_view json_str) {
 
   CompanionSessionSnapshot snapshot;
   json::Reader reader;
-  if (!read_text(reader, root, "profileId", "$", false, snapshot.profile_id) ||
-      !read_text(reader, root, "sessionKey", "$", false, snapshot.session_key) ||
+  // timestampMs is unsigned on the wire; a negative token is unrepresentable.
+  if (!read_text(reader, root, "profileId", "$", snapshot.profile_id) ||
+      !read_text(reader, root, "sessionKey", "$", snapshot.session_key) ||
       !read_count(reader, root, "timestampMs", "$", 0,
                   std::numeric_limits<std::int64_t>::max(),
                   snapshot.timestamp_ms) ||
-      !read_bounded_array(reader, root, "panels", "$",
-                          max_companion_snapshot_panels,
-                          "panel count exceeds its bound", parse_snapshot_panel,
-                          snapshot.panels) ||
-      !read_bounded_array(reader, root, "availablePanels", "$",
-                          max_companion_available_panels,
-                          "available panel count exceeds its bound",
-                          parse_available_panel, snapshot.available_panels) ||
-      !read_bounded_array(reader, root, "preferences", "$", max_companion_slots,
-                          "preference count exceeds its bound",
-                          parse_preference, snapshot.preferences))
+      !read_array(reader, root, "panels", "$", parse_snapshot_panel,
+                  snapshot.panels) ||
+      !read_array(reader, root, "availablePanels", "$", parse_available_panel,
+                  snapshot.available_panels) ||
+      !read_array(reader, root, "preferences", "$", parse_preference,
+                  snapshot.preferences))
     return reader_error(reader);
-  // Enforce the same invariants as the validator (cross-panel duplicate
-  // slots, bounds) so a parsed snapshot is never rejected on round-trip.
+  // The validator is the sole owner of semantic bounds, so a parsed snapshot
+  // and a directly constructed one are judged identically.
   if (const auto error = validate_companion_snapshot(snapshot))
     return *error;
   return snapshot;
