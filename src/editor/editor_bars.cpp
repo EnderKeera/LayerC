@@ -89,7 +89,7 @@ void EditorWindow::refresh_bar_list(std::size_t preferred_panel) {
   int selected_row = -1;
   const auto &profile = document_.profile();
   if (preferred_panel == SIZE_MAX) {
-    if (const auto *cooldown = selected_cooldown(); cooldown != nullptr) {
+    if (const auto *cooldown = cooldown_editor_.selected(); cooldown != nullptr) {
       const auto owner = std::ranges::find_if(
           profile.panels, [&](const layerc::core::Panel &panel) {
             return std::ranges::find(panel.cooldown_ids, cooldown->id) !=
@@ -142,7 +142,7 @@ void EditorWindow::refresh_bar_controls() {
     EnableWindow(GetDlgItem(shell_.window, id), panel != nullptr);
   if (panel != nullptr) {
     const ProfileFieldContext context{
-        shell_.window, document_.profile(), selected_cooldown(),
+        shell_.window, document_.profile(), cooldown_editor_.selected(),
         &document_.profile().panels[panel_preview_.controls_panel]};
     write_profile_fields(context, ProfileFieldOwner::panel);
     set_text(GetDlgItem(shell_.window, IDC_BAR_FILL), L"Fill");
@@ -180,7 +180,7 @@ void EditorWindow::refresh_position_hint() {
 
 
 void EditorWindow::follow_cooldown_bar() {
-  const auto *cooldown = selected_cooldown();
+  const auto *cooldown = cooldown_editor_.selected();
   if (cooldown == nullptr || panel_preview_.list == nullptr)
     return;
   const auto &panels = document_.profile().panels;

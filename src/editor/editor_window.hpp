@@ -2,6 +2,7 @@
 
 #include "appearance_draft.hpp"
 #include "automation_editor.hpp"
+#include "cooldown_editor.hpp"
 #include "dialog_layout.hpp"
 #include "editor_history.hpp"
 #include "editor_state.hpp"
@@ -9,6 +10,7 @@
 #include "editor_text.hpp"
 #include "editor_util.hpp"
 #include "profile_document.hpp"
+#include "visual_editor.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/calibration.hpp"
 #include "layerc/core/live_edit.hpp"
@@ -59,7 +61,6 @@ private:
   static INT_PTR CALLBACK export_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK import_pack_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static INT_PTR CALLBACK diagnostics_dialog_proc(HWND, UINT, WPARAM, LPARAM);
-  static INT_PTR CALLBACK hid_binding_dialog_proc(HWND, UINT, WPARAM, LPARAM);
   static LRESULT CALLBACK preview_subclass(HWND, UINT, WPARAM, LPARAM, UINT_PTR,
                                            DWORD_PTR);
   // Owns mouse toggling of profile enablement: a click inside a row's
@@ -67,7 +68,6 @@ private:
   // LVN_ITEMCHANGED, like Space) and never reaches the list view.
   static LRESULT CALLBACK profile_list_subclass(HWND, UINT, WPARAM, LPARAM,
                                                 UINT_PTR, DWORD_PTR);
-  bool handle_binding_capture_message(const MSG &message);
 
   [[nodiscard]] RoleColors
   colors(layerc::platform::EditorControlRole role) const {
@@ -81,7 +81,7 @@ private:
   void initialize_tasks(HWND);
   void initialize_options(HWND);
   void initialize_appearance(HWND);
-  void style_dialog_children(HWND) const;
+  void style_dialog_children(HWND) const override;
   void style_list_view(HWND, bool hide_header) const;
   void rebuild_profile_check_hit_images();
   void rebuild_brushes();
@@ -107,7 +107,6 @@ private:
   void show_context_menu(HWND source, POINT screen);
   bool handle_list_key(const MSG &message);
   void duplicate_profile();
-  void duplicate_cooldown();
   void set_advanced_visible(bool visible, bool persist);
   void set_text_scale(int percent);
   void update_view_menu(HMENU popup) const;
@@ -117,8 +116,6 @@ private:
   void paint_status_strip(HDC dc) const;
   void show_keyboard_shortcuts();
   void show_about();
-  // Scan codes of the selected cooldown's binding, for its tooltip.
-  [[nodiscard]] std::wstring binding_codes_text();
   // Selects the bar that shows the selected cooldown.
   void follow_cooldown_bar();
   void layout_tasks(HWND);
@@ -128,18 +125,8 @@ private:
   }
 
   void refresh_profile_controls();
-  void refresh_cooldown_list(int selection = 0);
-  void refresh_selected_cooldown_label();
-  [[nodiscard]] layerc::core::CooldownDefinition *selected_cooldown();
-  void refresh_binding_controls();
-  void refresh_visual_controls();
-  void calibrate_visual();
+  // Routes Calibrate on the task picker to the visual editor.
   void calibrate_selected_task();
-  bool launch_calibration(HWND target);
-  [[nodiscard]] bool merge_calibration_result(std::string_view visual_json);
-  [[nodiscard]] bool save_visual_profile();
-  void set_visual_assignment_enabled(bool enabled);
-  void remove_visual_assignment();
   [[nodiscard]] std::wstring write_failure_message() const;
   // serialize → parse → reassign, keeping sidecar profile ids aligned.
   // Nullopt when the profile round-trips cleanly.
@@ -160,10 +147,6 @@ private:
   void mark_committed(const std::filesystem::path &path,
                       const layerc::core::GameProfile &profile,
                       const CommitOptions &options = {});
-  void begin_binding_capture();
-  void capture_hid_binding();
-  void cancel_binding_capture(std::wstring_view status = {});
-  void assign_binding_chord(std::span<const std::uint16_t> scan_codes);
   void refresh_bar_list(std::size_t preferred_panel = SIZE_MAX);
   void refresh_bar_controls();
   void refresh_position_hint();
@@ -207,8 +190,6 @@ private:
   void finish_picker();
   void cancel_picker();
 
-  void add_cooldown();
-  void remove_cooldown();
   void split_independent_bars();
   void choose_bar_color(int id);
   [[nodiscard]] bool choose_color(HWND owner, std::uint32_t &value);
@@ -295,6 +276,7 @@ private:
   TaskPicker task_picker_;
   PackDialogs pack_dialogs_;
   LiveEditSession live_edit_;
+  VisualEditor visual_editor_;
   bool live_profile_pending_{};
   std::unique_ptr<AutomationEditor> automation_editor_;
   std::optional<layerc::platform::ProfileWriteError> last_write_error_;

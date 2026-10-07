@@ -172,7 +172,7 @@ int EditorWindow::run(const HINSTANCE instance, const int show_command) {
       LoadAcceleratorsW(shell_.instance, MAKEINTRESOURCEW(IDR_EDITOR_ACCELERATORS));
   MSG message{};
   while (GetMessageW(&message, nullptr, 0, 0) > 0) {
-    if (handle_binding_capture_message(message))
+    if (cooldown_editor_.handle_capture_message(message))
       continue;
     if (handle_list_key(message))
       continue;
@@ -214,7 +214,7 @@ void EditorWindow::initialize(const HWND window) {
   style_dialog_children(shell_.window);
   rebuild_brushes();
   shell_.profile_list = GetDlgItem(shell_.window, IDC_PROFILE_LIST);
-  cooldown_editor_.list = GetDlgItem(shell_.window, IDC_COOLDOWN_LIST);
+  cooldown_editor_.bind(GetDlgItem(shell_.window, IDC_COOLDOWN_LIST));
   panel_preview_.list = GetDlgItem(shell_.window, IDC_BAR_LIST);
   panel_preview_.window = GetDlgItem(shell_.window, IDC_PREVIEW);
   shell_.status = GetDlgItem(shell_.window, IDC_STATUS);
@@ -275,7 +275,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       if (!shell_.syncing && notification == binding->notification) {
         sync_profile_from_controls();
         if (binding->refresh_cooldown_label)
-          refresh_selected_cooldown_label();
+          cooldown_editor_.refresh_selected_label();
         record_profile_change(binding->change == ProfileFieldChange::text
                                   ? ChangeKind::text
                                   : ChangeKind::immediate);
@@ -337,7 +337,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       return TRUE;
     }
     if (id == IDC_VISUAL_ENABLED && notification == BN_CLICKED) {
-      set_visual_assignment_enabled(
+      visual_editor_.set_enabled(
           owner_draw_checkbox_checked(GetDlgItem(shell_.window, IDC_VISUAL_ENABLED)));
       return TRUE;
     }
@@ -360,7 +360,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
           isolated ? layerc::core::VisualRuntime::isolated
                    : layerc::core::VisualRuntime::inline_process;
       record_profile_change(ChangeKind::immediate);
-      refresh_visual_controls();
+      visual_editor_.refresh();
       return TRUE;
     }
     switch (id) {
@@ -445,16 +445,16 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       return TRUE;
     }
     case IDM_COOLDOWN_ADD:
-      add_cooldown();
+      cooldown_editor_.add();
       return TRUE;
     case IDM_COOLDOWN_DUPLICATE:
-      duplicate_cooldown();
+      cooldown_editor_.duplicate();
       return TRUE;
     case IDM_COOLDOWN_RENAME:
       focus_field(IDC_COOLDOWN_NAME);
       return TRUE;
     case IDM_COOLDOWN_REMOVE:
-      remove_cooldown();
+      cooldown_editor_.remove();
       return TRUE;
     case IDM_VIEW_TEXT_100:
     case IDM_VIEW_TEXT_115:
@@ -473,22 +473,22 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       split_independent_bars();
       return TRUE;
     case IDC_ADD_COOLDOWN:
-      add_cooldown();
+      cooldown_editor_.add();
       return TRUE;
     case IDC_REMOVE_COOLDOWN:
-      remove_cooldown();
+      cooldown_editor_.remove();
       return TRUE;
     case IDC_CAPTURE_BINDING:
-      begin_binding_capture();
+      cooldown_editor_.begin_capture();
       return TRUE;
     case IDC_CAPTURE_HID:
-      capture_hid_binding();
+      cooldown_editor_.capture_hid();
       return TRUE;
     case IDC_CALIBRATE_VISUAL:
-      calibrate_visual();
+      visual_editor_.calibrate();
       return TRUE;
     case IDC_REMOVE_VISUAL:
-      remove_visual_assignment();
+      visual_editor_.remove_assignment();
       return TRUE;
     case IDC_BAR_FILL:
     case IDC_BAR_BACKGROUND:
@@ -515,8 +515,8 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       break;
     }
     if (id == IDC_COOLDOWN_LIST && notification == LBN_SELCHANGE) {
-      cancel_binding_capture();
-      refresh_binding_controls();
+      cooldown_editor_.cancel_capture();
+      cooldown_editor_.refresh_controls();
       return TRUE;
     }
     if (id == IDC_BAR_LIST && notification == LBN_SELCHANGE) {
@@ -525,7 +525,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       // Keep the cooldown selection on a cooldown this bar shows.
       if (const auto *panel = selected_bar();
           panel != nullptr && !panel->cooldown_ids.empty()) {
-        const auto *cooldown = selected_cooldown();
+        const auto *cooldown = cooldown_editor_.selected();
         if (cooldown == nullptr ||
             std::ranges::find(panel->cooldown_ids, cooldown->id) ==
                 panel->cooldown_ids.end()) {
@@ -534,7 +534,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
               cooldowns, panel->cooldown_ids.front(),
               &layerc::core::CooldownDefinition::id);
           if (first != cooldowns.end())
-            refresh_cooldown_list(static_cast<int>(first - cooldowns.begin()));
+            cooldown_editor_.refresh_list(static_cast<int>(first - cooldowns.begin()));
         }
       }
       if (live_edit_.session_id() != 0) {
@@ -736,7 +736,7 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     enable_item(IDM_FILE_SPLIT_BARS, has_grouped_bars);
     enable_item(IDM_EDIT_UNDO, document_.history().can_undo());
     enable_item(IDM_EDIT_REDO, document_.history().can_redo());
-    const bool has_cooldown = selected_cooldown() != nullptr;
+    const bool has_cooldown = cooldown_editor_.selected() != nullptr;
     enable_item(IDM_COOLDOWN_DUPLICATE, has_cooldown);
     enable_item(IDM_COOLDOWN_RENAME, has_cooldown);
     enable_item(IDM_COOLDOWN_REMOVE,
