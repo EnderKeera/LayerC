@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cassert>
 #include <filesystem>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -23,12 +24,6 @@ std::filesystem::path profile_path_for_key(const std::string_view key) {
   return decoded.has_value() && !decoded->empty()
              ? std::filesystem::path(*decoded)
              : std::filesystem::path{};
-}
-
-template <typename Profile, typename Error>
-ModuleSidecar<Profile> module_sidecar_from(
-    const layerc::platform::ModuleSidecarLoad<Profile, Error> &loaded) {
-  return ModuleSidecar<Profile>::from(loaded);
 }
 
 std::vector<ProfileSource>
@@ -61,7 +56,7 @@ void advance_source_revisions(
     }
     source.automation_revision = previous->automation_revision;
     if (source.revision != previous->revision ||
-        source.modules.automation != previous->modules.automation)
+        source.modules.get<layerc::core::AutomationModule>() != previous->modules.get<layerc::core::AutomationModule>())
       ++source.automation_revision;
   }
 }
@@ -100,49 +95,47 @@ SessionInit ProfileSource::to_session_init(const bool visual_enabled) const {
           .visual_enabled = visual_enabled};
 }
 
+template <typename Module>
+void Session::configure_module(const bool visual_enabled) {
+  auto &sidecar = modules.get<Module>();
+  if (!sidecar.usable()) sidecar.profile.reset();
+  // Runtime behavior is module-specific, but loaded state is never enumerated
+  // here: even a new module with no runtime consumer propagates automatically.
+  if constexpr (std::is_same_v<Module, layerc::core::VisualModule>) {
+    automation.set_invalid_visual_sidecar(
+        sidecar.state == layerc::platform::ModuleSidecarState::invalid);
+    last_visual_sequence = 0;
+    automation.configure_visual(sidecar.profile, visual_enabled);
+  } else if constexpr (std::is_same_v<Module, layerc::core::AutomationModule>) {
+    if (!sidecar.profile) automation.discard_runtime();
+    rebuild_input_configuration();
+  }
+}
+
 Session::Session(SessionInit init)
     : automation(std::move(init.profile)),
-      source_key(std::move(init.source_key)), input(automation.profile().bindings) {
-  apply_visual_profile(std::move(init.modules.visual), init.visual_enabled);
-  apply_automation_profile(std::move(init.modules.automation));
-  apply_companion_profile(std::move(init.modules.companion));
+      source_key(std::move(init.source_key)), input(automation.profile().bindings),
+      modules(std::move(init.modules)) {
+  modules.for_each([&](auto module, auto &) {
+    configure_module<decltype(module)>(init.visual_enabled);
+  });
   rebuild_input_configuration();
 }
 
-void Session::apply_visual_profile(
-    ModuleSidecar<layerc::core::VisualProfile> updated,
-    const bool visual_enabled) {
-  modules.visual = std::move(updated);
-  automation.set_invalid_visual_sidecar(
-      modules.visual.state == layerc::platform::ModuleSidecarState::invalid);
-  last_visual_sequence = 0;
-  automation.configure_visual(modules.visual.usable() ? modules.visual.profile
-                                                      : std::nullopt,
-                              visual_enabled);
-}
-
-void Session::apply_automation_profile(
-    ModuleSidecar<layerc::core::AutomationProfile> updated) {
-  if (!updated.usable()) updated.profile.reset();
-  if (!updated.profile.has_value())
-    automation.discard_runtime();
-  modules.automation = std::move(updated);
-  rebuild_input_configuration();
-}
-
-void Session::apply_companion_profile(
-    ModuleSidecar<layerc::core::CompanionProfile> updated) {
-  if (!updated.usable()) updated.profile.reset();
-  modules.companion = std::move(updated);
+void Session::apply_modules(const ProfileModules &updated,
+                            const bool visual_enabled) {
+  modules.reconcile(updated, [&](auto module, auto &) {
+    configure_module<decltype(module)>(visual_enabled);
+  });
 }
 
 bool Session::has_enabled_automations() const noexcept {
-  return modules.automation.usable() &&
-         layerc::core::has_enabled_automations(*modules.automation.profile);
+  return modules.get<layerc::core::AutomationModule>().usable() &&
+         layerc::core::has_enabled_automations(*modules.get<layerc::core::AutomationModule>().profile);
 }
 bool Session::has_active_visual_rules() const noexcept {
-  return automation.visual_triggers() != nullptr && modules.visual.usable() &&
-         layerc::core::has_enabled_visual_assignments(*modules.visual.profile) &&
+  return automation.visual_triggers() != nullptr && modules.get<layerc::core::VisualModule>().usable() &&
+         layerc::core::has_enabled_visual_assignments(*modules.get<layerc::core::VisualModule>().profile) &&
          automation.visual_triggers()->visual_enabled();
 }
 
@@ -197,7 +190,7 @@ void Session::rebuild_input_configuration() {
     for (const auto &token : binding.chord.tokens)
       seed_binding_token(*this, token);
   const auto demand = input_device_demand(
-      automation.profile(), modules.automation.profile ? &*modules.automation.profile
+      automation.profile(), modules.get<layerc::core::AutomationModule>().profile ? &*modules.get<layerc::core::AutomationModule>().profile
                                           : nullptr);
   uses_raw_keyboard = demand.keyboard;
   uses_raw_mouse = demand.mouse;
@@ -233,15 +226,10 @@ void Session::clear_input_state() {
 
 namespace {
 
-// Loads every sidecar module, plus persisted automation state, for a source
-// whose path and base automation.profile() are already set.
+// Storage, loading, and value-copy conversion use the same descriptor table.
 void load_source_modules(ProfileSource &source) {
-  source.modules.visual = module_sidecar_from(
-      layerc::platform::load_visual_sidecar(source.path, source.profile));
-  source.modules.automation = module_sidecar_from(
-      layerc::platform::load_automation_sidecar(source.path, source.profile));
-  source.modules.companion = module_sidecar_from(
-      layerc::platform::load_companion_sidecar(source.path, source.profile));
+  source.modules = layerc::platform::module_sidecars(
+      layerc::platform::load_profile_modules(source.path, source.profile));
 }
 
 } // namespace
@@ -326,13 +314,8 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
     }
     if (session->automation.profile() != source->profile)
       session->apply_profile(source->profile, overlay_runtime_.capture_exclusion, reconcile_now);
-    if (session->modules.visual != source->modules.visual)
-      session->apply_visual_profile(source->modules.visual,
-                                    visual_capture_runtime_.recognition_enabled);
-    if (session->modules.automation != source->modules.automation)
-      session->apply_automation_profile(source->modules.automation);
-    if (session->modules.companion != source->modules.companion)
-      session->apply_companion_profile(source->modules.companion);
+    session->apply_modules(source->modules,
+                           visual_capture_runtime_.recognition_enabled);
     return false;
   });
   for (const auto &key : recreate_keys)
@@ -343,10 +326,10 @@ void DaemonApp::reconcile_profile_sources(std::vector<ProfileSource> loaded) {
   // from its store, unsaved values stay with the owner until written.
   std::vector<std::filesystem::path> automation_paths;
   for (const auto &source : session_registry_.sources) {
-    if (!source.modules.automation.usable())
+    if (!source.modules.get<layerc::core::AutomationModule>().usable())
       continue;
     (void)automation_runtime_host_.persistence().attach(
-        source.path, *source.modules.automation.profile, reconcile_now, true);
+        source.path, *source.modules.get<layerc::core::AutomationModule>().profile, reconcile_now, true);
     automation_paths.push_back(source.path);
   }
   automation_runtime_host_.persistence().retain(automation_paths);

@@ -406,20 +406,25 @@ ProfileWriteResult write_profile_bundle(
     ModuleIntent<layerc::core::VisualProfile> visual,
     ModuleIntent<layerc::core::AutomationProfile> automation,
     ModuleIntent<layerc::core::CompanionProfile> companion) {
-  return write_profile_bundle(
-      path, profile,
-      ProfileModuleIntents{std::move(visual), std::move(automation),
-                           std::move(companion)});
+  // The editor owns these modules only; every other registered module keeps
+  // its stored state without changing this convenience API.
+  ProfileModuleIntents modules;
+  std::get<ModuleIntentFor<core::VisualModule>>(modules) = std::move(visual);
+  std::get<ModuleIntentFor<core::AutomationModule>>(modules) = std::move(automation);
+  std::get<ModuleIntentFor<core::CompanionModule>>(modules) = std::move(companion);
+  return write_profile_bundle(path, profile, std::move(modules));
 }
 
 ProfileWriteResult
 write_profile_bundle_create_only(const std::filesystem::path &path,
                                  const layerc::core::GameProfile &profile) {
+  ProfileModuleIntents modules;
+  std::get<ModuleIntentFor<core::VisualModule>>(modules) = RemoveModule{};
+  std::get<ModuleIntentFor<core::AutomationModule>>(modules) = RemoveModule{};
   return write_profile_bundle_impl(
       {.path = path,
        .profile = profile,
-       .modules = ProfileModuleIntents{RemoveModule{}, RemoveModule{},
-                                       KeepModule{}},
+       .modules = std::move(modules),
        .create_only = true});
 }
 

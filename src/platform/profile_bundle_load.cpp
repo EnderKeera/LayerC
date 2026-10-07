@@ -42,9 +42,9 @@ load_profile_bundle(const std::filesystem::path &path) {
   result.profile = std::move(*profile);
   result.legacy_base_schema = source_schema_before(
       *contents, layerc::core::profile_schema_version);
-  result.visual = load_visual_sidecar(path, result.profile);
-  result.automation = load_automation_sidecar(path, result.profile);
-  result.legacy_visual_schema = visual_sidecar_is_legacy(result.visual);
+  result.modules = load_profile_modules(path, result.profile);
+  result.legacy_visual_schema = visual_sidecar_is_legacy(
+      result.modules.get<core::VisualModule>());
   return result;
 }
 

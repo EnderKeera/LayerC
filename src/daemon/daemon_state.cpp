@@ -85,7 +85,7 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
   }
   for (const auto *session : sessions_.active_inputs) {
     if (session == nullptr || session->game_window == nullptr ||
-        !session->modules.visual.profile.has_value())
+        !session->modules.get<layerc::core::VisualModule>().profile.has_value())
       continue;
     const auto capture = captures.find(session->game_window);
     if (capture == captures.end() || capture->second == nullptr ||
@@ -93,7 +93,7 @@ layerc::runtime::RuntimeResourceStats VisualCaptureRuntime::resources(
       continue;
     for (const auto &state :
          layerc::core::observations_of<layerc::core::TemplateState>(
-             session->modules.visual.profile->observations)) {
+             session->modules.get<layerc::core::VisualModule>().profile->observations)) {
       const auto available =
           std::numeric_limits<std::uint64_t>::max() - decoded_assets;
       decoded_assets += std::min<std::uint64_t>(

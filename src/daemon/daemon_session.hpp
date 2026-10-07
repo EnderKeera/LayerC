@@ -23,16 +23,7 @@
 
 namespace layerc::daemon {
 
-template <typename Profile>
-using ModuleSidecar = layerc::platform::ModuleSidecar<Profile>;
-
-struct ProfileModules {
-  ModuleSidecar<layerc::core::VisualProfile> visual;
-  ModuleSidecar<layerc::core::AutomationProfile> automation;
-  ModuleSidecar<layerc::core::CompanionProfile> companion;
-
-  bool operator==(const ProfileModules &) const = default;
-};
+using ProfileModules = layerc::platform::ProfileModuleSidecars;
 
 struct SessionInit {
   layerc::core::GameProfile profile;
@@ -73,12 +64,8 @@ struct Session {
   void set_capture_exclusion(bool enabled);
   void apply_profile(const layerc::core::GameProfile &updated,
                      bool capture_exclusion, layerc::core::TimePoint now);
-  void apply_visual_profile(
-      ModuleSidecar<layerc::core::VisualProfile> visual, bool visual_enabled);
-  void apply_automation_profile(
-      ModuleSidecar<layerc::core::AutomationProfile> automation);
-  void apply_companion_profile(
-      ModuleSidecar<layerc::core::CompanionProfile> companion);
+  void apply_modules(const ProfileModules &updated, bool visual_enabled);
+  template <typename Module> void configure_module(bool visual_enabled);
   [[nodiscard]] bool has_enabled_automations() const noexcept;
   [[nodiscard]] bool has_active_visual_rules() const noexcept;
   [[nodiscard]] bool is_global() const noexcept { return automation.profile().game.global; }

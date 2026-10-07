@@ -161,6 +161,56 @@ private:
   }
 };
 
+// Storage and propagation derive from a table too, not a second list of
+// module members. A slot is keyed by its codec type, never a tuple index.
+template <typename Table, template <typename> typename Slot>
+class ModuleValues {
+public:
+  template <typename Module> [[nodiscard]] Slot<Module> &get() noexcept {
+    return std::get<Storage<Module>>(values_).value;
+  }
+  template <typename Module>
+  [[nodiscard]] const Slot<Module> &get() const noexcept {
+    return std::get<Storage<Module>>(values_).value;
+  }
+  template <typename Visitor> void for_each(Visitor &&visitor) {
+    Table::for_each([&]<typename Module>(Module module) {
+      visitor(module, get<Module>());
+    });
+  }
+  template <typename Visitor> void for_each(Visitor &&visitor) const {
+    Table::for_each([&]<typename Module>(Module module) {
+      visitor(module, get<Module>());
+    });
+  }
+  template <typename Factory>
+  [[nodiscard]] static ModuleValues load(Factory &&factory) {
+    ModuleValues result;
+    result.for_each([&](auto module, auto &slot) { slot = factory(module); });
+    return result;
+  }
+  // Observers receive every changed slot, including newly registered modules.
+  template <typename Observer>
+  void reconcile(const ModuleValues &updated, Observer &&observer) {
+    for_each([&]<typename Module>(Module module, Slot<Module> &slot) {
+      const auto &next = updated.template get<Module>();
+      if (slot == next) return;
+      slot = next;
+      observer(module, slot);
+    });
+  }
+  bool operator==(const ModuleValues &) const = default;
+
+private:
+  // Codec identity remains unique even if two modules share a profile/slot
+  // type. Keying the tuple by the slot alias alone would merge those modules.
+  template <typename Module> struct Storage {
+    Slot<Module> value;
+    bool operator==(const Storage &) const = default;
+  };
+  typename Table::template each<Storage> values_;
+};
+
 // THE table. Adding a module adds its codec struct above and one entry here.
 using ProfileModuleTable =
     ModuleTable<VisualModule, AutomationModule, CompanionModule>;

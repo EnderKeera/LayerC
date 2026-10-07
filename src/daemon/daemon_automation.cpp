@@ -82,11 +82,11 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
       continue;
     }
     auto *source = find_source(sessions_.sources, session->source_key);
-    if (source == nullptr || !source->modules.automation.profile.has_value()) {
+    if (source == nullptr || !source->modules.get<layerc::core::AutomationModule>().profile.has_value()) {
       session->automation.discard_runtime();
       continue;
     }
-    const auto &profile = *source->modules.automation.profile;
+    const auto &profile = *source->modules.get<layerc::core::AutomationModule>().profile;
     if (!session->automation.runtime()) {
       session->automation_revision = source->automation_revision;
       if (session->automation.start(profile,
