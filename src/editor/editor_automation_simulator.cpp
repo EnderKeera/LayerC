@@ -368,7 +368,7 @@ void AutomationEditor::restore_live_subscription() {
   if (!trace_enabled_)
     return;
   live_edit_.advance_revision();
-  (void)(void)live_edit_.channel().send({
+  (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::automation_trace_subscribe,
       .revision = live_edit_.revision(),
   });
@@ -397,7 +397,7 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
       enabled ? layerc::core::LiveMessageType::automation_trace_subscribe
               : layerc::core::LiveMessageType::automation_trace_unsubscribe;
   message.revision = live_edit_.revision();
-  (void)(void)live_edit_.channel().send(message);
+  (void)live_edit_.channel().send(message);
 }
 
 void AutomationEditor::save_trace(const HWND dialog) {
@@ -435,6 +435,6 @@ void AutomationEditor::retry_selected(const HWND dialog) {
   message.profile_key =
       layerc::platform::canonical_profile_key(document_.path());
   message.text = automation->id;
-  (void)(void)live_edit_.channel().send(message);
+  (void)live_edit_.channel().send(message);
 }
 } // namespace layerc::editor
