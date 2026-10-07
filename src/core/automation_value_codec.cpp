@@ -191,12 +191,6 @@ json::Value tagged_automation_value_tree(const AutomationValue &value,
       {std::string(tags.value), automation_value_tree(value, tags)}});
 }
 
-void append_tagged_automation_value(std::string &out,
-                                    const AutomationValue &value,
-                                    const AutomationValueTags tags) {
-  json::append_value(out, tagged_automation_value_tree(value, tags));
-}
-
 std::optional<AutomationValue>
 read_automation_value(const json::Value &value, const AutomationValueType type,
                       const AutomationValueTags tags, AutomationError &error,

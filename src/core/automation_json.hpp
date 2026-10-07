@@ -44,9 +44,6 @@ tagged_automation_value_tree(const AutomationValue &value, AutomationValueTags t
 
 void append_automation_value(std::string &out, const AutomationValue &value,
                              AutomationValueTags tags = state_value_tags);
-void append_tagged_automation_value(std::string &out,
-                                    const AutomationValue &value,
-                                    AutomationValueTags tags);
 [[nodiscard]] std::optional<AutomationValue>
 read_automation_value(const json::Value &value, AutomationValueType type,
                       AutomationValueTags tags, AutomationError &error,
