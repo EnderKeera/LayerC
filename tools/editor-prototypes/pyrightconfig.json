@@ -1,0 +1,6 @@
+{
+  "pythonPlatform": "Linux",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "include": ["*.py"]
+}
