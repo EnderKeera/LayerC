@@ -61,10 +61,48 @@ using Clock = std::chrono::steady_clock;
   return false;
 }
 
-[[nodiscard]] bool write_all(int fd, std::string_view data, int timeout_ms,
-                             std::string &error) {
-  const auto deadline = Clock::now() + std::chrono::milliseconds(timeout_ms);
+[[nodiscard]] bool connect_until(int fd, const ::sockaddr_un &address,
+                                 Clock::time_point deadline) {
+  while (Clock::now() < deadline) {
+    if (::connect(fd, reinterpret_cast<const sockaddr *>(&address),
+                  sizeof(address)) == 0 || errno == EISCONN)
+      return true;
+    const int failure = errno;
+    if (failure == EINPROGRESS || failure == EALREADY || failure == EINTR) {
+      const bool ready = poll_until(fd, POLLOUT, deadline);
+      int socket_error = 0;
+      socklen_t length = sizeof(socket_error);
+      if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &length) != 0)
+        return false;
+      if (socket_error != 0) {
+        errno = socket_error;
+        return false;
+      }
+      if (ready) return true;
+      errno = Clock::now() >= deadline ? ETIMEDOUT : ECONNABORTED;
+      return false;
+    }
+    if (failure != EAGAIN && failure != EWOULDBLOCK) return false;
+    // A full AF_UNIX listen queue reports EAGAIN without beginning a
+    // connection. POLLOUT would be immediately ready: sleep before retrying
+    // instead of spinning, while retaining the same monotonic deadline.
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        deadline - Clock::now());
+    const int pause_ms = static_cast<int>(
+        std::clamp<std::int64_t>(remaining.count(), 1, 10));
+    if (::poll(nullptr, 0, pause_ms) < 0 && errno != EINTR) return false;
+  }
+  errno = ETIMEDOUT;
+  return false;
+}
+
+[[nodiscard]] bool write_all(int fd, std::string_view data,
+                             Clock::time_point deadline, std::string &error) {
   while (!data.empty()) {
+    if (Clock::now() >= deadline) {
+      error = "control peer did not accept the full frame";
+      return false;
+    }
     const ssize_t sent = ::send(fd, data.data(), data.size(), MSG_NOSIGNAL);
     if (sent > 0) {
       data.remove_prefix(static_cast<std::size_t>(sent));
@@ -225,19 +263,25 @@ std::optional<ControlListener> ControlListener::open(std::string &error,
     }
     // Probe before unlink: refuse while a live daemon answers, and only
     // then treat the inode as stale.
-    const int probe = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    const int probe =
+        ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (probe < 0) {
       error = "could not probe the control socket";
       return std::nullopt;
     }
-    const bool live = ::connect(probe, reinterpret_cast<sockaddr *>(&address),
-                                sizeof(address)) == 0;
+    const bool live =
+        connect_until(probe, address, Clock::now() + std::chrono::seconds(1));
+    const int probe_error = live ? 0 : errno;
     (void)::close(probe);
     if (live) {
       error = "another LayerC daemon is already serving the control socket";
       return std::nullopt;
     }
-    if (::unlink(path->c_str()) != 0) {
+    if (probe_error != ECONNREFUSED && probe_error != ENOENT) {
+      error = "could not prove the control socket stale; leaving it intact";
+      return std::nullopt;
+    }
+    if (::unlink(path->c_str()) != 0 && errno != ENOENT) {
       error = "could not remove the stale control socket";
       return std::nullopt;
     }
@@ -252,8 +296,9 @@ std::optional<ControlListener> ControlListener::open(std::string &error,
   }
   if (::bind(listener.fd_, reinterpret_cast<sockaddr *>(&address),
              sizeof(address)) != 0) {
-    (void)::close(listener.fd_);
-    error = errno == EADDRINUSE
+    const int bind_error = errno;
+    listener.close();
+    error = bind_error == EADDRINUSE
                 ? "the control socket appeared during startup"
                 : "could not bind the control socket";
     return std::nullopt;
@@ -287,7 +332,8 @@ ControlAcceptResult ControlListener::accept() {
   }
 }
 
-std::optional<int> control_connect(std::string &error) {
+std::optional<int> control_connect(std::string &error,
+                                   const Clock::time_point deadline) {
   std::string warning;
   const auto path = control_socket_path(warning);
   if (!path.has_value()) {
@@ -299,15 +345,18 @@ std::optional<int> control_connect(std::string &error) {
     error = "control socket path exceeds the unix name limit";
     return std::nullopt;
   }
-  const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  const int fd =
+      ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
   if (fd < 0) {
     error = "could not create the control client";
     return std::nullopt;
   }
-  if (::connect(fd, reinterpret_cast<sockaddr *>(&address),
-                sizeof(address)) != 0) {
+  if (!connect_until(fd, address, deadline)) {
+    const int failure = errno;
     (void)::close(fd);
-    error = "the LayerC daemon is not reachable";
+    error = failure == ETIMEDOUT
+        ? "control connection timed out"
+        : "the LayerC daemon is not reachable: " + std::string(std::strerror(failure));
     return std::nullopt;
   }
   if (!peer_uid_matches(fd)) {
@@ -315,26 +364,21 @@ std::optional<int> control_connect(std::string &error) {
     error = "rejected a control server with a different effective uid";
     return std::nullopt;
   }
-  if (::fcntl(fd, F_SETFL, O_NONBLOCK) < 0) {
-    (void)::close(fd);
-    error = "could not make the control client nonblocking";
-    return std::nullopt;
-  }
   return fd;
 }
 
 std::optional<std::string>
 control_roundtrip(std::string_view request_json, std::string &error) {
-  const auto fd = control_connect(error);
+  const auto deadline = Clock::now() + std::chrono::seconds(5);
+  const auto fd = control_connect(error, deadline);
   if (!fd.has_value()) return std::nullopt;
   const std::string packet = frame(request_json);
-  if (!write_all(*fd, packet, 5000, error)) {
+  if (!write_all(*fd, packet, deadline, error)) {
     (void)::close(*fd);
     return std::nullopt;
   }
   layerc::core::FrameDecoder framer{control_frame_limit, control_buffer_limit};
   std::array<char, 4096> chunk{};
-  const auto deadline = Clock::now() + std::chrono::seconds(5);
   while (poll_until(*fd, POLLIN, deadline)) {
     const ssize_t received = ::read(*fd, chunk.data(), chunk.size());
     if (received < 0 && (errno == EINTR || errno == EAGAIN ||
@@ -364,7 +408,7 @@ control_roundtrip(std::string_view request_json, std::string &error) {
 }
 
 bool control_send_frame(int fd, std::string_view payload, std::string &error) {
-  return write_all(fd, frame(payload), 2000, error);
+  return write_all(fd, frame(payload), Clock::now() + std::chrono::seconds(2), error);
 }
 
 bool peer_uid_matches(const int fd) noexcept {

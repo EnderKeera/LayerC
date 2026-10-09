@@ -18,6 +18,7 @@ runtime behavior, but it is not a substitute for the hardware checklist.
 | V2.6.0 portable runtime | implemented | Foreground `layerd`, `layerctl`, XDG storage, Unix-socket control, bundles, install metadata |
 | V2.6.1 X11 interaction | implemented | EWMH tracking, passive XI2 input, Shape overlays, RandR scaling |
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
+| v2.6c editor slice | experimental | FLTK X11 profile/first-cooldown/first-panel editing, durable Save and daemon status/reload; not installed or packaged yet |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
 | Gamescope and Wayland | unsupported in V2.6 | No compatibility promise or silent fallback |
 
@@ -109,6 +110,43 @@ block implementation or container CI:
 - Headless/non-X11 and missing-extension snapshots showing the affected
   adapter as unavailable rather than silently omitted.
 
+## Experimental X11 editor slice
+
+The v2.6c editor is in development, not a published release or a full Windows
+editor replacement. When X11 development libraries, FLTK 1.4+ and
+`fltk-config` are available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the
+source-build `layere` target. Missing FLTK leaves the existing daemon/CLI and
+headless build graph usable; it does not count as passing an editor gate.
+FLTK is linked into `layere` only, not into `layerd` or the shared core.
+
+```sh
+cmake --build build-linux --target layere
+./build-linux/layere
+```
+
+An X11 display is required. The slice reads the normal XDG profile store and
+edits profile name, executable match and enabled state plus the first cooldown
+and first panel's normalized position. Its preview is illustrative, not a
+complete renderer. Existing bindings, other panels and valid module sidecars
+are retained; unreadable/invalid module data blocks Save rather than being
+silently discarded. Save uses the shared durable stage/commit path, then asks
+the daemon to reload through the authenticated private control socket.
+
+Invalid inputs and storage failures retain unsaved edits and show a reason.
+A successful offline save is distinguished from a save whose daemon reload
+request was acknowledged or could not be confirmed. An acknowledgement does
+not prove completed runtime application, nor does a lost acknowledgement prove
+that no reload occurred. Inspection/permission faults remain visible rather
+than being misreported as an offline daemon. The editor does not start or stop
+the daemon.
+Closing or selecting another profile prompts to save, discard or cancel dirty
+edits. Daemon capabilities/faults are visible, with an explicit refresh button.
+
+CRUD, import/export, complete accessibility, advanced editor parity, installed
+smoke, GUI CI and editor packaging are not complete in this slice. Xvfb
+walkthrough evidence is automated evidence, not physical GNOME/KDE coverage.
+Gamescope and native Wayland remain unsupported in V2.6.
+
 ## V2.6.2 calibration and evidence
 
 `layercal` is intentionally a CLI, not a second editor. Select an X11 window
@@ -189,8 +227,10 @@ ctest --test-dir build-linux --output-on-failure   # portable + Linux suites
 ```
 
 Linux builds `layerd`, `layerctl`, and `layercal` when the required X11
-libraries are present. The graphical editor, capture worker, and Game Bar host
-remain Windows-only targets.
+libraries are present. FLTK 1.4+ development files additionally enable the
+experimental X11 `layere` slice described below. Missing FLTK does not disable
+the existing headless/source targets. The isolated capture worker and Game Bar
+host remain Windows-only.
 
 ### Complete automated gate
 

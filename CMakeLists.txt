@@ -520,6 +520,19 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
     else()
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_linux)
         layerc_enable_warnings(layerc_editor_core)
+
+        # Linux editor services shared by the frontend and its tests: the
+        # authenticated control client for daemon status and reload.
+        add_library(layerc_editor_linux STATIC
+            src/editor/linux/daemon_link.cpp src/editor/linux/editor_model.cpp)
+        target_include_directories(layerc_editor_linux PUBLIC src/editor/linux)
+        target_include_directories(layerc_editor_linux PRIVATE src/platform/linux)
+        target_link_libraries(layerc_editor_linux PUBLIC
+            layerc_editor_core layerc_runtime layerc_linux)
+        layerc_enable_warnings(layerc_editor_linux)
+        if(LAYERC_BUILD_EDITOR AND LAYERC_HAVE_X11)
+            include(cmake/LinuxEditorGUI.cmake)
+        endif()
     endif()
 endif()
 

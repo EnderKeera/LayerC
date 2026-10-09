@@ -205,6 +205,25 @@ if(NOT WIN32)
     target_compile_definitions(layerc_linux_control_channel_tests PRIVATE
         LAYERC_TEST_LAYERCTL_PATH="$<TARGET_FILE:layerctl>")
     add_dependencies(layerc_linux_control_channel_tests layerctl)
+
+    layerc_add_test(layerc_linux_control_ownership_tests
+        SOURCES tests/linux_control_ownership_tests.cpp
+        LINK layerc_linux TIMEOUT 30)
+    target_include_directories(layerc_linux_control_ownership_tests PRIVATE
+        src/platform/linux)
+    # Test-only bind failure and descriptor-reuse simulation.
+    target_link_options(layerc_linux_control_ownership_tests PRIVATE
+        "LINKER:--wrap=bind" "LINKER:--wrap=close")
+
+    layerc_add_test(layerc_linux_editor_daemon_link_tests
+        SOURCES tests/linux_editor_daemon_link_tests.cpp
+        LINK layerc_editor_linux layerc_daemon_linux TIMEOUT 30)
+    target_include_directories(layerc_linux_editor_daemon_link_tests PRIVATE
+        src/platform/linux)
+
+    layerc_add_test(layerc_linux_editor_model_tests
+        SOURCES tests/linux_editor_model_tests.cpp
+        LINK layerc_editor_linux TIMEOUT 30)
 endif()
 
 layerc_add_test(layerc_automation_benchmark

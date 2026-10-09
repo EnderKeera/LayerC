@@ -5,6 +5,7 @@
 #include "layerc/core/utf8.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -114,11 +115,14 @@ private:
 // Client side: connects to the resolved socket path (no directory
 // creation — offline commands must not invent runtime dirs).
 // Authenticates the server's effective UID before returning a connected fd;
-// nullopt with error text when no same-UID daemon answers.
-[[nodiscard]] std::optional<int> control_connect(std::string &error);
+// Nonblocking establishment is bounded by a monotonic deadline; nullopt
+// with error text when no same-UID daemon answers.
+[[nodiscard]] std::optional<int> control_connect(
+    std::string &error, std::chrono::steady_clock::time_point deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5));
 
-// Blocking request/response roundtrip for CLI and store notifications: sends
-// one frame, then polls with a bounded wait. Accepts only a valid, successful
+// Blocking CLI/store roundtrip: one five-second monotonic deadline covers
+// connection, frame write, and response read. Accepts only a valid, successful
 // LayerC.Control v1 response; returns its original bytes for presentation.
 [[nodiscard]] std::optional<std::string>
 control_roundtrip(std::string_view request_json, std::string &error);
