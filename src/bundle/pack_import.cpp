@@ -62,11 +62,14 @@ struct ImportPlan {
 
 using ImportPlanResult = std::variant<ImportPlan, PackError>;
 
-// A packed module replaces the stored sidecar; an absent one tombstones it.
+// Full packs replace the complete bundle. A base-only JSON import instead
+// keeps missing modules, including unsupported and unreadable module evidence.
 template <typename Profile>
 platform::ModuleIntent<Profile>
-module_intent(const std::optional<ModulePayload<Profile>> &slot) {
+module_intent(const std::optional<ModulePayload<Profile>> &slot,
+              const bool keep_missing) {
   if (slot.has_value()) return slot->profile;
+  if (keep_missing) return platform::KeepModule{};
   return platform::RemoveModule{};
 }
 
@@ -274,8 +277,9 @@ ImportPlanResult build_import_plan(
     // The store's save policy owns base metadata, recovery copies, markers,
     // and tombstones; the batch adds only content-addressed assets.
     auto intents = std::apply(
-        [](const auto &...slots) {
-          return platform::ProfileModuleIntents{module_intent(slots)...};
+        [&](const auto &...slots) {
+          return platform::ProfileModuleIntents{
+              module_intent(slots, choice.keep_missing_modules)...};
         },
         imported.modules);
     const auto planned = platform::plan_profile_bundle_mutations(

@@ -19,7 +19,9 @@ std::optional<layerc::core::ProfileError> normalize_profile_bundle(
 CommitOutcome commit_profile_bundle(const std::filesystem::path &path,
                                     ProfileBundle &bundle,
                                     const CommitOptions &options,
-                                    const ConfirmUpgrade &confirm_upgrade) {
+                                    const ConfirmUpgrade &confirm_upgrade,
+                                    layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
+                                        companion) {
   if (normalize_profile_bundle(bundle.profile, bundle.visual,
                                bundle.automation)
           .has_value())
@@ -29,13 +31,18 @@ CommitOutcome commit_profile_bundle(const std::filesystem::path &path,
   if (bundle.upgrade_needed &&
       (!options.prompt_upgrade || !confirm_upgrade || !confirm_upgrade()))
     return {CommitResult::upgrade_declined, std::nullopt};
-  const auto write =
-      path.empty()
-          ? layerc::platform::ProfileWriteResult{
-                layerc::platform::ProfileWriteError::invalid_input}
-          : layerc::platform::write_profile_bundle(
-                path, bundle.profile, bundle.visual, bundle.automation,
-                layerc::platform::KeepModule{});
+  namespace platform = layerc::platform;
+  const auto planner = [&](std::vector<platform::ProfileFileMutation> &mutations) {
+    return platform::plan_profile_bundle_mutations(
+        path, bundle.profile,
+        platform::ProfileModuleIntents{bundle.visual, bundle.automation, companion},
+        options.create_only, mutations);
+  };
+  const auto write = path.empty()
+                         ? platform::ProfileWriteResult{platform::ProfileWriteError::invalid_input}
+                         : platform::commit_profile_transaction(
+                               platform::ProfileTransactionScope(path.parent_path()),
+                               platform::ProfileMutationPlan(planner));
   if (!write)
     return {CommitResult::write_failed, write.failure};
   return {};
@@ -44,10 +51,12 @@ CommitOutcome commit_profile_bundle(const std::filesystem::path &path,
 CommitOutcome commit_document(ProfileDocument &document,
                               const std::filesystem::path &path,
                               const CommitOptions &options,
-                              const ConfirmUpgrade &confirm_upgrade) {
+                              const ConfirmUpgrade &confirm_upgrade,
+                              layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
+                                  companion) {
   auto bundle = document.bundle();
   const auto outcome =
-      commit_profile_bundle(path, bundle, options, confirm_upgrade);
+      commit_profile_bundle(path, bundle, options, confirm_upgrade, std::move(companion));
   if (outcome.result != CommitResult::invalid_profile) {
     document.profile() = std::move(bundle.profile);
     document.visual() = std::move(bundle.visual);

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Disposable X11 GUI runner for the Linux LayerE editor (Debian WSL or Linux).
 #
-#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session]
+#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session|resources]
 #                             [--idle-seconds N] [--session-seconds N] [--env FILE]
 #                             [--expect-stamp FILE]
 #
@@ -49,8 +49,9 @@ inside() {
   wait_for 10 bash -c 'xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"'
 
   mkdir -p "$profiles"
-  python3 - "$profiles/fixture.json" <<'PY'
-import json, sys
+  python3 - "$profiles" "$GUI_MODE" <<'PY'
+import copy, json, sys
+from pathlib import Path
 profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled": True,
            "modules": [], "hidBindings": [], "cooldownGroups": [],
            "game": {"executableName": "lctest.exe"},
@@ -63,8 +64,26 @@ profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled"
                        "anchorX": 0.25, "anchorY": 0.75, "cooldowns": ["ability"]}],
            "bindings": [{"cooldownId": "ability",
                          "chord": [{"device": "keyboard", "code": 69}]}]}
-with open(sys.argv[1], "w") as handle:
-    json.dump(profile, handle)
+store = Path(sys.argv[1])
+if sys.argv[2] != "resources":
+    (store / "fixture.json").write_text(json.dumps(profile))
+else:
+    # The approved representative store: 20 profiles, each with ten
+    # cooldowns and two panels; the first (fixture.json) opens selected.
+    for number in range(1, 21):
+        item = copy.deepcopy(profile)
+        item.update(id=f"fixture-{number:02d}", name=f"Fixture {number:02d}")
+        ids = [f"cooldown-{c:02d}" for c in range(1, 11)]
+        item["cooldowns"] = [{"id": cid, "name": f"Cooldown {c}", "durationMs": 1000 * c,
+                              "maxCharges": 1 + c % 3, "retrigger": "ignore", "recovery": "single"}
+                             for c, cid in enumerate(ids, 1)]
+        second = copy.deepcopy(item["panels"][0])
+        second.update(id="side", name="Side", anchorX=0.75, anchorY=0.25)
+        item["panels"][0]["cooldowns"], second["cooldowns"] = ids[:5], ids[5:]
+        item["panels"].append(second)
+        item["bindings"] = [{"cooldownId": ids[0], "chord": [{"device": "keyboard", "code": 69}]}]
+        name = "fixture.json" if number == 1 else f"fixture-{number:02d}.json"
+        (store / name).write_text(json.dumps(item))
 PY
   cp "$profiles/fixture.json" "$out/profile-before.json"
 
@@ -76,10 +95,18 @@ PY
   xprop -id "$game" -f _NET_WM_PID 32c -set _NET_WM_PID "$(owned_pid fixture)"
   xdotool windowmove "$game" 60 80 windowsize "$game" 1100 650
 
-  owned_start daemon "$out/daemon.log" -- "$build/layerd"
+  # LayerD runs under an owned restart loop: after a stop it waits on this
+  # FIFO, so the bridge can start it again for reconnect cases without ever
+  # spawning a process itself. Release stops the loop's whole group.
+  mkfifo -m 600 "$work/daemon.control"
+  owned_start daemon "$out/daemon.log" -- bash -c \
+    'while "$1"; read -r request < "$2" && [[ $request == start ]]; do :; done' \
+    -- "$build/layerd" "$work/daemon.control"
   wait_for 10 "$build/layerctl" status --json
 
   local nonce editor_pid editor_start editor
+  # The editor's working directory is disposable, never the source mirror.
+  cd "$work"
   nonce=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
   owned_start sampler "$out/sampler.log" -- python3 "$here/editor-prototypes/start_process.py" \
     "$build/layere" "$out/editor.log" "$work/editor.pid" "$out/startup-resources.json" 1 "$nonce"
@@ -100,16 +127,21 @@ PY
   mkdir -m 700 "$session"
   owned_start bridge "$out/bridge.log" -- python3 "$here/linux-gui/bridge.py" serve \
     --session "$session" --evidence "$out" --display "$DISPLAY" --profile-dir "$profiles" \
-    --layerctl "$build/layerctl" --xvfb-pid "$GUI_XVFB_PID" --idle-seconds "$GUI_SESSION_SECONDS"
+    --layerctl "$build/layerctl" --daemon-control "$work/daemon.control" \
+    --xvfb-pid "$GUI_XVFB_PID" --idle-seconds "$GUI_SESSION_SECONDS"
   # The bridge publishes its token before the socket: a socket means ready.
   wait_for 10 test -S "$session/bridge.sock"
   test -s "$session/bridge.token"
   python3 "$here/linux-gui/sample.py" roles "$out/harness-resources.json" \
-    "xvfb=$GUI_XVFB_PID" "openbox=$(owned_pid wm)" "layerd=$(owned_pid daemon)" \
+    "xvfb=$GUI_XVFB_PID" "openbox=$(owned_pid wm)" \
+    "layerd=$(pgrep -P "$(owned_pid daemon)" -x layerd)" \
     "fixture=$(owned_pid fixture)" "bridge=$(owned_pid bridge)"
 
   if [[ $GUI_MODE == walkthrough ]]; then
     python3 "$here/linux-gui/walkthrough.py" --session "$session" --out "$out" || result=$?
+    python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
+  elif [[ $GUI_MODE == resources ]]; then
+    python3 "$here/linux-gui/cycles.py" --session "$session" --out "$out" || result=$?
     python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
   else
     python3 - "$out/session.json" "$session" "$DISPLAY" "$GUI_SESSION_SECONDS" <<'PY'
@@ -151,8 +183,8 @@ while (($#)); do
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session]" >&2; exit 64; }
-[[ $mode == walkthrough || $mode == session ]] || { echo "unknown mode: $mode" >&2; exit 64; }
+[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session|resources]" >&2; exit 64; }
+[[ $mode == walkthrough || $mode == session || $mode == resources ]] || { echo "unknown mode: $mode" >&2; exit 64; }
 expand_home() { [[ $1 == "~"* ]] && printf '%s' "$HOME${1:1}" || printf '%s' "$1"; }
 build=$(realpath "$(expand_home "$build")")
 # Hold the mirror/build pair for the whole run, so no build replaces the
@@ -230,6 +262,16 @@ finish() {
   python3 "$here/linux-gui/report.py" "$out" "$mode" "$session_exit" "$joined" \
     "$sandbox_removed" "$leftovers" "$lock_left" "$stale_locks" "$setup_error" || rc=1
   layerc_write_sha256sums "$out" || rc=1
+  # Publication is the final handoff. A Windows WSL launcher exiting is not
+  # proof that the Linux cleanup/report has finished. Bind both final files.
+  if [[ -f "$out/result.json" && -f "$out/SHA256SUMS" ]]; then
+    local result_sha manifest_sha
+    result_sha=$(sha256sum -- "$out/result.json") || rc=1
+    manifest_sha=$(sha256sum -- "$out/SHA256SUMS") || rc=1
+    printf '{"version":1,"exitCode":%d,"resultSha256":"%s","manifestSha256":"%s"}\n' \
+      "$rc" "${result_sha%% *}" "${manifest_sha%% *}" > "$out/.runner-complete.tmp" || rc=1
+    mv -fT -- "$out/.runner-complete.tmp" "$out/runner-complete.json" || rc=1
+  fi
   exit "$rc"
 }
 trap finish EXIT

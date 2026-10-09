@@ -289,10 +289,30 @@ void profile_edit_contracts() {
          "finishing capture clears it");
 }
 
+void create_only_contracts() {
+  const IsolatedStore store;
+  auto document = full_document();
+  const auto path = save_new(store, document);
+  if (!path) return;
+  const auto original = layerc::test::read_file(*path);
+  document.profile().name = "A colliding draft must not overwrite this";
+  const auto rejected = layerc::editor::commit_document(
+      document, *path, {.create_only = true}, nullptr);
+  expect(rejected.result == CommitResult::write_failed &&
+             rejected.write_error == layerc::platform::ProfileWriteError::target_exists &&
+             layerc::test::read_file(*path) == original,
+         "the shared create-only commit refuses an occupied path under writer ownership");
+  const auto new_path = store.directory() / "create-only.json";
+  document.profile().id = "create-only";
+  expect(layerc::editor::commit_document(
+             document, new_path, {.create_only = true}, nullptr).ok(),
+         "the shared create-only commit publishes an absent destination");
+}
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(editor_cooldown_removal_contracts),
                  LAYERC_TEST_CASE(round_trip_contracts),
                  LAYERC_TEST_CASE(recovery_contracts),
                  LAYERC_TEST_CASE(rejected_commit_contracts),
-                 LAYERC_TEST_CASE(profile_edit_contracts))
+                 LAYERC_TEST_CASE(profile_edit_contracts),
+                 LAYERC_TEST_CASE(create_only_contracts))

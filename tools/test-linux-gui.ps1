@@ -23,7 +23,7 @@ PowerShell 7.3+ is required for faithful native argument passing.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Walkthrough', 'Session', 'Call', 'Stop')]
+    [ValidateSet('Walkthrough', 'Resources', 'Session', 'Call', 'Stop')]
     [string]$Mode = 'Walkthrough',
     [string]$Request = '',
     [string]$Distro = 'Debian',
@@ -41,6 +41,7 @@ $PSNativeCommandArgumentPassing = 'Windows'
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repositoryRoot = Split-Path -Parent $scriptRoot
 Import-Module (Join-Path $scriptRoot 'LayerC.Tools.psm1') -Force
+Import-Module (Join-Path $scriptRoot 'linux-gui/Lifecycle.psm1') -Force
 $evidenceRoot = Join-Path $repositoryRoot 'out\linux-gui'
 $activePath = Join-Path $evidenceRoot 'active-session.json'
 New-Item -ItemType Directory -Force $evidenceRoot | Out-Null
@@ -206,7 +207,8 @@ function Invoke-BridgeCall {
             $response | Add-Member -NotePropertyName windowsPath `
                 -NotePropertyValue (Join-Path $active.directory $response.relative)
         }
-        Write-Host ($response | ConvertTo-Json -Depth 8)
+        # Deep enough for the accessibility tree (a11y.py MAX_DEPTH 8).
+        Write-Host ($response | ConvertTo-Json -Depth 64)
     } catch {
         Write-Host $text
     }
@@ -225,9 +227,9 @@ function Wait-Runner {
 }
 
 switch ($Mode) {
-    'Walkthrough' {
+    { $_ -in 'Walkthrough', 'Resources' } {
         $run = New-Run
-        $code = Invoke-Wsl (Get-RunnerArguments $run 'walkthrough')
+        $code = Invoke-Wsl (Get-RunnerArguments $run $Mode.ToLowerInvariant())
         Write-Host "Evidence: $($run.Directory)"
         exit $code
     }
@@ -316,15 +318,20 @@ switch ($Mode) {
         exit (Invoke-BridgeCall $Request)
     }
     'Stop' {
-        $null = Invoke-BridgeCall '{"op":"stop"}'
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $complete = Join-Path $active.directory 'runner-complete.json'
+        if (-not (Test-Path -LiteralPath $complete -PathType Leaf)) {
+            $null = Invoke-BridgeCall '{"op":"stop"}'
+        }
         if (-not (Wait-Runner $active.processId $active.processStartTime)) {
             throw "Session runner did not finish; see $($active.directory)"
         }
+        $remaining = [int][Math]::Max(1, 120000 - $watch.ElapsedMilliseconds)
+        $summary = Wait-LayerCGuiResult -Directory $active.directory -Milliseconds $remaining
+        # Failed or incomplete publication retains the slot and evidence, so a
+        # caller can retry Stop rather than losing the ownership record.
         Remove-Item -LiteralPath $activePath
-        $result = Join-Path $active.directory 'result.json'
-        if (-not (Test-Path -LiteralPath $result)) { throw "Session produced no result: $($active.directory)" }
-        Get-Content -Raw $result
-        $summary = Get-Content -Raw $result | ConvertFrom-Json
+        $summary | ConvertTo-Json -Depth 64
         exit ([int](-not $summary.passed))
     }
 }

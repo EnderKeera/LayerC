@@ -42,8 +42,8 @@ OPERATION_SECONDS = 60.0  # Every subprocess of one operation shares this budget
 SEND_SECONDS = 5.0
 MAX_TEXT = 256
 TYPE_DELAY_MS = 20
-INPUT_OPS = {"click", "drag", "set_text", "key", "type", "activate"}
-FIXTURE_OPS = {"block_profile", "restore_profile", "daemon_stop"}
+INPUT_OPS = {"click", "drag", "set_text", "key", "type", "activate", "a11y_check"}
+FIXTURE_OPS = {"block_profile", "restore_profile", "daemon_stop", "daemon_start"}
 KEY_PATTERN = re.compile(r"^[A-Za-z0-9_+]{1,64}$")
 NAME_PATTERN = re.compile(r"[^a-z0-9-]+")
 NONCE_PROPERTY = "_LAYERC_GUI_SESSION"
@@ -95,6 +95,13 @@ class Bridge:
         self.profiles = Path(args.profile_dir)
         self.aside = self.session / "aside"
         self.layerctl = args.layerctl
+        self.daemon_control = Path(args.daemon_control)
+        # Private import/export directory for file-chooser cases.
+        self.exchange_dir = self.session / "exchange"
+        self.exchange_dir.mkdir(mode=0o700, exist_ok=True)
+        # A file name that is not UTF-8: the chooser lists it while AT-SPI
+        # reads the tree, which must not reach D-Bus as invalid UTF-8.
+        (self.exchange_dir / os.fsdecode(b"\xff-not-utf8.json")).write_bytes(b"")
         self.idle = args.idle_seconds
         self.sequence = 0          # Actions begun; each consumes freshness.
         self.shot_index = 0
@@ -263,7 +270,10 @@ class Bridge:
             daemon = json.loads(status.stdout) if status.returncode == 0 else None
         except ValueError:
             daemon = None
-        return {"profiles": profiles,
+        exchange = {entry.name: hashlib.sha256(entry.read_bytes()).hexdigest()
+                    for entry in sorted(self.exchange_dir.iterdir())
+                    if entry.is_file() and not entry.is_symlink()}
+        return {"profiles": profiles, "exchange": str(self.exchange_dir), "exchangeFiles": exchange,
                 "daemon": {"reachable": daemon is not None, "status": daemon,
                            "error": None if daemon else status.stderr.strip()[:300]}}
 
@@ -274,6 +284,18 @@ class Bridge:
             return json.loads(run([sys.executable, str(script)], timeout=self.remaining(10.0)))
         except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
             return {"available": False, "reason": f"accessibility query failed: {error}"}
+
+    def op_a11y_check(self, _request):
+        # Semantic walkthrough through AT-SPI; it renames and saves the fixture
+        # and sends one Tab key, so it is an input operation.
+        self.begin()
+        script = Path(__file__).with_name("a11y_check.py")
+        output = self.bounded([sys.executable, str(script), str(self.profiles)],
+                              timeout=50.0)
+        try:
+            return json.loads(output)
+        except ValueError as error:
+            raise Rejected(f"accessibility check produced no report: {error}") from error
 
     # Actions -------------------------------------------------------------
     # Each op validates every argument first, then calls begin() immediately
@@ -404,6 +426,30 @@ class Bridge:
         path.rmdir()
         aside.rename(path)
 
+    def daemon_reachable(self):
+        return subprocess.run([self.layerctl, "status", "--json"], capture_output=True,
+                              timeout=self.remaining(10.0), check=False).returncode == 0
+
+    def op_daemon_start(self, _request):
+        # The runner keeps LayerD under an owned restart loop that waits on
+        # this FIFO after a stop; the bridge never spawns the daemon itself.
+        if self.daemon_reachable():
+            raise Rejected("LayerD is already running")
+        self.sequence += 1
+        while True:
+            try:
+                descriptor = os.open(self.daemon_control, os.O_WRONLY | os.O_NONBLOCK)
+                break
+            except OSError:  # ENXIO until the loop is waiting; remaining() bounds it.
+                self.remaining(1.0)
+                time.sleep(0.05)
+        with os.fdopen(descriptor, "w") as control:
+            control.write("start\n")
+        while not self.daemon_reachable():
+            self.remaining(1.0)
+            time.sleep(0.1)
+        return {"started": True}
+
     def op_daemon_stop(self, _request):
         self.sequence += 1
         run([self.layerctl, "stop"], timeout=self.remaining(10.0))
@@ -421,12 +467,14 @@ class Bridge:
             raise Rejected("unknown operation")
         kind = ("input" if op in INPUT_OPS else "direct-geometry" if op == "set_geometry"
                 else "fixture" if op in FIXTURE_OPS else "observe")
+        # Every check below runs within this operation's own budget, never a
+        # previous operation's expired deadline.
+        self.deadline = time.monotonic() + OPERATION_SECONDS
         if kind in ("input", "direct-geometry"):
             self.require_fresh(request)
         elif op == "screenshot":
             self.confirm_display()
         before = self.sequence
-        self.deadline = time.monotonic() + OPERATION_SECONDS
         try:
             result = handler(request)
         finally:
@@ -564,7 +612,8 @@ def main():
     parser = argparse.ArgumentParser(description="LayerE disposable-session bridge")
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve")
-    for name in ("--session", "--evidence", "--display", "--profile-dir", "--layerctl"):
+    for name in ("--session", "--evidence", "--display", "--profile-dir", "--layerctl",
+                 "--daemon-control"):
         serve.add_argument(name, required=True)
     serve.add_argument("--xvfb-pid", required=True, type=int)
     serve.add_argument("--idle-seconds", type=float, default=1800)

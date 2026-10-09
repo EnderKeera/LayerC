@@ -10,6 +10,7 @@ import sys
 
 MAX_NODES = 400
 MAX_DEPTH = 8
+MAX_TEXT = 400
 
 
 def describe(node, depth, budget):
@@ -21,7 +22,15 @@ def describe(node, depth, budget):
     item = {"role": node.getRoleName(), "name": node.name,
             "focused": states.contains(pyatspi.STATE_FOCUSED),
             "selected": states.contains(pyatspi.STATE_SELECTED),
-            "enabled": states.contains(pyatspi.STATE_ENABLED)}
+            "enabled": states.contains(pyatspi.STATE_ENABLED),
+            "showing": states.contains(pyatspi.STATE_SHOWING)}
+    if states.contains(pyatspi.STATE_CHECKED):
+        item["checked"] = True
+    try:
+        text = node.queryText()
+        item["text"] = text.getText(0, min(text.characterCount, MAX_TEXT))
+    except NotImplementedError:
+        pass
     try:
         box = node.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
         item["extents"] = [box.x, box.y, box.width, box.height]
