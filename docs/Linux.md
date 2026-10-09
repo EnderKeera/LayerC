@@ -110,27 +110,40 @@ block implementation or container CI:
 - Headless/non-X11 and missing-extension snapshots showing the affected
   adapter as unavailable rather than silently omitted.
 
-## Experimental X11 editor slice
+## Experimental X11 editor
 
 The v2.6c editor is in development, not a published release or a full Windows
-editor replacement. When X11 development libraries, FLTK 1.4+ and
-`fltk-config` are available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the
-source-build `layere` target. Missing FLTK leaves the existing daemon/CLI and
-headless build graph usable; it does not count as passing an editor gate.
-FLTK is linked into `layere` only, not into `layerd` or the shared core.
+editor replacement. When X11 development libraries, FLTK 1.4+ with
+`fltk-config`, and ATK, its AT-SPI adaptor and libatspi 2.62 or later are
+available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the source-build
+`layere` target. Older ATK/AT-SPI adaptors crash during cleanup, so 2.62 is the
+floor; current Debian 13 (2.56) and Ubuntu 24.04 (2.52) packages do not
+qualify. Missing dependencies leave the existing daemon/CLI and headless build
+graph usable and do not count as passing an editor gate. Configure with
+`-DLAYERC_REQUIRE_EDITOR=ON` to make them a configuration error instead.
+FLTK and ATK are linked into `layere` only, not into `layerd` or the shared
+core. GTK widgets are not used.
 
 ```sh
 cmake --build build-linux --target layere
 ./build-linux/layere
 ```
 
-An X11 display is required. The slice reads the normal XDG profile store and
-edits profile name, executable match and enabled state plus the first cooldown
-and first panel's normalized position. Its preview is illustrative, not a
-complete renderer. Existing bindings, other panels and valid module sidecars
-are retained; unreadable/invalid module data blocks Save rather than being
-silently discarded. Save uses the shared durable stage/commit path, then asks
-the daemon to reload through the authenticated private control socket.
+An X11 display is required. The editor reads the normal XDG profile store.
+It creates, duplicates, renames, enables/disables and deletes profiles, and
+edits game matching, cooldowns, keyboard and mouse bindings (with capture), and
+panels. It has undo/redo, menus and context menus, and JSON/`.layercprofile`
+import with collision review and export. Its preview is illustrative, not a
+complete renderer. Advanced modules (automation, visual, calibration,
+companion), Generic HID bindings and cooldown groups are preserved but not
+editable; unreadable/invalid module data blocks Save rather than being
+silently discarded. Save uses the shared durable
+stage/commit path, then asks the daemon to reload through the authenticated
+private control socket.
+
+LayerE exports its windows, menus and controls to screen readers through ATK
+and the AT-SPI bus without GTK widgets. When the bus or a coherent ≥ 2.62
+library set is unavailable, the window shows the reason and editing continues.
 
 Invalid inputs and storage failures retain unsaved edits and show a reason.
 A successful offline save is distinguished from a save whose daemon reload
@@ -142,9 +155,9 @@ the daemon.
 Closing or selecting another profile prompts to save, discard or cancel dirty
 edits. Daemon capabilities/faults are visible, with an explicit refresh button.
 
-CRUD, import/export, complete accessibility, advanced editor parity, installed
-smoke, GUI CI and editor packaging are not complete in this slice. Xvfb
-walkthrough evidence is automated evidence, not physical GNOME/KDE coverage.
+Advanced editor parity, installed smoke, GUI CI and editor packaging are not
+complete. Xvfb walkthrough evidence is automated evidence, not physical
+GNOME/KDE coverage or a screen-reader user study.
 Gamescope and native Wayland remain unsupported in V2.6.
 
 ### GUI walkthrough runner and agent bridge
@@ -178,7 +191,7 @@ most recent screenshot, and that screenshot must postdate the previous action;
 anything else is rejected and logged. Direct window geometry and the test-only fixture faults (store
 block/restore, daemon stop) are logged as distinct action kinds. Operations:
 `screenshot`, `inspect` (region digest/colour centroid), `state` (profile
-bytes plus daemon status), `tree` (AT-SPI; LayerE currently reports none),
+bytes plus daemon status), `tree` (AT-SPI), `a11y_check` (semantic AT-SPI walkthrough),
 `click`, `drag`, `set_text`, `key`, `type`, `activate`, `set_geometry`,
 `block_profile`, `restore_profile`, `daemon_stop` and `stop`.
 
@@ -192,6 +205,7 @@ refused. One run or session uses a mirror/build pair at a time:
 
 ```powershell
 tools/test-linux-gui.ps1 -EnvScript '~/dev-env.sh'          # scripted walkthrough
+tools/test-linux-gui.ps1 -Mode Resources                         # representative store
 tools/test-linux-gui.ps1 -Mode Session -EnvScript '~/dev-env.sh'  # agent session
 tools/test-linux-gui.ps1 -Mode Call -Request '{"op":"screenshot","name":"start"}'
 tools/test-linux-gui.ps1 -Mode Stop
@@ -201,8 +215,15 @@ Each run writes `out/linux-gui/<run>/`: `revision.json`, executable checksums,
 tool versions, `actions.jsonl`, `shots/`, `cases.json` (walkthrough), the
 profile before/after, editor idle/startup memory and CPU, a separate harness
 process snapshot, owned-process exit records, `cleanup.json`, `result.json` and
-`SHA256SUMS`. The result passes only if every required case passed, LayerE met
-its idle/startup USS and idle CPU targets, and cleanup left nothing behind.
+`SHA256SUMS`. The final atomic `runner-complete.json` binds the result and
+manifest hashes after cleanup/report generation. Windows `Stop` waits for and
+validates that publication before releasing the active-session slot; incomplete
+or corrupt publication retains the slot and evidence for retry. The result
+passes only if every required case passed, LayerE met its idle/startup USS and
+idle CPU targets, and cleanup left nothing behind. `Resources` mode loads the
+representative 20-profile store, applies the 32 MiB USS targets and runs 100
+profile-switch/dialog cycles that must stay within 2 MiB without a rising trend
+(`cycles.json`).
 
 ## V2.6.2 calibration and evidence
 
@@ -284,8 +305,9 @@ ctest --test-dir build-linux --output-on-failure   # portable + Linux suites
 ```
 
 Linux builds `layerd`, `layerctl`, and `layercal` when the required X11
-libraries are present. FLTK 1.4+ development files additionally enable the
-experimental X11 `layere` slice described below. Missing FLTK does not disable
+libraries are present. FLTK 1.4+ and ATK/AT-SPI 2.62+ development files
+additionally enable the experimental X11 `layere` editor described below.
+Missing editor dependencies do not disable
 the existing headless/source targets. The isolated capture worker and Game Bar
 host remain Windows-only.
 

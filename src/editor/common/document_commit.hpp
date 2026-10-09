@@ -34,11 +34,14 @@ using ConfirmUpgrade = std::function<bool()>;
 // The shared commit pipeline for every frontend: normalize, refuse to
 // discard an unreadable module, obtain upgrade consent, then publish the base
 // profile with its visual and automation intents through the durable store
-// transaction. The companion sidecar is never edited here and is kept.
+// transaction. The companion sidecar is kept by default; a duplicate can
+// supply a validated replacement without dropping the read-only module.
 [[nodiscard]] CommitOutcome
 commit_profile_bundle(const std::filesystem::path &path, ProfileBundle &bundle,
                       const CommitOptions &options,
-                      const ConfirmUpgrade &confirm_upgrade);
+                      const ConfirmUpgrade &confirm_upgrade,
+                      layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
+                          companion = layerc::platform::KeepModule{});
 
 // Commits the document's current values (the caller syncs its controls
 // first). The normalized values are kept unless the profile is invalid; the
@@ -46,7 +49,9 @@ commit_profile_bundle(const std::filesystem::path &path, ProfileBundle &bundle,
 [[nodiscard]] CommitOutcome
 commit_document(ProfileDocument &document, const std::filesystem::path &path,
                 const CommitOptions &options,
-                const ConfirmUpgrade &confirm_upgrade);
+                const ConfirmUpgrade &confirm_upgrade,
+                layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
+                    companion = layerc::platform::KeepModule{});
 
 // Same store file as the open document (canonical, case-insensitive where
 // the store is).

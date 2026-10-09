@@ -224,6 +224,16 @@ if(NOT WIN32)
     layerc_add_test(layerc_linux_editor_model_tests
         SOURCES tests/linux_editor_model_tests.cpp
         LINK layerc_editor_linux TIMEOUT 30)
+    layerc_add_test(layerc_linux_editor_session_tests
+        SOURCES tests/linux_editor_session_tests.cpp
+        LINK layerc_editor_linux TIMEOUT 30)
+    if(TARGET layerc_editor_fltk)
+        layerc_add_test(layerc_linux_editor_widget_tests
+            SOURCES tests/linux_editor_widget_tests.cpp
+            LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
+            LABELS required x11 editor)
+        layerc_editor_build_runtime(layerc_linux_editor_widget_tests)
+    endif()
 endif()
 
 layerc_add_test(layerc_automation_benchmark

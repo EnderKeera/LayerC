@@ -82,6 +82,9 @@ struct ImportChoice {
   // fails rather than publishing to a destination the user did not review.
   std::optional<std::filesystem::path> expected_target{};
   bool require_absent{};
+  // A plain JSON import has no module-removal intent. Full packs retain the
+  // existing replacement policy; missing modules in them are removed.
+  bool keep_missing_modules{};
 };
 
 [[nodiscard]] PackOperationResult export_profile_pack(

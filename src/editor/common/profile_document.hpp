@@ -62,6 +62,9 @@ struct CommitOptions {
   // After a document commit, reload the profile list instead of syncing the
   // current row only.
   bool refresh_list = false;
+  // New drafts must not overwrite a file created after the list scan.
+  // Checked inside the recovered transaction's writer ownership.
+  bool create_only = false;
 };
 
 // Owns the base profile, editable sidecars, persistence state, and undo history.

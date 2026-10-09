@@ -20,6 +20,9 @@ from walkthrough import EXPECTED  # noqa: E402 -- the required-case manifest
 
 MIB = 1024 * 1024
 TARGETS = {"idleUssBytes": 20 * MIB, "startupPeakUssBytes": 20 * MIB, "idleCpuPercent": 0.2}
+# Approved ceilings for the representative store (docs/LinuxEditorPlan.md §7).
+REPRESENTATIVE = {"idleUssBytes": 32 * MIB, "startupPeakUssBytes": 32 * MIB, "idleCpuPercent": 0.2}
+CYCLE_COUNT, CYCLE_DRIFT = 100, 2 * MIB
 OWNED_ROLES = ("wm", "fixture", "daemon", "sampler", "bridge", "outer-xvfb")
 MIN_IDLE_SECONDS = 5.0
 
@@ -85,6 +88,21 @@ def check_cases(out, failures):
     return statuses, report.get("deferred")
 
 
+def check_cycles(out, failures):
+    report = load(out / "cycles.json")
+    if not isinstance(report, dict):
+        failures.append("cycle run produced no report")
+        return None
+    drift = number(report, "driftBytes", failures, "cycles") if "driftBytes" in report else None
+    if report.get("cycles") != CYCLE_COUNT:
+        failures.append(f"only {report.get('cycles')} of {CYCLE_COUNT} cycles completed")
+    if drift is None or drift > CYCLE_DRIFT or report.get("continuingUpwardTrend") is not False:
+        failures.append(f"cycle USS target not met: {report.get('error') or drift}")
+    if not is_true(report.get("passed")):
+        failures.append(f"cycle run failed: {report.get('error')}")
+    return {k: report.get(k) for k in ("cycles", "baselineUssBytes", "finalUssBytes",
+                                       "driftBytes", "continuingUpwardTrend")}
+
 def main():
     out = Path(sys.argv[1])
     try:
@@ -124,7 +142,8 @@ def evaluate(out):
                 or isinstance(code, bool) or not isinstance(code, int) or code != 0:
             failures.append(f"owned process {name} ended abnormally: {status}")
 
-    resources: dict[str, object] = {"targets": TARGETS}
+    targets = REPRESENTATIVE if mode == "resources" else TARGETS
+    resources: dict[str, object] = {"targets": targets}
     idle, startup = load(out / "resources.json"), load(out / "startup-resources.json")
     if not isinstance(idle, dict) or not isinstance(startup, dict):
         failures.append("editor resource evidence is missing")
@@ -135,7 +154,7 @@ def evaluate(out):
                     "idleCpuPercent": number(idle, "idleCpuPercent", failures, "idle"),
                     "idleSeconds": number(idle, "idleSeconds", failures, "idle")}
         resources["observed"] = observed
-        for key, limit in TARGETS.items():
+        for key, limit in targets.items():
             if observed[key] is not None and observed[key] > limit:
                 failures.append(f"resource target exceeded: {key}")
         if observed["idleSeconds"] is not None and observed["idleSeconds"] < MIN_IDLE_SECONDS:
@@ -152,10 +171,13 @@ def evaluate(out):
         if statuses is not None:
             result["cases"] = statuses
             result["deferred"] = deferred
+    elif mode == "resources":
+        result["fixture"] = "representative: 20 profiles x 10 cooldowns x 2 panels"
+        result["cycles"] = check_cycles(out, failures)
     else:
         result["note"] = ("Agent session: actions.jsonl and shots/ record the agent's "
                           "coverage; this run makes no scripted case claims.")
-    if session_exit != 0 and not any("required cases" in f for f in failures):
+    if session_exit != 0 and not any("required cases" in f or "cycle" in f for f in failures):
         failures.append(f"session exited with status {session_exit}")
     result.update(passed=not failures, failures=failures)
     (out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
