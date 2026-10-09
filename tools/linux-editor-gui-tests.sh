@@ -1,0 +1,325 @@
+#!/usr/bin/env bash
+# Disposable X11 GUI runner for the Linux LayerE editor (Debian WSL or Linux).
+#
+#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session]
+#                             [--idle-seconds N] [--session-seconds N] [--env FILE]
+#                             [--expect-stamp FILE]
+#
+# walkthrough (default): run tools/linux-gui/walkthrough.py through the bridge
+#   and gate on its required cases, the editor resource targets and cleanup.
+# session: keep the computer-use bridge open for one external agent until it
+#   sends {"op":"stop"} or the bridge idles out (--session-seconds).
+#
+# Everything runs in a private authenticated Xvfb + Openbox + D-Bus session
+# with private HOME/XDG roots: it never addresses the user's display, bus,
+# daemon, control socket or profile store. Every helper is owned and joined
+# (tools/editor-prototypes/owned.sh). Dependency installation is separate;
+# a missing dependency fails the run instead of skipping it. --env sources a
+# dependency-root setup script (for example an extracted sysroot) first.
+set -euo pipefail
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+source "$here/linux-lib.sh"
+source "$here/editor-prototypes/owned.sh"
+
+# wait_for SECONDS COMMAND...: retry until success, bounded by a monotonic timeout.
+wait_for() {
+  local seconds=$1
+  shift
+  timeout "$seconds" bash -c 'until "$@" >/dev/null 2>&1; do sleep .05; done' -- "$@"
+}
+
+inside() {
+  local out=$GUI_OUT build=$GUI_BUILD work=$GUI_WORK result=0
+  local profiles="$XDG_CONFIG_HOME/layerc/profiles" session="$GUI_WORK/bridge"
+  finish_inside() {
+    local rc=$? i
+    trap - EXIT
+    for ((i=${#owned_names[@]}-1; i>=0; i--)); do
+      owned_release "${owned_names[$i]}" || { ((rc)) || rc=70; }
+    done
+    # Runs after inside() returned: use globals, not its locals.
+    mkdir -p "$GUI_OUT/ownership"
+    [[ -z "$owned_root" ]] || cp "$owned_root"/*.status "$GUI_OUT/ownership/" 2>/dev/null || true
+    owned_cleanup
+    exit "$rc"
+  }
+  trap finish_inside EXIT
+
+  owned_start wm "$out/openbox.log" -- openbox --sm-disable
+  wait_for 10 bash -c 'xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"'
+
+  mkdir -p "$profiles"
+  python3 - "$profiles/fixture.json" <<'PY'
+import json, sys
+profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled": True,
+           "modules": [], "hidBindings": [], "cooldownGroups": [],
+           "game": {"executableName": "lctest.exe"},
+           "cooldowns": [{"id": "ability", "name": "Ability", "durationMs": 8000,
+                          "maxCharges": 1, "retrigger": "ignore", "recovery": "single"}],
+           "panels": [{"id": "main", "name": "Main", "layout": "row", "style": "bar",
+                       "bar": {"width": 360, "height": 30, "fillColor": "#50BAC8",
+                               "backgroundColor": "#202A31", "borderColor": "#50BAC8",
+                               "textColor": "#F1F5F7", "hideWhenReady": False},
+                       "anchorX": 0.25, "anchorY": 0.75, "cooldowns": ["ability"]}],
+           "bindings": [{"cooldownId": "ability",
+                         "chord": [{"device": "keyboard", "code": 69}]}]}
+with open(sys.argv[1], "w") as handle:
+    json.dump(profile, handle)
+PY
+  cp "$profiles/fixture.json" "$out/profile-before.json"
+
+  cp "$build/layerc_linux_x11_smoke_fixture" "$work/lctest.exe"
+  owned_start fixture "$out/fixture.log" -- "$work/lctest.exe"
+  wait_for 10 xdotool search --name '^LayerC Automation Fixture$'
+  local game
+  game=$(xdotool search --name '^LayerC Automation Fixture$' | head -n1)
+  xprop -id "$game" -f _NET_WM_PID 32c -set _NET_WM_PID "$(owned_pid fixture)"
+  xdotool windowmove "$game" 60 80 windowsize "$game" 1100 650
+
+  owned_start daemon "$out/daemon.log" -- "$build/layerd"
+  wait_for 10 "$build/layerctl" status --json
+
+  local nonce editor_pid editor_start editor
+  nonce=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+  owned_start sampler "$out/sampler.log" -- python3 "$here/editor-prototypes/start_process.py" \
+    "$build/layere" "$out/editor.log" "$work/editor.pid" "$out/startup-resources.json" 1 "$nonce"
+  wait_for 10 test -s "$work/editor.pid"
+  read -r editor_pid editor_start < "$work/editor.pid"
+  wait_for 10 xdotool search --all --pid "$editor_pid" --name '^LayerE'
+  editor=$(xdotool search --all --pid "$editor_pid" --name '^LayerE' | head -n1)
+  # Harness readiness marker, written after the owned window is observed;
+  # production LayerE emits no test-only readiness text.
+  printf '\nready\n' >> "$out/editor.log"
+  wait_for 10 test -s "$out/startup-resources.json"
+  xdotool windowmove "$editor" 20 20
+  printf '{"nonce":"%s","pid":%s,"startTime":"%s"}\n' "$nonce" "$editor_pid" "$editor_start" \
+    > "$out/editor-identity.json"
+
+  python3 "$here/linux-gui/sample.py" idle "$editor_pid" "$GUI_IDLE" "$out/resources.json"
+
+  mkdir -m 700 "$session"
+  owned_start bridge "$out/bridge.log" -- python3 "$here/linux-gui/bridge.py" serve \
+    --session "$session" --evidence "$out" --display "$DISPLAY" --profile-dir "$profiles" \
+    --layerctl "$build/layerctl" --xvfb-pid "$GUI_XVFB_PID" --idle-seconds "$GUI_SESSION_SECONDS"
+  # The bridge publishes its token before the socket: a socket means ready.
+  wait_for 10 test -S "$session/bridge.sock"
+  test -s "$session/bridge.token"
+  python3 "$here/linux-gui/sample.py" roles "$out/harness-resources.json" \
+    "xvfb=$GUI_XVFB_PID" "openbox=$(owned_pid wm)" "layerd=$(owned_pid daemon)" \
+    "fixture=$(owned_pid fixture)" "bridge=$(owned_pid bridge)"
+
+  if [[ $GUI_MODE == walkthrough ]]; then
+    python3 "$here/linux-gui/walkthrough.py" --session "$session" --out "$out" || result=$?
+    python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
+  else
+    python3 - "$out/session.json" "$session" "$DISPLAY" "$GUI_SESSION_SECONDS" <<'PY'
+import json, os, sys
+temporary = sys.argv[1] + ".tmp"
+with open(temporary, "w") as handle:  # Published atomically: readers never see a partial file.
+    json.dump({"sessionDir": sys.argv[2], "display": sys.argv[3],
+               "idleSeconds": float(sys.argv[4]),
+               "call": "python3 tools/linux-gui/bridge.py call --session SESSION REQUEST"},
+              handle, indent=2)
+os.replace(temporary, sys.argv[1])
+PY
+    echo "bridge session ready: $session"
+  fi
+  owned_wait bridge || result=$?
+  owned_stop sampler || result=$?
+  [[ ! -f "$profiles/fixture.json" ]] || cp "$profiles/fixture.json" "$out/profile-after.json"
+  return "$result"
+}
+
+if [[ ${1:-} == --inside ]]; then
+  inside
+  exit
+fi
+
+# WSLENV can forward a Windows HOME; resolve the account's own home.
+HOME=$(getent passwd "$(id -u)" | cut -d: -f6)
+export HOME
+mode=walkthrough build= out= idle_seconds=60 session_seconds=1800 env_file= expect_stamp=
+while (($#)); do
+  case $1 in
+    --build) build=$2; shift 2 ;;
+    --out) out=$2; shift 2 ;;
+    --mode) mode=$2; shift 2 ;;
+    --idle-seconds) idle_seconds=$2; shift 2 ;;
+    --session-seconds) session_seconds=$2; shift 2 ;;
+    --env) env_file=$2; shift 2 ;;
+    --expect-stamp) expect_stamp=$2; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 64 ;;
+  esac
+done
+[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session]" >&2; exit 64; }
+[[ $mode == walkthrough || $mode == session ]] || { echo "unknown mode: $mode" >&2; exit 64; }
+expand_home() { [[ $1 == "~"* ]] && printf '%s' "$HOME${1:1}" || printf '%s' "$1"; }
+build=$(realpath "$(expand_home "$build")")
+# Hold the mirror/build pair for the whole run, so no build replaces the
+# executables or helper scripts underneath it (see tools/linux-gui/build.sh).
+# The scripts themselves run from the mirror ($here is its tools/ directory).
+exec 8>>"$(dirname "$here").lock" 9>>"$build.lock"
+if ! flock -s -n 8 || ! flock -s -n 9; then
+  echo "a build is replacing $build; retry when it finishes" >&2
+  exit 75
+fi
+# Under the shared locks, the executables must still be the ones this run's
+# build produced: another build may have finished in between.
+if [[ -n $expect_stamp ]] && ! (cd "$build" && sha256sum --check --quiet --status "$expect_stamp"); then
+  echo "executables in $build changed since this run's build; rerun" >&2
+  exit 75
+fi
+if [[ -n $env_file ]]; then
+  # shellcheck source=/dev/null
+  source "$(expand_home "$env_file")"
+fi
+out=$(realpath -m "$out")
+mkdir -p "$out"
+[[ ! -e "$out/result.json" ]] || { echo "refusing to reuse evidence directory: $out" >&2; exit 64; }
+
+work= session_exit=1 setup_error= xvfb_name=
+attempt_numbers=() attempt_pids=()
+finish() {
+  local rc=$? joined=1 sandbox_removed=1 leftovers lock_left=0 stale_locks= i name status lock_pid
+  trap - EXIT
+  # Stop and join first, so the final statuses (including stop failures)
+  # are preserved before the ownership metadata is removed. A release's exit
+  # code is the child's own result (judged by report.py from its status);
+  # only a supervisor that failed, or left no status, is a join failure.
+  for ((i=${#owned_names[@]}-1; i>=0; i--)); do
+    owned_release "${owned_names[$i]}" || true
+  done
+  for name in "${owned_names[@]}"; do
+    status="$owned_root/$name.status"
+    if [[ ! -e "$status" ]] || grep -q '"state": "failed"' "$status"; then joined=0; fi
+  done
+  mkdir -p "$out/ownership"
+  if [[ -n "$owned_root" ]]; then
+    for status in "$owned_root"/*.status; do
+      [[ -e "$status" ]] || continue
+      name=$(basename "$status" .status)
+      [[ $name == "$xvfb_name" ]] && name=xvfb
+      [[ $name == xvfb-attempt-* ]] || name="outer-$name"
+      cp "$status" "$out/ownership/$name.status" || joined=0
+    done
+  fi
+  owned_cleanup
+  leftovers=
+  if [[ -n "$work" ]]; then
+    leftovers=$(pgrep -u "$(id -u)" -f -- "$work" | tr '\n' ' ' || true)
+    rm -rf -- "$work" || true
+    [[ ! -e "$work" ]] || sandbox_removed=0
+  fi
+  # Every display this run tried must be released. A lock naming another
+  # server's PID is not ours to judge or remove. One naming our own, now
+  # joined Xvfb (left behind by a crash or SIGKILL) is stale: remove and
+  # record it. One whose PID is still an Xvfb was not released.
+  for i in "${!attempt_numbers[@]}"; do
+    lock="/tmp/.X${attempt_numbers[$i]}-lock"
+    if [[ -r "$lock" ]] && read -r lock_pid < "$lock" && [[ "$lock_pid" == "${attempt_pids[$i]}" ]]; then
+      if tr '\0' ' ' < "/proc/$lock_pid/cmdline" 2>/dev/null | grep -q '^Xvfb '; then
+        lock_left=1
+      elif rm -f -- "$lock"; then
+        stale_locks+="${attempt_numbers[$i]} "
+      else
+        lock_left=1
+      fi
+    fi
+  done
+  ((rc == 0)) || [[ -n "$setup_error" ]] || setup_error="runner exited with status $rc"
+  python3 "$here/linux-gui/report.py" "$out" "$mode" "$session_exit" "$joined" \
+    "$sandbox_removed" "$leftovers" "$lock_left" "$stale_locks" "$setup_error" || rc=1
+  layerc_write_sha256sums "$out" || rc=1
+  exit "$rc"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+for command in Xvfb xauth xdpyinfo xprop xwininfo xdotool openbox import convert python3 \
+    dbus-run-session pgrep sha256sum timeout; do
+  if ! command -v "$command" >/dev/null; then
+    setup_error="missing required dependency: $command"
+    echo "$setup_error" >&2
+    exit 1
+  fi
+done
+for program in layere layerd layerctl layerc_linux_x11_smoke_fixture; do
+  if [[ ! -x "$build/$program" ]]; then
+    setup_error="missing required build output: $program"
+    echo "$setup_error" >&2
+    exit 1
+  fi
+done
+
+work=$(mktemp -d -t layerc-gui.XXXXXXXX)
+chmod 700 "$work"
+mkdir -p "$work/home" "$work/config" "$work/data" "$work/cache" "$work/state" "$work/runtime"
+chmod 700 "$work/runtime"
+export HOME="$work/home" XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" \
+  XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state" XDG_RUNTIME_DIR="$work/runtime" \
+  XAUTHORITY="$work/Xauthority" FLTK_BACKEND=x11
+unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS AT_SPI_BUS_ADDRESS NO_AT_BRIDGE \
+  LAYERC_PROFILE_DIR LAYERC_STORE_ROOT SESSION_MANAGER
+
+python3 - "$out" "$build" <<'PY'
+import hashlib, json, os, pathlib, platform, subprocess, sys
+out, build = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+def first(command):
+    try:
+        # Inside the private HOME/XDG roots, with no display to touch.
+        env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+        run = subprocess.run(command, capture_output=True, text=True, timeout=10, env=env)
+        return (run.stdout + run.stderr).strip().splitlines()[0]
+    except (OSError, IndexError, subprocess.TimeoutExpired):
+        return None
+names = ("layere", "layerd", "layerctl", "layerc_linux_x11_smoke_fixture")
+(out / "executables.json").write_text(json.dumps(
+    {n: hashlib.sha256((build / n).read_bytes()).hexdigest() for n in names}, indent=2) + "\n")
+(out / "environment.json").write_text(json.dumps({
+    "kernel": platform.uname()._asdict(), "python": platform.python_version(),
+    "layere": first([str(build / "layere"), "--version"]),
+    "xvfb": first(["Xvfb", "-version"]), "openbox": first(["openbox", "--version"]),
+    "xdotool": first(["xdotool", "version"]), "imagemagick": first(["convert", "-version"]),
+    "screen": "1600x1000x24"}, indent=2) + "\n")
+PY
+
+# Private authenticated display. Explicit numbers use abstract sockets, which
+# also works where /tmp/.X11-unix is read-only (WSLg).
+cookie=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
+ready=0
+for attempt in $(seq 10); do
+  display_number=$((1000 + RANDOM % 20000))
+  [[ ! -e "/tmp/.X$display_number-lock" ]] || continue
+  export DISPLAY=":$display_number"
+  xauth -f "$XAUTHORITY" add "$DISPLAY" MIT-MAGIC-COOKIE-1 "$cookie" 2>/dev/null
+  xvfb_name="xvfb-attempt-$attempt"
+  owned_start "$xvfb_name" "$out/$xvfb_name.log" -- Xvfb "$DISPLAY" -auth "$XAUTHORITY" \
+    -screen 0 1600x1000x24 -nolisten tcp || { owned_release "$xvfb_name" || true; continue; }
+  xvfb_pid=$(owned_pid "$xvfb_name")
+  attempt_numbers+=("$display_number")
+  attempt_pids+=("$xvfb_pid")
+  for _ in $(seq 50); do
+    owned_alive "$xvfb_name" || break
+    if [[ -r "/tmp/.X$display_number-lock" ]] && read -r lock_pid < "/tmp/.X$display_number-lock" &&
+       [[ "$lock_pid" == "$xvfb_pid" ]] && xdpyinfo >/dev/null 2>&1; then
+      ready=1
+      break
+    fi
+    sleep .1
+  done
+  ((ready)) && break
+  owned_release "$xvfb_name" || true
+done
+if ((!ready)); then
+  xvfb_name=
+  setup_error="private authenticated Xvfb did not start"
+  exit 1
+fi
+
+export GUI_OUT="$out" GUI_BUILD="$build" GUI_WORK="$work" GUI_MODE="$mode" \
+  GUI_IDLE="$idle_seconds" GUI_SESSION_SECONDS="$session_seconds" GUI_XVFB_PID="$xvfb_pid"
+session_exit=0
+owned_start session "$out/session.log" --group -- dbus-run-session -- bash "$here/linux-editor-gui-tests.sh" --inside
+owned_wait session || session_exit=$?
+exit 0

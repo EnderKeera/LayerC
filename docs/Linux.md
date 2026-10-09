@@ -147,6 +147,63 @@ smoke, GUI CI and editor packaging are not complete in this slice. Xvfb
 walkthrough evidence is automated evidence, not physical GNOME/KDE coverage.
 Gamescope and native Wayland remain unsupported in V2.6.
 
+### GUI walkthrough runner and agent bridge
+
+`tools/linux-editor-gui-tests.sh` runs the editor in a disposable session: a
+private authenticated Xvfb display (1600x1000), Openbox, a private D-Bus
+session, private HOME/XDG roots, the X11 smoke fixture as the game, `layerd`
+and `layere`. It never addresses the user's display, bus, daemon, control
+socket or profiles. Every helper is owned, stopped and joined; a missing
+dependency or build output fails the run rather than skipping it.
+
+```sh
+tools/linux-editor-gui-tests.sh --build build-linux --out out/linux-gui/manual
+```
+
+The default `walkthrough` mode drives `tools/linux-gui/walkthrough.py`:
+bridge guard rejections; startup; invalid input left unwritten; edit, durable
+save, acknowledged reload and a moved live overlay; frame-corner resize and
+minimum-size clamp; offline save; and a visible store failure that leaves the
+original profile intact. A failed case blocks the later cases; it never passes
+them. Menus, CRUD, import/export, keyboard/accessibility, maximize/scroll/font
+scaling and daemon reconnect are recorded as deferred to the full editor.
+
+`--mode session` keeps the computer-use bridge (`tools/linux-gui/bridge.py`)
+open for one agent instead. It listens on a private Unix socket, requires the
+session token from the same user, and acts only on the runner-owned display:
+it pins that Xvfb through a pidfd, marks its root window with a session nonce,
+and re-confirms both before every X command. Losing the display ends the
+session and fails the run. Each click, drag, key or text action must cite the
+most recent screenshot, and that screenshot must postdate the previous action;
+anything else is rejected and logged. Direct window geometry and the test-only fixture faults (store
+block/restore, daemon stop) are logged as distinct action kinds. Operations:
+`screenshot`, `inspect` (region digest/colour centroid), `state` (profile
+bytes plus daemon status), `tree` (AT-SPI; LayerE currently reports none),
+`click`, `drag`, `set_text`, `key`, `type`, `activate`, `set_geometry`,
+`block_profile`, `restore_profile`, `daemon_stop` and `stop`.
+
+From Windows (PowerShell 7.3+), `tools/test-linux-gui.ps1` records the
+source revision (HEAD, dirty state and a digest of uncommitted changes),
+mirrors the checkout into a dedicated Linux directory, builds the editor
+targets in Release, re-checks that the working tree did not change during the
+copy, and runs the helper. The mirror directory must be new, empty or already
+marked as a runner mirror; home, the checkout and overlapping build paths are
+refused. One run or session uses a mirror/build pair at a time:
+
+```powershell
+tools/test-linux-gui.ps1 -EnvScript '~/dev-env.sh'          # scripted walkthrough
+tools/test-linux-gui.ps1 -Mode Session -EnvScript '~/dev-env.sh'  # agent session
+tools/test-linux-gui.ps1 -Mode Call -Request '{"op":"screenshot","name":"start"}'
+tools/test-linux-gui.ps1 -Mode Stop
+```
+
+Each run writes `out/linux-gui/<run>/`: `revision.json`, executable checksums,
+tool versions, `actions.jsonl`, `shots/`, `cases.json` (walkthrough), the
+profile before/after, editor idle/startup memory and CPU, a separate harness
+process snapshot, owned-process exit records, `cleanup.json`, `result.json` and
+`SHA256SUMS`. The result passes only if every required case passed, LayerE met
+its idle/startup USS and idle CPU targets, and cleanup left nothing behind.
+
 ## V2.6.2 calibration and evidence
 
 `layercal` is intentionally a CLI, not a second editor. Select an X11 window
