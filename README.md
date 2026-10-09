@@ -24,6 +24,7 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
+| Linux editor (v2.6c in development) | Experimental FLTK X11 edit/save/reload slice | Source target only; full parity, accessibility, install and package gates remain open |
 | Gamescope and Wayland | Not supported | Deferred beyond V2.6 |
 
 Package metadata reports **2.6.0**, the `v2.6.0` release. That release ships
@@ -84,7 +85,8 @@ $env:LAYERC_SETTINGS_KEY = 'Software\LayerC.Dev'
 
 Requirements: a C++20 compiler, CMake 3.28+, and Ninja or Make. X11 development
 libraries enable input, overlays, capture, and `layercal`; without them LayerC
-builds a headless store/control daemon.
+builds a headless store/control daemon. FLTK 1.4+ and `fltk-config` additionally
+enable the experimental Linux `layere` slice; see [`docs/Linux.md`](docs/Linux.md#experimental-x11-editor-slice).
 
 ```sh
 cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -104,7 +106,7 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 | --- | ---: | ---: | --- |
 | `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
 | `layerd` | yes | yes | Cooldown/automation daemon; background desktop app on Windows, foreground service on Linux |
-| `layere` | yes | no | Native profile editor, live edit, automation editor, and simulator |
+| `layere` | yes | experimental X11 | Full native editor on Windows; Linux currently provides an edit/save/reload slice |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |
@@ -297,6 +299,9 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_profile_pack_tests` | Byte-deterministic bundle export and import roundtrip |
 | `layerc_linux_event_loop_tests` | Monotonic timerfd deadlines, signal shutdown, and zero idle wakeups |
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
+| `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
+| `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
+| `layerc_linux_editor_model_tests` | Slice edits, durable save/roundtrip, retained additional data, selection identity, invalid input, and visible store/module faults |
 | `layerc_linux_x11_tests` | X11 probes, EWMH tracking, and game matching |
 | `layerc_linux_x11_registry_tests` | Display-free session admission, automation health, checkpoint retry, and bounded status diagnostics |
 | `layerc_linux_x11_input_tests` | XI2 normalization, hotplug, mouse/wheel mapping, and session replay |
