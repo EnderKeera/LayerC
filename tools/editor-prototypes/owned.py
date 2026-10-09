@@ -107,6 +107,15 @@ def wait_exit(pidfd, seconds):
     return bool(select.select([pidfd], [], [], seconds)[0])
 
 
+def reap(child, seconds=10):
+    """Bounded reap: None if the child cannot be reaped in time (for example
+    uninterruptible sleep even after SIGKILL); the caller records it."""
+    try:
+        return child.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        return None
+
+
 def stop_child(child, pidfd, group):
     """Bounded stop of the unreaped child (and its group). Returns its status
     and any adopted descendants that survived the bounded cleanup."""
@@ -127,7 +136,11 @@ def stop_child(child, pidfd, group):
             if wait_exit(pidfd, seconds):
                 break
     survivors = stop_adopted(child.pid, 10) if group else []
-    return child.wait(), survivors
+    code = reap(child)
+    if code is None:
+        survivors = [child.pid, *survivors]
+        code = -signal.SIGKILL
+    return code, survivors
 
 
 def write_status(prefix, state, code):
@@ -210,9 +223,8 @@ def main():
                 # PID-based stop of our own child (and its group) is safe here.
                 with contextlib.suppress(ProcessLookupError):
                     (os.killpg if group else os.kill)(child.pid, signal.SIGKILL)
-                child.wait()
-                if group:
-                    survivors = stop_adopted(child.pid, 10)
+                unreaped = [child.pid] if reap(child) is None else []
+                survivors = unreaped + (stop_adopted(child.pid, 10) if group else [])
             else:
                 code, survivors = stop_child(child, pidfd, group)
                 if code < 0:
