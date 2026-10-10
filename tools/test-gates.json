@@ -42,6 +42,7 @@
         "layerc_linux_control_ownership_tests",
         "layerc_linux_editor_daemon_link_tests",
         "layerc_linux_editor_model_tests",
+        "layerc_linux_editor_session_tests",
         "layerc_linux_event_loop_tests",
         "layerc_linux_profile_pack_tests",
         "layerc_linux_profile_store_tests",
@@ -63,6 +64,13 @@
         "layerc_linux_x11_overlay_tests",
         "layerc_linux_x11_tests",
         "layerc_linux_x11_visual_tests"
+      ]
+    },
+    "linux-editor": {
+      "description": "Linux LayerE toolkit suites under an X display (CTest label editor); selected by tools/run-linux-tests.sh --editor.",
+      "label": "editor",
+      "required": [
+        "layerc_linux_editor_widget_tests"
       ]
     }
   }

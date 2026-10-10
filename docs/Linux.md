@@ -7,18 +7,20 @@ gate details.
 
 ## Support status
 
-Linux V2.6 is part of the `v2.6.0` release as **source/CLI only**. No Linux
-package or Flatpak bundle is published; build it from source as described
-below. The physical GNOME Xorg/KDE X11 evidence below is **pending**: it has not
-been archived. CI verifies headless, Xvfb, installed-native, and Flatpak
-runtime behavior, but it is not a substitute for the hardware checklist.
+The daemon and CLIs shipped in the `v2.6.0` release as **source/CLI only**.
+v2.6c (package version 2.6.2) adds the X11 `layere` editor, a native Debian
+package and an editor Flatpak; it is built and gated locally but not yet
+published, so build from source as described below. The physical GNOME
+Xorg/KDE X11 evidence below is **pending**: it has not been archived. CI
+verifies headless, Xvfb, installed-native, package and Flatpak runtime
+behavior, but it is not a substitute for the hardware checklist.
 
 | Surface | State | Boundary |
 | --- | --- | --- |
 | V2.6.0 portable runtime | implemented | Foreground `layerd`, `layerctl`, XDG storage, Unix-socket control, bundles, install metadata |
 | V2.6.1 X11 interaction | implemented | EWMH tracking, passive XI2 input, Shape overlays, RandR scaling |
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
-| v2.6c editor slice | experimental | FLTK X11 profile/first-cooldown/first-panel editing, durable Save and daemon status/reload; not installed or packaged yet |
+| v2.6c X11 editor | first-release feature set; advanced parity in progress | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility; installed, `.deb` and Flatpak gates; not yet published |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
 | Gamescope and Wayland | unsupported in V2.6 | No compatibility promise or silent fallback |
 
@@ -110,15 +112,16 @@ block implementation or container CI:
 - Headless/non-X11 and missing-extension snapshots showing the affected
   adapter as unavailable rather than silently omitted.
 
-## Experimental X11 editor
+## X11 editor (v2.6c)
 
-The v2.6c editor is in development, not a published release or a full Windows
-editor replacement. When X11 development libraries, FLTK 1.4+ with
+The v2.6c editor is not yet published and not yet a full Windows editor
+replacement (advanced modules follow). When X11 development libraries, FLTK 1.4+ with
 `fltk-config`, and ATK, its AT-SPI adaptor and libatspi 2.62 or later are
-available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the source-build
-`layere` target. Older ATK/AT-SPI adaptors crash during cleanup, so 2.62 is the
-floor; current Debian 13 (2.56) and Ubuntu 24.04 (2.52) packages do not
-qualify. Missing dependencies leave the existing daemon/CLI and headless build
+available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the `layere`
+target. Older ATK/AT-SPI adaptors crash during cleanup, so 2.62 is the
+floor: Debian 13 takes 2.62 from `trixie-backports` (its main archive has
+2.56), while Ubuntu 24.04 (2.52) does not qualify. `tools/linux-editor-deps.txt`
+lists the editor's Debian packages and their suite. Missing dependencies leave the existing daemon/CLI and headless build
 graph usable and do not count as passing an editor gate. Configure with
 `-DLAYERC_REQUIRE_EDITOR=ON` to make them a configuration error instead.
 FLTK and ATK are linked into `layere` only, not into `layerd` or the shared
@@ -155,7 +158,10 @@ the daemon.
 Closing or selecting another profile prompts to save, discard or cancel dirty
 edits. Daemon capabilities/faults are visible, with an explicit refresh button.
 
-Advanced editor parity, installed smoke, GUI CI and editor packaging are not
+The installed `layere` is smoke-tested by `tools/linux-editor-smoke.sh`: it
+starts beside the installed daemon on a disposable display with private XDG
+roots, must map its window, stay within the 20 MiB idle USS and 0.2% idle
+CPU targets, and quit through Ctrl+Q. Advanced editor parity is not
 complete. Xvfb walkthrough evidence is automated evidence, not physical
 GNOME/KDE coverage or a screen-reader user study.
 Gamescope and native Wayland remain unsupported in V2.6.
@@ -306,7 +312,7 @@ ctest --test-dir build-linux --output-on-failure   # portable + Linux suites
 
 Linux builds `layerd`, `layerctl`, and `layercal` when the required X11
 libraries are present. FLTK 1.4+ and ATK/AT-SPI 2.62+ development files
-additionally enable the experimental X11 `layere` editor described below.
+additionally enable the X11 `layere` editor described above.
 Missing editor dependencies do not disable
 the existing headless/source targets. The isolated capture worker and Game Bar
 host remain Windows-only.
@@ -320,7 +326,7 @@ preflight. It keeps generated state in explicit build/evidence directories:
 bash tools/run-linux-tests.sh \
     --build-dir build/linux-automation \
     --evidence-dir out/linux-automation/local \
-    --flatpak auto
+    --flatpak auto --editor auto --package off
 ```
 
 The native stages use private XDG roots. The complete CI gate runs on
@@ -340,18 +346,41 @@ disposable workers and performs the following:
 - records CTest JUnit, registration and validation summaries, daemon logs,
   status snapshots, PPM/JSON captures, process resources, environment/tool
   versions, the exact Git commit and dirty state, plus SHA-256 checksums;
+- with `--editor auto|required` (default `auto`), runs the CTest `editor` gate
+  (`linux-editor` in `tools/test-gates.json`) under Xvfb and the installed
+  editor smoke. `required` configures with `LAYERC_REQUIRE_EDITOR=ON`, so a
+  missing FLTK/ATK dependency fails instead of shrinking coverage; `off`
+  records `not-run`;
+- with `--package auto|required` (default `off`), builds a separate
+  `/usr`-prefixed Release tree, creates the Debian package with CPack and
+  checks it with `tools/linux_package_check.py` (metadata, contents, desktop
+  entry, AppStream). Only as root inside a container its launcher declared
+  disposable (`LAYERC_DISPOSABLE_ROOT=1`, passed by `tools/ci-linux.sh`) does
+  it install the `.deb` with apt, run the headless, X11 and editor smokes
+  against `/usr/bin`, remove the package and confirm that it and its files are
+  gone; elsewhere installation is recorded as unavailable. A required package needs
+  a required editor; with `--editor off`, `--package auto` records the package
+  as unavailable;
 - builds, installs, and runtime-smokes the Flatpak when `flatpak-builder` and
   the 25.08 Platform/SDK are installed. The runner redirects its user install
   and HOME/XDG paths; this is best-effort on a shared host, so use a disposable
-  user or CI worker for Flatpak evidence. Flatpak staging stays under
-  `build/flatpak-automation.*`, which the manifest excludes from its source copy.
-  `auto` records unavailable coverage explicitly; `required` (also selected by
-  `LAYERC_RELEASE_EVIDENCE=1`) fails instead. Release mode also requires a clean
-  source tree before and after the gate.
+  user or CI worker for Flatpak evidence. Only a system-wide 25.08 runtime
+  counts, because the build uses a private user installation. Flatpak staging
+  lives beside the build directory (`<build-dir>-flatpak.*`; inside the
+  checkout only under `build/`, which the manifest does not copy) and is
+  removed after a successful stage. Unless `--editor off`, the Flatpak stage
+  also runs the editor smoke; it always exports the bundle to
+  `<evidence-dir>/packages/LayerC.flatpak`. `auto` records unavailable coverage explicitly;
+  `required` fails instead. `LAYERC_RELEASE_EVIDENCE=1` requires the Flatpak,
+  editor and package stages and a clean source tree before and after the gate.
 
-`tools/ci-linux.sh <image> [evidence-directory]` runs the same gate in a
-read-only source mount. Its build is container-local while the evidence mount
-survives container teardown. An `off` Flatpak policy is recorded as `not-run`,
+`tools/ci-linux.sh <image> [evidence-directory] [options...]` runs the same
+gate in a read-only source mount, passing the options to the gate. The
+container is the disposable root: `tools/linux-gate-in-root.sh` installs
+`tools/linux-deps.txt` and, unless `--editor off`, the editor packages, then
+runs the gate with package installation allowed; it refuses to run outside a
+container. Its build is container-local while the evidence mount survives
+container teardown. An `off` Flatpak policy is recorded as `not-run`,
 never as a pass; the dedicated Ubuntu Flatpak CI job supplies required coverage.
 That job passes `--flatpak-only` (valid only with `--flatpak required` and
 without release evidence): it builds just the smoke fixture natively, records
@@ -424,8 +453,34 @@ sessions are destroyed; temporary capability quiescence only checkpoints.
 ## Install layout (GNUInstallDirs)
 
 ```sh
-cmake --install build-linux --prefix /usr/local  # BINDIR: layerd, layerctl, layercal
+cmake --install build-linux --prefix /usr/local  # BINDIR: layerd, layerctl, layercal, layere
 ```
+
+With the editor, the install also places the `io.github.EnderKeera.LayerC`
+desktop entry, hicolor icons (48–256 px) and a desktop-application metainfo;
+without it, only the console-application metainfo is installed.
+
+### Debian package
+
+```sh
+cmake -S . -B build-deb -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr -DLAYERC_REQUIRE_EDITOR=ON
+cmake --build build-deb --parallel
+cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.6.2-1_amd64.deb
+```
+
+CPack derives the library dependencies with `dpkg-shlibdeps` (needs
+`dpkg-dev` and `file`) and adds the ATK, ATK bridge and AT-SPI ≥ 2.62 floor.
+Debian 13's main archive has 2.56, so enable `trixie-backports` and install
+from it explicitly:
+
+```sh
+sudo apt install -t trixie-backports ./layerc_2.6.2-1_amd64.deb
+```
+
+One `layerc` package carries the daemon, CLIs and editor. It also installs
+the systemd user unit described below with `ExecStart=/usr/bin/layerd`, but
+never enables or starts it.
 
 ### Optional systemd user unit (default OFF)
 
@@ -443,10 +498,11 @@ and `UMask=0077`. Direct launch remains the baseline and behaves equivalently.
 ## Flatpak
 
 Manifest: `packaging/flatpak/io.github.EnderKeera.LayerC.json`
-(runtime `org.freedesktop.Platform` 25.08). GNUInstallDirs also installs
-`io.github.EnderKeera.LayerC.metainfo.xml` as a console application. V2.6 has no
-graphical launcher, so it intentionally installs no desktop entry or icon.
-Every Linux install, including the Flatpak, carries the notices for the
+(runtime `org.freedesktop.Platform` 25.08). The runtime has no FLTK and only
+AT-SPI 2.54, so the manifest builds FLTK 1.4.3 (static) and at-spi2-core
+2.62.0 from checksum-pinned upstream archives before LayerC; the editor is
+required there. Its default command is `layere`, and it installs the desktop
+entry, icons and desktop-application metainfo. Every Linux install, including the Flatpak, carries the notices for the
 statically linked miniz under `share/licenses/LayerC/`
 (`THIRD_PARTY_NOTICES.md`, `miniz/LICENSE`, `miniz/UPSTREAM.md`); the automated
 gate fails if the native or Flatpak install tree lacks them.
@@ -455,22 +511,29 @@ The metainfo uses `LicenseRef-proprietary` because the repository has no
 project-level license; replace it only with an owner-approved SPDX license.
 Authenticated repository access confirms control of the `EnderKeera/LayerC`
 namespace, but the code-hosting URL must also be publicly reachable before a
-Flathub submission. Flathub currently excludes general console software unless
-an exception is granted, so this manifest is for local or self-hosted Flatpak
+Flathub submission. The manifest has not been submitted and builds its
+bundled FLTK and AT-SPI from source, so it is for local or self-hosted Flatpak
 repositories until a publishing channel accepts it.
 
-V2.6.1 grants only `--socket=x11`, which is required for the one Xlib
-connection used by XI2, Shape, RandR, and EWMH. It does **not** grant network,
-device, host-filesystem, Wayland, bus, IPC-share, or background access. X11
-access is intentionally a separately reviewed permission because an X server
-does not isolate clients; remove it to roll the Flatpak back to the V2.6.0
-store/control-only mode.
+The manifest grants `--socket=x11`, which is required for the one Xlib
+connection used by XI2, Shape, RandR, EWMH and the editor window, and v2.6c
+adds `--filesystem=xdg-documents` and `--filesystem=xdg-download` so the
+editor's import/export chooser can reach the usual exchange folders. It does
+**not** grant network, device, home or host filesystem, Wayland, session-bus,
+IPC-share, or background access; the screen-reader bridge uses the
+accessibility bus Flatpak provides to every app. X11 access is intentionally a
+separately reviewed permission because an X server does not isolate clients;
+removing it returns the Flatpak to the V2.6.0 store/control-only mode, which
+also disables the editor (the default command), so run the daemon and CLIs
+with `--command=`. Remove the two folders to keep imports and exports to shell
+redirection.
 
 ```sh
 flatpak-builder --user --install --force-clean build-flatpak \
     packaging/flatpak/io.github.EnderKeera.LayerC.json
 
-flatpak run io.github.EnderKeera.LayerC                              # daemon (fg)
+flatpak run io.github.EnderKeera.LayerC                              # editor
+flatpak run --command=layerd io.github.EnderKeera.LayerC             # daemon (fg)
 flatpak run --command=layerctl io.github.EnderKeera.LayerC status --json
 flatpak run --command=layerctl io.github.EnderKeera.LayerC bundle export a b > out.layercprofile
 flatpak run --command=layercal io.github.EnderKeera.LayerC snapshot 0x4600007 --quality low > low.ppm
@@ -485,7 +548,8 @@ a profile that specifies `executableName` or `executablePath` then does not
 match (fields are conjunctive and never fall back), so Flatpak-only profiles
 should identify the game by `windowClass`/`windowTitle`.
 
-CI builds the manifest and runs daemon/control/X11 smoke under Xvfb. A physical
+CI builds the manifest and runs daemon/control/X11 and editor smokes under
+Xvfb. A physical
 desktop is still required for real compositor, pointer, monitor, and GPU
 observations; automated Flatpak success does not satisfy that checklist.
 
@@ -494,8 +558,12 @@ observations; automated Flatpak success does not satisfy that checklist.
 The `linux` (`debian:stable`, `ubuntu:24.04`) and `linux-flatpak` jobs in
 `ci.yml` run the gate above and are the automated Linux compatibility gate;
 job details are in
-[`../CONTRIBUTING.md`](../CONTRIBUTING.md#ci-and-release-gates). No Linux
-package is published: `windows-msvc` produces the only release ZIP. Physical
+[`../CONTRIBUTING.md`](../CONTRIBUTING.md#ci-and-release-gates). The
+`debian:stable` job runs `--editor required --package required`; `ubuntu:24.04`
+(AT-SPI below 2.62) runs `--editor off --package off`, keeping the source and
+headless build without the editor. No Linux package is published yet:
+`windows-msvc` produces the only release ZIP, and the `.deb` and
+`LayerC.flatpak` exist only as gate evidence. Physical
 input/click-through, real-monitor/driver behavior, and GNOME Xorg/KDE X11
 native plus Flatpak evidence remain manual and pending until archived.
 Future Gamescope or Wayland lanes could reuse the evidence schema, but no such

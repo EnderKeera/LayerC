@@ -54,8 +54,8 @@ and manual dispatch; a newer push to a pull request cancels its older run.
 | `workflow-lint` | `actionlint` over every workflow |
 | `windows-msvc` | [`build-package`](.github/actions/build-package/action.yml): `ci` preset (Ninja, sccache, unity), CTest with registration/JUnit policy, `benchmark_v22`, `benchmark_v23`, install, ZIP, artifacts |
 | `windows-analyze` | Non-unity Release build with MSVC `/analyze` for every LayerC target (compile-time only) |
-| `linux` | [`tools/ci-linux.sh`](tools/ci-linux.sh) in digest-pinned `debian:stable` and `ubuntu:24.04`: headless and required Xvfb suites, installed-binary smoke with private XDG roots, commit-bound evidence |
-| `linux-flatpak` | 25.08 manifest with required daemon/control/X11 smoke under Xvfb (`--flatpak-only`) |
+| `linux` | [`tools/ci-linux.sh`](tools/ci-linux.sh) in digest-pinned `debian:stable` and `ubuntu:24.04`: headless and required Xvfb suites, installed-binary smoke with private XDG roots, commit-bound evidence. `debian:stable` also requires the `editor` gate, installed-editor smoke and the `.deb` build/install/remove (`--editor required --package required`); `ubuntu:24.04` runs without the editor |
+| `linux-flatpak` | 25.08 manifest (bundled FLTK and AT-SPI 2.62) with required daemon/control/X11 and editor smoke under Xvfb (`--flatpak-only`) |
 | `publish-rolling` | `main` pushes only; needs all five jobs above and publishes the `rolling` prerelease |
 
 Every CTest gate (`windows-msvc`, `windows-selfhosted.yml`, and the Linux
@@ -75,8 +75,8 @@ same setup and `build-package` actions, so benchmark gating cannot drift.
 Releases and `rolling` ship only the Windows x64 ZIP. A tag publishes a
 non-prerelease release whose notes state that `layerc.exe` is omitted until a
 release-signing key exists and that launcher self-updates are OFF by default.
-The notes also state that Linux is source/CLI only, with physical X11 evidence
-pending. Bump `project(LayerC VERSION ...)` and the README/`docs/Linux.md`
+The notes also state that no Linux package is published (the `.deb` and
+Flatpak are CI evidence only), with physical X11 evidence pending. Bump `project(LayerC VERSION ...)` and the README/`docs/Linux.md`
 status text in one change before tagging, and tag only a commit whose `ci.yml`
 run is green.
 

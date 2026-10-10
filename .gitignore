@@ -1,4 +1,6 @@
 /build/
+/build-flatpak/
+/.flatpak-builder/
 /.vs/
 # Local-only historical plans, one-off handoffs, and scratch files
 /PLAN.md

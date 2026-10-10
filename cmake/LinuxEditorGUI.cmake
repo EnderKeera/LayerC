@@ -73,6 +73,15 @@ endif()
 # GLib/ATK headers are system headers: project warnings must not apply.
 set(LAYERC_ATK_INCLUDES)
 foreach(dir IN LISTS LAYERC_ATK_INCLUDE_DIRS)
+    # A compiler default root (the Flatpak SDK's pkg-config reports
+    # /usr/include) must not be re-added: it would break #include_next.
+    cmake_path(NORMAL_PATH dir OUTPUT_VARIABLE layerc_atk_dir)
+    string(REGEX REPLACE "(.)/$" "\\1" layerc_atk_dir "${layerc_atk_dir}")
+    if(layerc_atk_dir IN_LIST CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES OR
+       "${LAYERC_EDITOR_SYSROOT}${layerc_atk_dir}" IN_LIST
+       CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
+        continue()
+    endif()
     if(LAYERC_EDITOR_SYSROOT AND EXISTS "${LAYERC_EDITOR_SYSROOT}${dir}")
         list(APPEND LAYERC_ATK_INCLUDES -isystem "${LAYERC_EDITOR_SYSROOT}${dir}")
     elseif(EXISTS "${dir}")

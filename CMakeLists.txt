@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(LayerC VERSION 2.6.0 LANGUAGES C CXX)
+project(LayerC VERSION 2.6.2 LANGUAGES C CXX)
 
 set(LAYERC_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 file(MAKE_DIRECTORY "${LAYERC_GENERATED_INCLUDE_DIR}/layerc/core")
@@ -708,13 +708,28 @@ else()
     # GNUInstallDirs layout for the Linux foreground host and CLIs.
     # flatpak/"make install" consumers rely on these alternate commands.
     include(GNUInstallDirs)
-    foreach(layerc_linux_target IN ITEMS layerd layerctl layercal)
+    foreach(layerc_linux_target IN ITEMS layerd layerctl layercal layere)
         if(TARGET ${layerc_linux_target})
             install(TARGETS ${layerc_linux_target}
                 RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
         endif()
     endforeach()
-    if(TARGET layerd)
+    if(TARGET layere)
+        # The editor makes the install a desktop application: one launcher,
+        # its icon, and the desktop-application form of the same component.
+        install(FILES packaging/linux/io.github.EnderKeera.LayerC.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
+        foreach(layerc_icon_size IN ITEMS 48 64 128 256)
+            set(layerc_icon_dir "${layerc_icon_size}x${layerc_icon_size}")
+            install(FILES
+                packaging/linux/icons/${layerc_icon_dir}/io.github.EnderKeera.LayerC.png
+                DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${layerc_icon_dir}/apps
+                COMPONENT Runtime)
+        endforeach()
+        install(FILES packaging/linux/io.github.EnderKeera.LayerC.editor.metainfo.xml
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo
+            RENAME io.github.EnderKeera.LayerC.metainfo.xml COMPONENT Runtime)
+    elseif(TARGET layerd)
         install(FILES
             packaging/flatpak/io.github.EnderKeera.LayerC.metainfo.xml
             DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo COMPONENT Runtime)
@@ -748,6 +763,41 @@ set(CPACK_PACKAGE_FILE_NAME
     "LayerC-${PROJECT_VERSION}-windows-x64")
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
 set(CPACK_MONOLITHIC_INSTALL ON)
+include(CPack)
+else()
+# Native Debian package. Configure it with CMAKE_INSTALL_PREFIX=/usr; the
+# optional user unit embeds the configured binary path, so the package installs
+# under that same prefix. dpkg-shlibdeps derives the library dependencies, and
+# the editor adds the AT-SPI floor its accessibility bridge needs (Debian 13:
+# trixie-backports).
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "layerc")
+set(CPACK_PACKAGE_VENDOR "LayerC")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_CONTACT "EnderKeera <EnderKeera@users.noreply.github.com>")
+set(CPACK_PACKAGING_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+set(CPACK_PACKAGE_DESCRIPTION
+    "LayerC runs a passive, click-through cooldown overlay on X11 from the keyboard and mouse input it observes; it never injects input or reads game memory. layerctl and layercal manage profiles, bundles and calibration.")
+if(TARGET layere)
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "Passive X11 cooldown overlay, command-line tools and LayerE editor")
+    string(APPEND CPACK_PACKAGE_DESCRIPTION
+        " The LayerE editor creates and edits profiles, cooldowns, bindings and panels and asks the daemon to reload them.")
+else()
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "Passive X11 cooldown overlay and command-line tools")
+endif()
+set(CPACK_MONOLITHIC_INSTALL ON)
+set(CPACK_STRIP_FILES ON)
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_RELEASE 1)
+set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/EnderKeera/LayerC")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+if(TARGET layere)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS
+        "libatk1.0-0t64 (>= 2.62), libatk-bridge2.0-0t64 (>= 2.62), libatspi2.0-0t64 (>= 2.62)")
+endif()
 include(CPack)
 endif()
 

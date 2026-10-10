@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=LayerE
+GenericName=LayerC Profile Editor
+Comment=Edit LayerC cooldown overlay profiles
+Exec=layere
+Icon=io.github.EnderKeera.LayerC
+Terminal=false
+StartupNotify=false
+Categories=Utility;
+Keywords=cooldown;overlay;profile;LayerC;

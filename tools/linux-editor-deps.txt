@@ -1,0 +1,11 @@
+main libfltk1.4-dev
+main dbus
+main xdotool
+main desktop-file-utils
+main appstream
+main dpkg-dev
+main file
+backports libatk1.0-dev
+backports libatk-bridge2.0-dev
+backports libatspi2.0-dev
+backports at-spi2-core
