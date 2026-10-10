@@ -3,17 +3,69 @@
     "runtime": "org.freedesktop.Platform",
     "runtime-version": "25.08",
     "sdk": "org.freedesktop.Sdk",
-    "command": "layerd",
+    "command": "layere",
     "separate-locales": false,
-    "finish-args": [ "--socket=x11" ],
+    "finish-args": [
+        "--socket=x11",
+        "--filesystem=xdg-documents",
+        "--filesystem=xdg-download"
+    ],
     "modules": [
+        {
+            "name": "fltk",
+            "buildsystem": "cmake-ninja",
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+                "-DFLTK_BUILD_SHARED_LIBS=OFF",
+                "-DFLTK_BACKEND_WAYLAND=OFF",
+                "-DFLTK_BUILD_FLUID=OFF",
+                "-DFLTK_BUILD_FLTK_OPTIONS=OFF",
+                "-DFLTK_BUILD_TEST=OFF",
+                "-DFLTK_BUILD_EXAMPLES=OFF",
+                "-DFLTK_BUILD_HTML_DOCS=OFF",
+                "-DFLTK_BUILD_PDF_DOCS=OFF"
+            ],
+            "cleanup": [ "/bin", "/include", "/lib", "/share" ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/fltk/fltk/releases/download/release-1.4.3/fltk-1.4.3-source.tar.bz2",
+                    "sha256": "76ecc922b6d708f75ab29abe2810494575b66b00735e692cff6d96686ed0fc4a"
+                }
+            ]
+        },
+        {
+            "name": "at-spi2-core",
+            "buildsystem": "meson",
+            "config-opts": [
+                "-Ddocs=false",
+                "-Dintrospection=disabled",
+                "-Dgtk2_atk_adaptor=false",
+                "-Duse_systemd=false",
+                "-Ddefault_bus=dbus-daemon"
+            ],
+            "cleanup": [
+                "/etc", "/include", "/lib/pkgconfig", "/lib/systemd",
+                "/lib/gnome-settings-daemon-3.0", "/lib/python*", "/lib/*.so",
+                "/libexec", "/share/dbus-1", "/share/defaults"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://download.gnome.org/sources/at-spi2-core/2.62/at-spi2-core-2.62.0.tar.xz",
+                    "sha256": "03a94f7bf35f300daf2843a37cdf36479a91bc53f59a8ea437c79e25d95d1de3"
+                }
+            ]
+        },
         {
             "name": "layerc",
             "buildsystem": "cmake-ninja",
             "config-opts": [
                 "-DCMAKE_BUILD_TYPE=release",
                 "-DLAYERC_BUILD_TESTS=OFF",
-                "-DLAYERC_BUILD_EDITOR=OFF",
+                "-DLAYERC_BUILD_EDITOR=ON",
+                "-DLAYERC_REQUIRE_EDITOR=ON",
                 "-DLAYERC_BUILD_GAMEBAR_HOST=OFF",
                 "-DLAYERC_INSTALL_SYSTEMD_USER_UNIT=OFF"
             ],
@@ -24,6 +76,9 @@
                     "path": "../..",
                     "skip": [
                         ".git", ".codegraph", "build", "build-linux",
+                        "build-flatpak", ".flatpak-builder", ".pi", ".vs",
+                        ".claude", ".omp", "scratch", "Testing",
+                        "_CPack_Packages",
                         "out", "review", ".review_tmp", ".codewhale", ".mimosa"
                     ]
                 }

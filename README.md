@@ -7,9 +7,9 @@ C++20 core and native platform backends. It provides passive input tracking,
 click-through cooldown panels, opt-in visual recognition, bounded automation,
 typed JSON profiles, and deterministic `.layercprofile` bundles.
 
-Windows is the complete desktop experience. Linux V2.6 is a CLI-first X11
-implementation with a headless fallback; its physical desktop evidence is still
-pending. LayerC has no telemetry and never injects input, reads game memory, or
+Windows is the complete desktop experience. Linux V2.6 is an X11
+implementation with a headless fallback; the unpublished v2.6c adds the first
+Linux `layere` editor. Linux physical desktop evidence is still pending. LayerC has no telemetry and never injects input, reads game memory, or
 requires elevation.
 
 ## Support and release status
@@ -24,14 +24,17 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c in development) | Experimental FLTK X11 edit/save/reload slice | Source target only; full parity, accessibility, install and package gates remain open |
+| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set and AT-SPI accessibility; advanced modules in progress | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
 | Gamescope and Wayland | Not supported | Deferred beyond V2.6 |
 
-Package metadata reports **2.6.0**, the `v2.6.0` release. That release ships
-only the Windows x64 ZIP. The ZIP starts LayerC via `layerd.exe`. It omits
+Package metadata reports **2.6.2** for the unpublished v2.6c, which the
+`v*.*.*` tag convention would publish as `v2.6.2`; the V2.6.1–V2.6.2 rows
+above are implementation milestones that shipped in `v2.6.0`. The latest
+published release, `v2.6.0`, ships only the Windows x64 ZIP. The ZIP starts LayerC via `layerd.exe`. It omits
 `layerc.exe` until a release-signing key is provisioned, and launcher
-self-updates are OFF by default. Linux V2.6 is source/CLI only: there is no
-Linux package, and its physical X11 evidence is pending. The Game Bar
+self-updates are OFF by default. Linux in `v2.6.0` is source/CLI only; the v2.6c
+`.deb` and Flatpak are gate artifacts until published, and the physical X11
+evidence is pending. The Game Bar
 companion's manual matrix, certification, and production signing remain open.
 
 ## Non-negotiable guarantees
@@ -85,8 +88,9 @@ $env:LAYERC_SETTINGS_KEY = 'Software\LayerC.Dev'
 
 Requirements: a C++20 compiler, CMake 3.28+, and Ninja or Make. X11 development
 libraries enable input, overlays, capture, and `layercal`; without them LayerC
-builds a headless store/control daemon. FLTK 1.4+ and `fltk-config` additionally
-enable the experimental Linux `layere` slice; see [`docs/Linux.md`](docs/Linux.md#experimental-x11-editor-slice).
+builds a headless store/control daemon. FLTK 1.4+ with `fltk-config` and
+ATK/AT-SPI 2.62+ additionally enable the Linux `layere` editor; see
+[`docs/Linux.md`](docs/Linux.md#x11-editor-v26c).
 
 ```sh
 cmake -S . -B build-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -106,7 +110,7 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 | --- | ---: | ---: | --- |
 | `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
 | `layerd` | yes | yes | Cooldown/automation daemon; background desktop app on Windows, foreground service on Linux |
-| `layere` | yes | experimental X11 | Full native editor on Windows; Linux currently provides an edit/save/reload slice |
+| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the first-release profile, cooldown, binding and panel editor |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |
@@ -194,8 +198,10 @@ cmake --install build-linux --prefix /usr/local
 ```
 
 This installs `layerd`, `layerctl`, and, when X11 support was configured,
-`layercal`. The optional systemd user unit is default-off; Linux package details
-live in [`docs/Linux.md`](docs/Linux.md).
+`layercal`; with the editor, also `layere`, its desktop entry, icons and
+metainfo. The optional systemd user unit is default-off here; the Debian
+package installs it without enabling it. The Debian package
+(CPack) and Flatpak details live in [`docs/Linux.md`](docs/Linux.md).
 
 ## Capabilities
 
@@ -247,7 +253,8 @@ live in [`docs/Linux.md`](docs/Linux.md).
 - Composite/Damage capture with a bounded direct-window fallback.
 - `layerctl` profile/bundle transfer compatible with Windows JSON and
   `.layercprofile` payloads.
-- No Linux GUI editor, tray, Wayland backend, or Gamescope support in V2.6.
+- `layere` editor (v2.6c) on X11; no tray, Wayland backend, or Gamescope
+  support in V2.6.
 
 ### Xbox Game Bar companion
 
@@ -301,7 +308,9 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
-| `layerc_linux_editor_model_tests` | Slice edits, durable save/roundtrip, retained additional data, selection identity, invalid input, and visible store/module faults |
+| `layerc_linux_editor_model_tests` | Profile, cooldown and panel edits, durable save/roundtrip, retained additional data, selection identity, invalid input, and visible store/module faults |
+| `layerc_linux_editor_session_tests` | Toolkit-free editor session: drafts and history, mutation candidates with preserved data, save/delete failures, enablement, reviewed import/export and import races, and field parsing |
+| `layerc_linux_editor_widget_tests` | FLTK editor under an X display (CTest label `editor`): drafts and history, cooldown/binding/panel forms, dirty prompts, binding capture, menus, shortcuts, and small-window layout |
 | `layerc_linux_x11_tests` | X11 probes, EWMH tracking, and game matching |
 | `layerc_linux_x11_registry_tests` | Display-free session admission, automation health, checkpoint retry, and bounded status diagnostics |
 | `layerc_linux_x11_input_tests` | XI2 normalization, hotplug, mouse/wheel mapping, and session replay |
@@ -315,7 +324,8 @@ CI runs on pushes to `main`, pull requests, and manual dispatch: workflow
 lint, Windows MSVC build/test/benchmarks/package, MSVC `/analyze`, Linux
 containers, and Flatpak smoke. Green `main` publishes the `rolling`
 prerelease; `v*.*.*` tags publish a release. Both ship only the Windows x64
-ZIP; Linux V2.6 is source/CLI only, with no packaged artifact. Jobs, runners,
+ZIP; the Linux `.deb` and Flatpak bundle are CI evidence artifacts, not
+published downloads. Jobs, runners,
 artifacts, and hardware benchmarks are described in
 [`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates).
 

@@ -108,7 +108,7 @@ if [[ $mode == native ]]; then
 else
   command -v flatpak >/dev/null
   flatpak info "$app_id" >"$out/flatpak-info.txt"
-  daemon=(flatpak run "$app_id")
+  daemon=(flatpak run --command=layerd "$app_id")
   ctl=(flatpak run --command=layerctl "$app_id")
   cal=(flatpak run --command=layercal "$app_id")
 fi

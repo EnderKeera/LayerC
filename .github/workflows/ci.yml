@@ -117,17 +117,24 @@ jobs:
 
   linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The editor, its dependencies and the package build/install add minutes.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Debian 13 provides FLTK 1.4 and, from trixie-backports, AT-SPI
+          # 2.62: the editor and the native package are required there.
           - name: debian:stable
             artifact: debian-stable
             image: debian@sha256:7fa362f5e7c036d7f45621a6c721c03493cdcb5889adfcd65587759e34fe4c6f
+            gates: --editor required --package required
           - name: ubuntu:24.04
             artifact: ubuntu-24.04
             image: ubuntu@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
+            # Ubuntu 24.04 ships AT-SPI 2.52, below the editor's floor; it
+            # keeps the headless/X11 source build and records no editor.
+            gates: --editor off --package off
     name: Linux (${{ matrix.name }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -139,7 +146,7 @@ jobs:
         shell: bash
         run: >-
           bash tools/ci-linux.sh "${{ matrix.image }}"
-          "out/linux-ci/${{ matrix.artifact }}"
+          "out/linux-ci/${{ matrix.artifact }}" ${{ matrix.gates }}
 
       - name: Upload Linux evidence (${{ matrix.name }})
         if: always()
@@ -164,14 +171,16 @@ jobs:
           sudo apt-get update
           mapfile -t packages < tools/linux-deps.txt
           sudo apt-get install -y --no-install-recommends \
-            "${packages[@]}" flatpak flatpak-builder elfutils
+            "${packages[@]}" flatpak flatpak-builder elfutils bzip2 xz-utils \
+            dbus xdotool
           sudo flatpak remote-add --system --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install --system -y flathub \
             org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
 
       # The linux matrix already builds and tests natively; this job builds
-      # only the smoke fixture natively before the Flatpak stages.
+      # only the smoke fixture natively before the Flatpak stages, which
+      # build the bundled editor and run its installed smoke.
       - name: Run required Flatpak smoke
         shell: bash
         run: >-

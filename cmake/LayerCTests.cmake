@@ -227,11 +227,13 @@ if(NOT WIN32)
     layerc_add_test(layerc_linux_editor_session_tests
         SOURCES tests/linux_editor_session_tests.cpp
         LINK layerc_editor_linux TIMEOUT 30)
+    # The toolkit suite is its own gate (label editor), so builds without the
+    # editor keep an unchanged x11 gate and editor gates require it by name.
     if(TARGET layerc_editor_fltk)
         layerc_add_test(layerc_linux_editor_widget_tests
             SOURCES tests/linux_editor_widget_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
-            LABELS required x11 editor)
+            LABELS required editor RESOURCE_LOCK layerc_x11_display)
         layerc_editor_build_runtime(layerc_linux_editor_widget_tests)
     endif()
 endif()

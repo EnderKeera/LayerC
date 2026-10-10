@@ -2,13 +2,14 @@
 #include "layerc/core/version.hpp"
 
 #include <FL/Fl.H>
+#include <FL/Fl_Window.H>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
 
 int main(const int argc, char **argv) {
   if (argc == 2 && std::string_view(argv[1]) == "--help") {
-    std::puts("layere — experimental Linux X11 profile editor\n"
+    std::puts("layere — Linux X11 profile editor\n"
               "Uses the normal XDG profile store. --help, --version.");
     return 0;
   }
@@ -31,6 +32,9 @@ int main(const int argc, char **argv) {
     std::fputs("LayerE could not select its required X11 backend.\n", stderr);
     return 2;
   }
+  // The window class names the installed desktop entry, so desktops pair the
+  // window with its launcher and icon.
+  Fl_Window::default_xclass("io.github.EnderKeera.LayerC");
   layerc::editor::EditorApp app;
   app.build();
   app.window.show();

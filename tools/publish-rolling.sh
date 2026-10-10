@@ -107,7 +107,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cp "${packages[0]}" "$work/$staged"
 digest=$(sha256_of "$work/$staged")
-notes="Rolling Windows x64 build of main@$sha; every ci.yml gate is green. Linux V2.6 is source/CLI only, with no packaged artifact.
+notes="Rolling Windows x64 build of main@$sha; every ci.yml gate is green. No Linux package is published; the .deb and Flatpak are CI evidence only.
 
 $canonical SHA-256: $digest"
 title='LayerC rolling build'

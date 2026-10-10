@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.EnderKeera.LayerC</id>
+  <name>LayerC</name>
+  <summary>Passive X11 cooldown overlay with a profile editor</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <developer id="io.github.enderkeera">
+    <name>EnderKeera</name>
+  </developer>
+  <description>
+    <p>
+      LayerC runs a passive, click-through cooldown overlay on X11. The LayerE
+      editor creates and edits profiles, cooldowns, bindings and panels, saves
+      them durably and asks the running daemon to reload them. Command-line
+      tools cover profile and bundle management, runtime control and visual
+      calibration.
+    </p>
+    <p>
+      LayerC never injects input, reads game memory or needs elevated
+      privileges. Native Wayland sessions are not supported.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.EnderKeera.LayerC.desktop</launchable>
+  <url type="homepage">https://github.com/EnderKeera/LayerC</url>
+  <url type="bugtracker">https://github.com/EnderKeera/LayerC/issues</url>
+  <provides>
+    <binary>layerd</binary>
+    <binary>layerctl</binary>
+    <binary>layercal</binary>
+    <binary>layere</binary>
+  </provides>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="2.6.2" date="2026-10-10">
+      <description>
+        <p>LayerC 2.6.2 (release label v2.6c) adds the LayerE profile editor for X11, packaged with the daemon and tools.</p>
+      </description>
+    </release>
+  </releases>
+</component>
