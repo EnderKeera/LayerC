@@ -118,6 +118,10 @@ std::string save_report_text(const CommitOutcome &commit,
   case CommitResult::blocked_by_sidecar:
     return "Not saved: repair the invalid visual or automation settings first.";
   case CommitResult::write_failed:
+    // The final durability barrier can fail after every file was published.
+    if (commit.write_error == layerc::platform::ProfileWriteError::durability_unconfirmed)
+      return "Save unconfirmed: the files may already be on disk, but their durability "
+             "could not be confirmed. These edits are kept; Save again.";
     return "Not saved. " + write_failure_text(commit.write_error) + ".";
   }
   if (!reload) return "Saved.";

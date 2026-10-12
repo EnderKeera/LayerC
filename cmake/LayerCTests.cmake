@@ -106,6 +106,10 @@ layerc_add_test(layerc_editor_document_tests
 layerc_add_test(layerc_editor_automation_tests
     SOURCES tests/editor_automation_graph_tests.cpp
     LINK layerc_editor_core TIMEOUT 30)
+# Shared visual calibration model and calibration-result merge.
+layerc_add_test(layerc_editor_visual_tests
+    SOURCES tests/editor_visual_assignment_tests.cpp
+    LINK layerc_editor_core TIMEOUT 30)
 if(WIN32)
     layerc_add_test(layerc_launcher_win_tests
         SOURCES tests/launcher_win_tests.cpp
@@ -119,6 +123,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(layerc_core_tests PRIVATE -Wno-missing-field-initializers)
     target_compile_options(layerc_editor_document_tests PRIVATE -Wno-missing-field-initializers)
     target_compile_options(layerc_editor_automation_tests PRIVATE -Wno-missing-field-initializers)
+    target_compile_options(layerc_editor_visual_tests PRIVATE -Wno-missing-field-initializers)
 endif()
 
 if(NOT WIN32)
@@ -131,6 +136,13 @@ if(NOT WIN32)
     # Test-only fsync fault injection; production binaries use libc directly.
     target_link_options(layerc_linux_profile_store_tests PRIVATE
         "LINKER:--wrap=fsync")
+
+    layerc_add_test(layerc_linux_visual_assets_tests
+        SOURCES tests/linux_visual_assets_tests.cpp
+            src/platform/profile_transaction_testing.cpp
+        LINK layerc_linux TIMEOUT 30)
+    target_include_directories(layerc_linux_visual_assets_tests PRIVATE
+        src/platform/linux)
 
     layerc_add_test(layerc_linux_profile_pack_tests
         SOURCES tests/linux_profile_pack_tests.cpp

@@ -250,6 +250,7 @@ bool EditorApp::command_enabled(const EditorCommand action) const {
   case EditorCommand::binding_page:
   case EditorCommand::panel_page:
   case EditorCommand::automation_page:
+  case EditorCommand::visual_page:
   case EditorCommand::close: return true;
   case EditorCommand::undo: return session.has_document() && (pending_fields_ || session.can_undo());
   case EditorCommand::redo: return session.has_document() && !pending_fields_ && session.can_redo();
@@ -277,6 +278,7 @@ void EditorApp::command(const EditorCommand action) {
   case EditorCommand::binding_page: page = binding_tab; break;
   case EditorCommand::panel_page: page = panel_tab; break;
   case EditorCommand::automation_page: if (automation) page = automation->group(); break;
+  case EditorCommand::visual_page: if (visual) page = visual->group(); break;
   default: break;
   }
   if (page) { tabs->value(page); tab_changed(); tabs->redraw(); return; }

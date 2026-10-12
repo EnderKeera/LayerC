@@ -5,6 +5,7 @@
 #include "editor_text.hpp"
 #include "editor_util.hpp"
 #include "calibration_session.hpp"
+#include "visual_assignment.hpp"
 
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/durable_file.hpp"
@@ -27,34 +28,6 @@
 namespace layerc::editor {
 namespace {
 
-layerc::core::VisualTrigger *find_trigger(
-    layerc::core::VisualProfile &visual, const std::string_view cooldown) {
-  const auto found = std::ranges::find(visual.triggers, cooldown,
-                                      &layerc::core::VisualTrigger::cooldown_id);
-  return found == visual.triggers.end() ? nullptr : &*found;
-}
-
-using layerc::core::observation_id;
-using layerc::core::VisualObservation;
-
-void set_observation_id(VisualObservation &observation,
-                        const std::string_view id) {
-  std::visit([&](auto &item) { item.id = id; }, observation);
-}
-
-std::string unique_observation_id(
-    const std::string_view requested,
-    const layerc::core::VisualProfile &profile,
-    const std::string_view allowed = {}) {
-  const std::string base =
-      requested.empty() ? "visual-observation" : std::string(requested);
-  return next_unique_id(
-      base, [&](const std::string_view value) {
-        if (!allowed.empty() && value == allowed) return false;
-        return layerc::core::find_observation(profile, value) != nullptr;
-      });
-}
-
 std::wstring visual_mode_label(const layerc::core::VisualTrigger &trigger) {
   return trigger.mode == layerc::core::VisualTriggerMode::pixel_only
              ? L"Pixel only"
@@ -67,74 +40,6 @@ std::optional<layerc::platform::WindowCandidate> candidate_for_window(
     if (candidate.window == window) return candidate;
   }
   return std::nullopt;
-}
-
-bool ensure_observation_capacity(
-    const HWND owner, const layerc::core::VisualProfile &profile,
-    const VisualObservation &candidate,
-    const std::string_view replacing_id = {}) {
-  const bool is_pixel = std::holds_alternative<layerc::core::PixelRule>(candidate);
-  const auto same_kind = [&](const VisualObservation &observation) {
-    return observation.index() == candidate.index();
-  };
-  auto count = static_cast<std::size_t>(
-      std::ranges::count_if(profile.observations, same_kind));
-  if (!replacing_id.empty()) {
-    const auto *replaced =
-        layerc::core::find_observation(profile, replacing_id);
-    if (replaced != nullptr && same_kind(*replaced)) --count;
-  }
-  const auto maximum = is_pixel ? layerc::core::max_pixel_rules
-                                : layerc::core::max_template_states;
-  if (count < maximum) return true;
-  const auto kind = is_pixel ? L"pixel" : L"template";
-  const auto message = L"This profile already has the maximum " +
-                       std::to_wstring(maximum) + L" " + kind +
-                       L" observations.";
-  themed_message_box(owner, message.c_str(), L"Visual observation limit",
-              MB_OK | MB_ICONINFORMATION);
-  return false;
-}
-
-void append_observation(layerc::core::VisualProfile &profile,
-                        const VisualObservation &observation) {
-  profile.observations.push_back(observation);
-}
-
-// Recalibration keeps the observation's authored position.
-void replace_observation(layerc::core::VisualProfile &profile,
-                         const std::string_view old_id,
-                         const VisualObservation &observation) {
-  const auto found = std::ranges::find_if(
-      profile.observations, [&](const VisualObservation &item) {
-        return observation_id(item) == old_id;
-      });
-  if (found == profile.observations.end())
-    append_observation(profile, observation);
-  else
-    *found = observation;
-}
-
-// Fresh observation id, append, and trigger link for a calibration result
-// that has no shared prior observation to reuse.
-bool install_new_observation(const HWND owner,
-                             layerc::core::VisualProfile &profile,
-                             VisualObservation &observation,
-                             layerc::core::VisualTrigger &trigger) {
-  if (!ensure_observation_capacity(owner, profile, observation))
-    return false;
-  const auto new_id =
-      unique_observation_id(observation_id(observation), profile);
-  set_observation_id(observation, new_id);
-  trigger.observation_id = new_id;
-  append_observation(profile, observation);
-  return true;
-}
-
-std::optional<VisualObservation>
-single_observation(const layerc::core::VisualProfile &profile) {
-  if (profile.observations.size() != 1) return std::nullopt;
-  return profile.observations.front();
 }
 
 } // namespace
@@ -165,7 +70,7 @@ void VisualEditor::refresh() {
   const layerc::core::PixelRule *rule{};
   const layerc::core::TemplateState *template_state{};
   if (editable && document_.visual()) {
-    trigger = find_trigger(*document_.visual(), cooldown->id);
+    trigger = find_visual_trigger(*document_.visual(), cooldown->id);
     if (trigger != nullptr) {
       const auto *observation = layerc::core::find_observation(
           *document_.visual(), trigger->observation_id);
@@ -263,7 +168,10 @@ void VisualEditor::set_enabled(const bool enabled) {
     refresh();
     return;
   }
-  auto *trigger = find_trigger(*document_.visual(), cooldown->id);
+  // A commit replaces the document's modules even when it is refused, so
+  // neither the trigger nor the cooldown may be held across save().
+  const std::string cooldown_id = cooldown->id;
+  auto *trigger = find_visual_trigger(*document_.visual(), cooldown_id);
   if (trigger == nullptr) {
     refresh();
     return;
@@ -271,7 +179,9 @@ void VisualEditor::set_enabled(const bool enabled) {
   const bool previous = trigger->enabled;
   trigger->enabled = enabled;
   if (!save()) {
-    trigger->enabled = previous;
+    if (document_.visual())
+      if (auto *current = find_visual_trigger(*document_.visual(), cooldown_id))
+        current->enabled = previous;
     refresh();
     return;
   }
@@ -282,7 +192,7 @@ void VisualEditor::set_enabled(const bool enabled) {
 void VisualEditor::remove_assignment() {
   const auto *cooldown = host_.selected_cooldown();
   if (cooldown == nullptr || !document_.visual()) return;
-  const auto *existing = find_trigger(*document_.visual(), cooldown->id);
+  const auto *existing = find_visual_trigger(*document_.visual(), cooldown->id);
   if (existing == nullptr) return;
   if (themed_message_box(shell_.window,
                   L"Remove visual recognition from this cooldown? Its ordinary input binding is preserved.",
@@ -398,82 +308,32 @@ bool VisualEditor::launch_calibration(const HWND target) {
 }
 
 bool VisualEditor::merge_calibration_result(const std::string_view visual_json) {
-  const auto parsed =
-      layerc::core::parse_visual_profile_json(visual_json, document_.profile());
-  const auto *candidate_profile =
-      std::get_if<layerc::core::VisualProfile>(&parsed);
   const auto *cooldown = host_.selected_cooldown();
-  const auto candidate = candidate_profile == nullptr
-                             ? std::optional<VisualObservation>{}
-                             : single_observation(*candidate_profile);
-  if (candidate_profile == nullptr || cooldown == nullptr || !candidate ||
-      candidate_profile->triggers.size() != 1 ||
-      candidate_profile->triggers.front().cooldown_id != cooldown->id) {
-    themed_message_box(shell_.window,
-                L"LayerC Calibration returned an invalid result. No profile "
-                L"data was changed.",
-                L"Calibration rejected", MB_OK | MB_ICONERROR);
-    return false;
-  }
-
-  layerc::core::VisualProfile merged =
-      document_.visual().value_or(layerc::core::VisualProfile{});
-  if (document_.visual_state() == layerc::platform::ModuleSidecarState::invalid)
-    merged = {};
-  merged.profile_id = document_.profile().id;
-  merged.sample_rate_hz = candidate_profile->sample_rate_hz;
-  merged.quality = candidate_profile->quality;
-  auto candidate_observation = *candidate;
-  auto candidate_trigger = candidate_profile->triggers.front();
-  auto *old_trigger = find_trigger(merged, cooldown->id);
-  std::string old_observation_id;
-  if (old_trigger != nullptr) {
-    old_observation_id = old_trigger->observation_id;
-    const auto references = std::ranges::count_if(
-        merged.triggers,
-        [&](const auto &trigger) {
-          return trigger.observation_id == old_observation_id;
-        });
-    bool update_shared = references <= 1;
-    if (references > 1) {
-      const int choice = themed_message_box(
-          shell_.window,
-          L"This visual observation is shared by multiple cooldowns. Choose Yes to update the shared observation, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
-          L"Shared visual observation", MB_YESNOCANCEL | MB_ICONQUESTION);
-      if (choice == IDCANCEL) return false;
-      update_shared = choice == IDYES;
-    }
-    if (update_shared) {
-      if (!ensure_observation_capacity(shell_.window, merged,
-                                       candidate_observation,
-                                       old_observation_id))
-        return false;
-      set_observation_id(candidate_observation, old_observation_id);
-      replace_observation(merged, old_observation_id, candidate_observation);
-      candidate_trigger.observation_id = old_observation_id;
-    } else if (!install_new_observation(shell_.window, merged,
-                                        candidate_observation,
-                                        candidate_trigger)) {
-      return false;
-    }
-    *old_trigger = candidate_trigger;
-  } else {
-    if (!install_new_observation(shell_.window, merged, candidate_observation,
-                                 candidate_trigger))
-      return false;
-    merged.triggers.push_back(candidate_trigger);
-  }
-
-  gc_orphan_visual_observation(merged, old_observation_id);
-
-  const auto error = layerc::core::validate_visual_profile(merged, document_.profile());
-  if (!error.message.empty()) {
-    themed_message_box(shell_.window, to_wide(error.message).c_str(),
-                L"Calibration rejected", MB_OK | MB_ICONERROR);
+  auto merged = layerc::editor::merge_calibration_result(
+      document_.visual(),
+      document_.visual_state() == layerc::platform::ModuleSidecarState::invalid,
+      document_.profile(),
+      cooldown == nullptr ? std::string_view{} : std::string_view{cooldown->id},
+      visual_json, [&] {
+        const int choice = themed_message_box(
+            shell_.window,
+            L"This visual observation is shared by multiple cooldowns. Choose Yes to update the shared observation, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
+            L"Shared visual observation", MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (choice == IDCANCEL) return SharedObservationChoice::cancel;
+        return choice == IDYES ? SharedObservationChoice::update_shared
+                               : SharedObservationChoice::clone;
+      });
+  if (const auto *refusal = std::get_if<VisualMergeRefusal>(&merged)) {
+    if (refusal->kind == VisualMergeRefusal::Kind::limit)
+      themed_message_box(shell_.window, to_wide(refusal->message).c_str(),
+                         L"Visual observation limit", MB_OK | MB_ICONINFORMATION);
+    else if (refusal->kind != VisualMergeRefusal::Kind::cancelled)
+      themed_message_box(shell_.window, to_wide(refusal->message).c_str(),
+                         L"Calibration rejected", MB_OK | MB_ICONERROR);
     return false;
   }
   const auto previous = document_.visual();
-  document_.visual() = std::move(merged);
+  document_.visual() = std::move(std::get<layerc::core::VisualProfile>(merged));
   if (!save()) {
     document_.visual() = previous;
     refresh();

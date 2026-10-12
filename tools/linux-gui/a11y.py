@@ -23,7 +23,9 @@ def describe(node, depth, budget):
             "focused": states.contains(pyatspi.STATE_FOCUSED),
             "selected": states.contains(pyatspi.STATE_SELECTED),
             "enabled": states.contains(pyatspi.STATE_ENABLED),
-            "showing": states.contains(pyatspi.STATE_SHOWING)}
+            "showing": states.contains(pyatspi.STATE_SHOWING),
+            "active": states.contains(pyatspi.STATE_ACTIVE),
+            "modal": states.contains(pyatspi.STATE_MODAL)}
     if states.contains(pyatspi.STATE_CHECKED):
         item["checked"] = True
     try:

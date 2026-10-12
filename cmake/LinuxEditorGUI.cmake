@@ -102,6 +102,9 @@ add_library(layerc_editor_fltk STATIC
     src/editor/linux/editor_accessibility.cpp
     src/editor/linux/editor_app.cpp
     src/editor/linux/automation_editor.cpp
+    src/editor/linux/visual_editor.cpp
+    src/editor/linux/calibration_window.cpp
+    src/editor/linux/calibration_preview.cpp
     src/editor/linux/editor_forms.cpp
     src/editor/linux/editor_geometry.cpp
     src/editor/linux/editor_import.cpp

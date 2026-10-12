@@ -70,6 +70,14 @@ public:
     return EditorProfileSnapshot{profile, visual_profile, automation_profile} ==
            baseline_;
   }
+  // Every snapshot history can still restore, for owners of resources that
+  // retained snapshots reference.
+  template <typename Visit> void for_each_snapshot(Visit &&visit) const {
+    visit(baseline_);
+    visit(saved_);
+    for (const auto &snapshot : undo_) visit(snapshot);
+    for (const auto &snapshot : redo_) visit(snapshot);
+  }
   [[nodiscard]] bool can_undo() const noexcept { return !undo_.empty(); }
   [[nodiscard]] bool can_redo() const noexcept { return !redo_.empty(); }
   [[nodiscard]] bool

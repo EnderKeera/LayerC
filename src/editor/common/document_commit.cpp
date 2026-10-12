@@ -21,7 +21,8 @@ CommitOutcome commit_profile_bundle(const std::filesystem::path &path,
                                     const CommitOptions &options,
                                     const ConfirmUpgrade &confirm_upgrade,
                                     layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
-                                        companion) {
+                                        companion,
+                                    const layerc::platform::ProfileMutationPlanner &additional_mutations) {
   if (normalize_profile_bundle(bundle.profile, bundle.visual,
                                bundle.automation)
           .has_value())
@@ -33,6 +34,10 @@ CommitOutcome commit_profile_bundle(const std::filesystem::path &path,
     return {CommitResult::upgrade_declined, std::nullopt};
   namespace platform = layerc::platform;
   const auto planner = [&](std::vector<platform::ProfileFileMutation> &mutations) {
+    if (additional_mutations) {
+      const auto extra = additional_mutations(mutations);
+      if (!extra) return extra;
+    }
     return platform::plan_profile_bundle_mutations(
         path, bundle.profile,
         platform::ProfileModuleIntents{bundle.visual, bundle.automation, companion},
@@ -53,10 +58,12 @@ CommitOutcome commit_document(ProfileDocument &document,
                               const CommitOptions &options,
                               const ConfirmUpgrade &confirm_upgrade,
                               layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
-                                  companion) {
+                                  companion,
+                              const layerc::platform::ProfileMutationPlanner &additional_mutations) {
   auto bundle = document.bundle();
   const auto outcome =
-      commit_profile_bundle(path, bundle, options, confirm_upgrade, std::move(companion));
+      commit_profile_bundle(path, bundle, options, confirm_upgrade, std::move(companion),
+                            additional_mutations);
   if (outcome.result != CommitResult::invalid_profile) {
     document.profile() = std::move(bundle.profile);
     document.visual() = std::move(bundle.visual);

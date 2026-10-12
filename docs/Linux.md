@@ -137,10 +137,18 @@ It creates, duplicates, renames, enables/disables and deletes profiles, and
 edits game matching, cooldowns, keyboard and mouse bindings (with capture), and
 panels. It has undo/redo, menus and context menus, and JSON/`.layercprofile`
 import with collision review and export. Its preview is illustrative, not a
-complete renderer. Advanced modules (automation, visual, calibration,
-companion), Generic HID bindings and cooldown groups are preserved but not
-editable; unreadable/invalid module data blocks Save rather than being
-silently discarded. Save uses the shared durable
+complete renderer. The Automation tab edits rules and presets, runs the
+deterministic simulator and records an authenticated live trace. The Visual
+tab assigns, updates, clones and removes the selected cooldown's visual
+trigger and calibrates it against an X11 window in a modal dialog: after an
+explicit capture notice it previews the window through the bounded X11
+capture, selects a region, samples a color, and edits average-color,
+brightness, color-coverage and template predicates, with up to four captured
+or imported PNG references and an editable alpha mask. The profile, its
+sidecars and template assets are published in one durable transaction.
+Game Bar companion data, Generic HID bindings and cooldown groups are
+preserved but not editable; unreadable/invalid module data blocks Save rather
+than being silently discarded. Save uses the shared durable
 stage/commit path, then asks the daemon to reload through the authenticated
 private control socket.
 
@@ -173,19 +181,29 @@ private authenticated Xvfb display (1600x1000), Openbox, a private D-Bus
 session, private HOME/XDG roots, the X11 smoke fixture as the game, `layerd`
 and `layere`. It never addresses the user's display, bus, daemon, control
 socket or profiles. Every helper is owned, stopped and joined; a missing
-dependency or build output fails the run rather than skipping it.
+dependency or build output fails the run rather than skipping it. The Python
+AT-SPI checks also need `python3-gi`, `python3-pyatspi` and the matching
+`gir1.2-atspi-2.0` metadata from the same AT-SPI installation (2.62 or later).
+When using an extracted dependency root, point both `LD_LIBRARY_PATH` and
+`GI_TYPELIB_PATH` at that root: new libraries paired with old system
+introspection metadata can crash the test client. Dependency setup remains
+separate from the ordinary run.
 
 ```sh
 tools/linux-editor-gui-tests.sh --build build-linux --out out/linux-gui/manual
 ```
 
 The default `walkthrough` mode drives `tools/linux-gui/walkthrough.py`:
-bridge guard rejections; startup; invalid input left unwritten; edit, durable
-save, acknowledged reload and a moved live overlay; frame-corner resize and
-minimum-size clamp; offline save; and a visible store failure that leaves the
-original profile intact. A failed case blocks the later cases; it never passes
-them. Menus, CRUD, import/export, keyboard/accessibility, maximize/scroll/font
-scaling and daemon reconnect are recorded as deferred to the full editor.
+bridge guard rejections; startup; the AT-SPI semantic check; keyboard
+navigation; menus and context menus; profile create/rename/enable/delete with
+undo/redo; invalid input left unwritten; edit, durable save, acknowledged
+reload and a moved live overlay; import/export; automation JSON, simulator and
+live trace; pixel and template calibration, shared-observation preservation
+and the visual lifecycle; layout (resize, minimum size, maximize, scrolling,
+text scaling); daemon stop, offline save and reconnect; and a visible store
+failure that leaves the original profile intact. Advanced views are each
+sampled for 60 s against the 48 MiB / 0.2% targets. A failed case blocks the
+later cases; it never passes them.
 
 `--mode session` keeps the computer-use bridge (`tools/linux-gui/bridge.py`)
 open for one agent instead. It listens on a private Unix socket, requires the

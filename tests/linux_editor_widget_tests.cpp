@@ -4,6 +4,7 @@
 #include "editor_app.hpp"
 #include "profile_edit.hpp"
 #include "automation_graph.hpp"
+#include "calibration_window.hpp"
 #include "test_support.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -20,8 +21,16 @@
 #include <FL/Fl_Menu_Button.H>
 #include <FL/Fl_Scroll.H>
 #include <FL/Fl_Tabs.H>
+#include <FL/Fl_Output.H>
+#include <FL/Fl_Window.H>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/Xatom.h>
+#include <unistd.h>
 #include <sys/stat.h>
+#include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -70,6 +79,7 @@ struct Reply {
   std::string label;
   int attempts{};
   bool delivered{};
+  std::function<void()> before;
 };
 Fl_Button *find_button(Fl_Group &group, const std::string &label) {
   for (int i = 0; i < group.children(); ++i) {
@@ -86,6 +96,7 @@ void reply(void *data) {
   auto &choice = *static_cast<Reply *>(data);
   if (auto *modal = Fl::modal()) {
     if (auto *button = find_button(*modal, choice.label)) {
+      if (choice.before) choice.before();
       choice.delivered = true; button->do_callback(); return;
     }
     if (++choice.attempts >= 100) { modal->hide(); return; }
@@ -94,7 +105,8 @@ void reply(void *data) {
 }
 class Answer final {
 public:
-  explicit Answer(std::string label) : choice_{std::move(label), 0, false} {
+  explicit Answer(std::string label, std::function<void()> before = {})
+      : choice_{std::move(label), 0, false, std::move(before)} {
     Fl::add_timeout(.01, reply, &choice_);
   }
   ~Answer() { Fl::remove_timeout(reply, &choice_); }
@@ -543,6 +555,306 @@ void automation_trace_disconnect() {
   app.window.hide();
 }
 
+template <typename Widget>
+Widget &visual_control(editor::EditorApp &app, const std::string_view label) {
+  auto *widget = dynamic_cast<Widget *>(find_control(*app.visual->group(), label));
+  expect(widget != nullptr, "the visual page owns the named control");
+  return *widget;
+}
+void visual_page_history_and_cancel() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app; show(app);
+  expect(app.session.has_document(), "show opens the only private fixture");
+  expect(app.visual->group()->children() == 0, "hidden Visual controls are demand-created");
+  app.command(editor::EditorCommand::visual_page);
+  expect(app.tabs->value() == app.visual->group(), "View Visual opens the real page");
+  const auto profile = app.session.document().profile();
+  const auto id = profile.cooldowns.front().id;
+  auto seed = editor::CalibrationModel::open(profile, id, std::nullopt);
+  expect(seed.has_value(), "visual seed uses the selected cooldown");
+  auto built = seed->build_result(seed->initial_controls(), {});
+  expect(std::holds_alternative<core::VisualProfile>(built), "pixel calibration produces a valid module");
+  expect(!app.session.apply_calibration(id, core::serialize_visual_profile_json(
+      std::get<core::VisualProfile>(built)), [] { return editor::SharedObservationChoice::update_shared; }),
+      "apply the validated visual draft");
+  app.refresh();
+  auto &enabled = visual_control<Fl_Check_Button>(app, "Visual trigger enabled");
+  enabled.value(0); enabled.do_callback();
+  expect(!editor::find_visual_trigger(*app.session.document().visual(), id)->enabled,
+         "Enabled updates the complete visual draft");
+  app.command(editor::EditorCommand::undo);
+  expect(editor::find_visual_trigger(*app.session.document().visual(), id)->enabled,
+         "document Undo restores the trigger");
+  {
+    Answer remove("Remove assignment");
+    visual_control<Fl_Button>(app, "Remove visual assignment").do_callback();
+    expect(remove.delivered(), "Remove has an explicit confirmation");
+  }
+  expect(!app.session.document().visual(), "Remove erases the unreferenced observation and trigger");
+  app.command(editor::EditorCommand::undo);
+  expect(app.session.document().visual().has_value(), "Undo restores the removed visual module");
+  const auto before = *app.session.document().visual();
+  {
+    Answer cancel("Cancel calibration");
+    visual_control<Fl_Button>(app, "Calibrate visual...").do_callback();
+    expect(cancel.delivered(), "calibration Cancel belongs to the real modal");
+  }
+  expect(*app.session.document().visual() == before &&
+         std::string(app.status->value()).find("Calibration cancelled") == 0,
+         "Cancel preserves the complete unsaved visual draft and explains no writes");
+  auto &isolated = visual_control<Fl_Check_Button>(app, "Isolated visual runtime");
+  isolated.value(1); isolated.do_callback();
+  expect(app.session.document().profile().visual_runtime == core::VisualRuntime::isolated &&
+         std::string(visual_control<Fl_Multiline_Output>(app,
+             "Visual availability / preservation").value()).find("Unavailable:") != std::string::npos,
+         "unsupported isolated runtime is retained with an explicit reason");
+  app.command(editor::EditorCommand::undo);
+  expect(app.session.document().profile().visual_runtime == core::VisualRuntime::inline_process,
+         "runtime setting participates in document history");
+  app.window.hide();
+}
+void visual_remove_refuses_nested_selection_change() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app; show(app);
+  app.command(editor::EditorCommand::add_cooldown);
+  app.command(editor::EditorCommand::visual_page);
+  const auto profile = app.session.document().profile();
+  for (const auto &cooldown : profile.cooldowns) {
+    auto seed = editor::CalibrationModel::open(profile, cooldown.id, app.session.document().visual());
+    auto built = seed->build_result(seed->initial_controls(), {});
+    expect(std::holds_alternative<core::VisualProfile>(built), "seed each private visual assignment");
+    expect(!app.session.apply_calibration(cooldown.id,
+        core::serialize_visual_profile_json(std::get<core::VisualProfile>(built)),
+        [] { return editor::SharedObservationChoice::update_shared; }), "apply each private assignment");
+  }
+  app.refresh();
+  auto &target = visual_control<Fl_Choice>(app, "Visual target cooldown");
+  target.value(0); target.do_callback();
+  const auto before = app.session.document().visual();
+  {
+    Answer answer("Remove assignment", [&] { target.value(1); target.do_callback(); });
+    visual_control<Fl_Button>(app, "Remove visual assignment").do_callback();
+    expect(answer.delivered(), "a nested event changes selection inside the real Remove confirmation");
+  }
+  expect(app.session.document().visual() == before &&
+         std::string(app.status->value()).find("Not removed:") == 0,
+         "confirmation for A cannot remove B after a nested selection change");
+  {
+    Answer answer("Remove assignment", [&] {
+      expect(!app.session.edit([](auto &candidate) { candidate.name = "Nested document edit"; }),
+             "a nested document mutation succeeds independently");
+    });
+    visual_control<Fl_Button>(app, "Remove visual assignment").do_callback();
+    expect(answer.delivered(), "a nested event changes the document inside Remove confirmation");
+  }
+  expect(app.session.document().visual() == before &&
+         app.session.document().profile().name == "Nested document edit" &&
+         std::string(app.status->value()).find("Not removed:") == 0,
+         "changed document refuses stale removal without discarding the nested edit");
+  app.window.hide();
+}
+struct CalibrationProbe {
+  bool delivered{};
+  bool capture{};
+  bool refuse_once{};
+  int attempts{};
+};
+void exercise_calibration(void *data) {
+  auto &probe = *static_cast<CalibrationProbe *>(data);
+  auto *modal = Fl::modal();
+  if (!modal) {
+    if (++probe.attempts < 100) Fl::add_timeout(.01, exercise_calibration, data);
+    return;
+  }
+  const auto control = [&](const char *label) {
+    auto *widget = find_control(*modal, label);
+    expect(widget != nullptr, "real calibration owns each named control");
+    return widget;
+  };
+  auto &live = *dynamic_cast<Fl_Check_Button *>(control("Live preview"));
+  auto &status = *dynamic_cast<Fl_Multiline_Output *>(control("Capture / live match status"));
+  live.value(1); live.do_callback();
+  expect(!live.value() && std::string(status.value()).find("Unavailable:") == 0,
+         "capture without acknowledgement is refused visibly");
+  if (!probe.capture) {
+    control("Rescan windows")->do_callback();
+    expect(std::string(status.value()).find("Unavailable:") == 0,
+           "missing target has a visible unavailable reason");
+    control("Cancel calibration")->do_callback(); probe.delivered = true; return;
+  }
+  control("Rescan windows")->do_callback();
+  auto &target = *dynamic_cast<Fl_Choice *>(control("Calibration target window"));
+  expect(target.value() >= 0, "rescan finds the private matching X11 fixture");
+  auto &notice = *dynamic_cast<Fl_Check_Button *>(control(
+      "I acknowledge passive capture of the selected game window"));
+  notice.value(1); notice.do_callback();
+  live.value(1); live.do_callback();
+  auto &preview = *dynamic_cast<editor::CalibrationPreview *>(control("Calibration preview"));
+  expect(live.value() && preview.frame && preview.frame->view().valid(),
+         "acknowledged real X11 capture produces a valid owned frame");
+  control("Capture reference")->do_callback();
+  expect(std::string(dynamic_cast<Fl_Output *>(control("Template references"))->value()).find("1/") == 0,
+         "capture stages one structured template reference");
+  notice.value(0); notice.do_callback();
+  expect(!live.value() && std::string(status.value()).find("Stopped.") == 0,
+         "withdrawing acknowledgement stops the capture session");
+  control("Apply calibration")->do_callback();
+  if (probe.refuse_once) {
+    expect(Fl::modal() == modal &&
+               std::string(status.value()).find("Not applied: test refusal") == 0,
+           "a refused Apply keeps the dialog and its draft open with the reason");
+    control("Apply calibration")->do_callback();
+  }
+  probe.delivered = true;
+}
+std::size_t open_fds() {
+  return static_cast<std::size_t>(std::distance(
+      std::filesystem::directory_iterator("/proc/self/fd"), std::filesystem::directory_iterator{}));
+}
+void calibration_mask_coalesced_pointer_strokes() {
+  Fixture fixture;
+  struct EventState {
+    int x{Fl::e_x}, y{Fl::e_y}, key{Fl::e_keysym};
+    ~EventState() { Fl::e_x = x; Fl::e_y = y; Fl::e_keysym = key; }
+  } event_state;
+  Fl_Window window(320, 320);
+  editor::CalibrationPreview preview(0, 0, 320, 320);
+  window.end();
+  core::TemplateImage image;
+  image.width = image.height = 32;
+  image.pixels.resize(32 * 32);
+  image.alpha.assign(32 * 32, 255);
+  preview.mask = &image;
+  preview.painted = [&](const double x, const double y, const bool opaque) {
+    expect(editor::paint_template_mask(image, x, y, opaque), "paint valid source-image mask pixels");
+  };
+  const auto paint_rows = [&](const int tool) {
+    preview.tool = tool;
+    Fl::e_keysym = FL_Button + FL_LEFT_MOUSE;
+    for (int row = 1; row < 32; row += 3) {
+      Fl::e_x = 1; Fl::e_y = row * 10 + 5;
+      expect(preview.handle(FL_PUSH) == 1, "begin a mask brush stroke");
+      Fl::e_x = 319;
+      expect(preview.handle(FL_DRAG) == 1 && preview.handle(FL_RELEASE) == 1,
+             "coalesced motion joins the complete brush stroke");
+    }
+  };
+  paint_rows(1);
+  expect(std::all_of(image.alpha.begin(), image.alpha.end(), [](const auto alpha) { return alpha == 0; }),
+         "sparse pointer events erase every pixel without holes between samples");
+  paint_rows(2);
+  expect(std::all_of(image.alpha.begin(), image.alpha.end(), [](const auto alpha) { return alpha == 255; }),
+         "a fully erased draft remains repairable by the restore brush");
+  preview.resize(0, 0, 0, 0);
+  expect(preview.handle(FL_PUSH) == 0, "a collapsed preview refuses degenerate pointer coordinates");
+}
+
+void calibration_unavailable_and_owned_capture() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app; show(app);
+  expect(app.session.has_document(), "show opens the only private fixture");
+  auto profile = app.session.document().profile();
+  const auto id = profile.cooldowns.front().id;
+  const auto before = open_fds();
+  {
+    CalibrationProbe probe;
+    Fl::add_timeout(.01, exercise_calibration, &probe);
+    auto seed = editor::CalibrationModel::open(profile, id, std::nullopt);
+    const auto result = editor::run_x11_calibration(fixture.path, std::move(*seed));
+    Fl::remove_timeout(exercise_calibration, &probe);
+    expect(probe.delivered && !result, "unavailable calibration Cancel returns no data");
+  }
+  expect(open_fds() == before, "unavailable modal releases its discovery display");
+  struct X11Fixture {
+    Display *display{XOpenDisplay(nullptr)};
+    Window window{};
+    X11Fixture() {
+      expect(display != nullptr, "open only a disposable X11 fixture display");
+      window = XCreateSimpleWindow(display, DefaultRootWindow(display), 1100, 780, 120, 100, 0, 0, 0);
+      XStoreName(display, window, "Private calibration target");
+      XClassHint hint{const_cast<char *>("LayerCCalibrationFixture"), const_cast<char *>("LayerCCalibrationFixture")};
+      XSetClassHint(display, window, &hint);
+      const unsigned long pid = static_cast<unsigned long>(::getpid());
+      XChangeProperty(display, window, XInternAtom(display, "_NET_WM_PID", False),
+                      XA_CARDINAL, 32, PropModeReplace, reinterpret_cast<const unsigned char *>(&pid), 1);
+      XMapWindow(display, window);
+      auto gc = XCreateGC(display, window, 0, nullptr);
+      for (int row = 0; row < 100; ++row) {
+        XSetForeground(display, gc, static_cast<unsigned long>((row * 2) << 16 | (255 - row * 2) << 8 | row));
+        XFillRectangle(display, window, gc, 0, row, 120, 1);
+      }
+      XFreeGC(display, gc); XSync(display, False);
+    }
+    ~X11Fixture() { if (display) { if (window) XDestroyWindow(display, window); XCloseDisplay(display); } }
+  } target;
+  profile.game.executable_name = std::filesystem::read_symlink("/proc/self/exe").filename().string();
+  profile.game.window_class = "LayerCCalibrationFixture";
+  const auto with_fixture = open_fds();
+  {
+    CalibrationProbe probe; probe.capture = true; probe.refuse_once = true;
+    Fl::add_timeout(.01, exercise_calibration, &probe);
+    auto seed = editor::CalibrationModel::open(profile, id, std::nullopt);
+    int accepts{};
+    const editor::CalibrationAccept accept =
+        [&](const editor::CalibrationDraft &draft) -> std::optional<std::string> {
+      if (++accepts == 1) return std::string("test refusal");
+      expect(draft.images.size() == 1, "the retried Apply still carries the complete draft");
+      return std::nullopt;
+    };
+    const auto result = editor::run_x11_calibration(fixture.path, std::move(*seed), accept);
+    Fl::remove_timeout(exercise_calibration, &probe);
+    expect(probe.delivered && accepts == 2 && result && result->images.size() == 1,
+           "real X11 calibration returns a complete in-memory template draft");
+    expect(core::template_image_has_structure(result->images.front()) &&
+           !result->images.front().asset_sha256.empty(), "captured reference has structure and canonical identity");
+    expect(std::holds_alternative<core::VisualProfile>(
+        core::parse_visual_profile_json(result->visual_json, profile)), "Apply returns validated template JSON");
+  }
+  expect(open_fds() == with_fixture, "completed calibration releases capture and discovery connections");
+  {
+    struct IdentityProbe {
+      Display *display{}; Window window{}; int stage{}, attempts{}; bool delivered{};
+      static void run(void *data) {
+        auto &probe = *static_cast<IdentityProbe *>(data);
+        auto *modal = Fl::modal();
+        if (!modal) {
+          if (++probe.attempts < 100) Fl::add_timeout(.01, run, data);
+          return;
+        }
+        auto *live = dynamic_cast<Fl_Check_Button *>(find_control(*modal, "Live preview"));
+        auto *notice = dynamic_cast<Fl_Check_Button *>(find_control(*modal,
+            "I acknowledge passive capture of the selected game window"));
+        auto *preview = dynamic_cast<editor::CalibrationPreview *>(find_control(*modal, "Calibration preview"));
+        auto *status = dynamic_cast<Fl_Multiline_Output *>(find_control(*modal, "Capture / live match status"));
+        expect(live && notice && preview && status, "identity probe uses the real modal controls");
+        if (probe.stage++ == 0) {
+          find_control(*modal, "Rescan windows")->do_callback();
+          notice->value(1); notice->do_callback(); live->value(1); live->do_callback();
+          expect(live->value() && preview->frame, "identity test begins with available live capture");
+          const auto property = XInternAtom(probe.display, "_LAYERC_TEST_CAPTURE_CHURN", False);
+          for (unsigned long value = 0; value < 3000; ++value)
+            XChangeProperty(probe.display, probe.window, property, XA_CARDINAL, 32,
+                            PropModeReplace, reinterpret_cast<const unsigned char *>(&value), 1);
+          XStoreName(probe.display, probe.window, "Changed calibration identity");
+          XSync(probe.display, False);
+          Fl::add_timeout(.5, run, data); return;
+        }
+        expect(!live->value() && !notice->value() && !preview->frame &&
+                   std::string(status->value()).find("changed identity") != std::string::npos,
+               "live identity invalidation clears the frame and requires renewed capture consent");
+        find_control(*modal, "Cancel calibration")->do_callback(); probe.delivered = true;
+      }
+    } probe{.display = target.display, .window = target.window};
+    Fl::add_timeout(.01, IdentityProbe::run, &probe);
+    auto seed = editor::CalibrationModel::open(profile, id, std::nullopt);
+    const auto result = editor::run_x11_calibration(fixture.path, std::move(*seed));
+    Fl::remove_timeout(IdentityProbe::run, &probe);
+    expect(probe.delivered && !result, "identity loss never returns a calibration draft");
+  }
+  expect(open_fds() == with_fixture, "identity failure joins and releases its private connections");
+  app.window.hide();
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(
@@ -557,4 +869,8 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(routed_ctrl_z_precedes_field_undo),
   LAYERC_TEST_CASE(automation_history_and_invalid_properties),
   LAYERC_TEST_CASE(automation_json_and_simulator_lifetime),
-  LAYERC_TEST_CASE(automation_trace_disconnect))
+  LAYERC_TEST_CASE(automation_trace_disconnect),
+  LAYERC_TEST_CASE(visual_page_history_and_cancel),
+  LAYERC_TEST_CASE(visual_remove_refuses_nested_selection_change),
+  LAYERC_TEST_CASE(calibration_mask_coalesced_pointer_strokes),
+  LAYERC_TEST_CASE(calibration_unavailable_and_owned_capture))

@@ -19,6 +19,15 @@ namespace core = layerc::core;
 namespace platform = layerc::platform;
 namespace bundle = layerc::bundle;
 
+bool references_template(const core::VisualProfile &visual, const std::string_view sha256) {
+  return std::ranges::any_of(visual.observations, [&](const auto &observation) {
+    const auto *state = std::get_if<core::TemplateState>(&observation);
+    return state && std::ranges::any_of(state->references, [&](const auto &reference) {
+             return reference.asset_sha256 == sha256;
+           });
+  });
+}
+
 // Every file that belongs to one stored profile: the base file, its recovery
 // copy and each module sidecar with its backup and marker.
 std::vector<std::filesystem::path> bundle_files(const std::filesystem::path &path) {
@@ -85,7 +94,11 @@ std::optional<std::string> EditorSession::open(const std::size_t row) {
   if (!loaded_bundle)
     return "Could not read the selected profile; its files were not changed.";
   companion_ = loaded_bundle->modules.get<core::CompanionModule>();
+  const auto &visual = loaded_bundle->modules.get<core::VisualModule>();
+  unreadable_visual_ = visual.state() == platform::ModuleSidecarState::invalid
+                           ? visual : platform::VisualSidecarLoad{};
   document_.assign_bundle(scan_.profiles[row].path, std::move(*loaded_bundle));
+  owned_assets_.clear();
   document_.set_dirty(false);
   document_.reset_history();
   opened_ = true;
@@ -99,7 +112,9 @@ std::optional<std::string> EditorSession::open_path(const std::filesystem::path 
 }
 
 void EditorSession::new_profile() {
+  owned_assets_.clear();
   companion_ = {};
+  unreadable_visual_ = {};
   document_.path().clear();
   document_.clear_sidecars();
   document_.clear_legacy_schemas();
@@ -127,6 +142,14 @@ std::optional<std::string> EditorSession::duplicate_current() {
   auto copy = duplicate_profile(document_.profile(), taken);
   if (const auto error = core::validate_profile(copy))
     return "Not duplicated: " + profile_error_line(*error);
+  std::vector<platform::EncodedTemplateAsset> assets;
+  if (document_.visual()) {
+    auto snapshot = platform::snapshot_profile_template_assets(
+        document_.path(), *document_.visual(), owned_assets_);
+    if (const auto *error = std::get_if<platform::VisualAssetError>(&snapshot))
+      return "Not duplicated: " + error->message;
+    assets = std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(snapshot));
+  }
   if (auto companion = companion_.optional_profile()) {
     companion->profile_id = copy.id;
     companion_ = platform::CompanionSidecarLoad::valid(std::move(*companion), {});
@@ -139,6 +162,7 @@ std::optional<std::string> EditorSession::duplicate_current() {
   document_.clear_sidecars();
   document_.clear_legacy_schemas();
   document_.profile() = std::move(copy);
+  owned_assets_ = std::move(assets);
   // The copy keeps editable modules; their profile ids realign at commit.
   document_.visual() = std::move(visual);
   document_.automation() = std::move(automation);
@@ -150,8 +174,10 @@ std::optional<std::string> EditorSession::duplicate_current() {
 }
 
 void EditorSession::close_document() {
+  owned_assets_.clear();
   document_ = ProfileDocument{};
   companion_ = {};
+  unreadable_visual_ = {};
   opened_ = false;
 }
 
@@ -208,6 +234,83 @@ std::optional<std::string> EditorSession::edit_automation(
   return std::nullopt;
 }
 
+void EditorSession::accept_visual(std::optional<core::VisualProfile> visual,
+                                  const bool text_change) {
+  document_.visual() = std::move(visual);
+  document_.mark_visual_edited();
+  (void)document_.history().record(document_.profile(), document_.visual(),
+                                  document_.automation(), text_change);
+  release_unreachable_assets();
+  mark_changed();
+}
+
+void EditorSession::release_unreachable_assets() {
+  std::erase_if(owned_assets_, [&](const platform::EncodedTemplateAsset &asset) {
+    const auto uses = [&](const std::optional<core::VisualProfile> &visual) {
+      return visual && references_template(*visual, asset.asset_sha256);
+    };
+    bool reachable = uses(document_.visual());
+    document_.history().for_each_snapshot([&](const EditorProfileSnapshot &snapshot) {
+      reachable = reachable || uses(snapshot.visual_profile);
+    });
+    return !reachable;
+  });
+}
+
+std::optional<std::string> EditorSession::edit_visual(
+    const std::function<std::optional<std::string>(
+        std::optional<core::VisualProfile> &)> &change,
+    const bool text_change) {
+  if (!opened_) return "No profile is open.";
+  if (document_.visual_state() == platform::ModuleSidecarState::invalid)
+    return "The unreadable visual module is preserved; recalibrate to repair it.";
+  auto candidate = document_.visual();
+  if (const auto error = change(candidate)) return error;
+  if (candidate) {
+    const auto error = core::validate_visual_profile(*candidate, document_.profile());
+    if (!error.message.empty()) return error.describe();
+  }
+  if (candidate != document_.visual()) accept_visual(std::move(candidate), text_change);
+  return std::nullopt;
+}
+
+std::optional<std::string> EditorSession::apply_calibration(
+    const std::string_view cooldown_id, const std::string_view visual_json,
+    const std::function<SharedObservationChoice()> &choose_shared,
+    std::vector<platform::EncodedTemplateAsset> assets) {
+  if (!opened_) return "No profile is open.";
+  auto merged = merge_calibration_result(document_.visual(),
+      document_.visual_state() == platform::ModuleSidecarState::invalid,
+      document_.profile(), cooldown_id, visual_json, choose_shared);
+  if (const auto *refusal = std::get_if<VisualMergeRefusal>(&merged))
+    return refusal->message;
+  for (auto &asset : assets)
+    if (std::ranges::find(owned_assets_, asset.asset_sha256,
+                          &platform::EncodedTemplateAsset::asset_sha256) == owned_assets_.end())
+      owned_assets_.push_back(std::move(asset));
+  auto candidate = std::get<core::VisualProfile>(std::move(merged));
+  if (candidate != document_.visual()) accept_visual(std::move(candidate));
+  return std::nullopt;
+}
+
+std::optional<std::string>
+EditorSession::set_visual_runtime(const core::VisualRuntime runtime) {
+  if (runtime != core::VisualRuntime::inline_process &&
+      runtime != core::VisualRuntime::isolated)
+    return "Unknown visual runtime.";
+  return edit([&](core::GameProfile &profile) { profile.visual_runtime = runtime; });
+}
+
+void EditorSession::restore_visual_history(std::optional<core::VisualProfile> visual) {
+  if (document_.visual() == visual) return;
+  document_.visual() = std::move(visual);
+  if (!document_.visual() &&
+      unreadable_visual_.state() == platform::ModuleSidecarState::invalid)
+    document_.set_visual(unreadable_visual_, document_.legacy_visual_schema());
+  else
+    document_.mark_visual_edited();
+}
+
 std::optional<std::string> EditorSession::remove_cooldown(const std::string_view id) {
   if (!opened_) return "No profile is open.";
   if (const auto error = document_.remove_cooldown(id)) return error->message;
@@ -224,7 +327,7 @@ bool EditorSession::undo() {
                                            document_.automation());
   if (!snapshot) return false;
   document_.profile() = std::move(snapshot->profile);
-  document_.visual() = std::move(snapshot->visual_profile);
+  restore_visual_history(std::move(snapshot->visual_profile));
   if (document_.automation() != snapshot->automation_profile) {
     document_.automation() = std::move(snapshot->automation_profile);
     document_.mark_automation_edited();
@@ -238,7 +341,7 @@ bool EditorSession::redo() {
                                            document_.automation());
   if (!snapshot) return false;
   document_.profile() = std::move(snapshot->profile);
-  document_.visual() = std::move(snapshot->visual_profile);
+  restore_visual_history(std::move(snapshot->visual_profile));
   if (document_.automation() != snapshot->automation_profile) {
     document_.automation() = std::move(snapshot->automation_profile);
     document_.mark_automation_edited();
@@ -255,12 +358,36 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade) {
                           : document_.path();
   platform::ModuleIntent<core::CompanionProfile> companion = platform::KeepModule{};
   if (draft && companion_.profile()) companion = *companion_.profile();
+  // Owned template bytes publish inside this bundle's transaction. A draft
+  // must own every reference; a stored profile already holds the others.
+  std::vector<platform::EncodedTemplateAsset> assets;
+  if (document_.visual() && draft) {
+    auto snapshot = platform::snapshot_profile_template_assets(
+        {}, *document_.visual(), owned_assets_);
+    if (const auto *error = std::get_if<platform::VisualAssetError>(&snapshot))
+      return {{CommitResult::invalid_fields, std::nullopt}, std::nullopt,
+              "Not saved: " + error->message};
+    assets = std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(snapshot));
+  } else if (document_.visual()) {
+    for (const auto &asset : owned_assets_)
+      if (references_template(*document_.visual(), asset.asset_sha256)) assets.push_back(asset);
+  }
   const auto commit = commit_document(document_, path, {.create_only = draft},
-                                      confirm_upgrade, std::move(companion));
+      confirm_upgrade, std::move(companion), [&](auto &mutations) {
+        return platform::plan_profile_template_copies(path, assets, mutations);
+      });
   std::optional<ReloadResult> reload;
   if (commit.ok()) {
+    // Published bytes now live in the store; unpublished ones stay owned
+    // while history can still restore a reference to them.
+    std::erase_if(owned_assets_, [&](const platform::EncodedTemplateAsset &owned) {
+      return std::ranges::find(assets, owned.asset_sha256,
+                               &platform::EncodedTemplateAsset::asset_sha256) != assets.end();
+    });
+    unreadable_visual_ = {};
     document_.path() = path;
     document_.mark_saved();
+    release_unreachable_assets();
     reload = request_daemon_reload();
     rescan();
   }

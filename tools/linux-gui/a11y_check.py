@@ -21,18 +21,29 @@ EVENTS = ("object:state-changed", "object:text-changed",
           "window:destroy", "window:activate")
 
 
+def profile_fixture_index(row_names, expected_names, fixture_name):
+    """Verify the whole roster, then locate the named fixture without an order assumption."""
+    # Keep authored name whitespace; only the shared profile_list_text separator is decoration.
+    names = [name.partition("  —  ")[0] for name in row_names]
+    assert sorted(names) == sorted(expected_names), f"profile rows: {names}; expected {expected_names}"
+    matches = [index for index, name in enumerate(names) if name == fixture_name]
+    assert len(matches) == 1, f"fixture row is ambiguous or missing: {fixture_name}; {names}"
+    return matches[0]
+
+
 def main():
     profile = Path(sys.argv[1]) / "fixture.json"
-    import gi  # noqa: PLC0415 -- the bridge reports absence instead of failing
+    import importlib  # noqa: PLC0415 -- Linux-only dependencies are loaded inside the runner
+    gi = importlib.import_module("gi")
     gi.require_version("Atspi", "2.0")
-    from gi.repository import GLib  # noqa: PLC0415
-    import pyatspi  # noqa: PLC0415
+    GLib = importlib.import_module("gi.repository.GLib")
+    pyatspi = importlib.import_module("pyatspi")
 
     context = GLib.MainContext.default()
     events, checks = [], []
 
     def dispatch():
-        for _ in range(64):
+        for _ in range(1024):
             if not context.pending():
                 break
             context.iteration(False)
@@ -51,19 +62,32 @@ def main():
     def children(node):
         return [node.getChildAtIndex(i) for i in range(node.childCount)]
 
+    # Searches use lists and plain loops, never suspended or abandoned
+    # generators: releasing an accessible can dispatch AT-SPI event callbacks,
+    # and Python 3.13 crashed when one ran while a nested walk generator was
+    # being finalized.
     def walk(node):
-        yield node
-        for child in children(node):
-            if child is not None:
-                yield from walk(child)
+        nodes, pending = [], [node]
+        while pending:
+            current = pending.pop()
+            nodes.append(current)
+            pending.extend(reversed([c for c in children(current) if c is not None]))
+        return nodes
+
+    def first(nodes, predicate):
+        for node in nodes:
+            if node is not None and predicate(node):
+                return node
+        return None
 
     def application():
-        return next((a for a in children(pyatspi.Registry.getDesktop(0))
-                     if a is not None and a.name == "LayerE"), None)
+        return first(children(pyatspi.Registry.getDesktop(0)), lambda a: a.name == "LayerE")
 
     def lookup(name, role, root=None):
-        return next((n for n in walk(root or application())
-                     if n.name == name and n.getRoleName() == role), None)
+        root = root if root is not None else application()
+        if root is None:
+            return None
+        return first(walk(root), lambda n: n.name == name and n.getRoleName() == role)
 
     def find(name, role, root=None):
         node = lookup(name, role, root)
@@ -89,7 +113,7 @@ def main():
     pyatspi.Registry.registerEventListener(record, *EVENTS)
     try:
         app = until(application, "application exported as LayerE")
-        frame = until(lambda: next((c for c in children(app) if c.getRoleName() == "frame"), None),
+        frame = until(lambda: first(children(app), lambda c: c.getRoleName() == "frame"),
                       "main window exported")
         until(lambda: lookup("Accessibility: AT-SPI bridge active", "label"),
               "visible bridge status exported")
@@ -99,14 +123,21 @@ def main():
         assert "<Control>s" in save_item.queryAction().getKeyBinding(0)
         checks.append("menu bar, items and Ctrl+S keybinding exported")
 
+        saved_name = json.loads(profile.read_text())["name"]
+        profiles = find("Profiles", "list")
+        rows = children(profiles)
+        expected_names = [json.loads(path.read_text())["name"]
+                          for path in profile.parent.glob("*.json")]
+        fixture = profile_fixture_index([row.name for row in rows], expected_names, saved_name)
+        selection = profiles.querySelection()
+        assert selection.selectChild(fixture), "fixture row could not be selected"
+        until(lambda: selection.nSelectedChildren == 1 and selection.isChildSelected(fixture),
+              "fixture profile selected through accessibility")
         name = find("Profile name", "entry")
         text = name.queryText()
-        saved_name = json.loads(profile.read_text())["name"]
-        assert text.getText(0, -1) == saved_name, text.getText(0, -1)
+        until(lambda: text.getText(0, -1) == saved_name, "selected profile name field readable")
         checks.append("profile name field readable")
-        rows = children(find("Profiles", "list"))
-        assert len(rows) == 1 and state(rows[0], pyatspi.STATE_SELECTED)
-        checks.append("profile list row exported and selected")
+        checks.append("complete profile list exported and fixture selected")
 
         windows = subprocess.check_output(["xdotool", "search", "--name", "^LayerE"],
                                           text=True, timeout=5).split()
@@ -146,15 +177,19 @@ def main():
         until(lambda: not frame.name.endswith("*"), "saved title exported")
 
         assert find("Delete...", "menu item").queryAction().doAction(0)
-        dialog = until(lambda: next((c for c in children(application())
-                                     if c.getRoleName() == "dialog"), None),
+        dialog = until(lambda: first(children(application()),
+                                     lambda c: c.getRoleName() == "dialog"),
                        "modal Delete dialog exported")
         until(lambda: state(dialog, pyatspi.STATE_MODAL), "dialog is modal")
+        # A modal disables every main-window control, so its creation event
+        # follows a burst of state changes; observe it while the dialog lives.
+        until(lambda: seen("window:create", role="dialog"), "dialog creation event emitted")
         prompt = [n.name for n in walk(dialog) if n.getRoleName() == "label"]
         assert any("Delete this profile" in p for p in prompt), prompt
         cancel = find("Cancel", "button", dialog)
         assert cancel.queryAction().doAction(0)
-        until(lambda: not any(c.getRoleName() == "dialog" for c in children(application())),
+        until(lambda: first(children(application()),
+                            lambda c: c.getRoleName() == "dialog") is None,
               "dialog closed by accessible Cancel")
         assert profile.is_file()
         checks.append("cancelled Delete kept the profile")
@@ -162,7 +197,6 @@ def main():
         until(lambda: seen("object:state-changed:focused", detail1=1), "focus event emitted")
         until(lambda: seen("object:text-changed:insert"), "text-change event emitted")
         until(lambda: seen("object:state-changed:selected", detail1=1), "selection event emitted")
-        until(lambda: seen("window:create", role="dialog"), "dialog creation event emitted")
         report["passed"] = True
     except Exception as error:  # noqa: BLE001 -- reported, never raised to the bridge
         report["error"] = f"{type(error).__name__}: {error}"
