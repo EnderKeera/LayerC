@@ -26,7 +26,10 @@ class LinuxGuiReportTests(unittest.TestCase):
         self.write("resources.json", {"peakIdleUssBytes": 7 * MIB,
                                       "idleCpuPercent": 0.0, "idleSeconds": 60.0})
         self.write("startup-resources.json", {"peakUssKiB": 7 * 1024, "passed": True,
-                                              "stoppedByHarness": True})
+                                              "stoppedByHarness": True, "applicationPid": 1234,
+                                              "applicationStartTime": "4242", "nonce": "n0nce"})
+        for view in ("json", "simulator", "trace-stopped"):
+            self.write(f"automation-{view}-resources.json", self.advanced_resources())
         self.cases([(name, "pass") for name in EXPECTED])
 
     def tearDown(self) -> None:
@@ -122,6 +125,64 @@ class LinuxGuiReportTests(unittest.TestCase):
                 self.setUp()
                 (self.out / "ownership" / f"{role}.status").unlink()
                 self.assert_fails(self.run_report(), f"owned process record missing: {role}")
+
+    def advanced_resources(self, moments: Any = None) -> dict[str, Any]:
+        moments = moments if moments is not None else [100.0 + 0.25 * i for i in range(241)]
+        return {"process": "layere", "pid": 1234, "startTime": "4242", "nonce": "n0nce",
+                "peakIdleUssBytes": 8 * MIB,
+                "peakIdlePssBytes": 9 * MIB, "peakIdleRssBytes": 12 * MIB,
+                "idleCpuPercent": 0.0, "idleSeconds": 60.0,
+                "samples": [{"monotonic": moment, "ussBytes": 8 * MIB,
+                             "pssBytes": 9 * MIB, "rssBytes": 12 * MIB}
+                            for moment in moments]}
+
+    def test_advanced_resource_evidence_is_required_and_bounded(self) -> None:
+        for view in ("json", "simulator", "trace-stopped"):
+            with self.subTest(view=view):
+                path = self.out / f"automation-{view}-resources.json"
+                path.unlink()
+                self.assert_fails(self.run_report(), f"automation {view}: resource evidence is missing")
+                self.write(path.name, self.advanced_resources())
+        for key, value, fragment in (
+                ("peakIdleUssBytes", 49 * MIB, "resource target exceeded"),
+                ("idleCpuPercent", 0.3, "resource target exceeded"),
+                ("idleSeconds", 1.0, "idle window shorter"),
+                ("peakIdlePssBytes", True, "not a finite"),
+                ("peakIdleRssBytes", float("nan"), "not a finite"),
+                ("pid", 1235, "owned editor"),
+                ("pid", True, "owned editor"),
+                ("startTime", "4243", "owned editor"),
+                ("nonce", "other", "owned editor"),
+                ("idleSeconds", 65.0, "do not cover the reported idle window"),
+                ("samples", [], "memory samples are missing"),
+                ("samples", ["x"] * 241, "memory samples are missing"),
+                ("samples", [{"monotonic": 100 + i} for i in range(150)], "too few"),
+                ("samples", [{"monotonic": 100.0 + 0.25 * i} for i in range(241)], "not a finite")):
+            with self.subTest(key=key, value=value):
+                report = self.advanced_resources()
+                report[key] = value
+                self.write("automation-json-resources.json", report)
+                self.assert_fails(self.run_report(), fragment)
+        report = self.advanced_resources()
+        report["samples"][1]["monotonic"] = 99
+        self.write("automation-json-resources.json", report)
+        self.assert_fails(self.run_report(), "timestamps are not increasing")
+        report = self.advanced_resources()
+        report["samples"][1]["ussBytes"] += MIB
+        self.write("automation-json-resources.json", report)
+        self.assert_fails(self.run_report(), "does not match its samples")
+        # Two quick readings cannot stand in for a reported sixty-second window.
+        self.write("automation-json-resources.json",
+                   self.advanced_resources([100.0 + 0.04 * i for i in range(241)]))
+        self.assert_fails(self.run_report(), "do not cover the reported idle window")
+        self.write("automation-json-resources.json",
+                   self.advanced_resources([100.0 + 0.25 * i for i in range(241) if not 100 <= i < 108]))
+        self.assert_fails(self.run_report(), "unobserved gap")
+        self.write("automation-json-resources.json", self.advanced_resources())
+        startup = json.loads((self.out / "startup-resources.json").read_text())
+        startup["applicationPid"] = True
+        self.write("startup-resources.json", startup)
+        self.assert_fails(self.run_report(), "names no owned editor")
 
     def test_resource_targets_and_malformed_samples_fail(self) -> None:
         self.write("resources.json", {"peakIdleUssBytes": 21 * MIB,

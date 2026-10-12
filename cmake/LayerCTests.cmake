@@ -102,6 +102,10 @@ layerc_add_test(layerc_editor_document_tests
     SOURCES tests/editor_document_tests.cpp
         tests/editor_document_store_tests.cpp
     LINK layerc_editor_core TIMEOUT 30)
+# Shared automation graph edits, simulator replay and trace files.
+layerc_add_test(layerc_editor_automation_tests
+    SOURCES tests/editor_automation_graph_tests.cpp
+    LINK layerc_editor_core TIMEOUT 30)
 if(WIN32)
     layerc_add_test(layerc_launcher_win_tests
         SOURCES tests/launcher_win_tests.cpp
@@ -114,6 +118,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     # diagnostics enabled without requiring hundreds of empty initializers.
     target_compile_options(layerc_core_tests PRIVATE -Wno-missing-field-initializers)
     target_compile_options(layerc_editor_document_tests PRIVATE -Wno-missing-field-initializers)
+    target_compile_options(layerc_editor_automation_tests PRIVATE -Wno-missing-field-initializers)
 endif()
 
 if(NOT WIN32)

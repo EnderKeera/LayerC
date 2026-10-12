@@ -1,0 +1,564 @@
+#include "automation_editor.hpp"
+#include "automation_trace_client.hpp"
+#include <exception>
+#include "editor_app.hpp"
+#include "automation_graph.hpp"
+#include "automation_simulator.hpp"
+
+#include <FL/Fl.H>
+#include <FL/Fl_Button.H>
+#include <FL/Fl_Check_Button.H>
+#include <FL/Fl_Choice.H>
+#include <FL/Fl_Group.H>
+#include <FL/Fl_Hold_Browser.H>
+#include <FL/Fl_Input.H>
+#include <FL/Fl_Multiline_Input.H>
+#include <FL/Fl_Multiline_Output.H>
+#include <FL/Fl_Native_File_Chooser.H>
+#include <FL/Fl_Output.H>
+#include <FL/Fl_Scroll.H>
+#include <FL/fl_ask.H>
+
+#include <algorithm>
+#include <cstdlib>
+#include <functional>
+#include <limits>
+#include <string>
+#include <utility>
+#include <variant>
+
+namespace layerc::editor {
+namespace core = layerc::core;
+namespace {
+// The shared JSON writer emits CRLF for Windows edit controls; FLTK would
+// render each CR as a visible ^M, and the parser accepts plain LF.
+std::string display_lines(std::string text) {
+  std::erase(text, '\r');
+  return text;
+}
+void append_choice(Fl_Choice &choice, const std::string_view label) {
+  const auto index = choice.add(("__item_" + std::to_string(choice.size())).c_str());
+  choice.replace(index, std::string(label).c_str());
+}
+std::optional<std::filesystem::path> trace_destination(const bool save) {
+  Fl_Native_File_Chooser chooser;
+  chooser.title(save ? "Save automation trace" : "Load automation trace");
+  if (const auto *home = std::getenv("HOME"); home && *home) chooser.directory(home);
+  chooser.type(save ? Fl_Native_File_Chooser::BROWSE_SAVE_FILE : Fl_Native_File_Chooser::BROWSE_FILE);
+  chooser.filter("LayerC trace\t*.layerctrace");
+  if (save) chooser.options(Fl_Native_File_Chooser::SAVEAS_CONFIRM);
+  if (chooser.show() || !chooser.filename() || !*chooser.filename()) return std::nullopt;
+  return std::filesystem::path(chooser.filename());
+}
+} // namespace
+
+struct LinuxAutomationEditor::Impl {
+  enum class Pending { none, basic, json };
+  EditorApp &app;
+  Fl_Group *page{}, *basic{}, *advanced{}, *simulation{}, *live_view{}, *properties{}, *action_fields{};
+  Fl_Hold_Browser *automations{}, *nodes{};
+  Fl_Choice *view{}, *preset{}, *palette{}, *event{}, *action{}, *sim_event{}, *speed{};
+  Fl_Input *name{}, *rule_id{}, *source{}, *priority{}, *target{}, *value{};
+  Fl_Input *sim_source{}, *sim_fields{}, *breakpoint{}, *assertions{};
+  Fl_Check_Button *enabled{}, *repeating{}, *trace_enabled{};
+  Fl_Multiline_Input *json{};
+  Fl_Output *validation{};
+  Fl_Multiline_Output *state{}, *trace_state{};
+  Fl_Button *create{}, *remove{}, *add{}, *erase{}, *apply{}, *json_apply{};
+  Fl_Button *reset{}, *step{}, *play{}, *event_add{}, *load_trace{}, *save_trace{}, *trace_replay{};
+  AutomationSelection selection;
+  std::vector<AutomationNodeRow> rows;
+  AutomationSimulator simulator;
+  LiveTraceLog trace;
+  std::unique_ptr<AutomationTraceClient> trace_client;
+  bool trace_gap{};
+  std::string profile_id;
+  std::string simulated_graph; // graph JSON the simulator was last reset with
+  Pending pending{Pending::none};
+  int current_view{};
+  bool playing{};
+
+  Impl(EditorApp &owner, Fl_Group &group) : app(owner), page(&group) {
+    page->begin();
+    view = choice(285, 75, 170, "Automation view");
+    for (const auto label : automation_view_labels) append_choice(*view, label);
+    append_choice(*view, "Live trace");
+    view->value(0);
+    preset = choice(475, 75, 260, "Starter preset");
+    for (const auto label : automation_preset_labels) append_choice(*preset, label);
+    preset->value(0);
+    create = button(750, 75, 120, "New automation");
+    remove = button(880, 75, 150, "Remove automation");
+
+    basic = new Fl_Scroll(270, 110, 775, 265);
+    basic->begin();
+    automations = browser(285, 145, 215, 200, "Automations");
+    name = input(520, 145, 325, "Automation name");
+    enabled = check(860, 145, 170, "Automation enabled");
+    palette = choice(520, 210, 325, "Node palette");
+    for (const auto &entry : automation_palette) append_choice(*palette, entry.label);
+    palette->value(0);
+    add = button(860, 210, 75, "Add node");
+    erase = button(945, 210, 85, "Delete node");
+    nodes = browser(520, 270, 510, 110, "Rules and actions");
+    properties = new Fl_Group(520, 405, 510, 280);
+    properties->begin();
+    rule_id = input(520, 430, 245, "Rule id");
+    event = choice(785, 430, 245, "Event");
+    for (const auto kind : core::automation_event_kinds) append_choice(*event, event_label(kind));
+    source = input(520, 495, 245, "Source filter");
+    priority = input(785, 495, 245, "Priority");
+    action_fields = new Fl_Group(520, 525, 510, 160);
+    action_fields->begin();
+    action = choice(520, 560, 245, "Action kind");
+    for (const auto &spec : core::automation_action_specs) append_choice(*action, spec.display_name);
+    target = input(785, 560, 245, "Action target");
+    value = input(520, 625, 325, "Typed JSON value (expressions kept)");
+    repeating = check(860, 625, 170, "Repeating timer");
+    action_fields->end();
+    properties->end();
+    apply = button(520, 705, 245, "Apply properties");
+    basic->end();
+
+    advanced = new Fl_Group(270, 110, 775, 335);
+    advanced->begin();
+    json = new Fl_Multiline_Input(285, 145, 745, 185, "Advanced automation JSON");
+    json->align(FL_ALIGN_TOP_LEFT);
+    json->textfont(FL_COURIER);
+    json->textsize(12);
+    json->when(FL_WHEN_CHANGED);
+    bind(*json);
+    json_apply = button(285, 345, 220, "Validate / Apply JSON");
+    advanced->end();
+
+    simulation = new Fl_Group(270, 110, 775, 335);
+    simulation->begin();
+    sim_event = choice(285, 145, 225, "Synthetic event");
+    for (const auto kind : core::automation_event_kinds) append_choice(*sim_event, event_label(kind));
+    sim_event->value(0);
+    sim_source = input(530, 145, 190, "Event source", false);
+    sim_fields = input(740, 145, 290, "Fields: name=JSON; ...", false);
+    event_add = button(285, 195, 135, "Add event");
+    reset = button(430, 195, 100, "Reset");
+    step = button(540, 195, 100, "Step");
+    play = button(650, 195, 100, "Play");
+    speed = choice(770, 195, 110, "Speed");
+    for (const auto label : simulator_speed_labels) append_choice(*speed, label);
+    speed->value(1);
+    breakpoint = input(285, 255, 225, "Breakpoint rule id", false);
+    assertions = input(530, 255, 500, "Assertions: variable=JSON; ...", false);
+    state = new Fl_Multiline_Output(285, 310, 745, 65, "Simulator state");
+    state->align(FL_ALIGN_TOP_LEFT);
+    state->textfont(FL_COURIER);
+    state->textsize(12);
+    simulation->end();
+    live_view = new Fl_Group(270, 110, 775, 270);
+    live_view->begin();
+    trace_enabled = check(285, 145, 650, "Record authenticated LayerD trace (saved profile only)");
+    trace_replay = button(285, 195, 350, "Replay collected trace in simulator");
+    trace_state = new Fl_Multiline_Output(285, 255, 745, 100, "Live trace status");
+    trace_state->align(FL_ALIGN_TOP_LEFT);
+    trace_state->value("Stopped. No daemon subscription.");
+    live_view->end();
+    page->end();
+    // Trace files work in every view and never access a running daemon.
+    page->begin();
+    load_trace = button(285, 395, 160, "Load trace...");
+    save_trace = button(460, 395, 160, "Save trace...");
+    validation = new Fl_Output(645, 395, 385, 28, "Automation validation");
+    validation->align(FL_ALIGN_TOP_LEFT);
+    page->end();
+    show_view();
+  }
+  ~Impl() { suspend(); }
+  void bind(Fl_Widget &widget) {
+    widget.callback([](Fl_Widget *w, void *data) { static_cast<Impl *>(data)->handle(w); }, this);
+  }
+  Fl_Button *button(int x, int y, int width, const char *label) {
+    auto *widget = new Fl_Button(x, y, width, 28, label);
+    bind(*widget);
+    return widget;
+  }
+  Fl_Input *input(int x, int y, int width, const char *label, bool edit = true) {
+    auto *widget = new Fl_Input(x, y, width, 28, label);
+    widget->align(FL_ALIGN_TOP_LEFT);
+    if (edit) { widget->when(FL_WHEN_CHANGED); bind(*widget); }
+    return widget;
+  }
+  Fl_Choice *choice(int x, int y, int width, const char *label) {
+    auto *widget = new Fl_Choice(x, y, width, 28, label);
+    widget->align(FL_ALIGN_TOP_LEFT);
+    bind(*widget);
+    return widget;
+  }
+  Fl_Check_Button *check(int x, int y, int width, const char *label) {
+    auto *widget = new Fl_Check_Button(x, y, width, 28, label);
+    bind(*widget);
+    return widget;
+  }
+  Fl_Hold_Browser *browser(int x, int y, int width, int height, const char *label) {
+    auto *widget = new Fl_Hold_Browser(x, y, width, height, label);
+    widget->align(FL_ALIGN_TOP_LEFT);
+    widget->format_char(0);
+    bind(*widget);
+    return widget;
+  }
+  void show_view() {
+    basic->hide(); simulation->hide(); advanced->hide(); live_view->hide();
+    if (current_view == 0) basic->show();
+    if (current_view == 1) simulation->show();
+    if (current_view == 2) advanced->show();
+    if (current_view == 3) live_view->show();
+    page->redraw();
+  }
+  void stop() {
+    playing = false;
+    Fl::remove_timeout(tick, this);
+    play->copy_label("Play");
+  }
+  void stop_live(const std::string &status = "Stopped. No daemon subscription.") {
+    Fl::remove_timeout(trace_tick, this);
+    trace_enabled->value(0);
+    trace_client.reset(); // owned, joined worker; unsubscribes or lease expires
+    trace_state->value(status.c_str());
+    trace_state->redraw();
+  }
+  void suspend() { stop(); stop_live(); }
+  static void trace_tick(void *data) {
+    auto &self = *static_cast<Impl *>(data);
+    if (!self.page->visible_r()) { self.stop_live(); return; }
+    if (!self.trace_client) return;
+    if (auto update = self.trace_client->take_update()) {
+      if (!update->reply) {
+        self.stop_live("Unavailable: " + update->error);
+        self.message("Automation trace unavailable: " + update->error);
+        return;
+      }
+      const auto &reply = *update->reply;
+      if (!reply.packet.empty() &&
+          std::holds_alternative<core::AutomationError>(core::parse_layerc_trace(reply.packet))) {
+        self.stop_live("Unavailable: LayerD returned an invalid trace packet.");
+        self.message("Automation trace packet was refused.");
+        return;
+      }
+      if (reply.reset) { self.trace.clear(); self.trace_gap = false; }
+      self.trace_gap = self.trace_gap || reply.gap;
+      if (!reply.packet.empty()) (void)self.trace.append_packet(reply.packet);
+      const auto status = "Recording saved daemon profile. Roots: " +
+          std::to_string(self.trace.events().size()) +
+          (self.trace_gap ? "\nOlder trace events were lost from the bounded daemon buffer." : "") +
+          "\nTrace files may contain user-authored strings or maps.";
+      self.trace_state->value(status.c_str());
+      self.trace_state->redraw();
+    }
+    self.trace_client->request_poll();
+    Fl::repeat_timeout(0.2, trace_tick, &self);
+  }
+  void set_pending(Pending next) {
+    stop();
+    pending = next;
+    app.module_fields_changed(next != Pending::none);
+  }
+  void message(const std::string &text) {
+    app.report(text);
+  }
+  void describe() {
+    state->value(simulator.describe(assertions->value()).c_str());
+    state->redraw();
+  }
+  void rewind() {
+    stop();
+    const auto result = simulator.reset(automation_graph_json(app.session.document().automation()),
+                                        app.session.document().profile());
+    if (result.error) message("Simulator unavailable: " + *result.error);
+    else if (result.seeded) trace.record(*result.seeded);
+    describe();
+  }
+  void refresh() {
+    stop();
+    if (pending != Pending::none) app.module_fields_changed(false);
+    pending = Pending::none;
+    if (!app.session.has_document()) {
+      stop_live();
+      profile_id.clear();
+      simulated_graph.clear();
+      trace.clear();
+      simulator.load({});
+      json->value(""); state->value(""); validation->value("");
+      page->deactivate();
+      return;
+    }
+    page->activate();
+    const auto &document = app.session.document();
+    if (profile_id != document.profile().id) {
+      stop_live();
+      profile_id = document.profile().id;
+      selection = {};
+      trace.clear();
+      simulator.load({});
+      simulated_graph.clear();
+    }
+    const auto &graph = document.automation();
+    selection = clamp_selection(graph, selection);
+    if (selection.automation < 0 && graph && !graph->automations.empty())
+      selection = {0, -1, -1};
+    automations->clear(); nodes->clear(); rows.clear();
+    name->value(""); enabled->value(0);
+    if (graph) {
+      for (const auto &item : graph->automations)
+        automations->add(automation_label(item).c_str());
+      if (selection.automation >= 0) {
+        const auto &item = graph->automations[static_cast<std::size_t>(selection.automation)];
+        name->value(item.name.c_str()); enabled->value(item.enabled);
+        rows = automation_node_rows(item);
+        for (const auto &row : rows) nodes->add(row.label.c_str());
+      }
+    }
+    automations->value(selection.automation + 1);
+    nodes->value(0);
+    for (std::size_t i = 0; i < rows.size(); ++i)
+      if (rows[i].rule == selection.rule && rows[i].action == selection.action)
+        nodes->value(static_cast<int>(i + 1));
+    if (selection.automation < 0) {
+      name->deactivate(); enabled->deactivate(); remove->deactivate(); add->deactivate();
+    } else {
+      name->activate(); enabled->activate(); remove->activate(); add->activate();
+    }
+    if (selection.rule < 0) { properties->deactivate(); erase->deactivate(); }
+    else { properties->activate(); erase->activate(); }
+    if (selection.action < 0) action_fields->deactivate();
+    else action_fields->activate();
+    const auto fields = graph ? automation_node_fields(*graph, selection) : AutomationNodeFields{};
+    rule_id->value(fields.rule_id.c_str()); event->value(fields.event_index);
+    source->value(fields.source_filter.c_str()); priority->value(fields.priority.c_str());
+    action->value(fields.action_kind_index); target->value(fields.target.c_str());
+    value->value(fields.value.c_str()); repeating->value(fields.repeating);
+    auto graph_json = automation_graph_json(graph);
+    json->value(display_lines(graph_json).c_str());
+    validation->value(automation_validation_summary(graph, document.profile()).c_str());
+    if (document.automation_state() == platform::ModuleSidecarState::invalid) {
+      basic->deactivate(); advanced->deactivate(); create->deactivate(); remove->deactivate();
+      validation->value("Unreadable automation module preserved; editing blocked.");
+    } else { basic->activate(); advanced->activate(); create->activate(); }
+    // Unrelated form refreshes keep simulator progress; graph edits rewind it.
+    if (graph_json != simulated_graph) {
+      simulated_graph = std::move(graph_json);
+      rewind();
+    }
+    show_view();
+  }
+  bool apply_pending() {
+    if (pending == Pending::none) return true;
+    auto &session = app.session;
+    std::optional<std::string> error;
+    if (pending == Pending::json) {
+      const auto source_text = std::string(json->value());
+      auto parsed = core::parse_automation_profile_json(source_text, session.document().profile());
+      if (const auto *failure = std::get_if<core::AutomationError>(&parsed)) {
+        const auto location = locate_json_error(source_text, *failure);
+        message("Invalid automation JSON: " + location.message);
+        if (location.begin && location.end) {
+          const auto bound = static_cast<std::size_t>(std::numeric_limits<int>::max());
+          json->insert_position(static_cast<int>(std::min(*location.end, bound)),
+                         static_cast<int>(std::min(*location.begin, bound)));
+          json->take_focus();
+        }
+        return false;
+      }
+      error = session.edit_automation([&](auto &graph) -> std::optional<std::string> {
+        graph = std::move(std::get<core::AutomationProfile>(parsed));
+        return std::nullopt;
+      });
+    } else {
+      const AutomationNodeFields fields{
+          .rule_id = rule_id->value(), .event_index = event->value(),
+          .source_filter = source->value(), .priority = priority->value(),
+          .action_kind_index = action->value(), .target = target->value(),
+          .value = value->value(), .repeating = repeating->value() != 0,
+          .advanced_value = std::string_view(value->value()) == advanced_expression_text};
+      error = session.edit_automation([&](auto &graph) -> std::optional<std::string> {
+        if (!graph || selection.automation < 0 ||
+            static_cast<std::size_t>(selection.automation) >= graph->automations.size())
+          return "Select an automation first.";
+        auto &item = graph->automations[static_cast<std::size_t>(selection.automation)];
+        item.name = name->value(); item.enabled = enabled->value() != 0;
+        if (selection.rule >= 0)
+          return apply_automation_node_fields(*graph, selection, fields, fields.advanced_value);
+        return std::nullopt;
+      });
+    }
+    if (error) { message("Not applied: " + *error); return false; }
+    pending = Pending::none;
+    app.module_fields_changed(false);
+    refresh();
+    message("Automation applied to the document. Save publishes it.");
+    return true;
+  }
+  bool edit_graph(const std::function<AutomationEditResult(std::optional<core::AutomationProfile> &)> &edit,
+                  const bool repair = false) {
+    if (!app.apply_fields()) return false;
+    auto next = selection;
+    const auto error = app.session.edit_automation([&](auto &graph) -> std::optional<std::string> {
+      const auto result = edit(graph);
+      if (const auto *failure = std::get_if<std::string>(&result)) return *failure;
+      next = std::get<AutomationSelection>(result);
+      return std::nullopt;
+    }, false, repair);
+    if (error) { message("Not changed: " + *error); return false; }
+    selection = next;
+    refresh();
+    message("Unsaved automation changes. Save applies them.");
+    return true;
+  }
+  static void tick(void *data) {
+    auto &self = *static_cast<Impl *>(data);
+    if (!self.playing || !self.app.window.shown() || !self.page->visible_r()) {
+      self.stop(); return;
+    }
+    const bool more = self.simulator.step(self.breakpoint->value());
+    self.describe();
+    if (!more) { self.stop(); return; }
+    Fl::repeat_timeout(static_cast<double>(simulator_interval(self.speed->value()).count()) / 1000.0,
+                       tick, &self);
+  }
+  void trace_file(bool save) {
+    suspend();
+    if (save && trace.empty()) { message("No trace to save."); return; }
+    if (save && fl_choice("Trace files may contain user-authored strings or maps. Save?",
+                          "Cancel", "Save", nullptr) != 1) return;
+    const auto destination = trace_destination(save);
+    if (!destination) return;
+    if (save) {
+      message(write_trace_file(*destination, trace.export_text()) ? "Trace saved." : "Trace write failed.");
+      return;
+    }
+    auto loaded = read_trace_file(*destination);
+    if (const auto *error = std::get_if<TraceLoadError>(&loaded)) {
+      message(error->message); return;
+    }
+    auto &record = std::get<LoadedTrace>(loaded);
+    simulator.load(record.events);
+    trace.assign(std::move(record.events), std::move(record.text));
+    rewind();
+    message("Trace loaded as simulator roots.");
+  }
+  void handle(Fl_Widget *widget) {
+    if (!app.session.has_document()) return;
+    if (widget == view) {
+      const auto next = view->value();
+      if (!app.apply_fields()) { view->value(current_view); return; }
+      stop(); if (next != 3) stop_live();
+      current_view = next; show_view(); return;
+    }
+    if (widget == trace_enabled) {
+      if (!trace_enabled->value()) { stop_live(); return; }
+      try {
+        // Like Windows: a recording starts a fresh log, never mixed with
+        // seeded or synthetic simulator roots.
+        trace.clear();
+        trace_client = std::make_unique<AutomationTraceClient>(profile_id);
+        trace_gap = false;
+        trace_state->value("Connecting to authenticated local LayerD...");
+        Fl::add_timeout(0.0, trace_tick, this);
+      } catch (const std::exception &error) {
+        stop_live(std::string("Unavailable: ") + error.what());
+      }
+      return;
+    }
+    if (widget == trace_replay) {
+      if (trace.empty()) { message("No daemon trace roots to replay."); return; }
+      stop_live();
+      simulator.load(trace.events());
+      current_view = 1; view->value(1); show_view(); rewind();
+      message("Daemon trace copied to simulator. Local replay does not modify LayerD.");
+      return;
+    }
+    if (widget == preset || widget == palette || widget == sim_event) return;
+    if (widget == speed) { if (playing) { stop(); play->do_callback(); } return; }
+    if (widget == create) {
+      (void)edit_graph([&](auto &graph) {
+        return add_automation_preset(app.session.document().profile(), graph,
+                                     static_cast<AutomationPreset>(preset->value()));
+      });
+      return;
+    }
+    if (widget == remove || widget == erase) {
+      if (fl_choice(widget == remove ? "Remove this automation?" : "Remove this rule or action?",
+                    "Cancel", "Remove", nullptr) != 1) return;
+      (void)edit_graph([&](auto &graph) -> AutomationEditResult {
+        return widget == remove ? remove_automation(graph, selection)
+                                : delete_automation_node(graph, selection);
+      }, true);
+      return;
+    }
+    if (widget == add) {
+      const auto *entry = automation_palette_entry(palette->value());
+      if (entry) (void)edit_graph([&](auto &graph) {
+        return add_palette_node(app.session.document().profile(), graph, selection, *entry);
+      });
+      return;
+    }
+    if (widget == automations || widget == nodes) {
+      const int chosen = static_cast<Fl_Hold_Browser *>(widget)->value() - 1;
+      const auto previous = selection;
+      if (!app.apply_fields()) {
+        automations->value(previous.automation + 1);
+        for (std::size_t i = 0; i < rows.size(); ++i)
+          if (rows[i].rule == previous.rule && rows[i].action == previous.action)
+            nodes->value(static_cast<int>(i + 1));
+        return;
+      }
+      if (widget == automations) selection = {chosen, -1, -1};
+      else if (chosen >= 0 && static_cast<std::size_t>(chosen) < rows.size()) {
+        selection.rule = rows[static_cast<std::size_t>(chosen)].rule;
+        selection.action = rows[static_cast<std::size_t>(chosen)].action;
+      }
+      refresh(); return;
+    }
+    if (widget == apply || widget == json_apply) { (void)apply_pending(); return; }
+    if (widget == load_trace || widget == save_trace) { trace_file(widget == save_trace); return; }
+    if (widget == reset) { rewind(); return; }
+    if (widget == step) { stop(); (void)simulator.step(breakpoint->value()); describe(); return; }
+    if (widget == event_add) {
+      const int index = sim_event->value();
+      if (index < 0 || static_cast<std::size_t>(index) >= core::automation_event_kinds.size()) return;
+      const auto result = simulator.add_event(core::automation_event_kinds[static_cast<std::size_t>(index)],
+                                               sim_source->value(), sim_fields->value());
+      if (const auto *error = std::get_if<std::string>(&result)) message(*error);
+      else { trace.record(std::get<core::AutomationEvent>(result)); message("Synthetic event added."); }
+      describe(); return;
+    }
+    if (widget == play) {
+      if (playing) { stop(); return; }
+      if (!simulator.compiled() || simulator.position() >= simulator.events().size()) {
+        message("Reset the simulator or add an event before playback."); return;
+      }
+      playing = true; play->copy_label("Pause");
+      Fl::add_timeout(static_cast<double>(simulator_interval(speed->value()).count()) / 1000.0, tick, this);
+      return;
+    }
+    set_pending(widget == json ? Pending::json : Pending::basic);
+  }
+};
+
+LinuxAutomationEditor::LinuxAutomationEditor(EditorApp &app)
+    : app_(app), page_(new Fl_Group(270, 45, 775, 405, "Automation")) {
+  page_->end();
+  page_->hide();
+}
+LinuxAutomationEditor::~LinuxAutomationEditor() = default;
+Fl_Group *LinuxAutomationEditor::group() const { return page_; }
+void LinuxAutomationEditor::refresh() {
+  if (!impl_) {
+    if (!app_.session.has_document()) { page_->deactivate(); return; }
+    page_->activate();
+    if (!page_->visible()) return; // no advanced widgets or graph copies until requested
+    auto *previous = Fl_Group::current();
+    impl_ = std::make_unique<Impl>(app_, *page_);
+    Fl_Group::current(previous);
+  }
+  impl_->refresh();
+}
+bool LinuxAutomationEditor::apply_pending() { return !impl_ || impl_->apply_pending(); }
+void LinuxAutomationEditor::stop() { if (impl_) impl_->suspend(); }
+} // namespace layerc::editor

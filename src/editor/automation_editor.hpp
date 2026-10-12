@@ -4,6 +4,7 @@
 #include "dialog_theme.hpp"
 #include "editor_state.hpp"
 #include "profile_document.hpp"
+#include "automation_simulator.hpp"
 #include "layerc/core/automation.hpp"
 #include "layerc/core/live_edit.hpp"
 
@@ -76,7 +77,8 @@ private:
   [[nodiscard]] layerc::core::AutomationRule *selected_rule(HWND dialog) const;
   [[nodiscard]] layerc::core::AutomationAction *selected_action(HWND dialog) const;
   [[nodiscard]] Mutation mutate_automation(HWND dialog, const wchar_t *title,
-                                           const AutomationEdit &edit);
+                                           const AutomationEdit &edit,
+                                           bool repair = false);
 
   ProfileDocument &document_;
   LiveEditSession &live_edit_;
@@ -85,12 +87,9 @@ private:
   ChangeRecorder record_change_;
   HWND dialog_{};
   DialogChrome chrome_;
-  std::string trace_json_;
   std::string trace_display_;
-  std::vector<layerc::core::AutomationEvent> trace_events_;
-  std::vector<layerc::core::AutomationEvent> simulator_events_;
-  std::unique_ptr<layerc::core::AutomationRuntime> simulator_;
-  std::size_t simulator_index_{};
+  LiveTraceLog trace_log_;
+  AutomationSimulator simulator_;
   int node_rule_{-1};
   int node_action_{-1};
   int view_{};

@@ -4,11 +4,13 @@
 #include "event_loop.hpp"
 
 #include "layerc/core/profile.hpp"
+#include "layerc/core/automation_trace_control.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 
 #include <cstddef>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -70,11 +72,15 @@ struct ControlReply {
   bool reload_requested{};
 };
 
-// LayerC.Control v1 dispatch: status/reload/notify-reload/stop.
+using TraceControlResult = std::variant<layerc::core::TraceControlReply, std::string>;
+using TraceControlHandler = std::function<TraceControlResult(const layerc::core::TraceControlRequest &)>;
+
+// LayerC.Control v1 dispatch; trace payloads have their own typed version.
 [[nodiscard]] ControlReply handle_control_request(
     std::string_view request_json,
     const layerc::runtime::DaemonKernel &kernel,
-    const LinuxStatusSnapshot &linux = {});
+    const LinuxStatusSnapshot &linux = {},
+    const TraceControlHandler &trace = {});
 
 struct ControlOutcome {
   std::string diagnostic;
@@ -97,7 +103,8 @@ public:
   [[nodiscard]] ControlOutcome service(
       layerc::platform::EventLoop &loop, std::vector<int> ready,
       const layerc::runtime::DaemonKernel &kernel,
-      const LinuxStatusSnapshot &linux = {});
+      const LinuxStatusSnapshot &linux = {},
+      const TraceControlHandler &trace = {});
 
   void expire_clients(
       layerc::platform::EventLoop &loop,

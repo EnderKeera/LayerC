@@ -837,6 +837,7 @@ public:
   [[nodiscard]] bool persistent_dirty() const noexcept;
   void mark_persistent_saved() noexcept;
   [[nodiscard]] const std::vector<AutomationTraceEntry> &trace() const noexcept;
+  [[nodiscard]] bool trace_enabled() const noexcept;
   void set_trace_enabled(bool enabled);
   void consume_trace(std::size_t count);
   void clear_trace();

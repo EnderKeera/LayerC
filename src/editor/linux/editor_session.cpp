@@ -183,6 +183,31 @@ EditorSession::edit(const std::function<void(core::GameProfile &)> &change,
   return std::nullopt;
 }
 
+std::optional<std::string> EditorSession::edit_automation(
+    const std::function<std::optional<std::string>(
+        std::optional<core::AutomationProfile> &)> &change,
+    const bool text_change, const bool repair) {
+  if (!opened_) return "No profile is open.";
+  if (document_.automation_state() == platform::ModuleSidecarState::invalid)
+    return "The unreadable automation module is preserved; editing is blocked.";
+  auto candidate = document_.automation();
+  // Removals may repair an already-invalid graph one node at a time.
+  const bool was_invalid = repair && candidate &&
+      !core::validate_automation_profile(*candidate, document_.profile()).message.empty();
+  if (const auto error = change(candidate)) return error;
+  if (candidate && !was_invalid) {
+    const auto error = core::validate_automation_profile(*candidate, document_.profile());
+    if (!error.message.empty()) return error.describe();
+  }
+  if (candidate == document_.automation()) return std::nullopt;
+  document_.automation() = std::move(candidate);
+  document_.mark_automation_edited();
+  (void)document_.history().record(document_.profile(), document_.visual(),
+                                    document_.automation(), text_change);
+  mark_changed();
+  return std::nullopt;
+}
+
 std::optional<std::string> EditorSession::remove_cooldown(const std::string_view id) {
   if (!opened_) return "No profile is open.";
   if (const auto error = document_.remove_cooldown(id)) return error->message;
@@ -200,7 +225,10 @@ bool EditorSession::undo() {
   if (!snapshot) return false;
   document_.profile() = std::move(snapshot->profile);
   document_.visual() = std::move(snapshot->visual_profile);
-  document_.automation() = std::move(snapshot->automation_profile);
+  if (document_.automation() != snapshot->automation_profile) {
+    document_.automation() = std::move(snapshot->automation_profile);
+    document_.mark_automation_edited();
+  }
   mark_changed();
   return true;
 }
@@ -211,7 +239,10 @@ bool EditorSession::redo() {
   if (!snapshot) return false;
   document_.profile() = std::move(snapshot->profile);
   document_.visual() = std::move(snapshot->visual_profile);
-  document_.automation() = std::move(snapshot->automation_profile);
+  if (document_.automation() != snapshot->automation_profile) {
+    document_.automation() = std::move(snapshot->automation_profile);
+    document_.mark_automation_edited();
+  }
   mark_changed();
   return true;
 }

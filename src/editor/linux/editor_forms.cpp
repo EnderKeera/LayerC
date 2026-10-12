@@ -96,10 +96,12 @@ void EditorApp::build() {
   window_class = input(285, 210, 340, "Window class (optional)");
   window_title = input(660, 210, 370, "Window title (optional)");
   enabled = check(285, 265, 260, "Profile enabled");
-  auto *note = new Fl_Box(285, 320, 745, 90,
+  profile_id = new Fl_Multiline_Output(285, 320, 745, 30, "Profile ID (read-only)");
+  profile_id->align(FL_ALIGN_TOP_LEFT);
+  auto *note = new Fl_Box(285, 370, 745, 65,
       "Explicit Save publishes edits and requests an authenticated LayerD reload.\n"
-      "Offline editing is supported. Game Bar companion, visual and automation data\n"
-      "are preserved; advanced editing is tracked separately.");
+      "Offline editing is supported. The Automation tab edits rules and replays events.\n"
+      "Visual and Game Bar companion data are preserved.");
   note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
   profile_tab->end();
 
@@ -166,6 +168,7 @@ void EditorApp::build() {
   preview_note->labelsize(11);
   panel_fields->end();
   panel_tab->end();
+  automation = std::make_unique<LinuxAutomationEditor>(*this);
   tabs->end();
   active_tab_ = profile_tab;
   tabs->callback([](Fl_Widget *, void *data) { static_cast<EditorApp *>(data)->tab_changed(); }, this);
@@ -233,9 +236,14 @@ void EditorApp::fill_lists() {
 }
 
 void EditorApp::refresh_forms() {
-  if (!session.has_document()) { tabs->deactivate(); module_status->value("No open profile."); return; }
+  if (automation) automation->refresh();
+  if (!session.has_document()) {
+    tabs->deactivate(); profile_id->value("");
+    module_status->value("No open profile."); return;
+  }
   tabs->activate();
   const auto &profile = session.document().profile();
+  profile_id->value(profile.id.c_str());
   name->value(profile.name.c_str());
   executable->value(profile.game.executable_name.c_str());
   executable_path->value(profile.game.executable_path.c_str());

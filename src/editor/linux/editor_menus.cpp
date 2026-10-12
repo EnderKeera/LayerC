@@ -45,6 +45,7 @@ constexpr std::array definitions{
     Definition{"&View/&Cooldowns", "&Cooldowns", Command::cooldown_page, FL_CTRL | '2', 0},
     Definition{"&View/&Bindings", "&Bindings", Command::binding_page, FL_CTRL | '3', 0},
     Definition{"&View/&Panels", "&Panels", Command::panel_page, FL_CTRL | '4', FL_MENU_DIVIDER},
+    Definition{"&View/&Automation", "&Automation", Command::automation_page, FL_CTRL | '5', 0},
     Definition{"&View/Daemon &status", "Daemon &status", Command::refresh, 0, 0}};
 static_assert(static_cast<std::size_t>(Command::close) < 32);
 

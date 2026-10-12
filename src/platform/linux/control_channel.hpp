@@ -30,6 +30,7 @@ enum class ControlCommand : std::uint8_t {
   reload,
   notify_reload,
   stop,
+  trace,
 };
 
 inline constexpr std::array control_command_wire{
@@ -37,6 +38,7 @@ inline constexpr std::array control_command_wire{
     layerc::core::EnumWireEntry{ControlCommand::reload, "reload"},
     layerc::core::EnumWireEntry{ControlCommand::notify_reload, "notify-reload"},
     layerc::core::EnumWireEntry{ControlCommand::stop, "stop"},
+    layerc::core::EnumWireEntry{ControlCommand::trace, "trace"},
 };
 
 [[nodiscard]] constexpr std::string_view
@@ -53,7 +55,8 @@ parse_control_command(const std::string_view name) noexcept {
 // Request JSON: {"proto":"LayerC.Control","v":1,"cmd":"<command>"}
 // Response JSON: {"proto":"LayerC.Control","v":1,"ok":true[,"payload":<json>]
 //                 [,"error":"<text>"]}
-[[nodiscard]] std::string encode_control_request(ControlCommand command);
+[[nodiscard]] std::string encode_control_request(ControlCommand command,
+                                                 std::string_view payload_json = {});
 
 [[nodiscard]] std::optional<ControlCommand>
 parse_control_request(std::string_view json);
@@ -125,7 +128,8 @@ private:
 // connection, frame write, and response read. Accepts only a valid, successful
 // LayerC.Control v1 response; returns its original bytes for presentation.
 [[nodiscard]] std::optional<std::string>
-control_roundtrip(std::string_view request_json, std::string &error);
+control_roundtrip(std::string_view request_json, std::string &error,
+                  std::chrono::milliseconds timeout = std::chrono::seconds(5));
 
 // Blocking framed write with a bounded POLLOUT wait (CLI/test helpers only;
 // daemon responses advance nonblocking writes on the shared event loop).

@@ -68,6 +68,7 @@ struct InputSession {
   layerc::core::AutomationSession automation;
   std::filesystem::path source_path;
   std::uint64_t window{};
+  std::uint64_t trace_generation{}; // registry-owned runtime identity, preserved on moves
   bool global{};
   bool active{};
   layerc::core::InputMatcher matcher;
@@ -133,6 +134,8 @@ public:
   session_requests() const;
 
   [[nodiscard]] std::size_t automation_count() const noexcept;
+  [[nodiscard]] TraceControlResult trace_request(const layerc::core::TraceControlRequest &request,
+      layerc::core::TimePoint now = layerc::core::MonotonicClock::now());
   // Unsaved values of profiles that no longer have a session.
   [[nodiscard]] std::size_t pending_checkpoint_count() const;
   [[nodiscard]] const layerc::platform::AutomationPersistence &
@@ -152,6 +155,16 @@ private:
   // Marks runtimes whose values the persistence owner just made durable.
   void acknowledge_saved(std::span<const std::filesystem::path> saved);
 
+  struct TraceLease {
+    std::string profile_id;
+    layerc::core::TimePoint expires;
+    std::uint64_t generation{};
+    std::uint64_t cursor{};       // last sequence delivered
+    std::uint64_t acknowledged{}; // last cursor the client sent back
+  };
+  void reconcile_trace(layerc::core::TimePoint now);
+  std::map<std::string, TraceLease, std::less<>> trace_leases_;
+  std::uint64_t trace_generation_{};
   std::vector<ConfiguredProfile> configured_;
   std::vector<VisualConfiguration> visual_configurations_;
   std::vector<InputSession> sessions_;

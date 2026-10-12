@@ -82,6 +82,12 @@ public:
   [[nodiscard]] std::optional<std::string>
   edit(const std::function<void(layerc::core::GameProfile &)> &change,
        bool text_change = false);
+  // Edits a module copy, validates the complete result against the base, and
+  // records one normal history transaction. Unreadable sidecars stay blocked.
+  [[nodiscard]] std::optional<std::string> edit_automation(
+      const std::function<std::optional<std::string>(
+          std::optional<layerc::core::AutomationProfile> &)> &change,
+      bool text_change = false, bool repair = false);
   // Removes a cooldown with its bindings, panel memberships and module
   // references, refusing when a group or rule still depends on it.
   [[nodiscard]] std::optional<std::string> remove_cooldown(std::string_view id);

@@ -61,6 +61,7 @@ public:
   [[nodiscard]] std::size_t session_count() const noexcept;
   [[nodiscard]] std::vector<layerc::runtime::SessionDiagnostics>
   session_diagnostics() const;
+  [[nodiscard]] TraceControlResult trace_request(const layerc::core::TraceControlRequest &request);
 
 private:
   struct Impl;
