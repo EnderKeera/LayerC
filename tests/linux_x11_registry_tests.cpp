@@ -599,8 +599,134 @@ void test_status_diagnostic_bound() {
          "bounded fault detail keeps the status control frame sendable");
 }
 
+void test_registry_trace_lifetime() {
+  using layerc::test::expect;
+  layerc::test::TempDirectory temp{"layerc-trace-registry"};
+  layerc::test::ScopedEnvironment config{"XDG_CONFIG_HOME", temp.path() / "config"};
+  layerc::test::ScopedEnvironment data{"XDG_DATA_HOME", temp.path() / "data"};
+  if (!expect(config.applied() && data.applied(), "trace tests own disposable XDG roots")) return;
+  const auto roots = layerc::platform::profile_store_roots();
+  if (!expect(layerc::platform::ensure_profile_store_roots(roots), "private trace store exists")) return;
+  const auto base = base_profile("trace-only");
+  auto automation = automation_profile(base, AutomationEventKind::input_pressed);
+  const StoredProfile source{roots.config_profiles / "trace.json", base};
+  if (!expect(layerc::platform::write_profile_bundle(
+          source.path, base, std::nullopt, automation).ok(), "trace-only bundle is stored")) return;
+  layerc::daemon::X11SessionRegistry registry;
+  registry.configure(std::span{&source, 1});
+  const auto scan = active_scan();
+  registry.refresh(scan);
+  auto *runtime = registry.sessions().front().automation.runtime();
+  if (!expect(runtime && !runtime->trace_enabled() && runtime->trace().capacity() == 0,
+              "ordinary automation allocates no trace buffer")) return;
+  const auto now = MonotonicClock::now();
+  TraceControlRequest request{TraceControlOperation::subscribe, base.id, "client-a", 0, 0};
+  auto exchange = [&](const TraceControlRequest &value) -> std::optional<TraceControlReply> {
+    const auto response = registry.trace_request(value, now);
+    if (!expect(std::holds_alternative<TraceControlReply>(response), "valid trace request succeeds"))
+      return std::nullopt;
+    return std::get<TraceControlReply>(response);
+  };
+  auto reply = exchange(request);
+  if (!reply) return;
+  expect(reply->reset && reply->generation != 0 && runtime->trace_enabled() &&
+             runtime->snapshot().variables.at("count") == AutomationValue(std::int64_t{0}),
+         "subscription only enables observation; it never evaluates a root");
+  request.operation = TraceControlOperation::poll;
+  request.generation = reply->generation; request.cursor = reply->cursor;
+  AutomationEvent root;
+  root.kind = AutomationEventKind::input_pressed;
+  root.source_id = "fixture"; root.timestamp = now; root.origin_token = 1;
+  (void)runtime->process(root);
+  reply = exchange(request);
+  if (!reply) return;
+  const auto imported = parse_layerc_trace(reply->packet);
+  expect(std::holds_alternative<std::vector<AutomationEvent>>(imported) &&
+             std::get<std::vector<AutomationEvent>>(imported).size() == 1 &&
+             reply->cursor > request.cursor,
+         "bounded packets carry a replayable root and advance the sequence cursor");
+  const auto retry = registry.trace_request(request, now);
+  const auto *again = std::get_if<TraceControlReply>(&retry);
+  expect(again != nullptr && again->cursor == reply->cursor && again->packet == reply->packet,
+         "a lost reply is fetched again with the unacknowledged cursor");
+  const auto stale = request.cursor;
+  request.cursor = reply->cursor;
+  if (!exchange(request)) return; // acknowledges the delivered batch
+  auto replay = request; replay.cursor = stale;
+  expect(std::holds_alternative<std::string>(registry.trace_request(replay, now)),
+         "a stale cursor cannot replay an acknowledged packet");
+  auto wrong = request; wrong.profile_id = "unrelated";
+  expect(std::holds_alternative<std::string>(registry.trace_request(wrong, now)) &&
+             runtime->trace_enabled(), "one client cannot affect another profile subscription");
+  const auto a = request;
+  auto b = request; b.client_id = "client-b"; b.operation = TraceControlOperation::subscribe;
+  if (!exchange(b)) return;
+  auto unsubscribe = request; unsubscribe.operation = TraceControlOperation::unsubscribe;
+  if (!exchange(unsubscribe)) return;
+  expect(runtime->trace_enabled(), "another subscriber keeps trace demand alive");
+  unsubscribe.client_id = b.client_id;
+  if (!exchange(unsubscribe)) return;
+  expect(!runtime->trace_enabled() && runtime->trace().empty() && runtime->trace().capacity() == 0,
+         "last unsubscribe releases both capture demand and trace capacity");
+
+  request = a; request.operation = TraceControlOperation::subscribe;
+  reply = exchange(request);
+  if (!reply) return;
+  request.operation = TraceControlOperation::poll;
+  request.generation = reply->generation; request.cursor = reply->cursor;
+  (void)runtime->process(root);
+  reply = exchange(request);
+  if (!reply) return;
+  request.cursor = reply->cursor;
+  for (std::size_t i = 0; i < max_automation_trace_entries + 8; ++i) {
+    root.origin_token = i + 10;
+    (void)runtime->process(root);
+  }
+  reply = exchange(request);
+  if (!reply) return;
+  expect(reply->gap && reply->packet.size() <= trace_control_packet_bytes &&
+             runtime->trace().size() <= max_automation_trace_entries,
+         "a slow subscriber sees explicit truncation without unbounded growth");
+
+  const auto old_generation = request.generation;
+  automation.automations.front().rules.front().actions.front().value =
+      literal(AutomationValue(std::int64_t{2}));
+  if (!expect(layerc::platform::write_profile_bundle(
+          source.path, base, std::nullopt, automation).ok(), "changed graph is durably stored")) return;
+  registry.configure(std::span{&source, 1}); registry.refresh(scan);
+  runtime = registry.sessions().front().automation.runtime();
+  reply = exchange(request);
+  if (!reply) return;
+  expect(reply->reset && reply->generation != old_generation && reply->cursor == 0 &&
+             runtime->trace_enabled(), "runtime replacement has an explicit new trace generation");
+  request.generation = reply->generation; request.cursor = reply->cursor;
+  reply = exchange(request);
+  if (!reply) return;
+  expect(!reply->reset && reply->packet.empty(), "empty new generation cannot reuse old roots");
+  (void)registry.poll_automation(now + trace_control_lease + Milliseconds{1});
+  expect(!runtime->trace_enabled() && runtime->trace().capacity() == 0 &&
+             std::holds_alternative<std::string>(registry.trace_request(request, now + trace_control_lease + Milliseconds{1})),
+         "abandoned clients expire on the daemon monotonic event-loop deadline");
+
+  request.operation = TraceControlOperation::subscribe;
+  for (std::size_t i = 0; i < trace_control_client_limit; ++i) {
+    request.client_id = "limit-" + std::to_string(i);
+    if (!exchange(request)) return;
+  }
+  request.client_id = "too-many";
+  expect(std::holds_alternative<std::string>(registry.trace_request(request, now)),
+         "subscriber count is bounded independently of the control connection limit");
+  expect(std::holds_alternative<std::string>(registry.trace_request(request, TimePoint::max())),
+         "lease clock overflow is refused instead of creating immortal demand");
+  (void)registry.poll_automation(now + trace_control_lease + Milliseconds{1});
+  expect(!runtime->trace_enabled() && runtime->trace().capacity() == 0,
+         "all disconnected subscribers release their trace buffer");
+  registry.stop_sessions(MonotonicClock::now());
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(test_registry_automation_only_and_health),
                  LAYERC_TEST_CASE(test_registry_fresh_admission_state),
-                 LAYERC_TEST_CASE(test_status_diagnostic_bound))
+                 LAYERC_TEST_CASE(test_status_diagnostic_bound),
+                 LAYERC_TEST_CASE(test_registry_trace_lifetime))

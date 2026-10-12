@@ -95,6 +95,7 @@ add_library(layerc_core STATIC
     src/core/automation_runtime_effects.cpp
     src/core/automation_runtime_evaluation.cpp
     src/core/automation_trace.cpp
+    src/core/automation_trace_control.cpp
     src/core/automation_validation.cpp
     src/core/automation_effects.cpp
     src/core/cooldown_engine.cpp
@@ -477,6 +478,7 @@ if(NOT WIN32)
         if(LAYERC_HAVE_X11)
             target_sources(layerc_daemon_linux PRIVATE
                 src/daemon/linux/input_service.cpp
+                src/daemon/linux/automation_trace.cpp
                 src/daemon/linux/overlay_service.cpp
                 src/daemon/linux/visual_service.cpp)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_x11)
@@ -509,7 +511,9 @@ endif()
 # or platform headers; the platform library supplies the profile store.
 if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
     add_library(layerc_editor_core STATIC
+        src/editor/common/automation_graph.cpp
         src/editor/common/automation_presets.cpp
+        src/editor/common/automation_simulator.cpp
         src/editor/common/document_commit.cpp
         src/editor/common/profile_document.cpp
         src/editor/common/profile_edit.cpp)
@@ -525,13 +529,15 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         # authenticated control client for daemon status and reload.
         add_library(layerc_editor_linux STATIC
             src/editor/linux/daemon_link.cpp
+            src/editor/linux/automation_trace_client.cpp
             src/editor/linux/editor_model.cpp
             src/editor/linux/editor_session.cpp
             src/editor/linux/profile_mutations.cpp)
         target_include_directories(layerc_editor_linux PUBLIC src/editor/linux)
         target_include_directories(layerc_editor_linux PRIVATE src/platform/linux)
+        find_package(Threads REQUIRED)
         target_link_libraries(layerc_editor_linux PUBLIC
-            layerc_editor_core layerc_runtime layerc_linux layerc_bundle)
+            layerc_editor_core layerc_runtime layerc_linux layerc_bundle Threads::Threads)
         layerc_enable_warnings(layerc_editor_linux)
         if(LAYERC_BUILD_EDITOR AND LAYERC_HAVE_X11)
             include(cmake/LinuxEditorGUI.cmake)

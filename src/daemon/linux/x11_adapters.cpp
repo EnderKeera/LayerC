@@ -231,6 +231,10 @@ X11Adapters::session_diagnostics() const {
   return rows;
 }
 
+TraceControlResult X11Adapters::trace_request(const layerc::core::TraceControlRequest &request) {
+  return impl_->sessions.trace_request(request);
+}
+
 #else
 
 struct X11Adapters::Impl {};
@@ -273,6 +277,10 @@ std::size_t X11Adapters::session_count() const noexcept { return 0; }
 std::vector<layerc::runtime::SessionDiagnostics>
 X11Adapters::session_diagnostics() const {
   return {};
+}
+
+TraceControlResult X11Adapters::trace_request(const layerc::core::TraceControlRequest &) {
+  return std::string("automation trace unavailable: X11 support was not built");
 }
 
 #endif

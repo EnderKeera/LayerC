@@ -24,7 +24,9 @@ TARGETS = {"idleUssBytes": 20 * MIB, "startupPeakUssBytes": 20 * MIB, "idleCpuPe
 REPRESENTATIVE = {"idleUssBytes": 32 * MIB, "startupPeakUssBytes": 32 * MIB, "idleCpuPercent": 0.2}
 CYCLE_COUNT, CYCLE_DRIFT = 100, 2 * MIB
 OWNED_ROLES = ("wm", "fixture", "daemon", "sampler", "bridge", "outer-xvfb")
-MIN_IDLE_SECONDS = 5.0
+MIN_IDLE_SECONDS = 60.0
+# The samples themselves must prove the window: ~240 readings at 0.25 s.
+MIN_WINDOW_SAMPLES, MAX_SAMPLE_GAP, WINDOW_SLACK = 200, 1.0, 1.0
 
 
 def load(path):
@@ -87,6 +89,70 @@ def check_cases(out, failures):
     statuses = {name: case.get("status") for name, case in seen.items() if isinstance(case, dict)}
     return statuses, report.get("deferred")
 
+
+def check_automation_resources(out, startup, failures):
+    """Required advanced-view samples belong to this runner's editor."""
+    targets = {"peakIdleUssBytes": 48 * MIB, "idleCpuPercent": 0.2}
+    observations = {}
+    startup = startup if isinstance(startup, dict) else {}
+    owner = startup.get("applicationPid")
+    owner_start, owner_nonce = startup.get("applicationStartTime"), startup.get("nonce")
+    if (isinstance(owner, bool) or not isinstance(owner, int) or owner <= 0
+            or not isinstance(owner_start, str) or not owner_start
+            or not isinstance(owner_nonce, str) or not owner_nonce):
+        failures.append("automation resources: startup evidence names no owned editor")
+        owner = owner_start = owner_nonce = None
+    for view in ("json", "simulator", "trace-stopped"):
+        label = f"automation {view}"
+        report = load(out / f"automation-{view}-resources.json")
+        if not isinstance(report, dict):
+            failures.append(f"{label}: resource evidence is missing")
+            continue
+        pid = report.get("pid")
+        if (owner is None or report.get("process") != "layere" or isinstance(pid, bool)
+                or not isinstance(pid, int) or pid != owner
+                or report.get("startTime") != owner_start or report.get("nonce") != owner_nonce):
+            failures.append(f"{label}: sample does not belong to the owned editor")
+        observed = {key: number(report, key, failures, label) for key in
+                    ("peakIdleUssBytes", "peakIdlePssBytes", "peakIdleRssBytes",
+                     "idleCpuPercent", "idleSeconds")}
+        for key, limit in targets.items():
+            if observed[key] is not None and observed[key] > limit:
+                failures.append(f"{label}: resource target exceeded: {key}")
+        if observed["idleSeconds"] is not None and observed["idleSeconds"] < MIN_IDLE_SECONDS:
+            failures.append(f"{label}: idle window shorter than {MIN_IDLE_SECONDS} s")
+        samples = report.get("samples")
+        if (not isinstance(samples, list) or len(samples) < MIN_WINDOW_SAMPLES
+                or not all(isinstance(sample, dict) for sample in samples)):
+            failures.append(f"{label}: memory samples are missing or too few")
+        else:
+            previous = first = None
+            peaks: dict[str, int | float] = {"ussBytes": 0, "pssBytes": 0, "rssBytes": 0}
+            for sample in samples:
+                moment = number(sample, "monotonic", failures, label)
+                if moment is not None:
+                    if previous is not None and moment <= previous:
+                        failures.append(f"{label}: sample timestamps are not increasing")
+                    elif previous is not None and moment - previous > MAX_SAMPLE_GAP:
+                        failures.append(f"{label}: samples leave an unobserved gap")
+                    first = moment if first is None else first
+                    previous = moment
+                for key in peaks:
+                    value = number(sample, key, failures, label)
+                    if value is not None:
+                        peaks[key] = max(peaks[key], value)
+            span = previous - first if first is not None and previous is not None else 0
+            if span < MIN_IDLE_SECONDS - WINDOW_SLACK or (
+                    observed["idleSeconds"] is not None
+                    and abs(observed["idleSeconds"] - span) > WINDOW_SLACK):
+                failures.append(f"{label}: samples do not cover the reported idle window")
+            for field, key in (("peakIdleUssBytes", "ussBytes"),
+                               ("peakIdlePssBytes", "pssBytes"),
+                               ("peakIdleRssBytes", "rssBytes")):
+                if observed[field] is not None and observed[field] != peaks[key]:
+                    failures.append(f"{label}: {field} does not match its samples")
+        observations[view] = observed
+    return {"targets": targets, "observed": observations}
 
 def check_cycles(out, failures):
     report = load(out / "cycles.json")
@@ -171,6 +237,7 @@ def evaluate(out):
         if statuses is not None:
             result["cases"] = statuses
             result["deferred"] = deferred
+        result["automationResources"] = check_automation_resources(out, startup, failures)
     elif mode == "resources":
         result["fixture"] = "representative: 20 profiles x 10 cooldowns x 2 panels"
         result["cycles"] = check_cycles(out, failures)

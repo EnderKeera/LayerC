@@ -3,14 +3,18 @@
 // accessibility are covered separately by the disposable GUI walkthrough.
 #include "editor_app.hpp"
 #include "profile_edit.hpp"
+#include "automation_graph.hpp"
 #include "test_support.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
+#include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Input.H>
+#include <FL/Fl_Hold_Browser.H>
+#include <FL/Fl_Multiline_Input.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Menu_Button.H>
@@ -128,6 +132,9 @@ void text_history_and_invalid_navigation() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; show(app);
   const auto original = app.session.document().profile().name;
+  expect(app.profile_id->readonly() &&
+         std::string(app.profile_id->value()) == app.session.document().profile().id,
+         "read-only profile identity identifies even same-name imports");
   app.name->value("First"); app.field_changed(app.name);
   app.name->value("First edited"); app.field_changed(app.name);
   app.command(editor::EditorCommand::undo);
@@ -387,6 +394,155 @@ void routed_ctrl_z_precedes_field_undo() {
   Fl::e_state = 0;
   app.window.hide();
 }
+Fl_Widget *find_control(Fl_Group &group, const std::string_view label) {
+  for (int i = 0; i < group.children(); ++i) {
+    auto *child = group.child(i);
+    if (child->label() && label == child->label()) return child;
+    if (auto *nested = dynamic_cast<Fl_Group *>(child))
+      if (auto *found = find_control(*nested, label)) return found;
+  }
+  return nullptr;
+}
+template <typename Widget>
+Widget &automation_control(editor::EditorApp &app, const std::string_view label) {
+  auto *widget = dynamic_cast<Widget *>(find_control(*app.automation->group(), label));
+  expect(widget != nullptr, "the automation page owns the named control");
+  return *widget;
+}
+void automation_history_and_invalid_properties() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app; show(app);
+  app.command(editor::EditorCommand::automation_page);
+  expect(app.tabs->value() == app.automation->group(), "View Automation opens the real page");
+  auto &create = automation_control<Fl_Button>(app, "New automation");
+  create.do_callback();
+  expect(app.session.document().automation() && app.session.can_undo(),
+         "a blank preset goes through document history");
+  auto &palette = automation_control<Fl_Choice>(app, "Node palette");
+  palette.value(0);
+  automation_control<Fl_Button>(app, "Add node").do_callback();
+  expect(app.session.document().automation()->automations.front().rules.size() == 1,
+         "the node palette adds a validated input rule");
+  const auto graph_before = editor::automation_graph_json(app.session.document().automation());
+  auto &priority = automation_control<Fl_Input>(app, "Priority");
+  priority.value("bad"); priority.do_callback();
+  automation_control<Fl_Button>(app, "Apply properties").do_callback();
+  expect(editor::automation_graph_json(app.session.document().automation()) == graph_before &&
+         std::string(priority.value()) == "bad" && !app.save(),
+         "invalid properties stay local and Save cannot publish them");
+  tab(app, app.profile_tab);
+  expect(app.tabs->value() == app.automation->group() && std::string(priority.value()) == "bad",
+         "invalid automation fields block tab navigation without discarding text");
+  app.command(editor::EditorCommand::undo);
+  expect(editor::automation_graph_json(app.session.document().automation()) == graph_before && std::string(priority.value()) != "bad",
+         "Undo explicitly discards the invalid property buffer without undoing the graph");
+  app.command(editor::EditorCommand::undo);
+  expect(app.session.document().automation()->automations.front().rules.empty(),
+         "the next Undo reverses the accepted palette edit");
+  app.command(editor::EditorCommand::redo);
+  expect(editor::automation_graph_json(app.session.document().automation()) == graph_before, "Redo restores the accepted graph");
+  auto &name = automation_control<Fl_Input>(app, "Automation name");
+  name.value("A/B & Unicode Δ"); name.do_callback();
+  automation_control<Fl_Button>(app, "Apply properties").do_callback();
+  expect(app.session.document().automation()->automations.front().name == "A/B & Unicode Δ",
+         "Apply properties accepts UTF-8 names without menu-label parsing");
+  expect(app.save() && !app.session.has_unsaved_changes(), "Save durably publishes the automation sidecar");
+  const auto saved = editor::automation_graph_json(app.session.document().automation());
+  expect(!app.session.open_path(fixture.path) && editor::automation_graph_json(app.session.document().automation()) == saved,
+         "the saved graph reopens byte-stably through the durable store");
+  app.window.hide();
+}
+void automation_json_and_simulator_lifetime() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app; show(app);
+  app.command(editor::EditorCommand::automation_page);
+  automation_control<Fl_Button>(app, "New automation").do_callback();
+  const auto accepted = editor::automation_graph_json(app.session.document().automation());
+  const auto disk_before = layerc::test::read_file(fixture.path);
+  auto &view = automation_control<Fl_Choice>(app, "Automation view");
+  view.value(2); view.do_callback();
+  auto &json = automation_control<Fl_Multiline_Input>(app, "Advanced automation JSON");
+  expect(std::string_view(json.value()).find('\r') == std::string_view::npos &&
+             std::string_view(json.value()).find('\n') != std::string_view::npos,
+         "Advanced JSON shows plain lines, never CR glyphs");
+  json.value("{invalid"); json.do_callback();
+  automation_control<Fl_Button>(app, "Validate / Apply JSON").do_callback();
+  expect(editor::automation_graph_json(app.session.document().automation()) == accepted && !app.save() &&
+         layerc::test::read_file(fixture.path) == disk_before &&
+         std::string(app.status->value()).find("Invalid automation JSON") != std::string::npos,
+         "JSON parser refusal preserves the accepted graph and every durable byte");
+  view.value(1); view.do_callback();
+  expect(view.value() == 2 && std::string(json.value()) == "{invalid",
+         "a failed view change preserves invalid JSON");
+  app.command(editor::EditorCommand::undo);
+  auto replacement = app.session.document().automation();
+  replacement->automations.front().name = "Applied JSON";
+  const auto text = editor::automation_graph_json(replacement);
+  json.value(text.c_str()); json.do_callback();
+  automation_control<Fl_Button>(app, "Validate / Apply JSON").do_callback();
+  expect(editor::automation_graph_json(app.session.document().automation()) == text,
+         "validated advanced JSON uses the same document transaction as Basic");
+  view.value(1); view.do_callback();
+  auto &state = automation_control<Fl_Multiline_Output>(app, "Simulator state");
+  expect(std::string(state.value()).find("Events: 0/1") == 0,
+         "the simulator seeds sessionStarted and does not run the real daemon");
+  automation_control<Fl_Button>(app, "Step").do_callback();
+  expect(std::string(state.value()).find("Events: 1/1") == 0, "Step consumes one deterministic root");
+  auto &fields = automation_control<Fl_Input>(app, "Fields: name=JSON; ...");
+  fields.value("nonsense");
+  automation_control<Fl_Button>(app, "Add event").do_callback();
+  expect(std::string(state.value()).find("Events: 1/1") == 0,
+         "invalid synthetic fields cannot append a partial event");
+  fields.value("");
+  automation_control<Fl_Button>(app, "Add event").do_callback();
+  expect(std::string(state.value()).find("Events: 1/2") == 0, "a valid event appends at virtual time");
+  auto &play = automation_control<Fl_Button>(app, "Play");
+  play.do_callback();
+  expect(std::string(play.label()) == "Pause", "Play owns its scheduled timeout");
+  view.value(0); view.do_callback();
+  expect(std::string(play.label()) == "Play", "leaving the simulator cancels playback immediately");
+  const auto before_wait = std::string(state.value());
+  Fl::wait(.05);
+  expect(std::string(state.value()) == before_wait,
+         "a hidden simulator cannot keep advancing on an orphaned timeout");
+  view.value(1); view.do_callback();
+  automation_control<Fl_Choice>(app, "Speed").value(2);
+  play.do_callback();
+  for (int i = 0; i < 30 && std::string(play.label()) == "Pause"; ++i) Fl::wait(.02);
+  expect(std::string(play.label()) == "Play" && std::string(state.value()).find("Events: 2/2") == 0,
+         "playback consumes the remaining event and becomes idle without polling");
+  automation_control<Fl_Button>(app, "Reset").do_callback();
+  play.do_callback();
+  app.window.hide(); // destruction removes the owned timeout before FLTK frees its widgets
+}
+void automation_trace_disconnect() {
+  Fixture fixture; fixture.store();
+  editor::EditorApp app; show(app);
+  app.command(editor::EditorCommand::automation_page);
+  auto &view = automation_control<Fl_Choice>(app, "Automation view");
+  view.value(3); view.do_callback();
+  auto &record = automation_control<Fl_Check_Button>(
+      app, "Record authenticated LayerD trace (saved profile only)");
+  auto &status = automation_control<Fl_Multiline_Output>(app, "Live trace status");
+  const auto before = editor::automation_graph_json(app.session.document().automation());
+  const auto disk = layerc::test::read_file(fixture.path);
+  record.value(1); record.do_callback();
+  for (int i = 0; i < 80 && record.value(); ++i) Fl::wait(.02);
+  expect(!record.value() && std::string(status.value()).find("Unavailable:") == 0 &&
+             std::string(app.status->value()).find("Automation trace unavailable") == 0,
+         "missing authenticated daemon is visible and stops the trace worker");
+  expect(editor::automation_graph_json(app.session.document().automation()) == before &&
+             layerc::test::read_file(fixture.path) == disk && !app.session.has_unsaved_changes(),
+         "trace failure changes neither the document nor its durable profile");
+  record.value(1); record.do_callback();
+  view.value(0); view.do_callback();
+  expect(!record.value() && std::string(status.value()).find("Stopped.") == 0,
+         "leaving trace view joins its owned worker and cancels the UI timer");
+  Fl::wait(.05);
+  expect(std::string(status.value()).find("Stopped.") == 0, "no orphaned callback changes hidden status");
+  app.window.hide();
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(
@@ -398,4 +554,7 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(menus_follow_document_history_and_context),
   LAYERC_TEST_CASE(context_rows_and_fixed_menu_geometry),
   LAYERC_TEST_CASE(document_shortcuts_and_native_text_keys),
-  LAYERC_TEST_CASE(routed_ctrl_z_precedes_field_undo))
+  LAYERC_TEST_CASE(routed_ctrl_z_precedes_field_undo),
+  LAYERC_TEST_CASE(automation_history_and_invalid_properties),
+  LAYERC_TEST_CASE(automation_json_and_simulator_lifetime),
+  LAYERC_TEST_CASE(automation_trace_disconnect))

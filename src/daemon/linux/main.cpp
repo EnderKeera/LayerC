@@ -160,7 +160,8 @@ private:
     adapters_.refresh_status(kernel_, status_);
     status_.sessions = adapters_.session_diagnostics();
     const auto outcome =
-        control_.service(loop_, loop_.ready_fds(), kernel_, status_);
+        control_.service(loop_, loop_.ready_fds(), kernel_, status_,
+            [this](const auto &request) { return adapters_.trace_request(request); });
     if (!outcome.diagnostic.empty())
       std::fprintf(stderr, "layerd: %s\n", outcome.diagnostic.c_str());
     stop_requested_ = stop_requested_ || outcome.stop_requested;

@@ -2,6 +2,7 @@
 #include "profile_mutations.hpp"
 #include "profile_edit.hpp"
 #include "automation_presets.hpp"
+#include "automation_graph.hpp"
 #include "test_support.hpp"
 #include "layerc/core/companion.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
@@ -316,6 +317,79 @@ void import_destination_race_and_invalid_json() {
          "invalid JSON import is rejected without changing the store");
 }
 
+void automation_candidates_history_and_recovery() {
+  Fixture fixture;
+  fixture.store(true);
+  editor::EditorSession session(fixture.directory);
+  expect(!session.open(0), "open a complete bundle for automation edits");
+  const auto base = session.document().profile();
+  const auto initial = session.document().automation();
+  const auto disk = layerc::test::read_file(platform::automation_sidecar_path(fixture.path));
+  expect(!session.edit_automation([](auto &graph) -> std::optional<std::string> {
+           graph->automations.front().name = "Edited automation";
+           return std::nullopt;
+         }) && session.has_unsaved_changes() && session.can_undo(),
+         "accepted automation edits enter shared document history");
+  const auto edited = session.document().automation();
+  expect(layerc::test::read_file(platform::automation_sidecar_path(fixture.path)) == disk,
+         "automation editing never publishes before explicit Save");
+  expect(session.edit_automation([](auto &graph) -> std::optional<std::string> {
+           graph->profile_id = "wrong";
+           return std::nullopt;
+         }).has_value() && session.document().automation() == edited,
+         "validate the complete module identity before accepting a candidate");
+  expect(session.edit_automation([](auto &graph) -> std::optional<std::string> {
+           graph.reset();
+           return "refused";
+         }).has_value() && session.document().automation() == edited,
+         "a callback refusal cannot partially remove the module");
+  expect(!session.edit_automation([](auto &) -> std::optional<std::string> {
+           return std::nullopt;
+         }), "a no-op module edit is accepted without new history");
+  expect(session.undo() && session.document().automation() == initial &&
+             !session.has_unsaved_changes() && session.redo() &&
+             session.document().automation() == edited,
+         "module undo and redo cross the saved baseline correctly");
+  expect(session.document().profile() == base &&
+             session.save([] { return true; }).saved(),
+         "editing automation does not alter the base and saves durably");
+  const auto reopened = load(fixture.path);
+  expect(reopened && reopened->modules.get<core::AutomationModule>().usable() &&
+             *reopened->modules.get<core::AutomationModule>().profile() == *edited &&
+             reopened->modules.get<core::VisualModule>().usable() &&
+             reopened->modules.get<core::CompanionModule>().usable(),
+         "automation round-trip keeps unrelated modules intact");
+  expect(!session.edit_automation([](auto &graph) -> std::optional<std::string> {
+           graph.reset();
+           return std::nullopt;
+         }) && session.document().automation_state() == platform::ModuleSidecarState::absent,
+         "an explicit removal updates the sidecar intent");
+  expect(session.undo() && session.document().automation_state() == platform::ModuleSidecarState::valid &&
+             session.redo() && session.document().automation_state() == platform::ModuleSidecarState::absent,
+         "history restores the module state as well as its value");
+  expect(session.save([] { return true; }).saved(), "save the removal intent");
+  const auto removed = load(fixture.path);
+  expect(removed && removed->modules.get<core::AutomationModule>().state() ==
+                         platform::ModuleSidecarState::absent,
+         "the durable tombstone deactivates automation while retaining recovery bytes");
+  fixture.store(true);
+  const auto bad = platform::automation_sidecar_path(fixture.path);
+  std::filesystem::remove(platform::recovery_backup_path(bad));
+  expect(layerc::test::write_file(bad, "{broken") && !session.open_path(fixture.path),
+         "load unreadable automation with no recovery copy");
+  bool called{};
+  expect(session.edit_automation([&](auto &graph) -> std::optional<std::string> {
+           called = true;
+           graph.reset();
+           return std::nullopt;
+         }).has_value() && !called && session.document().has_unreadable_module(),
+         "an unreadable module cannot become an implicit deletion intent");
+  const auto blocked = session.save([] { return true; });
+  expect(!blocked.saved() && !blocked.reload &&
+             layerc::test::read_file(bad) == std::optional<std::string>("{broken"),
+         "failed module edits and saves preserve the original recovery evidence");
+}
+
 void field_parser_contracts() {
   expect(editor::parse_anchor("0.25") == 0.25 && !editor::parse_anchor("nan") &&
              !editor::parse_anchor("1.01") && !editor::parse_anchor("0.2junk"),
@@ -340,4 +414,5 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(drafts_and_history),
                  LAYERC_TEST_CASE(enablement_and_invalid_modules),
                  LAYERC_TEST_CASE(reviewed_import_export),
                  LAYERC_TEST_CASE(import_destination_race_and_invalid_json),
+                 LAYERC_TEST_CASE(automation_candidates_history_and_recovery),
                  LAYERC_TEST_CASE(field_parser_contracts))

@@ -39,8 +39,10 @@ from pathlib import Path
 MAX_REQUEST = 64 * 1024
 RECEIVE_SECONDS = 10.0    # Whole request must arrive within this window.
 OPERATION_SECONDS = 60.0  # Every subprocess of one operation shares this budget.
+RESOURCE_SECONDS = 75.0   # A 60-second read-only probe plus bounded setup/teardown.
 SEND_SECONDS = 5.0
 MAX_TEXT = 256
+MAX_MODULE_BYTES = 1024 * 1024  # Larger sidecars are listed by nothing; tests stay small.
 TYPE_DELAY_MS = 20
 INPUT_OPS = {"click", "drag", "set_text", "key", "type", "activate", "a11y_check"}
 FIXTURE_OPS = {"block_profile", "restore_profile", "daemon_stop", "daemon_start"}
@@ -273,9 +275,38 @@ class Bridge:
         exchange = {entry.name: hashlib.sha256(entry.read_bytes()).hexdigest()
                     for entry in sorted(self.exchange_dir.iterdir())
                     if entry.is_file() and not entry.is_symlink()}
-        return {"profiles": profiles, "exchange": str(self.exchange_dir), "exchangeFiles": exchange,
+        # Module sidecars of the private split store (read-only, bounded).
+        modules: dict[str, dict[str, object]] = {}
+        data = Path(os.environ["XDG_DATA_HOME"]) / "layerc" / "profiles"
+        for directory in sorted(data.iterdir()) if data.is_dir() else []:
+            if not directory.is_dir() or directory.is_symlink():
+                continue
+            for entry in sorted(directory.glob("*.json")):
+                if entry.is_file() and not entry.is_symlink() and entry.stat().st_size <= MAX_MODULE_BYTES:
+                    raw = entry.read_bytes()
+                    try:
+                        parsed = json.loads(raw)
+                    except ValueError:
+                        parsed = None
+                    modules[f"{directory.name}/{entry.name}"] = {
+                        "sha256": hashlib.sha256(raw).hexdigest(), "json": parsed}
+        return {"profiles": profiles, "modules": modules,
+                "exchange": str(self.exchange_dir), "exchangeFiles": exchange,
                 "daemon": {"reachable": daemon is not None, "status": daemon,
                            "error": None if daemon else status.stderr.strip()[:300]}}
+
+    def op_editor_resources(self, request):
+        from editor_resources import measure_editor
+        from sample import write
+        view = request.get("view")
+        if view not in ("json", "simulator", "trace-stopped"):
+            raise Rejected("unknown automation resource view")
+        self.confirm_display()
+        sample = measure_editor(self.evidence, f":{self.display_number}", self.profiles,
+                                self.deadline)
+        self.confirm_display()
+        write(self.evidence / f"automation-{view}-resources.json", sample)
+        return sample
 
     def op_tree(self, _request):
         # Out of process: an absent or wedged accessibility bus cannot stall us.
@@ -469,7 +500,8 @@ class Bridge:
                 else "fixture" if op in FIXTURE_OPS else "observe")
         # Every check below runs within this operation's own budget, never a
         # previous operation's expired deadline.
-        self.deadline = time.monotonic() + OPERATION_SECONDS
+        budget = RESOURCE_SECONDS if op == "editor_resources" else OPERATION_SECONDS
+        self.deadline = time.monotonic() + budget
         if kind in ("input", "direct-geometry"):
             self.require_fresh(request)
         elif op == "screenshot":
@@ -593,7 +625,8 @@ def call(session, request, token=None):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         # The bridge serves one request at a time: allow a queued request
         # behind one full operation, plus its own receive/operation/send.
-        client.settimeout(2 * OPERATION_SECONDS + RECEIVE_SECONDS + SEND_SECONDS + 10)
+        client.settimeout(2 * max(OPERATION_SECONDS, RESOURCE_SECONDS)
+                          + RECEIVE_SECONDS + SEND_SECONDS + 10)
         client.connect(str(session / "bridge.sock"))
         client.sendall((json.dumps({**request, "token": token}) + "\n").encode())
         data = b""

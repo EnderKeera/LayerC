@@ -28,7 +28,9 @@ def describe(node, depth, budget):
         item["checked"] = True
     try:
         text = node.queryText()
-        item["text"] = text.getText(0, min(text.characterCount, MAX_TEXT))
+        limit = 8192 if item["name"] == "Advanced automation JSON" else MAX_TEXT
+        item["text"] = text.getText(0, min(text.characterCount, limit))
+        item["textTruncated"] = text.characterCount > limit
     except NotImplementedError:
         pass
     try:

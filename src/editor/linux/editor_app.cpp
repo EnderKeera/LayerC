@@ -79,6 +79,7 @@ void EditorApp::refresh() {
 
 bool EditorApp::apply_fields(const bool text_change) {
   if (!session.has_document()) return true;
+  if (automation && active_tab_ == automation->group()) return automation->apply_pending();
   auto candidate = session.document().profile();
   std::string parse_error;
   if (active_tab_ == profile_tab) {
@@ -134,6 +135,13 @@ bool EditorApp::apply_fields(const bool text_change) {
   return !error;
 }
 
+void EditorApp::module_fields_changed(const bool pending) {
+  pending_fields_ = pending;
+  last_field_ = nullptr;
+  report(pending ? "Pending automation fields. Apply or Save validates them."
+                 : (session.has_unsaved_changes() ? "Unsaved changes. Save applies them."
+                                                 : "No pending changes."));
+}
 void EditorApp::field_changed(Fl_Widget *widget) {
   if (widget != last_field_) session.end_text_edit();
   last_field_ = widget;
@@ -237,6 +245,7 @@ bool EditorApp::command_enabled(const EditorCommand action) const {
   case EditorCommand::cooldown_page:
   case EditorCommand::binding_page:
   case EditorCommand::panel_page:
+  case EditorCommand::automation_page:
   case EditorCommand::close: return true;
   case EditorCommand::undo: return session.has_document() && (pending_fields_ || session.can_undo());
   case EditorCommand::redo: return session.has_document() && !pending_fields_ && session.can_redo();
@@ -263,6 +272,7 @@ void EditorApp::command(const EditorCommand action) {
   case EditorCommand::cooldown_page: page = cooldown_tab; break;
   case EditorCommand::binding_page: page = binding_tab; break;
   case EditorCommand::panel_page: page = panel_tab; break;
+  case EditorCommand::automation_page: if (automation) page = automation->group(); break;
   default: break;
   }
   if (page) { tabs->value(page); tab_changed(); tabs->redraw(); return; }

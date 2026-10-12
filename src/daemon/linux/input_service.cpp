@@ -218,6 +218,7 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
       // A replacement continues from the owner's values, including unsaved
       // ones whose write is still being retried.
       next.emplace_back(bundle, window->window, persistence_);
+      next.back().trace_generation = ++trace_generation_;
     } else {
       if (configuration_changed_ && retained->automation.runtime()) {
         // An explicit reload re-reads the durable state unless values are
@@ -245,6 +246,7 @@ void X11SessionRegistry::refresh(const layerc::platform::X11WindowScan &scan) {
   }
   for (auto &session : previous) session.stop_automation(now);
   sessions_ = std::move(next);
+  reconcile_trace(now);
   std::vector<std::filesystem::path> live;
   for (const auto &session : sessions_)
     if (session.automation.runtime()) live.push_back(session.source_path);
@@ -409,6 +411,7 @@ std::size_t X11SessionRegistry::automation_count() const noexcept {
 }
 
 bool X11SessionRegistry::poll_automation(const TimePoint now) {
+  reconcile_trace(now);
   for (auto &session : sessions_) session.poll_automation(now);
   // A completed write of a session-less entry drops its automation demand.
   const auto orphaned = pending_checkpoint_count();
@@ -419,6 +422,10 @@ bool X11SessionRegistry::poll_automation(const TimePoint now) {
 std::optional<TimePoint>
 X11SessionRegistry::next_automation_deadline(const TimePoint now) {
   std::optional<TimePoint> next = persistence_.next_deadline();
+  for (const auto &[client, lease] : trace_leases_) {
+    (void)client;
+    next = layerc::core::earliest_deadline(next, lease.expires);
+  }
   for (auto &session : sessions_)
     next = layerc::core::earliest_deadline(
         next, session.next_automation_deadline(now));

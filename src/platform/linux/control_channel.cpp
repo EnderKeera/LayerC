@@ -122,12 +122,14 @@ using Clock = std::chrono::steady_clock;
 
 } // namespace
 
-std::string encode_control_request(const ControlCommand command) {
+std::string encode_control_request(const ControlCommand command,
+                                   const std::string_view payload_json) {
   std::string out;
   out += "{\"proto\":";
   layerc::core::json::append_quoted(out, control_protocol_name);
   out += ",\"v\":1,\"cmd\":";
   layerc::core::json::append_quoted(out, control_command_name(command));
+  if (!payload_json.empty()) { out += ",\"payload\":"; out += payload_json; }
   out += "}";
   return out;
 }
@@ -368,8 +370,14 @@ std::optional<int> control_connect(std::string &error,
 }
 
 std::optional<std::string>
-control_roundtrip(std::string_view request_json, std::string &error) {
-  const auto deadline = Clock::now() + std::chrono::seconds(5);
+control_roundtrip(std::string_view request_json, std::string &error,
+                  const std::chrono::milliseconds timeout) {
+  if (request_json.size() > control_frame_limit || timeout <= std::chrono::milliseconds::zero() ||
+      timeout > std::chrono::seconds(5)) {
+    error = "invalid control request size or timeout";
+    return std::nullopt;
+  }
+  const auto deadline = Clock::now() + timeout;
   const auto fd = control_connect(error, deadline);
   if (!fd.has_value()) return std::nullopt;
   const std::string packet = frame(request_json);

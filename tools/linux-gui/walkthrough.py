@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from automation_walkthrough import EXPECTED as AUTOMATION_EXPECTED
+from automation_walkthrough import AutomationWalk  # noqa: E402
 from bridge import call  # noqa: E402
 
 EDITOR = "LayerE"  # Title prefix; the title also names the open profile.
@@ -49,6 +51,7 @@ EXPECTED = {
     "import-export": "Export JSON through the file chooser writes the saved bytes; "
                      "import of the same file reports the collision, copies it on "
                      "request, and a cancelled import writes nothing.",
+    **AUTOMATION_EXPECTED,
     "layout": "Corner drags grow the window and clamp it at 640x480 with scrolling; "
               "title-bar double-clicks maximize and restore; Ctrl+Plus/Ctrl+0 scale "
               "and restore the window.",
@@ -61,7 +64,7 @@ EXPECTED = {
 DEFERRED = {
     "overlay-target-changes": "target resize/focus and click-through checks belong to the "
                               "overlay integration walkthrough (runtime suites cover them)",
-    "later-parity": "automation, visual calibration and portal cases are Change 8",
+    "later-parity": "visual calibration and portal cases are Change 8",
 }
 
 
@@ -89,7 +92,7 @@ def center(node):
     return x + w // 2, y + h // 2
 
 
-class Walk:
+class Walk(AutomationWalk):
     def __init__(self, session):
         self.session = session
         self.shot = {}
@@ -178,7 +181,8 @@ class Walk:
 
     def press(self, button, label):
         found = self.dialog()
-        check(found is not None, f"no dialog for {button!r}")
+        if found is None:
+            raise Failure(f"no dialog for {button!r}")
         return self.click(self.find("button", button, found[1]), label)
 
     def choose(self, title, path, label):
@@ -360,24 +364,37 @@ class Walk:
         self.notes["created"] = created
         return f"{created} created, disabled and saved; undo/redo; dirty switch cancelled then discarded"
 
-    def row_of(self, name):
-        """0-based index of the profile-list row for a profile name."""
+    def profile_rows(self, name):
+        """Rows in this list only; names can legitimately repeat after import."""
         profiles = self.find("list", "Profiles")
         nodes = self.nodes()
         start = next(i for i, n in enumerate(nodes)
                      if n["role"] == "list" and n["name"] == "Profiles")
-        rows = [n for n in nodes[start + 1:] if n["depth"] == profiles["depth"] + 1
+        stop = next((i for i in range(start + 1, len(nodes))
+                     if nodes[i]["depth"] <= profiles["depth"]), len(nodes))
+        rows = [n for n in nodes[start + 1:stop] if n["depth"] == profiles["depth"] + 1
                 and n["role"] == "list item"]
-        for index, node in enumerate(rows):
-            if node["name"].startswith(name):
-                return index
-        raise Failure(f"profile row {name!r} not listed")
+        # Match the shared profile_list_text decorations, not a bare prefix:
+        # an imported "Fixture (copy)" must not stand in for "Fixture".
+        return [index for index, node in enumerate(rows)
+                if node["name"] == name or node["name"] == name + "  (off)"
+                or node["name"].startswith(name + "  —  ")]
+
+    def row_of(self, name):
+        matches = self.profile_rows(name)
+        if len(matches) == 1:
+            return matches[0]
+        raise Failure(f"profile row {name!r} is missing or ambiguous")
 
     def select_fixture(self, label):
         """Open the fixture profile through the list, by its current name."""
-        name = self.profile()[0]["json"]["name"]
-        self.row(self.row_of(name), label)
-        self.until(lambda n: name in n[1]["name"], f"fixture {name!r} did not open")
+        profile = self.profile()[0]["json"]
+        name = profile["name"]
+        for index in self.profile_rows(name):
+            self.row(index, label + f"-row-{index}")
+            if self.text("Profile ID (read-only)") == profile["id"]:
+                return
+        raise Failure(f"fixture {name!r} with ID {profile['id']!r} did not open")
 
     def case_invalid_no_write(self):
         self.focus(EDITOR, "invalid-focused")

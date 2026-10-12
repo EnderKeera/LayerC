@@ -1,6 +1,7 @@
 #include "daemon_host.hpp"
 
 #include "layerc/core/profile.hpp"
+#include "layerc/core/json.hpp"
 #include "layerc/platform/profile_store.hpp"
 
 #include <poll.h>
@@ -227,7 +228,8 @@ load_profiles(std::string &warning) {
 ControlReply handle_control_request(
     const std::string_view request_json,
     const layerc::runtime::DaemonKernel &kernel,
-    const LinuxStatusSnapshot &linux) {
+    const LinuxStatusSnapshot &linux,
+    const TraceControlHandler &trace) {
   const auto command = layerc::platform::parse_control_request(request_json);
   if (!command.has_value())
     return {.response = layerc::platform::encode_control_response(
@@ -243,6 +245,23 @@ ControlReply handle_control_request(
   case layerc::platform::ControlCommand::stop:
     return {.response = layerc::platform::encode_control_response(true, {}, {}),
             .stop_requested = true};
+  case layerc::platform::ControlCommand::trace: {
+    const auto tree = layerc::core::json::parse(request_json);
+    const auto *value = std::get_if<layerc::core::json::Value>(&tree);
+    const auto *payload = value ? value->find("payload") : nullptr;
+    std::string text;
+    if (payload) layerc::core::json::append_value(text, *payload);
+    const auto request = layerc::core::parse_trace_control_request(text);
+    if (!request)
+      return {.response = layerc::platform::encode_control_response(false, "invalid trace request", {})};
+    if (!trace)
+      return {.response = layerc::platform::encode_control_response(false, "automation trace unavailable", {})};
+    const auto result = trace(*request);
+    if (const auto *error = std::get_if<std::string>(&result))
+      return {.response = layerc::platform::encode_control_response(false, *error, {})};
+    return {.response = layerc::platform::encode_control_response(true, {},
+        layerc::core::serialize_trace_control_reply(std::get<layerc::core::TraceControlReply>(result)))};
+  }
   }
   return {.response = layerc::platform::encode_control_response(
               false, "invalid control command", {})};
@@ -262,7 +281,8 @@ void ControlService::attach(layerc::platform::EventLoop &loop) noexcept {
 ControlOutcome ControlService::service(
     layerc::platform::EventLoop &loop, std::vector<int> ready,
     const layerc::runtime::DaemonKernel &kernel,
-    const LinuxStatusSnapshot &linux) {
+    const LinuxStatusSnapshot &linux,
+    const TraceControlHandler &trace) {
   ControlOutcome outcome;
   const auto now = layerc::core::MonotonicClock::now();
   expire_clients(loop, now);
@@ -309,7 +329,7 @@ ControlOutcome ControlService::service(
         drop(loop, fd);
       continue; // partial frame
     }
-    const auto reply = handle_control_request(*request, kernel, linux);
+    const auto reply = handle_control_request(*request, kernel, linux, trace);
     if (reply.response.size() > layerc::platform::control_frame_limit) {
       outcome.diagnostic = "control response exceeds the frame limit";
       drop(loop, fd);

@@ -3,6 +3,7 @@
 #include "editor_accessibility.hpp"
 #include "editor_session.hpp"
 #include "editor_menus.hpp"
+#include "automation_editor.hpp"
 
 #include <memory>
 
@@ -40,7 +41,7 @@ enum class EditorCommand {
   refresh, import_profiles, export_json, export_pack,
   add_cooldown, delete_cooldown, add_panel, delete_panel,
   add_keyboard, add_mouse, capture_binding, delete_binding,
-  profile_page, cooldown_page, binding_page, panel_page, close
+  profile_page, cooldown_page, binding_page, panel_page, automation_page, close
 };
 
 // The toolkit frontend owns only controls and the local, possibly invalid
@@ -63,11 +64,12 @@ public:
   Fl_Choice *layout{}, *style{}, *member{}, *binding_target{}, *mouse_button{};
   Fl_Check_Button *member_enabled{}, *show_text{}, *hide_ready{};
   Fl_Input *key_code{};
-  Fl_Multiline_Output *status{}, *daemon_status{}, *module_status{};
+  Fl_Multiline_Output *status{}, *daemon_status{}, *module_status{}, *profile_id{};
   Fl_Box *accessibility_status{};
   Fl_Button *undo_button{}, *redo_button{};
   PanelPreview *preview{};
   std::unique_ptr<EditorMenus> menus;
+  std::unique_ptr<LinuxAutomationEditor> automation;
   // Declared last: it releases its widget trackers before the widgets go.
   std::unique_ptr<EditorAccessibility> accessibility;
 
@@ -77,6 +79,7 @@ public:
   void refresh_forms();
   void report(std::string text);
   void query_status();
+  void module_fields_changed(bool pending);
   void field_changed(Fl_Widget *widget);
   void selection_changed(Fl_Widget *widget);
   void tab_changed();

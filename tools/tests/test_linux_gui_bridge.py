@@ -114,6 +114,22 @@ class BridgeLogicTests(unittest.TestCase):
             self.bridge.handle({"op": "key", "screenshot": 1, "combo": "Return"})
         self.assertEqual(self.commands, [])
 
+    def test_long_budget_is_only_for_read_only_editor_resources(self) -> None:
+        observed: list[float] = []
+
+        def observe(_request: object) -> None:
+            observed.append(self.bridge.deadline - bridge.time.monotonic())
+
+        self.bridge.op_editor_resources = observe
+        self.bridge.op_state = observe
+        before = self.bridge.sequence
+        self.bridge.handle({"op": "editor_resources", "view": "json"})
+        self.bridge.handle({"op": "state"})
+        self.assertAlmostEqual(observed[0], bridge.RESOURCE_SECONDS, delta=0.1)
+        self.assertAlmostEqual(observed[1], bridge.OPERATION_SECONDS, delta=0.1)
+        self.assertEqual(self.bridge.sequence, before)
+        self.assertEqual(self.commands, [])
+
     def test_stale_or_missing_screenshot_is_rejected(self) -> None:
         with self.assertRaisesRegex(bridge.Rejected, "latest screenshot"):
             self.bridge.handle({"op": "key", "combo": "Return"})

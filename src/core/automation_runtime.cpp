@@ -241,10 +241,13 @@ const std::vector<AutomationTraceEntry> &
 AutomationRuntime::trace() const noexcept {
   return impl_->trace_entries;
 }
+bool AutomationRuntime::trace_enabled() const noexcept {
+  return impl_->trace_enabled;
+}
 void AutomationRuntime::set_trace_enabled(bool enabled) {
   impl_->trace_enabled = enabled;
   if (!enabled)
-    impl_->trace_entries.clear();
+    std::vector<AutomationTraceEntry>{}.swap(impl_->trace_entries);
 }
 void AutomationRuntime::consume_trace(const std::size_t count) {
   const auto consumed = std::min(count, impl_->trace_entries.size());

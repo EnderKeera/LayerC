@@ -214,8 +214,8 @@ void automation_palette_contracts() {
   using layerc::editor::AutomationPaletteNode;
   const auto &palette = layerc::editor::automation_palette;
   expect(palette.size() == 6U &&
-             std::wstring_view(palette[0].label) == L"Event: input pressed" &&
-             std::wstring_view(palette[5].label) == L"Variable: Boolean",
+             palette[0].label == "Event: input pressed" &&
+             palette[5].label == "Variable: Boolean",
          "the palette table should keep the combo item order");
   expect(layerc::editor::automation_palette_entry(-1) == nullptr &&
              layerc::editor::automation_palette_entry(6) == nullptr &&
