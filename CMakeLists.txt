@@ -516,7 +516,9 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/common/automation_simulator.cpp
         src/editor/common/document_commit.cpp
         src/editor/common/profile_document.cpp
-        src/editor/common/profile_edit.cpp)
+        src/editor/common/profile_edit.cpp
+        src/editor/common/visual_assignment.cpp
+        src/editor/common/visual_calibration.cpp)
     target_include_directories(layerc_editor_core PUBLIC src/editor/common)
     if(WIN32)
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_windows)

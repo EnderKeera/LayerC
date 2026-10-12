@@ -36,6 +36,8 @@ import sys
 import time
 from pathlib import Path
 
+from template_alpha import png_alpha_summary
+
 MAX_REQUEST = 64 * 1024
 RECEIVE_SECONDS = 10.0    # Whole request must arrive within this window.
 OPERATION_SECONDS = 60.0  # Every subprocess of one operation shares this budget.
@@ -114,6 +116,8 @@ class Bridge:
         self.nonce = secrets.token_hex(16)
         run(["xprop", "-root", "-f", NONCE_PROPERTY, "8s", "-set", NONCE_PROPERTY, self.nonce])
         self.confirm_display()
+        from visual_fixture import write_inputs
+        write_inputs(self.exchange_dir)
         dims = re.search(r"dimensions:\s+(\d+)x(\d+)", run(["xdpyinfo"]))
         if not dims:
             raise SystemExit("cannot read the private display dimensions")
@@ -277,10 +281,22 @@ class Bridge:
                     if entry.is_file() and not entry.is_symlink()}
         # Module sidecars of the private split store (read-only, bounded).
         modules: dict[str, dict[str, object]] = {}
+        assets: dict[str, str] = {}
+        asset_alpha: dict[str, dict[str, object]] = {}
         data = Path(os.environ["XDG_DATA_HOME"]) / "layerc" / "profiles"
         for directory in sorted(data.iterdir()) if data.is_dir() else []:
             if not directory.is_dir() or directory.is_symlink():
                 continue
+            asset_dir = directory / "assets"
+            if asset_dir.is_dir() and not asset_dir.is_symlink():
+                for entry in sorted(asset_dir.glob("*.png")):
+                    if entry.is_file() and not entry.is_symlink() and entry.stat().st_size <= 4 * MAX_MODULE_BYTES:
+                        name, raw = f"{directory.name}/{entry.name}", entry.read_bytes()
+                        assets[name] = hashlib.sha256(raw).hexdigest()
+                        try:
+                            asset_alpha[name] = png_alpha_summary(raw)
+                        except ValueError as error:
+                            asset_alpha[name] = {"error": str(error)[:200]}
             for entry in sorted(directory.glob("*.json")):
                 if entry.is_file() and not entry.is_symlink() and entry.stat().st_size <= MAX_MODULE_BYTES:
                     raw = entry.read_bytes()
@@ -290,7 +306,8 @@ class Bridge:
                         parsed = None
                     modules[f"{directory.name}/{entry.name}"] = {
                         "sha256": hashlib.sha256(raw).hexdigest(), "json": parsed}
-        return {"profiles": profiles, "modules": modules,
+        return {"profiles": profiles, "modules": modules, "assets": assets,
+                "assetAlpha": asset_alpha,
                 "exchange": str(self.exchange_dir), "exchangeFiles": exchange,
                 "daemon": {"reachable": daemon is not None, "status": daemon,
                            "error": None if daemon else status.stderr.strip()[:300]}}
@@ -299,8 +316,8 @@ class Bridge:
         from editor_resources import measure_editor
         from sample import write
         view = request.get("view")
-        if view not in ("json", "simulator", "trace-stopped"):
-            raise Rejected("unknown automation resource view")
+        if view not in ("json", "simulator", "trace-stopped", "calibration-stopped"):
+            raise Rejected("unknown advanced resource view")
         self.confirm_display()
         sample = measure_editor(self.evidence, f":{self.display_number}", self.profiles,
                                 self.deadline)

@@ -41,7 +41,8 @@ commit_profile_bundle(const std::filesystem::path &path, ProfileBundle &bundle,
                       const CommitOptions &options,
                       const ConfirmUpgrade &confirm_upgrade,
                       layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
-                          companion = layerc::platform::KeepModule{});
+                          companion = layerc::platform::KeepModule{},
+                      const layerc::platform::ProfileMutationPlanner &additional_mutations = {});
 
 // Commits the document's current values (the caller syncs its controls
 // first). The normalized values are kept unless the profile is invalid; the
@@ -51,7 +52,8 @@ commit_document(ProfileDocument &document, const std::filesystem::path &path,
                 const CommitOptions &options,
                 const ConfirmUpgrade &confirm_upgrade,
                 layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
-                    companion = layerc::platform::KeepModule{});
+                    companion = layerc::platform::KeepModule{},
+                const layerc::platform::ProfileMutationPlanner &additional_mutations = {});
 
 // Same store file as the open document (canonical, case-insensitive where
 // the store is).

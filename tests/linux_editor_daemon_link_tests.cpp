@@ -262,6 +262,12 @@ void commit_failure_text_contracts() {
       std::nullopt);
   expect(failed == "Not saved. Profile write failed: profile store is busy.",
          "a write failure names the store reason: " + failed);
+  const auto unconfirmed = layerc::editor::save_report_text(
+      {CommitResult::write_failed, layerc::platform::ProfileWriteError::durability_unconfirmed},
+      std::nullopt);
+  expect(unconfirmed.starts_with("Save unconfirmed") &&
+             unconfirmed.find("Not saved") == std::string::npos,
+         "an unconfirmed durable publication is never reported as not saved: " + unconfirmed);
   expect(layerc::editor::save_report_text({CommitResult::blocked_by_sidecar, std::nullopt},
                                           layerc::editor::ReloadResult{})
              .starts_with("Not saved"),

@@ -170,6 +170,7 @@ void editor_visual_component_contracts() {
   const layerc::editor::LiveEditSession live_edit;
   layerc::editor::TaskPicker task_picker;
   auto commit = layerc::editor::CommitResult::ok;
+  bool replace_modules = false;
   int commits{};
   int committed{};
   int tasks_shown{};
@@ -182,6 +183,12 @@ void editor_visual_component_contracts() {
        .commit_document =
            [&] {
              ++commits;
+             // The real pipeline replaces the document's modules even when
+             // the commit is refused.
+             if (replace_modules) {
+               auto replacement = document.visual();
+               document.visual() = std::move(replacement);
+             }
              return commit;
            },
        .mark_committed = [&] { ++committed; },
@@ -199,6 +206,13 @@ void editor_visual_component_contracts() {
   expect(!document.visual()->triggers.front().enabled && commits == 2 &&
              committed == 1,
          "a declined commit restores the previous enablement");
+
+  replace_modules = true;
+  editor.set_enabled(true);
+  replace_modules = false;
+  expect(!document.visual()->triggers.front().enabled && commits == 3 &&
+             committed == 1,
+         "a refused toggle restores enablement in the replaced document");
 
   editor.calibrate();
   expect(task_picker.awaiting_calibration() && tasks_shown == 1,

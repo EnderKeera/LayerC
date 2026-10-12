@@ -101,7 +101,7 @@ void EditorApp::build() {
   auto *note = new Fl_Box(285, 370, 745, 65,
       "Explicit Save publishes edits and requests an authenticated LayerD reload.\n"
       "Offline editing is supported. The Automation tab edits rules and replays events.\n"
-      "Visual and Game Bar companion data are preserved.");
+      "The Visual tab calibrates X11 recognition; Game Bar companion data are preserved.");
   note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
   profile_tab->end();
 
@@ -169,6 +169,7 @@ void EditorApp::build() {
   panel_fields->end();
   panel_tab->end();
   automation = std::make_unique<LinuxAutomationEditor>(*this);
+  visual = std::make_unique<LinuxVisualEditor>(*this);
   tabs->end();
   active_tab_ = profile_tab;
   tabs->callback([](Fl_Widget *, void *data) { static_cast<EditorApp *>(data)->tab_changed(); }, this);
@@ -237,6 +238,7 @@ void EditorApp::fill_lists() {
 
 void EditorApp::refresh_forms() {
   if (automation) automation->refresh();
+  if (visual) visual->refresh();
   if (!session.has_document()) {
     tabs->deactivate(); profile_id->value("");
     module_status->value("No open profile."); return;

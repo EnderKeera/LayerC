@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from automation_walkthrough import EXPECTED as AUTOMATION_EXPECTED
 from automation_walkthrough import AutomationWalk  # noqa: E402
 from bridge import call  # noqa: E402
+from visual_walkthrough import EXPECTED as VISUAL_EXPECTED  # noqa: E402
+from visual_walkthrough import VisualWalk  # noqa: E402
 
 EDITOR = "LayerE"  # Title prefix; the title also names the open profile.
 GAME = "LayerC Automation Fixture"
@@ -52,6 +54,7 @@ EXPECTED = {
                      "import of the same file reports the collision, copies it on "
                      "request, and a cancelled import writes nothing.",
     **AUTOMATION_EXPECTED,
+    **VISUAL_EXPECTED,
     "layout": "Corner drags grow the window and clamp it at 640x480 with scrolling; "
               "title-bar double-clicks maximize and restore; Ctrl+Plus/Ctrl+0 scale "
               "and restore the window.",
@@ -64,7 +67,7 @@ EXPECTED = {
 DEFERRED = {
     "overlay-target-changes": "target resize/focus and click-through checks belong to the "
                               "overlay integration walkthrough (runtime suites cover them)",
-    "later-parity": "visual calibration and portal cases are Change 8",
+    "later-parity": "Wayland portal cases await the Change 7 backend",
 }
 
 
@@ -92,7 +95,7 @@ def center(node):
     return x + w // 2, y + h // 2
 
 
-class Walk(AutomationWalk):
+class Walk(AutomationWalk, VisualWalk):
     def __init__(self, session):
         self.session = session
         self.shot = {}
@@ -160,16 +163,22 @@ class Walk(AutomationWalk):
 
     def dialog(self):
         """The topmost dialog's subtree, or None."""
-        nodes = self.nodes()
+        nodes, dialogs = self.nodes(), []
         for index, node in enumerate(nodes):
-            if node["depth"] == 1 and node["role"] == "dialog":
+            if node["depth"] == 1 and node["role"] == "dialog" and node.get("showing", True):
                 subtree = []
                 for child in nodes[index + 1:]:
                     if child["depth"] <= 1:
                         break
                     subtree.append(child)
-                return node, subtree
-        return None
+                dialogs.append((node, subtree))
+        # The accessibility bridge preserves window order across activation.
+        # A nested confirmation is not necessarily the first or last dialog.
+        active = [item for item in dialogs if item[0].get("active") or
+                  any(child.get("focused") for child in item[1])]
+        check(len(active) <= 1 and (active or len(dialogs) <= 1),
+              "multiple dialogs are visible without one active confirmation")
+        return active[0] if active else (dialogs[0] if dialogs else None)
 
     def click(self, node, label, **args):
         x, y = center(node)

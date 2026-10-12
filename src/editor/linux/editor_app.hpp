@@ -4,6 +4,7 @@
 #include "editor_session.hpp"
 #include "editor_menus.hpp"
 #include "automation_editor.hpp"
+#include "visual_editor.hpp"
 
 #include <memory>
 
@@ -41,7 +42,7 @@ enum class EditorCommand {
   refresh, import_profiles, export_json, export_pack,
   add_cooldown, delete_cooldown, add_panel, delete_panel,
   add_keyboard, add_mouse, capture_binding, delete_binding,
-  profile_page, cooldown_page, binding_page, panel_page, automation_page, close
+  profile_page, cooldown_page, binding_page, panel_page, automation_page, visual_page, close
 };
 
 // The toolkit frontend owns only controls and the local, possibly invalid
@@ -70,6 +71,7 @@ public:
   PanelPreview *preview{};
   std::unique_ptr<EditorMenus> menus;
   std::unique_ptr<LinuxAutomationEditor> automation;
+  std::unique_ptr<LinuxVisualEditor> visual;
   // Declared last: it releases its widget trackers before the widgets go.
   std::unique_ptr<EditorAccessibility> accessibility;
 

@@ -3,7 +3,13 @@
 #include "profile_edit.hpp"
 #include "automation_presets.hpp"
 #include "automation_graph.hpp"
+#include "visual_calibration.hpp"
+#include "layerc/platform/profile_file_guard.hpp"
+#include "layerc/platform/profile_store_linux.hpp"
 #include "test_support.hpp"
+#include "template_png_fixture.hpp"
+#include <array>
+#include <span>
 #include "layerc/core/companion.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
 
@@ -390,6 +396,254 @@ void automation_candidates_history_and_recovery() {
          "failed module edits and saves preserve the original recovery evidence");
 }
 
+void visual_candidates_history_and_recovery() {
+  Fixture fixture;
+  fixture.store(true);
+  editor::EditorSession session(fixture.directory);
+  expect(!session.open(0), "open a complete bundle for visual edits");
+  const auto base = session.document().profile();
+  const auto automation = session.document().automation();
+  const auto initial = session.document().visual();
+  const auto disk = layerc::test::read_file(platform::visual_sidecar_path(fixture.path));
+  expect(!session.edit_visual([](auto &visual) -> std::optional<std::string> {
+           std::get<core::PixelRule>(visual->observations.front()).name = "Edited observation";
+           return std::nullopt;
+         }) && session.has_unsaved_changes() && session.can_undo(),
+         "visual edits are one validated history transaction");
+  const auto edited = session.document().visual();
+  expect(layerc::test::read_file(platform::visual_sidecar_path(fixture.path)) == disk,
+         "visual editing never publishes until an explicit Save");
+  expect(session.edit_visual([](auto &visual) -> std::optional<std::string> {
+           visual->profile_id = "wrong";
+           return std::nullopt;
+         }).has_value() && session.document().visual() == edited,
+         "invalid candidates leave the whole document unchanged");
+  expect(session.edit_visual([](auto &visual) -> std::optional<std::string> {
+           visual.reset();
+           return "refused";
+         }).has_value() && session.document().visual() == edited,
+         "a refused callback cannot partially remove the visual module");
+  expect(session.undo() && session.document().visual() == initial &&
+             !session.has_unsaved_changes() && session.redo() &&
+             session.document().visual() == edited,
+         "visual undo/redo cross the saved baseline without altering the base");
+  expect(session.document().profile() == base && session.document().automation() == automation &&
+             session.save([] { return true; }).saved(), "save the accepted visual edit");
+  const auto reopened = load(fixture.path);
+  expect(reopened && reopened->modules.get<core::VisualModule>().optional_profile() == edited &&
+             reopened->modules.get<core::AutomationModule>().optional_profile() == automation &&
+             reopened->modules.get<core::CompanionModule>().usable(),
+         "visual round-trip preserves the unrelated modules");
+  expect(!session.edit_visual([](auto &visual) -> std::optional<std::string> {
+           visual.reset();
+           return std::nullopt;
+         }) && session.document().visual_state() == platform::ModuleSidecarState::absent &&
+             session.undo() && session.document().visual_state() == platform::ModuleSidecarState::valid &&
+             session.redo() && session.document().visual_state() == platform::ModuleSidecarState::absent,
+         "module removals and history keep the visual sidecar state synchronized");
+  expect(session.save([] { return true; }).saved(), "save the explicit removal intent");
+  const auto removed = load(fixture.path);
+  expect(removed && removed->modules.get<core::VisualModule>().state() ==
+                        platform::ModuleSidecarState::absent,
+         "visual removal is a durable tombstone, not loss of recovery files");
+
+  fixture.store(true);
+  const auto bad = platform::visual_sidecar_path(fixture.path);
+  std::filesystem::remove(platform::recovery_backup_path(bad));
+  expect(layerc::test::write_file(bad, "{broken") && !session.open_path(fixture.path),
+         "open unreadable visual data without a recovery copy");
+  const auto diagnostic = session.document().visual_error();
+  bool called{};
+  expect(session.edit_visual([&](auto &visual) -> std::optional<std::string> {
+           called = true;
+           visual.reset();
+           return std::nullopt;
+         }).has_value() && !called && session.document().has_unreadable_module(),
+         "ordinary editing never converts unreadable data to removal");
+  expect(session.apply_calibration("ability", "{bad", {}).has_value() &&
+             session.document().has_unreadable_module(),
+         "invalid calibration cannot weaken the unreadable-sidecar gate");
+  const auto model = editor::CalibrationModel::open(base, "ability", std::nullopt);
+  expect(model.has_value(), "seed an explicit repair calibration");
+  auto result = model->build_result(model->initial_controls(), {});
+  const auto *visual = std::get_if<core::VisualProfile>(&result);
+  expect(visual != nullptr, "a pixel calibration builds one valid observation and trigger");
+  const auto json = core::serialize_visual_profile_json(*visual);
+  expect(!session.apply_calibration("ability", json, {}) &&
+             session.document().visual_state() == platform::ModuleSidecarState::valid &&
+             session.document().dirty() && session.undo() &&
+             session.document().has_unreadable_module() &&
+             session.document().visual_error() == diagnostic &&
+             !session.has_unsaved_changes(),
+         "undoing an unsaved calibration repair restores the unreadable state and diagnostic");
+  const auto blocked = session.save([] { return true; });
+  expect(!blocked.saved() && !blocked.reload &&
+             layerc::test::read_file(bad) == std::optional<std::string>("{broken"),
+         "Save after repair undo preserves all original failure evidence");
+  expect(session.redo() && !session.document().has_unreadable_module(),
+         "redo restores the explicit validated repair");
+  {
+    platform::TransactionFileLock lock(platform::profile_store_roots());
+    expect(lock.locked(), "take the disposable store writer lock");
+    const auto failed = session.save([] { return true; });
+    expect(!failed.saved() && !failed.reload && session.document().dirty() &&
+               layerc::test::read_file(bad) == std::optional<std::string>("{broken"),
+           "failed repair Save keeps the draft and original bytes without reload");
+  }
+  expect(session.save([] { return true; }).saved(), "the explicit calibration repair saves durably");
+  expect(session.undo() && session.document().visual_state() == platform::ModuleSidecarState::absent &&
+             !session.document().has_unreadable_module() && session.redo(),
+         "after commit undo is a normal editable removal, never a stale invalid flag");
+  expect(!session.set_visual_runtime(core::VisualRuntime::isolated) &&
+             session.document().profile().visual_runtime == core::VisualRuntime::isolated &&
+             session.undo() && session.document().profile().visual_runtime == core::VisualRuntime::inline_process,
+         "visual runtime choice is a validated base-profile history edit");
+  expect(session.set_visual_runtime(static_cast<core::VisualRuntime>(255)).has_value(),
+         "unknown visual runtime values are refused");
+}
+
+void duplicate_templates_retains_bytes_and_commits_atomically() {
+  Fixture fixture; fixture.store(true);
+  const auto &canonical = layerc::test::canonical_template_png_fixture();
+  const std::array<std::uint8_t, 27> metadata{
+      0, 0, 0, 15, 0x74, 0x45, 0x58, 0x74, 0x6f, 0x72, 0x69, 0x67, 0x69,
+      0x6e, 0, 0x70, 0x6f, 0x72, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x39, 0x6a, 0x79, 0x61};
+  auto original = canonical.bytes;
+  original.insert(original.end() - 12, metadata.begin(), metadata.end());
+  const auto digest = core::sha256(std::as_bytes(std::span(original)));
+  const auto first = platform::profile_visual_asset_path(fixture.path, canonical.sha256);
+  const auto second = platform::profile_visual_asset_path(fixture.path, digest);
+  std::filesystem::create_directories(first.parent_path());
+  expect(layerc::test::write_file(first, canonical.bytes) &&
+             layerc::test::write_file(second, original), "prepare two encoded identities");
+  editor::EditorSession session(fixture.directory);
+  expect(!session.open_path(fixture.path), "open the source bundle");
+  expect(!session.edit_visual([&](auto &visual) -> std::optional<std::string> {
+    core::TemplateState state; state.id = "ready"; state.name = "Ready";
+    state.references = {{canonical.sha256}, {digest}};
+    visual->observations.front() = state; return std::nullopt;
+  }) && session.save([] { return true; }).saved(), "save valid template references");
+  const auto source_visual = session.document().visual();
+  std::filesystem::remove(second);
+  expect(session.duplicate_current().has_value() && !session.is_draft() &&
+             session.document().visual() == source_visual,
+         "a missing winning reference refuses duplication without replacing the document");
+  expect(layerc::test::write_file(second, original) && !session.duplicate_current() &&
+             session.is_draft(), "a complete duplicate retains both encoded asset identities");
+  // A second unsaved duplication must use owned bytes, not an empty source path.
+  expect(!session.duplicate_current(), "a duplicate draft can itself be duplicated");
+  const auto destination = editor::default_profile_path(fixture.directory, session.document().profile());
+  const auto copied_first = platform::profile_visual_asset_path(destination, canonical.sha256);
+  const auto copied_second = platform::profile_visual_asset_path(destination, digest);
+  std::filesystem::remove_all(first.parent_path());
+  std::filesystem::create_directories(copied_second); // Unsafe second target, after a valid first.
+  const auto refused = session.save([] { return true; });
+  expect(!refused.saved() && !refused.reload && session.is_draft() &&
+             !std::filesystem::exists(destination) &&
+             !std::filesystem::exists(platform::visual_sidecar_path(destination)) &&
+             !std::filesystem::exists(copied_first),
+         "refused copy Save publishes neither the bundle nor a prefix of the asset set");
+  std::filesystem::remove(copied_second);
+  {
+    platform::TransactionFileLock lock(platform::profile_store_roots());
+    expect(lock.locked(), "hold only the disposable store writer");
+    const auto busy = session.save([] { return true; });
+    expect(!busy.saved() && !busy.reload && !std::filesystem::exists(destination),
+           "busy writer preserves the complete duplicate draft");
+  }
+  expect(session.save([] { return true; }).saved() &&
+             layerc::test::read_file(copied_first) == std::optional<std::string>(canonical.bytes) &&
+             layerc::test::read_file(copied_second) == std::optional<std::string>(original),
+         "retry atomically saves original encoded bytes independently of the deleted source");
+  session.close_document();
+  expect(!session.open_path(destination), "reopen the duplicate from its own namespace");
+  for (const auto &reference : std::get<core::TemplateState>(
+           session.document().visual()->observations.front()).references)
+    expect(std::holds_alternative<core::TemplateImage>(
+               platform::load_profile_template_asset(destination, reference.asset_sha256)),
+           "every reopened template resolves without access to the source assets");
+}
+
+void calibration_assets_publish_with_bundle_and_survive_undo() {
+  Fixture fixture; fixture.store(true);
+  const auto &canonical = layerc::test::canonical_template_png_fixture();
+  auto image = layerc::test::checker_template_image();
+  image.asset_sha256 = canonical.sha256;
+  editor::EditorSession session(fixture.directory);
+  expect(!session.open_path(fixture.path), "open the calibration source");
+  const auto asset = platform::profile_visual_asset_path(fixture.path, canonical.sha256);
+  auto prepared = platform::prepare_profile_template_assets(fixture.path, std::span(&image, 1));
+  auto *assets = std::get_if<std::vector<platform::EncodedTemplateAsset>>(&prepared);
+  expect(assets && assets->size() == 1 && assets->front().asset_sha256 == canonical.sha256 &&
+             !std::filesystem::exists(asset),
+         "calibration images become owned canonical bytes without a store write");
+  auto model = editor::CalibrationModel::open(session.document().profile(), "ability",
+                                              session.document().visual());
+  expect(model && model->add_reference({canonical.sha256}), "seed a template calibration");
+  auto controls = model->initial_controls();
+  controls.predicate = editor::CalibrationPredicate::template_match;
+  auto built = model->build_result(controls, std::vector<core::TemplateImage>{image});
+  const auto *visual = std::get_if<core::VisualProfile>(&built);
+  expect(visual != nullptr, "a template calibration builds one observation and trigger");
+  const auto sidecar = platform::visual_sidecar_path(fixture.path);
+  const auto before = layerc::test::read_file(sidecar);
+  const auto json = core::serialize_visual_profile_json(*visual);
+  const auto update = [] { return editor::SharedObservationChoice::update_shared; };
+  expect(!session.apply_calibration("ability", json, update, std::move(*assets)) &&
+             session.owned_template_assets().size() == 1 && !std::filesystem::exists(asset),
+         "applying a calibration owns its assets and still publishes nothing");
+  expect(std::holds_alternative<core::TemplateImage>(platform::load_profile_template_asset(
+             fixture.path, canonical.sha256, session.owned_template_assets())) &&
+             !std::holds_alternative<core::TemplateImage>(
+                 platform::load_profile_template_asset(fixture.path, canonical.sha256)),
+         "a reopened calibration reads unpublished owned bytes before the store");
+  expect(session.undo() && session.owned_template_assets().size() == 1,
+         "an undone calibration keeps its bytes while redo can restore it");
+  expect(!session.edit_visual([](auto &candidate) -> std::optional<std::string> {
+           std::get<core::PixelRule>(candidate->observations.front()).name = "New branch";
+           return std::nullopt;
+         }) && session.owned_template_assets().empty(),
+         "an edit that discards the redo branch releases unreachable owned bytes");
+  auto again = platform::prepare_profile_template_assets(fixture.path, std::span(&image, 1));
+  expect(std::holds_alternative<std::vector<platform::EncodedTemplateAsset>>(again) &&
+             !session.apply_calibration("ability", json, update,
+                 std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(again))) &&
+             session.owned_template_assets().size() == 1,
+         "the calibration applies again with fresh owned bytes");
+  {
+    platform::TransactionFileLock lock(platform::profile_store_roots());
+    expect(lock.locked(), "hold only the disposable store writer");
+    const auto busy = session.save([] { return true; });
+    expect(!busy.saved() && !busy.reload && !std::filesystem::exists(asset) &&
+               layerc::test::read_file(sidecar) == before && session.document().dirty() &&
+               session.owned_template_assets().size() == 1,
+           "a refused calibration Save publishes neither assets nor the bundle");
+  }
+  expect(session.save([] { return true; }).saved() &&
+             layerc::test::read_file(asset) == std::optional<std::string>(canonical.bytes) &&
+             layerc::test::read_file(sidecar) != before && session.owned_template_assets().empty(),
+         "Save publishes the calibration assets with the profile and sidecar");
+
+  expect(!session.duplicate_current() && session.is_draft() &&
+             session.owned_template_assets().size() == 1,
+         "a duplicate owns its source template bytes");
+  expect(!session.edit_visual([](auto &candidate) -> std::optional<std::string> {
+           candidate.reset();
+           return std::nullopt;
+         }), "remove the duplicate's visual module before its first Save");
+  const auto destination = editor::default_profile_path(fixture.directory, session.document().profile());
+  const auto copied = platform::profile_visual_asset_path(destination, canonical.sha256);
+  expect(session.save([] { return true; }).saved() && !std::filesystem::exists(copied) &&
+             session.owned_template_assets().size() == 1,
+         "an unreferenced owned asset stays owned after the first Save");
+  std::filesystem::remove(asset);
+  expect(session.undo() && session.document().visual() &&
+             session.save([] { return true; }).saved() &&
+             layerc::test::read_file(copied) == std::optional<std::string>(canonical.bytes) &&
+             session.owned_template_assets().empty(),
+         "Undo after Save restores a reference whose bytes the next Save publishes");
+}
+
 void field_parser_contracts() {
   expect(editor::parse_anchor("0.25") == 0.25 && !editor::parse_anchor("nan") &&
              !editor::parse_anchor("1.01") && !editor::parse_anchor("0.2junk"),
@@ -415,4 +669,7 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(drafts_and_history),
                  LAYERC_TEST_CASE(reviewed_import_export),
                  LAYERC_TEST_CASE(import_destination_race_and_invalid_json),
                  LAYERC_TEST_CASE(automation_candidates_history_and_recovery),
+                 LAYERC_TEST_CASE(visual_candidates_history_and_recovery),
+                 LAYERC_TEST_CASE(duplicate_templates_retains_bytes_and_commits_atomically),
+                 LAYERC_TEST_CASE(calibration_assets_publish_with_bundle_and_survive_undo),
                  LAYERC_TEST_CASE(field_parser_contracts))

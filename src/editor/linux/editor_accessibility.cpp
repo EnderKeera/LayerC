@@ -1,6 +1,7 @@
 // FLTK semantics exported through ATK and its AT-SPI adaptor, without GTK.
 #include "editor_accessibility.hpp"
 #include "editor_app.hpp"
+#include "calibration_window.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -214,10 +215,14 @@ bool showing(const Node &n) {
     return w->parent()->visible_r() != 0;
   return w->visible_r() != 0;
 }
+bool modal_allows(Fl_Widget &widget) {
+  const auto *modal = Fl::modal();
+  return !modal || widget.top_window() == modal;
+}
 bool enabled(const Node &n) {
   auto *w = n.widget();
   if (!w) return live(n);
-  if (!w->active_r()) return false;
+  if (!w->active_r() || !modal_allows(*w)) return false;
   const auto *item = menu_item(n);
   return n.kind != Kind::menu_item || (item && item->active());
 }
@@ -452,7 +457,8 @@ void defer(Fl_Widget *w, std::function<void(Fl_Widget &)> step) {
   auto tracker = std::make_shared<Fl_Widget_Tracker>(w);
   if (deferred.empty()) Fl::add_timeout(0.0, run_deferred);
   deferred.push_back([tracker, step = std::move(step)] {
-    if (auto *live_widget = tracker->widget(); live_widget && live_widget->active_r())
+    if (auto *live_widget = tracker->widget();
+        live_widget && live_widget->active_r() && modal_allows(*live_widget))
       step(*live_widget);
   });
 }
@@ -803,7 +809,7 @@ struct EditorAccessibility::Impl {
       role = ATK_ROLE_LABEL;
     } else if (dynamic_cast<Fl_Scroll *>(w)) {
       role = ATK_ROLE_SCROLL_PANE;
-    } else if (dynamic_cast<PanelPreview *>(w)) {
+    } else if (dynamic_cast<PanelPreview *>(w) || dynamic_cast<CalibrationPreview *>(w)) {
       role = ATK_ROLE_CANVAS;
     }
     auto *object = ATK_OBJECT(g_object_new(type, nullptr));

@@ -2,6 +2,8 @@
 // fallback. Returns 77 when the host cannot provide the Xvfb fixture.
 #include "x11_capture.hpp"
 #include "x11_error.hpp"
+#include "x11_window.hpp"
+#include <X11/Xatom.h>
 
 #include "test_support.hpp"
 
@@ -299,7 +301,26 @@ int run_linux_x11_capture_tests(const int argc, char **argv) {
                    "two damaged draws coalesce to the final pixels");
   passed &= expect(coalesced.result.frame != initial_frame,
                    "damaged Composite capture publishes a new frame");
-  const auto coalesced_frame = coalesced.result.frame;
+  {
+    layerc::platform::X11WindowTracker tracker(*display);
+    (void)tracker.scan();
+    (void)tracker.poll_changes();
+    const auto property = XInternAtom(raw, "_LAYERC_TEST_CAPTURE_CHURN", False);
+    for (unsigned long round = 0; round < 20; ++round) {
+      for (unsigned long value = 0; value < 1000; ++value)
+        XChangeProperty(raw, composite_window, property, XA_CARDINAL, 32,
+                        PropModeReplace, reinterpret_cast<const unsigned char *>(&value), 1);
+      fill(raw, composite_window, gc, round % 2 == 0 ? first : final, 320, 180);
+      XSync(raw, False);
+      (void)tracker.poll_changes();
+      passed &= expect(display->pending_events() == 0,
+                       "private discovery dispatch drains repeated property churn completely");
+      const auto polled = composite.poll(start_time + std::chrono::milliseconds{2});
+      passed &= expect(frame_matches(polled, 320, 180, round % 2 == 0 ? first.rgb : final.rgb),
+                       "draining Damage events does not lose server-side accumulated capture changes");
+    }
+  }
+  const auto coalesced_frame = composite.poll(start_time + std::chrono::milliseconds{2}).result.frame;
   const auto coalesced_quiet =
       composite.poll(start_time + std::chrono::milliseconds{3});
   passed &= expect(coalesced_quiet.result.frame == coalesced_frame,

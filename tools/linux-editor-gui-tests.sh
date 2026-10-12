@@ -50,7 +50,7 @@ inside() {
 
   mkdir -p "$profiles"
   python3 - "$profiles" "$GUI_MODE" <<'PY'
-import copy, json, sys
+import copy, json, os, sys
 from pathlib import Path
 profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled": True,
            "modules": [], "hidBindings": [], "cooldownGroups": [],
@@ -67,6 +67,31 @@ profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled"
 store = Path(sys.argv[1])
 if sys.argv[2] != "resources":
     (store / "fixture.json").write_text(json.dumps(profile))
+    if sys.argv[2] == "walkthrough":
+        shared = copy.deepcopy(profile)
+        shared.update(id="shared", name="Shared calibration fixture", enabled=False,
+                      modules=[{"kind": "visual", "schemaVersion": 2}])
+        sibling = copy.deepcopy(shared["cooldowns"][0])
+        sibling.update(id="sibling", name="Sibling")
+        shared["cooldowns"].append(sibling)
+        shared["bindings"].append({"cooldownId": "sibling",
+                                   "chord": [{"device": "keyboard", "code": 70}]})
+        (store / "z-shared.json").write_text(json.dumps(shared))
+        visual = {"schemaVersion": 2, "profileId": "shared", "sampleRateHz": 5, "quality": "balanced",
+                  "observations": [{"type": "pixel", "id": "shared-observation", "name": "Shared pixel",
+                                    "region": {"x": 0.02, "y": 0.02, "width": 0.2, "height": 0.2},
+                                    "predicate": {"type": "averageColor", "target": "#808080", "tolerance": 10},
+                                    "stableSamples": 2, "repeat": "edge"}],
+                  "triggers": [{"cooldownId": cid, "observationId": "shared-observation", "enabled": True,
+                                "mode": "pixelOnly", "keepInput": True, "onUnavailable": "ignore"}
+                               for cid in ("ability", "sibling")]}
+        # Nondefault sibling controls must survive shared update, clone and removal.
+        visual["triggers"][1] = {"cooldownId": "sibling", "observationId": "shared-observation",
+                                 "enabled": False, "mode": "confirmInput",
+                                 "confirmationTimeoutMs": 1337, "onUnavailable": "triggerFromInput"}
+        data = Path(os.environ["XDG_DATA_HOME"]) / "layerc" / "profiles" / "z-shared"
+        data.mkdir(parents=True)
+        (data / "visual.json").write_text(json.dumps(visual))
 else:
     # The approved representative store: 20 profiles, each with ten
     # cooldowns and two panels; the first (fixture.json) opens selected.

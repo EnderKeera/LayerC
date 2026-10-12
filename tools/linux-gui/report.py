@@ -102,7 +102,7 @@ def check_automation_resources(out, startup, failures):
             or not isinstance(owner_nonce, str) or not owner_nonce):
         failures.append("automation resources: startup evidence names no owned editor")
         owner = owner_start = owner_nonce = None
-    for view in ("json", "simulator", "trace-stopped"):
+    for view in ("json", "simulator", "trace-stopped", "calibration-stopped"):
         label = f"automation {view}"
         report = load(out / f"automation-{view}-resources.json")
         if not isinstance(report, dict):

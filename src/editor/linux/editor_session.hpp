@@ -3,8 +3,10 @@
 #include "daemon_link.hpp"
 #include "document_commit.hpp"
 #include "profile_document.hpp"
+#include "visual_assignment.hpp"
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/platform/profile_store.hpp"
+#include "layerc/platform/visual_assets_linux.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -88,6 +90,24 @@ public:
       const std::function<std::optional<std::string>(
           std::optional<layerc::core::AutomationProfile> &)> &change,
       bool text_change = false, bool repair = false);
+  // Complete validated visual edits with shared undo/redo. Ordinary edits
+  // cannot replace an unreadable sidecar; only explicit calibration can repair it.
+  [[nodiscard]] std::optional<std::string> edit_visual(
+      const std::function<std::optional<std::string>(
+          std::optional<layerc::core::VisualProfile> &)> &change,
+      bool text_change = false);
+  // Takes ownership of the calibration's new template bytes; the next Save
+  // publishes them with the profile and sidecars in one durable transaction.
+  [[nodiscard]] std::optional<std::string> apply_calibration(
+      std::string_view cooldown_id, std::string_view visual_json,
+      const std::function<SharedObservationChoice()> &choose_shared,
+      std::vector<layerc::platform::EncodedTemplateAsset> assets = {});
+  [[nodiscard]] const std::vector<layerc::platform::EncodedTemplateAsset> &
+  owned_template_assets() const noexcept {
+    return owned_assets_;
+  }
+  [[nodiscard]] std::optional<std::string>
+  set_visual_runtime(layerc::core::VisualRuntime runtime);
   // Removes a cooldown with its bindings, panel memberships and module
   // references, refusing when a group or rule still depends on it.
   [[nodiscard]] std::optional<std::string> remove_cooldown(std::string_view id);
@@ -120,6 +140,12 @@ public:
 
 private:
   void mark_changed();
+  void restore_visual_history(std::optional<layerc::core::VisualProfile> visual);
+  void accept_visual(std::optional<layerc::core::VisualProfile> visual,
+                     bool text_change = false);
+  // Drops owned template bytes that neither the document nor any snapshot
+  // history can restore still references.
+  void release_unreachable_assets();
   [[nodiscard]] OperationOutcome reload_report(const std::string &done);
 
   std::filesystem::path directory_;
@@ -127,6 +153,15 @@ private:
   ProfileDocument document_;
   // Read-only companion data is kept for a duplicate, never edited by this UI.
   layerc::platform::CompanionSidecarLoad companion_;
+  // An unsaved repair can be undone back to the original unreadable state,
+  // not to a deletion intent. Cleared only after a successful commit or reopen.
+  layerc::platform::VisualSidecarLoad unreadable_visual_;
+  // Template bytes this document owns that its store may not hold yet: a
+  // duplicate's original encoded identities and applied calibration images.
+  // Save publishes the referenced ones inside its bundle transaction; the rest
+  // stay owned until the document closes, so Undo can restore references that
+  // a later Save still publishes, even after the source namespace is deleted.
+  std::vector<layerc::platform::EncodedTemplateAsset> owned_assets_;
   bool opened_{};
 };
 

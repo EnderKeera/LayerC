@@ -25,13 +25,6 @@ struct VisualAssetGcReport {
   [[nodiscard]] bool completed() const noexcept { return fault.empty(); }
 };
 
-struct ImportedTemplateAsset {
-  layerc::core::TemplateReference reference;
-  layerc::core::TemplateImage image;
-  std::filesystem::path path;
-};
-using TemplateAssetResult = std::variant<ImportedTemplateAsset, VisualAssetError>;
-
 [[nodiscard]] std::filesystem::path visual_asset_directory();
 [[nodiscard]] std::filesystem::path visual_asset_path(std::string_view sha256);
 [[nodiscard]] VisualAssetSignature asset_signature(std::string_view sha256);
