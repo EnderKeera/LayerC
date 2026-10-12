@@ -210,7 +210,11 @@ void EditorApp::tab_changed() {
 }
 bool EditorApp::save() {
   if (!session.has_document()) { report("No profile is open."); return false; }
-  if (!apply_fields()) return false;
+  if (!apply_fields()) {
+    // Keep the field's own error, marked so a refused Save is distinguishable.
+    if (!status_text_.starts_with("Not saved")) report("Not saved. " + status_text_);
+    return false;
+  }
   session.end_text_edit();
   const auto outcome = session.save(confirm_upgrade);
   if (outcome.saved()) refresh();

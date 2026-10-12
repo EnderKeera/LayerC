@@ -128,7 +128,8 @@ class AutomationWalk:
                 f"JSON error did not include a location: {failure!r}")
         self.key("ctrl+s", "automation-invalid-save")
         refused = self.text("Save / reload outcome")
-        require("Not" in refused or "Invalid" in refused, f"Save did not refuse pending invalid JSON: {refused!r}")
+        require(refused != failure and refused.startswith("Not saved") and "Invalid" in refused,
+                f"Save did not refuse pending invalid JSON: {refused!r}")
         require(self.profile()[0]["sha256"] == before, "invalid JSON changed the durable base profile")
         require(self.state()["modules"].get("fixture/automation.json") == before_module,
                 "invalid JSON changed the durable automation sidecar")
