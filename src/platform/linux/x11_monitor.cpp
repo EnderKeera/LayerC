@@ -23,18 +23,6 @@ namespace {
 
 } // namespace
 
-int dpi_from_geometry(const int width, const int height, const int mm_width,
-                      const int mm_height) noexcept {
-  if (width <= 0 || height <= 0 || mm_width <= 0 || mm_height <= 0)
-    return baseline_dpi;
-  const double horizontal =
-      static_cast<double>(width) * 25.4 / static_cast<double>(mm_width);
-  const double vertical =
-      static_cast<double>(height) * 25.4 / static_cast<double>(mm_height);
-  const int dpi = static_cast<int>(std::lround((horizontal + vertical) / 2.0));
-  return std::clamp(dpi, min_dpi, max_dpi);
-}
-
 int monitor_dpi_for_rect(const X11MonitorScan &scan, const int x, const int y,
                          const int width, const int height) noexcept {
   if (scan.monitors.empty()) return baseline_dpi;
@@ -56,10 +44,6 @@ int monitor_dpi_for_rect(const X11MonitorScan &scan, const int x, const int y,
   for (const auto &monitor : scan.monitors)
     if (monitor.primary) return monitor.dpi;
   return scan.monitors.front().dpi;
-}
-
-int scaled_pixels(const int value, const int dpi) noexcept {
-  return (value * dpi + baseline_dpi / 2) / baseline_dpi;
 }
 
 X11MonitorScan scan_monitors(const X11Display &display) {
