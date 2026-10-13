@@ -416,6 +416,7 @@ if(NOT WIN32)
         src/platform/template_png.cpp
         src/platform/linux/event_loop.cpp
         src/platform/linux/control_channel.cpp
+        src/platform/linux/display_types.cpp
     )
     target_include_directories(layerc_linux PUBLIC
         src/platform/include src/platform/linux/include)
@@ -467,6 +468,14 @@ if(NOT WIN32)
         target_link_libraries(layercal PRIVATE layerc_x11)
         layerc_enable_warnings(layercal)
     endif()
+
+    # Wayland-era adapter libraries (docs/Wayland.md). Each lane owns one
+    # optional module; a missing module or dependency builds without it.
+    set(layerc_linux_modules
+        LayerCLinuxWayland LayerCLinuxEvdev LayerCLinuxBus LayerCGnomeShell)
+    foreach(layerc_linux_module IN LISTS layerc_linux_modules)
+        include(cmake/${layerc_linux_module}.cmake OPTIONAL)
+    endforeach()
 
     if(LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS)
         add_library(layerc_daemon_linux STATIC
