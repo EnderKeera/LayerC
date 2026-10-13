@@ -187,10 +187,10 @@ class CheckedInPolicyTests(unittest.TestCase):
     repo = Path(__file__).parents[2]
 
     def test_policy_matches_cmake_registration(self) -> None:
-        cmake = "".join(
-            (self.repo / name).read_text(encoding="utf-8")
-            for name in ("CMakeLists.txt", "cmake/LayerCTests.cmake")
-        )
+        # Lane modules register their suites in cmake/LayerC*Tests.cmake.
+        sources = [self.repo / "CMakeLists.txt",
+                   *sorted((self.repo / "cmake").glob("LayerC*Tests.cmake"))]
+        cmake = "".join(path.read_text(encoding="utf-8") for path in sources)
         declared = set(re.findall(r"layerc_add_test\((\w+)", cmake))
         declared |= set(re.findall(r"add_test\(NAME (\w+)", cmake))
         declared.discard("${target}")
