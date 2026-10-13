@@ -1,6 +1,6 @@
 # Linux editor. Missing dependencies keep source/headless builds working;
-# editor CI and release jobs set LAYERC_REQUIRE_EDITOR so they cannot skip it.
-option(LAYERC_REQUIRE_EDITOR "Fail configuration when Linux LayerE cannot be built" OFF)
+# editor CI and release jobs set LAYERC_REQUIRE_EDITOR (CMakeLists.txt) so
+# they cannot skip it.
 macro(layerc_editor_unavailable reason)
     if(LAYERC_REQUIRE_EDITOR)
         message(FATAL_ERROR "Linux LayerE required but not buildable: ${reason}")
@@ -17,7 +17,10 @@ if(NOT LAYERC_FLTK_CONFIG)
 endif()
 execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --version
     OUTPUT_VARIABLE LAYERC_FLTK_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
-    COMMAND_ERROR_IS_FATAL ANY)
+    RESULT_VARIABLE layerc_fltk_result)
+if(NOT layerc_fltk_result EQUAL 0)
+    layerc_editor_unavailable("${LAYERC_FLTK_CONFIG} --version failed")
+endif()
 if(LAYERC_FLTK_VERSION VERSION_LESS 1.4)
     layerc_editor_unavailable("FLTK 1.4 or later required")
 endif()
@@ -45,10 +48,13 @@ if(NOT LAYERC_ATK_FOUND)
 endif()
 execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --cxxflags
     OUTPUT_VARIABLE LAYERC_FLTK_CXXFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
-    COMMAND_ERROR_IS_FATAL ANY)
+    RESULT_VARIABLE layerc_fltk_cxx_result)
 execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --ldflags
     OUTPUT_VARIABLE LAYERC_FLTK_LDFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
-    COMMAND_ERROR_IS_FATAL ANY)
+    RESULT_VARIABLE layerc_fltk_ld_result)
+if(NOT layerc_fltk_cxx_result EQUAL 0 OR NOT layerc_fltk_ld_result EQUAL 0)
+    layerc_editor_unavailable("${LAYERC_FLTK_CONFIG} did not report its build flags")
+endif()
 separate_arguments(LAYERC_FLTK_CXXFLAGS UNIX_COMMAND "${LAYERC_FLTK_CXXFLAGS}")
 separate_arguments(LAYERC_FLTK_LDFLAGS UNIX_COMMAND "${LAYERC_FLTK_LDFLAGS}")
 if(LAYERC_EDITOR_SYSROOT)
