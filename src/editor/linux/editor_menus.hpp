@@ -5,6 +5,7 @@
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Double_Window.H>
 #include <array>
+#include <string>
 
 class Fl_Menu_Bar;
 class Fl_Menu_Button;
@@ -25,9 +26,11 @@ public:
   [[nodiscard]] bool shortcut(int key, int modifiers);
   void configure_context(Fl_Menu_Button &menu, EditorMenuContext context, bool has_target);
   void popup(EditorMenuContext context, bool has_target);
+  // One "shortcut<TAB>action" line per keyboard shortcut.
+  [[nodiscard]] static std::string shortcut_help();
 private:
   struct Action { EditorApp *app{}; EditorCommand command{}; };
-  std::array<Action, 32> actions_{};
+  std::array<Action, 48> actions_{};
   EditorApp &app_;
   Fl_Menu_Bar *bar_{};
   static void invoke(Fl_Widget *widget, void *data);

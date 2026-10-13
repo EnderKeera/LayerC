@@ -6,6 +6,10 @@
 #include "automation_editor.hpp"
 #include "visual_editor.hpp"
 #include "live_draft_client.hpp"
+#include "task_list.hpp"
+#include "tasks_window.hpp"
+#include "diagnostics_window.hpp"
+#include "editor_appearance.hpp"
 
 #include <memory>
 
@@ -13,6 +17,7 @@
 #include <FL/Fl_Widget.H>
 #include <optional>
 #include <string>
+#include <sys/types.h>
 
 class Fl_Box;
 class Fl_Button;
@@ -43,7 +48,9 @@ enum class EditorCommand {
   refresh, import_profiles, export_json, export_pack,
   add_cooldown, delete_cooldown, add_panel, delete_panel,
   add_keyboard, add_mouse, capture_binding, delete_binding,
-  profile_page, cooldown_page, binding_page, panel_page, automation_page, visual_page, close
+  profile_page, cooldown_page, binding_page, panel_page, automation_page, visual_page,
+  duplicate_cooldown, rename, diagnostics, shortcuts_help, about,
+  save_as, open_folder, split_bars, panel_colors, options, appearance, tasks, position, close
 };
 
 // The toolkit frontend owns only controls and the local, possibly invalid
@@ -69,11 +76,13 @@ public:
   Fl_Input *key_code{};
   Fl_Multiline_Output *status{}, *daemon_status{}, *module_status{}, *profile_id{};
   Fl_Box *accessibility_status{};
-  Fl_Button *undo_button{}, *redo_button{};
+  Fl_Button *undo_button{}, *redo_button{}, *position_button{};
   PanelPreview *preview{};
   std::unique_ptr<EditorMenus> menus;
   std::unique_ptr<LinuxAutomationEditor> automation;
   std::unique_ptr<LinuxVisualEditor> visual;
+  std::unique_ptr<DiagnosticsWindow> diagnostics; // demand-created
+  std::unique_ptr<TasksWindow> tasks_window;     // demand-created
   // Declared last: it releases its widget trackers before the widgets go.
   std::unique_ptr<EditorAccessibility> accessibility;
 
@@ -94,10 +103,16 @@ public:
   [[nodiscard]] bool command_enabled(EditorCommand action) const;
   void command(EditorCommand action);
   void import_profiles();
+  // Restores the saved editor appearance (Tools > Appearance) at startup.
+  void load_appearance();
+  [[nodiscard]] const EditorAppearance &appearance() const noexcept { return appearance_; }
   void export_profile(bool pack);
   [[nodiscard]] std::optional<std::size_t> cooldown_index() const;
   [[nodiscard]] std::optional<std::size_t> panel_index() const;
   [[nodiscard]] const std::string &selected_panel() const { return panel_id_; }
+  // The game window the preview stands for while positioning on it.
+  [[nodiscard]] bool placement_active() const;
+  [[nodiscard]] const std::optional<TaskCandidate> &placement() const noexcept { return placement_; }
 
 private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_, title_text_;
@@ -118,6 +133,25 @@ private:
   static void autosave_tick(void *);
   static void live_draft_ready(int, void *);
   void end_live_draft();
+  // Save As, profiles folder, split bars, panel colours, Options, Appearance.
+  [[nodiscard]] bool tools_command(EditorCommand action);
+  void open_profiles_folder();
+  static void opener_tick(void *);
+  void stop_opener();
+  EditorAppearance appearance_;
+  std::filesystem::path appearance_path_;
+  std::string appearance_error_;
+  pid_t opener_{};
+  std::string opener_path_;
+  // Detected Tasks and live placement (editor_placement.cpp).
+  void show_tasks(const std::string &reason = {});
+  void use_task(const TaskCandidate &task, bool exact_path);
+  void position_command();
+  void position_on(const TaskCandidate &task);
+  void end_placement(const std::string &status);
+  void update_position_button();
+  std::optional<TaskCandidate> placement_;
+  std::string placement_profile_;
   [[nodiscard]] std::string edit_status() const;
   void changed(const std::optional<std::string> &error);
   friend class PanelPreview;

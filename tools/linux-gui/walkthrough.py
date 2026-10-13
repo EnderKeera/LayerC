@@ -20,6 +20,12 @@ from automation_walkthrough import AutomationWalk  # noqa: E402
 from bridge import call  # noqa: E402
 from autosave_walkthrough import EXPECTED as AUTOSAVE_EXPECTED  # noqa: E402
 from autosave_walkthrough import AutosaveWalk  # noqa: E402
+from runtime_walkthrough import EXPECTED as RUNTIME_EXPECTED  # noqa: E402
+from runtime_walkthrough import RuntimeWalk  # noqa: E402
+from device_walkthrough import EXPECTED as DEVICE_EXPECTED  # noqa: E402
+from device_walkthrough import DeviceWalk  # noqa: E402
+from tools_walkthrough import EXPECTED as TOOLS_EXPECTED  # noqa: E402
+from tools_walkthrough import ToolsWalk  # noqa: E402
 from visual_walkthrough import EXPECTED as VISUAL_EXPECTED  # noqa: E402
 from visual_walkthrough import VisualWalk  # noqa: E402
 
@@ -58,6 +64,9 @@ EXPECTED = {
     **AUTOMATION_EXPECTED,
     **VISUAL_EXPECTED,
     **AUTOSAVE_EXPECTED,
+    **RUNTIME_EXPECTED,
+    **DEVICE_EXPECTED,
+    **TOOLS_EXPECTED,
     "layout": "Corner drags grow the window and clamp it at 640x480 with scrolling; "
               "title-bar double-clicks maximize and restore; Ctrl+Plus/Ctrl+0 scale "
               "and restore the window.",
@@ -98,7 +107,7 @@ def center(node):
     return x + w // 2, y + h // 2
 
 
-class Walk(AutomationWalk, VisualWalk, AutosaveWalk):
+class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, ToolsWalk):
     def __init__(self, session):
         self.session = session
         self.shot = {}

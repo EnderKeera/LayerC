@@ -74,6 +74,7 @@ void EditorApp::refresh() {
   last_field_ = nullptr;
   fill_lists();
   refresh_forms();
+  update_position_button();
   preview->redraw();
 }
 
@@ -259,7 +260,16 @@ bool EditorApp::command_enabled(const EditorCommand action) const {
   case EditorCommand::panel_page:
   case EditorCommand::automation_page:
   case EditorCommand::visual_page:
+  case EditorCommand::diagnostics:
+  case EditorCommand::shortcuts_help:
+  case EditorCommand::about:
+  case EditorCommand::options:
+  case EditorCommand::appearance:
+  case EditorCommand::open_folder:
+  case EditorCommand::tasks:
   case EditorCommand::close: return true;
+  case EditorCommand::duplicate_cooldown: return cooldown_index().has_value();
+  case EditorCommand::panel_colors: return panel_index().has_value();
   case EditorCommand::undo: return session.has_document() && (pending_fields_ || session.can_undo());
   case EditorCommand::redo: return session.has_document() && !pending_fields_ && session.can_redo();
   case EditorCommand::toggle_enabled:
@@ -294,6 +304,23 @@ void EditorApp::command(const EditorCommand action) {
   }
   if (page) { tabs->value(page); tab_changed(); tabs->redraw(); return; }
   if (action == EditorCommand::save) { (void)save(); return; }
+  if (tools_command(action)) return;
+  if (action == EditorCommand::tasks) { show_tasks(); return; }
+  if (action == EditorCommand::position) { position_command(); return; }
+  if (action == EditorCommand::diagnostics) {
+    if (!diagnostics) diagnostics = std::make_unique<DiagnosticsWindow>();
+    diagnostics->show();
+    return;
+  }
+  if (action == EditorCommand::shortcuts_help) {
+    show_text_dialog("Keyboard shortcuts — LayerE", EditorMenus::shortcut_help());
+    return;
+  }
+  if (action == EditorCommand::about) {
+    show_about_dialog(daemon_text_, accessibility_status && accessibility_status->label()
+                                        ? accessibility_status->label() : "");
+    return;
+  }
   if (action == EditorCommand::refresh) { query_status(); return; }
   if (action == EditorCommand::new_profile) {
     if (!may_leave()) return;
@@ -311,6 +338,16 @@ void EditorApp::command(const EditorCommand action) {
     session.end_text_edit();
     const bool done = action == EditorCommand::undo ? session.undo() : session.redo();
     refresh(); report(done ? "History restored. " + edit_status() : "No history in that direction."); return;
+  }
+  if (action == EditorCommand::rename) {
+    // F2 renames the selected cooldown on its page, otherwise the profile.
+    const bool cooldown = active_tab_ == cooldown_tab && cooldown_index();
+    if (!cooldown) { tabs->value(profile_tab); tab_changed(); tabs->redraw(); }
+    if (active_tab_ != (cooldown ? cooldown_tab : profile_tab)) return; // invalid field kept
+    auto *field = cooldown ? cooldown_name : name;
+    field->take_focus();
+    field->insert_position(field->size(), 0);
+    return;
   }
   if (action == EditorCommand::duplicate) {
     if (!may_leave()) return;
@@ -339,6 +376,15 @@ void EditorApp::command(const EditorCommand action) {
     const auto error = session.edit([&](auto &profile) { id = add_cooldown(profile); });
     if (!error) cooldown_id_ = std::move(id);
     changed(error); break;
+  }
+  case EditorCommand::duplicate_cooldown: {
+    std::string id;
+    const auto error = session.edit([&](auto &profile) { id = duplicate_cooldown(profile, cooldown_id_); });
+    if (!error && id.empty()) { report("Select a cooldown to duplicate."); break; }
+    if (!error) cooldown_id_ = std::move(id);
+    changed(error);
+    if (!error) report("Cooldown duplicated without bindings; add a binding for the copy.");
+    break;
   }
   case EditorCommand::delete_cooldown:
     if (fl_choice("Remove this cooldown, its bindings and memberships?", "Cancel", "Remove", nullptr) == 1)

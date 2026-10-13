@@ -8,7 +8,7 @@ from pathlib import Path
 from sample import cpu_seconds, memory
 
 ADVANCED_VIEWS = ("json", "simulator", "trace-stopped", "calibration-stopped",
-                  "autosave-stopped", "live-draft-active")
+                  "autosave-stopped", "live-draft-active", "diagnostics-open")
 SAMPLE_SECONDS = 60.0
 SAMPLE_INTERVAL = 0.25
 # The editor must share the bridge's private roots, not only its display.

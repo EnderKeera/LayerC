@@ -221,18 +221,18 @@ X11DeviceKind X11InputSource::kind_of(const int deviceid) const noexcept {
   return X11DeviceKind::other;
 }
 
-bool X11InputSource::refresh_devices() noexcept {
-  if (display_ == nullptr) return false;
-  auto *raw = reinterpret_cast<Display *>(display_);
+std::optional<std::vector<X11InputDevice>>
+query_input_devices(struct _XDisplay *display) {
+  if (display == nullptr) return std::nullopt;
+  auto *raw = reinterpret_cast<Display *>(display);
   int count{};
   X11ErrorTrap trap{raw};
   XIDeviceInfo *info = XIQueryDevice(raw, XIAllDevices, &count);
   if (info == nullptr || !trap.ok()) {
     if (info != nullptr) XIFreeDeviceInfo(info);
-    return false;
+    return std::nullopt;
   }
   std::vector<X11InputDevice> next;
-  std::vector<int> gamepads;
   for (int index = 0; index < count; ++index) {
     const XIDeviceInfo &device = info[index];
     // Master devices are virtual: they never generate raw events.
@@ -260,13 +260,41 @@ bool X11InputSource::refresh_devices() noexcept {
   }
   XIFreeDeviceInfo(info);
   std::ranges::sort(next, {}, &X11InputDevice::id);
-  for (const auto &device : next)
-    if (device.kind == X11DeviceKind::gamepad) gamepads.push_back(device.id);
+  return next;
+}
 
-  const bool changed = next != devices_ || gamepads != gamepads_;
-  devices_ = std::move(next);
-  gamepads_ = std::move(gamepads);
-  return changed;
+std::vector<int> gamepad_ids(const std::vector<X11InputDevice> &devices) {
+  std::vector<int> gamepads;
+  for (const auto &device : devices)
+    if (device.kind == X11DeviceKind::gamepad) gamepads.push_back(device.id);
+  return gamepads;
+}
+
+layerc::core::InputToken gamepad_button_token(const std::vector<int> &gamepads,
+                                              const int deviceid,
+                                              const std::uint32_t detail) noexcept {
+  std::uint8_t slot{};
+  for (std::size_t index = 0; index < gamepads.size(); ++index)
+    if (gamepads[index] == deviceid) {
+      slot = static_cast<std::uint8_t>(std::min<std::size_t>(index, 255U));
+      break;
+    }
+  return {layerc::core::InputDevice::controller, static_cast<std::uint16_t>(detail), slot};
+}
+
+bool X11InputSource::refresh_devices() noexcept {
+  // The queries allocate; on failure the previous device lists stay current.
+  try {
+    auto next = query_input_devices(display_);
+    if (!next) return false;
+    auto gamepads = gamepad_ids(*next);
+    const bool changed = *next != devices_ || gamepads != gamepads_;
+    devices_ = std::move(*next);
+    gamepads_ = std::move(gamepads);
+    return changed;
+  } catch (...) {
+    return false;
+  }
 }
 
 bool X11InputSource::refresh_keymap() noexcept {
@@ -371,16 +399,8 @@ X11InputPoll X11InputSource::poll(X11WindowTracker *tracker) {
       } else {
         const auto kind = kind_of(raw_event.deviceid);
         if (kind == X11DeviceKind::gamepad) {
-          std::uint8_t slot{};
-          for (std::size_t index = 0; index < gamepads_.size(); ++index)
-            if (gamepads_[index] == raw_event.deviceid) {
-              slot = static_cast<std::uint8_t>(std::min<std::size_t>(index, 255U));
-              break;
-            }
           result.events.push_back(
-              {{layerc::core::InputDevice::controller,
-                static_cast<std::uint16_t>(detail), slot},
-               pressed});
+              {gamepad_button_token(gamepads_, raw_event.deviceid, detail), pressed});
         } else if (kind == X11DeviceKind::mouse) {
           const auto code = button_to_mouse_code(detail);
           if (code != 0)

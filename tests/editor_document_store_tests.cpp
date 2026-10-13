@@ -9,11 +9,13 @@
 #include "layerc/platform/profile_store.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <utility>
 #include <variant>
+#include <vector>
 
 void editor_cooldown_removal_contracts();
 
@@ -254,6 +256,32 @@ void profile_edit_contracts() {
              parse_duration_seconds("2s") == std::nullopt &&
              parse_duration_seconds("1e9") == std::nullopt,
          "durations parse as positive bounded seconds");
+  {
+    auto grouped = layerc::editor::make_new_profile();
+    expect(!layerc::editor::split_grouped_bars(grouped, 1000) &&
+               grouped == layerc::editor::make_new_profile(),
+           "a profile without shared bars is left unchanged");
+    grouped.cooldowns.push_back(grouped.cooldowns.front());
+    grouped.cooldowns.back().id = "second";
+    grouped.panels.front().cooldown_ids.push_back("second");
+    grouped.panels.front().bar.height = 18;
+    grouped.panels.push_back({.id = "main-ability", .name = "Taken",
+                              .style = layerc::core::PanelStyle::card,
+                              .cooldown_ids = {"ability"}});
+    const auto first = layerc::editor::split_grouped_bars(grouped, 240);
+    const auto &panels = grouped.panels;
+    expect(first == 0U && panels.size() == 3U && panels[0].id == "main-ability-2" &&
+               panels[1].id == "main-second" && panels[2].id == "main-ability" &&
+               panels[0].cooldown_ids == std::vector<std::string>{"ability"} &&
+               panels[1].cooldown_ids == std::vector<std::string>{"second"} &&
+               panels[0].name == "Main ability",
+           "a shared bar splits into unique single-cooldown bars in place");
+    // (18 + spacing 6) / 240 = 0.1 apart, centred on the shared anchor 0.75.
+    expect(std::abs(panels[0].anchor_y - 0.70) < 1e-9 &&
+               std::abs(panels[1].anchor_y - 0.80) < 1e-9 &&
+               panels[0].anchor_x == 0.5,
+           "split bars stack around the shared anchor");
+  }
   auto profile = layerc::editor::make_new_profile();
   expect(!profile.game.executable_name.empty() || validate_profile(profile),
          "a new draft must name its application before it can be saved");

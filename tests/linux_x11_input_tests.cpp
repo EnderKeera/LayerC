@@ -339,6 +339,23 @@ void check_normalization(bool &passed) {
   passed &= expect(classify_device("Pedal", false, true, 0, false) ==
                        X11DeviceKind::other,
                    "buttons without axes are not claimed");
+
+  // The editor's focused capture and the daemon share one slot numbering.
+  using layerc::platform::X11InputDevice;
+  const std::vector<X11InputDevice> roster{
+      {2, "Virtual core XTEST pointer", X11DeviceKind::mouse},
+      {7, "Second pad", X11DeviceKind::gamepad},
+      {5, "First pad", X11DeviceKind::gamepad},
+      {9, "AT Keyboard", X11DeviceKind::keyboard}};
+  const auto pads = layerc::platform::gamepad_ids(roster);
+  passed &= expect(pads == std::vector<int>{7, 5},
+                   "gamepad ids keep the roster order and skip other kinds");
+  const auto token = layerc::platform::gamepad_button_token({5, 7}, 7, 3);
+  passed &= expect(token.device == layerc::core::InputDevice::controller &&
+                       token.code == 3 && token.controller_index == 1,
+                   "a gamepad's slot is its index among the gamepads");
+  passed &= expect(layerc::platform::gamepad_button_token({5, 7}, 11, 2).controller_index == 0,
+                   "an unlisted device decodes to slot 0");
 }
 
 } // namespace

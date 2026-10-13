@@ -1,13 +1,18 @@
+#include "editor_appearance.hpp"
 #include "editor_model.hpp"
 #include "profile_edit.hpp"
+#include "task_list.hpp"
 #include "test_support.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
 
 #include <sys/stat.h>
+#include <unistd.h>
+#include <cmath>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace {
 using layerc::test::expect;
@@ -165,10 +170,130 @@ void write_failure_and_invalid_module_are_visible() {
   expect(layerc::test::read_file(sidecar) == std::optional<std::string>("{broken"),
          "a blocked save preserves invalid module evidence");
 }
+
+void appearance_persistence() {
+  using namespace layerc::editor;
+  const auto root = std::filesystem::temp_directory_path() /
+                    ("layerc-appearance-" + std::to_string(::getpid()));
+  std::filesystem::remove_all(root);
+  const auto path = root / "layerc" / "editor-appearance.json";
+  const auto missing = load_editor_appearance(path);
+  expect(missing.error.empty() && missing.appearance == EditorAppearance{},
+         "a missing appearance file is the system default without an error");
+  EditorAppearance chosen;
+  chosen.theme = EditorTheme::teal;
+  chosen.accent = 0x123456;
+  chosen.overrides[static_cast<std::size_t>(EditorRole::edit)].fill = 0x101010;
+  chosen.overrides[static_cast<std::size_t>(EditorRole::status)].text = 0xABCDEF;
+  expect(!save_editor_appearance(path, chosen), "an appearance saves durably beside the profiles");
+  expect(layerc::test::read_file(path) ==
+             std::optional<std::string>("{\"appearanceVersion\":1,\"theme\":\"teal\","
+                 "\"accent\":\"#123456\",\"overrides\":{\"edit\":{\"fill\":\"#101010\"},"
+                 "\"status\":{\"text\":\"#ABCDEF\"}}}\n"),
+         "the appearance file is byte-stable JSON");
+  expect(load_editor_appearance(path).appearance == chosen && load_editor_appearance(path).error.empty(),
+         "a saved appearance round-trips");
+  const auto edit = theme_role_colors(chosen, EditorRole::edit);
+  const auto button = theme_role_colors(chosen, EditorRole::button);
+  const auto label = theme_role_colors(chosen, EditorRole::label);
+  expect(edit && edit->fill == 0x101010 && edit->text == 0xF3F3F3 && button &&
+             button->fill == 0x2D2D2D && label && label->text == 0xB8B8B8 &&
+             label->fill == 0x1F1F1F,
+         "presets use the Windows neutral ramp with per-role overrides");
+  EditorAppearance teal;
+  teal.theme = EditorTheme::teal;
+  // A quarter (60/255) of the teal accent 0x5AB6AA over the 0x1F1F1F window.
+  expect(theme_role_colors(teal, EditorRole::list)->selection == 0x2C423F &&
+             !theme_role_colors(EditorAppearance{}, EditorRole::window),
+         "selection blends the preset accent; the system theme keeps FLTK colours");
+  const std::string invalid_text = "{\"appearanceVersion\":1,\"theme\":\"neon\"}";
+  expect(layerc::test::write_file(path, invalid_text), "write an invalid appearance file");
+  const auto invalid = load_editor_appearance(path);
+  expect(!invalid.error.empty() && invalid.appearance == EditorAppearance{} &&
+             layerc::test::read_file(path) == std::optional<std::string>(invalid_text),
+         "an invalid appearance file is reported, ignored and left untouched");
+  for (const char *bad : {"[]", "{\"appearanceVersion\":2,\"theme\":\"teal\"}",
+                          "{\"appearanceVersion\":1,\"theme\":\"teal\",\"extra\":1}",
+                          "{\"appearanceVersion\":1,\"theme\":\"teal\",\"accent\":\"#12345\"}",
+                          "{\"appearanceVersion\":1,\"theme\":\"teal\",\"overrides\":{\"menu\":{}}}",
+                          "{\"appearanceVersion\":1,\"theme\":\"teal\",\"overrides\":{\"edit\":{\"hover\":\"#000000\"}}}"})
+    expect(std::holds_alternative<std::string>(parse_appearance(bad)),
+           "malformed appearance JSON is refused");
+  std::filesystem::remove_all(root);
+}
+
+void detected_tasks_and_placement() {
+  using layerc::editor::TaskCandidate;
+  TaskCandidate game;
+  game.window = 1;
+  game.title = "Game";
+  game.class_name = "game";
+  game.executable_name = "game.bin";
+  game.executable_path = "/opt/game/game.bin";
+  game.pid = 40U;
+  game.width = 1600;
+  game.height = 900;
+  TaskCandidate xterm;
+  xterm.class_name = "xterm";
+  TaskCandidate own = game;
+  own.window = 2; own.pid = 7U; own.title = "LayerE";
+  TaskCandidate hidden = game;
+  hidden.window = 3; hidden.hidden = true;
+  TaskCandidate untitled = game;
+  untitled.window = 4; untitled.title.clear();
+  const std::vector<TaskCandidate> all{game, own, hidden, untitled};
+  const auto shown = layerc::editor::visible_tasks(all, 7U, false);
+  expect(shown.size() == 1U && shown.front() == game,
+         "the editor itself, hidden and untitled windows are left out by default");
+  expect(layerc::editor::visible_tasks(all, 7U, true).size() == 3U,
+         "Show all windows adds hidden and untitled windows but never the editor");
+  expect(layerc::editor::task_row_text(untitled) == "game.bin\t(untitled)\t40" &&
+             layerc::editor::task_row_text(xterm) == "xterm\t(untitled)\t-",
+         "rows show the program, title and PID with explicit placeholders");
+
+  auto profile = layerc::editor::make_new_profile();
+  profile.game.window_title = "old";
+  auto applied = layerc::editor::apply_task(profile, game, false, true);
+  expect(applied.applied && profile.game.executable_name == "game.bin" &&
+             profile.game.executable_path.empty() && profile.game.window_title.empty() &&
+             profile.name == "game" && profile.id == "game" &&
+             applied.status == "Application selected — Save once to create the profile.",
+         "an unsaved New Profile takes the executable matcher and its name");
+  applied = layerc::editor::apply_task(profile, game, true, false);
+  expect(applied.applied && profile.game.executable_path == "/opt/game/game.bin" &&
+             profile.name == "game" &&
+             applied.status == "Application selected — matching its exact path.",
+         "a saved profile keeps its name and can match the exact path");
+  TaskCandidate unreadable = game;
+  unreadable.executable_name.clear();
+  unreadable.executable_path.clear();
+  applied = layerc::editor::apply_task(profile, unreadable, true, false);
+  expect(applied.applied && profile.game.executable_name.empty() &&
+             profile.game.executable_path.empty() && profile.game.window_class == "game",
+         "an unreadable process falls back to the window class");
+  const auto before = profile;
+  applied = layerc::editor::apply_task(profile, TaskCandidate{}, false, false);
+  expect(!applied.applied && profile == before,
+         "a window without executable or class leaves the profile unchanged");
+
+  const auto frame = layerc::editor::placement_frame(10, 20, 400, 300, 1600, 900);
+  expect(frame == layerc::editor::PlacementFrame{10, 57, 400, 225, 0.25},
+         "a 16:9 target is aspect-fitted and centred in the preview");
+  const auto origin = layerc::editor::placed_origin(frame, 0.5, 0.75, 90, 8);
+  expect(origin == layerc::editor::PreviewPoint{165, 222},
+         "panels are centred on anchor times the target size, as the X11 overlay does");
+  const auto anchor = layerc::editor::anchor_at(frame, 210, 225);
+  expect(std::abs(anchor.x - 0.5) < 1e-9 && std::abs(anchor.y - (168.0 / 225.0)) < 1e-9,
+         "a preview point maps back to the overlay anchor");
+  const auto outside = layerc::editor::anchor_at(frame, -50, 9999);
+  expect(outside.x == 0.0 && outside.y == 1.0, "anchors are clamped to the target window");
+}
 } // namespace
 
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(edit_save_roundtrip_and_disconnected),
     LAYERC_TEST_CASE(selection_survives_save_rescan),
     LAYERC_TEST_CASE(invalid_input_is_atomic),
-    LAYERC_TEST_CASE(write_failure_and_invalid_module_are_visible))
+    LAYERC_TEST_CASE(write_failure_and_invalid_module_are_visible),
+    LAYERC_TEST_CASE(appearance_persistence),
+    LAYERC_TEST_CASE(detected_tasks_and_placement))

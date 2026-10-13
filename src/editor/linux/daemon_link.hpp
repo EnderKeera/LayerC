@@ -31,6 +31,8 @@ struct DaemonStatus {
   std::string x11_reason;
   std::size_t sessions{};
   std::vector<CapabilityLine> capabilities;
+  // The raw RuntimeDiagnostics payload, for the Runtime Diagnostics view.
+  std::string payload_json;
 
   // One status-bar line: "LayerD 2.6.0 — X11 connected, 1 session".
   [[nodiscard]] std::string summary() const;

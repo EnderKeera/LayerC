@@ -11,6 +11,8 @@ import sys
 MAX_NODES = 400
 MAX_DEPTH = 8
 MAX_TEXT = 400
+# Multi-line views whose full text the walkthrough verifies.
+LONG_TEXT = ("Advanced automation JSON", "Runtime diagnostics", "Keyboard shortcuts — LayerE")
 
 
 def describe(node, depth, budget):
@@ -30,7 +32,7 @@ def describe(node, depth, budget):
         item["checked"] = True
     try:
         text = node.queryText()
-        limit = 8192 if item["name"] == "Advanced automation JSON" else MAX_TEXT
+        limit = 8192 if item["name"] in LONG_TEXT else MAX_TEXT
         item["text"] = text.getText(0, min(text.characterCount, limit))
         item["textTruncated"] = text.characterCount > limit
     except NotImplementedError:

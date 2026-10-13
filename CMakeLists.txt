@@ -519,9 +519,11 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/common/document_commit.cpp
         src/editor/common/profile_document.cpp
         src/editor/common/profile_edit.cpp
+        src/editor/common/runtime_diagnostics_view.cpp
         src/editor/common/visual_assignment.cpp
         src/editor/common/visual_calibration.cpp)
     target_include_directories(layerc_editor_core PUBLIC src/editor/common)
+    target_link_libraries(layerc_editor_core PUBLIC layerc_runtime)
     if(WIN32)
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_windows)
         layerc_win32(layerc_editor_core)
@@ -537,7 +539,9 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
             src/editor/linux/live_draft_client.cpp
             src/editor/linux/editor_model.cpp
             src/editor/linux/editor_session.cpp
-            src/editor/linux/profile_mutations.cpp)
+            src/editor/linux/profile_mutations.cpp
+            src/editor/linux/editor_appearance.cpp
+            src/editor/linux/task_list.cpp)
         target_include_directories(layerc_editor_linux PUBLIC src/editor/linux)
         target_include_directories(layerc_editor_linux PRIVATE src/platform/linux)
         find_package(Threads REQUIRED)
