@@ -125,6 +125,12 @@ if(NOT WIN32)
         SOURCES tests/linux_profile_pack_tests.cpp
         LINK layerc_bundle layerc_miniz TIMEOUT 45)
 
+    layerc_add_test(layerc_linux_display_types_tests
+        SOURCES tests/linux_display_types_tests.cpp
+        LINK layerc_linux TIMEOUT 30)
+    target_include_directories(layerc_linux_display_types_tests PRIVATE
+        src/platform/linux)
+
     layerc_add_test(layerc_linux_event_loop_tests
         SOURCES tests/linux_event_loop_tests.cpp
         LINK layerc_linux layerc_runtime TIMEOUT 30)
@@ -199,6 +205,11 @@ if(NOT WIN32)
     target_compile_definitions(layerc_linux_control_channel_tests PRIVATE
         LAYERC_TEST_LAYERCTL_PATH="$<TARGET_FILE:layerctl>")
     add_dependencies(layerc_linux_control_channel_tests layerctl)
+
+    # Wayland-era lane suites (docs/Wayland.md); each module is optional.
+    foreach(layerc_linux_module IN LISTS layerc_linux_modules)
+        include(cmake/${layerc_linux_module}Tests.cmake OPTIONAL)
+    endforeach()
 endif()
 
 layerc_add_test(layerc_automation_benchmark
