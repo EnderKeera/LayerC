@@ -24,7 +24,7 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; see the [parity matrix](docs/LinuxEditorPlan.md) for X11 limits | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
+| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
 | Gamescope and Wayland | Not supported | Deferred beyond V2.6 |
 
 Package metadata reports **2.6.2** for the unpublished v2.6c, which the
@@ -110,7 +110,7 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 | --- | ---: | ---: | --- |
 | `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
 | `layerd` | yes | yes | Cooldown/automation daemon; background desktop app on Windows, foreground service on Linux |
-| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor described by the [parity matrix](docs/LinuxEditorPlan.md) |
+| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c, not yet shipped; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |

@@ -9,9 +9,24 @@ if [[ $# -lt 1 ]]; then
   exit 64
 fi
 image=$1
+if [[ $image != *@sha256:* ]]; then
+  echo "$0: the image must be digest-pinned (name@sha256:...): $image" >&2
+  exit 64
+fi
+if [[ ${2:-} == -* ]]; then
+  echo "$0: give the evidence directory before run-linux-tests options" >&2
+  exit 64
+fi
 repo=${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel)}
 evidence=${2:-$repo/out/linux-ci/$(date -u +%Y%m%dT%H%M%SZ)}
 shift $(($# < 2 ? $# : 2))
+for option in "$@"; do
+  case $option in
+    --flatpak|--flatpak=*|--flatpak-only)
+      echo "$0: the container gate runs with --flatpak off; $option is not accepted" >&2
+      exit 64 ;;
+  esac
+done
 mkdir -p "$evidence"
 evidence=$(cd "$evidence" && pwd)
 

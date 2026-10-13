@@ -9,6 +9,12 @@ configure_file(cmake/version.hpp.in
 
 option(LAYERC_BUILD_DAEMON "Build the native layerd daemon" ON)
 option(LAYERC_BUILD_EDITOR "Build the native LayerE editor" ON)
+# Editor CI and release jobs set this so a missing Linux editor fails
+# configuration instead of being skipped.
+option(LAYERC_REQUIRE_EDITOR "Fail configuration when Linux LayerE cannot be built" OFF)
+if(LAYERC_REQUIRE_EDITOR AND NOT LAYERC_BUILD_EDITOR)
+    message(FATAL_ERROR "LAYERC_REQUIRE_EDITOR needs LAYERC_BUILD_EDITOR=ON")
+endif()
 option(LAYERC_BUILD_TESTS "Build LayerC tests" ON)
 option(LAYERC_INSTALL_SYSTEMD_USER_UNIT
     "Install the optional LayerC systemd user unit (Linux; never auto-enabled)" OFF)
@@ -550,6 +556,8 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         layerc_enable_warnings(layerc_editor_linux)
         if(LAYERC_BUILD_EDITOR AND LAYERC_HAVE_X11)
             include(cmake/LinuxEditorGUI.cmake)
+        elseif(LAYERC_REQUIRE_EDITOR)
+            message(FATAL_ERROR "Linux LayerE required but not buildable: X11 development files were not found")
         endif()
     endif()
 endif()

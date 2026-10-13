@@ -9,18 +9,20 @@ gate details.
 
 The daemon and CLIs shipped in the `v2.6.0` release as **source/CLI only**.
 v2.6c (package version 2.6.2) adds the X11 `layere` editor, a native Debian
-package and an editor Flatpak; it is built and gated locally but not yet
-published, so build from source as described below. The physical GNOME
-Xorg/KDE X11 evidence below is **pending**: it has not been archived. CI
-verifies headless, Xvfb, installed-native, package and Flatpak runtime
-behavior, but it is not a substitute for the hardware checklist.
+package and an editor Flatpak; they were built and gated in local Debian
+container and WSL runs (automated evidence only) but are not yet published,
+so build from source as described below. The physical GNOME Xorg/KDE X11
+evidence below is **pending**: it has not been archived. `ci.yml` is
+configured to verify headless, Xvfb, installed-native, package and Flatpak
+runtime behavior, but no CI run has been recorded for v2.6c, and CI is not a
+substitute for the hardware checklist.
 
 | Surface | State | Boundary |
 | --- | --- | --- |
 | V2.6.0 portable runtime | implemented | Foreground `layerd`, `layerctl`, XDG storage, Unix-socket control, bundles, install metadata |
 | V2.6.1 X11 interaction | implemented | EWMH tracking, passive XI2 input, Shape overlays, RandR scaling |
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
-| v2.6c X11 editor | first-release feature set; advanced parity in progress | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility; installed, `.deb` and Flatpak gates; not yet published |
+| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; not yet published |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
 | Gamescope and Wayland | unsupported in V2.6 | No compatibility promise or silent fallback |
 
@@ -114,8 +116,11 @@ block implementation or container CI:
 
 ## X11 editor (v2.6c)
 
-The v2.6c editor is not yet published and not yet a full Windows editor
-replacement (advanced modules follow). When X11 development libraries, FLTK 1.4+ with
+The v2.6c editor is not yet published. Compared with the Windows editor, X11
+has no Generic HID capture, Game Bar companion, capture exclusion or isolated
+recognition (their data is preserved), cooldown groups and the isolated-runtime
+setting are preserved but not editable, and there is no Pick Window or direct
+overlay drag because X11 overlays never take input. When X11 development libraries, FLTK 1.4+ with
 `fltk-config`, and ATK, its AT-SPI adaptor and libatspi 2.62 or later are
 available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the `layere`
 target. Older ATK/AT-SPI adaptors crash during cleanup, so 2.62 is the
@@ -198,8 +203,7 @@ visible, with an explicit refresh button.
 The installed `layere` is smoke-tested by `tools/linux-editor-smoke.sh`: it
 starts beside the installed daemon on a disposable display with private XDG
 roots, must map its window, stay within the 20 MiB idle USS and 0.2% idle
-CPU targets, and quit through Ctrl+Q. Advanced editor parity is not
-complete. Xvfb walkthrough evidence is automated evidence, not physical
+CPU targets, and quit through Ctrl+Q. Xvfb walkthrough evidence is automated evidence, not physical
 GNOME/KDE coverage or a screen-reader user study.
 Gamescope and native Wayland remain unsupported in V2.6.
 
@@ -209,7 +213,10 @@ Gamescope and native Wayland remain unsupported in V2.6.
 private authenticated Xvfb display (1600x1000), Openbox, a private D-Bus
 session, private HOME/XDG roots, the X11 smoke fixture as the game, `layerd`
 and `layere`. It never addresses the user's display, bus, daemon, control
-socket or profiles. Every helper is owned, stopped and joined; a missing
+socket or profiles. Its clicks and keys are synthesized with `xdotool` only
+inside that private display, as test input; `layerd` and `layere` never
+synthesize input, and `tools/linux-gui` is not installed by CMake, the `.deb`
+or the Flatpak. Every helper is owned, stopped and joined; a missing
 dependency or build output fails the run rather than skipping it. The Python
 AT-SPI checks also need `python3-gi`, `python3-pyatspi` and the matching
 `gir1.2-atspi-2.0` metadata from the same AT-SPI installation (2.62 or later).
