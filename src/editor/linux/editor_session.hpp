@@ -70,6 +70,9 @@ public:
   [[nodiscard]] const ProfileDocument &document() const noexcept { return document_; }
   // Unsaved edits that would be lost (any draft counts).
   [[nodiscard]] bool has_unsaved_changes() const;
+  // Changes only on accepted mutations or document replacement, not reports.
+  [[nodiscard]] std::uint64_t edit_generation() const noexcept { return edit_generation_; }
+  [[nodiscard]] bool last_edit_was_text() const noexcept { return last_edit_was_text_; }
 
   // Opening, creating and duplicating replace the document: callers ask
   // about unsaved changes first.
@@ -117,7 +120,8 @@ public:
   bool undo();
   bool redo();
 
-  [[nodiscard]] SessionSaveOutcome save(const ConfirmUpgrade &confirm_upgrade);
+  [[nodiscard]] SessionSaveOutcome save(const ConfirmUpgrade &confirm_upgrade,
+                                        bool prompt_upgrade = true);
   // Enables or disables a saved profile on disk. The open document must
   // have no unsaved edits, so enablement never publishes them implicitly.
   [[nodiscard]] OperationOutcome set_enabled(std::size_t row, bool enabled,
@@ -139,7 +143,7 @@ public:
   [[nodiscard]] OperationOutcome import_pack(const ImportPlan &plan);
 
 private:
-  void mark_changed();
+  void mark_changed(bool text_change = false);
   void restore_visual_history(std::optional<layerc::core::VisualProfile> visual);
   void accept_visual(std::optional<layerc::core::VisualProfile> visual,
                      bool text_change = false);
@@ -162,6 +166,8 @@ private:
   // stay owned until the document closes, so Undo can restore references that
   // a later Save still publishes, even after the source namespace is deleted.
   std::vector<layerc::platform::EncodedTemplateAsset> owned_assets_;
+  std::uint64_t edit_generation_{};
+  bool last_edit_was_text_{};
   bool opened_{};
 };
 

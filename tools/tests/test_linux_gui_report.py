@@ -10,6 +10,7 @@ TOOLS = Path(__file__).parents[1] / "linux-gui"
 REPORT = TOOLS / "report.py"
 sys.path.insert(0, str(TOOLS))
 from walkthrough import EXPECTED  # noqa: E402
+from editor_resources import ADVANCED_VIEWS  # noqa: E402
 
 MIB = 1024 * 1024
 ROLES = ("wm", "fixture", "daemon", "sampler", "bridge", "outer-xvfb")
@@ -28,7 +29,7 @@ class LinuxGuiReportTests(unittest.TestCase):
         self.write("startup-resources.json", {"peakUssKiB": 7 * 1024, "passed": True,
                                               "stoppedByHarness": True, "applicationPid": 1234,
                                               "applicationStartTime": "4242", "nonce": "n0nce"})
-        for view in ("json", "simulator", "trace-stopped", "calibration-stopped"):
+        for view in ADVANCED_VIEWS:
             self.write(f"automation-{view}-resources.json", self.advanced_resources())
         self.cases([(name, "pass") for name in EXPECTED])
 
@@ -137,7 +138,7 @@ class LinuxGuiReportTests(unittest.TestCase):
                             for moment in moments]}
 
     def test_advanced_resource_evidence_is_required_and_bounded(self) -> None:
-        for view in ("json", "simulator", "trace-stopped", "calibration-stopped"):
+        for view in ADVANCED_VIEWS:
             with self.subTest(view=view):
                 path = self.out / f"automation-{view}-resources.json"
                 path.unlink()

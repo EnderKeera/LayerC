@@ -229,7 +229,8 @@ ControlReply handle_control_request(
     const std::string_view request_json,
     const layerc::runtime::DaemonKernel &kernel,
     const LinuxStatusSnapshot &linux,
-    const TraceControlHandler &trace) {
+    const TraceControlHandler &trace,
+    const DraftControlHandler &draft) {
   const auto command = layerc::platform::parse_control_request(request_json);
   if (!command.has_value())
     return {.response = layerc::platform::encode_control_response(
@@ -262,6 +263,23 @@ ControlReply handle_control_request(
     return {.response = layerc::platform::encode_control_response(true, {},
         layerc::core::serialize_trace_control_reply(std::get<layerc::core::TraceControlReply>(result)))};
   }
+  case layerc::platform::ControlCommand::draft: {
+    const auto tree = layerc::core::json::parse(request_json);
+    const auto *value = std::get_if<layerc::core::json::Value>(&tree);
+    const auto *payload = value ? value->find("payload") : nullptr;
+    std::string text;
+    if (payload) layerc::core::json::append_value(text, *payload);
+    const auto request = layerc::core::parse_live_draft_request(text);
+    if (!request)
+      return {.response = layerc::platform::encode_control_response(false, "invalid live draft request", {})};
+    if (!draft)
+      return {.response = layerc::platform::encode_control_response(false, "live drafts unavailable", {})};
+    const auto result = draft(*request);
+    if (const auto *error = std::get_if<std::string>(&result))
+      return {.response = layerc::platform::encode_control_response(false, *error, {})};
+    return {.response = layerc::platform::encode_control_response(true, {},
+        layerc::core::serialize_live_draft_reply(std::get<layerc::core::LiveDraftReply>(result)))};
+  }
   }
   return {.response = layerc::platform::encode_control_response(
               false, "invalid control command", {})};
@@ -282,7 +300,8 @@ ControlOutcome ControlService::service(
     layerc::platform::EventLoop &loop, std::vector<int> ready,
     const layerc::runtime::DaemonKernel &kernel,
     const LinuxStatusSnapshot &linux,
-    const TraceControlHandler &trace) {
+    const TraceControlHandler &trace,
+    const DraftControlHandler &draft) {
   ControlOutcome outcome;
   const auto now = layerc::core::MonotonicClock::now();
   expire_clients(loop, now);
@@ -329,7 +348,7 @@ ControlOutcome ControlService::service(
         drop(loop, fd);
       continue; // partial frame
     }
-    const auto reply = handle_control_request(*request, kernel, linux, trace);
+    const auto reply = handle_control_request(*request, kernel, linux, trace, draft);
     if (reply.response.size() > layerc::platform::control_frame_limit) {
       outcome.diagnostic = "control response exceeds the frame limit";
       drop(loop, fd);

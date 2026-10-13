@@ -223,6 +223,10 @@ if(NOT WIN32)
         LAYERC_TEST_LAYERCTL_PATH="$<TARGET_FILE:layerctl>")
     add_dependencies(layerc_linux_control_channel_tests layerctl)
 
+    layerc_add_test(layerc_linux_live_draft_tests
+        SOURCES tests/linux_live_draft_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30)
+
     layerc_add_test(layerc_linux_control_ownership_tests
         SOURCES tests/linux_control_ownership_tests.cpp
         LINK layerc_linux TIMEOUT 30)
@@ -252,6 +256,11 @@ if(NOT WIN32)
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
             LABELS required editor RESOURCE_LOCK layerc_x11_display)
         layerc_editor_build_runtime(layerc_linux_editor_widget_tests)
+        layerc_add_test(layerc_linux_editor_autosave_tests
+            SOURCES tests/linux_editor_autosave_tests.cpp
+            LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
+            LABELS required editor RESOURCE_LOCK layerc_x11_display)
+        layerc_editor_build_runtime(layerc_linux_editor_autosave_tests)
     endif()
 endif()
 

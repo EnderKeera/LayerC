@@ -1,0 +1,161 @@
+// Deterministic FLTK autosave tests: disposable stores and private sockets.
+#include "editor_app.hpp"
+#include "profile_edit.hpp"
+#include "test_support.hpp"
+#include "layerc/core/profile.hpp"
+#include "layerc/core/json.hpp"
+#include "layerc/platform/profile_store.hpp"
+#include <FL/Fl.H>
+#include <FL/Fl_Input.H>
+#include <FL/Fl_Output.H>
+#include <FL/Fl_Multiline_Output.H>
+#include <FL/Fl_Window.H>
+#include <chrono>
+#include <filesystem>
+#include <sys/stat.h>
+namespace {
+namespace editor = layerc::editor;
+namespace core = layerc::core;
+namespace platform = layerc::platform;
+using layerc::test::expect;
+class Fixture {
+public:
+  Fixture() : temp_("layerc-autosave"),
+      home_("HOME", temp_.path()), config_("XDG_CONFIG_HOME", temp_.path() / "config"),
+      data_("XDG_DATA_HOME", temp_.path() / "data"),
+      runtime_("XDG_RUNTIME_DIR", temp_.path() / "runtime"),
+      bus_("DBUS_SESSION_BUS_ADDRESS", std::nullopt),
+      accessibility_("AT_SPI_BUS_ADDRESS", std::nullopt),
+      backend_("FLTK_BACKEND", std::filesystem::path("x11")),
+      override_("LAYERC_PROFILE_DIR", std::nullopt) {
+    layerc::test::require_x11();
+    std::filesystem::create_directories(temp_.path() / "runtime");
+    expect(::chmod((temp_.path() / "runtime").c_str(), 0700) == 0, "private control runtime");
+    path = platform::profile_directory() / "fixture.json";
+  }
+  void store(bool legacy = false) {
+    auto profile = editor::make_new_profile();
+    profile.game.executable_name = "fixture.exe";
+    auto bytes = core::serialize_profile_json(profile);
+    if (legacy) {
+      const auto tree = core::json::parse(bytes);
+      auto object = std::get<core::json::Value>(tree).as_object();
+      object["schemaVersion"] = core::json::Value(std::int64_t{3});
+      object.erase("cooldownGroups"); // this field is legal only from schema 4
+      bytes.clear();
+      core::json::append_value(bytes, core::json::Value(std::move(object)), 2);
+      const auto parsed = core::parse_profile_json(bytes);
+      const auto *error = std::get_if<core::ProfileError>(&parsed);
+      expect(!error, error ? error->describe() : "legacy fixture is valid");
+    }
+    expect(platform::write_profile_file(path, bytes).ok(), "store a disposable fixture");
+  }
+  std::filesystem::path path;
+private:
+  layerc::test::TempDirectory temp_;
+  layerc::test::ScopedEnvironment home_, config_, data_, runtime_, bus_, accessibility_, backend_, override_;
+};
+void wait(double seconds) {
+  const auto until = core::MonotonicClock::now() + std::chrono::duration_cast<core::MonotonicClock::duration>(
+      std::chrono::duration<double>(seconds));
+  while (core::MonotonicClock::now() < until) Fl::wait(.01);
+}
+void show(editor::EditorApp &app) { app.build(); app.window.show(); Fl::check(); }
+void name(editor::EditorApp &app, const char *value) { app.name->value(value); app.field_changed(app.name); }
+std::string disk_name(const std::filesystem::path &path) {
+  const auto bytes = layerc::test::read_file(path);
+  if (!bytes) return {};
+  const auto result = core::parse_profile_json(*bytes);
+  const auto *profile = std::get_if<core::GameProfile>(&result);
+  return profile ? profile->name : std::string{};
+}
+void debounce_undo_and_offline_save() {
+  Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
+  const auto original = disk_name(fixture.path);
+  name(app, "First"); wait(.20);
+  expect(disk_name(fixture.path) == original && app.session.has_unsaved_changes(), "debounce retains partial text");
+  name(app, "Second"); wait(.20);
+  expect(disk_name(fixture.path) == original, "typing restarts debounce");
+  wait(.35);
+  expect(disk_name(fixture.path) == "Second" && !app.session.has_unsaved_changes() &&
+             std::string(app.status->value()).starts_with("Autosaved") &&
+             std::string(app.status->value()).find("LayerD is not running") != std::string::npos,
+         "text autosaves durably with visible offline-daemon status");
+  app.command(editor::EditorCommand::undo); wait(.08);
+  expect(disk_name(fixture.path) == original && !app.session.has_unsaved_changes(), "Undo immediately autosaves coalesced history");
+  app.command(editor::EditorCommand::redo); wait(.08);
+  expect(disk_name(fixture.path) == "Second", "Redo autosaves the restored entry");
+  app.window.hide();
+}
+void draft_first_save_then_autosave() {
+  Fixture fixture; editor::EditorApp app; show(app);
+  app.command(editor::EditorCommand::new_profile);
+  app.executable->value("draft.exe"); app.field_changed(app.executable);
+  name(app, "Unsaved new profile"); wait(.55);
+  expect(app.session.is_draft() && app.session.profiles().profiles.empty(), "typing never creates a new profile");
+  expect(app.save(), "first explicit Save creates draft");
+  const auto path = app.session.document().path();
+  name(app, "Created profile edit"); wait(.55);
+  expect(!app.session.is_draft() && disk_name(path) == "Created profile edit", "existing profile then autosaves");
+  app.window.hide();
+}
+void invalid_buffer_then_recovery() {
+  Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
+  const auto before = layerc::test::read_file(fixture.path);
+  name(app, "Accepted"); name(app, ""); wait(.55);
+  expect(layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes() &&
+             std::string(app.name->value()).empty() && std::string(app.status->value()).starts_with("Not autosaved"),
+         "invalid buffer blocks publication without losing it or earlier accepted edits");
+  name(app, "Recovered"); wait(.55);
+  expect(disk_name(fixture.path) == "Recovered" && !app.session.has_unsaved_changes(), "corrected buffer retries autosave");
+  app.window.hide();
+}
+void write_failure_then_recovery() {
+  Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
+  const auto before = layerc::test::read_file(fixture.path);
+  const auto blocked = platform::recovery_backup_path(fixture.path);
+  std::filesystem::remove(blocked); std::filesystem::create_directory(blocked);
+  name(app, "Cannot write"); wait(.55);
+  expect(layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes() &&
+             std::string(app.status->value()).starts_with("Not autosaved"),
+         "planning failure retains draft and original durable bytes");
+  wait(.20); expect(layerc::test::read_file(fixture.path) == before, "failed save has no retry spin");
+  std::filesystem::remove(blocked);
+  name(app, "Write recovered"); wait(.55);
+  expect(disk_name(fixture.path) == "Write recovered" && !app.session.has_unsaved_changes(), "next edit retries after fault removal");
+  app.window.hide();
+}
+void upgrade_never_prompts_automatically() {
+  Fixture fixture; fixture.store(true); editor::EditorApp app; show(app);
+  const auto before = layerc::test::read_file(fixture.path);
+  expect(app.session.document().legacy_base_schema(), "legacy fixture is recognized");
+  name(app, "Legacy edit"); wait(.55);
+  expect(!Fl::modal() && layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes() &&
+             std::string(app.status->value()).starts_with("Autosave paused"),
+         "autosave never prompts or silently upgrades");
+  expect(app.session.save([] { return true; }).saved(), "explicit consent upgrades");
+  app.refresh(); name(app, "After upgrade"); wait(.55);
+  expect(disk_name(fixture.path) == "After upgrade" && !app.session.has_unsaved_changes(), "autosave resumes after upgrade");
+  app.window.hide();
+}
+void modal_suspends_commit_and_close_flushes() {
+  Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
+  const auto before = layerc::test::read_file(fixture.path);
+  name(app, "Inside modal");
+  Fl_Window modal(120, 80); modal.end(); modal.set_modal(); modal.show(); wait(.55);
+  expect(layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes(), "no autosave underneath modal");
+  modal.hide(); wait(.20);
+  expect(disk_name(fixture.path) == "Inside modal", "autosave resumes after modal close");
+  name(app, "Close flush"); app.command(editor::EditorCommand::close);
+  expect(!app.window.shown() && disk_name(fixture.path) == "Close flush" && !app.session.has_unsaved_changes(),
+         "close flushes accepted edits and stops owned services");
+  const auto closed = layerc::test::read_file(fixture.path); wait(.55);
+  expect(layerc::test::read_file(fixture.path) == closed, "no orphaned timer writes after close");
+}
+} // namespace
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(debounce_undo_and_offline_save),
+                 LAYERC_TEST_CASE(draft_first_save_then_autosave),
+                 LAYERC_TEST_CASE(invalid_buffer_then_recovery),
+                 LAYERC_TEST_CASE(write_failure_then_recovery),
+                 LAYERC_TEST_CASE(upgrade_never_prompts_automatically),
+                 LAYERC_TEST_CASE(modal_suspends_commit_and_close_flushes))

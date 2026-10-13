@@ -163,8 +163,21 @@ not prove completed runtime application, nor does a lost acknowledgement prove
 that no reload occurred. Inspection/permission faults remain visible rather
 than being misreported as an offline daemon. The editor does not start or stop
 the daemon.
-Closing or selecting another profile prompts to save, discard or cancel dirty
-edits. Daemon capabilities/faults are visible, with an explicit refresh button.
+Edits to a stored profile autosave: text fields after a 400 ms pause, other
+edits immediately, through the same durable transaction, keeping focus and
+undo/redo. A new profile needs one explicit Save; a legacy-format profile
+pauses autosave until an explicit Save confirms the upgrade. Invalid field
+text is never written. While an edit is pending (and no upgrade confirmation
+is outstanding), the editor publishes the
+accepted base profile to the daemon as an in-memory live draft (a typed,
+versioned `draft` request on the authenticated control socket). The draft is
+held by one editor under a 2.5 s monotonic lease that the editor renews; ending
+it, or letting the lease lapse, restores the committed profile. Drafts never
+reach the store, and module sidecars change only through the durable save.
+Closing or selecting another profile flushes autosave first. It prompts to
+save, discard or cancel only when edits remain unsaved: invalid field text, a
+new profile, a failed save, or a declined upgrade. Daemon capabilities/faults are
+visible, with an explicit refresh button.
 
 The installed `layere` is smoke-tested by `tools/linux-editor-smoke.sh`: it
 starts beside the installed daemon on a disposable display with private XDG

@@ -5,6 +5,7 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/core/automation_trace_control.hpp"
+#include "layerc/core/live_draft_control.hpp"
 #include "layerc/platform/profile_store.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 #include "layerc/runtime/diagnostics.hpp"
@@ -74,13 +75,17 @@ struct ControlReply {
 
 using TraceControlResult = std::variant<layerc::core::TraceControlReply, std::string>;
 using TraceControlHandler = std::function<TraceControlResult(const layerc::core::TraceControlRequest &)>;
+using DraftControlResult = std::variant<layerc::core::LiveDraftReply, std::string>;
+using DraftControlHandler = std::function<DraftControlResult(const layerc::core::LiveDraftRequest &)>;
 
-// LayerC.Control v1 dispatch; trace payloads have their own typed version.
+// LayerC.Control v1 dispatch; trace and draft payloads carry their own typed
+// versions.
 [[nodiscard]] ControlReply handle_control_request(
     std::string_view request_json,
     const layerc::runtime::DaemonKernel &kernel,
     const LinuxStatusSnapshot &linux = {},
-    const TraceControlHandler &trace = {});
+    const TraceControlHandler &trace = {},
+    const DraftControlHandler &draft = {});
 
 struct ControlOutcome {
   std::string diagnostic;
@@ -104,7 +109,8 @@ public:
       layerc::platform::EventLoop &loop, std::vector<int> ready,
       const layerc::runtime::DaemonKernel &kernel,
       const LinuxStatusSnapshot &linux = {},
-      const TraceControlHandler &trace = {});
+      const TraceControlHandler &trace = {},
+      const DraftControlHandler &draft = {});
 
   void expire_clients(
       layerc::platform::EventLoop &loop,

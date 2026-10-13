@@ -102,6 +102,7 @@ std::optional<std::string> EditorSession::open(const std::size_t row) {
   document_.set_dirty(false);
   document_.reset_history();
   opened_ = true;
+  ++edit_generation_;
   return std::nullopt;
 }
 
@@ -126,6 +127,7 @@ void EditorSession::new_profile() {
   document_.reset_history();
   document_.set_dirty(true);
   opened_ = true;
+  ++edit_generation_;
 }
 
 std::optional<std::string> EditorSession::duplicate_current() {
@@ -170,6 +172,7 @@ std::optional<std::string> EditorSession::duplicate_current() {
   document_.mark_automation_edited();
   document_.reset_history();
   document_.set_dirty(true);
+  ++edit_generation_;
   return std::nullopt;
 }
 
@@ -179,9 +182,12 @@ void EditorSession::close_document() {
   companion_ = {};
   unreadable_visual_ = {};
   opened_ = false;
+  ++edit_generation_;
 }
 
-void EditorSession::mark_changed() {
+void EditorSession::mark_changed(const bool text_change) {
+  ++edit_generation_;
+  last_edit_was_text_ = text_change;
   document_.set_dirty(is_draft() ||
                       document_.history().is_dirty(document_.profile(), document_.visual(),
                                                    document_.automation()));
@@ -205,7 +211,7 @@ EditorSession::edit(const std::function<void(core::GameProfile &)> &change,
   document_.profile() = std::move(candidate);
   (void)document_.history().record(document_.profile(), document_.visual(),
                                     document_.automation(), text_change);
-  mark_changed();
+  mark_changed(text_change);
   return std::nullopt;
 }
 
@@ -230,7 +236,7 @@ std::optional<std::string> EditorSession::edit_automation(
   document_.mark_automation_edited();
   (void)document_.history().record(document_.profile(), document_.visual(),
                                     document_.automation(), text_change);
-  mark_changed();
+  mark_changed(text_change);
   return std::nullopt;
 }
 
@@ -241,7 +247,7 @@ void EditorSession::accept_visual(std::optional<core::VisualProfile> visual,
   (void)document_.history().record(document_.profile(), document_.visual(),
                                   document_.automation(), text_change);
   release_unreachable_assets();
-  mark_changed();
+  mark_changed(text_change);
 }
 
 void EditorSession::release_unreachable_assets() {
@@ -350,7 +356,8 @@ bool EditorSession::redo() {
   return true;
 }
 
-SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade) {
+SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
+                                        const bool prompt_upgrade) {
   if (!opened_) return {{CommitResult::invalid_fields, std::nullopt}, std::nullopt,
                         "Not saved: no profile is open."};
   const bool draft = is_draft();
@@ -372,7 +379,8 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade) {
     for (const auto &asset : owned_assets_)
       if (references_template(*document_.visual(), asset.asset_sha256)) assets.push_back(asset);
   }
-  const auto commit = commit_document(document_, path, {.create_only = draft},
+  const auto commit = commit_document(document_, path,
+      {.prompt_upgrade = prompt_upgrade, .create_only = draft},
       confirm_upgrade, std::move(companion), [&](auto &mutations) {
         return platform::plan_profile_template_copies(path, assets, mutations);
       });
@@ -387,6 +395,7 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade) {
     unreadable_visual_ = {};
     document_.path() = path;
     document_.mark_saved();
+    ++edit_generation_;
     release_unreachable_assets();
     reload = request_daemon_reload();
     rescan();

@@ -313,10 +313,10 @@ class Bridge:
                            "error": None if daemon else status.stderr.strip()[:300]}}
 
     def op_editor_resources(self, request):
-        from editor_resources import measure_editor
+        from editor_resources import ADVANCED_VIEWS, measure_editor
         from sample import write
         view = request.get("view")
-        if view not in ("json", "simulator", "trace-stopped", "calibration-stopped"):
+        if view not in ADVANCED_VIEWS:
             raise Rejected("unknown advanced resource view")
         self.confirm_display()
         sample = measure_editor(self.evidence, f":{self.display_number}", self.profiles,

@@ -211,6 +211,9 @@ void dirty_cancel_discard_and_delete() {
   Fixture fixture; fixture.store();
   editor::EditorApp app; show(app);
   app.name->value("Unsaved"); app.field_changed(app.name);
+  // A valid pending edit now autosaves on leave. Invalid field buffers still
+  // require Cancel/Discard/Save and may never publish the accepted draft.
+  app.name->value(""); app.field_changed(app.name);
   const auto before = layerc::test::read_file(fixture.path);
   {
     Answer answer("Cancel");

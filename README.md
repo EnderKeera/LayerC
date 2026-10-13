@@ -24,7 +24,7 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing and visual calibration; remaining advanced parity in progress | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
+| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts; remaining advanced parity in progress | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
 | Gamescope and Wayland | Not supported | Deferred beyond V2.6 |
 
 Package metadata reports **2.6.2** for the unpublished v2.6c, which the

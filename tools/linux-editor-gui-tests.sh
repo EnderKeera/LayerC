@@ -68,6 +68,12 @@ store = Path(sys.argv[1])
 if sys.argv[2] != "resources":
     (store / "fixture.json").write_text(json.dumps(profile))
     if sys.argv[2] == "walkthrough":
+        legacy = copy.deepcopy(profile)
+        legacy.update(schemaVersion=3, id="legacy", name="Legacy autosave fixture", enabled=False)
+        legacy["bindings"].append({"cooldownId": "ability",
+                                   "chord": [{"device": "mouse", "code": 4}]})
+        del legacy["cooldownGroups"]  # This member did not exist before schema 4.
+        (store / "y-legacy.json").write_text(json.dumps(legacy))
         shared = copy.deepcopy(profile)
         shared.update(id="shared", name="Shared calibration fixture", enabled=False,
                       modules=[{"kind": "visual", "schemaVersion": 2}])
