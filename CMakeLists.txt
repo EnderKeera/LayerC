@@ -463,8 +463,9 @@ if(NOT WIN32)
             ${X11_INCLUDE_DIR}
             src/platform/include)
         target_include_directories(layerc_x11 PRIVATE src/platform/linux)
+        # layerc_linux supplies the display-server-neutral geometry helpers.
         target_link_libraries(layerc_x11 PUBLIC
-            layerc_capture_common layerc_core layerc_runtime ${X11_LIBRARIES}
+            layerc_linux layerc_capture_common layerc_core layerc_runtime ${X11_LIBRARIES}
             ${X11_Xext_LIB} ${X11_Xi_LIB} ${X11_Xrandr_LIB}
             ${X11_Xcomposite_LIB} ${X11_Xdamage_LIB} ${X11_Xfixes_LIB})
         layerc_enable_warnings(layerc_x11)
