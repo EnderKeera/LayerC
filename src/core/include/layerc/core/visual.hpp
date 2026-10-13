@@ -56,6 +56,7 @@ enum class CaptureBackendKind : std::uint8_t {
   desktop_duplication,
   x11_composite,
   x11_full_frame,
+  pipewire_portal,
 };
 
 enum class CaptureAvailability : std::uint8_t {
@@ -95,14 +96,15 @@ inline constexpr std::array capture_backend_wire{
     EnumWireEntry{CaptureBackendKind::windows_graphics_capture, "windowsGraphicsCapture"},
     EnumWireEntry{CaptureBackendKind::desktop_duplication, "desktopDuplication"},
     EnumWireEntry{CaptureBackendKind::x11_composite, "x11Composite"},
-    EnumWireEntry{CaptureBackendKind::x11_full_frame, "x11FullFrame"}};
+    EnumWireEntry{CaptureBackendKind::x11_full_frame, "x11FullFrame"},
+    EnumWireEntry{CaptureBackendKind::pipewire_portal, "pipewirePortal"}};
 
 // Inclusive underlying maxima for schema and wire validation of these enums.
 // Callers compare against these names instead of magic ordinals.
 inline constexpr std::uint8_t capture_quality_max =
     static_cast<std::uint8_t>(CaptureQuality::exact);
 inline constexpr std::uint8_t capture_backend_max =
-    static_cast<std::uint8_t>(CaptureBackendKind::x11_full_frame);
+    static_cast<std::uint8_t>(CaptureBackendKind::pipewire_portal);
 inline constexpr std::uint8_t capture_availability_max =
     static_cast<std::uint8_t>(CaptureAvailability::outside_output);
 
