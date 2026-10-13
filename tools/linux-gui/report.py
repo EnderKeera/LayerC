@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from walkthrough import EXPECTED  # noqa: E402 -- the required-case manifest
+from editor_resources import ADVANCED_VIEWS  # noqa: E402
 
 MIB = 1024 * 1024
 TARGETS = {"idleUssBytes": 20 * MIB, "startupPeakUssBytes": 20 * MIB, "idleCpuPercent": 0.2}
@@ -102,7 +103,7 @@ def check_automation_resources(out, startup, failures):
             or not isinstance(owner_nonce, str) or not owner_nonce):
         failures.append("automation resources: startup evidence names no owned editor")
         owner = owner_start = owner_nonce = None
-    for view in ("json", "simulator", "trace-stopped", "calibration-stopped"):
+    for view in ADVANCED_VIEWS:
         label = f"automation {view}"
         report = load(out / f"automation-{view}-resources.json")
         if not isinstance(report, dict):

@@ -58,6 +58,7 @@ void EditorApp::report(std::string text) {
   if (session.can_redo() && !pending_fields_) redo_button->activate();
   else redo_button->deactivate();
   if (menus) menus->update();
+  sync_edit_services();
 }
 void EditorApp::query_status() {
   const auto state = query_daemon_status();
@@ -66,8 +67,7 @@ void EditorApp::query_status() {
     daemon_text_ += "\n" + capability.name + ": " + capability.availability;
     if (!capability.reasons.empty()) daemon_text_ += " (" + capability.reasons + ")";
   }
-  daemon_status->value(daemon_text_.c_str());
-  daemon_status->redraw();
+  update_daemon_status();
 }
 void EditorApp::refresh() {
   pending_fields_ = false;
@@ -138,9 +138,8 @@ bool EditorApp::apply_fields(const bool text_change) {
 void EditorApp::module_fields_changed(const bool pending) {
   pending_fields_ = pending;
   last_field_ = nullptr;
-  report(pending ? "Pending automation fields. Apply or Save validates them."
-                 : (session.has_unsaved_changes() ? "Unsaved changes. Save applies them."
-                                                 : "No pending changes."));
+  report(pending ? "Pending automation fields. Autosave validates them." : edit_status());
+  if (pending) schedule_autosave(true);
 }
 void EditorApp::field_changed(Fl_Widget *widget) {
   if (widget != last_field_) session.end_text_edit();
@@ -167,7 +166,7 @@ void EditorApp::field_changed(Fl_Widget *widget) {
   }
   if (apply_fields(dynamic_cast<Fl_Input *>(widget) != nullptr)) {
     fill_lists();
-    report(session.has_unsaved_changes() ? "Unsaved changes. Save applies them." : "No pending changes.");
+    report(edit_status());
     preview->redraw();
   }
 }
@@ -183,7 +182,7 @@ void EditorApp::selection_changed(Fl_Widget *widget) {
     if (const auto error = session.open_path(path)) { report(*error); fill_lists(); return; }
     cooldown_id_.clear(); panel_id_.clear(); binding_index_ = -1;
     refresh();
-    report("Profile loaded. Explicit Save applies changes.");
+    report("Profile loaded. Changes autosave; new profiles need Save once.");
     return;
   }
   if (!apply_fields()) { fill_lists(); return; }
@@ -210,20 +209,29 @@ void EditorApp::tab_changed() {
 }
 bool EditorApp::save() {
   if (!session.has_document()) { report("No profile is open."); return false; }
+  if (saving_) return false;
+  Fl::remove_timeout(autosave_tick, this);
+  saving_ = true;
   if (!apply_fields()) {
+    saving_ = false;
+    observed_generation_ = session.edit_generation();
     // Keep the field's own error, marked so a refused Save is distinguishable.
     if (!status_text_.starts_with("Not saved")) report("Not saved. " + status_text_);
     return false;
   }
   session.end_text_edit();
   const auto outcome = session.save(confirm_upgrade);
-  if (outcome.saved()) refresh();
+  saving_ = false;
+  observed_generation_ = session.edit_generation();
+  if (outcome.saved()) { stop_edit_services(); refresh(); }
   report(outcome.text);
   query_status();
   return outcome.saved();
 }
 bool EditorApp::may_leave() {
   if (!pending_fields_ && !session.has_unsaved_changes()) return true;
+  if (!session.is_draft() && flush_autosave()) return true;
+  Fl::remove_timeout(autosave_tick, this);
   const auto decision = fl_choice("This profile has unsaved changes.", "Cancel", "Discard", "Save");
   if (decision == 2) return save();
   if (decision != 1) return false;
@@ -237,7 +245,7 @@ bool EditorApp::may_leave() {
 void EditorApp::changed(const std::optional<std::string> &error) {
   if (error) { report("Not changed: " + *error); return; }
   refresh();
-  report("Unsaved changes. Save applies them.");
+  report(edit_status());
 }
 
 bool EditorApp::command_enabled(const EditorCommand action) const {
@@ -270,7 +278,10 @@ bool EditorApp::command_enabled(const EditorCommand action) const {
 }
 
 void EditorApp::command(const EditorCommand action) {
-  if (action == EditorCommand::close) { if (may_leave()) window.hide(); return; }
+  if (action == EditorCommand::close) {
+    if (may_leave()) { stop_edit_services(); window.hide(); }
+    return;
+  }
   Fl_Group *page = nullptr;
   switch (action) {
   case EditorCommand::profile_page: page = profile_tab; break;
@@ -299,7 +310,7 @@ void EditorApp::command(const EditorCommand action) {
     if (pending_fields_) { refresh(); report("Invalid field edit discarded."); return; }
     session.end_text_edit();
     const bool done = action == EditorCommand::undo ? session.undo() : session.redo();
-    refresh(); report(done ? "History restored. Save applies changes." : "No history in that direction."); return;
+    refresh(); report(done ? "History restored. " + edit_status() : "No history in that direction."); return;
   }
   if (action == EditorCommand::duplicate) {
     if (!may_leave()) return;

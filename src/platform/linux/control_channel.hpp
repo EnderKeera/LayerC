@@ -31,6 +31,7 @@ enum class ControlCommand : std::uint8_t {
   notify_reload,
   stop,
   trace,
+  draft,
 };
 
 inline constexpr std::array control_command_wire{
@@ -39,6 +40,7 @@ inline constexpr std::array control_command_wire{
     layerc::core::EnumWireEntry{ControlCommand::notify_reload, "notify-reload"},
     layerc::core::EnumWireEntry{ControlCommand::stop, "stop"},
     layerc::core::EnumWireEntry{ControlCommand::trace, "trace"},
+    layerc::core::EnumWireEntry{ControlCommand::draft, "draft"},
 };
 
 [[nodiscard]] constexpr std::string_view

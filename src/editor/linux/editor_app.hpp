@@ -5,6 +5,7 @@
 #include "editor_menus.hpp"
 #include "automation_editor.hpp"
 #include "visual_editor.hpp"
+#include "live_draft_client.hpp"
 
 #include <memory>
 
@@ -49,6 +50,7 @@ enum class EditorCommand {
 // field buffer. EditorSession owns accepted edits, history and store effects.
 class EditorApp final {
 public:
+  ~EditorApp();
   EditorSession session;
   EditorWindow window{*this, 1080, 790, "LayerE — Linux X11 editor"};
   Fl_Scroll *content{};
@@ -87,6 +89,7 @@ public:
   void tab_changed();
   [[nodiscard]] bool apply_fields(bool text_change = false);
   [[nodiscard]] bool save();
+  [[nodiscard]] bool flush_autosave();
   [[nodiscard]] bool may_leave();
   [[nodiscard]] bool command_enabled(EditorCommand action) const;
   void command(EditorCommand action);
@@ -103,6 +106,19 @@ private:
   Fl_Widget *last_field_{};
   Fl_Group *active_tab_{};
   bool pending_fields_{};
+  bool saving_{};
+  std::uint64_t observed_generation_{};
+  std::unique_ptr<LiveDraftClient> live_draft_;
+  std::string live_draft_text_;
+  std::uint64_t live_draft_sequence_{}; // latest publish; 0 when none is current
+  void sync_edit_services();
+  void schedule_autosave(bool text_change);
+  void stop_edit_services();
+  void update_daemon_status();
+  static void autosave_tick(void *);
+  static void live_draft_ready(int, void *);
+  void end_live_draft();
+  [[nodiscard]] std::string edit_status() const;
   void changed(const std::optional<std::string> &error);
   friend class PanelPreview;
 };

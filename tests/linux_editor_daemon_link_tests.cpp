@@ -1,6 +1,10 @@
 #include "control_channel.hpp"
 #include "daemon_host.hpp"
 #include "daemon_link.hpp"
+#include "live_draft_client.hpp"
+#include "live_draft.hpp"
+#include "profile_edit.hpp"
+#include "layerc/core/profile.hpp"
 #include "test_support.hpp"
 
 #include "layerc/core/frame.hpp"
@@ -274,6 +278,120 @@ void commit_failure_text_contracts() {
          "a blocked commit never reports a reload");
 }
 
+std::optional<layerc::editor::LiveDraftUpdate> wait_draft(layerc::editor::LiveDraftClient &client) {
+  const auto until = layerc::core::MonotonicClock::now() + std::chrono::seconds(2);
+  while (layerc::core::MonotonicClock::now() < until) {
+    if (auto update = client.take_update()) return update;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return std::nullopt;
+}
+void live_draft_client_lease_and_ownership() {
+  const PrivateRuntime runtime;
+  auto profile = layerc::editor::make_new_profile();
+  profile.game.executable_name = "fixture.exe";
+  auto other = layerc::editor::make_new_profile();
+  other.id = "other-profile";
+  other.game.executable_name = "other.exe";
+  const std::vector<control::StoredProfile> stored{{"fixture.json", profile}, {"other.json", other}};
+  layerc::daemon::LiveDraftHost host; // used only by FakeDaemon's worker
+  std::atomic<unsigned> ends{};
+  std::atomic<bool> applied{};
+  const FakeDaemon daemon([&](const std::string_view wire) {
+    layerc::runtime::DaemonKernel kernel;
+    return layerc::daemon::handle_control_request(wire, kernel, {}, {},
+        [&](const layerc::core::LiveDraftRequest &request) -> layerc::daemon::DraftControlResult {
+          bool changed{};
+          auto result = host.handle(request, stored, layerc::core::MonotonicClock::now(), changed);
+          applied.store(host.active());
+          if (request.operation == layerc::core::LiveDraftOperation::end) ++ends;
+          return result;
+        }).response;
+  });
+  {
+    layerc::editor::LiveDraftClient client;
+    client.publish(profile.id, layerc::core::serialize_profile_json(profile));
+    pollfd ready{client.notify_fd(), POLLIN, 0};
+    expect(::poll(&ready, 1, 2000) == 1 && (ready.revents & POLLIN),
+           "a publish reply wakes the UI descriptor instead of requiring a poll timer");
+    const auto first = wait_draft(client);
+    ready.revents = 0;
+    expect(::poll(&ready, 1, 0) == 0, "taking the update drains the UI descriptor");
+    expect(first && first->reply && first->reply->revision == 1 && applied.load(),
+           "the authenticated worker publishes revision one without writing the store");
+    {
+      layerc::editor::LiveDraftClient second;
+      second.publish(profile.id, layerc::core::serialize_profile_json(profile));
+      const auto refused = wait_draft(second);
+      expect(refused && !refused->reply && refused->error.find("another editor owns") != std::string::npos,
+             "a refused second owner retains the daemon's reason");
+    }
+    expect(applied.load(), "the second client's End never clears the first owner's lease");
+    const auto renewed = wait_draft(client);
+    expect(renewed && renewed->reply && renewed->reply->state == layerc::core::LiveDraftState::renewed,
+           "the active worker renews its lease on a monotonic deadline");
+    profile.name = "Later edit";
+    client.publish(profile.id, layerc::core::serialize_profile_json(profile));
+    const auto later = wait_draft(client);
+    expect(later && later->reply && later->reply->revision == 2, "the next edit advances the client revision");
+    // A profile switch ends the first lease before publishing the second.
+    client.publish(other.id, layerc::core::serialize_profile_json(other));
+    auto switched = wait_draft(client);
+    // A silent renewal may still sit in the update slot; wait for the publish.
+    for (int i = 0; i < 3 && switched && switched->reply && switched->reply->revision != 3; ++i)
+      switched = wait_draft(client);
+    expect(switched && switched->reply && switched->reply->revision == 3 && ends.load() == 2 &&
+               host.describe() == other.id + " r3",
+           "the same worker ends the old profile's lease, then owns the new one");
+    // end() only queues: the UI thread never waits for the daemon.
+    const auto before_end = layerc::core::MonotonicClock::now();
+    client.end();
+    expect(layerc::core::MonotonicClock::now() - before_end < std::chrono::milliseconds(50),
+           "ending a draft returns without a control roundtrip");
+    for (int i = 0; i < 100 && applied.load(); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    expect(!applied.load() && ends.load() == 3, "the queued end reaches LayerD from the worker");
+    pollfd quiet{client.notify_fd(), POLLIN, 0};
+    expect(::poll(&quiet, 1, 1200) == 0, "an idle ended worker neither renews nor wakes the UI");
+  }
+  expect(!applied.load() && ends.load() == 3,
+         "both clients ended only their own leases; an ended worker sends nothing at shutdown");
+}
+void live_draft_client_invalid_ack_is_idle() {
+  const PrivateRuntime runtime;
+  std::atomic<unsigned> requests{};
+  const FakeDaemon daemon([&](std::string_view) {
+    ++requests;
+    return control::encode_control_response(true, {}, layerc::core::serialize_live_draft_reply(
+        {999, layerc::core::LiveDraftState::applied}));
+  });
+  layerc::editor::LiveDraftClient client;
+  const auto sequence = client.publish("fixture", "{}");
+  const auto update = wait_draft(client);
+  expect(update && !update->reply && update->error.find("invalid live draft acknowledgement") != std::string::npos,
+         "a mismatched revision cannot falsely acknowledge a draft");
+  expect(sequence != 0 && update && update->sequence == sequence,
+         "a failure names its publish, so the UI can ignore stale results");
+  const auto count = requests.load();
+  std::this_thread::sleep_for(std::chrono::milliseconds(350));
+  expect(requests.load() == count, "a failed worker blocks instead of retry-spinning");
+}
+void live_draft_client_shutdown_is_bounded() {
+  const PrivateRuntime runtime;
+  std::string error, warning;
+  const auto listener = control::ControlListener::open(error, warning);
+  expect(listener.has_value(), "a private stalled listener opens");
+  if (!listener) return;
+  const auto start = layerc::core::MonotonicClock::now();
+  {
+    layerc::editor::LiveDraftClient client;
+    client.publish("fixture", "{}");
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    // Neither publish nor End is serviced: each has its own 300 ms deadline.
+  }
+  expect(layerc::core::MonotonicClock::now() - start < std::chrono::seconds(1),
+         "close joins a stalled worker within the two bounded control roundtrips");
+}
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(offline_contracts),
@@ -283,4 +401,7 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(offline_contracts),
                  LAYERC_TEST_CASE(inspection_errors_are_not_offline),
                  LAYERC_TEST_CASE(invalid_runtime_path_is_not_offline),
                  LAYERC_TEST_CASE(full_queue_is_bounded_and_not_unlinked),
-                 LAYERC_TEST_CASE(commit_failure_text_contracts))
+                 LAYERC_TEST_CASE(commit_failure_text_contracts),
+                 LAYERC_TEST_CASE(live_draft_client_lease_and_ownership),
+                 LAYERC_TEST_CASE(live_draft_client_invalid_ack_is_idle),
+                 LAYERC_TEST_CASE(live_draft_client_shutdown_is_bounded))

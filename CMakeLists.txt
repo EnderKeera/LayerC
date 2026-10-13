@@ -96,6 +96,7 @@ add_library(layerc_core STATIC
     src/core/automation_runtime_evaluation.cpp
     src/core/automation_trace.cpp
     src/core/automation_trace_control.cpp
+    src/core/live_draft_control.cpp
     src/core/automation_validation.cpp
     src/core/automation_effects.cpp
     src/core/cooldown_engine.cpp
@@ -469,7 +470,8 @@ if(NOT WIN32)
 
     if(LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS)
         add_library(layerc_daemon_linux STATIC
-            src/daemon/linux/daemon_host.cpp)
+            src/daemon/linux/daemon_host.cpp
+            src/daemon/linux/live_draft.cpp)
         target_include_directories(layerc_daemon_linux PUBLIC
             src/daemon/linux
             src/platform/linux)
@@ -532,6 +534,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         add_library(layerc_editor_linux STATIC
             src/editor/linux/daemon_link.cpp
             src/editor/linux/automation_trace_client.cpp
+            src/editor/linux/live_draft_client.cpp
             src/editor/linux/editor_model.cpp
             src/editor/linux/editor_session.cpp
             src/editor/linux/profile_mutations.cpp)

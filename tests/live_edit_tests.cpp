@@ -3,6 +3,8 @@
 
 #include "layerc/core/cooldown_engine.hpp"
 #include "layerc/core/live_edit.hpp"
+#include "layerc/core/live_draft_control.hpp"
+#include "layerc/core/profile.hpp"
 #include "layerc/core/json.hpp"
 
 #include <algorithm>
@@ -281,6 +283,50 @@ void test_shared_pool_reconciliation() {
 
 void test_live_protocol_framing() {
   using namespace layerc::core;
+  // The Linux local-control draft codec remains platform-free and is covered
+  // by this shared suite on Windows as well as Linux.
+  const LiveDraftRequest draft{
+      LiveDraftOperation::publish, "gam\xC3\xA9", "editor-1",
+      9'007'199'254'740'993ULL, serialize_profile_json(live_profile())};
+  expect(parse_live_draft_request(serialize_live_draft_request(draft)) == draft,
+         "draft codecs preserve UTF-8, profile bytes and integers above 2^53");
+  for (const auto operation : {LiveDraftOperation::renew, LiveDraftOperation::end}) {
+    auto request = draft;
+    request.operation = operation;
+    request.profile_json.clear();
+    expect(parse_live_draft_request(serialize_live_draft_request(request)) == request,
+           "body-free draft operations round-trip exactly");
+    request.profile_json = "{}";
+    expect(!live_draft_request_valid(request),
+           "renew and end cannot carry a profile payload");
+  }
+  auto bad_draft = draft;
+  bad_draft.revision = 0;
+  expect(!live_draft_request_valid(bad_draft), "draft publish revisions start above zero");
+  bad_draft = draft;
+  bad_draft.client_id = "invalid client";
+  expect(!live_draft_request_valid(bad_draft), "draft client identities are bounded tokens");
+  bad_draft = draft;
+  bad_draft.profile_json.assign(live_draft_profile_bytes + 1, 'x');
+  expect(!live_draft_request_valid(bad_draft), "draft profile payloads are bounded");
+  auto draft_wire = serialize_live_draft_request(draft);
+  draft_wire.insert(draft_wire.size() - 1, ",\"extra\":true");
+  expect(!parse_live_draft_request(draft_wire), "draft requests reject unknown fields");
+  draft_wire = serialize_live_draft_request(draft);
+  draft_wire.replace(draft_wire.find("\"draftVersion\":1"), 16, "\"draftVersion\":2");
+  expect(!parse_live_draft_request(draft_wire), "draft requests reject another wire version");
+  for (const auto state : {LiveDraftState::applied, LiveDraftState::duplicate,
+                           LiveDraftState::renewed, LiveDraftState::ended}) {
+    const LiveDraftReply reply{draft.revision, state};
+    expect(parse_live_draft_reply(serialize_live_draft_reply(reply)) == reply,
+           "every live draft acknowledgement state round-trips exactly");
+  }
+  expect(!parse_live_draft_reply(
+             R"({"draftVersion":1,"revision":-1,"state":"applied"})") &&
+             !parse_live_draft_reply(
+                 R"({"draftVersion":1,"revision":1,"state":"unknown"})"),
+         "draft replies reject negative revisions and unknown states");
+
   LiveMessage source{
       .type = LiveMessageType::begin_edit,
       .revision = 9'007'199'254'740'993ULL,

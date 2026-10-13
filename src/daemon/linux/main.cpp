@@ -2,6 +2,7 @@
 // X11Adapters seam so orchestration is identical with and without Xlib.
 #include "daemon_host.hpp"
 #include "event_loop.hpp"
+#include "live_draft.hpp"
 #include "x11_adapters.hpp"
 
 #include "layerc/core/profile.hpp"
@@ -97,7 +98,7 @@ public:
 
 private:
   void step() {
-    while (profiles_dirty_ || sessions_dirty_)
+    while (profiles_dirty_ || sessions_dirty_ || draft_dirty_)
       reload();
 
     // Queue-aware prepare phase: synchronous Xlib queries during
@@ -113,6 +114,7 @@ private:
     if (wake.timer) {
       const auto now = MonotonicClock::now();
       control_.expire_clients(loop_, now);
+      draft_dirty_ = drafts_.expire(now, profiles_) || draft_dirty_;
       sessions_dirty_ = adapters_.render(now) || sessions_dirty_;
       arm_deadline(now);
     }
@@ -135,11 +137,21 @@ private:
       profiles_ = layerc::daemon::load_profiles(load_warning);
       if (!load_warning.empty())
         std::fprintf(stderr, "layerd: %s\n", load_warning.c_str());
+      // A draft whose stored profile disappeared ends with it.
+      draft_dirty_ = drafts_.expire(MonotonicClock::now(), profiles_) || draft_dirty_;
     }
-    profiles_dirty_ = sessions_dirty_ = false;
+    // An editor's live draft replaces one base profile in memory only; the
+    // store is never re-read or written for it.
+    const bool configure = reread || draft_dirty_;
+    if (draft_dirty_) {
+      const auto draft = drafts_.describe();
+      std::fprintf(stderr, "layerd: live draft %s\n",
+                   draft.empty() ? "ended; committed profiles restored" : draft.c_str());
+    }
+    profiles_dirty_ = sessions_dirty_ = draft_dirty_ = false;
 
     diagnostics_.clear();
-    adapters_.refresh(profiles_, reread, kernel_, status_, diagnostics_);
+    adapters_.refresh(drafts_.effective(profiles_), configure, kernel_, status_, diagnostics_);
     // Focus and window changes rematch often; log them only when the summary
     // or its diagnostics changed. A store re-read always logs.
     const std::pair summary{adapters_.session_count(), profiles_.size()};
@@ -161,7 +173,13 @@ private:
     status_.sessions = adapters_.session_diagnostics();
     const auto outcome =
         control_.service(loop_, loop_.ready_fds(), kernel_, status_,
-            [this](const auto &request) { return adapters_.trace_request(request); });
+            [this](const auto &request) { return adapters_.trace_request(request); },
+            [this](const auto &request) {
+              bool changed{};
+              auto result = drafts_.handle(request, profiles_, MonotonicClock::now(), changed);
+              draft_dirty_ = draft_dirty_ || changed;
+              return result;
+            });
     if (!outcome.diagnostic.empty())
       std::fprintf(stderr, "layerd: %s\n", outcome.diagnostic.c_str());
     stop_requested_ = stop_requested_ || outcome.stop_requested;
@@ -186,7 +204,8 @@ private:
 
   void arm_deadline(const TimePoint now) {
     loop_.set_deadline(layerc::core::earliest_deadline(
-        adapters_.next_deadline(now), control_.next_deadline()));
+        layerc::core::earliest_deadline(adapters_.next_deadline(now), control_.next_deadline()),
+        drafts_.next_deadline()));
   }
 
   // Declaration order is the historical construction order; members are
@@ -195,6 +214,7 @@ private:
   layerc::runtime::DaemonKernel kernel_;
   layerc::platform::EventLoop loop_;
   layerc::daemon::ControlService control_;
+  layerc::daemon::LiveDraftHost drafts_;
   layerc::daemon::LinuxStatusSnapshot status_;
   std::vector<std::string> diagnostics_;
   std::optional<std::pair<std::size_t, std::size_t>> logged_summary_;
@@ -202,6 +222,7 @@ private:
   std::vector<layerc::platform::StoredProfile> profiles_;
   bool profiles_dirty_{true};
   bool sessions_dirty_{};
+  bool draft_dirty_{};
   bool stop_requested_{};
 };
 

@@ -18,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from automation_walkthrough import EXPECTED as AUTOMATION_EXPECTED
 from automation_walkthrough import AutomationWalk  # noqa: E402
 from bridge import call  # noqa: E402
+from autosave_walkthrough import EXPECTED as AUTOSAVE_EXPECTED  # noqa: E402
+from autosave_walkthrough import AutosaveWalk  # noqa: E402
 from visual_walkthrough import EXPECTED as VISUAL_EXPECTED  # noqa: E402
 from visual_walkthrough import VisualWalk  # noqa: E402
 
@@ -44,8 +46,8 @@ EXPECTED = {
                      "selected-row context menu duplicates the profile; Profile > Delete "
                      "is cancelled with Escape, then confirmed, and removes the copy.",
     "profiles-crud": "Ctrl+N creates a profile that saves durably; the enabled check box "
-                     "saves; undo/redo restore field text; a dirty selection change "
-                     "prompts, cancels, then discards.",
+                     "autosaves; undo/redo restore durable values; an invalid pending "
+                     "selection change prompts, cancels, then discards.",
     "invalid-no-write": "Duration 'nan' is reported as invalid while typing and after "
                         "Ctrl+S, and the durable profile stays byte-identical.",
     "edit-commit-reload-overlay": "Duration 3.25 s and panel X 0.75 are saved durably, "
@@ -55,6 +57,7 @@ EXPECTED = {
                      "request, and a cancelled import writes nothing.",
     **AUTOMATION_EXPECTED,
     **VISUAL_EXPECTED,
+    **AUTOSAVE_EXPECTED,
     "layout": "Corner drags grow the window and clamp it at 640x480 with scrolling; "
               "title-bar double-clicks maximize and restore; Ctrl+Plus/Ctrl+0 scale "
               "and restore the window.",
@@ -95,7 +98,7 @@ def center(node):
     return x + w // 2, y + h // 2
 
 
-class Walk(AutomationWalk, VisualWalk):
+class Walk(AutomationWalk, VisualWalk, AutosaveWalk):
     def __init__(self, session):
         self.session = session
         self.shot = {}
@@ -358,6 +361,11 @@ class Walk(AutomationWalk, VisualWalk):
         self.key("ctrl+shift+z", "crud-redo")
         self.until(lambda n: self.find("entry", "Profile name", n).get("text") == "Renamed once",
                    "redo did not reapply the name")
+        self.autosaved("crud-redo-autosaved",
+                       lambda: self.store()[created]["json"]["name"] == "Renamed once")
+        # Valid edits are always saved now. Only an invalid pending raw buffer
+        # should still require Cancel/Discard before leaving the document.
+        self.type_into("entry", "Profile name", "", "crud-invalid-name")
         fixture = self.row_of(self.profile()[0]["json"]["name"])
         self.row(fixture, "crud-dirty-switch")
         self.until(lambda _: self.dialog(), "dirty selection change did not prompt")
@@ -368,10 +376,10 @@ class Walk(AutomationWalk, VisualWalk):
         self.press("Discard", "crud-discarded")
         self.until(lambda n: "Walkthrough" not in n[1]["name"] and "Renamed" not in n[1]["name"],
                    "Discard did not switch profiles")
-        check(self.store()[created]["json"]["name"] == "Walkthrough profile",
-              "discarded edit reached the store")
+        check(self.store()[created]["json"]["name"] == "Renamed once",
+              "discarded invalid edit reached the store")
         self.notes["created"] = created
-        return f"{created} created, disabled and saved; undo/redo; dirty switch cancelled then discarded"
+        return f"{created} created, disabled and saved; autosaved undo/redo; invalid switch cancelled then discarded"
 
     def profile_rows(self, name):
         """Rows in this list only; names can legitimately repeat after import."""
