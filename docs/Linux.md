@@ -174,6 +174,22 @@ versioned `draft` request on the authenticated control socket). The draft is
 held by one editor under a 2.5 s monotonic lease that the editor renews; ending
 it, or letting the lease lapse, restores the committed profile. Drafts never
 reach the store, and module sidecars change only through the durable save.
+View > Runtime diagnostics shows the daemon's process, X11, capability,
+service, session and automation-fault state, refreshed on request, with the raw
+JSON available for copying. Help lists the keyboard shortcuts (F1) and the
+version. Captured bindings come from focused input only: keys, mouse buttons
+and buttons of XI2 gamepad-class devices; generic HID capture is unavailable.
+File > Save As writes the open profile and its modules under a new name, and
+File > Open profiles folder starts `xdg-open` (or names the path when it is
+missing). Tools > Appearance applies the Windows presets, an accent and
+per-role colours, stored in `<config>/layerc/editor-appearance.json`; Tools >
+Options states that capture exclusion and isolated recognition are unavailable
+on X11. Tools > Detected tasks (Ctrl+T) lists top-level EWMH windows (never the
+editor) through a short-lived X11 connection, scanned only on open and Refresh,
+and can set the profile's executable matcher. Position on window maps the
+preview to the matching game window with the overlay's centred-anchor rule;
+each drag is published through the live draft, so the overlay follows. Direct
+Drag is not offered because X11 overlays never accept input.
 Closing or selecting another profile flushes autosave first. It prompts to
 save, discard or cancel only when edits remain unsaved: invalid field text, a
 new profile, a failed save, or a declined upgrade. Daemon capabilities/faults are

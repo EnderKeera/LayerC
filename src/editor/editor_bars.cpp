@@ -204,35 +204,11 @@ void EditorWindow::follow_cooldown_bar() {
 
 void EditorWindow::split_independent_bars() {
   sync_profile_from_controls();
-  std::vector<layerc::core::Panel> split;
-  split.reserve(document_.profile().panels.size() + document_.profile().cooldowns.size());
-  bool changed{}; std::size_t first_split = SIZE_MAX;
-  const auto target_height = std::max(1L, preview_target_size().cy);
-  for (const auto &panel : document_.profile().panels) {
-    if (panel.style != layerc::core::PanelStyle::bar || panel.cooldown_ids.size() <= 1) {
-      split.push_back(panel); continue;
-    }
-    changed = true;
-    const double offset =
-        (static_cast<double>(panel.bar.height) +
-         layerc::core::overlay_metrics.spacing) /
-        target_height;
-    for (std::size_t index = 0; index < panel.cooldown_ids.size(); ++index) {
-      auto bar = panel;
-      const auto &cooldown = panel.cooldown_ids[index];
-      bar.id = unique_panel_id(panel.id + "-" + cooldown, document_.profile().panels, &split);
-      bar.name = panel.name + " " + cooldown;
-      bar.cooldown_ids = {cooldown};
-      bar.anchor_y = std::clamp(panel.anchor_y +
-          (static_cast<double>(index) - (static_cast<double>(panel.cooldown_ids.size()) - 1.0) / 2.0) * offset,
-          0.0, 1.0);
-      if (first_split == SIZE_MAX) first_split = split.size();
-      split.push_back(std::move(bar));
-    }
-  }
-  if (!changed) { set_status(L"Bars are already independent; legacy groups were left unchanged."); return; }
-  document_.profile().panels = std::move(split);
-  refresh_bar_list(first_split);
+  // The split itself is shared with the Linux editor.
+  const auto first_split =
+      split_grouped_bars(document_.profile(), preview_target_size().cy);
+  if (!first_split) { set_status(L"Bars are already independent; legacy groups were left unchanged."); return; }
+  refresh_bar_list(*first_split);
   record_profile_change(ChangeKind::immediate);
   set_status(L"Split grouped bars into independently positioned cooldown bars.");
 }

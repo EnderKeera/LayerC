@@ -144,6 +144,7 @@ void EditorApp::build() {
   panels = browser(285, 80, 190, 230, "Panels", EditorMenuContext::panels);
   button(285, 325, 90, "Add panel", EditorCommand::add_panel);
   button(385, 325, 90, "Remove", EditorCommand::delete_panel);
+  position_button = button(285, 365, 190, "Position on window...", EditorCommand::position);
   panel_fields = new Fl_Group(490, 60, 550, 380);
   panel_fields->begin();
   panel_name = input(500, 85, 260, "Panel name");
@@ -158,6 +159,7 @@ void EditorApp::build() {
   border = input(780, 205, 120, "Border");
   text_color = input(915, 205, 115, "Text color");
   show_text = check(500, 255, 180, "Show bar text");
+  button(685, 250, 90, "Colours...", EditorCommand::panel_colors);
   hide_ready = check(780, 255, 250, "Hide bars when ready");
   member = choice(500, 320, 260, "Panel cooldown membership", nullptr);
   member_enabled = check(780, 320, 250, "Include selected cooldown");
@@ -203,6 +205,7 @@ void EditorApp::build() {
   accessibility_status->copy_label(accessibility->available()
       ? "Accessibility: AT-SPI bridge active"
       : ("Accessibility unavailable: " + accessibility->fault()).c_str());
+  load_appearance();
   if (!session.profiles().profiles.empty()) {
     if (const auto error = session.open(0)) report(*error);
   }
@@ -210,6 +213,7 @@ void EditorApp::build() {
   report(session.has_document() ? "Profile loaded. Explicit Save applies changes." :
          "No readable profiles. Use New or Import to begin. " + session.profiles().error);
   query_status();
+  if (!appearance_error_.empty()) report(appearance_error_);
 }
 
 void EditorApp::fill_lists() {

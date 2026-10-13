@@ -79,6 +79,20 @@ std::string add_cooldown(core::GameProfile &profile) {
   return id;
 }
 
+std::string duplicate_cooldown(core::GameProfile &profile, const std::string_view id) {
+  const auto source = std::ranges::find(profile.cooldowns, id, &core::CooldownDefinition::id);
+  if (source == profile.cooldowns.end()) return {};
+  const auto original = *source; // add_cooldown may reallocate
+  auto copy = add_cooldown(profile);
+  auto &added = *std::ranges::find(profile.cooldowns, copy, &core::CooldownDefinition::id);
+  added.name = original.name + " copy";
+  added.duration = original.duration;
+  added.max_charges = original.max_charges;
+  added.retrigger = original.retrigger;
+  added.recovery = original.recovery;
+  return copy;
+}
+
 std::string add_panel(core::GameProfile &profile) {
   core::Panel panel;
   panel.id = unique_panel_id("panel", profile.panels);

@@ -6,9 +6,11 @@
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Menu_Button.H>
 #include <FL/Fl_Menu_Item.H>
+#include <FL/fl_draw.H>
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace layerc::editor {
@@ -26,14 +28,18 @@ constexpr std::array definitions{
     Definition{"&File/&Import...", "&Import...", Command::import_profiles, FL_CTRL | 'o', 0},
     Definition{"&File/Export &JSON...", "Export &JSON...", Command::export_json, FL_CTRL | FL_SHIFT | 'e', 0},
     Definition{"&File/Export &pack...", "Export &pack...", Command::export_pack, FL_CTRL | FL_ALT | FL_SHIFT | 'e', FL_MENU_DIVIDER},
-    Definition{"&File/&Save", "&Save", Command::save, FL_CTRL | 's', FL_MENU_DIVIDER},
+    Definition{"&File/&Save", "&Save", Command::save, FL_CTRL | 's', 0},
+    Definition{"&File/Save &As...", "Save &As...", Command::save_as, FL_CTRL | FL_SHIFT | 's', 0},
+    Definition{"&File/Open profiles &folder", "Open profiles &folder", Command::open_folder, 0, FL_MENU_DIVIDER},
     Definition{"&File/&Quit", "&Quit", Command::close, FL_CTRL | 'q', 0},
     Definition{"&Edit/&Undo", "&Undo", Command::undo, FL_CTRL | 'z', 0},
-    Definition{"&Edit/&Redo", "&Redo", Command::redo, FL_CTRL | FL_SHIFT | 'z', 0},
+    Definition{"&Edit/&Redo", "&Redo", Command::redo, FL_CTRL | FL_SHIFT | 'z', FL_MENU_DIVIDER},
+    Definition{"&Edit/Re&name", "Re&name", Command::rename, FL_F + 2, 0},
     Definition{"&Profile/&Duplicate", "&Duplicate", Command::duplicate, FL_CTRL | 'd', 0},
     Definition{"&Profile/&Delete...", "&Delete...", Command::delete_profile, 0, 0},
     Definition{"&Profile/Toggle saved &enabled", "Toggle saved &enabled", Command::toggle_enabled, 0, 0},
     Definition{"&Cooldowns/&Add cooldown", "&Add cooldown", Command::add_cooldown, 0, 0},
+    Definition{"&Cooldowns/D&uplicate cooldown", "D&uplicate cooldown", Command::duplicate_cooldown, 0, 0},
     Definition{"&Cooldowns/&Remove cooldown...", "&Remove cooldown...", Command::delete_cooldown, 0, 0},
     Definition{"&Bindings/Add &key", "Add &key", Command::add_keyboard, 0, 0},
     Definition{"&Bindings/Add &mouse", "Add &mouse", Command::add_mouse, 0, 0},
@@ -41,14 +47,23 @@ constexpr std::array definitions{
     Definition{"&Bindings/&Remove binding", "&Remove binding", Command::delete_binding, 0, 0},
     Definition{"&Panels/&Add panel", "&Add panel", Command::add_panel, 0, 0},
     Definition{"&Panels/&Remove panel...", "&Remove panel...", Command::delete_panel, 0, 0},
+    Definition{"&Panels/Choose &colours...", "Choose &colours...", Command::panel_colors, 0, 0},
+    Definition{"&Panels/&Position on window", "&Position on window", Command::position, 0, 0},
     Definition{"&View/&Profile", "&Profile", Command::profile_page, FL_CTRL | '1', 0},
     Definition{"&View/&Cooldowns", "&Cooldowns", Command::cooldown_page, FL_CTRL | '2', 0},
     Definition{"&View/&Bindings", "&Bindings", Command::binding_page, FL_CTRL | '3', 0},
     Definition{"&View/&Panels", "&Panels", Command::panel_page, FL_CTRL | '4', FL_MENU_DIVIDER},
     Definition{"&View/&Automation", "&Automation", Command::automation_page, FL_CTRL | '5', 0},
     Definition{"&View/&Visual", "&Visual", Command::visual_page, FL_CTRL | '6', 0},
-    Definition{"&View/Daemon &status", "Daemon &status", Command::refresh, 0, 0}};
-static_assert(static_cast<std::size_t>(Command::close) < 32);
+    Definition{"&View/Daemon &status", "Daemon &status", Command::refresh, 0, 0},
+    Definition{"&View/Runtime &diagnostics...", "Runtime &diagnostics...", Command::diagnostics, 0, 0},
+    Definition{"&Tools/&Options...", "&Options...", Command::options, FL_CTRL | ',', 0},
+    Definition{"&Tools/A&ppearance...", "A&ppearance...", Command::appearance, 0, FL_MENU_DIVIDER},
+    Definition{"&Tools/Split grouped &bars", "Split grouped &bars", Command::split_bars, 0, FL_MENU_DIVIDER},
+    Definition{"&Tools/Detected &tasks...", "Detected &tasks...", Command::tasks, FL_CTRL | 't', 0},
+    Definition{"&Help/&Keyboard shortcuts", "&Keyboard shortcuts", Command::shortcuts_help, FL_F + 1, 0},
+    Definition{"&Help/&About LayerE", "&About LayerE", Command::about, 0, 0}};
+static_assert(static_cast<std::size_t>(Command::close) < 48);
 
 bool in_context(Command command, EditorMenuContext context) {
   switch (context) {
@@ -58,9 +73,11 @@ bool in_context(Command command, EditorMenuContext context) {
            command == Command::toggle_enabled || command == Command::save ||
            command == Command::export_json || command == Command::export_pack;
   case EditorMenuContext::cooldowns:
-    return command == Command::add_cooldown || command == Command::delete_cooldown;
+    return command == Command::add_cooldown || command == Command::duplicate_cooldown ||
+           command == Command::delete_cooldown;
   case EditorMenuContext::panels:
-    return command == Command::add_panel || command == Command::delete_panel;
+    return command == Command::add_panel || command == Command::delete_panel ||
+           command == Command::panel_colors;
   case EditorMenuContext::bindings:
     return command == Command::add_keyboard || command == Command::add_mouse ||
            command == Command::capture_binding || command == Command::delete_binding;
@@ -70,7 +87,8 @@ bool in_context(Command command, EditorMenuContext context) {
 bool needs_target(Command command, EditorMenuContext context) {
   if (context == EditorMenuContext::profiles)
     return command != Command::new_profile && command != Command::import_profiles;
-  return command == Command::delete_cooldown || command == Command::delete_panel ||
+  return command == Command::delete_cooldown || command == Command::duplicate_cooldown ||
+         command == Command::delete_panel || command == Command::panel_colors ||
          command == Command::delete_binding;
 }
 } // namespace
@@ -92,6 +110,21 @@ void EditorMenus::invoke(Fl_Widget *widget, void *data) {
       if (menu->menu()[i].user_data() == data && !menu->menu()[i].active()) return;
   }
   if (action.app->command_enabled(action.command)) action.app->command(action.command);
+}
+std::string EditorMenus::shortcut_help() {
+  // Derived from the menu definitions, so the help cannot drift from them.
+  std::string text;
+  for (const auto &item : definitions) {
+    if (!item.shortcut) continue;
+    std::string label = item.label;
+    std::erase(label, '&');
+    text += std::string(fl_shortcut_label(static_cast<unsigned>(item.shortcut))) + "\t" + label + "\n";
+  }
+  return text + "Ctrl+Y\tRedo\n"
+                "Tab / Shift+Tab\tMove between fields\n"
+                "Alt+letter\tOpen the menu with that underlined letter\n"
+                "Right-click\tList context menu\n"
+                "Arrow keys\tChange the focused list, choice or tab";
 }
 void EditorMenus::update() {
   for (const auto &item : definitions) {

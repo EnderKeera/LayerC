@@ -57,6 +57,37 @@ std::string unique_panel_id(
   });
 }
 
+std::optional<std::size_t>
+split_grouped_bars(layerc::core::GameProfile &profile, const long target_height) {
+  using layerc::core::Panel;
+  std::vector<Panel> split;
+  split.reserve(profile.panels.size() + profile.cooldowns.size());
+  std::optional<std::size_t> first_split;
+  const auto height = static_cast<double>(std::max(1L, target_height));
+  for (const auto &panel : profile.panels) {
+    if (panel.style != layerc::core::PanelStyle::bar || panel.cooldown_ids.size() <= 1) {
+      split.push_back(panel);
+      continue;
+    }
+    const double offset =
+        (static_cast<double>(panel.bar.height) + layerc::core::overlay_metrics.spacing) / height;
+    const auto count = static_cast<double>(panel.cooldown_ids.size());
+    for (std::size_t index = 0; index < panel.cooldown_ids.size(); ++index) {
+      auto bar = panel;
+      const auto &cooldown = panel.cooldown_ids[index];
+      bar.id = unique_panel_id(panel.id + "-" + cooldown, profile.panels, &split);
+      bar.name = panel.name + " " + cooldown;
+      bar.cooldown_ids = {cooldown};
+      bar.anchor_y = std::clamp(
+          panel.anchor_y + (static_cast<double>(index) - (count - 1.0) / 2.0) * offset, 0.0, 1.0);
+      if (!first_split) first_split = split.size();
+      split.push_back(std::move(bar));
+    }
+  }
+  if (first_split) profile.panels = std::move(split);
+  return first_split;
+}
+
 std::optional<layerc::core::Milliseconds>
 parse_duration_seconds(const std::string_view seconds) {
   if (seconds.empty())

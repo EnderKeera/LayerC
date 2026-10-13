@@ -66,7 +66,7 @@ DaemonStatus query_daemon_status() {
     status.error = "status payload unavailable";
     return status;
   }
-  std::string payload_json;
+  auto &payload_json = status.payload_json;
   json::append_value(payload_json, *payload);
   const auto parsed = runtime::parse_runtime_diagnostics_json(payload_json);
   const auto *diagnostics = std::get_if<runtime::RuntimeDiagnostics>(&parsed);

@@ -18,6 +18,9 @@ namespace layerc::editor {
 // Adds a cooldown with a fresh id and returns that id. Bar panels gain it
 // through the shared panel normalization.
 std::string add_cooldown(layerc::core::GameProfile &profile);
+// Adds an unbound copy of a cooldown's timing under a new id; empty when the
+// source is missing.
+std::string duplicate_cooldown(layerc::core::GameProfile &profile, std::string_view id);
 // Adds a card panel listing every cooldown; returns its id.
 std::string add_panel(layerc::core::GameProfile &profile);
 // Removes a panel; false when no panel has the id.

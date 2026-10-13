@@ -10,6 +10,7 @@ namespace core = layerc::core;
 
 EditorApp::~EditorApp() {
   stop_edit_services();
+  stop_opener();
   if (live_draft_) Fl::remove_fd(live_draft_->notify_fd());
   live_draft_.reset(); // the only join: bounded, and only at shutdown
 }

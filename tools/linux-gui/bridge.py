@@ -306,7 +306,17 @@ class Bridge:
                         parsed = None
                     modules[f"{directory.name}/{entry.name}"] = {
                         "sha256": hashlib.sha256(raw).hexdigest(), "json": parsed}
+        # LayerE's own appearance file beside the profiles (Tools > Appearance).
+        appearance_file = self.profiles.parent / "editor-appearance.json"
+        appearance = None
+        if (appearance_file.is_file() and not appearance_file.is_symlink()
+                and appearance_file.stat().st_size <= MAX_MODULE_BYTES):
+            try:
+                appearance = json.loads(appearance_file.read_bytes())
+            except ValueError:
+                appearance = {"error": "invalid JSON"}
         return {"profiles": profiles, "modules": modules, "assets": assets,
+                "editorAppearance": appearance,
                 "assetAlpha": asset_alpha,
                 "exchange": str(self.exchange_dir), "exchangeFiles": exchange,
                 "daemon": {"reachable": daemon is not None, "status": daemon,

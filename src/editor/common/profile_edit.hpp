@@ -34,6 +34,14 @@ unique_panel_id(std::string_view base,
                 const std::vector<layerc::core::Panel> &existing,
                 const std::vector<layerc::core::Panel> *generated = nullptr);
 
+// Splits every bar panel shared by several cooldowns into one bar per
+// cooldown, stacked around the shared anchor. `target_height` is the game
+// window height in pixels that turns bar spacing into the 0-1 anchor space.
+// Returns the index of the first new bar, or nullopt (profile unchanged)
+// when no bar is shared.
+[[nodiscard]] std::optional<std::size_t>
+split_grouped_bars(layerc::core::GameProfile &profile, long target_height);
+
 // Parses a positive decimal seconds value ("1.5") within the cooldown
 // duration limit, rounded to whole milliseconds.
 [[nodiscard]] std::optional<layerc::core::Milliseconds>

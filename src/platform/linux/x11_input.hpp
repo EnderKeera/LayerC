@@ -51,6 +51,18 @@ xkb_key_name_to_scan_code(std::string_view name) noexcept;
 // in particular horizontal wheel buttons 6/7 are never side-button tokens.
 [[nodiscard]] std::uint16_t button_to_mouse_code(std::uint32_t button) noexcept;
 
+// The classified XI2 slave devices in id order; nullopt when the server
+// cannot be queried. Master devices are virtual and never listed.
+[[nodiscard]] std::optional<std::vector<X11InputDevice>>
+query_input_devices(struct _XDisplay *display);
+// Ids of the gamepad-class devices, in id order: a gamepad's index here is
+// its controller slot, so the editor and the daemon number pads alike.
+[[nodiscard]] std::vector<int> gamepad_ids(const std::vector<X11InputDevice> &devices);
+// The controller token for a gamepad button; an unlisted device is slot 0.
+[[nodiscard]] layerc::core::InputToken
+gamepad_button_token(const std::vector<int> &gamepads, int deviceid,
+                     std::uint32_t detail) noexcept;
+
 struct X11InputCapabilities {
   bool keyboard{};
   bool mouse{};

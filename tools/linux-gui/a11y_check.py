@@ -118,7 +118,8 @@ def main():
         until(lambda: lookup("Accessibility: AT-SPI bridge active", "label"),
               "visible bridge status exported")
         menus = [m.name for m in children(find("Main menu", "menu bar"))]
-        assert menus == ["File", "Edit", "Profile", "Cooldowns", "Bindings", "Panels", "View"], menus
+        assert menus == ["File", "Edit", "Profile", "Cooldowns", "Bindings", "Panels", "View", "Tools",
+                         "Help"], menus
         save_item = find("Save", "menu item")
         assert "<Control>s" in save_item.queryAction().getKeyBinding(0)
         checks.append("menu bar, items and Ctrl+S keybinding exported")

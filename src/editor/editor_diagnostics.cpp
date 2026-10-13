@@ -3,6 +3,8 @@
 #include "editor_dialog_dispatch.hpp"
 #include "editor_resource.h"
 
+#include "runtime_diagnostics_view.hpp"
+
 #include "layerc/core/json.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 
@@ -24,96 +26,19 @@ struct DiagnosticsView {
   bool retry_visual{};
 };
 
-// First non-empty last_error among items, or empty when none reported one.
-template <typename Items>
-std::string first_last_error(const Items &items) {
-  const auto found = std::ranges::find_if(
-      items, [](const auto &item) { return !item.last_error.empty(); });
-  return found == std::ranges::end(items) ? std::string{} : found->last_error;
-}
-
 DiagnosticsView diagnostics_view(const std::string_view source,
                                  const bool connected,
                                  const bool authenticated) {
+  // The summary text is shared with the Linux editor.
+  const auto shared =
+      runtime_diagnostics_view(source, connected, authenticated, false);
   DiagnosticsView view{};
-  view.summary = L"Connection: ";
-  if (!connected)
-    view.summary += L"LayerD disconnected";
-  else if (!authenticated)
-    view.summary += L"LayerD connected; authentication pending";
-  else
-    view.summary += L"LayerD connected and authenticated";
-
-  if (source.empty()) {
-    const wchar_t *snapshot_state =
-        connected && authenticated ? L"Waiting for snapshot" : L"Unavailable";
-    view.summary += L"\r\nActive profile: ";
-    view.summary += snapshot_state;
-    view.summary += L"\r\nIsolated visual worker: ";
-    view.summary += snapshot_state;
-    view.summary += connected && authenticated
-                        ? L"\r\nLast error: No diagnostics snapshot received"
-                        : L"\r\nLast error: LayerD is unavailable";
-    return view;
+  for (const auto &line : shared.lines) {
+    if (!view.summary.empty())
+      view.summary += L"\r\n";
+    view.summary += to_wide(line);
   }
-
-  const auto parsed = layerc::runtime::parse_runtime_diagnostics_json(source);
-  const auto *diagnostics =
-      std::get_if<layerc::runtime::RuntimeDiagnostics>(&parsed);
-  if (diagnostics == nullptr) {
-    const auto &error = std::get<layerc::core::json::FieldError>(parsed);
-    view.summary += L"\r\nActive profile: Unavailable"
-                    L"\r\nIsolated visual worker: Unavailable"
-                    L"\r\nLast error: Invalid diagnostics snapshot (";
-    view.summary += to_wide(error.describe());
-    view.summary += L")";
-    return view;
-  }
-
-  std::string profile_id;
-  for (const auto &session : diagnostics->sessions) {
-    if (profile_id.empty() || session.foreground)
-      profile_id = session.profile_id;
-    if (session.foreground)
-      break;
-  }
-  view.summary += L"\r\nActive profile: ";
-  view.summary += profile_id.empty() ? L"None" : to_wide(profile_id);
-
-  const auto helper_count = diagnostics->helpers.size();
-  const auto running_count =
-      static_cast<std::size_t>(std::ranges::count(
-          diagnostics->helpers, true,
-          &layerc::runtime::HelperDiagnostics::running));
-  const auto quarantined_count =
-      static_cast<std::size_t>(std::ranges::count(
-          diagnostics->helpers, true,
-          &layerc::runtime::HelperDiagnostics::quarantined));
-  view.retry_visual = quarantined_count != 0U;
-  view.summary += L"\r\nIsolated visual worker: ";
-  if (helper_count == 0U) {
-    view.summary += L"Not active";
-  } else if (quarantined_count != 0U) {
-    view.summary += L"Quarantined (" + std::to_wstring(quarantined_count) +
-                    L" of " + std::to_wstring(helper_count) + L")";
-  } else if (running_count == helper_count) {
-    view.summary += L"Running (" + std::to_wstring(helper_count) + L")";
-  } else if (running_count == 0U) {
-    view.summary += L"Stopped (" + std::to_wstring(helper_count) + L")";
-  } else {
-    view.summary += L"Degraded (" + std::to_wstring(running_count) + L" of " +
-                    std::to_wstring(helper_count) + L" running)";
-  }
-
-  std::string last_error = first_last_error(diagnostics->helpers);
-  if (last_error.empty())
-    last_error = first_last_error(diagnostics->services);
-  if (last_error.empty())
-    last_error = diagnostics->gamebar.last_error;
-  if (last_error.empty())
-    last_error = diagnostics->settings.last_error;
-  view.summary += L"\r\nLast error: ";
-  view.summary += last_error.empty() ? L"None reported" : to_wide(last_error);
+  view.retry_visual = shared.retry_visual;
   return view;
 }
 
