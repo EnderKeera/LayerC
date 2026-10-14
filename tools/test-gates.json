@@ -54,6 +54,7 @@
         "layerc_linux_profile_pack_tests",
         "layerc_linux_display_types_tests",
         "layerc_linux_display_adapters_tests",
+        "layerc_linux_bus_model_tests",
         "layerc_linux_evdev_input_tests",
         "layerc_linux_evdev_keymap_tests",
         "layerc_linux_evdev_us_keymap_tests",

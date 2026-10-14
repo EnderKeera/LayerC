@@ -3,11 +3,40 @@
 #include "layerc/core/json.hpp"
 #include "layerc/core/panel_geometry.hpp"
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 namespace layerc::platform {
+
+std::string process_executable_path(std::uint32_t pid) {
+  if (pid == 0) return {};
+  char directory[64];
+  std::snprintf(directory, sizeof(directory), "/proc/%u", pid);
+  struct stat info {};
+  if (::lstat(directory, &info) != 0) return {};
+  // Only same-UID PIDs (root may resolve any); everything else degrades to
+  // title/class matching instead of leaking another user's executable path.
+  const auto self = ::geteuid();
+  if (info.st_uid != self && self != 0) return {};
+  char link[64 + 5];
+  std::snprintf(link, sizeof(link), "/proc/%u/exe", pid);
+  char target[4096];
+  const ssize_t length = ::readlink(link, target, sizeof(target) - 1);
+  if (length <= 0) return {};
+  target[length] = '\0';
+  return std::string{target, static_cast<std::size_t>(length)};
+}
+
+std::string path_basename(const std::string_view path) {
+  const auto slash = path.find_last_of('/');
+  return slash == std::string_view::npos ? std::string{path}
+                                         : std::string{path.substr(slash + 1)};
+}
 
 int dpi_from_geometry(const int width, const int height, const int mm_width,
                       const int mm_height) noexcept {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "display_types.hpp"
 #include "x11_display.hpp"
 
 #include "layerc/core/types.hpp"
@@ -71,10 +72,6 @@ private:
   bool root_selected_{};
   mutable std::vector<Watch> watched_;
 };
-
-// Resolved /proc/<pid>/exe for PIDs owned by the effective UID (root may read
-// any). Empty for every other case — the caller degrades to title/class.
-[[nodiscard]] std::string process_executable_path(std::uint32_t pid);
 
 // One window for a profile under the shared core::resolve_game_match
 // policy: every specified identity field must hold (byte-exact executable
