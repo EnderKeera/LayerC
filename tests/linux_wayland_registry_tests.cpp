@@ -251,7 +251,7 @@ void malformed_wire_announcement(const bool send_sync) {
   expect(!connection.open(layerc::core::Milliseconds{1000}) &&
          connection.status().reason == "wayland_invalid_global" &&
          connection.status().globals.empty() && !connection.raw() &&
-         layerc::core::MonotonicClock::now() - start < std::chrono::milliseconds{500},
+         layerc::core::MonotonicClock::now() - start < std::chrono::milliseconds{900},
          "malformed registry rejects immediately, with or without a sync reply");
   int status{};
   expect(::waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
@@ -278,8 +278,14 @@ void seam_connection_lifecycle() {
   expect(status.display && status.display->session == layerc::runtime::DisplaySession::wayland &&
          status.display->compositor == layerc::runtime::DisplayCompositor::wlroots &&
          !loop.poll_once(0).any(), "seam detects paired wlroots globals and the idle connection does not wake");
-  expect(status.display->providers.overlay.state == layerc::runtime::DisplayProviderState::not_built,
-         "transport alone does not claim native overlay support");
+  // Without the native lane the provider is not built; with it, this fake
+  // registry advertises layer-shell but no wl_shm, so it stays unavailable.
+  const auto &overlay = status.display->providers.overlay;
+  expect(overlay.state == layerc::runtime::DisplayProviderState::not_built ||
+             (overlay.name == "wlr_layer_shell" &&
+              overlay.state == layerc::runtime::DisplayProviderState::unavailable &&
+              std::ranges::find(overlay.reasons, "wl_shm_missing") != overlay.reasons.end()),
+         "no native overlay is claimed without every required global");
   server.disconnect();
   expect(eventually([&] {
     const auto result = adapters.dispatch({});

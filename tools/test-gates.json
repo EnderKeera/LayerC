@@ -68,7 +68,8 @@
       "optional": {
         "layerc_benchmark_result_tests": "registered only where pwsh is installed; PowerShell is not a Linux build dependency",
         "layerc_linux_wayland_connection_tests": "registered only with the optional wayland-client transport; private failure fixtures, no desktop required",
-        "layerc_linux_wayland_registry_tests": "registered only with wayland-client and test-only wayland-server; private protocol server, no desktop required"
+        "layerc_linux_wayland_registry_tests": "registered only with wayland-client and test-only wayland-server; private protocol server, no desktop required",
+        "layerc_linux_wayland_paint_tests": "registered only with the native Wayland lane (scanner, protocols, cairo, xkbcommon); pure painter, no compositor required"
       }
     },
     "linux-x11": {
@@ -85,6 +86,13 @@
       "optional": {
         "layerc_linux_wayland_xwayland_loss_tests": "registered with X11, wayland-client and test-only wayland-server; forced Wayland loss must drain unselected XWayland work"
       }
+    },
+    "linux-wayland": {
+      "description": "Native Wayland providers inside a disposable headless sway session (tools/wayland-test-session.sh, CTest label wayland); registered with the native lane and X11.",
+      "label": "wayland",
+      "required": [
+        "layerc_linux_wayland_native_tests"
+      ]
     },
     "linux-editor": {
       "description": "Linux LayerE toolkit suites under an X display (CTest label editor); selected by tools/run-linux-tests.sh --editor.",

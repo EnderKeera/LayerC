@@ -18,6 +18,39 @@ namespace layerc::daemon {
 
 #ifndef LAYERC_NO_X11
 
+namespace {
+
+// Native providers report neutral scans; the session engine still speaks the
+// X11 shapes, which carry the same fields.
+layerc::platform::X11WindowScan to_x11(const layerc::platform::WindowScan &scan) {
+  layerc::platform::X11WindowScan result;
+  result.ewmh = scan.authoritative;
+  result.active = scan.active;
+  result.warning = scan.warning;
+  result.truncated = scan.truncated;
+  result.windows.reserve(scan.windows.size());
+  for (const auto &window : scan.windows)
+    result.windows.push_back({window.window, window.title, window.class_name,
+                              window.instance_name, window.pid, window.executable_name,
+                              window.executable_path, window.x, window.y, window.width,
+                              window.height, window.active, window.fullscreen,
+                              window.hidden});
+  return result;
+}
+
+layerc::platform::X11MonitorScan to_x11(const layerc::platform::MonitorScan &scan) {
+  layerc::platform::X11MonitorScan result;
+  result.randr = scan.available;
+  result.warning = scan.warning;
+  result.monitors.reserve(scan.monitors.size());
+  for (const auto &monitor : scan.monitors)
+    result.monitors.push_back({monitor.name, monitor.x, monitor.y, monitor.width,
+                               monitor.height, monitor.primary, monitor.dpi});
+  return result;
+}
+
+} // namespace
+
 struct X11Adapters::Impl {
   std::optional<layerc::platform::X11Display> display;
   std::optional<layerc::platform::X11WindowTracker> tracker;
@@ -27,6 +60,14 @@ struct X11Adapters::Impl {
   X11OverlayService overlay;
   X11VisualService visual;
   int fd{-1};
+  NativeDisplaySource *native{};
+
+  // XWayland EWMH windows carry PIDs for executable matching; foreign
+  // toplevels (no PID) are used only when there is no X11 connection.
+  [[nodiscard]] bool native_windows() const {
+    return native && native->has_windows() && !tracker.has_value();
+  }
+  [[nodiscard]] bool native_overlay() { return native && native->overlay() != nullptr; }
 };
 
 X11Adapters::X11Adapters() : impl_(std::make_unique<Impl>()) {}
@@ -44,6 +85,11 @@ X11Adapters::runtime_services() noexcept {
   result[static_cast<std::size_t>(layerc::runtime::Capability::visual)] =
       &impl_->visual;
   return result;
+}
+
+void X11Adapters::set_native(NativeDisplaySource *source) noexcept {
+  impl_->native = source;
+  impl_->overlay.use_backend(source ? source->overlay() : nullptr);
 }
 
 void X11Adapters::start(layerc::platform::EventLoop &loop,
@@ -102,21 +148,29 @@ void X11Adapters::refresh(
     layerc::runtime::DaemonKernel &kernel, LinuxStatusSnapshot &status,
     std::vector<std::string> &diagnostics) {
   if (configuration_changed) impl_->sessions.configure(profiles);
-  if (!impl_->tracker.has_value()) {
+  auto *native = impl_->native;
+  // Re-evaluated every pass: a provider can appear or vanish at runtime.
+  impl_->overlay.use_backend(native ? native->overlay() : nullptr);
+  const bool native_windows = impl_->native_windows();
+  if (!native_windows && !impl_->tracker.has_value()) {
     (void)kernel.reconcile({});
     refresh_status(kernel, status);
     return;
   }
 
-  const auto scan = impl_->tracker->scan();
+  const auto scan = native_windows ? to_x11(native->windows()) : impl_->tracker->scan();
   impl_->sessions.refresh(scan);
-  impl_->overlay.refresh(impl_->sessions.sessions(), scan,
-                         layerc::platform::scan_monitors(*impl_->display));
+  const auto monitors =
+      native && native->has_monitors() ? to_x11(native->monitors())
+      : impl_->display ? layerc::platform::scan_monitors(*impl_->display)
+                       : layerc::platform::X11MonitorScan{};
+  impl_->overlay.refresh(impl_->sessions.sessions(), scan, monitors);
   const auto requests = impl_->sessions.session_requests();
   const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  impl_->visual.refresh(impl_->sessions.sessions(), demand,
-                        configuration_changed,
+  // X11 capture needs XIDs; native window ids are opaque provider ids.
+  impl_->visual.refresh(native_windows ? std::span<InputSession>{} : impl_->sessions.sessions(),
+                        demand, configuration_changed,
                         impl_->sessions.visual_configurations());
   (void)kernel.reconcile(demand);
 
@@ -127,12 +181,15 @@ void X11Adapters::refresh(
   visual_unavailable.insert(visual_unavailable.end(),
                             impl_->sessions.visual_diagnostics().begin(),
                             impl_->sessions.visual_diagnostics().end());
+  if (native_windows && demand.required(layerc::runtime::Capability::visual))
+    visual_unavailable.emplace_back("visual: native windows have no X11 window id");
   derive_capability_status(
       status, demand,
       {.input = input_unavailable,
        .overlay = overlay_unavailable,
        .automation = automation_unavailable,
-       .visual = visual_unavailable});
+       .visual = visual_unavailable,
+       .native_overlay = impl_->native_overlay()});
   for (const auto &reason : input_unavailable)
     diagnostics.push_back("input " + reason);
   for (const auto &reason : overlay_unavailable)
@@ -154,12 +211,16 @@ void X11Adapters::refresh_status(
   visual_unavailable.insert(visual_unavailable.end(),
                             impl_->sessions.visual_diagnostics().begin(),
                             impl_->sessions.visual_diagnostics().end());
+  if (impl_->native_windows() &&
+      kernel.demand().required(layerc::runtime::Capability::visual))
+    visual_unavailable.emplace_back("visual: native windows have no X11 window id");
   derive_capability_status(
       status, kernel.demand(),
       {.input = impl_->input.unavailable(),
        .overlay = impl_->overlay.unavailable(),
        .automation = impl_->sessions.automation_diagnostics(),
-       .visual = visual_unavailable});
+       .visual = visual_unavailable,
+       .native_overlay = impl_->native_overlay()});
 }
 
 X11Dispatch X11Adapters::dispatch(const std::span<const int> ready) {
@@ -246,6 +307,8 @@ layerc::runtime::RuntimeServiceRegistry
 X11Adapters::runtime_services() noexcept {
   return {};
 }
+
+void X11Adapters::set_native(NativeDisplaySource *) noexcept {}
 
 void X11Adapters::start(layerc::platform::EventLoop &, LinuxStatusSnapshot &,
                         std::vector<std::string> &) {}

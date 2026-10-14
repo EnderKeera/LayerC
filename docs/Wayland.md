@@ -83,6 +83,11 @@ stable reason tokens are published in status.
 | overlay | `wlr_layer_shell`, `gnome_shell`, `x11_shape` (degraded `xwayland_overlay`) | `x11_shape` |
 | capture | `portal_screencast`, `x11_composite` (XWayland windows only, degraded) | `x11_composite` |
 
+On wlroots compositors with XWayland, `x11_ewmh` keeps window tracking:
+foreign toplevels carry no PID, so executable-matched profiles could never
+attach. `wlr_foreign_toplevel` is used only without an X11 connection.
+Monitors and overlay stay native in either case.
+
 Window ids are opaque per provider. Overlay and input providers need only
 geometry, so any combination works. `x11_composite` capture needs an XID: it is
 usable with `x11_ewmh` windows, or with native reports that carry `x11Window`.
@@ -182,7 +187,11 @@ double-buffered `wl_shm` XRGB8888 painted by cairo from the display list at
 `title`, `app_id` (→ `class_name` and `instance_name`), activated/fullscreen/
 minimized state, and output enter/leave are applied on `done`. There is no PID
 or window geometry, so executable matching is unavailable and geometry is the
-rect of the first entered output; both are published as degraded reasons.
+rect of the first entered output; both are published as degraded reasons
+(`toplevel_no_pid`, `toplevel_output_geometry`). Compositors that send no
+`output_enter` (sway 1.10) get the only monitor's rect when exactly one
+exists; otherwise the geometry stays empty and no panel is anchored to that
+window rather than guessing a monitor.
 
 ### Monitors (`wayland_output`)
 
@@ -270,8 +279,9 @@ license headers under `third_party/wayland-protocols/`; `xdg-shell` and
 
 ## Implementation evidence
 
-The display seam is implemented on the local Linux-editor integration branch;
-native Wayland monitors, windows, overlay, evdev routing, and portal routing
+The display seam and the wlroots-family native providers (outputs, foreign
+toplevels, layer-shell overlay) are implemented on the local Linux-editor
+integration branch; evdev routing, the KWin/GNOME bridges, and portal capture
 are still pending. This is not a V2.7 support claim.
 
 - `DisplayAdapters` selects a successfully connected Wayland transport in
@@ -302,6 +312,27 @@ are still pending. This is not a V2.7 support claim.
   desktop, KWin, GNOME, or native Wayland-rendering evidence.
 - The X11 GUI and smoke harnesses clear inherited Wayland sockets and force
   their own backend; headless CTest clears both display socket environments.
+- Native providers bind lazily from the registry on the daemon's one
+  connection and are released by its hook before the display goes away. The
+  session engine drives either X11 overlay windows or the native
+  `OverlayBackend` (`src/daemon/linux/display_providers.hpp`); with no native
+  source the X11 path is unchanged. Layer surfaces are created on first paint,
+  painted by cairo into double-buffered `wl_shm` XRGB8888 at the integer
+  buffer scale, and not repainted while their content is unchanged.
+  `Capability::overlay` takes its platform availability from layer-shell when
+  it is native. Native window ids are not XIDs, so X11 capture reports
+  `visual: native windows have no X11 window id`. The native providers need
+  the X11-enabled daemon build (the session engine); otherwise they report
+  `not_built`. A registry without `wl_shm` keeps layer-shell `unavailable`.
+- Automated headless-sway evidence (`wayland` label, two outputs at scale 1
+  and 2): logical monitor layout and buffer scale; layer-shell panels mapped
+  above a fullscreen window, read back with screencopy, crisp at scale 2,
+  moved/resized after configure, unmapped on removal or client disconnect;
+  a virtual-pointer click on a panel reaches the window beneath it; foreign
+  toplevel title/app_id/active/fullscreen and close, without `output_enter`;
+  and `DisplayAdapters` end to end (session, painted panel, provider status).
+  Screencopy and the virtual pointer are test-only protocols. This is not
+  KWin, GNOME, or physical-desktop evidence.
 
 ## Tests
 

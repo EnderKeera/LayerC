@@ -510,6 +510,13 @@ if(NOT WIN32)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_wayland_connection)
             target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_WAYLAND_CONNECTION)
         endif()
+        # Native Wayland providers feed the session engine, which lives in the
+        # X11-enabled build; without X11 the seam reports them unavailable.
+        if(TARGET layerc_wayland AND LAYERC_HAVE_X11)
+            target_sources(layerc_daemon_linux PRIVATE src/daemon/linux/wayland_providers.cpp)
+            target_link_libraries(layerc_daemon_linux PUBLIC layerc_wayland)
+            target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_WAYLAND_PROVIDERS)
+        endif()
         layerc_enable_warnings(layerc_daemon_linux)
     endif()
 
