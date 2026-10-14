@@ -191,12 +191,11 @@ struct DisplayAdapters::Impl {
         value.providers.monitors = missing("wayland_output", "native_provider_not_built");
         value.providers.overlay = missing("wlr_layer_shell", "native_provider_not_built");
 #endif
-        if (!route.built)
-          value.providers.input = missing("evdev", "input_provider_not_built");
-        else if (input.selection != InputSelection::evdev)
-          value.providers.input = evdev_provider(route, input.selection);
-        else
+        // An attached route still reports its own state without a session.
+        if (route.built && input.selection == InputSelection::evdev && !route.evdev_attached)
           value.providers.input = {"evdev", State::unavailable, {"session_unavailable"}};
+        else
+          value.providers.input = evdev_provider(route, input.selection);
         value.providers.capture = missing("portal_screencast", "native_provider_not_built");
       }
       value.reasons.emplace_back(value.override_backend == runtime::DisplayBackend::invalid
