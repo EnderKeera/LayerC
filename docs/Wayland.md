@@ -268,6 +268,41 @@ license headers under `third_party/wayland-protocols/`; `xdg-shell` and
 `xdg-output` come from the system `wayland-protocols`. Each lane owns one
 `cmake/LayerCLinux*.cmake` file included from `CMakeLists.txt`.
 
+## Implementation evidence
+
+The display seam is implemented on the local Linux-editor integration branch;
+native Wayland monitors, windows, overlay, evdev routing, and portal routing
+are still pending. This is not a V2.7 support claim.
+
+- `DisplayAdapters` selects a successfully connected Wayland transport in
+  `auto`, then X11, then headless. A forced backend never selects the other
+  session. Invalid overrides select headless with `invalid_display_backend`.
+  A Wayland session may still use explicitly degraded XWayland providers.
+- Connection establishment and the registry handshake share a monotonic
+  250 ms deadline. Named sockets connect nonblocking; a full listening backlog
+  fails without retry polling. Inherited `WAYLAND_SOCKET` ownership is unchanged.
+  More than 1024 global instances or 128 distinct interfaces fail the
+  connection with `wayland_too_many_globals` instead of publishing a truncated
+  registry snapshot.
+  Loss unregisters the transport fd, publishes `wayland_connection_lost`, and
+  does not start a retry timer. A remaining XWayland queue is drained with
+  sessions stopped when the forced Wayland backend is lost, so an unselected
+  connection cannot busy-loop.
+  The connection owns no worker thread.
+- The `x11` object's bytes remain unchanged. The optional typed `display`
+  object roundtrips through shared diagnostics parsing; `layerctl status`
+  prints a display/provider summary. Native providers that have not landed
+  report `not_built` rather than active capabilities. Compositor detection
+  currently uses desktop hints and advertised registry globals. Session-bus
+  owner checks are added with bus-provider integration; the bus remains closed
+  until demanded.
+- Automated Debian WSL evidence: private transport/server tests, seam tests,
+  Xvfb X11 compatibility/idle-loop tests, and a no-X11/no-Wayland build.
+  MSVC runtime and editor diagnostics tests also pass. These are not physical
+  desktop, KWin, GNOME, or native Wayland-rendering evidence.
+- The X11 GUI and smoke harnesses clear inherited Wayland sockets and force
+  their own backend; headless CTest clears both display socket environments.
+
 ## Tests
 
 | Label | Harness | Skips (77) when |

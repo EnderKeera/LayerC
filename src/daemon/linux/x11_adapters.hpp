@@ -1,6 +1,7 @@
 #pragma once
 
 #include "daemon_host.hpp"
+#include "display_dispatch.hpp"
 #include "event_loop.hpp"
 
 #include "layerc/platform/profile_store.hpp"
@@ -15,13 +16,7 @@
 
 namespace layerc::daemon {
 
-// Work surfaced by one pass over the X11 connection.
-struct X11Dispatch {
-  std::vector<std::string> triggered;
-  std::size_t events{};
-  bool windows_changed{};
-  bool devices_changed{};
-};
+using X11Dispatch = DisplayDispatch;
 
 // The daemon's single compile-time X11 seam. The no-X11 build keeps the same
 // orchestration surface and reports unavailable capabilities without linking

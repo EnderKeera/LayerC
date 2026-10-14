@@ -253,14 +253,83 @@ bool capability(json::Reader &r, const json::Value &root, const std::string &pat
   return strings(r, root, "reasons", path, value.reasons) &&
          strings(r, root, "diagnostics", path, value.diagnostics, Required::no);
 }
+bool display_provider(json::Reader &r, const json::Value &root,
+                      const std::string &path, DisplayProviderStatus &value) {
+  if (!r.exact_fields(root, {"name", "state", "reasons"}, path) ||
+      !r.string(root, "name", path, value.name, Required::yes, EmptyString::reject))
+    return false;
+  const auto state = r.enumeration<DisplayProviderState>(
+      root, "state", path, display_provider_state_wire, Required::yes,
+      DisplayProviderState::unavailable);
+  if (!state) return false;
+  value.state = *state;
+  return strings(r, root, "reasons", path, value.reasons);
+}
+bool display(json::Reader &r, const json::Value &root, DisplayStatusSnapshot &value) {
+  const std::string path = "$.display";
+  if (!r.exact_fields(root, {"session", "override", "desktop", "compositor",
+                             "wayland", "bus", "providers", "reasons"}, path))
+    return false;
+  const auto session = r.enumeration<DisplaySession>(
+      root, "session", path, display_session_wire, Required::yes, DisplaySession::none);
+  const auto backend = r.enumeration<DisplayBackend>(
+      root, "override", path, display_backend_wire, Required::yes, DisplayBackend::auto_detect);
+  const auto compositor = r.enumeration<DisplayCompositor>(
+      root, "compositor", path, display_compositor_wire, Required::yes, DisplayCompositor::unknown);
+  if (!session || !backend || !compositor ||
+      !r.string(root, "desktop", path, value.desktop, Required::yes, EmptyString::allow))
+    return false;
+  value.session = *session;
+  value.override_backend = *backend;
+  value.compositor = *compositor;
+  const auto *wayland = r.object(root, "wayland", path, Required::yes);
+  const auto *bus = r.object(root, "bus", path, Required::yes);
+  const auto *providers = r.object(root, "providers", path, Required::yes);
+  if (!wayland || !bus || !providers ||
+      !r.exact_fields(*wayland, {"connected", "globals", "reason"}, path + ".wayland") ||
+      !r.boolean(*wayland, "connected", path + ".wayland", value.wayland.connected, Required::yes) ||
+      !r.string(*wayland, "reason", path + ".wayland", value.wayland.reason, Required::no, EmptyString::allow) ||
+      !r.exact_fields(*bus, {"connected"}, path + ".bus") ||
+      !r.boolean(*bus, "connected", path + ".bus", value.bus_connected, Required::yes) ||
+      !r.exact_fields(*providers, {"windows", "monitors", "input", "overlay", "capture"}, path + ".providers"))
+    return false;
+  const auto *globals = r.object(*wayland, "globals", path + ".wayland", Required::yes);
+  if (!globals) return false;
+  if (globals->as_object().size() > 128) return r.fail(path + ".wayland.globals", "too many globals");
+  for (const auto &[name, version] : globals->as_object()) {
+    (void)version;
+    if (name.empty() || name.size() > 128) return r.fail(path + ".wayland.globals", "invalid interface name");
+    const auto number = r.integer(*globals, name, path + ".wayland.globals", 1,
+                                   std::numeric_limits<std::uint32_t>::max(), Required::yes);
+    if (!number) return false;
+    value.wayland.globals.emplace(name, static_cast<std::uint32_t>(*number));
+  }
+  const auto provider = [&](std::string_view name, DisplayProviderStatus &output) {
+    const auto *object = r.object(*providers, name, path + ".providers", Required::yes);
+    return object && display_provider(r, *object, path + ".providers." + std::string(name), output);
+  };
+  return provider("windows", value.providers.windows) &&
+         provider("monitors", value.providers.monitors) &&
+         provider("input", value.providers.input) &&
+         provider("overlay", value.providers.overlay) &&
+         provider("capture", value.providers.capture) &&
+         strings(r, root, "reasons", path, value.reasons);
+}
 bool linux_extension(json::Reader &r, const json::Value &root,
                      std::optional<LinuxDiagnostics> &value) {
   const auto *probe = r.field(root, "x11", "$", Required::no);
   const auto *capabilities = r.field(root, "capabilities", "$", Required::no);
-  if (!probe && !capabilities) return r.ok();
+  const auto *display_value = r.field(root, "display", "$", Required::no);
+  if (!probe && !capabilities && !display_value) return r.ok();
   const auto *object = r.object(root, "x11", "$", Required::yes);
   if (!object) return false;
   value.emplace();
+  if (display_value) {
+    const auto *display_object = r.object(root, "display", "$", Required::yes);
+    if (!display_object) return false;
+    value->display.emplace();
+    if (!display(r, *display_object, *value->display)) return false;
+  }
   return x11(r, *object, value->x11) &&
          array(r, root, "capabilities", value->capabilities, capability);
 }
@@ -277,7 +346,7 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
           {"schemaVersion", "packageVersion", "protocolVersion", "process",
            "services", "gameBarTransport", "settings",
            "aggregateOwnedResources", "sessions", "isolatedHelpers", "captures",
-           "automationFaults", "x11", "capabilities"},
+           "automationFaults", "x11", "capabilities", "display"},
           "$") ||
       !r.integer(*root, "schemaVersion", "$", runtime_diagnostics_schema,
                   runtime_diagnostics_schema, Required::yes) ||

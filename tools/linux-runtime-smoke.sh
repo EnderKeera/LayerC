@@ -17,6 +17,10 @@ artifact_dir=$3
 profile_json=${4:-}
 fixture_exe=${5:-}
 case "$mode" in headless | x11) ;; *) usage; exit 64 ;; esac
+# These modes exercise a controlled X11 fixture or no display. Never connect
+# to an inherited Wayland socket (including an absolute WSLg socket path).
+unset WAYLAND_DISPLAY WAYLAND_SOCKET
+export LAYERC_DISPLAY_BACKEND=x11
 
 flatpak_app=
 installed_location=

@@ -182,6 +182,24 @@ void print_status_summary(const std::string_view response) {
     const auto &x11 = diagnostics->linux_extension->x11;
     std::printf("x11: %s%s%s\n", x11.connected ? "connected" : "not connected",
                 x11.reason.empty() ? "" : " - ", x11.reason.c_str());
+    if (diagnostics->linux_extension->display) {
+      const auto &display = *diagnostics->linux_extension->display;
+      std::printf("display: %s compositor=%s",
+          layerc::core::enum_wire_name(runtime::display_session_wire, display.session).value_or("none").data(),
+          layerc::core::enum_wire_name(runtime::display_compositor_wire, display.compositor).value_or("unknown").data());
+      const auto provider = [](const char *capability, const runtime::DisplayProviderStatus &status) {
+        std::printf(" %s=%s/%s", capability, status.name.c_str(),
+            layerc::core::enum_wire_name(runtime::display_provider_state_wire, status.state).value_or("unavailable").data());
+        for (const auto &reason : status.reasons) std::printf("(%s)", reason.c_str());
+      };
+      provider("windows", display.providers.windows);
+      provider("monitors", display.providers.monitors);
+      provider("input", display.providers.input);
+      provider("overlay", display.providers.overlay);
+      provider("capture", display.providers.capture);
+      for (const auto &reason : display.reasons) std::printf(" (%s)", reason.c_str());
+      std::putchar('\n');
+    }
   }
   std::printf("sessions: %zu\n", diagnostics->sessions.size());
   for (const auto &session : diagnostics->sessions) {

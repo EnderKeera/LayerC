@@ -56,7 +56,8 @@ function(layerc_add_test target)
 endfunction()
 
 layerc_add_test(layerc_runtime_tests
-    SOURCES tests/runtime_services_tests.cpp LINK layerc_runtime)
+    SOURCES tests/runtime_services_tests.cpp tests/runtime_display_diagnostics_tests.cpp
+    LINK layerc_runtime)
 
 # Tooling contract: the shared benchmark result writer emits the documented
 # keys without touching PowerShell's read-only $Host.
@@ -159,6 +160,38 @@ if(NOT WIN32)
     target_include_directories(layerc_linux_display_types_tests PRIVATE
         src/platform/linux)
 
+    if(TARGET layerc_wayland_connection)
+        layerc_add_test(layerc_linux_wayland_connection_tests
+            SOURCES tests/linux_wayland_connection_tests.cpp
+            LINK layerc_wayland_connection TIMEOUT 10)
+        # Protocol-server fakes are test-only; never link libwayland-server
+        # or their fixture threads into the daemon.
+        pkg_check_modules(LAYERC_WAYLAND_TEST_SERVER QUIET IMPORTED_TARGET wayland-server)
+        if(LAYERC_WAYLAND_TEST_SERVER_FOUND)
+            layerc_add_test(layerc_linux_wayland_registry_tests
+                SOURCES tests/linux_wayland_registry_tests.cpp
+                LINK layerc_daemon_linux PkgConfig::LAYERC_WAYLAND_TEST_SERVER
+                TIMEOUT 10)
+            if(TARGET layerc_x11)
+                layerc_add_test(layerc_linux_wayland_xwayland_loss_tests
+                    SOURCES tests/linux_wayland_registry_tests.cpp
+                    LINK layerc_daemon_linux PkgConfig::LAYERC_WAYLAND_TEST_SERVER
+                    TIMEOUT 10 LABELS required x11 SKIP_RETURN_CODE 77
+                    RESOURCE_LOCK layerc_x11_display)
+                target_compile_definitions(layerc_linux_wayland_xwayland_loss_tests
+                    PRIVATE LAYERC_TEST_XWAYLAND_LOSS)
+            endif()
+        endif()
+    endif()
+    layerc_add_test(layerc_linux_display_adapters_tests
+        SOURCES tests/linux_display_adapters_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30)
+    if(LAYERC_HAVE_X11)
+        layerc_add_test(layerc_linux_display_x11_tests
+            SOURCES tests/linux_display_x11_tests.cpp
+            LINK layerc_daemon_linux TIMEOUT 30
+            LABELS "required;x11" SKIP_RETURN_CODE 77)
+    endif()
     layerc_add_test(layerc_linux_event_loop_tests
         SOURCES tests/linux_event_loop_tests.cpp
         LINK layerc_linux layerc_runtime TIMEOUT 30)

@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+void diagnostics_display_contracts();
+
 namespace {
 
 using layerc::test::expect;
@@ -659,5 +661,6 @@ int main() {
       {"diagnostics_linux_extension_round_trips", diagnostics_linux_extension_round_trips},
       {"diagnostics_linux_adapter_preserves_shared_fields", diagnostics_linux_adapter_preserves_shared_fields},
       {"diagnostics_linux_parser_failure_paths", diagnostics_linux_parser_failure_paths},
+      {"diagnostics_display_contracts", diagnostics_display_contracts},
   });
 }
