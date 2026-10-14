@@ -43,12 +43,6 @@ using namespace x11_property;
   return title;
 }
 
-[[nodiscard]] std::string path_basename(std::string_view path) {
-  const auto slash = path.find_last_of('/');
-  return slash == std::string_view::npos ? std::string{path}
-                                         : std::string{path.substr(slash + 1)};
-}
-
 constexpr long client_events = PropertyChangeMask | StructureNotifyMask;
 constexpr long root_events = client_events | SubstructureNotifyMask;
 
@@ -84,25 +78,6 @@ struct Atoms {
 }
 
 } // namespace
-
-std::string process_executable_path(std::uint32_t pid) {
-  if (pid == 0) return {};
-  char directory[64];
-  std::snprintf(directory, sizeof(directory), "/proc/%u", pid);
-  struct stat info {};
-  if (::lstat(directory, &info) != 0) return {};
-  // Only same-UID PIDs (root may resolve any); everything else degrades to
-  // title/class matching instead of leaking another user's executable path.
-  const auto self = ::geteuid();
-  if (info.st_uid != self && self != 0) return {};
-  char link[64 + 5];
-  std::snprintf(link, sizeof(link), "/proc/%u/exe", pid);
-  char target[4096];
-  const ssize_t length = ::readlink(link, target, sizeof(target) - 1);
-  if (length <= 0) return {};
-  target[length] = '\0';
-  return std::string{target, static_cast<std::size_t>(length)};
-}
 
 X11WindowTracker::X11WindowTracker(const X11Display &display) noexcept
     : display_(&display) {

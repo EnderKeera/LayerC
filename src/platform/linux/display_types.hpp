@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace layerc::platform {
@@ -41,6 +42,9 @@ struct WindowSnapshot {
   bool active{};
   bool fullscreen{};
   bool hidden{};
+  // The XWayland XID a compositor bridge reported, so X11 capture can still
+  // address the window; absent for native clients and other providers.
+  std::optional<std::uint64_t> x11_window;
 
   bool operator==(const WindowSnapshot &) const = default;
 };
@@ -59,6 +63,11 @@ struct WindowScan {
 
   bool operator==(const WindowScan &) const = default;
 };
+
+// Resolved /proc/<pid>/exe for PIDs owned by the effective UID (root may read
+// any). Empty for every other case — the caller degrades to title/class.
+[[nodiscard]] std::string process_executable_path(std::uint32_t pid);
+[[nodiscard]] std::string path_basename(std::string_view path);
 
 // Upper bound every provider applies before a scan reaches the registry.
 inline constexpr std::uint32_t window_scan_limit = 64;
