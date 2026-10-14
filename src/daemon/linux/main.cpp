@@ -1,9 +1,9 @@
 // Linux foreground daemon entry point. Platform variants are confined to the
-// X11Adapters seam so orchestration is identical with and without Xlib.
+// DisplayAdapters seam so orchestration is identical for every backend.
 #include "daemon_host.hpp"
 #include "event_loop.hpp"
 #include "live_draft.hpp"
-#include "x11_adapters.hpp"
+#include "display_adapters.hpp"
 
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store_linux.hpp"
@@ -210,7 +210,7 @@ private:
 
   // Declaration order is the historical construction order; members are
   // destroyed in reverse, adapters last.
-  layerc::daemon::X11Adapters adapters_;
+  layerc::daemon::DisplayAdapters adapters_;
   layerc::runtime::DaemonKernel kernel_;
   layerc::platform::EventLoop loop_;
   layerc::daemon::ControlService control_;

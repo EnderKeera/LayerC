@@ -305,6 +305,11 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_profile_store_tests` | XDG roots, permissions, journaling, fault injection, and recovery |
 | `layerc_linux_profile_pack_tests` | Byte-deterministic bundle export and import roundtrip |
 | `layerc_linux_event_loop_tests` | Monotonic timerfd deadlines, signal shutdown, and zero idle wakeups |
+| `layerc_linux_display_adapters_tests` | Display selection, strict overrides, compositor hints, headless/provider reasons, and no-graphics builds |
+| `layerc_linux_display_x11_tests` | X11 orchestration/status compatibility and an idle blocking event loop (CTest label `x11`) |
+| `layerc_linux_wayland_connection_tests` | Optional Wayland transport: private failed/timeout sockets, bounded startup, descriptor cleanup |
+| `layerc_linux_wayland_registry_tests` | Optional test-only Wayland server: registry/removal, connection loss, and compositor selection |
+| `layerc_linux_wayland_xwayland_loss_tests` | Optional Wayland server over Xvfb: degraded providers and forced Wayland loss without undrained XWayland work |
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |

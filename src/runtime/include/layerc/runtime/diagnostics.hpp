@@ -4,6 +4,7 @@
 #include "layerc/core/live_edit.hpp"
 #include "layerc/core/visual.hpp"
 #include "layerc/runtime/runtime_services.hpp"
+#include "layerc/runtime/display_diagnostics.hpp"
 
 namespace layerc::runtime {
 
@@ -106,6 +107,8 @@ struct CapabilityStatus {
 struct LinuxDiagnostics {
   X11StatusSnapshot x11;
   std::vector<CapabilityStatus> capabilities;
+  // Optional for pre-V2.7 producers; old snapshots round-trip unchanged.
+  std::optional<DisplayStatusSnapshot> display{};
   bool operator==(const LinuxDiagnostics &) const = default;
 };
 
@@ -138,6 +141,7 @@ struct LinuxStatusSnapshot {
   // Shared-schema session rows; emitted as RuntimeDiagnostics::sessions,
   // not inside the x11 extension.
   std::vector<SessionDiagnostics> sessions;
+  std::optional<DisplayStatusSnapshot> display{};
 };
 
 // Adapts native Linux probes to the shared typed diagnostics serializer.

@@ -290,7 +290,7 @@ else
     >"$evidence_dir/ctest-registration.json"
 
   headless_junit="$evidence_dir/ctest-headless.xml"
-  run_logged ctest-headless env -u DISPLAY ctest --test-dir "$build_dir" \
+  run_logged ctest-headless env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET ctest --test-dir "$build_dir" \
     -L '^headless$' --output-on-failure --no-tests=error \
     --output-junit "$headless_junit"
   run_logged verify-headless python3 "$source_dir/tools/linux_test_report.py" \
@@ -304,7 +304,7 @@ else
     "$source_dir/examples/lctest.json"
 
   x11_junit="$evidence_dir/ctest-x11.xml"
-  run_logged ctest-x11 xvfb-run -a bash -c \
+  run_logged ctest-x11 env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET LAYERC_DISPLAY_BACKEND=x11 xvfb-run -a bash -c \
     'source "$1"; shift; layerc_x11_exec 50 0.2 "$@"' _ "$source_dir/tools/linux-lib.sh" \
     ctest --test-dir "$build_dir" -L '^x11$' --output-on-failure --no-tests=error \
     --output-junit "$x11_junit"
@@ -329,7 +329,7 @@ else
     fi
   else
     editor_junit="$evidence_dir/ctest-editor.xml"
-    run_logged ctest-editor xvfb-run -a "${editor_session[@]}" bash -c \
+    run_logged ctest-editor env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET LAYERC_DISPLAY_BACKEND=x11 xvfb-run -a "${editor_session[@]}" bash -c \
       'source "$1"; shift; layerc_x11_exec 50 0.2 "$@"' _ "$source_dir/tools/linux-lib.sh" \
       ctest --test-dir "$build_dir" -L '^editor$' --output-on-failure --no-tests=error \
       --output-junit "$editor_junit"

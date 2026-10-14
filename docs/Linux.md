@@ -472,6 +472,12 @@ layercal snapshot <x11-window-id> [--region x y width height] --json > snapshot.
                              # region: normalized 0..1 fractions, recorded in the JSON metadata
 ```
 
+In the development tree, `layerctl status` also prints a `display:` line with
+session, compositor, and provider names, states, and fault reasons. JSON status
+keeps the existing `x11` object and adds a separate `display` object. Backend
+overrides and the in-development Wayland seam are described in
+[`Wayland.md`](Wayland.md#seam); detection is not a native Wayland support claim.
+
 Imports read stdin and publish transactionally; a rejected profile names the
 failing JSON field. The store file name is the sanitized id; an id whose
 sanitized name is already taken by another profile gets a `-2`, `-3`, ...

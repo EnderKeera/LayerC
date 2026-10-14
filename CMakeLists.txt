@@ -487,7 +487,10 @@ if(NOT WIN32)
     if(LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS)
         add_library(layerc_daemon_linux STATIC
             src/daemon/linux/daemon_host.cpp
-            src/daemon/linux/live_draft.cpp)
+            src/daemon/linux/live_draft.cpp
+            src/daemon/linux/display_adapters.cpp
+            src/daemon/linux/display_selection.cpp
+            src/daemon/linux/x11_adapters.cpp)
         target_include_directories(layerc_daemon_linux PUBLIC
             src/daemon/linux
             src/platform/linux)
@@ -500,18 +503,19 @@ if(NOT WIN32)
                 src/daemon/linux/overlay_service.cpp
                 src/daemon/linux/visual_service.cpp)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_x11)
+        else()
+            target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_NO_X11)
+        endif()
+        if(TARGET layerc_wayland_connection)
+            target_link_libraries(layerc_daemon_linux PUBLIC layerc_wayland_connection)
+            target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_WAYLAND_CONNECTION)
         endif()
         layerc_enable_warnings(layerc_daemon_linux)
     endif()
 
     if(LAYERC_BUILD_DAEMON)
-        add_executable(layerd
-            src/daemon/linux/main.cpp
-            src/daemon/linux/x11_adapters.cpp)
+        add_executable(layerd src/daemon/linux/main.cpp)
         target_link_libraries(layerd PRIVATE layerc_daemon_linux)
-        if(NOT LAYERC_HAVE_X11)
-            target_compile_definitions(layerd PRIVATE LAYERC_NO_X11)
-        endif()
         layerc_enable_warnings(layerd)
 
         add_executable(layerctl

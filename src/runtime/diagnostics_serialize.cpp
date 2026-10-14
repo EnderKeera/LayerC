@@ -105,6 +105,38 @@ Value x11(const X11StatusSnapshot &value) {
   result.emplace("ewmh", Value(std::move(ewmh)));
   return Value(std::move(result));
 }
+Value display_provider(const DisplayProviderStatus &value) {
+  return Value(Value::Object{
+      {"name", Value(value.name)},
+      {"state", Value(std::string(core::enum_wire_name(
+          display_provider_state_wire, value.state).value_or("unavailable")))},
+      {"reasons", strings(value.reasons)}});
+}
+Value display(const DisplayStatusSnapshot &value) {
+  Value::Object globals;
+  for (const auto &[name, version] : value.wayland.globals)
+    globals.emplace(name, exact_unsigned_value(version));
+  Value::Object wayland{{"connected", Value(value.wayland.connected)},
+                        {"globals", Value(std::move(globals))}};
+  if (!value.wayland.reason.empty()) wayland.emplace("reason", Value(value.wayland.reason));
+  return Value(Value::Object{
+      {"session", Value(std::string(core::enum_wire_name(
+          display_session_wire, value.session).value_or("none")))},
+      {"override", Value(std::string(core::enum_wire_name(
+          display_backend_wire, value.override_backend).value_or("invalid")))},
+      {"desktop", Value(value.desktop)},
+      {"compositor", Value(std::string(core::enum_wire_name(
+          display_compositor_wire, value.compositor).value_or("unknown")))},
+      {"wayland", Value(std::move(wayland))},
+      {"bus", Value(Value::Object{{"connected", Value(value.bus_connected)}})},
+      {"providers", Value(Value::Object{
+          {"windows", display_provider(value.providers.windows)},
+          {"monitors", display_provider(value.providers.monitors)},
+          {"input", display_provider(value.providers.input)},
+          {"overlay", display_provider(value.providers.overlay)},
+          {"capture", display_provider(value.providers.capture)}})},
+      {"reasons", strings(value.reasons)}});
+}
 Value capability(const CapabilityStatus &value) {
   Value::Object result{
       {"capability", Value(std::string(capability_name(value.capability)))},
@@ -134,6 +166,8 @@ std::string serialize_runtime_diagnostics_json(const RuntimeDiagnostics &value) 
       {"automationFaults", strings(value.automation_faults)}};
   if (value.linux_extension) {
     root.emplace("x11", x11(value.linux_extension->x11));
+    if (value.linux_extension->display)
+      root.emplace("display", display(*value.linux_extension->display));
     root.emplace("capabilities", array(value.linux_extension->capabilities, capability));
   }
   std::string output;

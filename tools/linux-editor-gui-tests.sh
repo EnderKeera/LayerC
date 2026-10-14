@@ -332,8 +332,9 @@ chmod 700 "$work/runtime"
 export HOME="$work/home" XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" \
   XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state" XDG_RUNTIME_DIR="$work/runtime" \
   XAUTHORITY="$work/Xauthority" FLTK_BACKEND=x11
-unset WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS AT_SPI_BUS_ADDRESS NO_AT_BRIDGE \
+unset WAYLAND_DISPLAY WAYLAND_SOCKET DBUS_SESSION_BUS_ADDRESS AT_SPI_BUS_ADDRESS NO_AT_BRIDGE \
   LAYERC_PROFILE_DIR LAYERC_STORE_ROOT SESSION_MANAGER
+export LAYERC_DISPLAY_BACKEND=x11
 
 python3 - "$out" "$build" <<'PY'
 import hashlib, json, os, pathlib, platform, subprocess, sys

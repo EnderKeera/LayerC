@@ -7,7 +7,7 @@ std::string serialize_linux_status_json(const RuntimeDiagnostics &diagnostics,
   // Preserve the caller's shared session rows; the native snapshot only
   // supplies the Linux probes and availability extension.
   auto snapshot = diagnostics;
-  snapshot.linux_extension = LinuxDiagnostics{linux.x11, linux.capabilities};
+  snapshot.linux_extension = LinuxDiagnostics{linux.x11, linux.capabilities, linux.display};
   return serialize_runtime_diagnostics_json(snapshot);
 }
 

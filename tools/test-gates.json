@@ -53,6 +53,7 @@
         "layerc_linux_event_loop_tests",
         "layerc_linux_profile_pack_tests",
         "layerc_linux_display_types_tests",
+        "layerc_linux_display_adapters_tests",
         "layerc_linux_evdev_input_tests",
         "layerc_linux_evdev_keymap_tests",
         "layerc_linux_evdev_us_keymap_tests",
@@ -65,19 +66,25 @@
         "layerc_visual_asset_gc_contract_tests"
       ],
       "optional": {
-        "layerc_benchmark_result_tests": "registered only where pwsh is installed; PowerShell is not a Linux build dependency"
+        "layerc_benchmark_result_tests": "registered only where pwsh is installed; PowerShell is not a Linux build dependency",
+        "layerc_linux_wayland_connection_tests": "registered only with the optional wayland-client transport; private failure fixtures, no desktop required",
+        "layerc_linux_wayland_registry_tests": "registered only with wayland-client and test-only wayland-server; private protocol server, no desktop required"
       }
     },
     "linux-x11": {
       "description": "Linux suites that need an X display (Xvfb in CI, CTest label x11).",
       "label": "x11",
       "required": [
+        "layerc_linux_display_x11_tests",
         "layerc_linux_x11_capture_tests",
         "layerc_linux_x11_input_tests",
         "layerc_linux_x11_overlay_tests",
         "layerc_linux_x11_tests",
         "layerc_linux_x11_visual_tests"
-      ]
+      ],
+      "optional": {
+        "layerc_linux_wayland_xwayland_loss_tests": "registered with X11, wayland-client and test-only wayland-server; forced Wayland loss must drain unselected XWayland work"
+      }
     },
     "linux-editor": {
       "description": "Linux LayerE toolkit suites under an X display (CTest label editor); selected by tools/run-linux-tests.sh --editor.",
