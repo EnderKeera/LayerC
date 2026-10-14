@@ -1,5 +1,6 @@
 #pragma once
 
+#include "display_providers.hpp"
 #include "input_service.hpp"
 #include "x11_monitor.hpp"
 #include "x11_overlay.hpp"
@@ -30,6 +31,9 @@ class X11OverlayService final : public layerc::runtime::IRuntimeService {
 public:
   // The display outlives the service; the shared connection owner keeps it.
   void attach(layerc::platform::X11Display &display) noexcept;
+  // Paints panels through a native backend (Wayland layer-shell) instead of
+  // X11 windows; nullptr returns to X11. The backend outlives the service.
+  void use_backend(OverlayBackend *backend) noexcept;
 
   // Rebuilds the panel list from the input sessions. A session whose window
   // is gone or hidden gets no overlay.
@@ -73,9 +77,14 @@ private:
     // frame.panel carries an automation override that must be undone once
     // the override is cleared.
     bool overridden{};
+    // Backend mode: the backend currently shows this panel.
+    bool shown{};
   };
 
+  [[nodiscard]] static std::string key(const Target &target);
+
   layerc::platform::X11Display *display_{};
+  OverlayBackend *backend_{};
   std::vector<Target> targets_;
   std::string fault_;
 };

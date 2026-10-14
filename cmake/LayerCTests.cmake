@@ -183,6 +183,40 @@ if(NOT WIN32)
             endif()
         endif()
     endif()
+    if(TARGET layerc_wayland)
+        layerc_add_test(layerc_linux_wayland_paint_tests
+            SOURCES tests/linux_wayland_paint_tests.cpp
+            LINK layerc_wayland TIMEOUT 30)
+    endif()
+    # The native suite ends with the daemon seam, whose providers need the
+    # X11-enabled session engine.
+    if(TARGET layerc_wayland AND LAYERC_HAVE_X11)
+        # Screencopy and the virtual pointer are test-only protocols: they
+        # read pixels and synthesize input inside the disposable compositor
+        # and must never link into layerd.
+        set(layerc_wayland_test_protocol_sources)
+        layerc_wayland_protocol(layerc_wayland_test_protocol_sources
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/wayland-protocols/wlr-screencopy-unstable-v1.xml"
+            wlr-screencopy-unstable-v1)
+        layerc_wayland_protocol(layerc_wayland_test_protocol_sources
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/wayland-protocols/wlr-virtual-pointer-unstable-v1.xml"
+            wlr-virtual-pointer-unstable-v1)
+        add_library(layerc_wayland_test_client STATIC
+            tests/wayland_test_client.cpp ${layerc_wayland_test_protocol_sources})
+        target_include_directories(layerc_wayland_test_client PUBLIC tests)
+        target_link_libraries(layerc_wayland_test_client PUBLIC layerc_wayland)
+        layerc_enable_warnings(layerc_wayland_test_client)
+        set_source_files_properties(${layerc_wayland_test_protocol_sources}
+            PROPERTIES COMPILE_OPTIONS "-w")
+        layerc_add_test(layerc_linux_wayland_native_tests
+            SOURCES tests/linux_wayland_native_tests.cpp
+            LINK layerc_wayland layerc_wayland_test_client layerc_daemon_linux NO_REGISTER)
+        add_test(NAME layerc_linux_wayland_native_tests
+            COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tools/wayland-test-session.sh"
+                $<TARGET_FILE:layerc_linux_wayland_native_tests>)
+        set_tests_properties(layerc_linux_wayland_native_tests PROPERTIES
+            LABELS wayland SKIP_RETURN_CODE 77 TIMEOUT 60)
+    endif()
     layerc_add_test(layerc_linux_display_adapters_tests
         SOURCES tests/linux_display_adapters_tests.cpp
         LINK layerc_daemon_linux TIMEOUT 30)

@@ -7,9 +7,14 @@
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
 #include "wayland_connection.hpp"
 #endif
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+#include "wayland_providers.hpp"
+#endif
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
+#include <utility>
 
 namespace layerc::daemon {
 namespace {
@@ -59,6 +64,16 @@ struct DisplayAdapters::Impl {
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
   layerc::platform::WaylandConnection wayland;
 #endif
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+  // Declared after the connection: destroyed first, while it is valid.
+  std::unique_ptr<WaylandProviders> native;
+  bool native_dirty{};
+
+  ~Impl() {
+    x11.set_native(nullptr);
+    native.reset();
+  }
+#endif
 
   runtime::DisplaySession selected() const noexcept {
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
@@ -89,7 +104,16 @@ struct DisplayAdapters::Impl {
   }
   bool dispatch_wayland() {
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
-    const bool changed = wayland.dispatch();
+    bool changed = wayland.dispatch();
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    if (native) {
+      if (changed) native->sync();
+      // Evaluate every flag so none survives to cause a spurious refresh.
+      const bool dirty = std::exchange(native_dirty, false);
+      changed = native->take_changed() || dirty || changed;
+      native->repaint();
+    }
+#endif
     sync_connection();
     return changed;
 #else
@@ -102,6 +126,12 @@ struct DisplayAdapters::Impl {
     value.wayland = wayland.status();
 #endif
     value.session = selected();
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    const bool native_session = native && value.session == runtime::DisplaySession::wayland;
+    const bool native_overlay = native_session && native->overlay_provider().state != State::unavailable;
+#else
+    const bool native_overlay = false;
+#endif
     if (value.session == runtime::DisplaySession::wayland)
       value.compositor = detect_compositor(value.desktop, false, false,
           value.wayland.globals.contains("zwlr_layer_shell_v1"),
@@ -125,12 +155,25 @@ struct DisplayAdapters::Impl {
         value.providers = {absent, absent, absent, absent, absent};
 #endif
       } else {
-        // These native provider lanes are not yet wired. Do not advertise
-        // support solely because the Wayland transport was compiled.
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+        // The native lane is built; without a Wayland session it is
+        // unavailable for the session's reason, not missing from the build.
+        const auto lost = [&](const char *name) {
+          return runtime::DisplayProviderStatus{
+              name, State::unavailable,
+              {value.wayland.reason.empty() ? std::string{"session_unavailable"}
+                                            : value.wayland.reason}};
+        };
+        value.providers.windows = lost("wlr_foreign_toplevel");
+        value.providers.monitors = lost("wayland_output");
+        value.providers.overlay = lost("wlr_layer_shell");
+#else
+        // Do not advertise support solely because the transport was compiled.
         value.providers.windows = missing("wlr_foreign_toplevel", "native_provider_not_built");
         value.providers.monitors = missing("wayland_output", "native_provider_not_built");
-        value.providers.input = missing("evdev", "input_provider_not_integrated");
         value.providers.overlay = missing("wlr_layer_shell", "native_provider_not_built");
+#endif
+        value.providers.input = missing("evdev", "input_provider_not_integrated");
         value.providers.capture = missing("portal_screencast", "native_provider_not_built");
       }
       value.reasons.emplace_back(value.override_backend == runtime::DisplayBackend::invalid
@@ -154,13 +197,15 @@ struct DisplayAdapters::Impl {
       }
       value.providers.input = provider_from_capability(status, runtime::Capability::input,
           "x11_xi2", fallback ? "xwayland_focus_only" : nullptr);
-      value.providers.overlay = provider_from_capability(status, runtime::Capability::overlay,
-          "x11_shape", fallback ? "xwayland_overlay" : nullptr);
+      if (!native_overlay)
+        value.providers.overlay = provider_from_capability(status, runtime::Capability::overlay,
+            "x11_shape", fallback ? "xwayland_overlay" : nullptr);
       value.providers.capture = provider_from_capability(status, runtime::Capability::visual,
           "x11_composite", fallback ? "xwayland_windows_only" : nullptr);
       if (fallback) {
         degrade_capability(status, runtime::Capability::input, "xwayland_focus_only");
-        degrade_capability(status, runtime::Capability::overlay, "xwayland_overlay");
+        if (!native_overlay)
+          degrade_capability(status, runtime::Capability::overlay, "xwayland_overlay");
         degrade_capability(status, runtime::Capability::visual, "xwayland_windows_only");
       }
     } else {
@@ -170,6 +215,23 @@ struct DisplayAdapters::Impl {
       value.providers.overlay = {"wlr_layer_shell", State::not_built, {"native_provider_not_built"}};
       value.providers.capture = {"portal_screencast", State::not_built, {"native_provider_not_built"}};
     }
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    if (native_session) {
+      // Native providers win; an unusable one keeps its XWayland fallback
+      // when there is one, otherwise its own reason.
+      const bool fallback = status.x11.connected;
+      // XWayland EWMH keeps windows while connected: foreign toplevels have
+      // no PID, so executable-matched profiles could never attach.
+      if (!fallback) value.providers.windows = native->window_provider();
+      if (auto monitors = native->monitor_provider(); monitors.state != State::unavailable || !fallback)
+        value.providers.monitors = std::move(monitors);
+      if (native_overlay)
+        value.providers.overlay =
+            provider_from_capability(status, runtime::Capability::overlay, "wlr_layer_shell", nullptr);
+      else if (!fallback)
+        value.providers.overlay = native->overlay_provider();
+    }
+#endif
     status.display = std::move(value);
   }
 };
@@ -195,6 +257,10 @@ void DisplayAdapters::start(layerc::platform::EventLoop &loop, LinuxStatusSnapsh
       display.override_backend != runtime::DisplayBackend::invalid) {
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
     (void)impl_->wayland.open();
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    if (impl_->wayland.status().connected)
+      impl_->native = std::make_unique<WaylandProviders>(impl_->wayland);
+#endif
     impl_->sync_connection();
 #else
     display.wayland.reason = "wayland_not_built";
@@ -208,6 +274,10 @@ void DisplayAdapters::start(layerc::platform::EventLoop &loop, LinuxStatusSnapsh
   } else {
     status.x11.reason = "backend_not_selected";
   }
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+  if (impl_->native && impl_->selected() == runtime::DisplaySession::wayland)
+    impl_->x11.set_native(impl_->native.get());
+#endif
   impl_->publish(status);
 }
 void DisplayAdapters::refresh(std::span<const layerc::platform::StoredProfile> profiles,
@@ -236,6 +306,12 @@ bool DisplayAdapters::has_pending_events() {
   bool pending = impl_->x11.has_pending_events();
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
   pending = impl_->wayland.has_pending_events() || pending;
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+  if (impl_->native && impl_->native->take_changed()) {
+    impl_->native_dirty = true;
+    pending = true;
+  }
+#endif
   impl_->sync_connection();
 #endif
   return pending;
@@ -247,7 +323,15 @@ DisplayDispatch DisplayAdapters::dispatch_pending() {
   return result;
 }
 bool DisplayAdapters::render(layerc::core::TimePoint now) {
-  return impl_->selected() != runtime::DisplaySession::none && impl_->x11.render(now);
+  const bool changed = impl_->selected() != runtime::DisplaySession::none && impl_->x11.render(now);
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+  if (impl_->native) {
+    // Overlay commits queue on the connection; send them now.
+    impl_->wayland.flush();
+    impl_->sync_connection();
+  }
+#endif
+  return changed;
 }
 void DisplayAdapters::stop_sessions(layerc::core::TimePoint now) { impl_->x11.stop_sessions(now); }
 std::optional<layerc::core::TimePoint> DisplayAdapters::next_deadline(layerc::core::TimePoint now) const {

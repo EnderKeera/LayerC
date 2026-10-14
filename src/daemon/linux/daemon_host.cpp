@@ -127,10 +127,12 @@ void derive_capability_status(
                         .platform_first = true});
   resolve_availability(linux, demand,
                        {.capability = Capability::overlay,
-                        .platform_available = linux.x11.shape.available,
+                        .platform_available = linux.x11.shape.available ||
+                                              unavailable.native_overlay,
                         .session_errors = unavailable.overlay,
                         .session_reason = "session_error",
-                        .secondary_available = linux.x11.randr.available,
+                        .secondary_available = linux.x11.randr.available ||
+                                               unavailable.native_overlay,
                         .secondary_reason = "extension_missing",
                         .platform_first = true});
   resolve_availability(linux, demand,

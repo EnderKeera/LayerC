@@ -1,6 +1,7 @@
 #pragma once
 
 #include "daemon_host.hpp"
+#include "display_providers.hpp"
 #include "display_dispatch.hpp"
 #include "event_loop.hpp"
 
@@ -30,6 +31,10 @@ public:
 
   [[nodiscard]] layerc::runtime::RuntimeServiceRegistry
   runtime_services() noexcept;
+  // Substitutes native (Wayland) providers for the X11 window tracker,
+  // monitor scan and overlay windows while they are available; nullptr
+  // restores X11. The source outlives this object or is reset first.
+  void set_native(NativeDisplaySource *source) noexcept;
 
   void start(layerc::platform::EventLoop &loop, LinuxStatusSnapshot &status,
              std::vector<std::string> &diagnostics);

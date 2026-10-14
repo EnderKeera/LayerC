@@ -50,6 +50,8 @@ struct CapabilityReasons {
   std::span<const std::string> overlay;
   std::span<const std::string> automation;
   std::span<const std::string> visual;
+  // A native (Wayland layer-shell) overlay backend replaces X11 Shape/RandR.
+  bool native_overlay{};
 };
 
 void derive_capability_status(

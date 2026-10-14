@@ -79,9 +79,14 @@ struct WaylandConnection::Impl {
   std::map<std::uint32_t, std::pair<std::string, std::uint32_t>> globals;
   bool changed{};
   bool blocked_write{};
+  std::function<void()> release;
 
   ~Impl() { disconnect(); }
   void disconnect() noexcept {
+    if (display && release) {
+      // Providers own proxies on this display; they go first.
+      try { release(); } catch (...) {}
+    }
     if (registry) wl_registry_destroy(std::exchange(registry, nullptr));
     if (display) wl_display_disconnect(std::exchange(display, nullptr));
   }
@@ -143,8 +148,11 @@ WaylandConnection::WaylandConnection() : impl_(std::make_unique<Impl>()) {}
 WaylandConnection::~WaylandConnection() = default;
 
 bool WaylandConnection::open(const core::Milliseconds timeout) {
-  // Opening/reopening explicitly replaces the old owned connection.
+  // Opening/reopening explicitly replaces the old owned connection; the old
+  // one still runs the release hook while its display is valid.
+  auto release = impl_->release;
   impl_ = std::make_unique<Impl>();
+  impl_->release = std::move(release);
   auto &self = *impl_;
   const auto *name = std::getenv("WAYLAND_DISPLAY");
   const auto *socket = std::getenv("WAYLAND_SOCKET");
@@ -252,4 +260,20 @@ const runtime::WaylandStatusSnapshot &WaylandConnection::status() const noexcept
 }
 wl_display *WaylandConnection::raw() const noexcept { return impl_->display; }
 wl_registry *WaylandConnection::registry() const noexcept { return impl_->registry; }
+std::vector<WaylandGlobal> WaylandConnection::globals() const {
+  std::vector<WaylandGlobal> result;
+  if (!impl_->status.connected) return result;
+  result.reserve(impl_->globals.size());
+  for (const auto &[id, value] : impl_->globals)
+    result.push_back({id, value.first, value.second});
+  return result;
+}
+void WaylandConnection::set_release_hook(std::function<void()> hook) {
+  impl_->release = std::move(hook);
+}
+void WaylandConnection::flush() {
+  if (!impl_->status.connected) return;
+  (void)impl_->flush();
+  if (!impl_->status.connected) impl_->disconnect();
+}
 } // namespace layerc::platform
