@@ -92,9 +92,22 @@ void X11Adapters::set_native(NativeDisplaySource *source) noexcept {
   impl_->overlay.use_backend(source ? source->overlay() : nullptr);
 }
 
+void X11Adapters::configure_input(const InputOptions &options) {
+  impl_->input.configure_input(options);
+}
+void X11Adapters::prefer_evdev(const bool preferred) noexcept {
+  impl_->input.prefer_evdev(preferred);
+}
+void X11Adapters::set_input_keymap(const std::optional<std::string> &text) {
+  impl_->input.set_evdev_keymap(text);
+}
+InputRouteStatus X11Adapters::input_route() const { return impl_->input.route_status(); }
+
 void X11Adapters::start(layerc::platform::EventLoop &loop,
                         LinuxStatusSnapshot &status,
                         std::vector<std::string> &diagnostics) {
+  // evdev needs no X connection (a Wayland session without XWayland).
+  impl_->input.attach_loop(loop);
   auto opened = layerc::platform::X11Display::open_result();
   if (!opened.display.has_value()) {
     const char *session_type = std::getenv("XDG_SESSION_TYPE");
@@ -189,7 +202,8 @@ void X11Adapters::refresh(
        .overlay = overlay_unavailable,
        .automation = automation_unavailable,
        .visual = visual_unavailable,
-       .native_overlay = impl_->native_overlay()});
+       .native_overlay = impl_->native_overlay(),
+       .native_input = impl_->input.evdev_selected()});
   for (const auto &reason : input_unavailable)
     diagnostics.push_back("input " + reason);
   for (const auto &reason : overlay_unavailable)
@@ -220,16 +234,24 @@ void X11Adapters::refresh_status(
        .overlay = impl_->overlay.unavailable(),
        .automation = impl_->sessions.automation_diagnostics(),
        .visual = visual_unavailable,
-       .native_overlay = impl_->native_overlay()});
+       .native_overlay = impl_->native_overlay(),
+       .native_input = impl_->input.evdev_selected()});
 }
 
 X11Dispatch X11Adapters::dispatch(const std::span<const int> ready) {
+  auto result = impl_->input.dispatch_evdev(ready);
   if (impl_->fd < 0 || std::ranges::find(ready, impl_->fd) == ready.end())
-    return {};
-  auto result = impl_->input.dispatch(&*impl_->tracker);
-  result.windows_changed =
-      result.windows_changed ||
+    return result;
+  auto x11 = impl_->input.dispatch(&*impl_->tracker);
+  x11.windows_changed =
+      x11.windows_changed ||
       (!impl_->input.attached() && impl_->tracker->poll_changes());
+  result.events += x11.events;
+  result.windows_changed = result.windows_changed || x11.windows_changed;
+  result.devices_changed = result.devices_changed || x11.devices_changed;
+  result.triggered.insert(result.triggered.end(),
+                          std::make_move_iterator(x11.triggered.begin()),
+                          std::make_move_iterator(x11.triggered.end()));
   return result;
 }
 
@@ -309,6 +331,11 @@ X11Adapters::runtime_services() noexcept {
 }
 
 void X11Adapters::set_native(NativeDisplaySource *) noexcept {}
+void X11Adapters::configure_input(const InputOptions &) {}
+void X11Adapters::prefer_evdev(bool) noexcept {}
+void X11Adapters::set_input_keymap(const std::optional<std::string> &) {}
+// The session engine (and so evdev routing) lives in the X11-enabled build.
+InputRouteStatus X11Adapters::input_route() const { return {}; }
 
 void X11Adapters::start(layerc::platform::EventLoop &, LinuxStatusSnapshot &,
                         std::vector<std::string> &) {}

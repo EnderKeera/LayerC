@@ -5,6 +5,7 @@
 #include "layerc/runtime/display_diagnostics.hpp"
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -34,6 +35,10 @@ public:
   [[nodiscard]] bool take_changed() noexcept;
   // Paints surfaces whose configure arrived since the last frame.
   void repaint();
+  // The seat keyboard's XKB keymap for evdev translation; the flag is true
+  // once after it changed.
+  [[nodiscard]] bool take_keymap_changed() noexcept;
+  [[nodiscard]] const std::optional<std::string> &keymap() const noexcept;
 
   [[nodiscard]] bool has_windows() const override;
   [[nodiscard]] layerc::platform::WindowScan windows() const override;

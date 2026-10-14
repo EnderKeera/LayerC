@@ -310,6 +310,13 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_wayland_connection_tests` | Optional Wayland transport: private failed/timeout sockets, bounded startup, descriptor cleanup |
 | `layerc_linux_wayland_registry_tests` | Optional test-only Wayland server: registry/removal, connection loss, and compositor selection |
 | `layerc_linux_wayland_xwayland_loss_tests` | Optional Wayland server over Xvfb: degraded providers and forced Wayland loss without undrained XWayland work |
+| `layerc_linux_wayland_keymap_tests` | Optional test-only Wayland server: seat keyboard keymap delivery, format/size bounds, capability loss, and seat removal |
+| `layerc_linux_wayland_paint_tests` | Layer-shell painter without a compositor: display-list operations on exact device pixels at integer buffer scales |
+| `layerc_linux_wayland_native_tests` | Wayland lane under headless sway (CTest label `wayland`): outputs, layer-shell panels, foreign toplevels, and the display seam end to end |
+| `layerc_linux_evdev_input_tests` | Passive evdev source over FIFO-backed synthetic devices: classification, read-only opens, key/button/wheel/hat mapping, `SYN_DROPPED` resync, and hotplug (CTest label `evdev`) |
+| `layerc_linux_evdev_keymap_tests`, `layerc_linux_evdev_us_keymap_tests` | evdev keycode translation with xkbcommon and with the built-in US table |
+| `layerc_linux_evdev_daemon_tests` | Opted-in evdev route in the daemon: no opens without the opt-in, demand-driven open/close on the event loop, cooldown triggers, hotplug registrations, and permission/missing-class reasons |
+| `layerc_linux_evdev_boundary` | Lexical check that evdev sources never grab, write, or open a device for writing |
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |

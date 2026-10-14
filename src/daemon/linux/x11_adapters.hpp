@@ -3,6 +3,7 @@
 #include "daemon_host.hpp"
 #include "display_providers.hpp"
 #include "display_dispatch.hpp"
+#include "display_selection.hpp"
 #include "event_loop.hpp"
 
 #include "layerc/platform/profile_store.hpp"
@@ -35,6 +36,12 @@ public:
   // monitor scan and overlay windows while they are available; nullptr
   // restores X11. The source outlives this object or is reset first.
   void set_native(NativeDisplaySource *source) noexcept;
+  // The user's input opt-in, before start(); evdev is preferred over XI2
+  // only in a Wayland session (or without XI2).
+  void configure_input(const InputOptions &options);
+  void prefer_evdev(bool preferred) noexcept;
+  void set_input_keymap(const std::optional<std::string> &text);
+  [[nodiscard]] InputRouteStatus input_route() const;
 
   void start(layerc::platform::EventLoop &loop, LinuxStatusSnapshot &status,
              std::vector<std::string> &diagnostics);

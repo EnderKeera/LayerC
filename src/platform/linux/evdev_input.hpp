@@ -81,6 +81,10 @@ public:
   create(const EvdevOptions &options, std::string &error,
          std::shared_ptr<EvdevDeviceBackend> backend);
   [[nodiscard]] bool valid() const noexcept;
+  // Replaces the XKB keymap (nullopt: library defaults). On failure the
+  // previous keymap stays in use and `error` explains why.
+  [[nodiscard]] bool set_keymap(const std::optional<std::string> &text,
+                                std::string &error);
   // Device descriptors followed by the inotify descriptor. After poll reports
   // devices_changed, replace event-loop registrations with this fresh list.
   [[nodiscard]] std::vector<int> fds() const;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "evdev_route.hpp"
 #include "x11_adapters.hpp"
 #include "x11_display.hpp"
 #include "x11_input.hpp"
@@ -174,9 +175,11 @@ private:
   bool configuration_changed_{};
 };
 
-// The daemon's Capability::input service on X11: passive XI2 raw input
-// feeding the registry's sessions. The XI2 device source exists only while
-// the kernel demands input, so an idle daemon holds no input resources.
+// The daemon's Capability::input service: passive XI2 raw input, or the
+// opted-in evdev source, feeding the registry's sessions. A device source
+// exists only while the kernel demands input, so an idle daemon holds no
+// input resources. evdev wins in a Wayland session or without XI2; XI2 is
+// the fallback when evdev cannot read any device.
 class X11InputService final : public layerc::runtime::IRuntimeService {
 public:
   explicit X11InputService(X11SessionRegistry &registry) noexcept
@@ -184,15 +187,27 @@ public:
 
   // The display outlives the service; the shared connection owner keeps it.
   void attach(layerc::platform::X11Display &display) noexcept;
+  // The loop carries the evdev descriptors; it must outlive an open route
+  // (layerd quiesces the kernel, closing it, before the loop goes away).
+  void attach_loop(layerc::platform::EventLoop &loop) noexcept { evdev_.attach(loop); }
+  void configure_input(const InputOptions &options);
+  void prefer_evdev(bool preferred) noexcept { prefer_evdev_ = preferred; }
+  void set_evdev_keymap(const std::optional<std::string> &text) { evdev_.set_keymap(text); }
 
   // The shared dispatcher observes discovery before decoding passive input,
   // so neither consumer drains events unseen by the other.
   [[nodiscard]] X11Dispatch dispatch(
       layerc::platform::X11WindowTracker *tracker = nullptr);
+  // Feeds events from ready evdev descriptors (none when not attached).
+  [[nodiscard]] X11Dispatch dispatch_evdev(std::span<const int> ready);
 
+  // The XI2 source specifically: it also drains window discovery.
   [[nodiscard]] bool attached() const noexcept {
     return source_.has_value();
   }
+  [[nodiscard]] bool evdev_attached() const noexcept { return evdev_.attached(); }
+  [[nodiscard]] bool evdev_selected() const noexcept;
+  [[nodiscard]] InputRouteStatus route_status() const;
   [[nodiscard]] std::vector<std::string> unavailable() const;
 
   [[nodiscard]] layerc::runtime::ServiceReconcileResult reconcile(
@@ -202,9 +217,13 @@ public:
   resources() const noexcept override;
 
 private:
+  void feed(std::span<const layerc::core::InputEvent> events, X11Dispatch &result);
+
   X11SessionRegistry &registry_;
   layerc::platform::X11Display *display_{};
   std::optional<layerc::platform::X11InputSource> source_;
+  EvdevInputRoute evdev_;
+  bool prefer_evdev_{};
 };
 
 class X11AutomationService final : public layerc::runtime::IRuntimeService {

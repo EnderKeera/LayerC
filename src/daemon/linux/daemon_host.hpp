@@ -52,6 +52,8 @@ struct CapabilityReasons {
   std::span<const std::string> visual;
   // A native (Wayland layer-shell) overlay backend replaces X11 Shape/RandR.
   bool native_overlay{};
+  // The opted-in evdev source replaces XI2 (and needs no X11 window ids).
+  bool native_input{};
 };
 
 void derive_capability_status(

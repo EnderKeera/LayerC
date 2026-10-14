@@ -5,7 +5,9 @@ if(NOT DEFINED LAYERC_SOURCE_DIR)
 endif()
 file(GLOB sources
     "${LAYERC_SOURCE_DIR}/src/platform/linux/evdev_*.hpp"
-    "${LAYERC_SOURCE_DIR}/src/platform/linux/evdev_*.cpp")
+    "${LAYERC_SOURCE_DIR}/src/platform/linux/evdev_*.cpp"
+    "${LAYERC_SOURCE_DIR}/src/daemon/linux/evdev_*.hpp"
+    "${LAYERC_SOURCE_DIR}/src/daemon/linux/evdev_*.cpp")
 if(NOT sources)
     message(FATAL_ERROR "No evdev sources found")
 endif()

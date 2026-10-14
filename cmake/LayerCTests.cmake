@@ -181,6 +181,12 @@ if(NOT WIN32)
                 target_compile_definitions(layerc_linux_wayland_xwayland_loss_tests
                     PRIVATE LAYERC_TEST_XWAYLAND_LOSS)
             endif()
+            if(TARGET layerc_wayland)
+                layerc_add_test(layerc_linux_wayland_keymap_tests
+                    SOURCES tests/linux_wayland_keymap_tests.cpp
+                    LINK layerc_wayland PkgConfig::LAYERC_WAYLAND_TEST_SERVER
+                    TIMEOUT 10)
+            endif()
         endif()
     endif()
     if(TARGET layerc_wayland)

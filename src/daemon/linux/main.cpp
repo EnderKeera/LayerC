@@ -12,8 +12,10 @@
 
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -64,7 +66,7 @@ class LinuxDaemon {
 public:
   LinuxDaemon() : kernel_(adapters_.runtime_services()) {}
 
-  [[nodiscard]] int run() {
+  [[nodiscard]] int run(const layerc::daemon::InputOptions &input) {
     if (!prepare_profile_store())
       return 1;
     if (!loop_.valid()) {
@@ -83,6 +85,11 @@ public:
 
     status_.x11.reason = "platform_unsupported";
     status_.capabilities = unsupported_capabilities();
+    adapters_.configure_input(input);
+    if (input.selection == layerc::daemon::InputSelection::evdev)
+      std::fputs("layerd: evdev input opted in (reads every keystroke on the seat)\n", stderr);
+    else if (input.selection == layerc::daemon::InputSelection::invalid)
+      std::fputs("layerd: LAYERC_INPUT is not auto or evdev; evdev stays off\n", stderr);
     adapters_.start(loop_, status_, diagnostics_);
     report(diagnostics_);
 
@@ -228,7 +235,18 @@ private:
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  std::vector<std::string_view> arguments;
+  for (int index = 1; index < argc; ++index) arguments.emplace_back(argv[index]);
+  std::string error;
+  const auto selection = layerc::daemon::parse_input_selection(
+      arguments, std::getenv("LAYERC_INPUT"), error);
+  if (!selection) {
+    std::fprintf(stderr, "layerd: %s\n", error.c_str());
+    return 2;
+  }
+  layerc::daemon::InputOptions input;
+  input.selection = *selection;
   LinuxDaemon daemon;
-  return daemon.run();
+  return daemon.run(input);
 }

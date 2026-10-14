@@ -111,10 +111,12 @@ void derive_capability_status(
   using layerc::runtime::Capability;
   resolve_availability(linux, demand,
                        {.capability = Capability::input,
-                        .platform_available = linux.x11.xi2.available,
+                        .platform_available = linux.x11.xi2.available ||
+                                              unavailable.native_input,
                         .session_errors = unavailable.input,
                         .session_reason = "no_matching_device",
-                        .secondary_available = linux.x11.ewmh,
+                        .secondary_available = linux.x11.ewmh ||
+                                               unavailable.native_input,
                         .secondary_reason = "extension_missing",
                         .platform_first = true});
   resolve_availability(linux, demand,

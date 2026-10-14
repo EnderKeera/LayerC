@@ -217,7 +217,9 @@ position and size. `dpi = 96`, `buffer_scale = wl_output.scale`.
   so profiles stay portable.
 - Reasons: `evdev_not_enabled`, `evdev_permission_denied` (with the `input`
   group hint), `evdev_no_keyboard`, `evdev_no_mouse`, `evdev_no_gamepad`
-  (limited to the classes a profile needs).
+  (limited to the classes a profile needs), `evdev_device_unavailable`,
+  `evdev_unavailable`, and `evdev_keymap`. Provider rows carry only the token;
+  device paths and errno text stay in the capability diagnostics.
 - Flatpak grants no device access; evdev there needs the user's own
   `flatpak override --user --device=all`.
 
@@ -280,9 +282,9 @@ license headers under `third_party/wayland-protocols/`; `xdg-shell` and
 ## Implementation evidence
 
 The display seam and the wlroots-family native providers (outputs, foreign
-toplevels, layer-shell overlay) are implemented on the local Linux-editor
-integration branch; evdev routing, the KWin/GNOME bridges, and portal capture
-are still pending. This is not a V2.7 support claim.
+toplevels, layer-shell overlay) and opt-in evdev input routing are implemented
+on the local Linux-editor integration branch; the KWin/GNOME bridges and portal
+capture are still pending. This is not a V2.7 support claim.
 
 - `DisplayAdapters` selects a successfully connected Wayland transport in
   `auto`, then X11, then headless. A forced backend never selects the other
@@ -333,6 +335,29 @@ are still pending. This is not a V2.7 support claim.
   and `DisplayAdapters` end to end (session, painted panel, provider status).
   Screencopy and the virtual pointer are test-only protocols. This is not
   KWin, GNOME, or physical-desktop evidence.
+- evdev routing (`src/daemon/linux/evdev_route.*`): `layerd --input=auto|evdev`
+  wins over `LAYERC_INPUT`; any other argument exits with status 2, and an
+  invalid `LAYERC_INPUT` keeps evdev off with `invalid_input_backend`. The
+  opted-in route serves `Capability::input` in a Wayland session, or in an X11
+  session without XI2; otherwise XI2 stays first. Devices open when input is
+  demanded and close on quiesce; each device and the inotify descriptor is
+  registered on the one `EventLoop` and unregistered before it closes, and
+  hotplug replaces the registrations. Events reach the same sessions and
+  `last_input_match` as XI2. If evdev can read no device (every open denied),
+  the XWayland XI2 fallback serves input as `x11_xi2` (degraded,
+  `xwayland_focus_only` plus the evdev token). Without the opt-in the XWayland
+  row also carries `evdev_not_enabled`; without an X11 connection the row is
+  `evdev` (`unavailable`, `evdev_not_enabled`).
+- The keymap is the first `wl_seat` keyboard's XKB v1 keymap (at most 1 MiB,
+  mapped read-only, descriptor always closed), applied live when it changes.
+  The daemon has no keyboard focus, so no key event reaches it. A keymap that
+  does not compile falls back to the XKB defaults and reports `evdev_keymap`.
+- Automated evdev evidence: FIFO-backed synthetic devices through the daemon
+  route (opt-out opens nothing; press to cooldown trigger; hotplug add and
+  remove; quiesce; permission and missing-class tokens), an in-process
+  `wl_seat` server for keymap delivery and bounds, CLI opt-in status rows, and
+  the lexical passive-boundary check over `src/platform/linux/evdev_*` and
+  `src/daemon/linux/evdev_*`. No physical input device was used.
 
 ## Tests
 

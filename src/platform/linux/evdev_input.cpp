@@ -413,6 +413,17 @@ EvdevInputSource::create(const EvdevOptions &options, std::string &error,
 }
 
 bool EvdevInputSource::valid() const noexcept { return impl_ != nullptr; }
+bool EvdevInputSource::set_keymap(const std::optional<std::string> &text,
+                                  std::string &error) {
+  error.clear();
+  if (!impl_) { error = "evdev: no source"; return false; }
+  auto map = EvdevKeymap::create(text, error);
+  if (!map) return false;
+  // Held keys keep the tokens they were pressed with, so releases match.
+  impl_->keymap = std::move(*map);
+  impl_->options.xkb_keymap_text = text;
+  return true;
+}
 std::vector<int> EvdevInputSource::fds() const {
   std::vector<int> result;
   if (impl_) {
