@@ -475,7 +475,8 @@ layercal snapshot <x11-window-id> [--region x y width height] --json > snapshot.
 In the development tree, `layerctl status` also prints a `display:` line with
 session, compositor, and provider names, states, and fault reasons. JSON status
 keeps the existing `x11` object and adds a separate `display` object. Backend
-overrides and the in-development Wayland seam are described in
+overrides, the opt-in evdev input source (`layerd --input=evdev` or
+`LAYERC_INPUT=evdev`), and the in-development Wayland seam are described in
 [`Wayland.md`](Wayland.md#seam); detection is not a native Wayland support claim.
 
 Imports read stdin and publish transactionally; a rejected profile names the

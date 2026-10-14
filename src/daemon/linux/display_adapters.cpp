@@ -51,6 +51,21 @@ void degrade_capability(LinuxStatusSnapshot &status, runtime::Capability capabil
       std::ranges::find(row->reasons, reason) == row->reasons.end())
     row->reasons.emplace_back(reason);
 }
+const char *input_opt_in_reason(const InputSelection selection) noexcept {
+  return selection == InputSelection::invalid ? "invalid_input_backend" : "evdev_not_enabled";
+}
+
+runtime::DisplayProviderStatus evdev_provider(const InputRouteStatus &route,
+                                              const InputSelection selection) {
+  if (!route.built) return {"evdev", State::not_built, {"input_provider_not_built"}};
+  if (selection != InputSelection::evdev)
+    return {"evdev", State::unavailable, {input_opt_in_reason(selection)}};
+  if (route.evdev_attached)
+    return {"evdev", route.evdev_reasons.empty() ? State::active : State::degraded,
+            route.evdev_reasons};
+  if (!route.evdev_reasons.empty()) return {"evdev", State::unavailable, route.evdev_reasons};
+  return {"evdev", State::inactive, {"not_demanded"}};
+}
 } // namespace
 
 struct DisplayAdapters::Impl {
@@ -59,6 +74,7 @@ struct DisplayAdapters::Impl {
   X11Adapters x11;
   runtime::DisplayStatusSnapshot display;
   bool x11_connected{};
+  InputOptions input;
   layerc::platform::EventLoop *loop{};
   int wayland_fd{-1};
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
@@ -108,6 +124,7 @@ struct DisplayAdapters::Impl {
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
     if (native) {
       if (changed) native->sync();
+      if (native->take_keymap_changed()) x11.set_input_keymap(native->keymap());
       // Evaluate every flag so none survives to cause a spurious refresh.
       const bool dirty = std::exchange(native_dirty, false);
       changed = native->take_changed() || dirty || changed;
@@ -126,6 +143,7 @@ struct DisplayAdapters::Impl {
     value.wayland = wayland.status();
 #endif
     value.session = selected();
+    const auto route = x11.input_route();
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
     const bool native_session = native && value.session == runtime::DisplaySession::wayland;
     const bool native_overlay = native_session && native->overlay_provider().state != State::unavailable;
@@ -173,7 +191,12 @@ struct DisplayAdapters::Impl {
         value.providers.monitors = missing("wayland_output", "native_provider_not_built");
         value.providers.overlay = missing("wlr_layer_shell", "native_provider_not_built");
 #endif
-        value.providers.input = missing("evdev", "input_provider_not_integrated");
+        if (!route.built)
+          value.providers.input = missing("evdev", "input_provider_not_built");
+        else if (input.selection != InputSelection::evdev)
+          value.providers.input = evdev_provider(route, input.selection);
+        else
+          value.providers.input = {"evdev", State::unavailable, {"session_unavailable"}};
         value.providers.capture = missing("portal_screencast", "native_provider_not_built");
       }
       value.reasons.emplace_back(value.override_backend == runtime::DisplayBackend::invalid
@@ -195,15 +218,29 @@ struct DisplayAdapters::Impl {
         value.providers.windows.reasons.emplace_back("xwayland_windows_only");
         value.providers.monitors.reasons.emplace_back("xwayland_monitors");
       }
-      value.providers.input = provider_from_capability(status, runtime::Capability::input,
-          "x11_xi2", fallback ? "xwayland_focus_only" : nullptr);
+      // The selected evdev route serves input unless XI2 took over after it
+      // failed; that fallback keeps evdev's reason visible.
+      const bool evdev = route.evdev_selected && (route.evdev_attached || !route.xi2_attached);
+      if (evdev) {
+        value.providers.input = evdev_provider(route, input.selection);
+      } else {
+        value.providers.input = provider_from_capability(status, runtime::Capability::input,
+            "x11_xi2", fallback ? "xwayland_focus_only" : nullptr);
+        if (fallback) {
+          auto &reasons = value.providers.input.reasons;
+          if (input.selection == InputSelection::evdev)
+            reasons.insert(reasons.end(), route.evdev_reasons.begin(), route.evdev_reasons.end());
+          else
+            reasons.emplace_back(input_opt_in_reason(input.selection));
+        }
+      }
       if (!native_overlay)
         value.providers.overlay = provider_from_capability(status, runtime::Capability::overlay,
             "x11_shape", fallback ? "xwayland_overlay" : nullptr);
       value.providers.capture = provider_from_capability(status, runtime::Capability::visual,
           "x11_composite", fallback ? "xwayland_windows_only" : nullptr);
       if (fallback) {
-        degrade_capability(status, runtime::Capability::input, "xwayland_focus_only");
+        if (!evdev) degrade_capability(status, runtime::Capability::input, "xwayland_focus_only");
         if (!native_overlay)
           degrade_capability(status, runtime::Capability::overlay, "xwayland_overlay");
         degrade_capability(status, runtime::Capability::visual, "xwayland_windows_only");
@@ -211,7 +248,7 @@ struct DisplayAdapters::Impl {
     } else {
       value.providers.windows = {"wlr_foreign_toplevel", State::not_built, {"native_provider_not_built"}};
       value.providers.monitors = {"wayland_output", State::not_built, {"native_provider_not_built"}};
-      value.providers.input = {"evdev", State::not_built, {"input_provider_not_integrated"}};
+      value.providers.input = evdev_provider(route, input.selection);
       value.providers.overlay = {"wlr_layer_shell", State::not_built, {"native_provider_not_built"}};
       value.providers.capture = {"portal_screencast", State::not_built, {"native_provider_not_built"}};
     }
@@ -274,11 +311,21 @@ void DisplayAdapters::start(layerc::platform::EventLoop &loop, LinuxStatusSnapsh
   } else {
     status.x11.reason = "backend_not_selected";
   }
+  impl_->x11.prefer_evdev(impl_->selected() == runtime::DisplaySession::wayland);
+  if (impl_->input.selection == InputSelection::invalid)
+    display.reasons.emplace_back("invalid_input_backend");
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-  if (impl_->native && impl_->selected() == runtime::DisplaySession::wayland)
+  if (impl_->native && impl_->selected() == runtime::DisplaySession::wayland) {
     impl_->x11.set_native(impl_->native.get());
+    (void)impl_->native->take_keymap_changed();
+    impl_->x11.set_input_keymap(impl_->native->keymap());
+  }
 #endif
   impl_->publish(status);
+}
+void DisplayAdapters::configure_input(const InputOptions &options) {
+  impl_->input = options;
+  impl_->x11.configure_input(options);
 }
 void DisplayAdapters::refresh(std::span<const layerc::platform::StoredProfile> profiles,
     bool configuration_changed, layerc::runtime::DaemonKernel &kernel,

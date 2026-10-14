@@ -2,6 +2,7 @@
 
 #include "daemon_host.hpp"
 #include "display_dispatch.hpp"
+#include "display_selection.hpp"
 
 #include <memory>
 
@@ -17,6 +18,8 @@ public:
   DisplayAdapters &operator=(const DisplayAdapters &) = delete;
 
   [[nodiscard]] layerc::runtime::RuntimeServiceRegistry runtime_services() noexcept;
+  // The user's input opt-in; call before start().
+  void configure_input(const InputOptions &options);
   void start(layerc::platform::EventLoop &loop, LinuxStatusSnapshot &status,
              std::vector<std::string> &diagnostics);
   void refresh(std::span<const layerc::platform::StoredProfile> profiles,

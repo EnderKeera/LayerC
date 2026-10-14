@@ -1,5 +1,5 @@
-# Standalone passive evdev provider. Deliberately not linked into layerd here;
-# the display-adapter integrator owns opt-in/demand and event-loop wiring.
+# Passive evdev provider. layerc_daemon_linux links it into the session engine;
+# src/daemon/linux/evdev_route owns the opt-in, demand and event-loop wiring.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
     pkg_check_modules(LAYERC_XKBCOMMON QUIET IMPORTED_TARGET xkbcommon)

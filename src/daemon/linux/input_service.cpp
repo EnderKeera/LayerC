@@ -338,9 +338,26 @@ X11Dispatch X11InputService::dispatch(layerc::platform::X11WindowTracker *tracke
   result.events = poll.events.size();
   result.windows_changed = poll.windows_changed;
   result.devices_changed = poll.devices_changed;
-  if (poll.events.empty() || registry_.sessions().empty()) return result;
+  feed(poll.events, result);
+  return result;
+}
+
+X11Dispatch X11InputService::dispatch_evdev(const std::span<const int> ready) {
+  X11Dispatch result;
+  if (!evdev_.attached()) return result;
+  auto poll = evdev_.poll(ready);
+  result.events = poll.events.size();
+  result.devices_changed = poll.devices_changed;
+  feed(poll.events, result);
+  return result;
+}
+
+// XI2 and evdev events reach the same sessions under the same rules.
+void X11InputService::feed(const std::span<const layerc::core::InputEvent> events,
+                           X11Dispatch &result) {
+  if (events.empty() || registry_.sessions().empty()) return;
   const auto now = layerc::core::MonotonicClock::now();
-  for (const auto &event : poll.events)
+  for (const auto &event : events)
     for (auto &session : registry_.sessions()) {
       if (!session.global && !session.active) continue;
       auto triggered = session.feed(event, now);
@@ -348,7 +365,21 @@ X11Dispatch X11InputService::dispatch(layerc::platform::X11WindowTracker *tracke
                               std::make_move_iterator(triggered.begin()),
                               std::make_move_iterator(triggered.end()));
     }
-  return result;
+}
+
+void X11InputService::configure_input(const InputOptions &options) {
+  // A new opt-in applies from the next demand-driven reconcile.
+  if (evdev_.attached()) {
+    evdev_.close();
+    for (auto &session : registry_.sessions()) session.matcher.clear();
+  }
+  evdev_.configure(options);
+}
+
+bool X11InputService::evdev_selected() const noexcept {
+  if (!evdev_.enabled()) return false;
+  return prefer_evdev_ || display_ == nullptr || !display_->valid() ||
+         !display_->probe().xi2.present;
 }
 
 namespace {
@@ -396,6 +427,12 @@ needed_devices(std::span<const InputSession> sessions) {
 
 std::vector<std::string> X11InputService::unavailable() const {
   const auto needed = needed_devices(registry_.sessions());
+  const layerc::platform::EvdevInputCapabilities evdev_needed{
+      .keyboard = needed.keyboard, .mouse = needed.mouse, .gamepad = needed.gamepad};
+  if (evdev_.attached()) return evdev_.unavailable(evdev_needed);
+  // A selected evdev route without its XI2 fallback reports its own fault.
+  if (!source_.has_value() && evdev_selected() && !evdev_.fault().empty())
+    return evdev_.unavailable(evdev_needed);
   if (!source_.has_value()) {
     // A matched timer/visual/overlay session does not require an XI2 source
     // unless a direct binding or automation input rule can consume an event.
@@ -438,10 +475,13 @@ X11InputService::reconcile(
   if (!demand.required(layerc::runtime::Capability::input))
     return layerc::runtime::ServiceReconcileResult::failed(
         "input: service invoked without demand");
-  if (source_.has_value()) return {};
+  if (source_.has_value() || evdev_.attached()) return {};
+  std::string evdev_error;
+  if (evdev_selected() && evdev_.open(evdev_error)) return {};
   if (display_ == nullptr || !display_->valid())
     return layerc::runtime::ServiceReconcileResult::failed(
-        "input: no X display for the input service");
+        evdev_error.empty() ? std::string{"input: no X display for the input service"}
+                            : "input: " + evdev_error);
   std::string error;
   auto source = layerc::platform::X11InputSource::create(*display_, error);
   if (!source.has_value())
@@ -456,16 +496,35 @@ void X11InputService::quiesce() noexcept {
   // Automation state is owned by X11AutomationService; session objects
   // are retired only by refresh() when their profile/window no longer
   // resolves.
+  evdev_.close();
   source_.reset();
   for (auto &session : registry_.sessions()) session.matcher.clear();
 }
 
 layerc::runtime::RuntimeResourceStats
 X11InputService::resources() const noexcept {
-  layerc::runtime::RuntimeResourceStats stats;
-  stats.handles = source_.has_value() ? 1U : 0U;
-  stats.objects = source_.has_value() ? 1U : 0U;
+  auto stats = evdev_.resources();
+  stats.handles += source_.has_value() ? 1U : 0U;
+  stats.objects += source_.has_value() ? 1U : 0U;
   return stats;
+}
+
+InputRouteStatus X11InputService::route_status() const {
+  InputRouteStatus route;
+  route.built = true;
+  route.selection = evdev_.enabled() ? InputSelection::evdev : InputSelection::automatic;
+  route.evdev_selected = evdev_selected();
+  route.evdev_attached = evdev_.attached();
+  route.xi2_attached = source_.has_value();
+  if (route.evdev_attached) {
+    const auto needed = needed_devices(registry_.sessions());
+    route.evdev_reasons = evdev_reason_tokens(evdev_.unavailable(
+        {.keyboard = needed.keyboard, .mouse = needed.mouse, .gamepad = needed.gamepad}));
+  } else if (!evdev_.fault().empty()) {
+    const std::string fault = evdev_.fault();
+    route.evdev_reasons = evdev_reason_tokens(std::span{&fault, 1});
+  }
+  return route;
 }
 
 layerc::runtime::ServiceReconcileResult

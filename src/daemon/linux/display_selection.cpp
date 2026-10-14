@@ -22,6 +22,32 @@ layerc::runtime::DisplayBackend display_backend(std::string_view value) noexcept
   return invalid;
 }
 
+InputSelection input_selection(std::string_view value) noexcept {
+  if (value.empty() || value == "auto") return InputSelection::automatic;
+  if (value == "evdev") return InputSelection::evdev;
+  return InputSelection::invalid;
+}
+
+std::optional<InputSelection>
+parse_input_selection(std::span<const std::string_view> arguments,
+                      const char *environment, std::string &error) {
+  error.clear();
+  std::optional<InputSelection> flag;
+  constexpr std::string_view prefix{"--input="};
+  for (const auto argument : arguments) {
+    const auto selection = argument.starts_with(prefix)
+        ? input_selection(argument.substr(prefix.size())) : InputSelection::invalid;
+    if (!argument.starts_with(prefix) || argument.size() == prefix.size() ||
+        selection == InputSelection::invalid) {
+      error = "unknown argument (usage: layerd [--input=auto|evdev])";
+      return std::nullopt;
+    }
+    flag = selection;
+  }
+  if (flag) return flag;
+  return input_selection(environment ? std::string_view{environment} : std::string_view{});
+}
+
 layerc::runtime::DisplaySession select_display_session(
     layerc::runtime::DisplayBackend backend, bool wayland, bool x11) noexcept {
   using layerc::runtime::DisplayBackend;

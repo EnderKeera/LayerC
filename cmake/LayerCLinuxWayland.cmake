@@ -74,6 +74,7 @@ target_include_directories(layerc_wayland_protocols SYSTEM PUBLIC
 target_link_libraries(layerc_wayland_protocols PUBLIC PkgConfig::LAYERC_WAYLAND_CLIENT)
 
 add_library(layerc_wayland STATIC
+    src/platform/linux/wayland_keymap.cpp
     src/platform/linux/wayland_monitors.cpp
     src/platform/linux/wayland_toplevels.cpp
     src/platform/linux/wayland_overlay.cpp)

@@ -4,6 +4,10 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <initializer_list>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 using namespace layerc::runtime;
@@ -75,8 +79,77 @@ void headless_and_invalid_overrides() {
     adapters.stop_sessions(layerc::core::MonotonicClock::now());
   }
 }
+void input_selection_policy() {
+  using layerc::daemon::InputSelection;
+  using layerc::daemon::parse_input_selection;
+  std::string error;
+  const auto parse = [&](std::initializer_list<std::string_view> args, const char *env) {
+    const std::vector<std::string_view> list(args);
+    return parse_input_selection(list, env, error);
+  };
+  expect(parse({}, nullptr) == InputSelection::automatic &&
+         parse({}, "") == InputSelection::automatic &&
+         parse({}, "auto") == InputSelection::automatic,
+         "evdev is never selected without an opt-in");
+  expect(parse({}, "evdev") == InputSelection::evdev &&
+         parse({"--input=evdev"}, nullptr) == InputSelection::evdev,
+         "LAYERC_INPUT=evdev and --input=evdev opt in");
+  expect(parse({"--input=evdev"}, "auto") == InputSelection::evdev &&
+         parse({"--input=auto"}, "evdev") == InputSelection::automatic,
+         "the flag wins over the environment");
+  expect(parse({}, "EVDEV") == InputSelection::invalid && error.empty(),
+         "an invalid environment value keeps evdev off without failing start");
+  for (const auto bad : {"--input=bogus", "--input=", "--input", "--verbose", "evdev"})
+    expect(!parse({bad}, nullptr) && !error.empty(), "unknown arguments are usage errors");
+}
+void headless_input_rows() {
+  using layerc::daemon::InputSelection;
+  const layerc::test::ScopedEnvironment no_x("DISPLAY", std::nullopt);
+  const layerc::test::ScopedEnvironment no_wl("WAYLAND_DISPLAY", std::nullopt);
+  const layerc::test::ScopedEnvironment no_socket("WAYLAND_SOCKET", std::nullopt);
+  const layerc::test::ScopedEnvironment selection("LAYERC_DISPLAY_BACKEND", "wayland");
+  for (const auto input : {InputSelection::automatic, InputSelection::evdev, InputSelection::invalid}) {
+    layerc::daemon::DisplayAdapters adapters;
+    layerc::runtime::DaemonKernel kernel(adapters.runtime_services());
+    layerc::platform::EventLoop loop;
+    LinuxStatusSnapshot status;
+    for (std::size_t i = 0; i < capability_count; ++i)
+      status.capabilities.push_back({static_cast<Capability>(i), CapabilityAvailability::unavailable, {}, {}});
+    std::vector<std::string> diagnostics;
+    layerc::daemon::InputOptions options;
+    options.selection = input;
+    adapters.configure_input(options);
+    adapters.start(loop, status, diagnostics);
+    adapters.refresh({}, true, kernel, status, diagnostics);
+    if (!expect(status.display.has_value(), "display status is published")) continue;
+    const auto &row = status.display->providers.input;
+    const auto has = [&](const char *reason) {
+      return std::ranges::find(row.reasons, reason) != row.reasons.end();
+    };
+    expect(row.name == "evdev", "the Wayland input row names evdev");
+    if (row.state == DisplayProviderState::not_built) {
+      expect(has("input_provider_not_built"), "a build without the session engine says so");
+      continue;
+    }
+    expect(row.state == DisplayProviderState::unavailable, "headless evdev is unavailable");
+    if (input == InputSelection::automatic)
+      expect(has("evdev_not_enabled"), "without the opt-in evdev reports evdev_not_enabled");
+    else if (input == InputSelection::evdev)
+      expect(has("session_unavailable"), "an opted-in evdev route needs a session");
+    else
+      expect(has("invalid_input_backend") &&
+                 std::ranges::find(status.display->reasons, "invalid_input_backend") !=
+                     status.display->reasons.end(),
+             "an invalid LAYERC_INPUT stays visible");
+    expect(adapters.dispatch({}).events == 0, "no device is read while headless");
+    kernel.quiesce();
+    adapters.stop_sessions(layerc::core::MonotonicClock::now());
+  }
+}
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(selection_policy),
                  LAYERC_TEST_CASE(compositor_policy),
-                 LAYERC_TEST_CASE(headless_and_invalid_overrides))
+                 LAYERC_TEST_CASE(headless_and_invalid_overrides),
+                 LAYERC_TEST_CASE(input_selection_policy),
+                 LAYERC_TEST_CASE(headless_input_rows))

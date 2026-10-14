@@ -17,6 +17,13 @@ layerc_add_test(layerc_linux_evdev_us_keymap_tests
     TIMEOUT 30 LABELS required headless evdev)
 target_include_directories(layerc_linux_evdev_us_keymap_tests PRIVATE src/platform/linux)
 
+# The daemon route runs in the X11-enabled session engine; no display needed.
+if(LAYERC_HAVE_X11 AND TARGET layerc_daemon_linux)
+    layerc_add_test(layerc_linux_evdev_daemon_tests
+        SOURCES tests/linux_evdev_daemon_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30 LABELS required headless evdev)
+endif()
+
 add_test(NAME layerc_linux_evdev_boundary
     COMMAND ${CMAKE_COMMAND} "-DLAYERC_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
         -P "${PROJECT_SOURCE_DIR}/tools/tests/test_evdev_boundary.cmake")

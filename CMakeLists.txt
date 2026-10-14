@@ -498,11 +498,13 @@ if(NOT WIN32)
             layerc_runtime layerc_linux)
         if(LAYERC_HAVE_X11)
             target_sources(layerc_daemon_linux PRIVATE
+                src/daemon/linux/evdev_route.cpp
                 src/daemon/linux/input_service.cpp
                 src/daemon/linux/automation_trace.cpp
                 src/daemon/linux/overlay_service.cpp
                 src/daemon/linux/visual_service.cpp)
-            target_link_libraries(layerc_daemon_linux PUBLIC layerc_x11)
+            # The opted-in evdev source feeds the same session engine.
+            target_link_libraries(layerc_daemon_linux PUBLIC layerc_x11 layerc_evdev)
         else()
             target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_NO_X11)
         endif()

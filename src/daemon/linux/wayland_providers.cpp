@@ -1,6 +1,7 @@
 #include "wayland_providers.hpp"
 
 #include "wayland_connection.hpp"
+#include "wayland_keymap.hpp"
 #include "wayland_monitors.hpp"
 #include "wayland_overlay.hpp"
 #include "wayland_toplevels.hpp"
@@ -17,9 +18,11 @@ struct WaylandProviders::Impl {
   layerc::platform::WaylandMonitors monitors;
   layerc::platform::WaylandToplevels toplevels;
   layerc::platform::WaylandOverlay overlay;
+  layerc::platform::WaylandKeymap keymap;
 
   explicit Impl(layerc::platform::WaylandConnection &owner) : connection(owner) {}
   void release() noexcept {
+    keymap.release();
     overlay.release();
     toplevels.release();
     monitors.release();
@@ -45,7 +48,14 @@ void WaylandProviders::sync() {
   impl_->toplevels.forget_outputs(impl_->monitors.take_removed());
   impl_->toplevels.sync(impl_->connection);
   impl_->overlay.sync(impl_->connection);
+  impl_->keymap.sync(impl_->connection);
   impl_->connection.flush();
+}
+
+bool WaylandProviders::take_keymap_changed() noexcept { return impl_->keymap.take_changed(); }
+
+const std::optional<std::string> &WaylandProviders::keymap() const noexcept {
+  return impl_->keymap.text();
 }
 
 bool WaylandProviders::take_changed() noexcept {
