@@ -297,16 +297,21 @@ void portal_version_malformed_token_failure_and_owner_loss() {
   expect(portal.start("p"), "malformed fixture starts");
   expect(fixture::pump(bus, {fake->peer.get()}, [&] { return portal.reason() == "portal_invalid_response"; }),
          "unexpected session handle rejects the whole response");
-  portal.stop(); fake->malformed = false; fake->extra_stream = true;
+  portal.stop(); fake->malformed = false;
+  expect(portal.start("p"), "object-path session handle fixture starts");
+  expect(fixture::pump(bus, {fake->peer.get()}, [&] { portal.sync(); return portal.ready(); }),
+         "a correct object-path session handle completes consent");
+  portal.stop(); fake->object_path_handle = false; fake->extra_stream = true;
   expect(portal.start("p"), "multiple-source fixture starts");
   expect(fixture::pump(bus, {fake->peer.get()}, [&] { return portal.reason() == "portal_invalid_response"; }),
          "multiple streams rejected instead of guessing a target");
   portal.stop(); fake->extra_stream = false;
+  const auto opens_before = fake->opens;
   ScreencastTokenStore nowhere{{}};
   PortalScreencast no_storage{bus, nowhere};
   expect(no_storage.start("p"), "storage-failure fixture starts");
   expect(fixture::pump(bus, {fake->peer.get()}, [&] { return no_storage.reason() == "portal_token_write_failed"; }) &&
-             fake->opens == 0, "failed durable token publication prevents remote acquisition");
+             fake->opens == opens_before, "failed durable token publication prevents remote acquisition");
   no_storage.stop();
   expect(portal.start("p"), "owner-loss fixture starts");
   expect(fixture::pump(bus, {fake->peer.get()}, [&] { portal.sync(); return portal.ready(); }),

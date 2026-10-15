@@ -22,7 +22,7 @@ if [[ ${1:-} != --session ]]; then
   done
   [[ -n $build ]] || { echo "error: --build is required" >&2; exit 64; }
   build=$(realpath "$build")
-  for tool in bwrap gnome-shell pipewire gdbus dbus-daemon dbus-run-session python3 timeout pkg-config "${CXX:-c++}"; do
+  for tool in bwrap cmake gnome-shell pipewire gdbus dbus-daemon dbus-run-session python3 timeout pkg-config "${CXX:-c++}"; do
     command -v "$tool" >/dev/null || { echo "error: missing $tool" >&2; exit 69; }
   done
   [[ -x /usr/libexec/xdg-desktop-portal && -x /usr/libexec/xdg-desktop-portal-gnome ]] ||
@@ -54,7 +54,7 @@ else:
         "codeDiffSha256": hashlib.sha256(git("diff", "--binary", "HEAD", "--", "src", "tests", "cmake", "tools")).hexdigest(),
     }
     origin = "Git in source tree"
-if not re.fullmatch(r"[0-9a-f]{40,64}", source.get("gitHead", "")) or not re.fullmatch(r"[0-9a-f]{64}", source.get("codeDiffSha256", "")):
+if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", source.get("gitHead", "")) or not re.fullmatch(r"[0-9a-f]{64}", source.get("codeDiffSha256", "")):
     raise SystemExit("error: malformed source revision stamp")
 revision = {
     "gitHead": source["gitHead"],
@@ -67,11 +67,33 @@ revision = {
 }
 (out / "revision.json").write_text(json.dumps(revision, indent=2))
 PY
+  # Bind the linked product code to this source tree: the build's own source
+  # must match it, and its archives are brought up to date before linking.
+  build_source=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$build/CMakeCache.txt")
+  [[ -d $build_source ]] || { echo "error: $build is not a configured CMake build" >&2; exit 69; }
+  for part in src cmake CMakeLists.txt; do
+    diff -rq --strip-trailing-cr "$repo/$part" "$build_source/$part" >/dev/null ||
+      { echo "error: $build was configured from a different $part than $repo" >&2; exit 65; }
+  done
+  targets=(layerc_bus layerc_bus_model layerc_linux layerc_capture_common layerc_core layerc_durable)
+  cmake --build "$build" --target "${targets[@]}" > "$evidence/archive-build.log" 2>&1 ||
+    { echo "error: rebuilding the product archives failed" >&2; exit 1; }
   archives=()
-  for name in layerc_bus layerc_bus_model layerc_linux layerc_capture_common layerc_core layerc_durable; do
+  for name in "${targets[@]}"; do
     [[ -f "$build/lib$name.a" ]] || { echo "error: missing $build/lib$name.a" >&2; exit 69; }
     archives+=("$build/lib$name.a")
   done
+  python3 - "$evidence" "$build_source" "${archives[@]}" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+out, source, archives = Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
+(out / "build-provenance.json").write_text(json.dumps({
+    "buildSourceMatchesTree": True,
+    "comparedParts": ["src", "cmake", "CMakeLists.txt"],
+    "buildSourceDirectory": source,
+    "archivesSha256": {Path(a).name: hashlib.sha256(Path(a).read_bytes()).hexdigest() for a in archives},
+}, indent=2))
+PY
   read -r -a bus_flags <<<"$(pkg-config --cflags --libs libsystemd)"
   # Demand-built TEST-ONLY driver, not installed or linked into any product.
   "${CXX:-c++}" -std=c++20 -Wall -Wextra -Wpedantic -Werror \
@@ -82,9 +104,9 @@ PY
     -o "$evidence/native-portal-probe"
   set +e
   bwrap --unshare-user --unshare-pid --unshare-net --die-with-parent \
-    --ro-bind / / --bind "$sandbox" "$sandbox" --bind "$evidence" "$evidence" \
-    --tmpfs /run --tmpfs /tmp --dev /dev --proc /proc \
-    env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET -u DBUS_SESSION_BUS_ADDRESS \
+    --ro-bind / / --tmpfs /run --tmpfs /tmp --dev /dev --proc /proc \
+    --ro-bind "$repo" "$repo" --bind "$sandbox" "$sandbox" --bind "$evidence" "$evidence" \
+    env -i PATH="$PATH" LANG="${LANG:-C.UTF-8}" \
     HOME="$sandbox/home" XDG_RUNTIME_DIR="$sandbox/runtime" \
     XDG_CONFIG_HOME="$sandbox/config" XDG_DATA_HOME="$sandbox/data" \
     XDG_CACHE_HOME="$sandbox/cache" XDG_CURRENT_DESKTOP=GNOME \
@@ -131,6 +153,13 @@ PY
   exit $?
 fi
 evidence=$2
+# Refuse to write configuration or start services outside the runner's sandbox.
+if [[ ${LAYERC_TEST_PRIVATE_NATIVE_SESSION:-} != 1 || -n ${DISPLAY:-} || -n ${AT_SPI_BUS_ADDRESS:-} ||
+      ${XDG_RUNTIME_DIR:-} != */layerc-consent.*/runtime ||
+      ${XDG_CONFIG_HOME:-} != */layerc-consent.*/config || $(cat /proc/1/comm) != bwrap ]]; then
+  echo "error: --session runs only inside the runner's private sandbox" >&2
+  exit 64
+fi
 python3 - "$evidence" <<'PY'
 import json, os, sys
 from pathlib import Path
