@@ -341,7 +341,14 @@ bool PortalScreencast::parse_results(const Step step, sd_bus_message *message) {
     const std::string_view name{key};
     if (step == Step::create && name == "session_handle") {
       std::string value;
-      if (found || !read_string(message, "o", value) || value != session_path_) return false;
+      char type{};
+      const char *signature{};
+      // The portal specification deliberately uses a string for this path.
+      // Retain object-path variant compatibility without relaxing identity.
+      if (found || sd_bus_message_peek_type(message, &type, &signature) <= 0 ||
+          type != 'v' || !signature ||
+          (std::string_view{signature} != "s" && std::string_view{signature} != "o") ||
+          !read_string(message, signature, value) || value != session_path_) return false;
       found = true;
     } else if (step == Step::start && name == "streams") {
       if (found || !parse_streams(message)) return false;
