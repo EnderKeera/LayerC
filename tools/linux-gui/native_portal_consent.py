@@ -13,6 +13,7 @@ from pathlib import Path
 if (
     os.environ.get("LAYERC_TEST_PRIVATE_NATIVE_SESSION") != "1"
     or os.environ.get("DISPLAY")
+    or os.environ.get("AT_SPI_BUS_ADDRESS")
     or "/layerc-consent." not in os.environ.get("XDG_RUNTIME_DIR", "")
 ):
     raise SystemExit("native consent UI requires the runner-owned private session")
