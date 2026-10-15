@@ -126,13 +126,22 @@
       }
     },
     "linux-gjs": {
-      "description": "Pure JavaScript fixtures (CTest label gjs).",
+      "description": "JavaScript fixtures (CTest label gjs): the KWin script and the GNOME Shell extension (pure modules, glue on a private dbus-run-session bus, network boundary, datadir install).",
       "label": "gjs",
       "required": [
-        "layerc_linux_kwin_script_tests"
+        "layerc_linux_kwin_script_tests",
+        "layerc_linux_gnome_extension_report_tests",
+        "layerc_linux_gnome_extension_overlay_tests",
+        "layerc_linux_gnome_extension_network_tests",
+        "layerc_linux_gnome_extension_shell_tests",
+        "layerc_linux_gnome_extension_install_tests"
       ],
       "allowSkip": {
-        "layerc_linux_kwin_script_tests": "gjs missing; unavailable script coverage, not a pass"
+        "layerc_linux_kwin_script_tests": "gjs missing; unavailable script coverage, not a pass",
+        "layerc_linux_gnome_extension_report_tests": "gjs missing; unavailable script coverage, not a pass",
+        "layerc_linux_gnome_extension_overlay_tests": "gjs missing; unavailable script coverage, not a pass",
+        "layerc_linux_gnome_extension_network_tests": "gjs missing; unavailable script coverage, not a pass",
+        "layerc_linux_gnome_extension_shell_tests": "gjs or dbus-run-session missing; unavailable extension glue coverage, not a pass"
       }
     }
   }
