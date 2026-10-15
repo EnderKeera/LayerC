@@ -31,7 +31,7 @@ struct FakePortal {
   std::vector<BusSlot> objects;
   std::uint32_t version{4}, types{3}, cursors{7}, response_code{};
   unsigned probes{}, creates{}, selects{}, starts{}, opens{}, requests_closed{}, sessions_closed{};
-  bool malformed{}, extra_stream{};
+  bool malformed{}, extra_stream{}, object_path_handle{};
   std::string hold_member, held_request, held_member, session;
   std::string restore, next_restore{"new-token"};
   std::uint32_t selected_types{}, persist{}, cursor{};
@@ -142,9 +142,10 @@ struct FakePortal {
            sd_bus_message_open_container(message, 'a', "{sv}") >= 0, "response opens results");
     if (!response_code && member == "CreateSession") {
       const auto value = malformed ? "/wrong/session" : session;
-      expect(variant(message, "session_handle", "o", [&](sd_bus_message *out) {
-        return sd_bus_message_append(out, "o", value.c_str());
-      }) >= 0, "session handle appended");
+      const char *signature = object_path_handle ? "o" : "s";
+      expect(variant(message, "session_handle", signature, [&](sd_bus_message *out) {
+        return sd_bus_message_append(out, signature, value.c_str());
+      }) >= 0, "standard string or compatible object-path session handle appended");
     } else if (!response_code && member == "Start") {
       expect(variant(message, "restore_token", "s", [&](sd_bus_message *out) {
         return sd_bus_message_append(out, "s", next_restore.c_str());
@@ -292,6 +293,7 @@ void portal_version_malformed_token_failure_and_owner_loss() {
   for (int i = 0; i < 50; ++i) portal.sync();
   expect(fake->probes == 3, "version failure has no probe loop");
   portal.stop(); fake->version = 4; fake->malformed = true;
+  fake->object_path_handle = true; // Keep legacy variants checked, including wrong paths.
   expect(portal.start("p"), "malformed fixture starts");
   expect(fixture::pump(bus, {fake->peer.get()}, [&] { return portal.reason() == "portal_invalid_response"; }),
          "unexpected session handle rejects the whole response");
