@@ -1,6 +1,9 @@
 #include "display_adapters.hpp"
 #include "display_selection.hpp"
 #include "x11_adapters.hpp"
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+#include "bus_providers.hpp"
+#endif
 
 #include "layerc/core/utf8.hpp"
 
@@ -84,12 +87,46 @@ struct DisplayAdapters::Impl {
   // Declared after the connection: destroyed first, while it is valid.
   std::unique_ptr<WaylandProviders> native;
   bool native_dirty{};
+#endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  std::unique_ptr<BusProviders> bus;
+#endif
 
   ~Impl() {
     x11.set_native(nullptr);
-    native.reset();
-  }
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+    bus.reset();
 #endif
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    native.reset();
+#endif
+  }
+  void sync_native() {
+    NativeDisplaySource *source{};
+    if (selected() == runtime::DisplaySession::wayland) {
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+      source = bus.get();
+#endif
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+      if (!source) source = native.get();
+#endif
+    }
+    x11.set_native(source);
+  }
+  bool dispatch_bus(std::span<const int> ready) {
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+    if (bus) {
+      if (selected() != runtime::DisplaySession::wayland)
+        bus->configure(false, display.desktop, false);
+      sync_native();
+      return bus->dispatch(ready);
+    }
+#else
+    (void)ready;
+#endif
+    sync_native();
+    return false;
+  }
 
   runtime::DisplaySession selected() const noexcept {
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
@@ -146,12 +183,24 @@ struct DisplayAdapters::Impl {
     const auto route = x11.input_route();
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
     const bool native_session = native && value.session == runtime::DisplaySession::wayland;
-    const bool native_overlay = native_session && native->overlay_provider().state != State::unavailable;
+    bool native_overlay = native_session && native->overlay_provider().state != State::unavailable;
 #else
-    const bool native_overlay = false;
+    bool native_overlay = false;
+#endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+    const bool bus_session = bus && value.session == runtime::DisplaySession::wayland;
+    native_overlay = native_overlay || (bus_session && bus->overlay());
+    const bool native_capture = bus_session && bus->capture_demanded();
+#else
+    const bool native_capture = false;
 #endif
     if (value.session == runtime::DisplaySession::wayland)
-      value.compositor = detect_compositor(value.desktop, false, false,
+      value.compositor = detect_compositor(value.desktop,
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+          bus_session && bus->kwin_owner(), bus_session && bus->gnome_owner(),
+#else
+          false, false,
+#endif
           value.wayland.globals.contains("zwlr_layer_shell_v1"),
           value.wayland.globals.contains("zwlr_foreign_toplevel_manager_v1"));
     else
@@ -242,7 +291,8 @@ struct DisplayAdapters::Impl {
         if (!evdev) degrade_capability(status, runtime::Capability::input, "xwayland_focus_only");
         if (!native_overlay)
           degrade_capability(status, runtime::Capability::overlay, "xwayland_overlay");
-        degrade_capability(status, runtime::Capability::visual, "xwayland_windows_only");
+        if (!native_capture)
+          degrade_capability(status, runtime::Capability::visual, "xwayland_windows_only");
       }
     } else {
       value.providers.windows = {"wlr_foreign_toplevel", State::not_built, {"native_provider_not_built"}};
@@ -266,6 +316,22 @@ struct DisplayAdapters::Impl {
             provider_from_capability(status, runtime::Capability::overlay, "wlr_layer_shell", nullptr);
       else if (!fallback)
         value.providers.overlay = native->overlay_provider();
+    }
+#endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+    if (bus_session) {
+      const bool fallback = status.x11.connected;
+      if (auto windows = bus->window_provider()) {
+        if (bus->prefer_windows() || !fallback) value.providers.windows = std::move(*windows);
+        else if (windows->state == State::unavailable) {
+          auto &reasons = value.providers.windows.reasons;
+          reasons.insert(reasons.end(), windows->reasons.begin(), windows->reasons.end());
+        }
+      }
+      if (auto overlay = bus->overlay_provider(); overlay &&
+          (bus->overlay() || !fallback || overlay->state == State::inactive))
+        value.providers.overlay = std::move(*overlay);
+      if (native_capture || !fallback) value.providers.capture = bus->capture_provider();
     }
 #endif
     status.display = std::move(value);
@@ -310,12 +376,21 @@ void DisplayAdapters::start(layerc::platform::EventLoop &loop, LinuxStatusSnapsh
   } else {
     status.x11.reason = "backend_not_selected";
   }
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->selected() == runtime::DisplaySession::wayland) {
+    NativeDisplaySource *fallback{};
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    fallback = impl_->native.get();
+#endif
+    impl_->bus = std::make_unique<BusProviders>(loop, fallback);
+  }
+#endif
+  impl_->sync_native();
   impl_->x11.prefer_evdev(impl_->selected() == runtime::DisplaySession::wayland);
   if (impl_->input.selection == InputSelection::invalid)
     display.reasons.emplace_back("invalid_input_backend");
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
   if (impl_->native && impl_->selected() == runtime::DisplaySession::wayland) {
-    impl_->x11.set_native(impl_->native.get());
     (void)impl_->native->take_keymap_changed();
     impl_->x11.set_input_keymap(impl_->native->keymap());
   }
@@ -329,12 +404,23 @@ void DisplayAdapters::configure_input(const InputOptions &options) {
 void DisplayAdapters::refresh(std::span<const layerc::platform::StoredProfile> profiles,
     bool configuration_changed, layerc::runtime::DaemonKernel &kernel,
     LinuxStatusSnapshot &status, std::vector<std::string> &diagnostics) {
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) {
+    const bool tracking = impl_->selected() == runtime::DisplaySession::wayland &&
+        std::ranges::any_of(profiles, [](const auto &profile) { return profile.profile.enabled; });
+    impl_->bus->configure(tracking, impl_->display.desktop, configuration_changed);
+  }
+#endif
+  impl_->sync_native();
   if (impl_->selected() == runtime::DisplaySession::none) {
     impl_->x11.stop_sessions(layerc::core::MonotonicClock::now());
     impl_->x11.refresh({}, true, kernel, status, diagnostics);
   } else {
     impl_->x11.refresh(profiles, configuration_changed, kernel, status, diagnostics);
   }
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) impl_->bus->want_overlay(kernel.demand().required(runtime::Capability::overlay));
+#endif
   impl_->publish(status);
 }
 void DisplayAdapters::refresh_status(const layerc::runtime::DaemonKernel &kernel,
@@ -343,7 +429,8 @@ void DisplayAdapters::refresh_status(const layerc::runtime::DaemonKernel &kernel
   impl_->publish(status);
 }
 DisplayDispatch DisplayAdapters::dispatch(std::span<const int> ready) {
-  const bool changed = impl_->dispatch_wayland();
+  const bool wayland_changed = impl_->dispatch_wayland();
+  const bool changed = impl_->dispatch_bus(ready) || wayland_changed;
   auto result = impl_->dispatch_x11(ready, false);
   result.windows_changed = result.windows_changed || changed;
   return result;
@@ -360,16 +447,26 @@ bool DisplayAdapters::has_pending_events() {
 #endif
   impl_->sync_connection();
 #endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) {
+    const auto deadline = impl_->bus->next_deadline();
+    pending = pending || (deadline && *deadline <= layerc::core::MonotonicClock::now());
+  }
+#endif
   return pending;
 }
 DisplayDispatch DisplayAdapters::dispatch_pending() {
-  const bool changed = impl_->dispatch_wayland();
+  const bool wayland_changed = impl_->dispatch_wayland();
+  const bool changed = impl_->dispatch_bus({}) || wayland_changed;
   auto result = impl_->dispatch_x11({}, true);
   result.windows_changed = result.windows_changed || changed;
   return result;
 }
 bool DisplayAdapters::render(layerc::core::TimePoint now) {
   const bool changed = impl_->selected() != runtime::DisplaySession::none && impl_->x11.render(now);
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) impl_->bus->present();
+#endif
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
   if (impl_->native) {
     // Overlay commits queue on the connection; send them now.
@@ -379,9 +476,18 @@ bool DisplayAdapters::render(layerc::core::TimePoint now) {
 #endif
   return changed;
 }
-void DisplayAdapters::stop_sessions(layerc::core::TimePoint now) { impl_->x11.stop_sessions(now); }
+void DisplayAdapters::stop_sessions(layerc::core::TimePoint now) {
+  impl_->x11.stop_sessions(now);
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) impl_->bus->stop();
+#endif
+}
 std::optional<layerc::core::TimePoint> DisplayAdapters::next_deadline(layerc::core::TimePoint now) const {
-  return impl_->x11.next_deadline(now);
+  auto next = impl_->x11.next_deadline(now);
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) next = layerc::core::earliest_deadline(next, impl_->bus->next_deadline());
+#endif
+  return next;
 }
 std::size_t DisplayAdapters::session_count() const noexcept { return impl_->x11.session_count(); }
 std::vector<layerc::runtime::SessionDiagnostics> DisplayAdapters::session_diagnostics() const {

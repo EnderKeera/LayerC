@@ -211,6 +211,38 @@ void pipewire_frames_convert_formats_and_crops() {
          "partially visible windows are clamped to the monitor");
   expect(!monitor_crop({0, 0, 640, 360}, monitor, 2560, 1440),
          "a window on another monitor is outside the output");
+
+  // A window half outside its monitor keeps whole-window coordinates: rule
+  // regions sample the same window pixels as on a fully visible window.
+  std::vector<std::byte> screen(100 * 100 * 4);
+  for (std::size_t y = 0; y < 100; ++y)
+    for (std::size_t x = 0; x < 100; ++x) {
+      const auto at = (y * 100 + x) * 4;
+      // BGRx: red over the visible window's first 20 columns, blue elsewhere.
+      screen[at] = std::byte(x < 20 ? 0 : 255);
+      screen[at + 2] = std::byte(x < 20 ? 255 : 0);
+    }
+  const LogicalRect clipped{-50, 0, 100, 100};
+  const LogicalRect screen_monitor{0, 0, 100, 100};
+  const RawVideoFrame stream{screen, 100, 100, 400, VideoPixelFormat::bgrx};
+  const auto clipped_frame =
+      convert_video_frame(stream, layerc::core::CaptureQuality::exact,
+                          monitor_crop(clipped, screen_monitor, 100, 100), now, error,
+                          window_canvas(clipped, screen_monitor, 100, 100));
+  if (!expect(clipped_frame != nullptr, "a clipped window converts")) return;
+  const auto pixel = [&](std::uint32_t x) {
+    return clipped_frame->pixels[50U * clipped_frame->width + x];
+  };
+  const auto &available = clipped_frame->available_region;
+  expect(clipped_frame->width == 100 && clipped_frame->height == 100 && available.x == 0.5 &&
+             available.y == 0.0 && available.width == 0.5 && available.height == 1.0,
+         "the frame spans the whole window and marks the visible half available");
+  expect(pixel(60) == layerc::core::RgbPixel{255, 0, 0} &&
+             pixel(75) == layerc::core::RgbPixel{0, 0, 255} && pixel(10) == layerc::core::RgbPixel{},
+         "visible pixels keep their window coordinates; the clipped half stays empty");
+  expect(layerc::capture::region_is_available({0.5, 0, 0.2, 1}, available) &&
+             !layerc::capture::region_is_available({0.2, 0, 0.2, 1}, available),
+         "only rules inside the visible part are evaluated");
 }
 
 } // namespace

@@ -65,7 +65,8 @@ struct X11Adapters::Impl {
   // XWayland EWMH windows carry PIDs for executable matching; foreign
   // toplevels (no PID) are used only when there is no X11 connection.
   [[nodiscard]] bool native_windows() const {
-    return native && native->has_windows() && !tracker.has_value();
+    return native && native->has_windows() &&
+           (native->prefer_windows() || !tracker.has_value());
   }
   [[nodiscard]] bool native_overlay() { return native && native->overlay() != nullptr; }
 };
@@ -88,6 +89,7 @@ X11Adapters::runtime_services() noexcept {
 }
 
 void X11Adapters::set_native(NativeDisplaySource *source) noexcept {
+  if (impl_->native != source) impl_->visual.use_native(nullptr);
   impl_->native = source;
   impl_->overlay.use_backend(source ? source->overlay() : nullptr);
 }
@@ -165,6 +167,7 @@ void X11Adapters::refresh(
   // Re-evaluated every pass: a provider can appear or vanish at runtime.
   impl_->overlay.use_backend(native ? native->overlay() : nullptr);
   const bool native_windows = impl_->native_windows();
+  impl_->visual.use_native(native_windows ? native->capture() : nullptr);
   if (!native_windows && !impl_->tracker.has_value()) {
     (void)kernel.reconcile({});
     refresh_status(kernel, status);
@@ -181,8 +184,9 @@ void X11Adapters::refresh(
   const auto requests = impl_->sessions.session_requests();
   const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  // X11 capture needs XIDs; native window ids are opaque provider ids.
-  impl_->visual.refresh(native_windows ? std::span<InputSession>{} : impl_->sessions.sessions(),
+  // A native factory distinguishes XWayland XIDs from opaque identities.
+  impl_->visual.refresh(native_windows && !native->capture()
+                            ? std::span<InputSession>{} : impl_->sessions.sessions(),
                         demand, configuration_changed,
                         impl_->sessions.visual_configurations());
   (void)kernel.reconcile(demand);
@@ -194,7 +198,7 @@ void X11Adapters::refresh(
   visual_unavailable.insert(visual_unavailable.end(),
                             impl_->sessions.visual_diagnostics().begin(),
                             impl_->sessions.visual_diagnostics().end());
-  if (native_windows && demand.required(layerc::runtime::Capability::visual))
+  if (native_windows && !native->capture() && demand.required(layerc::runtime::Capability::visual))
     visual_unavailable.emplace_back("visual: native windows have no X11 window id");
   derive_capability_status(
       status, demand,
@@ -225,7 +229,7 @@ void X11Adapters::refresh_status(
   visual_unavailable.insert(visual_unavailable.end(),
                             impl_->sessions.visual_diagnostics().begin(),
                             impl_->sessions.visual_diagnostics().end());
-  if (impl_->native_windows() &&
+  if (impl_->native_windows() && !impl_->native->capture() &&
       kernel.demand().required(layerc::runtime::Capability::visual))
     visual_unavailable.emplace_back("visual: native windows have no X11 window id");
   derive_capability_status(

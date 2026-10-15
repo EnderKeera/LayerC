@@ -40,10 +40,53 @@ void append_unique(std::vector<std::string> &values, std::string value) {
   values.push_back(std::move(value));
 }
 
+// X11 Composite capture behind the shared session contract.
+class X11Capture final : public VisualCaptureSession {
+public:
+  X11Capture(const layerc::platform::X11Display &display, const layerc::runtime::WindowId window,
+             const CaptureQuality quality)
+      : session_(display, window, quality) {}
+  bool start() override { return session_.start(); }
+  void stop() noexcept override { session_.stop(); }
+  void set_quality(const CaptureQuality quality) noexcept override {
+    session_.set_quality(quality);
+  }
+  // Damage drives X11 capture; the evaluator alone paces sampling.
+  void set_sample_rate(std::uint8_t) noexcept override {}
+  layerc::capture::CapturePoll poll(const TimePoint now) override { return session_.poll(now); }
+  layerc::runtime::RuntimeResourceStats resources() const noexcept override {
+    return session_.resources();
+  }
+
+private:
+  layerc::platform::X11CaptureSession session_;
+};
+
 } // namespace
+
+// Explicit XWayland/X11 windows use Composite capture; opaque native windows
+// use the provider's portal stream.
+std::unique_ptr<VisualCaptureSession>
+X11VisualService::create_capture(const Target &target, const std::string_view profile_id,
+                                 const std::uint8_t sample_rate) {
+  if (target.x11_window)
+    return display_ == nullptr
+               ? nullptr
+               : std::make_unique<X11Capture>(
+                     *display_, layerc::runtime::WindowId{*target.x11_window}, target.quality);
+  return native_ == nullptr
+             ? nullptr
+             : native_->create_capture(profile_id, {target.window}, target.quality, sample_rate);
+}
 
 void X11VisualService::attach(layerc::platform::X11Display &display) noexcept {
   display_ = &display;
+}
+
+void X11VisualService::use_native(NativeCaptureFactory *factory) noexcept {
+  if (native_ == factory) return;
+  quiesce(); // XIDs and opaque native identities are not interchangeable
+  native_ = factory;
 }
 
 void X11VisualService::refresh(
@@ -54,6 +97,7 @@ void X11VisualService::refresh(
   struct Desired {
     CaptureQuality quality{CaptureQuality::low};
     std::vector<const InputSession *> sessions;
+    std::uint8_t sample_rate{1};
   };
   std::map<std::uint64_t, Desired> desired;
   for (const auto &consumer : demand.visual_consumers()) {
@@ -65,6 +109,7 @@ void X11VisualService::refresh(
     if (found == sessions.end() || !found->visual_profile()) continue;
     auto &entry = desired[found->window];
     entry.quality = std::max(entry.quality, found->visual_profile()->quality);
+    entry.sample_rate = std::max(entry.sample_rate, found->visual_profile()->sample_rate_hz);
     entry.sessions.push_back(&*found);
   }
 
@@ -184,14 +229,19 @@ void X11VisualService::refresh(
     Target target;
     target.window = window;
     target.quality = entry.quality;
+    target.x11_window = native_ ? native_->x11_window(window) : std::optional{window};
     if (const auto previous = std::ranges::find(targets_, window, &Target::window);
-        previous != targets_.end()) {
+        previous != targets_.end() && previous->x11_window == target.x11_window &&
+        !(configuration_changed && native_)) {
       target.capture = std::move(previous->capture);
-      if (target.capture) target.capture->set_quality(target.quality);
+      if (target.capture) {
+        target.capture->set_quality(target.quality);
+        target.capture->set_sample_rate(entry.sample_rate);
+      }
     }
-    if (!target.capture && display_ != nullptr)
-      target.capture = std::make_unique<layerc::platform::X11CaptureSession>(
-          *display_, layerc::runtime::WindowId{window}, target.quality);
+    if (!target.capture && !entry.sessions.empty())
+      target.capture = create_capture(target, entry.sessions.front()->automation.profile().id,
+                                      entry.sample_rate);
 
     for (const auto *session : entry.sessions)
       if (const auto found = evaluations_.find(session->source_path);
@@ -218,8 +268,7 @@ X11VisualService::poll(const std::span<InputSession> sessions,
            now >= evaluation->next_sample;
   };
   for (auto &target : targets_) {
-    if (!std::ranges::any_of(target.evaluations, due) || !target.capture)
-      continue;
+    if (!std::ranges::any_of(target.evaluations, due) || !target.capture) continue;
 
     auto capture = target.capture->poll(now).result;
     if (!capture.diagnostic.empty())
@@ -282,14 +331,14 @@ X11VisualService::reconcile(
   if (!demand.required(layerc::runtime::Capability::visual))
     return layerc::runtime::ServiceReconcileResult::failed(
         "visual: service invoked without demand");
-  if (display_ == nullptr || !display_->valid())
+  if (!native_ && (display_ == nullptr || !display_->valid()))
     return layerc::runtime::ServiceReconcileResult::failed(
         "visual: no X display for capture");
   fault_.clear();
   for (auto &target : targets_) {
     if (target.capture && target.capture->start()) continue;
     append_unique(capture_diagnostics_,
-                  "visual: X11 capture could not start for window " +
+                  "visual: capture could not start for window " +
                       std::to_string(target.window));
   }
   return {};
