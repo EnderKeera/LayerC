@@ -3,6 +3,7 @@
 // shape and every drag is published through the live draft, which moves
 // the click-through overlay. Direct Drag would need an input-accepting
 // overlay, which X11 overlays never are.
+#include "daemon_link.hpp"
 #include "editor_app.hpp"
 #include "tasks_window.hpp"
 
@@ -87,10 +88,17 @@ void EditorApp::position_on(const TaskCandidate &task) {
   if (tasks_window) tasks_window->hide();
   update_position_button();
   preview->redraw();
-  report("Positioning on " + (task.title.empty() ? std::string("the window") : "\"" + task.title + "\"") +
-         " (" + std::to_string(task.width) + "x" + std::to_string(task.height) +
-         "): drag bars in the preview; LayerD moves the overlay through the live draft. Direct "
-         "Drag is unavailable on X11 because overlays stay click-through.");
+  std::string text =
+      "Positioning on " + (task.title.empty() ? std::string("the window") : "\"" + task.title + "\"") +
+      " (" + std::to_string(task.width) + "x" + std::to_string(task.height) +
+      "): drag bars in the preview; LayerD moves the overlay through the live draft. Direct "
+      "Drag is unavailable on X11 because overlays stay click-through.";
+  // On Wayland the geometry is the XWayland window's; the note names the
+  // degraded path and LayerD's own window provider.
+  if (const auto note = wayland_scope_note(query_daemon_status(), wayland_environment());
+      !note.empty())
+    text += " " + note;
+  report(text);
 }
 
 void EditorApp::end_placement(const std::string &status) {

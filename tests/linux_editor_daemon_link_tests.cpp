@@ -136,6 +136,37 @@ void running_contracts() {
          "persistence and reload acknowledgement are distinct from runtime application");
 }
 
+void wayland_status_and_scope_notes() {
+  namespace runtime = layerc::runtime;
+  layerc::editor::DaemonStatus status;
+  status.running = true;
+  status.version = "2.7.0";
+  status.x11_connected = true;
+  status.sessions = 1;
+  status.display = runtime::DisplayStatusSnapshot{};
+  status.display->session = runtime::DisplaySession::x11;
+  expect(status.summary() == "LayerD 2.7.0 \u2014 X11 connected, 1 session" &&
+             layerc::editor::wayland_scope_note(status, false).empty(),
+         "an X11 session keeps the V2.6 summary and adds no scope note");
+  status.display->session = runtime::DisplaySession::wayland;
+  status.display->compositor = runtime::DisplayCompositor::wlroots;
+  status.display->providers.windows = {"x11_ewmh", runtime::DisplayProviderState::degraded,
+                                       {"xwayland_windows_only"}};
+  expect(status.summary() ==
+             "LayerD 2.7.0 \u2014 Wayland (wlroots), XWayland connected, 1 session",
+         "a Wayland session names the compositor and the XWayland connection");
+  const auto note = layerc::editor::wayland_scope_note(status, false);
+  expect(note.starts_with("Wayland session: only XWayland windows are listed (degraded)") &&
+             note.ends_with("LayerD tracks windows with x11_ewmh: degraded "
+                            "(xwayland_windows_only)."),
+         "the scope note names the degraded scan and LayerD's window provider: " + note);
+  layerc::editor::DaemonStatus offline;
+  const auto unknown = layerc::editor::wayland_scope_note(offline, true);
+  expect(unknown.find("only XWayland windows") != std::string::npos &&
+             unknown.ends_with("LayerD is not running, so its window provider is unknown."),
+         "a Wayland editor environment reports the degraded scan without a daemon");
+}
+
 void refused_contracts() {
   const PrivateRuntime runtime;
   const FakeDaemon daemon([](std::string_view) {
@@ -396,6 +427,7 @@ void live_draft_client_shutdown_is_bounded() {
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(offline_contracts),
                  LAYERC_TEST_CASE(running_contracts),
+                 LAYERC_TEST_CASE(wayland_status_and_scope_notes),
                  LAYERC_TEST_CASE(refused_contracts),
                  LAYERC_TEST_CASE(lost_acknowledgement_is_uncertain),
                  LAYERC_TEST_CASE(inspection_errors_are_not_offline),
