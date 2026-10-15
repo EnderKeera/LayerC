@@ -3,6 +3,9 @@
 
 #include "layerc/core/profile.hpp"
 #include "layerc/core/panel_geometry.hpp"
+#include "layerc/core/hid.hpp"
+#include "layerc/core/json.hpp"
+#include <limits>
 
 #include <chrono>
 #include <string>
@@ -227,6 +230,86 @@ void test_profile_serialization() {
          "serializer should preserve bindings");
   expect(serialize_profile_json(*round_tripped) == serialized,
          "serializer should emit byte-stable JSON after a round trip");
+
+  // Opaque data is value-owned, not tied to JSON text or array positions.
+  auto extended = profile;
+  extended.schema_version = profile_schema_version;
+  const auto payload = json::parse(R"json({"future":{"n":9223372036854775807,"u":18446744073709551615,"f":0.12345678901234567890123456789,"a":[null,true,1.25,"opaque",-0]}})json");
+  const auto extras = std::get<json::Value>(payload).as_object();
+  extended.extra_fields = extras;
+  extended.game.extra_fields = extras;
+  extended.cooldowns.front().extra_fields = extras;
+  auto other = extended.cooldowns.front();
+  other.id = "other";
+  extended.cooldowns.push_back(other);
+  extended.cooldown_groups.push_back({.id = "group", .name = "Group",
+      .cooldown_ids = {"dash", "other"}, .extra_fields = extras});
+  extended.modules.push_back({.kind = ProfileModuleKind::visual,
+      .schema_version = 2, .extra_fields = extras});
+  extended.panels.front().extra_fields = extras;
+  extended.panels.front().bar.extra_fields = extras;
+  extended.bindings.front().extra_fields = extras;
+  extended.bindings.front().token_extra_fields.emplace(
+      extended.bindings.front().chord.tokens.front(), extras);
+  HidControlBinding hid;
+  hid.id = "unused";
+  hid.device.stable_slot = 1;
+  hid.device.descriptor_hash = std::string(64, 'a');
+  hid.device.usage_page = 0xFF00;
+  hid.device.usage = 1;
+  hid.usage_page = 0xFF00;
+  hid.usage = 1;
+  extended.hid_bindings.push_back(hid);
+  hid.id = "kept";
+  hid.extra_fields = extras;
+  hid.device_extra_fields = extras;
+  hid.control_extra_fields = extras;
+  extended.hid_bindings.push_back(hid);
+  const InputToken token{InputDevice::generic_hid, 2, 0};
+  InputBinding hid_binding;
+  hid_binding.cooldown_id = "other";
+  hid_binding.chord.tokens = {token};
+  hid_binding.extra_fields = extras;
+  hid_binding.token_extra_fields.emplace(token, extras);
+  extended.bindings.push_back(hid_binding);
+  expect(!validate_profile(extended), "opaque fields do not weaken known-field validation");
+  const auto encoded = serialize_profile_json(extended);
+  expect(encoded.find("-0") != std::string::npos,
+         "opaque negative zero retains its original numeric spelling");
+  const auto negative_zero = json::parse("-0");
+  const auto *integer_zero = std::get_if<json::Value>(&negative_zero);
+  expect(integer_zero && integer_zero->is_integer() && integer_zero->is_number() &&
+             integer_zero->as_integer() == 0 && integer_zero->as_number() == 0.0,
+         "preserved negative zero retains known-field integer reader behavior");
+  const auto decoded = parse_profile_json(encoded);
+  const auto *restored = std::get_if<GameProfile>(&decoded);
+  expect(restored && *restored == extended,
+         "unknown root, entity, nested HID, bar, module and token fields round-trip exactly");
+  expect(restored && serialize_profile_json(*restored) == encoded,
+         "opaque JSON including full-width integers has byte-stable canonical output");
+  auto changed = extended;
+  changed.extra_fields["future"] = json::Value(false);
+  expect(changed != extended, "opaque edits participate in document value equality");
+  compact_hid_bindings(extended);
+  expect(extended.hid_bindings.size() == 1 &&
+         extended.bindings.back().chord.tokens.front().code == 1 &&
+         extended.bindings.back().token_extra_fields.at(
+             extended.bindings.back().chord.tokens.front()) == extras,
+         "HID compaction remaps token metadata by identity");
+  extended.bindings.pop_back();
+  compact_hid_bindings(extended);
+  expect(extended.hid_bindings.size() == 1,
+         "unreferenced HID descriptors carrying unknown fields are retained");
+  auto invalid = extended;
+  invalid.extra_fields["name"] = json::Value(std::string("shadow"));
+  expect(validate_profile(invalid).has_value(), "known-field extension collisions are rejected");
+  invalid = extended;
+  invalid.panels.front().bar.extra_fields["bad"] =
+      json::Value(std::numeric_limits<double>::infinity());
+  expect(validate_profile(invalid).has_value(), "non-finite opaque data cannot be saved");
+  invalid = extended;
+  invalid.game.extra_fields["bad"] = json::Value(std::string(1, static_cast<char>(0xFF)));
+  expect(validate_profile(invalid).has_value(), "invalid opaque UTF-8 is rejected, not discarded");
 }
 void test_profile_enabled_and_independent_bar_placement() {
   using namespace layerc::core;

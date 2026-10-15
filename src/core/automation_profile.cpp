@@ -66,7 +66,7 @@ struct Parser {
                             const std::string &path) {
     return fields.array(parent, key, path, json::Required::yes);
   }
-  // Unknown-field policy: like the profile, visual, and companion sidecars,
+  // Unknown-field policy: like the visual and companion sidecars,
   // automation rejects unknown fields at every object level. The serializer
   // has only ever emitted the keys accepted here, so no file LayerC wrote is
   // stranded, and a misspelt optional field (for example "priorty") fails

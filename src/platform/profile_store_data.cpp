@@ -277,8 +277,15 @@ template <typename Module>
   }
   if (effective.has_value()) {
     if (!Module::valid(*effective, stored)) return false;
-    stored.modules.push_back({.kind = Module::descriptor.kind,
-                              .schema_version = effective->schema_version});
+    const auto declaration = std::ranges::find(stored.modules, Module::descriptor.kind,
+                                               &layerc::core::ProfileModule::kind);
+    if (declaration != stored.modules.end()) declaration->schema_version = effective->schema_version;
+    else stored.modules.push_back({.kind = Module::descriptor.kind,
+                                   .schema_version = effective->schema_version});
+  } else {
+    std::erase_if(stored.modules, [](const auto &entry) {
+      return entry.kind == Module::descriptor.kind;
+    });
   }
 
   const auto paths = sidecar_paths(path, Module::descriptor.kind);
@@ -324,7 +331,6 @@ template <typename Module>
 plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   auto stored = std::move(inputs.profile);
   stored.schema_version = layerc::core::profile_schema_version;
-  stored.modules.clear();
   const auto &path = inputs.path;
   if (path.parent_path().empty()) return std::nullopt;
 

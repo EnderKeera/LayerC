@@ -6,12 +6,14 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "layerc/core/enum_wire.hpp"
+#include "layerc/core/json.hpp"
 
 namespace layerc::core {
 
@@ -36,6 +38,7 @@ inline constexpr Milliseconds max_cooldown_duration{86'400'000};
 // editor fields.
 inline constexpr std::uint32_t min_cooldown_charges = 1;
 inline constexpr std::uint32_t max_cooldown_charges = 99;
+inline constexpr std::size_t max_cooldown_groups = 64;
 inline constexpr std::uint32_t min_bar_width = 40;
 inline constexpr std::uint32_t max_bar_width = 1'200;
 inline constexpr std::uint32_t min_bar_height = 16;
@@ -142,6 +145,10 @@ struct CooldownDefinition {
   // only ever sees recovery.
   RecoveryMode recovery{RecoveryMode::single};
 
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
+
   bool operator==(const CooldownDefinition&) const = default;
 };
 
@@ -171,12 +178,22 @@ struct CooldownGroup {
   RecoveryMode recovery{RecoveryMode::single};
   RetriggerPolicy retrigger{RetriggerPolicy::ignore};
 
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
+
   bool operator==(const CooldownGroup &) const = default;
 };
 
 struct InputBinding {
   std::string cooldown_id;
   InputChord chord;
+
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
+  // Token identity rather than array position keeps metadata on reordering.
+  std::map<InputToken, json::Value::Object> token_extra_fields{};
 
   bool operator==(const InputBinding&) const = default;
 };
@@ -215,6 +232,12 @@ struct HidControlBinding {
   double threshold{0.5};
   double hysteresis{0.1};
   bool allow_system_class{};
+
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
+  json::Value::Object device_extra_fields{};
+  json::Value::Object control_extra_fields{};
 
   bool operator==(const HidControlBinding&) const = default;
 };
@@ -278,6 +301,10 @@ struct BarAppearance {
   bool show_text{true};
   bool hide_when_ready{true};
 
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
+
   bool operator==(const BarAppearance&) const = default;
 };
 
@@ -291,6 +318,10 @@ struct Panel {
   double anchor_y{0.5};
   std::vector<std::string> cooldown_ids;
 
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
+
   bool operator==(const Panel&) const = default;
 };
 
@@ -302,6 +333,10 @@ struct GameMatch {
   std::string executable_name;
   std::string window_class;
   std::string window_title;
+
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
 
   bool operator==(const GameMatch&) const = default;
 };
@@ -320,6 +355,10 @@ enum class ProfileModuleKind : std::uint8_t {
 struct ProfileModule {
   ProfileModuleKind kind{ProfileModuleKind::visual};
   std::uint32_t schema_version{2};
+
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
 
   bool operator==(const ProfileModule&) const = default;
 };
@@ -340,6 +379,10 @@ struct GameProfile {
   std::vector<CooldownGroup> cooldown_groups;
   std::vector<HidControlBinding> hid_bindings;
   std::vector<InputBinding> bindings;
+
+  // Opaque, value-owned JSON fields not interpreted by this profile schema.
+  // Keep them with the entity through edits, history and durable writes.
+  json::Value::Object extra_fields{};
 
   bool operator==(const GameProfile&) const = default;
 };

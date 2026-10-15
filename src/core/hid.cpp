@@ -25,16 +25,34 @@ void compact_hid_bindings(GameProfile &profile) {
   std::vector<HidControlBinding> compacted;
   compacted.reserve(profile.hid_bindings.size());
 
+  // Unreferenced descriptors can carry opaque data owned by a newer editor.
+  // Compaction must not erase that data as a side effect of another edit.
+  for (std::size_t i{}; i < profile.hid_bindings.size(); ++i) {
+    const auto &hid = profile.hid_bindings[i];
+    if (hid.extra_fields.empty() && hid.device_extra_fields.empty() &&
+        hid.control_extra_fields.empty()) continue;
+    remap[i] = compacted.size();
+    compacted.push_back(hid);
+  }
   for (auto &binding : profile.bindings) {
+    decltype(binding.token_extra_fields) token_fields;
     for (auto &token : binding.chord.tokens) {
-      if (token.device != InputDevice::generic_hid) continue;
+      const auto original = token;
+      if (token.device != InputDevice::generic_hid) {
+        if (const auto extra = binding.token_extra_fields.find(original);
+            extra != binding.token_extra_fields.end()) token_fields.emplace(token, extra->second);
+        continue;
+      }
       const auto old_index = static_cast<std::size_t>(token.code - 1U);
       if (remap[old_index] == missing) {
         remap[old_index] = compacted.size();
         compacted.push_back(profile.hid_bindings[old_index]);
       }
       token.code = static_cast<std::uint16_t>(remap[old_index] + 1U);
+      if (const auto extra = binding.token_extra_fields.find(original);
+          extra != binding.token_extra_fields.end()) token_fields.emplace(token, extra->second);
     }
+    binding.token_extra_fields = std::move(token_fields);
   }
   profile.hid_bindings = std::move(compacted);
 }

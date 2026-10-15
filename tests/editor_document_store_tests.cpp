@@ -99,6 +99,16 @@ std::optional<std::filesystem::path> save_new(const IsolatedStore &store,
 void round_trip_contracts() {
   const IsolatedStore store;
   auto document = full_document();
+  const json::Value::Object opaque{{"future", json::Value(std::string("keep me"))}};
+  document.profile().extra_fields = opaque;
+  document.profile().game.extra_fields = opaque;
+  document.profile().cooldowns.front().extra_fields = opaque;
+  document.profile().panels.front().extra_fields = opaque;
+  document.profile().panels.front().bar.extra_fields = opaque;
+  document.profile().modules = {
+      {.kind = ProfileModuleKind::visual, .schema_version = 2, .extra_fields = opaque},
+      {.kind = ProfileModuleKind::automation, .schema_version = 1, .extra_fields = opaque}};
+  document.reset_history();
   document.profile().name = "Edited";
   (void)document.history().record(document.profile(), document.visual(),
                                   document.automation());
@@ -127,6 +137,32 @@ void round_trip_contracts() {
              "\n---\n" + wanted);
   expect(reopened.profile().modules.size() == 2,
          "the stored base declares both written modules");
+  expect(reopened.profile().modules == document.profile().modules,
+         "bundle publication retains opaque module declaration fields");
+  reopened.reset_history();
+  reopened.profile().name = "Another edit";
+  (void)reopened.history().record(reopened.profile(), reopened.visual(), reopened.automation());
+  const auto undo = reopened.history().undo(
+      reopened.profile(), reopened.visual(), reopened.automation());
+  expect(undo && undo->profile.extra_fields == opaque &&
+             undo->profile.name == "Edited",
+         "document undo retains unknown fields as part of the value snapshot");
+  const auto again_saved = layerc::editor::commit_document(reopened, *path, {}, nullptr);
+  auto after_edit = load(*path);
+  expect(again_saved.ok() && after_edit && after_edit->profile.extra_fields == opaque &&
+             after_edit->profile.panels.front().bar.extra_fields == opaque &&
+             after_edit->profile.modules == document.profile().modules,
+         "a second durable save retains unknown fields throughout the base profile");
+  expect(layerc::test::read_file(layerc::platform::recovery_backup_path(*path)) == stored,
+         "the recovery copy retains the complete previous profile including opaque data");
+  const auto before_rejected = layerc::test::read_file(*path);
+  reopened.profile().extra_fields["enabled"] = json::Value(false);
+  const auto rejected = layerc::editor::commit_document(reopened, *path, {}, nullptr);
+  expect(rejected.result == CommitResult::invalid_profile &&
+             layerc::test::read_file(*path) == before_rejected &&
+             reopened.profile().extra_fields.contains("enabled"),
+         "invalid opaque edits preserve both disk data and the rejected draft");
+  reopened.profile().extra_fields.erase("enabled");
   expect(reopened.visual() == document.visual(),
          "reopening yields the exact committed visual module");
   expect(reopened.automation() == document.automation(),
