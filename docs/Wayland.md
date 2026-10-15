@@ -461,8 +461,8 @@ Root containers drop only the sway fixture to their existing unprivileged
 | Headless sway/pixman | Native output, foreign-toplevel and click-through layer-shell tests with scale 1/2; XWayland editor walkthrough (5/5) | Physical outputs/GPU, all wlroots-family compositors, real games |
 | X11/Xvfb | Existing daemon suites, installed smokes, editor walkthrough (30/30) | Physical GNOME Xorg/KDE X11, real input/gamepad/HiDPI desktops |
 | KWin | Private-bus script load/run/unload/authentication and GJS script fixtures | Real Plasma/KWin 5/6, fullscreen stacking, native portal consent |
-| GNOME | GJS pure modules and unmodified glue with fake Shell/Mutter objects on a private bus | Real GNOME 45–50, host extension enablement, fullscreen stacking, accessibility user study |
-| ScreenCast/PipeWire | Fake portal sequencing/denial/owner loss and private local PipeWire stream lifecycle | Real portal source picker, physical capture/GPU performance |
+| GNOME | GJS pure modules and unmodified glue with fake Shell/Mutter objects on a private bus; real GNOME Shell 48 (headless, owned private session) for portal consent | Host GNOME 45–50 desktops, host extension enablement, fullscreen stacking, accessibility user study |
+| ScreenCast/PipeWire | Fake portal sequencing/denial/owner loss and private local PipeWire stream lifecycle; real xdg-desktop-portal-gnome source picker deny/cancel/revoke against the product client (`tools/linux-portal-consent-tests.sh`) | KDE portal consent, decoded frames from a real portal stream, physical capture/GPU performance |
 | evdev | Synthetic event/capability/keymap, idle/recovery and boundary tests | Physical devices, permissions/hotplug and real game input; sandbox device access |
 
 Local complete gate `out/linux-automation/c7h-20261015T100347Z` passed on
@@ -471,8 +471,13 @@ Local complete gate `out/linux-automation/c7h-20261015T100347Z` passed on
 base-gate fixture checks: 36 headless, 7 X11, 2 editor, 1 Wayland, 5 D-Bus
 and 6 GJS suites, none skipped, plus 88 tooling tests and installed native
 and Flatpak smokes. Native/Flatpak editor idle USS was 13.13/12.93 MiB,
-both at 0.0% CPU over 20 s (targets 20 MiB / 0.2%). The package stage was off;
-Docker Desktop was unavailable for the attempted native-container reruns.
+both at 0.0% CPU over 20 s (targets 20 MiB / 0.2%). The package stage was off
+there; the digest-pinned Debian container gate with `--wayland required
+--editor required --package required` later passed on clean commit `25985aa`
+(`out/linux-ci/debian-stable-20261015T153559Z`). The real GNOME portal consent
+run `out/linux-consent/consent-20261015T155656Z-973Jfm` (clean `eb09a59`) passed
+deny, cancel and revoke in an owned headless GNOME Shell 48 session; the
+product needed `33ee040` to accept the portal's string `session_handle`.
 The integration review found no High; its missing-protocol-fixture Medium
 was fixed and independently confirmed. Workflow lint passed with the same
 checksum-verified actionlint 1.7.12 version pinned by CI (not a CI run).
