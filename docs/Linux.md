@@ -24,7 +24,8 @@ substitute for the hardware checklist.
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
 | v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; not yet published |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
-| Gamescope and Wayland | unsupported in V2.6 | No compatibility promise or silent fallback |
+| Wayland (V2.7, in development) | implemented locally, automated evidence only | Native/degraded providers and evidence gaps below; no support claim in V2.6 |
+| Gamescope | unsupported | Out of scope |
 
 On X11, `layerd` reads passive input and paints click-through overlays; the
 shared capture adapter also backs bounded CLI snapshots. Without `$DISPLAY`,
@@ -33,6 +34,48 @@ capabilities as unavailable; `layercal` fails visibly. Name matching on both
 platforms uses the shared deterministic fold (ASCII plus the cased Latin-1
 supplement rows; all other codepoints compare byte-exact), replacing the
 former Windows `LCMapStringEx` invariant mapping so Windows and Linux agree.
+
+## Wayland development (V2.7)
+
+The backend is implemented on the local integration branch, not released or
+physically qualified. [`Wayland.md`](Wayland.md) owns its architecture and
+provider contracts. V2.6 and the unpublished v2.6c remain X11-only support scopes;
+Gamescope remains unsupported.
+
+`layerd` selects a connected Wayland display in `auto`, then X11, then headless.
+Use `LAYERC_DISPLAY_BACKEND=auto|x11|wayland` to force the choice; a forced
+backend never silently selects the other session. `layerctl status --json`
+reports `display.session`, compositor, and each provider's name, state and
+reason tokens; the editor's Runtime Diagnostics repeats those rows.
+
+- wlroots-family providers use Wayland outputs and layer-shell overlays.
+  Foreign toplevels have no PID and only output geometry; with XWayland,
+  tracking instead uses X11 and is explicitly degraded. KWin uses a loaded
+  script and GNOME uses the optional Shell extension. These are implementation
+  paths, not a compatibility promise for every compositor in those families.
+- Input defaults to XWayland XI2 (`degraded`, `xwayland_focus_only`). The only
+  global native input source is passive evdev, enabled with `layerd --input=evdev`
+  or `LAYERC_INPUT=evdev`. The user must already belong to `input`; LayerC never
+  elevates or changes groups. Devices are opened read-only and never grabbed.
+- Native visual capture uses the ScreenCast portal and a portal-granted
+  PipeWire connection. The user chooses a source; denial remains visible and
+  does not trigger repeated prompts. XWayland windows can retain X11 capture.
+- `layere` remains an X11 client and requires XWayland. Its Detected Tasks,
+  placement and calibration address XWayland windows only, not native windows;
+  status and diagnostics do not hide that degradation.
+- The optional GNOME extension installs under
+  `<datadir>/gnome-shell/extensions/layerc@enderkeera.github.io/` but is never
+  enabled by installation. For a native user install, use
+  `cmake --install build-linux --component GnomeShellExtension --prefix ~/.local`
+  and explicitly enable it with
+  `gnome-extensions enable layerc@enderkeera.github.io`. Files inside a Flatpak
+  cannot install or enable an extension in the host Shell.
+
+Automated evidence is limited to headless sway (including scale 1/2 outputs),
+private D-Bus fakes and GJS Shell/Mutter objects, synthetic evdev, and an
+XWayland editor walkthrough. No real KWin, GNOME Shell, desktop portal consent,
+GPU/physical monitor, real game, input hotplug or screen-reader user study was
+observed. See [the compositor evidence matrix](Wayland.md#compositor-evidence-and-gaps).
 
 ## X11 session (V2.6.1)
 
@@ -388,8 +431,8 @@ disposable workers and performs the following:
 
 - configures, builds, installs, and runs the portable/core/Linux suites with no
   display;
-- runs the five required X11 tracking, input, overlay, capture, and visual
-  suites under Xvfb, failing if one is absent or skipped;
+- runs the six required X11 display, tracking, input, overlay, capture, and
+  visual suites under Xvfb, failing if one is absent or skipped;
 - validates both stages against the `linux-headless` and `linux-x11` suite
   lists in `tools/test-gates.json`, so a suite that is not registered (for
   example because a dependency such as `libxtst-dev` is missing) fails the
@@ -400,6 +443,16 @@ disposable workers and performs the following:
 - records CTest JUnit, registration and validation summaries, daemon logs,
   status snapshots, PPM/JSON captures, process resources, environment/tool
   versions, the exact Git commit and dirty state, plus SHA-256 checksums;
+- with `--wayland off|auto|required` (default `auto`), runs the V2.7 `wayland`,
+  `dbus` and `gjs` gates. Each suite owns its headless compositor or private bus;
+  the caller's display, bus and input opt-in are cleared. `auto` records a
+  missing lane/harness or an allowed skip as `unavailable`, never a pass.
+  `required` makes every backend policy suite (including optional PipeWire)
+  and the Wayland protocol/connection fixtures in the headless/X11 gates
+  mandatory, and rejects their skips; unrelated PowerShell tooling stays
+  optional. `off` records `not-run` and keeps source-only builds
+  usable. Disposable container jobs install `tools/linux-wayland-deps.txt`
+  unless this policy is off;
 - with `--editor auto|required` (default `auto`), runs the CTest `editor` gate
   (`linux-editor` in `tools/test-gates.json`) under Xvfb and the installed
   editor smoke. `required` configures with `LAYERC_REQUIRE_EDITOR=ON`, so a
@@ -436,8 +489,8 @@ runs the gate with package installation allowed; it refuses to run outside a
 container. Its build is container-local while the evidence mount survives
 container teardown. An `off` Flatpak policy is recorded as `not-run`,
 never as a pass; the dedicated Ubuntu Flatpak CI job supplies required coverage.
-That job passes `--flatpak-only` (valid only with `--flatpak required` and
-without release evidence): it builds just the smoke fixture natively, records
+That job passes `--flatpak-only` (valid only with `--flatpak required`,
+`--package off`, no `--wayland required` and no release evidence): it builds just the smoke fixture natively, records
 the native stage as `not-run`, and runs the Flatpak build and smokes, since the
 container jobs already cover the native gate.
 
@@ -576,18 +629,26 @@ Flathub submission. The manifest has not been submitted and builds its
 bundled FLTK and AT-SPI from source, so it is for local or self-hosted Flatpak
 repositories until a publishing channel accepts it.
 
-The manifest grants `--socket=x11`, which is required for the one Xlib
-connection used by XI2, Shape, RandR, EWMH and the editor window, and v2.6c
-adds `--filesystem=xdg-documents` and `--filesystem=xdg-download` so the
-editor's import/export chooser can reach the usual exchange folders. It does
-**not** grant network, device, home or host filesystem, Wayland, session-bus,
-IPC-share, or background access; the screen-reader bridge uses the
-accessibility bus Flatpak provides to every app. X11 access is intentionally a
-separately reviewed permission because an X server does not isolate clients;
-removing it returns the Flatpak to the V2.6.0 store/control-only mode, which
-also disables the editor (the default command), so run the daemon and CLIs
-with `--command=`. Remove the two folders to keep imports and exports to shell
-redirection.
+The manifest grants `--socket=x11` for XI2, Shape, RandR, EWMH and the
+editor, plus `--socket=wayland` for the in-development V2.7 daemon providers.
+It retains `--filesystem=xdg-documents` and `--filesystem=xdg-download` for
+import/export. Its filtered session bus permits only the named compositor
+services `org.kde.KWin`, `org.gnome.Shell` and
+`io.github.EnderKeera.LayerC.GnomeShell` in addition to Flatpak's implicit
+portal/accessibility access and app-ID name ownership. ScreenCast returns the
+PipeWire fd; no broad PipeWire socket or session-bus grant is needed.
+
+It grants **no** network, device, home/host filesystem, unfiltered session bus,
+IPC-share or background access. evdev stays unavailable in the default sandbox;
+only a user's explicit
+`flatpak override --user --device=all io.github.EnderKeera.LayerC` can expose
+input devices (the user's host permissions and LayerC's opt-in still apply).
+LayerC never performs this override. X11 access is intentionally separately
+reviewed because an X server does not isolate clients. Removing X11 disables
+the editor (still X11-only); removing both display sockets returns to headless
+store/control operation via `--command=`. Remove the two folders to restrict
+file exchange to shell redirection. These permissions do not assert Wayland
+support or install the GNOME extension in the host Shell.
 
 ```sh
 flatpak-builder --user --install --force-clean build-flatpak \

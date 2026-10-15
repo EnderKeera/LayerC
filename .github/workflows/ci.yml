@@ -128,19 +128,20 @@ jobs:
           - name: debian:stable
             artifact: debian-stable
             image: debian@sha256:7fa362f5e7c036d7f45621a6c721c03493cdcb5889adfcd65587759e34fe4c6f
-            gates: --editor required --package required
+            gates: --editor required --package required --wayland required
           - name: ubuntu:24.04
             artifact: ubuntu-24.04
             image: ubuntu@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
             # Ubuntu 24.04 ships AT-SPI 2.52, below the editor's floor; it
             # keeps the headless/X11 source build and records no editor.
-            gates: --editor off --package off
+            gates: --editor off --package off --wayland required
     name: Linux (${{ matrix.name }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
+      # Required wayland (headless sway), dbus (private bus) and gjs fixtures.
       # Logic lives in tools/ci-linux.sh so the same gate runs locally.
       - name: Build and test (${{ matrix.name }})
         shell: bash

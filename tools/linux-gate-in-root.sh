@@ -22,9 +22,13 @@ evidence_dir=$3
 shift 3
 
 editor=auto
+wayland=auto
 arguments=("$@")
 for ((i = 0; i < ${#arguments[@]}; ++i)); do
-  [[ ${arguments[i]} == --editor ]] && editor=${arguments[i + 1]:-}
+  case ${arguments[i]} in
+    --editor) editor=${arguments[i + 1]:-} ;;
+    --wayland) wayland=${arguments[i + 1]:-} ;;
+  esac
 done
 
 # One package per line; blank lines, comments and CR line endings are ignored,
@@ -42,6 +46,11 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 mapfile -t packages < <(read_list "$source_dir/tools/linux-deps.txt")
 apt-get install -y --no-install-recommends "${packages[@]}"
+
+if [[ $wayland != off ]]; then
+  mapfile -t packages < <(read_list "$source_dir/tools/linux-wayland-deps.txt")
+  apt-get install -y --no-install-recommends "${packages[@]}"
+fi
 
 if [[ $editor != off ]]; then
   # shellcheck disable=SC1091
