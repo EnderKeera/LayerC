@@ -2,6 +2,7 @@
 // folder, Split grouped bars, panel colours, Options and editor Appearance.
 #include "editor_app.hpp"
 #include "appearance_window.hpp"
+#include "cooldown_groups_window.hpp"
 #include "diagnostics_window.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
@@ -108,6 +109,16 @@ void EditorApp::load_appearance() {
 
 bool EditorApp::tools_command(const EditorCommand action) {
   switch (action) {
+  case EditorCommand::cooldown_groups: {
+    if (!session.has_document() || !apply_fields()) return true;
+    CooldownGroupsDialog dialog(session);
+    apply_editor_appearance(appearance_, dialog, nullptr, nullptr);
+    dialog.show();
+    while (dialog.shown()) Fl::wait();
+    if (dialog.applied) changed(std::nullopt);
+    else report("Cooldown groups unchanged.");
+    return true;
+  }
   case EditorCommand::options:
     show_text_dialog("Options — LayerE", options_text);
     return true;

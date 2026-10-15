@@ -5,6 +5,8 @@
 #include "profile_edit.hpp"
 #include "automation_graph.hpp"
 #include "calibration_window.hpp"
+#include "cooldown_groups_window.hpp"
+#include "export_selection_window.hpp"
 #include "test_support.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -858,9 +860,97 @@ void calibration_unavailable_and_owned_capture() {
   app.window.hide();
 }
 
+void cooldown_group_dialog_transactions() {
+  Fixture fixture; fixture.store();
+  editor::EditorSession session(fixture.path.parent_path());
+  expect(!session.open(0), "open the private group fixture");
+  const auto original = session.document().profile();
+  {
+    editor::CooldownGroupsDialog dialog(session); dialog.show(); Fl::check();
+    find_button(dialog, "Add group")->do_callback();
+    dialog.mode->value(1); dialog.mode->do_callback();
+    dialog.duration->value("nan");
+    find_button(dialog, "Apply")->do_callback();
+    expect(dialog.shown() && !dialog.applied && session.document().profile() == original,
+           "invalid group timing leaves the dialog and document intact");
+    dialog.duration->value("2.5"); dialog.charges->value("3");
+    dialog.recovery->value(1); dialog.retrigger->value(1);
+    dialog.name->value("Shared charges");
+    find_button(dialog, "Apply")->do_callback();
+    expect(dialog.applied, "valid complete group edit applies");
+  }
+  const auto grouped = session.document().profile();
+  expect(grouped.cooldown_groups.size() == 1 &&
+             grouped.cooldown_groups.front().duration == core::Milliseconds(2500) &&
+             grouped.cooldown_groups.front().max_charges == 3 &&
+             grouped.cooldown_groups.front().recovery == core::RecoveryMode::sequential &&
+             grouped.cooldown_groups.front().retrigger == core::RetriggerPolicy::restart,
+         "the group dialog edits shared timing, charges, recovery and retrigger");
+  expect(session.undo() && session.document().profile() == original &&
+             session.redo() && session.document().profile() == grouped,
+         "the entire group dialog is one undoable session edit");
+  {
+    editor::CooldownGroupsDialog dialog(session); dialog.show(); Fl::check();
+    find_button(dialog, "Add group")->do_callback();
+    dialog.mode->value(1); dialog.mode->do_callback();
+    find_button(dialog, "Apply")->do_callback();
+    expect(dialog.shown() && !dialog.applied && session.document().profile() == grouped,
+           "overlapping shared pools are refused without changing the document");
+    find_button(dialog, "Cancel")->do_callback();
+  }
+  expect(!session.edit([](auto &profile) {
+    profile.cooldown_groups.front().extra_fields.emplace("future", core::json::Value(true));
+  }), "add opaque group metadata to the fixture");
+  {
+    editor::CooldownGroupsDialog dialog(session); dialog.show(); Fl::check();
+    dialog.name->value("Renamed group");
+    find_button(dialog, "Apply")->do_callback();
+    expect(dialog.applied &&
+               session.document().profile().cooldown_groups.front().extra_fields.contains("future"),
+           "group field edits retain opaque metadata");
+  }
+  {
+    editor::CooldownGroupsDialog dialog(session); dialog.show(); Fl::check();
+    find_button(dialog, "Remove group")->do_callback();
+    find_button(dialog, "Apply")->do_callback();
+    expect(dialog.applied && session.document().profile().cooldown_groups.empty(),
+           "removing a group is an explicit validated edit");
+  }
+}
+void export_profile_checklist() {
+  Fixture fixture;
+  std::vector<platform::StoredProfile> entries(3);
+  for (std::size_t i{}; i < entries.size(); ++i) {
+    entries[i].profile.id = "profile-" + std::to_string(i);
+    entries[i].profile.name = "Same visible name";
+  }
+  {
+    editor::ExportSelectionDialog dialog(entries, 1); dialog.show(); Fl::check();
+    expect(dialog.profiles.size() == 3 && dialog.profiles[1]->value() &&
+               !dialog.profiles[0]->value(),
+           "the export checklist defaults to the selected saved profile");
+    find_button(dialog, "Select none")->do_callback();
+    find_button(dialog, "Export")->do_callback();
+    expect(dialog.shown() && !dialog.selection, "an empty export selection is refused");
+    dialog.profiles[0]->value(1); dialog.profiles[2]->value(1);
+    find_button(dialog, "Export")->do_callback();
+    expect(dialog.selection == std::vector<std::size_t>({0, 2}),
+           "the export checklist accepts an arbitrary noncontiguous subset");
+  }
+  {
+    editor::ExportSelectionDialog dialog(entries, 1); dialog.show(); Fl::check();
+    find_button(dialog, "Select all")->do_callback();
+    expect(std::ranges::all_of(dialog.profiles, [](auto *item) { return item->value(); }),
+           "Select all includes every profile");
+    find_button(dialog, "Cancel")->do_callback();
+    expect(!dialog.selection, "Cancel never returns an export intent");
+  }
+}
 } // namespace
 
 LAYERC_TEST_MAIN(
+  LAYERC_TEST_CASE(cooldown_group_dialog_transactions),
+  LAYERC_TEST_CASE(export_profile_checklist),
   LAYERC_TEST_CASE(empty_draft_save_and_reopen),
   LAYERC_TEST_CASE(text_history_and_invalid_navigation),
   LAYERC_TEST_CASE(cooldowns_bindings_and_panels),

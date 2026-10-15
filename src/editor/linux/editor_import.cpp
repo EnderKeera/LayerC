@@ -1,9 +1,12 @@
 #include "editor_app.hpp"
+#include "export_selection_window.hpp"
+#include "appearance_window.hpp"
+
+#include <FL/Fl.H>
 
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/fl_ask.H>
 #include <cstdlib>
-#include <numeric>
 #include <variant>
 
 namespace layerc::editor {
@@ -76,13 +79,12 @@ void EditorApp::export_profile(const bool pack) {
   if (!selected) { report("Select a saved profile before exporting."); return; }
   std::vector<std::size_t> rows{*selected};
   if (pack) {
-    const auto decision = fl_choice("Export the selected saved profile or every saved profile?",
-                                    "Cancel", "Selected", "All");
-    if (decision == 0) return;
-    if (decision == 2) {
-      rows.resize(session.profiles().profiles.size());
-      std::iota(rows.begin(), rows.end(), std::size_t{0});
-    }
+    ExportSelectionDialog dialog(session.profiles().profiles, *selected);
+    apply_editor_appearance(appearance_, dialog, nullptr, nullptr);
+    dialog.show();
+    while (dialog.shown()) Fl::wait();
+    if (!dialog.selection) { report("Export canceled. No files changed."); return; }
+    rows = std::move(*dialog.selection);
   }
   const auto destination = choose_file(true, pack ? "Export complete profile pack" : "Export base JSON only",
                                        pack ? "LayerC profile pack\t*.layercprofile" : "JSON\t*.json");
