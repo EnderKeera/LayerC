@@ -54,6 +54,7 @@
         "layerc_linux_profile_pack_tests",
         "layerc_linux_display_types_tests",
         "layerc_linux_display_adapters_tests",
+        "layerc_linux_native_visual_tests",
         "layerc_linux_bus_model_tests",
         "layerc_linux_evdev_input_tests",
         "layerc_linux_evdev_keymap_tests",
@@ -104,6 +105,35 @@
         "layerc_linux_editor_autosave_tests",
         "layerc_linux_editor_widget_tests"
       ]
+    },
+    "linux-dbus": {
+      "description": "Isolated session-bus fakes (fake Shell1/KWin, GNOME bridge, portal consent, daemon provider precedence and idle quiescence); registered with the optional sd-bus lane (libsystemd or libelogind) and selected only where it is built (CTest label dbus).",
+      "label": "dbus",
+      "required": [
+        "layerc_linux_dbus_service_tests",
+        "layerc_linux_gnome_bridge_tests",
+        "layerc_linux_portal_screencast_tests",
+        "layerc_linux_bus_providers_tests"
+      ],
+      "optional": {
+        "layerc_linux_pipewire_capture_tests": "registered only with sd-bus and PipeWire; private remote lifecycle, fd/thread counts, and version faults"
+      },
+      "allowSkip": {
+        "layerc_linux_dbus_service_tests": "dbus-run-session missing; unavailable fake-bus coverage, not a pass",
+        "layerc_linux_gnome_bridge_tests": "dbus-run-session missing; unavailable fake-bus coverage, not a pass",
+        "layerc_linux_portal_screencast_tests": "dbus-run-session missing; unavailable fake-bus coverage, not a pass",
+        "layerc_linux_bus_providers_tests": "dbus-run-session missing; unavailable fake-bus coverage, not a pass"
+      }
+    },
+    "linux-gjs": {
+      "description": "Pure JavaScript fixtures (CTest label gjs).",
+      "label": "gjs",
+      "required": [
+        "layerc_linux_kwin_script_tests"
+      ],
+      "allowSkip": {
+        "layerc_linux_kwin_script_tests": "gjs missing; unavailable script coverage, not a pass"
+      }
     }
   }
 }

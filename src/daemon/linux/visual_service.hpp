@@ -17,8 +17,8 @@
 
 namespace layerc::daemon {
 
-// One shared X11 capture per active window, sampled only while inline visual
-// demand exists. Native X11 state remains outside core/runtime.
+// One shared capture per active window, sampled only while inline visual
+// demand exists. Native transports remain outside core/runtime.
 class X11VisualService final : public layerc::runtime::IRuntimeService {
 public:
   struct WorkStats {
@@ -31,6 +31,7 @@ public:
   };
 
   void attach(layerc::platform::X11Display &display) noexcept;
+  void use_native(NativeCaptureFactory *factory) noexcept;
   void refresh(std::span<InputSession> sessions,
                const layerc::runtime::CapabilityDemand &demand,
                bool configuration_changed = false,
@@ -77,11 +78,17 @@ private:
   struct Target {
     std::uint64_t window{};
     layerc::core::CaptureQuality quality{layerc::core::CaptureQuality::low};
-    std::unique_ptr<layerc::platform::X11CaptureSession> capture;
+    // Transport chosen by create_capture(); the evaluator never branches on it.
+    std::unique_ptr<VisualCaptureSession> capture;
+    std::optional<std::uint64_t> x11_window;
     std::vector<Evaluation *> evaluations;
   };
 
+  [[nodiscard]] std::unique_ptr<VisualCaptureSession>
+  create_capture(const Target &target, std::string_view profile_id, std::uint8_t sample_rate);
+
   layerc::platform::X11Display *display_{};
+  NativeCaptureFactory *native_{};
   std::vector<Target> targets_;
   // Matched-profile configuration survives foreground/capture quiescence.
   std::map<std::filesystem::path, Evaluation> evaluations_;

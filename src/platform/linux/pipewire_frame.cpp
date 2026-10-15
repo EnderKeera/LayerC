@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace layerc::platform {
 namespace {
@@ -43,10 +44,34 @@ monitor_crop(const LogicalRect &window, const LogicalRect &monitor,
   return bounds;
 }
 
+std::optional<WindowCanvas>
+window_canvas(const LogicalRect &window, const LogicalRect &monitor,
+              const std::uint32_t buffer_width, const std::uint32_t buffer_height) noexcept {
+  if (window.width <= 0 || window.height <= 0 || monitor.width <= 0 || monitor.height <= 0 ||
+      buffer_width == 0 || buffer_height == 0)
+    return std::nullopt;
+  const auto to_buffer = [](const std::int64_t logical, const std::int64_t logical_size,
+                            const std::uint32_t buffer_size) {
+    const auto pixels = (logical * buffer_size + logical_size / 2) / logical_size;
+    return static_cast<std::uint32_t>(
+        std::clamp<std::int64_t>(pixels, 0, std::numeric_limits<std::uint32_t>::max()));
+  };
+  WindowCanvas canvas{
+      to_buffer(window.width, monitor.width, buffer_width),
+      to_buffer(window.height, monitor.height, buffer_height),
+      to_buffer(std::max<std::int64_t>(0, static_cast<std::int64_t>(monitor.x) - window.x),
+                monitor.width, buffer_width),
+      to_buffer(std::max<std::int64_t>(0, static_cast<std::int64_t>(monitor.y) - window.y),
+                monitor.height, buffer_height)};
+  if (canvas.width == 0 || canvas.height == 0) return std::nullopt;
+  return canvas;
+}
+
 std::shared_ptr<const capture::CaptureFrame>
 convert_video_frame(const RawVideoFrame &raw, const core::CaptureQuality quality,
                     std::optional<capture::PixelBounds> crop,
-                    const core::TimePoint captured_at, std::string &error) {
+                    const core::TimePoint captured_at, std::string &error,
+                    const std::optional<WindowCanvas> canvas) {
   if (raw.width == 0 || raw.height == 0) {
     error = "pipewire: empty video buffer";
     return nullptr;
@@ -67,7 +92,13 @@ convert_video_frame(const RawVideoFrame &raw, const core::CaptureQuality quality
   }
   const auto source_width = bounds.right - bounds.left;
   const auto source_height = bounds.bottom - bounds.top;
-  const auto [width, height] = capture::capture_sample_dimensions(source_width, source_height,
+  const auto placed = canvas.value_or(WindowCanvas{source_width, source_height, 0, 0});
+  if (placed.width == 0 || placed.height == 0 || placed.x >= placed.width ||
+      placed.y >= placed.height) {
+    error = "pipewire: crop is outside the window canvas";
+    return nullptr;
+  }
+  const auto [width, height] = capture::capture_sample_dimensions(placed.width, placed.height,
                                                                   quality);
   if (width == 0 || height == 0) {
     error = "pipewire: sampled dimensions are empty";
@@ -79,16 +110,25 @@ convert_video_frame(const RawVideoFrame &raw, const core::CaptureQuality quality
   frame->width = width;
   frame->height = height;
   frame->captured_at = captured_at;
+  // The crop's share of the canvas; pixels outside it stay black and are
+  // excluded from evaluation by this region.
+  const auto visible_width = std::min(source_width, placed.width - placed.x);
+  const auto visible_height = std::min(source_height, placed.height - placed.y);
+  frame->available_region = {static_cast<double>(placed.x) / placed.width,
+                             static_cast<double>(placed.y) / placed.height,
+                             static_cast<double>(visible_width) / placed.width,
+                             static_cast<double>(visible_height) / placed.height};
   frame->pixels.resize(static_cast<std::size_t>(width) * height);
   const auto *bytes = reinterpret_cast<const std::uint8_t *>(raw.data.data());
   for (std::uint32_t y = 0; y < height; ++y) {
-    const auto row = static_cast<std::size_t>(bounds.top + sampled_coordinate(y, source_height,
-                                                                              height)) *
-                     raw.stride;
+    const auto canvas_y = sampled_coordinate(y, placed.height, height);
+    if (canvas_y < placed.y || canvas_y - placed.y >= visible_height) continue;
+    const auto row = static_cast<std::size_t>(bounds.top + canvas_y - placed.y) * raw.stride;
     for (std::uint32_t x = 0; x < width; ++x) {
+      const auto canvas_x = sampled_coordinate(x, placed.width, width);
+      if (canvas_x < placed.x || canvas_x - placed.x >= visible_width) continue;
       const auto *pixel =
-          bytes + row +
-          static_cast<std::size_t>(bounds.left + sampled_coordinate(x, source_width, width)) * 4U;
+          bytes + row + static_cast<std::size_t>(bounds.left + canvas_x - placed.x) * 4U;
       // Alpha is ignored: overlays composite opaque content.
       frame->pixels[static_cast<std::size_t>(y) * width + x] =
           rgb_order ? core::RgbPixel{pixel[0], pixel[1], pixel[2]}

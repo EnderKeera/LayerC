@@ -41,11 +41,27 @@ struct LogicalRect {
 monitor_crop(const LogicalRect &window, const LogicalRect &monitor,
              std::uint32_t buffer_width, std::uint32_t buffer_height) noexcept;
 
-// Samples `crop` (default: the whole buffer) at `quality`. Returns null and
-// sets `error` when the buffer is shorter than its stride and height claim.
+// The whole window at buffer scale, with the origin of its monitor crop. A
+// partially visible window keeps whole-window coordinates: the crop is placed
+// at (x, y) and the rest of the canvas is reported unavailable.
+struct WindowCanvas {
+  std::uint32_t width{};
+  std::uint32_t height{};
+  std::uint32_t x{};
+  std::uint32_t y{};
+};
+
+[[nodiscard]] std::optional<WindowCanvas>
+window_canvas(const LogicalRect &window, const LogicalRect &monitor,
+              std::uint32_t buffer_width, std::uint32_t buffer_height) noexcept;
+
+// Samples `crop` (default: the whole buffer) at `quality`. With `canvas`, the
+// frame spans the whole window and `available_region` covers only the crop.
+// Returns null and sets `error` when the buffer is shorter than its stride and
+// height claim.
 [[nodiscard]] std::shared_ptr<const capture::CaptureFrame>
 convert_video_frame(const RawVideoFrame &raw, core::CaptureQuality quality,
                     std::optional<capture::PixelBounds> crop, core::TimePoint captured_at,
-                    std::string &error);
+                    std::string &error, std::optional<WindowCanvas> canvas = std::nullopt);
 
 } // namespace layerc::platform

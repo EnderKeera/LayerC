@@ -5,6 +5,7 @@
 // scan or overlay windows. No backend header may reach this file.
 
 #include "display_types.hpp"
+#include "native_capture.hpp"
 
 #include <span>
 #include <string>
@@ -32,6 +33,10 @@ public:
   virtual ~NativeDisplaySource() = default;
   // Authoritative native window tracking is available.
   [[nodiscard]] virtual bool has_windows() const = 0;
+  // Compositor reports supersede XWayland-only scans; foreign toplevels
+  // retain the existing fallback because they cannot supply PIDs.
+  [[nodiscard]] virtual bool prefer_windows() const { return false; }
+  [[nodiscard]] virtual NativeCaptureFactory *capture() { return nullptr; }
   [[nodiscard]] virtual layerc::platform::WindowScan windows() const = 0;
   [[nodiscard]] virtual bool has_monitors() const = 0;
   [[nodiscard]] virtual layerc::platform::MonitorScan monitors() const = 0;

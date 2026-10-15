@@ -165,6 +165,9 @@ with `gnome-extensions enable`; it never accesses the network.
   stage coordinates by non-reactive actors that never take input and stay above
   fullscreen windows. Every panel is removed on `Clear()`, when the daemon's
   name vanishes, and on `disable()`.
+- A panel that would exceed these bounds is rejected on its own: accepted
+  panels keep presenting, the overlay row is `degraded` with
+  `gnome_frame_too_large`, and it recovers once the panel fits or is removed.
 
 ## Native Wayland adapters
 
@@ -237,13 +240,23 @@ position and size. `dpi = 96`, `buffer_scale = wl_output.scale`.
   helper and replaced with every new token.
 - A user cancel/deny marks capture unavailable (`portal_denied`) until the
   next configuration or demand change; there is no retry loop.
-- PipeWire: `pw_init` once, a `pw_loop` driven from the main loop
-  (`pw_loop_get_fd` + `pw_loop_iterate(loop, 0)`), `pw_context_connect_fd`
-  on the portal fd, one `pw_stream` per session negotiating
-  BGRx/BGRA/RGBx/RGBA with `MemPtr`/`MemFd` buffers (no DMA-BUF in V2.7),
-  converted into `capture::CaptureFrame` honouring `CaptureQuality`.
+- PipeWire: demanded streams hold balanced `pw_init`/`pw_deinit` leases; the
+  last stream releases library resources. A `pw_loop` is driven from the main
+  loop (`pw_loop_get_fd` + `pw_loop_iterate(loop, 0)`), with
+  `pw_context_connect_fd` on the portal fd and one `pw_stream` per session
+  negotiating BGRx/BGRA/RGBx/RGBA with `MemPtr`/`MemFd` buffers (no DMA-BUF in
+  V2.7), converted into `capture::CaptureFrame` honouring `CaptureQuality`.
+  Native capture requires PipeWire 1.2 or later to disable every data-loop
+  thread; older runtimes report `pipewire_version_requires_1_2`. The private
+  context uses the null configuration and explicitly loaded local modules;
+  custom `PIPEWIRE_CONFIG_NAME` overrides report `pipewire_config_override`
+  rather than executing helpers or starting threads. Library diagnostics use
+  stderr, never the default persistent journal/file logger.
 - Monitor sources are cropped to the window rect (logical → buffer pixels) and
   reported degraded `monitor_crop`, because overlays may appear in the pixels.
+  The frame keeps whole-window coordinates: a window partly outside its
+  monitor is placed on a whole-window canvas whose missing part is excluded
+  through `available_region`, so rule regions sample the same window pixels.
 - The portal session is closed as soon as visual demand drops.
 
 ## Status schema
@@ -283,8 +296,10 @@ license headers under `third_party/wayland-protocols/`; `xdg-shell` and
 
 The display seam and the wlroots-family native providers (outputs, foreign
 toplevels, layer-shell overlay) and opt-in evdev input routing are implemented
-on the local Linux-editor integration branch; the KWin/GNOME bridges and portal
-capture are still pending. This is not a V2.7 support claim.
+on the local Linux-editor integration branch, as is the daemon side of the bus
+lane (Shell1 window reports, KWin script loader, GNOME overlay bridge client,
+ScreenCast portal, and PipeWire capture). The GNOME Shell extension itself
+is still pending. This is not a V2.7 support claim.
 
 - `DisplayAdapters` selects a successfully connected Wayland transport in
   `auto`, then X11, then headless. A forced backend never selects the other
@@ -305,9 +320,9 @@ capture are still pending. This is not a V2.7 support claim.
   object roundtrips through shared diagnostics parsing; `layerctl status`
   prints a display/provider summary. Native providers that have not landed
   report `not_built` rather than active capabilities. Compositor detection
-  currently uses desktop hints and advertised registry globals. Session-bus
-  owner checks are added with bus-provider integration; the bus remains closed
-  until demanded.
+  uses desktop hints and advertised registry globals; once window tracking
+  opens the session bus, the owner of `org.kde.KWin` or `org.gnome.Shell`
+  overrides the desktop hint. The bus remains closed until demanded.
 - Automated Debian WSL evidence: private transport/server tests, seam tests,
   Xvfb X11 compatibility/idle-loop tests, and a no-X11/no-Wayland build.
   MSVC runtime and editor diagnostics tests also pass. These are not physical
@@ -358,6 +373,33 @@ capture are still pending. This is not a V2.7 support claim.
   `wl_seat` server for keymap delivery and bounds, CLI opt-in status rows, and
   the lexical passive-boundary check over `src/platform/linux/evdev_*` and
   `src/daemon/linux/evdev_*`. No physical input device was used.
+- Bus lane (`src/platform/linux/{dbus_connection,dbus_shell_service,kwin_script,gnome_bridge,portal_screencast,pipewire_capture}.*`,
+  `pipewire_transport.c`, `src/daemon/linux/bus_providers.*`): one sd-bus
+  connection, opened on demand and registered on the daemon `EventLoop`;
+  sd-bus timeouts feed `next_deadline`. Each asynchronous call belongs to its
+  client's guard: releasing the guard cancels the pending calls, their
+  captured state, and their reply timeouts, while already queued messages
+  (`ReleaseName`, `Clear`, `unloadScript`, portal `Close`) are still written.
+  Slots are released after dispatch, never inside their own callback, and no
+  exception crosses an sd-bus or PipeWire callback.
+- `ReportWindows` is authenticated against the current owner of
+  `org.kde.KWin` or `org.gnome.Shell`, and a report is parsed completely
+  before it replaces the previous one. The GNOME bridge calls only a verified
+  owner of both `org.gnome.Shell` and the extension name, with one call in
+  flight and only the newest replacement kept. Portal responses are bound to
+  the request path and the authenticated unique sender.
+- The visual service holds one capture session per target behind a shared
+  contract: explicit XWayland windows use X11 Composite capture, opaque native
+  windows use the portal stream, and both feed the same evaluator.
+- Automated bus evidence (`dbus` and `gjs` labels; `dbus-run-session` with fake
+  KWin, GNOME Shell, and portal services): name ownership and conflict, sender
+  authentication, KWin script load/run/unload on KWin 6 and 5.27 object
+  paths, GNOME owner verification, bounded frame replacement and bounds
+  recovery, the portal request sequence, restore-token persistence, denial,
+  spoofed responses, owner loss, cancellation of 128 pending calls, PipeWire
+  stream lifecycle against the local PipeWire runtime, partially visible
+  window sampling, and builds without X11, sd-bus, or PipeWire. No KWin, GNOME
+  Shell, or desktop portal was used; this is not physical-desktop evidence.
 
 ## Tests
 

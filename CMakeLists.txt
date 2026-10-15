@@ -494,8 +494,10 @@ if(NOT WIN32)
         target_include_directories(layerc_daemon_linux PUBLIC
             src/daemon/linux
             src/platform/linux)
+        # The native visual seam (native_capture.hpp) is shared by every
+        # provider build, including those without X11.
         target_link_libraries(layerc_daemon_linux PUBLIC
-            layerc_runtime layerc_linux)
+            layerc_runtime layerc_linux layerc_capture_common)
         if(LAYERC_HAVE_X11)
             target_sources(layerc_daemon_linux PRIVATE
                 src/daemon/linux/evdev_route.cpp
@@ -518,6 +520,14 @@ if(NOT WIN32)
             target_sources(layerc_daemon_linux PRIVATE src/daemon/linux/wayland_providers.cpp)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_wayland)
             target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_WAYLAND_PROVIDERS)
+        endif()
+        if(TARGET layerc_bus AND LAYERC_HAVE_X11)
+            target_sources(layerc_daemon_linux PRIVATE src/daemon/linux/bus_providers.cpp)
+            target_link_libraries(layerc_daemon_linux PUBLIC layerc_bus)
+            target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_BUS_PROVIDERS)
+            if(TARGET layerc_pipewire)
+                target_link_libraries(layerc_daemon_linux PUBLIC layerc_pipewire)
+            endif()
         endif()
         layerc_enable_warnings(layerc_daemon_linux)
     endif()
