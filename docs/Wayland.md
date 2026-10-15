@@ -168,6 +168,11 @@ with `gnome-extensions enable`; it never accesses the network.
 - A panel that would exceed these bounds is rejected on its own: accepted
   panels keep presenting, the overlay row is `degraded` with
   `gnome_frame_too_large`, and it recovers once the panel fits or is removed.
+- The extension accepts `Present` and `Clear` only from the current unique
+  owner of `io.github.EnderKeera.LayerC` (`AccessDenied` otherwise) and
+  rejects an invalid frame whole with `InvalidArgs`, keeping the last good
+  one. Reports go only to that unique owner, without bus activation, with one
+  call in flight and no retry.
 
 ## Native Wayland adapters
 
@@ -298,8 +303,8 @@ The display seam and the wlroots-family native providers (outputs, foreign
 toplevels, layer-shell overlay) and opt-in evdev input routing are implemented
 on the local Linux-editor integration branch, as is the daemon side of the bus
 lane (Shell1 window reports, KWin script loader, GNOME overlay bridge client,
-ScreenCast portal, and PipeWire capture). The GNOME Shell extension itself
-is still pending. This is not a V2.7 support claim.
+ScreenCast portal, and PipeWire capture) and the GNOME Shell extension.
+This is not a V2.7 support claim.
 
 - `DisplayAdapters` selects a successfully connected Wayland transport in
   `auto`, then X11, then headless. A forced backend never selects the other
@@ -400,6 +405,21 @@ is still pending. This is not a V2.7 support claim.
   stream lifecycle against the local PipeWire runtime, partially visible
   window sampling, and builds without X11, sd-bus, or PipeWire. No KWin, GNOME
   Shell, or desktop portal was used; this is not physical-desktop evidence.
+- GNOME Shell extension (`packaging/gnome-shell/layerc@enderkeera.github.io/`):
+  pure `lib/` modules (report building and coalescing, frame validation,
+  panel reconciliation, Overlay1 authorization) plus thin `extension.js` glue.
+  `cmake/LayerCGnomeShell.cmake` installs it as the `GnomeShellExtension`
+  component (`LAYERC_INSTALL_GNOME_EXTENSION`, default on); installing never
+  enables it.
+- Automated extension evidence (`gjs` label): bounded UTF-8 rows and 64 KiB
+  snapshots, at most one report per 100 ms with one call in flight, frame
+  bounds matching layerd's, reconciliation by panel id, sender authorization,
+  the unmodified `extension.js` glue on a private `dbus-run-session` bus with
+  fake Shell/Mutter objects (reports to a fake daemon, rogue `Present`
+  denied, non-reactive actors, daemon loss, `disable()` releasing every
+  signal and name), a lexical scan for network, system-bus, and process APIs,
+  and a component install into a disposable prefix. No GNOME Shell was
+  running; actor stacking above fullscreen windows is unverified.
 
 ## Tests
 
@@ -408,7 +428,7 @@ is still pending. This is not a V2.7 support claim.
 | `wayland` | headless sway (`WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1`, private `XDG_RUNTIME_DIR`) via `tools/wayland-test-session.sh` | sway is missing |
 | `dbus` | `dbus-run-session` with fake `org.kde.KWin`, `org.gnome.Shell`, and portal services | `dbus-run-session` is missing |
 | `evdev` | synthetic event streams and capability bitmaps; optional uinput probe | — (uinput probe only) |
-| `gjs` | `gjs -m` unit tests of the extension's pure modules | gjs is missing |
+| `gjs` | `gjs -m` tests of the KWin script and the GNOME extension (glue under `dbus-run-session`), plus its datadir install | gjs (or `dbus-run-session` for the glue) is missing |
 
 ## Development lanes
 
