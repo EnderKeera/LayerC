@@ -161,8 +161,8 @@ block implementation or container CI:
 
 The v2.6c editor is not yet published. Compared with the Windows editor, X11
 has no Generic HID capture, Game Bar companion, capture exclusion or isolated
-recognition (their data is preserved), the isolated-runtime setting is
-preserved but not editable, and there is no Pick Window or direct
+recognition (their data is preserved), the isolated-runtime setting has no
+Linux counterpart (its value is preserved), and there is no Pick Window or direct
 overlay drag because X11 overlays never take input. When X11 development libraries, FLTK 1.4+ with
 `fltk-config`, and ATK, its AT-SPI adaptor and libatspi 2.62 or later are
 available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the `layere`
