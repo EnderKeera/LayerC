@@ -11,12 +11,28 @@
 
 namespace layerc::core::json {
 
+inline constexpr std::size_t maximum_nesting_depth = 128;
+
+namespace detail { class Parser; }
+
 class Value {
+  // Only the parser can create this: its spelling has passed JSON grammar
+  // and finite-number validation. Opaque fields must not round away digits.
+  struct ParsedInteger {
+    std::int64_t value;
+    std::string source;
+    bool operator==(const ParsedInteger &) const = default;
+  };
+  struct ParsedNumber {
+    double value;
+    std::string source;
+    bool operator==(const ParsedNumber &) const = default;
+  };
 public:
   using Array = std::vector<Value>;
   using Object = std::map<std::string, Value, std::less<>>;
   using Storage = std::variant<std::nullptr_t, bool, std::int64_t, double,
-                               std::string, Array, Object>;
+                               std::string, Array, Object, ParsedNumber, ParsedInteger>;
 
   Value() noexcept;
   explicit Value(std::nullptr_t) noexcept;
@@ -41,12 +57,18 @@ public:
   [[nodiscard]] bool as_bool() const;
   [[nodiscard]] std::int64_t as_integer() const;
   [[nodiscard]] double as_number() const;
+  [[nodiscard]] std::string_view number_source() const noexcept;
   [[nodiscard]] const std::string& as_string() const;
   [[nodiscard]] const Array& as_array() const;
   [[nodiscard]] const Object& as_object() const;
   [[nodiscard]] const Value* find(std::string_view key) const;
 
+  bool operator==(const Value &) const = default;
+
 private:
+  friend class detail::Parser;
+  Value(std::int64_t value, std::string source);
+  Value(double value, std::string source);
   Storage storage_;
 };
 
@@ -74,7 +96,7 @@ parse_color_text(std::string_view text) noexcept;
 // the spelling stays byte-stable in one place.
 void append_bool(std::string &output, bool value);
 // Generic deterministic JSON emission; indent=0 is compact, otherwise CRLF
-// and that many spaces per level. Parsed integer values retain full precision.
+// and that many spaces per level. Parsed numeric values retain their digits.
 // A non-finite double is rejected with std::invalid_argument; output is restored
 // to its original size before the exception propagates.
 void append_value(std::string &output, const Value &value, unsigned indent = 0);

@@ -10,9 +10,7 @@
 
 namespace layerc::core::json {
 
-namespace {
-
-constexpr std::size_t kMaximumNestingDepth = 128;
+namespace detail {
 
 class Parser {
 public:
@@ -47,7 +45,7 @@ private:
             case '"': return Value(parse_string());
             case '[':
             case '{':
-                if (depth >= kMaximumNestingDepth) {
+                if (depth >= maximum_nesting_depth) {
                     fail("maximum nesting depth exceeded");
                     return {};
                 }
@@ -109,8 +107,8 @@ private:
         }
 
         const auto text = source_.substr(start, position_ - start);
-        // Integral tokens without a fraction or exponent keep exact int64
-        // storage; everything else parses as a double as before.
+        // Integral tokens that fit int64 keep exact integer storage. Retain
+        // every other finite number's checked spelling for opaque round trips.
         if (text.find('.') == std::string_view::npos &&
             text.find('e') == std::string_view::npos &&
             text.find('E') == std::string_view::npos) {
@@ -118,8 +116,10 @@ private:
             const auto integer_conversion = std::from_chars(
                 text.data(), text.data() + text.size(), integer);
             if (integer_conversion.ec == std::errc{} &&
-                integer_conversion.ptr == text.data() + text.size())
+                integer_conversion.ptr == text.data() + text.size()) {
+                if (text == "-0") return Value(integer, std::string(text));
                 return Value(integer);
+            }
         }
         double number{};
         const auto conversion = std::from_chars(text.data(), text.data() + text.size(), number);
@@ -127,7 +127,7 @@ private:
             fail("invalid number");
             return {};
         }
-        return Value(number);
+        return Value(number, std::string(text));
     }
 
     std::string parse_string() {
@@ -203,7 +203,7 @@ private:
             return false;
         }
 
-        detail::append_utf8(output, *codepoint);
+        layerc::core::detail::append_utf8(output, *codepoint);
         return true;
     }
 
@@ -349,7 +349,7 @@ private:
 }  // namespace
 
 ParseResult parse(const std::string_view source) {
-    return Parser(source).run();
+    return detail::Parser(source).run();
 }
 
 }  // namespace layerc::core::json

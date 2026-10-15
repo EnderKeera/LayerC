@@ -4,6 +4,7 @@
 #include "layerc/core/profile_modules.hpp"
 #include "layerc/core/profile_wire.hpp"
 #include "profile_keys.hpp"
+#include "profile_extensions.hpp"
 
 #include <cstdint>
 #include <string_view>
@@ -13,6 +14,8 @@ namespace layerc::core {
 namespace {
 namespace keys = profile_keys;
 using json::Value;
+using detail::ProfileObject;
+using detail::with_profile_extensions;
 
 std::pair<std::string, Value> member(const std::string_view key, Value value) {
   return {std::string(key), std::move(value)};
@@ -32,24 +35,24 @@ Value text_list(const std::vector<std::string> &values) {
 using json::color_text;
 
 Value game_section(const GameMatch &game) {
-  return Value(Value::Object{
+  return with_profile_extensions(Value::Object{
       member(keys::global, Value(game.global)),
       member(keys::executable_path, text(game.executable_path)),
       member(keys::executable_name, text(game.executable_name)),
       member(keys::window_class, text(game.window_class)),
       member(keys::window_title, text(game.window_title)),
-  });
+  }, game.extra_fields, ProfileObject::game);
 }
 Value modules_section(const std::vector<ProfileModule> &modules) {
   Value::Array result;
   result.reserve(modules.size());
   for (const auto &module : modules) {
     const auto *descriptor = find_module(module.kind);
-    result.emplace_back(Value::Object{
+    result.push_back(with_profile_extensions(Value::Object{
         member(keys::kind, text(descriptor == nullptr ? std::string_view{}
                                                       : descriptor->name)),
         member(keys::schema_version, integer(module.schema_version)),
-    });
+    }, module.extra_fields, ProfileObject::module));
   }
   return Value(std::move(result));
 }
@@ -57,7 +60,7 @@ Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns) {
   Value::Array result;
   result.reserve(cooldowns.size());
   for (const auto &cooldown : cooldowns)
-    result.emplace_back(Value::Object{
+    result.push_back(with_profile_extensions(Value::Object{
         member(keys::id, text(cooldown.id)),
         member(keys::name, text(cooldown.name)),
         member(keys::duration_ms, integer(cooldown.duration.count())),
@@ -70,7 +73,7 @@ Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns) {
                text(enum_wire_name(profile_wire::recovery,
                                    cooldown.recovery)
                         .value_or(""))),
-    });
+    }, cooldown.extra_fields, ProfileObject::cooldown));
   return Value(std::move(result));
 }
 Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
@@ -100,7 +103,8 @@ Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
                                                group.retrigger)
                                     .value_or(""))));
     }
-    result.emplace_back(std::move(object));
+    result.push_back(with_profile_extensions(std::move(object), group.extra_fields,
+                                             ProfileObject::group));
   }
   return Value(std::move(result));
 }
@@ -133,12 +137,14 @@ Value hid_bindings_section(const std::vector<HidControlBinding> &bindings) {
         member(keys::threshold, Value(binding.threshold)),
         member(keys::hysteresis, Value(binding.hysteresis)),
     };
-    result.emplace_back(Value::Object{
+    result.push_back(with_profile_extensions(Value::Object{
         member(keys::id, text(binding.id)),
-        member(keys::device, Value(std::move(device))),
-        member(keys::control, Value(std::move(control))),
+        member(keys::device, with_profile_extensions(std::move(device),
+            binding.device_extra_fields, ProfileObject::device)),
+        member(keys::control, with_profile_extensions(std::move(control),
+            binding.control_extra_fields, ProfileObject::control)),
         member(keys::allow_system_class, Value(binding.allow_system_class)),
-    });
+    }, binding.extra_fields, ProfileObject::hid));
   }
   return Value(std::move(result));
 }
@@ -157,7 +163,7 @@ Value panels_section(const std::vector<Panel> &panels) {
         member(keys::show_text, Value(panel.bar.show_text)),
         member(keys::hide_when_ready, Value(panel.bar.hide_when_ready)),
     };
-    result.emplace_back(Value::Object{
+    result.push_back(with_profile_extensions(Value::Object{
         member(keys::id, text(panel.id)),
         member(keys::name, text(panel.name)),
         member(keys::layout,
@@ -168,11 +174,12 @@ Value panels_section(const std::vector<Panel> &panels) {
                text(enum_wire_name(profile_wire::panel_style,
                                    panel.style)
                         .value_or(""))),
-        member(keys::bar, Value(std::move(bar))),
+        member(keys::bar, with_profile_extensions(std::move(bar),
+            panel.bar.extra_fields, ProfileObject::bar)),
         member(keys::anchor_x, Value(panel.anchor_x)),
         member(keys::anchor_y, Value(panel.anchor_y)),
         member(keys::cooldowns, text_list(panel.cooldown_ids)),
-    });
+    }, panel.extra_fields, ProfileObject::panel));
   }
   return Value(std::move(result));
 }
@@ -197,12 +204,15 @@ Value bindings_section(const GameProfile &profile) {
           object.insert(
               member(keys::controller_index, integer(token.controller_index)));
       }
-      chord.emplace_back(std::move(object));
+      const auto extra = binding.token_extra_fields.find(token);
+      chord.push_back(extra == binding.token_extra_fields.end()
+          ? Value(std::move(object))
+          : with_profile_extensions(std::move(object), extra->second, ProfileObject::token));
     }
-    result.emplace_back(Value::Object{
+    result.push_back(with_profile_extensions(Value::Object{
         member(keys::cooldown_id, text(binding.cooldown_id)),
         member(keys::chord, Value(std::move(chord))),
-    });
+    }, binding.extra_fields, ProfileObject::binding));
   }
   return Value(std::move(result));
 }
@@ -210,7 +220,7 @@ Value bindings_section(const GameProfile &profile) {
 } // namespace
 
 std::string serialize_profile_json(const GameProfile &profile) {
-  Value root(Value::Object{
+  Value root = with_profile_extensions(Value::Object{
       member(keys::schema_version, integer(profile_schema_version)),
       member(keys::id, text(profile.id)),
       member(keys::name, text(profile.name)),
@@ -227,7 +237,7 @@ std::string serialize_profile_json(const GameProfile &profile) {
       member(keys::hid_bindings, hid_bindings_section(profile.hid_bindings)),
       member(keys::panels, panels_section(profile.panels)),
       member(keys::bindings, bindings_section(profile)),
-  });
+  }, profile.extra_fields, ProfileObject::root);
   std::string output;
   output.reserve(2'048);
   json::append_value(output, root, 2);

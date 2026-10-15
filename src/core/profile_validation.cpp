@@ -2,6 +2,7 @@
 #include "layerc/core/hid.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/profile_modules.hpp"
+#include "profile_extension_validation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,7 +17,6 @@ namespace layerc::core {
 namespace {
 
 constexpr std::size_t max_hid_bindings = 128;
-constexpr std::size_t max_cooldown_groups = 64;
 constexpr std::string_view empty_text = "expected non-empty string";
 constexpr std::string_view integer_range =
     "integer is outside the supported range or encoding";
@@ -264,7 +264,8 @@ std::optional<ProfileError> validate_profile(const GameProfile &profile) {
   if (auto failure = validate_cooldowns(profile, cooldowns)) return failure;
   if (auto failure = validate_groups(profile, cooldowns)) return failure;
   if (auto failure = validate_panels(profile, cooldowns)) return failure;
-  return validate_bindings(profile, cooldowns);
+  if (auto failure = validate_bindings(profile, cooldowns)) return failure;
+  return detail::validate_profile_extensions(profile);
 }
 
 } // namespace layerc::core

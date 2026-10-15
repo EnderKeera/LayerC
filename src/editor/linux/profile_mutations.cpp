@@ -85,11 +85,9 @@ std::string duplicate_cooldown(core::GameProfile &profile, const std::string_vie
   const auto original = *source; // add_cooldown may reallocate
   auto copy = add_cooldown(profile);
   auto &added = *std::ranges::find(profile.cooldowns, copy, &core::CooldownDefinition::id);
+  added = original;
+  added.id = copy;
   added.name = original.name + " copy";
-  added.duration = original.duration;
-  added.max_charges = original.max_charges;
-  added.retrigger = original.retrigger;
-  added.recovery = original.recovery;
   return copy;
 }
 

@@ -6,6 +6,7 @@
 
 #include "profile_reader.hpp"
 #include "profile_keys.hpp"
+#include "profile_extensions.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -89,6 +90,8 @@ ProfileResult ProfileReader::read() {
       !read_panels(profile) || !read_bindings(profile)) {
     return failure();
   }
+  profile.extra_fields = unknown_profile_fields(root_, ProfileObject::root);
+  profile.game.extra_fields = unknown_profile_fields(*game, ProfileObject::game);
   return profile;
 }
 
@@ -218,6 +221,9 @@ bool ProfileReader::read_hid_bindings(GameProfile &profile,
     fields_.boolean(entry, keys::allow_system_class, path,
                     binding.allow_system_class, json::Required::no);
     if (!fields_.ok()) return false;
+    binding.extra_fields = unknown_profile_fields(entry, ProfileObject::hid);
+    binding.device_extra_fields = unknown_profile_fields(*device, ProfileObject::device);
+    binding.control_extra_fields = unknown_profile_fields(*control, ProfileObject::control);
     profile.hid_bindings.push_back(std::move(binding));
   }
   return true;
@@ -256,7 +262,8 @@ bool ProfileReader::read_modules(GameProfile &profile,
         std::numeric_limits<std::uint32_t>::max(), json::Required::yes);
     if (!version.has_value()) return false;
     module.schema_version = static_cast<std::uint32_t>(*version);
-    profile.modules.push_back(module);
+    module.extra_fields = unknown_profile_fields(entry, ProfileObject::module);
+    profile.modules.push_back(std::move(module));
   }
   return true;
 }
@@ -323,6 +330,7 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
                           "expected 'ignore' or 'restart'");
     }
     definition.retrigger = *parsed_retrigger;
+    definition.extra_fields = unknown_profile_fields(value, ProfileObject::cooldown);
     profile.cooldowns.push_back(std::move(definition));
   }
   return true;
@@ -418,6 +426,7 @@ bool ProfileReader::read_cooldown_groups(
                             "expected ignore or restart");
       group.retrigger = *parsed_retrigger;
     }
+    group.extra_fields = unknown_profile_fields(value, ProfileObject::group);
     profile.cooldown_groups.push_back(std::move(group));
   }
   return true;
@@ -477,6 +486,7 @@ bool ProfileReader::read_panels(GameProfile &profile) {
       if (!bar->is_object()) {
         return fields_.fail(path + ".bar", "expected object");
       }
+      panel.bar.extra_fields = unknown_profile_fields(*bar, ProfileObject::bar);
       const auto bar_path = path + ".bar";
       constexpr std::int64_t largest = std::numeric_limits<std::uint32_t>::max();
       const auto width = fields_.integer(*bar, keys::width, bar_path, 0,
@@ -534,6 +544,7 @@ bool ProfileReader::read_panels(GameProfile &profile) {
       }
       panel.cooldown_ids.push_back((*cooldowns)[item].as_string());
     }
+    panel.extra_fields = unknown_profile_fields(value, ProfileObject::panel);
     profile.panels.push_back(std::move(panel));
   }
   return true;
@@ -571,6 +582,8 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
     token.code = static_cast<std::uint16_t>(*code);
     token.controller_index = static_cast<std::uint8_t>(*controller);
   }
+  auto extra = unknown_profile_fields(token_value, ProfileObject::token);
+  if (!extra.empty()) binding.token_extra_fields.emplace(token, std::move(extra));
   binding.chord.tokens.push_back(token);
   return true;
 }
@@ -605,6 +618,7 @@ bool ProfileReader::read_bindings(GameProfile &profile) {
       if (!read_chord_token(token_value, token_path, binding))
         return false;
     }
+    binding.extra_fields = unknown_profile_fields(value, ProfileObject::binding);
     profile.bindings.push_back(std::move(binding));
   }
   return true;
