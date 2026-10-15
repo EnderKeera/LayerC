@@ -1,0 +1,12 @@
+libwayland-dev
+libwayland-bin
+wayland-protocols
+libxkbcommon-dev
+libcairo2-dev
+libsystemd-dev
+libpipewire-0.3-dev
+libpipewire-0.3-modules
+sway
+gjs
+dbus
+util-linux

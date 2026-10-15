@@ -7,6 +7,10 @@
     "separate-locales": false,
     "finish-args": [
         "--socket=x11",
+        "--socket=wayland",
+        "--talk-name=org.kde.KWin",
+        "--talk-name=org.gnome.Shell",
+        "--talk-name=io.github.EnderKeera.LayerC.GnomeShell",
         "--filesystem=xdg-documents",
         "--filesystem=xdg-download"
     ],

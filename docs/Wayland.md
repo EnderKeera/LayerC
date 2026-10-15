@@ -2,8 +2,8 @@
 
 This document owns the Wayland backend's architecture, contracts, and
 invariants. [`Linux.md`](Linux.md) keeps owning user-facing Linux behavior,
-commands, packaging, and evidence; it gains a Wayland section once the lanes
-below land. Until then nothing here is a support claim: V2.6 remains X11-only.
+commands, packaging, and evidence, including a V2.7 development section.
+Nothing here is a support claim: V2.6 remains X11-only.
 
 ## Target
 
@@ -444,6 +444,42 @@ This is not a V2.7 support claim.
 | `dbus` | `dbus-run-session` with fake `org.kde.KWin`, `org.gnome.Shell`, and portal services | `dbus-run-session` is missing |
 | `evdev` | synthetic event streams and capability bitmaps; optional uinput probe | — (uinput probe only) |
 | `gjs` | `gjs -m` tests of the KWin script and the GNOME extension (glue under `dbus-run-session`), plus its datadir install | gjs (or `dbus-run-session` for the glue) is missing |
+
+The reusable gate is `tools/run-linux-tests.sh --wayland required` (combine
+with `--editor required --flatpak required` for editor/Flatpak coverage).
+`required` fails on missing registrations, labels, harness tools, transports or
+any skip; `auto` records unavailable coverage rather than claiming a pass.
+`ci.yml` passes `--wayland required` in both Linux container jobs. The `evdev`
+unit/boundary suites run in the headless gate; uinput stays optional/test-only.
+Root containers drop only the sway fixture to their existing unprivileged
+`nobody` account; a root host is refused. No host compositor is used.
+
+## Compositor evidence and gaps
+
+| Environment | Observed automated evidence | Not established |
+| --- | --- | --- |
+| Headless sway/pixman | Native output, foreign-toplevel and click-through layer-shell tests with scale 1/2; XWayland editor walkthrough (5/5) | Physical outputs/GPU, all wlroots-family compositors, real games |
+| X11/Xvfb | Existing daemon suites, installed smokes, editor walkthrough (30/30) | Physical GNOME Xorg/KDE X11, real input/gamepad/HiDPI desktops |
+| KWin | Private-bus script load/run/unload/authentication and GJS script fixtures | Real Plasma/KWin 5/6, fullscreen stacking, native portal consent |
+| GNOME | GJS pure modules and unmodified glue with fake Shell/Mutter objects on a private bus | Real GNOME 45–50, host extension enablement, fullscreen stacking, accessibility user study |
+| ScreenCast/PipeWire | Fake portal sequencing/denial/owner loss and private local PipeWire stream lifecycle | Real portal source picker, physical capture/GPU performance |
+| evdev | Synthetic event/capability/keymap, idle/recovery and boundary tests | Physical devices, permissions/hotplug and real game input; sandbox device access |
+
+Local complete gate `out/linux-automation/c7h-20261015T100347Z` passed on
+`8183a7b` plus the recorded uncommitted c7h integration changes
+(`sourceTreeClean=false`), including the Flatpak permissions and strict
+base-gate fixture checks: 36 headless, 7 X11, 2 editor, 1 Wayland, 5 D-Bus
+and 6 GJS suites, none skipped, plus 88 tooling tests and installed native
+and Flatpak smokes. Native/Flatpak editor idle USS was 13.13/12.93 MiB,
+both at 0.0% CPU over 20 s (targets 20 MiB / 0.2%). The package stage was off;
+Docker Desktop was unavailable for the attempted native-container reruns.
+The integration review found no High; its missing-protocol-fixture Medium
+was fixed and independently confirmed. Workflow lint passed with the same
+checksum-verified actionlint 1.7.12 version pinned by CI (not a CI run).
+The latest editor GUI bundles are
+`out/linux-gui/c7g-wayland-20261015T065435Z` (5/5) and
+`out/linux-gui/c7b-20261015T065624Z` (30/30). CI was not run (nothing pushed).
+No VM or physical-compositor evidence, release, signing or publication is claimed.
 
 ## Development lanes
 

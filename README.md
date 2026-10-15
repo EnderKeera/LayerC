@@ -25,7 +25,8 @@ published release.
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
 | Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
-| Gamescope and Wayland | Not supported | Deferred beyond V2.6 |
+| Wayland (V2.7, in development) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented locally; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
+| Gamescope | Not supported | Out of scope |
 
 Package metadata reports **2.6.2** for the unpublished v2.6c, which the
 `v*.*.*` tag convention would publish as `v2.6.2`; the V2.6.1–V2.6.2 rows

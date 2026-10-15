@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 
 MODULE_PATH = Path(__file__).parents[1] / "linux_test_report.py"
 SPEC = importlib.util.spec_from_file_location("linux_test_report", MODULE_PATH)
@@ -37,7 +38,7 @@ class LinuxTestReportTests(unittest.TestCase):
         path.write_text(content, encoding="utf-8")
         return path
 
-    def check(self, registered: str, report: str, gate: Gate) -> dict[str, object]:
+    def check(self, registered: str, report: str, gate: Gate) -> dict[str, Any]:
         return linux_test_report.validate(
             self.write("registered.json", registered), self.write("ctest.xml", report), gate
         )
@@ -170,6 +171,39 @@ class LinuxTestReportTests(unittest.TestCase):
         )
         self.assertEqual("fail", report["result"])
         self.assertIn("tests did not run: a", report["problems"])
+
+    def test_required_gate_promotes_optional_suites_and_rejects_skips(self) -> None:
+        policy = self.write("gates.json", json.dumps({"gates": {
+            "backend": {"label": "dbus", "required": ["bus"],
+                        "optional": {"stream": "transport dependency"},
+                        "allowSkip": {"bus": "missing harness"}},
+        }}))
+        strict = linux_test_report.load_gate(policy, "backend", require_all=True)
+        absent = self.check(registration(("bus", ["dbus"])),
+                            junit('<testcase name="bus"/>'), strict)
+        self.assertEqual(["stream"], absent["missingRequired"])
+        skipped = self.check(
+            registration(("bus", ["dbus"]), ("stream", ["dbus"])),
+            junit('<testcase name="bus"><skipped/></testcase>',
+                  '<testcase name="stream"/>'), strict)
+        self.assertIn("unexpected skipped suites: bus", skipped["problems"])
+        complete = self.check(
+            registration(("bus", ["dbus"]), ("stream", ["dbus"])),
+            junit('<testcase name="bus"/>', '<testcase name="stream"/>'), strict)
+        self.assertEqual("pass", complete["result"], complete["problems"])
+
+    def test_prefix_promotes_only_matching_optional_suites(self) -> None:
+        policy = self.write("gates.json", json.dumps({"gates": {
+            "g": {"required": ["core"], "optional": {"wl_probe": "backend",
+                  "tooling": "PowerShell"}, "allowSkip": {"wl_probe": "harness"}},
+        }}))
+        gate = linux_test_report.load_gate(policy, "g", require_optional_prefix="wl_")
+        self.assertEqual(frozenset({"core", "wl_probe"}), gate.required)
+        self.assertEqual(frozenset({"tooling"}), gate.optional)
+        self.assertFalse(gate.allow_skip)
+        for prefix in ("", "unknown_"):
+            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                linux_test_report.load_gate(policy, "g", require_optional_prefix=prefix)
 
     def test_policy_rejects_inconsistent_gates(self) -> None:
         policy = self.write("gates.json", json.dumps({"gates": {

@@ -15,6 +15,17 @@ if ! command -v sway >/dev/null 2>&1 || ! command -v swaymsg >/dev/null 2>&1; th
   exit 77
 fi
 
+# sway refuses root. Only the disposable container launcher may drop to the
+# existing unprivileged account; never change users or privileges on a host.
+if [[ $(id -u) == 0 ]]; then
+  if [[ ${LAYERC_DISPOSABLE_ROOT:-0} != 1 ]] ||
+      [[ ! -e /.dockerenv && ! -e /run/.containerenv ]]; then
+    echo "wayland-test-session: run as an unprivileged user" >&2
+    exit 70
+  fi
+  exec runuser -u nobody -- bash "$0" "$@"
+fi
+
 runtime=$(mktemp -d "${TMPDIR:-/tmp}/layerc-wayland.XXXXXX") || exit 70
 chmod 700 "$runtime"
 sway_pid=

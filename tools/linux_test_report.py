@@ -27,7 +27,8 @@ class Gate:
     optional: frozenset[str] = field(default_factory=frozenset)
     allow_skip: frozenset[str] = field(default_factory=frozenset)
 
-def load_gate(policy: Path, name: str) -> Gate:
+def load_gate(policy: Path, name: str, *, require_all: bool = False,
+              require_optional_prefix: str | None = None) -> Gate:
     document = json.loads(policy.read_text(encoding="utf-8"))
     gates = document["gates"]
     if name not in gates:
@@ -46,6 +47,17 @@ def load_gate(policy: Path, name: str) -> Gate:
         raise ValueError(f"gate {name!r} lists suites as both required and optional")
     if not gate.allow_skip <= gate.required | gate.optional:
         raise ValueError(f"gate {name!r} allows skips for suites outside the gate")
+    if require_optional_prefix is not None:
+        promoted = frozenset(suite for suite in gate.optional
+                             if suite.startswith(require_optional_prefix))
+        if not require_optional_prefix or not promoted:
+            raise ValueError(f"gate {name!r} has no optional suites matching "
+                             f"{require_optional_prefix!r}")
+        gate = Gate(gate.name, gate.required | promoted, gate.label,
+                    gate.optional - promoted, gate.allow_skip - promoted)
+    if require_all:
+        # Required integration gates cannot lose an optional transport or skip.
+        return Gate(gate.name, gate.required | gate.optional, label=gate.label)
     return gate
 
 
@@ -166,11 +178,17 @@ def main() -> int:
     parser.add_argument("--gate", required=True)
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--require-all", action="store_true",
+                        help="Require optional suites too, and reject every skip")
+    parser.add_argument("--require-optional-prefix",
+                        help="Require optional suites with this name prefix; reject their skips")
     args = parser.parse_args()
 
     try:
         report = validate(
-            args.registration, args.junit, load_gate(args.policy, args.gate)
+            args.registration, args.junit,
+            load_gate(args.policy, args.gate, require_all=args.require_all,
+                      require_optional_prefix=args.require_optional_prefix)
         )
     except (OSError, ValueError, KeyError, ET.ParseError) as error:
         report = {

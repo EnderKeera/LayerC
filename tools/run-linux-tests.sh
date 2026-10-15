@@ -22,6 +22,12 @@ Options:
   --package POLICY        off, auto, or required (default: off; required for
                           release mode). Builds and checks the Debian package;
                           installing it needs a disposable container root.
+  --wayland POLICY        off, auto, or required (default: auto). Selects the
+                          in-development V2.7 Wayland-backend gates: wayland
+                          (headless sway), dbus (private bus fakes) and gjs
+                          (KWin script, GNOME extension). auto runs each gate
+                          its build registered; required fails when a gate's
+                          suites or harness tools are missing.
 
 Environment:
   LAYERC_RELEASE_EVIDENCE=1  Requires Flatpak, editor and package coverage.
@@ -38,6 +44,7 @@ flatpak_policy=
 flatpak_only=false
 editor_policy=
 package_policy=
+wayland_policy=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source-dir) source_dir=${2:?}; shift 2 ;;
@@ -47,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --flatpak-only) flatpak_only=true; shift ;;
     --editor) editor_policy=${2:?}; shift 2 ;;
     --package) package_policy=${2:?}; shift 2 ;;
+    --wayland) wayland_policy=${2:?}; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
@@ -74,9 +82,11 @@ release_or() {
 }
 editor_policy=${editor_policy:-$(release_or auto)}
 package_policy=${package_policy:-$(release_or off)}
-for policy in "$editor_policy" "$package_policy"; do
+# V2.7 makes no Wayland support claim, so release evidence does not force it.
+wayland_policy=${wayland_policy:-auto}
+for policy in "$editor_policy" "$package_policy" "$wayland_policy"; do
   case "$policy" in off | auto | required) ;; *)
-    echo "error: --editor and --package must be off, auto, or required" >&2
+    echo "error: --editor, --package and --wayland must be off, auto, or required" >&2
     exit 64
   esac
 done
@@ -91,8 +101,8 @@ if [[ $package_policy == required && $editor_policy != required ]]; then
 fi
 if [[ $flatpak_only == true ]] &&
     [[ $flatpak_policy != required || $package_policy != off ||
-       ${LAYERC_RELEASE_EVIDENCE:-0} == 1 ]]; then
-  echo "error: --flatpak-only needs --flatpak required, --package off and no release evidence" >&2
+       $wayland_policy == required || ${LAYERC_RELEASE_EVIDENCE:-0} == 1 ]]; then
+  echo "error: --flatpak-only needs --flatpak required, --package off, no --wayland required and no release evidence" >&2
   exit 64
 fi
 
@@ -148,7 +158,7 @@ finish() {
   fi
   EVIDENCE_DIR="$evidence_dir" SOURCE_COMMIT="$commit" \
     FLATPAK_POLICY="$flatpak_policy" EDITOR_POLICY="$editor_policy" \
-    PACKAGE_POLICY="$package_policy" python3 - <<'PY'
+    PACKAGE_POLICY="$package_policy" WAYLAND_POLICY="$wayland_policy" python3 - <<'PY'
 import json
 import os
 from datetime import datetime, timezone
@@ -179,6 +189,7 @@ summary = {
     "flatpakPolicy": os.environ["FLATPAK_POLICY"],
     "editorPolicy": os.environ["EDITOR_POLICY"],
     "packagePolicy": os.environ["PACKAGE_POLICY"],
+    "waylandPolicy": os.environ["WAYLAND_POLICY"],
     "automatedEvidence": stages,
     "physicalEvidence": {
         "status": "pending",
@@ -227,6 +238,12 @@ git -c "safe.directory=$source_dir" -C "$source_dir" status --short >"$evidence_
   fltk-config --version 2>/dev/null | sed 's/^/fltk /' || true
   pkg-config --modversion atk-bridge-2.0 2>/dev/null | sed 's/^/atk-bridge-2.0 /' || true
   dpkg-deb --version 2>/dev/null | head -n1 || true
+  sway --version 2>/dev/null || true
+  gjs --version 2>/dev/null || true
+  dbus-run-session --version 2>/dev/null | head -n1 || true
+  for module in wayland-client xkbcommon cairo libsystemd libelogind libpipewire-0.3; do
+    pkg-config --modversion "$module" 2>/dev/null | sed "s/^/$module /" || true
+  done
 } >"$evidence_dir/tool-versions.txt"
 
 # The editor smoke runs in its own session bus, so its accessibility bridge
@@ -278,6 +295,9 @@ if [[ $flatpak_only == true ]]; then
   record_stage editor not-run \
     'flatpak-only mode; the Flatpak stage runs its own editor smoke'
   record_stage package not-run 'flatpak-only mode'
+  for label in wayland dbus gjs; do
+    record_stage "$label" not-run 'flatpak-only mode; native jobs own backend coverage'
+  done
 else
   # A reused tree must not let a stale editor binary or install tree stand in
   # for this configuration's result.
@@ -289,14 +309,15 @@ else
   ctest --test-dir "$build_dir" --show-only=json-v1 \
     >"$evidence_dir/ctest-registration.json"
 
+  source "$source_dir/tools/linux-backend-gates.sh"
+
   headless_junit="$evidence_dir/ctest-headless.xml"
   run_logged ctest-headless env -u DISPLAY -u WAYLAND_DISPLAY -u WAYLAND_SOCKET ctest --test-dir "$build_dir" \
     -L '^headless$' --output-on-failure --no-tests=error \
     --output-junit "$headless_junit"
-  run_logged verify-headless python3 "$source_dir/tools/linux_test_report.py" \
-    --registration "$evidence_dir/ctest-registration.json" \
-    --junit "$headless_junit" --gate linux-headless \
-    --report "$evidence_dir/ctest-headless-summary.json"
+  verify_base_gate headless
+
+  run_backend_gates
 
   run_logged native-headless-smoke env -u DISPLAY \
     bash "$source_dir/tools/linux-runtime-smoke.sh" headless \
@@ -308,10 +329,7 @@ else
     'source "$1"; shift; layerc_x11_exec 50 0.2 "$@"' _ "$source_dir/tools/linux-lib.sh" \
     ctest --test-dir "$build_dir" -L '^x11$' --output-on-failure --no-tests=error \
     --output-junit "$x11_junit"
-  run_logged verify-x11 python3 "$source_dir/tools/linux_test_report.py" \
-    --registration "$evidence_dir/ctest-registration.json" \
-    --junit "$x11_junit" --gate linux-x11 \
-    --report "$evidence_dir/ctest-x11-summary.json"
+  verify_base_gate x11
   run_logged native-x11-smoke xvfb-run -a \
     bash "$source_dir/tools/linux-runtime-smoke.sh" x11 \
     "$build_dir/install/bin" "$evidence_dir/native-x11" \
@@ -471,6 +489,10 @@ manifest = json.loads(path.read_text(encoding="utf-8"))
 actual = manifest.get("finish-args", [])
 expected = [
     "--socket=x11",
+    "--socket=wayland",
+    "--talk-name=org.kde.KWin",
+    "--talk-name=org.gnome.Shell",
+    "--talk-name=io.github.EnderKeera.LayerC.GnomeShell",
     "--filesystem=xdg-documents",
     "--filesystem=xdg-download",
 ]

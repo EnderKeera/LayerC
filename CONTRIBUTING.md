@@ -54,22 +54,26 @@ and manual dispatch; a newer push to a pull request cancels its older run.
 | `workflow-lint` | `actionlint` over every workflow |
 | `windows-msvc` | [`build-package`](.github/actions/build-package/action.yml): `ci` preset (Ninja, sccache, unity), CTest with registration/JUnit policy, `benchmark_v22`, `benchmark_v23`, install, ZIP, artifacts |
 | `windows-analyze` | Non-unity Release build with MSVC `/analyze` for every LayerC target (compile-time only) |
-| `linux` | [`tools/ci-linux.sh`](tools/ci-linux.sh) in digest-pinned `debian:stable` and `ubuntu:24.04`: headless and required Xvfb suites, installed-binary smoke with private XDG roots, commit-bound evidence. `debian:stable` also requires the `editor` gate, installed-editor smoke and the `.deb` build/install/remove (`--editor required --package required`); `ubuntu:24.04` runs without the editor |
+| `linux` | [`tools/ci-linux.sh`](tools/ci-linux.sh) in digest-pinned `debian:stable` and `ubuntu:24.04`: headless and required Xvfb suites, installed-binary smoke with private XDG roots, commit-bound evidence. `debian:stable` also requires the `editor` gate, installed-editor smoke and the `.deb` build/install/remove (`--editor required --package required`); `ubuntu:24.04` runs without the editor. Both require `--wayland required`: headless sway, private-bus and GJS fixtures, not physical compositor qualification |
 | `linux-flatpak` | 25.08 manifest (bundled FLTK and AT-SPI 2.62) with required daemon/control/X11 and editor smoke under Xvfb (`--flatpak-only`) |
 | `publish-rolling` | `main` pushes only; needs all five jobs above and publishes the `rolling` prerelease |
 
 Every CTest gate (`windows-msvc`, `windows-selfhosted.yml`, and the Linux
-`headless` and `x11` stages) is validated by
+`headless`, `x11`, `editor`, `wayland`, `dbus` and `gjs` stages) is validated by
 [`tools/linux_test_report.py`](tools/linux_test_report.py) against the suites
 that [`tools/test-gates.json`](tools/test-gates.json) names for it, not against
 whatever happened to be registered. A gate fails on empty runs, a required
 suite that is unregistered, unlabelled, or did not run, a labelled suite the
 policy does not list, and skips the policy does not name. Adding or removing a
-suite therefore updates the policy in the same change. The only allowed skip is
-`layerc_overlay_tests` when the runner cannot create an isolated desktop;
-report it as unavailable interactive coverage, not a pass. The only optional
-suite is `layerc_benchmark_result_tests` on Linux, which registers only where
-`pwsh` is installed.
+suite therefore updates the policy in the same change. On Windows,
+`layerc_overlay_tests` may skip when no isolated desktop is available; report
+that as unavailable interactive coverage, not a pass. Linux `auto` backend
+gates allow only the harness skips named in the policy and report unavailable
+coverage. `--wayland required` promotes every optional backend suite and the
+Wayland protocol/connection fixtures in the headless/X11 gates to required,
+and forbids their skips (not the unrelated PowerShell tooling). Optional Linux
+suites also include the PowerShell benchmark-result test and dependency-dependent Wayland/PipeWire
+fixtures; `tools/test-gates.json` is authoritative.
 [`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
 same setup and `build-package` actions, so benchmark gating cannot drift.
 Releases and `rolling` ship only the Windows x64 ZIP. A tag publishes a
