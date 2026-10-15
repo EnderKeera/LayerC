@@ -1,28 +1,25 @@
 #!/usr/bin/env bash
 # Real GNOME source-picker deny/cancel/revoke in an OWNED headless Wayland
 # namespace. Never addresses the user's display/bus/socket. No fake portal.
-# Usage: bash tools/linux-portal-consent-tests.sh --build DIR [--out PARENT]
+# Usage: bash tools/linux-portal-consent-tests.sh [--out PARENT]
 #        [--revision-stamp FILE] (Windows-authoritative Git metadata for WSL)
+# The product archives are built fresh from this tree; no existing build is used.
 # Requires existing GNOME/GTK4/AT-SPI/PipeWire/portal and bubblewrap packages.
 # Dependencies are never installed by this runner; missing ones fail, not skip.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/.." && pwd)
 if [[ ${1:-} != --session ]]; then
-  build=
   revision_stamp=
   out="$repo/out/linux-consent"
   while (($#)); do
     case $1 in
-      --build) build=${2:?}; shift 2 ;;
       --out) out=${2:?}; shift 2 ;;
       --revision-stamp) revision_stamp=$(realpath "${2:?}"); shift 2 ;;
-      *) echo "usage: $0 --build DIR [--out PARENT] [--revision-stamp FILE]" >&2; exit 64 ;;
+      *) echo "usage: $0 [--out PARENT] [--revision-stamp FILE]" >&2; exit 64 ;;
     esac
   done
-  [[ -n $build ]] || { echo "error: --build is required" >&2; exit 64; }
-  build=$(realpath "$build")
-  for tool in bwrap cmake gnome-shell pipewire gdbus dbus-daemon dbus-run-session python3 timeout pkg-config "${CXX:-c++}"; do
+  for tool in bwrap cmake ninja gnome-shell pipewire gdbus dbus-daemon dbus-run-session python3 timeout pkg-config "${CXX:-c++}"; do
     command -v "$tool" >/dev/null || { echo "error: missing $tool" >&2; exit 69; }
   done
   [[ -x /usr/libexec/xdg-desktop-portal && -x /usr/libexec/xdg-desktop-portal-gnome ]] ||
@@ -67,30 +64,27 @@ revision = {
 }
 (out / "revision.json").write_text(json.dumps(revision, indent=2))
 PY
-  # Bind the linked product code to this source tree: the build's own source
-  # must match it, and its archives are brought up to date before linking.
-  build_source=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$build/CMakeCache.txt")
-  [[ -d $build_source ]] || { echo "error: $build is not a configured CMake build" >&2; exit 69; }
-  for part in src cmake CMakeLists.txt; do
-    diff -rq --strip-trailing-cr "$repo/$part" "$build_source/$part" >/dev/null ||
-      { echo "error: $build was configured from a different $part than $repo" >&2; exit 65; }
-  done
+  # Link only archives compiled here from this tree into a fresh private build
+  # directory, so the evidence cannot inherit stale or unrelated objects.
+  build="$sandbox/build"
   targets=(layerc_bus layerc_bus_model layerc_linux layerc_capture_common layerc_core layerc_durable)
-  cmake --build "$build" --target "${targets[@]}" > "$evidence/archive-build.log" 2>&1 ||
-    { echo "error: rebuilding the product archives failed" >&2; exit 1; }
+  { cmake -S "$repo" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+      -DLAYERC_BUILD_TESTS=OFF -DLAYERC_BUILD_EDITOR=OFF &&
+    cmake --build "$build" --parallel --target "${targets[@]}"; } > "$evidence/archive-build.log" 2>&1 ||
+    { echo "error: building the product archives failed; see $evidence/archive-build.log" >&2; exit 1; }
   archives=()
   for name in "${targets[@]}"; do
     [[ -f "$build/lib$name.a" ]] || { echo "error: missing $build/lib$name.a" >&2; exit 69; }
     archives+=("$build/lib$name.a")
   done
-  python3 - "$evidence" "$build_source" "${archives[@]}" <<'PY'
+  python3 - "$evidence" "$repo" "${archives[@]}" <<'PY'
 import hashlib, json, sys
 from pathlib import Path
 out, source, archives = Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
 (out / "build-provenance.json").write_text(json.dumps({
-    "buildSourceMatchesTree": True,
-    "comparedParts": ["src", "cmake", "CMakeLists.txt"],
+    "freshBuildFromTree": True,
     "buildSourceDirectory": source,
+    "configure": "-G Ninja -DCMAKE_BUILD_TYPE=Debug -DLAYERC_BUILD_TESTS=OFF -DLAYERC_BUILD_EDITOR=OFF",
     "archivesSha256": {Path(a).name: hashlib.sha256(Path(a).read_bytes()).hexdigest() for a in archives},
 }, indent=2))
 PY
