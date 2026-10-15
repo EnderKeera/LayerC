@@ -79,6 +79,9 @@ profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled"
                        "anchorX": 0.25, "anchorY": 0.75, "cooldowns": ["ability"]}],
            "bindings": [{"cooldownId": "ability",
                          "chord": [{"device": "keyboard", "code": 69}]}]}
+# Forward-compatible data must survive the actual editor/autosave/export paths.
+profile["futureProfile"] = {"large": 18446744073709551615, "note": "opaque metadata"}
+profile["cooldowns"][0]["futureCooldown"] = {"keep": True}
 store = Path(sys.argv[1])
 if sys.argv[2] != "resources":
     (store / "fixture.json").write_text(json.dumps(profile))

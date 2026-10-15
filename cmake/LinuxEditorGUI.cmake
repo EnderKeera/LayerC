@@ -120,6 +120,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/linux/editor_forms.cpp
     src/editor/linux/editor_geometry.cpp
     src/editor/linux/editor_import.cpp
+    src/editor/linux/cooldown_groups_window.cpp
+    src/editor/linux/export_selection_window.cpp
     src/editor/linux/editor_menus.cpp
     src/editor/linux/editor_preview.cpp
     src/editor/linux/binding_capture.cpp)

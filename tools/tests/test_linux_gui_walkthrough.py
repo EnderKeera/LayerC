@@ -6,6 +6,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "linux-gui"))
 from walkthrough import Failure, Walk  # noqa: E402
+from parity_walkthrough import reviewed_destinations  # noqa: E402
 
 
 class ProfileRows(Walk):
@@ -68,6 +69,21 @@ class WalkthroughSelectionTests(unittest.TestCase):
         self.assertEqual(rows.visited, [0, 1])
         with self.assertRaises(Failure):
             FixtureRows(["imported-copy"]).select_fixture("missing")
+
+class ExportSummaryTests(unittest.TestCase):
+    def test_message_box_uses_label_name_without_a_text_interface(self) -> None:
+        dialog = ({"role": "dialog"}, [
+            {"role": "label", "name": "?"},
+            {"role": "label", "name": "Reviewed destinations:\nfirst.json — copy\nlast.json — copy\n"},
+            {"role": "button", "name": "Cancel"},
+        ])
+        self.assertEqual(reviewed_destinations(dialog),
+                         ["first.json — copy", "last.json — copy"])
+
+    def test_no_summary_cannot_be_mistaken_for_two_profiles(self) -> None:
+        self.assertEqual(reviewed_destinations(None), [])
+        self.assertEqual(reviewed_destinations(({}, [{"role": "label", "name": "Existing profile collision."} ])), [])
+
 
 if __name__ == "__main__":
     unittest.main()

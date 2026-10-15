@@ -161,8 +161,8 @@ block implementation or container CI:
 
 The v2.6c editor is not yet published. Compared with the Windows editor, X11
 has no Generic HID capture, Game Bar companion, capture exclusion or isolated
-recognition (their data is preserved), cooldown groups and the isolated-runtime
-setting are preserved but not editable, and there is no Pick Window or direct
+recognition (their data is preserved), the isolated-runtime setting is
+preserved but not editable, and there is no Pick Window or direct
 overlay drag because X11 overlays never take input. When X11 development libraries, FLTK 1.4+ with
 `fltk-config`, and ATK, its AT-SPI adaptor and libatspi 2.62 or later are
 available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the `layere`
@@ -183,9 +183,12 @@ cmake --build build-linux --target layere
 An X11 display is required. The editor reads the normal XDG profile store.
 It creates, duplicates, renames, enables/disables and deletes profiles, and
 edits game matching, cooldowns, keyboard and mouse bindings (with capture), and
-panels. It has undo/redo, menus and context menus, and JSON/`.layercprofile`
-import with collision review and export. Its preview is illustrative, not a
-complete renderer. The Automation tab edits rules and presets, runs the
+panels. Cooldowns > Cooldown groups edits propagation groups and shared pools,
+including members, timing, charges, recovery and retrigger, as one undoable
+transaction. It has undo/redo, menus and context menus, and JSON/`.layercprofile`
+import with collision review. Pack export has individual profile checkboxes,
+Select all and Select none; an empty selection is refused and Cancel writes
+nothing. Its preview is illustrative, not a complete renderer. The Automation tab edits rules and presets, runs the
 deterministic simulator and records an authenticated live trace. The Visual
 tab assigns, updates, clones and removes the selected cooldown's visual
 trigger and calibrates it against an X11 window in a modal dialog: after an
@@ -194,9 +197,11 @@ capture, selects a region, samples a color, and edits average-color,
 brightness, color-coverage and template predicates, with up to four captured
 or imported PNG references and an editable alpha mask. The profile, its
 sidecars and template assets are published in one durable transaction.
-Game Bar companion data, Generic HID bindings and cooldown groups are
-preserved but not editable; unreadable/invalid module data blocks Save rather
-than being silently discarded. Save uses the shared durable
+Game Bar companion data and Generic HID bindings are preserved but not
+editable. Unknown base-profile JSON fields are retained with their owning
+objects, including nested fields and numeric source digits; unsupported or
+invalid data is not dropped to make a save succeed. Unreadable/invalid module
+data blocks Save rather than being silently discarded. Save uses the shared durable
 stage/commit path, then asks the daemon to reload through the authenticated
 private control socket.
 

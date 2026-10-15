@@ -50,7 +50,7 @@ enum class EditorCommand {
   add_keyboard, add_mouse, capture_binding, delete_binding,
   profile_page, cooldown_page, binding_page, panel_page, automation_page, visual_page,
   duplicate_cooldown, rename, diagnostics, shortcuts_help, about,
-  save_as, open_folder, split_bars, panel_colors, options, appearance, tasks, position, close
+  save_as, open_folder, split_bars, panel_colors, options, appearance, tasks, position, cooldown_groups, close
 };
 
 // The toolkit frontend owns only controls and the local, possibly invalid

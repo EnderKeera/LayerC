@@ -41,6 +41,7 @@ constexpr std::array definitions{
     Definition{"&Cooldowns/&Add cooldown", "&Add cooldown", Command::add_cooldown, 0, 0},
     Definition{"&Cooldowns/D&uplicate cooldown", "D&uplicate cooldown", Command::duplicate_cooldown, 0, 0},
     Definition{"&Cooldowns/&Remove cooldown...", "&Remove cooldown...", Command::delete_cooldown, 0, 0},
+    Definition{"&Cooldowns/Edit &groups...", "Edit &groups...", Command::cooldown_groups, 0, 0},
     Definition{"&Bindings/Add &key", "Add &key", Command::add_keyboard, 0, 0},
     Definition{"&Bindings/Add &mouse", "Add &mouse", Command::add_mouse, 0, 0},
     Definition{"&Bindings/&Capture focused chord...", "&Capture focused chord...", Command::capture_binding, 0, 0},
@@ -74,7 +75,7 @@ bool in_context(Command command, EditorMenuContext context) {
            command == Command::export_json || command == Command::export_pack;
   case EditorMenuContext::cooldowns:
     return command == Command::add_cooldown || command == Command::duplicate_cooldown ||
-           command == Command::delete_cooldown;
+           command == Command::delete_cooldown || command == Command::cooldown_groups;
   case EditorMenuContext::panels:
     return command == Command::add_panel || command == Command::delete_panel ||
            command == Command::panel_colors;
