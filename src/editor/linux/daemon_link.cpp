@@ -1,6 +1,7 @@
 #include "daemon_link.hpp"
 
 #include "control_channel.hpp"
+#include "runtime_diagnostics_view.hpp"
 
 #include "layerc/core/json.hpp"
 #include "layerc/core/json_reader.hpp"
@@ -9,6 +10,8 @@
 
 #include <sys/stat.h>
 #include <cerrno>
+#include <cstdlib>
+#include <string_view>
 #include <variant>
 
 namespace layerc::editor {
@@ -38,11 +41,45 @@ std::string DaemonStatus::summary() const {
     return text + (error.empty() ? "" : " (" + error + ")");
   }
   std::string text = "LayerD " + (version.empty() ? std::string("running") : version);
-  text += x11_connected ? " \u2014 X11 connected" : " \u2014 X11 unavailable";
+  if (wayland_session()) {
+    // X11 here is the XWayland connection LayerD may use for degraded paths.
+    text += " \u2014 Wayland (" +
+            std::string(layerc::core::enum_wire_name(layerc::runtime::display_compositor_wire,
+                                                     display->compositor)
+                            .value_or("unknown")) +
+            "), XWayland ";
+    text += x11_connected ? "connected" : "unavailable";
+  } else {
+    text += x11_connected ? " \u2014 X11 connected" : " \u2014 X11 unavailable";
+  }
   if (!x11_connected && !x11_reason.empty()) text += " (" + x11_reason + ")";
   text += ", " + std::to_string(sessions) + (sessions == 1 ? " session" : " sessions");
   if (!error.empty()) text += " (" + error + ")";
   return text;
+}
+
+bool DaemonStatus::wayland_session() const noexcept {
+  return display && display->session == layerc::runtime::DisplaySession::wayland;
+}
+
+bool wayland_environment() {
+  const char *socket = std::getenv("WAYLAND_DISPLAY");
+  const char *type = std::getenv("XDG_SESSION_TYPE");
+  return (socket != nullptr && *socket != '\0') ||
+         (type != nullptr && std::string_view{type} == "wayland");
+}
+
+std::string wayland_scope_note(const DaemonStatus &status, const bool wayland_environment) {
+  if (!status.wayland_session() && !wayland_environment) return {};
+  std::string note = "Wayland session: only XWayland windows are listed (degraded); native "
+                     "Wayland windows are not shown here.";
+  if (status.wayland_session())
+    note += " LayerD tracks windows with " +
+            display_provider_text(status.display->providers.windows) + ".";
+  else
+    note += status.running ? " LayerD did not report a window provider."
+                           : " LayerD is not running, so its window provider is unknown.";
+  return note;
 }
 
 DaemonStatus query_daemon_status() {
@@ -91,6 +128,7 @@ DaemonStatus query_daemon_status() {
           line.reasons += (line.reasons.empty() ? "" : ", ") + reason;
       status.capabilities.push_back(std::move(line));
     }
+    status.display = diagnostics->linux_extension->display;
   }
   return status;
 }

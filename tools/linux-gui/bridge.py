@@ -89,6 +89,7 @@ def start_time(pid):
     return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
 
 
+
 class Bridge:
     def __init__(self, args):
         self.session = Path(args.session)
@@ -124,21 +125,28 @@ class Bridge:
         self.width, self.height = int(dims.group(1)), int(dims.group(2))
 
     def pin_display(self, display, xvfb_pid):
-        # Refuse anything but the runner's own private Xvfb: a user display
-        # must never receive synthesized input.
+        # Refuse anything but the runner's own private display server: a user
+        # display must never receive synthesized input. That is the runner's
+        # Xvfb, or the XWayland of the runner's private headless sway (wlroots
+        # binds the display sockets and writes the lock with sway's own PID).
         match = re.fullmatch(r":(\d+)", display or "")
-        if os.environ.get("DISPLAY") != display or not match or int(match.group(1)) < 1000:
+        if os.environ.get("DISPLAY") != display or not match:
             raise SystemExit("bridge requires the runner-owned private display")
         number = match.group(1)
         before = start_time(xvfb_pid)
         self.xvfb = os.pidfd_open(xvfb_pid)
         # The pidfd now names one process; re-verify that it is the same,
-        # still-running Xvfb that owns the display lock.
+        # still-running server that owns the display lock.
         cmdline = Path(f"/proc/{xvfb_pid}/cmdline").read_bytes().split(b"\0")
+        # wlroots NUL-terminates the PID it writes; Xvfb pads with spaces.
+        lock = Path(f"/tmp/.X{number}-lock").read_text().replace("\0", "").strip()
+        # Xvfb displays use explicit numbers from 1000; XWayland picks the
+        # first free number inside the runner's private /tmp/.X11-unix.
+        server = cmdline[0].endswith(b"Xvfb") and int(number) >= 1000 or cmdline[0].endswith(b"sway")
         if (select.select([self.xvfb], [], [], 0)[0] or start_time(xvfb_pid) != before
-                or not cmdline[0].endswith(b"Xvfb")
-                or Path(f"/tmp/.X{number}-lock").read_text().strip() != str(xvfb_pid)):
-            raise SystemExit("display is not served by the runner-owned Xvfb")
+                or not server or lock != str(xvfb_pid)):
+            raise SystemExit(f"display :{number} is not served by the runner-owned display server "
+                             f"(server {cmdline[0]!r}, lock {lock!r})")
         return number
 
     def remaining(self, cap):
@@ -207,11 +215,25 @@ class Bridge:
         self.shot_index += 1
         label = NAME_PATTERN.sub("-", name.lower()).strip("-")[:40] or "shot"
         path = self.shots / f"{self.shot_index:03d}-{label}.png"
-        self.bounded(["import", "-window", "root", str(path)], timeout=20)
+        windows = self.windows()
+        try:
+            self.bounded(["import", "-window", "root", str(path)], timeout=20)
+        except RuntimeError:
+            # Rootless XWayland has no root image: compose each visible X window
+            # at its position on a black canvas. Native Wayland windows are not
+            # X windows and stay absent.
+            command = ["convert", "-size", f"{self.width}x{self.height}", "xc:black"]
+            for index, window in enumerate(windows):
+                part = self.shots / f".part-{index}.png"
+                self.bounded(["import", "-window", str(window["id"]), str(part)], timeout=20)
+                command += [str(part), "-geometry", f"+{window['x']}+{window['y']}", "-composite"]
+            self.bounded(command + [str(path)], timeout=20)
+            for part in self.shots.glob(".part-*.png"):
+                part.unlink()
         self.latest = {"id": self.shot_index, "sequence": self.sequence}
         return {"screenshot": self.shot_index, "path": str(path),
                 "relative": str(path.relative_to(self.evidence)),
-                "screen": [self.width, self.height], "windows": self.windows()}
+                "screen": [self.width, self.height], "windows": windows}
 
     def shot_path(self, request):
         wanted = request.get("screenshot")

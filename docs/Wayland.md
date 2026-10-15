@@ -420,6 +420,21 @@ This is not a V2.7 support claim.
   signal and name), a lexical scan for network, system-bus, and process APIs,
   and a component install into a disposable prefix. No GNOME Shell was
   running; actor stacking above fullscreen windows is unverified.
+- Editor on Wayland: `layere` stays an FLTK X11 client, so on Wayland it is an
+  XWayland client. Daemon status names the session ("Wayland (wlroots),
+  XWayland connected"); Runtime Diagnostics adds a `Display:` line and one row
+  per provider exactly as LayerD reports it. Detected Tasks and Position on
+  window scan X11 windows only: on Wayland they list XWayland clients and say
+  so (`only XWayland windows are listed (degraded)`), naming LayerD's window
+  provider. Native Wayland windows are not listed by the editor.
+- Automated editor evidence: `tools/linux-editor-gui-tests.sh --mode wayland`
+  runs the editor, LayerD, an XWayland game fixture and a native foot window in
+  a private headless sway with XWayland (`tools/linux-gui/wayland_walkthrough.py`,
+  5 required cases: XWayland/native split, status, diagnostics rows matching
+  LayerD, degraded Detected Tasks, degraded placement), with the editor's
+  resource targets and cleanup. Rootless XWayland has no root image, so
+  screenshots compose the X windows; native windows are absent from them. The
+  X11 walkthrough is unchanged. sway only; no KWin, GNOME, or physical desktop.
 
 ## Tests
 

@@ -2,6 +2,8 @@
 
 #include "document_commit.hpp"
 
+#include "layerc/runtime/display_diagnostics.hpp"
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -31,12 +33,26 @@ struct DaemonStatus {
   std::string x11_reason;
   std::size_t sessions{};
   std::vector<CapabilityLine> capabilities;
+  // V2.7 display session and provider rows; absent from V2.6 daemons.
+  std::optional<layerc::runtime::DisplayStatusSnapshot> display;
   // The raw RuntimeDiagnostics payload, for the Runtime Diagnostics view.
   std::string payload_json;
 
-  // One status-bar line: "LayerD 2.6.0 — X11 connected, 1 session".
+  // One status-bar line: "LayerD 2.6.0 — X11 connected, 1 session", or
+  // "LayerD 2.7.0 — Wayland (wlroots), XWayland connected, 1 session".
   [[nodiscard]] std::string summary() const;
+  [[nodiscard]] bool wayland_session() const noexcept;
 };
+
+// Whether the editor runs inside a Wayland session (it always draws through
+// X11, so there it is an XWayland client).
+[[nodiscard]] bool wayland_environment();
+
+// Detected Tasks and placement scan X11 windows: in a Wayland session they
+// list XWayland clients only. The note says so and names LayerD's window
+// provider; empty on X11.
+[[nodiscard]] std::string wayland_scope_note(const DaemonStatus &status,
+                                             bool wayland_environment);
 
 [[nodiscard]] DaemonStatus query_daemon_status();
 

@@ -74,6 +74,15 @@ void append_details(std::vector<std::string> &lines, const runtime::RuntimeDiagn
         for (const auto &reason : *list) reasons += (reasons.empty() ? "" : "; ") + reason;
       lines.push_back(reasons.empty() ? line : line + " (" + reasons + ")");
     }
+    if (const auto &display = diagnostics.linux_extension->display) {
+      lines.push_back("Display: " + display_session_text(*display));
+      const auto &providers = display->providers;
+      for (const auto &[name, provider] :
+           {std::pair{"windows", &providers.windows}, std::pair{"monitors", &providers.monitors},
+            std::pair{"input", &providers.input}, std::pair{"overlay", &providers.overlay},
+            std::pair{"capture", &providers.capture}})
+        lines.push_back(std::string("  ") + name + ": " + display_provider_text(*provider));
+    }
   }
   lines.push_back("");
   lines.push_back("Services:");
@@ -168,6 +177,31 @@ RuntimeDiagnosticsView runtime_diagnostics_view(const std::string_view source,
   view.lines.push_back("Last error: " + (last_error.empty() ? std::string("None reported") : last_error));
   if (detailed) append_details(view.lines, *diagnostics);
   return view;
+}
+
+std::string display_session_text(const runtime::DisplayStatusSnapshot &display) {
+  using core::enum_wire_name;
+  std::string text =
+      std::string(enum_wire_name(runtime::display_session_wire, display.session).value_or("none")) +
+      " session, compositor " +
+      std::string(enum_wire_name(runtime::display_compositor_wire, display.compositor)
+                      .value_or("unknown"));
+  if (!display.desktop.empty()) text += ", desktop " + display.desktop;
+  if (display.override_backend != runtime::DisplayBackend::auto_detect)
+    text += ", override " + std::string(enum_wire_name(runtime::display_backend_wire,
+                                                       display.override_backend)
+                                            .value_or("invalid"));
+  for (const auto &reason : display.reasons) text += "; " + reason;
+  return text;
+}
+
+std::string display_provider_text(const runtime::DisplayProviderStatus &provider) {
+  std::string text = provider.name + ": " +
+      std::string(core::enum_wire_name(runtime::display_provider_state_wire, provider.state)
+                      .value_or("unavailable"));
+  std::string reasons;
+  for (const auto &reason : provider.reasons) reasons += (reasons.empty() ? "" : ", ") + reason;
+  return reasons.empty() ? text : text + " (" + reasons + ")";
 }
 
 } // namespace layerc::editor

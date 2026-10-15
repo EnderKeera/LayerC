@@ -70,6 +70,25 @@ void windows_summary_and_linux_details() {
              has_line(detailed, "fixture on window 0x2a, foreground, 1 overlay window; last input: dash") &&
              has_line(detailed, "checkpoint failed"),
          "details list process, X11, capability, service, session and automation state");
+  expect(!has_line(detailed, "Display:"), "a V2.6 snapshot without display rows adds none");
+
+  runtime::DisplayStatusSnapshot display;
+  display.session = runtime::DisplaySession::wayland;
+  display.compositor = runtime::DisplayCompositor::wlroots;
+  display.desktop = "sway";
+  display.providers.windows = {"x11_ewmh", runtime::DisplayProviderState::degraded,
+                               {"xwayland_windows_only"}};
+  display.providers.monitors = {"wayland_output", runtime::DisplayProviderState::active, {}};
+  display.providers.capture = {"portal_screencast", runtime::DisplayProviderState::not_built,
+                               {"pipewire_not_built"}};
+  linux_status.display = display;
+  const auto wayland = layerc::editor::runtime_diagnostics_view(
+      runtime::serialize_linux_status_json(diagnostics, linux_status), true, true, true);
+  expect(has_line(wayland, "Display: wayland session, compositor wlroots, desktop sway") &&
+             has_line(wayland, "  windows: x11_ewmh: degraded (xwayland_windows_only)") &&
+             has_line(wayland, "  monitors: wayland_output: active") &&
+             has_line(wayland, "  capture: portal_screencast: not_built (pipewire_not_built)"),
+         "details name the display session and every provider with its state and reasons");
 }
 void worker_states_and_error_precedence() {
   using layerc::editor::runtime_diagnostics_view;

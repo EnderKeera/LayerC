@@ -1,4 +1,5 @@
 #include "tasks_window.hpp"
+#include "daemon_link.hpp"
 #include "x11_window.hpp"
 
 #include <FL/Fl.H>
@@ -130,14 +131,20 @@ void TasksWindow::refresh() {
     if (tasks_[index].window == previous) select = static_cast<int>(index) + 1;
   }
   list_->value(select);
+  std::string message;
   if (!error.empty())
-    set_message("Window discovery: " + error);
+    message = "Window discovery: " + error;
   else if (tasks_.empty())
-    set_message(show_all_->value() ? "No windows detected."
-                                   : "No eligible windows detected. Show all windows includes "
-                                     "hidden and untitled windows.");
+    message = show_all_->value() ? "No windows detected."
+                                 : "No eligible windows detected. Show all windows includes "
+                                   "hidden and untitled windows.";
   else
-    set_message(std::to_string(tasks_.size()) + " windows detected.");
+    message = std::to_string(tasks_.size()) + " windows detected.";
+  // On Wayland the scan sees XWayland clients only; say so, never imply all.
+  if (const auto note = wayland_scope_note(query_daemon_status(), wayland_environment());
+      !note.empty())
+    message += " " + note;
+  set_message(message);
   update_detail();
 }
 

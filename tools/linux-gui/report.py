@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from walkthrough import EXPECTED  # noqa: E402 -- the required-case manifest
+from wayland_walkthrough import EXPECTED as WAYLAND_EXPECTED  # noqa: E402
 from editor_resources import ADVANCED_VIEWS  # noqa: E402
 
 MIB = 1024 * 1024
@@ -25,6 +26,8 @@ TARGETS = {"idleUssBytes": 20 * MIB, "startupPeakUssBytes": 20 * MIB, "idleCpuPe
 REPRESENTATIVE = {"idleUssBytes": 32 * MIB, "startupPeakUssBytes": 32 * MIB, "idleCpuPercent": 0.2}
 CYCLE_COUNT, CYCLE_DRIFT = 100, 2 * MIB
 OWNED_ROLES = ("wm", "fixture", "daemon", "sampler", "bridge", "outer-xvfb")
+# Wayland mode: sway replaces Xvfb and Openbox; a native foot window is owned.
+WAYLAND_ROLES = ("native", "fixture", "daemon", "sampler", "bridge", "outer-compositor")
 MIN_IDLE_SECONDS = 60.0
 # The samples themselves must prove the window: ~240 readings at 0.25 s.
 MIN_WINDOW_SAMPLES, MAX_SAMPLE_GAP, WINDOW_SLACK = 200, 1.0, 1.0
@@ -63,7 +66,7 @@ def host_class(out):
     return "Linux host; native, VM or container not verified"
 
 
-def check_cases(out, failures):
+def check_cases(out, failures, expected=EXPECTED):
     report = load(out / "cases.json")
     if not isinstance(report, dict) or not isinstance(report.get("cases"), list):
         failures.append("walkthrough produced no case report")
@@ -77,13 +80,13 @@ def check_cases(out, failures):
         if name in seen:
             failures.append(f"duplicate case record: {name}")
         seen[name] = case
-    unexpected = [name for name in seen if name not in EXPECTED]
-    missing = [name for name in EXPECTED if name not in seen]
+    unexpected = [name for name in seen if name not in expected]
+    missing = [name for name in expected if name not in seen]
     if unexpected:
         failures.append(f"unexpected case records: {unexpected}")
     if missing:
         failures.append(f"required cases missing: {', '.join(missing)}")
-    bad = [name for name in EXPECTED if name in seen and (
+    bad = [name for name in expected if name in seen and (
         not is_true(seen[name].get("required")) or seen[name].get("status") != "pass")]
     if bad:
         failures.append(f"required cases not passed: {', '.join(bad)}")
@@ -198,7 +201,7 @@ def evaluate(out):
 
     ownership = {p.stem: load(p) for p in sorted((out / "ownership").glob("*.status"))}
     if not setup_error:
-        for role in OWNED_ROLES:
+        for role in WAYLAND_ROLES if mode == "wayland" else OWNED_ROLES:
             if role not in ownership:
                 failures.append(f"owned process record missing: {role}")
     for name, status in ownership.items():
@@ -230,7 +233,9 @@ def evaluate(out):
             failures.append("startup sampler did not complete and stop LayerE cleanly")
 
     result: dict[str, object] = {
-        "mode": mode, "evidenceClass": "automated private-Xvfb session",
+        "mode": mode,
+        "evidenceClass": "automated private headless-sway session (XWayland)" if mode == "wayland"
+        else "automated private-Xvfb session",
         "host": host_class(out), "sessionExit": session_exit,
         "resources": resources, "ownership": ownership}
     if mode == "walkthrough":
@@ -239,6 +244,11 @@ def evaluate(out):
             result["cases"] = statuses
             result["deferred"] = deferred
         result["automationResources"] = check_automation_resources(out, startup, failures)
+    elif mode == "wayland":
+        statuses, deferred = check_cases(out, failures, WAYLAND_EXPECTED)
+        if statuses is not None:
+            result["cases"] = statuses
+            result["deferred"] = deferred
     elif mode == "resources":
         result["fixture"] = "representative: 20 profiles x 10 cooldowns x 2 panels"
         result["cycles"] = check_cycles(out, failures)

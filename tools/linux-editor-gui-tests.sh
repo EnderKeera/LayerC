@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Disposable X11 GUI runner for the Linux LayerE editor (Debian WSL or Linux).
 #
-#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session|resources]
+#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session|resources|wayland]
 #                             [--idle-seconds N] [--session-seconds N] [--env FILE]
 #                             [--expect-stamp FILE]
 #
 # walkthrough (default): run tools/linux-gui/walkthrough.py through the bridge
 #   and gate on its required cases, the editor resource targets and cleanup.
+# wayland: the editor as an XWayland client of a private headless sway, with a
+#   native foot window beside the X11 fixture; runs linux-gui/wayland_walkthrough.py
+#   and gates on accurate native/degraded reporting. XWayland needs a writable
+#   sticky /tmp/.X11-unix (under WSLg, run inside a private tmpfs there).
 # session: keep the computer-use bridge open for one external agent until it
 #   sends {"op":"stop"} or the bridge idles out (--session-seconds).
 #
@@ -45,8 +49,19 @@ inside() {
   }
   trap finish_inside EXIT
 
-  owned_start wm "$out/openbox.log" -- openbox --sm-disable
-  wait_for 10 bash -c 'xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"'
+  if [[ $GUI_MODE == wayland ]]; then
+    # sway manages windows; a native Wayland client sits beside the XWayland
+    # fixture so the native/degraded split is observable.
+    # foot reports a harness stop as status 230; the wrapper turns only that
+    # requested stop into success, so a crash still fails the run.
+    owned_start native "$out/native.log" -- bash -c \
+      'foot --title "LayerC Native Window" sleep infinity & child=$!
+       trap "kill -TERM $child; wait $child; exit 0" TERM; wait $child'
+  else
+    owned_start wm "$out/openbox.log" -- openbox --sm-disable
+  fi
+  [[ $GUI_MODE == wayland ]] ||
+    wait_for 10 bash -c 'xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"'
 
   mkdir -p "$profiles"
   python3 - "$profiles" "$GUI_MODE" <<'PY'
@@ -164,12 +179,16 @@ PY
   wait_for 10 test -S "$session/bridge.sock"
   test -s "$session/bridge.token"
   python3 "$here/linux-gui/sample.py" roles "$out/harness-resources.json" \
-    "xvfb=$GUI_XVFB_PID" "openbox=$(owned_pid wm)" \
+    "$([[ $GUI_MODE == wayland ]] && echo sway || echo xvfb)=$GUI_XVFB_PID" \
+    "$([[ $GUI_MODE == wayland ]] && echo "foot=$(owned_pid native)" || echo "openbox=$(owned_pid wm)")" \
     "layerd=$(pgrep -P "$(owned_pid daemon)" -x layerd)" \
     "fixture=$(owned_pid fixture)" "bridge=$(owned_pid bridge)"
 
   if [[ $GUI_MODE == walkthrough ]]; then
     python3 "$here/linux-gui/walkthrough.py" --session "$session" --out "$out" || result=$?
+    python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
+  elif [[ $GUI_MODE == wayland ]]; then
+    python3 "$here/linux-gui/wayland_walkthrough.py" --session "$session" --out "$out" || result=$?
     python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
   elif [[ $GUI_MODE == resources ]]; then
     python3 "$here/linux-gui/cycles.py" --session "$session" --out "$out" || result=$?
@@ -214,8 +233,9 @@ while (($#)); do
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session|resources]" >&2; exit 64; }
-[[ $mode == walkthrough || $mode == session || $mode == resources ]] || { echo "unknown mode: $mode" >&2; exit 64; }
+[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session|resources|wayland]" >&2; exit 64; }
+[[ $mode == walkthrough || $mode == session || $mode == resources || $mode == wayland ]] ||
+  { echo "unknown mode: $mode" >&2; exit 64; }
 expand_home() { [[ $1 == "~"* ]] && printf '%s' "$HOME${1:1}" || printf '%s' "$1"; }
 build=$(realpath "$(expand_home "$build")")
 # Hold the mirror/build pair for the whole run, so no build replaces the
@@ -240,7 +260,7 @@ out=$(realpath -m "$out")
 mkdir -p "$out"
 [[ ! -e "$out/result.json" ]] || { echo "refusing to reuse evidence directory: $out" >&2; exit 64; }
 
-work= session_exit=1 setup_error= xvfb_name=
+work= session_exit=1 setup_error= xvfb_name= display_role=xvfb
 attempt_numbers=() attempt_pids=()
 finish() {
   local rc=$? joined=1 sandbox_removed=1 leftovers lock_left=0 stale_locks= i name status lock_pid
@@ -261,7 +281,7 @@ finish() {
     for status in "$owned_root"/*.status; do
       [[ -e "$status" ]] || continue
       name=$(basename "$status" .status)
-      [[ $name == "$xvfb_name" ]] && name=xvfb
+      [[ $name == "$xvfb_name" ]] && name=$display_role
       [[ $name == xvfb-attempt-* ]] || name="outer-$name"
       cp "$status" "$out/ownership/$name.status" || joined=0
     done
@@ -309,7 +329,9 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for command in Xvfb xauth xdpyinfo xprop xwininfo xdotool openbox import convert python3 \
+display_commands=(Xvfb xauth openbox)
+[[ $mode != wayland ]] || display_commands=(sway Xwayland foot)
+for command in "${display_commands[@]}" xdpyinfo xprop xwininfo xdotool import convert python3 \
     dbus-run-session pgrep sha256sum timeout; do
   if ! command -v "$command" >/dev/null; then
     setup_error="missing required dependency: $command"
@@ -334,7 +356,12 @@ export HOME="$work/home" XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/dat
   XAUTHORITY="$work/Xauthority" FLTK_BACKEND=x11
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DBUS_SESSION_BUS_ADDRESS AT_SPI_BUS_ADDRESS NO_AT_BRIDGE \
   LAYERC_PROFILE_DIR LAYERC_STORE_ROOT SESSION_MANAGER
-export LAYERC_DISPLAY_BACKEND=x11
+if [[ $mode == wayland ]]; then
+  # Detection must find the private sway: LayerD runs as in a Wayland session.
+  export LAYERC_DISPLAY_BACKEND=auto XDG_SESSION_TYPE=wayland
+else
+  export LAYERC_DISPLAY_BACKEND=x11
+fi
 
 python3 - "$out" "$build" <<'PY'
 import hashlib, json, os, pathlib, platform, subprocess, sys
@@ -354,12 +381,49 @@ names = ("layere", "layerd", "layerctl", "layerc_linux_x11_smoke_fixture")
     "kernel": platform.uname()._asdict(), "python": platform.python_version(),
     "layere": first([str(build / "layere"), "--version"]),
     "xvfb": first(["Xvfb", "-version"]), "openbox": first(["openbox", "--version"]),
+    "sway": first(["sway", "--version"]), "foot": first(["foot", "--version"]),
     "xdotool": first(["xdotool", "version"]), "imagemagick": first(["convert", "-version"]),
     "screen": "1600x1000x24"}, indent=2) + "\n")
 PY
 
 # Private authenticated display. Explicit numbers use abstract sockets, which
 # also works where /tmp/.X11-unix is read-only (WSLg).
+if [[ $mode == wayland ]]; then
+  # Private headless sway with XWayland inside this run's runtime directory.
+  if [[ ! -k /tmp/.X11-unix || ! -w /tmp/.X11-unix ]]; then
+    setup_error="XWayland needs a writable sticky /tmp/.X11-unix"
+    echo "$setup_error" >&2
+    exit 1
+  fi
+  cat > "$work/sway.conf" <<EOF
+xwayland enable
+default_border none
+for_window [class=".*"] floating enable
+for_window [app_id=".*"] floating enable
+output HEADLESS-1 resolution 1600x1000 position 0 0 scale 1
+exec printf '%s' "\$DISPLAY" > "$work/xwayland.display"
+EOF
+  xvfb_name=sway display_role=compositor
+  # Its own process group holds XWayland too: release stops both.
+  owned_start sway "$out/sway.log" --group -- env WLR_BACKENDS=headless WLR_RENDERER=pixman \
+    WLR_LIBINPUT_NO_DEVICES=1 sway --config "$work/sway.conf"
+  xvfb_pid=$(owned_pid sway)
+  ready=0
+  for _ in $(seq 200); do
+    owned_alive sway || break
+    socket=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -name 'wayland-[0-9]*' ! -name '*.lock' \
+      -printf '%f\n' | head -n 1)
+    if [[ -n $socket && -s $work/xwayland.display ]]; then
+      export WAYLAND_DISPLAY=$socket DISPLAY=$(cat "$work/xwayland.display")
+      if xdpyinfo >/dev/null 2>&1; then ready=1; break; fi
+    fi
+    sleep .1
+  done
+  if ((!ready)); then
+    setup_error="private headless sway with XWayland did not start"
+    exit 1
+  fi
+else
 cookie=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
 ready=0
 for attempt in $(seq 10); do
@@ -389,6 +453,8 @@ if ((!ready)); then
   xvfb_name=
   setup_error="private authenticated Xvfb did not start"
   exit 1
+fi
+
 fi
 
 export GUI_OUT="$out" GUI_BUILD="$build" GUI_WORK="$work" GUI_MODE="$mode" \
