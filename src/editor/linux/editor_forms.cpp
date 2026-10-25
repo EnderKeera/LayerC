@@ -45,16 +45,19 @@ void EditorApp::build() {
                      EditorMenuContext context) {
     return builder.browser(x, y, width, height, label, context);
   };
+  // Sidebar (profiles, their commands, preservation and daemon state) beside
+  // the tabbed form and preview; one footer row. Everything fits the default
+  // window without scrolling; smaller windows scroll instead of overlapping.
   button(15, 15, 70, "&New", EditorCommand::new_profile)->shortcut(FL_CTRL | 'n');
   button(90, 15, 85, "Duplicate", EditorCommand::duplicate);
   button(180, 15, 75, "Delete", EditorCommand::delete_profile);
-  profiles = browser(15, 70, 240, 385, "Profiles", EditorMenuContext::profiles);
-  button(15, 465, 115, "Toggle saved", EditorCommand::toggle_enabled);
-  button(140, 465, 115, "&Import...", EditorCommand::import_profiles);
-  button(15, 505, 115, "Export JSON...", EditorCommand::export_json);
-  button(140, 505, 115, "Export pack...", EditorCommand::export_pack);
+  profiles = browser(15, 70, 240, 300, "Profiles", EditorMenuContext::profiles);
+  button(15, 380, 115, "Toggle saved", EditorCommand::toggle_enabled);
+  button(140, 380, 115, "&Import...", EditorCommand::import_profiles);
+  button(15, 416, 115, "Export JSON...", EditorCommand::export_json);
+  button(140, 416, 115, "Export pack...", EditorCommand::export_pack);
   status_pane_ = std::make_unique<StatusPane>(*this);
-  status_pane_->build_modules(builder, 15, 550, 240, 135);
+  status_pane_->build_modules(builder, 15, 474, 240, 72);
 
   tabs = new EditorTabs(270, 15, 775, 435);
   tabs->begin();
@@ -78,7 +81,7 @@ void EditorApp::build() {
   tabs->end();
   active_tab_ = profile_tab;
   tabs->callback([](Fl_Widget *, void *data) { static_cast<EditorApp *>(data)->tab_changed(); }, this);
-  preview = new PanelPreview(270, 460, 775, 220, *this);
+  preview = new PanelPreview(270, 460, 775, 190, *this);
   status_pane_->build_footer(builder);
   content->end();
   content->position(0, EditorMenus::bar_height);

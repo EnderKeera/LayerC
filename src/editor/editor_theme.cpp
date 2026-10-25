@@ -34,9 +34,9 @@ std::optional<SIZE> font_base_units(const HWND window, const HFONT font) {
 }
 
 // Fixed dialog templates are laid out in dialog units of their 9 pt template
-// font, but render with the larger body font (14 px, times the text size).
-// Scale the template once so its text fits; resizable dialogs lay out in
-// code through window_base_dpi instead. Per-monitor DPI changes later rescale
+// font, the native body size; a larger text size (Windows or Options) renders
+// the body font larger. Scale the template once so its text fits; resizable
+// dialogs lay out in code through window_base_dpi instead. Per-monitor DPI changes later rescale
 // the dialog proportionally, so this runs only at creation.
 void fit_dialog_to_font(const HWND dialog) {
   const auto style = GetWindowLongPtrW(dialog, GWL_STYLE);
@@ -63,9 +63,10 @@ void fit_dialog_to_font(const HWND dialog) {
   const auto scaled = [scale](const LONG value) {
     return MulDiv(static_cast<int>(value), scale, 1000);
   };
-  // Buttons and checkboxes keep the one 30 px control height used by the
+  // Buttons and checkboxes keep the one control height used by the
   // code-laid-out surfaces instead of growing with the template scale.
-  const int control_height = dpi_scaled(30, window_base_dpi(dialog));
+  const int control_height =
+      dpi_scaled(native_control_height, window_base_dpi(dialog));
   for (HWND child = GetWindow(dialog, GW_CHILD); child != nullptr;
        child = GetWindow(child, GW_HWNDNEXT)) {
     RECT bounds{};

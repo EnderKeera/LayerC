@@ -178,12 +178,15 @@ void linux_editor_system_theme_restores_tab_class_colors() {
   Fl_Hold_Browser list(10, 60, 100, 100); first.end();
   Fl_Group second(0, 25, 400, 275, "Second"); second.end();
   tabs.end(); window.end();
+  editor::EditorAppearance themed; themed.theme = editor::EditorTheme::teal;
+  editor::apply_editor_appearance(themed, window);
+  editor::EditorAppearance system; system.theme = editor::EditorTheme::system;
+  editor::apply_editor_appearance(system, window);
+  // Earlier cases may have shown the (Graphite) default; System restores
+  // FLTK's startup palette, which these now hold.
   const auto background = Fl::get_color(FL_BACKGROUND_COLOR);
   const auto foreground = Fl::get_color(FL_FOREGROUND_COLOR);
   const auto selection = Fl::get_color(FL_SELECTION_COLOR);
-  editor::EditorAppearance themed; themed.theme = editor::EditorTheme::teal;
-  editor::apply_editor_appearance(themed, window);
-  editor::apply_editor_appearance({}, window);
   Fl_Widget *tab_widgets[]{&tabs, &first, &second};
   for (auto *widget : tab_widgets) {
     expect(Fl::get_color(widget->selection_color()) == background,

@@ -5,8 +5,13 @@
 #include "layerc/platform/profile_store_linux.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <charconv>
+#include <cmath>
 #include <span>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace layerc::editor {
 namespace {
@@ -108,6 +113,9 @@ std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
   case EditorRole::button: colors.fill = ramp_panel; break;
   case EditorRole::label:
   case EditorRole::status: colors.text = ramp_secondary; break;
+  // FLTK draws the check mark and a light button's lamp in the selection
+  // colour: the full accent, like the filled Windows check box.
+  case EditorRole::checkbox: colors.selection = accent; break;
   default: break;
   }
   const auto &override_ = appearance.overrides[static_cast<std::size_t>(role)];
@@ -115,6 +123,109 @@ std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
   if (override_.text) colors.text = *override_.text;
   if (override_.selection) colors.selection = *override_.selection;
   return colors;
+}
+
+std::uint32_t control_border(const std::uint32_t fill) noexcept {
+  const auto luma = (((fill >> 16U) & 0xFFU) * 299U + ((fill >> 8U) & 0xFFU) * 587U +
+                     (fill & 0xFFU) * 114U) / 1000U;
+  return blend(fill, luma < 128U ? 0xFFFFFFU : 0x000000U, 84);
+}
+
+std::optional<DesktopFont> parse_desktop_font(const std::string_view description) {
+  std::vector<std::string> words;
+  std::string word;
+  for (const char c : description) {
+    if (c == ' ' || c == '\t') {
+      if (!word.empty()) words.push_back(std::exchange(word, {}));
+    } else {
+      word += c;
+    }
+  }
+  if (!word.empty()) words.push_back(std::move(word));
+  if (words.empty()) return std::nullopt;
+  DesktopFont font;
+  // A trailing number is the size: points, or pixels with a "px" suffix.
+  std::string_view size = words.back();
+  const bool pixel_size = size.ends_with("px");
+  if (pixel_size) size.remove_suffix(2);
+  double value{};
+  const auto [end, error] = std::from_chars(size.data(), size.data() + size.size(), value);
+  if (error == std::errc{} && end == size.data() + size.size() && !size.empty()) {
+    words.pop_back();
+    if (value > 0.0 && value <= 200.0)
+      font.pixels = static_cast<int>(std::lround(pixel_size ? value : value * 96.0 / 72.0));
+  }
+  std::string rest;
+  for (const auto &item : words) rest += (rest.empty() ? "" : " ") + item;
+  // "Family A, Family B, Style": the first family; styles follow the list.
+  if (const auto comma = rest.find(','); comma != std::string::npos) {
+    rest.resize(comma);
+  } else {
+    static constexpr std::array<std::string_view, 34> styles{
+        "normal", "roman", "oblique", "italic", "small-caps", "thin", "ultra-light",
+        "extra-light", "light", "semi-light", "demi-light", "book", "regular", "medium",
+        "semi-bold", "demi-bold", "bold", "ultra-bold", "extra-bold", "heavy", "black",
+        "ultra-black", "extra-black", "ultra-heavy", "ultra-condensed", "extra-condensed",
+        "condensed", "semi-condensed", "semi-expanded", "expanded", "extra-expanded",
+        "ultra-expanded", "not-rotated", "upside-down"};
+    const auto is_style = [](std::string text) {
+      for (auto &c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      return std::ranges::find(styles, text) != styles.end();
+    };
+    while (words.size() > 1 && is_style(words.back())) words.pop_back();
+    rest.clear();
+    for (const auto &item : words) rest += (rest.empty() ? "" : " ") + item;
+  }
+  while (!rest.empty() && rest.back() == ' ') rest.pop_back();
+  if (rest.empty()) return std::nullopt;
+  font.family = std::move(rest);
+  return font;
+}
+
+std::optional<std::string> xsettings_string(const std::span<const unsigned char> data,
+                                            const std::string_view name) {
+  // XSETTINGS: byte order, 3 pad, serial, count; then per setting a type, a
+  // pad, a 16-bit name length, the name (padded to 4), a serial and a value.
+  if (data.size() < 12 || data[0] > 1) return std::nullopt;
+  const bool msb_first = data[0] == 1;
+  const auto read = [&](const std::size_t at, const std::size_t bytes) {
+    std::uint32_t value{};
+    for (std::size_t index = 0; index < bytes; ++index) {
+      const std::uint32_t byte = data[at + (msb_first ? index : bytes - 1 - index)];
+      value = (value << 8U) | byte;
+    }
+    return value;
+  };
+  const auto padded = [](const std::size_t length) { return (length + 3U) & ~std::size_t{3}; };
+  const auto count = read(8, 4);
+  std::size_t at = 12;
+  for (std::uint32_t index = 0; index < count; ++index) {
+    if (data.size() - at < 4) return std::nullopt;
+    const auto type = data[at];
+    const std::size_t name_length = read(at + 2, 2);
+    at += 4;
+    if (data.size() - at < padded(name_length) + 4) return std::nullopt;
+    const std::string_view setting(reinterpret_cast<const char *>(data.data() + at), name_length);
+    at += padded(name_length) + 4;
+    if (type == 0) { // integer
+      if (data.size() - at < 4) return std::nullopt;
+      at += 4;
+    } else if (type == 1) { // string
+      if (data.size() - at < 4) return std::nullopt;
+      const std::size_t length = read(at, 4);
+      at += 4;
+      if (data.size() - at < padded(length)) return std::nullopt;
+      if (setting == name)
+        return std::string(reinterpret_cast<const char *>(data.data() + at), length);
+      at += padded(length);
+    } else if (type == 2) { // colour
+      if (data.size() - at < 8) return std::nullopt;
+      at += 8;
+    } else {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
 }
 
 std::filesystem::path editor_appearance_path() {

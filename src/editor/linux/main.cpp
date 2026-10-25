@@ -1,4 +1,5 @@
 #include "editor_app.hpp"
+#include "editor_style.hpp"
 #include "layerc/core/version.hpp"
 
 #include <FL/Fl.H>
@@ -35,6 +36,7 @@ int main(const int argc, char **argv) {
   // The window class names the installed desktop entry, so desktops pair the
   // window with its launcher and icon.
   Fl_Window::default_xclass("io.github.EnderKeera.LayerC");
+  layerc::editor::install_editor_style();
   layerc::editor::EditorApp app;
   app.build();
   app.show();

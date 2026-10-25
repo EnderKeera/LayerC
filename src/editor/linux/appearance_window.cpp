@@ -14,6 +14,7 @@
 #include <FL/Fl_Menu_.H>
 #include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Output.H>
+#include <FL/Fl_Tabs.H>
 #include <FL/Fl_Window.H>
 
 #include <array>
@@ -113,6 +114,12 @@ void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_
       if (item.selection) colors->selection = *item.selection;
     }
     paint(widget, *colors, label);
+    // Fl_Tabs fills each unselected tab with its page's selection colour and
+    // only the selected tab with its own: neutral pages keep the accent tint
+    // on the selected tab alone.
+    if (const auto button = theme_role_colors(appearance, EditorRole::button);
+        button && widget->as_group() && dynamic_cast<Fl_Tabs *>(widget->parent()))
+      widget->selection_color(fl(button->fill));
   }
   if (auto *group = widget->as_group())
     for (int index = 0; index < group->children(); ++index)

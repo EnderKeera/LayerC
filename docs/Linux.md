@@ -284,8 +284,13 @@ version. Captured bindings come from focused input only: keys, mouse buttons
 and buttons of XI2 gamepad-class devices; generic HID capture is unavailable.
 File > Save As writes the open profile and its modules under a new name, and
 File > Open profiles folder starts `xdg-open` (or names the path when it is
-missing). Tools > Appearance applies the Windows presets, an accent and
-per-role colours, stored in `<config>/layerc/editor-appearance.json`; Tools >
+missing). The editor draws flat, square controls with 1 px outlines, like
+the Windows editor ([design system](DesignSystem.md)), in the desktop's
+interface font: the XSETTINGS
+`Gtk/FontName` family when a settings manager runs, else fontconfig's sans,
+at that size up to the forms' 14 px. Tools > Appearance applies the Windows
+presets (Graphite / Copper by default; System keeps FLTK's colours), an accent
+and per-role colours, stored in `<config>/layerc/editor-appearance.json`; Tools >
 Options states that capture exclusion and isolated recognition are unavailable
 on X11. Tools > Detected tasks (Ctrl+T) lists top-level EWMH windows (never the
 editor) through a short-lived X11 connection, scanned only on open and Refresh,

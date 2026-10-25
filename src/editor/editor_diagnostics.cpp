@@ -53,7 +53,7 @@ void layout_diagnostics_dialog(const HWND window) {
   const int intro_height = ui.scaled(34);
   const int summary_height = ui.scaled(76);
   const int toggle_height = ui.scaled(22);
-  const int button_height = ui.scaled(25);
+  const int button_height = ui.scaled(native_control_height);
   const int summary_top = margin + intro_height + gap;
   const int toggle_top = summary_top + summary_height + gap;
   const int raw_top = toggle_top + toggle_height + gap;

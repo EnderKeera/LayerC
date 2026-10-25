@@ -96,7 +96,7 @@ void layout_pack_dialog(const HWND window, const bool import) {
   const int margin = ui.scaled(12);
   const int gap = ui.scaled(8);
   const int intro_height = ui.scaled(30);
-  const int button_height = ui.scaled(25);
+  const int button_height = ui.scaled(native_control_height);
   const int action_top = height - margin - button_height;
   const int selection_top = action_top - gap - button_height;
   const int list_top = margin + intro_height + gap;

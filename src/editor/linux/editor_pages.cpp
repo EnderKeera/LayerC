@@ -99,22 +99,22 @@ void StatusPane::build_modules(FormBuilder &builder, const int x, const int y,
 }
 
 void StatusPane::build_footer(FormBuilder &builder) {
-  (void)builder.button(15, 700, 100, "&Save", EditorCommand::save)
+  (void)builder.button(15, 722, 100, "&Save", EditorCommand::save)
       ->shortcut(FL_CTRL | 's');
-  undo_button_ = builder.button(125, 700, 80, "&Undo", EditorCommand::undo);
+  undo_button_ = builder.button(125, 722, 80, "&Undo", EditorCommand::undo);
   undo_button_->shortcut(FL_CTRL | 'z');
-  redo_button_ = builder.button(215, 700, 80, "&Redo", EditorCommand::redo);
+  redo_button_ = builder.button(215, 722, 80, "&Redo", EditorCommand::redo);
   redo_button_->shortcut(FL_CTRL | FL_SHIFT | 'z');
-  (void)builder.button(305, 700, 130, "Daemon status", EditorCommand::refresh);
-  status_ = new Fl_Multiline_Output(450, 700, 595, 55, "Save / reload outcome");
+  (void)builder.button(305, 722, 130, "Daemon status", EditorCommand::refresh);
+  status_ = new Fl_Multiline_Output(270, 676, 775, 38, "Save / reload outcome");
   status_->wrap(1);
   status_->align(FL_ALIGN_TOP_LEFT);
   daemon_status_ =
-      new Fl_Multiline_Output(15, 785, 700, 90, "Daemon status and capability faults");
+      new Fl_Multiline_Output(15, 572, 240, 142, "Daemon status and capability faults");
   daemon_status_->wrap(1);
   daemon_status_->align(FL_ALIGN_TOP_LEFT);
   daemon_status_->textsize(11);
-  accessibility_status_ = new Fl_Box(730, 755, 315, 28);
+  accessibility_status_ = new Fl_Box(450, 723, 595, 28);
   accessibility_status_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
   accessibility_status_->labelsize(11);
 }

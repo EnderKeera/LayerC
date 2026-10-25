@@ -141,7 +141,7 @@ void layout_basic_view(const AutomationFrame &f,
   int y = f.workspace_top;
   for (const auto &[label_id, control_id] : fields) {
     ui.field_row(label_id, control_id, right, y, field_label, right_width,
-                 f.label_height, f.control_height);
+                 f.control_height);
     y += row_height;
   }
   ui.move(IDC_AUTOMATION_REPEATING, field_left, y,
@@ -283,9 +283,8 @@ AutomationFrame layout_automation_header(const HWND dialog) {
 
   const int margin = ui.scaled(12);
   const int gap = ui.scaled(8);
-  const int control_height = ui.scaled(30);
+  const int control_height = ui.scaled(native_control_height);
   const int label_height = ui.scaled(20);
-  const int label_top = (control_height - label_height) / 2;
   const int top = margin;
   // Right-anchored preset/action cluster; the automation list takes the rest.
   const int list_label = text_width(dialog, IDC_AUTOMATION_LIST_LABEL, 0);
@@ -304,17 +303,17 @@ AutomationFrame layout_automation_header(const HWND dialog) {
   right -= gap + presets_width;
   ui.move(IDC_AUTOMATION_PRESETS, right, top, presets_width, ui.scaled(200));
   right -= preset_label;
-  ui.move(IDC_AUTOMATION_PRESET_LABEL, right, top + label_top, preset_label,
-          label_height);
-  ui.move(IDC_AUTOMATION_LIST_LABEL, margin, top + label_top, list_label,
-          label_height);
+  ui.row_label(IDC_AUTOMATION_PRESET_LABEL, right, top, preset_label,
+               control_height);
+  ui.row_label(IDC_AUTOMATION_LIST_LABEL, margin, top, list_label,
+               control_height);
   ui.move(IDC_AUTOMATION_LIST, margin + list_label, top,
           std::max(ui.scaled(100), right - gap * 2 - margin - list_label),
           ui.scaled(240));
   const int view_top = top + control_height + gap;
   const int view_label = text_width(dialog, IDC_AUTOMATION_VIEW_LABEL, 0);
-  ui.move(IDC_AUTOMATION_VIEW_LABEL, margin, view_top + label_top, view_label,
-          label_height);
+  ui.row_label(IDC_AUTOMATION_VIEW_LABEL, margin, view_top, view_label,
+               control_height);
   ui.move(IDC_AUTOMATION_VIEW, margin + view_label, view_top, ui.scaled(170),
           ui.scaled(160));
 
