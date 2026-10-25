@@ -133,8 +133,8 @@ void EditorApp::load_appearance() {
   auto loaded = load_editor_appearance(appearance_path_);
   appearance_ = loaded.appearance;
   appearance_error_ = std::move(loaded.error);
-  if (appearance_ != EditorAppearance{} )
-    apply_editor_appearance(appearance_, window, profiles, preview);
+  // The default is a preset too, so it is always applied.
+  apply_editor_appearance(appearance_, window, profiles, preview);
 }
 
 

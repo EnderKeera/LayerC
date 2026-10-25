@@ -57,7 +57,7 @@ Do not hard-code accessibility indexes; find controls by current labels.
 
 ## Interface review
 
-Review the real current build at representative window sizes and relevant modes. Check:
+Review the real current build at representative window sizes and relevant modes. Judge the look against [`docs/DesignSystem.md`](../../../docs/DesignSystem.md) (tokens, square controls, native fonts, metrics), not against memory. Check:
 
 - control visibility, clipping, overlap, spacing, alignment, and text readability;
 - focus order, keyboard operation, disabled/enabled states, default actions, and modal behavior;

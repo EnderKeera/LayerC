@@ -54,19 +54,11 @@ void draw_text(const HDC dc, const HFONT font, const std::wstring_view text,
 constexpr UINT single_line = DT_LEFT | DT_VCENTER | DT_SINGLELINE |
                              DT_END_ELLIPSIS | DT_NOPREFIX;
 
-// Rounded 1 px outlined rectangle filled with `fill`.
-void round_rect(const HDC dc, const RECT &bounds, const COLORREF fill,
-                const COLORREF outline, const int radius) {
-  const HBRUSH brush = CreateSolidBrush(fill);
-  const HPEN pen = CreatePen(PS_SOLID, 1, outline);
-  const HGDIOBJ previous_brush = SelectObject(dc, brush);
-  const HGDIOBJ previous_pen = SelectObject(dc, pen);
-  RoundRect(dc, bounds.left, bounds.top, bounds.right, bounds.bottom, radius,
-            radius);
-  SelectObject(dc, previous_pen);
-  SelectObject(dc, previous_brush);
-  DeleteObject(pen);
-  DeleteObject(brush);
+// Square 1 px outlined rectangle filled with `fill`, like the buttons.
+void outlined_rect(const HDC dc, const RECT &bounds, const COLORREF fill,
+                   const COLORREF outline) {
+  layerc::platform::fill_solid_rect(dc, bounds, fill);
+  layerc::platform::frame_solid_rect(dc, bounds, outline);
 }
 
 } // namespace
@@ -200,7 +192,6 @@ void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw,
   const int s4 = scaled(4, dpi);
   const int s8 = scaled(8, dpi);
   const int row_height = scaled(26, dpi);
-  const int radius = scaled(8, dpi);
 
   const auto window_colors = role(EditorControlRole::window);
   fill_solid_rect(dc, area, window_colors.fill);
@@ -288,8 +279,7 @@ void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw,
     const COLORREF fill = kind == 2   ? button_colors.accent
                           : kind == 1 ? button_colors.hover
                                       : button_colors.fill;
-    round_rect(dc, button, fill, kind == 2 ? fill : button_colors.border,
-               radius);
+    outlined_rect(dc, button, fill, kind == 2 ? fill : button_colors.border);
     draw_text(dc, shell_.font, text, button,
               kind == 2 ? button_colors.on_accent : button_colors.text,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);

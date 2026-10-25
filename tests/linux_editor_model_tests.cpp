@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -162,6 +163,44 @@ void write_failure_and_invalid_module_are_visible() {
          "a blocked save preserves invalid module evidence");
 }
 
+void native_style_helpers() {
+  using namespace layerc::editor;
+  // A third of the way toward white on the dark ramp, toward black on light fills.
+  expect(control_border(0x1F1F1F) == 0x686868 && control_border(0x2D2D2D) == 0x727272 &&
+             control_border(0xFFFFFF) == 0xABABAB,
+         "flat controls outline a third of the way toward the contrasting extreme");
+
+  expect(parse_desktop_font("Cantarell 11") == DesktopFont{"Cantarell", 15} &&
+             parse_desktop_font("Noto Sans, Medium 10") == DesktopFont{"Noto Sans", 13} &&
+             parse_desktop_font("Ubuntu Semi-Bold Italic 12") == DesktopFont{"Ubuntu", 16} &&
+             parse_desktop_font("DejaVu Sans 13px") == DesktopFont{"DejaVu Sans", 13} &&
+             parse_desktop_font("Inter") == DesktopFont{"Inter", std::nullopt} &&
+             !parse_desktop_font("   ") && !parse_desktop_font("11"),
+         "desktop font descriptions yield the first family and a pixel size");
+
+  // Two settings, least significant byte first: Net/ThemeName then Gtk/FontName.
+  const auto setting = [](std::vector<unsigned char> &out, std::string_view name,
+                          std::string_view value) {
+    out.insert(out.end(), {1, 0, static_cast<unsigned char>(name.size()), 0});
+    out.insert(out.end(), name.begin(), name.end());
+    out.resize(out.size() + ((4 - name.size() % 4) % 4) + 4); // pad + serial
+    out.insert(out.end(), {static_cast<unsigned char>(value.size()), 0, 0, 0});
+    out.insert(out.end(), value.begin(), value.end());
+    out.resize(out.size() + (4 - value.size() % 4) % 4);
+  };
+  std::vector<unsigned char> property{0, 0, 0, 0, 7, 0, 0, 0, 2, 0, 0, 0};
+  setting(property, "Net/ThemeName", "Adwaita");
+  setting(property, "Gtk/FontName", "Cantarell 11");
+  expect(xsettings_string(property, "Gtk/FontName") == std::optional<std::string>("Cantarell 11") &&
+             !xsettings_string(property, "Gtk/MonospaceFontName"),
+         "the XSETTINGS reader finds a string setting after another one");
+  auto truncated = property;
+  truncated.resize(truncated.size() - 6);
+  expect(!xsettings_string(truncated, "Gtk/FontName") &&
+             !xsettings_string(std::vector<unsigned char>{2, 0, 0, 0}, "Gtk/FontName"),
+         "truncated or foreign XSETTINGS data yields nothing");
+}
+
 void appearance_persistence() {
   using namespace layerc::editor;
   const auto root = std::filesystem::temp_directory_path() /
@@ -169,8 +208,9 @@ void appearance_persistence() {
   std::filesystem::remove_all(root);
   const auto path = root / "layerc" / "editor-appearance.json";
   const auto missing = load_editor_appearance(path);
-  expect(missing.error.empty() && missing.appearance == EditorAppearance{},
-         "a missing appearance file is the system default without an error");
+  expect(missing.error.empty() && missing.appearance == EditorAppearance{} &&
+             missing.appearance.theme == EditorTheme::copper,
+         "a missing appearance file is the Graphite / Copper default without an error");
   EditorAppearance chosen;
   chosen.theme = EditorTheme::teal;
   chosen.accent = 0x123456;
@@ -194,9 +234,13 @@ void appearance_persistence() {
   EditorAppearance teal;
   teal.theme = EditorTheme::teal;
   // A quarter (60/255) of the teal accent 0x5AB6AA over the 0x1F1F1F window.
+  EditorAppearance system;
+  system.theme = EditorTheme::system;
   expect(theme_role_colors(teal, EditorRole::list)->selection == 0x2C423F &&
-             !theme_role_colors(EditorAppearance{}, EditorRole::window),
+             !theme_role_colors(system, EditorRole::window),
          "selection blends the preset accent; the system theme keeps FLTK colours");
+  expect(theme_role_colors(teal, EditorRole::checkbox)->selection == 0x5AB6AA,
+         "check marks use the full accent");
   chosen.accent = 0U;
   expect(appearance_json(chosen).find("\"accent\":\"#000000\"") != std::string::npos,
          "explicit black is serialized rather than omitted as the preset");
@@ -307,4 +351,5 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(invalid_candidates_are_atomic),
     LAYERC_TEST_CASE(write_failure_and_invalid_module_are_visible),
     LAYERC_TEST_CASE(appearance_persistence),
+    LAYERC_TEST_CASE(native_style_helpers),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

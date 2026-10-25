@@ -90,11 +90,11 @@ void set_native_text_scale(int percent) noexcept;
 [[nodiscard]] UINT native_window_dpi(HWND window);
 
 enum class NativeFontKind { body, heading, title, monospace };
-// Body text is 14 px at 96 DPI and 100 %, adjusted by the Windows text-size
-// setting (the message font's size relative to its 12 px default) and by
-// native_text_scale(). Face: Segoe UI Variable Text, else Segoe UI; headings
-// are the same face semibold, titles semibold 20 px, monospace Cascadia Mono,
-// else Consolas.
+// Body text is the native 12 px (9 pt) at 96 DPI and 100 %, adjusted by the
+// Windows text-size setting (the message font's size relative to its 12 px
+// default) and by native_text_scale(). Face: the system message font (Segoe
+// UI); headings are the same face semibold, titles semibold 16 px, monospace
+// Cascadia Mono, else Consolas, at the body size.
 [[nodiscard]] HFONT create_native_font(NativeFontKind kind, UINT dpi);
 // The shared native dialog (body) font at `dpi` (0 means 96).
 [[nodiscard]] HFONT create_native_dialog_font(UINT dpi);

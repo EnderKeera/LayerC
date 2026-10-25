@@ -287,7 +287,7 @@ void capture_cancel_and_small_window() {
   expect(app.session.document().profile() == before, "canceled capture changes no binding");
   editor::EditorAppTestAccess::window(app).size(640, 480); Fl::check();
   expect(editor::EditorAppTestAccess::content(app)->w() == 640 && editor::EditorAppTestAccess::content(app)->h() == 480 - editor::EditorMenus::bar_height &&
-         editor::EditorAppTestAccess::status(app)->w() == 595 && editor::EditorAppTestAccess::panel_name(app)->w() == 260,
+         editor::EditorAppTestAccess::status(app)->w() == 775 && editor::EditorAppTestAccess::panel_name(app)->w() == 260,
          "a small viewport scrolls intact forms rather than squeezing them into overlap");
   editor::EditorAppTestAccess::content(app)->scroll_to(0, 300); Fl::check();
   expect(editor::EditorAppTestAccess::content(app)->yposition() > 0, "the small viewport exposes the bottom status area by scrolling");

@@ -1,6 +1,7 @@
 #include "layerc/platform/native_theme.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -15,6 +16,8 @@ constexpr DWORD dark_title_bar_attribute = 20;
 constexpr DWORD border_color_attribute = 34;
 constexpr DWORD caption_color_attribute = 35;
 constexpr DWORD caption_text_color_attribute = 36;
+constexpr DWORD window_corner_preference_attribute = 33;
+constexpr int square_corners = 1; // DWMWCP_DONOTROUND
 
 enum class PreferredAppMode : int {
   default_mode,
@@ -135,11 +138,24 @@ bool font_face_installed(const wchar_t *face) {
   return found;
 }
 
+// The system message font's face (Segoe UI on Windows 10/11): the face every
+// native dialog, message box and property sheet uses.
 const wchar_t *ui_face() {
-  static const wchar_t *const face =
-      font_face_installed(L"Segoe UI Variable Text") ? L"Segoe UI Variable Text"
-                                                     : L"Segoe UI";
-  return face;
+  static const std::array<wchar_t, LF_FACESIZE> face = [] {
+    std::array<wchar_t, LF_FACESIZE> name{};
+    NONCLIENTMETRICSW metrics{};
+    metrics.cbSize = sizeof(metrics);
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, metrics.cbSize,
+                              &metrics, 0) != FALSE &&
+        metrics.lfMessageFont.lfFaceName[0] != L'\0' &&
+        font_face_installed(metrics.lfMessageFont.lfFaceName))
+      wcsncpy_s(name.data(), name.size(), metrics.lfMessageFont.lfFaceName,
+                _TRUNCATE);
+    else
+      wcsncpy_s(name.data(), name.size(), L"Segoe UI", _TRUNCATE);
+    return name;
+  }();
+  return face.data();
 }
 
 const wchar_t *monospace_face() {
@@ -243,12 +259,9 @@ int native_text_percent(const UINT dpi) {
 HFONT create_native_font(const NativeFontKind kind, const UINT dpi) {
   const UINT effective_dpi = dpi == 0 ? 96U : dpi;
   const int scale = native_text_percent(effective_dpi);
-  const int logical_pixels = kind == NativeFontKind::title ? 20 : 14;
-  int height = MulDiv(MulDiv(logical_pixels, static_cast<int>(effective_dpi),
-                             96),
-                      scale, 100);
-  if (kind == NativeFontKind::monospace)
-    height = std::max(1, height - MulDiv(1, static_cast<int>(effective_dpi), 96));
+  const int logical_pixels = kind == NativeFontKind::title ? 16 : 12;
+  const int height = MulDiv(
+      MulDiv(logical_pixels, static_cast<int>(effective_dpi), 96), scale, 100);
   const int weight = kind == NativeFontKind::heading ||
                              kind == NativeFontKind::title
                          ? FW_SEMIBOLD
@@ -351,6 +364,10 @@ void set_dark_title_bar(const HWND window) {
   const BOOL enabled = TRUE;
   (void)DwmSetWindowAttribute(window, dark_title_bar_attribute, &enabled,
                               sizeof(enabled));
+  // Square frame corners match the square controls (Windows 11; ignored on
+  // Windows 10, whose corners are already square).
+  (void)DwmSetWindowAttribute(window, window_corner_preference_attribute,
+                              &square_corners, sizeof(square_corners));
 }
 
 void set_window_frame_colors(const HWND window, const COLORREF caption,

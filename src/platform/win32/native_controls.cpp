@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <mutex>
+#include <string>
 
 #include <commctrl.h>
 #include <uxtheme.h>
@@ -18,6 +19,7 @@ constexpr UINT_PTR list_hover_subclass_id = 0x4C43'0002;
 constexpr UINT_PTR frame_subclass_id = 0x4C43'0003;
 constexpr UINT_PTR menu_bar_subclass_id = 0x4C43'0004;
 constexpr UINT_PTR list_header_subclass_id = 0x4C43'0005;
+constexpr UINT_PTR flat_combo_subclass_id = 0x4C43'0006;
 
 // Undocumented but stable since Windows Vista; used by win32-darkmode and
 // Notepad++ to paint the menu bar.
@@ -193,13 +195,30 @@ void paint_flat_frame(const HWND window) {
   const HDC dc = GetWindowDC(window);
   if (dc == nullptr)
     return;
-  // Outer 1 px role border, then the remainder of the edge in input fill.
-  frame_solid_rect(dc, bounds, enabled ? palette.border : palette.divider);
-  RECT inner = bounds;
-  for (int ring = 1; ring < thickness; ++ring) {
-    InflateRect(&inner, -1, -1);
-    frame_solid_rect(dc, inner, palette.fill);
+  // The whole non-client band (the edge, plus a centered edit's padding) in
+  // the control's own background, then the outer 1 px role border.
+  RECT client{};
+  GetClientRect(window, &client);
+  MapWindowPoints(window, nullptr, reinterpret_cast<POINT *>(&client), 2);
+  RECT window_rect{};
+  GetWindowRect(window, &window_rect);
+  OffsetRect(&client, -window_rect.left, -window_rect.top);
+  const int saved = SaveDC(dc);
+  ExcludeClipRect(dc, client.left, client.top, client.right, client.bottom);
+  HBRUSH background = nullptr;
+  if (window_class(window) == L"Edit") {
+    const bool read_only = (style & ES_READONLY) != 0;
+    background = reinterpret_cast<HBRUSH>(SendMessageW(
+        GetParent(window),
+        enabled && !read_only ? WM_CTLCOLOREDIT : WM_CTLCOLORSTATIC,
+        reinterpret_cast<WPARAM>(dc), reinterpret_cast<LPARAM>(window)));
   }
+  if (background != nullptr)
+    FillRect(dc, &bounds, background);
+  else
+    fill_solid_rect(dc, bounds, palette.fill);
+  RestoreDC(dc, saved);
+  frame_solid_rect(dc, bounds, enabled ? palette.border : palette.divider);
   if (focused && enabled) {
     const int accent_height = std::max(2, MulDiv(2, static_cast<int>(native_window_dpi(window)), 96));
     RECT accent{bounds.left, bounds.bottom - accent_height, bounds.right,
@@ -233,10 +252,56 @@ LRESULT CALLBACK list_header_subclass(const HWND window, const UINT message,
   return DefSubclassProc(window, message, wparam, lparam);
 }
 
+bool single_line_edit(const HWND window) {
+  return window_class(window) == L"Edit" &&
+         (GetWindowLongPtrW(window, GWL_STYLE) & ES_MULTILINE) == 0;
+}
+
+// A single-line edit draws its text at the top of its client area; shrink
+// the client to one text line so the text sits centered in the taller
+// control, like the buttons and drop-down lists beside it.
+void center_edit_client(const HWND window, RECT &client) {
+  const auto font =
+      reinterpret_cast<HFONT>(SendMessageW(window, WM_GETFONT, 0, 0));
+  const HDC dc = GetDC(window);
+  if (dc == nullptr)
+    return;
+  const HGDIOBJ previous =
+      SelectObject(dc, font != nullptr ? font : GetStockObject(DEFAULT_GUI_FONT));
+  TEXTMETRICW metrics{};
+  const bool measured = GetTextMetricsW(dc, &metrics) != FALSE;
+  SelectObject(dc, previous);
+  ReleaseDC(window, dc);
+  const int available = client.bottom - client.top;
+  if (!measured || available <= metrics.tmHeight)
+    return;
+  client.top += (available - metrics.tmHeight) / 2;
+  client.bottom = client.top + metrics.tmHeight;
+}
+
 LRESULT CALLBACK frame_subclass(const HWND window, const UINT message,
                                 const WPARAM wparam, const LPARAM lparam,
                                 const UINT_PTR id, DWORD_PTR) {
   switch (message) {
+  case WM_NCCALCSIZE: {
+    const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+    if (single_line_edit(window))
+      center_edit_client(window, *reinterpret_cast<RECT *>(lparam));
+    return result;
+  }
+  case WM_NCHITTEST: {
+    // Clicks in the centering band still place the caret.
+    const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+    return result == HTBORDER && single_line_edit(window) ? HTCLIENT : result;
+  }
+  case WM_SETFONT: {
+    const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+    if (single_line_edit(window))
+      SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                       SWP_FRAMECHANGED);
+    return result;
+  }
   case WM_NCPAINT: {
     const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
     paint_flat_frame(window);
@@ -252,6 +317,118 @@ LRESULT CALLBACK frame_subclass(const HWND window, const UINT message,
   }
   case WM_NCDESTROY:
     RemoveWindowSubclass(window, &frame_subclass, id);
+    break;
+  default:
+    break;
+  }
+  return DefSubclassProc(window, message, wparam, lparam);
+}
+
+// A drop-down list painted like the flat edits: square input fill, 1 px
+// border, 2 px accent bottom edge while focused or open, and a chevron. The
+// Windows 11 themed combo box would otherwise draw rounded corners.
+void paint_flat_combo(const HWND combo, const HDC dc, const bool hot) {
+  RECT client{};
+  GetClientRect(combo, &client);
+  const auto chrome = native_chrome_palette();
+  const auto &palette = chrome.frame;
+  const int dpi = static_cast<int>(native_window_dpi(combo));
+  const bool enabled = IsWindowEnabled(combo) != FALSE;
+  const bool open = SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0) != FALSE;
+  const bool focused = GetFocus() == combo || open;
+  const COLORREF fill = !enabled      ? chrome.menu.fill
+                        : hot || open ? palette.hover
+                                      : palette.input;
+  fill_solid_rect(dc, client, fill);
+  frame_solid_rect(dc, client, enabled ? palette.border : palette.divider);
+  if (focused && enabled) {
+    const int accent_height = std::max(2, MulDiv(2, dpi, 96));
+    fill_solid_rect(dc,
+                    {client.left, client.bottom - accent_height, client.right,
+                     client.bottom},
+                    palette.accent);
+  }
+  const COLORREF ink = enabled ? palette.text : palette.disabled;
+  const int chevron_width = MulDiv(26, dpi, 96);
+  const int center_x = client.right - chevron_width / 2;
+  const int center_y = (client.top + client.bottom) / 2;
+  const int half = std::max(3, MulDiv(4, dpi, 96));
+  const HPEN pen = CreatePen(PS_SOLID, std::max(1, MulDiv(1, dpi, 96)), ink);
+  const HGDIOBJ previous_pen = SelectObject(dc, pen);
+  const std::array<POINT, 3> chevron{{{center_x - half, center_y - half / 2},
+                                      {center_x, center_y + half / 2},
+                                      {center_x + half, center_y - half / 2}}};
+  Polyline(dc, chevron.data(), static_cast<int>(chevron.size()));
+  SetPixel(dc, chevron[2].x, chevron[2].y, ink);
+  SelectObject(dc, previous_pen);
+  DeleteObject(pen);
+
+  const LRESULT selected = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+  if (selected == CB_ERR)
+    return;
+  const LRESULT length = SendMessageW(combo, CB_GETLBTEXTLEN,
+                                      static_cast<WPARAM>(selected), 0);
+  if (length == CB_ERR || length <= 0)
+    return;
+  std::wstring text(static_cast<std::size_t>(length) + 1U, L'\0');
+  SendMessageW(combo, CB_GETLBTEXT, static_cast<WPARAM>(selected),
+               reinterpret_cast<LPARAM>(text.data()));
+  text.resize(static_cast<std::size_t>(length));
+  RECT text_rect{client.left + MulDiv(8, dpi, 96), client.top,
+                 client.right - chevron_width, client.bottom};
+  SetBkMode(dc, TRANSPARENT);
+  SetTextColor(dc, ink);
+  const auto font =
+      reinterpret_cast<HFONT>(SendMessageW(combo, WM_GETFONT, 0, 0));
+  const HGDIOBJ previous_font =
+      font != nullptr ? SelectObject(dc, font) : nullptr;
+  DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &text_rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                DT_NOPREFIX);
+  if (previous_font != nullptr)
+    SelectObject(dc, previous_font);
+}
+
+// Reference data is 1 while the pointer is over the combo box.
+LRESULT CALLBACK flat_combo_subclass(const HWND window, const UINT message,
+                                     const WPARAM wparam, const LPARAM lparam,
+                                     const UINT_PTR id, const DWORD_PTR hot) {
+  switch (message) {
+  case WM_PAINT: {
+    PAINTSTRUCT paint{};
+    const HDC dc = BeginPaint(window, &paint);
+    if (dc != nullptr)
+      paint_flat_combo(window, dc, hot != 0);
+    EndPaint(window, &paint);
+    return 0;
+  }
+  case WM_ERASEBKGND:
+    return 1;
+  case WM_MOUSEMOVE:
+    if (hot == 0) {
+      SetWindowSubclass(window, &flat_combo_subclass, id, 1);
+      TRACKMOUSEEVENT track{.cbSize = sizeof(TRACKMOUSEEVENT),
+                            .dwFlags = TME_LEAVE,
+                            .hwndTrack = window,
+                            .dwHoverTime = 0};
+      TrackMouseEvent(&track);
+      InvalidateRect(window, nullptr, FALSE);
+    }
+    break;
+  case WM_MOUSELEAVE:
+    SetWindowSubclass(window, &flat_combo_subclass, id, 0);
+    InvalidateRect(window, nullptr, FALSE);
+    break;
+  case WM_SETFOCUS:
+  case WM_KILLFOCUS:
+  case WM_ENABLE:
+  case CB_SETCURSEL: {
+    const LRESULT result = DefSubclassProc(window, message, wparam, lparam);
+    InvalidateRect(window, nullptr, FALSE);
+    return result;
+  }
+  case WM_NCDESTROY:
+    RemoveWindowSubclass(window, &flat_combo_subclass, id);
     break;
   default:
     break;
@@ -389,8 +566,15 @@ void style_combo_child(const HWND dialog, const HWND child, const HFONT font,
     SendMessageW(child, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1),
                  item_height);
   }
+  // The theme still styles the drop-down list and its scroll bar.
   SetWindowTheme(child, L"DarkMode_CFD", nullptr);
   track_native_list_hover(child);
+  const auto type = GetWindowLongPtrW(child, GWL_STYLE) & 0x3;
+  DWORD_PTR existing{};
+  if (type == CBS_DROPDOWNLIST &&
+      GetWindowSubclass(child, &flat_combo_subclass, flat_combo_subclass_id,
+                        &existing) == FALSE)
+    SetWindowSubclass(child, &flat_combo_subclass, flat_combo_subclass_id, 0);
 }
 
 void style_listbox_child(const HWND dialog, const HWND child, const HFONT font,
@@ -465,6 +649,10 @@ void install_flat_frame(const HWND control) {
                         &existing) != FALSE)
     return;
   SetWindowSubclass(control, &frame_subclass, frame_subclass_id, 0);
+  if (single_line_edit(control))
+    SetWindowPos(control, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
   RedrawWindow(control, nullptr, nullptr, RDW_FRAME | RDW_INVALIDATE);
 }
 
@@ -511,7 +699,7 @@ void style_native_dialog_children(const HWND dialog, const HFONT font,
 }
 
 int native_check_box_size(const UINT dpi) {
-  return MulDiv(18, static_cast<int>(dpi == 0 ? 96U : dpi), 96);
+  return MulDiv(16, static_cast<int>(dpi == 0 ? 96U : dpi), 96);
 }
 
 RECT paint_native_check_box(const HDC dc, const RECT &bounds,
@@ -539,12 +727,15 @@ RECT paint_native_check_box(const HDC dc, const RECT &bounds,
     frame = colors.text;
   }
   const int scale = static_cast<int>(dpi == 0 ? 96U : dpi);
-  const int radius = MulDiv(state.radio ? size : 6, scale, state.radio ? scale : 96);
   const HBRUSH brush = CreateSolidBrush(fill);
   const HPEN pen = CreatePen(PS_SOLID, 1, frame);
   const HGDIOBJ previous_brush = SelectObject(dc, brush);
   const HGDIOBJ previous_pen = SelectObject(dc, pen);
-  RoundRect(dc, box.left, box.top, box.right, box.bottom, radius, radius);
+  // Check boxes are square like every other control; radio buttons stay round.
+  if (state.radio)
+    Ellipse(dc, box.left, box.top, box.right, box.bottom);
+  else
+    Rectangle(dc, box.left, box.top, box.right, box.bottom);
   SelectObject(dc, previous_pen);
   SelectObject(dc, previous_brush);
   DeleteObject(pen);
@@ -564,9 +755,13 @@ RECT paint_native_check_box(const HDC dc, const RECT &bounds,
     DeleteObject(dot_brush);
   } else if (filled) {
     const int pen_width = std::max(2, MulDiv(2, scale, 96));
-    const HPEN tick = CreatePen(PS_SOLID | PS_ENDCAP_ROUND | PS_GEOMETRIC,
-                                pen_width, state.disabled ? colors.disabled
-                                                          : colors.on_accent);
+    const LOGBRUSH ink{.lbStyle = BS_SOLID,
+                       .lbColor = state.disabled ? colors.disabled
+                                                 : colors.on_accent,
+                       .lbHatch = 0};
+    const HPEN tick = ExtCreatePen(
+        PS_SOLID | PS_ENDCAP_FLAT | PS_JOIN_MITER | PS_GEOMETRIC, pen_width,
+        &ink, 0, nullptr);
     const HGDIOBJ old_pen = SelectObject(dc, tick);
     MoveToEx(dc, box.left + size * 4 / 16, box.top + size * 9 / 16, nullptr);
     LineTo(dc, box.left + size * 7 / 16, box.top + size * 12 / 16);
@@ -664,20 +859,9 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
   } else if (hot) {
     fill = colors.hover;
   }
-  RECT parent_fill = draw.rcItem;
-  fill_solid_rect(draw.hDC, parent_fill,
-                  native_chrome_palette().menu.fill);
-  const int radius = MulDiv(8, static_cast<int>(dpi), 96);
-  const HBRUSH brush = CreateSolidBrush(fill);
-  const HPEN pen = CreatePen(PS_SOLID, 1, outline);
-  const HGDIOBJ previous_brush = SelectObject(draw.hDC, brush);
-  const HGDIOBJ previous_pen = SelectObject(draw.hDC, pen);
-  RoundRect(draw.hDC, draw.rcItem.left, draw.rcItem.top, draw.rcItem.right,
-            draw.rcItem.bottom, radius, radius);
-  SelectObject(draw.hDC, previous_pen);
-  SelectObject(draw.hDC, previous_brush);
-  DeleteObject(pen);
-  DeleteObject(brush);
+  // Square, flat: a 1 px outline around the fill.
+  fill_solid_rect(draw.hDC, draw.rcItem, fill);
+  frame_solid_rect(draw.hDC, draw.rcItem, outline);
 
   RECT text_rect = draw.rcItem;
   UINT text_format = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
@@ -711,17 +895,8 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
   SelectObject(draw.hDC, previous_font);
   if ((draw.itemState & ODS_FOCUS) != 0 &&
       (draw.itemState & ODS_NOFOCUSRECT) == 0) {
-    RECT focus = draw.rcItem;
-    const HPEN ring = CreatePen(PS_SOLID | PS_INSIDEFRAME,
-                                std::max(2, MulDiv(2, static_cast<int>(dpi), 96)),
-                                primary ? colors.text : colors.accent);
-    const HGDIOBJ old_pen = SelectObject(draw.hDC, ring);
-    const HGDIOBJ old_brush = SelectObject(draw.hDC, GetStockObject(NULL_BRUSH));
-    RoundRect(draw.hDC, focus.left, focus.top, focus.right, focus.bottom,
-              radius, radius);
-    SelectObject(draw.hDC, old_brush);
-    SelectObject(draw.hDC, old_pen);
-    DeleteObject(ring);
+    paint_focus_ring(draw.hDC, draw.rcItem,
+                     primary ? colors.text : colors.accent, dpi);
   }
 }
 

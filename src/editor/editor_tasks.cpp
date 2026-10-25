@@ -78,7 +78,7 @@ void EditorWindow::layout_tasks(const HWND window) {
   const DialogLayout ui(window, dpi);
 
   const int margin = ui.scaled(12);
-  const int button_height = ui.scaled(30);
+  const int button_height = ui.scaled(native_control_height);
   const int heading_height = ui.scaled(24);
   const int detail_height = ui.scaled(20);
   const int gap = ui.scaled(8);

@@ -42,8 +42,8 @@ constexpr std::array heading_controls{
 
 // Logical (96-DPI, 100 % text) metrics: one control height per surface and
 // an 8 px rhythm.
-constexpr int control_height = 30;
-constexpr int row_pitch = 38;
+constexpr int control_height = native_control_height;
+constexpr int row_pitch = control_height + 8;
 constexpr int heading_pitch = 28;
 constexpr int section_gap = 12;
 constexpr int field_cap = 480;
@@ -114,8 +114,7 @@ void show_controls(const HWND window, const auto &ids, const bool visible) {
 // A label vertically centered on a control row.
 void label(const MainLayout &f, const int id, const int left, const int top,
            const int width) {
-  f.ui.move(id, left, top + (f.row - f.ui.scaled(20)) / 2, width,
-            f.ui.scaled(20));
+  f.ui.row_label(id, left, top, width, f.row);
 }
 
 void layout_sidebar(const MainLayout &f) {
@@ -172,7 +171,7 @@ int layout_profile(const MainLayout &f) {
   if (f.advanced) {
     ui.move(IDC_APPLICATION_EXACT_PATH, field_left, top, field_width,
             ui.scaled(24));
-    top += ui.scaled(30);
+    top += f.row;
   }
   return top + ui.scaled(4);
 }
@@ -202,7 +201,7 @@ GroupHeights group_heights(const MainLayout &f, const int timing_width) {
       .timing = f.heading + f.pitch * (3 + advanced_rows + wrapped_rows),
       .visual = f.heading + f.pitch * (f.advanced ? 3 : 2) + f.ui.scaled(40),
       .overlay = f.heading + (f.legacy_bars ? f.ui.scaled(24 + 80 + 8) : 0) +
-                 f.pitch * 3 + f.ui.scaled(30) * 2 + f.ui.scaled(60) +
+                 f.pitch * 3 + f.row * 2 + f.ui.scaled(60) +
                  (f.preview ? 0 : f.pitch),
   };
 }
@@ -318,9 +317,9 @@ void layout_overlay(const MainLayout &f, const int left, const int right,
   top += f.pitch;
   ui.move(IDC_SHOW_TEXT, left, top, half, f.row);
   ui.move(IDC_HIDE_READY, second, top, width - half - ui.scaled(8), f.row);
-  top += ui.scaled(30);
+  top += f.row;
   ui.move(IDC_DIRECT_DRAG, left, top, width, f.row);
-  top += ui.scaled(30);
+  top += f.row;
   ui.move(IDC_POSITION_STATUS, left, top, width, ui.scaled(60));
   top += ui.scaled(60);
   if (!f.preview)

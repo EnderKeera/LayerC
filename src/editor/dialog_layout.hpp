@@ -10,6 +10,10 @@
 
 namespace layerc::editor {
 
+// The one control height (logical px) of every code-laid-out surface: square
+// buttons, edits and drop-down lists sized for the 12 px native body font.
+inline constexpr int native_control_height = 26;
+
 inline void apply_suggested_dpi_rect(const HWND window, const LPARAM lparam) {
   const auto *suggested = reinterpret_cast<const RECT *>(lparam);
   if (suggested == nullptr)
@@ -76,10 +80,21 @@ public:
             const int height) const {
     move_control(dialog_, id, x, y, width, height);
   }
+  // A single-line label sharing a control row: as tall as the row, with its
+  // text centered vertically like the text inside the control beside it.
+  void row_label(const int id, const int x, const int y, const int width,
+                 const int row_height) const {
+    if (const HWND control = GetDlgItem(dialog_, id); control != nullptr) {
+      const auto style = GetWindowLongPtrW(control, GWL_STYLE);
+      if ((style & SS_CENTERIMAGE) == 0)
+        SetWindowLongPtrW(control, GWL_STYLE, style | SS_CENTERIMAGE);
+    }
+    move(id, x, y, width, row_height);
+  }
   void field_row(const int label_id, const int control_id, const int x,
                  const int y, const int column_width, const int total_width,
-                 const int label_height, const int control_height) const {
-    move(label_id, x, y + scaled(3), column_width - scaled(5), label_height);
+                 const int control_height) const {
+    row_label(label_id, x, y, column_width - scaled(5), control_height);
     move(control_id, x + column_width, y,
          std::max(1, total_width - column_width), control_height);
   }

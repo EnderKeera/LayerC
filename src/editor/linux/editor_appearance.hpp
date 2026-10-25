@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -12,9 +13,10 @@
 namespace layerc::editor {
 
 // LayerE's own look on Linux, stored beside the profiles in XDG config. The
-// presets match Windows: one neutral dark ramp, differing only in accent.
-// "System" keeps FLTK's default colours. Per-role overrides cover what FLTK
-// draws per widget: fill, text and selection colour.
+// presets match Windows: one neutral dark ramp, differing only in accent;
+// Graphite / Copper is the default, as on Windows. "System" keeps FLTK's
+// default colours. Per-role overrides cover what FLTK draws per widget: fill,
+// text and selection colour.
 enum class EditorTheme : std::uint8_t { copper, teal, plum, system, dark, count };
 enum class EditorRole : std::uint8_t {
   window, toolbar, sidebar, label, button, edit, list, checkbox, preview, status, count
@@ -30,7 +32,7 @@ struct RoleOverride {
 };
 
 struct EditorAppearance {
-  EditorTheme theme{EditorTheme::system};
+  EditorTheme theme{EditorTheme::copper};
   std::optional<std::uint32_t> accent; // nullopt = the preset accent; zero = explicit black
   std::array<RoleOverride, editor_role_count> overrides{};
   bool operator==(const EditorAppearance &) const = default;
@@ -52,6 +54,24 @@ struct RoleColors {
 // for the system theme, whose base colours are FLTK's own.
 [[nodiscard]] std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
                                                           EditorRole role);
+
+// The 1 px outline of a flat control filled with `fill`: a third of the way
+// toward white on dark fills and toward black on light ones.
+[[nodiscard]] std::uint32_t control_border(std::uint32_t fill) noexcept;
+
+// The desktop's interface font, from a Pango-style description such as
+// "Cantarell 11" or "Noto Sans, Medium 10": the first family without style
+// words, and the point size in pixels at 96 DPI when one is given.
+struct DesktopFont {
+  std::string family;
+  std::optional<int> pixels;
+  bool operator==(const DesktopFont &) const = default;
+};
+[[nodiscard]] std::optional<DesktopFont> parse_desktop_font(std::string_view description);
+// The string setting `name` (e.g. "Gtk/FontName") in an XSETTINGS
+// _XSETTINGS_SETTINGS property; nullopt when absent or malformed.
+[[nodiscard]] std::optional<std::string> xsettings_string(std::span<const unsigned char> data,
+                                                          std::string_view name);
 
 // <config>/layerc/editor-appearance.json; empty without an absolute HOME.
 [[nodiscard]] std::filesystem::path editor_appearance_path();

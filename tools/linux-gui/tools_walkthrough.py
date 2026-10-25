@@ -7,6 +7,9 @@ from automation_walkthrough import require
 STATUS = "Save / reload outcome"
 APPEARANCE = "Appearance — LayerE"
 WINDOW_FILL = [0x1F, 0x1F, 0x1F]  # The presets' shared neutral window colour.
+# Selected rows: about a quarter of the preset accent over the window colour.
+COPPER_SELECTION = [0x4A, 0x39, 0x29]
+TEAL_SELECTION = [0x2C, 0x42, 0x3F]
 TASKS = "Detected Tasks — LayerE"
 GAME = "LayerC Automation Fixture"
 CYAN = [80, 186, 200]  # The fixture profile's bar fill, as walkthrough.py samples it.
@@ -17,7 +20,8 @@ EXPECTED = {
     "split-grouped-bars": "A bar shared by two cooldowns splits into two single-cooldown bars "
                           "stacked around the shared anchor, autosaves, and undoes exactly; "
                           "a profile without shared bars is reported unchanged.",
-    "editor-appearance": "Tools > Appearance previews a preset live, Apply persists it to "
+    "editor-appearance": "Without a saved appearance the editor paints Graphite / Copper; Tools > "
+                         "Appearance previews a preset live, Apply persists it to "
                          "editor-appearance.json and repaints the editor, Cancel restores the "
                          "applied look, and System restores FLTK's colours.",
     "detected-tasks-placement": "Ctrl+T lists the game (never LayerE) with its executable and PID; "
@@ -37,14 +41,17 @@ class ToolsWalk:
             self.key("Down", f"{label}-down-{step}")
         self.key("Return", label)
 
-    def window_fill_pixels(self: Any, label):
+    def window_pixels(self: Any, label, *colours):
         self.capture(label)
         editor = self.window("LayerE")
         width, height = self.shot["screen"]
         region = [max(0, editor["x"]), max(0, editor["y"]),
                   min(editor["width"], width - editor["x"]), min(editor["height"], height - editor["y"])]
-        return self.request("inspect", screenshot=self.shot["screenshot"], rgb=WINDOW_FILL,
-                            region=region)["count"]
+        return [self.request("inspect", screenshot=self.shot["screenshot"], rgb=rgb,
+                             region=region)["count"] for rgb in colours]
+
+    def window_fill_pixels(self: Any, label):
+        return self.window_pixels(label, WINDOW_FILL)[0]
 
     def cyan_near(self: Any, game, center_x, half_width, shot=None):
         # Overlay pixels in a column band of the game window. Other profiles that
@@ -151,7 +158,10 @@ class ToolsWalk:
     def case_editor_appearance(self: Any):
         self.focus("LayerE", "appearance-focused")
         require(self.state()["editorAppearance"] is None, "an appearance file exists before the case")
-        system = self.window_fill_pixels("appearance-system")
+        default, copper = self.window_pixels("appearance-default", WINDOW_FILL, COPPER_SELECTION)
+        require(default > 20000 and copper > 0,
+                f"no saved appearance did not paint Graphite / Copper ({default} neutral, "
+                f"{copper} copper selection pixels)")
         self.open_appearance("appearance-opened")
         self.automation_choice("Theme", 1, "appearance-teal")
         self.click(self.find("button", "Apply"), "appearance-applied")
@@ -161,9 +171,11 @@ class ToolsWalk:
         saved = self.state()["editorAppearance"]
         require(saved == {"appearanceVersion": 1, "theme": "teal"},
                 f"editor-appearance.json is unexpected: {saved!r}")
-        teal = self.window_fill_pixels("appearance-teal-painted")
-        require(teal > 20000 and teal > 10 * max(1, system),
-                f"the editor was not repainted ({system} -> {teal} neutral pixels)")
+        teal, selection, stale = self.window_pixels("appearance-teal-painted", WINDOW_FILL,
+                                                    TEAL_SELECTION, COPPER_SELECTION)
+        require(teal > 20000 and selection > 0 and stale == 0,
+                f"the editor was not repainted Teal ({teal} neutral; selection pixels "
+                f"{copper} copper -> {selection} teal, {stale} copper left)")
         self.open_appearance("appearance-reopened")
         self.automation_choice("Theme", 3, "appearance-system-preview")
         previewed = self.window_fill_pixels("appearance-system-previewed")
@@ -183,8 +195,9 @@ class ToolsWalk:
                 "System was not persisted")
         final = self.window_fill_pixels("appearance-system-restored")
         require(final < teal // 10, f"System did not restore FLTK's colours ({final} pixels)")
-        return f"neutral window pixels {system} -> {teal} (Teal) -> {previewed} (preview) -> " \
-               f"{restored} (Cancel) -> {final} (System)"
+        return f"neutral window pixels {default} (Copper) -> {teal} (Teal) -> {previewed} " \
+               f"(preview) -> {restored} (Cancel) -> {final} (System); selection pixels " \
+               f"{copper} copper -> {selection} teal"
 
     def named(self: Any, name_part, nodes):
         return [n for n in nodes if name_part in (n.get("name") or "")]

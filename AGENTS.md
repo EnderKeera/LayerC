@@ -12,6 +12,7 @@ memory and historical plans.
 | User behavior, support matrix, setup, programs, test targets, profile format | [`README.md`](README.md) |
 | Linux behavior, CLI, dependencies, packaging, permissions, physical evidence | [`docs/Linux.md`](docs/Linux.md) |
 | Linux editor plan history and dated local GUI/resource evidence | [`docs/LinuxEditorPlan.md`](docs/LinuxEditorPlan.md) |
+| Editor visual design: tokens, typography, geometry, components, revert tags | [`docs/DesignSystem.md`](docs/DesignSystem.md) |
 | Wayland backend architecture, contracts, and invariants (V2.7, in development) | [`docs/Wayland.md`](docs/Wayland.md) |
 | Game Bar architecture and invariants | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
 | Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |

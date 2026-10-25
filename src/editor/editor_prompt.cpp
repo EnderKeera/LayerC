@@ -36,11 +36,11 @@ int scaled(const int logical, const HWND window) {
 }
 
 // Lays the message out at its measured size: text up to 440 px wide, one
-// 32 px button row right-aligned, 16 px padding.
+// 26 px button row right-aligned, 16 px padding.
 void layout_prompt(const HWND dialog, const PromptState &state) {
   const HWND text = GetDlgItem(dialog, IDC_PROMPT_TEXT);
   const int pad = scaled(20, dialog);
-  const int button_height = scaled(32, dialog);
+  const int button_height = scaled(26, dialog);
   const int gap = scaled(8, dialog);
   RECT measure{0, 0, scaled(440, dialog), 0};
   const HDC dc = GetDC(dialog);
