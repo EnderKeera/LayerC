@@ -71,11 +71,6 @@ NativeChromePalette chrome_palette = [] {
   };
 }();
 
-UINT control_dpi(const HWND window) {
-  const UINT dpi = GetDpiForWindow(window);
-  return dpi == 0 ? 96U : dpi;
-}
-
 LRESULT CALLBACK hover_subclass(const HWND window, const UINT message,
                                 const WPARAM wparam, const LPARAM lparam,
                                 const UINT_PTR id, const DWORD_PTR hot) {
@@ -206,7 +201,7 @@ void paint_flat_frame(const HWND window) {
     frame_solid_rect(dc, inner, palette.fill);
   }
   if (focused && enabled) {
-    const int accent_height = std::max(2, MulDiv(2, static_cast<int>(control_dpi(window)), 96));
+    const int accent_height = std::max(2, MulDiv(2, static_cast<int>(native_window_dpi(window)), 96));
     RECT accent{bounds.left, bounds.bottom - accent_height, bounds.right,
                 bounds.bottom};
     fill_solid_rect(dc, accent, palette.accent);
@@ -377,10 +372,10 @@ LPARAM dialog_item_height(const HWND dialog, const HFONT font) {
     SelectObject(dc, previous);
     ReleaseDC(dialog, dc);
   }
-  const int padding = MulDiv(8, static_cast<int>(control_dpi(dialog)), 96);
+  const int padding = MulDiv(8, static_cast<int>(native_window_dpi(dialog)), 96);
   return static_cast<LPARAM>(
       std::max(text_height + padding,
-               MulDiv(20, static_cast<int>(control_dpi(dialog)), 96)));
+               MulDiv(20, static_cast<int>(native_window_dpi(dialog)), 96)));
 }
 
 void style_combo_child(const HWND dialog, const HWND child, const HFONT font,
@@ -406,7 +401,7 @@ void style_listbox_child(const HWND dialog, const HWND child, const HFONT font,
                       style | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS);
     SendMessageW(child, LB_SETITEMHEIGHT, 0,
                  dialog_item_height(dialog, font) +
-                     MulDiv(4, static_cast<int>(control_dpi(dialog)), 96));
+                     MulDiv(4, static_cast<int>(native_window_dpi(dialog)), 96));
   }
   SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
   track_native_list_hover(child);
@@ -598,7 +593,7 @@ native_button_custom_draw(const NMHDR &header, const NativeThemeColors &colors,
   if (draw.dwDrawStage != CDDS_PREPAINT)
     return CDRF_DODEFAULT;
   const HWND control = header.hwndFrom;
-  const UINT dpi = control_dpi(control);
+  const UINT dpi = native_window_dpi(control);
   RECT client{};
   GetClientRect(control, &client);
   fill_solid_rect(draw.hdc, client, colors.fill);
@@ -643,7 +638,7 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
   const bool pressed = (draw.itemState & ODS_SELECTED) != 0;
   const bool hot = native_button_hot(draw.hwndItem) ||
                    (draw.itemState & ODS_HOTLIGHT) != 0;
-  const UINT dpi = control_dpi(draw.hwndItem);
+  const UINT dpi = native_window_dpi(draw.hwndItem);
   // The one primary action per surface (the dialog's default id) carries
   // the accent; every other button is neutral.
   const HWND parent = GetParent(draw.hwndItem);

@@ -2,6 +2,7 @@
 
 #include "layerc/core/frame.hpp"
 #include "layerc/core/json.hpp"
+#include "layerc/core/json_reader.hpp"
 #include "layerc/platform/profile_file_guard_linux.hpp"
 
 #include <fcntl.h>
@@ -150,17 +151,27 @@ namespace {
 
 } // namespace
 
-std::optional<ControlCommand> parse_control_request(std::string_view json_text) {
-  const auto parsed = layerc::core::json::parse(json_text);
-  const auto *value = std::get_if<layerc::core::json::Value>(&parsed);
+std::optional<ControlRequest> parse_control_request_envelope(const std::string_view json_text) {
+  auto parsed = layerc::core::json::parse_bounded(json_text, control_frame_limit);
+  auto *value = std::get_if<layerc::core::json::Value>(&parsed);
   if (value == nullptr || !has_control_envelope(*value)) return std::nullopt;
   const auto *command = value->find("cmd");
   if (command == nullptr || !command->is_string()) return std::nullopt;
-  return parse_control_command(command->as_string());
+  const auto parsed_command = parse_control_command(command->as_string());
+  if (!parsed_command.has_value()) return std::nullopt;
+  ControlRequest result{*parsed_command, std::nullopt};
+  if (auto *payload = value->find("payload")) result.payload = *payload;
+  return result;
+}
+
+std::optional<ControlCommand> parse_control_request(std::string_view json_text) {
+  const auto request = parse_control_request_envelope(json_text);
+  return request.has_value() ? std::optional{request->command} : std::nullopt;
 }
 
 std::string encode_control_response(const bool ok, std::string_view error,
-                                    std::string_view payload_json) {
+                                    std::string_view payload_json,
+                                    std::string_view code) {
   std::string out;
   out += "{\"proto\":";
   layerc::core::json::append_quoted(out, control_protocol_name);
@@ -170,6 +181,10 @@ std::string encode_control_response(const bool ok, std::string_view error,
     out += ",\"payload\":";
     out += payload_json;
   }
+  if (!ok && !code.empty()) {
+    out += ",\"code\":";
+    layerc::core::json::append_quoted(out, code);
+  }
   if (!error.empty()) {
     out += ",\"error\":";
     layerc::core::json::append_quoted(out, error);
@@ -178,19 +193,32 @@ std::string encode_control_response(const bool ok, std::string_view error,
   return out;
 }
 
+static std::optional<ControlCall> decode_control_call(std::string_view text) {
+  const auto parsed = layerc::core::json::parse_bounded(text, control_frame_limit);
+  const auto *value = std::get_if<layerc::core::json::Value>(&parsed);
+  if (!value || !has_control_envelope(*value)) return std::nullopt;
+  const auto *ok = value->find("ok");
+  if (!ok || !ok->is_bool()) return std::nullopt;
+  ControlCall call;
+  call.ok = ok->as_bool();
+  if (const auto *error = value->find("error")) {
+    if (!error->is_string()) return std::nullopt;
+    call.error = error->as_string();
+  }
+  if (const auto *code = value->find("code")) {
+    if (!code->is_string()) return std::nullopt;
+    call.code = code->as_string();
+  }
+  if (const auto *payload = value->find("payload")) call.payload = *payload;
+  return call;
+}
+
 std::optional<ControlResponse>
 decode_control_response(const std::string_view json_text) {
-  const auto parsed = layerc::core::json::parse(json_text);
-  const auto *value = std::get_if<layerc::core::json::Value>(&parsed);
-  if (value == nullptr || !has_control_envelope(*value)) return std::nullopt;
-  const auto *ok = value->find("ok");
-  if (ok == nullptr || !ok->is_bool()) return std::nullopt;
-  ControlResponse response{.ok = ok->as_bool(), .error = {}};
-  if (const auto *error = value->find("error"); error != nullptr) {
-    if (!error->is_string()) return std::nullopt;
-    response.error = error->as_string();
-  }
-  return response;
+  auto call = decode_control_call(json_text);
+  if (!call.has_value()) return std::nullopt;
+  return ControlResponse{.ok = call->ok, .error = std::move(call->error),
+                         .code = std::move(call->code)};
 }
 
 std::optional<std::string> control_socket_path(std::string &warning) {
@@ -369,9 +397,9 @@ std::optional<int> control_connect(std::string &error,
   return fd;
 }
 
-std::optional<std::string>
-control_roundtrip(std::string_view request_json, std::string &error,
-                  const std::chrono::milliseconds timeout) {
+static std::optional<std::string>
+control_exchange_raw(std::string_view request_json, std::string &error,
+                     const std::chrono::milliseconds timeout) {
   if (request_json.size() > control_frame_limit || timeout <= std::chrono::milliseconds::zero() ||
       timeout > std::chrono::seconds(5)) {
     error = "invalid control request size or timeout";
@@ -397,14 +425,7 @@ control_roundtrip(std::string_view request_json, std::string &error,
         chunk.data(), static_cast<std::size_t>(received)}));
     if (auto payload = framer.next_frame(); payload.has_value()) {
       (void)::close(*fd);
-      const auto response = decode_control_response(*payload);
-      if (!response.has_value() || !response->ok) {
-        error = response.has_value() && !response->error.empty()
-                    ? response->error
-                    : "the daemon returned an invalid response";
-        return std::nullopt;
-      }
-      return payload; // Preserve accepted response bytes for JSON presentation.
+      return payload;
     }
     if (framer.fault() != layerc::core::FrameDecoder::Fault::none) break;
   }
@@ -413,6 +434,37 @@ control_roundtrip(std::string_view request_json, std::string &error,
               ? "the daemon did not return a control response"
               : "the daemon violated the control frame limits";
   return std::nullopt;
+}
+
+std::optional<std::string>
+control_roundtrip(std::string_view request_json, std::string &error,
+                  const std::chrono::milliseconds timeout) {
+  const auto raw = control_exchange_raw(request_json, error, timeout);
+  if (!raw.has_value()) return std::nullopt;
+  const auto call = decode_control_call(*raw);
+  if (!call.has_value() || !call->ok) {
+    error = call.has_value() && !call->error.empty()
+                ? call->error
+                : "the daemon returned an invalid response";
+    return std::nullopt;
+  }
+  return raw; // Preserve accepted response bytes for JSON presentation.
+}
+
+ControlCall control_call(const ControlCommand command, std::string_view payload_json,
+                         const std::chrono::milliseconds timeout) {
+  std::string error;
+  const auto raw = control_exchange_raw(encode_control_request(command, payload_json), error,
+                                        timeout);
+  if (!raw.has_value())
+    return {.ok = false, .code = {}, .error = std::move(error), .payload = std::nullopt};
+  auto call = decode_control_call(*raw);
+  if (!call.has_value())
+    return {.ok = false, .code = {}, .error = "the daemon returned an invalid response",
+            .payload = std::nullopt};
+  if (!call->ok && call->error.empty())
+    call->error = "the daemon returned an invalid response";
+  return std::move(*call);
 }
 
 bool control_send_frame(int fd, std::string_view payload, std::string &error) {

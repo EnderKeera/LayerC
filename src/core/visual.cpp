@@ -2,6 +2,7 @@
 #include "layerc/core/hash.hpp"
 
 #include "layerc/core/json_reader.hpp"
+#include "layerc/core/profile.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -505,11 +506,7 @@ VisualError validate_visual_profile(const VisualProfile &profile,
       return invalid(path + ".cooldownId",
                      "only one visual trigger per cooldown is supported");
     if (trigger.mode == VisualTriggerMode::confirm_input) {
-      const bool has_binding = std::ranges::any_of(
-          base_profile.bindings, [&](const InputBinding &binding) {
-            return binding.cooldown_id == trigger.cooldown_id;
-          });
-      if (!has_binding)
+      if (!has_binding(base_profile, trigger.cooldown_id))
         return invalid(path, "input confirmation requires an input binding");
       if (trigger.confirmation_timeout < Milliseconds(50) ||
           trigger.confirmation_timeout > Milliseconds(5'000))
@@ -650,7 +647,8 @@ std::string serialize_visual_profile_json(const VisualProfile &profile) {
       {"triggers", json::Value(std::move(triggers))}});
   std::string output;
   output.reserve(2'048);
-  json::append_value(output, root, 2);
+  if (!json::append_value_bounded(output, root, max_visual_json_bytes - 2U, 2))
+    json::append_value(output, root);
   output += "\r\n";
   return output;
 }

@@ -49,6 +49,7 @@ void test_template_matching();
 void test_visual_trigger_state_machine();
 void test_visual_repeat_when_ready();
 void test_calibration_protocol();
+void test_calibration_readiness();
 void test_automation_profile_round_trip();
 void test_automation_session_trigger_policy();
 void test_automation_session_origin_and_persistence();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "display_providers.hpp"
 #include "display_selection.hpp"
 #include "event_loop.hpp"
 #include "evdev_input.hpp"
@@ -9,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace layerc::daemon {
@@ -23,7 +25,7 @@ evdev_reason_tokens(std::span<const std::string> reasons);
 // demand; every descriptor is registered while open and unregistered before
 // it is closed, so the loop must outlive an open route. Read-only: the source
 // never grabs or writes a device.
-class EvdevInputRoute {
+class EvdevInputRoute : public PassiveInputSource {
 public:
   EvdevInputRoute() = default;
   ~EvdevInputRoute();
@@ -56,6 +58,31 @@ public:
   [[nodiscard]] std::span<const int> registered() const noexcept { return registered_; }
   [[nodiscard]] layerc::runtime::RuntimeResourceStats resources() const noexcept;
 
+  // PassiveInputSource: the borrowed passive source the daemon service drains.
+  [[nodiscard]] bool input_available() const noexcept override { return enabled(); }
+  [[nodiscard]] bool open_input(std::string &error) override {
+    if (open(error)) return true;
+    error = "input: " + error;
+    return false;
+  }
+  void close_input() noexcept override { close(); }
+  [[nodiscard]] bool input_open() const noexcept override { return attached(); }
+  [[nodiscard]] std::vector<std::string>
+  input_unavailable(const InputDeviceNeeds needed) const override {
+    return unavailable({.keyboard = needed.keyboard, .mouse = needed.mouse,
+                        .gamepad = needed.gamepad});
+  }
+  [[nodiscard]] layerc::runtime::RuntimeResourceStats
+  input_resources() const noexcept override {
+    return resources();
+  }
+  [[nodiscard]] std::string_view input_name() const noexcept override { return "evdev"; }
+  [[nodiscard]] PassiveInputPoll poll_input(std::span<const int> ready) override {
+    auto result = poll(ready);
+    return {std::move(result.events), result.devices_changed};
+  }
+  [[nodiscard]] std::string_view input_fault() const noexcept override { return fault(); }
+
 private:
   void sync_registrations() noexcept;
 
@@ -66,5 +93,12 @@ private:
   std::optional<std::string> keymap_;
   std::string fault_;
 };
+
+// Provider-row status of the passive input route. It reads the same ordered
+// selection the route binds and never opens, closes or mutates a source.
+[[nodiscard]] InputRouteStatus input_route_status(const EvdevInputRoute &evdev,
+                                                  const PassiveInputSource *xi2,
+                                                  bool prefer_evdev,
+                                                  InputDeviceNeeds needed);
 
 } // namespace layerc::daemon

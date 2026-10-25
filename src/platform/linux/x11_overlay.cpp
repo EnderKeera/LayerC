@@ -10,7 +10,6 @@
 #include <X11/extensions/shape.h>
 
 #include <algorithm>
-#include <cmath>
 #include <ranges>
 #include <utility>
 
@@ -37,28 +36,6 @@ std::vector<std::string> overlay_unavailable(const X11Probe &probe) {
     reasons.push_back(
         "overlay: shape extension not advertised by the X server");
   return reasons;
-}
-
-X11OverlayRect panel_rect(const X11OverlayFrame &frame) {
-  const int dpi = frame.dpi;
-  const auto geometry =
-      layerc::core::panel_geometry(frame.panel, frame.bars.size());
-  const int width = std::max(scaled_pixels(geometry.size.width, dpi), 1);
-  const int height = std::max(scaled_pixels(geometry.size.height, dpi), 1);
-  X11OverlayRect rect;
-  rect.width = width;
-  rect.height = height;
-  rect.x = frame.target.x +
-           static_cast<int>(
-               std::lround(frame.panel.anchor_x *
-                           static_cast<double>(frame.target.width))) -
-           width / 2;
-  rect.y = frame.target.y +
-           static_cast<int>(
-               std::lround(frame.panel.anchor_y *
-                           static_cast<double>(frame.target.height))) -
-           height / 2;
-  return rect;
 }
 
 X11OverlayWindow::X11OverlayWindow(const X11Display &display,

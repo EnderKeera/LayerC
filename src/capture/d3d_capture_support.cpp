@@ -50,17 +50,6 @@ std::uint8_t tone_map_channel(const float linear) {
       std::clamp(std::lround(srgb * 255.0F), 0L, 255L));
 }
 
-std::uint32_t sampled_coordinate(const std::uint32_t index,
-                                 const std::uint32_t source_extent,
-                                 const std::uint32_t output_extent) {
-  return std::min<std::uint32_t>(
-      source_extent - 1U,
-      static_cast<std::uint32_t>(
-          (static_cast<std::uint64_t>(index) * source_extent +
-           source_extent / 2U) /
-          output_extent));
-}
-
 std::optional<core::RgbPixel> decode_pixel(const DXGI_FORMAT format,
                                            const std::byte *row,
                                            const std::uint32_t source_x) {

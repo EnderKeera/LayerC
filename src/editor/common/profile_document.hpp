@@ -8,14 +8,26 @@
 #include "layerc/platform/profile_store.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 namespace layerc::editor {
 
 enum class DocumentChangeKind { text, immediate, drag };
+
+enum class ModuleEditStatus { accepted, unchanged, blocked, refused, invalid };
+
+struct ModuleEditOutcome {
+  ModuleEditStatus status{ModuleEditStatus::unchanged};
+  std::string message;
+  [[nodiscard]] bool accepted() const noexcept {
+    return status == ModuleEditStatus::accepted;
+  }
+};
 
 struct CooldownRemovalError {
   std::string message;
@@ -67,28 +79,34 @@ struct CommitOptions {
   bool create_only = false;
 };
 
+// Why a draft exists. A fresh draft is clean until its first accepted edit; a
+// copy is unsaved by construction and stays dirty until committed.
+enum class DraftOrigin {
+  fresh,
+  copy,
+};
+
+// How a successful commit enters history. Ordinary saves only rebase the saved
+// values; a committed candidate change is one undoable step.
+enum class CommitRecord {
+  rebase,
+  record_edit,
+};
+
 // Owns the base profile, editable sidecars, persistence state, and undo history.
 // A document path and its module state move together; callers cannot retain a
 // detached copy of one persistence flag outside this object.
 class ProfileDocument final {
 public:
-  [[nodiscard]] layerc::core::GameProfile &profile() noexcept { return profile_; }
   [[nodiscard]] const layerc::core::GameProfile &profile() const noexcept {
     return profile_;
   }
 
-  [[nodiscard]] std::optional<layerc::core::VisualProfile> &visual() noexcept {
-    return visual_.profile;
-  }
   [[nodiscard]] const std::optional<layerc::core::VisualProfile> &
   visual() const noexcept {
     return visual_.profile;
   }
 
-  [[nodiscard]] std::optional<layerc::core::AutomationProfile> &
-  automation() noexcept {
-    return automation_.profile;
-  }
   [[nodiscard]] const std::optional<layerc::core::AutomationProfile> &
   automation() const noexcept {
     return automation_.profile;
@@ -107,7 +125,6 @@ public:
     return automation_.state;
   }
 
-  [[nodiscard]] std::filesystem::path &path() noexcept { return path_; }
   [[nodiscard]] const std::filesystem::path &path() const noexcept {
     return path_;
   }
@@ -121,31 +138,91 @@ public:
   [[nodiscard]] bool upgrade_acknowledged() const noexcept {
     return upgrade_acknowledged_;
   }
-  void set_dirty(const bool dirty) noexcept { dirty_ = dirty; }
-  [[nodiscard]] bool dirty() const noexcept { return dirty_; }
-  [[nodiscard]] EditorProfileHistory &history() noexcept { return history_; }
-  // A freshly opened or created document: its values are the only history.
-  void reset_history() {
-    history_.reset(profile_, visual_.profile, automation_.profile);
-  }
-  // After the document's own path was committed: clean, written in the
-  // current schemas, and the saved values become the history baseline.
-  void mark_saved() {
-    dirty_ = false;
-    clear_legacy_schemas();
-    history_.rebase(profile_, visual_.profile, automation_.profile);
+  // Persisted cleanliness is owned by the saved history, never a side flag.
+  [[nodiscard]] bool dirty() const noexcept {
+    return !history_.is_saved(profile_, visual_.profile, automation_.profile);
   }
   [[nodiscard]] const EditorProfileHistory &history() const noexcept {
     return history_;
   }
 
   // Deletion is conservative: preflight reports every group/rule dependency.
-  // The operation validates a complete candidate before replacing any value;
-  // its caller records the accepted edit as one normal history transaction.
+  // The accepted removal is one recorded history transaction.
   [[nodiscard]] std::optional<CooldownRemovalError>
   cooldown_removal_error(std::string_view id) const;
   [[nodiscard]] std::optional<CooldownRemovalError>
   remove_cooldown(std::string_view id);
+
+  // An invalid module without a parsed profile (see ProfileBundle).
+  [[nodiscard]] bool has_unreadable_module() const noexcept {
+    return (!visual_.profile &&
+            visual_.state == layerc::platform::ModuleSidecarState::invalid) ||
+           (!automation_.profile &&
+            automation_.state == layerc::platform::ModuleSidecarState::invalid);
+  }
+  // ---- F01 transitions: the document owns draft replacement, saved-path
+  // transitions and snapshot application. Committed values replace the document
+  // only through accept_commit, after the store accepted them.
+  void open(std::filesystem::path path,
+            layerc::platform::ProfileBundleLoad loaded);
+  void start_draft(layerc::core::GameProfile profile, DraftOrigin origin,
+                   std::optional<layerc::core::VisualProfile> visual = std::nullopt,
+                   std::optional<layerc::core::AutomationProfile> automation =
+                       std::nullopt);
+  void close();
+  void accept_commit(std::filesystem::path path, ProfileBundle committed,
+                     CommitRecord record = CommitRecord::rebase);
+  [[nodiscard]] bool can_undo() const noexcept { return history_.can_undo(); }
+  [[nodiscard]] bool can_redo() const noexcept { return history_.can_redo(); }
+  // Every visual profile current values or history can restore (asset retention).
+  template <typename Visit>
+  void for_each_retained_visual(Visit &&visit) const {
+    history_.for_each_visual_profile(visit);
+    visit(visual_.profile);
+    if (retained_visual_) visit(retained_visual_->optional_profile());
+  }
+  // Recording variants: an accepted edit is exactly one history transaction.
+  ModuleEditOutcome edit_profile(
+      const std::function<void(layerc::core::GameProfile &)> &edit,
+      DocumentChangeKind kind,
+      const layerc::core::CompanionProfile *companion = nullptr);
+  ModuleEditOutcome edit_visual(
+      const std::function<std::optional<std::string>(
+          std::optional<layerc::core::VisualProfile> &)> &edit,
+      DocumentChangeKind kind);
+  ModuleEditOutcome edit_automation(
+      const std::function<std::optional<std::string>(
+          std::optional<layerc::core::AutomationProfile> &)> &edit,
+      DocumentChangeKind kind, bool repair = false);
+  // The only edit allowed to replace an unreadable visual module.
+  ModuleEditOutcome
+  replace_visual_from_calibration(layerc::core::VisualProfile visual);
+  bool undo();
+  bool redo();
+  void end_text_coalescing() noexcept { history_.end_text_coalescing(); }
+
+  // The document as a commit input (the caller syncs controls first).
+  [[nodiscard]] ProfileBundle bundle() const {
+    return {.profile = profile_,
+            .visual = visual_.profile,
+            .automation = automation_.profile,
+            .unreadable_module = has_unreadable_module(),
+            .upgrade_needed = (legacy_base_schema_ || legacy_visual_schema_) &&
+                              !upgrade_acknowledged_};
+  }
+private:
+  // Value implementations of the recorded edits: they validate and replace a
+  // candidate but never record history; the public overloads record once.
+  [[nodiscard]] ModuleEditOutcome edit_profile_value(
+      const std::function<void(layerc::core::GameProfile &)> &edit,
+      const layerc::core::CompanionProfile *companion);
+  [[nodiscard]] ModuleEditOutcome edit_visual_value(
+      const std::function<std::optional<std::string>(
+          std::optional<layerc::core::VisualProfile> &)> &edit);
+  [[nodiscard]] ModuleEditOutcome edit_automation_value(
+      const std::function<std::optional<std::string>(
+          std::optional<layerc::core::AutomationProfile> &)> &edit,
+      bool repair);
 
   // Sidecar value, state, and error move together so no caller can leave a
   // valid state beside a stale error or an invalid state beside a value.
@@ -157,46 +234,9 @@ public:
   void set_automation(const layerc::platform::AutomationSidecarLoad &loaded) {
     automation_ = decltype(automation_)::from(loaded);
   }
-  // An invalid module without a parsed profile (see ProfileBundle).
-  [[nodiscard]] bool has_unreadable_module() const noexcept {
-    return (!visual_.profile &&
-            visual_.state == layerc::platform::ModuleSidecarState::invalid) ||
-           (!automation_.profile &&
-            automation_.state == layerc::platform::ModuleSidecarState::invalid);
-  }
-  // The document as a commit input (the caller syncs controls first).
-  [[nodiscard]] ProfileBundle bundle() const {
-    return {.profile = profile_,
-            .visual = visual_.profile,
-            .automation = automation_.profile,
-            .unreadable_module = has_unreadable_module(),
-            .upgrade_needed = (legacy_base_schema_ || legacy_visual_schema_) &&
-                              !upgrade_acknowledged_};
-  }
   void mark_visual_edited() { visual_.mark_edited(); }
   void mark_automation_edited() { automation_.mark_edited(); }
-  void clear_sidecars() {
-    set_visual({}, false);
-    set_automation({});
-  }
-  // The document was rewritten in the current schemas.
-  void clear_legacy_schemas() noexcept {
-    legacy_base_schema_ = false;
-    legacy_visual_schema_ = false;
-    upgrade_acknowledged_ = false;
-  }
-  void assign_bundle(std::filesystem::path path,
-                     layerc::platform::ProfileBundleLoad bundle) {
-    profile_ = std::move(bundle.profile);
-    path_ = std::move(path);
-    set_visual(bundle.modules.get<layerc::core::VisualModule>(),
-               bundle.legacy_visual_schema);
-    set_automation(bundle.modules.get<layerc::core::AutomationModule>());
-    legacy_base_schema_ = bundle.legacy_base_schema;
-    upgrade_acknowledged_ = false;
-  }
 
-private:
   layerc::core::GameProfile profile_;
   layerc::platform::ModuleSidecar<layerc::core::VisualProfile> visual_;
   layerc::platform::ModuleSidecar<layerc::core::AutomationProfile> automation_;
@@ -204,8 +244,19 @@ private:
   bool legacy_base_schema_{};
   bool legacy_visual_schema_{};
   bool upgrade_acknowledged_{};
-  bool dirty_{};
+  // The loaded invalid visual sidecar, so undo can restore exactly that state
+  // and diagnostic after a calibration repair.
+  std::optional<layerc::platform::VisualSidecarLoad> retained_visual_;
   EditorProfileHistory history_;
 };
+
+enum class OpenDocumentEnablement { commit_open_edits, require_clean };
+enum class EnablementRefusal { dirty_open_document, unreadable, invalid_profile };
+
+// Selects the open edits or stored bundle without committing or changing history.
+[[nodiscard]] std::variant<ProfileBundle, EnablementRefusal>
+profile_enablement_bundle(const ProfileDocument &document, bool is_current,
+                          const std::filesystem::path &target,
+                          OpenDocumentEnablement policy);
 
 } // namespace layerc::editor

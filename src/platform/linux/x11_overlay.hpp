@@ -19,35 +19,11 @@ struct _XOC;
 
 namespace layerc::platform {
 
-struct X11OverlayRect {
-  int x{};
-  int y{};
-  int width{};
-  int height{};
-
-  bool operator==(const X11OverlayRect &) const = default;
-};
-
-// One cooldown bar inside a panel. `remaining` is the fraction of the
-// cooldown still running: 1 right after a trigger, 0 once it is ready.
-struct X11OverlayBar {
-  std::string label;
-  double remaining{};
-  bool running{};
-};
-
-// Everything one overlay window needs for one paint: the game window it is
-// anchored to (root coordinates), the panel, its bars and the monitor scale.
-struct X11OverlayFrame {
-  X11OverlayRect target;
-  layerc::core::Panel panel;
-  std::vector<X11OverlayBar> bars;
-  int dpi{baseline_dpi};
-};
-
-// Panel geometry in device pixels: authored at 96 dpi, anchored inside the
-// target window. Pure, so the geometry rules are verifiable without a server.
-[[nodiscard]] X11OverlayRect panel_rect(const X11OverlayFrame &frame);
+// Overlay windows paint the neutral frame (root coordinates on X11) and are
+// placed by the shared panel_rect.
+using X11OverlayRect = OverlayRect;
+using X11OverlayBar = OverlayBar;
+using X11OverlayFrame = OverlayFrame;
 
 // Reasons no overlay may be shown at all. Without Shape the window would
 // intercept clicks, so it stays hidden instead.

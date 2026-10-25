@@ -7,6 +7,7 @@
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <variant>
@@ -25,10 +26,6 @@ bool live_publish_allowed(const ProfileDocument &document) {
 }
 
 } // namespace
-
-void EditorWindow::reset_history() {
-  document_.reset_history();
-}
 
 void EditorWindow::sync_current_profile_entry() {
   if (document_.path().empty() || shell_.profile_list == nullptr) return;
@@ -49,20 +46,57 @@ void EditorWindow::sync_current_profile_entry() {
   }
 }
 
-void EditorWindow::record_profile_change(const ChangeKind kind) {
-  if (shell_.syncing) return;
-  if (document_.history().is_baseline(document_.profile(), document_.visual(), document_.automation())) {
-    if (!draft_controls_valid()) {
-      document_.set_dirty(true);
-      schedule_autosave(false);
-    }
-    return;
-  }
-  (void)document_.history().record(document_.profile(), document_.visual(), document_.automation(),
-                        kind == ChangeKind::text);
-  document_.set_dirty(true);
-  schedule_autosave(kind != ChangeKind::text);
+void EditorWindow::document_changed(const DocumentChangeKind kind) {
+  schedule_autosave(kind != DocumentChangeKind::text);
   if (live_publish_allowed(document_)) send_live_profile();
+  sync_current_profile_entry();
+  refresh_title();
+}
+
+bool EditorWindow::apply_edit(const ModuleEditOutcome &outcome,
+                              const DocumentChangeKind kind) {
+  if (outcome.accepted()) {
+    document_changed(kind);
+    return true;
+  }
+  if (outcome.status == ModuleEditStatus::unchanged) {
+    // An invalid buffer keeps today's autosave pause.
+    if (!draft_controls_valid()) schedule_autosave(false);
+    return true;
+  }
+  set_status(to_wide(outcome.message));
+  return false;
+}
+
+bool EditorWindow::apply_profile_change(
+    const DocumentChangeKind kind,
+    const std::function<void(layerc::core::GameProfile &)> &extra) {
+  if (shell_.syncing) return true;
+  const auto cooldown_index = cooldown_editor_.selected_index();
+  const auto panel_index = panel_preview_.controls_panel;
+  const auto outcome = document_.edit_profile(
+      [&](layerc::core::GameProfile &candidate) {
+        auto *panel = panel_index < candidate.panels.size()
+                          ? &candidate.panels[panel_index]
+                          : nullptr;
+        auto *cooldown =
+            cooldown_index && *cooldown_index < candidate.cooldowns.size()
+                ? &candidate.cooldowns[*cooldown_index]
+                : nullptr;
+        ProfileFieldContext context{shell_.window, candidate, cooldown, panel};
+        read_profile_fields(context);
+        if (extra) extra(candidate);
+      },
+      kind);
+  return apply_edit(outcome, kind);
+}
+
+bool EditorWindow::apply_profile_controls(const DocumentChangeKind kind) {
+  return apply_profile_change(kind, {});
+}
+
+bool EditorWindow::has_unsaved_changes() const {
+  return document_.dirty() || !draft_controls_valid();
 }
 
 void EditorWindow::schedule_autosave(const bool immediate) {
@@ -76,13 +110,24 @@ void EditorWindow::schedule_autosave(const bool immediate) {
 }
 
 bool EditorWindow::draft_controls_valid() const {
-  auto &self = const_cast<EditorWindow &>(*this);
-  auto *panel = self.panel_preview_.controls_panel < self.document_.profile().panels.size()
-                    ? &self.document_.profile().panels[self.panel_preview_.controls_panel]
+  // F01 amendment (lead-approved): a valid buffer is per-field valid AND fully
+  // applied, i.e. reading the controls into a copy of the document changes
+  // nothing. The document itself may be legitimately incomplete (an untouched
+  // New Profile has no executable); only pending buffer content is invalid.
+  // With no controls bound (headless fixtures) reading changes nothing.
+  auto candidate = document_.profile();
+  const auto panel_index = panel_preview_.controls_panel;
+  auto *panel = panel_index < candidate.panels.size()
+                    ? &candidate.panels[panel_index]
                     : nullptr;
-  const ProfileFieldContext context{
-      self.shell_.window, self.document_.profile(), self.cooldown_editor_.selected(), panel};
-  return profile_fields_valid(context);
+  const auto cooldown_index = cooldown_editor_.selected_index();
+  auto *cooldown = cooldown_index && *cooldown_index < candidate.cooldowns.size()
+                       ? &candidate.cooldowns[*cooldown_index]
+                       : nullptr;
+  ProfileFieldContext context{shell_.window, candidate, cooldown, panel};
+  if (!profile_fields_valid(context)) return false;
+  read_profile_fields(context);
+  return candidate == document_.profile();
 }
 
 bool EditorWindow::require_stored_profile(const wchar_t *const first_save_message) {
@@ -91,13 +136,13 @@ bool EditorWindow::require_stored_profile(const wchar_t *const first_save_messag
                 MB_OK | MB_ICONINFORMATION);
     return false;
   }
-  return !document_.dirty() || flush_autosave();
+  return !has_unsaved_changes() || flush_autosave();
 }
 
 bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
   KillTimer(shell_.window, autosave_timer);
-  document_.history().end_text_coalescing();
-  if (!document_.dirty()) return true;
+  document_.end_text_coalescing();
+  if (!has_unsaved_changes()) return true;
   if (document_.path().empty() || !draft_controls_valid()) {
     set_status(document_.path().empty()
                    ? L"Draft is not created yet — use Save."
@@ -258,7 +303,7 @@ void EditorWindow::handle_live_message(
       set_status(L"Ready — authenticated matching LayerD connection.");
       automation_editor_->restore_live_subscription();
 
-      if (!document_.path().empty() && !document_.dirty())
+      if (!document_.path().empty() && !has_unsaved_changes())
         notify_profile_committed(document_.path(), document_.profile());
       return;
     }
@@ -269,20 +314,26 @@ void EditorWindow::handle_live_message(
   if (message.type != layerc::core::LiveMessageType::anchor_changed ||
       message.edit_session != live_edit_.session_id())
     return;
+  if (live_edit_.session_id() == 0) return;
   if (layerc::core::revision_decision(message.revision, live_edit_.peer_revision()) !=
       layerc::core::RevisionDecision::accept)
     return;
-  live_edit_.observe_peer(message.revision);
   const auto panel = std::ranges::find(document_.profile().panels,
                                        message.panel_id,
                                        &layerc::core::Panel::id);
   if (panel == document_.profile().panels.end()) return;
-  panel->anchor_x = message.anchor_x;
-  panel->anchor_y = message.anchor_y;
+  if (!std::isfinite(message.anchor_x) || !std::isfinite(message.anchor_y) ||
+      message.anchor_x < 0.0 || message.anchor_x > 1.0 ||
+      message.anchor_y < 0.0 || message.anchor_y > 1.0)
+    return;
+  // Only accepted input advances the peer revision.
+  live_edit_.observe_peer(message.revision);
+  panel_preview_.pending_anchor = PanelPreview::PendingAnchor{
+      message.panel_id, message.anchor_x, message.anchor_y};
   select_bar_by_id(message.panel_id);
   InvalidateRect(panel_preview_.window, nullptr, TRUE);
-  if (message.final)
-    record_profile_change(ChangeKind::drag);
+  // An incoming final applies once locally and is never echoed as final.
+  if (message.final) (void)commit_pending_anchor(false);
 }
 
 void EditorWindow::send_live_profile() {
@@ -313,14 +364,15 @@ void EditorWindow::send_live_anchor(const bool final) {
   const ULONGLONG now = GetTickCount64();
   if (!final && now - live_edit_.last_drag_send() < 16) return;
   live_edit_.note_drag_send(now);
+  const auto effective = preview_panel(*panel);
   live_edit_.advance_revision();
   (void)live_edit_.channel().send({
       .type = layerc::core::LiveMessageType::anchor_changed,
       .revision = live_edit_.revision(),
       .edit_session = live_edit_.session_id(),
-      .panel_id = panel->id,
-      .anchor_x = panel->anchor_x,
-      .anchor_y = panel->anchor_y,
+      .panel_id = effective.id,
+      .anchor_x = effective.anchor_x,
+      .anchor_y = effective.anchor_y,
       .final = final,
   });
 }
@@ -427,6 +479,9 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
 
 void EditorWindow::end_edit_on_window(const std::wstring_view status,
                                       const bool notify_daemon) {
+  // A cancelled gesture is discarded, never committed.
+  panel_preview_.finish_drag();
+  if (GetCapture() == panel_preview_.window) ReleaseCapture();
   if (notify_daemon && live_edit_.session_id() != 0) {
     (void)live_edit_.channel().send({
         .type = layerc::core::LiveMessageType::end_edit,
@@ -471,28 +526,21 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled) {
 }
 
 void EditorWindow::undo() {
-  auto previous = document_.history().undo(document_.profile(), document_.visual(), document_.automation());
-  if (!previous.has_value()) return;
-  apply_history_snapshot(std::move(*previous));
-}
-
-void EditorWindow::redo() {
-  auto next = document_.history().redo(document_.profile(), document_.visual(), document_.automation());
-  if (!next.has_value()) return;
-  apply_history_snapshot(std::move(*next));
-}
-
-void EditorWindow::apply_history_snapshot(EditorProfileSnapshot snapshot) {
-  document_.profile() = std::move(snapshot.profile);
-  document_.visual() = std::move(snapshot.visual_profile);
-  document_.automation() = std::move(snapshot.automation_profile);
-  document_.set_dirty(document_.history().is_dirty(
-      document_.profile(), document_.visual(), document_.automation(),
-      !document_.path().empty()));
+  if (!document_.undo()) return;
   refresh_profile_controls();
   sync_current_profile_entry();
   schedule_autosave(true);
   if (live_publish_allowed(document_)) send_live_profile();
+  refresh_title();
+}
+
+void EditorWindow::redo() {
+  if (!document_.redo()) return;
+  refresh_profile_controls();
+  sync_current_profile_entry();
+  schedule_autosave(true);
+  if (live_publish_allowed(document_)) send_live_profile();
+  refresh_title();
 }
 
 } // namespace layerc::editor

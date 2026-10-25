@@ -47,13 +47,15 @@ native provider is missing, and are always reported as `degraded`.
 
 ## Seam
 
-`DisplayAdapters` (`src/daemon/linux/display_adapters.{hpp,cpp}`) replaces
-`X11Adapters` with the same orchestration surface (`start`, `refresh`,
-`refresh_status`, `dispatch`, `has_pending_events`, `dispatch_pending`,
-`render`, `stop_sessions`, `next_deadline`, `session_count`,
-`session_diagnostics`). It owns each shared connection at most once:
-`X11Display` (`$DISPLAY`, possibly XWayland), `WaylandConnection`
-(`$WAYLAND_DISPLAY`), and `BusConnection` (session bus, lazy).
+`DisplayAdapters` (`src/daemon/linux/display_adapters.{hpp,cpp}`) owns a
+backend-neutral `SessionEngine` and the available display providers. The engine
+owns session admission, input/automation, overlay presentation, and visual
+evaluation even in builds without X11. `X11Provider` owns `X11Display`
+(`$DISPLAY`, possibly XWayland), window tracking, passive XI2 input, and the X11
+overlay/capture backends. `WaylandConnection` (`$WAYLAND_DISPLAY`) and
+`BusConnection` (session bus, lazy) remain separately owned, with each connection
+opened at most once. Services release their provider references before the
+providers are destroyed.
 
 Display-server-neutral values live in
 [`src/platform/linux/display_types.hpp`](../src/platform/linux/display_types.hpp):
@@ -72,21 +74,38 @@ for users who prefer the XWayland path. Compositor detection: `kwin` (owner of
 
 ### Providers
 
-Each capability picks the first available provider; the choice, its state, and
-stable reason tokens are published in status.
+`display_route` resolves provider selection once per refresh from a snapshot of
+provider facts. The resulting plan supplies both the session engine's provider
+pointers and the identities used to publish status rows; publication combines
+those identities with current provider health. For input, the route binds an
+ordered list of passive sources (`select_input_sources`): an opted-in evdev
+source first in a Wayland session or when XI2 is absent or unavailable, then
+XI2 as the fallback. The provider-neutral input service opens them in that
+order only while input is demanded and keeps the first source's fault visible
+when none attaches.
 
 | Capability | Wayland session order | X11 session |
 | --- | --- | --- |
-| windows | `kwin_script`, `gnome_shell`, `wlr_foreign_toplevel`, `x11_ewmh` (XWayland windows only, degraded) | `x11_ewmh` |
+| windows | bus reports (`kwin_dbus` or `gnome_shell`), `x11_ewmh` (XWayland windows only, degraded), `wlr_foreign_toplevel` | `x11_ewmh` |
 | monitors | `wayland_output`, `x11_randr` (degraded) | `x11_randr` |
 | input | `evdev` (opt-in), `x11_xi2` (degraded `xwayland_focus_only`) | `x11_xi2`, `evdev` (opt-in) |
 | overlay | `wlr_layer_shell`, `gnome_shell`, `x11_shape` (degraded `xwayland_overlay`) | `x11_shape` |
-| capture | `portal_screencast`, `x11_composite` (XWayland windows only, degraded) | `x11_composite` |
+| capture | native windows: bus `portal_screencast` when built; XWayland windows: `x11_composite` (degraded) | `x11_composite` |
 
 On wlroots compositors with XWayland, `x11_ewmh` keeps window tracking:
 foreign toplevels carry no PID, so executable-matched profiles could never
 attach. `wlr_foreign_toplevel` is used only without an X11 connection.
-Monitors and overlay stay native in either case.
+Monitors and overlay stay native when their transports are available.
+
+Status rows name the provider that actually serves the slot. In particular,
+Wayland toplevels serving while bus reports are pending are named
+`wlr_foreign_toplevel`, not `kwin_dbus` or `gnome_shell`. Reasons from relevant
+higher-priority providers are appended only when their health is `unavailable`,
+never merely `inactive`. Native windows select the `portal_screencast` row before
+capture starts, rather than temporarily showing `x11_composite`. An idle GNOME
+bridge that cannot serve an overlay no longer replaces the serving XWayland
+`x11_shape` row. If no provider can serve, the highest-priority relevant row
+retains its own health and reasons.
 
 Window ids are opaque per provider. Overlay and input providers need only
 geometry, so any combination works. `x11_composite` capture needs an XID: it is
@@ -336,16 +355,18 @@ This is not a V2.7 support claim.
   their own backend; headless CTest clears both display socket environments.
 - Native providers bind lazily from the registry on the daemon's one
   connection and are released by its hook before the display goes away. The
-  session engine drives either X11 overlay windows or the native
-  `OverlayBackend` (`src/daemon/linux/display_providers.hpp`); with no native
-  source the X11 path is unchanged. Layer surfaces are created on first paint,
+  neutral session engine drives both X11 overlay windows and native surfaces
+  through `OverlayBackend` (`src/daemon/linux/display_providers.hpp`). Overlay
+  resources exist only while demanded; X11 windows and native surfaces are
+  created on first paint, and their count reports shown panels. Layer surfaces are
   painted by cairo into double-buffered `wl_shm` XRGB8888 at the integer
   buffer scale, and not repainted while their content is unchanged.
   `Capability::overlay` takes its platform availability from layer-shell when
   it is native. Native window ids are not XIDs, so X11 capture reports
-  `visual: native windows have no X11 window id`. The native providers need
-  the X11-enabled daemon build (the session engine); otherwise they report
-  `not_built`. A registry without `wl_shm` keeps layer-shell `unavailable`.
+  `visual: native windows have no X11 window id` when no native capture factory
+  is available. The session engine and evdev route are built independently of
+  X11; native providers are compiled whenever their own dependencies exist.
+  A registry without `wl_shm` keeps layer-shell `unavailable`.
 - Automated headless-sway evidence (`wayland` label, two outputs at scale 1
   and 2): logical monitor layout and buffer scale; layer-shell panels mapped
   above a fullscreen window, read back with screencopy, crisp at scale 2,
@@ -359,8 +380,11 @@ This is not a V2.7 support claim.
   wins over `LAYERC_INPUT`; any other argument exits with status 2, and an
   invalid `LAYERC_INPUT` keeps evdev off with `invalid_input_backend`. The
   opted-in route serves `Capability::input` in a Wayland session, or in an X11
-  session without XI2; otherwise XI2 stays first. Devices open when input is
-  demanded and close on quiesce; each device and the inotify descriptor is
+  session without XI2; otherwise XI2 stays first. `EvdevInputRoute` implements
+  the same `PassiveInputSource` contract as XI2 and is owned by
+  `DisplayAdapters`; the input service only borrows the ordered sources.
+  Devices open when input is demanded and close on quiesce; each device and
+  the inotify descriptor is
   registered on the one `EventLoop` and unregistered before it closes, and
   hotplug replaces the registrations. Events reach the same sessions and
   `last_input_match` as XI2. If evdev can read no device (every open denied),

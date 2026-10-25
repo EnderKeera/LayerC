@@ -273,12 +273,11 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
     if (const auto *binding = profile_field_binding(id);
         binding != nullptr) {
       if (!shell_.syncing && notification == binding->notification) {
-        sync_profile_from_controls();
+        (void)apply_profile_controls(binding->change == ProfileFieldChange::text
+                                         ? ChangeKind::text
+                                         : ChangeKind::immediate);
         if (binding->refresh_cooldown_label)
           cooldown_editor_.refresh_selected_label();
-        record_profile_change(binding->change == ProfileFieldChange::text
-                                  ? ChangeKind::text
-                                  : ChangeKind::immediate);
         if (binding->invalidate_preview)
           InvalidateRect(panel_preview_.window, nullptr, TRUE);
         if (notification == BN_CLICKED)
@@ -302,20 +301,18 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       InvalidateRect(GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH), nullptr,
                      TRUE);
       if (!exact && !document_.profile().game.executable_path.empty()) {
-        sync_profile_from_controls();
-        if (document_.profile().game.executable_name.empty()) {
-          document_.profile().game.executable_name = wide_to_utf8(
-              std::filesystem::path(to_wide(document_.profile().game.executable_path))
-                  .filename()
-                  .wstring());
-        }
-        document_.profile().game.executable_path.clear();
-        {
-          auto sync = shell_.sync_scope();
-          set_text(shell_.application_path,
-                   to_wide(document_.profile().game.executable_name));
-        }
-        record_profile_change(ChangeKind::immediate);
+        (void)apply_profile_change(
+            ChangeKind::immediate, [](layerc::core::GameProfile &profile) {
+              if (profile.game.executable_name.empty())
+                profile.game.executable_name = wide_to_utf8(
+                    std::filesystem::path(to_wide(profile.game.executable_path))
+                        .filename()
+                        .wstring());
+              profile.game.executable_path.clear();
+            });
+        auto sync = shell_.sync_scope();
+        set_text(shell_.application_path,
+                 to_wide(document_.profile().game.executable_name));
       } else if (exact && document_.profile().game.executable_path.empty()) {
         const std::filesystem::path typed(window_text(shell_.application_path));
         if (typed.is_absolute()) {
@@ -356,10 +353,12 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
         set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_VISUAL_ISOLATED),
                                 false);
       }
-      document_.profile().visual_runtime =
-          isolated ? layerc::core::VisualRuntime::isolated
-                   : layerc::core::VisualRuntime::inline_process;
-      record_profile_change(ChangeKind::immediate);
+      (void)apply_profile_change(
+          ChangeKind::immediate, [&](layerc::core::GameProfile &profile) {
+            profile.visual_runtime =
+                isolated ? layerc::core::VisualRuntime::isolated
+                         : layerc::core::VisualRuntime::inline_process;
+          });
       visual_editor_.refresh();
       return TRUE;
     }
@@ -520,7 +519,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       return TRUE;
     }
     if (id == IDC_BAR_LIST && notification == LBN_SELCHANGE) {
-      sync_profile_from_controls();
+      (void)apply_profile_controls(DocumentChangeKind::text);
       refresh_bar_controls();
       // Keep the cooldown selection on a cooldown this bar shows.
       if (const auto *panel = selected_bar();
@@ -734,8 +733,8 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
                      MF_BYCOMMAND | (enabled ? MF_ENABLED : MF_GRAYED));
     };
     enable_item(IDM_FILE_SPLIT_BARS, has_grouped_bars);
-    enable_item(IDM_EDIT_UNDO, document_.history().can_undo());
-    enable_item(IDM_EDIT_REDO, document_.history().can_redo());
+    enable_item(IDM_EDIT_UNDO, document_.can_undo());
+    enable_item(IDM_EDIT_REDO, document_.can_redo());
     const bool has_cooldown = cooldown_editor_.selected() != nullptr;
     enable_item(IDM_COOLDOWN_DUPLICATE, has_cooldown);
     enable_item(IDM_COOLDOWN_RENAME, has_cooldown);

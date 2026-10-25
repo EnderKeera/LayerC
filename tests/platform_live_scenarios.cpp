@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -77,6 +78,33 @@ void platform_transactions() {
          "test transaction scope should resolve");
   if (!transaction_scope.has_value())
     return;
+
+  using layerc::platform::ProfileFileMutation;
+  using layerc::platform::ProfileMutationPlan;
+  using layerc::platform::ProfileTransactionScope;
+  static_assert(std::is_copy_constructible_v<ProfileMutationPlan>);
+  static_assert(std::is_copy_constructible_v<ProfileTransactionScope>);
+  const auto temporary_roots = [&]() -> layerc::platform::ProfileStoreRoots {
+    return *transaction_scope;
+  };
+  const ProfileTransactionScope retained_scope(temporary_roots());
+  const auto copied_scope = retained_scope;
+  const auto owned_target = directory / L"owned.json";
+  const auto owned_plan = [&] {
+    const ProfileMutationPlan original(std::vector<ProfileFileMutation>{
+        {.target = owned_target,
+         .contents = std::vector<std::byte>{std::byte{'o'}, std::byte{'w'},
+                                            std::byte{'n'}, std::byte{'e'},
+                                            std::byte{'d'}}}});
+    const ProfileMutationPlan copy = original;
+    return copy;
+  }();
+  expect(layerc::platform::commit_profile_transaction(copied_scope, owned_plan) &&
+             read_file(owned_target) == "owned",
+         "copied plans and scopes should own temporary mutations and roots");
+  expect(static_cast<bool>(
+             layerc::platform::recover_profile_transactions(copied_scope)),
+         "retained temporary roots should support recovery");
 
   expect(durable_read_contract(directory),
          "bounded reads should distinguish missing, oversize, and successful "
@@ -330,6 +358,7 @@ void platform_visual_asset_writer_ownership() {
   if (!expect(root.applied(), "writer tests must use an isolated profile store"))
     return;
   layerc::core::TemplateImage pixels{
+      .asset_sha256 = {},
       .width = 8, .height = 8,
       .pixels = std::vector<layerc::core::RgbPixel>(64),
       .alpha = std::vector<std::uint8_t>(64, 255)};

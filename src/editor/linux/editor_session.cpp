@@ -72,7 +72,9 @@ EditorSession::EditorSession(std::filesystem::path directory)
   rescan();
 }
 
-void EditorSession::rescan() { scan_ = platform::scan_profile_directory(directory_); }
+void EditorSession::rescan() {
+  scan_ = platform::scan_profile_summaries(directory_);
+}
 
 std::optional<std::size_t> EditorSession::current_row() const {
   if (!opened_ || document_.path().empty()) return std::nullopt;
@@ -94,15 +96,12 @@ std::optional<std::string> EditorSession::open(const std::size_t row) {
   if (!loaded_bundle)
     return "Could not read the selected profile; its files were not changed.";
   companion_ = loaded_bundle->modules.get<core::CompanionModule>();
-  const auto &visual = loaded_bundle->modules.get<core::VisualModule>();
-  unreadable_visual_ = visual.state() == platform::ModuleSidecarState::invalid
-                           ? visual : platform::VisualSidecarLoad{};
-  document_.assign_bundle(scan_.profiles[row].path, std::move(*loaded_bundle));
+  // The document keeps an unreadable visual sidecar itself, so undo can restore
+  // exactly its state and diagnostic after an explicit calibration repair.
+  document_.open(scan_.profiles[row].path, std::move(*loaded_bundle));
   owned_assets_.clear();
-  document_.set_dirty(false);
-  document_.reset_history();
   opened_ = true;
-  ++edit_generation_;
+  mark_changed(false);
   return std::nullopt;
 }
 
@@ -115,19 +114,14 @@ std::optional<std::string> EditorSession::open_path(const std::filesystem::path 
 void EditorSession::new_profile() {
   owned_assets_.clear();
   companion_ = {};
-  unreadable_visual_ = {};
-  document_.path().clear();
-  document_.clear_sidecars();
-  document_.clear_legacy_schemas();
   rescan();
-  document_.profile() = make_new_profile();
-  document_.profile().id = next_unique_id(document_.profile().id, [&](const std::string &id) {
+  auto profile = make_new_profile();
+  profile.id = next_unique_id(profile.id, [&](const std::string &id) {
     return scan_.find(id) != nullptr;
   });
-  document_.reset_history();
-  document_.set_dirty(true);
+  document_.start_draft(std::move(profile), DraftOrigin::fresh);
   opened_ = true;
-  ++edit_generation_;
+  mark_changed(false);
 }
 
 std::optional<std::string> EditorSession::duplicate_current() {
@@ -160,59 +154,44 @@ std::optional<std::string> EditorSession::duplicate_current() {
   auto automation = document_.automation();
   if (visual) visual->profile_id = copy.id;
   if (automation) automation->profile_id = copy.id;
-  document_.path().clear();
-  document_.clear_sidecars();
-  document_.clear_legacy_schemas();
-  document_.profile() = std::move(copy);
   owned_assets_ = std::move(assets);
-  // The copy keeps editable modules; their profile ids realign at commit.
-  document_.visual() = std::move(visual);
-  document_.automation() = std::move(automation);
-  document_.mark_visual_edited();
-  document_.mark_automation_edited();
-  document_.reset_history();
-  document_.set_dirty(true);
-  ++edit_generation_;
+  // The copy keeps editable modules; their profile ids realign at commit, and a
+  // copy is unsaved by construction.
+  document_.start_draft(std::move(copy), DraftOrigin::copy, std::move(visual),
+                        std::move(automation));
+  mark_changed(false);
   return std::nullopt;
 }
 
 void EditorSession::close_document() {
   owned_assets_.clear();
-  document_ = ProfileDocument{};
+  document_.close();
   companion_ = {};
-  unreadable_visual_ = {};
   opened_ = false;
-  ++edit_generation_;
+  mark_changed(false);
 }
 
 void EditorSession::mark_changed(const bool text_change) {
   ++edit_generation_;
   last_edit_was_text_ = text_change;
-  document_.set_dirty(is_draft() ||
-                      document_.history().is_dirty(document_.profile(), document_.visual(),
-                                                   document_.automation()));
+  if (change_listener_) change_listener_();
+}
+
+void EditorSession::set_change_listener(std::function<void()> listener) {
+  change_listener_ = std::move(listener);
 }
 
 std::optional<std::string>
 EditorSession::edit(const std::function<void(core::GameProfile &)> &change,
                     const bool text_change) {
   if (!opened_) return "No profile is open.";
-  auto candidate = document_.profile();
-  change(candidate);
-  if (const auto error = core::validate_profile(candidate))
-    return profile_error_line(*error);
-  if (candidate == document_.profile()) return std::nullopt;
-  if (document_.visual() && !core::VisualModule::valid(*document_.visual(), candidate))
-    return "The edit would invalidate the existing visual module.";
-  if (document_.automation() && !core::AutomationModule::valid(*document_.automation(), candidate))
-    return "The edit would invalidate the existing automation module.";
-  if (companion_.profile() && !core::CompanionModule::valid(*companion_.profile(), candidate))
-    return "The edit would invalidate the read-only Game Bar companion module.";
-  document_.profile() = std::move(candidate);
-  (void)document_.history().record(document_.profile(), document_.visual(),
-                                    document_.automation(), text_change);
-  mark_changed(text_change);
-  return std::nullopt;
+  const auto outcome = document_.edit_profile(
+      change, text_change ? DocumentChangeKind::text : DocumentChangeKind::immediate,
+      companion_.profile());
+  if (outcome.accepted()) mark_changed(text_change);
+  if (outcome.accepted() || outcome.status == ModuleEditStatus::unchanged)
+    return std::nullopt;
+  return outcome.message;
 }
 
 std::optional<std::string> EditorSession::edit_automation(
@@ -220,45 +199,23 @@ std::optional<std::string> EditorSession::edit_automation(
         std::optional<core::AutomationProfile> &)> &change,
     const bool text_change, const bool repair) {
   if (!opened_) return "No profile is open.";
-  if (document_.automation_state() == platform::ModuleSidecarState::invalid)
-    return "The unreadable automation module is preserved; editing is blocked.";
-  auto candidate = document_.automation();
-  // Removals may repair an already-invalid graph one node at a time.
-  const bool was_invalid = repair && candidate &&
-      !core::validate_automation_profile(*candidate, document_.profile()).message.empty();
-  if (const auto error = change(candidate)) return error;
-  if (candidate && !was_invalid) {
-    const auto error = core::validate_automation_profile(*candidate, document_.profile());
-    if (!error.message.empty()) return error.describe();
-  }
-  if (candidate == document_.automation()) return std::nullopt;
-  document_.automation() = std::move(candidate);
-  document_.mark_automation_edited();
-  (void)document_.history().record(document_.profile(), document_.visual(),
-                                    document_.automation(), text_change);
-  mark_changed(text_change);
-  return std::nullopt;
-}
-
-void EditorSession::accept_visual(std::optional<core::VisualProfile> visual,
-                                  const bool text_change) {
-  document_.visual() = std::move(visual);
-  document_.mark_visual_edited();
-  (void)document_.history().record(document_.profile(), document_.visual(),
-                                  document_.automation(), text_change);
-  release_unreachable_assets();
-  mark_changed(text_change);
+  const auto outcome = document_.edit_automation(
+      change, text_change ? DocumentChangeKind::text : DocumentChangeKind::immediate,
+      repair);
+  if (outcome.accepted()) mark_changed(text_change);
+  if (outcome.accepted() || outcome.status == ModuleEditStatus::unchanged)
+    return std::nullopt;
+  return outcome.message;
 }
 
 void EditorSession::release_unreachable_assets() {
   std::erase_if(owned_assets_, [&](const platform::EncodedTemplateAsset &asset) {
-    const auto uses = [&](const std::optional<core::VisualProfile> &visual) {
-      return visual && references_template(*visual, asset.asset_sha256);
-    };
-    bool reachable = uses(document_.visual());
-    document_.history().for_each_snapshot([&](const EditorProfileSnapshot &snapshot) {
-      reachable = reachable || uses(snapshot.visual_profile);
-    });
+    bool reachable{};
+    document_.for_each_retained_visual(
+        [&](const std::optional<core::VisualProfile> &visual) {
+          reachable = reachable ||
+                      (visual && references_template(*visual, asset.asset_sha256));
+        });
     return !reachable;
   });
 }
@@ -268,34 +225,63 @@ std::optional<std::string> EditorSession::edit_visual(
         std::optional<core::VisualProfile> &)> &change,
     const bool text_change) {
   if (!opened_) return "No profile is open.";
-  if (document_.visual_state() == platform::ModuleSidecarState::invalid)
-    return "The unreadable visual module is preserved; recalibrate to repair it.";
-  auto candidate = document_.visual();
-  if (const auto error = change(candidate)) return error;
-  if (candidate) {
-    const auto error = core::validate_visual_profile(*candidate, document_.profile());
-    if (!error.message.empty()) return error.describe();
+  const auto outcome = document_.edit_visual(
+      change, text_change ? DocumentChangeKind::text : DocumentChangeKind::immediate);
+  if (outcome.accepted()) {
+    release_unreachable_assets();
+    mark_changed(text_change);
   }
-  if (candidate != document_.visual()) accept_visual(std::move(candidate), text_change);
-  return std::nullopt;
+  if (outcome.accepted() || outcome.status == ModuleEditStatus::unchanged)
+    return std::nullopt;
+  return outcome.message;
 }
 
-std::optional<std::string> EditorSession::apply_calibration(
-    const std::string_view cooldown_id, const std::string_view visual_json,
-    const std::function<SharedObservationChoice()> &choose_shared,
-    std::vector<platform::EncodedTemplateAsset> assets) {
-  if (!opened_) return "No profile is open.";
-  auto merged = merge_calibration_result(document_.visual(),
+CalibrationAcceptance EditorSession::prepare_calibration(
+    const std::string_view cooldown_id,
+    const core::VisualProfile &calibration,
+    const std::span<const core::TemplateImage> images,
+    const std::function<SharedObservationChoice()> &choose_shared) const {
+  if (!opened_) return std::string("No profile is open.");
+  const auto generation = edit_generation_;
+  const auto path = document_.path();
+  auto merged = merge_calibration_result(
+      document_.visual(),
       document_.visual_state() == platform::ModuleSidecarState::invalid,
-      document_.profile(), cooldown_id, visual_json, choose_shared);
+      document_.profile(), cooldown_id, calibration, choose_shared);
+  // A nested shared-choice dialog can dispatch another editor command.
+  if (!opened_ || edit_generation_ != generation || document_.path() != path)
+    return std::string("The active document changed during calibration.");
   if (const auto *refusal = std::get_if<VisualMergeRefusal>(&merged))
     return refusal->message;
-  for (auto &asset : assets)
+  auto prepared = platform::prepare_profile_template_assets(path, images, owned_assets_);
+  if (const auto *error = std::get_if<platform::VisualAssetError>(&prepared))
+    return error->message;
+  return AcceptedCalibration{
+      generation, path,
+      std::get<core::VisualProfile>(std::move(merged)),
+      std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(prepared))};
+}
+
+std::optional<std::string>
+EditorSession::apply_calibration(AcceptedCalibration accepted) {
+  if (!opened_ || accepted.generation != edit_generation_ ||
+      accepted.path != document_.path())
+    return "The active document changed during calibration.";
+  // The document validates against the current profile and records one step;
+  // an invalid result returns its message before any byte is adopted.
+  const auto outcome =
+      document_.replace_visual_from_calibration(std::move(accepted.visual));
+  // An identical recalibration is a success: nothing changed, no new step and
+  // no new bytes are adopted for a module whose references are unchanged.
+  if (outcome.status == ModuleEditStatus::unchanged) return std::nullopt;
+  if (!outcome.accepted()) return outcome.message;
+  // All refusals above are inert. Bytes remain owned until transactional Save.
+  for (auto &asset : accepted.assets)
     if (std::ranges::find(owned_assets_, asset.asset_sha256,
-                          &platform::EncodedTemplateAsset::asset_sha256) == owned_assets_.end())
+          &platform::EncodedTemplateAsset::asset_sha256) == owned_assets_.end())
       owned_assets_.push_back(std::move(asset));
-  auto candidate = std::get<core::VisualProfile>(std::move(merged));
-  if (candidate != document_.visual()) accept_visual(std::move(candidate));
+  release_unreachable_assets();
+  mark_changed();
   return std::nullopt;
 }
 
@@ -307,59 +293,33 @@ EditorSession::set_visual_runtime(const core::VisualRuntime runtime) {
   return edit([&](core::GameProfile &profile) { profile.visual_runtime = runtime; });
 }
 
-void EditorSession::restore_visual_history(std::optional<core::VisualProfile> visual) {
-  if (document_.visual() == visual) return;
-  document_.visual() = std::move(visual);
-  if (!document_.visual() &&
-      unreadable_visual_.state() == platform::ModuleSidecarState::invalid)
-    document_.set_visual(unreadable_visual_, document_.legacy_visual_schema());
-  else
-    document_.mark_visual_edited();
-}
-
 std::optional<std::string> EditorSession::remove_cooldown(const std::string_view id) {
   if (!opened_) return "No profile is open.";
   if (const auto error = document_.remove_cooldown(id)) return error->message;
-  (void)document_.history().record(document_.profile(), document_.visual(),
-                                    document_.automation());
   mark_changed();
   return std::nullopt;
 }
 
-void EditorSession::end_text_edit() { document_.history().end_text_coalescing(); }
+void EditorSession::end_text_edit() { document_.end_text_coalescing(); }
 
 bool EditorSession::undo() {
-  auto snapshot = document_.history().undo(document_.profile(), document_.visual(),
-                                           document_.automation());
-  if (!snapshot) return false;
-  document_.profile() = std::move(snapshot->profile);
-  restore_visual_history(std::move(snapshot->visual_profile));
-  if (document_.automation() != snapshot->automation_profile) {
-    document_.automation() = std::move(snapshot->automation_profile);
-    document_.mark_automation_edited();
-  }
+  if (!document_.undo()) return false;
   mark_changed();
   return true;
 }
 
 bool EditorSession::redo() {
-  auto snapshot = document_.history().redo(document_.profile(), document_.visual(),
-                                           document_.automation());
-  if (!snapshot) return false;
-  document_.profile() = std::move(snapshot->profile);
-  restore_visual_history(std::move(snapshot->visual_profile));
-  if (document_.automation() != snapshot->automation_profile) {
-    document_.automation() = std::move(snapshot->automation_profile);
-    document_.mark_automation_edited();
-  }
+  if (!document_.redo()) return false;
   mark_changed();
   return true;
 }
 
 SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
-                                        const bool prompt_upgrade) {
+                                        const SaveMode mode) {
+  const bool autosave = mode == SaveMode::autosave;
   if (!opened_) return {{CommitResult::invalid_fields, std::nullopt}, std::nullopt,
-                        "Not saved: no profile is open."};
+                        autosave ? "Not autosaved: no profile is open."
+                                 : "Not saved: no profile is open."};
   const bool draft = is_draft();
   const auto path = draft ? default_profile_path(directory_, document_.profile())
                           : document_.path();
@@ -373,14 +333,14 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
         {}, *document_.visual(), owned_assets_);
     if (const auto *error = std::get_if<platform::VisualAssetError>(&snapshot))
       return {{CommitResult::invalid_fields, std::nullopt}, std::nullopt,
-              "Not saved: " + error->message};
+              (autosave ? "Not autosaved: " : "Not saved: ") + error->message};
     assets = std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(snapshot));
   } else if (document_.visual()) {
     for (const auto &asset : owned_assets_)
       if (references_template(*document_.visual(), asset.asset_sha256)) assets.push_back(asset);
   }
   const auto commit = commit_document(document_, path,
-      {.prompt_upgrade = prompt_upgrade, .create_only = draft},
+      {.prompt_upgrade = !autosave, .create_only = draft},
       confirm_upgrade, std::move(companion), [&](auto &mutations) {
         return platform::plan_profile_template_copies(path, assets, mutations);
       });
@@ -392,15 +352,12 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
       return std::ranges::find(assets, owned.asset_sha256,
                                &platform::EncodedTemplateAsset::asset_sha256) != assets.end();
     });
-    unreadable_visual_ = {};
-    document_.path() = path;
-    document_.mark_saved();
-    ++edit_generation_;
     release_unreachable_assets();
     reload = request_daemon_reload();
     rescan();
+    mark_changed(false);
   }
-  return {commit, reload, save_report_text(commit, reload)};
+  return {commit, reload, save_report_text(commit, reload, mode)};
 }
 
 OperationOutcome EditorSession::reload_report(const std::string &done) {
@@ -418,12 +375,14 @@ OperationOutcome EditorSession::set_enabled(const std::size_t row, const bool en
   if (row >= scan_.profiles.size()) return {false, "No profile selected."};
   const auto path = scan_.profiles[row].path;
   const bool is_current = opened_ && is_document_path(document_, path);
-  if (is_current && document_.dirty())
-    return {false, "Save or undo the open profile's changes before turning it on or off."};
-  auto loaded = platform::load_profile_bundle(path);
-  auto *stored = std::get_if<platform::ProfileBundleLoad>(&loaded);
-  if (!stored) return {false, "Could not read that profile; it was not changed."};
-  auto candidate = loaded_bundle(std::move(*stored));
+  auto selected = profile_enablement_bundle(
+      document_, is_current, path, OpenDocumentEnablement::require_clean);
+  if (const auto *refusal = std::get_if<EnablementRefusal>(&selected)) {
+    if (*refusal == EnablementRefusal::dirty_open_document)
+      return {false, "Save or undo the open profile's changes before turning it on or off."};
+    return {false, "Could not read that profile; it was not changed."};
+  }
+  auto candidate = std::get<ProfileBundle>(std::move(selected));
   if (candidate.profile.enabled == enabled) return {true, "No change."};
   candidate.profile.enabled = enabled;
   const auto commit = commit_profile_bundle(path, candidate, {}, confirm_upgrade);

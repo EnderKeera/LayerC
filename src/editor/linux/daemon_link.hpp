@@ -66,10 +66,15 @@ struct ReloadResult {
 // Asks the running daemon to reload profiles after a committed save.
 [[nodiscard]] ReloadResult request_daemon_reload();
 
+// Manual Save and background autosave phrase the same durable outcome
+// differently; the wording is derived from the mode, never rewritten.
+enum class SaveMode { manual, autosave };
+
 // A disk save and a runtime reload are distinct outcomes: the text reports
 // both, and a failed commit never claims a reload.
 [[nodiscard]] std::string
 save_report_text(const CommitOutcome &commit,
-                 const std::optional<ReloadResult> &reload);
+                 const std::optional<ReloadResult> &reload,
+                 SaveMode mode = SaveMode::manual);
 
 } // namespace layerc::editor

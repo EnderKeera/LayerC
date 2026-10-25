@@ -22,9 +22,10 @@ public:
   struct Host {
     std::function<const layerc::core::CooldownDefinition *()>
         selected_cooldown;
-    // Commits the open document through the shared pipeline.
-    std::function<CommitResult()> commit_document;
-    // Records a completed commit (dirty state, timers, notification).
+    // Computes and commits a detached visual candidate; values are adopted
+    // only after a durable success.
+    std::function<CommitResult(layerc::core::VisualProfile)> commit_visual;
+    // Refreshes host UI/timers and notifies after acceptance; no document mutation.
     std::function<void()> mark_committed;
     std::function<std::wstring()> write_failure_message;
     // Saves a new draft once and flushes pending edits; false to abort.
@@ -53,7 +54,7 @@ public:
 
 private:
   [[nodiscard]] bool merge_calibration_result(std::string_view visual_json);
-  [[nodiscard]] bool save();
+  [[nodiscard]] bool save(layerc::core::VisualProfile candidate);
   void set_status(std::wstring_view text) const;
 
   ProfileDocument &document_;

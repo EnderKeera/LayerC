@@ -59,16 +59,33 @@ CommitOutcome commit_document(ProfileDocument &document,
                               const ConfirmUpgrade &confirm_upgrade,
                               layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
                                   companion,
-                              const layerc::platform::ProfileMutationPlanner &additional_mutations) {
+                              const layerc::platform::ProfileMutationPlanner &additional_mutations,
+                              const std::function<void(ProfileBundle &)> &candidate) {
   auto bundle = document.bundle();
+  if (candidate) {
+    candidate(bundle);
+    // A calibration repair supplies a visual, so it is no longer blocked by an
+    // unreadable stored module; anything still missing keeps the block.
+    bundle.unreadable_module =
+        (document.visual_state() == layerc::platform::ModuleSidecarState::invalid &&
+         !bundle.visual) ||
+        (document.automation_state() == layerc::platform::ModuleSidecarState::invalid &&
+         !bundle.automation);
+    if (bundle.visual) {
+      const auto error =
+          layerc::core::validate_visual_profile(*bundle.visual, bundle.profile);
+      if (!error.message.empty())
+        return {CommitResult::invalid_profile, std::nullopt};
+    }
+  }
   const auto outcome =
       commit_profile_bundle(path, bundle, options, confirm_upgrade, std::move(companion),
                             additional_mutations);
-  if (outcome.result != CommitResult::invalid_profile) {
-    document.profile() = std::move(bundle.profile);
-    document.visual() = std::move(bundle.visual);
-    document.automation() = std::move(bundle.automation);
-  }
+  // Only a successful durable commit installs values and the saved transition.
+  if (outcome.ok())
+    document.accept_commit(path, std::move(bundle),
+                           candidate ? CommitRecord::record_edit
+                                     : CommitRecord::rebase);
   return outcome;
 }
 

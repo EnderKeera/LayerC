@@ -460,7 +460,9 @@ void visual_candidates_history_and_recovery() {
            return std::nullopt;
          }).has_value() && !called && session.document().has_unreadable_module(),
          "ordinary editing never converts unreadable data to removal");
-  expect(session.apply_calibration("ability", "{bad", {}).has_value() &&
+  const auto invalid_calibration =
+      session.prepare_calibration("ability", core::VisualProfile{}, {}, {});
+  expect(std::get_if<std::string>(&invalid_calibration) != nullptr &&
              session.document().has_unreadable_module(),
          "invalid calibration cannot weaken the unreadable-sidecar gate");
   const auto model = editor::CalibrationModel::open(base, "ability", std::nullopt);
@@ -468,8 +470,11 @@ void visual_candidates_history_and_recovery() {
   auto result = model->build_result(model->initial_controls(), {});
   const auto *visual = std::get_if<core::VisualProfile>(&result);
   expect(visual != nullptr, "a pixel calibration builds one valid observation and trigger");
-  const auto json = core::serialize_visual_profile_json(*visual);
-  expect(!session.apply_calibration("ability", json, {}) &&
+  auto prepared_repair = session.prepare_calibration("ability", *visual, {}, {});
+  auto *accepted_repair = std::get_if<editor::AcceptedCalibration>(&prepared_repair);
+  expect(accepted_repair != nullptr, "a valid repair calibration prepares");
+  expect(accepted_repair &&
+             !session.apply_calibration(std::move(*accepted_repair)) &&
              session.document().visual_state() == platform::ModuleSidecarState::valid &&
              session.document().dirty() && session.undo() &&
              session.document().has_unreadable_module() &&
@@ -587,9 +592,15 @@ void calibration_assets_publish_with_bundle_and_survive_undo() {
   expect(visual != nullptr, "a template calibration builds one observation and trigger");
   const auto sidecar = platform::visual_sidecar_path(fixture.path);
   const auto before = layerc::test::read_file(sidecar);
-  const auto json = core::serialize_visual_profile_json(*visual);
   const auto update = [] { return editor::SharedObservationChoice::update_shared; };
-  expect(!session.apply_calibration("ability", json, update, std::move(*assets)) &&
+  auto prepared_calibration =
+      session.prepare_calibration("ability", *visual, std::span(&image, 1), update);
+  auto *accepted_calibration =
+      std::get_if<editor::AcceptedCalibration>(&prepared_calibration);
+  expect(accepted_calibration != nullptr,
+         "a typed template calibration prepares without publishing");
+  expect(accepted_calibration &&
+             !session.apply_calibration(std::move(*accepted_calibration)) &&
              session.owned_template_assets().size() == 1 && !std::filesystem::exists(asset),
          "applying a calibration owns its assets and still publishes nothing");
   expect(std::holds_alternative<core::TemplateImage>(platform::load_profile_template_asset(
@@ -604,10 +615,9 @@ void calibration_assets_publish_with_bundle_and_survive_undo() {
            return std::nullopt;
          }) && session.owned_template_assets().empty(),
          "an edit that discards the redo branch releases unreachable owned bytes");
-  auto again = platform::prepare_profile_template_assets(fixture.path, std::span(&image, 1));
-  expect(std::holds_alternative<std::vector<platform::EncodedTemplateAsset>>(again) &&
-             !session.apply_calibration("ability", json, update,
-                 std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(again))) &&
+  auto again = session.prepare_calibration("ability", *visual, std::span(&image, 1), update);
+  auto *accepted_again = std::get_if<editor::AcceptedCalibration>(&again);
+  expect(accepted_again && !session.apply_calibration(std::move(*accepted_again)) &&
              session.owned_template_assets().size() == 1,
          "the calibration applies again with fresh owned bytes");
   {
@@ -660,16 +670,338 @@ void field_parser_contracts() {
              editor::format_rgb(0xAB12EFU) == "#AB12EF",
          "display formatting round-trips values and names the physical binding");
 }
+// Calibration is prepared once into a typed value: preparation is inert and
+// the accepted value applies without asking the shared-choice dialog again.
+void calibration_prepare_is_inert_and_accepts_once() {
+  Fixture fixture;
+  fixture.store();
+  editor::EditorSession session(fixture.directory);
+  expect(!session.open(0), "open the shared-observation calibration fixture");
+  expect(!session.edit([](auto &profile) {
+           auto second = profile.cooldowns.front();
+           second.id = "other";
+           second.name = "Other";
+           profile.cooldowns.push_back(second);
+         }),
+         "add a cooldown that shares the observation");
+  core::VisualProfile shared;
+  shared.schema_version = 2;
+  shared.profile_id = session.document().profile().id;
+  core::PixelRule shared_rule;
+  shared_rule.id = "shared";
+  shared_rule.name = "Shared";
+  shared_rule.region = core::NormalizedRegion{0.4, 0.4, 0.2, 0.2};
+  shared.observations.push_back(shared_rule);
+  shared.triggers.push_back({.cooldown_id = "ability", .observation_id = "shared"});
+  shared.triggers.push_back({.cooldown_id = "other", .observation_id = "shared"});
+  expect(!session.edit_visual([&](auto &visual) -> std::optional<std::string> {
+           visual = shared;
+           return std::nullopt;
+         }),
+         "install one observation referenced by two cooldowns");
+  auto model = editor::CalibrationModel::open(session.document().profile(), "ability",
+                                              session.document().visual());
+  expect(model.has_value(), "seed the shared-observation calibration");
+  auto built = model->build_result(model->initial_controls(), {});
+  const auto *calibration = std::get_if<core::VisualProfile>(&built);
+  if (!expect(calibration != nullptr,
+              "the shared calibration builds one observation and trigger")) return;
+  const auto before_profile = session.document().profile();
+  const auto before_visual = session.document().visual();
+  const auto before_generation = session.edit_generation();
+  const auto before_undo = session.can_undo();
+  const auto before_assets = session.owned_template_assets().size();
+  const auto sidecar = platform::visual_sidecar_path(fixture.path);
+  const auto before_bytes = layerc::test::read_file(sidecar);
+  int choices{};
+  const auto chooser = [&] {
+    ++choices;
+    return editor::SharedObservationChoice::clone;
+  };
+  auto prepared = session.prepare_calibration("ability", *calibration, {}, chooser);
+  auto *accepted = std::get_if<editor::AcceptedCalibration>(&prepared);
+  expect(accepted != nullptr && choices == 1,
+         "preparation asks the shared choice exactly once");
+  expect(session.document().profile() == before_profile &&
+             session.document().visual() == before_visual &&
+             session.edit_generation() == before_generation &&
+             session.can_undo() == before_undo &&
+             session.owned_template_assets().size() == before_assets &&
+             layerc::test::read_file(sidecar) == before_bytes,
+         "preparation changes no document, history, owned bytes or store file");
+  const auto cancelled = session.prepare_calibration(
+      "ability", *calibration, {},
+      [] { return editor::SharedObservationChoice::cancel; });
+  expect(std::get_if<std::string>(&cancelled) != nullptr &&
+             session.document().profile() == before_profile &&
+             session.document().visual() == before_visual &&
+             session.edit_generation() == before_generation &&
+             session.can_undo() == before_undo &&
+             session.owned_template_assets().size() == before_assets &&
+             layerc::test::read_file(sidecar) == before_bytes,
+         "a cancelled shared choice changes no document, history, bytes or file");
+  core::VisualProfile invalid;
+  invalid.schema_version = 2;
+  invalid.profile_id = session.document().profile().id;
+  core::PixelRule invalid_rule;
+  invalid_rule.id = "only";
+  invalid_rule.name = "Only";
+  invalid_rule.region = core::NormalizedRegion{0.4, 0.4, 0.2, 0.2};
+  invalid.observations.push_back(invalid_rule);
+  const auto rejected = session.prepare_calibration("ability", invalid, {}, chooser);
+  expect(std::get_if<std::string>(&rejected) != nullptr && choices == 1 &&
+             session.document().profile() == before_profile &&
+             session.document().visual() == before_visual &&
+             session.edit_generation() == before_generation &&
+             session.owned_template_assets().size() == before_assets &&
+             layerc::test::read_file(sidecar) == before_bytes,
+         "an invalid typed result changes no document, history, bytes or file");
+  auto retried = session.prepare_calibration("ability", *calibration, {}, chooser);
+  expect(std::get_if<editor::AcceptedCalibration>(&retried) != nullptr && choices == 2,
+         "retrying after a refusal prepares the same draft with a fresh choice");
+  expect(accepted && !session.apply_calibration(std::move(*accepted)) && choices == 2 &&
+             session.edit_generation() == before_generation + 1,
+         "applying the accepted value asks nothing again and records one edit");
+  const auto applied = session.document().visual();
+  expect(applied && applied->observations.size() == 2 &&
+             applied->triggers.size() == 2 &&
+             layerc::core::find_observation(*applied, "shared") != nullptr &&
+             layerc::core::find_observation(*applied, "shared-2") != nullptr,
+         "cloning keeps the shared observation and adds this cooldown's own");
+  expect(session.undo() && session.document().visual() == before_visual &&
+             session.redo() && session.document().visual() == applied,
+         "one undo and redo restore the whole calibration module");
+}
+
+// Assets stay owned until Save, and generation/path tokens reject stale values
+// before any ownership, history or document change.
+void calibration_assets_and_stale_tokens() {
+  Fixture fixture;
+  fixture.store(true);
+  const auto &canonical = layerc::test::canonical_template_png_fixture();
+  auto image = layerc::test::checker_template_image();
+  image.asset_sha256 = canonical.sha256;
+  editor::EditorSession session(fixture.directory);
+  expect(!session.open_path(fixture.path), "open the calibration asset fixture");
+  auto model = editor::CalibrationModel::open(session.document().profile(), "ability",
+                                              session.document().visual());
+  expect(model && model->add_reference({canonical.sha256}), "seed a template calibration");
+  auto controls = model->initial_controls();
+  controls.predicate = editor::CalibrationPredicate::template_match;
+  auto built = model->build_result(controls, std::vector<core::TemplateImage>{image});
+  const auto *visual = std::get_if<core::VisualProfile>(&built);
+  if (!expect(visual != nullptr, "a template calibration builds one observation and trigger")) return;
+  const auto asset = platform::profile_visual_asset_path(fixture.path, canonical.sha256);
+  const auto generation = session.edit_generation();
+  auto prepared = session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *accepted = std::get_if<editor::AcceptedCalibration>(&prepared);
+  expect(accepted != nullptr && accepted->assets.size() == 1 &&
+             accepted->assets.front().asset_sha256 == canonical.sha256 &&
+             session.owned_template_assets().empty() &&
+             session.edit_generation() == generation && !std::filesystem::exists(asset),
+         "preparation owns canonical bytes without publishing or mutating the document");
+  auto missing = image;
+  missing.asset_sha256 = std::string(64, 'f');
+  const auto before_refusal_visual = session.document().visual();
+  const auto refused_assets =
+      session.prepare_calibration("ability", *visual, std::span(&missing, 1), {});
+  expect(std::get_if<std::string>(&refused_assets) != nullptr &&
+             session.owned_template_assets().empty() &&
+             session.edit_generation() == generation &&
+             session.document().visual() == before_refusal_visual,
+         "an unavailable template asset refuses preparation without ownership");
+  auto stale = session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *stale_accepted = std::get_if<editor::AcceptedCalibration>(&stale);
+  expect(stale_accepted != nullptr, "prepare a value that will become stale");
+  expect(!session.edit([](auto &profile) { profile.name = "Edited after calibration"; }),
+         "edit the document after preparing");
+  const auto edited_generation = session.edit_generation();
+  const auto edited_visual = session.document().visual();
+  expect(stale_accepted &&
+             session.apply_calibration(std::move(*stale_accepted)) ==
+                 std::optional<std::string>(
+                     "The active document changed during calibration.") &&
+             session.edit_generation() == edited_generation &&
+             session.document().visual() == edited_visual &&
+             session.owned_template_assets().empty(),
+         "a stale generation token is refused before any ownership or edit");
+  auto closed = session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *closed_accepted = std::get_if<editor::AcceptedCalibration>(&closed);
+  session.close_document();
+  expect(!session.open_path(fixture.path), "reopen the calibration document");
+  expect(closed_accepted &&
+             session.apply_calibration(std::move(*closed_accepted)) ==
+                 std::optional<std::string>(
+                     "The active document changed during calibration.") &&
+             session.owned_template_assets().empty(),
+         "a reopened document rejects the old generation token");
+  auto drafted = session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *drafted_accepted = std::get_if<editor::AcceptedCalibration>(&drafted);
+  session.new_profile();
+  expect(drafted_accepted &&
+             session.apply_calibration(std::move(*drafted_accepted)) ==
+                 std::optional<std::string>(
+                     "The active document changed during calibration.") &&
+             session.owned_template_assets().empty(),
+         "a new draft rejects a token prepared for the saved path");
+  expect(!session.open_path(fixture.path), "reopen the saved profile for the invalid result");
+  auto corrupted = session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *corrupted_accepted = std::get_if<editor::AcceptedCalibration>(&corrupted);
+  if (!expect(corrupted_accepted != nullptr, "prepare a value to corrupt")) return;
+  corrupted_accepted->visual.triggers.front().cooldown_id = "missing";
+  const auto before_corrupt_generation = session.edit_generation();
+  const auto before_corrupt_visual = session.document().visual();
+  const auto error = session.apply_calibration(std::move(*corrupted_accepted));
+  expect(error && !error->empty() &&
+             session.edit_generation() == before_corrupt_generation &&
+             session.document().visual() == before_corrupt_visual &&
+             session.owned_template_assets().empty() &&
+             !std::filesystem::exists(asset),
+         "final validation refuses a corrupted accepted value before asset append");
+  // An identical recalibration is a success, not an error: nothing changes and
+  // no new step or bytes are adopted.
+  auto applied_once =
+      session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *applied_once_accepted = std::get_if<editor::AcceptedCalibration>(&applied_once);
+  if (!expect(applied_once_accepted != nullptr, "prepare the baseline recalibration")) return;
+  expect(!session.apply_calibration(std::move(*applied_once_accepted)),
+         "the baseline recalibration applies");
+  auto again_prepared =
+      session.prepare_calibration("ability", *visual, std::span(&image, 1), {});
+  auto *again_accepted = std::get_if<editor::AcceptedCalibration>(&again_prepared);
+  if (!expect(again_accepted != nullptr, "prepare the identical recalibration")) return;
+  const auto before_identical_generation = session.edit_generation();
+  const auto before_identical_visual = session.document().visual();
+  const auto before_identical_assets = session.owned_template_assets().size();
+  expect(!session.apply_calibration(std::move(*again_accepted)) &&
+             session.edit_generation() == before_identical_generation &&
+             session.document().visual() == before_identical_visual &&
+             session.owned_template_assets().size() == before_identical_assets,
+         "an identical recalibration succeeds without a step or new bytes");
+}
 } // namespace
+
+// Every accepted transition notifies the listener exactly once, at the final
+// state, with the generation already advanced; refusals never notify.
+void change_listener_contracts() {
+  Fixture fixture;
+  fixture.store();
+  editor::EditorSession session(fixture.directory);
+  int notifications{};
+  std::uint64_t observed_generation{};
+  const auto listen = [&] {
+    notifications = 0;
+    observed_generation = 0;
+    session.set_change_listener([&] {
+      ++notifications;
+      observed_generation = session.edit_generation();
+    });
+  };
+  const auto advance = [&] { return session.edit_generation(); };
+  listen();
+  expect(!session.open(0), "open the stored fixture");
+  expect(notifications == 1 && observed_generation == advance(),
+         "open notifies once after the document is installed");
+  const auto accept = [&](const std::function<void(core::GameProfile &)> &change) {
+    notifications = 0;
+    const auto outcome = session.edit(change);
+    expect(!outcome && notifications == 1 && observed_generation == advance(),
+           "an accepted base edit notifies once at the final state");
+  };
+  accept([](auto &profile) { profile.name = "Notified"; });
+  const auto profile_id = session.document().profile().id;
+  const auto visual_profile_id = profile_id;
+  notifications = 0;
+  expect(session.edit([](auto &profile) { profile.cooldowns.front().duration =
+                                             core::Milliseconds(0); }).has_value() &&
+             notifications == 0,
+         "a refused edit notifies nobody");
+  notifications = 0;
+  expect(!session.edit_visual([visual_profile_id = profile_id](
+                                  auto &visual) -> std::optional<std::string> {
+           if (!visual) {
+             core::PixelRule rule;
+             rule.id = "ready";
+             rule.name = "Ready";
+             visual = core::VisualProfile{};
+             visual->profile_id = visual_profile_id;
+             visual->observations.push_back(rule);
+           }
+           std::get<core::PixelRule>(visual->observations.front()).name = "Notified rule";
+           return std::nullopt;
+         }).has_value() &&
+             notifications == 1 && observed_generation == advance(),
+         "an accepted visual edit notifies once");
+  notifications = 0;
+  expect(!session.edit_automation([profile_id = profile_id](
+                                      auto &automation) -> std::optional<std::string> {
+           core::AutomationDefinition definition;
+           definition.id = "automation-1";
+           if (!automation) automation = core::AutomationProfile{};
+           automation->profile_id = profile_id;
+           automation->automations.push_back(definition);
+           return std::nullopt;
+         }).has_value() &&
+             notifications == 1 && observed_generation == advance(),
+         "an accepted automation edit notifies once");
+  notifications = 0;
+  expect(!session.edit([](auto &profile) {
+           profile.name = profile.name;
+         }).has_value() &&
+             notifications == 0,
+         "an unchanged edit notifies nobody");
+  notifications = 0;
+  expect(session.undo() && notifications == 1 && observed_generation == advance(),
+         "undo notifies once");
+  notifications = 0;
+  expect(session.redo() && notifications == 1 && observed_generation == advance(),
+         "redo notifies once");
+  const auto blocked =
+      platform::recovery_backup_path(session.document().path());
+  std::filesystem::remove_all(blocked);
+  std::filesystem::create_directory(blocked);
+  notifications = 0;
+  expect(!session.save([] { return true; }).saved() && notifications == 0,
+         "a failed save notifies nobody");
+  std::filesystem::remove_all(blocked);
+  notifications = 0;
+  expect(session.save([] { return true; }).saved() && notifications == 1 &&
+             observed_generation == advance(),
+         "a successful save notifies once after rescan");
+  notifications = 0;
+  session.close_document();
+  expect(notifications == 1 && observed_generation == advance(), "close notifies once");
+  notifications = 0;
+  session.new_profile();
+  expect(notifications == 1 && observed_generation == advance(), "new notifies once");
+  expect(!session.edit([](auto &profile) {
+           profile.game.executable_name = "fixture.exe";
+         }),
+         "give the fresh draft a matching executable");
+  notifications = 0;
+  const auto duplicated = session.duplicate_current();
+  expect(!duplicated.has_value() && notifications == 1 &&
+             observed_generation == advance(),
+         "duplicate notifies once: notifications=" + std::to_string(notifications) +
+             " error=" + duplicated.value_or("-"));
+  session.set_change_listener({});
+  notifications = 0;
+  session.close_document();
+  session.new_profile();
+  expect(notifications == 0, "a cleared listener is never called");
+}
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(drafts_and_history),
                  LAYERC_TEST_CASE(mutation_candidates_and_preservation),
                  LAYERC_TEST_CASE(save_and_delete_failures),
                  LAYERC_TEST_CASE(enablement_and_invalid_modules),
                  LAYERC_TEST_CASE(reviewed_import_export),
+                 LAYERC_TEST_CASE(change_listener_contracts),
                  LAYERC_TEST_CASE(import_destination_race_and_invalid_json),
                  LAYERC_TEST_CASE(automation_candidates_history_and_recovery),
                  LAYERC_TEST_CASE(visual_candidates_history_and_recovery),
                  LAYERC_TEST_CASE(duplicate_templates_retains_bytes_and_commits_atomically),
                  LAYERC_TEST_CASE(calibration_assets_publish_with_bundle_and_survive_undo),
+                 LAYERC_TEST_CASE(calibration_prepare_is_inert_and_accepts_once),
+                 LAYERC_TEST_CASE(calibration_assets_and_stale_tokens),
                  LAYERC_TEST_CASE(field_parser_contracts))

@@ -27,9 +27,15 @@ def memory(pid):
             "rssBytes": values.get("Rss", 0), "swapBytes": values.get("Swap", 0)}
 
 
-def cpu_seconds(pid):
+def cpu_snapshot(pid):
     fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-    return (int(fields[11]) + int(fields[12])) / TICKS
+    return {"startTime": fields[19], "userTicks": int(fields[11]),
+            "systemTicks": int(fields[12])}
+
+
+def cpu_seconds(pid):
+    sample = cpu_snapshot(pid)
+    return (sample["userTicks"] + sample["systemTicks"]) / TICKS
 
 
 def write(path, data):
@@ -39,13 +45,25 @@ def write(path, data):
 
 
 def idle(pid, seconds, output):
-    start, initial, samples = time.monotonic(), cpu_seconds(pid), []
+    initial, samples = cpu_snapshot(pid), []
+    start = time.monotonic()
     while time.monotonic() - start < seconds:
         samples.append({"monotonic": round(time.monotonic(), 6), **memory(pid)})
         time.sleep(0.25)
-    elapsed = time.monotonic() - start
+    ended = time.monotonic()
+    final = cpu_snapshot(pid)
+    if final["startTime"] != initial["startTime"]:
+        raise RuntimeError("editor identity changed during idle sampling")
+    initial_ticks = initial["userTicks"] + initial["systemTicks"]
+    final_ticks = final["userTicks"] + final["systemTicks"]
+    if final_ticks < initial_ticks:
+        raise RuntimeError("editor CPU ticks decreased during idle sampling")
+    elapsed = ended - start
     write(output, {"process": "layere", "pid": pid, "idleSeconds": round(elapsed, 3),
-                   "idleCpuPercent": round(100 * (cpu_seconds(pid) - initial) / elapsed, 4),
+                   "idleCpuPercent": round(100 * (final_ticks - initial_ticks) / TICKS / elapsed, 4),
+                   "clockTicksPerSecond": TICKS,
+                   "idleStartedMonotonic": start, "idleEndedMonotonic": ended,
+                   "cpuTicksStart": initial, "cpuTicksEnd": final,
                    "peakIdleUssBytes": max(s["ussBytes"] for s in samples),
                    "peakIdlePssBytes": max(s["pssBytes"] for s in samples),
                    "peakIdleRssBytes": max(s["rssBytes"] for s in samples),

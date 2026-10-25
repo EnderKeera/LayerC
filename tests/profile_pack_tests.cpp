@@ -471,7 +471,9 @@ void copy_original_id_reservations() {
     auto base = profile(id, id, 30);
     pack.profiles.push_back({.suggested_filename = filename,
                             .base_json = layerc::core::serialize_profile_json(base),
-                            .profile = std::move(base)});
+                            .profile = std::move(base),
+                            .modules = {},
+                            .asset_sha256 = {}});
   }
   const std::array choices{
       layerc::bundle::ImportChoice{.profile_index = 0,
@@ -514,7 +516,9 @@ void copy_choice_order_is_canonical() {
     auto base = profile(id, id, 30);
     pack.profiles.push_back({.suggested_filename = "foo.json",
                             .base_json = layerc::core::serialize_profile_json(base),
-                            .profile = std::move(base)});
+                            .profile = std::move(base),
+                            .modules = {},
+                            .asset_sha256 = {}});
   }
   const std::array choices{
       layerc::bundle::ImportChoice{.profile_index = 0,
@@ -555,7 +559,9 @@ void import_planning_after_recovery() {
   layerc::bundle::PackProfile incoming_item{
       .suggested_filename = "a.json",
       .base_json = layerc::core::serialize_profile_json(incoming),
-      .profile = incoming};
+      .profile = incoming,
+      .modules = {},
+      .asset_sha256 = {}};
   incoming_item.module<layerc::core::CompanionModule>() =
       layerc::bundle::ModulePayload<layerc::core::CompanionProfile>{
           .json = layerc::core::serialize_companion_profile_json(

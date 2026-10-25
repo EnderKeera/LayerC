@@ -9,7 +9,7 @@ from typing import Any
 TOOLS = Path(__file__).parents[1] / "linux-gui"
 REPORT = TOOLS / "report.py"
 sys.path.insert(0, str(TOOLS))
-from walkthrough import EXPECTED  # noqa: E402
+from cases import EXPECTED  # noqa: E402
 from editor_resources import ADVANCED_VIEWS  # noqa: E402
 
 MIB = 1024 * 1024

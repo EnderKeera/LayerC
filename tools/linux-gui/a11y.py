@@ -4,6 +4,7 @@
 Runs out of process so an absent or wedged accessibility bus cannot stall the
 bridge. Reports `available: false` with a reason instead of guessing.
 """
+from collections import deque
 import json
 import os
 import sys
@@ -15,7 +16,7 @@ MAX_TEXT = 400
 LONG_TEXT = ("Advanced automation JSON", "Runtime diagnostics", "Keyboard shortcuts — LayerE")
 
 
-def describe(node, depth, budget):
+def describe_one(node, budget):
     import pyatspi  # noqa: PLC0415 -- imported only after the bus check
     if budget[0] <= 0:
         return None
@@ -42,10 +43,41 @@ def describe(node, depth, budget):
         item["extents"] = [box.x, box.y, box.width, box.height]
     except NotImplementedError:
         pass
-    if depth < MAX_DEPTH:
-        children = [describe(node.getChildAtIndex(i), depth + 1, budget)
-                    for i in range(node.childCount)]
-        item["children"] = [child for child in children if child is not None]
+    return item
+
+
+def describe(node, depth, budget):
+    """Bound remote work and fairly visit siblings without draining a huge list."""
+    item = describe_one(node, budget)
+    if item is None:
+        return None
+    pending = deque([(node, item, depth, 0, None)])
+    while pending and budget[0] > 0:
+        parent, entry, level, index, count = pending.popleft()
+        if level >= MAX_DEPTH:
+            entry["childrenOmitted"] = "depth limit"
+            continue
+        if not entry["showing"]:
+            entry["children"] = []
+            entry["childrenOmitted"] = "not showing"
+            continue
+        if count is None:
+            count = parent.childCount
+            entry["childCount"] = count
+            entry["children"] = []
+        if index >= count:
+            continue
+        child = parent.getChildAtIndex(index)
+        if child is None:
+            raise ValueError("accessibility child disappeared during snapshot")
+        child_item = describe_one(child, budget)
+        entry["children"].append(child_item)
+        if index + 1 < count:
+            pending.append((parent, entry, level, index + 1, count))
+        pending.append((child, child_item, level + 1, 0, None))
+    for _parent, entry, _level, index, count in pending:
+        if count is None or index < count:
+            entry["childrenOmitted"] = "node limit"
     return item
 
 

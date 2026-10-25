@@ -318,10 +318,15 @@ void enable_native_dark_mode() {
     flush();
 }
 
-void set_window_app_icon(const HWND window) {
+UINT native_window_dpi(const HWND window) {
   const UINT dpi = GetDpiForWindow(window);
+  return dpi == 0 ? 96U : dpi;
+}
+
+void set_window_app_icon(const HWND window) {
+  const UINT dpi = native_window_dpi(window);
   const auto load = [dpi](const int metric) {
-    const int size = GetSystemMetricsForDpi(metric, dpi == 0 ? 96U : dpi);
+    const int size = GetSystemMetricsForDpi(metric, dpi);
     return reinterpret_cast<HICON>(
         LoadImageW(GetModuleHandleW(nullptr),
                    MAKEINTRESOURCEW(app_icon_resource), IMAGE_ICON, size,

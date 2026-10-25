@@ -95,7 +95,17 @@ struct PanelPreview final {
     drag_moved = false;
     drag_start = {};
     drag_offset = {};
+    pending_anchor.reset();
   }
+
+  // Transient preview coordinates for one panel: UI projection state only, not
+  // a document value, dirty flag or history entry.
+  struct PendingAnchor {
+    std::string panel_id;
+    double x{};
+    double y{};
+  };
+  std::optional<PendingAnchor> pending_anchor;
 
   HWND list{};
   HWND window{};

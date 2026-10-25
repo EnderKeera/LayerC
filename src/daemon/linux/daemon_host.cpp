@@ -1,4 +1,6 @@
 #include "daemon_host.hpp"
+#include "layerc/core/automation_trace_control.hpp"
+#include "layerc/core/live_draft_control.hpp"
 
 #include "layerc/core/profile.hpp"
 #include "layerc/core/json.hpp"
@@ -235,11 +237,11 @@ ControlReply handle_control_request(
     const LinuxStatusSnapshot &linux,
     const TraceControlHandler &trace,
     const DraftControlHandler &draft) {
-  const auto command = layerc::platform::parse_control_request(request_json);
+  const auto command = layerc::platform::parse_control_request_envelope(request_json);
   if (!command.has_value())
     return {.response = layerc::platform::encode_control_response(
                 false, "invalid LayerC.Control request", {})};
-  switch (*command) {
+  switch (command->command) {
   case layerc::platform::ControlCommand::status:
     return {.response = layerc::platform::encode_control_response(
                 true, {}, status_payload_json(kernel, linux))};
@@ -251,36 +253,48 @@ ControlReply handle_control_request(
     return {.response = layerc::platform::encode_control_response(true, {}, {}),
             .stop_requested = true};
   case layerc::platform::ControlCommand::trace: {
-    const auto tree = layerc::core::json::parse(request_json);
-    const auto *value = std::get_if<layerc::core::json::Value>(&tree);
-    const auto *payload = value ? value->find("payload") : nullptr;
-    std::string text;
-    if (payload) layerc::core::json::append_value(text, *payload);
-    const auto request = layerc::core::parse_trace_control_request(text);
+    const auto request = command->payload
+                             ? layerc::core::parse_trace_control_request(*command->payload)
+                             : std::nullopt;
     if (!request)
-      return {.response = layerc::platform::encode_control_response(false, "invalid trace request", {})};
+      return {.response = layerc::platform::encode_control_response(
+                  false, layerc::core::trace_control_failure(
+                             layerc::core::TraceControlError::invalid_request)
+                             .message,
+                  {}, "invalid-request")};
     if (!trace)
-      return {.response = layerc::platform::encode_control_response(false, "automation trace unavailable", {})};
+      return {.response = layerc::platform::encode_control_response(
+                  false, "automation trace unavailable", {}, "unavailable")};
     const auto result = trace(*request);
-    if (const auto *error = std::get_if<std::string>(&result))
-      return {.response = layerc::platform::encode_control_response(false, *error, {})};
+    if (const auto *failure = std::get_if<layerc::core::TraceControlFailure>(&result))
+      return {.response = layerc::platform::encode_control_response(
+                  false, failure->message, {},
+                  layerc::core::enum_wire_name(layerc::core::trace_control_error_wire,
+                                               failure->code)
+                      .value_or(""))};
     return {.response = layerc::platform::encode_control_response(true, {},
         layerc::core::serialize_trace_control_reply(std::get<layerc::core::TraceControlReply>(result)))};
   }
   case layerc::platform::ControlCommand::draft: {
-    const auto tree = layerc::core::json::parse(request_json);
-    const auto *value = std::get_if<layerc::core::json::Value>(&tree);
-    const auto *payload = value ? value->find("payload") : nullptr;
-    std::string text;
-    if (payload) layerc::core::json::append_value(text, *payload);
-    const auto request = layerc::core::parse_live_draft_request(text);
+    const auto request = command->payload
+                             ? layerc::core::parse_live_draft_request(*command->payload)
+                             : std::nullopt;
     if (!request)
-      return {.response = layerc::platform::encode_control_response(false, "invalid live draft request", {})};
+      return {.response = layerc::platform::encode_control_response(
+                  false, layerc::core::live_draft_failure(
+                             layerc::core::LiveDraftError::invalid_request)
+                             .message,
+                  {}, "invalid-request")};
     if (!draft)
-      return {.response = layerc::platform::encode_control_response(false, "live drafts unavailable", {})};
+      return {.response = layerc::platform::encode_control_response(
+                  false, "live drafts unavailable", {}, "unavailable")};
     const auto result = draft(*request);
-    if (const auto *error = std::get_if<std::string>(&result))
-      return {.response = layerc::platform::encode_control_response(false, *error, {})};
+    if (const auto *failure = std::get_if<layerc::core::LiveDraftFailure>(&result))
+      return {.response = layerc::platform::encode_control_response(
+                  false, failure->message, {},
+                  layerc::core::enum_wire_name(layerc::core::live_draft_error_wire,
+                                               failure->code)
+                      .value_or(""))};
     return {.response = layerc::platform::encode_control_response(true, {},
         layerc::core::serialize_live_draft_reply(std::get<layerc::core::LiveDraftReply>(result)))};
   }

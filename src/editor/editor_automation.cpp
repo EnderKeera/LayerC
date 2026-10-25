@@ -74,8 +74,10 @@ void select_json_error(const HWND dialog,
 EditorWindow::EditorWindow()
     : cooldown_editor_(
           document_, shell_, static_cast<const DialogTheme &>(*this),
-          [this](const DocumentChangeKind kind) { record_profile_change(kind); },
-          {.sync_fields = [this] { sync_profile_from_controls(); },
+          [this](const ModuleEditOutcome &outcome, const DocumentChangeKind kind) {
+            return apply_edit(outcome, kind);
+          },
+          {.sync_fields = [this] { (void)apply_profile_controls(DocumentChangeKind::text); },
            .follow_bar = [this] { follow_cooldown_bar(); },
            .refresh_visual = [this] { visual_editor_.refresh(); },
            .refresh_bars =
@@ -88,8 +90,14 @@ EditorWindow::EditorWindow()
                [this]() -> const layerc::core::CooldownDefinition * {
                  return cooldown_editor_.selected();
                },
-           .commit_document =
-               [this] { return commit_document(document_.path()); },
+           .commit_visual =
+               [this](layerc::core::VisualProfile visual) {
+                 return commit_document(
+                     document_.path(), {},
+                     [visual = std::move(visual)](ProfileBundle &bundle) {
+                       bundle.visual = visual;
+                     });
+               },
            .mark_committed = [this] { mark_committed(); },
            .write_failure_message = [this] { return write_failure_message(); },
            .require_stored_profile =
@@ -100,8 +108,8 @@ EditorWindow::EditorWindow()
       automation_editor_(std::make_unique<AutomationEditor>(
           document_, live_edit_, shell_,
           static_cast<const DialogTheme &>(*this),
-          [this](const DocumentChangeKind kind) {
-            record_profile_change(kind);
+          [this](const ModuleEditOutcome &outcome, const DocumentChangeKind kind) {
+            return apply_edit(outcome, kind);
           })) {}
 
 EditorWindow::~EditorWindow() = default;
@@ -116,7 +124,7 @@ int AutomationEditor::selected_index(const HWND dialog) const {
              : static_cast<int>(selected);
 }
 
-layerc::core::AutomationDefinition *
+const layerc::core::AutomationDefinition *
 AutomationEditor::selected_automation(const HWND dialog) const {
   const int index = selected_index(dialog);
   return index < 0 ? nullptr
@@ -124,18 +132,18 @@ AutomationEditor::selected_automation(const HWND dialog) const {
                           ->automations[static_cast<std::size_t>(index)];
 }
 
-layerc::core::AutomationRule *
+const layerc::core::AutomationRule *
 AutomationEditor::selected_rule(const HWND dialog) const {
-  auto *automation = selected_automation(dialog);
+  const auto *automation = selected_automation(dialog);
   return automation && node_rule_ >= 0 &&
                  static_cast<std::size_t>(node_rule_) < automation->rules.size()
              ? &automation->rules[static_cast<std::size_t>(node_rule_)]
              : nullptr;
 }
 
-layerc::core::AutomationAction *
+const layerc::core::AutomationAction *
 AutomationEditor::selected_action(const HWND dialog) const {
-  auto *rule = selected_rule(dialog);
+  const auto *rule = selected_rule(dialog);
   return rule && node_action_ >= 0 &&
                  static_cast<std::size_t>(node_action_) < rule->actions.size()
              ? &rule->actions[static_cast<std::size_t>(node_action_)]
@@ -146,35 +154,25 @@ AutomationEditor::Mutation
 AutomationEditor::mutate_automation(const HWND dialog, const wchar_t *title,
                                     const AutomationEdit &edit,
                                     const bool repair) {
-  if (document_.automation_state() == platform::ModuleSidecarState::invalid) {
-    themed_message_box(dialog,
-                       L"The unreadable automation module is preserved; editing is blocked.",
-                       title, MB_OK | MB_ICONWARNING);
+  const auto outcome =
+      document_.edit_automation(edit, DocumentChangeKind::immediate, repair);
+  switch (outcome.status) {
+  case ModuleEditStatus::blocked:
+  case ModuleEditStatus::refused:
+    themed_message_box(dialog, to_wide(outcome.message).c_str(), title,
+                       MB_OK | MB_ICONWARNING);
     return Mutation::rejected;
-  }
-  auto &graph = document_.automation();
-  auto before = graph;
-  // Removals may repair a graph one node at a time while it stays invalid.
-  const bool was_invalid =
-      repair && before && !validate_automation_graph(*before, document_.profile()).empty();
-  if (const auto rejection = edit()) {
-    graph = std::move(before);
-    themed_message_box(dialog, rejection->c_str(), title, MB_OK | MB_ICONWARNING);
-    return Mutation::rejected;
-  }
-  const auto validation = graph
-      ? validate_automation_graph(*graph, document_.profile()) : std::string{};
-  if (!validation.empty() && !was_invalid) {
-    graph = std::move(before);
-    themed_message_box(dialog, to_wide(validation).c_str(), title,
+  case ModuleEditStatus::invalid:
+    themed_message_box(dialog, to_wide(outcome.message).c_str(), title,
                        MB_OK | MB_ICONWARNING);
     return Mutation::invalid;
+  case ModuleEditStatus::accepted:
+    (void)report_edit_(outcome, DocumentChangeKind::immediate);
+    return Mutation::committed;
+  case ModuleEditStatus::unchanged:
+    return Mutation::committed;
   }
-  if (graph == before)
-    return Mutation::committed; // nothing changed: no dirty state or undo step
-  document_.mark_automation_edited();
-  record_change_(DocumentChangeKind::immediate);
-  return Mutation::committed;
+  return Mutation::rejected;
 }
 
 void AutomationEditor::refresh(const HWND dialog) {
@@ -297,12 +295,13 @@ void AutomationEditor::apply_node_properties(const HWND dialog) {
   fields.repeating = owner_draw_checkbox_checked(
       GetDlgItem(dialog, IDC_AUTOMATION_REPEATING));
   const auto result = mutate_automation(
-      dialog, L"Rule properties", [&]() -> std::optional<std::wstring> {
-        const auto refusal = apply_automation_node_fields(
-            *document_.automation(),
+      dialog, L"Rule properties",
+      [&](std::optional<layerc::core::AutomationProfile> &candidate)
+          -> std::optional<std::string> {
+        return apply_automation_node_fields(
+            *candidate,
             {selected_index(dialog), node_rule_, node_action_}, fields,
             advanced_expression_displayed_);
-        return refusal ? std::optional(to_wide(*refusal)) : std::nullopt;
       });
   // A refused value keeps the typed field text; committed and invalid edits
   // reload the properties from the profile.
@@ -315,8 +314,10 @@ void AutomationEditor::delete_node(const HWND dialog) {
     return;
   AutomationSelection selection{selected_index(dialog), node_rule_, node_action_};
   const auto result = mutate_automation(
-      dialog, L"Delete node", [&]() -> std::optional<std::wstring> {
-        selection = delete_automation_node(document_.automation(), selection);
+      dialog, L"Delete node",
+      [&](std::optional<layerc::core::AutomationProfile> &candidate)
+          -> std::optional<std::string> {
+        selection = delete_automation_node(candidate, selection);
         return std::nullopt;
       }, true);
   if (result == Mutation::committed) {
@@ -395,9 +396,9 @@ AutomationEditor::AutomationEditor(ProfileDocument &document,
                                    LiveEditSession &live_edit,
                                    const EditorShell &shell,
                                    const DialogTheme &theme,
-                                   ChangeRecorder record_change) noexcept
+                                   EditReporter report_edit) noexcept
     : document_(document), live_edit_(live_edit), shell_(shell), theme_(theme),
-      record_change_(std::move(record_change)) {}
+      report_edit_(std::move(report_edit)) {}
 AutomationEditor::~AutomationEditor() = default;
 
 void AutomationEditor::open() {
@@ -413,12 +414,14 @@ void AutomationEditor::add_basic(const HWND dialog) {
       dialog, IDC_AUTOMATION_PRESETS, CB_GETCURSEL, 0, 0)));
   AutomationSelection selection;
   const auto result = mutate_automation(
-      dialog, L"Automation", [&]() -> std::optional<std::wstring> {
+      dialog, L"Automation",
+      [&](std::optional<layerc::core::AutomationProfile> &candidate)
+          -> std::optional<std::string> {
         const auto added = add_automation_preset(
-            document_.profile(), document_.automation(),
+            document_.profile(), candidate,
             static_cast<AutomationPreset>(preset));
         if (const auto *refusal = std::get_if<std::string>(&added))
-          return to_wide(*refusal);
+          return *refusal;
         selection = std::get<AutomationSelection>(added);
         return std::nullopt;
       });
@@ -461,11 +464,12 @@ void AutomationEditor::add_palette_node(const HWND dialog) {
   AutomationSelection selection{selected, node_rule_, node_action_};
   const auto result = mutate_automation(
       dialog, L"Could not add the rule or action",
-      [&]() -> std::optional<std::wstring> {
+      [&](std::optional<layerc::core::AutomationProfile> &candidate)
+          -> std::optional<std::string> {
         const auto added = layerc::editor::add_palette_node(
-            document_.profile(), document_.automation(), selection, *entry);
+            document_.profile(), candidate, selection, *entry);
         if (const auto *refusal = std::get_if<std::string>(&added))
-          return to_wide(*refusal);
+          return *refusal;
         selection = std::get<AutomationSelection>(added);
         return std::nullopt;
       });
@@ -480,8 +484,10 @@ void AutomationEditor::remove_selected(const HWND dialog) {
   if (selected_index(dialog) < 0)
     return;
   const auto result = mutate_automation(
-      dialog, L"Remove automation", [&]() -> std::optional<std::wstring> {
-        (void)remove_automation(document_.automation(),
+      dialog, L"Remove automation",
+      [&](std::optional<layerc::core::AutomationProfile> &candidate)
+          -> std::optional<std::string> {
+        (void)remove_automation(candidate,
                                 {selected_index(dialog), -1, -1});
         return std::nullopt;
       }, true);
@@ -493,31 +499,41 @@ void AutomationEditor::remove_selected(const HWND dialog) {
 }
 
 bool AutomationEditor::apply_json(const HWND dialog) {
-  if (document_.automation_state() == platform::ModuleSidecarState::invalid) {
-    themed_message_box(dialog,
-                       L"The unreadable automation module is preserved; editing is blocked.",
-                       L"Invalid automation graph", MB_OK | MB_ICONWARNING);
-    return false;
-  }
   const auto source =
       wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_JSON)));
-  const auto parsed =
-      layerc::core::parse_automation_profile_json(source, document_.profile());
-  const auto *profile = std::get_if<layerc::core::AutomationProfile>(&parsed);
-  if (profile == nullptr) {
-    const auto &error = std::get<layerc::core::AutomationError>(parsed);
-    const auto presentation = present_json_error(source, error);
+  std::optional<layerc::core::AutomationError> json_error;
+  const auto outcome = document_.edit_automation(
+      [&](std::optional<layerc::core::AutomationProfile> &candidate)
+          -> std::optional<std::string> {
+        auto parsed = layerc::core::parse_automation_profile_json(
+            source, document_.profile());
+        if (const auto *error = std::get_if<layerc::core::AutomationError>(&parsed)) {
+          json_error = *error;
+          return error->describe();
+        }
+        candidate = std::move(std::get<layerc::core::AutomationProfile>(parsed));
+        return std::nullopt;
+      },
+      DocumentChangeKind::immediate);
+  if (json_error) {
+    const auto presentation = present_json_error(source, *json_error);
     themed_message_box(dialog, presentation.message.c_str(),
-                L"Invalid automation graph", MB_OK | MB_ICONWARNING);
+                       L"Invalid automation graph", MB_OK | MB_ICONWARNING);
     select_json_error(dialog, presentation);
     return false;
   }
-  document_.automation() = *profile;
-  node_rule_ = -1;
-  node_action_ = -1;
-  document_.mark_automation_edited();
-  record_change_(DocumentChangeKind::immediate);
-  refresh(dialog);
+  if (outcome.status != ModuleEditStatus::accepted &&
+      outcome.status != ModuleEditStatus::unchanged) {
+    themed_message_box(dialog, to_wide(outcome.message).c_str(),
+                       L"Invalid automation graph", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  if (outcome.accepted()) {
+    node_rule_ = -1;
+    node_action_ = -1;
+    (void)report_edit_(outcome, DocumentChangeKind::immediate);
+    refresh(dialog);
+  }
   return true;
 }
 
@@ -592,21 +608,37 @@ bool AutomationEditor::handle_command(const HWND dialog,
     return true;
   case IDC_AUTOMATION_ENABLED:
     if (notification == BN_CLICKED) {
-      if (auto *selected = selected_automation(dialog)) {
-        selected->enabled = owner_draw_checkbox_checked(
-            GetDlgItem(dialog, IDC_AUTOMATION_ENABLED));
-        record_change_(DocumentChangeKind::immediate);
-        refresh(dialog);
-      }
+      const int index = selected_index(dialog);
+      const auto outcome = document_.edit_automation(
+          [&](std::optional<layerc::core::AutomationProfile> &automation)
+              -> std::optional<std::string> {
+            if (!automation || index < 0 ||
+                static_cast<std::size_t>(index) >= automation->automations.size())
+              return std::string("No automation is selected.");
+            automation->automations[static_cast<std::size_t>(index)].enabled =
+                owner_draw_checkbox_checked(
+                    GetDlgItem(dialog, IDC_AUTOMATION_ENABLED));
+            return std::nullopt;
+          },
+          DocumentChangeKind::immediate);
+      if (report_edit_(outcome, DocumentChangeKind::immediate)) refresh(dialog);
     }
     return true;
   case IDC_AUTOMATION_NAME:
     if (notification == EN_KILLFOCUS && document_.automation()) {
-      if (auto *selected = selected_automation(dialog)) {
-        selected->name =
-            wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_NAME)));
-        record_change_(DocumentChangeKind::text);
-      }
+      const int index = selected_index(dialog);
+      const auto outcome = document_.edit_automation(
+          [&](std::optional<layerc::core::AutomationProfile> &automation)
+              -> std::optional<std::string> {
+            if (!automation || index < 0 ||
+                static_cast<std::size_t>(index) >= automation->automations.size())
+              return std::string("No automation is selected.");
+            automation->automations[static_cast<std::size_t>(index)].name =
+                wide_to_utf8(window_text(GetDlgItem(dialog, IDC_AUTOMATION_NAME)));
+            return std::nullopt;
+          },
+          DocumentChangeKind::text);
+      (void)report_edit_(outcome, DocumentChangeKind::text);
       refresh(dialog);
     }
     return true;

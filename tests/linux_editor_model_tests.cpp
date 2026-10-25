@@ -1,5 +1,5 @@
 #include "editor_appearance.hpp"
-#include "editor_model.hpp"
+#include "editor_session.hpp"
 #include "profile_edit.hpp"
 #include "task_list.hpp"
 #include "test_support.hpp"
@@ -59,24 +59,23 @@ private:
 
 void edit_save_roundtrip_and_disconnected() {
   Fixture fixture;
-  layerc::editor::LinuxEditorModel model(fixture.directory);
-  expect(model.profiles().profiles.size() == 1 && !model.open(0),
-         "scan and load the XDG profile through shared readers");
-  auto fields = model.fields();
-  fields.name = "Fixture edited";
-  fields.cooldown_name = "Edited ability";
-  fields.duration_seconds = "1.25";
-  fields.panel_x = "0.2";
-  const auto result = model.save(fields, [] { return true; });
-  expect(result.saved() && !model.document().dirty(),
-         "a durable save marks the document clean");
-  expect(result.reload &&
-             result.reload->state == layerc::editor::ReloadState::daemon_unavailable,
+  layerc::editor::EditorSession session(fixture.directory);
+  expect(session.profiles().profiles.size() == 1 && !session.open(0),
+         "scan and load the XDG profile through the production session");
+  expect(!session.edit([](auto &profile) {
+    profile.name = "Fixture edited";
+    profile.cooldowns.front().name = "Edited ability";
+    profile.cooldowns.front().duration = layerc::core::Milliseconds(1250);
+    profile.panels.front().anchor_x = 0.2;
+  }), "accept one production edit transaction");
+  const auto result = session.save([] { return true; });
+  expect(result.saved() && !session.document().dirty(), "a durable save marks the document clean");
+  expect(result.reload && result.reload->state == layerc::editor::ReloadState::daemon_unavailable,
          "offline saves do not pretend to reload a daemon");
   expect(!result.text.empty(), "the combined disk/runtime outcome is visible");
   auto expected = fixture.profile;
-  expected.name = fields.name;
-  expected.cooldowns.front().name = fields.cooldown_name;
+  expected.name = "Fixture edited";
+  expected.cooldowns.front().name = "Edited ability";
   expected.cooldowns.front().duration = layerc::core::Milliseconds(1250);
   expected.panels.front().anchor_x = 0.2;
   auto loaded = layerc::platform::load_profile_bundle(fixture.path);
@@ -99,61 +98,53 @@ void selection_survives_save_rescan() {
   expect(layerc::test::write_file(other_path,
              layerc::core::serialize_profile_json(other)),
          "create a second selectable profile");
-  layerc::editor::LinuxEditorModel model(fixture.directory);
-  expect(model.profiles().profiles.size() == 2 && !model.open_path(fixture.path),
+  layerc::editor::EditorSession session(fixture.directory);
+  expect(session.profiles().profiles.size() == 2 && !session.open_path(fixture.path),
          "open the intended profile independently of directory order");
-  if (model.profiles().profiles.size() != 2) return;
+  if (session.profiles().profiles.size() != 2) return;
   const auto intended = other_path;
-  auto fields = model.fields();
-  fields.name = "Zulu";
-  expect(model.save(fields, [] { return true; }).saved(),
-         "saving a rename rescans the list");
+  expect(!session.edit([](auto &profile) { profile.name = "Zulu"; }),
+         "rename through the production session");
+  expect(session.save([] { return true; }).saved(), "saving a rename rescans the list");
   // Directory iteration order is deliberately unspecified. Path lookup must
   // remain correct after Save rescans, irrespective of its new row position.
-  expect(!model.open_path(intended) &&
-             model.document().path() == other_path &&
-             model.document().profile().id == other.id,
+  expect(!session.open_path(intended) &&
+             session.document().path() == other_path &&
+             session.document().profile().id == other.id,
          "a pre-save selection follows its path, not a stale row");
-  expect(model.open_path(fixture.directory / "missing.json").has_value() &&
-             model.document().path() == other_path,
+  expect(session.open_path(fixture.directory / "missing.json").has_value() &&
+             session.document().path() == other_path,
          "a missing selection leaves the current document intact");
 }
 
-void invalid_input_is_atomic() {
+void invalid_candidates_are_atomic() {
   Fixture fixture;
-  layerc::editor::LinuxEditorModel model(fixture.directory);
-  expect(!model.open(0), "open the fixture");
+  layerc::editor::EditorSession session(fixture.directory);
+  expect(!session.open(0), "open the fixture");
   const auto original = layerc::test::read_file(fixture.path);
-  for (const auto &value : {"", "nan", "-1", "1garbage", "999999999999"}) {
-    auto fields = model.fields();
-    fields.duration_seconds = value;
-    fields.name = "Must not leak";
-    const auto result = model.save(fields, [] { return true; });
-    expect(!result.saved() && result.commit.result == CommitResult::invalid_fields &&
-               !result.reload && result.text.starts_with("Not saved:"),
-           "invalid duration reports a field error without requesting reload");
-    expect(model.document().profile() == fixture.profile &&
-               layerc::test::read_file(fixture.path) == original,
-           "an invalid candidate changes neither document nor disk");
-  }
-  for (const auto &value : {"nan", "1.01", "-0.01", "0.5junk"}) {
-    auto fields = model.fields();
-    fields.panel_x = value;
-    expect(model.apply(fields).has_value(), "invalid panel anchor is rejected");
-  }
+  const auto reject = [&](const auto &edit) {
+    expect(session.edit(edit).has_value(), "invalid production candidate is rejected");
+    expect(session.document().profile() == fixture.profile && !session.can_undo() &&
+           !session.has_unsaved_changes() && layerc::test::read_file(fixture.path) == original,
+           "invalid candidate changes neither accepted values, history nor disk");
+  };
+  reject([](auto &profile) { profile.name.clear(); });
+  reject([](auto &profile) { profile.cooldowns.front().duration = layerc::core::Milliseconds(0); });
+  reject([](auto &profile) { profile.panels.front().anchor_x = -0.01; });
+  reject([](auto &profile) { profile.panels.front().anchor_x = 1.01; });
 }
 
 void write_failure_and_invalid_module_are_visible() {
   Fixture fixture;
-  layerc::editor::LinuxEditorModel model(fixture.directory);
-  expect(!model.open(0), "open the fixture");
-  auto fields = model.fields();
-  fields.name = "Still unsaved";
+  layerc::editor::EditorSession session(fixture.directory);
+  expect(!session.open(0), "open the fixture");
+  expect(!session.edit([](auto &profile) { profile.name = "Still unsaved"; }),
+         "prepare a dirty edit in the production document");
   std::filesystem::remove(fixture.path);
   std::filesystem::create_directory(fixture.path);
-  const auto failed = model.save(fields, [] { return true; });
+  const auto failed = session.save([] { return true; });
   expect(!failed.saved() && failed.commit.result == CommitResult::write_failed &&
-             !failed.reload && model.document().dirty() && !failed.text.empty(),
+             !failed.reload && session.document().dirty() && !failed.text.empty(),
          "a store failure retains the dirty edit and reports failure without reload");
   std::filesystem::remove(fixture.path);
   expect(layerc::test::write_file(fixture.path,
@@ -161,9 +152,9 @@ void write_failure_and_invalid_module_are_visible() {
          "restore the private base profile");
   const auto sidecar = layerc::platform::visual_sidecar_path(fixture.path);
   expect(layerc::test::write_file(sidecar, "{broken"), "write a private invalid sidecar");
-  model.scan();
-  expect(!model.open(0), "base profile remains loadable with an invalid module");
-  const auto blocked = model.save(model.fields(), [] { return true; });
+  session.rescan();
+  expect(!session.open(0), "base profile remains loadable with an invalid module");
+  const auto blocked = session.save([] { return true; });
   expect(!blocked.saved() && blocked.commit.result == CommitResult::blocked_by_sidecar &&
              !blocked.reload && !blocked.text.empty(),
          "invalid module data blocks a save visibly");
@@ -206,6 +197,26 @@ void appearance_persistence() {
   expect(theme_role_colors(teal, EditorRole::list)->selection == 0x2C423F &&
              !theme_role_colors(EditorAppearance{}, EditorRole::window),
          "selection blends the preset accent; the system theme keeps FLTK colours");
+  chosen.accent = 0U;
+  expect(appearance_json(chosen).find("\"accent\":\"#000000\"") != std::string::npos,
+         "explicit black is serialized rather than omitted as the preset");
+  expect(!save_editor_appearance(path, chosen), "black accent saves durably");
+  expect(load_editor_appearance(path).error.empty() && load_editor_appearance(path).appearance == chosen,
+         "explicit black survives a durable round trip");
+  expect(theme_role_colors(chosen, EditorRole::list)->selection == 0x181818,
+         "explicit black, not the teal preset, is blended into selection");
+  chosen.accent.reset();
+  const auto preset_json = appearance_json(chosen);
+  const auto preset_parsed = parse_appearance(preset_json);
+  expect(preset_json.find("\"accent\"") == std::string::npos &&
+             std::holds_alternative<EditorAppearance>(preset_parsed) &&
+             std::get<EditorAppearance>(preset_parsed) == chosen,
+         "an absent accent remains the compatible preset representation");
+  const auto legacy = parse_appearance("{\"appearanceVersion\":1,\"theme\":\"teal\"}");
+  expect(std::holds_alternative<EditorAppearance>(legacy) &&
+             !std::get<EditorAppearance>(legacy).accent &&
+             theme_role_colors(std::get<EditorAppearance>(legacy), EditorRole::list)->selection == 0x2C423F,
+         "existing version-one files without accent retain the preset");
   const std::string invalid_text = "{\"appearanceVersion\":1,\"theme\":\"neon\"}";
   expect(layerc::test::write_file(path, invalid_text), "write an invalid appearance file");
   const auto invalid = load_editor_appearance(path);
@@ -293,7 +304,7 @@ void detected_tasks_and_placement() {
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(edit_save_roundtrip_and_disconnected),
     LAYERC_TEST_CASE(selection_survives_save_rescan),
-    LAYERC_TEST_CASE(invalid_input_is_atomic),
+    LAYERC_TEST_CASE(invalid_candidates_are_atomic),
     LAYERC_TEST_CASE(write_failure_and_invalid_module_are_visible),
     LAYERC_TEST_CASE(appearance_persistence),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

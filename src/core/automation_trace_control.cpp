@@ -48,8 +48,13 @@ std::string serialize_trace_control_request(const TraceControlRequest &request) 
 std::optional<TraceControlRequest> parse_trace_control_request(const std::string_view text) {
   if (text.size() > 8U * max_automation_string_bytes) return std::nullopt;
   const auto parsed = json::parse(text);
-  const auto *v = std::get_if<json::Value>(&parsed);
-  if (!v || !v->is_object() || v->as_object().size() != 6 || !version_ok(*v)) return std::nullopt;
+  const auto *value = std::get_if<json::Value>(&parsed);
+  return value ? parse_trace_control_request(*value) : std::nullopt;
+}
+std::optional<TraceControlRequest>
+parse_trace_control_request(const json::Value &value) {
+  const auto *v = &value;
+  if (!v->is_object() || v->as_object().size() != 6 || !version_ok(*v)) return std::nullopt;
   const auto *op = field(*v, "operation"), *profile = field(*v, "profileId"), *client = field(*v, "clientId");
   const auto generation = number(*v, "generation"), cursor = number(*v, "cursor");
   if (!op || !op->is_string() || !profile || !profile->is_string() ||
@@ -73,8 +78,12 @@ std::string serialize_trace_control_reply(const TraceControlReply &reply) {
 std::optional<TraceControlReply> parse_trace_control_reply(const std::string_view text) {
   if (text.size() > 2U * trace_control_packet_bytes + 1024U) return std::nullopt;
   const auto parsed = json::parse(text);
-  const auto *v = std::get_if<json::Value>(&parsed);
-  if (!v || !v->is_object() || v->as_object().size() != 6 || !version_ok(*v)) return std::nullopt;
+  const auto *value = std::get_if<json::Value>(&parsed);
+  return value ? parse_trace_control_reply(*value) : std::nullopt;
+}
+std::optional<TraceControlReply> parse_trace_control_reply(const json::Value &value) {
+  const auto *v = &value;
+  if (!v->is_object() || v->as_object().size() != 6 || !version_ok(*v)) return std::nullopt;
   const auto generation = number(*v, "generation"), cursor = number(*v, "cursor");
   const auto *reset = field(*v, "reset"), *gap = field(*v, "gap"), *packet = field(*v, "packet");
   if (!generation || !cursor || !reset || !reset->is_bool() || !gap || !gap->is_bool() ||
@@ -82,4 +91,24 @@ std::optional<TraceControlReply> parse_trace_control_reply(const std::string_vie
       !is_valid_utf8(packet->as_string())) return std::nullopt;
   return TraceControlReply{*generation, *cursor, reset->as_bool(), gap->as_bool(), packet->as_string()};
 }
+TraceControlFailure trace_control_failure(const TraceControlError code) {
+  switch (code) {
+  case TraceControlError::invalid_request:
+    return {code, "invalid trace request"};
+  case TraceControlError::unavailable:
+    return {code, "automation trace unavailable: no matched, enabled automation session"};
+  case TraceControlError::client_conflict:
+    return {code, "trace client belongs to another profile"};
+  case TraceControlError::subscriber_limit:
+    return {code, "automation trace subscriber limit reached"};
+  case TraceControlError::clock_limit:
+    return {code, "automation trace lease clock limit exceeded"};
+  case TraceControlError::expired:
+    return {code, "automation trace subscription expired"};
+  case TraceControlError::invalid_cursor:
+    return {code, "invalid automation trace cursor"};
+  }
+  return {code, "unknown trace control error"};
+}
+
 } // namespace layerc::core

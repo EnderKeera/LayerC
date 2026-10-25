@@ -11,6 +11,7 @@ memory and historical plans.
 | --- | --- |
 | User behavior, support matrix, setup, programs, test targets, profile format | [`README.md`](README.md) |
 | Linux behavior, CLI, dependencies, packaging, permissions, physical evidence | [`docs/Linux.md`](docs/Linux.md) |
+| Linux editor plan history and dated local GUI/resource evidence | [`docs/LinuxEditorPlan.md`](docs/LinuxEditorPlan.md) |
 | Wayland backend architecture, contracts, and invariants (V2.7, in development) | [`docs/Wayland.md`](docs/Wayland.md) |
 | Game Bar architecture and invariants | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
 | Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
@@ -124,16 +125,27 @@ names, packaging details, and specialized documentation synchronized.
 
 ## Decision boundaries and completion
 
-- Implement in the current task. Do not use subagents, delegate work, or start
-  multi-worker teams unless the user explicitly authorizes their use for the
-  current task. Otherwise, perform research, implementation, review, and
-  validation directly. If authorized, keep delegated work self-contained and
+- Implement in the current task. The harness's persistent sidekick agent is
+  pre-authorized: hand it mechanical implementation, builds, test runs, and
+  environment setup with a self-contained brief that restates the relevant
+  repository constraints, the files it owns, and the acceptance evidence to
+  return. The primary agent settles the design; authors CI gate, benchmark
+  threshold, and test-gate policy changes itself; reviews every sidekick change
+  and its evidence before acceptance; and keeps commits, pushes, external
+  mutations, and communication with the user.
+- Other subagents, delegated runs, and multi-worker teams still require the
+  user's explicit authorization for the current task; without it, perform the
+  remaining work directly. If authorized, keep delegated work self-contained and
   preserve these repository constraints; the primary agent reviews it before
   acceptance. The user chooses the agent harness for each task; no particular
   launcher or orchestration tool is required. Give each worker a non-overlapping
   ownership boundary and acceptance evidence. `tools/start-orca-team.ps1` is an
   optional Orca workflow (see
   [`CONTRIBUTING.md`](CONTRIBUTING.md#optional-orca-agent-team)).
+- When delegating through Pi, use only models in Pi's current scoped model
+  list. Resolve that list before dispatch; do not hard-code stale model IDs or
+  use an out-of-scope fallback. If no scoped model is available, stop and ask
+  the user.
 - Inspect source, tests, CMake, or specialized documentation when the requested
   change crosses that boundary—not as a universal preflight.
 - Carry implementation through focused validation and the nearest relevant

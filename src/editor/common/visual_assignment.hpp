@@ -51,7 +51,7 @@ using VisualMergeResult =
 [[nodiscard]] VisualMergeResult merge_calibration_result(
     const std::optional<layerc::core::VisualProfile> &current,
     bool current_invalid, const layerc::core::GameProfile &profile,
-    std::string_view cooldown_id, std::string_view visual_json,
+    std::string_view cooldown_id, const layerc::core::VisualProfile &calibration,
     const std::function<SharedObservationChoice()> &choose_shared);
 
 } // namespace layerc::editor

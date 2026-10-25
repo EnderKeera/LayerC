@@ -6,8 +6,7 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 
-#include <algorithm>
-#include <cmath>
+#include <utility>
 
 namespace layerc::platform {
 namespace {
@@ -22,29 +21,6 @@ namespace {
 }
 
 } // namespace
-
-int monitor_dpi_for_rect(const X11MonitorScan &scan, const int x, const int y,
-                         const int width, const int height) noexcept {
-  if (scan.monitors.empty()) return baseline_dpi;
-  const X11Monitor *best = nullptr;
-  std::int64_t best_overlap = 0;
-  for (const auto &monitor : scan.monitors) {
-    const int left = std::max(x, monitor.x);
-    const int right = std::min(x + width, monitor.x + monitor.width);
-    const int top = std::max(y, monitor.y);
-    const int bottom = std::min(y + height, monitor.y + monitor.height);
-    const auto overlap = static_cast<std::int64_t>(std::max(0, right - left)) *
-                         static_cast<std::int64_t>(std::max(0, bottom - top));
-    if (best == nullptr || overlap > best_overlap) {
-      best = &monitor;
-      best_overlap = overlap;
-    }
-  }
-  if (best_overlap > 0 && best != nullptr) return best->dpi;
-  for (const auto &monitor : scan.monitors)
-    if (monitor.primary) return monitor.dpi;
-  return scan.monitors.front().dpi;
-}
 
 X11MonitorScan scan_monitors(const X11Display &display) {
   X11MonitorScan scan;
@@ -72,7 +48,7 @@ X11MonitorScan scan_monitors(const X11Display &display) {
     scan.warning = "randr: XRRGetScreenResources failed";
     return scan;
   }
-  scan.randr = true;
+  scan.available = true;
   // The primary output needs RandR 1.3; without it the first monitor wins.
   const RROutput primary =
       display.probe().randr.major > 1 || display.probe().randr.minor >= 3

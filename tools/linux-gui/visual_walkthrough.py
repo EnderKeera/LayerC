@@ -224,6 +224,8 @@ class VisualWalk:
         before = self.visual_durable()
         original_triggers = {t["cooldownId"]: t for t in self.visual_module("z-shared")["json"]["triggers"]}
         self.calibrate("shared-cancel-open")
+        # Apply needs a captured frame evaluated against the current predicate.
+        self.visual_start("shared")
         self.type_into("entry", "Brightness threshold", "70", "shared-threshold")
         self.automation_choice("Calibration predicate", 1, "shared-brightness")
         self.click(self.find("button", "Apply calibration"), "shared-choice-open")
@@ -242,6 +244,7 @@ class VisualWalk:
                 "updating the shared observation lost trigger settings or its new predicate")
         shared_observation = updated["observations"][0]
         self.calibrate("shared-clone-open")
+        self.visual_start("shared-clone")
         self.automation_choice("Calibration predicate", 0, "shared-clone-average")
         self.click(self.find("button", "Apply calibration"), "shared-clone-choice")
         self.press("Clone for cooldown", "shared-cloned")

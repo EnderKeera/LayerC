@@ -137,6 +137,28 @@ class BridgeLogicTests(unittest.TestCase):
         with self.assertRaisesRegex(bridge.Rejected, "predates"):
             self.bridge.handle({"op": "key", "screenshot": 1, "combo": "Return"})
 
+    def test_inspect_reports_one_pixel_column_runs(self) -> None:
+        import tempfile
+        import types
+        from unittest import mock
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.bridge.shots = Path(directory.name)
+        (self.bridge.shots / "001-list.png").write_bytes(b"MOCK, never decoded")
+        pixels = bytes.fromhex("ffffff" * 3 + "000080" * 2 + "000000" + "ffffff")
+        decoded = types.SimpleNamespace(stdout=pixels)
+        with mock.patch.object(bridge.subprocess, "run", return_value=decoded) as convert:
+            result = self.bridge.op_inspect({"screenshot": 1, "region": [39, 120, 1, 7], "runs": True})
+            plain = self.bridge.op_inspect({"screenshot": 1, "region": [39, 120, 1, 7]})
+        self.assertEqual(result["runs"], [[120, 122, "ffffff"], [123, 124, "000080"],
+                                          [125, 125, "000000"], [126, 126, "ffffff"]])
+        self.assertIn("1x7+39+120", convert.call_args.args[0])
+        self.assertNotIn("runs", plain)
+        for request in ({"screenshot": 1, "region": [39, 120, 2, 7], "runs": True},
+                        {"screenshot": 1, "region": [39, 120, 1, 7], "runs": 1}):
+            with self.subTest(request=request), self.assertRaisesRegex(bridge.Rejected, "one-pixel-wide"):
+                self.bridge.op_inspect(request)
+
     @unittest.skipUnless(hasattr(bridge.os, "geteuid"), "peer credentials are Linux-only")
     def test_malformed_requests_are_contained(self) -> None:
         for payload in (b"[1, 2]\n", b"not json\n",

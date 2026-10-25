@@ -140,9 +140,10 @@ private:
   // adopts the normalized profile.
   [[nodiscard]] CommitResult
   commit_document(const std::filesystem::path &path,
-                  const CommitOptions &options = {});
-  // Shared postlude: dirty/legacy/rebase/timer/notify. A path that is not the
-  // open document only notifies so a row edit cannot clear its dirty state.
+                  const CommitOptions &options = {},
+                  const std::function<void(ProfileBundle &)> &candidate = {});
+  // Refreshes UI/timers and notifies after an accepted commit; no document
+  // mutation. A different row only notifies, preserving the open document.
   void mark_committed(const CommitOptions &options = {});
   void mark_committed(const std::filesystem::path &path,
                       const layerc::core::GameProfile &profile,
@@ -150,8 +151,6 @@ private:
   void refresh_bar_list(std::size_t preferred_panel = SIZE_MAX);
   void refresh_bar_controls();
   void refresh_position_hint();
-  void sync_profile_from_controls();
-  [[nodiscard]] layerc::core::Panel *selected_bar();
   [[nodiscard]] const layerc::core::Panel *selected_bar() const;
   [[nodiscard]] bool validate_profile();
   [[nodiscard]] bool confirm_v2_upgrade();
@@ -204,6 +203,12 @@ private:
   [[nodiscard]] RECT preview_canvas() const;
   // Height of the "Actual size" strip under the canvas (0 when hidden).
   [[nodiscard]] int preview_actual_size_height() const;
+  // The panel's preview projection: committed values, with a pending drag
+  // anchor applied when it belongs to this panel.
+  [[nodiscard]] layerc::core::Panel
+  preview_panel(const layerc::core::Panel &panel) const;
+  // Applies a pending anchor as ONE document transaction.
+  [[nodiscard]] bool commit_pending_anchor(bool publish_final);
   [[nodiscard]] RECT bar_preview_rect(const layerc::core::Panel &,
                                       const RECT &) const;
   void paint_preview(HWND);
@@ -212,7 +217,19 @@ private:
   void finalize_dragged_bar();
 
   using ChangeKind = DocumentChangeKind;
-  void record_profile_change(ChangeKind kind);
+  // One notification for an accepted change: autosave scheduling, live publish
+  // and entry/title refresh only. It never touches history.
+  void document_changed(DocumentChangeKind kind);
+  // Routes a validated edit outcome through the one funnel.
+  [[nodiscard]] bool apply_edit(const ModuleEditOutcome &outcome,
+                                DocumentChangeKind kind);
+  // Reads the profile controls into the document as one validated edit, with an
+  // optional extra mutation inside the same candidate transaction.
+  [[nodiscard]] bool apply_profile_change(
+      DocumentChangeKind kind,
+      const std::function<void(layerc::core::GameProfile &)> &extra = {});
+  [[nodiscard]] bool apply_profile_controls(DocumentChangeKind kind);
+  [[nodiscard]] bool has_unsaved_changes() const;
   void schedule_autosave(bool immediate);
   [[nodiscard]] bool flush_autosave(bool allow_upgrade_prompt = true);
   // Live edit and calibration act on the stored profile: a new draft must be
@@ -230,8 +247,6 @@ private:
   void set_direct_drag_enabled(bool enabled);
   void undo();
   void redo();
-  void apply_history_snapshot(EditorProfileSnapshot snapshot);
-  void reset_history();
   void sync_current_profile_entry();
 
   void open_options();

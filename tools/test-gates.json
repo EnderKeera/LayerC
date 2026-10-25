@@ -46,6 +46,7 @@
         "layerc_launcher_tests",
         "layerc_linux_control_channel_tests",
         "layerc_linux_live_draft_tests",
+        "layerc_linux_lease_worker_tests",
         "layerc_linux_control_ownership_tests",
         "layerc_linux_editor_daemon_link_tests",
         "layerc_linux_editor_model_tests",
@@ -54,6 +55,9 @@
         "layerc_linux_profile_pack_tests",
         "layerc_linux_display_types_tests",
         "layerc_linux_display_adapters_tests",
+        "layerc_linux_session_engine_tests",
+        "layerc_linux_display_route_tests",
+        "layerc_linux_display_route_binding_tests",
         "layerc_linux_native_visual_tests",
         "layerc_linux_bus_model_tests",
         "layerc_linux_evdev_input_tests",
@@ -92,7 +96,7 @@
       }
     },
     "linux-wayland": {
-      "description": "Native Wayland providers inside a disposable headless sway session (tools/wayland-test-session.sh, CTest label wayland); registered with the native lane and X11.",
+      "description": "Native Wayland providers inside a disposable headless sway session (tools/wayland-test-session.sh, CTest label wayland); registered with the native Wayland lane (TARGET layerc_wayland), independently of X11.",
       "label": "wayland",
       "required": [
         "layerc_linux_wayland_native_tests"

@@ -20,7 +20,7 @@ LiveDraftResult LiveDraftHost::handle(const core::LiveDraftRequest &request,
                                       std::span<const platform::StoredProfile> stored,
                                       const core::TimePoint now, bool &changed) {
   changed = false;
-  if (!core::live_draft_request_valid(request)) return std::string("invalid live draft request");
+  if (!core::live_draft_request_valid(request)) return core::live_draft_failure(core::LiveDraftError::invalid_request);
   changed = expire(now, stored);
   const bool owned = draft_ && draft_->client_id == request.client_id &&
                      draft_->profile_id == request.profile_id;
@@ -33,18 +33,18 @@ LiveDraftResult LiveDraftHost::handle(const core::LiveDraftRequest &request,
     }
     return core::LiveDraftReply{0, core::LiveDraftState::ended};
   }
-  if (draft_ && !owned) return std::string("another editor owns the live draft");
+  if (draft_ && !owned) return core::live_draft_failure(core::LiveDraftError::owned_elsewhere);
   const auto expires = core::automation_time_after(now, core::live_draft_lease);
-  if (!expires) return std::string("live draft lease clock limit exceeded");
+  if (!expires) return core::live_draft_failure(core::LiveDraftError::clock_limit);
   if (request.operation == core::LiveDraftOperation::renew) {
-    if (!owned) return std::string("live draft expired; publish it again");
-    if (request.revision != draft_->revision) return std::string("live draft revision mismatch");
+    if (!owned) return core::live_draft_failure(core::LiveDraftError::expired);
+    if (request.revision != draft_->revision) return core::live_draft_failure(core::LiveDraftError::revision_mismatch);
     draft_->expires = *expires;
     return core::LiveDraftReply{draft_->revision, core::LiveDraftState::renewed};
   }
   if (owned) {
     const auto decision = core::revision_decision(request.revision, draft_->revision);
-    if (decision == core::RevisionDecision::stale) return std::string("stale live draft revision");
+    if (decision == core::RevisionDecision::stale) return core::live_draft_failure(core::LiveDraftError::stale_revision);
     if (decision == core::RevisionDecision::duplicate) {
       draft_->expires = *expires;
       return core::LiveDraftReply{draft_->revision, core::LiveDraftState::duplicate};
@@ -52,11 +52,14 @@ LiveDraftResult LiveDraftHost::handle(const core::LiveDraftRequest &request,
   }
   auto parsed = core::parse_profile_json(request.profile_json);
   if (const auto *error = std::get_if<core::ProfileError>(&parsed))
-    return "invalid live draft profile: " + error->describe();
+    return core::LiveDraftFailure{core::LiveDraftError::invalid_profile,
+                                  core::live_draft_failure(core::LiveDraftError::invalid_profile)
+                                          .message +
+                                      error->describe()};
   auto &profile = std::get<core::GameProfile>(parsed);
-  if (profile.id != request.profile_id) return std::string("live draft profile id mismatch");
+  if (profile.id != request.profile_id) return core::live_draft_failure(core::LiveDraftError::id_mismatch);
   if (!stored_id(stored, request.profile_id))
-    return std::string("live draft names no stored profile; Save creates it first");
+    return core::live_draft_failure(core::LiveDraftError::unknown_profile);
   draft_ = Draft{request.client_id, request.profile_id, request.revision, std::move(profile), *expires};
   changed = true;
   return core::LiveDraftReply{request.revision, core::LiveDraftState::applied};

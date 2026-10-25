@@ -4,6 +4,7 @@
 // No display is needed. The FIFO writers are test-only; product sources never
 // write a device (tools/tests/test_evdev_boundary.cmake).
 #include "display_selection.hpp"
+#include "display_route.hpp"
 #include "evdev_route.hpp"
 #include "input_service.hpp"
 
@@ -100,9 +101,9 @@ std::optional<layerc::core::GameProfile> fixture_profile() {
   return std::nullopt;
 }
 
-X11WindowScan active_scan() {
-  X11WindowScan scan;
-  X11WindowSnapshot window;
+WindowScan active_scan() {
+  WindowScan scan;
+  WindowSnapshot window;
   window.window = 0x1234;
   window.active = true;
   scan.windows.push_back(window);
@@ -156,10 +157,13 @@ struct Fixture {
 };
 
 struct Engine {
-  layerc::daemon::X11SessionRegistry registry;
-  layerc::daemon::X11InputService service{registry};
+  layerc::daemon::SessionRegistry registry;
+  // Owned like DisplayAdapters owns it; the service only borrows it.
+  layerc::daemon::EvdevInputRoute route;
+  layerc::daemon::InputService service{registry};
   layerc::platform::StoredProfile stored;
   layerc::runtime::CapabilityDemand demand;
+  std::vector<layerc::daemon::PassiveInputSource *> sources;
 
   [[nodiscard]] bool start(Fixture &fixture, const InputOptions &options) {
     const auto roots = layerc::platform::profile_store_roots();
@@ -170,11 +174,21 @@ struct Engine {
     registry.configure(std::span{&stored, 1});
     registry.refresh(active_scan());
     demand = layerc::runtime::calculate_capability_demand(registry.session_requests(), false);
-    service.attach_loop(fixture.loop);
-    service.configure_input(options);
+    route.attach(fixture.loop);
+    route.configure(options);
+    // No X display in this fixture: the route boundary supplies evdev only when opted in.
+    sources = layerc::daemon::select_input_sources(route.enabled() ? &route : nullptr,
+                                                   nullptr, false);
+    service.use_sources(sources);
     return expect(registry.session_count() == 1 &&
                       demand.required(layerc::runtime::Capability::input),
                   "a global binding session demands input");
+  }
+
+  [[nodiscard]] bool selected() const { return !sources.empty() && sources.front() == &route; }
+  [[nodiscard]] std::vector<std::string> tokens() const {
+    return layerc::daemon::input_route_status(route, nullptr, false,
+        layerc::daemon::needed_devices(registry.sessions())).evdev_reasons;
   }
 };
 
@@ -185,12 +199,11 @@ void test_opt_out_never_opens() {
   if (!engine.start(fixture, fixture.options(InputSelection::automatic))) return;
   const auto result = engine.service.reconcile(engine.demand);
   expect(!ok(result), "without the opt-in and without X there is no input source");
-  expect(!engine.service.evdev_selected() && !engine.service.evdev_attached() &&
+  expect(!engine.selected() && !engine.route.attached() &&
              engine.service.resources().handles == 0,
          "no device is opened without the opt-in");
   expect(!fixture.loop.poll_once(0).fd, "no descriptor was registered");
-  const auto route = engine.service.route_status();
-  expect(route.built && route.selection == InputSelection::automatic && !route.evdev_selected,
+  expect(engine.sources.empty() && !engine.route.enabled(),
          "the route reports no opt-in");
 }
 
@@ -199,48 +212,47 @@ void test_opted_in_stream_and_hotplug() {
   fixture.add("event0", keyboard_bits());
   Engine engine;
   if (!engine.start(fixture, fixture.options())) return;
-  expect(engine.service.evdev_selected(), "without X the opted-in evdev route is selected");
+  expect(engine.selected(), "without X the opted-in evdev route is selected");
   expect(engine.service.resources().handles == 0, "nothing opens before demand reconciles");
   if (!expect(ok(engine.service.reconcile(engine.demand)), "evdev serves the demand")) return;
   expect(fixture.backend->passive_flags, "devices open read-only, nonblocking, close-on-exec");
-  expect(engine.service.evdev_attached() && !engine.service.attached() &&
+  expect(engine.route.attached() && engine.service.attached() == &engine.route &&
              engine.service.resources().handles == 2,
          "one device plus the hotplug watch are held");
   expect(engine.service.unavailable().empty(), "the keyboard the binding needs is present");
-  const auto route = engine.service.route_status();
-  expect(route.evdev_attached && route.evdev_reasons.empty(), "the evdev row is active");
+  expect(engine.route.attached() && engine.tokens().empty(), "the evdev row is active");
 
   fixture.connect("event0");
   fixture.key("event0", KEY_Q, true);
   auto ready = fixture.wake();
   expect(!ready.empty(), "the device descriptor wakes the shared loop");
-  auto dispatch = engine.service.dispatch_evdev(ready);
+  auto dispatch = engine.service.poll(ready);
   expect(dispatch.events == 1 &&
              std::ranges::find(dispatch.triggered, "dash") != dispatch.triggered.end(),
          "a passive evdev press triggers the bound cooldown");
   fixture.key("event0", KEY_Q, false);
-  dispatch = engine.service.dispatch_evdev(fixture.wake());
+  dispatch = engine.service.poll(fixture.wake());
   expect(dispatch.events == 1 && dispatch.triggered.empty(), "the release triggers nothing");
   expect(engine.registry.sessions().front().last_input_match.starts_with("keyboard:81"),
          "the session records the evdev match like XI2");
 
   // Hotplug: a new device is registered on the loop, a removed one leaves.
   fixture.add("event1", mouse_bits());
-  dispatch = engine.service.dispatch_evdev(fixture.wake());
+  dispatch = engine.service.poll(fixture.wake());
   expect(dispatch.devices_changed && engine.service.resources().handles == 3,
          "a hotplugged device is opened and registered");
   std::filesystem::remove(fixture.devices / "event1");
-  dispatch = engine.service.dispatch_evdev(fixture.wake());
+  dispatch = engine.service.poll(fixture.wake());
   expect(dispatch.devices_changed && engine.service.resources().handles == 2,
          "a removed device is closed and unregistered");
   expect(!fixture.loop.poll_once(0).fd, "no stale descriptor stays in the poll set");
 
   // Zero demand releases every device and registration.
   engine.service.quiesce();
-  expect(!engine.service.evdev_attached() && engine.service.resources().handles == 0,
+  expect(!engine.route.attached() && engine.service.resources().handles == 0,
          "quiesce closes the evdev source");
   expect(!fixture.loop.poll_once(0).fd, "quiesce unregisters every descriptor");
-  expect(engine.service.dispatch_evdev(ready).events == 0, "a closed route reads nothing");
+  expect(engine.service.poll(ready).events == 0, "a closed route reads nothing");
 }
 
 void test_permission_denied_reason() {
@@ -249,12 +261,11 @@ void test_permission_denied_reason() {
   Engine engine;
   if (!engine.start(fixture, fixture.options())) return;
   const auto result = engine.service.reconcile(engine.demand);
-  expect(!ok(result) && !engine.service.evdev_attached() &&
+  expect(!ok(result) && !engine.route.attached() &&
              engine.service.resources().handles == 0,
          "a route that can read no device is released, not kept open");
-  const auto route = engine.service.route_status();
-  expect(route.evdev_selected && !route.evdev_attached && route.evdev_reasons.size() == 1 &&
-             route.evdev_reasons.front() == "evdev_permission_denied",
+  expect(engine.selected() && !engine.route.attached() &&
+             engine.tokens() == std::vector<std::string>{"evdev_permission_denied"},
          "the stable token is evdev_permission_denied");
   const auto unavailable = engine.service.unavailable();
   expect(unavailable.size() == 1 && unavailable.front().find("'input' group") != std::string::npos,
@@ -268,8 +279,7 @@ void test_missing_class_reasons() {
   Engine engine;
   if (!engine.start(fixture, fixture.options())) return;
   if (!expect(ok(engine.service.reconcile(engine.demand)), "a mouse alone still opens")) return;
-  const auto route = engine.service.route_status();
-  expect(route.evdev_reasons == std::vector<std::string>{"evdev_no_keyboard"},
+  expect(engine.tokens() == std::vector<std::string>{"evdev_no_keyboard"},
          "only the class a profile needs is reported missing");
   engine.service.quiesce();
 }

@@ -21,9 +21,11 @@ private:
   [[nodiscard]] ProfileError failure() const;
   bool read_cooldowns(GameProfile &profile, std::uint32_t source_schema);
   std::optional<std::int64_t> read_duration(const json::Value &value,
-                                            const std::string &path);
+                                            const std::string &path,
+                                            std::string_view key);
   std::optional<std::int64_t> read_charges(const json::Value &value,
-                                           const std::string &path);
+                                           const std::string &path,
+                                           std::string_view key);
   bool read_cooldown_groups(GameProfile &profile,
                             std::uint32_t source_schema);
   bool read_panels(GameProfile &profile);

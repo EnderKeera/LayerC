@@ -59,23 +59,12 @@ bool confirm_schema_upgrade(const HWND owner) {
          IDYES;
 }
 
-void EditorWindow::sync_profile_from_controls() {
-  if (shell_.syncing) return;
-  auto *panel = panel_preview_.controls_panel < document_.profile().panels.size()
-                    ? &document_.profile().panels[panel_preview_.controls_panel]
-                    : nullptr;
-  ProfileFieldContext context{shell_.window, document_.profile(), cooldown_editor_.selected(), panel};
-  read_profile_fields(context);
-  if (document_.visual()) document_.visual()->profile_id = document_.profile().id;
-  if (document_.automation()) document_.automation()->profile_id = document_.profile().id;
-}
-
 bool EditorWindow::validate_profile() {
   if (!draft_controls_valid()) {
     show_invalid_field_message(shell_.window);
     return false;
   }
-  sync_profile_from_controls();
+  if (!apply_profile_controls(DocumentChangeKind::text)) return false;
   if (const auto error = normalize_for_commit()) {
     themed_message_box(shell_.window, profile_error_text(*error).c_str(),
                 L"Profile is incomplete", MB_OK | MB_ICONWARNING);
@@ -95,7 +84,7 @@ bool EditorWindow::confirm_v2_upgrade() {
 }
 
 bool EditorWindow::confirm_unsaved_changes() {
-  if (!document_.dirty())
+  if (!has_unsaved_changes())
     return true;
   if (!document_.path().empty() && draft_controls_valid() && flush_autosave(false))
     return true;
@@ -109,14 +98,9 @@ void EditorWindow::new_profile(const bool confirm) {
   if (confirm && !confirm_unsaved_changes())
     return;
   end_edit_on_window();
-  document_.profile() = make_new_profile();
-  document_.clear_sidecars();
-  document_.clear_legacy_schemas();
-  document_.path().clear();
   // Untouched drafts are clean: the first real edit marks the document dirty,
   // so leaving an unedited New Profile never asks to save it.
-  document_.set_dirty(false);
-  reset_history();
+  document_.start_draft(make_new_profile(), DraftOrigin::fresh);
   refresh_profile_controls();
   visual_editor_.refresh();
   sync_draft_row();
@@ -203,12 +187,10 @@ void EditorWindow::open_profile_row(const int row, const bool confirm) {
                    : L"The selected profile is invalid.");
     return;
   }
-  document_.assign_bundle(
-      target_path, std::get<layerc::platform::ProfileBundleLoad>(std::move(loaded)));
+  document_.open(target_path,
+                 std::get<layerc::platform::ProfileBundleLoad>(std::move(loaded)));
   visual_editor_.refresh();
-  document_.set_dirty(false);
   end_edit_on_window();
-  reset_history();
   sync_draft_row();
   select_path(target_path);
   refresh_profile_controls();
@@ -234,28 +216,28 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
   const bool is_current =
       layerc::platform::canonical_profile_key(entry.path) ==
       layerc::platform::canonical_profile_key(document_.path());
-  ProfileBundle bundle;
   if (is_current) {
     if (!draft_controls_valid()) {
       restore_checkbox();
       set_status(L"Finish the invalid field before turning the profile on or off.");
       return;
     }
-    sync_profile_from_controls();
-    bundle = document_.bundle();
-  } else {
-    auto loaded = layerc::platform::load_profile_bundle(entry.path);
-    if (const auto *error =
-            std::get_if<layerc::platform::ProfileBundleLoadError>(&loaded)) {
+    if (!apply_profile_controls(DocumentChangeKind::text)) {
       restore_checkbox();
-      set_status(*error == layerc::platform::ProfileBundleLoadError::unreadable
-                     ? L"Could not update the selected profile."
-                     : L"Could not update an invalid profile.");
+      set_status(L"Finish the invalid field before turning the profile on or off.");
       return;
     }
-    bundle = loaded_bundle(
-        std::move(std::get<layerc::platform::ProfileBundleLoad>(loaded)));
   }
+  auto selected = profile_enablement_bundle(
+      document_, is_current, entry.path, OpenDocumentEnablement::commit_open_edits);
+  if (const auto *refusal = std::get_if<EnablementRefusal>(&selected)) {
+    restore_checkbox();
+    set_status(*refusal == EnablementRefusal::unreadable
+                   ? L"Could not update the selected profile."
+                   : L"Could not update an invalid profile.");
+    return;
+  }
+  auto bundle = std::get<ProfileBundle>(std::move(selected));
   bundle.profile.enabled = enabled;
   switch (commit_bundle(entry.path, bundle)) {
   case CommitResult::ok:
@@ -287,16 +269,8 @@ void EditorWindow::save_profile_enabled(const int row, const bool enabled) {
     ListView_SetItemText(shell_.profile_list, row, 0, entry.label.data());
   }
   if (is_current) {
-    document_.visual() = bundle.visual;
-    document_.automation() = bundle.automation;
-    document_.mark_visual_edited();
-    document_.mark_automation_edited();
-    const bool enablement_changes = document_.profile() != bundle.profile;
-    if (enablement_changes) {
-      (void)document_.history().record(bundle.profile, document_.visual(),
-                            document_.automation(), false);
-    }
-    document_.profile() = bundle.profile;
+    const auto committed_path = entry.path;
+    document_.accept_commit(committed_path, std::move(bundle), CommitRecord::record_edit);
     mark_committed();
   } else {
     mark_committed(entry.path, bundle.profile);
@@ -417,7 +391,6 @@ bool EditorWindow::save_profile(const bool force_save_as) {
                 L"Profile save failed", MB_OK | MB_ICONERROR);
     return false;
   }
-  document_.path() = destination;
   mark_committed(destination, document_.profile(), {.refresh_list = true});
   set_status(L"Profile saved — LayerD updated live.");
   return true;
@@ -435,7 +408,6 @@ void EditorWindow::delete_profile() {
     if (saved == shell_.profiles.end()) {
       new_profile(false);
     } else {
-      document_.set_dirty(false);
       open_profile_row(static_cast<int>(saved - shell_.profiles.begin()), false);
     }
     set_status(L"Draft discarded.");
@@ -461,9 +433,8 @@ void EditorWindow::delete_profile() {
     return;
   }
   end_edit_on_window();
-  document_.path().clear();
-  document_.set_dirty(false);
-  document_.clear_sidecars();
+  // Same clean, module-less detached state as before, minus stale undo history.
+  document_.start_draft(document_.profile(), DraftOrigin::fresh);
   (void)layerc::platform::signal_profile_reload();
   reload_profile_list(safe_remaining, true);
   set_status(safe_remaining.empty() ? L"Profile moved to the Recycle Bin."
@@ -489,8 +460,10 @@ std::wstring EditorWindow::write_failure_message() const {
 }
 
 std::optional<layerc::core::ProfileError> EditorWindow::normalize_for_commit() {
-  return normalize_profile_bundle(document_.profile(), document_.visual(),
-                                  document_.automation());
+  // Validate a detached copy: the document changes only through a commit.
+  auto bundle = document_.bundle();
+  return normalize_profile_bundle(bundle.profile, bundle.visual,
+                                  bundle.automation);
 }
 
 CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
@@ -505,16 +478,18 @@ CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
   return outcome.result;
 }
 
-CommitResult EditorWindow::commit_document(const std::filesystem::path &path,
-                                           const CommitOptions &options) {
+CommitResult EditorWindow::commit_document(
+    const std::filesystem::path &path, const CommitOptions &options,
+    const std::function<void(ProfileBundle &)> &candidate) {
   if (!draft_controls_valid()) return CommitResult::invalid_fields;
-  sync_profile_from_controls();
+  if (!apply_profile_controls(DocumentChangeKind::text))
+    return CommitResult::invalid_fields;
   const auto outcome = layerc::editor::commit_document(
       document_, path, options, [&] {
         return is_document_path(document_, path)
                    ? confirm_v2_upgrade()
                    : confirm_schema_upgrade(shell_.window);
-      });
+      }, layerc::platform::KeepModule{}, {}, candidate);
   last_write_error_ = outcome.write_error;
   return outcome.result;
 }
@@ -527,12 +502,13 @@ void EditorWindow::mark_committed(const std::filesystem::path &path,
                                   const layerc::core::GameProfile &profile,
                                   const CommitOptions &options) {
   if (is_document_path(document_, path)) {
-    document_.mark_saved();
+    // The commit already installed the saved transition.
     KillTimer(shell_.window, autosave_timer);
     if (options.refresh_list)
       reload_profile_list(path, false);
     else
       sync_current_profile_entry();
+    refresh_title();
   }
   notify_profile_committed(path, profile);
 }
@@ -540,7 +516,7 @@ void EditorWindow::mark_committed(const std::filesystem::path &path,
 void EditorWindow::refresh_profile_controls() {
   cooldown_editor_.reset_capture();
   auto sync = shell_.sync_scope();
-  const ProfileFieldContext context{shell_.window, document_.profile()};
+  const ProfileFieldView context{shell_.window, document_.profile()};
   write_profile_fields(context, ProfileFieldOwner::profile);
   set_owner_draw_checkbox(
       GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH),

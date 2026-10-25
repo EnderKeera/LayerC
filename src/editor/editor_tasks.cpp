@@ -229,24 +229,24 @@ const wchar_t *EditorWindow::empty_task_list_text() const {
 
 void EditorWindow::apply_task(
     const layerc::platform::WindowCandidate &candidate) {
-  sync_profile_from_controls();
-  document_.profile().game.global = false;
   const bool exact_path = owner_draw_checkbox_checked(
       GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH));
-  document_.profile().game.executable_path =
-      exact_path ? wide_to_utf8(candidate.executable_path) : std::string{};
-  document_.profile().game.executable_name = wide_to_utf8(candidate.executable_name);
-  document_.profile().game.window_class.clear();
-  document_.profile().game.window_title.clear();
-  if (document_.profile().name == "New Profile" || document_.profile().name.empty()) {
-    const auto suggested =
-        std::filesystem::path(candidate.executable_name).stem().wstring();
-    document_.profile().name = wide_to_utf8(suggested);
-    document_.profile().id =
-        layerc::core::slugify(document_.profile().name, "profile");
-  }
+  (void)apply_profile_change(
+      ChangeKind::immediate, [&](layerc::core::GameProfile &profile) {
+        profile.game.global = false;
+        profile.game.executable_path =
+            exact_path ? wide_to_utf8(candidate.executable_path) : std::string{};
+        profile.game.executable_name = wide_to_utf8(candidate.executable_name);
+        profile.game.window_class.clear();
+        profile.game.window_title.clear();
+        if (profile.name == "New Profile" || profile.name.empty()) {
+          const auto suggested =
+              std::filesystem::path(candidate.executable_name).stem().wstring();
+          profile.name = wide_to_utf8(suggested);
+          profile.id = layerc::core::slugify(profile.name, "profile");
+        }
+      });
   refresh_profile_controls();
-  record_profile_change(ChangeKind::immediate);
   update_task_detail();
   set_status(document_.path().empty()
                  ? L"Application selected — Save once to create the profile."

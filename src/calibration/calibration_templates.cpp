@@ -6,9 +6,7 @@
 #include "layerc/platform/visual_assets_windows.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <filesystem>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -16,58 +14,6 @@
 
 namespace layerc::calibration {
 namespace {
-
-layerc::core::NormalizedRegion expanded_template_search_region(
-    const layerc::core::NormalizedRegion selected) {
-  const auto expand = [](const double origin, const double extent) {
-    const double expanded = std::min(1.0, extent * 2.0);
-    const double center = origin + extent * 0.5;
-    return std::pair{std::clamp(center - expanded * 0.5, 0.0,
-                                1.0 - expanded),
-                     expanded};
-  };
-  const auto [x, width] = expand(selected.x, selected.width);
-  const auto [y, height] = expand(selected.y, selected.height);
-  return {x, y, width, height};
-}
-
-// Samples the source pixel under the center of each downscaled pixel so the
-// stored reference never exceeds max_template_axis pixels on its longer side.
-layerc::core::TemplateImage
-downscale_capture_region(const layerc::capture::CaptureFrame &frame,
-                         const std::uint32_t left, const std::uint32_t top,
-                         const std::uint32_t source_width,
-                         const std::uint32_t source_height) {
-  const auto source_offset = [](const std::uint32_t index,
-                                const std::uint32_t extent,
-                                const std::uint32_t source_extent) {
-    return std::min(source_extent - 1,
-                    static_cast<std::uint32_t>(
-                        (static_cast<std::uint64_t>(index) * 2U + 1U) *
-                        source_extent /
-                        (static_cast<std::uint64_t>(extent) * 2U)));
-  };
-  const double factor =
-      std::min(1.0, static_cast<double>(layerc::core::max_template_axis) /
-                        std::max(source_width, source_height));
-  layerc::core::TemplateImage image;
-  image.width = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(source_width * factor)));
-  image.height = std::max<std::uint32_t>(
-      1, static_cast<std::uint32_t>(std::lround(source_height * factor)));
-  image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
-  image.alpha.assign(image.pixels.size(), 255);
-  for (std::uint32_t y = 0; y < image.height; ++y) {
-    const auto source_y = top + source_offset(y, image.height, source_height);
-    for (std::uint32_t x = 0; x < image.width; ++x) {
-      const auto source_x = left + source_offset(x, image.width, source_width);
-      image.pixels[static_cast<std::size_t>(y) * image.width + x] =
-          frame.pixels[static_cast<std::size_t>(source_y) * frame.width +
-                       source_x];
-    }
-  }
-  return image;
-}
 
 [[nodiscard]] bool reject_when_reference_limit_reached(
     const HWND dialog, const layerc::core::TemplateState &state) {
@@ -93,7 +39,8 @@ void CalibrationWindow::set_reference_selection(
   rule_.region = selected;
   template_state_.expected_width = selected.width;
   template_state_.expected_height = selected.height;
-  template_state_.search_region = expanded_template_search_region(selected);
+  template_state_.search_region =
+      layerc::core::expanded_template_search_region(selected);
   template_matcher_.clear();
 }
 
@@ -118,12 +65,8 @@ CalibrationWindow::captured_reference_image() const {
   const auto &frame = preview_.frame();
   if (!frame)
     return std::nullopt;
-  const auto [left, top, right, bottom] = layerc::core::to_pixel_bounds(
-      reference_selection_, frame->width, frame->height);
-  if (right <= left || bottom <= top ||
-      static_cast<std::uint64_t>(right - left) * (bottom - top) < 64U)
-    return std::nullopt;
-  return downscale_capture_region(*frame, left, top, right - left, bottom - top);
+  return layerc::core::template_from_selection(frame->view(),
+                                               reference_selection_);
 }
 
 bool CalibrationWindow::append_template_reference(

@@ -33,13 +33,21 @@ layerc::core::GameProfile make_new_profile() {
   return profile;
 }
 
-std::string profile_list_text(const layerc::core::GameProfile &profile) {
-  std::string label = profile.name;
-  if (!profile.game.executable_name.empty())
-    label += "  \u2014  " + profile.game.executable_name;
-  if (!profile.enabled)
-    label += "  (off)";
+std::string profile_list_text(const std::string_view name,
+                              const std::string_view executable_name,
+                              const bool enabled) {
+  std::string label{name};
+  if (!executable_name.empty()) {
+    label += "  \u2014  ";
+    label += executable_name;
+  }
+  if (!enabled) label += "  (off)";
   return label;
+}
+
+std::string profile_list_text(const layerc::core::GameProfile &profile) {
+  return profile_list_text(profile.name, profile.game.executable_name,
+                           profile.enabled);
 }
 
 std::string unique_panel_id(

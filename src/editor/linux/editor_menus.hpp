@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor_commands.hpp"
 #include "editor_geometry.hpp"
 
 #include <FL/Fl_Hold_Browser.H>
@@ -12,15 +13,13 @@ class Fl_Menu_Button;
 
 namespace layerc::editor {
 class EditorApp;
-enum class EditorCommand;
-enum class EditorMenuContext { profiles, cooldowns, bindings, panels };
 
 // Linux frontend menus use the same accepted-edit commands as its buttons.
 // Menu widgets are owned by the window; their callback data is owned here.
 class EditorMenus final {
 public:
   static constexpr int bar_height = 28;
-  explicit EditorMenus(EditorApp &app);
+  EditorMenus(EditorApp &app, Fl_Window &window);
   [[nodiscard]] Fl_Menu_Bar &bar() const { return *bar_; }
   void update();
   [[nodiscard]] bool shortcut(int key, int modifiers);
@@ -30,8 +29,9 @@ public:
   [[nodiscard]] static std::string shortcut_help();
 private:
   struct Action { EditorApp *app{}; EditorCommand command{}; };
-  std::array<Action, 48> actions_{};
+  std::array<Action, static_cast<std::size_t>(EditorCommand::count)> actions_{};
   EditorApp &app_;
+  Fl_Window &window_;
   Fl_Menu_Bar *bar_{};
   static void invoke(Fl_Widget *widget, void *data);
 };

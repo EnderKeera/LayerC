@@ -1,6 +1,3 @@
-// X11 overlay capability (V2.6.1): one click-through window per panel,
-// painted from the input sessions' cooldown states and registered with the
-// daemon kernel as Capability::overlay.
 #include "overlay_service.hpp"
 
 #include "layerc/core/panel_presentation.hpp"
@@ -17,8 +14,8 @@ namespace {
 
 using layerc::core::TimePoint;
 
-const layerc::platform::X11WindowSnapshot *
-find_snapshot(const layerc::platform::X11WindowScan &scan,
+const layerc::platform::WindowSnapshot *
+find_snapshot(const layerc::platform::WindowScan &scan,
               const std::uint64_t window) noexcept {
   for (const auto &snapshot : scan.windows)
     if (snapshot.window == window) return &snapshot;
@@ -42,7 +39,7 @@ struct PanelOverrides {
 // so the common no-override frame does no allocation. false when the panel
 // is gone; visibility itself is decided by core::present_panel.
 [[nodiscard]] bool apply_automation_overrides(
-    layerc::platform::X11OverlayFrame &frame, bool &overridden,
+    layerc::platform::OverlayFrame &frame, bool &overridden,
     const InputSession &session, const std::string_view panel_id,
     PanelOverrides &result) {
   const auto base = std::ranges::find(session.automation.profile().panels, panel_id,
@@ -70,7 +67,7 @@ struct PanelOverrides {
 // Fills `frame.bars` from the shared panel presentation. false means the
 // panel is hidden right now.
 [[nodiscard]] bool
-fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
+fill_bars(layerc::platform::OverlayFrame &frame, const InputSession &session,
           const TimePoint now, const PanelOverrides &overrides) {
   const auto presentation = layerc::core::present_panel(
       frame.panel, session.automation.profile().cooldowns, session.automation.snapshot_buffer(),
@@ -78,7 +75,7 @@ fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
       now);
   frame.bars.clear();
   for (const auto &item : presentation.bars) {
-    layerc::platform::X11OverlayBar bar;
+    layerc::platform::OverlayBar bar;
     bar.label = item.label;
     bar.running = !item.ready;
     bar.remaining = item.remaining;
@@ -87,41 +84,27 @@ fill_bars(layerc::platform::X11OverlayFrame &frame, const InputSession &session,
   return presentation.visible;
 }
 
-// The backend contract is display-server neutral; X11 frames carry the same
-// fields.
-layerc::platform::OverlayFrame
-neutral_frame(const layerc::platform::X11OverlayFrame &frame) {
-  layerc::platform::OverlayFrame result;
-  result.target = {frame.target.x, frame.target.y, frame.target.width, frame.target.height};
-  result.panel = frame.panel;
-  result.dpi = frame.dpi;
-  result.bars.reserve(frame.bars.size());
-  for (const auto &bar : frame.bars) result.bars.push_back({bar.label, bar.remaining, bar.running});
-  return result;
-}
-
 } // namespace
 
-void X11OverlayService::attach(layerc::platform::X11Display &display) noexcept {
-  display_ = &display;
-}
-
-void X11OverlayService::use_backend(OverlayBackend *backend) noexcept {
+void OverlayService::use_backend(OverlayBackend *backend) noexcept {
   if (backend_ == backend) return;
   if (backend_) backend_->retain({});
-  for (auto &target : targets_) target.shown = false;
+  for (auto &target : targets_) {
+    target.shown = false;
+    target.retry_at.reset();
+  }
   backend_ = backend;
 }
 
-std::string X11OverlayService::key(const Target &target) {
+std::string OverlayService::key(const Target &target) {
   // Length-prefixed so no pair of ids can collide.
   return std::to_string(target.profile_id.size()) + ':' + target.profile_id + target.panel_id;
 }
 
-void X11OverlayService::refresh(
+void OverlayService::refresh(
     const std::span<InputSession> sessions,
-    const layerc::platform::X11WindowScan &scan,
-    const layerc::platform::X11MonitorScan &monitors) {
+    const layerc::platform::WindowScan &scan,
+    const layerc::platform::MonitorScan &monitors) {
   std::vector<Target> next;
   for (const auto &session : sessions) {
     if (!session.active) continue;
@@ -129,7 +112,7 @@ void X11OverlayService::refresh(
     if (snapshot == nullptr || snapshot->hidden || snapshot->width <= 0 ||
         snapshot->height <= 0)
       continue;
-    const layerc::platform::X11OverlayRect target{
+    const layerc::platform::OverlayRect target{
         snapshot->x, snapshot->y, snapshot->width, snapshot->height};
     const int dpi = layerc::platform::monitor_dpi_for_rect(
         monitors, target.x, target.y, target.width, target.height);
@@ -141,7 +124,7 @@ void X11OverlayService::refresh(
       entry.frame.target = target;
       entry.frame.panel = panel;
       entry.frame.dpi = dpi;
-      entry.active = snapshot->active;
+      entry.frame.anchor_active = snapshot->active;
       // Keep the window across rebuilds so panels are not recreated (and
       // re-raised) every time a profile or window list changes.
       const auto previous = std::ranges::find_if(
@@ -150,8 +133,9 @@ void X11OverlayService::refresh(
                    candidate.panel_id == entry.panel_id;
           });
       if (previous != targets_.end()) {
-        entry.window = std::move(previous->window);
         entry.shown = previous->shown;
+        if (previous->session_window == entry.session_window)
+          entry.retry_at = previous->retry_at;
       }
       next.push_back(std::move(entry));
     }
@@ -165,14 +149,13 @@ void X11OverlayService::refresh(
   }
 }
 
-void X11OverlayService::render(const std::span<InputSession> sessions,
+void OverlayService::render(const std::span<InputSession> sessions,
                                const TimePoint now) {
-  if (display_ == nullptr && backend_ == nullptr) return;
+  if (!reconciled_ || !backend_) return;
   // refresh() emits each session's panels together, so one snapshot per run
   // of targets covers every panel of that session.
   const InputSession *snapshotted = nullptr;
   for (auto &target : targets_) {
-    if (!backend_ && !target.window.valid()) continue;
     auto *session = find_session(sessions, target.profile_id);
     if (session == nullptr) continue;
     if (session != snapshotted) {
@@ -183,134 +166,92 @@ void X11OverlayService::render(const std::span<InputSession> sessions,
     if (!apply_automation_overrides(target.frame, target.overridden, *session,
                                     target.panel_id, overrides) ||
         !fill_bars(target.frame, *session, now, overrides)) {
-      if (backend_) {
-        backend_->hide(key(target));
-        target.shown = false;
-      } else {
-        target.window.hide();
-      }
+      backend_->hide(key(target));
+      target.shown = false;
+      target.retry_at.reset();
       continue;
     }
-    if (backend_) {
-      // Layer-shell overlays stay above fullscreen windows; no raise.
-      target.shown = backend_->show(key(target), neutral_frame(target.frame));
-      continue;
-    }
-    // Raise before painting: overlays have no backing store, so drawing
-    // into a window another overlay still covers is lost when it is raised
-    // afterwards, and overlapping panels would show unpainted black.
-    if (target.active) target.window.raise();
-    if (!target.window.update(target.frame)) {
-      // The server rejected the window; drop it so the next refresh rebuilds.
-      target.window = layerc::platform::X11OverlayWindow{};
-      continue;
-    }
+    if (target.retry_at && now < *target.retry_at) continue;
+    target.shown = backend_->show(key(target), target.frame);
+    target.retry_at = target.shown
+                          ? std::nullopt
+                          : std::optional{now + overlay_repaint_interval};
   }
 }
 
 std::optional<TimePoint>
-X11OverlayService::next_render_deadline(const TimePoint now) const {
-  for (const auto &target : targets_)
-    if (backend_ ? target.shown : target.window.visible())
-      return now + overlay_repaint_interval;
-  return std::nullopt;
+OverlayService::next_render_deadline(const TimePoint now) const {
+  if (!reconciled_ || !backend_) return std::nullopt;
+  std::optional<TimePoint> next;
+  for (const auto &target : targets_) {
+    next = core::earliest_deadline(next, target.retry_at);
+    if (target.shown)
+      next = core::earliest_deadline(next, now + overlay_repaint_interval);
+  }
+  return next;
 }
 
-std::size_t X11OverlayService::window_count() const noexcept {
+std::size_t OverlayService::window_count() const noexcept {
   std::size_t count = 0;
   for (const auto &target : targets_)
-    if (backend_ ? target.shown : target.window.valid()) ++count;
+    if (target.shown) ++count;
   return count;
 }
 
 std::size_t
-X11OverlayService::window_count(const std::string_view profile_id,
+OverlayService::window_count(const std::string_view profile_id,
                                 const std::uint64_t session_window) const noexcept {
   return static_cast<std::size_t>(
       std::ranges::count_if(targets_, [&](const Target &target) {
         return target.profile_id == profile_id &&
                target.session_window == session_window &&
-               (backend_ ? target.shown : target.window.valid());
+               target.shown;
       }));
 }
 
-std::vector<std::uint64_t> X11OverlayService::windows() const {
-  std::vector<std::uint64_t> result;
+std::vector<std::string> OverlayService::unavailable() const {
+  auto reasons = backend_
+                     ? backend_->unavailable()
+                     : std::vector<std::string>{
+                           "overlay: no X display for the overlay service"};
   for (const auto &target : targets_)
-    if (target.window.valid()) result.push_back(target.window.window());
-  return result;
-}
-
-std::vector<std::string> X11OverlayService::unavailable() const {
-  if (backend_) {
-    auto reasons = backend_->unavailable();
-    if (reasons.empty() && !fault_.empty()) reasons.push_back(fault_);
-    return reasons;
-  }
-  if (display_ == nullptr || !display_->valid())
-    return {"overlay: no X display for the overlay service"};
-  auto reasons = layerc::platform::overlay_unavailable(display_->probe());
-  if (!reasons.empty()) return reasons;
-  if (!fault_.empty()) return {fault_};
-  // No targets with no fault is a healthy idle service, not unavailability:
-  // the capability layer already reports undemanded overlays as inactive via
-  // the demand gate, and a real per-session failure lands in fault_.
-  return {};
+    if (target.retry_at)
+      reasons.push_back("overlay: could not show panel " + target.panel_id +
+                        " for profile " + target.profile_id);
+  return reasons;
 }
 
 layerc::runtime::ServiceReconcileResult
-X11OverlayService::reconcile(
+OverlayService::reconcile(
     const layerc::runtime::CapabilityDemand &demand) {
   if (!demand.required(layerc::runtime::Capability::overlay))
     return layerc::runtime::ServiceReconcileResult::failed(
         "overlay: service invoked without demand");
-  if (backend_) {
-    // Surfaces are created lazily on the first paint; only a missing
-    // protocol is a reason to degrade.
-    const auto reasons = backend_->unavailable();
-    if (reasons.empty()) {
-      fault_.clear();
-      return {};
-    }
-    fault_ = "overlay: " + reasons.front();
-    return layerc::runtime::ServiceReconcileResult::degraded(fault_);
+  reconciled_ = true;
+  if (!backend_) {
+    const std::string reason = "overlay: no X display for the overlay service";
+    return layerc::runtime::ServiceReconcileResult::degraded(reason);
   }
-  if (display_ == nullptr || !display_->valid()) {
-    // Never fault: an overlay failure must not unwind the input service the
-    // kernel activated in the same pass. Publish the reason instead.
-    fault_ = "overlay: no X display for the overlay service";
-    return layerc::runtime::ServiceReconcileResult::degraded(fault_);
+  const auto reasons = backend_->unavailable();
+  if (!reasons.empty()) {
+    const std::string reason = reasons.front().starts_with("overlay: ")
+                                   ? reasons.front()
+                                   : "overlay: " + reasons.front();
+    return layerc::runtime::ServiceReconcileResult::degraded(reason);
   }
-  if (const auto reasons =
-          layerc::platform::overlay_unavailable(display_->probe());
-      !reasons.empty()) {
-    fault_ = reasons.front();
-    return layerc::runtime::ServiceReconcileResult::degraded(fault_);
-  }
-  std::string error;
-  for (auto &target : targets_) {
-    if (target.window.valid()) continue;
-    auto window =
-        layerc::platform::X11OverlayWindow::create(*display_, error);
-    if (!window.has_value()) {
-      fault_ = error;
-      return {};
-    }
-    target.window = std::move(*window);
-  }
-  fault_.clear();
   return {};
 }
 
-void X11OverlayService::quiesce() noexcept {
+void OverlayService::quiesce() noexcept {
+  reconciled_ = false;
   if (backend_) backend_->retain({});
   targets_.clear();
-  fault_.clear();
 }
 
 layerc::runtime::RuntimeResourceStats
-X11OverlayService::resources() const noexcept {
+OverlayService::resources() const noexcept {
   layerc::runtime::RuntimeResourceStats stats;
+  if (!reconciled_) return stats;
   stats.windows = static_cast<std::uint32_t>(
       std::min<std::size_t>(window_count(), 0xFFFFFFFFU));
   stats.objects = static_cast<std::uint32_t>(

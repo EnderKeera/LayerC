@@ -16,14 +16,20 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from walkthrough import EXPECTED  # noqa: E402 -- the required-case manifest
+from cases import EXPECTED  # noqa: E402 -- the required-case manifest
 from wayland_walkthrough import EXPECTED as WAYLAND_EXPECTED  # noqa: E402
 from editor_resources import ADVANCED_VIEWS  # noqa: E402
+from active_walkthrough import EXPECTED as ACTIVE_EXPECTED  # noqa: E402
+from active_resources import evaluate as evaluate_active  # noqa: E402
 
 MIB = 1024 * 1024
 TARGETS = {"idleUssBytes": 20 * MIB, "startupPeakUssBytes": 20 * MIB, "idleCpuPercent": 0.2}
-# Approved ceilings for the representative store (docs/LinuxEditorPlan.md §7).
+# Approved ceilings for the representative store (docs/Linux.md#linux-editor-resource-targets).
 REPRESENTATIVE = {"idleUssBytes": 32 * MIB, "startupPeakUssBytes": 32 * MIB, "idleCpuPercent": 0.2}
+# A selected worst-case document is not the empty, no-selection idle scenario.
+# Its entire sampled lifetime, including startup and settling, uses the 48 MiB
+# boundary-workload peak bound. Empty/representative ceilings remain unchanged.
+BOUNDARY_DOCUMENT = {"idleUssBytes": 48 * MIB, "startupPeakUssBytes": 48 * MIB, "idleCpuPercent": 0.2}
 CYCLE_COUNT, CYCLE_DRIFT = 100, 2 * MIB
 OWNED_ROLES = ("wm", "fixture", "daemon", "sampler", "bridge", "outer-xvfb")
 # Wayland mode: sway replaces Xvfb and Openbox; a native foot window is owned.
@@ -31,6 +37,14 @@ WAYLAND_ROLES = ("native", "fixture", "daemon", "sampler", "bridge", "outer-comp
 MIN_IDLE_SECONDS = 60.0
 # The samples themselves must prove the window: ~240 readings at 0.25 s.
 MIN_WINDOW_SAMPLES, MAX_SAMPLE_GAP, WINDOW_SLACK = 200, 1.0, 1.0
+
+
+def resource_targets(mode):
+    if mode in ("resources", "peaks"):
+        return REPRESENTATIVE
+    if mode == "limits":
+        return BOUNDARY_DOCUMENT
+    return TARGETS
 
 
 def load(path):
@@ -212,7 +226,7 @@ def evaluate(out):
                 or isinstance(code, bool) or not isinstance(code, int) or code != 0:
             failures.append(f"owned process {name} ended abnormally: {status}")
 
-    targets = REPRESENTATIVE if mode == "resources" else TARGETS
+    targets = resource_targets(mode)
     resources: dict[str, object] = {"targets": targets}
     idle, startup = load(out / "resources.json"), load(out / "startup-resources.json")
     if not isinstance(idle, dict) or not isinstance(startup, dict):
@@ -249,6 +263,24 @@ def evaluate(out):
         if statuses is not None:
             result["cases"] = statuses
             result["deferred"] = deferred
+    elif mode == "peaks":
+        statuses, deferred = check_cases(out, failures, ACTIVE_EXPECTED)
+        if statuses is not None:
+            result["cases"], result["deferred"] = statuses, deferred
+        try:
+            result["activeResources"] = evaluate_active(out)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            failures.append(f"active resource qualification failed: {error}")
+    elif mode == "limits":
+        from limits_walkthrough import EXPECTED as LIMIT_EXPECTED
+        from limit_resources import evaluate as evaluate_limits
+        statuses, deferred = check_cases(out, failures, LIMIT_EXPECTED)
+        if statuses is not None:
+            result["cases"], result["deferred"] = statuses, deferred
+        try:
+            result["boundaryResources"] = evaluate_limits(out)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            failures.append(f"boundary resource qualification failed: {error}")
     elif mode == "resources":
         result["fixture"] = "representative: 20 profiles x 10 cooldowns x 2 panels"
         result["cycles"] = check_cycles(out, failures)

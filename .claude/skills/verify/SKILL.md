@@ -5,8 +5,13 @@ description: Build LayerC's Linux programs and drive layerd/layerctl/layercal at
 
 # Verify LayerC on Linux at runtime
 
-Linux only reaches `layerd`, `layerctl`, and `layercal`; the editor, capture
-worker, and Game Bar host are Windows-only and cannot be driven here.
+Linux supports `layerd`, `layerctl`, the `layercal` CLI, and the X11 `layere` editor (v2.6c). The standalone graphical `layercal` UI, isolated capture worker and Game Bar host remain Windows-only. Drive editor cases with `tools/linux-editor-gui-tests.sh` in disposable Xvfb sessions; see `docs/Linux.md` for required dependencies and support boundaries.
+
+## Editor evidence discipline
+
+Use the [current source-bound editor qualification](../../../docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21) and preserve the source freeze throughout resource acquisition and broad gates. Check actual rendered calibration and appearance states (including explicit black, scaling and scrolled edges), not only strings, widget bounds or a producer's pass flag; also verify semantic/durable outcomes and fault recovery. Retain failed attempts and bind final documentation-only changes separately. Private Xvfb/WSL and container results do not establish VM, physical desktop or screen-reader-user acceptance.
+
+The full X11 walkthrough must execute the four required controlled-target overlay cases: focus changes, corner-drag resize, actual click-through and cleanup (currently 36 required cases total). Do not defer that group or substitute runtime CTest results for process/desktop evidence. Require the real `xev` ButtonPress/ButtonRelease observation for clicks beside and on painted overlay pixels, fresh screenshot IDs for input, and complete owned-process cleanup. Preserve failing bundles and isolate conflicting disposable fixture copies through the real editor without deleting profiles or bypassing the failed-save test. See the [fresh required-overlay record](../../../docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21).
 
 ## Build
 

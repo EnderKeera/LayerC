@@ -64,6 +64,14 @@ struct WindowScan {
   bool operator==(const WindowScan &) const = default;
 };
 
+// One window for a profile under the shared core::resolve_game_match
+// policy: every specified identity field must hold (byte-exact executable
+// path), the active window wins, and a previous window breaks background
+// ties so losing focus does not change an existing session's target.
+[[nodiscard]] const WindowSnapshot *
+match_window(const WindowScan &scan, const layerc::core::GameMatch &match,
+             std::uint64_t previous_window = 0);
+
 // Resolved /proc/<pid>/exe for PIDs owned by the effective UID (root may read
 // any). Empty for every other case — the caller degrades to title/class.
 [[nodiscard]] std::string process_executable_path(std::uint32_t pid);
@@ -140,6 +148,7 @@ struct OverlayFrame {
   layerc::core::Panel panel;
   std::vector<OverlayBar> bars;
   int dpi{baseline_dpi};
+  bool anchor_active{};
 };
 
 // Panel geometry in device pixels: authored at 96 dpi, anchored inside the

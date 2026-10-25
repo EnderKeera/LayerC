@@ -6,9 +6,8 @@
 #include <FL/Fl_Scroll.H>
 
 namespace layerc::editor {
-ExportSelectionDialog::ExportSelectionDialog(
-    const std::vector<platform::StoredProfile> &entries, const std::size_t selected)
-    : Fl_Double_Window(620, 460, "Select profiles to export — LayerE") {
+void ExportSelectionDialog::build(const std::vector<std::string> &entries,
+                                  const std::size_t selected) {
   begin();
   auto *note = new Fl_Box(15, 15, 590, 40,
       "Choose the saved profiles to include. Modules and assets travel with each profile.");
@@ -17,7 +16,7 @@ ExportSelectionDialog::ExportSelectionDialog(
   scroll->begin();
   for (std::size_t i{}; i < entries.size(); ++i) {
     auto *check = new Fl_Check_Button(25, 70 + static_cast<int>(i) * 30, 545, 28);
-    check->copy_label((entries[i].profile.name + " (" + entries[i].profile.id + ")").c_str());
+    check->copy_label(entries[i].c_str());
     check->value(i == selected);
     profiles.push_back(check);
   }

@@ -54,8 +54,12 @@ std::optional<LiveDraftRequest> parse_live_draft_request(const std::string_view 
   // A quoted profile can double in size when every byte is escaped.
   if (text.size() > 6U * live_draft_profile_bytes + 4096U) return std::nullopt;
   const auto parsed = json::parse(text);
-  const auto *v = std::get_if<json::Value>(&parsed);
-  if (!v || !v->is_object() || v->as_object().size() != 6 || !version_ok(*v)) return std::nullopt;
+  const auto *value = std::get_if<json::Value>(&parsed);
+  return value ? parse_live_draft_request(*value) : std::nullopt;
+}
+std::optional<LiveDraftRequest> parse_live_draft_request(const json::Value &value) {
+  const auto *v = &value;
+  if (!v->is_object() || v->as_object().size() != 6 || !version_ok(*v)) return std::nullopt;
   const auto *op = v->find("operation"), *profile = v->find("profileId"),
              *client = v->find("clientId"), *body = v->find("profileJson");
   const auto revision = number(*v, "revision");
@@ -81,8 +85,12 @@ std::string serialize_live_draft_reply(const LiveDraftReply &reply) {
 std::optional<LiveDraftReply> parse_live_draft_reply(const std::string_view text) {
   if (text.size() > 1024U) return std::nullopt;
   const auto parsed = json::parse(text);
-  const auto *v = std::get_if<json::Value>(&parsed);
-  if (!v || !v->is_object() || v->as_object().size() != 3 || !version_ok(*v)) return std::nullopt;
+  const auto *value = std::get_if<json::Value>(&parsed);
+  return value ? parse_live_draft_reply(*value) : std::nullopt;
+}
+std::optional<LiveDraftReply> parse_live_draft_reply(const json::Value &value) {
+  const auto *v = &value;
+  if (!v->is_object() || v->as_object().size() != 3 || !version_ok(*v)) return std::nullopt;
   const auto revision = number(*v, "revision");
   const auto *state = v->find("state");
   if (!revision || !state || !state->is_string()) return std::nullopt;
@@ -90,4 +98,30 @@ std::optional<LiveDraftReply> parse_live_draft_reply(const std::string_view text
   if (!parsed_state) return std::nullopt;
   return LiveDraftReply{*revision, *parsed_state};
 }
+LiveDraftFailure live_draft_failure(const LiveDraftError code) {
+  switch (code) {
+  case LiveDraftError::invalid_request:
+    return {code, "invalid live draft request"};
+  case LiveDraftError::unavailable:
+    return {code, "live drafts unavailable"};
+  case LiveDraftError::owned_elsewhere:
+    return {code, "another editor owns the live draft"};
+  case LiveDraftError::clock_limit:
+    return {code, "live draft lease clock limit exceeded"};
+  case LiveDraftError::expired:
+    return {code, "live draft expired; publish it again"};
+  case LiveDraftError::revision_mismatch:
+    return {code, "live draft revision mismatch"};
+  case LiveDraftError::stale_revision:
+    return {code, "stale live draft revision"};
+  case LiveDraftError::invalid_profile:
+    return {code, "invalid live draft profile: "};
+  case LiveDraftError::id_mismatch:
+    return {code, "live draft profile id mismatch"};
+  case LiveDraftError::unknown_profile:
+    return {code, "live draft names no stored profile; Save creates it first"};
+  }
+  return {code, "unknown live draft error"};
+}
+
 } // namespace layerc::core

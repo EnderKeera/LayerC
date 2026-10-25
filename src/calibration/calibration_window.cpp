@@ -26,13 +26,6 @@ std::wstring color_text(const std::uint32_t color) {
   return layerc::platform::utf8_to_wide(layerc::core::json::color_text(color));
 }
 
-bool contains_binding(const layerc::core::GameProfile &profile,
-                      const std::string_view cooldown_id) {
-  return std::ranges::any_of(profile.bindings, [&](const auto &binding) {
-    return binding.cooldown_id == cooldown_id;
-  });
-}
-
 // Combo-box indices are 0=first choice, 1=second, 2=third; CB_ERR (-1) and any
 // unexpected value fall back to the middle default, matching the historical
 // nested-ternary behavior.
@@ -417,6 +410,19 @@ void CalibrationWindow::update_control_enablement() {
                                                 CB_GETCURSEL, 0, 0) == 1;
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_KEEP_INPUT), !confirmation);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_TIMEOUT), confirmation);
+  refresh_apply_readiness();
+}
+
+bool CalibrationWindow::sampling_ready() const {
+  const layerc::core::VisualObservation observation =
+      mode() == CalibrationMode::template_match
+          ? layerc::core::VisualObservation{current_template_from_controls()}
+          : layerc::core::VisualObservation{current_rule_from_controls()};
+  return readiness_.ready_for(observation, quality_);
+}
+
+void CalibrationWindow::refresh_apply_readiness() {
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_APPLY), sampling_ready());
 }
 
 bool CalibrationWindow::handle_command(const WPARAM wparam) {
@@ -439,6 +445,8 @@ bool CalibrationWindow::handle_command(const WPARAM wparam) {
       preview_.clear_frame();
       begin_fallback_snapshot();
     }
+    update_match_status();
+    refresh_apply_readiness();
     return true;
   }
   if (id == IDC_CAL_SAMPLE_COLOR && notification == BN_CLICKED) {
@@ -469,6 +477,11 @@ bool CalibrationWindow::handle_command(const WPARAM wparam) {
   if (id == IDCANCEL) {
     EndDialog(dialog_, IDCANCEL);
     return true;
+  }
+  if (notification == EN_CHANGE || notification == CBN_SELCHANGE ||
+      notification == BN_CLICKED) {
+    update_match_status();
+    refresh_apply_readiness();
   }
   return false;
 }
@@ -683,28 +696,39 @@ layerc::core::PixelRule CalibrationWindow::current_rule_from_controls() const {
 
 void CalibrationWindow::update_match_status(const bool force) {
   if (mask_editor_.editing()) {
+    readiness_.invalidate();
+    refresh_apply_readiness();
     set_control_text(IDC_CAL_MATCH, L"Editing alpha mask — left drag ignores "
                                     L"pixels; right drag restores them.");
     return;
   }
   const auto &frame = preview_.frame();
-  if (!frame)
+  if (!frame) {
+    readiness_.invalidate();
+    refresh_apply_readiness();
     return;
+  }
   if (mode() == CalibrationMode::template_match) {
     if (template_state_.references.empty()) {
+      readiness_.invalidate();
+      refresh_apply_readiness();
       set_control_text(IDC_CAL_MATCH,
                        L"Capture or import at least one template reference.");
       return;
     }
     if (template_images_.size() != template_state_.references.size()) {
+      readiness_.invalidate();
+      refresh_apply_readiness();
       set_control_text(
           IDC_CAL_MATCH,
           L"One or more referenced template assets are unavailable.");
       return;
     }
     const auto now = GetTickCount64();
-    if (!force && now < next_template_match_at_)
+    if (!force && now < next_template_match_at_) {
+      refresh_apply_readiness();
       return;
+    }
     // Exact can consume the full 8M-comparison allowance. Keep that bounded
     // evaluation off the 15 Hz paint/capture cadence so the modal UI remains
     // responsive while still refreshing live status twice per second.
@@ -713,6 +737,8 @@ void CalibrationWindow::update_match_status(const bool force) {
     const auto result = template_matcher_.evaluate(
         state, template_images_, frame->view(), quality_,
         frame->available_region, frame->unavailable_regions);
+    readiness_.observe(state, result, quality_);
+    refresh_apply_readiness();
     if (!result.search_region_available) {
       set_control_text(
           IDC_CAL_MATCH,
@@ -729,8 +755,17 @@ void CalibrationWindow::update_match_status(const bool force) {
     return;
   }
   const auto rule = current_rule_from_controls();
+  if (!layerc::capture::region_is_available(rule.region, *frame)) {
+    readiness_.invalidate();
+    refresh_apply_readiness();
+    set_control_text(IDC_CAL_MATCH,
+                     L"Selected region is outside the capturable window area.");
+    return;
+  }
   const auto result =
       layerc::core::evaluate_pixel_rule(rule, frame->view(), quality_);
+  readiness_.observe(rule, result, quality_, true);
+  refresh_apply_readiness();
   std::wstring status = result.matched ? L"MATCHED now" : L"Not matched now";
   status += L"\nAverage " + color_text(result.average_color) +
             L", brightness " +
@@ -775,6 +810,14 @@ bool CalibrationWindow::apply() {
   const auto quality_index =
       SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0);
   quality_ = capture_quality_from_combobox(quality_index);
+  update_match_status();
+  if (!sampling_ready()) {
+    MessageBoxW(dialog_,
+                L"Capture a frame and evaluate the current predicate before applying calibration.",
+                L"Calibration sample required", MB_OK | MB_ICONINFORMATION);
+    refresh_apply_readiness();
+    return false;
+  }
   if (quality_ == layerc::core::CaptureQuality::exact &&
       MessageBoxW(
           dialog_,
@@ -797,7 +840,7 @@ bool CalibrationWindow::apply() {
           ? layerc::core::CaptureUnavailablePolicy::trigger_from_input
           : layerc::core::CaptureUnavailablePolicy::ignore;
   if (trigger_.mode == layerc::core::VisualTriggerMode::confirm_input &&
-      !contains_binding(profile_, trigger_.cooldown_id)) {
+      !layerc::core::has_binding(profile_, trigger_.cooldown_id)) {
     MessageBoxW(dialog_,
                 L"Input confirmation requires a captured input binding for "
                 L"this cooldown.",

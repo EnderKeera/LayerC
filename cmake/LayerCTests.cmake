@@ -102,6 +102,8 @@ layerc_add_test(layerc_automation_persistence_tests
 layerc_add_test(layerc_editor_document_tests
     SOURCES tests/editor_document_tests.cpp
         tests/editor_document_store_tests.cpp
+        tests/editor_document_ownership_tests.cpp
+        tests/editor_document_scan_tests.cpp
     LINK layerc_editor_core TIMEOUT 30)
 # Shared automation graph edits, simulator replay and trace files.
 layerc_add_test(layerc_editor_automation_tests
@@ -133,6 +135,13 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 endif()
 
 if(NOT WIN32)
+    # Test-only validator-derived workload helper, never installed. The GUI
+    # resource gate uses its compiled limits rather than a parallel schema.
+    add_executable(layerc_editor_resource_probe tools/linux-gui/resource_probe.cpp)
+    target_include_directories(layerc_editor_resource_probe PRIVATE src/editor/common)
+    target_link_libraries(layerc_editor_resource_probe PRIVATE layerc_editor_core)
+    layerc_enable_warnings(layerc_editor_resource_probe)
+
     layerc_add_test(layerc_linux_profile_store_tests
         SOURCES tests/linux_profile_store_tests.cpp
             src/platform/profile_transaction_testing.cpp
@@ -194,9 +203,7 @@ if(NOT WIN32)
             SOURCES tests/linux_wayland_paint_tests.cpp
             LINK layerc_wayland TIMEOUT 30)
     endif()
-    # The native suite ends with the daemon seam, whose providers need the
-    # X11-enabled session engine.
-    if(TARGET layerc_wayland AND LAYERC_HAVE_X11)
+    if(TARGET layerc_wayland)
         # Screencopy and the virtual pointer are test-only protocols: they
         # read pixels and synthesize input inside the disposable compositor
         # and must never link into layerd.
@@ -223,6 +230,15 @@ if(NOT WIN32)
         set_tests_properties(layerc_linux_wayland_native_tests PROPERTIES
             LABELS wayland SKIP_RETURN_CODE 77 TIMEOUT 60)
     endif()
+    layerc_add_test(layerc_linux_session_engine_tests
+        SOURCES tests/linux_session_engine_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30)
+    layerc_add_test(layerc_linux_display_route_tests
+        SOURCES tests/linux_display_route_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30)
+    layerc_add_test(layerc_linux_display_route_binding_tests
+        SOURCES tests/linux_display_route_binding_tests.cpp
+        LINK layerc_daemon_linux TIMEOUT 30)
     layerc_add_test(layerc_linux_display_adapters_tests
         SOURCES tests/linux_display_adapters_tests.cpp
         LINK layerc_daemon_linux TIMEOUT 30)
@@ -238,6 +254,12 @@ if(NOT WIN32)
     target_include_directories(layerc_linux_event_loop_tests PRIVATE
         src/daemon/linux
         src/platform/linux)
+
+    # Registry admission and automation health use a synthetic scan;
+    # keep this suite in the display-free headless gate.
+    layerc_add_test(layerc_linux_x11_registry_tests
+        SOURCES tests/linux_x11_registry_tests.cpp LINK layerc_daemon_linux
+        TIMEOUT 60)
 
     # X11 tracking probes run against Xvfb; the test skips (77) when no
     # display is available, so non-X builders stay green.
@@ -268,12 +290,6 @@ if(NOT WIN32)
             SOURCES tests/linux_x11_visual_tests.cpp LINK layerc_daemon_linux
             TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
             SKIP_RETURN_CODE 77)
-
-        # Registry admission and automation health use a synthetic scan;
-        # keep this suite in the display-free headless gate.
-        layerc_add_test(layerc_linux_x11_registry_tests
-            SOURCES tests/linux_x11_registry_tests.cpp LINK layerc_daemon_linux
-            TIMEOUT 60)
 
         # XI2 input + session replay. XTest is a test-only dependency:
         # it is never linked into layerd, which only ever reads input.
@@ -311,6 +327,10 @@ if(NOT WIN32)
         SOURCES tests/linux_live_draft_tests.cpp
         LINK layerc_daemon_linux TIMEOUT 30)
 
+    layerc_add_test(layerc_linux_lease_worker_tests
+        SOURCES tests/linux_lease_worker_tests.cpp
+        LINK layerc_editor_linux TIMEOUT 30)
+
     layerc_add_test(layerc_linux_control_ownership_tests
         SOURCES tests/linux_control_ownership_tests.cpp
         LINK layerc_linux TIMEOUT 30)
@@ -337,9 +357,22 @@ if(NOT WIN32)
     if(TARGET layerc_editor_fltk)
         layerc_add_test(layerc_linux_editor_widget_tests
             SOURCES tests/linux_editor_widget_tests.cpp
+                tests/linux_editor_dialog_tests.cpp
+                tests/linux_editor_accessibility_tests.cpp
+                tests/linux_editor_visual_contract_tests.cpp
+                tests/linux_editor_binding_capture_tests.cpp
+                tests/linux_editor_diagnostics_tests.cpp
+                tests/linux_editor_command_registry_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
             LABELS required editor RESOURCE_LOCK layerc_x11_display)
+        set_source_files_properties(
+            tests/linux_editor_accessibility_tests.cpp tests/linux_editor_diagnostics_tests.cpp
+            PROPERTIES COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
         layerc_editor_build_runtime(layerc_linux_editor_widget_tests)
+        if(X11_Xtst_LIB)
+            target_link_libraries(layerc_linux_editor_widget_tests PRIVATE ${X11_Xtst_LIB})
+            target_compile_definitions(layerc_linux_editor_widget_tests PRIVATE LAYERC_TEST_XTEST=1)
+        endif()
         layerc_add_test(layerc_linux_editor_autosave_tests
             SOURCES tests/linux_editor_autosave_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77

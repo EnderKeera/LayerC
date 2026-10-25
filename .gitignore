@@ -5,6 +5,9 @@
 # Local-only historical plans, one-off handoffs, and scratch files
 /PLAN.md
 /PLAN-v26-linux.md
+/docs/PLAN.md
+/docs/PLAN-v26-linux.md
+/archive/
 /scratch/
 /out/
 *.user
@@ -66,3 +69,20 @@ vcpkg_installed/
 *.dwo
 Testing/
 .cache/
+
+# Editor, OS, tool caches and local artifacts
+.vscode/
+.idea/
+.pytest_cache/
+.ruff_cache/
+Thumbs.db
+desktop.ini
+*.dmp
+*.msix
+*.appx
+*.tar
+*.tar.*
+*.tgz
+*.7z
+*.deb
+*.vhdx

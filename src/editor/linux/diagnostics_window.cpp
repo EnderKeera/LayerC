@@ -7,6 +7,9 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Multiline_Output.H>
+#include <FL/fl_draw.H>
+
+#include <algorithm>
 
 namespace layerc::editor {
 namespace {
@@ -19,11 +22,26 @@ std::string join(const RuntimeDiagnosticsView &view) {
 }
 } // namespace
 
+void fit_text_view(Fl_Window &window, Fl_Multiline_Output &text) {
+  fl_font(text.textfont(), text.textsize());
+  // Fl_Input_ draws inside its box frame with a small text margin.
+  int width = text.w() - Fl::box_dw(text.box()) - 6, height = 0;
+  if (width <= 0) return;
+  fl_measure(text.value(), width, height, 0);
+  const int needed = height + Fl::box_dh(text.box()) + fl_height();
+  if (needed <= text.h()) return;
+  int x = 0, y = 0, w = 0, h = 0;
+  Fl::screen_work_area(x, y, w, h, window.x(), window.y());
+  const int limit = std::max(window.h(), h - 40); // room for decorations
+  window.size(window.w(), std::min(window.h() + needed - text.h(), limit));
+}
+
 DiagnosticsWindow::DiagnosticsWindow()
     : window_(std::make_unique<Fl_Double_Window>(width, height, "Runtime Diagnostics — LayerE")) {
   window_->begin();
   text_ = new Fl_Multiline_Output(margin, margin, width - 2 * margin,
                                   height - 3 * margin - button_height, "Runtime diagnostics");
+  text_->wrap(1);
   text_->align(FL_ALIGN_TOP_LEFT | FL_ALIGN_INSIDE);
   text_->labeltype(FL_NO_LABEL);
   text_->textfont(FL_COURIER);
@@ -57,6 +75,7 @@ void DiagnosticsWindow::refresh() {
   else if (!status.error.empty())
     view.lines.push_back("Status problem: " + status.error);
   text_->value(join(view).c_str());
+  fit_text_view(*window_, *text_);
   text_->redraw();
 }
 
@@ -75,6 +94,7 @@ void show_text_dialog(const char *title, const std::string &text, const std::str
   Fl_Double_Window dialog(560, 400, title);
   auto *output = new Fl_Multiline_Output(margin, margin, 560 - 2 * margin,
                                          400 - 3 * margin - button_height, title);
+  output->wrap(1);
   output->labeltype(FL_NO_LABEL);
   output->value(text.c_str());
   const int y = 400 - margin - button_height;
@@ -87,7 +107,9 @@ void show_text_dialog(const char *title, const std::string &text, const std::str
   }
   auto *close = new Fl_Button(560 - margin - 110, y, 110, button_height, "Close");
   close->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
+  dialog.resizable(output);
   dialog.end();
+  fit_text_view(dialog, *output);
   dialog.set_modal();
   dialog.show();
   close->take_focus();

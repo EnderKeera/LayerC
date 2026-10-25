@@ -7,13 +7,7 @@
 namespace layerc::platform {
 namespace {
 
-[[nodiscard]] std::uint32_t sampled_coordinate(const std::uint32_t index,
-                                               const std::uint32_t source,
-                                               const std::uint32_t output) noexcept {
-  return std::min<std::uint32_t>(
-      source - 1U, static_cast<std::uint32_t>(
-                       (static_cast<std::uint64_t>(index) * source + source / 2U) / output));
-}
+using capture::sampled_coordinate;
 
 [[nodiscard]] std::uint32_t scale(const std::int64_t logical, const std::int64_t logical_size,
                                   const std::uint32_t buffer_size) noexcept {

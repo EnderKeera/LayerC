@@ -149,6 +149,38 @@ void control_response_acceptance_contracts() {
   ResponseFixture fixture(success);
   (void)expect(control::signal_profile_reload(), "valid reload acknowledgement succeeds");
   fixture.finish();
+  // A coded failure keeps its machine code, prose and payload through one parse,
+  // while the legacy roundtrip still reports the daemon's prose alone.
+  const std::string coded =
+      control::encode_control_response(false, "renamed presentation", R"({"cursor":7})",
+                                       "expired");
+  {
+    const layerc::test::TempDirectory typed_root("layerc-response-typed");
+    const layerc::test::ScopedEnvironment typed_runtime("XDG_RUNTIME_DIR", typed_root.path());
+    (void)expect(typed_runtime.applied(), "typed response runtime is private");
+    ResponseFixture failing(coded);
+    const auto call = control::control_call(control::ControlCommand::trace, "{}",
+                                            std::chrono::seconds(5));
+    failing.finish();
+    (void)expect(!call.ok && call.code == "expired" &&
+                     call.error == "renamed presentation" && call.payload &&
+                     call.payload->find("cursor") &&
+                     call.payload->find("cursor")->as_integer() == 7,
+                 "the typed call preserves code, prose and payload of a failure");
+  }
+  {
+    const layerc::test::TempDirectory legacy_root("layerc-response-legacy");
+    const layerc::test::ScopedEnvironment legacy_runtime("XDG_RUNTIME_DIR", legacy_root.path());
+    (void)expect(legacy_runtime.applied(), "legacy response runtime is private");
+    ResponseFixture failing(coded);
+    std::string error;
+    const auto legacy = control::control_roundtrip(
+        control::encode_control_request(control::ControlCommand::trace, "{}"), error,
+        std::chrono::seconds(5));
+    failing.finish();
+    (void)expect(!legacy && error == "renamed presentation",
+                 "the legacy roundtrip still reports only the daemon prose");
+  }
 }
 
 void control_response_backpressure_contracts() {

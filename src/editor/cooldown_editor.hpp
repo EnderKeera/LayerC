@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,7 +24,8 @@ namespace layerc::editor {
 // the injected callbacks; it has no access to its host window's state.
 class CooldownEditor final {
 public:
-  using ChangeRecorder = std::function<void(DocumentChangeKind)>;
+  using EditReporter =
+      std::function<bool(const ModuleEditOutcome &, DocumentChangeKind)>;
   struct Host {
     // Commits pending field edits before a structural change.
     std::function<void()> sync_fields;
@@ -36,7 +38,7 @@ public:
   };
 
   CooldownEditor(ProfileDocument &document, EditorShell &shell,
-                 const DialogTheme &theme, ChangeRecorder record_change,
+                 const DialogTheme &theme, EditReporter report_edit,
                  Host host) noexcept;
 
   CooldownEditor(const CooldownEditor &) = delete;
@@ -49,7 +51,10 @@ public:
     return capture_.capturing_binding();
   }
 
-  [[nodiscard]] layerc::core::CooldownDefinition *selected();
+  [[nodiscard]] const layerc::core::CooldownDefinition *selected() const;
+  // The selected cooldown's index in the document, so callers can resolve the
+  // same index inside a candidate profile without holding a pointer.
+  [[nodiscard]] std::optional<std::size_t> selected_index() const;
   void refresh_list(int selection = 0);
   void refresh_selected_label();
   void refresh_controls();
@@ -75,7 +80,7 @@ private:
   ProfileDocument &document_;
   EditorShell &shell_;
   const DialogTheme &theme_;
-  ChangeRecorder record_change_;
+  EditReporter report_edit_;
   Host host_;
   HWND list_{};
   BindingCapture capture_;

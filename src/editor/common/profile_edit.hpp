@@ -17,6 +17,9 @@ namespace layerc::editor {
 
 // "name — app.exe (off)" in UTF-8: the list text every frontend shows.
 [[nodiscard]] std::string
+profile_list_text(std::string_view name, std::string_view executable_name,
+                  bool enabled);
+[[nodiscard]] std::string
 profile_list_text(const layerc::core::GameProfile &profile);
 
 // Smallest "<base>" then "<base>-<n>" id unused by the predicate.

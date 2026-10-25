@@ -5,11 +5,16 @@
 #include "layerc/core/panel_geometry.hpp"
 #include "layerc/core/hid.hpp"
 #include "layerc/core/json.hpp"
+#include "../src/core/profile_extensions.hpp"
 #include <limits>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 
 namespace layerc::test {
@@ -231,6 +236,29 @@ void test_profile_serialization() {
   expect(serialize_profile_json(*round_tripped) == serialized,
          "serializer should emit byte-stable JSON after a round trip");
 
+  auto wide_profile = profile;
+  json::Value::Object wide_fields;
+  for (std::size_t index = 0; index < 18'000; ++index)
+    wide_fields.emplace("u" + std::to_string(index), json::Value(nullptr));
+  wide_profile.extra_fields["futureWide"] = json::Value(std::move(wide_fields));
+  const auto compact_profile = serialize_profile_json(wide_profile);
+  const auto compact_value = json::parse(compact_profile);
+  const auto *compact_root = std::get_if<json::Value>(&compact_value);
+  if (!expect(compact_root != nullptr,
+              "compact oversized-pretty profile parses as JSON")) return;
+  std::string pretty_profile;
+  json::append_value(pretty_profile, *compact_root, 2);
+  pretty_profile += "\r\n";
+  const auto compact_profile_result = parse_profile_json(compact_profile);
+  const auto *compact_round_trip =
+      std::get_if<GameProfile>(&compact_profile_result);
+  expect(pretty_profile.size() > max_profile_json_bytes &&
+             compact_profile.size() <= max_profile_json_bytes &&
+             compact_round_trip != nullptr &&
+             compact_round_trip->extra_fields.at("futureWide") ==
+                 wide_profile.extra_fields.at("futureWide"),
+         "oversized pretty output falls back to complete compact JSON within the wire limit");
+
   // Opaque data is value-owned, not tied to JSON text or array positions.
   auto extended = profile;
   extended.schema_version = profile_schema_version;
@@ -287,6 +315,151 @@ void test_profile_serialization() {
          "unknown root, entity, nested HID, bar, module and token fields round-trip exactly");
   expect(restored && serialize_profile_json(*restored) == encoded,
          "opaque JSON including full-width integers has byte-stable canonical output");
+
+  // Field declarations are the one inventory: both the reader/serializer keys
+  // and the extension classification derive from them, so these checks derive
+  // their expectations from the same declaration instead of a key list.
+  {
+    namespace detail = layerc::core::detail;
+    const auto parsed_encoded = json::parse(encoded);
+    const auto *encoded_root = std::get_if<json::Value>(&parsed_encoded);
+    if (!expect(encoded_root != nullptr,
+                "the extended fixture serializes to parseable JSON")) return;
+    const auto first_element = [](const json::Value &parent,
+                                  const std::string_view key)
+        -> const json::Value * {
+      const auto *array = parent.find(key);
+      if (array == nullptr || !array->is_array() || array->as_array().empty())
+        return nullptr;
+      return &array->as_array().front();
+    };
+    const auto check_object = [](const json::Value *object,
+                                 const detail::ProfileObject kind,
+                                 const std::string &path) {
+      if (!expect(object != nullptr && object->is_object(),
+                  path + " is a serialized object")) return;
+      const auto known = detail::known_profile_fields(kind);
+      for (const auto &[key, value] : object->as_object()) {
+        // The fixture's only intentional opaque field.
+        if (key == "future") continue;
+        expect(std::ranges::find(known, key) != known.end(),
+               path + "." + key + " is declared by its object");
+      }
+    };
+    const auto *game_object = encoded_root->find("game");
+    const auto *module_object = first_element(*encoded_root, "modules");
+    const auto *cooldown_object = first_element(*encoded_root, "cooldowns");
+    const auto *group_object = first_element(*encoded_root, "cooldownGroups");
+    const auto *hid_object = first_element(*encoded_root, "hidBindings");
+    const auto *device_object = hid_object == nullptr
+                                    ? nullptr
+                                    : hid_object->find("device");
+    const auto *control_object = hid_object == nullptr
+                                     ? nullptr
+                                     : hid_object->find("control");
+    const auto *panel_object = first_element(*encoded_root, "panels");
+    const auto *bar_object = panel_object == nullptr
+                                 ? nullptr
+                                 : panel_object->find("bar");
+    const auto *binding_object = first_element(*encoded_root, "bindings");
+    const auto *token_object =
+        binding_object == nullptr ? nullptr : first_element(*binding_object, "chord");
+    check_object(encoded_root, detail::ProfileObject::root, "$");
+    check_object(game_object, detail::ProfileObject::game, "$.game");
+    check_object(module_object, detail::ProfileObject::module, "$.modules[0]");
+    check_object(cooldown_object, detail::ProfileObject::cooldown, "$.cooldowns[0]");
+    check_object(group_object, detail::ProfileObject::group, "$.cooldownGroups[0]");
+    check_object(hid_object, detail::ProfileObject::hid, "$.hidBindings[0]");
+    check_object(device_object, detail::ProfileObject::device,
+                 "$.hidBindings[0].device");
+    check_object(control_object, detail::ProfileObject::control,
+                 "$.hidBindings[0].control");
+    check_object(panel_object, detail::ProfileObject::panel, "$.panels[0]");
+    check_object(bar_object, detail::ProfileObject::bar, "$.panels[0].bar");
+    check_object(binding_object, detail::ProfileObject::binding, "$.bindings[0]");
+    check_object(token_object, detail::ProfileObject::token, "$.bindings[0].chord[0]");
+
+    const std::array kinds{
+        std::pair{detail::ProfileObject::root, std::string_view{"root"}},
+        std::pair{detail::ProfileObject::game, std::string_view{"game"}},
+        std::pair{detail::ProfileObject::module, std::string_view{"module"}},
+        std::pair{detail::ProfileObject::cooldown, std::string_view{"cooldown"}},
+        std::pair{detail::ProfileObject::group, std::string_view{"group"}},
+        std::pair{detail::ProfileObject::hid, std::string_view{"hid"}},
+        std::pair{detail::ProfileObject::device, std::string_view{"device"}},
+        std::pair{detail::ProfileObject::control, std::string_view{"control"}},
+        std::pair{detail::ProfileObject::panel, std::string_view{"panel"}},
+        std::pair{detail::ProfileObject::bar, std::string_view{"bar"}},
+        std::pair{detail::ProfileObject::binding, std::string_view{"binding"}},
+        std::pair{detail::ProfileObject::token, std::string_view{"token"}},
+    };
+    const auto payload_value = json::Value(extras);
+    const auto throws_invalid_argument = [](const auto &call) {
+      try {
+        call();
+      } catch (const std::invalid_argument &) {
+        return true;
+      } catch (...) {
+        return false;
+      }
+      return false;
+    };
+    for (const auto &[kind, kind_name] : kinds) {
+      const auto known = detail::known_profile_fields(kind);
+      if (!expect(!known.empty(), std::string(kind_name) + " declares fields")) continue;
+      // A declared name is automatically classified: it never becomes opaque.
+      json::Value::Object declared;
+      for (const auto &name : known) declared.emplace(std::string(name), json::Value(nullptr));
+      declared.emplace("futureUnrecognized", payload_value);
+      const auto opaque =
+          detail::unknown_profile_fields(json::Value(std::move(declared)), kind);
+      expect(opaque.size() == 1 && opaque.contains("futureUnrecognized") &&
+                 opaque.at("futureUnrecognized") == payload_value,
+             "declared " + std::string(kind_name) +
+                 " names are excluded from opaque capture automatically");
+      // No declared name may be re-introduced as an extension, including the
+      // legacy-only key and names a conditional serializer branch omits.
+      for (const auto &name : known)
+        expect(throws_invalid_argument([&] {
+                 (void)detail::with_profile_extensions(
+                     json::Value::Object{},
+                     json::Value::Object{{std::string(name), json::Value(nullptr)}},
+                     kind);
+               }),
+               "extension collision with declared " + std::string(kind_name) +
+                   " field is refused");
+    }
+    // An emitted object field that someone forgot to declare must still be
+    // refused, so a new serializer member cannot silently drop opaque data.
+    expect(throws_invalid_argument([] {
+             (void)detail::with_profile_extensions(
+                 json::Value::Object{{"addedLater", json::Value(true)}},
+                 json::Value::Object{{"addedLater", json::Value(false)}},
+                 detail::ProfileObject::root);
+           }),
+           "an unregistered emitted field cannot overwrite an extension");
+
+    // A recognized legacy field is migrated on parse, never emitted again.
+    const auto legacy_serialized = serialize_profile_json(*source);
+    expect(source->cooldowns.front().recovery == RecoveryMode::sequential &&
+               !source->cooldowns.front().extra_fields.contains("stackCharges") &&
+               legacy_serialized.find("stackCharges") == std::string::npos,
+           "legacy stackCharges is migrated and never emitted");
+    const auto legacy_cooldowns =
+        layerc::core::profile_keys::cooldown::fields;
+    std::size_t legacy_only{};
+    bool stack_charges_declared{};
+    for (const auto &field : legacy_cooldowns) {
+      if (field.recognized_legacy_only) ++legacy_only;
+      if (field.name == "stackCharges")
+        stack_charges_declared = field.recognized_legacy_only;
+    }
+    expect(legacy_only == 1 && stack_charges_declared &&
+               std::ranges::find(layerc::core::profile_keys::cooldown::names,
+                                 std::string_view("stackCharges")) !=
+                   layerc::core::profile_keys::cooldown::names.end(),
+           "exactly the retired stackCharges declaration is legacy-only");
+  }
   auto changed = extended;
   changed.extra_fields["future"] = json::Value(false);
   expect(changed != extended, "opaque edits participate in document value equality");

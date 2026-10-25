@@ -128,7 +128,8 @@ class CaptureFixtureTests(unittest.TestCase):
         import ast
 
         source = (Path(__file__).parents[1] / "linux-editor-gui-tests.sh").read_text(encoding="utf-8")
-        marker = "python3 - \"$profiles\" \"$GUI_MODE\" <<'PY'\n"
+        marker = "python3 - \"$profiles\" \"$GUI_MODE\" \"$here/linux-gui\" \"$out\" <<'PY'\n"
+        self.assertEqual(source.count(marker), 1, "shared fixture heredoc must be unique")
         program = source.split(marker, 1)[1].split("\nPY\n", 1)[0]
         updates = [node for node in ast.walk(ast.parse(program))
                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)

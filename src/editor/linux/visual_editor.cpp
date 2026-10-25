@@ -30,15 +30,17 @@ struct LinuxVisualEditor::Impl {
 
   Impl(EditorApp &owner, Fl_Group &page) : app(owner) {
     page.begin();
-    target = new Fl_Choice(290, 85, 730, 28, "Visual target cooldown");
+    target = new Fl_Choice(290, 105, 730, 28, "Visual target cooldown");
     target->align(FL_ALIGN_TOP_LEFT);
-    summary = new Fl_Multiline_Output(290, 145, 730, 90, "Visual assignment");
+    summary = new Fl_Multiline_Output(290, 165, 730, 90, "Visual assignment");
+    summary->wrap(1);
     summary->align(FL_ALIGN_TOP_LEFT);
-    enabled = new Fl_Check_Button(290, 245, 300, 30, "Visual trigger enabled");
-    isolated = new Fl_Check_Button(620, 245, 400, 30, "Isolated visual runtime");
-    calibrate = new Fl_Button(290, 290, 350, 30, "Calibrate visual...");
-    remove = new Fl_Button(660, 290, 360, 30, "Remove visual assignment");
-    hint = new Fl_Multiline_Output(290, 355, 730, 75, "Visual availability / preservation");
+    enabled = new Fl_Check_Button(290, 265, 300, 30, "Visual trigger enabled");
+    isolated = new Fl_Check_Button(620, 265, 400, 30, "Isolated visual runtime");
+    calibrate = new Fl_Button(290, 310, 350, 30, "Calibrate visual...");
+    remove = new Fl_Button(660, 310, 360, 30, "Remove visual assignment");
+    hint = new Fl_Multiline_Output(290, 370, 730, 75, "Visual availability / preservation");
+    hint->wrap(1);
     hint->align(FL_ALIGN_TOP_LEFT); hint->textsize(11);
     for (Fl_Widget *w : std::array<Fl_Widget *, 5>{target, enabled, isolated, calibrate, remove})
       w->callback([](Fl_Widget *widget, void *data) {
@@ -98,14 +100,15 @@ struct LinuxVisualEditor::Impl {
   auto unchanged_guard() const {
     const auto &document = app.session.document();
     return [this, cooldown = selected_id, path = document.path(),
-            visual_state = document.visual_state(), automation_state = document.automation_state(),
-            source = EditorProfileSnapshot{document.profile(), document.visual(), document.automation()}] {
+            generation = app.session.edit_generation(),
+            visual_state = document.visual_state(),
+            automation_state = document.automation_state()] {
       const auto &session = app.session;
-      return session.has_document() && selected_id == cooldown && session.document().path() == path &&
-             session.document().visual_state() == visual_state &&
-             session.document().automation_state() == automation_state &&
-             source == EditorProfileSnapshot{session.document().profile(), session.document().visual(),
-                                              session.document().automation()};
+      return session.has_document() && selected_id == cooldown &&
+          session.edit_generation() == generation &&
+          session.document().path() == path &&
+          session.document().visual_state() == visual_state &&
+          session.document().automation_state() == automation_state;
     };
   }
   void handle(Fl_Widget *widget) {
@@ -134,6 +137,7 @@ struct LinuxVisualEditor::Impl {
     if (widget == remove) {
       const auto cooldown = selected_id;
       const auto unchanged = unchanged_guard();
+      fl_message_title("Remove visual assignment");
       if (fl_choice("Remove this cooldown's visual assignment? Shared observations stay in use.",
                     "Cancel", "Remove assignment", nullptr) != 1) return;
       if (!unchanged()) {
@@ -150,43 +154,34 @@ struct LinuxVisualEditor::Impl {
     session.end_text_edit();
     const auto path = session.document().path();
     const auto cooldown = selected_id;
-    const auto visual_state = session.document().visual_state();
-    const EditorProfileSnapshot source{session.document().profile(), session.document().visual(),
-                                       session.document().automation()};
     const auto unchanged = unchanged_guard();
-    auto seed = CalibrationModel::open(source.profile, cooldown, source.visual_profile);
+    auto seed = CalibrationModel::open(session.document().profile(), cooldown,
+                                       session.document().visual());
     if (!seed) { app.report("Unavailable: the selected cooldown no longer exists."); return; }
-    SharedObservationChoice choice = SharedObservationChoice::update_shared;
-    std::vector<platform::EncodedTemplateAsset> assets;
     const auto chooser = [&] {
+      fl_message_title("Shared observation");
       const auto answer = fl_choice("Other cooldowns share this observation. Update all or clone for this cooldown?",
                                     "Cancel", "Update shared", "Clone for cooldown");
-      choice = answer == 1 ? SharedObservationChoice::update_shared :
-               answer == 2 ? SharedObservationChoice::clone : SharedObservationChoice::cancel;
-      return choice;
+      return answer == 1 ? SharedObservationChoice::update_shared :
+             answer == 2 ? SharedObservationChoice::clone : SharedObservationChoice::cancel;
     };
-    // Apply runs the complete merge, shared choice and asset preflight while
-    // the dialog keeps its draft, so a refusal never discards the calibration.
-    const CalibrationAccept accept = [&](const CalibrationDraft &draft) -> std::optional<std::string> {
-      if (!unchanged()) return "the active document changed during calibration.";
-      const auto preflight = merge_calibration_result(source.visual_profile,
-          visual_state == platform::ModuleSidecarState::invalid,
-          source.profile, cooldown, draft.visual_json, chooser);
-      if (const auto *error = std::get_if<VisualMergeRefusal>(&preflight)) return error->message;
-      auto prepared = platform::prepare_profile_template_assets(
-          path, draft.images, session.owned_template_assets());
-      if (const auto *error = std::get_if<platform::VisualAssetError>(&prepared)) return error->message;
-      assets = std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(prepared));
-      return std::nullopt;
+    // Apply prepares the complete typed merge and asset preflight while the
+    // dialog keeps its draft, so a refusal never discards the calibration.
+    const CalibrationAccept accept = [&](const CalibrationDraft &draft) -> CalibrationAcceptance {
+      if (!unchanged())
+        return std::string("The active document changed during calibration.");
+      auto accepted = session.prepare_calibration(cooldown, draft.visual, draft.images, chooser);
+      if (!unchanged())
+        return std::string("The active document or cooldown changed during calibration.");
+      return accepted;
     };
-    auto draft = run_x11_calibration(path, std::move(*seed), accept,
-                                     session.owned_template_assets());
-    if (!draft) { app.report("Calibration cancelled. No calibration data or assets were written."); return; }
+    auto accepted = run_x11_calibration(path, std::move(*seed), accept,
+                                        session.owned_template_assets());
+    if (!accepted) { app.report("Calibration cancelled. No calibration data or assets were written."); return; }
     if (!unchanged()) { app.report("Not applied: the active document changed during calibration."); return; }
-    // The session owns the template bytes; Save publishes them with the
-    // profile and sidecars in one durable transaction.
-    if (const auto error = session.apply_calibration(cooldown, draft->visual_json,
-                                                     [&] { return choice; }, std::move(assets))) {
+    // The session owns the prepared template bytes; Save publishes them with
+    // the profile and sidecars in one durable transaction.
+    if (const auto error = session.apply_calibration(std::move(*accepted))) {
       app.report("Not applied: " + *error); return;
     }
     // A refused durable Save keeps the complete calibration in the document

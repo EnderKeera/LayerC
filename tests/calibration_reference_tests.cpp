@@ -1,4 +1,6 @@
 #include "calibration_window.hpp"
+#include "calibration_mode.hpp"
+#include "calibration_resource.h"
 #include "test_support.hpp"
 
 #include "layerc/platform/visual_assets_windows.hpp"
@@ -47,6 +49,26 @@ struct CalibrationWindowTestAccess {
   static const auto &images(const CalibrationWindow &window) {
     return window.template_images_;
   }
+  static void attach(CalibrationWindow &window, HWND dialog) {
+    window.dialog_ = dialog;
+    window.rule_.id = "readiness-pixel";
+    window.rule_.name = "Readiness pixel";
+    window.rule_.region = {0.0, 0.0, 1.0, 1.0};
+    window.target_color_ = 0xFFFFFFU;
+    window.quality_ = layerc::core::CaptureQuality::balanced;
+    window.initialize_controls();
+  }
+  static bool ready(const CalibrationWindow &window) {
+    return window.sampling_ready();
+  }
+  static void evaluate(CalibrationWindow &window) {
+    window.update_match_status();
+  }
+  static void quality(CalibrationWindow &window,
+                      layerc::core::CaptureQuality value) {
+    window.quality_ = value;
+    window.refresh_apply_readiness();
+  }
   static void redraw(CalibrationWindow &window, HWND preview,
                      POINT start, POINT end) {
     window.preview_.attach(preview);
@@ -63,6 +85,16 @@ namespace {
 
 using layerc::calibration::CalibrationWindow;
 using Access = layerc::calibration::CalibrationWindowTestAccess;
+
+INT_PTR CALLBACK readiness_dialog_proc(HWND, UINT message, WPARAM, LPARAM) {
+  return message == WM_INITDIALOG ? TRUE : FALSE;
+}
+struct ReadinessDialog final {
+  HWND handle = CreateDialogParamW(
+      GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_CALIBRATION), nullptr,
+      readiness_dialog_proc, 0);
+  ~ReadinessDialog() { if (handle != nullptr) DestroyWindow(handle); }
+};
 using layerc::core::NormalizedRegion;
 using layerc::test::expect;
 
@@ -231,4 +263,47 @@ void calibration_reference_negative_contracts() {
   const auto before_small_capture = snapshot(window);
   expect(!Access::capture(window) && snapshot(window) == before_small_capture,
          "a crop with fewer than 64 pixels must fail without installing a reference");
+}
+
+void calibration_sampling_readiness_contracts() {
+  using layerc::core::CaptureQuality;
+  ReadinessDialog dialog;
+  if (!expect(dialog.handle != nullptr,
+              "the hidden calibration readiness resource must load")) return;
+  CalibrationWindow window({});
+  Access::attach(window, dialog.handle);
+  const HWND apply = GetDlgItem(dialog.handle, IDC_CAL_APPLY);
+  expect(!Access::ready(window) && !IsWindowEnabled(apply),
+         "untouched native calibration must disable Apply");
+  auto captured = frame(11);
+  captured->available_region = {0.0, 0.0, 1.0, 1.0};
+  Access::frame(window, captured);
+  Access::evaluate(window);
+  expect(Access::ready(window) && IsWindowEnabled(apply),
+         "a genuinely evaluated negative pixel result enables native Apply");
+  Access::quality(window, CaptureQuality::low);
+  expect(!Access::ready(window) && !IsWindowEnabled(apply),
+         "native quality changes cannot reuse differently sampled evidence");
+  Access::evaluate(window);
+  expect(Access::ready(window) && IsWindowEnabled(apply),
+         "native reevaluation records the newly selected quality");
+  Access::frame(window, nullptr);
+  Access::evaluate(window);
+  expect(!Access::ready(window) && !IsWindowEnabled(apply),
+         "clearing the native preview clears sampling readiness");
+  layerc::core::TemplateState state;
+  state.id = "readiness-template";
+  state.name = "Readiness template";
+  state.references.push_back({.asset_sha256 = std::string(64, 'a')});
+  Access::load(window, state);
+  SendDlgItemMessageW(dialog.handle, IDC_CAL_PREDICATE, CB_SETCURSEL,
+      layerc::calibration::calibration_mode_index(
+          layerc::calibration::CalibrationMode::template_match), 0);
+  Access::evaluate(window);
+  expect(!Access::ready(window) && !IsWindowEnabled(apply),
+         "loaded native references without a captured frame are not evidence");
+  Access::frame(window, captured);
+  Access::evaluate(window);
+  expect(!Access::ready(window) && !IsWindowEnabled(apply),
+         "missing native template image bytes cannot enable Apply");
 }

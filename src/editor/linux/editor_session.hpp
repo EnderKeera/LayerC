@@ -1,5 +1,6 @@
 #pragma once
 
+#include "calibration_result.hpp"
 #include "daemon_link.hpp"
 #include "document_commit.hpp"
 #include "profile_document.hpp"
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -57,7 +59,10 @@ public:
       std::filesystem::path directory = layerc::platform::profile_directory());
 
   void rescan();
-  [[nodiscard]] const layerc::platform::ProfileDirectoryScan &profiles() const {
+  // Rows are display/identity summaries only and must never be committed.
+  // Opening loads a full bundle; saves and exports use full disk/document data.
+  [[nodiscard]] const layerc::platform::ProfileSummaryDirectoryScan &
+  profiles() const {
     return scan_;
   }
   [[nodiscard]] const std::filesystem::path &directory() const { return directory_; }
@@ -66,7 +71,6 @@ public:
 
   [[nodiscard]] bool has_document() const noexcept { return opened_; }
   [[nodiscard]] bool is_draft() const noexcept { return opened_ && document_.path().empty(); }
-  [[nodiscard]] ProfileDocument &document() noexcept { return document_; }
   [[nodiscard]] const ProfileDocument &document() const noexcept { return document_; }
   // Unsaved edits that would be lost (any draft counts).
   [[nodiscard]] bool has_unsaved_changes() const;
@@ -99,12 +103,19 @@ public:
       const std::function<std::optional<std::string>(
           std::optional<layerc::core::VisualProfile> &)> &change,
       bool text_change = false);
-  // Takes ownership of the calibration's new template bytes; the next Save
-  // publishes them with the profile and sidecars in one durable transaction.
-  [[nodiscard]] std::optional<std::string> apply_calibration(
-      std::string_view cooldown_id, std::string_view visual_json,
-      const std::function<SharedObservationChoice()> &choose_shared,
-      std::vector<layerc::platform::EncodedTemplateAsset> assets = {});
+  // Merges one typed calibration result and preflights its template bytes
+  // without changing the document, history or owned bytes. The accepted value
+  // carries the generation/path tokens the caller must return to apply it.
+  [[nodiscard]] CalibrationAcceptance prepare_calibration(
+      std::string_view cooldown_id,
+      const layerc::core::VisualProfile &calibration,
+      std::span<const layerc::core::TemplateImage> images,
+      const std::function<SharedObservationChoice()> &choose_shared) const;
+  // Takes ownership of a prepared calibration's new template bytes; the next
+  // Save publishes them with the profile and sidecars in one durable
+  // transaction. Refuses a stale generation/path or an invalid module.
+  [[nodiscard]] std::optional<std::string>
+  apply_calibration(AcceptedCalibration accepted);
   [[nodiscard]] const std::vector<layerc::platform::EncodedTemplateAsset> &
   owned_template_assets() const noexcept {
     return owned_assets_;
@@ -115,13 +126,16 @@ public:
   // references, refusing when a group or rule still depends on it.
   [[nodiscard]] std::optional<std::string> remove_cooldown(std::string_view id);
   void end_text_edit();
-  [[nodiscard]] bool can_undo() const { return document_.history().can_undo(); }
-  [[nodiscard]] bool can_redo() const { return document_.history().can_redo(); }
+  [[nodiscard]] bool can_undo() const { return document_.can_undo(); }
+  [[nodiscard]] bool can_redo() const { return document_.can_redo(); }
   bool undo();
   bool redo();
 
   [[nodiscard]] SessionSaveOutcome save(const ConfirmUpgrade &confirm_upgrade,
-                                        bool prompt_upgrade = true);
+                                        SaveMode mode = SaveMode::manual);
+  // Notified once after every accepted change reaches its final state; the
+  // generation has already advanced and no refusal or unchanged edit notifies.
+  void set_change_listener(std::function<void()> listener);
   // Enables or disables a saved profile on disk. The open document must
   // have no unsaved edits, so enablement never publishes them implicitly.
   [[nodiscard]] OperationOutcome set_enabled(std::size_t row, bool enabled,
@@ -144,22 +158,16 @@ public:
 
 private:
   void mark_changed(bool text_change = false);
-  void restore_visual_history(std::optional<layerc::core::VisualProfile> visual);
-  void accept_visual(std::optional<layerc::core::VisualProfile> visual,
-                     bool text_change = false);
   // Drops owned template bytes that neither the document nor any snapshot
   // history can restore still references.
   void release_unreachable_assets();
   [[nodiscard]] OperationOutcome reload_report(const std::string &done);
 
   std::filesystem::path directory_;
-  layerc::platform::ProfileDirectoryScan scan_;
+  layerc::platform::ProfileSummaryDirectoryScan scan_;
   ProfileDocument document_;
   // Read-only companion data is kept for a duplicate, never edited by this UI.
   layerc::platform::CompanionSidecarLoad companion_;
-  // An unsaved repair can be undone back to the original unreadable state,
-  // not to a deletion intent. Cleared only after a successful commit or reopen.
-  layerc::platform::VisualSidecarLoad unreadable_visual_;
   // Template bytes this document owns that its store may not hold yet: a
   // duplicate's original encoded identities and applied calibration images.
   // Save publishes the referenced ones inside its bundle transaction; the rest
@@ -168,6 +176,7 @@ private:
   std::vector<layerc::platform::EncodedTemplateAsset> owned_assets_;
   std::uint64_t edit_generation_{};
   bool last_edit_was_text_{};
+  std::function<void()> change_listener_;
   bool opened_{};
 };
 

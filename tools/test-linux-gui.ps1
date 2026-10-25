@@ -4,10 +4,18 @@
 Runs the Linux LayerE GUI walkthrough, or an agent bridge session, in WSL.
 
 .DESCRIPTION
+This is the Windows host launcher only; the shell runner owns Linux session setup,
+cases, gates, reports, and cleanup.
 Walkthrough (default): records the source revision, mirrors this checkout into
 a dedicated Linux directory, builds the editor targets, and runs
 tools/linux-editor-gui-tests.sh in a private Xvfb/Openbox session. Evidence
 goes to a unique out\linux-gui\<run>\ directory; the exit code is the gate.
+
+Limits: select one frozen validator-derived document using -LimitInputs and
+-LimitCase. Record cold start, real bounded-history save or trace import,
+refusal/data preservation and recovery, plus a continuous 48 MiB peak gate.
+The idle/startup 20 MiB and idle CPU targets are unchanged. Derive inputs once
+with tools/linux-gui/limit_inputs.py create; never regenerate them per case.
 
 Session: the same setup, but the computer-use bridge stays open for one
 agent. Drive it with -Mode Call -Request '<json>' (one action or observation
@@ -23,7 +31,7 @@ PowerShell 7.3+ is required for faithful native argument passing.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Walkthrough', 'Resources', 'Session', 'Call', 'Stop')]
+    [ValidateSet('Walkthrough', 'Resources', 'Peaks', 'Limits', 'Session', 'Call', 'Stop')]
     [string]$Mode = 'Walkthrough',
     [string]$Request = '',
     [string]$Distro = 'Debian',
@@ -31,6 +39,8 @@ param(
     [string]$SourceDir = '~/layerc-gui-src',
     [string]$BuildDir = '~/layerc-gui-build',
     [string[]]$CMakeArgs = @(),
+    [string]$LimitInputs = '',
+    [string]$LimitCase = '',
     [int]$IdleSeconds = 60,
     [int]$SessionSeconds = 1800
 )
@@ -38,6 +48,11 @@ param(
 $ErrorActionPreference = 'Stop'
 # Faithful argument boundaries for native calls, whatever the caller's setting.
 $PSNativeCommandArgumentPassing = 'Windows'
+if ($Mode -eq 'Limits') {
+    if (-not $LimitInputs -or -not $LimitCase) { throw 'Limits requires -LimitInputs and -LimitCase.' }
+} elseif ($LimitInputs -or $LimitCase) {
+    throw '-LimitInputs and -LimitCase require -Mode Limits.'
+}
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repositoryRoot = Split-Path -Parent $scriptRoot
 Import-Module (Join-Path $scriptRoot 'LayerC.Tools.psm1') -Force
@@ -179,6 +194,11 @@ function Get-RunnerArguments {
         '--idle-seconds', "$IdleSeconds", '--session-seconds', "$SessionSeconds",
         '--expect-stamp', "$($Run.WslDirectory)/build-stamp.txt")
     if ($EnvScript) { $arguments += @('--env', $EnvScript) }
+    if ($RunnerMode -eq 'limits') {
+        $inputsPath = Resolve-LinuxPath $LimitInputs
+        if (-not $inputsPath.StartsWith('/')) { $inputsPath = ConvertTo-WslPath $inputsPath }
+        $arguments += @('--limit-inputs', $inputsPath, '--limit-case', $LimitCase)
+    }
     return $arguments
 }
 
@@ -227,7 +247,7 @@ function Wait-Runner {
 }
 
 switch ($Mode) {
-    { $_ -in 'Walkthrough', 'Resources' } {
+    { $_ -in 'Walkthrough', 'Resources', 'Peaks', 'Limits' } {
         $run = New-Run
         $code = Invoke-Wsl (Get-RunnerArguments $run $Mode.ToLowerInvariant())
         Write-Host "Evidence: $($run.Directory)"

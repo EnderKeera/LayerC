@@ -11,19 +11,20 @@
 
 namespace layerc::daemon {
 
-// The bus provider group wraps (but never owns) the native Wayland providers.
+// The bus provider group owns only bus reports, overlay and portal transports.
 // One demanded session-bus connection and all PipeWire descriptors share the
 // daemon's EventLoop. No connection, thread or timer exists while idle.
-class BusProviders final : public NativeDisplaySource, public OverlayBackend,
-                           public NativeCaptureFactory {
+class BusProviders final : public DisplaySource, public OverlayBackend,
+                           public CaptureFactory {
 public:
-  BusProviders(layerc::platform::EventLoop &loop, NativeDisplaySource *fallback);
+  explicit BusProviders(layerc::platform::EventLoop &loop);
   ~BusProviders() override;
   BusProviders(const BusProviders &) = delete;
   BusProviders &operator=(const BusProviders &) = delete;
 
   void configure(bool tracking, std::string_view desktop, bool configuration_changed);
   void want_overlay(bool wanted);
+  void use_window_source(const DisplaySource *source);
   [[nodiscard]] bool dispatch(std::span<const int> ready);
   void present();
   void stop() noexcept;
@@ -37,12 +38,11 @@ public:
   [[nodiscard]] bool capture_demanded() const noexcept;
 
   [[nodiscard]] bool has_windows() const override;
-  [[nodiscard]] bool prefer_windows() const override;
   [[nodiscard]] layerc::platform::WindowScan windows() const override;
   [[nodiscard]] bool has_monitors() const override;
   [[nodiscard]] layerc::platform::MonitorScan monitors() const override;
   [[nodiscard]] OverlayBackend *overlay() override;
-  [[nodiscard]] NativeCaptureFactory *capture() override { return this; }
+  [[nodiscard]] CaptureFactory *capture() override { return this; }
 
   [[nodiscard]] bool show(std::string_view key, const layerc::platform::OverlayFrame &frame) override;
   void hide(std::string_view key) noexcept override;

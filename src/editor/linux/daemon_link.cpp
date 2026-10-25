@@ -73,7 +73,7 @@ std::string wayland_scope_note(const DaemonStatus &status, const bool wayland_en
   if (!status.wayland_session() && !wayland_environment) return {};
   std::string note = "Wayland session: only XWayland windows are listed (degraded); native "
                      "Wayland windows are not shown here.";
-  if (status.wayland_session())
+  if (status.display)
     note += " LayerD tracks windows with " +
             display_provider_text(status.display->providers.windows) + ".";
   else
@@ -144,34 +144,44 @@ ReloadResult request_daemon_reload() {
 }
 
 std::string save_report_text(const CommitOutcome &commit,
-                             const std::optional<ReloadResult> &reload) {
+                             const std::optional<ReloadResult> &reload,
+                             const SaveMode mode) {
+  const bool autosave = mode == SaveMode::autosave;
+  const std::string not_saved = autosave ? "Not autosaved: " : "Not saved: ";
   switch (commit.result) {
   case CommitResult::ok:
     break;
   case CommitResult::invalid_fields:
   case CommitResult::invalid_profile:
-    return "Not saved: finish the invalid field first.";
+    return not_saved + "finish the invalid field first.";
   case CommitResult::upgrade_declined:
-    return "Not saved: the profile format upgrade was declined.";
+    return autosave
+               ? "Autosave paused \u2014 use Save to approve the profile format upgrade."
+               : "Not saved: the profile format upgrade was declined.";
   case CommitResult::blocked_by_sidecar:
-    return "Not saved: repair the invalid visual or automation settings first.";
+    return not_saved + "repair the invalid visual or automation settings first.";
   case CommitResult::write_failed:
     // The final durability barrier can fail after every file was published.
     if (commit.write_error == layerc::platform::ProfileWriteError::durability_unconfirmed)
-      return "Save unconfirmed: the files may already be on disk, but their durability "
-             "could not be confirmed. These edits are kept; Save again.";
-    return "Not saved. " + write_failure_text(commit.write_error) + ".";
+      return (autosave ? "Autosave unconfirmed" : "Save unconfirmed") +
+             std::string(": the files may already be on disk, but their durability "
+                         "could not be confirmed. These edits are kept; Save again.");
+    return (autosave ? "Not autosaved. " : "Not saved. ") +
+           write_failure_text(commit.write_error) + ".";
   }
-  if (!reload) return "Saved.";
+  if (!reload) return autosave ? "Autosaved." : "Saved.";
   switch (reload->state) {
   case ReloadState::acknowledged:
-    return "Saved \u2014 LayerD acknowledged the reload request.";
+    return autosave ? "Autosaved \u2014 LayerD acknowledged the reload request."
+                    : "Saved \u2014 LayerD acknowledged the reload request.";
   case ReloadState::daemon_unavailable:
-    return "Saved. LayerD is not running; the change applies when it starts.";
+    return autosave ? "Autosaved. LayerD is not running; the change applies when it starts."
+                    : "Saved. LayerD is not running; the change applies when it starts.";
   case ReloadState::failed:
     break;
   }
-  return "Saved; LayerD's reload could not be confirmed" +
+  return (autosave ? "Autosaved; LayerD's reload could not be confirmed"
+                   : "Saved; LayerD's reload could not be confirmed") +
          (reload->error.empty() ? std::string(".") : ": " + reload->error + ".");
 }
 

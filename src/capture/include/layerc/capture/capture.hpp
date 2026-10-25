@@ -101,6 +101,11 @@ struct CapturePoll {
 [[nodiscard]] std::pair<std::uint32_t, std::uint32_t>
 capture_sample_dimensions(std::uint32_t width, std::uint32_t height,
                           core::CaptureQuality quality) noexcept;
+// Source coordinate under the center of output cell `index` when an axis of
+// `source_extent` pixels is resampled to `output_extent` cells.
+[[nodiscard]] std::uint32_t sampled_coordinate(std::uint32_t index,
+                                               std::uint32_t source_extent,
+                                               std::uint32_t output_extent) noexcept;
 [[nodiscard]] bool frame_is_nearly_black(const CaptureFrame &frame) noexcept;
 
 } // namespace layerc::capture

@@ -8,7 +8,13 @@
 namespace layerc::editor {
 namespace core = layerc::core;
 
+EditorApp::EditorApp() {
+  // An accepted edit is the only autosave signal; presentation never is.
+  session.set_change_listener([this] { sync_edit_services(); });
+}
+
 EditorApp::~EditorApp() {
+  session.set_change_listener({});
   stop_edit_services();
   stop_opener();
   if (live_draft_) Fl::remove_fd(live_draft_->notify_fd());
@@ -21,11 +27,9 @@ std::string EditorApp::edit_status() const {
                             : "Editing — autosave pending.";
 }
 void EditorApp::update_daemon_status() {
-  if (!daemon_status) return;
   const auto text = daemon_text_ +
       (live_draft_text_.empty() ? "" : "\nLive draft: " + live_draft_text_);
-  daemon_status->value(text.c_str());
-  daemon_status->redraw();
+  status_pane_->set_daemon(text);
 }
 void EditorApp::end_live_draft() {
   // Queued, never joined here: the worker ends any lease off the UI thread.
@@ -104,10 +108,10 @@ bool EditorApp::flush_autosave() {
   if (!session.has_document()) return true;
   if (session.is_draft()) return false;
   saving_ = true;
-  if (!apply_fields()) {
+  if (const auto error = apply_field_buffers()) {
     saving_ = false;
     observed_generation_ = session.edit_generation();
-    report("Not autosaved. " + status_text_);
+    report("Not autosaved. " + *error);
     return false;
   }
   session.end_text_edit();
@@ -117,7 +121,7 @@ bool EditorApp::flush_autosave() {
     update_daemon_status();
     return true;
   }
-  const auto outcome = session.save({}, false);
+  const auto outcome = session.save({}, SaveMode::autosave);
   saving_ = false;
   observed_generation_ = session.edit_generation();
   if (outcome.saved()) {
@@ -127,13 +131,7 @@ bool EditorApp::flush_autosave() {
     fill_lists();
     preview->redraw();
   }
-  std::string text = outcome.text;
-  if (outcome.commit.result == CommitResult::upgrade_declined)
-    text = "Autosave paused — use Save to approve the profile format upgrade.";
-  else if (text.starts_with("Saved")) text.replace(0, 5, "Autosaved");
-  else if (text.starts_with("Not saved")) text.replace(0, 9, "Not autosaved");
-  else if (text.starts_with("Save unconfirmed")) text.replace(0, 16, "Autosave unconfirmed");
-  report(std::move(text));
+  report(outcome.text);
   query_status();
   return outcome.saved();
 }

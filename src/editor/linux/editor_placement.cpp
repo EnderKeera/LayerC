@@ -110,9 +110,7 @@ void EditorApp::end_placement(const std::string &status) {
 }
 
 void EditorApp::update_position_button() {
-  if (!position_button) return;
-  position_button->copy_label(placement_active() ? "End positioning" : "Position on window...");
-  position_button->redraw();
+  if (panel_page_) panel_page_->show_position(placement_active());
 }
 
 } // namespace layerc::editor

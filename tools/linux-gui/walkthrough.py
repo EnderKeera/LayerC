@@ -15,21 +15,16 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from automation_walkthrough import EXPECTED as AUTOMATION_EXPECTED
 from automation_walkthrough import AutomationWalk  # noqa: E402
 from bridge import call  # noqa: E402
-from autosave_walkthrough import EXPECTED as AUTOSAVE_EXPECTED  # noqa: E402
 from autosave_walkthrough import AutosaveWalk  # noqa: E402
-from runtime_walkthrough import EXPECTED as RUNTIME_EXPECTED  # noqa: E402
 from runtime_walkthrough import RuntimeWalk  # noqa: E402
-from device_walkthrough import EXPECTED as DEVICE_EXPECTED  # noqa: E402
 from device_walkthrough import DeviceWalk  # noqa: E402
-from tools_walkthrough import EXPECTED as TOOLS_EXPECTED  # noqa: E402
 from tools_walkthrough import ToolsWalk  # noqa: E402
-from parity_walkthrough import EXPECTED as PARITY_EXPECTED  # noqa: E402
 from parity_walkthrough import ParityWalk  # noqa: E402
-from visual_walkthrough import EXPECTED as VISUAL_EXPECTED  # noqa: E402
 from visual_walkthrough import VisualWalk  # noqa: E402
+from overlay_walkthrough import OverlayWalk  # noqa: E402
+from cases import EXPECTED  # noqa: E402 -- the ordered required-case manifest
 
 EDITOR = "LayerE"  # Title prefix; the title also names the open profile.
 GAME = "LayerC Automation Fixture"
@@ -38,51 +33,9 @@ MINIMUM = (640, 480)
 PROFILE = "fixture.json"
 STATUS = "Save / reload outcome"
 DAEMON = "Daemon status and capability faults"
-ROW = 20  # Profile-list row pitch at the default scale.
-
-EXPECTED = {
-    "bridge-guards": "Bad token, out-of-screen input, stale screenshot and unknown "
-                     "operations are rejected and logged without acting.",
-    "startup": "Editor and game fixture are visible; the profile is a file; LayerD "
-               "answers; LayerE exports an AT-SPI tree with its bridge status.",
-    "accessibility-semantics": "Through AT-SPI alone: names, roles, focus, keyboard Tab, "
-                               "Unicode text, tab/combo selection, menu Save and a "
-                               "cancelled modal Delete, with the matching events.",
-    "keyboard-navigation": "Tab/Shift+Tab move focus between fields; Ctrl+2/Ctrl+1 switch "
-                           "pages; Alt+F opens the File menu and Escape closes it.",
-    "menus-context": "The empty-list context menu leaves the document unchanged; the "
-                     "selected-row context menu duplicates the profile; Profile > Delete "
-                     "is cancelled with Escape, then confirmed, and removes the copy.",
-    "profiles-crud": "Ctrl+N creates a profile that saves durably; the enabled check box "
-                     "autosaves; undo/redo restore durable values; an invalid pending "
-                     "selection change prompts, cancels, then discards.",
-    "invalid-no-write": "Duration 'nan' is reported as invalid while typing and after "
-                        "Ctrl+S, and the durable profile stays byte-identical.",
-    "edit-commit-reload-overlay": "Duration 3.25 s and panel X 0.75 are saved durably, "
-                                  "LayerD reloads, and the live overlay moves right.",
-    "import-export": "Export JSON through the file chooser writes the saved bytes; "
-                     "import of the same file reports the collision, copies it on "
-                     "request, and a cancelled import writes nothing.",
-    **AUTOMATION_EXPECTED,
-    **VISUAL_EXPECTED,
-    **AUTOSAVE_EXPECTED,
-    **RUNTIME_EXPECTED,
-    **DEVICE_EXPECTED,
-    **TOOLS_EXPECTED,
-    **PARITY_EXPECTED,
-    "layout": "Corner drags grow the window and clamp it at 640x480 with scrolling; "
-              "title-bar double-clicks maximize and restore; Ctrl+Plus/Ctrl+0 scale "
-              "and restore the window.",
-    "daemon-reconnect": "With LayerD stopped the status says so and Save commits offline; "
-                        "after LayerD restarts the status recovers and a Save is "
-                        "acknowledged.",
-    "store-failure-visible": "When the store cannot replace the profile, Save fails "
-                             "visibly and the original profile bytes survive.",
-}
 DEFERRED = {
-    "overlay-target-changes": "target resize/focus and click-through checks belong to the "
-                              "overlay integration walkthrough (runtime suites cover them)",
-    "later-parity": "Wayland portal cases await the Change 7 backend",
+    "later-parity": "Wayland provider and portal cases run in --mode wayland and "
+                    "tools/linux-portal-consent-tests.sh, not in this X11 walkthrough",
 }
 
 
@@ -110,7 +63,8 @@ def center(node):
     return x + w // 2, y + h // 2
 
 
-class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, ToolsWalk, ParityWalk):
+class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, ToolsWalk, ParityWalk,
+           OverlayWalk):
     def __init__(self, session):
         self.session = session
         self.shot = {}
@@ -220,9 +174,25 @@ class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, To
         return self.key("Return", label)
 
     def row(self, index, label, button=1):
-        """Click profile-list row `index` (0-based) by its position."""
-        x, y, w, _ = self.find("list", "Profiles")["extents"]
-        return self.act("click", label, x=x + w // 2, y=y + 11 + index * ROW, button=button)
+        """Click a semantic row; wheel-scroll without selecting intermediate profiles."""
+        for attempt in range(20):
+            profiles, rows = self.profile_list()
+            check(0 <= index < len(rows), f"profile row {index} does not exist")
+            check(sum(bool(row.get("selected")) for row in rows) <= 1,
+                  "more than one profile row is selected")
+            row = rows[index]
+            if row.get("showing", False):
+                self.capture(label + "-target")
+                return self.click(row, label, button=button)
+            visible = [i for i, item in enumerate(rows) if item.get("showing", False)]
+            check(visible, "the profile list has no visible semantic rows")
+            check(index < visible[0] or index > visible[-1],
+                  f"profile row {index} is hidden inside the visible range")
+            x, y = center(profiles)
+            self.capture(label + f"-scroll-{attempt}-before")
+            self.act("scroll", label + f"-scroll-{attempt}", x=x, y=y,
+                     steps=-6 if index < visible[0] else 6)
+        raise Failure(f"profile row {index} did not become visible after scrolling")
 
     # Store and runtime ------------------------------------------------------
     def state(self):
@@ -393,16 +363,23 @@ class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, To
         self.notes["created"] = created
         return f"{created} created, disabled and saved; autosaved undo/redo; invalid switch cancelled then discarded"
 
-    def profile_rows(self, name):
-        """Rows in this list only; names can legitimately repeat after import."""
-        profiles = self.find("list", "Profiles")
+    def profile_list(self):
+        """The unique Profiles list and its own rows, in semantic display order."""
         nodes = self.nodes()
-        start = next(i for i, n in enumerate(nodes)
-                     if n["role"] == "list" and n["name"] == "Profiles")
+        matches = [i for i, node in enumerate(nodes)
+                   if node["role"] == "list" and node["name"] == "Profiles"]
+        check(len(matches) == 1, "Profiles list is missing or ambiguous")
+        start = matches[0]
+        profiles = nodes[start]
         stop = next((i for i in range(start + 1, len(nodes))
                      if nodes[i]["depth"] <= profiles["depth"]), len(nodes))
-        rows = [n for n in nodes[start + 1:stop] if n["depth"] == profiles["depth"] + 1
-                and n["role"] == "list item"]
+        return profiles, [node for node in nodes[start + 1:stop]
+                          if node["depth"] == profiles["depth"] + 1
+                          and node["role"] == "list item"]
+
+    def profile_rows(self, name):
+        """Rows in this list only; names can legitimately repeat after import."""
+        _, rows = self.profile_list()
         # Match the shared profile_list_text decorations, not a bare prefix:
         # an imported "Fixture (copy)" must not stand in for "Fixture".
         return [index for index, node in enumerate(rows)

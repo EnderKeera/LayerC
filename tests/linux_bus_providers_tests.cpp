@@ -71,12 +71,12 @@ struct FakeGnome {
   }
 };
 
-struct Fallback final : daemon::NativeDisplaySource {
+struct WindowSource final : daemon::DisplaySource {
   bool has_windows() const override { return true; }
   platform::WindowScan windows() const override {
     platform::WindowScan result;
     platform::WindowSnapshot window;
-    window.window = 7; window.title = "Fallback";
+    window.window = 7; window.title = "Window source";
     result.windows.push_back(std::move(window));
     return result;
   }
@@ -108,11 +108,12 @@ void reporting_overlay_and_idle() {
   auto stranger = fixture::peer();
   const std::vector peers{shell.peer.get(), stranger.get()};
   platform::EventLoop loop;
-  Fallback fallback;
-  daemon::BusProviders providers{loop, &fallback};
+  WindowSource window_source;
+  daemon::BusProviders providers{loop};
+  providers.use_window_source(&window_source);
   expect(!providers.connected() && !providers.next_deadline(), "idle creates no bus or timer");
-  expect(providers.windows().windows.front().window == 7 && !providers.prefer_windows(),
-         "native fallback remains available before any report");
+  expect(!providers.has_windows() && providers.windows().windows.empty(),
+         "a capture window source is never exposed as a bus report");
   providers.configure(true, "GNOME", false);
   providers.want_overlay(true);
   expect(pump(providers, loop, peers, [&] { return providers.overlay() != nullptr; }),
@@ -122,8 +123,9 @@ void reporting_overlay_and_idle() {
   expect(report(providers, loop, shell.peer.get(), peers, native_report()).empty(),
          "current Shell reports native and XWayland clients");
   const auto scan = providers.windows();
-  if (!expect(providers.prefer_windows() && scan.authoritative && scan.windows.size() == 2,
-              "reports supersede fallback scans")) return;
+  if (!expect(providers.has_windows() && scan.authoritative && scan.windows.size() == 2,
+              "the bus exposes only its own authoritative reports")) return;
+  providers.use_window_source(&providers);
   const auto native = scan.windows[0].window;
   expect(scan.windows[0].executable_path == platform::process_executable_path(::getpid()) &&
              scan.windows[0].active && scan.windows[0].width == 200,
@@ -176,7 +178,7 @@ void reporting_overlay_and_idle() {
   auto all = peers; all.push_back(kwin.get());
   expect(pump(providers, loop, all, [&] { return providers.kwin_owner(); }),
          "late KWin owner beats a GNOME desktop hint");
-  expect(!providers.prefer_windows() && providers.windows().windows.front().window == 7,
+  expect(!providers.has_windows() && providers.windows().windows.empty(),
          "a different compositor cannot reuse the old Shell report");
   kwin.reset();
   expect(pump(providers, loop, peers, [&] { return !providers.kwin_owner() && providers.overlay(); }),
@@ -248,12 +250,13 @@ void consent_failure_is_sticky() {
   DeniedPortal portal;
   const std::vector peers{shell.peer.get(), portal.peer.get()};
   platform::EventLoop loop;
-  daemon::BusProviders providers{loop, nullptr};
+  daemon::BusProviders providers{loop};
   providers.configure(true, "GNOME", false);
   expect(pump(providers, loop, peers, [&] { return providers.gnome_owner(); }),
          "capture host discovers the Shell owner");
   expect(report(providers, loop, shell.peer.get(), peers, native_report()).empty(), "native report accepted");
   const auto window = providers.windows().windows.front().window;
+  providers.use_window_source(&providers);
   auto capture = providers.create_capture("fixture", {window}, core::CaptureQuality::low, 20);
   expect(!providers.capture_demanded() && portal.creates == 0, "allocating an owner does not ask consent");
   expect(capture->start(), "demand begins asynchronous consent");
@@ -277,12 +280,43 @@ void consent_failure_is_sticky() {
   expect(pump(providers, loop, peers, [&] { return !providers.connected(); }) &&
              !providers.next_deadline(), "shutdown drains and returns to idle");
 }
+
+void capture_window_source_changes() {
+  FakeGnome shell;
+  DeniedPortal portal;
+  const std::vector peers{shell.peer.get(), portal.peer.get()};
+  platform::EventLoop loop;
+  WindowSource first, second;
+  daemon::BusProviders providers{loop};
+  providers.use_window_source(&first);
+  providers.configure(true, "GNOME", false);
+  expect(pump(providers, loop, peers, [&] { return providers.gnome_owner(); }),
+         "the capture-source fixture discovers the Shell owner");
+  expect(!providers.has_windows(), "capture lookup does not require bus window reports");
+  auto capture = providers.create_capture("source", {7}, core::CaptureQuality::low, 20);
+  expect(capture->start(), "portal capture resolves a separately selected window source");
+  providers.use_window_source(&first);
+  expect(capture->poll(core::MonotonicClock::now()).result.diagnostic != "window_provider_changed",
+         "retaining the same source does not invalidate capture");
+  providers.use_window_source(&second);
+  expect(capture->poll(core::MonotonicClock::now()).result.diagnostic == "window_provider_changed" &&
+             !capture->start(),
+         "changing source invalidates capture even when its window id still exists");
+  providers.use_window_source(&first);
+  expect(capture->poll(core::MonotonicClock::now()).result.diagnostic == "window_provider_changed",
+         "returning to the original source does not clear the sticky fault");
+  capture.reset();
+  providers.stop();
+  expect(pump(providers, loop, peers, [&] { return !providers.connected(); }),
+         "the capture-source fixture drains shutdown");
+}
 #endif
 } // namespace
 
 #ifdef LAYERC_TEST_PIPEWIRE
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(reporting_overlay_and_idle),
-                 LAYERC_TEST_CASE(consent_failure_is_sticky))
+                 LAYERC_TEST_CASE(consent_failure_is_sticky),
+                 LAYERC_TEST_CASE(capture_window_source_changes))
 #else
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(reporting_overlay_and_idle))
 #endif

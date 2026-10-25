@@ -3,6 +3,7 @@
 #include "editor_accessibility.hpp"
 #include "editor_session.hpp"
 #include "editor_menus.hpp"
+#include "editor_pages.hpp"
 #include "automation_editor.hpp"
 #include "visual_editor.hpp"
 #include "live_draft_client.hpp"
@@ -32,6 +33,9 @@ class Fl_Tabs;
 
 namespace layerc::editor {
 
+// The one schema-upgrade confirmation every save path and command shares.
+[[nodiscard]] bool confirm_profile_upgrade();
+
 class EditorApp;
 class PanelPreview final : public Fl_Widget {
 public:
@@ -43,41 +47,28 @@ private:
   std::string dragging_;
 };
 
-enum class EditorCommand {
-  new_profile, duplicate, delete_profile, toggle_enabled, save, undo, redo,
-  refresh, import_profiles, export_json, export_pack,
-  add_cooldown, delete_cooldown, add_panel, delete_panel,
-  add_keyboard, add_mouse, capture_binding, delete_binding,
-  profile_page, cooldown_page, binding_page, panel_page, automation_page, visual_page,
-  duplicate_cooldown, rename, diagnostics, shortcuts_help, about,
-  save_as, open_folder, split_bars, panel_colors, options, appearance, tasks, position, cooldown_groups, close
-};
-
 // The toolkit frontend owns only controls and the local, possibly invalid
 // field buffer. EditorSession owns accepted edits, history and store effects.
 class EditorApp final {
 public:
+  EditorApp();
   ~EditorApp();
   EditorSession session;
+  // The root owns its shell widgets; each page/dialog owns its private controls.
+  // Test-only access is confined to EditorAppTestAccess.
+private:
   EditorWindow window{*this, 1080, 790, "LayerE — Linux X11 editor"};
   Fl_Scroll *content{};
-  Fl_Hold_Browser *profiles{}, *cooldowns{}, *panels{}, *bindings{};
+  Fl_Hold_Browser *profiles{};
   Fl_Tabs *tabs{};
   Fl_Group *profile_tab{}, *cooldown_tab{}, *binding_tab{}, *panel_tab{};
-  Fl_Group *cooldown_fields{}, *panel_fields{};
-  Fl_Input *name{}, *executable{}, *executable_path{}, *window_class{}, *window_title{};
-  Fl_Check_Button *enabled{};
-  Fl_Input *cooldown_name{}, *duration{}, *charges{};
-  Fl_Choice *recovery{}, *retrigger{};
-  Fl_Input *panel_name{}, *anchor_x{}, *anchor_y{}, *bar_width{}, *bar_height{};
-  Fl_Input *fill{}, *background{}, *border{}, *text_color{};
-  Fl_Choice *layout{}, *style{}, *member{}, *binding_target{}, *mouse_button{};
-  Fl_Check_Button *member_enabled{}, *show_text{}, *hide_ready{};
-  Fl_Input *key_code{};
-  Fl_Multiline_Output *status{}, *daemon_status{}, *module_status{}, *profile_id{};
-  Fl_Box *accessibility_status{};
-  Fl_Button *undo_button{}, *redo_button{}, *position_button{};
+
   PanelPreview *preview{};
+  std::unique_ptr<StatusPane> status_pane_;
+  std::unique_ptr<ProfilePage> profile_page_;
+  std::unique_ptr<CooldownPage> cooldown_page_;
+  std::unique_ptr<BindingPage> binding_page_;
+  std::unique_ptr<PanelPage> panel_page_;
   std::unique_ptr<EditorMenus> menus;
   std::unique_ptr<LinuxAutomationEditor> automation;
   std::unique_ptr<LinuxVisualEditor> visual;
@@ -86,7 +77,12 @@ public:
   // Declared last: it releases its widget trackers before the widgets go.
   std::unique_ptr<EditorAccessibility> accessibility;
 
+public:
   void build();
+  void show();
+  [[nodiscard]] bool shown() const;
+  [[nodiscard]] bool handle_shortcut(int key, int modifiers);
+  void show_context_menu(EditorMenuContext context, bool has_target);
   void refresh();
   void fill_lists();
   void refresh_forms();
@@ -97,6 +93,8 @@ public:
   void selection_changed(Fl_Widget *widget);
   void tab_changed();
   [[nodiscard]] bool apply_fields(bool text_change = false);
+  // The typed failure text of the visible field buffers, without reporting.
+  [[nodiscard]] std::optional<std::string> apply_field_buffers(bool text_change = false);
   [[nodiscard]] bool save();
   [[nodiscard]] bool flush_autosave();
   [[nodiscard]] bool may_leave();
@@ -133,8 +131,6 @@ private:
   static void autosave_tick(void *);
   static void live_draft_ready(int, void *);
   void end_live_draft();
-  // Save As, profiles folder, split bars, panel colours, Options, Appearance.
-  [[nodiscard]] bool tools_command(EditorCommand action);
   void open_profiles_folder();
   static void opener_tick(void *);
   void stop_opener();
@@ -155,6 +151,8 @@ private:
   [[nodiscard]] std::string edit_status() const;
   void changed(const std::optional<std::string> &error);
   friend class PanelPreview;
+  friend struct EditorCommandRegistry;
+  friend struct EditorAppTestAccess;
 };
 
 } // namespace layerc::editor

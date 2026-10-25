@@ -41,6 +41,7 @@ std::unique_ptr<CaptureBackend> make_backend(const core::CaptureBackendKind kind
   case core::CaptureBackendKind::none:
   case core::CaptureBackendKind::x11_composite:
   case core::CaptureBackendKind::x11_full_frame:
+  case core::CaptureBackendKind::pipewire_portal:
     break;
   }
   return nullptr;

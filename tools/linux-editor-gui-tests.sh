@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Disposable X11 GUI runner for the Linux LayerE editor (Debian WSL or Linux).
+# Single Linux owner of private-session setup, owned helpers, cases, gates, reports, and
+# cleanup; the PowerShell entry point only mirrors/builds/proxies.
 #
-#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session|resources|wayland]
+#   linux-editor-gui-tests.sh --build DIR --out DIR [--mode walkthrough|session|resources|peaks|limits|wayland]
 #                             [--idle-seconds N] [--session-seconds N] [--env FILE]
 #                             [--expect-stamp FILE]
+#                             [--limit-inputs DIR --limit-case GROUP:ID]
+# limits: one frozen validator-derived boundary document; real edits/import,
+#   full retained history, explicit refusal/recovery and continuous sampled peak.
 #
 # walkthrough (default): run tools/linux-gui/walkthrough.py through the bridge
 #   and gate on its required cases, the editor resource targets and cleanup.
@@ -17,13 +22,13 @@
 # Everything runs in a private authenticated Xvfb + Openbox + D-Bus session
 # with private HOME/XDG roots: it never addresses the user's display, bus,
 # daemon, control socket or profile store. Every helper is owned and joined
-# (tools/editor-prototypes/owned.sh). Dependency installation is separate;
+# (tools/linux-gui/owned.sh). Dependency installation is separate;
 # a missing dependency fails the run instead of skipping it. --env sources a
 # dependency-root setup script (for example an extracted sysroot) first.
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$here/linux-lib.sh"
-source "$here/editor-prototypes/owned.sh"
+source "$here/linux-gui/owned.sh"
 
 # wait_for SECONDS COMMAND...: retry until success, bounded by a monotonic timeout.
 wait_for() {
@@ -64,7 +69,7 @@ inside() {
     wait_for 10 bash -c 'xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"'
 
   mkdir -p "$profiles"
-  python3 - "$profiles" "$GUI_MODE" <<'PY'
+  python3 - "$profiles" "$GUI_MODE" "$here/linux-gui" "$out" <<'PY'
 import copy, json, os, sys
 from pathlib import Path
 profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled": True,
@@ -83,7 +88,15 @@ profile = {"schemaVersion": 4, "id": "fixture", "name": "GUI fixture", "enabled"
 profile["futureProfile"] = {"large": 18446744073709551615, "note": "opaque metadata"}
 profile["cooldowns"][0]["futureCooldown"] = {"keep": True}
 store = Path(sys.argv[1])
-if sys.argv[2] != "resources":
+sys.path.insert(0, sys.argv[3])
+if sys.argv[2] == "peaks":
+    from peak_fixture import write_representative
+    write_representative(profile, store, Path(sys.argv[4]))
+elif sys.argv[2] == "limits":
+    from limit_inputs import prepare
+    prepare(Path(os.environ["GUI_LIMIT_INPUTS"]), os.environ["GUI_LIMIT_CASE"],
+            store, Path(sys.argv[4]))
+elif sys.argv[2] != "resources":
     (store / "fixture.json").write_text(json.dumps(profile))
     if sys.argv[2] == "walkthrough":
         legacy = copy.deepcopy(profile)
@@ -157,8 +170,11 @@ PY
   # The editor's working directory is disposable, never the source mirror.
   cd "$work"
   nonce=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
-  owned_start sampler "$out/sampler.log" -- python3 "$here/editor-prototypes/start_process.py" \
-    "$build/layere" "$out/editor.log" "$work/editor.pid" "$out/startup-resources.json" 1 "$nonce"
+  local lifetime_args=()
+  [[ $GUI_MODE != peaks && $GUI_MODE != limits ]] || lifetime_args=(--lifetime-report "$out/active-resources.json")
+  owned_start sampler "$out/sampler.log" -- python3 "$here/linux-gui/start_process.py" \
+    "$build/layere" "$out/editor.log" "$work/editor.pid" "$out/startup-resources.json" 1 "$nonce" \
+    "${lifetime_args[@]}"
   wait_for 10 test -s "$work/editor.pid"
   read -r editor_pid editor_start < "$work/editor.pid"
   wait_for 10 xdotool search --all --pid "$editor_pid" --name '^LayerE'
@@ -167,6 +183,10 @@ PY
   # production LayerE emits no test-only readiness text.
   printf '\nready\n' >> "$out/editor.log"
   wait_for 10 test -s "$out/startup-resources.json"
+  # An error report is also nonempty: require sampler success and exact
+  # identity before addressing a window that its failed owner may have closed.
+  python3 "$here/linux-gui/startup_readiness.py" "$out/startup-resources.json" \
+    "$editor_pid" "$editor_start" "$nonce"
   xdotool windowmove "$editor" 20 20
   printf '{"nonce":"%s","pid":%s,"startTime":"%s"}\n' "$nonce" "$editor_pid" "$editor_start" \
     > "$out/editor-identity.json"
@@ -192,6 +212,12 @@ PY
     python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
   elif [[ $GUI_MODE == wayland ]]; then
     python3 "$here/linux-gui/wayland_walkthrough.py" --session "$session" --out "$out" || result=$?
+    python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
+  elif [[ $GUI_MODE == peaks ]]; then
+    python3 "$here/linux-gui/active_walkthrough.py" --session "$session" --out "$out" || result=$?
+    python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
+  elif [[ $GUI_MODE == limits ]]; then
+    python3 "$here/linux-gui/limits_walkthrough.py" --session "$session" --out "$out" || result=$?
     python3 "$here/linux-gui/bridge.py" call --session "$session" '{"op":"stop"}' >/dev/null
   elif [[ $GUI_MODE == resources ]]; then
     python3 "$here/linux-gui/cycles.py" --session "$session" --out "$out" || result=$?
@@ -223,7 +249,7 @@ fi
 # WSLENV can forward a Windows HOME; resolve the account's own home.
 HOME=$(getent passwd "$(id -u)" | cut -d: -f6)
 export HOME
-mode=walkthrough build= out= idle_seconds=60 session_seconds=1800 env_file= expect_stamp=
+mode=walkthrough build= out= idle_seconds=60 session_seconds=1800 env_file= expect_stamp= limit_inputs= limit_case=
 while (($#)); do
   case $1 in
     --build) build=$2; shift 2 ;;
@@ -233,12 +259,20 @@ while (($#)); do
     --session-seconds) session_seconds=$2; shift 2 ;;
     --env) env_file=$2; shift 2 ;;
     --expect-stamp) expect_stamp=$2; shift 2 ;;
+    --limit-inputs) limit_inputs=$2; shift 2 ;;
+    --limit-case) limit_case=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session|resources|wayland]" >&2; exit 64; }
-[[ $mode == walkthrough || $mode == session || $mode == resources || $mode == wayland ]] ||
+[[ -n $build && -n $out ]] || { echo "usage: $0 --build DIR --out DIR [--mode walkthrough|session|resources|peaks|limits|wayland]" >&2; exit 64; }
+[[ $mode == walkthrough || $mode == session || $mode == resources || $mode == peaks || $mode == limits || $mode == wayland ]] ||
   { echo "unknown mode: $mode" >&2; exit 64; }
+if [[ $mode == limits ]]; then
+  [[ -n $limit_inputs && -n $limit_case ]] || { echo "limits requires --limit-inputs DIR --limit-case ID" >&2; exit 64; }
+  limit_inputs=$(realpath "$limit_inputs")
+else
+  [[ -z $limit_inputs && -z $limit_case ]] || { echo "boundary arguments require limits mode" >&2; exit 64; }
+fi
 expand_home() { [[ $1 == "~"* ]] && printf '%s' "$HOME${1:1}" || printf '%s' "$1"; }
 build=$(realpath "$(expand_home "$build")")
 # Hold the mirror/build pair for the whole run, so no build replaces the
@@ -334,7 +368,7 @@ trap 'exit 143' TERM
 
 display_commands=(Xvfb xauth openbox)
 [[ $mode != wayland ]] || display_commands=(sway Xwayland foot)
-for command in "${display_commands[@]}" xdpyinfo xprop xwininfo xdotool import convert python3 \
+for command in "${display_commands[@]}" xdpyinfo xprop xwininfo xev stdbuf xdotool import convert python3 \
     dbus-run-session pgrep sha256sum timeout; do
   if ! command -v "$command" >/dev/null; then
     setup_error="missing required dependency: $command"
@@ -461,7 +495,8 @@ fi
 fi
 
 export GUI_OUT="$out" GUI_BUILD="$build" GUI_WORK="$work" GUI_MODE="$mode" \
-  GUI_IDLE="$idle_seconds" GUI_SESSION_SECONDS="$session_seconds" GUI_XVFB_PID="$xvfb_pid"
+  GUI_IDLE="$idle_seconds" GUI_SESSION_SECONDS="$session_seconds" GUI_XVFB_PID="$xvfb_pid" \
+  GUI_LIMIT_INPUTS="$limit_inputs" GUI_LIMIT_CASE="$limit_case"
 session_exit=0
 owned_start session "$out/session.log" --group -- dbus-run-session -- bash "$here/linux-editor-gui-tests.sh" --inside
 owned_wait session || session_exit=$?

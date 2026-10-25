@@ -106,6 +106,8 @@ endif()
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
     src/editor/linux/editor_accessibility.cpp
+    src/editor/linux/accessibility_semantics.cpp
+    src/editor/linux/accessibility_tree.cpp
     src/editor/linux/editor_app.cpp
     src/editor/linux/editor_autosave.cpp
     src/editor/linux/diagnostics_window.cpp
@@ -122,6 +124,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/linux/editor_import.cpp
     src/editor/linux/cooldown_groups_window.cpp
     src/editor/linux/export_selection_window.cpp
+    src/editor/linux/editor_commands.cpp
+    src/editor/linux/editor_pages.cpp
     src/editor/linux/editor_menus.cpp
     src/editor/linux/editor_preview.cpp
     src/editor/linux/binding_capture.cpp)
@@ -134,7 +138,10 @@ endif()
 target_compile_options(layerc_editor_fltk PUBLIC ${LAYERC_FLTK_CXXFLAGS})
 # Only the adapter sees the GLib/ATK headers; it links only what it calls,
 # and the loader resolves their own dependencies such as D-Bus.
-set_source_files_properties(src/editor/linux/editor_accessibility.cpp PROPERTIES
+set_source_files_properties(
+    src/editor/linux/editor_accessibility.cpp
+    src/editor/linux/accessibility_semantics.cpp
+    src/editor/linux/accessibility_tree.cpp PROPERTIES
     COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
 target_link_libraries(layerc_editor_fltk PUBLIC
     layerc_editor_linux layerc_x11 ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})

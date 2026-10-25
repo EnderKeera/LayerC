@@ -146,7 +146,7 @@ void ewmh_scan_and_fallback() {
 
   X11WindowTracker tracker(*tracker_display);
   const X11WindowScan scan = tracker.scan();
-  expect(scan.ewmh, "scan uses the EWMH client list");
+  expect(scan.authoritative, "scan uses the EWMH client list");
   expect(scan.warning.empty(), "no warning on the EWMH path");
   expect(scan.truncated == 0, "small scans are not truncated");
 
@@ -186,7 +186,7 @@ void ewmh_scan_and_fallback() {
                   XInternAtom(fixture.raw, "_NET_CLIENT_LIST", False));
   XFlush(fixture.raw);
   const X11WindowScan fallback = tracker.scan();
-  expect(!fallback.ewmh, "empty client list falls back");
+  expect(!fallback.authoritative, "empty client list falls back");
   expect(!fallback.warning.empty(), "fallback reports a reason");
   bool fallback_found = false;
   for (const auto &snapshot : fallback.windows)
@@ -261,6 +261,58 @@ void window_change_notifications() {
   sync();
   expect(tracker.poll_changes(), "fallback destruction wakes discovery");
   expect(!tracker.poll_changes(), "an unchanged tracker has no periodic rescan hint");
+}
+
+void ignored_overlay_notifications() {
+  using layerc::test::expect;
+  auto publisher = open_display();
+  auto display = open_display();
+  auto *raw = reinterpret_cast<Display *>(publisher.raw());
+  const auto root = static_cast<::Window>(publisher.root());
+  X11WindowTracker tracker(display);
+  XSetWindowAttributes attributes{};
+  attributes.override_redirect = True;
+  const auto ignored = XCreateWindow(raw, root, 10, 10, 40, 40, 0, CopyFromParent,
+                                     InputOutput, CopyFromParent, CWOverrideRedirect,
+                                     &attributes);
+  tracker.ignore_windows({ignored});
+  const auto sync = [&] { XSync(raw, False); XSync(display.raw(), False); };
+  sync();
+  expect(!tracker.poll_changes(), "ignored overlay creation does not wake discovery");
+  XMapWindow(raw, ignored);
+  XMoveResizeWindow(raw, ignored, 20, 20, 50, 50);
+  sync();
+  expect(!tracker.poll_changes(), "ignored overlay map/configure do not wake discovery");
+  const auto foreign = XCreateWindow(raw, root, 0, 0, 60, 60, 0, CopyFromParent,
+                                     InputOutput, CopyFromParent, CWOverrideRedirect,
+                                     &attributes);
+  XMapRaised(raw, foreign);
+  sync();
+  expect(tracker.poll_changes(), "non-ignored window creation/map wake discovery");
+  XRaiseWindow(raw, ignored);
+  sync();
+  expect(!tracker.poll_changes(), "ignored overlay raise does not wake discovery");
+  XMoveWindow(raw, foreign, 30, 30);
+  XRaiseWindow(raw, foreign);
+  sync();
+  expect(tracker.poll_changes(), "non-ignored window configure/raise wake discovery");
+  XUnmapWindow(raw, ignored);
+  XReparentWindow(raw, ignored, foreign, 0, 0);
+  XDestroyWindow(raw, ignored);
+  sync();
+  expect(!tracker.poll_changes(), "ignored overlay unmap/reparent/destroy do not wake discovery");
+  XEvent root_event{};
+  root_event.type = ConfigureNotify;
+  root_event.xconfigure.event = root;
+  root_event.xconfigure.window = root;
+  expect(tracker.observe(root_event), "root configure notifications remain visible");
+  root_event.type = PropertyNotify;
+  root_event.xproperty.window = root;
+  expect(tracker.observe(root_event), "root property notifications remain visible");
+  tracker.ignore_windows({});
+  XDestroyWindow(raw, foreign);
+  sync();
+  expect(tracker.poll_changes(), "non-ignored destruction remains visible");
 }
 
 void proc_resolution() {
@@ -343,5 +395,6 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(probe_extensions),
                  LAYERC_TEST_CASE(error_traps),
                  LAYERC_TEST_CASE(ewmh_scan_and_fallback),
                  LAYERC_TEST_CASE(window_change_notifications),
+                 LAYERC_TEST_CASE(ignored_overlay_notifications),
                  LAYERC_TEST_CASE(proc_resolution),
                  LAYERC_TEST_CASE(window_matching))

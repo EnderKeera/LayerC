@@ -7,6 +7,7 @@
 // touched, so a headless environment still verifies the math.
 #include "input_service.hpp"
 #include "overlay_service.hpp"
+#include "x11_provider.hpp"
 #include "x11_display.hpp"
 #include "x11_monitor.hpp"
 #include "x11_overlay.hpp"
@@ -78,7 +79,7 @@ using layerc::test::skip_code;
 
 [[nodiscard]] X11MonitorScan two_monitors() {
   X11MonitorScan scan;
-  scan.randr = true;
+  scan.available = true;
   X11Monitor left;
   left.name = "left";
   left.width = 1920;
@@ -199,6 +200,14 @@ void check_missing_shape_path(bool &passed) {
   layerc::platform::X11Probe disconnected;
   passed &= expect(!overlay_unavailable(disconnected).empty(),
                    "no display disables the overlay");
+  X11Display display;
+  layerc::daemon::X11OverlayBackend backend(display);
+  passed &= expect(backend.unavailable() == std::vector<std::string>{
+                       "overlay: no X display for the overlay service"},
+                   "an invalid display preserves the overlay service reason");
+  passed &= expect(!backend.show("missing", bar_frame(96, 1, {0, 0, 400, 300})) &&
+                       backend.windows().empty(),
+                   "an invalid display cannot create an overlay window");
 }
 
 [[nodiscard]] std::string fixture_profile(std::string_view executable_name) {
@@ -323,8 +332,9 @@ int run_linux_x11_overlay_tests() {
              "the live probe agrees with the Shape requirement");
   if (!shape_present) {
     // The server is the one environment that can prove the disable path.
-    layerc::daemon::X11OverlayService disabled;
-    disabled.attach(*display);
+    layerc::daemon::OverlayService disabled;
+    layerc::daemon::X11OverlayBackend disabled_backend(*display);
+    disabled.use_backend(&disabled_backend);
     std::string create_error;
     auto window =
         layerc::platform::X11OverlayWindow::create(*display, create_error);
@@ -337,7 +347,7 @@ int run_linux_x11_overlay_tests() {
 
   // --- monitors ----------------------------------------------------------
   const auto monitors = layerc::platform::scan_monitors(*display);
-  passed &= expect(monitors.randr, "the monitor scan used RandR");
+  passed &= expect(monitors.available, "the monitor scan used RandR");
   passed &= expect(monitors.warning.empty(), "the monitor scan has no warning");
   passed &= expect(!monitors.monitors.empty(), "at least one monitor");
   for (const auto &monitor : monitors.monitors)
@@ -385,12 +395,15 @@ int run_linux_x11_overlay_tests() {
   if (profile == nullptr) return passed ? 0 : 1;
 
   // --- service: session -> overlay window --------------------------------
-  layerc::daemon::X11SessionRegistry input_sessions;
-  layerc::daemon::X11InputService input(input_sessions);
-  layerc::daemon::X11OverlayService overlay;
-  input.attach(*display);
-  overlay.attach(*display);
-  const X11WindowScan scan = layerc::platform::X11WindowTracker(*display).scan();
+  layerc::daemon::X11Provider provider(std::move(*display));
+  layerc::daemon::SessionRegistry input_sessions;
+  layerc::daemon::InputService input(input_sessions);
+  layerc::daemon::OverlayService overlay;
+  layerc::daemon::PassiveInputSource *const overlay_sources[]{&provider};
+  input.use_sources(overlay_sources);
+  layerc::daemon::X11OverlayBackend overlay_backend(provider.display());
+  overlay.use_backend(&overlay_backend);
+  const X11WindowScan scan = provider.windows();
   layerc::test::TempDirectory temp{"layerc-x11-overlay"};
   const StoredProfile profiles[] = {
       {.path = temp.path() / "profile.json", .profile = *profile}};
@@ -425,13 +438,41 @@ int run_linux_x11_overlay_tests() {
   passed &= expect(kernel.services()
                        .find(layerc::runtime::Capability::input) != nullptr,
                    "the input service survived the overlay activation");
+  const auto now = layerc::core::MonotonicClock::now();
+  for (auto &session : input_sessions.sessions())
+    (void)session.automation.cooldowns().trigger("dash", now);
+  overlay.render(input_sessions.sessions(), now);
   passed &= expect(overlay.window_count() == 1, "one panel -> one window");
   passed &= expect(overlay.unavailable().empty(),
                    "the overlay has no unavailability reason");
-  const auto windows = overlay.windows();
+  const auto windows = overlay_backend.windows();
   passed &= expect(windows.size() == 1, "the overlay publishes its windows");
   if (windows.empty()) return passed ? 0 : 1;
   const auto overlay_window = static_cast<::Window>(windows.front());
+
+  {
+    layerc::daemon::X11OverlayBackend degraded_backend(provider.display());
+    layerc::daemon::OverlayService degraded_overlay;
+    degraded_overlay.use_backend(&degraded_backend);
+    degraded_overlay.refresh(input_sessions.sessions(), scan, monitors);
+    auto &probe = const_cast<layerc::platform::X11Probe &>(provider.display().probe());
+    const bool shape_present = probe.shape.present;
+    probe.shape.present = false;
+    const auto reconciled = degraded_overlay.reconcile(demand);
+    passed &= expect(reconciled.status ==
+                         layerc::runtime::ServiceReconcileStatus::degraded,
+                     "missing Shape degrades a demanded overlay service");
+    degraded_overlay.render(input_sessions.sessions(), now);
+    passed &= expect(degraded_backend.windows().empty() &&
+                         degraded_overlay.window_count() == 0,
+                     "a reconciled degraded overlay creates no X11 window");
+    overlay.render(input_sessions.sessions(), now);
+    passed &= expect(overlay.window_count() == 0,
+                     "missing Shape also prevents updating an existing overlay");
+    probe.shape.present = shape_present;
+    degraded_overlay.quiesce();
+  }
+  overlay.render(input_sessions.sessions(), now);
 
   // --- click-through: the input region is empty --------------------------
   int count = -1;
@@ -450,9 +491,6 @@ int run_linux_x11_overlay_tests() {
                    "an unshaped window still takes input (query is live)");
 
   // --- geometry + paint --------------------------------------------------
-  const auto now = layerc::core::MonotonicClock::now();
-  for (auto &session : input_sessions.sessions())
-    (void)session.automation.cooldowns().trigger("dash", now);
   overlay.render(input_sessions.sessions(), now);
   passed &= expect(overlay.next_render_deadline(now).has_value(),
                    "a mapped overlay arms the repaint deadline");
@@ -617,6 +655,164 @@ int run_linux_x11_overlay_tests() {
   return passed ? 0 : 1;
 }
 
+void update_failure_recovery() {
+  using layerc::test::expect;
+  layerc::test::require_x11();
+  std::string error;
+  auto display = X11Display::open(error);
+  if (!expect(display.has_value(), "open update-failure display")) return;
+  layerc::daemon::X11OverlayBackend backend(*display);
+  auto frame = bar_frame(96, 1, {0, 0, 400, 300});
+  if (!expect(backend.show("faulted", frame), "create update-failure fixture")) return;
+  const auto windows = backend.windows();
+  if (!expect(windows.size() == 1, "one owned failure fixture exists")) return;
+  XDestroyWindow(display->raw(), static_cast<::Window>(windows.front()));
+  XSync(display->raw(), False);
+  expect(!backend.show("faulted", frame), "a destroyed overlay fails update");
+  expect(!backend.unavailable().empty(), "update failure has a visible reason");
+  expect(backend.windows().empty(), "failed overlay is destroyed fail-closed");
+  expect(backend.show("healthy", frame), "unrelated healthy overlay shows");
+  expect(!backend.unavailable().empty(), "healthy key cannot mask another key's failure");
+  expect(backend.show("faulted", frame), "failed overlay is recreated");
+  expect(backend.unavailable().empty(), "successful recreation clears its fault");
+  backend.retain({});
+
+  if (!expect(backend.show("faulted", frame), "fault fixture can be recreated for hide")) return;
+  const auto hidden_windows = backend.windows();
+  if (!expect(hidden_windows.size() == 1, "hide fixture owns one window")) return;
+  XDestroyWindow(display->raw(), static_cast<::Window>(hidden_windows.front()));
+  XSync(display->raw(), False);
+  expect(!backend.show("faulted", frame), "hide fixture update fails");
+  backend.hide("faulted");
+  expect(backend.unavailable().empty(), "intentional hide clears the matching fault");
+
+  if (!expect(backend.show("healthy", frame), "healthy retained fixture shows")) return;
+  const auto healthy_windows = backend.windows();
+  if (!expect(healthy_windows.size() == 1, "one healthy retained window exists")) return;
+  if (!expect(backend.show("faulted", frame), "faulted retained fixture shows")) return;
+  const auto both_windows = backend.windows();
+  ::Window faulted_window = 0;
+  for (const auto window : both_windows)
+    if (window != healthy_windows.front())
+      faulted_window = static_cast<::Window>(window);
+  if (!expect(faulted_window != 0, "faulted window is distinguishable from healthy")) return;
+  XDestroyWindow(display->raw(), faulted_window);
+  XSync(display->raw(), False);
+  expect(!backend.show("faulted", frame), "retained fixture update fails");
+  const std::vector<std::string> retained{"healthy"};
+  backend.retain(retained);
+  expect(backend.unavailable().empty(), "retaining only healthy clears the removed fault");
+  expect(backend.windows().size() == 1, "the healthy retained window remains owned");
+
+  backend.retain({});
+  if (!expect(backend.show("", frame), "empty overlay key can be owned")) return;
+  const auto empty_key_windows = backend.windows();
+  if (!expect(empty_key_windows.size() == 1, "one empty-key fixture exists")) return;
+  XDestroyWindow(display->raw(), static_cast<::Window>(empty_key_windows.front()));
+  XSync(display->raw(), False);
+  expect(!backend.show("", frame), "empty-key fixture update fails");
+  expect(!backend.unavailable().empty(), "empty-key failure is visible");
+  backend.retain({});
+  expect(backend.unavailable().empty(), "empty retention clears even an empty-key fault");
+  expect(backend.windows().empty(), "empty retention releases the empty-key fixture");
+}
+
+void multiple_update_failures() {
+  using layerc::test::expect;
+  layerc::test::require_x11();
+  std::string error;
+  auto display = X11Display::open(error);
+  if (!expect(display.has_value(), "open simultaneous-failure display")) return;
+  const auto frame = bar_frame(96, 1, {0, 0, 400, 300});
+  enum class Resolution { recover, hide, remove };
+  for (const bool empty_key : {false, true}) {
+    const std::string first_key = empty_key ? "" : "fault-a";
+    for (const auto resolution : {Resolution::recover, Resolution::hide,
+                                  Resolution::remove}) {
+      layerc::daemon::X11OverlayBackend backend(*display);
+      if (!expect(backend.show(first_key, frame) && backend.show("fault-b", frame),
+                  "fault isolation: create both owned overlay fixtures")) return;
+      const auto windows = backend.windows();
+      if (!expect(windows.size() == 2, "fault isolation: two owned windows")) return;
+      for (const auto window : windows)
+        XDestroyWindow(display->raw(), static_cast<::Window>(window));
+      XSync(display->raw(), False);
+      expect(!backend.show(first_key, frame), "fault isolation: first update fails");
+      expect(!backend.show("fault-b", frame), "fault isolation: second update fails");
+      expect(backend.unavailable().size() == 2,
+             "fault isolation: retain both unresolved backend reasons");
+      if (resolution == Resolution::recover) {
+        expect(backend.show("fault-b", frame), "fault isolation: recover only second target");
+      } else if (resolution == Resolution::hide) {
+        backend.hide("fault-b");
+      } else {
+        const std::vector<std::string> retained{first_key};
+        backend.retain(retained);
+      }
+      expect(backend.unavailable().size() == 1,
+             "fault isolation: resolving second target preserves first target fault");
+      expect(backend.show(first_key, frame), "fault isolation: recover remaining target");
+      expect(backend.unavailable().empty(), "fault isolation: final recovery clears final fault");
+      backend.retain({});
+      expect(backend.windows().empty() && backend.unavailable().empty(),
+             "fault isolation: releasing all targets clears windows and faults");
+    }
+  }
+}
+
+void restack_notifications() {
+  using layerc::test::expect;
+  layerc::test::require_x11();
+  std::string error;
+  auto display = X11Display::open(error);
+  auto observer = X11Display::open(error);
+  if (!expect(display.has_value() && observer.has_value(), "open overlay and observer displays"))
+    return;
+  auto *raw = reinterpret_cast<Display *>(observer->raw());
+  const auto root = static_cast<::Window>(observer->root());
+  XSelectInput(raw, root, SubstructureNotifyMask);
+  XSync(raw, False);
+  layerc::daemon::X11OverlayBackend backend(*display);
+  auto frame = bar_frame(96, 1, {0, 0, 400, 300});
+  frame.anchor_active = true;
+  expect(backend.show("restack", frame), "initial overlay maps raised");
+  const auto windows = backend.windows();
+  if (!expect(windows.size() == 1, "one overlay exists")) return;
+  const auto window = static_cast<::Window>(windows.front());
+  const auto configurations = [&] {
+    XSync(display->raw(), False);
+    XSync(raw, False);
+    int count = 0;
+    while (XPending(raw) > 0) {
+      XEvent event{};
+      XNextEvent(raw, &event);
+      if (event.type == ConfigureNotify && event.xconfigure.window == window)
+        ++count;
+    }
+    return count;
+  };
+  (void)configurations();
+  XSetWindowAttributes attributes{};
+  attributes.override_redirect = True;
+  const auto cover = XCreateWindow(raw, root, 0, 0, 400, 300, 0, CopyFromParent,
+                                   InputOutput, CopyFromParent, CWOverrideRedirect,
+                                   &attributes);
+  XMapRaised(raw, cover);
+  XSync(raw, False);
+  (void)configurations();
+  for (int index = 0; index < 5; ++index)
+    expect(backend.show("restack", frame), "repaint succeeds without restacking");
+  expect(configurations() == 0, "repeated show does not raise an existing overlay");
+  backend.restack();
+  expect(backend.show("restack", frame), "show after restack succeeds");
+  expect(configurations() == 1, "restack raises exactly once on the next show");
+  for (int index = 0; index < 5; ++index)
+    expect(backend.show("restack", frame), "repaint after restack succeeds");
+  expect(configurations() == 0, "generation is consumed by the first raise");
+  XDestroyWindow(raw, cover);
+  XSync(raw, False);
+}
+
 int main() {
   return layerc::test::run({
       {"scale_rules", [] {
@@ -631,6 +827,9 @@ int main() {
          bool passed = true;
          check_missing_shape_path(passed);
        }},
+      {"restack_notifications", restack_notifications},
+      {"update_failure_recovery", update_failure_recovery},
+      {"multiple_update_failures", multiple_update_failures},
       {"live_overlay", [] {
          layerc::test::require_x11();
          const int result = run_linux_x11_overlay_tests();

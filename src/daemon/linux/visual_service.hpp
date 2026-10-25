@@ -1,7 +1,6 @@
 #pragma once
 
-#include "input_service.hpp"
-#include "x11_capture.hpp"
+#include "session_registry.hpp"
 
 #include "layerc/core/template_matcher.hpp"
 #include "layerc/platform/visual_assets_linux.hpp"
@@ -19,7 +18,7 @@ namespace layerc::daemon {
 
 // One shared capture per active window, sampled only while inline visual
 // demand exists. Native transports remain outside core/runtime.
-class X11VisualService final : public layerc::runtime::IRuntimeService {
+class VisualService final : public layerc::runtime::IRuntimeService {
 public:
   struct WorkStats {
     std::size_t asset_checks{};
@@ -30,8 +29,8 @@ public:
     bool operator==(const WorkStats &) const = default;
   };
 
-  void attach(layerc::platform::X11Display &display) noexcept;
-  void use_native(NativeCaptureFactory *factory) noexcept;
+  void use_x11_capture(CaptureFactory *factory) noexcept;
+  void use_capture(CaptureFactory *factory) noexcept;
   void refresh(std::span<InputSession> sessions,
                const layerc::runtime::CapabilityDemand &demand,
                bool configuration_changed = false,
@@ -87,8 +86,8 @@ private:
   [[nodiscard]] std::unique_ptr<VisualCaptureSession>
   create_capture(const Target &target, std::string_view profile_id, std::uint8_t sample_rate);
 
-  layerc::platform::X11Display *display_{};
-  NativeCaptureFactory *native_{};
+  CaptureFactory *x11_{};
+  CaptureFactory *native_{};
   std::vector<Target> targets_;
   // Matched-profile configuration survives foreground/capture quiescence.
   std::map<std::filesystem::path, Evaluation> evaluations_;

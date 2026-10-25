@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <optional>
+#include <string>
 
 class Fl_Group;
 
@@ -17,7 +19,9 @@ public:
   LinuxAutomationEditor &operator=(const LinuxAutomationEditor &) = delete;
   [[nodiscard]] Fl_Group *group() const;
   void refresh();
-  [[nodiscard]] bool apply_pending();
+  // Returns the failure text the caller must report; the validation box and
+  // selection/focus side effects stay inside the editor.
+  [[nodiscard]] std::optional<std::string> apply_pending();
   void stop();
 private:
   struct Impl;

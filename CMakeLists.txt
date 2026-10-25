@@ -490,38 +490,36 @@ if(NOT WIN32)
             src/daemon/linux/live_draft.cpp
             src/daemon/linux/display_adapters.cpp
             src/daemon/linux/display_selection.cpp
-            src/daemon/linux/x11_adapters.cpp)
+            src/daemon/linux/display_route.cpp
+            src/daemon/linux/session_registry.cpp
+            src/daemon/linux/session_engine.cpp
+            src/daemon/linux/evdev_route.cpp
+            src/daemon/linux/input_service.cpp
+            src/daemon/linux/trace_lease_host.cpp
+            src/daemon/linux/overlay_service.cpp
+            src/daemon/linux/visual_service.cpp)
         target_include_directories(layerc_daemon_linux PUBLIC
             src/daemon/linux
             src/platform/linux)
         # The native visual seam (native_capture.hpp) is shared by every
         # provider build, including those without X11.
         target_link_libraries(layerc_daemon_linux PUBLIC
-            layerc_runtime layerc_linux layerc_capture_common)
+            layerc_runtime layerc_linux layerc_capture_common layerc_evdev)
         if(LAYERC_HAVE_X11)
-            target_sources(layerc_daemon_linux PRIVATE
-                src/daemon/linux/evdev_route.cpp
-                src/daemon/linux/input_service.cpp
-                src/daemon/linux/automation_trace.cpp
-                src/daemon/linux/overlay_service.cpp
-                src/daemon/linux/visual_service.cpp)
-            # The opted-in evdev source feeds the same session engine.
-            target_link_libraries(layerc_daemon_linux PUBLIC layerc_x11 layerc_evdev)
-        else()
-            target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_NO_X11)
+            target_sources(layerc_daemon_linux PRIVATE src/daemon/linux/x11_provider.cpp)
+            target_link_libraries(layerc_daemon_linux PUBLIC layerc_x11)
+            target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_X11)
         endif()
         if(TARGET layerc_wayland_connection)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_wayland_connection)
             target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_WAYLAND_CONNECTION)
         endif()
-        # Native Wayland providers feed the session engine, which lives in the
-        # X11-enabled build; without X11 the seam reports them unavailable.
-        if(TARGET layerc_wayland AND LAYERC_HAVE_X11)
+        if(TARGET layerc_wayland)
             target_sources(layerc_daemon_linux PRIVATE src/daemon/linux/wayland_providers.cpp)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_wayland)
             target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_WAYLAND_PROVIDERS)
         endif()
-        if(TARGET layerc_bus AND LAYERC_HAVE_X11)
+        if(TARGET layerc_bus)
             target_sources(layerc_daemon_linux PRIVATE src/daemon/linux/bus_providers.cpp)
             target_link_libraries(layerc_daemon_linux PUBLIC layerc_bus)
             target_compile_definitions(layerc_daemon_linux PRIVATE LAYERC_HAVE_BUS_PROVIDERS)
@@ -556,6 +554,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/common/automation_presets.cpp
         src/editor/common/automation_simulator.cpp
         src/editor/common/document_commit.cpp
+        src/editor/common/diagnostic_text.cpp
         src/editor/common/profile_document.cpp
         src/editor/common/profile_edit.cpp
         src/editor/common/runtime_diagnostics_view.cpp
@@ -575,8 +574,8 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         add_library(layerc_editor_linux STATIC
             src/editor/linux/daemon_link.cpp
             src/editor/linux/automation_trace_client.cpp
+            src/editor/linux/lease_worker.cpp
             src/editor/linux/live_draft_client.cpp
-            src/editor/linux/editor_model.cpp
             src/editor/linux/editor_session.cpp
             src/editor/linux/profile_mutations.cpp
             src/editor/linux/editor_appearance.cpp

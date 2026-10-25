@@ -97,11 +97,12 @@ observation_capacity_error(const VisualProfile &profile,
 VisualMergeResult merge_calibration_result(
     const std::optional<VisualProfile> &current, const bool current_invalid,
     const layerc::core::GameProfile &profile, const std::string_view cooldown_id,
-    const std::string_view visual_json,
+    const layerc::core::VisualProfile &calibration,
     const std::function<SharedObservationChoice()> &choose_shared) {
-  const auto parsed = layerc::core::parse_visual_profile_json(visual_json, profile);
-  const auto *candidate_profile = std::get_if<VisualProfile>(&parsed);
-  if (candidate_profile == nullptr || cooldown_id.empty() ||
+  const auto *candidate_profile = &calibration;
+  const auto candidate_error =
+      layerc::core::validate_visual_profile(calibration, profile);
+  if (!candidate_error.message.empty() || cooldown_id.empty() ||
       candidate_profile->observations.size() != 1 ||
       candidate_profile->triggers.size() != 1 ||
       candidate_profile->triggers.front().cooldown_id != cooldown_id)

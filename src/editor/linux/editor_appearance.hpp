@@ -31,7 +31,7 @@ struct RoleOverride {
 
 struct EditorAppearance {
   EditorTheme theme{EditorTheme::system};
-  std::uint32_t accent{}; // 0 = the preset accent
+  std::optional<std::uint32_t> accent; // nullopt = the preset accent; zero = explicit black
   std::array<RoleOverride, editor_role_count> overrides{};
   bool operator==(const EditorAppearance &) const = default;
 };

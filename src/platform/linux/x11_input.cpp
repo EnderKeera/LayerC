@@ -127,8 +127,7 @@ X11InputSource::X11InputSource(X11InputSource &&other) noexcept
       xi_opcode_(std::exchange(other.xi_opcode_, 0)),
       root_(std::exchange(other.root_, 0)), devices_(std::move(other.devices_)),
       gamepads_(std::move(other.gamepads_)),
-      key_codes_(other.key_codes_),
-      keymap_available_(std::exchange(other.keymap_available_, false)),
+      keymap_(std::exchange(other.keymap_, {})),
       xkb_event_base_(std::exchange(other.xkb_event_base_, 0)) {}
 
 X11InputSource &X11InputSource::operator=(X11InputSource &&other) noexcept {
@@ -139,8 +138,7 @@ X11InputSource &X11InputSource::operator=(X11InputSource &&other) noexcept {
     root_ = std::exchange(other.root_, 0);
     devices_ = std::move(other.devices_);
     gamepads_ = std::move(other.gamepads_);
-    key_codes_ = other.key_codes_;
-    keymap_available_ = std::exchange(other.keymap_available_, false);
+    keymap_ = std::exchange(other.keymap_, {});
     xkb_event_base_ = std::exchange(other.xkb_event_base_, 0);
   }
   return *this;
@@ -297,32 +295,48 @@ bool X11InputSource::refresh_devices() noexcept {
   }
 }
 
-bool X11InputSource::refresh_keymap() noexcept {
-  key_codes_.fill(0);
-  keymap_available_ = false;
-  if (display_ == nullptr || xkb_event_base_ == 0) return false;
-  auto *raw = reinterpret_cast<Display *>(display_);
+bool X11PhysicalKeymap::refresh(struct _XDisplay *display) noexcept {
+  codes_.fill(0);
+  available_ = false;
+  if (display == nullptr) return false;
+  auto *raw = reinterpret_cast<Display *>(display);
   X11ErrorTrap trap{raw};
   auto *keyboard = XkbGetMap(raw, 0, XkbUseCoreKbd);
   if (keyboard == nullptr) return false;
   if (XkbGetNames(raw, XkbKeyNamesMask | XkbKeyAliasesMask, keyboard) == Success &&
       keyboard->names != nullptr && keyboard->names->keys != nullptr && trap.ok()) {
     for (unsigned int code = keyboard->min_key_code;
-         code <= keyboard->max_key_code && code < key_codes_.size(); ++code) {
+         code <= keyboard->max_key_code && code < codes_.size(); ++code) {
       const auto name = std::string_view{keyboard->names->keys[code].name, 4};
       auto scan = xkb_key_name_to_scan_code(name);
-      for (unsigned int index = 0; !scan && index < keyboard->names->num_key_aliases;
-           ++index) {
+      for (unsigned int index = 0;
+           !scan && keyboard->names->key_aliases != nullptr &&
+           index < keyboard->names->num_key_aliases; ++index) {
         const auto &alias = keyboard->names->key_aliases[index];
         if (std::string_view{alias.real, 4} == name)
           scan = xkb_key_name_to_scan_code(std::string_view{alias.alias, 4});
       }
-      if (scan) key_codes_[code] = *scan;
+      if (scan) codes_[code] = *scan;
     }
-    keymap_available_ = true;
+    available_ = true;
   }
   XkbFreeKeyboard(keyboard, XkbAllComponentsMask, True);
-  return keymap_available_;
+  return available_;
+}
+
+std::optional<std::uint16_t>
+X11PhysicalKeymap::scan_code(const std::uint32_t keycode) const noexcept {
+  if (!available_ || keycode >= codes_.size() || codes_[keycode] == 0)
+    return std::nullopt;
+  return codes_[keycode];
+}
+
+bool X11InputSource::refresh_keymap() noexcept {
+  if (display_ == nullptr || xkb_event_base_ == 0) {
+    (void)keymap_.refresh(nullptr);
+    return false;
+  }
+  return keymap_.refresh(display_);
 }
 
 X11InputCapabilities X11InputSource::capabilities() const noexcept {
@@ -350,7 +364,7 @@ X11InputSource::unavailable(const X11InputCapabilities needed) const {
     reasons.push_back(
         "xi2: no keyboard device visible to XInput2 (keyboard bindings "
         "stay inactive)");
-  if (needed.keyboard && caps.keyboard && !keymap_available_)
+  if (needed.keyboard && caps.keyboard && !keymap_.available())
     reasons.push_back("xi2: XKB physical key names unavailable (keyboard bindings stay inactive)");
   if (needed.mouse && !caps.mouse)
     reasons.push_back("xi2: no pointer device visible to XInput2 (mouse "
@@ -392,10 +406,11 @@ X11InputPoll X11InputSource::poll(X11WindowTracker *tracker) {
           evtype == XI_RawKeyPress || evtype == XI_RawButtonPress;
       const auto detail = static_cast<std::uint32_t>(raw_event.detail);
       if (evtype == XI_RawKeyPress || evtype == XI_RawKeyRelease) {
-        if (kind_of(raw_event.deviceid) == X11DeviceKind::keyboard &&
-            detail < key_codes_.size() && key_codes_[detail] != 0)
-          result.events.push_back(
-              {{layerc::core::InputDevice::keyboard, key_codes_[detail], 0}, pressed});
+        if (kind_of(raw_event.deviceid) == X11DeviceKind::keyboard) {
+          if (const auto code = keymap_.scan_code(detail))
+            result.events.push_back(
+                {{layerc::core::InputDevice::keyboard, *code, 0}, pressed});
+        }
       } else {
         const auto kind = kind_of(raw_event.deviceid);
         if (kind == X11DeviceKind::gamepad) {

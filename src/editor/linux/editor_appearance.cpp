@@ -96,7 +96,7 @@ std::uint32_t preset_accent(const EditorTheme theme) noexcept {
 std::optional<RoleColors> theme_role_colors(const EditorAppearance &appearance,
                                             const EditorRole role) {
   if (appearance.theme == EditorTheme::system) return std::nullopt;
-  const auto accent = appearance.accent != 0 ? appearance.accent : preset_accent(appearance.theme);
+  const auto accent = appearance.accent.value_or(preset_accent(appearance.theme));
   RoleColors colors{.fill = ramp_background, .text = ramp_text,
                     // About a quarter of the accent over the window, as on Windows.
                     .selection = blend(ramp_background, accent, 60)};
@@ -128,9 +128,9 @@ std::string appearance_json(const EditorAppearance &appearance) {
   json::append_unsigned(out, static_cast<std::uint64_t>(appearance_version));
   out += ",\"theme\":";
   json::append_quoted(out, theme_name(appearance.theme));
-  if (appearance.accent != 0) {
+  if (appearance.accent) {
     out += ",\"accent\":";
-    json::append_color_quoted(out, appearance.accent);
+    json::append_color_quoted(out, *appearance.accent);
   }
   // Only changed roles are written; with none, "overrides" is omitted.
   bool first_role = true;

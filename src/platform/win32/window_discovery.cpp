@@ -141,6 +141,7 @@ bool profile_matches_window(const WindowCandidate &candidate,
   return layerc::core::resolve_game_match(
              fields, profile.game,
              {.exact_path = false,
+              .preferred = {},
               .global = layerc::core::GlobalMatchPolicy::not_window_bound})
       .has_value();
 }

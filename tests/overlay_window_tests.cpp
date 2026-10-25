@@ -178,15 +178,17 @@ struct OverlayFixture {
   RECT client{};
   POINT origin{};
   RECT target_rect{};
-  layerc::core::Panel panel{
-      .id = "main",
-      .name = "Main",
-      .style = layerc::core::PanelStyle::card,
-      .bar = {},
-      .anchor_x = 0.5,
-      .anchor_y = 0.75,
-      .cooldown_ids = {"dash"},
-  };
+  layerc::core::Panel panel = [] {
+    layerc::core::Panel value{};
+    value.id = "main";
+    value.name = "Main";
+    value.style = layerc::core::PanelStyle::card;
+    value.bar = {};
+    value.anchor_x = 0.5;
+    value.anchor_y = 0.75;
+    value.cooldown_ids = {"dash"};
+    return value;
+  }();
   std::vector<layerc::core::CooldownDefinition> cooldowns{
       {.id = "dash", .name = "Dash", .duration = std::chrono::seconds(5)}};
   std::optional<layerc::daemon::OverlayWindow> overlay;

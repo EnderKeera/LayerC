@@ -12,7 +12,8 @@
 
 namespace layerc::daemon {
 
-using LiveDraftResult = std::variant<layerc::core::LiveDraftReply, std::string>;
+using LiveDraftResult =
+    std::variant<layerc::core::LiveDraftReply, layerc::core::LiveDraftFailure>;
 
 // The one unsaved editor draft LayerD applies in memory only. A draft names a
 // stored profile by id, replaces only its base profile, and lives while its
