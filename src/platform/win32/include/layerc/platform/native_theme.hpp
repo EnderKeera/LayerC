@@ -86,6 +86,8 @@ void set_native_text_scale(int percent) noexcept;
 // native_text_scale(), in percent: how much larger than 96-DPI design units
 // text renders at `dpi`. Geometry that must fit text scales by this too.
 [[nodiscard]] int native_text_percent(UINT dpi);
+// GetDpiForWindow, or the 96-DPI baseline when the window reports none.
+[[nodiscard]] UINT native_window_dpi(HWND window);
 
 enum class NativeFontKind { body, heading, title, monospace };
 // Body text is 14 px at 96 DPI and 100 %, adjusted by the Windows text-size

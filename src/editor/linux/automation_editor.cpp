@@ -14,6 +14,8 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Multiline_Input.H>
 #include <FL/Fl_Multiline_Output.H>
+#include <FL/Fl_Scroll.H>
+#include <FL/fl_draw.H>
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Scroll.H>
@@ -64,6 +66,7 @@ struct LinuxAutomationEditor::Impl {
   Fl_Multiline_Input *json{};
   Fl_Output *validation{};
   Fl_Multiline_Output *state{}, *trace_state{};
+  Fl_Scroll *state_scroll{};
   Fl_Button *create{}, *remove{}, *add{}, *erase{}, *apply{}, *json_apply{};
   Fl_Button *reset{}, *step{}, *play{}, *event_add{}, *load_trace{}, *save_trace{}, *trace_replay{};
   AutomationSelection selection;
@@ -80,92 +83,98 @@ struct LinuxAutomationEditor::Impl {
 
   Impl(EditorApp &owner, Fl_Group &group) : app(owner), page(&group) {
     page->begin();
-    view = choice(285, 75, 170, "Automation view");
+    view = choice(285, 95, 170, "Automation view");
     for (const auto label : automation_view_labels) append_choice(*view, label);
     append_choice(*view, "Live trace");
     view->value(0);
-    preset = choice(475, 75, 260, "Starter preset");
+    preset = choice(475, 95, 260, "Starter preset");
     for (const auto label : automation_preset_labels) append_choice(*preset, label);
     preset->value(0);
-    create = button(750, 75, 120, "New automation");
-    remove = button(880, 75, 150, "Remove automation");
+    create = button(750, 95, 120, "New automation");
+    remove = button(880, 95, 150, "Remove automation");
 
-    basic = new Fl_Scroll(270, 110, 775, 265);
+    basic = new Fl_Scroll(270, 130, 775, 265);
     basic->begin();
-    automations = browser(285, 145, 215, 200, "Automations");
-    name = input(520, 145, 325, "Automation name");
-    enabled = check(860, 145, 170, "Automation enabled");
-    palette = choice(520, 210, 325, "Node palette");
+    automations = browser(285, 165, 215, 200, "Automations");
+    name = input(520, 165, 325, "Automation name");
+    enabled = check(860, 165, 170, "Automation enabled");
+    palette = choice(520, 230, 325, "Node palette");
     for (const auto &entry : automation_palette) append_choice(*palette, entry.label);
     palette->value(0);
-    add = button(860, 210, 75, "Add node");
-    erase = button(945, 210, 85, "Delete node");
-    nodes = browser(520, 270, 510, 110, "Rules and actions");
-    properties = new Fl_Group(520, 405, 510, 280);
+    add = button(860, 230, 75, "Add node");
+    erase = button(945, 230, 85, "Delete node");
+    nodes = browser(520, 290, 510, 110, "Rules and actions");
+    properties = new Fl_Group(520, 425, 510, 280);
     properties->begin();
-    rule_id = input(520, 430, 245, "Rule id");
-    event = choice(785, 430, 245, "Event");
+    rule_id = input(520, 450, 245, "Rule id");
+    event = choice(785, 450, 245, "Event");
     for (const auto kind : core::automation_event_kinds) append_choice(*event, event_label(kind));
-    source = input(520, 495, 245, "Source filter");
-    priority = input(785, 495, 245, "Priority");
-    action_fields = new Fl_Group(520, 525, 510, 160);
+    source = input(520, 515, 245, "Source filter");
+    priority = input(785, 515, 245, "Priority");
+    action_fields = new Fl_Group(520, 545, 510, 160);
     action_fields->begin();
-    action = choice(520, 560, 245, "Action kind");
+    action = choice(520, 580, 245, "Action kind");
     for (const auto &spec : core::automation_action_specs) append_choice(*action, spec.display_name);
-    target = input(785, 560, 245, "Action target");
-    value = input(520, 625, 325, "Typed JSON value (expressions kept)");
-    repeating = check(860, 625, 170, "Repeating timer");
+    target = input(785, 580, 245, "Action target");
+    value = input(520, 645, 325, "Typed JSON value (expressions kept)");
+    repeating = check(860, 645, 170, "Repeating timer");
     action_fields->end();
     properties->end();
-    apply = button(520, 705, 245, "Apply properties");
+    apply = button(520, 725, 245, "Apply properties");
     basic->end();
 
-    advanced = new Fl_Group(270, 110, 775, 335);
+    advanced = new Fl_Group(270, 130, 775, 335);
     advanced->begin();
-    json = new Fl_Multiline_Input(285, 145, 745, 185, "Advanced automation JSON");
+    json = new Fl_Multiline_Input(285, 165, 745, 185, "Advanced automation JSON");
     json->align(FL_ALIGN_TOP_LEFT);
     json->textfont(FL_COURIER);
     json->textsize(12);
     json->when(FL_WHEN_CHANGED);
     bind(*json);
-    json_apply = button(285, 345, 220, "Validate / Apply JSON");
+    json_apply = button(285, 365, 220, "Validate / Apply JSON");
     advanced->end();
 
-    simulation = new Fl_Group(270, 110, 775, 335);
+    simulation = new Fl_Group(270, 130, 775, 335);
     simulation->begin();
-    sim_event = choice(285, 145, 225, "Synthetic event");
+    sim_event = choice(285, 165, 225, "Synthetic event");
     for (const auto kind : core::automation_event_kinds) append_choice(*sim_event, event_label(kind));
     sim_event->value(0);
-    sim_source = input(530, 145, 190, "Event source", false);
-    sim_fields = input(740, 145, 290, "Fields: name=JSON; ...", false);
-    event_add = button(285, 195, 135, "Add event");
-    reset = button(430, 195, 100, "Reset");
-    step = button(540, 195, 100, "Step");
-    play = button(650, 195, 100, "Play");
-    speed = choice(770, 195, 110, "Speed");
+    sim_source = input(530, 165, 190, "Event source", false);
+    sim_fields = input(740, 165, 290, "Fields: name=JSON; ...", false);
+    event_add = button(285, 215, 135, "Add event");
+    reset = button(430, 215, 100, "Reset");
+    step = button(540, 215, 100, "Step");
+    play = button(650, 215, 100, "Play");
+    speed = choice(770, 215, 110, "Speed");
     for (const auto label : simulator_speed_labels) append_choice(*speed, label);
     speed->value(1);
-    breakpoint = input(285, 255, 225, "Breakpoint rule id", false);
-    assertions = input(530, 255, 500, "Assertions: variable=JSON; ...", false);
-    state = new Fl_Multiline_Output(285, 310, 745, 65, "Simulator state");
+    breakpoint = input(285, 275, 225, "Breakpoint rule id", false);
+    assertions = input(530, 275, 500, "Assertions: variable=JSON; ...", false);
+    state_scroll = new Fl_Scroll(279, 309, 757, 92);
+    state_scroll->type(Fl_Scroll::VERTICAL);
+    state_scroll->begin();
+    state = new Fl_Multiline_Output(285, 330, 725, 65, "Simulator state");
+    state->wrap(1);
     state->align(FL_ALIGN_TOP_LEFT);
     state->textfont(FL_COURIER);
     state->textsize(12);
+    state_scroll->end();
     simulation->end();
-    live_view = new Fl_Group(270, 110, 775, 270);
+    live_view = new Fl_Group(270, 130, 775, 270);
     live_view->begin();
-    trace_enabled = check(285, 145, 650, "Record authenticated LayerD trace (saved profile only)");
-    trace_replay = button(285, 195, 350, "Replay collected trace in simulator");
-    trace_state = new Fl_Multiline_Output(285, 255, 745, 100, "Live trace status");
+    trace_enabled = check(285, 165, 650, "Record authenticated LayerD trace (saved profile only)");
+    trace_replay = button(285, 215, 350, "Replay collected trace in simulator");
+    trace_state = new Fl_Multiline_Output(285, 275, 745, 100, "Live trace status");
+    trace_state->wrap(1);
     trace_state->align(FL_ALIGN_TOP_LEFT);
     trace_state->value("Stopped. No daemon subscription.");
     live_view->end();
     page->end();
     // Trace files work in every view and never access a running daemon.
     page->begin();
-    load_trace = button(285, 395, 160, "Load trace...");
-    save_trace = button(460, 395, 160, "Save trace...");
-    validation = new Fl_Output(645, 395, 385, 28, "Automation validation");
+    load_trace = button(285, 415, 160, "Load trace...");
+    save_trace = button(460, 415, 160, "Save trace...");
+    validation = new Fl_Output(645, 415, 385, 28, "Automation validation");
     validation->align(FL_ALIGN_TOP_LEFT);
     page->end();
     show_view();
@@ -258,18 +267,61 @@ struct LinuxAutomationEditor::Impl {
     stop();
     pending = next;
     app.module_fields_changed(next != Pending::none);
+    if (next != Pending::none) show_pending_validation();
+  }
+  // The validation box describes the pending buffer while one exists; refresh()
+  // restores the committed summary when the buffer is applied or discarded.
+  void show_pending_validation() {
+    if (pending == Pending::json) {
+      const auto text = std::string(json->value());
+      auto parsed = core::parse_automation_profile_json(text, app.session.document().profile());
+      if (const auto *failure = std::get_if<core::AutomationError>(&parsed)) {
+        validation->value(("Pending JSON is invalid and not applied: " +
+                           locate_json_error(text, *failure).message)
+                              .c_str());
+        return;
+      }
+      validation
+          ->value(("Pending JSON: " +
+                   automation_validation_summary(
+                       std::optional<core::AutomationProfile>(
+                           std::get<core::AutomationProfile>(parsed)),
+                       app.session.document().profile()))
+                      .c_str());
+      return;
+    }
+    validation->value("Pending changes are not applied yet.");
   }
   void message(const std::string &text) {
     app.report(text);
   }
   void describe() {
-    state->value(simulator.describe(assertions->value()).c_str());
-    state->redraw();
+    const auto text = simulator.describe(assertions->value());
+    state->value(text.c_str());
+    fl_font(state->textfont(), state->textsize());
+    int width = 725 - 12;  // fl_measure wraps to a non-zero preset width
+    int height{};
+    fl_measure(text.c_str(), width, height, 0);
+    state_scroll->scroll_to(0, 0);
+    state->resize(state_scroll->x() + 6, state_scroll->y() + 21, 725,
+                  std::max(65, height + 12));
+    state_scroll->redraw();
+  }
+  // An absent module edits and simulates as an empty graph for this profile,
+  // so the template carries the base profile ID the parser requires.
+  [[nodiscard]] std::string current_graph_json() const {
+    const auto &document = app.session.document();
+    const auto &graph = document.automation();
+    if (graph) return automation_graph_json(graph);
+    // Assigned after construction: the aggregate has members without default
+    // member initializers, so a brace form warns under -Wmissing-field-initializers.
+    core::AutomationProfile empty;
+    empty.profile_id = document.profile().id;
+    return automation_graph_json(std::optional<core::AutomationProfile>(std::move(empty)));
   }
   void rewind() {
     stop();
-    const auto result = simulator.reset(automation_graph_json(app.session.document().automation()),
-                                        app.session.document().profile());
+    const auto result = simulator.reset(current_graph_json(), app.session.document().profile());
     if (result.error) message("Simulator unavailable: " + *result.error);
     else if (result.seeded) trace.record(*result.seeded);
     describe();
@@ -283,7 +335,7 @@ struct LinuxAutomationEditor::Impl {
       profile_id.clear();
       simulated_graph.clear();
       trace.clear();
-      simulator.load({});
+      simulator.clear();
       json->value(""); state->value(""); validation->value("");
       page->deactivate();
       return;
@@ -295,7 +347,7 @@ struct LinuxAutomationEditor::Impl {
       profile_id = document.profile().id;
       selection = {};
       trace.clear();
-      simulator.load({});
+      simulator.clear();
       simulated_graph.clear();
     }
     const auto &graph = document.automation();
@@ -333,7 +385,7 @@ struct LinuxAutomationEditor::Impl {
     source->value(fields.source_filter.c_str()); priority->value(fields.priority.c_str());
     action->value(fields.action_kind_index); target->value(fields.target.c_str());
     value->value(fields.value.c_str()); repeating->value(fields.repeating);
-    auto graph_json = automation_graph_json(graph);
+    auto graph_json = current_graph_json();
     json->value(display_lines(graph_json).c_str());
     validation->value(automation_validation_summary(graph, document.profile()).c_str());
     if (document.automation_state() == platform::ModuleSidecarState::invalid) {
@@ -347,8 +399,8 @@ struct LinuxAutomationEditor::Impl {
     }
     show_view();
   }
-  bool apply_pending() {
-    if (pending == Pending::none) return true;
+  std::optional<std::string> apply_pending() {
+    if (pending == Pending::none) return std::nullopt;
     auto &session = app.session;
     std::optional<std::string> error;
     if (pending == Pending::json) {
@@ -356,14 +408,14 @@ struct LinuxAutomationEditor::Impl {
       auto parsed = core::parse_automation_profile_json(source_text, session.document().profile());
       if (const auto *failure = std::get_if<core::AutomationError>(&parsed)) {
         const auto location = locate_json_error(source_text, *failure);
-        message("Invalid automation JSON: " + location.message);
+        show_pending_validation();
         if (location.begin && location.end) {
           const auto bound = static_cast<std::size_t>(std::numeric_limits<int>::max());
           json->insert_position(static_cast<int>(std::min(*location.end, bound)),
                          static_cast<int>(std::min(*location.begin, bound)));
           json->take_focus();
         }
-        return false;
+        return "Invalid automation JSON: " + location.message;
       }
       error = session.edit_automation([&](auto &graph) -> std::optional<std::string> {
         graph = std::move(std::get<core::AutomationProfile>(parsed));
@@ -387,12 +439,15 @@ struct LinuxAutomationEditor::Impl {
         return std::nullopt;
       });
     }
-    if (error) { message("Not applied: " + *error); return false; }
+    if (error) {
+      validation->value(("Pending changes are not applied: " + *error).c_str());
+      return "Not applied: " + *error;
+    }
     pending = Pending::none;
     app.module_fields_changed(false);
     refresh();
     message("Automation applied to the document. Save publishes it.");
-    return true;
+    return std::nullopt;
   }
   bool edit_graph(const std::function<AutomationEditResult(std::optional<core::AutomationProfile> &)> &edit,
                   const bool repair = false) {
@@ -412,7 +467,7 @@ struct LinuxAutomationEditor::Impl {
   }
   static void tick(void *data) {
     auto &self = *static_cast<Impl *>(data);
-    if (!self.playing || !self.app.window.shown() || !self.page->visible_r()) {
+    if (!self.playing || !self.app.shown() || !self.page->visible_r()) {
       self.stop(); return;
     }
     const bool more = self.simulator.step(self.breakpoint->value());
@@ -424,6 +479,7 @@ struct LinuxAutomationEditor::Impl {
   void trace_file(bool save) {
     suspend();
     if (save && trace.empty()) { message("No trace to save."); return; }
+    fl_message_title("Save simulator trace");
     if (save && fl_choice("Trace files may contain user-authored strings or maps. Save?",
                           "Cancel", "Save", nullptr) != 1) return;
     const auto destination = trace_destination(save);
@@ -483,6 +539,7 @@ struct LinuxAutomationEditor::Impl {
       return;
     }
     if (widget == remove || widget == erase) {
+      fl_message_title("Remove automation");
       if (fl_choice(widget == remove ? "Remove this automation?" : "Remove this rule or action?",
                     "Cancel", "Remove", nullptr) != 1) return;
       (void)edit_graph([&](auto &graph) -> AutomationEditResult {
@@ -515,7 +572,10 @@ struct LinuxAutomationEditor::Impl {
       }
       refresh(); return;
     }
-    if (widget == apply || widget == json_apply) { (void)apply_pending(); return; }
+    if (widget == apply || widget == json_apply) {
+      if (const auto error = apply_pending()) message(*error);
+      return;
+    }
     if (widget == load_trace || widget == save_trace) { trace_file(widget == save_trace); return; }
     if (widget == reset) { rewind(); return; }
     if (widget == step) { stop(); (void)simulator.step(breakpoint->value()); describe(); return; }
@@ -559,6 +619,8 @@ void LinuxAutomationEditor::refresh() {
   }
   impl_->refresh();
 }
-bool LinuxAutomationEditor::apply_pending() { return !impl_ || impl_->apply_pending(); }
+std::optional<std::string> LinuxAutomationEditor::apply_pending() {
+  return impl_ ? impl_->apply_pending() : std::nullopt;
+}
 void LinuxAutomationEditor::stop() { if (impl_) impl_->suspend(); }
 } // namespace layerc::editor

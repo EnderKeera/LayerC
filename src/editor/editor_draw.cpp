@@ -13,11 +13,6 @@ namespace {
 
 using layerc::platform::EditorControlRole;
 
-UINT item_dpi(const HWND window) {
-  const UINT dpi = GetDpiForWindow(window);
-  return dpi == 0 ? 96U : dpi;
-}
-
 HFONT control_font(const HWND control) {
   const auto font =
       reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0));
@@ -85,7 +80,7 @@ void EditorWindow::draw_button(const DRAWITEMSTRUCT &draw,
 
 void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
   const auto list_colors = colors(EditorControlRole::list);
-  const UINT dpi = item_dpi(draw.hwndItem);
+  const UINT dpi = native_window_dpi(draw.hwndItem);
   const bool combo_field = (draw.itemState & ODS_COMBOBOXEDIT) != 0;
   const bool selected = !combo_field && (draw.itemState & ODS_SELECTED) != 0;
   const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
@@ -121,7 +116,7 @@ void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
 void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
   // The saved-profiles list paints with the Saved Profiles (sidebar) role.
   const auto list_colors = colors(EditorControlRole::sidebar);
-  const UINT dpi = item_dpi(draw.hwndItem);
+  const UINT dpi = native_window_dpi(draw.hwndItem);
   const bool selected = (draw.itemState & ODS_SELECTED) != 0;
   RECT row = draw.rcItem;
   RECT client{};
@@ -189,7 +184,7 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
 // role being edited outlined in the accent.
 void EditorWindow::draw_appearance_preview(const DRAWITEMSTRUCT &draw,
                                            const HWND window) const {
-  const UINT dpi = item_dpi(draw.hwndItem);
+  const UINT dpi = native_window_dpi(draw.hwndItem);
   const auto active = appearance_role(window);
   const HDC dc = draw.hDC;
   const RECT area = draw.rcItem;

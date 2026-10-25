@@ -16,6 +16,18 @@
 
 namespace layerc::editor {
 
+// What the last processed event actually did: the committed effects and
+// derived events the runtime returns, plus the trace entries that call added.
+struct SimulatorStepReport {
+  layerc::core::AutomationEvent root;
+  std::size_t timer_events{};
+  // Entries added during the step; the root provenance phase is excluded.
+  std::vector<layerc::core::AutomationTraceEntry> trace;
+  std::vector<layerc::core::AutomationEffect> effects;
+  std::vector<layerc::core::AutomationEvent> derived;
+  std::optional<std::string> rejection;
+};
+
 // The editors' deterministic automation simulator: a runtime compiled from the
 // edited graph replays an editable list of root events one step at a time,
 // firing due timers and expiring overrides first, and pauses on a rejected
@@ -26,7 +38,7 @@ public:
   struct Reset {
     // Shown instead of the state when the graph does not compile.
     std::optional<std::string> error;
-    // The sessionStarted root seeded into an empty event list.
+    // The sessionStarted root seeded for a fresh session, never a loaded trace.
     std::optional<layerc::core::AutomationEvent> seeded;
   };
 
@@ -49,8 +61,11 @@ public:
   [[nodiscard]] std::variant<layerc::core::AutomationEvent, std::string>
   add_event(layerc::core::AutomationEventKind kind, std::string source_id,
             std::string_view fields);
-  // Replaces the event list (for example with a loaded trace).
+  // Replaces the event list exactly, including an explicitly empty trace.
+  // Subsequent resets compile/rewind without adding starter roots.
   void load(std::vector<layerc::core::AutomationEvent> events);
+  // Starts a fresh session; its first successful reset may seed sessionStarted.
+  void clear();
 
   [[nodiscard]] bool compiled() const noexcept { return runtime_ != nullptr; }
   [[nodiscard]] std::size_t position() const noexcept { return index_; }
@@ -61,6 +76,10 @@ public:
   [[nodiscard]] const layerc::core::AutomationRuntime *runtime() const noexcept {
     return runtime_.get();
   }
+  // The report of the last step(), cleared by reset/load/clear.
+  [[nodiscard]] const std::optional<SimulatorStepReport> &last_step() const noexcept {
+    return last_step_;
+  }
   // Progress, timers, variables and, when assertions ("id=JSON; ...") are
   // given, whether every declared variable currently equals its value.
   // Lines end with '\n'.
@@ -70,10 +89,16 @@ private:
   std::unique_ptr<layerc::core::AutomationRuntime> runtime_;
   std::vector<layerc::core::AutomationEvent> events_;
   std::size_t index_{};
+  bool seed_empty_{true};
+  std::optional<SimulatorStepReport> last_step_;
 };
 
 // Playback interval for the slow/normal/fast speed choices (0, 1, 2).
 [[nodiscard]] std::chrono::milliseconds simulator_interval(int speed) noexcept;
+
+// Editor import allocation policy, distinct from the 4MiB trace format bound.
+// Resource refusal never changes the file or the current editor trace/profile.
+inline constexpr std::size_t max_trace_import_json_values = 131072;
 
 // .layerctrace files: a bounded read that parses the root events.
 struct LoadedTrace {

@@ -1,6 +1,7 @@
 // Deterministic FLTK autosave tests: disposable stores and private sockets.
 #include "editor_app.hpp"
 #include "profile_edit.hpp"
+#include "linux_editor_test_access.hpp"
 #include "test_support.hpp"
 #include "layerc/core/profile.hpp"
 #include "layerc/core/json.hpp"
@@ -60,8 +61,8 @@ void wait(double seconds) {
       std::chrono::duration<double>(seconds));
   while (core::MonotonicClock::now() < until) Fl::wait(.01);
 }
-void show(editor::EditorApp &app) { app.build(); app.window.show(); Fl::check(); }
-void name(editor::EditorApp &app, const char *value) { app.name->value(value); app.field_changed(app.name); }
+void show(editor::EditorApp &app) { app.build(); editor::EditorAppTestAccess::window(app).show(); Fl::check(); }
+void name(editor::EditorApp &app, const char *value) { editor::EditorAppTestAccess::name(app)->value(value); app.field_changed(editor::EditorAppTestAccess::name(app)); }
 std::string disk_name(const std::filesystem::path &path) {
   const auto bytes = layerc::test::read_file(path);
   if (!bytes) return {};
@@ -78,37 +79,37 @@ void debounce_undo_and_offline_save() {
   expect(disk_name(fixture.path) == original, "typing restarts debounce");
   wait(.35);
   expect(disk_name(fixture.path) == "Second" && !app.session.has_unsaved_changes() &&
-             std::string(app.status->value()).starts_with("Autosaved") &&
-             std::string(app.status->value()).find("LayerD is not running") != std::string::npos,
+             std::string(editor::EditorAppTestAccess::status(app)->value()).starts_with("Autosaved") &&
+             std::string(editor::EditorAppTestAccess::status(app)->value()).find("LayerD is not running") != std::string::npos,
          "text autosaves durably with visible offline-daemon status");
   app.command(editor::EditorCommand::undo); wait(.08);
   expect(disk_name(fixture.path) == original && !app.session.has_unsaved_changes(), "Undo immediately autosaves coalesced history");
   app.command(editor::EditorCommand::redo); wait(.08);
   expect(disk_name(fixture.path) == "Second", "Redo autosaves the restored entry");
-  app.window.hide();
+  editor::EditorAppTestAccess::window(app).hide();
 }
 void draft_first_save_then_autosave() {
   Fixture fixture; editor::EditorApp app; show(app);
   app.command(editor::EditorCommand::new_profile);
-  app.executable->value("draft.exe"); app.field_changed(app.executable);
+  editor::EditorAppTestAccess::executable(app)->value("draft.exe"); app.field_changed(editor::EditorAppTestAccess::executable(app));
   name(app, "Unsaved new profile"); wait(.55);
   expect(app.session.is_draft() && app.session.profiles().profiles.empty(), "typing never creates a new profile");
   expect(app.save(), "first explicit Save creates draft");
   const auto path = app.session.document().path();
   name(app, "Created profile edit"); wait(.55);
   expect(!app.session.is_draft() && disk_name(path) == "Created profile edit", "existing profile then autosaves");
-  app.window.hide();
+  editor::EditorAppTestAccess::window(app).hide();
 }
 void invalid_buffer_then_recovery() {
   Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
   const auto before = layerc::test::read_file(fixture.path);
   name(app, "Accepted"); name(app, ""); wait(.55);
   expect(layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes() &&
-             std::string(app.name->value()).empty() && std::string(app.status->value()).starts_with("Not autosaved"),
+             std::string(editor::EditorAppTestAccess::name(app)->value()).empty() && std::string(editor::EditorAppTestAccess::status(app)->value()).starts_with("Not autosaved"),
          "invalid buffer blocks publication without losing it or earlier accepted edits");
   name(app, "Recovered"); wait(.55);
   expect(disk_name(fixture.path) == "Recovered" && !app.session.has_unsaved_changes(), "corrected buffer retries autosave");
-  app.window.hide();
+  editor::EditorAppTestAccess::window(app).hide();
 }
 void write_failure_then_recovery() {
   Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
@@ -117,13 +118,13 @@ void write_failure_then_recovery() {
   std::filesystem::remove(blocked); std::filesystem::create_directory(blocked);
   name(app, "Cannot write"); wait(.55);
   expect(layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes() &&
-             std::string(app.status->value()).starts_with("Not autosaved"),
+             std::string(editor::EditorAppTestAccess::status(app)->value()).starts_with("Not autosaved"),
          "planning failure retains draft and original durable bytes");
   wait(.20); expect(layerc::test::read_file(fixture.path) == before, "failed save has no retry spin");
   std::filesystem::remove(blocked);
   name(app, "Write recovered"); wait(.55);
   expect(disk_name(fixture.path) == "Write recovered" && !app.session.has_unsaved_changes(), "next edit retries after fault removal");
-  app.window.hide();
+  editor::EditorAppTestAccess::window(app).hide();
 }
 void upgrade_never_prompts_automatically() {
   Fixture fixture; fixture.store(true); editor::EditorApp app; show(app);
@@ -131,12 +132,12 @@ void upgrade_never_prompts_automatically() {
   expect(app.session.document().legacy_base_schema(), "legacy fixture is recognized");
   name(app, "Legacy edit"); wait(.55);
   expect(!Fl::modal() && layerc::test::read_file(fixture.path) == before && app.session.has_unsaved_changes() &&
-             std::string(app.status->value()).starts_with("Autosave paused"),
+             std::string(editor::EditorAppTestAccess::status(app)->value()).starts_with("Autosave paused"),
          "autosave never prompts or silently upgrades");
   expect(app.session.save([] { return true; }).saved(), "explicit consent upgrades");
   app.refresh(); name(app, "After upgrade"); wait(.55);
   expect(disk_name(fixture.path) == "After upgrade" && !app.session.has_unsaved_changes(), "autosave resumes after upgrade");
-  app.window.hide();
+  editor::EditorAppTestAccess::window(app).hide();
 }
 void modal_suspends_commit_and_close_flushes() {
   Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
@@ -147,15 +148,70 @@ void modal_suspends_commit_and_close_flushes() {
   modal.hide(); wait(.20);
   expect(disk_name(fixture.path) == "Inside modal", "autosave resumes after modal close");
   name(app, "Close flush"); app.command(editor::EditorCommand::close);
-  expect(!app.window.shown() && disk_name(fixture.path) == "Close flush" && !app.session.has_unsaved_changes(),
+  expect(!editor::EditorAppTestAccess::window(app).shown() && disk_name(fixture.path) == "Close flush" && !app.session.has_unsaved_changes(),
          "close flushes accepted edits and stops owned services");
   const auto closed = layerc::test::read_file(fixture.path); wait(.55);
   expect(layerc::test::read_file(fixture.path) == closed, "no orphaned timer writes after close");
 }
 } // namespace
+
+
+// A refused manual Save reports one prefix, keeps the buffer, history and the
+// durable bytes, and does not change its text between repeated attempts.
+void refused_save_and_presentation_only_report() {
+  Fixture fixture; fixture.store(); editor::EditorApp app; show(app);
+  const auto durable = layerc::test::read_file(fixture.path);
+  name(app, "Accepted rename"); wait(.20);
+  expect(app.session.can_undo(), "the accepted rename is one history step");
+  const auto steps = app.session.edit_generation();
+  name(app, "");
+  const auto first = app.save();
+  const std::string first_text = editor::EditorAppTestAccess::status(app)->value();
+  expect(!first && first_text.starts_with("Not saved. Invalid input: ") &&
+             first_text.find("Not saved") == first_text.rfind("Not saved"),
+         "a refused Save reports one prefix and the field error: " + first_text);
+  const auto second = app.save();
+  const std::string second_text = editor::EditorAppTestAccess::status(app)->value();
+  expect(!second && second_text == first_text && std::string(editor::EditorAppTestAccess::name(app)->value()).empty(),
+         "a repeated refused Save keeps the invalid buffer and the same text");
+  expect(app.session.edit_generation() == steps &&
+             layerc::test::read_file(fixture.path) == durable,
+         "a refused Save changes neither history nor durable bytes");
+  editor::EditorAppTestAccess::window(app).hide();
+
+  Fixture report_fixture; report_fixture.store();
+  editor::EditorApp quiet; show(quiet);
+  const auto quiet_durable = layerc::test::read_file(report_fixture.path);
+  const auto sequence = editor::EditorAppTestAccess::live_sequence(quiet);
+  // Presentation is never an autosave signal: with the listener cleared the
+  // session edit cannot schedule, and report() must not schedule either.
+  quiet.session.set_change_listener({});
+  expect(!quiet.session.edit([](auto &profile) { profile.name = "Listenerless"; }) &&
+             quiet.session.has_unsaved_changes(),
+         "an accepted edit without the listener still dirties the document");
+  expect(!editor::EditorAppTestAccess::autosave_pending(quiet),
+         "a session edit cannot schedule autosave once the listener is cleared");
+  quiet.report("x");
+  quiet.report("x");
+  expect(!editor::EditorAppTestAccess::autosave_pending(quiet) &&
+             editor::EditorAppTestAccess::live_sequence(quiet) == sequence &&
+             layerc::test::read_file(report_fixture.path) == quiet_durable,
+         "report() is presentational: no autosave timeout, no live publish, no write");
+  editor::EditorAppTestAccess::window(quiet).hide();
+
+  Fixture listener_fixture; listener_fixture.store();
+  editor::EditorApp app_with_listener; show(app_with_listener);
+  expect(!app_with_listener.session.edit(
+             [](auto &profile) { profile.name = "Listener schedules"; }) &&
+             editor::EditorAppTestAccess::autosave_pending(app_with_listener),
+         "the production listener schedules autosave for an accepted edit");
+  editor::EditorAppTestAccess::window(app_with_listener).hide();
+}
+
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(debounce_undo_and_offline_save),
                  LAYERC_TEST_CASE(draft_first_save_then_autosave),
                  LAYERC_TEST_CASE(invalid_buffer_then_recovery),
                  LAYERC_TEST_CASE(write_failure_then_recovery),
                  LAYERC_TEST_CASE(upgrade_never_prompts_automatically),
-                 LAYERC_TEST_CASE(modal_suspends_commit_and_close_flushes))
+                 LAYERC_TEST_CASE(modal_suspends_commit_and_close_flushes),
+                 LAYERC_TEST_CASE(refused_save_and_presentation_only_report))

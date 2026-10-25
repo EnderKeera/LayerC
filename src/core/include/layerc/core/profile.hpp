@@ -25,6 +25,10 @@ using ProfileResult = std::variant<GameProfile, ProfileError>;
 [[nodiscard]] std::optional<ProfileError>
 validate_profile(const GameProfile &profile);
 
+// True when any input binding triggers the cooldown.
+[[nodiscard]] bool has_binding(const GameProfile &profile,
+                               std::string_view cooldown_id) noexcept;
+
 [[nodiscard]] ProfileResult parse_profile_json(std::string_view source);
 // For a bounded document already accepted by json::parse (including UTF-8).
 [[nodiscard]] ProfileResult parse_profile_value(const json::Value &root);

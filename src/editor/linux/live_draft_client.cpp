@@ -1,13 +1,10 @@
 #include "live_draft_client.hpp"
 #include "control_channel.hpp"
-#include "layerc/core/json.hpp"
+#include "lease_worker.hpp"
 #include "layerc/core/json_reader.hpp"
 
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 #include <sys/eventfd.h>
 #include <unistd.h>
@@ -16,18 +13,11 @@ namespace layerc::editor {
 namespace core = layerc::core;
 namespace {
 LiveDraftUpdate exchange(const core::LiveDraftRequest &request) {
-  std::string error;
-  const auto response = platform::control_roundtrip(
-      platform::encode_control_request(platform::ControlCommand::draft,
-          core::serialize_live_draft_request(request)),
-      error, std::chrono::milliseconds(300));
-  if (!response) return {.reply = std::nullopt, .error = std::move(error)};
-  const auto tree = core::json::parse_bounded(*response, platform::control_frame_limit);
-  const auto *value = std::get_if<core::json::Value>(&tree);
-  const auto *payload = value ? value->find("payload") : nullptr;
-  std::string text;
-  if (payload) core::json::append_value(text, *payload);
-  auto reply = core::parse_live_draft_reply(text);
+  const auto call = platform::control_call(
+      platform::ControlCommand::draft, core::serialize_live_draft_request(request),
+      std::chrono::milliseconds(300));
+  if (!call.ok) return {.reply = std::nullopt, .error = call.error};
+  auto reply = call.payload ? core::parse_live_draft_reply(*call.payload) : std::nullopt;
   const bool state_ok = reply && (request.operation == core::LiveDraftOperation::end
       ? reply->state == core::LiveDraftState::ended
       : request.operation == core::LiveDraftOperation::renew
@@ -61,22 +51,16 @@ struct Publish {
 struct LiveDraftClient::Impl {
   // Declared first: it outlives the worker that signals it.
   EventFd notify;
-  std::string client_id{std::to_string(::getpid()) + "-" + std::to_string(
-      core::MonotonicClock::now().time_since_epoch().count())};
-  std::mutex mutex;
-  std::condition_variable condition;
+  std::string client_id{make_lease_client_id()};
   std::optional<Publish> pending;
   std::uint64_t submitted{};
   bool end_requested{};
   std::optional<LiveDraftUpdate> update;
-  bool stopping{};
-  std::thread worker{[this] { run(); }};
+  // Declared last: it joins before the state it guards.
+  LeaseWorker worker;
 
-  ~Impl() {
-    { const std::lock_guard lock(mutex); stopping = true; }
-    condition.notify_one();
-    if (worker.joinable()) worker.join(); // at most two 300 ms roundtrips
-  }
+  Impl() { worker.start([this] { run(); }); }
+  ~Impl() = default;
   void signal() const noexcept {
     const std::uint64_t one = 1;
     (void)!::write(notify.fd, &one, sizeof one); // a saturated counter is still readable
@@ -100,22 +84,20 @@ struct LiveDraftClient::Impl {
       for (;;) {
         std::optional<Publish> next;
         bool end_now = false;
-        {
-          std::unique_lock lock(mutex);
-          const auto ready = [&] { return pending.has_value() || end_requested || stopping; };
-          if (leased) condition.wait_until(lock, renew_at, ready);
-          else condition.wait(lock, ready);
-          if (stopping) break;
-          end_now = std::exchange(end_requested, false);
-          next = std::exchange(pending, std::nullopt);
-        }
+        if (!worker.wait(
+                [&] { return pending.has_value() || end_requested; },
+                leased ? std::optional<core::TimePoint>{renew_at} : std::nullopt,
+                [&] {
+                  next = std::exchange(pending, std::nullopt);
+                  end_now = std::exchange(end_requested, false);
+                }))
+          break;
         // One daemon draft at a time: end the old lease before another
         // profile's publish, and before any publish after end().
         if (end_now || (next && next->profile_id != lease.profile_id)) {
           end_lease();
           // Shutdown during that End must not start another publish.
-          const std::lock_guard lock(mutex);
-          if (stopping) break;
+          if (!worker.submit([] {})) break;
         }
         if (!next && !leased) continue;
         if (next) {
@@ -135,20 +117,16 @@ struct LiveDraftClient::Impl {
         // A successful renewal changes nothing visible: keep it observable
         // without waking the UI once per second.
         const bool visible = !leased || lease.operation == core::LiveDraftOperation::publish;
-        {
-          const std::lock_guard lock(mutex);
-          update = std::move(received);
-        }
+        if (!worker.submit([&] { update = std::move(received); })) break;
         if (visible) signal();
         // A failure blocks until another edit, instead of spinning or silently
         // weakening ownership. The existing lease then expires in the daemon.
       }
       end_lease();
     } catch (...) {
-      {
-        const std::lock_guard lock(mutex);
+      (void)worker.submit([&] {
         update = LiveDraftUpdate{std::nullopt, "Live draft client failed", submitted};
-      }
+      });
       signal();
     }
   }
@@ -157,29 +135,22 @@ LiveDraftClient::LiveDraftClient() : impl_(std::make_unique<Impl>()) {}
 LiveDraftClient::~LiveDraftClient() = default;
 std::uint64_t LiveDraftClient::publish(std::string profile_id, std::string profile_json) {
   std::uint64_t sequence{};
-  {
-    const std::lock_guard lock(impl_->mutex);
-    if (impl_->stopping) return 0;
+  const bool accepted = impl_->worker.submit([&] {
     sequence = ++impl_->submitted;
     impl_->pending = Publish{std::move(profile_id), std::move(profile_json), sequence};
-  }
-  impl_->condition.notify_one();
-  return sequence;
+  });
+  return accepted ? sequence : 0;
 }
 void LiveDraftClient::end() {
-  {
-    const std::lock_guard lock(impl_->mutex);
-    if (impl_->stopping) return;
+  (void)impl_->worker.submit([&] {
     impl_->pending.reset();
     impl_->end_requested = true;
-  }
-  impl_->condition.notify_one();
+  });
 }
 std::optional<LiveDraftUpdate> LiveDraftClient::take_update() {
   std::uint64_t count{};
   (void)!::read(impl_->notify.fd, &count, sizeof count); // nonblocking drain
-  const std::lock_guard lock(impl_->mutex);
-  return std::exchange(impl_->update, std::nullopt);
+  return impl_->worker.locked([&] { return std::exchange(impl_->update, std::nullopt); });
 }
 int LiveDraftClient::notify_fd() const noexcept { return impl_->notify.fd; }
 } // namespace layerc::editor

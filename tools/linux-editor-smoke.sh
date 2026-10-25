@@ -20,7 +20,7 @@ artifact_dir=$2
 profile_json=${3:-}
 idle_seconds=${4:-20}
 [[ $idle_seconds =~ ^[1-9][0-9]*$ ]] || { usage; exit 64; }
-# Approved idle targets (docs/LinuxEditorPlan.md section 7).
+# Approved idle targets (docs/Linux.md#linux-editor-resource-targets).
 uss_limit_mib=20
 cpu_limit_percent=0.2
 

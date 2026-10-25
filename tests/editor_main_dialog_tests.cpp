@@ -49,15 +49,21 @@ void profile_history_contracts(bool &passed) {
   layerc::editor::EditorProfileHistory history;
   history.reset(original, no_visual, no_automation);
   passed &=
-      expect(!history.is_dirty(original, no_visual, no_automation, true),
+      expect(!history.is_dirty(original, no_visual, no_automation),
              "a persisted profile matching its saved snapshot should be clean");
+  // A copy draft has no saved snapshot: it is dirty at its initial values.
+  layerc::editor::EditorProfileHistory draft_history;
+  draft_history.reset(original, no_visual, no_automation, false);
   passed &=
-      expect(history.is_dirty(original, no_visual, no_automation, false),
-             "a new draft must remain dirty at its initial history snapshot");
+      expect(draft_history.is_dirty(original, no_visual, no_automation),
+             "a draft without a saved snapshot is dirty at its initial values");
   auto edited = original;
   edited.name = "First text";
   passed &= expect(history.record(edited, no_visual, no_automation, true),
                    "the first text edit should create a history transaction");
+  // A draft forgets its saved snapshot on its first accepted edit (F01 A2), so
+  // neither undo nor redo can make it clean before its first save.
+  history.forget_saved();
   edited.name = "Coalesced text";
   passed &= expect(history.record(edited, no_visual, no_automation, true),
                    "a later text edit should update the coalesced transaction");
@@ -75,10 +81,25 @@ void profile_history_contracts(bool &passed) {
   if (undone.has_value() && redone.has_value()) {
     passed &=
         expect(history.is_dirty(undone->profile, undone->visual_profile,
-                                undone->automation_profile, false) &&
+                                undone->automation_profile) &&
                    history.is_dirty(redone->profile, redone->visual_profile,
-                                    redone->automation_profile, false),
+                                    redone->automation_profile),
                "draft undo and redo states must remain dirty until first save");
+    // §5.6 copy-draft regression: a copy has no saved snapshot, so undoing its
+    // first edit stays dirty until the copy is committed.
+    layerc::editor::EditorProfileHistory copy_history;
+    copy_history.reset(original, no_visual, no_automation, false);
+    auto copy_edit = original;
+    copy_edit.name = "Copy draft edit";
+    (void)copy_history.record(copy_edit, no_visual, no_automation);
+    const auto copy_undone =
+        copy_history.undo(copy_edit, no_visual, no_automation);
+    passed &= expect(
+        copy_undone &&
+            copy_history.is_dirty(copy_undone->profile,
+                                  copy_undone->visual_profile,
+                                  copy_undone->automation_profile),
+        "a copy draft undone to its initial values stays dirty until first save");
   }
 
   if (redone.has_value()) {
@@ -156,7 +177,7 @@ void profile_history_contracts(bool &passed) {
       history.record(pending_base, committed_visual, no_automation, false),
       "a committed visual-only action should enter combined history");
   passed &= expect(
-      history.is_dirty(pending_base, committed_visual, no_automation, true),
+      history.is_dirty(pending_base, committed_visual, no_automation),
       "pending base and visual edits must stay dirty until an explicit save");
   const auto base_undo =
       history.undo(pending_base, committed_visual, no_automation);

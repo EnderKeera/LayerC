@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -14,7 +15,10 @@ namespace detail {
 
 class Parser {
 public:
-    explicit Parser(const std::string_view source) : source_(source) {}
+    explicit Parser(const std::string_view source,
+                    const std::size_t max_values =
+                        std::numeric_limits<std::size_t>::max())
+        : source_(source), values_left_(max_values) {}
 
     ParseResult run() {
         skip_whitespace();
@@ -37,6 +41,11 @@ private:
             fail("expected a JSON value");
             return {};
         }
+        if (values_left_ == 0) {
+            fail(std::string(value_count_limit_error));
+            return {};
+        }
+        --values_left_;
 
         switch (source_[position_]) {
             case 'n': return parse_literal("null", Value(nullptr));
@@ -343,6 +352,7 @@ private:
 
     std::string_view source_;
     std::size_t position_{};
+    std::size_t values_left_;
     ParseError error_;
 };
 
@@ -350,6 +360,10 @@ private:
 
 ParseResult parse(const std::string_view source) {
     return detail::Parser(source).run();
+}
+
+ParseResult parse(const std::string_view source, const std::size_t max_values) {
+    return detail::Parser(source, max_values).run();
 }
 
 }  // namespace layerc::core::json

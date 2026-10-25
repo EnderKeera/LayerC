@@ -227,22 +227,29 @@ void CooldownEditor::capture_hid() {
                   L"HID binding", MB_OK | MB_ICONERROR);
       return;
     }
-    binding_index = document_.profile().hid_bindings.size();
-    document_.profile().hid_bindings.push_back(std::move(captured));
-  } else {
-    document_.profile().hid_bindings[binding_index] = std::move(captured);
   }
-  std::erase_if(document_.profile().bindings, [&](const auto &binding) {
-    return binding.cooldown_id == cooldown_id;
-  });
-  document_.profile().bindings.push_back(
-      {.cooldown_id = cooldown_id,
-       .chord = layerc::core::InputChord{
-           {{layerc::core::InputDevice::generic_hid,
-             static_cast<std::uint16_t>(binding_index + 1U), 0}}}});
-  layerc::core::compact_hid_bindings(document_.profile());
+  const auto outcome = document_.edit_profile(
+      [&](layerc::core::GameProfile &candidate) {
+        const std::size_t index = binding_index == SIZE_MAX
+                                      ? candidate.hid_bindings.size()
+                                      : binding_index;
+        if (binding_index == SIZE_MAX)
+          candidate.hid_bindings.push_back(captured);
+        else
+          candidate.hid_bindings[binding_index] = captured;
+        std::erase_if(candidate.bindings, [&](const auto &binding) {
+          return binding.cooldown_id == cooldown_id;
+        });
+        candidate.bindings.push_back(
+            {.cooldown_id = cooldown_id,
+             .chord = layerc::core::InputChord{
+                 {{layerc::core::InputDevice::generic_hid,
+                   static_cast<std::uint16_t>(index + 1U), 0}}}});
+        layerc::core::compact_hid_bindings(candidate);
+      },
+      DocumentChangeKind::immediate);
+  if (!report_edit_(outcome, DocumentChangeKind::immediate)) return;
   refresh_controls();
-  record_change_(DocumentChangeKind::immediate);
   set_status(document_.path().empty()
                  ? L"HID binding captured — Save once to create the profile."
                  : L"HID binding captured and autosaving.");

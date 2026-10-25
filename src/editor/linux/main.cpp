@@ -37,6 +37,6 @@ int main(const int argc, char **argv) {
   Fl_Window::default_xclass("io.github.EnderKeera.LayerC");
   layerc::editor::EditorApp app;
   app.build();
-  app.window.show();
+  app.show();
   return Fl::run();
 }

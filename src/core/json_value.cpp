@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 namespace layerc::core::json {
@@ -15,46 +16,82 @@ Value::Value(const bool value) noexcept : storage_(value) {}
 Value::Value(const std::int64_t value) noexcept : storage_(value) {}
 Value::Value(const double value) noexcept : storage_(value) {}
 Value::Value(const std::int64_t value, std::string source)
-    : storage_(ParsedInteger{value, std::move(source)}) {}
+    : storage_(std::make_shared<const ParsedInteger>(
+          ParsedInteger{value, std::move(source)})) {}
 Value::Value(const double value, std::string source)
-    : storage_(ParsedNumber{value, std::move(source)}) {}
-Value::Value(std::string value) : storage_(std::move(value)) {}
-Value::Value(Array value) : storage_(std::move(value)) {}
-Value::Value(Object value) : storage_(std::move(value)) {}
+    : storage_(std::make_shared<const ParsedNumber>(
+          ParsedNumber{value, std::move(source)})) {}
+Value::Value(std::string value)
+    : storage_(std::make_shared<const std::string>(std::move(value))) {}
+Value::Value(Array value)
+    : storage_(std::make_shared<const Array>(std::move(value))) {}
+Value::Value(Object value)
+    : storage_(std::make_shared<const Object>(std::move(value))) {}
+
+Value::Value(Value &&other) noexcept : storage_(std::move(other.storage_)) {
+    other.storage_ = nullptr;
+}
+Value &Value::operator=(const Value &other) noexcept {
+    // Snapshot first: other may live inside this value's current payload, and
+    // variant assignment destroys the old alternative before copying.
+    SharedStorage snapshot = other.storage_;
+    storage_ = std::move(snapshot);
+    return *this;
+}
+Value &Value::operator=(Value &&other) noexcept {
+    if (this != &other) {
+        SharedStorage taken = std::move(other.storage_);
+        other.storage_ = nullptr;
+        storage_ = std::move(taken);
+    }
+    return *this;
+}
+bool Value::operator==(const Value &other) const {
+    if (storage_.index() != other.storage_.index()) return false;
+    return std::visit([&](const auto &item) {
+        using T = std::decay_t<decltype(item)>;
+        const auto &rhs = std::get<T>(other.storage_);
+        if constexpr (requires { *item; }) {
+            return item == rhs || *item == *rhs;
+        } else {
+            return item == rhs;
+        }
+    }, storage_);
+}
 
 bool Value::is_null() const noexcept { return std::holds_alternative<std::nullptr_t>(storage_); }
 bool Value::is_bool() const noexcept { return std::holds_alternative<bool>(storage_); }
 bool Value::is_integer() const noexcept {
     return std::holds_alternative<std::int64_t>(storage_) ||
-           std::holds_alternative<ParsedInteger>(storage_);
+           std::holds_alternative<SharedInteger>(storage_);
 }
 bool Value::is_number() const noexcept {
     return is_integer() ||
            std::holds_alternative<double>(storage_) ||
-           std::holds_alternative<ParsedNumber>(storage_);
+           std::holds_alternative<SharedNumber>(storage_);
 }
-bool Value::is_string() const noexcept { return std::holds_alternative<std::string>(storage_); }
-bool Value::is_array() const noexcept { return std::holds_alternative<Array>(storage_); }
-bool Value::is_object() const noexcept { return std::holds_alternative<Object>(storage_); }
+bool Value::is_string() const noexcept { return std::holds_alternative<SharedString>(storage_); }
+bool Value::is_array() const noexcept { return std::holds_alternative<SharedArray>(storage_); }
+bool Value::is_object() const noexcept { return std::holds_alternative<SharedObject>(storage_); }
 
 bool Value::as_bool() const { return std::get<bool>(storage_); }
 std::int64_t Value::as_integer() const {
-    if (const auto *parsed = std::get_if<ParsedInteger>(&storage_)) return parsed->value;
+    if (const auto *parsed = std::get_if<SharedInteger>(&storage_)) return (*parsed)->value;
     return std::get<std::int64_t>(storage_);
 }
 double Value::as_number() const {
     if (is_integer()) return static_cast<double>(as_integer());
-    if (const auto *parsed = std::get_if<ParsedNumber>(&storage_)) return parsed->value;
+    if (const auto *parsed = std::get_if<SharedNumber>(&storage_)) return (*parsed)->value;
     return std::get<double>(storage_);
 }
 std::string_view Value::number_source() const noexcept {
-    if (const auto *parsed = std::get_if<ParsedInteger>(&storage_)) return parsed->source;
-    if (const auto *parsed = std::get_if<ParsedNumber>(&storage_)) return parsed->source;
+    if (const auto *parsed = std::get_if<SharedInteger>(&storage_)) return (*parsed)->source;
+    if (const auto *parsed = std::get_if<SharedNumber>(&storage_)) return (*parsed)->source;
     return {};
 }
-const std::string& Value::as_string() const { return std::get<std::string>(storage_); }
-const Value::Array& Value::as_array() const { return std::get<Array>(storage_); }
-const Value::Object& Value::as_object() const { return std::get<Object>(storage_); }
+const std::string& Value::as_string() const { return *std::get<SharedString>(storage_); }
+const Value::Array& Value::as_array() const { return *std::get<SharedArray>(storage_); }
+const Value::Object& Value::as_object() const { return *std::get<SharedObject>(storage_); }
 
 const Value* Value::find(const std::string_view key) const {
     if (!is_object()) {
@@ -146,6 +183,66 @@ void append_bool(std::string &output, bool value) {
 }
 
 namespace {
+class EmissionBudget {
+public:
+  explicit EmissionBudget(const std::size_t remaining) : remaining_(remaining) {}
+  bool value(const Value &item, const unsigned indent, const unsigned depth = 0) {
+    if (item.is_null()) return take(4);
+    if (item.is_bool()) return take(item.as_bool() ? 4U : 5U);
+    if (!item.number_source().empty()) return take(item.number_source().size());
+    if (item.is_integer()) return take(std::to_string(item.as_integer()).size());
+    if (item.is_number()) {
+      std::string scalar;
+      append_number(scalar, item.as_number());
+      return take(scalar.size());
+    }
+    if (item.is_string()) return quoted(item.as_string());
+    if (!take(1)) return false;
+    bool first = true;
+    if (item.is_array()) {
+      for (const auto &child : item.as_array()) {
+        if ((!first && !take(1)) || !newline(depth + 1, indent) ||
+            !value(child, indent, depth + 1)) return false;
+        first = false;
+      }
+    } else {
+      for (const auto &[key, child] : item.as_object()) {
+        if ((!first && !take(1)) || !newline(depth + 1, indent) ||
+            !quoted(key) || !take(indent ? 2U : 1U) ||
+            !value(child, indent, depth + 1)) return false;
+        first = false;
+      }
+    }
+    return (first || newline(depth, indent)) && take(1);
+  }
+private:
+  bool take(const std::size_t bytes) {
+    if (bytes > remaining_) return false;
+    remaining_ -= bytes;
+    return true;
+  }
+  bool newline(const unsigned depth, const unsigned indent) {
+    if (indent == 0) return true;
+    if (!take(2) || static_cast<std::size_t>(depth) > remaining_ / indent)
+      return false;
+    return take(static_cast<std::size_t>(depth) * indent);
+  }
+  bool quoted(const std::string_view text) {
+    if (!take(1)) return false;
+    for (const unsigned char character : text) {
+      std::size_t count = 1;
+      switch (character) {
+      case '"': case '\\': case '\b': case '\f': case '\n': case '\r': case '\t':
+        count = 2; break;
+      default: if (character < 0x20U) count = 6; break;
+      }
+      if (!take(count)) return false;
+    }
+    return take(1);
+  }
+  std::size_t remaining_;
+};
+
 void emit_value(std::string &output, const Value &value, const unsigned indent,
                 const unsigned depth) {
   const auto newline = [&](unsigned level) {
@@ -194,6 +291,16 @@ void append_value(std::string &output, const Value &value, const unsigned indent
     output.resize(original_size);
     throw;
   }
+}
+
+bool append_value_bounded(std::string &output, const Value &value,
+                          const std::size_t max_output_bytes,
+                          const unsigned indent) {
+  if (output.size() > max_output_bytes) return false;
+  EmissionBudget budget(max_output_bytes - output.size());
+  if (!budget.value(value, indent)) return false;
+  append_value(output, value, indent);
+  return true;
 }
 
 std::string format(const std::string_view source) {

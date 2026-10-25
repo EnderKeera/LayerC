@@ -4,6 +4,7 @@
 #include "layerc/core/visual.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/core/calibration.hpp"
+#include "layerc/core/calibration_readiness.hpp"
 
 #include <string>
 #include <variant>
@@ -410,6 +411,77 @@ void test_calibration_protocol() {
                error->message.starts_with("$."),
            "empty required calibration fields must retain a useful field diagnostic");
   }
+}
+
+void test_calibration_readiness() {
+  using namespace layerc::core;
+  CalibrationReadiness readiness;
+  PixelRule rule;
+  rule.id = "sample";
+  rule.name = "Sampling readiness";
+  rule.region = {0.1, 0.1, 0.2, 0.2};
+  rule.predicate = AverageColorPredicate{0xFFFFFFU, 24};
+  constexpr auto quality = CaptureQuality::balanced;
+  expect(!readiness.ready_for(VisualObservation{rule}, quality),
+         "valid defaults must not imply sampled calibration");
+  PixelEvaluation pixels;
+  readiness.observe(rule, pixels, quality, true);
+  expect(!readiness.ready_for(VisualObservation{rule}, quality),
+         "zero sampled pixels must not enable Apply");
+  pixels.sampled_pixels = 1;
+  pixels.matched = false;
+  readiness.observe(rule, pixels, quality, false);
+  expect(!readiness.ready_for(VisualObservation{rule}, quality),
+         "unavailable pixels must not enable Apply");
+  readiness.observe(rule, pixels, quality, true);
+  expect(readiness.ready_for(VisualObservation{rule}, quality),
+         "a genuine no-match still evaluates the predicate");
+  expect(!readiness.ready_for(VisualObservation{rule}, CaptureQuality::low),
+         "quality changes require evaluation at that quality");
+  auto changed = rule;
+  changed.region.x += 0.1;
+  expect(!readiness.ready_for(VisualObservation{changed}, quality),
+         "changed regions must not reuse old evidence");
+  changed = rule;
+  changed.predicate = AverageColorPredicate{0U, 24};
+  expect(!readiness.ready_for(VisualObservation{changed}, quality),
+         "changed target colours must not reuse old evidence");
+  changed = rule;
+  changed.stable_samples += 1;
+  expect(!readiness.ready_for(VisualObservation{changed}, quality),
+         "changed predicate settings must not reuse old evidence");
+  TemplateState state;
+  state.id = "template";
+  state.name = "Template readiness";
+  TemplateMatchResult result;
+  result.search_region_available = true;
+  result.candidates_evaluated = 1;
+  readiness.observe(state, result, quality);
+  expect(!readiness.ready_for(VisualObservation{state}, quality),
+         "examining but not scoring a candidate provides no evidence");
+  result.candidates_scored = 1;
+  result.matched = false;
+  result.search_region_available = false;
+  readiness.observe(state, result, quality);
+  expect(!readiness.ready_for(VisualObservation{state}, quality),
+         "unavailable template regions provide no evidence");
+  result.search_region_available = true;
+  readiness.observe(state, result, quality);
+  expect(readiness.ready_for(VisualObservation{state}, quality),
+         "a scored negative template candidate is valid evaluation evidence");
+  auto changed_state = state;
+  changed_state.search_region.x += 0.1;
+  expect(!readiness.ready_for(VisualObservation{changed_state}, quality),
+         "changed template search geometry requires reevaluation");
+  changed_state = state;
+  changed_state.references.push_back({.asset_sha256 = std::string(64, 'a')});
+  expect(!readiness.ready_for(VisualObservation{changed_state}, quality),
+         "loading/importing or modifying a reference must not seed evidence");
+  expect(!readiness.ready_for(VisualObservation{rule}, quality),
+         "switching predicate modes must not reuse a different observation");
+  readiness.invalidate();
+  expect(!readiness.ready_for(VisualObservation{state}, quality),
+         "clearing capture evidence disables Apply");
 }
 
 } // namespace layerc::test

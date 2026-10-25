@@ -126,9 +126,9 @@ void VisualEditor::refresh() {
   InvalidateRect(isolated, nullptr, TRUE);
 }
 
-bool VisualEditor::save() {
-  if (!document_.visual() || document_.path().empty()) return false;
-  switch (host_.commit_document()) {
+bool VisualEditor::save(layerc::core::VisualProfile candidate) {
+  if (document_.path().empty()) return false;
+  switch (host_.commit_visual(std::move(candidate))) {
   case CommitResult::ok:
     break;
   case CommitResult::invalid_fields:
@@ -152,8 +152,7 @@ bool VisualEditor::save() {
                 L"Visual save failed", MB_OK | MB_ICONERROR);
     return false;
   }
-  document_.mark_visual_edited();
-  (void)document_.history().record(document_.profile(), document_.visual(), document_.automation(), false);
+  // The host accepted and rebased exactly this candidate step.
   host_.mark_committed();
   // Persisted sidecars are not the whole retention set: undo/redo and other
   // interactive calibration sessions can still own content-addressed assets.
@@ -164,27 +163,13 @@ bool VisualEditor::save() {
 
 void VisualEditor::set_enabled(const bool enabled) {
   const auto *cooldown = host_.selected_cooldown();
-  if (cooldown == nullptr || !document_.visual()) {
-    refresh();
-    return;
-  }
-  // A commit replaces the document's modules even when it is refused, so
-  // neither the trigger nor the cooldown may be held across save().
+  if (cooldown == nullptr || !document_.visual()) { refresh(); return; }
   const std::string cooldown_id = cooldown->id;
-  auto *trigger = find_visual_trigger(*document_.visual(), cooldown_id);
-  if (trigger == nullptr) {
-    refresh();
-    return;
-  }
-  const bool previous = trigger->enabled;
-  trigger->enabled = enabled;
-  if (!save()) {
-    if (document_.visual())
-      if (auto *current = find_visual_trigger(*document_.visual(), cooldown_id))
-        current->enabled = previous;
-    refresh();
-    return;
-  }
+  const auto *trigger = find_visual_trigger(*document_.visual(), cooldown_id);
+  if (trigger == nullptr || trigger->enabled == enabled) { refresh(); return; }
+  auto candidate = *document_.visual();
+  find_visual_trigger(candidate, cooldown_id)->enabled = enabled;
+  if (!save(std::move(candidate))) { refresh(); return; }
   set_status(enabled ? L"Visual assignment enabled."
                      : L"Visual assignment disabled; ordinary input restored.");
 }
@@ -192,22 +177,16 @@ void VisualEditor::set_enabled(const bool enabled) {
 void VisualEditor::remove_assignment() {
   const auto *cooldown = host_.selected_cooldown();
   if (cooldown == nullptr || !document_.visual()) return;
-  const auto *existing = find_visual_trigger(*document_.visual(), cooldown->id);
-  if (existing == nullptr) return;
+  const std::string cooldown_id = cooldown->id;
+  if (find_visual_trigger(*document_.visual(), cooldown_id) == nullptr) return;
   if (themed_message_box(shell_.window,
-                  L"Remove visual recognition from this cooldown? Its ordinary input binding is preserved.",
-                  L"Remove visual assignment", MB_OKCANCEL | MB_ICONQUESTION) !=
-      IDOK)
-    return;
-
-  const auto previous_visual = document_.visual();
-  erase_visual_assignment(*document_.visual(), cooldown->id);
-  if (save())
+        L"Remove visual recognition from this cooldown? Its ordinary input binding is preserved.",
+        L"Remove visual assignment", MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+  auto candidate = *document_.visual();
+  erase_visual_assignment(candidate, cooldown_id);
+  if (save(std::move(candidate)))
     set_status(L"Visual assignment removed; ordinary input remains active.");
-  else {
-    document_.visual() = previous_visual;
-    refresh();
-  }
+  else refresh();
 }
 
 void VisualEditor::calibrate() {
@@ -309,12 +288,24 @@ bool VisualEditor::launch_calibration(const HWND target) {
 
 bool VisualEditor::merge_calibration_result(const std::string_view visual_json) {
   const auto *cooldown = host_.selected_cooldown();
+  // The external calibrator is a separate process, so its response crosses
+  // this JSON boundary exactly once; the shared merger stays typed.
+  const auto parsed = layerc::core::parse_visual_profile_json(
+      visual_json, document_.profile());
+  const auto *calibration = std::get_if<layerc::core::VisualProfile>(&parsed);
+  if (calibration == nullptr) {
+    themed_message_box(
+        shell_.window,
+        L"LayerC Calibration returned an invalid result. No profile data was changed.",
+        L"Calibration rejected", MB_OK | MB_ICONERROR);
+    return false;
+  }
   auto merged = layerc::editor::merge_calibration_result(
       document_.visual(),
       document_.visual_state() == layerc::platform::ModuleSidecarState::invalid,
       document_.profile(),
       cooldown == nullptr ? std::string_view{} : std::string_view{cooldown->id},
-      visual_json, [&] {
+      *calibration, [&] {
         const int choice = themed_message_box(
             shell_.window,
             L"This visual observation is shared by multiple cooldowns. Choose Yes to update the shared observation, No to clone it for this cooldown, or Cancel to keep everything unchanged.",
@@ -332,14 +323,7 @@ bool VisualEditor::merge_calibration_result(const std::string_view visual_json) 
                          L"Calibration rejected", MB_OK | MB_ICONERROR);
     return false;
   }
-  const auto previous = document_.visual();
-  document_.visual() = std::move(std::get<layerc::core::VisualProfile>(merged));
-  if (!save()) {
-    document_.visual() = previous;
-    refresh();
-    return false;
-  }
-  return true;
+  return save(std::move(std::get<layerc::core::VisualProfile>(merged)));
 }
 
 } // namespace layerc::editor

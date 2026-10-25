@@ -34,6 +34,16 @@ struct TemplateImage {
     std::uint32_t width, std::uint32_t height,
     std::span<const std::uint8_t> rgba);
 
+// Centered search area twice the selection on each axis, within the frame.
+[[nodiscard]] NormalizedRegion
+expanded_template_search_region(NormalizedRegion selected);
+
+// Samples the source pixel under the center of each downscaled pixel so the
+// image never exceeds max_template_axis on its longer side. Nullopt for an
+// invalid frame or a selection covering fewer than 64 captured pixels.
+[[nodiscard]] std::optional<TemplateImage>
+template_from_selection(PixelFrameView frame, const NormalizedRegion &selection);
+
 struct TemplateMatchResult {
   bool matched{};
   // True when the configured search region intersects pixels supplied by the

@@ -46,6 +46,20 @@ struct X11InputDevice {
 [[nodiscard]] std::optional<std::uint16_t>
 xkb_key_name_to_scan_code(std::string_view name) noexcept;
 
+// The one alias-aware physical key map: XKB key names plus key aliases to the
+// Windows-authored scan-code tokens. The daemon's passive source and the
+// editor's focused capture share this cache instead of keeping their own.
+class X11PhysicalKeymap final {
+public:
+  [[nodiscard]] bool refresh(struct _XDisplay *display) noexcept;
+  [[nodiscard]] std::optional<std::uint16_t>
+  scan_code(std::uint32_t keycode) const noexcept;
+  [[nodiscard]] bool available() const noexcept { return available_; }
+private:
+  std::array<std::uint16_t, 256> codes_{};
+  bool available_{};
+};
+
 // Conventional X pointer numbering to profile codes: 2/3 -> middle/right
 // (3/2), 4/5 -> wheel (6/7), 8/9 -> side (4/5). Zero means unsupported;
 // in particular horizontal wheel buttons 6/7 are never side-button tokens.
@@ -128,8 +142,7 @@ private:
   std::uint64_t root_{};
   std::vector<X11InputDevice> devices_;
   std::vector<int> gamepads_;
-  std::array<std::uint16_t, 256> key_codes_{};
-  bool keymap_available_{};
+  X11PhysicalKeymap keymap_;
   int xkb_event_base_{};
 };
 

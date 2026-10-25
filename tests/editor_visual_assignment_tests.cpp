@@ -27,9 +27,9 @@ const Value *as(const Variant &result) {
   return std::get_if<Value>(&result);
 }
 
-std::string calibration_json(const GameProfile &profile, const std::string &cooldown,
-                             const std::string &observation,
-                             const std::uint32_t color) {
+VisualProfile calibration_visual(const GameProfile &profile, const std::string &cooldown,
+                                 const std::string &observation,
+                                 const std::uint32_t color) {
   auto model = CalibrationModel::open(profile, cooldown, std::nullopt);
   if (!model) return {};
   model->set_target_color(color);
@@ -39,7 +39,7 @@ std::string calibration_json(const GameProfile &profile, const std::string &cool
   if (visual == nullptr) return {};
   std::visit([&](auto &item) { item.id = observation; }, visual->observations[0]);
   visual->triggers[0].observation_id = observation;
-  return serialize_visual_profile_json(*visual);
+  return *visual;
 }
 
 void model_seeds_and_builds() {
@@ -236,19 +236,19 @@ void merge_new_shared_and_invalid() {
   const auto first = profile.cooldowns[0].id, second = profile.cooldowns[1].id;
   const auto never = [] { return SharedObservationChoice::cancel; };
 
-  const auto bad = merge_calibration_result(std::nullopt, false, profile, first, "{",
-                                            never);
+  const auto bad = merge_calibration_result(std::nullopt, false, profile, first,
+                                            VisualProfile{}, never);
   expect(as<VisualMergeRefusal>(bad) &&
              as<VisualMergeRefusal>(bad)->kind == VisualMergeRefusal::Kind::invalid_result,
-         "an unreadable result changes nothing");
+         "an invalid typed result changes nothing");
   const auto wrong = merge_calibration_result(
       std::nullopt, false, profile, second,
-      calibration_json(profile, first, "shared", 1), never);
+      calibration_visual(profile, first, "shared", 1), never);
   expect(as<VisualMergeRefusal>(wrong) != nullptr,
          "a result for another cooldown is refused");
 
   auto merged = merge_calibration_result(std::nullopt, false, profile, first,
-                                         calibration_json(profile, first, "shared", 1),
+                                         calibration_visual(profile, first, "shared", 1),
                                          never);
   auto *visual = std::get_if<VisualProfile>(&merged);
   if (!expect(visual && visual->observations.size() == 1 &&
@@ -262,13 +262,13 @@ void merge_new_shared_and_invalid() {
   visual->triggers.push_back(shared_trigger);
 
   const auto cancelled = merge_calibration_result(
-      *visual, false, profile, first, calibration_json(profile, first, "x", 2), never);
+      *visual, false, profile, first, calibration_visual(profile, first, "x", 2), never);
   expect(as<VisualMergeRefusal>(cancelled) &&
              as<VisualMergeRefusal>(cancelled)->kind == VisualMergeRefusal::Kind::cancelled,
          "cancelling the shared choice keeps everything");
 
   const auto updated = merge_calibration_result(
-      *visual, false, profile, first, calibration_json(profile, first, "x", 2),
+      *visual, false, profile, first, calibration_visual(profile, first, "x", 2),
       [] { return SharedObservationChoice::update_shared; });
   const auto *shared = as<VisualProfile>(updated);
   expect(shared && shared->observations.size() == 1 &&
@@ -279,7 +279,7 @@ void merge_new_shared_and_invalid() {
          "updating keeps the shared id in place");
 
   const auto cloned = merge_calibration_result(
-      *visual, false, profile, first, calibration_json(profile, first, "shared", 3),
+      *visual, false, profile, first, calibration_visual(profile, first, "shared", 3),
       [] { return SharedObservationChoice::clone; });
   const auto *clone = as<VisualProfile>(cloned);
   expect(clone && clone->observations.size() == 2 &&
@@ -288,7 +288,7 @@ void merge_new_shared_and_invalid() {
          "cloning gives this cooldown a fresh observation");
 
   const auto repaired = merge_calibration_result(
-      *visual, true, profile, second, calibration_json(profile, second, "fresh", 4),
+      *visual, true, profile, second, calibration_visual(profile, second, "fresh", 4),
       never);
   const auto *replacement = as<VisualProfile>(repaired);
   expect(replacement && replacement->triggers.size() == 1 &&
@@ -304,7 +304,7 @@ void merge_limits() {
     full.observations.push_back(PixelRule{.id = "rule-" + std::to_string(index)});
   const auto refused = merge_calibration_result(
       full, false, profile, profile.cooldowns[0].id,
-      calibration_json(profile, profile.cooldowns[0].id, "new", 5),
+      calibration_visual(profile, profile.cooldowns[0].id, "new", 5),
       [] { return SharedObservationChoice::cancel; });
   expect(as<VisualMergeRefusal>(refused) &&
              as<VisualMergeRefusal>(refused)->kind == VisualMergeRefusal::Kind::limit &&

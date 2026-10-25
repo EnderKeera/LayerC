@@ -6,6 +6,7 @@
 class Fl_Double_Window;
 class Fl_Multiline_Output;
 class Fl_Widget;
+class Fl_Window;
 
 namespace layerc::editor {
 
@@ -34,6 +35,9 @@ private:
 
 // Modal read-only text with Close and, when copy_text is not empty, a
 // "Copy details" button that places copy_text on the clipboard.
+// Grows `window` (whose resizable() is `text`) until `text` shows its whole
+// wrapped value, never beyond the work area of the window's screen.
+void fit_text_view(Fl_Window &window, Fl_Multiline_Output &text);
 void show_text_dialog(const char *title, const std::string &text,
                       const std::string &copy_text = {});
 

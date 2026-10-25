@@ -16,51 +16,22 @@ enum class ProfileObject {
   root, game, module, cooldown, group, hid, device, control, panel, bar, binding, token
 };
 
-namespace extension_keys {
-namespace k = profile_keys;
-inline constexpr std::array root{
-    k::schema_version, k::id, k::name, k::enabled, k::game, k::visual_runtime,
-    k::modules, k::cooldowns, k::cooldown_groups, k::hid_bindings, k::panels, k::bindings};
-inline constexpr std::array game{
-    k::global, k::executable_path, k::executable_name, k::window_class, k::window_title};
-inline constexpr std::array module{k::kind, k::schema_version};
-inline constexpr std::array cooldown{
-    k::id, k::name, k::duration_ms, k::max_charges, k::retrigger, k::recovery,
-    k::stack_charges}; // Recognized legacy field, migrated to recovery.
-inline constexpr std::array group{
-    k::id, k::name, k::mode, k::cooldowns, k::duration_ms, k::max_charges,
-    k::retrigger, k::recovery};
-inline constexpr std::array hid{k::id, k::device, k::control, k::allow_system_class};
-inline constexpr std::array device{
-    k::vid, k::pid, k::version, k::usage_page, k::usage, k::descriptor_hash,
-    k::stable_slot, k::serial};
-inline constexpr std::array control{
-    k::report_id, k::usage_page, k::usage, k::link_collection, k::activation,
-    k::value, k::threshold, k::hysteresis};
-inline constexpr std::array panel{
-    k::id, k::name, k::layout, k::style, k::bar, k::anchor_x, k::anchor_y, k::cooldowns};
-inline constexpr std::array bar{
-    k::width, k::height, k::fill_color, k::background_color, k::border_color,
-    k::text_color, k::show_text, k::hide_when_ready};
-inline constexpr std::array binding{k::cooldown_id, k::chord};
-inline constexpr std::array token{k::device, k::code, k::controller_index, k::binding_id};
-} // namespace extension_keys
-
+// Every classification comes from the object-scoped field declarations in
+// profile_keys.hpp; there is no separately maintained name inventory.
 inline std::span<const std::string_view> known_profile_fields(const ProfileObject kind) {
-  using namespace extension_keys;
   switch (kind) {
-  case ProfileObject::root: return root;
-  case ProfileObject::game: return game;
-  case ProfileObject::module: return module;
-  case ProfileObject::cooldown: return cooldown;
-  case ProfileObject::group: return group;
-  case ProfileObject::hid: return hid;
-  case ProfileObject::device: return device;
-  case ProfileObject::control: return control;
-  case ProfileObject::panel: return panel;
-  case ProfileObject::bar: return bar;
-  case ProfileObject::binding: return binding;
-  case ProfileObject::token: return token;
+  case ProfileObject::root: return profile_keys::root::names;
+  case ProfileObject::game: return profile_keys::game::names;
+  case ProfileObject::module: return profile_keys::module::names;
+  case ProfileObject::cooldown: return profile_keys::cooldown::names;
+  case ProfileObject::group: return profile_keys::group::names;
+  case ProfileObject::hid: return profile_keys::hid::names;
+  case ProfileObject::device: return profile_keys::device::names;
+  case ProfileObject::control: return profile_keys::control::names;
+  case ProfileObject::panel: return profile_keys::panel::names;
+  case ProfileObject::bar: return profile_keys::bar::names;
+  case ProfileObject::binding: return profile_keys::binding::names;
+  case ProfileObject::token: return profile_keys::token::names;
   }
   return {};
 }
@@ -83,7 +54,8 @@ inline json::Value with_profile_extensions(json::Value::Object fields,
   for (const auto &[key, value] : extensions) {
     if (std::ranges::find(known, key) != known.end())
       throw std::invalid_argument("profile extension overlaps a known field: " + key);
-    fields.emplace(key, value);
+    if (!fields.emplace(key, value).second)
+      throw std::invalid_argument("profile extension overlaps a known field: " + key);
   }
   return json::Value(std::move(fields));
 }

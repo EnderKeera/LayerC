@@ -46,12 +46,19 @@ SEND_SECONDS = 5.0
 MAX_TEXT = 256
 MAX_MODULE_BYTES = 1024 * 1024  # Larger sidecars are listed by nothing; tests stay small.
 TYPE_DELAY_MS = 20
-INPUT_OPS = {"click", "drag", "set_text", "key", "type", "activate", "a11y_check"}
+INPUT_OPS = {"click", "drag", "set_text", "key", "type", "activate", "a11y_check",
+             "click_through", "scroll"}
 FIXTURE_OPS = {"block_profile", "restore_profile", "daemon_stop", "daemon_start"}
 KEY_PATTERN = re.compile(r"^[A-Za-z0-9_+]{1,64}$")
 NAME_PATTERN = re.compile(r"[^a-z0-9-]+")
 NONCE_PROPERTY = "_LAYERC_GUI_SESSION"
 SETTLE_SECONDS = 0.25
+# Xvfb's default 256 clients give each X client a 21-bit resource-id range.
+CLIENT_MASK = ~0x1FFFFF
+XEV_EVENT = re.compile(r"^(ButtonPress|ButtonRelease) event, serial \d+, synthetic (YES|NO), "
+                       r"window (0x[0-9a-f]+),")
+XEV_POINT = re.compile(r"\((-?\d+),(-?\d+)\), root:\((-?\d+),(-?\d+)\)")
+XEV_BUTTON = re.compile(r"\bbutton (\d+)\b")
 
 
 class Rejected(Exception):
@@ -83,6 +90,40 @@ def integer(request, key, low, high):
     if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
         raise Rejected(f"{key} must be an integer in [{low}, {high}]")
     return value
+
+
+def read_until(descriptor, marker, seconds):
+    """Raw bytes from a pipe until `marker` arrives, EOF or `seconds` pass.
+    Reads the descriptor directly: a buffered reader would hide data that
+    select() then no longer reports, and communicate() never sees."""
+    output, until = b"", time.monotonic() + seconds
+    while marker not in output:
+        left = until - time.monotonic()
+        if left <= 0 or not select.select([descriptor], [], [], left)[0]:
+            break
+        chunk = os.read(descriptor, 4096)
+        if not chunk:
+            break
+        output += chunk
+    return output
+
+
+def parse_xev(lines):
+    """Button events from `xev -event button` output, in arrival order."""
+    events: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    for line in lines:
+        if header := XEV_EVENT.match(line.strip()):
+            current = {"type": header.group(1), "synthetic": header.group(2) == "YES",
+                       "window": int(header.group(3), 16)}
+            events.append(current)
+        elif current is not None:
+            if point := XEV_POINT.search(line):
+                current.update(x=int(point.group(1)), y=int(point.group(2)),
+                               rootX=int(point.group(3)), rootY=int(point.group(4)))
+            if button := XEV_BUTTON.search(line):
+                current["button"] = int(button.group(1))
+    return events
 
 
 def start_time(pid):
@@ -245,7 +286,8 @@ class Bridge:
         return candidates[0]
 
     def op_inspect(self, request):
-        """Pixel facts for a screenshot region: digest, color count, centroid."""
+        """Pixel facts for a screenshot region: digest, color count, centroid,
+        and for a one-pixel column its [first_y, last_y, rrggbb] color runs."""
         path = self.shot_path(request)
         region = request.get("region", [0, 0, self.width, self.height])
         if (not isinstance(region, list) or len(region) != 4
@@ -261,6 +303,9 @@ class Bridge:
                     isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 255 for v in rgb)):
                 raise Rejected("rgb must be three integers in [0, 255]")
             color = bytes(rgb)
+        runs = request.get("runs", False)
+        if not isinstance(runs, bool) or (runs and w != 1):
+            raise Rejected("runs requires a one-pixel-wide region")
         raw = subprocess.run(["convert", str(path), "-crop", f"{w}x{h}+{x}+{y}", "+repage",
                               "-depth", "8", "rgb:-"], capture_output=True,
                              timeout=self.remaining(20.0), check=True).stdout
@@ -277,6 +322,15 @@ class Bridge:
                     sy += pixel // w
             result.update(count=count, meanX=x + sx / count if count else None,
                           meanY=y + sy / count if count else None)
+        if runs:
+            spans: list[list[object]] = []
+            for row in range(h):
+                value = raw[row * 3:row * 3 + 3].hex()
+                if spans and spans[-1][2] == value:
+                    spans[-1][1] = y + row
+                else:
+                    spans.append([y + row, y + row, value])
+            result["runs"] = spans
         return result
 
     def op_state(self, _request):
@@ -426,6 +480,15 @@ class Bridge:
         self.begin()
         self.bounded(["xdotool", "mousemove", x, y, "click", "--repeat", str(count), str(button)])
 
+    def op_scroll(self, request):
+        x, y = self.point(request)
+        steps = integer(request, "steps", -10, 10)
+        if not steps:
+            raise Rejected("scroll steps must be nonzero")
+        self.begin()
+        self.bounded(["xdotool", "mousemove", x, y, "click", "--repeat", str(abs(steps)),
+                      "4" if steps < 0 else "5"])
+
     def op_drag(self, request):
         x1, y1 = (int(v) for v in self.point(request))
         x2, y2 = (int(v) for v in self.point(request, "to_"))
@@ -481,6 +544,73 @@ class Bridge:
         self.begin()
         self.bounded(["xdotool", "windowmove", wid, str(values[0]), str(values[1]),
                       "windowsize", wid, str(values[2]), str(values[3])])
+
+    def op_overlays(self, _request):
+        """Unnamed override-redirect top-level windows of clients other than
+        the named windows' clients (LayerE, the fixture) and the window
+        manager: the daemon's overlay panels, mapped or not."""
+        excluded = {w["id"] & CLIENT_MASK for w in self.windows()}
+        manager = re.search(r"window id # (0x[0-9a-f]+)",
+                            self.bounded(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], check=False))
+        if manager:
+            excluded.add(int(manager.group(1), 16) & CLIENT_MASK)
+        listing = self.bounded(["xwininfo", "-root", "-children"])
+        found: dict[str, list[dict[str, int]]] = {"mapped": [], "unmapped": []}
+        for match in re.finditer(r"^\s+(0x[0-9a-f]+) \(has no name\): \(\)", listing, re.MULTILINE):
+            wid = int(match.group(1), 16)
+            if wid & CLIENT_MASK in excluded:
+                continue
+            try:
+                info = self.bounded(["xwininfo", "-id", match.group(1)])
+            except RuntimeError as error:
+                if "deadline" in str(error):
+                    raise
+                continue  # Destroyed while being described.
+            if not re.search(r"Override Redirect State:\s+yes", info):
+                continue
+            entry = {"id": wid, "client": wid & CLIENT_MASK}
+            for key, pattern in (("x", r"Absolute upper-left X:\s+(-?\d+)"),
+                                 ("y", r"Absolute upper-left Y:\s+(-?\d+)"),
+                                 ("width", r"\bWidth:\s+(\d+)"), ("height", r"\bHeight:\s+(\d+)")):
+                value = re.search(pattern, info)
+                if value is None:
+                    raise RuntimeError("incomplete xwininfo output")
+                entry[key] = int(value.group(1))
+            viewable = re.search(r"Map State:\s+IsViewable", info)
+            found["mapped" if viewable else "unmapped"].append(entry)
+        return found
+
+    def op_click_through(self, request):
+        """One real button-1 click at (x, y) while an xev observer selects
+        button events on `window`: the target receives the click only if
+        nothing above it at that point accepts pointer input."""
+        x, y = self.point(request)
+        wid = self.window_id(request)
+        self.begin()
+        # Line-buffered: a piped xev otherwise holds events until it exits,
+        # and terminating it discards them.
+        observer = subprocess.Popen(["stdbuf", "-oL", "xev", "-id", wid, "-event", "button"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output, error = b"", b""
+        try:
+            if observer.stdout is None:
+                raise RuntimeError("xev observer has no output pipe")
+            time.sleep(0.5)  # xev selects input right after it connects.
+            if observer.poll() is not None:
+                raise RuntimeError("xev could not observe the target")
+            self.bounded(["xdotool", "mousemove", x, y, "click", "1"])
+            output = read_until(observer.stdout.fileno(), b"ButtonRelease", self.remaining(3.0))
+        finally:
+            observer.terminate()
+            try:
+                rest, error = observer.communicate(timeout=3.0)
+                output += rest
+            except subprocess.TimeoutExpired:
+                observer.kill()
+                observer.communicate()
+        text = output.decode("utf-8", "replace")
+        return {"events": parse_xev(text.splitlines(keepends=True)),
+                "observerError": error.decode("utf-8", "replace").strip()[:300]}
 
     # Test-only fixture faults ------------------------------------------------
     def profile_entry(self, request):

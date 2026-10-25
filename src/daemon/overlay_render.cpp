@@ -1,6 +1,7 @@
 #include "overlay_window.hpp"
 
 #include "layerc/core/cooldown_engine.hpp"
+#include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/text.hpp"
 
 #include <algorithm>
@@ -14,9 +15,7 @@
 namespace layerc::daemon {
 namespace {
 
-COLORREF to_color_ref(const std::uint32_t color) {
-  return RGB((color >> 16U) & 0xFFU, (color >> 8U) & 0xFFU, color & 0xFFU);
-}
+using layerc::platform::native_color_ref;
 
 template <typename Handle> void delete_gdi_object(Handle &object) {
   if (object != nullptr) {
@@ -82,12 +81,12 @@ bool OverlayWindow::ensure_render_resources() {
       CreateFontW(font_height, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-  window_brush_ = CreateSolidBrush(to_color_ref(0x151A20U));
-  panel_brush_ = CreateSolidBrush(to_color_ref(background_color));
-  fill_brush_ = CreateSolidBrush(to_color_ref(fill_color));
+  window_brush_ = CreateSolidBrush(native_color_ref(0x151A20U));
+  panel_brush_ = CreateSolidBrush(native_color_ref(background_color));
+  fill_brush_ = CreateSolidBrush(native_color_ref(fill_color));
   border_pen_ =
-      CreatePen(PS_SOLID, std::max(1L, scaled(1)), to_color_ref(border_color));
-  text_color_ = to_color_ref(text_color);
+      CreatePen(PS_SOLID, std::max(1L, scaled(1)), native_color_ref(border_color));
+  text_color_ = native_color_ref(text_color);
 
   const bool ready = font_ != nullptr && window_brush_ != nullptr &&
                      panel_brush_ != nullptr && fill_brush_ != nullptr &&
@@ -137,7 +136,7 @@ void OverlayWindow::render(const layerc::core::PanelPresentation &presentation) 
   };
   const auto null_pen = static_cast<HPEN>(GetStockObject(NULL_PEN));
   const HPEN selection_pen = edit_selected_
-      ? CreatePen(PS_SOLID, 2, to_color_ref(0xE0A15AU))
+      ? CreatePen(PS_SOLID, 2, native_color_ref(0xE0A15AU))
       : nullptr;
   const HPEN visible_border = selection_pen != nullptr ? selection_pen
                                                         : border_pen_;

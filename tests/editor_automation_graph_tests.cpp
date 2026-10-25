@@ -1,9 +1,12 @@
 #include "automation_graph.hpp"
 #include "automation_simulator.hpp"
 #include "layerc/core/automation_trace_control.hpp"
+#include "layerc/core/live_draft_control.hpp"
+#include "layerc/core/json.hpp"
 #include "profile_edit.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -204,6 +207,44 @@ void simulator_replay() {
          "a reset rewinds without reseeding");
 }
 
+void simulator_empty_loaded_trace() {
+  const auto profile = base_profile();
+  const auto json = automation_graph_json(flag_graph(profile));
+  AutomationSimulator simulator;
+  expect(simulator.reset(json, profile).seeded.has_value(),
+         "a fresh simulator still offers its starter event");
+  simulator.load({});
+  const auto invalid = simulator.reset("{", profile);
+  expect(invalid.error.has_value() && !simulator.compiled(),
+         "invalid compilation leaves an explicitly empty trace uncompiled");
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const auto reset = simulator.reset(json, profile);
+    expect(!reset.error && !reset.seeded && simulator.compiled() &&
+               simulator.events().empty() && simulator.position() == 0U,
+           "reset preserves an explicitly loaded empty root list");
+    expect(simulator.describe("flag-1=false").starts_with("Events: 0/0") &&
+               simulator.describe("flag-1=false").ends_with("Assertions: PASS") &&
+               !simulator.step(""),
+           "an empty trace executes no invented sessionStarted rule");
+  }
+  const auto added = simulator.add_event(AutomationEventKind::input_pressed, "kbd", "");
+  expect(as<AutomationEvent>(added) &&
+             as<AutomationEvent>(added)->timestamp == TimePoint{} &&
+             simulator.events().size() == 1U,
+         "a synthetic event may be added to the preserved empty trace");
+  const auto reset = simulator.reset(json, profile);
+  expect(!reset.error && !reset.seeded && simulator.events().size() == 1U &&
+             simulator.events().front().kind == AutomationEventKind::input_pressed,
+         "nonempty imported or edited roots are not reseeded");
+  simulator.clear();
+  expect(!simulator.compiled() && simulator.events().empty() && simulator.position() == 0U,
+         "clearing a session removes its compiled state and roots");
+  const auto fresh = simulator.reset(json, profile);
+  expect(!fresh.error && fresh.seeded && simulator.events().size() == 1U &&
+             fresh.seeded->kind == AutomationEventKind::session_started,
+         "a fresh session after a loaded trace restores only the starter root");
+}
+
 void simulator_timer_ordering() {
   using namespace std::chrono_literals;
   const auto profile = base_profile();
@@ -249,16 +290,33 @@ void simulator_timer_ordering() {
              simulator.runtime()->snapshot().overlay_overrides.size() == 1U,
          "session start creates a timer and a temporary overlay override: " + detail);
   (void)simulator.step("");
+  const auto &timed = simulator.last_step();
   expect(simulator.runtime()->snapshot().timers.empty() &&
              simulator.runtime()->snapshot().overlay_overrides.empty() &&
              simulator.describe("flag-1=false").ends_with("Assertions: PASS"),
          "overrides expire and due timers fire before the next root reads variables");
+  expect(timed && timed->timer_events == 1U && timed->effects.size() == 2U &&
+             timed->effects.front().kind == AutomationActionKind::set_variable &&
+             timed->effects.front().value == AutomationValue(true) &&
+             timed->effects.back().kind == AutomationActionKind::set_variable &&
+             timed->effects.back().value == AutomationValue(false),
+         "the step report counts the due timer and keeps timer-before-root effect order");
+  bool saw_tick{};
+  bool saw_after{};
+  if (timed)
+    for (const auto &entry : timed->trace) {
+      saw_tick = saw_tick || entry.rule_id == "on-tick";
+      saw_after = saw_after || entry.rule_id == "after-timer";
+    }
+  expect(saw_tick && saw_after,
+         "the step report trace includes the timer rule and the root rule");
   expect(simulator_interval(0) == 400ms && simulator_interval(1) == 100ms &&
              simulator_interval(2) == 25ms,
          "playback uses the shared slow, normal and fast intervals");
 }
 
 void trace_files() {
+  namespace core = layerc::core;
   const auto directory = std::filesystem::temp_directory_path() /
                          ("layerc-trace-test-" + std::to_string(
                               std::chrono::steady_clock::now()
@@ -294,6 +352,75 @@ void trace_files() {
              std::holds_alternative<std::vector<AutomationEvent>>(
                  parse_layerc_trace(log.export_text())),
          "a packet's events are kept and exported");
+
+  const auto trace_with_opaque_values = [](const std::size_t count) {
+    std::string trace =
+        R"({"schemaVersion":1,"kind":"layerctrace","entries":[],"opaque":[)";
+    trace.reserve(trace.size() + count * 2U + 2U);
+    for (std::size_t index{}; index < count; ++index) {
+      if (index != 0) trace.push_back(',');
+      trace.push_back('0');
+    }
+    trace += "]}";
+    return trace;
+  };
+  const auto excessive_trace =
+      trace_with_opaque_values(max_trace_import_json_values);
+  expect(excessive_trace.size() < core::max_automation_trace_bytes &&
+             std::holds_alternative<std::vector<AutomationEvent>>(
+                 core::parse_layerc_trace(excessive_trace)),
+         "the default trace parser accepts the valid under-4-MiB opaque trace");
+  const auto excessive_path = directory / "many-values.layerctrace";
+  expect(write_trace_file(excessive_path, excessive_trace),
+         "the bounded-allocation trace fixture is written");
+  const auto bytes_before = layerc::test::read_file(excessive_path);
+  expect(bytes_before.has_value(), "the original trace bytes can be captured");
+  const auto simulator_before = simulator.events();
+  const auto log_before = log.export_text();
+  const auto refused = read_trace_file(excessive_path);
+  const auto *resource_error = as<TraceLoadError>(refused);
+  expect(resource_error != nullptr && !resource_error->invalid &&
+             resource_error->message ==
+                 "Trace import resource limit exceeded (131072 JSON values); "
+                 "the current trace and profile were not changed.",
+         "editor trace import refuses excessive allocation as a resource error");
+  const auto bytes_after = layerc::test::read_file(excessive_path);
+  expect(bytes_before.has_value() && bytes_after == bytes_before,
+         "resource refusal preserves the authored trace bytes");
+  const auto &events_after = simulator.events();
+  const bool events_unchanged =
+      events_after.size() == simulator_before.size() &&
+      std::equal(events_after.begin(), events_after.end(), simulator_before.begin(),
+                 [](const AutomationEvent &left, const AutomationEvent &right) {
+                   return left.kind == right.kind &&
+                          left.timestamp == right.timestamp &&
+                          left.source_id == right.source_id &&
+                          left.origin_token == right.origin_token &&
+                          left.fields == right.fields;
+                 });
+  expect(events_unchanged && log.export_text() == log_before,
+         "resource refusal preserves simulator events and live trace log");
+  const auto recovered = read_trace_file(directory / "ok.layerctrace");
+  expect(as<LoadedTrace>(recovered) != nullptr &&
+             as<LoadedTrace>(recovered)->events.size() == 2U,
+         "a valid trace loads after the resource refusal");
+
+  const auto exact_limit_trace = trace_with_opaque_values(
+      max_trace_import_json_values - 5U);
+  const auto exact_limit = core::parse_layerc_trace(
+      exact_limit_trace, max_trace_import_json_values);
+  expect(exact_limit_trace.size() < core::max_automation_trace_bytes &&
+             std::holds_alternative<std::vector<AutomationEvent>>(exact_limit),
+         "the caller-bounded trace parser accepts exactly 131072 JSON values");
+  const auto over_limit_trace = trace_with_opaque_values(
+      max_trace_import_json_values - 4U);
+  const auto over_limit = core::parse_layerc_trace(
+      over_limit_trace, max_trace_import_json_values);
+  const auto *value_limit_error = std::get_if<core::AutomationError>(&over_limit);
+  expect(value_limit_error != nullptr &&
+             value_limit_error->message == core::json::value_count_limit_error,
+         "the caller-bounded trace parser refuses the 131073rd JSON value");
+
   for (std::size_t i = 0; i < LiveTraceLog::max_events; ++i)
     log.record(log.events().front());
   expect(log.events().size() == LiveTraceLog::max_events,
@@ -309,6 +436,74 @@ void trace_files() {
   expect(log.events().size() == LiveTraceLog::max_events,
          "the live log keeps only the newest events");
   std::filesystem::remove_all(directory);
+}
+
+// The typed failures are the machine contract: one wire name and one text per
+// enumerator, and a lapse predicate only for the two client-recoverable codes.
+void control_failure_contracts() {
+  namespace core = layerc::core;
+  for (const auto &entry : core::trace_control_error_wire) {
+    const auto name = core::enum_wire_name(core::trace_control_error_wire, entry.value);
+    const auto parsed = core::parse_enum_wire(core::trace_control_error_wire, entry.name);
+    const auto failure = core::trace_control_failure(entry.value);
+    expect(name.has_value() && parsed == entry.value &&
+               failure.code == entry.value && !failure.message.empty(),
+           "every trace control error has one wire name and a text");
+    expect(core::trace_control_lapsed(entry.value) ==
+               (entry.value == core::TraceControlError::expired ||
+                entry.value == core::TraceControlError::invalid_cursor),
+           "only a lapsed lease or cursor is recoverable as a gap");
+  }
+  for (const auto &entry : core::live_draft_error_wire) {
+    const auto name = core::enum_wire_name(core::live_draft_error_wire, entry.value);
+    const auto parsed = core::parse_enum_wire(core::live_draft_error_wire, entry.name);
+    const auto failure = core::live_draft_failure(entry.value);
+    expect(name.has_value() && parsed == entry.value &&
+               failure.code == entry.value && !failure.message.empty(),
+           "every live draft error has one wire name and a text");
+  }
+  const core::TraceControlRequest request{
+      core::TraceControlOperation::poll, "profile-Δ", "fixture-42", 17, 1234};
+  const auto request_bytes = core::serialize_trace_control_request(request);
+  const auto request_tree = core::json::parse(request_bytes);
+  const auto *request_value = std::get_if<core::json::Value>(&request_tree);
+  expect(request_value &&
+             core::parse_trace_control_request(*request_value) ==
+                 core::parse_trace_control_request(request_bytes),
+         "the value overload agrees with the string overload for a valid request");
+  const core::TraceControlReply reply{17, 1234, false, true, "{\"entries\":[]}"};
+  const auto reply_bytes = core::serialize_trace_control_reply(reply);
+  const auto reply_tree = core::json::parse(reply_bytes);
+  const auto *reply_value = std::get_if<core::json::Value>(&reply_tree);
+  expect(reply_value && core::parse_trace_control_reply(*reply_value) ==
+                            core::parse_trace_control_reply(reply_bytes),
+         "the value overload agrees with the string overload for a valid reply");
+  for (const auto invalid : {
+           R"({"traceVersion":2,"operation":"poll","profileId":"p","clientId":"c","generation":1,"cursor":0})",
+           R"({"traceVersion":1,"operation":"poll","profileId":"p","clientId":"c","generation":1})",
+           R"({"traceVersion":1,"operation":"poll","profileId":"p","clientId":"../c","generation":1,"cursor":0})",
+           R"({"traceVersion":1,"operation":"poll","profileId":"p","clientId":"c","generation":1,"cursor":-4})"}) {
+    const auto tree = core::json::parse(invalid);
+    const auto *value = std::get_if<core::json::Value>(&tree);
+    expect(value && !core::parse_trace_control_request(*value),
+           "the value overload refuses the same malformed trace requests");
+  }
+  const core::LiveDraftRequest draft{core::LiveDraftOperation::publish, "profile-1",
+                                     "fixture-42", 7, "{\"name\":\"Draft\"}"};
+  const auto draft_bytes = core::serialize_live_draft_request(draft);
+  const auto draft_tree = core::json::parse(draft_bytes);
+  const auto *draft_value = std::get_if<core::json::Value>(&draft_tree);
+  expect(draft_value && core::parse_live_draft_request(*draft_value) ==
+                            core::parse_live_draft_request(draft_bytes),
+         "the value overload agrees with the string overload for a valid draft");
+  const core::LiveDraftReply draft_reply{7, core::LiveDraftState::applied};
+  const auto draft_reply_bytes = core::serialize_live_draft_reply(draft_reply);
+  const auto draft_reply_tree = core::json::parse(draft_reply_bytes);
+  const auto *draft_reply_value = std::get_if<core::json::Value>(&draft_reply_tree);
+  expect(draft_reply_value &&
+             core::parse_live_draft_reply(*draft_reply_value) ==
+                 core::parse_live_draft_reply(draft_reply_bytes),
+         "the value overload agrees with the string overload for a draft reply");
 }
 
 void trace_control_codec_contracts() {
@@ -341,6 +536,211 @@ void trace_control_codec_contracts() {
              layerc::core::serialize_trace_control_reply(oversized)), "trace packets are bounded");
 }
 
+// The step report is a value of what the last step actually did: committed
+// effects, derived events, the non-root trace and the rejection.
+void simulator_step_report_contracts() {
+  // 1. A matching input triggers a cooldown; a non-matching source does not.
+  {
+    const auto profile = base_profile();
+    std::optional<AutomationProfile> preset;
+    (void)add_automation_preset(profile, preset, AutomationPreset::input_cooldown);
+    if (!expect(preset.has_value() && !preset->automations.empty() &&
+                    !preset->automations.front().rules.empty(),
+                "the input preset graph has one rule"))
+      return;
+    preset->automations.front().rules.front().source_filter = "fixture-match";
+    const auto graph = *preset;
+    AutomationSimulator simulator;
+    if (!expect(!simulator.reset(automation_graph_json(graph), profile).error,
+                "the input preset graph compiles"))
+      return;
+    AutomationEvent matching;
+    matching.kind = AutomationEventKind::input_pressed;
+    matching.source_id = "fixture-match";
+    matching.origin_token = 1;
+    AutomationEvent other = matching;
+    other.source_id = "fixture-other";
+    other.origin_token = 2;
+    // Load the two explicit roots and recompile so no seeded root is stepped.
+    simulator.load({matching, other});
+    if (!expect(!simulator.reset(automation_graph_json(graph), profile).error,
+                "the loaded input graph compiles"))
+      return;
+    (void)simulator.step("");
+    const auto first = simulator.last_step();
+    if (!expect(first.has_value(), "the first step records a report")) return;
+    const auto &target = profile.cooldowns.front().id;
+    bool condition_true{};
+    for (const auto &entry : first->trace)
+      condition_true = condition_true || (entry.phase == "condition" &&
+                                          entry.detail == "true");
+    expect(condition_true && first->effects.size() == 1U &&
+               first->effects.front().kind == AutomationActionKind::trigger_cooldown &&
+               first->effects.front().target == target,
+           "a matching input reports its true condition and committed effect");
+    const auto described = simulator.describe("");
+    expect(described.find("Effect: Trigger cooldown " + target) != std::string::npos &&
+               described.find(target + " = false") == std::string::npos,
+           "the description renders the effect without an unused action value");
+    (void)simulator.step("");
+    const auto second = simulator.last_step();
+    expect(second && second->effects.empty() && second->derived.empty() &&
+               second->trace.empty() &&
+               simulator.describe("").find("Nothing matched this event.") !=
+                   std::string::npos,
+           "a non-matching source reports that nothing matched");
+  }
+  // 2. A false condition is visible and commits nothing.
+  {
+    const auto profile = base_profile();
+    auto graph = flag_graph(profile);
+    graph.automations.front().rules.front().condition =
+        expr::literal(AutomationValue(false));
+    AutomationSimulator simulator;
+    if (!expect(!simulator.reset(automation_graph_json(graph), profile).error,
+                "the false-condition graph compiles"))
+      return;
+    (void)simulator.step("");
+    const auto report = simulator.last_step();
+    bool condition_false{};
+    for (const auto &entry : report ? report->trace : std::vector<AutomationTraceEntry>{})
+      condition_false = condition_false || (entry.phase == "condition" &&
+                                             entry.detail == "false");
+    expect(report && report->effects.empty() && condition_false &&
+               simulator.describe("").find("condition false") != std::string::npos,
+           "a false condition is reported with no committed effect");
+  }
+  // 5. Reset, load and clear drop the report and its section.
+  {
+    const auto profile = base_profile();
+    const auto json = automation_graph_json(flag_graph(profile));
+    AutomationSimulator simulator;
+    if (!expect(!simulator.reset(json, profile).error, "the reset fixture compiles"))
+      return;
+    (void)simulator.step("");
+    expect(simulator.last_step().has_value() &&
+               simulator.describe("").find("Last step:") != std::string::npos,
+           "a step section is visible before reset");
+    (void)simulator.reset(json, profile);
+    expect(!simulator.last_step() &&
+               simulator.describe("").find("Last step:") == std::string::npos,
+           "reset clears the report and its section");
+    (void)simulator.step("");
+    simulator.load({});
+    expect(!simulator.last_step() &&
+               simulator.describe("").find("Last step:") == std::string::npos,
+           "load clears the report");
+    (void)simulator.reset(json, profile);
+    (void)simulator.step("");
+    simulator.clear();
+    expect(!simulator.last_step() &&
+               simulator.describe("").find("Last step:") == std::string::npos,
+           "clear clears the report");
+  }
+  // 6. Report details precede the assertions line, which stays last.
+  {
+    const auto profile = base_profile();
+    const auto json = automation_graph_json(flag_graph(profile));
+    AutomationSimulator simulator;
+    if (!expect(!simulator.reset(json, profile).error, "the ordering fixture compiles"))
+      return;
+    (void)simulator.step("");
+    const auto described = simulator.describe("flag-1=true");
+    const auto step_at = described.find("Last step:");
+    const auto assertions_at = described.rfind("Assertions: PASS");
+    expect(step_at != std::string::npos && assertions_at != std::string::npos &&
+               step_at < assertions_at && described.ends_with("Assertions: PASS"),
+           "step details precede the assertions line, which stays last");
+  }
+  // 3/7. A runtime node-limit rejection is reported first and stays bounded.
+  // Fifteen always-false 63-node conditions never fire, so the runtime
+  // re-evaluates them for each of nine derived cooldown events: 15 x 63 x 9
+  // exceeds max_automation_node_evaluations while the graph JSON stays small.
+  {
+    auto profile = base_profile();
+    for (int index = 1; index <= 8; ++index) {
+      auto stress = profile.cooldowns.front();
+      stress.id = "stress-" + std::to_string(index);
+      stress.name = "Stress " + std::to_string(index);
+      profile.cooldowns.push_back(std::move(stress));
+    }
+    const auto rule_base = flag_graph(profile).automations.front().rules.front();
+    const auto false_tree = [](const auto &self, const std::size_t depth)
+        -> AutomationExpression {
+      if (depth == 0) return expr::literal(AutomationValue(false));
+      return expr::binary("or", self(self, depth - 1U), self(self, depth - 1U));
+    };
+    AutomationProfile nodes;
+    nodes.profile_id = profile.id;
+    AutomationRule fanout = rule_base;
+    fanout.id = "fanout";
+    fanout.event = AutomationEventKind::session_started;
+    fanout.source_filter = "stress";
+    fanout.condition = expr::literal(AutomationValue(true));
+    fanout.actions.clear();
+    for (const auto &cooldown : profile.cooldowns) {
+      AutomationAction trigger;
+      trigger.kind = AutomationActionKind::trigger_cooldown;
+      trigger.target = cooldown.id;
+      fanout.actions.push_back(std::move(trigger));
+    }
+    nodes.automations.push_back(
+        {.id = "fanout", .name = "Fanout", .rules = {std::move(fanout)}});
+    for (std::size_t index{}; index < 15U; ++index) {
+      AutomationRule scan = rule_base;
+      scan.id = "scan";
+      scan.event = AutomationEventKind::cooldown_triggered;
+      scan.source_filter.clear();
+      scan.condition = false_tree(false_tree, 5U);
+      AutomationAction reset;
+      reset.kind = AutomationActionKind::reset_cooldown;
+      reset.target = profile.cooldowns.front().id;
+      scan.actions = {reset};
+      nodes.automations.push_back({.id = "s" + std::to_string(index),
+                                   .name = "Scan",
+                                   .rules = {std::move(scan)}});
+    }
+    if (!expect(validate_automation_profile(nodes, profile).message.empty() &&
+                    automation_graph_json(nodes).size() < max_automation_json_bytes,
+                "the node-limit fixture is a valid graph within the JSON cap"))
+      return;
+    AutomationSimulator simulator;
+    const auto compiled_nodes = simulator.reset(automation_graph_json(nodes), profile);
+    if (!expect(!compiled_nodes.error,
+                "the node-limit graph compiles: " +
+                    compiled_nodes.error.value_or("")))
+      return;
+    simulator.load({AutomationEvent{.kind = AutomationEventKind::session_started,
+                                    .source_id = "stress",
+                                    .origin_token = 1}});
+    (void)simulator.reset(automation_graph_json(nodes), profile);
+    (void)simulator.step("");
+    const auto report = simulator.last_step();
+    const auto described = simulator.describe("");
+    expect(report && report->rejection &&
+               report->rejection->find(
+                   std::to_string(max_automation_node_evaluations)) !=
+                   std::string::npos &&
+               report->effects.empty() &&
+               described.find("Rejected:") != std::string::npos,
+           "a node-limit rejection is reported with no committed effect");
+    std::size_t details{};
+    std::size_t omissions{};
+    std::size_t at = described.find('\n');
+    while (at != std::string::npos) {
+      const auto next = described.find('\n', at + 1);
+      const auto line = described.substr(at + 1, next - at - 1);
+      if (line.starts_with("  \u2026 "))
+        ++omissions;
+      else if (line.starts_with("  "))
+        ++details;
+      at = next;
+    }
+    expect(details <= 32U && omissions == 1U,
+           "the step detail list is capped with exactly one omission line");
+  }
+}
+
 void simulator_event_bounds() {
   AutomationSimulator simulator;
   for (std::size_t i = 0; i < max_automation_trace_entries; ++i)
@@ -364,7 +764,10 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(presets_and_palette),
                  LAYERC_TEST_CASE(node_fields_and_removal),
                  LAYERC_TEST_CASE(json_error_location),
                  LAYERC_TEST_CASE(simulator_replay),
+                 LAYERC_TEST_CASE(simulator_empty_loaded_trace),
                  LAYERC_TEST_CASE(simulator_timer_ordering),
+                 LAYERC_TEST_CASE(simulator_step_report_contracts),
                  LAYERC_TEST_CASE(trace_files),
                  LAYERC_TEST_CASE(trace_control_codec_contracts),
+                 LAYERC_TEST_CASE(control_failure_contracts),
                  LAYERC_TEST_CASE(simulator_event_bounds))

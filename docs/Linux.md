@@ -11,11 +11,13 @@ The daemon and CLIs shipped in the `v2.6.0` release as **source/CLI only**.
 v2.6c (package version 2.6.2) adds the X11 `layere` editor, a native Debian
 package and an editor Flatpak; they were built and gated in local Debian
 container and WSL runs (automated evidence only) but are not yet published,
-so build from source as described below. The physical GNOME Xorg/KDE X11
-evidence below is **pending**: it has not been archived. `ci.yml` is
+so build from source as described below. The [2026-10-21 source-bound local qualification](LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21) covers the repaired calibration layout and faithful explicit-black appearance, directly inspected rendered states, active-operation peaks, selected validator-derived boundary/exhaustion envelope, fresh empty and representative idle, 100-cycle drift and the original 32-case walkthrough, plus fresh Windows/Linux and native-package/Flatpak gates. It binds the complete source snapshot and the final documentation-only delta; the rejected earlier rendered verdict and older measurements remain historical, not current qualification. The original 32-case count omitted a required controlled-target group and did not close the full walkthrough contract. Its [fresh 36-case successor](LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) passes mandatory overlay focus/resize, actual click-through and cleanup in the owned Xvfb/Openbox session; it does not establish physical-desktop coverage.
+The physical GNOME Xorg/KDE X11 evidence below is also **pending**: it has not been archived. `ci.yml` is
 configured to verify headless, Xvfb, installed-native, package and Flatpak
 runtime behavior, but no CI run has been recorded for v2.6c, and CI is not a
-substitute for the hardware checklist.
+substitute for the hardware checklist. The
+[Linux editor resource targets](#linux-editor-resource-targets) are
+implementation contracts, not release acceptance claims.
 
 | Surface | State | Boundary |
 | --- | --- | --- |
@@ -34,6 +36,50 @@ capabilities as unavailable; `layercal` fails visibly. Name matching on both
 platforms uses the shared deterministic fold (ASCII plus the cased Latin-1
 supplement rows; all other codepoints compare byte-exact), replacing the
 former Windows `LCMapStringEx` invariant mapping so Windows and Linux agree.
+
+## Linux editor resource targets
+
+**These are approved implementation targets, not release acceptance claims.** The
+ceilings established during toolkit selection remain unchanged. If a target is
+missed, consult the user rather than raising it. The dated local evidence in
+[`LinuxEditorPlan.md`](LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21)
+is not proof for every combination of valid profile data or physical-desktop
+qualification.
+
+Use Linux USS (private resident pages) as the primary editor memory metric, and
+report PSS, RSS, swap, and any GPU/buffer allocations alongside it. Include every
+editor-owned helper process in aggregate results. Record Windows private bytes
+and working set separately; private commit and Linux USS are not equivalent
+measurements.
+
+| Scenario | Approved Linux USS ceiling |
+| --- | ---: |
+| Settled idle editor, no profile selected | 20 MiB |
+| Representative store: 20 profiles, 10 cooldowns each, two panels each; one selected | 32 MiB |
+| Active advanced view on a representative automation/visual fixture | 48 MiB peak |
+| After 100 repeated dialog/profile-switch cycles | Within 2 MiB of the warmed baseline, with no continuing upward trend |
+
+Capture the full startup peak even if the idle gate begins after settling. Once
+functionality is available, measure worst-case valid documents derived from the
+current validators. Before release, establish their explicit peak bound and
+resource-exhaustion behavior; the representative fixture is not proof for every
+valid profile.
+
+Additional approved targets:
+
+- Idle CPU at most 0.2% of one logical CPU averaged over 60 seconds when no
+  animation or operation is active.
+- Closing the editor leaves no editor/helper processes, owned sockets, or active
+  capture resources.
+- Opening/closing the editor must not weaken existing daemon memory/resource
+  gates. Reuse the daemon benchmark contracts and add standalone editor
+  measurement rather than interpreting daemon deltas as editor memory.
+- Cache/history limits preserve authored data. A resource-limited preview or
+  operation reports its reason; it does not silently alter a valid profile.
+
+Keep the desktop, driver, video recorder, and agent/model overhead in a separate
+harness measurement. Application-only numbers must not conceal the total cost of
+running the testing environment.
 
 ## Wayland development (V2.7)
 
@@ -195,8 +241,12 @@ trigger and calibrates it against an X11 window in a modal dialog: after an
 explicit capture notice it previews the window through the bounded X11
 capture, selects a region, samples a color, and edits average-color,
 brightness, color-coverage and template predicates, with up to four captured
-or imported PNG references and an editable alpha mask. The profile, its
-sidecars and template assets are published in one durable transaction.
+or imported PNG references and an editable alpha mask. Apply remains unavailable
+until the current predicate has been evaluated against a captured frame. A
+non-match is still an evaluation; changing the predicate or capture quality
+requires reevaluation. Loading a template reference alone does not satisfy this
+requirement. The profile, its sidecars and template assets are published in one
+durable transaction.
 Game Bar companion data and Generic HID bindings are preserved but not
 editable. Unknown base-profile JSON fields are retained with their owning
 objects, including nested fields and numeric source digits; unsupported or

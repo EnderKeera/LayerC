@@ -14,10 +14,15 @@
 
 namespace layerc::platform {
 
-struct ProfileStoreRoots;
+struct ProfileStoreRoots {
+  std::filesystem::path config_profiles;
+  std::filesystem::path data_profiles;
+  std::filesystem::path store;
+};
 
 enum class ProfileWriteError {
   invalid_input,
+  resource_limit,
   scope_rejected,
   lock_busy,
   recovery_blocked,
@@ -30,6 +35,7 @@ enum class ProfileWriteError {
     const ProfileWriteError error) noexcept {
   switch (error) {
   case ProfileWriteError::invalid_input: return "invalid profile data or destination";
+  case ProfileWriteError::resource_limit: return "profile resource limit exceeded";
   case ProfileWriteError::scope_rejected: return "profile store scope rejected";
   case ProfileWriteError::lock_busy: return "profile store is busy";
   case ProfileWriteError::recovery_blocked: return "profile recovery is blocked";
@@ -66,16 +72,17 @@ profile_transaction_scope(const std::filesystem::path &profile_directory);
 
 // Where a transaction runs: already-resolved roots, or a profile directory
 // resolved through profile_transaction_scope (refusal is scope_rejected).
+// Owns its target by value and is safe to retain and copy.
 class ProfileTransactionScope {
 public:
-  ProfileTransactionScope(const ProfileStoreRoots &roots) : target_(&roots) {}
+  ProfileTransactionScope(ProfileStoreRoots roots) : target_(std::move(roots)) {}
   ProfileTransactionScope(std::filesystem::path profile_directory)
       : target_(std::move(profile_directory)) {}
 
   [[nodiscard]] std::optional<ProfileStoreRoots> resolve() const;
 
 private:
-  std::variant<const ProfileStoreRoots *, std::filesystem::path> target_;
+  std::variant<ProfileStoreRoots, std::filesystem::path> target_;
 };
 
 // Store-dependent planning runs only after acquiring writer ownership and
@@ -85,18 +92,23 @@ private:
 using ProfileMutationPlanner =
     std::function<ProfileWriteResult(std::vector<ProfileFileMutation> &)>;
 
-// A planner, or a fixed mutation list (a constant planner; empty is invalid).
+// A value-owned planner or fixed mutation list (empty fixed lists are invalid).
+// Fixed mutations are owned by value; plans are safe to retain and copy.
 class ProfileMutationPlan {
 public:
   template <typename Planner>
     requires std::is_invocable_r_v<ProfileWriteResult, Planner &,
                                    std::vector<ProfileFileMutation> &>
   ProfileMutationPlan(Planner planner) : planner_(std::move(planner)) {}
+  ProfileMutationPlan(std::vector<ProfileFileMutation> mutations)
+      : planner_(constant(std::move(mutations))) {}
   template <typename Mutations>
     requires std::is_convertible_v<const Mutations &,
                                    std::span<const ProfileFileMutation>>
   ProfileMutationPlan(const Mutations &mutations)
-      : planner_(constant(mutations)) {}
+      : ProfileMutationPlan(std::vector<ProfileFileMutation>(
+            std::span<const ProfileFileMutation>(mutations).begin(),
+            std::span<const ProfileFileMutation>(mutations).end())) {}
 
   [[nodiscard]] ProfileWriteResult
   operator()(std::vector<ProfileFileMutation> &mutations) const {
@@ -106,8 +118,8 @@ public:
 
 private:
   static ProfileMutationPlanner
-  constant(const std::span<const ProfileFileMutation> mutations) {
-    return [mutations](std::vector<ProfileFileMutation> &out)
+  constant(std::vector<ProfileFileMutation> mutations) {
+    return [mutations = std::move(mutations)](std::vector<ProfileFileMutation> &out)
                -> ProfileWriteResult {
       if (mutations.empty()) return {ProfileWriteError::invalid_input};
       out.assign(mutations.begin(), mutations.end());

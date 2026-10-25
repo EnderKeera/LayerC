@@ -1,5 +1,6 @@
 #include "display_types.hpp"
 
+#include "layerc/core/game_match.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/core/panel_geometry.hpp"
 
@@ -12,6 +13,31 @@
 #include <cstdio>
 
 namespace layerc::platform {
+
+const WindowSnapshot *match_window(const WindowScan &scan,
+                                      const layerc::core::GameMatch &match,
+                                      const std::uint64_t previous_window) {
+  // Enumeration stays here; the matching rule and the foreground/previous
+  // preference live in core::resolve_game_match. POSIX filesystems
+  // compare case-sensitively, so the executable path stays byte-exact.
+  std::vector<layerc::core::MatchCandidate> candidates;
+  candidates.reserve(scan.windows.size());
+  std::optional<std::size_t> preferred;
+  for (std::size_t index{}; index < scan.windows.size(); ++index) {
+    const auto &snapshot = scan.windows[index];
+    candidates.push_back({.executable_name = snapshot.executable_name,
+                          .executable_path = snapshot.executable_path,
+                          .class_name = snapshot.class_name,
+                          .title = snapshot.title,
+                          .active = scan.active.has_value() &&
+                                  snapshot.window == *scan.active});
+    if (previous_window != 0 && snapshot.window == previous_window)
+      preferred = index;
+  }
+  const auto resolved = layerc::core::resolve_game_match(
+      candidates, match, {.exact_path = true, .preferred = preferred});
+  return resolved.has_value() ? &scan.windows[*resolved] : nullptr;
+}
 
 std::string process_executable_path(std::uint32_t pid) {
   if (pid == 0) return {};

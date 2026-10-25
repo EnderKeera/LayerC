@@ -21,7 +21,7 @@ namespace layerc::daemon {
 // toplevels, wlr layer-shell overlay) on the daemon's one connection. They
 // bind lazily from the registry and are released by the connection's hook
 // before its display goes away; no thread, no second connection.
-class WaylandProviders final : public NativeDisplaySource, public OverlayBackend {
+class WaylandProviders final : public DisplaySource, public OverlayBackend {
 public:
   // The connection outlives this object.
   explicit WaylandProviders(layerc::platform::WaylandConnection &connection);

@@ -686,8 +686,8 @@ run_owned(const ProfileTransactionScope &scope, const ProfileMutationPlan &plan,
 } // namespace
 
 std::optional<ProfileStoreRoots> ProfileTransactionScope::resolve() const {
-  if (const auto *roots = std::get_if<const ProfileStoreRoots *>(&target_))
-    return **roots;
+  if (const auto *roots = std::get_if<ProfileStoreRoots>(&target_))
+    return *roots;
   return profile_transaction_scope(std::get<std::filesystem::path>(target_));
 }
 

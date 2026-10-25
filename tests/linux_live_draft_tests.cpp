@@ -82,6 +82,15 @@ void codec_contracts() {
          "unknown reply states are refused");
 }
 
+namespace {
+
+std::optional<core::LiveDraftError> draft_failure(const layerc::daemon::LiveDraftResult &result) {
+  if (const auto *failure = std::get_if<core::LiveDraftFailure>(&result)) return failure->code;
+  return std::nullopt;
+}
+
+} // namespace
+
 void host_lease_and_revisions() {
   const std::vector<StoredProfile> stored{{"fixture.json", profile("fixture", "Committed")},
                                           {"other.json", profile("other", "Other")}};
@@ -92,7 +101,7 @@ void host_lease_and_revisions() {
   expect(std::holds_alternative<core::LiveDraftReply>(first) && changed && host.active() &&
              std::get<core::LiveDraftReply>(first).state == core::LiveDraftState::applied,
          std::string("a stored profile's draft applies: ") +
-             (std::holds_alternative<std::string>(first) ? std::get<std::string>(first) : "ok"));
+             (draft_failure(first) ? "refused" : "ok"));
   const auto effective = host.effective(stored);
   expect(effective[0].profile.name == "Draft one" && effective[0].path == "fixture.json" &&
              effective[1].profile.name == "Other" && stored[0].profile.name == "Committed",
@@ -102,15 +111,17 @@ void host_lease_and_revisions() {
          "a repeated revision is a duplicate, not a reapply");
   (void)host.handle(publish(3, profile("fixture", "Draft three")), stored, now, changed);
   expect(changed && host.describe() == "fixture r3", "a newer revision replaces the draft");
-  expect(std::holds_alternative<std::string>(
-             host.handle(publish(2, profile("fixture", "Old")), stored, now, changed)) &&
+  expect(draft_failure(host.handle(publish(2, profile("fixture", "Old")), stored, now, changed)) ==
+             core::LiveDraftError::stale_revision &&
              !changed && host.effective(stored)[0].profile.name == "Draft three",
          "a stale revision is refused and leaves the draft intact");
-  expect(std::holds_alternative<std::string>(
-             host.handle(publish(4, profile("fixture", "Other editor"), "editor-2"), stored, now, changed)),
+  expect(draft_failure(host.handle(publish(4, profile("fixture", "Other editor"), "editor-2"),
+                                    stored, now, changed)) ==
+             core::LiveDraftError::owned_elsewhere,
          "another editor cannot replace an owned draft");
-  expect(std::holds_alternative<std::string>(host.handle(
-             {core::LiveDraftOperation::renew, "fixture", "editor-1", 2, {}}, stored, now, changed)),
+  expect(draft_failure(host.handle(
+             {core::LiveDraftOperation::renew, "fixture", "editor-1", 2, {}}, stored, now, changed)) ==
+             core::LiveDraftError::revision_mismatch,
          "a renewal must name the current revision");
   const auto later = now + std::chrono::milliseconds(2000);
   const auto renewed = host.handle({core::LiveDraftOperation::renew, "fixture", "editor-1", 3, {}},
@@ -134,14 +145,15 @@ void expiry_during_failing_request() {
   // The renewal arrives exactly at the deadline: the lease has already lapsed.
   const auto late = host.handle({core::LiveDraftOperation::renew, "fixture", "editor-1", 1, {}},
                                 stored, now + core::live_draft_lease, changed);
-  expect(std::holds_alternative<std::string>(late) && changed && !host.active() &&
+  expect(draft_failure(late) == core::LiveDraftError::expired && changed && !host.active() &&
              !host.next_deadline() && host.effective(stored)[0].profile.name == "Committed",
          "a refused late renewal still reports the expiry that restored the committed profile");
   (void)host.handle(publish(2, profile("fixture", "Draft two")), stored, now, changed);
   auto broken = publish(3, profile("fixture", "Draft"));
   broken.profile_json = "{\"id\":\"fixture\"}";
   const auto refused = host.handle(broken, stored, now + 2 * core::live_draft_lease, changed);
-  expect(std::holds_alternative<std::string>(refused) && changed && !host.active(),
+  expect(draft_failure(refused) == core::LiveDraftError::invalid_profile && changed &&
+             !host.active(),
          "an invalid publish after expiry still reports the restoring change");
 }
 
@@ -150,16 +162,18 @@ void host_refusals_and_end() {
   layerc::daemon::LiveDraftHost host;
   const auto now = core::MonotonicClock::now();
   bool changed{};
-  expect(std::holds_alternative<std::string>(
-             host.handle(publish(1, profile("unsaved", "New")), stored, now, changed)) && !host.active(),
+  expect(draft_failure(host.handle(publish(1, profile("unsaved", "New")), stored, now, changed)) ==
+             core::LiveDraftError::unknown_profile && !host.active(),
          "a draft must name a stored profile");
   auto mismatch = publish(1, profile("fixture", "Draft"));
   mismatch.profile_id = "other";
-  expect(std::holds_alternative<std::string>(host.handle(mismatch, stored, now, changed)),
+  expect(draft_failure(host.handle(mismatch, stored, now, changed)) ==
+             core::LiveDraftError::id_mismatch,
          "the draft body must carry the named profile id");
   auto broken = publish(1, profile("fixture", "Draft"));
   broken.profile_json = "{\"id\":\"fixture\"}";
-  expect(std::holds_alternative<std::string>(host.handle(broken, stored, now, changed)) && !host.active(),
+  expect(draft_failure(host.handle(broken, stored, now, changed)) ==
+             core::LiveDraftError::invalid_profile && !host.active(),
          "an invalid profile body is refused before replacing anything");
   (void)host.handle(publish(1, profile("fixture", "Draft")), stored, now, changed);
   const auto foreign = host.handle({core::LiveDraftOperation::end, "fixture", "editor-2", 0, {}},
@@ -195,8 +209,20 @@ void control_dispatch() {
          "draft payloads dispatch to the typed handler without a store reload");
   const auto invalid = layerc::daemon::handle_control_request(
       layerc::platform::encode_control_request(layerc::platform::ControlCommand::draft, "{}"), kernel);
-  expect(invalid.response.find("invalid live draft request") != std::string::npos,
-         "malformed draft payloads are refused");
+  expect(invalid.response.find("invalid live draft request") != std::string::npos &&
+             invalid.response.find("\"code\":\"invalid-request\"") != std::string::npos,
+         "malformed draft payloads are refused with a machine code");
+  const auto trace_expired = layerc::daemon::handle_control_request(
+      layerc::platform::encode_control_request(layerc::platform::ControlCommand::trace,
+                                               R"({"traceVersion":1,"operation":"poll","profileId":"fixture","clientId":"client-a","generation":1,"cursor":0})"),
+      kernel, {},
+      [](const core::TraceControlRequest &) -> layerc::daemon::TraceControlResult {
+        return core::TraceControlFailure{core::TraceControlError::expired,
+                                         "renamed presentation"};
+      });
+  expect(trace_expired.response.find("\"code\":\"expired\"") != std::string::npos &&
+             trace_expired.response.find("renamed presentation") != std::string::npos,
+         "a trace failure carries its machine code independently of renamed prose");
 }
 
 } // namespace

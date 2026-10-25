@@ -1,6 +1,7 @@
 // X11 inline visual capture, profile-local PNG resolution and cooldown routing.
 // Returns 77 when the host cannot provide the Xvfb fixture.
 #include "visual_service.hpp"
+#include "x11_provider.hpp"
 #include "x11_error.hpp"
 
 #include "layerc/platform/profile_store_linux.hpp"
@@ -287,8 +288,9 @@ int run_linux_x11_visual_tests() {
       window, persistence);
   sessions.front().active = true;
 
-  layerc::daemon::X11VisualService visual;
-  visual.attach(*display);
+  layerc::daemon::VisualService visual;
+  layerc::daemon::X11CaptureFactory capture_factory(*display);
+  visual.use_x11_capture(&capture_factory);
   const layerc::runtime::SessionCapabilityRequest request{
       .window = {window}, .active = true, .visual = true,
       .profile_id = sessions.front().automation.profile().id};
@@ -303,8 +305,8 @@ int run_linux_x11_visual_tests() {
         sessions.front().source_path, sessions.front().automation.profile().id,
         *sessions.front().visual_profile()};
     const std::span configurations{&configuration, 1};
-    layerc::daemon::X11VisualService initially_unmatched;
-    initially_unmatched.attach(*display);
+    layerc::daemon::VisualService initially_unmatched;
+    initially_unmatched.use_x11_capture(&capture_factory);
     initially_unmatched.refresh({}, {}, true, configurations);
     const auto loaded_work = initially_unmatched.work_stats();
     initially_unmatched.refresh({}, {}, true, configurations);
@@ -326,8 +328,8 @@ int run_linux_x11_visual_tests() {
     const auto inactive_demand = layerc::runtime::calculate_capability_demand(
         std::span{&inactive_request, 1}, false);
     sessions.front().active = false;
-    layerc::daemon::X11VisualService initially_inactive;
-    initially_inactive.attach(*display);
+    layerc::daemon::VisualService initially_inactive;
+    initially_inactive.use_x11_capture(&capture_factory);
     initially_inactive.refresh(sessions, inactive_demand, true);
     const auto loaded_work = initially_inactive.work_stats();
     sessions.front().active = true;

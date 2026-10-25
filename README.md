@@ -24,7 +24,7 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak build with installed-editor gates; not yet published; physical evidence pending |
+| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); unpublished; CI and physical evidence pending |
 | Wayland (V2.7, in development) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented locally; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
 | Gamescope | Not supported | Out of scope |
 
@@ -230,6 +230,10 @@ package installs it without enabling it. The Debian package
   Template assets are stored as non-interlaced 8-bit RGBA PNG on both
   platforms; imported PNGs and bundle assets in any other standard PNG format
   are re-encoded on import, and their references follow the new content hash.
+  Apply remains unavailable until the current predicate has been evaluated
+  against a captured frame. A non-match is still an evaluation; changing the
+  predicate or capture quality requires reevaluation. Loading a template
+  reference alone does not satisfy this requirement.
 - Native editor, live preview, simulator, diagnostics, resilient executable-name
   matching, and optional exact-path matching. Local live-edit protocol 5 and
   calibration protocol 2 carry profile documents as nested JSON objects (null
@@ -321,7 +325,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
-| `layerc_linux_editor_model_tests` | Profile, cooldown and panel edits, durable save/roundtrip, retained additional data, selection identity, invalid input, and visible store/module faults |
+| `layerc_linux_editor_model_tests` | Production editor session: validated profile edits and durable save/roundtrip with retained cooldown/panel/binding fields, selection identity across a rescan, atomically refused invalid candidates, honest offline reload, and appearance/task/placement helpers |
 | `layerc_linux_editor_session_tests` | Toolkit-free editor session: drafts and history, mutation candidates with preserved data, save/delete failures, enablement, reviewed import/export and import races, and field parsing |
 | `layerc_linux_editor_widget_tests` | FLTK editor under an X display (CTest label `editor`): drafts and history, cooldown/binding/panel forms, dirty prompts, binding capture, menus, shortcuts, and small-window layout |
 | `layerc_linux_x11_tests` | X11 probes, EWMH tracking, and game matching |

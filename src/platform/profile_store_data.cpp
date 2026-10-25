@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -42,7 +43,8 @@ read_profile_file(const std::filesystem::path &path) {
 
 // --- Profile directory scan ---
 
-std::string ProfileDirectoryScan::warning_text() const {
+template <typename Stored>
+std::string BasicProfileDirectoryScan<Stored>::warning_text() const {
   std::string text;
   for (const auto &fault : faults) {
     if (!text.empty()) text += "; ";
@@ -51,18 +53,20 @@ std::string ProfileDirectoryScan::warning_text() const {
   return text;
 }
 
-const StoredProfile *ProfileDirectoryScan::find(
+template <typename Stored>
+const Stored *BasicProfileDirectoryScan<Stored>::find(
     const std::string_view id) const noexcept {
   const auto found = std::find_if(
-      profiles.begin(), profiles.end(), [id](const StoredProfile &entry) {
+      profiles.begin(), profiles.end(), [id](const Stored &entry) {
         return entry.profile.id == id;
       });
   return found == profiles.end() ? nullptr : &*found;
 }
 
+template <typename Stored>
 std::filesystem::path
-ProfileDirectoryScan::path_for(const std::filesystem::path &directory,
-                               const std::string_view id) const {
+BasicProfileDirectoryScan<Stored>::path_for(
+    const std::filesystem::path &directory, const std::string_view id) const {
   if (const auto *stored = find(id)) return stored->path;
   const auto folded_name = [](const std::filesystem::path &path) {
     return core::try_casefold_utf8(
@@ -82,6 +86,9 @@ ProfileDirectoryScan::path_for(const std::filesystem::path &directory,
   return directory / name;
 }
 
+template struct BasicProfileDirectoryScan<StoredProfile>;
+template struct BasicProfileDirectoryScan<StoredProfileSummary>;
+
 bool has_json_extension(const std::filesystem::path &path) {
   const auto encoded = path_to_utf8(path.extension());
   if (!encoded.has_value()) return false;
@@ -89,9 +96,12 @@ bool has_json_extension(const std::filesystem::path &path) {
   return folded.has_value() && *folded == ".json";
 }
 
-ProfileDirectoryScan
-scan_profile_directory(const std::filesystem::path &directory) {
-  ProfileDirectoryScan result;
+namespace {
+
+template <typename Stored>
+BasicProfileDirectoryScan<Stored>
+scan_profile_directory_impl(const std::filesystem::path &directory) {
+  BasicProfileDirectoryScan<Stored> result;
   if (directory.empty()) {
     result.error = "profile directory is unavailable";
     return result;
@@ -137,8 +147,19 @@ scan_profile_directory(const std::filesystem::path &directory) {
             result.error = "duplicate profile id '" + profile->id + "'";
             return result;
           }
-          result.profiles.push_back(
-              {.path = std::move(path), .profile = std::move(*profile)});
+          if constexpr (std::is_same_v<Stored, StoredProfileSummary>) {
+            ProfileSummary summary{
+                .id = std::move(profile->id),
+                .name = std::move(profile->name),
+                .enabled = profile->enabled,
+                .game = {.executable_name =
+                             std::move(profile->game.executable_name)}};
+            result.profiles.push_back(
+                {.path = path, .profile = std::move(summary)});
+          } else {
+            result.profiles.push_back(
+                {.path = path, .profile = std::move(*profile)});
+          }
         } else {
           const auto &failure =
               std::get<layerc::core::ProfileError>(parsed);
@@ -150,6 +171,18 @@ scan_profile_directory(const std::filesystem::path &directory) {
   }
   if (error) result.error = "profile directory enumeration failed";
   return result;
+}
+
+} // namespace
+
+ProfileDirectoryScan
+scan_profile_directory(const std::filesystem::path &directory) {
+  return scan_profile_directory_impl<StoredProfile>(directory);
+}
+
+ProfileSummaryDirectoryScan
+scan_profile_summaries(const std::filesystem::path &directory) {
+  return scan_profile_directory_impl<StoredProfileSummary>(directory);
 }
 
 // --- Sidecar paths and marker policy ---
@@ -216,7 +249,7 @@ SidecarFiles read_sidecar_files(const std::filesystem::path &primary,
 ProfileWriteResult write_profile_file(const std::filesystem::path &path,
                                       const std::string_view contents) {
   if (contents.size() > layerc::core::max_profile_json_bytes)
-    return {ProfileWriteError::invalid_input};
+    return {ProfileWriteError::resource_limit};
   std::error_code path_error;
   const auto absolute = std::filesystem::absolute(path, path_error);
   if (path_error) return {ProfileWriteError::invalid_input};
@@ -307,6 +340,10 @@ template <typename Module>
   // Prefer the last usable sidecar bytes as the user-visible recovery copy;
   // fall back to the new contents when nothing usable was stored.
   const auto contents = Module::serialize(*effective);
+  if (contents.size() > Module::descriptor.max_bytes) {
+    failure = ProfileWriteError::resource_limit;
+    return false;
+  }
   std::string recovery = contents;
   if (previous_profile.has_value()) {
     const auto loaded =
@@ -360,8 +397,12 @@ plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   });
   if (!planned) return std::nullopt;
 
-  mutations.push_back(
-      text_mutation(path, layerc::core::serialize_profile_json(stored)));
+  const auto contents = layerc::core::serialize_profile_json(stored);
+  if (contents.size() > layerc::core::max_profile_json_bytes) {
+    failure = ProfileWriteError::resource_limit;
+    return std::nullopt;
+  }
+  mutations.push_back(text_mutation(path, contents));
   mutations.back().must_be_absent = inputs.create_only;
   return mutations;
 }

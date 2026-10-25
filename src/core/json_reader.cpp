@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -80,9 +81,16 @@ void append_exact_integer(std::string &output, const std::int64_t value) {
 
 std::variant<Value, FieldError> parse_bounded(const std::string_view source,
                                               const std::size_t max_bytes) {
+  return parse_bounded(source, max_bytes,
+                       std::numeric_limits<std::size_t>::max());
+}
+
+std::variant<Value, FieldError> parse_bounded(const std::string_view source,
+                                              const std::size_t max_bytes,
+                                              const std::size_t max_values) {
   if (source.size() > max_bytes)
     return FieldError{"$", "JSON exceeds " + std::to_string(max_bytes) + " bytes"};
-  auto parsed = parse(source);
+  auto parsed = parse(source, max_values);
   if (const auto *error = std::get_if<ParseError>(&parsed))
     return FieldError{"$@" + std::to_string(error->offset), error->message};
   return std::get<Value>(std::move(parsed));

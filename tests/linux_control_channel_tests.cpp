@@ -433,6 +433,46 @@ void control_socket_contracts() {
   (void)passed;
 }
 
+void control_typed_envelope_contracts() {
+  using layerc::test::expect;
+  expect(control::encode_control_response(true, {}, {}, "expired") ==
+             R"({"proto":"LayerC.Control","v":1,"ok":true})",
+         "successful response bytes are unchanged and omit error codes");
+  expect(control::encode_control_response(false, "renamed presentation", {}, "expired") ==
+             R"({"proto":"LayerC.Control","v":1,"ok":false,"code":"expired","error":"renamed presentation"})",
+         "failure exposes a machine code independently of its prose");
+  expect(control::encode_control_response(false, "renamed presentation", R"({"cursor":7})",
+                                          "expired") ==
+             R"({"proto":"LayerC.Control","v":1,"ok":false,"payload":{"cursor":7},"code":"expired","error":"renamed presentation"})",
+         "payload/code/error have stable byte order");
+  const auto legacy =
+      control::decode_control_response(control::encode_control_response(false, "nope", {}));
+  expect(legacy && !legacy->ok && legacy->code.empty() && legacy->error == "nope",
+         "legacy failures decode with an absent code");
+  const auto coded = control::decode_control_response(
+      control::encode_control_response(false, "renamed presentation", {}, "expired"));
+  expect(coded && !coded->ok && coded->code == "expired" &&
+             coded->error == "renamed presentation",
+         "code and text decode separately");
+  for (const auto text : {R"({"proto":"LayerC.Control","v":1,"ok":false,"code":4})",
+                          R"({"proto":"LayerC.Control","v":1,"ok":false,"code":null})"})
+    expect(!control::decode_control_response(text), "non-string codes are refused");
+  const auto request = control::parse_control_request_envelope(
+      control::encode_control_request(control::ControlCommand::reload, R"({"cursor":7})"));
+  expect(request && request->command == control::ControlCommand::reload && request->payload &&
+             request->payload->find("cursor") &&
+             request->payload->find("cursor")->as_integer() == 7,
+         "request envelope retains the typed payload");
+  expect(!control::parse_control_request_envelope(R"({"proto":"foreign","v":1,"cmd":"reload"})") &&
+             !control::parse_control_request_envelope(
+                 R"({"proto":"LayerC.Control","v":1,"cmd":3})"),
+         "foreign and malformed commands remain refused");
+  auto oversized = control::encode_control_request(control::ControlCommand::reload);
+  oversized.append(control::control_frame_limit, ' ');
+  expect(!control::parse_control_request_envelope(oversized),
+         "request envelopes retain the frame size bound");
+}
+
 void control_response_acceptance_contracts();
 void control_response_backpressure_contracts();
 void control_server_identity_contracts();
@@ -442,6 +482,7 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(control_protocol_contracts),
     LAYERC_TEST_CASE(control_dispatch_contracts),
     LAYERC_TEST_CASE(control_socket_contracts),
+    LAYERC_TEST_CASE(control_typed_envelope_contracts),
     LAYERC_TEST_CASE(control_response_acceptance_contracts),
     LAYERC_TEST_CASE(control_response_backpressure_contracts),
     LAYERC_TEST_CASE(control_server_identity_contracts))

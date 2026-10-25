@@ -876,5 +876,8 @@ using AutomationTraceParseResult =
     std::variant<std::vector<AutomationEvent>, AutomationError>;
 [[nodiscard]] AutomationTraceParseResult
 parse_layerc_trace(std::string_view source);
+// Optional caller allocation budget; not a change to the trace format limits.
+[[nodiscard]] AutomationTraceParseResult
+parse_layerc_trace(std::string_view source, std::size_t max_json_values);
 
 } // namespace layerc::core

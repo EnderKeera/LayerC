@@ -1,3 +1,4 @@
+#include "diagnostic_text.hpp"
 #include "tasks_window.hpp"
 #include "daemon_link.hpp"
 #include "x11_window.hpp"
@@ -57,7 +58,7 @@ std::vector<TaskCandidate> scan_tasks(std::string &error) {
 std::optional<TaskCandidate> matching_task(const std::vector<TaskCandidate> &tasks,
                                            const core::GameMatch &match) {
   platform::X11WindowScan scan;
-  scan.ewmh = true;
+  scan.authoritative = true;
   for (const auto &task : tasks)
     if (!task.pid || *task.pid != static_cast<std::uint32_t>(getpid()))
       scan.windows.push_back(snapshot(task));
@@ -143,7 +144,7 @@ void TasksWindow::refresh() {
   // On Wayland the scan sees XWayland clients only; say so, never imply all.
   if (const auto note = wayland_scope_note(query_daemon_status(), wayland_environment());
       !note.empty())
-    message += " " + note;
+    message = join_sentences(std::move(message), note);
   set_message(message);
   update_detail();
 }

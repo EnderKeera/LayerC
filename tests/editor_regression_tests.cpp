@@ -1,13 +1,16 @@
 #include "dialog_layout.hpp"
 #include "editor_layout_rules.hpp"
+#include "profile_edit.hpp"
 #include "editor_resource.h"
 #include "editor_window.hpp"
 #include "test_support.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -30,12 +33,18 @@ struct EditorWindowTestAccess {
   }
   static void edit(EditorWindow &editor) {
     auto &document = editor.document_;
-    document.profile().name += " edited";
-    document.visual().emplace();
-    document.visual()->profile_id = document.profile().id;
-    document.automation().emplace();
-    document.automation()->profile_id = document.profile().id;
-    editor.record_profile_change(EditorWindow::ChangeKind::immediate);
+    auto profile = document.profile();
+    profile.game.executable_name = "fixture.exe";
+    layerc::core::VisualProfile visual;
+    visual.profile_id = profile.id;
+    layerc::core::AutomationProfile automation;
+    automation.profile_id = profile.id;
+    document.start_draft(std::move(profile), layerc::editor::DraftOrigin::fresh,
+                         std::move(visual), std::move(automation));
+    const auto outcome = document.edit_profile(
+        [](auto &candidate) { candidate.name += " edited"; },
+        layerc::editor::DocumentChangeKind::immediate);
+    (void)editor.apply_edit(outcome, layerc::editor::DocumentChangeKind::immediate);
   }
   static void duplicate(EditorWindow &editor) {
     // There are no edit controls in this fixture; keep the prepared document.
@@ -59,6 +68,69 @@ struct EditorWindowTestAccess {
   }
   static HFONT owner_font(const EditorWindow &editor) {
     return editor.shell_.font;
+  }
+  static void bind_drag(EditorWindow &editor, const HWND owner,
+                        const HWND list, const HWND preview) {
+    editor.shell_.instance = GetModuleHandleW(nullptr);
+    editor.shell_.window = owner;
+    editor.panel_preview_.list = list;
+    editor.panel_preview_.window = preview;
+    editor.panel_preview_.controls_panel = 0;
+    editor.live_edit_.begin_session(preview, 42);
+  }
+  static void unbind_drag(EditorWindow &editor) {
+    editor.end_edit_on_window({}, false);
+    editor.shell_.window = nullptr;
+    editor.panel_preview_.list = nullptr;
+    editor.panel_preview_.window = nullptr;
+  }
+  static void receive_anchor(EditorWindow &editor,
+                             const layerc::core::LiveMessage &message) {
+    editor.handle_live_message(message);
+  }
+  static layerc::core::Panel effective_panel(EditorWindow &editor) {
+    return editor.preview_panel(editor.document_.profile().panels.front());
+  }
+  static RECT effective_rect(EditorWindow &editor) {
+    return editor.bar_preview_rect(editor.document_.profile().panels.front(),
+                                   RECT{0, 0, 400, 240});
+  }
+  static bool has_pending_anchor(EditorWindow &editor) {
+    return editor.panel_preview_.pending_anchor.has_value();
+  }
+  static void pending_anchor(EditorWindow &editor, const double x,
+                             const double y, const bool dragging = false) {
+    if (dragging) {
+      editor.panel_preview_.begin_drag({0, 0}, {0, 0});
+      editor.panel_preview_.mark_drag_moved();
+    }
+    editor.panel_preview_.pending_anchor = PanelPreview::PendingAnchor{
+        editor.document_.profile().panels.front().id, x, y};
+  }
+  static bool finish_anchor(EditorWindow &editor) {
+    return editor.commit_pending_anchor(true);
+  }
+  static void preview_message(EditorWindow &editor, const UINT message) {
+    (void)editor.handle_preview_message(editor.panel_preview_.window,
+                                         message, 0, 0);
+  }
+  static void end_drag_session(EditorWindow &editor) {
+    editor.end_edit_on_window({}, false);
+  }
+  static void clear_drag_session(EditorWindow &editor) {
+    editor.live_edit_.clear_session();
+  }
+  static void begin_drag_session(EditorWindow &editor, const HWND preview) {
+    editor.live_edit_.begin_session(preview, 42);
+  }
+  static layerc::core::ProfileRevision sent_revision(EditorWindow &editor) {
+    return editor.live_edit_.revision();
+  }
+  static layerc::core::ProfileRevision peer_revision(EditorWindow &editor) {
+    return editor.live_edit_.peer_revision();
+  }
+  static bool pending_live_profile(EditorWindow &editor) {
+    return editor.live_profile_pending_;
   }
   static void draw(EditorWindow &editor, const HWND dialog,
                    const DRAWITEMSTRUCT &item) {
@@ -411,5 +483,264 @@ void editor_binding_row_contracts() {
     expect(!capture_buttons_wrap(scaled(287), scaled(label), scaled(capture),
                                  scaled(gap), scaled(binding_field_floor)),
            "the binding row decision is independent of DPI scaling");
+  }
+}
+
+namespace {
+
+// Own only hidden windows and a value-owned document. Never initialize the
+// editor, connect a channel, open settings/stores, or synthesize input.
+class DragFixture final {
+public:
+  DragFixture() : editor_(std::make_unique<layerc::editor::EditorWindow>()) {
+    const auto instance = GetModuleHandleW(nullptr);
+    owner_ = CreateWindowExW(0, L"STATIC", L"Layer51 drag fixture",
+                              WS_OVERLAPPED, 0, 0, 500, 400, nullptr, nullptr,
+                              instance, nullptr);
+    list_ = CreateWindowExW(0, L"LISTBOX", L"", WS_CHILD | LBS_HASSTRINGS,
+                             0, 0, 100, 100, owner_, nullptr, instance, nullptr);
+    preview_ = CreateWindowExW(0, L"STATIC", L"Preview", WS_CHILD,
+                                100, 0, 400, 300, owner_, nullptr,
+                                instance, nullptr);
+    if (!expect(owner_ != nullptr && list_ != nullptr && preview_ != nullptr,
+                "drag fixture owns its hidden shell/list/preview"))
+      return;
+    SendMessageW(list_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ability"));
+    SendMessageW(list_, LB_SETITEMDATA, 0, 0);
+    SendMessageW(list_, LB_SETCURSEL, 0, 0);
+    auto profile = layerc::editor::make_new_profile();
+    profile.game.executable_name = "fixture.exe";
+    profile.cooldowns.resize(1);
+    profile.cooldowns.front().id = "ability";
+    profile.cooldowns.front().name = "Ability";
+    profile.cooldowns.front().duration = std::chrono::seconds(1);
+    profile.panels.resize(1);
+    auto &panel = profile.panels.front();
+    panel.style = layerc::core::PanelStyle::bar;
+    panel.layout = layerc::core::PanelLayout::row;
+    panel.id = "panel";
+    panel.name = "Ability";
+    panel.anchor_x = 0.4;
+    panel.anchor_y = 0.6;
+    panel.cooldown_ids = {profile.cooldowns.front().id};
+    profile.bindings.clear();
+    // Core validation requires at least one binding: give the fixture cooldown
+    // its own keyboard token so no old cooldown id survives the replacement.
+    profile.bindings.push_back(
+        {.cooldown_id = "ability",
+         .chord = layerc::core::InputChord{
+             {{layerc::core::InputDevice::keyboard, 0x12, 0}}}});
+    profile.hid_bindings.clear();
+    profile.cooldown_groups.clear();
+    if (const auto profile_error = layerc::core::validate_profile(profile)) {
+      expect(false, "drag fixture is a valid complete profile: " +
+                        profile_error->describe());
+      return;
+    }
+    layerc::core::VisualProfile visual;
+    visual.profile_id = profile.id;
+    layerc::core::AutomationProfile automation;
+    automation.profile_id = profile.id;
+    document().start_draft(std::move(profile), layerc::editor::DraftOrigin::fresh,
+                           std::move(visual), std::move(automation));
+    EditorWindowTestAccess::bind_drag(*editor_, owner_, list_, preview_);
+    ready_ = true;
+  }
+  ~DragFixture() {
+    if (ready_) EditorWindowTestAccess::unbind_drag(*editor_);
+    if (owner_ != nullptr) DestroyWindow(owner_);
+  }
+  DragFixture(const DragFixture &) = delete;
+  DragFixture &operator=(const DragFixture &) = delete;
+  bool ready() const noexcept { return ready_; }
+  layerc::editor::EditorWindow &editor() { return *editor_; }
+  layerc::editor::ProfileDocument &document() {
+    return EditorWindowTestAccess::document(*editor_);
+  }
+  HWND preview() const noexcept { return preview_; }
+  HWND other_owned_child() const noexcept { return list_; }
+  layerc::editor::EditorProfileSnapshot current() { return snapshot(document()); }
+private:
+  std::unique_ptr<layerc::editor::EditorWindow> editor_;
+  HWND owner_{};
+  HWND list_{};
+  HWND preview_{};
+  bool ready_{};
+};
+
+layerc::core::LiveMessage anchor_message(
+    const layerc::core::ProfileRevision revision, const double x, const double y,
+    const bool final = false,
+    const layerc::core::EditSessionId session = 42) {
+  layerc::core::LiveMessage message;
+  message.type = layerc::core::LiveMessageType::anchor_changed;
+  message.revision = revision;
+  message.edit_session = session;
+  message.panel_id = "panel";
+  message.anchor_x = x;
+  message.anchor_y = y;
+  message.final = final;
+  return message;
+}
+
+} // namespace
+
+void editor_drag_transaction_contracts() {
+  INITCOMMONCONTROLSEX controls{.dwSize = sizeof(controls),
+                                .dwICC = ICC_WIN95_CLASSES};
+  InitCommonControlsEx(&controls);
+  // 1. A remote non-final is a visible projection, never a document edit.
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    const auto before = fixture.current();
+    const auto original_rect = EditorWindowTestAccess::effective_rect(editor);
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(1, 0.8, 0.2));
+    const auto projected = EditorWindowTestAccess::effective_panel(editor);
+    const auto moved_rect = EditorWindowTestAccess::effective_rect(editor);
+    expect(fixture.current() == before && !fixture.document().dirty() &&
+               !fixture.document().can_undo(),
+           "drag1 non-final preserves complete profile/modules/history");
+    expect(projected.anchor_x == 0.8 && projected.anchor_y == 0.2 &&
+               moved_rect.left > original_rect.left &&
+               moved_rect.top < original_rect.top,
+           "drag1 preview geometry follows pending anchor, not stored anchor");
+  }
+  // 2. Remote final, duplicate final and capture loss yield exactly one edit.
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    const auto before = fixture.current();
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(1, 0.8, 0.2));
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(2, 0.75, 0.25, true));
+    const auto final = fixture.current();
+    expect(final.profile.panels.front().anchor_x == 0.75 &&
+               final.profile.panels.front().anchor_y == 0.25 &&
+               fixture.document().dirty() && fixture.document().can_undo() &&
+               !EditorWindowTestAccess::has_pending_anchor(editor),
+           "drag2 remote final accepts one transaction and clears pending");
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(2, 0.75, 0.25, true));
+    EditorWindowTestAccess::preview_message(editor, WM_CAPTURECHANGED);
+    expect(EditorWindowTestAccess::sent_revision(editor) == 0,
+           "drag2 incoming final is never echoed as an outgoing final anchor");
+    EditorWindowTestAccess::undo(editor);
+    expect(fixture.current() == before && !fixture.document().can_undo(),
+           "drag2 one undo restores exact baseline after repeated final/capture loss");
+    EditorWindowTestAccess::redo(editor);
+    expect(fixture.current() == final && !fixture.document().can_redo(),
+           "drag2 one redo restores exact final profile and modules");
+  }
+  // 3. Local final then capture-change/button-up must not double-record.
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    const auto before = fixture.current();
+    EditorWindowTestAccess::pending_anchor(editor, 0.65, 0.35, true);
+    expect(EditorWindowTestAccess::finish_anchor(editor),
+           "drag3 changed local final is accepted");
+    EditorWindowTestAccess::preview_message(editor, WM_CAPTURECHANGED);
+    EditorWindowTestAccess::preview_message(editor, WM_LBUTTONUP);
+    expect(fixture.document().profile().panels.front().anchor_x == 0.65 &&
+               fixture.document().profile().panels.front().anchor_y == 0.35,
+           "drag3 local coordinates become committed only at final");
+    EditorWindowTestAccess::undo(editor);
+    expect(fixture.current() == before && !fixture.document().can_undo(),
+           "drag3 local final/capture loss/button up create one undo step");
+  }
+  // 4. End/new discard projection and release only this preview's capture.
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    const auto before = fixture.current();
+    EditorWindowTestAccess::pending_anchor(editor, 0.9, 0.1, true);
+    if (expect(GetCapture() == nullptr,
+               "drag4 fixture starts without another current-thread capture")) {
+      SetCapture(fixture.preview());
+      expect(GetCapture() == fixture.preview(), "drag4 owns preview capture");
+      EditorWindowTestAccess::end_drag_session(editor);
+      expect(GetCapture() == nullptr, "drag4 ending releases its preview capture");
+    } else {
+      EditorWindowTestAccess::end_drag_session(editor);
+    }
+    expect(!EditorWindowTestAccess::has_pending_anchor(editor) &&
+               fixture.current() == before && !fixture.document().can_undo(),
+           "drag4 ending discards rather than commits pending coordinates");
+    EditorWindowTestAccess::begin_drag_session(editor, fixture.preview());
+    EditorWindowTestAccess::pending_anchor(editor, 0.95, 0.05);
+    if (GetCapture() == nullptr) {
+      SetCapture(fixture.other_owned_child());
+      EditorWindowTestAccess::end_drag_session(editor);
+      expect(GetCapture() == fixture.other_owned_child(),
+             "drag4 ending does not release a different owned child's capture");
+      if (GetCapture() == fixture.other_owned_child()) ReleaseCapture();
+    }
+    EditorWindowTestAccess::pending_anchor(editor, 0.9, 0.1);
+    EditorWindowTestAccess::new_profile(editor, false);
+    expect(!EditorWindowTestAccess::has_pending_anchor(editor) &&
+               !fixture.document().can_undo() &&
+               fixture.document().profile().panels.front().anchor_x == 0.5 &&
+               fixture.document().profile().panels.front().anchor_y == 0.75,
+           "drag4 new document cannot inherit previous panel id/coordinates");
+  }
+  // 5. Invalid messages neither replace a valid projection nor poison revision.
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    const auto before = fixture.current();
+    EditorWindowTestAccess::clear_drag_session(editor);
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(1, 0.8, 0.2, false, 0));
+    expect(!EditorWindowTestAccess::has_pending_anchor(editor) && fixture.current() == before,
+           "drag5 zero session cannot accept anchor messages");
+    EditorWindowTestAccess::begin_drag_session(editor, fixture.preview());
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(1, 0.8, 0.2));
+    std::vector<layerc::core::LiveMessage> invalid{
+        anchor_message(2, 0.5, 0.5, false, 7),
+        anchor_message(1, 0.5, 0.5),
+        anchor_message(100, std::numeric_limits<double>::quiet_NaN(), 0.5),
+        anchor_message(100, 0.5, std::numeric_limits<double>::infinity()),
+        anchor_message(100, -0.1, 0.5),
+        anchor_message(100, 0.5, 1.1)};
+    auto missing = anchor_message(100, 0.5, 0.5);
+    missing.panel_id = "missing";
+    invalid.push_back(std::move(missing));
+    for (const auto &message : invalid) {
+      EditorWindowTestAccess::receive_anchor(editor, message);
+      const auto projected = EditorWindowTestAccess::effective_panel(editor);
+      expect(fixture.current() == before && !fixture.document().dirty() &&
+                 !fixture.document().can_undo() && projected.anchor_x == 0.8 &&
+                 projected.anchor_y == 0.2 &&
+                 EditorWindowTestAccess::peer_revision(editor) == 1,
+             "drag5 invalid/stale input preserves valid pending snapshot/revision");
+    }
+    EditorWindowTestAccess::receive_anchor(editor, anchor_message(2, 0.7, 0.3));
+    const auto projected = EditorWindowTestAccess::effective_panel(editor);
+    expect(projected.anchor_x == 0.7 && projected.anchor_y == 0.3 &&
+               EditorWindowTestAccess::peer_revision(editor) == 2 &&
+               fixture.current() == before,
+           "drag5 invalid high revisions cannot poison next valid lower revision");
+  }
+  // 6. Returning to the original coordinate is no history or publish event.
+  {
+    DragFixture fixture;
+    if (!fixture.ready()) return;
+    auto &editor = fixture.editor();
+    const auto before = fixture.current();
+    const auto revision = EditorWindowTestAccess::sent_revision(editor);
+    const auto live_pending = EditorWindowTestAccess::pending_live_profile(editor);
+    EditorWindowTestAccess::pending_anchor(editor, 0.4, 0.6, true);
+    expect(!EditorWindowTestAccess::finish_anchor(editor),
+           "drag6 unchanged gesture is not an accepted change");
+    EditorWindowTestAccess::preview_message(editor, WM_CAPTURECHANGED);
+    expect(fixture.current() == before && !fixture.document().dirty() &&
+               !fixture.document().can_undo() &&
+               !EditorWindowTestAccess::has_pending_anchor(editor) &&
+               EditorWindowTestAccess::sent_revision(editor) == revision &&
+               EditorWindowTestAccess::pending_live_profile(editor) == live_pending,
+           "drag6 unchanged gesture records/publishes/notifies nothing");
   }
 }

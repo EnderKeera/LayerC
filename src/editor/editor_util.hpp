@@ -24,6 +24,7 @@ using layerc::platform::fill_solid_rect;
 using layerc::platform::frame_solid_rect;
 using layerc::platform::native_color_ref;
 using layerc::platform::native_rgb_value;
+using layerc::platform::native_window_dpi;
 using layerc::platform::outline_rect;
 using layerc::platform::set_dark_title_bar;
 

@@ -173,6 +173,59 @@ std::optional<TemplateImage> template_image_from_rgba(
   return image;
 }
 
+NormalizedRegion expanded_template_search_region(const NormalizedRegion selected) {
+  const auto expand = [](const double origin, const double extent) {
+    const double expanded = std::min(1.0, extent * 2.0);
+    const double center = origin + extent * 0.5;
+    return std::pair{std::clamp(center - expanded * 0.5, 0.0, 1.0 - expanded),
+                     expanded};
+  };
+  const auto [x, width] = expand(selected.x, selected.width);
+  const auto [y, height] = expand(selected.y, selected.height);
+  return {x, y, width, height};
+}
+
+std::optional<TemplateImage>
+template_from_selection(const PixelFrameView frame,
+                        const NormalizedRegion &selection) {
+  if (!frame.valid()) return std::nullopt;
+  const auto [left, top, right, bottom] =
+      to_pixel_bounds(selection, frame.width, frame.height);
+  if (right <= left || bottom <= top ||
+      static_cast<std::uint64_t>(right - left) * (bottom - top) <
+          minimum_mask_pixels)
+    return std::nullopt;
+  const auto source_width = right - left, source_height = bottom - top;
+  const auto source_offset = [](const std::uint32_t index,
+                                const std::uint32_t extent,
+                                const std::uint32_t source_extent) {
+    return std::min(source_extent - 1,
+                    static_cast<std::uint32_t>(
+                        (static_cast<std::uint64_t>(index) * 2U + 1U) *
+                        source_extent / (static_cast<std::uint64_t>(extent) * 2U)));
+  };
+  const double factor =
+      std::min(1.0, static_cast<double>(max_template_axis) /
+                        std::max(source_width, source_height));
+  TemplateImage image;
+  image.width = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(std::lround(source_width * factor)));
+  image.height = std::max<std::uint32_t>(
+      1, static_cast<std::uint32_t>(std::lround(source_height * factor)));
+  image.pixels.resize(static_cast<std::size_t>(image.width) * image.height);
+  image.alpha.assign(image.pixels.size(), 255);
+  for (std::uint32_t y = 0; y < image.height; ++y) {
+    const auto source_y = top + source_offset(y, image.height, source_height);
+    for (std::uint32_t x = 0; x < image.width; ++x) {
+      const auto source_x = left + source_offset(x, image.width, source_width);
+      image.pixels[static_cast<std::size_t>(y) * image.width + x] =
+          frame.pixels[static_cast<std::size_t>(source_y) * frame.stride() +
+                       source_x];
+    }
+  }
+  return image;
+}
+
 bool template_image_has_structure(const TemplateImage &image) noexcept {
   if (!image.valid()) return false;
   double mean{};

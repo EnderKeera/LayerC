@@ -27,7 +27,7 @@ ProfileResult ProfileReader::read() {
 
   GameProfile profile;
   const auto schema_version =
-      fields_.integer(root_, keys::schema_version, "$", 1,
+      fields_.integer(root_, keys::root::schema_version, "$", 1,
                       profile_schema_version, json::Required::yes);
   if (!schema_version.has_value()) {
     return failure();
@@ -36,43 +36,43 @@ ProfileResult ProfileReader::read() {
   // separately so only an explicit Save can approve the V2.2 boundary.
   profile.schema_version = profile_schema_version;
 
-  if (!fields_.string(root_, keys::id, "$", profile.id,
+  if (!fields_.string(root_, keys::root::id, "$", profile.id,
                       json::Required::yes, json::EmptyString::allow) ||
-      !fields_.string(root_, keys::name, "$", profile.name,
+      !fields_.string(root_, keys::root::name, "$", profile.name,
                       json::Required::yes, json::EmptyString::allow)) {
     return failure();
   }
-  fields_.boolean(root_, keys::enabled, "$", profile.enabled,
+  fields_.boolean(root_, keys::root::enabled, "$", profile.enabled,
                   json::Required::no);
   if (!fields_.ok()) {
     return failure();
   }
 
   const auto *game =
-      fields_.object(root_, keys::game, "$", json::Required::yes);
+      fields_.object(root_, keys::root::game, "$", json::Required::yes);
   if (game == nullptr) {
     return failure();
   }
-  fields_.string(*game, keys::executable_path, "$.game",
+  fields_.string(*game, keys::game::executable_path, "$.game",
                  profile.game.executable_path, json::Required::no,
                  json::EmptyString::allow);
-  fields_.string(*game, keys::executable_name, "$.game",
+  fields_.string(*game, keys::game::executable_name, "$.game",
                  profile.game.executable_name, json::Required::no,
                  json::EmptyString::allow);
-  fields_.string(*game, keys::window_class, "$.game",
+  fields_.string(*game, keys::game::window_class, "$.game",
                  profile.game.window_class, json::Required::no,
                  json::EmptyString::allow);
-  fields_.string(*game, keys::window_title, "$.game",
+  fields_.string(*game, keys::game::window_title, "$.game",
                  profile.game.window_title, json::Required::no,
                  json::EmptyString::allow);
-  fields_.boolean(*game, keys::global, "$.game", profile.game.global,
+  fields_.boolean(*game, keys::game::global, "$.game", profile.game.global,
                   json::Required::no);
   if (!fields_.ok()) {
     return failure();
   }
 
   std::string visual_runtime = "inline";
-  fields_.string(root_, keys::visual_runtime, "$", visual_runtime,
+  fields_.string(root_, keys::root::visual_runtime, "$", visual_runtime,
                  json::Required::no, json::EmptyString::allow);
   if (!fields_.ok()) return failure();
   const auto parsed_visual_runtime =
@@ -104,23 +104,23 @@ bool ProfileReader::read_hid_device(const json::Value &device,
                                     const std::string &path,
                                     HidDeviceSelector &out) {
   const auto vid =
-      fields_.integer(device, keys::vid, path, 0, 65'535, json::Required::yes);
+      fields_.integer(device, keys::device::vid, path, 0, 65'535, json::Required::yes);
   const auto pid =
-      fields_.integer(device, keys::pid, path, 0, 65'535, json::Required::yes);
-  const auto version = fields_.integer(device, keys::version, path, 0, 65'535,
+      fields_.integer(device, keys::device::pid, path, 0, 65'535, json::Required::yes);
+  const auto version = fields_.integer(device, keys::device::version, path, 0, 65'535,
                                        json::Required::yes);
-  const auto usage_page = fields_.integer(device, keys::usage_page, path, 0,
+  const auto usage_page = fields_.integer(device, keys::device::usage_page, path, 0,
                                           65'535, json::Required::yes);
   const auto usage =
-      fields_.integer(device, keys::usage, path, 0, 65'535, json::Required::yes);
-  const auto slot = fields_.integer(device, keys::stable_slot, path, 0, 65'535,
+      fields_.integer(device, keys::device::usage, path, 0, 65'535, json::Required::yes);
+  const auto slot = fields_.integer(device, keys::device::stable_slot, path, 0, 65'535,
                                     json::Required::no, 1);
   if (!vid.has_value() || !pid.has_value() || !version.has_value() ||
       !usage_page.has_value() || !usage.has_value() || !slot.has_value() ||
-      !fields_.string(device, keys::descriptor_hash, path, out.descriptor_hash,
+      !fields_.string(device, keys::device::descriptor_hash, path, out.descriptor_hash,
                       json::Required::yes, json::EmptyString::allow))
     return false;
-  fields_.string(device, keys::serial, path, out.serial, json::Required::no,
+  fields_.string(device, keys::device::serial, path, out.serial, json::Required::no,
                  json::EmptyString::allow);
   if (!fields_.ok()) return false;
   out.vendor_id = static_cast<std::uint16_t>(*vid);
@@ -136,21 +136,21 @@ bool ProfileReader::read_hid_control(const json::Value &control,
                                      const std::string &path,
                                      HidControlBinding &out) {
   const auto report_id =
-      fields_.integer(control, keys::report_id, path, 0, 255, json::Required::yes);
-  const auto control_page = fields_.integer(control, keys::usage_page, path, 0,
+      fields_.integer(control, keys::control::report_id, path, 0, 255, json::Required::yes);
+  const auto control_page = fields_.integer(control, keys::control::usage_page, path, 0,
                                             65'535, json::Required::yes);
-  const auto control_usage = fields_.integer(control, keys::usage, path, 0,
+  const auto control_usage = fields_.integer(control, keys::control::usage, path, 0,
                                              65'535, json::Required::yes);
-  const auto link = fields_.integer(control, keys::link_collection, path, 0,
+  const auto link = fields_.integer(control, keys::control::link_collection, path, 0,
                                     65'535, json::Required::no, 0);
   const auto discrete = fields_.integer(
-      control, keys::value, path, std::numeric_limits<std::int32_t>::min(),
+      control, keys::control::value, path, std::numeric_limits<std::int32_t>::min(),
       std::numeric_limits<std::int32_t>::max(), json::Required::no, 0);
   constexpr auto lowest = std::numeric_limits<double>::lowest();
   constexpr auto highest = std::numeric_limits<double>::max();
-  const auto threshold = fields_.number(control, keys::threshold, path, lowest,
+  const auto threshold = fields_.number(control, keys::control::threshold, path, lowest,
                                         highest, json::Required::no, 0.5);
-  const auto hysteresis = fields_.number(control, keys::hysteresis, path,
+  const auto hysteresis = fields_.number(control, keys::control::hysteresis, path,
                                          lowest, highest, json::Required::no,
                                          0.1);
   if (!report_id.has_value() || !control_page.has_value() ||
@@ -167,7 +167,7 @@ bool ProfileReader::read_hid_control(const json::Value &control,
   out.hysteresis = *hysteresis;
 
   std::string activation;
-  if (!fields_.string(control, keys::activation, path, activation,
+  if (!fields_.string(control, keys::control::activation, path, activation,
                       json::Required::yes, json::EmptyString::allow))
     return false;
   const auto parsed_activation =
@@ -181,7 +181,7 @@ bool ProfileReader::read_hid_control(const json::Value &control,
 
 bool ProfileReader::read_hid_bindings(GameProfile &profile,
                                       const std::uint32_t source_schema) {
-  const auto *value = root_.find(keys::hid_bindings);
+  const auto *value = root_.find(keys::root::hid_bindings);
   if (value == nullptr) {
     if (source_schema >= 3)
       return fields_.fail("$.hidBindings",
@@ -201,7 +201,7 @@ bool ProfileReader::read_hid_bindings(GameProfile &profile,
     if (!entry.is_object())
       return fields_.fail(path, "HID binding must be an object");
     HidControlBinding binding;
-    if (!fields_.string(entry, keys::id, path, binding.id,
+    if (!fields_.string(entry, keys::hid::id, path, binding.id,
                         json::Required::yes, json::EmptyString::allow))
       return false;
     // Tokens name a binding by its 1-based position. A duplicate keeps the
@@ -211,14 +211,14 @@ bool ProfileReader::read_hid_bindings(GameProfile &profile,
                                static_cast<std::uint16_t>(index + 1U));
 
     const auto *device =
-        fields_.object(entry, keys::device, path, json::Required::yes);
+        fields_.object(entry, keys::hid::device, path, json::Required::yes);
     const auto *control =
-        fields_.object(entry, keys::control, path, json::Required::yes);
+        fields_.object(entry, keys::hid::control, path, json::Required::yes);
     if (device == nullptr || control == nullptr) return false;
     if (!read_hid_device(*device, path + ".device", binding.device) ||
         !read_hid_control(*control, path + ".control", binding))
       return false;
-    fields_.boolean(entry, keys::allow_system_class, path,
+    fields_.boolean(entry, keys::hid::allow_system_class, path,
                     binding.allow_system_class, json::Required::no);
     if (!fields_.ok()) return false;
     binding.extra_fields = unknown_profile_fields(entry, ProfileObject::hid);
@@ -231,7 +231,7 @@ bool ProfileReader::read_hid_bindings(GameProfile &profile,
 
 bool ProfileReader::read_modules(GameProfile &profile,
                                  const std::uint32_t source_schema) {
-  const auto *value = root_.find(keys::modules);
+  const auto *value = root_.find(keys::root::modules);
   if (value == nullptr) {
     if (source_schema >= 3)
       return fields_.fail("$.modules", "schema 3 requires module metadata");
@@ -246,7 +246,7 @@ bool ProfileReader::read_modules(GameProfile &profile,
     if (!entry.is_object())
       return fields_.fail(path, "module descriptor must be an object");
     std::string kind;
-    if (!fields_.string(entry, keys::kind, path, kind, json::Required::yes,
+    if (!fields_.string(entry, keys::module::kind, path, kind, json::Required::yes,
                         json::EmptyString::allow))
       return false;
     ProfileModule module;
@@ -258,7 +258,7 @@ bool ProfileReader::read_modules(GameProfile &profile,
                           "module requires a newer profile schema");
     module.kind = descriptor->kind;
     const auto version = fields_.integer(
-        entry, keys::schema_version, path, 0,
+        entry, keys::module::schema_version, path, 0,
         std::numeric_limits<std::uint32_t>::max(), json::Required::yes);
     if (!version.has_value()) return false;
     module.schema_version = static_cast<std::uint32_t>(*version);
@@ -271,7 +271,7 @@ bool ProfileReader::read_modules(GameProfile &profile,
 bool ProfileReader::read_cooldowns(GameProfile &profile,
                                    const std::uint32_t source_schema) {
   const auto *values =
-      fields_.array(root_, keys::cooldowns, "$", json::Required::yes);
+      fields_.array(root_, keys::root::cooldowns, "$", json::Required::yes);
   if (values == nullptr) {
     return false;
   }
@@ -285,14 +285,14 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
     }
 
     CooldownDefinition definition;
-    if (!fields_.string(value, keys::id, path, definition.id,
+    if (!fields_.string(value, keys::cooldown::id, path, definition.id,
                         json::Required::yes, json::EmptyString::allow) ||
-        !fields_.string(value, keys::name, path, definition.name,
+        !fields_.string(value, keys::cooldown::name, path, definition.name,
                         json::Required::yes, json::EmptyString::allow)) {
       return false;
     }
-    const auto duration = read_duration(value, path);
-    const auto charges = read_charges(value, path);
+    const auto duration = read_duration(value, path, keys::cooldown::duration_ms);
+    const auto charges = read_charges(value, path, keys::cooldown::max_charges);
     if (!duration.has_value() || !charges.has_value()) {
       return false;
     }
@@ -300,11 +300,11 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
     definition.max_charges = static_cast<std::uint32_t>(*charges);
 
     std::string retrigger = "ignore";
-    fields_.string(value, keys::retrigger, path, retrigger,
+    fields_.string(value, keys::cooldown::retrigger, path, retrigger,
                    json::Required::no, json::EmptyString::allow);
     if (source_schema >= 4) {
       std::string recovery;
-      if (!fields_.string(value, keys::recovery, path, recovery,
+      if (!fields_.string(value, keys::cooldown::recovery, path, recovery,
                           json::Required::yes, json::EmptyString::allow))
         return false;
       const auto parsed_recovery =
@@ -317,7 +317,7 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
       // Schema <4 expressed recovery as a stackCharges boolean; derive the
       // canonical field here so runtime code never sees the mirror.
       bool stack_charges{};
-      fields_.boolean(value, keys::stack_charges, path, stack_charges,
+      fields_.boolean(value, keys::cooldown::stack_charges, path, stack_charges,
                       json::Required::no);
       definition.recovery = stack_charges ? RecoveryMode::sequential
                                           : RecoveryMode::single;
@@ -337,23 +337,25 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
 }
 
 std::optional<std::int64_t>
-ProfileReader::read_duration(const json::Value &value, const std::string &path) {
-  return fields_.integer(value, keys::duration_ms, path,
+ProfileReader::read_duration(const json::Value &value, const std::string &path,
+                             const std::string_view key) {
+  return fields_.integer(value, key, path,
                          std::numeric_limits<std::int64_t>::min(),
                          std::numeric_limits<std::int64_t>::max(),
                          json::Required::yes);
 }
 
 std::optional<std::int64_t>
-ProfileReader::read_charges(const json::Value &value, const std::string &path) {
-  return fields_.integer(value, keys::max_charges, path, 0,
+ProfileReader::read_charges(const json::Value &value, const std::string &path,
+                            const std::string_view key) {
+  return fields_.integer(value, key, path, 0,
                          std::numeric_limits<std::uint32_t>::max(),
                          json::Required::no, 1);
 }
 
 bool ProfileReader::read_cooldown_groups(
     GameProfile &profile, const std::uint32_t source_schema) {
-  const auto *values = root_.find(keys::cooldown_groups);
+  const auto *values = root_.find(keys::root::cooldown_groups);
   if (values == nullptr) {
     if (source_schema >= 4)
       return fields_.fail("$.cooldownGroups",
@@ -372,14 +374,14 @@ bool ProfileReader::read_cooldown_groups(
     if (!value.is_object())
       return fields_.fail(path, "cooldown group must be an object");
     CooldownGroup group;
-    if (!fields_.string(value, keys::id, path, group.id, json::Required::yes,
+    if (!fields_.string(value, keys::group::id, path, group.id, json::Required::yes,
                         json::EmptyString::allow) ||
-        !fields_.string(value, keys::name, path, group.name,
+        !fields_.string(value, keys::group::name, path, group.name,
                         json::Required::yes, json::EmptyString::allow))
       return false;
 
     std::string mode;
-    if (!fields_.string(value, keys::mode, path, mode, json::Required::yes,
+    if (!fields_.string(value, keys::group::mode, path, mode, json::Required::yes,
                         json::EmptyString::allow))
       return false;
     const auto parsed_mode =
@@ -390,7 +392,7 @@ bool ProfileReader::read_cooldown_groups(
     group.mode = *parsed_mode;
 
     const auto *members =
-        fields_.array(value, keys::cooldowns, path, json::Required::yes);
+        fields_.array(value, keys::group::cooldowns, path, json::Required::yes);
     if (members == nullptr) return false;
     for (std::size_t item{}; item < members->size(); ++item) {
       const auto item_path = path + ".cooldowns[" + std::to_string(item) + "]";
@@ -400,15 +402,17 @@ bool ProfileReader::read_cooldown_groups(
     }
 
     if (group.mode == CooldownGroupMode::shared_pool) {
-      const auto duration = read_duration(value, path);
-      const auto charges = read_charges(value, path);
+      const auto duration =
+          read_duration(value, path, keys::group::duration_ms);
+      const auto charges =
+          read_charges(value, path, keys::group::max_charges);
       std::string recovery;
       std::string retrigger = "ignore";
       if (!duration.has_value() || !charges.has_value() ||
-          !fields_.string(value, keys::recovery, path, recovery,
+          !fields_.string(value, keys::group::recovery, path, recovery,
                           json::Required::yes, json::EmptyString::allow))
         return false;
-      fields_.string(value, keys::retrigger, path, retrigger,
+      fields_.string(value, keys::group::retrigger, path, retrigger,
                      json::Required::no, json::EmptyString::allow);
       if (!fields_.ok()) return false;
       group.duration = Milliseconds(*duration);
@@ -433,7 +437,7 @@ bool ProfileReader::read_cooldown_groups(
 }
 bool ProfileReader::read_panels(GameProfile &profile) {
   const auto *values =
-      fields_.array(root_, keys::panels, "$", json::Required::yes);
+      fields_.array(root_, keys::root::panels, "$", json::Required::yes);
   if (values == nullptr) {
     return false;
   }
@@ -447,15 +451,15 @@ bool ProfileReader::read_panels(GameProfile &profile) {
     }
 
     Panel panel;
-    if (!fields_.string(value, keys::id, path, panel.id,
+    if (!fields_.string(value, keys::panel::id, path, panel.id,
                         json::Required::yes, json::EmptyString::allow) ||
-        !fields_.string(value, keys::name, path, panel.name,
+        !fields_.string(value, keys::panel::name, path, panel.name,
                         json::Required::yes, json::EmptyString::allow)) {
       return false;
     }
 
     std::string layout = "row";
-    fields_.string(value, keys::layout, path, layout, json::Required::no,
+    fields_.string(value, keys::panel::layout, path, layout, json::Required::no,
                    json::EmptyString::allow);
     if (!fields_.ok()) {
       return false;
@@ -469,7 +473,7 @@ bool ProfileReader::read_panels(GameProfile &profile) {
     panel.layout = *parsed_layout;
 
     std::string style = "card";
-    fields_.string(value, keys::style, path, style, json::Required::no,
+    fields_.string(value, keys::panel::style, path, style, json::Required::no,
                    json::EmptyString::allow);
     if (!fields_.ok()) {
       return false;
@@ -481,7 +485,7 @@ bool ProfileReader::read_panels(GameProfile &profile) {
     }
     panel.style = *parsed_style;
 
-    const auto *bar = value.find(keys::bar);
+    const auto *bar = value.find(keys::panel::bar);
     if (bar != nullptr) {
       if (!bar->is_object()) {
         return fields_.fail(path + ".bar", "expected object");
@@ -489,10 +493,10 @@ bool ProfileReader::read_panels(GameProfile &profile) {
       panel.bar.extra_fields = unknown_profile_fields(*bar, ProfileObject::bar);
       const auto bar_path = path + ".bar";
       constexpr std::int64_t largest = std::numeric_limits<std::uint32_t>::max();
-      const auto width = fields_.integer(*bar, keys::width, bar_path, 0,
+      const auto width = fields_.integer(*bar, keys::bar::width, bar_path, 0,
                                          largest, json::Required::no,
                                          panel.bar.width);
-      const auto height = fields_.integer(*bar, keys::height, bar_path, 0,
+      const auto height = fields_.integer(*bar, keys::bar::height, bar_path, 0,
                                           largest, json::Required::no,
                                           panel.bar.height);
       if (!width.has_value() || !height.has_value()) {
@@ -506,13 +510,13 @@ bool ProfileReader::read_panels(GameProfile &profile) {
                                               json::Required::no, color))
           color = *parsed;
       };
-      read_color(keys::fill_color, panel.bar.fill_color);
-      read_color(keys::background_color, panel.bar.background_color);
-      read_color(keys::border_color, panel.bar.border_color);
-      read_color(keys::text_color, panel.bar.text_color);
-      fields_.boolean(*bar, keys::show_text, bar_path,
+      read_color(keys::bar::fill_color, panel.bar.fill_color);
+      read_color(keys::bar::background_color, panel.bar.background_color);
+      read_color(keys::bar::border_color, panel.bar.border_color);
+      read_color(keys::bar::text_color, panel.bar.text_color);
+      fields_.boolean(*bar, keys::bar::show_text, bar_path,
                       panel.bar.show_text, json::Required::no);
-      fields_.boolean(*bar, keys::hide_when_ready, bar_path,
+      fields_.boolean(*bar, keys::bar::hide_when_ready, bar_path,
                       panel.bar.hide_when_ready, json::Required::no);
       if (!fields_.ok()) {
         return false;
@@ -521,9 +525,9 @@ bool ProfileReader::read_panels(GameProfile &profile) {
 
     constexpr auto lowest = std::numeric_limits<double>::lowest();
     constexpr auto highest = std::numeric_limits<double>::max();
-    const auto x = fields_.number(value, keys::anchor_x, path, lowest,
+    const auto x = fields_.number(value, keys::panel::anchor_x, path, lowest,
                                   highest, json::Required::no, 0.5);
-    const auto y = fields_.number(value, keys::anchor_y, path, lowest,
+    const auto y = fields_.number(value, keys::panel::anchor_y, path, lowest,
                                   highest, json::Required::no, 0.5);
     if (!x.has_value() || !y.has_value()) {
       return false;
@@ -532,7 +536,7 @@ bool ProfileReader::read_panels(GameProfile &profile) {
     panel.anchor_y = *y;
 
     const auto *cooldowns =
-        fields_.array(value, keys::cooldowns, path, json::Required::yes);
+        fields_.array(value, keys::panel::cooldowns, path, json::Required::yes);
     if (cooldowns == nullptr) {
       return false;
     }
@@ -554,7 +558,7 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
                                      const std::string &token_path,
                                      InputBinding &binding) {
   std::string device;
-  if (!fields_.string(token_value, keys::device, token_path, device,
+  if (!fields_.string(token_value, keys::token::device, token_path, device,
                       json::Required::yes, json::EmptyString::allow))
     return false;
   InputToken token;
@@ -565,7 +569,7 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
                         "expected keyboard, mouse, controller, or hid");
   if (token.device == InputDevice::generic_hid) {
     std::string binding_id;
-    if (!fields_.string(token_value, keys::binding_id, token_path, binding_id,
+    if (!fields_.string(token_value, keys::token::binding_id, token_path, binding_id,
                         json::Required::yes, json::EmptyString::allow))
       return false;
     // An unknown ID resolves to position 0, which names no binding;
@@ -573,9 +577,9 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
     const auto found = hid_binding_ids_.find(binding_id);
     token.code = found == hid_binding_ids_.end() ? 0 : found->second;
   } else {
-    const auto code = fields_.integer(token_value, keys::code, token_path, 0,
+    const auto code = fields_.integer(token_value, keys::token::code, token_path, 0,
                                       65'535, json::Required::yes);
-    const auto controller = fields_.integer(token_value, keys::controller_index,
+    const auto controller = fields_.integer(token_value, keys::token::controller_index,
                                             token_path, 0, 255,
                                             json::Required::no, 0);
     if (!code.has_value() || !controller.has_value()) return false;
@@ -590,7 +594,7 @@ bool ProfileReader::read_chord_token(const json::Value &token_value,
 
 bool ProfileReader::read_bindings(GameProfile &profile) {
   const auto *values =
-      fields_.array(root_, keys::bindings, "$", json::Required::yes);
+      fields_.array(root_, keys::root::bindings, "$", json::Required::yes);
   if (values == nullptr) return false;
 
   profile.bindings.reserve(values->size());
@@ -601,11 +605,11 @@ bool ProfileReader::read_bindings(GameProfile &profile) {
       return fields_.fail(path, "binding must be an object");
 
     InputBinding binding;
-    if (!fields_.string(value, keys::cooldown_id, path, binding.cooldown_id,
+    if (!fields_.string(value, keys::binding::cooldown_id, path, binding.cooldown_id,
                         json::Required::yes, json::EmptyString::allow))
       return false;
     const auto *chord =
-        fields_.array(value, keys::chord, path, json::Required::yes);
+        fields_.array(value, keys::binding::chord, path, json::Required::yes);
     if (chord == nullptr) return false;
 
     for (std::size_t token_index = 0; token_index < chord->size();

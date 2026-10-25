@@ -5,6 +5,7 @@
 
 #include "layerc/capture/window_capture.hpp"
 #include "layerc/core/calibration.hpp"
+#include "layerc/core/calibration_readiness.hpp"
 #include "layerc/core/template_matcher.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/visual.hpp"
@@ -78,6 +79,8 @@ private:
   void update_template_mask(POINT point, bool opaque);
   void refresh_template_reference_label();
   void update_match_status(bool force = true);
+  [[nodiscard]] bool sampling_ready() const;
+  void refresh_apply_readiness();
   bool apply();
 
   [[nodiscard]] int integer_control(int id, int fallback, int minimum,
@@ -116,6 +119,7 @@ private:
   MaskEditor mask_editor_;
   std::vector<layerc::core::TemplateImage> template_images_;
   layerc::core::CpuTemplateMatcher template_matcher_;
+  layerc::core::CalibrationReadiness readiness_;
   ULONGLONG next_template_match_at_{};
   bool fallback_snapshot_{};
   bool fallback_started_{};

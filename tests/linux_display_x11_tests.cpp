@@ -1,15 +1,26 @@
 #include "display_adapters.hpp"
-#include "x11_adapters.hpp"
+#include "session_engine.hpp"
+#include "x11_provider.hpp"
 #include "test_support.hpp"
 
+#include <type_traits>
+
 namespace {
+template <typename T>
+constexpr bool pinned_provider = !std::is_copy_constructible_v<T> &&
+    !std::is_copy_assignable_v<T> && !std::is_move_constructible_v<T> &&
+    !std::is_move_assignable_v<T>;
+static_assert(pinned_provider<layerc::daemon::X11Provider>);
+static_assert(pinned_provider<layerc::daemon::X11OverlayBackend>);
+static_assert(pinned_provider<layerc::daemon::X11CaptureFactory>);
 using layerc::test::expect;
 void unchanged_x11_provider() {
   layerc::test::require_x11();
   const layerc::test::ScopedEnvironment backend("LAYERC_DISPLAY_BACKEND", "x11");
   const layerc::test::ScopedEnvironment no_wl("WAYLAND_DISPLAY", std::nullopt);
   const layerc::test::ScopedEnvironment no_socket("WAYLAND_SOCKET", std::nullopt);
-  layerc::daemon::X11Adapters baseline;
+  layerc::daemon::X11Provider provider;
+  layerc::daemon::SessionEngine baseline;
   layerc::daemon::DisplayAdapters current;
   layerc::runtime::DaemonKernel old_kernel(baseline.runtime_services());
   layerc::runtime::DaemonKernel kernel(current.runtime_services());
@@ -20,10 +31,14 @@ void unchanged_x11_provider() {
         layerc::runtime::CapabilityAvailability::unavailable, {}, {}});
   status.capabilities = old_status.capabilities;
   std::vector<std::string> old_diagnostics, diagnostics;
-  baseline.start(old_loop, old_status, old_diagnostics);
+  provider.start(old_loop, old_status, old_diagnostics);
   current.start(loop, status, diagnostics);
   expect(status.x11.connected && status.x11 == old_status.x11, "seam preserves every native X11 probe");
-  baseline.refresh({}, true, old_kernel, old_status, old_diagnostics);
+  const layerc::daemon::DisplayRoute route{
+      .windows = &provider, .monitors = &provider,
+      .overlay = provider.overlay(), .x11_capture = provider.capture(),
+      .inputs = {&provider}};
+  baseline.refresh({}, true, route, old_kernel, old_status, old_diagnostics);
   current.refresh({}, true, kernel, status, diagnostics);
   expect(status.capabilities == old_status.capabilities && old_diagnostics == diagnostics,
          "X11 availability, demand, diagnostics and session behavior stay unchanged");

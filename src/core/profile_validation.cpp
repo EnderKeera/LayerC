@@ -268,4 +268,11 @@ std::optional<ProfileError> validate_profile(const GameProfile &profile) {
   return detail::validate_profile_extensions(profile);
 }
 
+bool has_binding(const GameProfile &profile,
+                 const std::string_view cooldown_id) noexcept {
+  return std::ranges::any_of(profile.bindings, [&](const InputBinding &binding) {
+    return binding.cooldown_id == cooldown_id;
+  });
+}
+
 } // namespace layerc::core

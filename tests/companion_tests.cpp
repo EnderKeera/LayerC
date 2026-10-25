@@ -166,7 +166,8 @@ static void test_companion_shared_pool_runtime_view() {
   const std::vector<CooldownDefinition> definitions{
       {.id = "a", .name = "A", .duration = 1s},
       {.id = "b", .name = "B", .duration = 10s}};
-  const std::vector<Panel> panels{{.id = "panel", .cooldown_ids = {"a", "b"}}};
+  const std::vector<Panel> panels{
+      {.id = "panel", .name = {}, .bar = {}, .cooldown_ids = {"a", "b"}}};
   const TimePoint start{};
   for (const auto recovery : {RecoveryMode::single, RecoveryMode::sequential,
                               RecoveryMode::parallel}) {
@@ -222,9 +223,11 @@ static void test_companion_bridge_rejects_invalid_not_oversize() {
   using namespace std::chrono_literals;
   const std::vector<CooldownDefinition> definitions{
       {.id = "a", .name = "A", .duration = 5s, .max_charges = 2}};
-  const std::vector<Panel> panels{{.id = "panel", .cooldown_ids = {"a"}}};
+  const std::vector<Panel> panels{
+      {.id = "panel", .name = {}, .bar = {}, .cooldown_ids = {"a"}}};
   const std::vector<CooldownState> invalid_states{
-      {.id = "a", .available_charges = 3, .max_charges = 2}};
+      {.id = "a", .available_charges = 3, .max_charges = 2,
+       .next_charge_at = {}, .recovery_deadlines = {}}};
   layerc::test::expect(build_companion_snapshot(
                           "profile", "session", panels, definitions, invalid_states,
                           std::nullopt, TimePoint{}).empty(),

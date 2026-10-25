@@ -1,3 +1,4 @@
+#include "diagnostic_text.hpp"
 #include "cooldown_groups_window.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
@@ -143,7 +144,8 @@ bool CooldownGroupsDialog::read_fields() {
   profile.cooldown_groups = staged_;
   profile.cooldown_groups[static_cast<std::size_t>(selected_)] = candidate;
   if (const auto error = core::validate_profile(profile)) {
-    show_error(error->describe()); return false;
+    show_error(cooldown_group_error_text(*error, profile.cooldown_groups));
+    return false;
   }
   staged_[static_cast<std::size_t>(selected_)] = std::move(candidate);
   return true;
@@ -181,6 +183,12 @@ void CooldownGroupsDialog::apply() {
     show_error("The profile changed while this dialog was open. Cancel and reopen it."); return;
   }
   session_.end_text_edit();
+  auto candidate = session_.document().profile();
+  candidate.cooldown_groups = staged_;
+  if (const auto error = core::validate_profile(candidate)) {
+    show_error(cooldown_group_error_text(*error, candidate.cooldown_groups));
+    return;
+  }
   if (const auto error = session_.edit([&](auto &profile) {
         profile.cooldown_groups = staged_;
       })) {

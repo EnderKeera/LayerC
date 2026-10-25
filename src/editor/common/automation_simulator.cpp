@@ -1,6 +1,9 @@
 #include "automation_simulator.hpp"
 
+#include "automation_graph.hpp"
+
 #include "layerc/core/cooldown_groups.hpp"
+#include "layerc/core/json.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -44,6 +47,7 @@ AutomationSimulator::reset(const std::string_view graph_json,
                            const core::GameProfile &profile) {
   runtime_.reset();
   index_ = 0;
+  last_step_.reset();
   const auto parsed = core::parse_automation_profile_json(graph_json, profile);
   const auto *graph = std::get_if<core::AutomationProfile>(&parsed);
   if (graph == nullptr)
@@ -55,7 +59,7 @@ AutomationSimulator::reset(const std::string_view graph_json,
       core::CooldownGroupTopology(profile.cooldown_groups), [] { return core::TimePoint{}; });
   runtime_->set_trace_enabled(true);
   Reset result;
-  if (events_.empty()) {
+  if (seed_empty_ && events_.empty()) {
     core::AutomationEvent event;
     event.kind = core::AutomationEventKind::session_started;
     event.timestamp = core::TimePoint{};
@@ -70,18 +74,42 @@ bool AutomationSimulator::step(const std::string_view breakpoint_rule) {
   if (!runtime_ || index_ >= events_.size())
     return false;
   const auto &event = events_[index_++];
-  const auto trace_sequence = runtime_->trace().empty() ? 0U : runtime_->trace().back().sequence;
+  last_step_.emplace();
+  auto &report = *last_step_;
+  report.root = event;
+  const auto evaluate = [&](const core::AutomationEvent &root) {
+    const auto before = runtime_->trace().empty()
+                            ? std::uint64_t{}
+                            : runtime_->trace().back().sequence;
+    auto result = runtime_->process(root);
+    for (const auto &entry : runtime_->trace())
+      if (entry.sequence > before &&
+          entry.phase != core::automation_trace_root_phase)
+        report.trace.push_back(entry);
+    if (result.committed) {
+      report.effects.insert(report.effects.end(), result.effects.begin(),
+                            result.effects.end());
+      report.derived.insert(report.derived.end(), result.derived_events.begin(),
+                            result.derived_events.end());
+    }
+    return result;
+  };
   (void)runtime_->expire_overlay_overrides(event.timestamp);
-  for (const auto &timer_event : runtime_->due_timer_events(event.timestamp))
-    (void)runtime_->process(timer_event);
-  bool keep_playing = runtime_->process(event).committed;
-  if (!breakpoint_rule.empty()) {
-    const auto &trace = runtime_->trace();
-    if (std::any_of(trace.begin(), trace.end(), [&](const auto &entry) {
-          return entry.sequence > trace_sequence && entry.rule_id == breakpoint_rule;
-        }))
-      keep_playing = false;
+  for (const auto &timer_event : runtime_->due_timer_events(event.timestamp)) {
+    ++report.timer_events;
+    (void)evaluate(timer_event);
   }
+  const auto result = evaluate(event);
+  bool keep_playing = result.committed;
+  if (!result.committed)
+    report.rejection = result.error
+                           ? result.error->describe()
+                           : std::string("The root event was rejected.");
+  if (!breakpoint_rule.empty() &&
+      std::any_of(report.trace.begin(), report.trace.end(), [&](const auto &entry) {
+        return entry.rule_id == breakpoint_rule;
+      }))
+    keep_playing = false;
   return keep_playing && index_ < events_.size();
 }
 
@@ -140,9 +168,58 @@ AutomationSimulator::add_event(const core::AutomationEventKind kind,
 
 void AutomationSimulator::load(std::vector<core::AutomationEvent> events) {
   events_ = std::move(events);
+  seed_empty_ = false;
   index_ = 0;
   runtime_.reset();
+  last_step_.reset();
 }
+
+void AutomationSimulator::clear() {
+  load({});
+  seed_empty_ = true;
+}
+
+namespace {
+
+// The value report of the last step: committed effects, derived events, the
+// non-root trace entries and the rejection, bounded to 32 detail lines.
+void append_step_report(std::string &output, const SimulatorStepReport &report) {
+  output += "\nLast step: " + std::string(core::automation_event_name(report.root.kind));
+  if (!report.root.source_id.empty()) output += " " + report.root.source_id;
+  if (report.timer_events != 0)
+    output += " (+" + std::to_string(report.timer_events) + " timer events)";
+  std::size_t count{};
+  const auto detail = [&](const std::string &line) {
+    if (count < 32U) output += "\n  " + line;
+    ++count;
+  };
+  if (report.rejection) detail("Rejected: " + *report.rejection);
+  for (const auto &entry : report.trace) {
+    if (entry.phase == core::automation_trace_root_phase) continue;
+    detail(entry.automation_id + "/" + entry.rule_id + ": " + entry.phase + " " +
+           entry.detail);
+  }
+  for (const auto &effect : report.effects) {
+    std::string line = "Effect: " + std::string(action_label(effect.kind));
+    if (!effect.target.empty()) line += " " + effect.target;
+    if (!effect.property.empty()) line += "." + effect.property;
+    const auto *spec = core::automation_action_spec(effect.kind);
+    if (spec != nullptr && spec->accepts_value())
+      line += " = " + core::automation_value_json(effect.value);
+    detail(line);
+  }
+  for (const auto &event : report.derived) {
+    std::string line = "Derived: " + std::string(core::automation_event_name(event.kind));
+    if (!event.source_id.empty()) line += " " + event.source_id;
+    detail(line);
+  }
+  if (report.trace.empty() && report.effects.empty() && report.derived.empty() &&
+      !report.rejection)
+    detail("Nothing matched this event.");
+  if (count > 32U) output += "\n  … " + std::to_string(count - 32U) + " more";
+}
+
+} // namespace
 
 std::string
 AutomationSimulator::describe(const std::string_view assertions) const {
@@ -154,6 +231,7 @@ AutomationSimulator::describe(const std::string_view assertions) const {
             "\nVariables:";
   for (const auto &[id, value] : runtime_->snapshot().variables)
     output += " " + id + "=" + core::automation_value_json(value) + ";";
+  if (last_step_) append_step_report(output, *last_step_);
   if (assertions.empty())
     return output;
   bool all_passed = true;
@@ -210,12 +288,16 @@ read_trace_file(const std::filesystem::path &path) {
   input.read(text.data(), static_cast<std::streamsize>(text.size()));
   if (input.gcount() != static_cast<std::streamsize>(text.size()))
     return unreadable;
-  auto parsed = core::parse_layerc_trace(text);
+  auto parsed = core::parse_layerc_trace(text, max_trace_import_json_values);
   if (auto *events = std::get_if<std::vector<core::AutomationEvent>>(&parsed))
     return LoadedTrace{.text = std::move(text), .events = std::move(*events)};
-  return TraceLoadError{
-      .message = std::get<core::AutomationError>(parsed).describe(),
-      .invalid = true};
+  const auto &parse_error = std::get<core::AutomationError>(parsed);
+  if (parse_error.message == core::json::value_count_limit_error)
+    return TraceLoadError{
+        .message = "Trace import resource limit exceeded (131072 JSON values); "
+                   "the current trace and profile were not changed.",
+        .invalid = false};
+  return TraceLoadError{.message = parse_error.describe(), .invalid = true};
 }
 
 bool write_trace_file(const std::filesystem::path &path,

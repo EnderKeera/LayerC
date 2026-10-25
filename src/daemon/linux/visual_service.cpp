@@ -40,56 +40,36 @@ void append_unique(std::vector<std::string> &values, std::string value) {
   values.push_back(std::move(value));
 }
 
-// X11 Composite capture behind the shared session contract.
-class X11Capture final : public VisualCaptureSession {
-public:
-  X11Capture(const layerc::platform::X11Display &display, const layerc::runtime::WindowId window,
-             const CaptureQuality quality)
-      : session_(display, window, quality) {}
-  bool start() override { return session_.start(); }
-  void stop() noexcept override { session_.stop(); }
-  void set_quality(const CaptureQuality quality) noexcept override {
-    session_.set_quality(quality);
-  }
-  // Damage drives X11 capture; the evaluator alone paces sampling.
-  void set_sample_rate(std::uint8_t) noexcept override {}
-  layerc::capture::CapturePoll poll(const TimePoint now) override { return session_.poll(now); }
-  layerc::runtime::RuntimeResourceStats resources() const noexcept override {
-    return session_.resources();
-  }
-
-private:
-  layerc::platform::X11CaptureSession session_;
-};
-
 } // namespace
 
 // Explicit XWayland/X11 windows use Composite capture; opaque native windows
 // use the provider's portal stream.
 std::unique_ptr<VisualCaptureSession>
-X11VisualService::create_capture(const Target &target, const std::string_view profile_id,
+VisualService::create_capture(const Target &target, const std::string_view profile_id,
                                  const std::uint8_t sample_rate) {
   if (target.x11_window)
-    return display_ == nullptr
+    return x11_ == nullptr
                ? nullptr
-               : std::make_unique<X11Capture>(
-                     *display_, layerc::runtime::WindowId{*target.x11_window}, target.quality);
+               : x11_->create_capture(profile_id, {*target.x11_window},
+                                      target.quality, sample_rate);
   return native_ == nullptr
              ? nullptr
              : native_->create_capture(profile_id, {target.window}, target.quality, sample_rate);
 }
 
-void X11VisualService::attach(layerc::platform::X11Display &display) noexcept {
-  display_ = &display;
+void VisualService::use_x11_capture(CaptureFactory *factory) noexcept {
+  if (x11_ == factory) return;
+  quiesce();
+  x11_ = factory;
 }
 
-void X11VisualService::use_native(NativeCaptureFactory *factory) noexcept {
+void VisualService::use_capture(CaptureFactory *factory) noexcept {
   if (native_ == factory) return;
   quiesce(); // XIDs and opaque native identities are not interchangeable
   native_ = factory;
 }
 
-void X11VisualService::refresh(
+void VisualService::refresh(
     const std::span<InputSession> sessions,
     const layerc::runtime::CapabilityDemand &demand,
     const bool configuration_changed,
@@ -259,7 +239,7 @@ void X11VisualService::refresh(
 }
 
 std::vector<std::string>
-X11VisualService::poll(const std::span<InputSession> sessions,
+VisualService::poll(const std::span<InputSession> sessions,
                        const TimePoint now) {
   std::vector<std::string> triggered;
   capture_diagnostics_.clear();
@@ -305,7 +285,7 @@ X11VisualService::poll(const std::span<InputSession> sessions,
 }
 
 std::optional<TimePoint>
-X11VisualService::next_deadline(const TimePoint now) const noexcept {
+VisualService::next_deadline(const TimePoint now) const noexcept {
   std::optional<TimePoint> result;
   for (const auto &target : targets_)
     for (const auto *evaluation : target.evaluations) {
@@ -317,7 +297,7 @@ X11VisualService::next_deadline(const TimePoint now) const noexcept {
   return result;
 }
 
-std::vector<std::string> X11VisualService::unavailable() const {
+std::vector<std::string> VisualService::unavailable() const {
   std::vector<std::string> result = asset_diagnostics_;
   for (const auto &diagnostic : capture_diagnostics_)
     append_unique(result, diagnostic);
@@ -326,12 +306,12 @@ std::vector<std::string> X11VisualService::unavailable() const {
 }
 
 layerc::runtime::ServiceReconcileResult
-X11VisualService::reconcile(
+VisualService::reconcile(
     const layerc::runtime::CapabilityDemand &demand) {
   if (!demand.required(layerc::runtime::Capability::visual))
     return layerc::runtime::ServiceReconcileResult::failed(
         "visual: service invoked without demand");
-  if (!native_ && (display_ == nullptr || !display_->valid()))
+  if (!native_ && !x11_)
     return layerc::runtime::ServiceReconcileResult::failed(
         "visual: no X display for capture");
   fault_.clear();
@@ -344,7 +324,7 @@ X11VisualService::reconcile(
   return {};
 }
 
-void X11VisualService::quiesce() noexcept {
+void VisualService::quiesce() noexcept {
   for (auto &target : targets_)
     if (target.capture) target.capture->stop();
   targets_.clear();
@@ -353,7 +333,7 @@ void X11VisualService::quiesce() noexcept {
 }
 
 layerc::runtime::RuntimeResourceStats
-X11VisualService::resources() const noexcept {
+VisualService::resources() const noexcept {
   layerc::runtime::RuntimeResourceStats result;
   for (const auto &target : targets_) {
     ++result.objects;
@@ -374,7 +354,7 @@ X11VisualService::resources() const noexcept {
   return result;
 }
 
-X11VisualService::WorkStats X11VisualService::work_stats() const noexcept {
+VisualService::WorkStats VisualService::work_stats() const noexcept {
   return {.asset_checks = asset_checks_,
           .asset_loads = asset_loads_,
           .evaluation_builds = evaluation_builds_,

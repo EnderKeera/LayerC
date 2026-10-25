@@ -3,6 +3,7 @@
 #include "profile_mutations.hpp"
 #include "x11_capture.hpp"
 #include "x11_window.hpp"
+#include "layerc/core/calibration_readiness.hpp"
 #include "layerc/core/hash.hpp"
 #include "layerc/platform/template_png.hpp"
 #include "layerc/platform/visual_assets_linux.hpp"
@@ -12,6 +13,7 @@
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Double_Window.H>
+#include <FL/Fl_Group.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Native_File_Chooser.H>
@@ -36,14 +38,17 @@ public:
       : path_(std::move(path)), model_(std::move(seed)), controls_(model_.initial_controls()),
         accept_(accept) {
     window_.begin();
-    auto *scroll = new Fl_Scroll(0, 0, 1060, 720);
+    auto *scroll = new Fl_Scroll(0, 0, 1060, 750);
     scroll->begin();
+    // Keep outside labels and form margins inside the scrollable bounds.
+    auto *canvas = new Fl_Group(0, 0, 1060, 750);
+    canvas->begin();
     target_ = choice(20, 45, 405, "Calibration target window", nullptr);
     rescan_ = button(435, 45, 135, "Rescan windows");
-    notice_ = check(20, 85, 550, "I acknowledge passive capture of the selected game window");
-    live_ = check(20, 120, 220, "Live preview");
-    tool_ = choice(270, 120, 300, "Preview tool", "Select region|Erase template mask|Restore template mask");
-    preview_ = new CalibrationPreview(20, 160, 550, 260);
+    notice_ = check(20, 80, 550, "I acknowledge passive capture of the selected game window");
+    live_ = check(20, 128, 220, "Live preview");
+    tool_ = choice(270, 128, 300, "Preview tool", "Select region|Erase template mask|Restore template mask");
+    preview_ = new CalibrationPreview(20, 163, 550, 220);
     preview_->selected = [this](const auto region) {
       model_.set_selection(region); fill_region(); evaluate();
     };
@@ -53,17 +58,18 @@ public:
         mask_dirty_ = true; matcher_.clear();
       }
     };
-    region_x_ = input(20, 450, 120, "Region X (0–1)");
-    region_y_ = input(160, 450, 120, "Region Y (0–1)");
-    region_w_ = input(300, 450, 120, "Region width");
-    region_h_ = input(440, 450, 130, "Region height");
-    sample_ = button(20, 495, 160, "Sample selection color");
-    capture_ = button(190, 495, 185, "Capture reference");
-    import_ = button(385, 495, 185, "Import PNG reference...");
-    clear_ = button(20, 535, 180, "Clear references");
-    references_ = new Fl_Output(215, 535, 355, 28, "Template references");
+    region_x_ = input(20, 410, 265, "Region X (0–1)");
+    region_y_ = input(305, 410, 265, "Region Y (0–1)");
+    region_w_ = input(20, 465, 265, "Region width");
+    region_h_ = input(305, 465, 265, "Region height");
+    sample_ = button(20, 510, 265, "Sample selection color");
+    capture_ = button(305, 510, 265, "Capture reference");
+    import_ = button(20, 550, 265, "Import PNG reference...");
+    clear_ = button(305, 550, 265, "Clear references");
+    references_ = new Fl_Output(20, 605, 550, 28, "Template references");
     references_->align(FL_ALIGN_TOP_LEFT);
-    outcome_ = new Fl_Multiline_Output(20, 600, 550, 90, "Capture / live match status");
+    outcome_ = new Fl_Multiline_Output(20, 665, 550, 65, "Capture / live match status");
+    outcome_->wrap(1);
     outcome_->align(FL_ALIGN_TOP_LEFT); outcome_->textsize(11);
 
     mode_ = choice(610, 45, 420, "Calibration predicate", "Average color|Brightness|Color coverage|Template match");
@@ -82,15 +88,17 @@ public:
     keep_ = check(610, 450, 420, "Keep input alongside the visual trigger");
     timeout_ = input(610, 510, 200, "Input timeout (50–5000 ms)");
     unavailable_ = choice(830, 510, 200, "Capture unavailable", "Ignore|Trigger from input");
-    auto *note = new Fl_Multiline_Output(610, 555, 420, 80, "Calibration semantics");
+    auto *note = new Fl_Multiline_Output(610, 560, 420, 80, "Calibration semantics");
+    note->wrap(1);
     note->align(FL_ALIGN_TOP_LEFT); note->textsize(11);
     note->value("Passive X11 capture; no input is blocked or synthesized.\n"
                 "Confirm input requires an existing cooldown binding.\n"
                 "Cancel discards all calibration edits and captured/imported assets.");
-    apply_ = button(730, 660, 150, "Apply calibration");
+    apply_ = button(730, 700, 150, "Apply calibration");
     apply_->shortcut(FL_CTRL | FL_Enter);
-    cancel_ = button(890, 660, 140, "Cancel calibration");
+    cancel_ = button(890, 700, 140, "Cancel calibration");
     cancel_->shortcut(FL_Escape);
+    canvas->end();
     scroll->end(); window_.end(); window_.resizable(scroll);
     window_.size_range(640, 480); window_.set_modal();
     window_.callback([](Fl_Widget *, void *data) {
@@ -104,21 +112,22 @@ public:
       else images_.push_back(std::get<core::TemplateImage>(std::move(loaded)));
     }
     refresh_references();
+    refresh_apply_readiness();
     message(load_fault_.empty() ? "Stopped. No capture session. Rescan windows to begin." : load_fault_);
   }
   ~CalibrationDialog() { stop_capture(); }
-  [[nodiscard]] std::optional<CalibrationDraft> run() {
+  [[nodiscard]] std::optional<AcceptedCalibration> run() {
     window_.show();
     while (window_.shown()) Fl::wait();
     return std::move(result_);
   }
 private:
-  Fl_Double_Window window_{1060, 720, "LayerE — X11 visual calibration"};
+  Fl_Double_Window window_{1060, 750, "LayerE — X11 visual calibration"};
   std::filesystem::path path_;
   CalibrationModel model_;
   CalibrationControls controls_;
   const CalibrationAccept &accept_;
-  std::optional<CalibrationDraft> result_;
+  std::optional<AcceptedCalibration> result_;
   // Reverse destruction releases capture and discovery before their display.
   std::optional<platform::X11Display> display_;
   std::unique_ptr<platform::X11WindowTracker> tracker_;
@@ -126,6 +135,7 @@ private:
   std::vector<platform::X11WindowSnapshot> windows_;
   std::vector<core::TemplateImage> images_;
   core::CpuTemplateMatcher matcher_;
+  core::CalibrationReadiness readiness_;
   std::string load_fault_;
   bool mask_dirty_{}, region_dirty_{};
   CalibrationPreview *preview_{};
@@ -190,6 +200,8 @@ private:
         rate = parse_count(rate_->value(), 1, 60), timeout = parse_count(timeout_->value(), 50, 5000);
     if (!x || !y || !w || !h || !core::valid_normalized_region({*x, *y, *w, *h}) || !color ||
         !tolerance || !threshold || !coverage || !confidence || !scale || !stable || !rate || !timeout) {
+      readiness_.invalidate();
+      refresh_apply_readiness();
       message("Invalid calibration input. All values and the nonempty region must be in range."); return false;
     }
     if (region_dirty_) { model_.set_selection({*x, *y, *w, *h}); region_dirty_ = false; }
@@ -217,6 +229,7 @@ private:
   void rescan() {
     stop_capture(); live_->value(0);
     preview_->frame.reset(); preview_->redraw();
+    readiness_.invalidate(); refresh_apply_readiness();
     target_->clear(); windows_.clear();
     if (!open_display()) return;
     const auto scan = tracker_->scan();
@@ -239,6 +252,7 @@ private:
   void close() { stop_capture(); live_->value(0); window_.hide(); }
   void start_capture() {
     stop_capture(); preview_->frame.reset(); preview_->redraw();
+    readiness_.invalidate(); refresh_apply_readiness();
     const auto selected = target_->value();
     if (!notice_->value() || selected < 0 || static_cast<std::size_t>(selected) >= windows_.size()) {
       live_->value(0); message("Unavailable: select a matching window and acknowledge passive capture first."); return;
@@ -285,6 +299,7 @@ private:
     };
     if (!same_identity()) {
       self.preview_->frame.reset(); self.preview_->redraw(); self.stop_capture();
+      self.readiness_.invalidate(); self.refresh_apply_readiness();
       self.live_->value(0); self.notice_->value(0); self.target_->clear(); self.windows_.clear();
       self.message("Unavailable: the selected window disappeared or changed identity. Rescan and acknowledge capture again.");
       return;
@@ -292,6 +307,7 @@ private:
     const auto poll = self.capture_session_->poll(std::chrono::steady_clock::now());
     if (!poll.result.frame || poll.result.availability != core::CaptureAvailability::available) {
       self.preview_->frame.reset(); self.preview_->redraw();
+      self.readiness_.invalidate(); self.refresh_apply_readiness();
       self.message("Unavailable: " + poll.result.diagnostic);
       self.stop_capture(); self.live_->value(0); return;
     }
@@ -300,24 +316,48 @@ private:
     }
     Fl::repeat_timeout(1.0 / self.controls_.sample_rate_hz, tick, &self);
   }
+  core::VisualObservation current_observation() const {
+    if (controls_.predicate == CalibrationPredicate::template_match)
+      return model_.template_state(controls_);
+    return model_.pixel_rule(controls_);
+  }
+  void refresh_apply_readiness() {
+    if (readiness_.ready_for(current_observation(), controls_.quality))
+      apply_->activate();
+    else
+      apply_->deactivate();
+  }
   void evaluate(const std::string &diagnostic = {}) {
     const auto &frame = preview_->frame;
-    if (!frame) { message("Stopped. No available captured frame."); return; }
+    if (!frame) {
+      readiness_.invalidate();
+      refresh_apply_readiness();
+      message("Stopped. No available captured frame."); return;
+    }
     if (controls_.predicate == CalibrationPredicate::template_match) {
       if (images_.size() != model_.references().size() || images_.empty()) {
+        readiness_.invalidate();
+        refresh_apply_readiness();
         message("Unavailable: capture or import every template reference first."); return;
       }
-      const auto result = matcher_.evaluate(model_.template_state(controls_), images_, frame->view(),
+      const auto state = model_.template_state(controls_);
+      const auto result = matcher_.evaluate(state, images_, frame->view(),
           controls_.quality, frame->available_region, frame->unavailable_regions);
+      readiness_.observe(state, result, controls_.quality);
+      refresh_apply_readiness();
       message(std::string(result.matched ? "Match" : "No match") + ": template confidence " +
           std::to_string(static_cast<int>(result.confidence * 100)) + "%; candidates " +
           std::to_string(result.candidates_scored) + ". " + diagnostic);
     } else {
       const auto rule = model_.pixel_rule(controls_);
       if (!layerc::capture::region_is_available(rule.region, *frame)) {
+        readiness_.invalidate();
+        refresh_apply_readiness();
         message("Unavailable: selected region lies outside available capture."); return;
       }
       const auto result = core::evaluate_pixel_rule(rule, frame->view(), controls_.quality);
+      readiness_.observe(rule, result, controls_.quality, true);
+      refresh_apply_readiness();
       message(std::string(result.matched ? "Match" : "No match") + ": average " + format_rgb(result.average_color) +
           "; pixels " + std::to_string(result.sampled_pixels) + ". " + diagnostic);
     }
@@ -358,7 +398,10 @@ private:
       stop_capture(); live_->value(0); message("Stopped. Capture acknowledgement withdrawn."); return;
     }
     if (widget == live_ || widget == target_) {
-      if (widget == target_) { preview_->frame.reset(); preview_->redraw(); }
+      if (widget == target_) {
+        preview_->frame.reset(); preview_->redraw();
+        readiness_.invalidate(); refresh_apply_readiness();
+      }
       if (live_->value()) start_capture();
       else { stop_capture(); message("Stopped. Capture session released; preview is frozen."); }
       return;
@@ -373,9 +416,12 @@ private:
       refresh_references(); return;
     }
     if (widget == quality_ && quality_->value() == static_cast<int>(core::CaptureQuality::exact) &&
-        controls_.quality != core::CaptureQuality::exact &&
-        fl_choice("Exact capture quality uses more memory and CPU. Continue?", "Cancel", "Use Exact", nullptr) != 1) {
-      quality_->value(static_cast<int>(controls_.quality)); return;
+        controls_.quality != core::CaptureQuality::exact) {
+      fl_message_title("Exact capture quality");
+      if (fl_choice("Exact capture quality uses more memory and CPU. Continue?", "Cancel",
+                    "Use Exact", nullptr) != 1) {
+        quality_->value(static_cast<int>(controls_.quality)); return;
+      }
     }
     if (!read_controls()) return;
     if (capture_session_) capture_session_->set_quality(controls_.quality);
@@ -408,23 +454,34 @@ private:
       controls_.predicate = CalibrationPredicate::template_match; mode_->value(static_cast<int>(controls_.predicate));
     } else if (widget == apply_) {
       if (!finalize_mask()) return;
+      // Evaluate only the already captured preview: Apply never starts capture.
+      evaluate();
+      if (!readiness_.ready_for(current_observation(), controls_.quality)) {
+        message(core::calibration_sampling_required);
+        refresh_apply_readiness();
+        return;
+      }
       auto built = model_.build_result(controls_, images_);
       if (const auto *error = std::get_if<std::string>(&built)) { message("Not applied: " + *error); return; }
-      const auto &visual = std::get<core::VisualProfile>(built);
-      CalibrationDraft draft{core::serialize_visual_profile_json(visual),
-          controls_.predicate == CalibrationPredicate::template_match ? images_ : std::vector<core::TemplateImage>{}};
-      if (accept_) {
-        if (const auto refusal = accept_(draft)) { message("Not applied: " + *refusal); return; }
+      CalibrationDraft draft{
+          std::get<core::VisualProfile>(std::move(built)),
+          controls_.predicate == CalibrationPredicate::template_match
+              ? images_ : std::vector<core::TemplateImage>{}};
+      auto accepted = accept_(draft);
+      if (const auto *refusal = std::get_if<std::string>(&accepted)) {
+        message("Not applied: " + *refusal);
+        return;
       }
-      result_ = std::move(draft);
-      close(); return;
+      result_ = std::get<AcceptedCalibration>(std::move(accepted));
+      close();
+      return;
     }
     preview_->redraw(); evaluate();
   }
 };
 } // namespace
 
-std::optional<CalibrationDraft> run_x11_calibration(
+std::optional<AcceptedCalibration> run_x11_calibration(
     const std::filesystem::path &profile_path, CalibrationModel model,
     const CalibrationAccept &accept, const std::span<const platform::EncodedTemplateAsset> owned) {
   // The modal owns all preview timers and X11 resources. No worker, service,

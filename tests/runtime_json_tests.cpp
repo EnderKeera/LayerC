@@ -14,6 +14,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -116,6 +117,214 @@ void test_runtime_instance_tracking() {
          "a daemon restart should reconstruct instances from current matches");
 }
 void test_json_unicode_and_errors() {
+  {
+    using namespace layerc::core::json;
+    const auto parsed = parse(
+        R"json({"escaped":"quote\" slash\\ backspace\b formfeed\f newline\n return\r tab\t control\u0001 UTF-8 é","nested":[[],{"items":[-0,1.2000e+1,9007199254740993]}],"empty":{}})json");
+    const auto *value = std::get_if<Value>(&parsed);
+    if (!expect(value != nullptr, "bounded-emission fixture parses")) return;
+    const Value rich_value(Value::Array{
+        *value, Value(nullptr), Value(false), Value(true),
+        Value(std::numeric_limits<std::int64_t>::min()), Value(0.125)});
+    for (const unsigned indent : {0U, 2U}) {
+      std::string expected = "prefix";
+      append_value(expected, rich_value, indent);
+      std::string exact = "prefix";
+      expect(append_value_bounded(exact, rich_value, expected.size(), indent) &&
+                 exact == expected,
+             "bounded JSON emission accepts the exact byte boundary");
+      std::string short_output = "prefix";
+      expect(!append_value_bounded(short_output, rich_value, expected.size() - 1U,
+                                   indent) &&
+                 short_output == "prefix",
+             "bounded JSON emission refuses one byte short without mutation");
+    }
+    std::string oversized_prefix = "prefix";
+    expect(!append_value_bounded(oversized_prefix, *value,
+                                 oversized_prefix.size() - 1U) &&
+               oversized_prefix == "prefix",
+           "bounded JSON emission refuses a prefix already over budget");
+    std::string deep_indent = "prefix";
+    const Value nested(Value::Array{Value(nullptr)});
+    expect(!append_value_bounded(deep_indent, nested, 64,
+                                 std::numeric_limits<unsigned>::max()) &&
+               deep_indent == "prefix",
+           "bounded JSON preflight rejects huge indentation without allocation");
+    std::string non_finite = "prefix";
+    bool non_finite_rejected = false;
+    try {
+      (void)append_value_bounded(
+          non_finite, Value(std::numeric_limits<double>::infinity()), 64);
+    } catch (const std::invalid_argument &) {
+      non_finite_rejected = true;
+    }
+    expect(non_finite_rejected && non_finite == "prefix",
+           "bounded JSON emission preserves the prefix when rejecting infinity");
+  }
+  {
+    using namespace layerc::core::json;
+    expect(std::holds_alternative<Value>(parse("[0,0]", 3)),
+           "JSON value budget accepts exact boundary");
+    const auto over = parse("[0,0]", 2);
+    expect(std::holds_alternative<ParseError>(over) &&
+               std::get<ParseError>(over).message == value_count_limit_error &&
+               std::get<ParseError>(over).offset == 3,
+           "JSON budget refuses before constructing the excess value");
+    expect(std::holds_alternative<Value>(parse(R"({"a":[null,true,"x"]})", 5)),
+           "JSON keys do not consume the value budget");
+    expect(std::holds_alternative<ParseError>(parse("0", 0)),
+           "a zero JSON value budget refuses the root");
+    expect(std::holds_alternative<Value>(parse("[0,0]")),
+           "default JSON parsing remains unrestricted");
+    const auto byte_first = parse_bounded("[0,0]", 4, 0);
+    expect(std::holds_alternative<FieldError>(byte_first) &&
+               std::get<FieldError>(byte_first).message == "JSON exceeds 4 bytes",
+           "byte bound keeps precedence over the optional value budget");
+    constexpr std::string_view payload =
+        R"json({"fraction":1e-2,"large":9007199254740993,"negativeZero":-0,"nested":[{"text":"shared"}]})json";
+    const auto parsed = parse(payload);
+    const auto *parsed_value = std::get_if<Value>(&parsed);
+    if (!expect(parsed_value != nullptr, "shared JSON fixture parses")) return;
+    const Value original = *parsed_value;
+    Value copied = original;
+    const auto *original_nested = original.find("nested");
+    const auto *copied_nested = copied.find("nested");
+    if (!expect(original_nested != nullptr && copied_nested != nullptr,
+                "copied JSON retains nested array access")) return;
+    const auto *original_text = original_nested->as_array().front().find("text");
+    const auto *copied_text = copied_nested->as_array().front().find("text");
+    if (!expect(original_text != nullptr && copied_text != nullptr,
+                "copied JSON retains nested string access")) return;
+    expect(&original.as_object() == &copied.as_object() &&
+               &original_nested->as_array() == &copied_nested->as_array() &&
+               &original_text->as_string() == &copied_text->as_string(),
+           "copies share immutable root, array, and string payloads");
+
+    const auto independently_parsed = parse(payload);
+    const auto *independent_value = std::get_if<Value>(&independently_parsed);
+    if (!expect(independent_value != nullptr,
+                "independently parsed JSON fixture parses")) return;
+    expect(original == *independent_value,
+           "independently parsed JSON compares by value");
+    auto replacement_object = copied.as_object();
+    replacement_object["nested"] = Value(Value::Array{
+        Value(Value::Object{{"text", Value(std::string("replacement"))}})});
+    copied = Value(std::move(replacement_object));
+    const auto *replaced_nested = copied.find("nested");
+    if (!expect(replaced_nested != nullptr,
+                "the replaced copy retains its nested array")) return;
+    const auto *replaced_text =
+        replaced_nested->as_array().front().find("text");
+    expect(replaced_text != nullptr && replaced_text->as_string() == "replacement" &&
+               original == *independent_value && original_text->as_string() == "shared",
+           "replacing a nested value in a copy leaves the original tree unchanged");
+
+    Value move_source = original;
+    Value moved(std::move(move_source));
+    std::string moved_from_json;
+    append_value(moved_from_json, move_source);
+    expect(moved == original && move_source.is_null() && moved_from_json == "null",
+           "move construction resets the source to safely serializable null");
+    move_source = Value(std::string("reassigned"));
+    expect(move_source.as_string() == "reassigned",
+           "a moved-from value can be reassigned");
+
+    Value assignment_source = original;
+    Value assigned(false);
+    assigned = std::move(assignment_source);
+    std::string assignment_source_json;
+    append_value(assignment_source_json, assignment_source);
+    expect(assigned == original && assignment_source.is_null() &&
+               assignment_source_json == "null",
+           "move assignment resets the source to safely serializable null");
+
+    Value self_move = original;
+    Value &self_move_alias = self_move;
+    self_move = std::move(self_move_alias);
+    expect(self_move == original, "self-move assignment remains usable");
+
+    Value self_copy = original;
+    Value &self_copy_alias = self_copy;
+    self_copy = self_copy_alias;
+    expect(self_copy == original, "self-copy assignment remains usable");
+
+    Value array_root(Value::Array{Value(std::string("retained"))});
+    array_root = array_root.as_array().front();
+    std::string array_root_json;
+    append_value(array_root_json, array_root);
+    expect(array_root.is_string() && array_root.as_string() == "retained" &&
+               array_root_json == R"json("retained")json",
+           "copy assignment retains an exclusively owned array descendant string");
+
+    Value object_root(Value::Object{{"items", Value(Value::Array{
+        Value(std::int64_t{7})})}});
+    object_root = *object_root.find("items");
+    std::string object_root_json;
+    append_value(object_root_json, object_root);
+    expect(object_root.is_array() && object_root.as_array().size() == 1 &&
+               object_root.as_array().front().as_integer() == 7 &&
+               object_root_json == "[7]",
+           "copy assignment retains an exclusively owned object descendant array");
+
+    auto number_result = parse(R"json({"n":1.50})json");
+    if (const auto *number_value = std::get_if<Value>(&number_result)) {
+        Value number_root = *number_value;
+        number_root = *number_root.find("n");
+        std::string number_root_json;
+        append_value(number_root_json, number_root);
+        expect(number_root.number_source() == "1.50" &&
+                   number_root_json == "1.50",
+               "copy assignment retains parsed-number descendant spelling");
+    } else {
+        expect(false, "parsed-number descendant fixture parses");
+    }
+
+    Value shared_array_root(Value::Array{Value(std::string("retained"))});
+    Value shared_array_keep = shared_array_root;
+    const Value expected_array_tree(
+        Value::Array{Value(std::string("retained"))});
+    shared_array_root = shared_array_root.as_array().front();
+    std::string shared_array_root_json;
+    append_value(shared_array_root_json, shared_array_root);
+    expect(shared_array_keep == expected_array_tree &&
+               shared_array_root.is_string() &&
+               shared_array_root.as_string() == "retained" &&
+               shared_array_root_json == R"json("retained")json",
+           "copy assignment preserves a retained array owner and descendant");
+
+    Value shared_object_root(Value::Object{{"items", Value(Value::Array{
+        Value(std::int64_t{7})})}});
+    Value shared_object_keep = shared_object_root;
+    const Value expected_object_tree(Value::Object{{"items", Value(Value::Array{
+        Value(std::int64_t{7})})}});
+    shared_object_root = *shared_object_root.find("items");
+    std::string shared_object_root_json;
+    append_value(shared_object_root_json, shared_object_root);
+    expect(shared_object_keep == expected_object_tree &&
+               shared_object_root.is_array() &&
+               shared_object_root.as_array().size() == 1 &&
+               shared_object_root.as_array().front().as_integer() == 7 &&
+               shared_object_root_json == "[7]",
+           "copy assignment preserves a retained object owner and descendant");
+
+    const auto changed = parse(
+        R"json({"fraction":1e-2,"large":9007199254740993,"negativeZero":-0,"nested":[{"text":"changed"}]})json");
+    const auto *changed_value = std::get_if<Value>(&changed);
+    expect(changed_value != nullptr && original != *changed_value,
+           "a changed nested value compares unequal");
+    const auto lexical_value = [](const std::string_view token) {
+      auto result = parse(token);
+      return std::get<Value>(std::move(result));
+    };
+    expect(lexical_value("-0") != lexical_value("0") &&
+               lexical_value("1e-2") != lexical_value("0.01"),
+           "numeric equality retains the original lexical spelling");
+    std::string emitted;
+    append_value(emitted, original);
+    expect(emitted == payload,
+           "compact JSON emission preserves exact numeric token spellings");
+  }
+
   const std::string source = R"({"n":9223372036854775807,"a":[true,null,"x\\ny"],"empty":{}})";
   const auto pretty_document = layerc::core::json::format(source);
   expect(pretty_document.find("\r\n  ") != std::string::npos &&

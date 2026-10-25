@@ -9,9 +9,9 @@ add_test(NAME layerc_linux_kwin_script_tests
 set_tests_properties(layerc_linux_kwin_script_tests PROPERTIES
     TIMEOUT 30 SKIP_RETURN_CODE 77 LABELS "gjs")
 
-if(LAYERC_HAVE_X11)
+if(TARGET layerc_daemon_linux)
     # The visual service's native (portal) capture seam with a fake factory;
-    # display- and bus-free, so it runs in every graphical build.
+    # display- and bus-free, so it runs in every daemon build.
     layerc_add_test(layerc_linux_native_visual_tests
         SOURCES tests/linux_native_visual_tests.cpp
         LINK layerc_daemon_linux TIMEOUT 30)
@@ -42,8 +42,7 @@ if(TARGET layerc_bus)
             $<TARGET_FILE:layerc_linux_portal_screencast_tests>)
     set_tests_properties(layerc_linux_portal_screencast_tests PROPERTIES
         TIMEOUT 30 SKIP_RETURN_CODE 77 LABELS "dbus")
-    # BusProviders is compiled into the daemon only with the X11 session engine.
-    if(LAYERC_HAVE_X11)
+    if(TARGET layerc_daemon_linux)
         layerc_add_test(layerc_linux_bus_providers_tests
             SOURCES tests/linux_bus_providers_tests.cpp
             LINK layerc_daemon_linux layerc_bus NO_REGISTER)

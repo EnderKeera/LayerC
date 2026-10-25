@@ -20,6 +20,9 @@ using FieldError = layerc::core::DocumentError;
 // violation has no parse offset and is reported at the document root.
 [[nodiscard]] std::variant<Value, FieldError>
 parse_bounded(std::string_view source, std::size_t max_bytes);
+[[nodiscard]] std::variant<Value, FieldError>
+parse_bounded(std::string_view source, std::size_t max_bytes,
+              std::size_t max_values);
 
 inline constexpr std::int64_t max_exact_json_integer = INT64_C(9'007'199'254'740'991);
 

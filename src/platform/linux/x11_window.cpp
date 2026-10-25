@@ -3,7 +3,6 @@
 // the scan and the per-window property reads.
 #include "x11_window.hpp"
 
-#include "layerc/core/game_match.hpp"
 #include "x11_error.hpp"
 #include "x11_property.hpp"
 
@@ -150,7 +149,7 @@ X11WindowScan X11WindowTracker::scan(const std::uint32_t limit) const {
   std::vector<::Window> candidates;
   if (display_->probe().ewmh) {
     candidates = read_window_list(display, root, atoms.net_client_list);
-    scan.ewmh = !candidates.empty();
+    scan.authoritative = !candidates.empty();
     if (candidates.empty())
       scan.warning =
           "ewmh: _NET_CLIENT_LIST is empty; scanning root children instead";
@@ -258,6 +257,10 @@ X11WindowScan X11WindowTracker::scan(const std::uint32_t limit) const {
   return scan;
 }
 
+void X11WindowTracker::ignore_windows(std::vector<std::uint64_t> windows) noexcept {
+  ignored_windows_.swap(windows);
+}
+
 bool X11WindowTracker::observe(const _XEvent &event) const noexcept {
   if (display_ == nullptr) return false;
   const auto root = static_cast<::Window>(display_->root());
@@ -265,22 +268,35 @@ bool X11WindowTracker::observe(const _XEvent &event) const noexcept {
     return std::any_of(watched_.begin(), watched_.end(),
                        [&](const Watch &watch) { return watch.window == window; });
   };
+  const auto ignored = [&](::Window window) {
+    return window != root &&
+           std::find(ignored_windows_.begin(), ignored_windows_.end(), window) !=
+               ignored_windows_.end();
+  };
   switch (event.type) {
   case PropertyNotify:
     if (event.xproperty.window == root) return true;
     return tracked(event.xproperty.window) &&
            std::find(identity_atoms_.begin(), identity_atoms_.end(),
                      event.xproperty.atom) != identity_atoms_.end();
-  case CreateNotify: return event.xcreatewindow.parent == root;
-  case MapNotify: return event.xmap.event == root || tracked(event.xmap.window);
-  case UnmapNotify: return event.xunmap.event == root || tracked(event.xunmap.window);
+  case CreateNotify:
+    return !ignored(event.xcreatewindow.window) && event.xcreatewindow.parent == root;
+  case MapNotify:
+    return !ignored(event.xmap.window) &&
+           (event.xmap.event == root || tracked(event.xmap.window));
+  case UnmapNotify:
+    return !ignored(event.xunmap.window) &&
+           (event.xunmap.event == root || tracked(event.xunmap.window));
   case DestroyNotify:
-    return event.xdestroywindow.event == root || tracked(event.xdestroywindow.window);
+    return !ignored(event.xdestroywindow.window) &&
+           (event.xdestroywindow.event == root || tracked(event.xdestroywindow.window));
   case ConfigureNotify:
-    return event.xconfigure.event == root || event.xconfigure.window == root ||
-           tracked(event.xconfigure.window);
+    return !ignored(event.xconfigure.window) &&
+           (event.xconfigure.event == root || event.xconfigure.window == root ||
+            tracked(event.xconfigure.window));
   case ReparentNotify:
-    return event.xreparent.event == root || tracked(event.xreparent.window);
+    return !ignored(event.xreparent.window) &&
+           (event.xreparent.event == root || tracked(event.xreparent.window));
   default: return false;
   }
 }
@@ -303,29 +319,5 @@ X11WindowTracker::find(const std::uint64_t window) const {
   return std::nullopt;
 }
 
-const X11WindowSnapshot *match_window(const X11WindowScan &scan,
-                                      const layerc::core::GameMatch &match,
-                                      const std::uint64_t previous_window) {
-  // Enumeration stays here; the matching rule and the foreground/previous
-  // preference live in core::resolve_game_match. POSIX filesystems
-  // compare case-sensitively, so the executable path stays byte-exact.
-  std::vector<layerc::core::MatchCandidate> candidates;
-  candidates.reserve(scan.windows.size());
-  std::optional<std::size_t> preferred;
-  for (std::size_t index{}; index < scan.windows.size(); ++index) {
-    const auto &snapshot = scan.windows[index];
-    candidates.push_back({.executable_name = snapshot.executable_name,
-                          .executable_path = snapshot.executable_path,
-                          .class_name = snapshot.class_name,
-                          .title = snapshot.title,
-                          .active = scan.active.has_value() &&
-                                  snapshot.window == *scan.active});
-    if (previous_window != 0 && snapshot.window == previous_window)
-      preferred = index;
-  }
-  const auto resolved = layerc::core::resolve_game_match(
-      candidates, match, {.exact_path = true, .preferred = preferred});
-  return resolved.has_value() ? &scan.windows[*resolved] : nullptr;
-}
 
 } // namespace layerc::platform

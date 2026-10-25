@@ -1,5 +1,6 @@
 // Tools and file commands beyond the core edit loop: Save As, the profiles
 // folder, Split grouped bars, panel colours, Options and editor Appearance.
+#include "editor_tools.hpp"
 #include "editor_app.hpp"
 #include "appearance_window.hpp"
 #include "cooldown_groups_window.hpp"
@@ -8,6 +9,7 @@
 #include "profile_mutations.hpp"
 
 #include <FL/Fl.H>
+#include <FL/fl_draw.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Double_Window.H>
@@ -31,20 +33,23 @@ struct PanelColorSet {
   std::array<std::uint32_t, 4> values{};
 };
 constexpr std::array<const char *, 4> color_names{"Fill", "Background", "Border", "Text"};
+constexpr int input_width = 140;
+constexpr int button_width = 155;
 
 // Modal panel colours: a #RRGGBB field and a chooser per bar colour.
-std::optional<PanelColorSet> edit_panel_colors(const PanelColorSet &current) {
-  Fl_Double_Window dialog(470, 250, "Panel colours — LayerE");
+std::optional<PanelColorSet> edit_panel_colors_internal(const PanelColorSet &current) {
+  const auto layout = panel_colors_layout();
+  Fl_Double_Window dialog(layout.window_width, 250, "Panel colours — LayerE");
   std::array<Fl_Input *, 4> fields{};
   struct Pick { Fl_Input *field; const char *title; };
   std::array<Pick, 4> picks{};
   for (std::size_t index = 0; index < fields.size(); ++index) {
     const int y = 15 + static_cast<int>(index) * 40;
-    fields[index] = new Fl_Input(150, y, 140, 28, nullptr);
+    fields[index] = new Fl_Input(layout.input_x, y, input_width, 28, nullptr);
     fields[index]->copy_label((std::string(color_names[index]) + " #RRGGBB").c_str());
     fields[index]->value(format_rgb(current.values[index]).c_str());
     picks[index] = {fields[index], color_names[index]};
-    auto *choose = new Fl_Button(300, y, 155, 28, nullptr);
+    auto *choose = new Fl_Button(layout.button_x, y, button_width, 28, nullptr);
     choose->copy_label(("Choose " + std::string(color_names[index]) + "...").c_str());
     choose->callback([](Fl_Widget *, void *data) {
       auto &pick = *static_cast<Pick *>(data);
@@ -53,14 +58,14 @@ std::optional<PanelColorSet> edit_panel_colors(const PanelColorSet &current) {
         pick.field->value(format_rgb(*color).c_str());
     }, &picks[index]);
   }
-  auto *message = new Fl_Box(15, 170, 440, 28);
+  auto *message = new Fl_Box(15, 170, layout.window_width - 30, 28);
   message->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
   bool accepted = false;
-  auto *cancel = new Fl_Button(220, 205, 110, 30, "Cancel");
+  auto *cancel = new Fl_Button(layout.window_width - 250, 205, 110, 30, "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
   struct Accept { bool *accepted; std::array<Fl_Input *, 4> *fields; Fl_Box *message; };
   Accept accept_state{&accepted, &fields, message};
-  auto *ok = new Fl_Button(345, 205, 110, 30, "OK");
+  auto *ok = new Fl_Button(layout.window_width - 125, 205, 110, 30, "OK");
   ok->callback([](Fl_Widget *widget, void *data) {
     auto &state = *static_cast<Accept *>(data);
     for (std::size_t index = 0; index < state.fields->size(); ++index)
@@ -84,7 +89,7 @@ std::optional<PanelColorSet> edit_panel_colors(const PanelColorSet &current) {
   return result;
 }
 
-constexpr const char *options_text =
+constexpr const char *options_dialog_text =
     "Exclude editor windows from screen capture\n"
     "  Unavailable on Linux X11: the X server offers no per-window capture\n"
     "  exclusion, so any X client with access to the display can read them.\n\n"
@@ -98,6 +103,31 @@ constexpr const char *options_text =
 
 } // namespace
 
+std::optional<PanelColorValues> edit_panel_colors(const PanelColorValues &current) {
+  PanelColorSet values;
+  values.values = current.values;
+  const auto chosen = edit_panel_colors_internal(values);
+  if (!chosen) return std::nullopt;
+  return PanelColorValues{chosen->values};
+}
+
+const char *options_text() { return options_dialog_text; }
+
+PanelColorsLayout panel_colors_layout() {
+  fl_font(FL_HELVETICA, FL_NORMAL_SIZE);
+  int label_width{};
+  for (const auto *name : color_names) {
+    const auto label = std::string(name) + " #RRGGBB";
+    label_width = std::max(label_width, static_cast<int>(fl_width(label.c_str())));
+  }
+  PanelColorsLayout layout;
+  layout.label_width = label_width;
+  layout.input_x = 15 + label_width + 12;
+  layout.button_x = layout.input_x + input_width + 10;
+  layout.window_width = layout.button_x + button_width + 15;
+  return layout;
+}
+
 void EditorApp::load_appearance() {
   appearance_path_ = editor_appearance_path();
   auto loaded = load_editor_appearance(appearance_path_);
@@ -107,94 +137,6 @@ void EditorApp::load_appearance() {
     apply_editor_appearance(appearance_, window, profiles, preview);
 }
 
-bool EditorApp::tools_command(const EditorCommand action) {
-  switch (action) {
-  case EditorCommand::cooldown_groups: {
-    if (!session.has_document() || !apply_fields()) return true;
-    CooldownGroupsDialog dialog(session);
-    apply_editor_appearance(appearance_, dialog, nullptr, nullptr);
-    dialog.show();
-    while (dialog.shown()) Fl::wait();
-    if (dialog.applied) changed(std::nullopt);
-    else report("Cooldown groups unchanged.");
-    return true;
-  }
-  case EditorCommand::options:
-    show_text_dialog("Options — LayerE", options_text);
-    return true;
-  case EditorCommand::appearance: {
-    if (!appearance_error_.empty() &&
-        fl_choice("%s\nApplying a new choice replaces the file.", "Cancel", "Continue", nullptr,
-                  appearance_error_.c_str()) != 1)
-      return true;
-    const auto chosen = edit_editor_appearance(appearance_, window, profiles, preview);
-    if (!chosen) { report("Appearance unchanged."); return true; }
-    appearance_ = *chosen;
-    if (const auto error = save_editor_appearance(appearance_path_, appearance_)) {
-      report(*error + " The choice applies until LayerE closes.");
-    } else {
-      appearance_error_.clear();
-      report("Appearance saved: " + std::string(theme_label(appearance_.theme)) + ".");
-    }
-    return true;
-  }
-  case EditorCommand::open_folder: {
-    open_profiles_folder();
-    return true;
-  }
-  case EditorCommand::split_bars: {
-    if (!apply_fields()) return true;
-    std::optional<std::size_t> first;
-    const auto error = session.edit([&](auto &profile) {
-      first = split_grouped_bars(profile, preview->h());
-    });
-    if (error) { changed(error); return true; }
-    if (!first) { report("Bars are already independent; nothing was split."); return true; }
-    panel_id_ = session.document().profile().panels[*first].id;
-    changed(std::nullopt);
-    report("Split grouped bars into independently positioned cooldown bars. " + edit_status());
-    return true;
-  }
-  case EditorCommand::panel_colors: {
-    const auto index = panel_index();
-    if (!index || !apply_fields()) return true;
-    const auto &bar = session.document().profile().panels[*index].bar;
-    const auto chosen = edit_panel_colors(
-        {{bar.fill_color, bar.background_color, bar.border_color, bar.text_color}});
-    if (!chosen) { report("Panel colours unchanged."); return true; }
-    const auto id = panel_id_;
-    changed(session.edit([&](auto &profile) {
-      for (auto &panel : profile.panels) {
-        if (panel.id != id) continue;
-        panel.bar.fill_color = chosen->values[0];
-        panel.bar.background_color = chosen->values[1];
-        panel.bar.border_color = chosen->values[2];
-        panel.bar.text_color = chosen->values[3];
-      }
-    }));
-    return true;
-  }
-  case EditorCommand::save_as: {
-    if (!session.has_document()) { report("Open a profile before Save As."); return true; }
-    if (!apply_fields()) { report("Save As needs valid fields first."); return true; }
-    const auto current = session.document().profile().name;
-    const char *name = fl_input("Save the open profile, with its modules, as a new profile named:",
-                                (current + " (copy)").c_str());
-    if (!name) return true;
-    if (std::string_view(name).empty()) { report("Save As needs a profile name."); return true; }
-    const std::string chosen(name);
-    if (const auto error = session.duplicate_current()) { report(*error); refresh(); return true; }
-    if (const auto error = session.edit([&](auto &profile) { profile.name = chosen; })) {
-      report(*error); refresh(); return true;
-    }
-    refresh();
-    (void)save();
-    return true;
-  }
-  default:
-    return false;
-  }
-}
 
 void EditorApp::open_profiles_folder() {
   const auto directory = session.directory();

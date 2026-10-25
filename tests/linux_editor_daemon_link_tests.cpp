@@ -23,6 +23,7 @@
 #include <cstring>
 #include <filesystem>
 #include <functional>
+#include <array>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -165,6 +166,86 @@ void wayland_status_and_scope_notes() {
   expect(unknown.find("only XWayland windows") != std::string::npos &&
              unknown.ends_with("LayerD is not running, so its window provider is unknown."),
          "a Wayland editor environment reports the degraded scan without a daemon");
+  // The provider sentence reads the daemon's report, not the editor session kind.
+  layerc::editor::DaemonStatus x11_daemon = status;
+  x11_daemon.display->session = runtime::DisplaySession::x11;
+  x11_daemon.display->compositor = runtime::DisplayCompositor::unknown;
+  const auto reported = layerc::editor::wayland_scope_note(x11_daemon, true);
+  expect(reported.ends_with("LayerD tracks windows with x11_ewmh: degraded "
+                            "(xwayland_windows_only)."),
+         "a Wayland editor environment still names an X11 daemon's provider: " + reported);
+  layerc::editor::DaemonStatus running_without_display;
+  running_without_display.running = true;
+  const auto unreported = layerc::editor::wayland_scope_note(running_without_display, true);
+  expect(unreported.ends_with("LayerD did not report a window provider."),
+         "a running daemon without display diagnostics says it did not report one: " +
+             unreported);
+}
+
+// Every CommitResult/ReloadState phrase is derived from the typed save mode, so
+// autosave wording never rewrites a manual string.
+void save_mode_text_contracts() {
+  namespace editor = layerc::editor;
+  using editor::save_report_text;
+  using editor::SaveMode;
+  struct Case {
+    const char *manual;
+    const char *autosave;
+    editor::CommitOutcome commit;
+    std::optional<editor::ReloadResult> reload;
+  };
+  editor::CommitOutcome invalid{};
+  invalid.result = editor::CommitResult::invalid_profile;
+  editor::CommitOutcome declined{};
+  declined.result = editor::CommitResult::upgrade_declined;
+  editor::CommitOutcome blocked{};
+  blocked.result = editor::CommitResult::blocked_by_sidecar;
+  editor::CommitOutcome failed{};
+  failed.result = editor::CommitResult::write_failed;
+  failed.write_error = layerc::platform::ProfileWriteError::io_failed;
+  editor::CommitOutcome unconfirmed{};
+  unconfirmed.result = editor::CommitResult::write_failed;
+  unconfirmed.write_error = layerc::platform::ProfileWriteError::durability_unconfirmed;
+  editor::CommitOutcome saved{};
+  const editor::ReloadResult acknowledged{editor::ReloadState::acknowledged, {}};
+  const editor::ReloadResult unavailable{editor::ReloadState::daemon_unavailable, {}};
+  const editor::ReloadResult failed_reload{editor::ReloadState::failed, {}};
+  const std::array<Case, 9> cases{{
+      {"Saved.", "Autosaved.", saved, std::nullopt},
+      {"Not saved: finish the invalid field first.",
+       "Not autosaved: finish the invalid field first.", invalid, std::nullopt},
+      {"Not saved: the profile format upgrade was declined.",
+       "Autosave paused \u2014 use Save to approve the profile format upgrade.",
+       declined, std::nullopt},
+      {"Not saved: repair the invalid visual or automation settings first.",
+       "Not autosaved: repair the invalid visual or automation settings first.",
+       blocked, std::nullopt},
+      {"Saved. LayerD is not running; the change applies when it starts.",
+       "Autosaved. LayerD is not running; the change applies when it starts.", saved,
+       unavailable},
+      {"Saved; LayerD's reload could not be confirmed.",
+       "Autosaved; LayerD's reload could not be confirmed.", saved, failed_reload},
+      {"Not saved. Profile write failed: profile store I/O failed.",
+       "Not autosaved. Profile write failed: profile store I/O failed.", failed, std::nullopt},
+      {"Save unconfirmed: the files may already be on disk, but their durability "
+       "could not be confirmed. These edits are kept; Save again.",
+       "Autosave unconfirmed: the files may already be on disk, but their durability "
+       "could not be confirmed. These edits are kept; Save again.",
+       unconfirmed, std::nullopt},
+      {"Saved \u2014 LayerD acknowledged the reload request.",
+       "Autosaved \u2014 LayerD acknowledged the reload request.", saved,
+       acknowledged},
+  }};
+  for (const auto &item : cases) {
+    const auto manual = save_report_text(item.commit, item.reload, SaveMode::manual);
+    const auto autosave = save_report_text(item.commit, item.reload, SaveMode::autosave);
+    expect(manual == item.manual, "the manual save text is byte-stable: " + manual);
+    expect(autosave == item.autosave,
+           "the autosave text is derived from the mode: " + autosave);
+  }
+  expect(save_report_text(failed, std::nullopt) ==
+             save_report_text(failed, std::nullopt, SaveMode::manual),
+         "the manual default keeps every existing caller byte-identical");
 }
 
 void refused_contracts() {
@@ -428,6 +509,7 @@ void live_draft_client_shutdown_is_bounded() {
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(offline_contracts),
                  LAYERC_TEST_CASE(running_contracts),
                  LAYERC_TEST_CASE(wayland_status_and_scope_notes),
+                 LAYERC_TEST_CASE(save_mode_text_contracts),
                  LAYERC_TEST_CASE(refused_contracts),
                  LAYERC_TEST_CASE(lost_acknowledgement_is_uncertain),
                  LAYERC_TEST_CASE(inspection_errors_are_not_offline),

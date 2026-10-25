@@ -78,9 +78,11 @@ RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
       role == EditorRole::sidebar || (role == EditorRole::edit && dynamic_cast<Fl_Input_ *>(widget));
   Fl_Color fill = field ? FL_BACKGROUND2_COLOR : FL_BACKGROUND_COLOR;
   if (role == EditorRole::preview) fill = fl_rgb_color(31, 36, 41);
-  const Fl_Color selection = role == EditorRole::button ? FL_BACKGROUND_COLOR
-                             : role == EditorRole::checkbox ? FL_FOREGROUND_COLOR
-                                                            : FL_SELECTION_COLOR;
+  // Tabs and their page groups use this colour as the tab's fill, not a text highlight.
+  const Fl_Color selection = (role == EditorRole::button || role == EditorRole::window)
+                                 ? FL_BACKGROUND_COLOR
+                                 : role == EditorRole::checkbox ? FL_FOREGROUND_COLOR
+                                                                : FL_SELECTION_COLOR;
   const auto rgb = [](Fl_Color color) {
     uchar r{}, g{}, b{};
     Fl::get_color(color, r, g, b);
@@ -159,7 +161,7 @@ public:
     auto *reset_all = new Fl_Button(335, 285, 170, 30, "Reset all colours");
     reset_all->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
-      dialog.staged.overrides = {}; dialog.staged.accent = 0;
+      dialog.staged.overrides = {}; dialog.staged.accent.reset();
       dialog.load(); dialog.preview_changes();
     }, this);
     status = new Fl_Box(15, 325, 490, 50);
@@ -215,7 +217,7 @@ private:
     return colors.value_or(RoleColors{0xFFFFFF, 0x000000, 0x0000FF});
   }
   void choose_accent() {
-    pick(accent, "Accent colour", staged.accent ? staged.accent : preset_accent(staged.theme));
+    pick(accent, "Accent colour", staged.accent.value_or(preset_accent(staged.theme)));
   }
   void choose_fill() { pick(fill, "Role fill colour", current_role_colors().fill); }
   void choose_text() { pick(text, "Role text colour", current_role_colors().text); }
@@ -223,7 +225,7 @@ private:
 
   void load() {
     theme->value(static_cast<int>(staged.theme));
-    accent->value(staged.accent ? format_rgb(staged.accent).c_str() : "");
+    accent->value(hex_or_empty(staged.accent).c_str());
     load_role();
   }
   void load_role() {
@@ -250,7 +252,7 @@ private:
       status->redraw();
       return false;
     }
-    staged.accent = accent_value.value_or(0);
+    staged.accent = accent_value;
     item = next;
     status->copy_label("");
     status->redraw();

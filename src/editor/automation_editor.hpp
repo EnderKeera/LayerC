@@ -25,11 +25,12 @@ namespace layerc::editor {
 // window's private state.
 class AutomationEditor final {
 public:
-  using ChangeRecorder = std::function<void(DocumentChangeKind)>;
+  using EditReporter =
+      std::function<bool(const ModuleEditOutcome &, DocumentChangeKind)>;
 
   AutomationEditor(ProfileDocument &document, LiveEditSession &live_edit,
                    const EditorShell &shell, const DialogTheme &theme,
-                   ChangeRecorder record_change) noexcept;
+                   EditReporter report_edit) noexcept;
   ~AutomationEditor();
 
   AutomationEditor(const AutomationEditor &) = delete;
@@ -41,11 +42,11 @@ public:
 
 private:
   void update_add_enabled(HWND dialog);
-  // Outcome of mutate_automation; rejected and invalid edits both restore the
-  // pre-edit snapshot.
+  // Rejected and invalid candidate edits leave the document unchanged.
   enum class Mutation { committed, rejected, invalid };
   // Returns the rejection text for a refused edit, or nullopt once applied.
-  using AutomationEdit = std::function<std::optional<std::wstring>()>;
+  using AutomationEdit = std::function<std::optional<std::string>(
+      std::optional<layerc::core::AutomationProfile> &)>;
 
   void initialize(HWND dialog);
   [[nodiscard]] LRESULT handle_message(HWND, UINT, WPARAM, LPARAM);
@@ -73,9 +74,11 @@ private:
   void save_trace(HWND dialog);
   void retry_selected(HWND dialog);
   [[nodiscard]] int selected_index(HWND dialog) const;
-  [[nodiscard]] layerc::core::AutomationDefinition *selected_automation(HWND dialog) const;
-  [[nodiscard]] layerc::core::AutomationRule *selected_rule(HWND dialog) const;
-  [[nodiscard]] layerc::core::AutomationAction *selected_action(HWND dialog) const;
+  [[nodiscard]] const layerc::core::AutomationDefinition *selected_automation(HWND dialog) const;
+  [[nodiscard]] const layerc::core::AutomationRule *selected_rule(HWND dialog) const;
+  [[nodiscard]] const layerc::core::AutomationAction *selected_action(HWND dialog) const;
+  friend struct AutomationEditorTestAccess;
+
   [[nodiscard]] Mutation mutate_automation(HWND dialog, const wchar_t *title,
                                            const AutomationEdit &edit,
                                            bool repair = false);
@@ -84,7 +87,7 @@ private:
   LiveEditSession &live_edit_;
   const EditorShell &shell_;
   const DialogTheme &theme_;
-  ChangeRecorder record_change_;
+  EditReporter report_edit_;
   HWND dialog_{};
   DialogChrome chrome_;
   std::string trace_display_;

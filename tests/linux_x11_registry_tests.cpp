@@ -1,5 +1,6 @@
 // Session admission and automation health are independent of an X11 display.
 #include "daemon_host.hpp"
+#include "trace_lease_host.hpp"
 #include "input_service.hpp"
 #include "control_channel.hpp"
 
@@ -62,9 +63,9 @@ AutomationProfile automation_profile(const GameProfile &base,
   return profile;
 }
 
-layerc::platform::X11WindowScan active_scan() {
-  layerc::platform::X11WindowScan scan;
-  layerc::platform::X11WindowSnapshot window;
+layerc::platform::WindowScan active_scan() {
+  layerc::platform::WindowScan scan;
+  layerc::platform::WindowSnapshot window;
   window.window = 0x1234;
   window.active = true;
   scan.windows.push_back(window);
@@ -73,7 +74,7 @@ layerc::platform::X11WindowScan active_scan() {
 }
 
 std::string automation_status_response(
-    const layerc::daemon::X11SessionRegistry &registry) {
+    const layerc::daemon::SessionRegistry &registry) {
   const auto requests = registry.session_requests();
   const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
@@ -133,7 +134,7 @@ void test_registry_automation_only_and_health() {
                   timer_source.path, timer_base, std::nullopt, timer_profile).ok(),
               "timer-only sidecar is stored"))
     return;
-  layerc::daemon::X11SessionRegistry timer_registry;
+  layerc::daemon::SessionRegistry timer_registry;
   timer_registry.configure(std::span{&timer_source, 1});
   timer_registry.refresh(scan);
   const auto timer_request = timer_registry.session_requests();
@@ -152,7 +153,7 @@ void test_registry_automation_only_and_health() {
                       layerc::runtime::Capability::overlay) == 0,
               "timer-only profile demands automation without XI2 or overlay"))
     return;
-  layerc::daemon::X11InputService timer_input{timer_registry};
+  layerc::daemon::InputService timer_input{timer_registry};
   expect(timer_input.unavailable().empty(),
          "timer-only session has no detached XI2 fault");
   expect(timer_input.resources().handles == 0 &&
@@ -178,7 +179,7 @@ void test_registry_automation_only_and_health() {
                   input_source.path, input_base, std::nullopt, input_profile).ok(),
               "input-rule sidecar is stored"))
     return;
-  layerc::daemon::X11SessionRegistry input_registry;
+  layerc::daemon::SessionRegistry input_registry;
   input_registry.configure(std::span{&input_source, 1});
   input_registry.refresh(scan);
   if (!expect(input_registry.session_count() == 1 &&
@@ -257,7 +258,7 @@ void test_registry_automation_only_and_health() {
   const auto pending_requests = input_registry.session_requests();
   const auto pending_demand =
       layerc::runtime::calculate_capability_demand(pending_requests, false);
-  layerc::daemon::X11AutomationService pending_service{input_registry};
+  layerc::daemon::AutomationService pending_service{input_registry};
   expect(input_registry.session_count() == 0 &&
              input_registry.pending_checkpoint_count() == 1 &&
              pending_demand.consumers(layerc::runtime::Capability::automation) ==
@@ -356,7 +357,7 @@ void test_registry_automation_only_and_health() {
                   "{invalid"),
               "malformed automation sidecar is isolated"))
     return;
-  layerc::daemon::X11SessionRegistry invalid_registry;
+  layerc::daemon::SessionRegistry invalid_registry;
   invalid_registry.configure(std::span{&invalid_source, 1});
   invalid_registry.refresh({});
   expect(invalid_registry.automation_diagnostics().empty(),
@@ -417,7 +418,7 @@ void test_registry_automation_only_and_health() {
                   fault_source.path, fault_base, std::nullopt, fault_profile).ok(),
               "fault-isolation sidecar is stored"))
     return;
-  layerc::daemon::X11SessionRegistry fault_registry;
+  layerc::daemon::SessionRegistry fault_registry;
   fault_registry.configure(std::span{&fault_source, 1});
   fault_registry.refresh(scan);
   if (!expect(fault_registry.session_count() == 1 &&
@@ -489,7 +490,7 @@ void test_registry_fresh_admission_state() {
                   source.path, base, std::nullopt, automation).ok(),
               "readmission profile and stopping rule are stored"))
     return;
-  layerc::daemon::X11SessionRegistry registry;
+  layerc::daemon::SessionRegistry registry;
   registry.configure(std::span{&source, 1});
   const auto scan = active_scan();
   registry.refresh(scan);
@@ -612,7 +613,8 @@ void test_registry_trace_lifetime() {
   const StoredProfile source{roots.config_profiles / "trace.json", base};
   if (!expect(layerc::platform::write_profile_bundle(
           source.path, base, std::nullopt, automation).ok(), "trace-only bundle is stored")) return;
-  layerc::daemon::X11SessionRegistry registry;
+  layerc::daemon::SessionRegistry registry;
+  layerc::daemon::TraceLeaseHost host;
   registry.configure(std::span{&source, 1});
   const auto scan = active_scan();
   registry.refresh(scan);
@@ -621,8 +623,14 @@ void test_registry_trace_lifetime() {
               "ordinary automation allocates no trace buffer")) return;
   const auto now = MonotonicClock::now();
   TraceControlRequest request{TraceControlOperation::subscribe, base.id, "client-a", 0, 0};
+  const auto failure_code = [](const auto &result)
+      -> std::optional<layerc::core::TraceControlError> {
+    if (const auto *failure = std::get_if<layerc::core::TraceControlFailure>(&result))
+      return failure->code;
+    return std::nullopt;
+  };
   auto exchange = [&](const TraceControlRequest &value) -> std::optional<TraceControlReply> {
-    const auto response = registry.trace_request(value, now);
+    const auto response = host.handle(value, registry.sessions(), now);
     if (!expect(std::holds_alternative<TraceControlReply>(response), "valid trace request succeeds"))
       return std::nullopt;
     return std::get<TraceControlReply>(response);
@@ -632,6 +640,17 @@ void test_registry_trace_lifetime() {
   expect(reply->reset && reply->generation != 0 && runtime->trace_enabled() &&
              runtime->snapshot().variables.at("count") == AutomationValue(std::int64_t{0}),
          "subscription only enables observation; it never evaluates a root");
+  expect(host.next_deadline() == std::optional<TimePoint>{now + trace_control_lease},
+         "the earliest lease expiry is the engine deadline");
+  auto later = request;
+  later.client_id = "client-deadline";
+  const auto later_reply = host.handle(later, registry.sessions(), now + Milliseconds{1});
+  expect(std::holds_alternative<TraceControlReply>(later_reply) &&
+             host.next_deadline() == std::optional<TimePoint>{now + trace_control_lease},
+         "a later subscriber cannot extend the earliest deadline");
+  auto drop_later = later;
+  drop_later.operation = TraceControlOperation::unsubscribe;
+  (void)host.handle(drop_later, registry.sessions(), now + Milliseconds{1});
   request.operation = TraceControlOperation::poll;
   request.generation = reply->generation; request.cursor = reply->cursor;
   AutomationEvent root;
@@ -645,7 +664,7 @@ void test_registry_trace_lifetime() {
              std::get<std::vector<AutomationEvent>>(imported).size() == 1 &&
              reply->cursor > request.cursor,
          "bounded packets carry a replayable root and advance the sequence cursor");
-  const auto retry = registry.trace_request(request, now);
+  const auto retry = host.handle(request, registry.sessions(), now);
   const auto *again = std::get_if<TraceControlReply>(&retry);
   expect(again != nullptr && again->cursor == reply->cursor && again->packet == reply->packet,
          "a lost reply is fetched again with the unacknowledged cursor");
@@ -653,11 +672,13 @@ void test_registry_trace_lifetime() {
   request.cursor = reply->cursor;
   if (!exchange(request)) return; // acknowledges the delivered batch
   auto replay = request; replay.cursor = stale;
-  expect(std::holds_alternative<std::string>(registry.trace_request(replay, now)),
+  expect(failure_code(host.handle(replay, registry.sessions(), now)) ==
+             layerc::core::TraceControlError::invalid_cursor,
          "a stale cursor cannot replay an acknowledged packet");
   auto wrong = request; wrong.profile_id = "unrelated";
-  expect(std::holds_alternative<std::string>(registry.trace_request(wrong, now)) &&
-             runtime->trace_enabled(), "one client cannot affect another profile subscription");
+  expect(failure_code(host.handle(wrong, registry.sessions(), now)) ==
+             layerc::core::TraceControlError::client_conflict && runtime->trace_enabled(),
+         "one client cannot affect another profile subscription");
   const auto a = request;
   auto b = request; b.client_id = "client-b"; b.operation = TraceControlOperation::subscribe;
   if (!exchange(b)) return;
@@ -695,6 +716,9 @@ void test_registry_trace_lifetime() {
           source.path, base, std::nullopt, automation).ok(), "changed graph is durably stored")) return;
   registry.configure(std::span{&source, 1}); registry.refresh(scan);
   runtime = registry.sessions().front().automation.runtime();
+  host.reconcile(registry.sessions());
+  expect(runtime->trace_enabled(),
+         "a rebuilt session inherits the live subscriber's trace demand");
   reply = exchange(request);
   if (!reply) return;
   expect(reply->reset && reply->generation != old_generation && reply->cursor == 0 &&
@@ -703,9 +727,12 @@ void test_registry_trace_lifetime() {
   reply = exchange(request);
   if (!reply) return;
   expect(!reply->reset && reply->packet.empty(), "empty new generation cannot reuse old roots");
-  (void)registry.poll_automation(now + trace_control_lease + Milliseconds{1});
+  expect(host.expire(now + trace_control_lease + Milliseconds{1}, registry.sessions()),
+         "the engine timer observes the lapsed lease");
   expect(!runtime->trace_enabled() && runtime->trace().capacity() == 0 &&
-             std::holds_alternative<std::string>(registry.trace_request(request, now + trace_control_lease + Milliseconds{1})),
+             failure_code(host.handle(request, registry.sessions(),
+                                      now + trace_control_lease + Milliseconds{1})) ==
+                 layerc::core::TraceControlError::expired,
          "abandoned clients expire on the daemon monotonic event-loop deadline");
 
   request.operation = TraceControlOperation::subscribe;
@@ -714,13 +741,17 @@ void test_registry_trace_lifetime() {
     if (!exchange(request)) return;
   }
   request.client_id = "too-many";
-  expect(std::holds_alternative<std::string>(registry.trace_request(request, now)),
+  expect(failure_code(host.handle(request, registry.sessions(), now)) ==
+             layerc::core::TraceControlError::subscriber_limit,
          "subscriber count is bounded independently of the control connection limit");
-  expect(std::holds_alternative<std::string>(registry.trace_request(request, TimePoint::max())),
+  expect(host.expire(now + trace_control_lease, registry.sessions()) &&
+             !runtime->trace_enabled() && runtime->trace().capacity() == 0 &&
+             !host.next_deadline() &&
+             !host.expire(now + trace_control_lease, registry.sessions()),
+         "at the exact deadline all disconnected subscribers release their trace buffer and deadline");
+  expect(failure_code(host.handle(request, registry.sessions(), TimePoint::max())) ==
+             layerc::core::TraceControlError::clock_limit,
          "lease clock overflow is refused instead of creating immortal demand");
-  (void)registry.poll_automation(now + trace_control_lease + Milliseconds{1});
-  expect(!runtime->trace_enabled() && runtime->trace().capacity() == 0,
-         "all disconnected subscribers release their trace buffer");
   registry.stop_sessions(MonotonicClock::now());
 }
 

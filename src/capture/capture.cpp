@@ -135,6 +135,17 @@ PixelBounds transform_output_crop(const PixelBounds logical_crop,
   }
 }
 
+std::uint32_t sampled_coordinate(const std::uint32_t index,
+                                 const std::uint32_t source_extent,
+                                 const std::uint32_t output_extent) noexcept {
+  return std::min<std::uint32_t>(
+      source_extent - 1U,
+      static_cast<std::uint32_t>(
+          (static_cast<std::uint64_t>(index) * source_extent +
+           source_extent / 2U) /
+          output_extent));
+}
+
 std::pair<std::uint32_t, std::uint32_t>
 capture_sample_dimensions(const std::uint32_t width, const std::uint32_t height,
                           const core::CaptureQuality quality) noexcept {

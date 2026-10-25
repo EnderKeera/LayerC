@@ -77,9 +77,11 @@ struct ControlReply {
   bool reload_requested{};
 };
 
-using TraceControlResult = std::variant<layerc::core::TraceControlReply, std::string>;
+using TraceControlResult =
+    std::variant<layerc::core::TraceControlReply, layerc::core::TraceControlFailure>;
 using TraceControlHandler = std::function<TraceControlResult(const layerc::core::TraceControlRequest &)>;
-using DraftControlResult = std::variant<layerc::core::LiveDraftReply, std::string>;
+using DraftControlResult =
+    std::variant<layerc::core::LiveDraftReply, layerc::core::LiveDraftFailure>;
 using DraftControlHandler = std::function<DraftControlResult(const layerc::core::LiveDraftRequest &)>;
 
 // LayerC.Control v1 dispatch; trace and draft payloads carry their own typed

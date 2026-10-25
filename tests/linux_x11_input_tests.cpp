@@ -5,6 +5,7 @@
 // XTest is linked here and only here — layerd reads input, never synthesizes
 // it, and does not link the extension at all.
 #include "input_service.hpp"
+#include "x11_provider.hpp"
 #include "overlay_service.hpp"
 #include "x11_display.hpp"
 #include "x11_input.hpp"
@@ -210,6 +211,14 @@ void check_passive_normalization(Display *raw, X11InputSource &source,
     return;
   }
   passed &= expect(source.refresh_keymap(), "server physical key names are readable");
+  // Both consumers share one alias-aware cache: the focused editor map must
+  // return exactly the same stable physical values as the daemon replay.
+  layerc::platform::X11PhysicalKeymap focused_map;
+  passed &= expect(!focused_map.available() && !focused_map.scan_code(0) &&
+                       !focused_map.scan_code(256),
+                   "a fresh physical map has no evidence before refresh");
+  passed &= expect(focused_map.refresh(raw) && focused_map.available(),
+                   "the shared physical map refreshes from the server");
   (void)source.poll();
   auto replay = [&](InputDevice device, std::uint16_t code, unsigned int detail,
                     bool supported) {
@@ -269,8 +278,16 @@ void check_passive_normalization(Display *raw, X11InputSource &source,
       passed = false;
       continue;
     }
+    passed &= expect(focused_map.scan_code(keycode) == key.code,
+                     "focused and passive consumers share the physical token");
     replay(InputDevice::keyboard, key.code, keycode, true);
   }
+  passed &= expect(!focused_map.refresh(nullptr) && !focused_map.available() &&
+                       !focused_map.scan_code(XKeysymToKeycode(raw, XK_e)),
+                   "a cleared physical map drops previous lookups");
+  passed &= expect(focused_map.refresh(raw) && focused_map.available() &&
+                       focused_map.scan_code(XKeysymToKeycode(raw, XK_e)) == 0x12,
+                   "the shared physical map recovers after a refresh");
   const struct ButtonCase { unsigned int button; std::uint16_t code; bool supported; }
       buttons[] = {{2, 3, true}, {3, 2, true}, {8, 4, true}, {9, 5, true},
                    {6, 4, false}, {7, 5, false}};
@@ -400,9 +417,9 @@ int run_linux_x11_input_tests() {
   scan.windows.push_back(foreground);
   scan.active = foreground.window;
 
-  layerc::daemon::X11SessionRegistry service_sessions;
+  layerc::daemon::SessionRegistry service_sessions;
 
-  layerc::daemon::X11InputService service(service_sessions);
+  layerc::daemon::InputService service(service_sessions);
   const StoredProfile profiles[] = {
       {.path = roots.config_profiles / "by-name.json", .profile = *by_name},
       {.path = roots.config_profiles / "global.json", .profile = *global}};
@@ -512,8 +529,8 @@ int run_linux_x11_input_tests() {
     auto chord_profile = profiles[0];
     chord_profile.profile.bindings.front().chord.tokens.push_back(
         {layerc::core::InputDevice::keyboard, 0x1D, 0});
-    layerc::daemon::X11SessionRegistry focus_service_sessions;
-    layerc::daemon::X11InputService focus_service(focus_service_sessions);
+    layerc::daemon::SessionRegistry focus_service_sessions;
+    layerc::daemon::InputService focus_service(focus_service_sessions);
     focus_service_sessions.configure(std::span{&chord_profile, 1});
     focus_service_sessions.refresh(focus_scan);
     const layerc::core::InputEvent ctrl{
@@ -593,9 +610,9 @@ int run_linux_x11_input_tests() {
                                                       std::int64_t{2}),
                    "dirty persistent state checkpoints transactionally");
 
-  layerc::daemon::X11SessionRegistry reloaded_sessions;
+  layerc::daemon::SessionRegistry reloaded_sessions;
 
-  layerc::daemon::X11InputService reloaded(reloaded_sessions);
+  layerc::daemon::InputService reloaded(reloaded_sessions);
   reloaded_sessions.configure(std::span{profiles}.first(1));
   reloaded_sessions.refresh(scan);
   const auto &reloaded_values =
@@ -659,10 +676,21 @@ int run_linux_x11_input_tests() {
   passed &= expect(!raw_input_selected(raw, root),
                    "destroying the XI2 source clears raw-event selection");
 
-  layerc::platform::X11WindowTracker tracker(*display);
-  layerc::daemon::X11SessionRegistry live_registry;
-  layerc::daemon::X11InputService live(live_registry);
-  live.attach(*display);
+  layerc::daemon::X11Provider provider(std::move(*display));
+  auto &tracker = provider.tracker();
+  layerc::daemon::SessionRegistry live_registry;
+  layerc::daemon::InputService live(live_registry);
+  layerc::daemon::PassiveInputSource *const live_sources[]{&provider};
+  live.use_sources(live_sources);
+  const auto dispatch_live = [&] {
+    auto poll = provider.dispatch_pending();
+    layerc::daemon::DisplayDispatch result;
+    result.events = poll.events.size();
+    result.windows_changed = poll.windows_changed;
+    result.devices_changed = poll.devices_changed;
+    live.feed(poll.events, result);
+    return result;
+  };
   live_registry.configure(profiles);
   live_registry.refresh(tracker.scan());
   const auto live_sessions = live_registry.session_count();
@@ -672,14 +700,15 @@ int run_linux_x11_input_tests() {
 
   // The overlay service is registered alongside input: an active session
   // demands both, and this regression must prove input survives that activation.
-  layerc::daemon::X11OverlayService overlay;
-  overlay.attach(*display);
+  layerc::daemon::OverlayService overlay;
+  layerc::daemon::X11OverlayBackend overlay_backend(provider.display());
+  overlay.use_backend(&overlay_backend);
   overlay.refresh(live_registry.sessions(), tracker.scan(),
-                  layerc::platform::scan_monitors(*display));
+                  provider.monitors());
   const auto requests = live_registry.session_requests();
   const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  layerc::daemon::X11AutomationService automation(live_registry);
+  layerc::daemon::AutomationService automation(live_registry);
   layerc::runtime::RuntimeServiceRegistry services{};
   services[static_cast<std::size_t>(layerc::runtime::Capability::input)] = &live;
   services[static_cast<std::size_t>(layerc::runtime::Capability::automation)] =
@@ -718,13 +747,13 @@ int run_linux_x11_input_tests() {
   if (xtest) {
     // Drain overlay construction first: only the client title and passive
     // keypress below can explain this mixed-batch discovery invalidation.
-    (void)live.dispatch(&tracker);
+    (void)dispatch_live();
     auto title_profile = profiles[0];
     title_profile.path = profiles[0].path.parent_path() / "title-match.json";
     title_profile.profile.id = "title-match";
     title_profile.profile.game = {};
     title_profile.profile.game.window_title = "Only After Rename";
-    layerc::daemon::X11SessionRegistry title_registry;
+    layerc::daemon::SessionRegistry title_registry;
     title_registry.configure(std::span{&title_profile, 1});
     title_registry.refresh(tracker.scan());
     passed &= expect(title_registry.session_count() == 0,
@@ -737,7 +766,7 @@ int run_linux_x11_input_tests() {
     const KeyCode key_e = XKeysymToKeycode(raw, XK_e);
     XTestFakeKeyEvent(raw, key_e, True, CurrentTime);
     XSync(raw, False);
-    auto dispatch = live.dispatch(&tracker);
+    auto dispatch = dispatch_live();
     passed &= expect(dispatch.events >= 1 && dispatch.windows_changed,
                      "one dispatcher preserves mixed keypress and client-title events");
     title_registry.refresh(tracker.scan());
@@ -754,7 +783,7 @@ int run_linux_x11_input_tests() {
 
     XTestFakeKeyEvent(raw, key_e, False, CurrentTime);
     XSync(raw, False);
-    dispatch = live.dispatch(&tracker);
+    dispatch = dispatch_live();
     passed &= expect(dispatch.events >= 1 && dispatch.triggered.empty(),
                      "the key release triggers nothing");
     const char unmatched[] = "No Longer Matching";
@@ -763,14 +792,14 @@ int run_linux_x11_input_tests() {
                     reinterpret_cast<const unsigned char *>(unmatched),
                     static_cast<int>(sizeof(unmatched) - 1));
     XSync(raw, False);
-    passed &= expect(live.dispatch(&tracker).windows_changed,
+    passed &= expect(dispatch_live().windows_changed,
                      "client-only rename-away is observed with input still active");
     title_registry.refresh(tracker.scan());
     passed &= expect(title_registry.session_count() == 0,
                      "rename-away retires the title-only session without a timer");
     XMoveResizeWindow(raw, fixture, 40, 60, 140, 90);
     XSync(raw, False);
-    const auto geometry_dispatch = live.dispatch(&tracker);
+    const auto geometry_dispatch = dispatch_live();
     passed &= expect(geometry_dispatch.windows_changed && geometry_dispatch.events == 0,
                      "geometry-only invalidation survives an active XI2 decoder");
     const auto moved = tracker.find(fixture);
@@ -781,33 +810,33 @@ int run_linux_x11_input_tests() {
     const auto fallback_child = XCreateSimpleWindow(raw, root, 0, 0, 30, 30, 0, 0, 0);
     XMapWindow(raw, fallback_child);
     XSync(raw, False);
-    passed &= expect(live.dispatch(&tracker).windows_changed &&
+    passed &= expect(dispatch_live().windows_changed &&
                          tracker.find(fallback_child).has_value(),
                      "active input preserves fallback creation/map discovery");
     XUnmapWindow(raw, fallback_child);
     XSync(raw, False);
-    passed &= expect(live.dispatch(&tracker).windows_changed &&
+    passed &= expect(dispatch_live().windows_changed &&
                          !tracker.find(fallback_child),
                      "active input preserves fallback unmap discovery");
     XDestroyWindow(raw, fallback_child);
     XSync(raw, False);
-    passed &= expect(live.dispatch(&tracker).windows_changed,
+    passed &= expect(dispatch_live().windows_changed,
                      "active input preserves fallback destruction discovery");
 
     XTestFakeButtonEvent(raw, 1, True, CurrentTime);
     XSync(raw, False);
-    dispatch = live.dispatch();
+    dispatch = dispatch_live();
     bool got_potion = false;
     for (const auto &cooldown : dispatch.triggered)
       if (cooldown == "potion") got_potion = true;
     passed &= expect(got_potion, "the injected mouse button drives a cooldown");
     XTestFakeButtonEvent(raw, 1, False, CurrentTime);
     XSync(raw, False);
-    (void)live.dispatch();
+    (void)dispatch_live();
 
     XTestFakeButtonEvent(raw, 4, True, CurrentTime);
     XSync(raw, False);
-    dispatch = live.dispatch();
+    dispatch = dispatch_live();
     bool got_zoom = false;
     for (const auto &cooldown : dispatch.triggered)
       if (cooldown == "zoom") got_zoom = true;
@@ -815,7 +844,7 @@ int run_linux_x11_input_tests() {
                      "X wheel button 4 normalizes to the profile wheel code");
     XTestFakeButtonEvent(raw, 4, False, CurrentTime);
     XSync(raw, False);
-    (void)live.dispatch();
+    (void)dispatch_live();
   }
 
   (void)live_registry.sessions().front().matcher.process(press_e);

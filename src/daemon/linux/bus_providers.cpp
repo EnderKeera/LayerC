@@ -28,7 +28,8 @@ using Source = platform::WindowReportSource;
 struct BusProviders::Impl {
   struct Session;
   platform::EventLoop *loop;
-  NativeDisplaySource *fallback;
+  const DisplaySource *window_source{};
+  bool own_windows{};
   platform::BusConnection bus;
   platform::ShellService shell{bus};
   platform::KwinScript kwin{bus};
@@ -42,8 +43,7 @@ struct BusProviders::Impl {
   bool tracking{}, overlay_wanted{}, attempted{}, stopped{}, dirty{};
   std::optional<core::TimePoint> close_at;
 
-  Impl(platform::EventLoop &event_loop, NativeDisplaySource *source)
-      : loop(&event_loop), fallback(source) {}
+  explicit Impl(platform::EventLoop &event_loop) : loop(&event_loop) {}
 
   [[nodiscard]] Compositor compositor() const {
     return detect_compositor(desktop, bus.owner(platform::kwin_bus_name).has_value(),
@@ -60,12 +60,15 @@ struct BusProviders::Impl {
   }
   [[nodiscard]] platform::WindowScan windows() const {
     if (auto reported = scan()) return std::move(*reported);
-    return fallback ? fallback->windows() : platform::WindowScan{};
+    return {};
   }
   [[nodiscard]] std::optional<platform::WindowSnapshot> window(std::uint64_t id) const {
-    const auto all = windows();
+    const auto all = window_source ? window_source->windows() : platform::WindowScan{};
     const auto found = std::ranges::find(all.windows, id, &platform::WindowSnapshot::window);
     return found == all.windows.end() ? std::nullopt : std::optional{*found};
+  }
+  [[nodiscard]] std::string capture_identity() const {
+    return own_windows ? identity() : "foreign_toplevel";
   }
   [[nodiscard]] std::string identity() const {
     const auto selected = source();
@@ -125,7 +128,7 @@ struct BusProviders::Impl::Session final : VisualCaptureSession {
     } else if (!owner->window(window.opaque)) {
       fault = "window_unavailable";
     } else {
-      identity = owner->identity();
+      identity = owner->capture_identity();
       if (!portal.start(profile)) fault = portal.reason();
     }
 #endif
@@ -168,7 +171,7 @@ struct BusProviders::Impl::Session final : VisualCaptureSession {
       const auto target = owner->window(window.opaque);
       if (owner->stopped || !owner->bus.connected()) {
         invalidate(owner->bus.reason().empty() ? "bus_unavailable" : owner->bus.reason());
-      } else if (!target || identity != owner->identity()) {
+      } else if (!target || identity != owner->capture_identity()) {
         invalidate("window_provider_changed");
       } else {
         pipewire.set_window({target->x, target->y, target->width, target->height});
@@ -243,8 +246,8 @@ void BusProviders::Impl::shutdown() noexcept {
   } catch (...) { bus.close(); close_at.reset(); }
 }
 
-BusProviders::BusProviders(platform::EventLoop &loop, NativeDisplaySource *fallback)
-    : impl_(std::make_shared<Impl>(loop, fallback)) {}
+BusProviders::BusProviders(platform::EventLoop &loop)
+    : impl_(std::make_shared<Impl>(loop)) {}
 BusProviders::~BusProviders() { stop(); impl_->bus.close(); }
 
 void BusProviders::configure(bool tracking, std::string_view desktop, bool configuration_changed) {
@@ -268,6 +271,13 @@ void BusProviders::configure(bool tracking, std::string_view desktop, bool confi
     if (host.bus.open(*host.loop)) host.shell.start();
   }
   host.sync_providers();
+}
+void BusProviders::use_window_source(const DisplaySource *source) {
+  if (impl_->window_source == source) return;
+  for (auto *session : impl_->captures)
+    if (session->started) session->invalidate("window_provider_changed");
+  impl_->window_source = source;
+  impl_->own_windows = source == this;
 }
 void BusProviders::want_overlay(bool wanted) {
   impl_->overlay_wanted = wanted;
@@ -331,8 +341,7 @@ std::optional<runtime::DisplayProviderStatus> BusProviders::window_provider() co
       reason.empty() ? std::vector<std::string>{} : std::vector<std::string>{reason}};
 }
 std::optional<runtime::DisplayProviderStatus> BusProviders::overlay_provider() const {
-  if (impl_->compositor() != Compositor::gnome ||
-      (impl_->fallback && impl_->fallback->overlay())) return std::nullopt;
+  if (impl_->compositor() != Compositor::gnome) return std::nullopt;
   if (!impl_->overlay_wanted)
     return runtime::DisplayProviderStatus{"gnome_shell", State::inactive, {"not_demanded"}};
   if (!impl_->bridge.available())
@@ -366,16 +375,12 @@ runtime::DisplayProviderStatus BusProviders::capture_provider() const {
 #endif
 }
 bool BusProviders::has_windows() const {
-  return impl_->scan().has_value() || (impl_->fallback && impl_->fallback->has_windows());
+  return impl_->scan().has_value();
 }
-bool BusProviders::prefer_windows() const { return impl_->scan().has_value(); }
 platform::WindowScan BusProviders::windows() const { return impl_->windows(); }
-bool BusProviders::has_monitors() const { return impl_->fallback && impl_->fallback->has_monitors(); }
-platform::MonitorScan BusProviders::monitors() const {
-  return impl_->fallback ? impl_->fallback->monitors() : platform::MonitorScan{};
-}
+bool BusProviders::has_monitors() const { return false; }
+platform::MonitorScan BusProviders::monitors() const { return {}; }
 OverlayBackend *BusProviders::overlay() {
-  if (impl_->fallback) if (auto *native = impl_->fallback->overlay()) return native;
   return impl_->compositor() == Compositor::gnome && impl_->bridge.available() ? this : nullptr;
 }
 bool BusProviders::show(std::string_view key, const platform::OverlayFrame &frame) {

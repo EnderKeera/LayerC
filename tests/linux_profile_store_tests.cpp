@@ -20,6 +20,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -180,6 +181,32 @@ void test_profile_directory_scan_resolves_ids() {
   const auto failed = layerc::platform::scan_profile_directory(not_directory);
   expect(!failed.error.empty(),
          "profile scan should report directory enumeration failure");
+}
+
+void test_transaction_parameter_lifetimes() {
+  using layerc::platform::ProfileFileMutation;
+  using layerc::platform::ProfileMutationPlan;
+  using layerc::platform::ProfileTransactionScope;
+  static_assert(std::is_copy_constructible_v<ProfileMutationPlan>);
+  static_assert(std::is_copy_constructible_v<ProfileTransactionScope>);
+
+  const layerc::test::TempDirectory temporary("layerc-store-test");
+  const ProfileTransactionScope scope(roots_under(temporary.path()));
+  const auto copied_scope = scope;
+  expect(layerc::platform::ensure_profile_store_roots(*copied_scope.resolve()),
+         "lifetime test roots should be created");
+  const auto target = roots_under(temporary.path()).config_profiles / "owned.json";
+  const auto plan = [&] {
+    const ProfileMutationPlan original(std::vector<ProfileFileMutation>{
+        {.target = target, .contents = owned_bytes("owned mutation bytes")}});
+    const ProfileMutationPlan copy = original;
+    return copy;
+  }();
+  expect(layerc::platform::commit_profile_transaction(copied_scope, plan).ok() &&
+             read_file(target) == "owned mutation bytes",
+         "copied plans and scopes should own temporary mutations and roots");
+  expect(layerc::platform::recover_profile_transactions(copied_scope).ok(),
+         "retained temporary roots should support recovery");
 }
 
 void test_transaction_validation_and_locking() {
@@ -557,6 +584,7 @@ int main() {
       {"test_bounded_file_read_statuses", test_bounded_file_read_statuses},
       {"test_profile_directory_scan_resolves_ids", test_profile_directory_scan_resolves_ids},
       {"test_profile_path_avoids_sanitized_collisions", test_profile_path_avoids_sanitized_collisions},
+      {"test_transaction_parameter_lifetimes", test_transaction_parameter_lifetimes},
       {"test_transaction_validation_and_locking", test_transaction_validation_and_locking},
       {"test_corrupt_journal_self_heals", test_corrupt_journal_self_heals},
       {"test_precreated_stage_symlink_is_rejected", test_precreated_stage_symlink_is_rejected},

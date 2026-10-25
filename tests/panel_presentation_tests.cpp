@@ -19,14 +19,14 @@ void test_panel_presentation_rule() {
   const std::vector<CooldownDefinition> definitions{
       {.id = "dash", .name = "Dash", .duration = 4s},
       {.id = "blink", .name = "Blink", .duration = 2s}};
-  Panel bar_panel{.id = "bars",
-                  .name = "Bars",
-                  .layout = PanelLayout::row,
-                  .style = PanelStyle::bar,
-                  .bar = {},
-                  .anchor_x = 0.5,
-                  .anchor_y = 0.5,
-                  .cooldown_ids = {"dash", "missing", "blink"}};
+  Panel bar_panel{};
+  bar_panel.id = "bars";
+  bar_panel.name = "Bars";
+  bar_panel.layout = PanelLayout::row;
+  bar_panel.style = PanelStyle::bar;
+  bar_panel.anchor_x = 0.5;
+  bar_panel.anchor_y = 0.5;
+  bar_panel.cooldown_ids = {"dash", "missing", "blink"};
   bar_panel.bar.hide_when_ready = true;
   const auto start = TimePoint{} + 10s;
 

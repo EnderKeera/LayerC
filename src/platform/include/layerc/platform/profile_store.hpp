@@ -27,12 +27,6 @@ struct SidecarPaths {
   std::filesystem::path marker;
 };
 
-struct ProfileStoreRoots {
-  std::filesystem::path config_profiles;
-  std::filesystem::path data_profiles;
-  std::filesystem::path store;
-};
-
 // Typed roots topology behind the transaction engine. Unified stores
 // (Windows: config == data == store) nest the transaction journal below
 // both target roots, so the file guard reserves its directory name.
@@ -100,8 +94,27 @@ struct ProfileScanFault {
   std::string message;
 };
 
-struct ProfileDirectoryScan {
-  std::vector<StoredProfile> profiles;
+// Display/identity metadata for one stored profile. A summary is not a
+// GameProfile and has no conversion to one: opening, saving and exporting
+// always load the complete file.
+struct ProfileSummary {
+  std::string id;
+  std::string name;
+  bool enabled{};
+  struct GameSummary {
+    std::string executable_name;
+    bool operator==(const GameSummary &) const = default;
+  } game;
+  bool operator==(const ProfileSummary &) const = default;
+};
+
+struct StoredProfileSummary {
+  std::filesystem::path path;
+  ProfileSummary profile;
+};
+
+template <typename Stored> struct BasicProfileDirectoryScan {
+  std::vector<Stored> profiles;
   // Every regular top-level JSON path, including files that could not be read
   // or parsed. Import planning reserves all of their names.
   std::vector<std::filesystem::path> base_paths;
@@ -112,7 +125,7 @@ struct ProfileDirectoryScan {
 
   // The fault messages joined with "; " for one-line diagnostics.
   [[nodiscard]] std::string warning_text() const;
-  [[nodiscard]] const StoredProfile *find(std::string_view id) const noexcept;
+  [[nodiscard]] const Stored *find(std::string_view id) const noexcept;
   // Store path for `id` inside `directory`: the file that already holds the
   // id, else the first `<slug>.json`, `<slug>-2.json`, ... whose casefolded
   // name no scanned file uses, so distinct ids never share one file.
@@ -120,9 +133,21 @@ struct ProfileDirectoryScan {
   path_for(const std::filesystem::path &directory, std::string_view id) const;
 };
 
+using ProfileDirectoryScan = BasicProfileDirectoryScan<StoredProfile>;
+using ProfileSummaryDirectoryScan =
+    BasicProfileDirectoryScan<StoredProfileSummary>;
+
 [[nodiscard]] bool has_json_extension(const std::filesystem::path &path);
-[[nodiscard]] ProfileDirectoryScan
-scan_profile_directory(const std::filesystem::path &directory);
+
+// Both scanners parse and validate every regular profile file identically:
+// same faults, duplicate-id refusal and reserved base paths. The default
+// scanner returns complete validated profiles. Summary rows hold only display
+// and identity metadata, have no conversion to GameProfile, and never replace
+// loading full data by path for opening, saving or exporting.
+[[nodiscard]] ProfileDirectoryScan scan_profile_directory(
+    const std::filesystem::path &directory);
+[[nodiscard]] ProfileSummaryDirectoryScan scan_profile_summaries(
+    const std::filesystem::path &directory);
 
 // Publishes one base-profile file through the stage→commit journal. A
 // user-visible `.bak` of the previous parseable profile is published as a

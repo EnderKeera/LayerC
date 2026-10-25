@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/enum_wire.hpp"
+#include "layerc/core/json.hpp"
 #include "layerc/core/frame.hpp"
 #include "layerc/core/utf8.hpp"
 
@@ -56,26 +57,50 @@ parse_control_command(const std::string_view name) noexcept {
 
 // Request JSON: {"proto":"LayerC.Control","v":1,"cmd":"<command>"}
 // Response JSON: {"proto":"LayerC.Control","v":1,"ok":true[,"payload":<json>]
-//                 [,"error":"<text>"]}
+//                 [,"code":"<wire-name>"][,"error":"<text>"]}
 [[nodiscard]] std::string encode_control_request(ControlCommand command,
                                                  std::string_view payload_json = {});
+
+// One request envelope, parsed once: the command plus its typed payload.
+struct ControlRequest {
+  ControlCommand command{};
+  std::optional<layerc::core::json::Value> payload;
+};
+[[nodiscard]] std::optional<ControlRequest>
+parse_control_request_envelope(std::string_view json);
 
 [[nodiscard]] std::optional<ControlCommand>
 parse_control_request(std::string_view json);
 
+// Failure responses may carry a machine-readable code between payload and
+// error; successes never emit one, so legacy bytes stay identical.
 [[nodiscard]] std::string encode_control_response(bool ok,
                                                   std::string_view error,
-                                                  std::string_view payload_json);
+                                                  std::string_view payload_json,
+                                                  std::string_view code = {});
 
 struct ControlResponse {
   bool ok{};
   std::string error;
+  std::string code;
 };
 
 // Mirror of encode_control_response; nullopt for anything that is not a
 // LayerC.Control v1 response envelope.
 [[nodiscard]] std::optional<ControlResponse>
 decode_control_response(std::string_view json);
+
+// One typed client call: the decoded envelope plus its typed payload.
+struct ControlCall {
+  bool ok{};
+  std::string code;
+  std::string error;
+  std::optional<layerc::core::json::Value> payload;
+};
+
+[[nodiscard]] ControlCall control_call(ControlCommand command,
+                                       std::string_view payload_json,
+                                       std::chrono::milliseconds timeout);
 
 // Resolves the control socket path without touching the filesystem:
 // $XDG_RUNTIME_DIR/layerc/control.sock, falling back to

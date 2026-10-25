@@ -17,8 +17,8 @@ layerc_add_test(layerc_linux_evdev_us_keymap_tests
     TIMEOUT 30 LABELS required headless evdev)
 target_include_directories(layerc_linux_evdev_us_keymap_tests PRIVATE src/platform/linux)
 
-# The daemon route runs in the X11-enabled session engine; no display needed.
-if(LAYERC_HAVE_X11 AND TARGET layerc_daemon_linux)
+# The daemon route needs no display server.
+if(TARGET layerc_daemon_linux)
     layerc_add_test(layerc_linux_evdev_daemon_tests
         SOURCES tests/linux_evdev_daemon_tests.cpp
         LINK layerc_daemon_linux TIMEOUT 30 LABELS required headless evdev)

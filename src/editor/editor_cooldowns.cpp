@@ -131,9 +131,9 @@ std::optional<CooldownRow> selected_cooldown_row(const HWND list,
 
 CooldownEditor::CooldownEditor(ProfileDocument &document, EditorShell &shell,
                                const DialogTheme &theme,
-                               ChangeRecorder record_change, Host host) noexcept
+                               EditReporter report_edit, Host host) noexcept
     : document_(document), shell_(shell), theme_(theme),
-      record_change_(std::move(record_change)), host_(std::move(host)) {}
+      report_edit_(std::move(report_edit)), host_(std::move(host)) {}
 
 void CooldownEditor::set_status(const std::wstring_view text) const {
   set_text(shell_.status, text);
@@ -203,6 +203,13 @@ void CooldownEditor::refresh_list(const int selection) {
   refresh_controls();
 }
 
+std::optional<std::size_t> CooldownEditor::selected_index() const {
+  const auto selected =
+      selected_cooldown_row(list_, document_.profile().cooldowns.size());
+  if (!selected) return std::nullopt;
+  return selected->index;
+}
+
 void CooldownEditor::refresh_selected_label() {
   const auto selected = selected_cooldown_row(
       list_, document_.profile().cooldowns.size());
@@ -224,7 +231,7 @@ void CooldownEditor::refresh_selected_label() {
   }
 }
 
-layerc::core::CooldownDefinition *CooldownEditor::selected() {
+const layerc::core::CooldownDefinition *CooldownEditor::selected() const {
   const auto selected = selected_cooldown_row(
       list_, document_.profile().cooldowns.size());
   if (!selected)
@@ -233,7 +240,7 @@ layerc::core::CooldownDefinition *CooldownEditor::selected() {
 }
 
 void CooldownEditor::refresh_controls() {
-  auto *cooldown = selected();
+  const auto *cooldown = selected();
   const bool has_selection = cooldown != nullptr;
   auto sync = shell_.sync_scope();
   const HWND binding_control = GetDlgItem(shell_.window, IDC_COOLDOWN_BINDING);
@@ -254,7 +261,7 @@ void CooldownEditor::refresh_controls() {
            capture_.capturing_binding() ? L"Press chord..."
                                                 : L"Capture key");
   if (!has_selection) {
-    const ProfileFieldContext context{shell_.window, document_.profile()};
+    const ProfileFieldView context{shell_.window, document_.profile()};
     write_profile_fields(context, ProfileFieldOwner::cooldown);
     for (const int id : {IDC_COOLDOWN_ID, IDC_COOLDOWN_GROUPS})
       set_text(GetDlgItem(shell_.window, id), L"");
@@ -263,7 +270,7 @@ void CooldownEditor::refresh_controls() {
     return;
   }
 
-  const ProfileFieldContext context{shell_.window, document_.profile(), cooldown};
+  const ProfileFieldView context{shell_.window, document_.profile(), cooldown};
   write_profile_fields(context, ProfileFieldOwner::cooldown);
   set_text(GetDlgItem(shell_.window, IDC_COOLDOWN_ID), to_wide(cooldown->id));
   std::wstring groups;
@@ -334,7 +341,7 @@ void CooldownEditor::cancel_capture(const std::wstring_view status) {
 
 void CooldownEditor::assign_chord(
     const std::span<const std::uint16_t> scan_codes) {
-  auto *cooldown = selected();
+  const auto *cooldown = selected();
   if (cooldown == nullptr) {
     cancel_capture(
         L"Binding capture cancelled because no cooldown is selected.");
@@ -358,33 +365,39 @@ void CooldownEditor::assign_chord(
   }
 
   const auto cooldown_id = cooldown->id;
-  std::erase_if(document_.profile().bindings,
-                [&](const layerc::core::InputBinding &binding) {
-                  return binding.cooldown_id == cooldown_id;
-                });
-  document_.profile().bindings.push_back(
-      {.cooldown_id = cooldown_id, .chord = std::move(chord)});
-  layerc::core::compact_hid_bindings(document_.profile());
+  const auto outcome = document_.edit_profile(
+      [&](layerc::core::GameProfile &candidate) {
+        std::erase_if(candidate.bindings,
+                      [&](const layerc::core::InputBinding &binding) {
+                        return binding.cooldown_id == cooldown_id;
+                      });
+        candidate.bindings.push_back(
+            {.cooldown_id = cooldown_id, .chord = chord});
+        layerc::core::compact_hid_bindings(candidate);
+      },
+      DocumentChangeKind::immediate);
+  if (!report_edit_(outcome, DocumentChangeKind::immediate)) return;
   capture_.finish_binding_capture();
   refresh_controls();
-  record_change_(DocumentChangeKind::immediate);
   set_status(document_.path().empty()
                  ? L"Binding updated — Save once to create the profile."
                  : L"Binding updated and autosaving.");
 }
 
-void CooldownEditor::add() {
-  host_.sync_fields();
+namespace {
+
+// The existing add mutation, applied to a candidate profile; returns the new id.
+std::string add_cooldown(layerc::core::GameProfile &candidate) {
   int number = 1;
   std::string id;
   do {
     id = "ability-" + std::to_string(number++);
-  } while (std::any_of(document_.profile().cooldowns.begin(), document_.profile().cooldowns.end(),
+  } while (std::any_of(candidate.cooldowns.begin(), candidate.cooldowns.end(),
                        [&](const layerc::core::CooldownDefinition &cooldown) {
                          return cooldown.id == id;
                        }));
   const int display_number = number - 1;
-  document_.profile().cooldowns.push_back(
+  candidate.cooldowns.push_back(
       {.id = id,
        .name = "Ability " + std::to_string(display_number),
        .duration = std::chrono::seconds(5),
@@ -395,61 +408,78 @@ void CooldownEditor::add() {
       0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1E, 0x1F, 0x20, 0x21,
       0x22, 0x23, 0x24, 0x25, 0x26, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, 0x31, 0x32,
       0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x3B, 0x3C};
-  const auto scan_code_used = [&](const std::uint16_t candidate) {
+  const auto scan_code_used = [&](const std::uint16_t code) {
     return std::any_of(
-        document_.profile().bindings.begin(), document_.profile().bindings.end(),
+        candidate.bindings.begin(), candidate.bindings.end(),
         [&](const layerc::core::InputBinding &binding) {
           return std::any_of(
               binding.chord.tokens.begin(), binding.chord.tokens.end(),
               [&](const layerc::core::InputToken &token) {
                 return token.device == layerc::core::InputDevice::keyboard &&
-                       token.code == candidate;
+                       token.code == code;
               });
         });
   };
   std::uint16_t scan_code{};
-  for (const auto candidate : preferred_scan_codes) {
-    if (!scan_code_used(candidate)) {
-      scan_code = candidate;
+  for (const auto code : preferred_scan_codes) {
+    if (!scan_code_used(code)) {
+      scan_code = code;
       break;
     }
   }
   if (scan_code == 0) {
-    for (std::uint16_t candidate = 1; candidate < 0x80; ++candidate) {
-      if (!scan_code_used(candidate)) {
-        scan_code = candidate;
+    for (std::uint16_t code = 1; code < 0x80; ++code) {
+      if (!scan_code_used(code)) {
+        scan_code = code;
         break;
       }
     }
   }
   if (scan_code == 0)
     scan_code = 0x12;
-  document_.profile().bindings.push_back(
+  candidate.bindings.push_back(
       {.cooldown_id = id,
        .chord = layerc::core::InputChord{
            {{layerc::core::InputDevice::keyboard, scan_code, 0}}}});
-  sync_bar_panels(document_.profile(), id);
+  sync_bar_panels(candidate, id);
+  return id;
+}
+
+} // namespace
+
+void CooldownEditor::add() {
+  host_.sync_fields();
+  const auto outcome = document_.edit_profile(
+      [](layerc::core::GameProfile &candidate) { (void)add_cooldown(candidate); },
+      DocumentChangeKind::immediate);
+  if (!report_edit_(outcome, DocumentChangeKind::immediate)) return;
   host_.refresh_bars(document_.profile().panels.size() - 1U);
   refresh_list(static_cast<int>(document_.profile().cooldowns.size()) - 1);
-  record_change_(DocumentChangeKind::immediate);
   set_status(L"Cooldown added with an unused keyboard binding; Capture key can "
              L"change it.");
 }
 
 void CooldownEditor::duplicate() {
+  // Commit pending field text first, then snapshot the source: copying stale
+  // pending values would duplicate the wrong content.
+  host_.sync_fields();
   const auto *source = selected();
   if (source == nullptr)
     return;
   const auto original = *source;
-  add();
-  auto &added = document_.profile().cooldowns.back();
-  added.name = original.name + " copy";
-  added.duration = original.duration;
-  added.max_charges = original.max_charges;
-  added.retrigger = original.retrigger;
-  added.recovery = original.recovery;
+  const auto outcome = document_.edit_profile(
+      [&](layerc::core::GameProfile &candidate) {
+        (void)add_cooldown(candidate);
+        auto &added = candidate.cooldowns.back();
+        added.name = original.name + " copy";
+        added.duration = original.duration;
+        added.max_charges = original.max_charges;
+        added.retrigger = original.retrigger;
+        added.recovery = original.recovery;
+      },
+      DocumentChangeKind::immediate);
+  if (!report_edit_(outcome, DocumentChangeKind::immediate)) return;
   refresh_list(static_cast<int>(document_.profile().cooldowns.size()) - 1);
-  record_change_(DocumentChangeKind::immediate);
   set_status(L"Cooldown duplicated with an unused key; Capture key can "
              L"change it.");
 }
@@ -485,7 +515,9 @@ void CooldownEditor::remove() {
 
   refresh_list(static_cast<int>(index) - 1);
   host_.refresh_bars(SIZE_MAX);
-  record_change_(DocumentChangeKind::immediate);
+  // The document op already recorded the step; report it so autosave/live run.
+  (void)report_edit_({ModuleEditStatus::accepted, {}},
+                     DocumentChangeKind::immediate);
   set_status(L"Cooldown removed.");
 }
 

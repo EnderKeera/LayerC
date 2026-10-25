@@ -1,6 +1,11 @@
 #include "display_adapters.hpp"
 #include "display_selection.hpp"
-#include "x11_adapters.hpp"
+#include "display_route.hpp"
+#include "evdev_route.hpp"
+#include "session_engine.hpp"
+#ifdef LAYERC_HAVE_X11
+#include "x11_provider.hpp"
+#endif
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
 #include "bus_providers.hpp"
 #endif
@@ -72,9 +77,9 @@ runtime::DisplayProviderStatus evdev_provider(const InputRouteStatus &route,
 } // namespace
 
 struct DisplayAdapters::Impl {
-  // The existing implementation is the X11 provider group during the native
-  // lanes' incremental integration, not a second host/connection.
-  X11Adapters x11;
+#ifdef LAYERC_HAVE_X11
+  X11Provider x11;
+#endif
   runtime::DisplayStatusSnapshot display;
   bool x11_connected{};
   InputOptions input;
@@ -92,39 +97,84 @@ struct DisplayAdapters::Impl {
   std::unique_ptr<BusProviders> bus;
 #endif
 
-  ~Impl() {
-    x11.set_native(nullptr);
-#ifdef LAYERC_HAVE_BUS_PROVIDERS
-    bus.reset();
+  // Borrowed by the engine's input service; declared first so the engine
+  // releases it before destruction.
+  EvdevInputRoute evdev;
+  // Services release provider references before any provider is destroyed.
+  SessionEngine engine;
+
+  InputRouteStatus input_status() const {
+    const PassiveInputSource *xi2{};
+#ifdef LAYERC_HAVE_X11
+    if (x11_connected) xi2 = const_cast<X11Provider &>(x11).input();
 #endif
-#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-    native.reset();
-#endif
+    return input_route_status(evdev, xi2, selected() == runtime::DisplaySession::wayland,
+                              engine.input_needs());
   }
-  void sync_native() {
-    NativeDisplaySource *source{};
-    if (selected() == runtime::DisplaySession::wayland) {
-#ifdef LAYERC_HAVE_BUS_PROVIDERS
-      source = bus.get();
+
+  RouteFacts route_facts(const LinuxStatusSnapshot &status) const {
+    RouteFacts facts;
+    facts.session = selected();
+    facts.override_backend = display.override_backend;
+#ifdef LAYERC_HAVE_X11
+    facts.x11_built = true;
 #endif
+    facts.x11_connected = x11_connected;
+    facts.ewmh = status.x11.ewmh;
+    facts.randr = status.x11.randr.available;
+    facts.input_selection = input.selection;
+    facts.input_route = input_status();
+    if (facts.session == runtime::DisplaySession::wayland) {
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-      if (!source) source = native.get();
+      facts.wayland_present = native != nullptr;
+      if (native) {
+        facts.toplevels = native->has_windows();
+        facts.outputs = native->has_monitors();
+        facts.layer_shell = native->overlay() != nullptr;
+      }
+#endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+      facts.bus_present = bus != nullptr;
+      if (bus) {
+        facts.reports = bus->has_windows();
+        const auto compositor = detect_compositor(display.desktop,
+            bus->kwin_owner(), bus->gnome_owner(), false, false);
+        if (compositor == runtime::DisplayCompositor::kwin)
+          facts.bus_windows_row = ProviderId::kwin_dbus;
+        if (compositor == runtime::DisplayCompositor::gnome)
+          facts.bus_windows_row = ProviderId::gnome_shell;
+        facts.gnome_overlay_row = compositor == runtime::DisplayCompositor::gnome;
+        facts.gnome_overlay = bus->overlay() != nullptr;
+      }
 #endif
     }
-    x11.set_native(source);
+    return facts;
+  }
+  ProviderSet providers() {
+    ProviderSet result;
+#ifdef LAYERC_HAVE_X11
+    result.x11 = &x11;
+    result.x11_connected = x11_connected;
+#endif
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    result.wayland = native.get();
+#endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+    result.bus = bus.get();
+#endif
+    result.evdev = evdev.enabled() ? &evdev : nullptr;
+    return result;
   }
   bool dispatch_bus(std::span<const int> ready) {
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
     if (bus) {
       if (selected() != runtime::DisplaySession::wayland)
         bus->configure(false, display.desktop, false);
-      sync_native();
       return bus->dispatch(ready);
     }
 #else
     (void)ready;
 #endif
-    sync_native();
     return false;
   }
 
@@ -144,12 +194,21 @@ struct DisplayAdapters::Impl {
     if (wayland_fd >= 0) loop->register_fd(wayland_fd, wayland.poll_events());
 #endif
   }
-  DisplayDispatch dispatch_x11(std::span<const int> ready, bool pending) {
+  DisplayDispatch dispatch_input(std::span<const int> ready, bool pending) {
     const bool enabled = selected() != runtime::DisplaySession::none;
-    if (!enabled) x11.stop_sessions(layerc::core::MonotonicClock::now());
-    // The connection can outlive an explicitly selected Wayland session.
-    // Always drain its queue/fd, but suppress work from an unselected provider.
-    const auto result = pending ? x11.dispatch_pending() : x11.dispatch(ready);
+    if (!enabled) engine.stop_sessions(layerc::core::MonotonicClock::now());
+    auto result = engine.poll_input(ready);
+#ifdef LAYERC_HAVE_X11
+    auto poll = pending ? x11.dispatch_pending() : x11.dispatch(ready);
+    result.events += poll.events.size();
+    if (enabled) {
+      engine.feed_input(poll.events, result);
+      result.windows_changed = result.windows_changed || poll.windows_changed;
+      result.devices_changed = result.devices_changed || poll.devices_changed;
+    }
+#else
+    (void)pending;
+#endif
     if (enabled) return result;
     DisplayDispatch drained;
     drained.events = result.events;
@@ -161,7 +220,7 @@ struct DisplayAdapters::Impl {
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
     if (native) {
       if (changed) native->sync();
-      if (native->take_keymap_changed()) x11.set_input_keymap(native->keymap());
+      if (native->take_keymap_changed()) evdev.set_keymap(native->keymap());
       // Evaluate every flag so none survives to cause a spurious refresh.
       const bool dirty = std::exchange(native_dirty, false);
       changed = native->take_changed() || dirty || changed;
@@ -174,166 +233,124 @@ struct DisplayAdapters::Impl {
     return false;
 #endif
   }
+  enum class Slot { windows, monitors, input, overlay, capture };
+  runtime::DisplayProviderStatus health(const ProviderId id, const Slot slot,
+      const bool serving, const LinuxStatusSnapshot &status, const RouteFacts &facts) const {
+    const auto name = std::string{provider_name(id)};
+    switch (id) {
+    case ProviderId::x11_ewmh: case ProviderId::x11_randr:
+      return {name, State::active, {}};
+    case ProviderId::x11_xi2:
+      return provider_from_capability(status, runtime::Capability::input, name.c_str(), nullptr);
+    case ProviderId::x11_shape:
+      return provider_from_capability(status, runtime::Capability::overlay, name.c_str(), nullptr);
+    case ProviderId::x11_composite:
+      return provider_from_capability(status, runtime::Capability::visual, name.c_str(), nullptr);
+    case ProviderId::evdev:
+      return evdev_provider(facts.input_route, facts.input_selection);
+#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
+    case ProviderId::wlr_foreign_toplevel:
+      if (native) return native->window_provider();
+      break;
+    case ProviderId::wayland_output:
+      if (native) return native->monitor_provider();
+      break;
+    case ProviderId::wlr_layer_shell:
+      if (serving)
+        return provider_from_capability(status, runtime::Capability::overlay, name.c_str(), nullptr);
+      if (native) return native->overlay_provider();
+      break;
+#endif
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+    case ProviderId::kwin_dbus: case ProviderId::gnome_shell:
+      if (bus) {
+        const auto row = slot == Slot::overlay ? bus->overlay_provider() : bus->window_provider();
+        if (row) return *row;
+      }
+      break;
+    case ProviderId::portal_screencast:
+      if (bus) return bus->capture_provider();
+      break;
+#endif
+    default: break;
+    }
+    (void)slot;
+    (void)serving;
+    return {name, State::not_built, {"native_provider_not_built"}};
+  }
+  runtime::DisplayProviderStatus publish_slot(const RouteSlot &plan, const Slot slot,
+      const LinuxStatusSnapshot &status, const RouteFacts &facts) const {
+    auto row = health(plan.row, slot, plan.serving == plan.row, status, facts);
+    row.name = provider_name(plan.row);
+    row.reasons.insert(row.reasons.end(), plan.reasons.begin(), plan.reasons.end());
+    if (!plan.reasons.empty() && row.state == State::active) row.state = State::degraded;
+    for (const auto candidate : plan.shadowed) {
+      const auto unavailable = health(candidate, slot, false, status, facts);
+      if (unavailable.state == State::unavailable)
+        row.reasons.insert(row.reasons.end(), unavailable.reasons.begin(), unavailable.reasons.end());
+    }
+    return row;
+  }
   void publish(LinuxStatusSnapshot &status) const {
     auto value = display;
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
     value.wayland = wayland.status();
 #endif
-    value.session = selected();
-    const auto route = x11.input_route();
-#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-    const bool native_session = native && value.session == runtime::DisplaySession::wayland;
-    bool native_overlay = native_session && native->overlay_provider().state != State::unavailable;
-#else
-    bool native_overlay = false;
-#endif
-#ifdef LAYERC_HAVE_BUS_PROVIDERS
-    const bool bus_session = bus && value.session == runtime::DisplaySession::wayland;
-    native_overlay = native_overlay || (bus_session && bus->overlay());
-    const bool native_capture = bus_session && bus->capture_demanded();
-#else
-    const bool native_capture = false;
-#endif
+    const auto facts = route_facts(status);
+    const auto plan = resolve_display_route(facts);
+    value.session = facts.session;
     if (value.session == runtime::DisplaySession::wayland)
       value.compositor = detect_compositor(value.desktop,
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
-          bus_session && bus->kwin_owner(), bus_session && bus->gnome_owner(),
+          bus && bus->kwin_owner(), bus && bus->gnome_owner(),
 #else
           false, false,
 #endif
           value.wayland.globals.contains("zwlr_layer_shell_v1"),
           value.wayland.globals.contains("zwlr_foreign_toplevel_manager_v1"));
-    else
-      value.compositor = runtime::DisplayCompositor::unknown;
+    else value.compositor = runtime::DisplayCompositor::unknown;
 
-    if (value.session == runtime::DisplaySession::none) {
-      const auto missing = [](const char *name, const char *reason) {
-        return runtime::DisplayProviderStatus{name, State::not_built, {reason}};
+    if (plan.session_none != SessionNoneRows::not_applicable) {
+      const auto missing = [](ProviderId id, const char *reason) {
+        return runtime::DisplayProviderStatus{std::string{provider_name(id)}, State::not_built, {reason}};
       };
-      if (value.override_backend == runtime::DisplayBackend::x11) {
-#ifdef LAYERC_NO_X11
-        value.providers.windows = missing("x11_ewmh", "x11_not_built");
-        value.providers.monitors = missing("x11_randr", "x11_not_built");
-        value.providers.input = missing("x11_xi2", "x11_not_built");
-        value.providers.overlay = missing("x11_shape", "x11_not_built");
-        value.providers.capture = missing("x11_composite", "x11_not_built");
-#else
+      if (plan.session_none == SessionNoneRows::forced_x11_not_built) {
+        value.providers = {missing(plan.windows.row, "x11_not_built"),
+            missing(plan.monitors.row, "x11_not_built"), missing(plan.input.row, "x11_not_built"),
+            missing(plan.overlay.row, "x11_not_built"), missing(plan.capture.row, "x11_not_built")};
+      } else if (plan.session_none == SessionNoneRows::forced_x11_unavailable) {
         const runtime::DisplayProviderStatus absent{"none", State::unavailable, {status.x11.reason}};
         value.providers = {absent, absent, absent, absent, absent};
-#endif
       } else {
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-        // The native lane is built; without a Wayland session it is
-        // unavailable for the session's reason, not missing from the build.
-        const auto lost = [&](const char *name) {
-          return runtime::DisplayProviderStatus{
-              name, State::unavailable,
-              {value.wayland.reason.empty() ? std::string{"session_unavailable"}
-                                            : value.wayland.reason}};
+        const auto lost = [&](ProviderId id) {
+          return runtime::DisplayProviderStatus{std::string{provider_name(id)}, State::unavailable,
+              {value.wayland.reason.empty() ? std::string{"session_unavailable"} : value.wayland.reason}};
         };
-        value.providers.windows = lost("wlr_foreign_toplevel");
-        value.providers.monitors = lost("wayland_output");
-        value.providers.overlay = lost("wlr_layer_shell");
+        value.providers.windows = lost(plan.windows.row);
+        value.providers.monitors = lost(plan.monitors.row);
+        value.providers.overlay = lost(plan.overlay.row);
 #else
-        // Do not advertise support solely because the transport was compiled.
-        value.providers.windows = missing("wlr_foreign_toplevel", "native_provider_not_built");
-        value.providers.monitors = missing("wayland_output", "native_provider_not_built");
-        value.providers.overlay = missing("wlr_layer_shell", "native_provider_not_built");
+        value.providers.windows = missing(plan.windows.row, "native_provider_not_built");
+        value.providers.monitors = missing(plan.monitors.row, "native_provider_not_built");
+        value.providers.overlay = missing(plan.overlay.row, "native_provider_not_built");
 #endif
-        // An attached route still reports its own state without a session.
-        if (route.built && input.selection == InputSelection::evdev && !route.evdev_attached)
+        if (facts.input_route.built && facts.input_selection == InputSelection::evdev &&
+            !facts.input_route.evdev_attached)
           value.providers.input = {"evdev", State::unavailable, {"session_unavailable"}};
-        else
-          value.providers.input = evdev_provider(route, input.selection);
-        value.providers.capture = missing("portal_screencast", "native_provider_not_built");
-      }
-      value.reasons.emplace_back(value.override_backend == runtime::DisplayBackend::invalid
-          ? "invalid_display_backend" : "session_unavailable");
-    } else if (status.x11.connected) {
-      const bool fallback = value.session == runtime::DisplaySession::wayland;
-      value.providers.windows = {"x11_ewmh", State::active, {}};
-      value.providers.monitors = {"x11_randr", State::active, {}};
-      if (!status.x11.ewmh) {
-        value.providers.windows.state = State::degraded;
-        value.providers.windows.reasons.emplace_back("ewmh_missing");
-      }
-      if (!status.x11.randr.available) {
-        value.providers.monitors.state = State::degraded;
-        value.providers.monitors.reasons.emplace_back("randr_missing");
-      }
-      if (fallback) {
-        value.providers.windows.state = value.providers.monitors.state = State::degraded;
-        value.providers.windows.reasons.emplace_back("xwayland_windows_only");
-        value.providers.monitors.reasons.emplace_back("xwayland_monitors");
-      }
-      // The selected evdev route serves input unless XI2 took over after it
-      // failed; that fallback keeps evdev's reason visible.
-      const bool evdev = route.evdev_selected && (route.evdev_attached || !route.xi2_attached);
-      if (evdev) {
-        value.providers.input = evdev_provider(route, input.selection);
-      } else {
-        value.providers.input = provider_from_capability(status, runtime::Capability::input,
-            "x11_xi2", fallback ? "xwayland_focus_only" : nullptr);
-        if (fallback) {
-          auto &reasons = value.providers.input.reasons;
-          if (input.selection == InputSelection::evdev)
-            reasons.insert(reasons.end(), route.evdev_reasons.begin(), route.evdev_reasons.end());
-          else
-            reasons.emplace_back(input_opt_in_reason(input.selection));
-        }
-      }
-      if (!native_overlay)
-        value.providers.overlay = provider_from_capability(status, runtime::Capability::overlay,
-            "x11_shape", fallback ? "xwayland_overlay" : nullptr);
-      value.providers.capture = provider_from_capability(status, runtime::Capability::visual,
-          "x11_composite", fallback ? "xwayland_windows_only" : nullptr);
-      if (fallback) {
-        if (!evdev) degrade_capability(status, runtime::Capability::input, "xwayland_focus_only");
-        if (!native_overlay)
-          degrade_capability(status, runtime::Capability::overlay, "xwayland_overlay");
-        if (!native_capture)
-          degrade_capability(status, runtime::Capability::visual, "xwayland_windows_only");
+        else value.providers.input = evdev_provider(facts.input_route, facts.input_selection);
+        value.providers.capture = missing(plan.capture.row, "native_provider_not_built");
       }
     } else {
-      value.providers.windows = {"wlr_foreign_toplevel", State::not_built, {"native_provider_not_built"}};
-      value.providers.monitors = {"wayland_output", State::not_built, {"native_provider_not_built"}};
-      value.providers.input = evdev_provider(route, input.selection);
-      value.providers.overlay = {"wlr_layer_shell", State::not_built, {"native_provider_not_built"}};
-      value.providers.capture = {"portal_screencast", State::not_built, {"native_provider_not_built"}};
+      value.providers.windows = publish_slot(plan.windows, Slot::windows, status, facts);
+      value.providers.monitors = publish_slot(plan.monitors, Slot::monitors, status, facts);
+      value.providers.input = publish_slot(plan.input, Slot::input, status, facts);
+      value.providers.overlay = publish_slot(plan.overlay, Slot::overlay, status, facts);
+      value.providers.capture = publish_slot(plan.capture, Slot::capture, status, facts);
     }
-#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-    if (native_session) {
-      // Native providers win; an unusable one keeps its XWayland fallback
-      // when there is one, otherwise its own reason.
-      const bool fallback = status.x11.connected;
-      // XWayland EWMH keeps windows while connected: foreign toplevels have
-      // no PID, so executable-matched profiles could never attach.
-      if (!fallback) value.providers.windows = native->window_provider();
-      if (auto monitors = native->monitor_provider(); monitors.state != State::unavailable || !fallback)
-        value.providers.monitors = std::move(monitors);
-      if (native_overlay)
-        value.providers.overlay =
-            provider_from_capability(status, runtime::Capability::overlay, "wlr_layer_shell", nullptr);
-      else if (!fallback)
-        value.providers.overlay = native->overlay_provider();
-    }
-#endif
-#ifdef LAYERC_HAVE_BUS_PROVIDERS
-    if (bus_session) {
-      const bool fallback = status.x11.connected;
-      if (auto windows = bus->window_provider()) {
-        if (bus->prefer_windows() || !fallback) value.providers.windows = std::move(*windows);
-        else if (windows->state == State::unavailable) {
-          auto &reasons = value.providers.windows.reasons;
-          reasons.insert(reasons.end(), windows->reasons.begin(), windows->reasons.end());
-        }
-      }
-      if (auto overlay = bus->overlay_provider(); overlay &&
-          (bus->overlay() || !fallback || overlay->state == State::inactive))
-        value.providers.overlay = std::move(*overlay);
-      if (native_capture || !fallback) value.providers.capture = bus->capture_provider();
-    }
-#endif
+    for (const auto &degradation : plan.degradations)
+      degrade_capability(status, degradation.capability, degradation.reason.c_str());
+    value.reasons.insert(value.reasons.end(), plan.display_reasons.begin(), plan.display_reasons.end());
     status.display = std::move(value);
   }
 };
@@ -341,11 +358,12 @@ struct DisplayAdapters::Impl {
 DisplayAdapters::DisplayAdapters() : impl_(std::make_unique<Impl>()) {}
 DisplayAdapters::~DisplayAdapters() = default;
 layerc::runtime::RuntimeServiceRegistry DisplayAdapters::runtime_services() noexcept {
-  return impl_->x11.runtime_services();
+  return impl_->engine.runtime_services();
 }
 void DisplayAdapters::start(layerc::platform::EventLoop &loop, LinuxStatusSnapshot &status,
                             std::vector<std::string> &diagnostics) {
   impl_->loop = &loop;
+  impl_->evdev.attach(loop);
   auto &display = impl_->display;
   const auto *backend = std::getenv("LAYERC_DISPLAY_BACKEND");
   display.override_backend = display_backend(backend ? std::string_view{backend} : std::string_view{});
@@ -371,35 +389,35 @@ void DisplayAdapters::start(layerc::platform::EventLoop &loop, LinuxStatusSnapsh
   if (display.override_backend == runtime::DisplayBackend::auto_detect ||
       display.override_backend == runtime::DisplayBackend::x11 ||
       impl_->selected() == runtime::DisplaySession::wayland) {
+#ifdef LAYERC_HAVE_X11
     impl_->x11.start(loop, status, diagnostics);
     impl_->x11_connected = status.x11.connected;
+#else
+    (void)diagnostics;
+#endif
   } else {
     status.x11.reason = "backend_not_selected";
   }
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
   if (impl_->selected() == runtime::DisplaySession::wayland) {
-    NativeDisplaySource *fallback{};
-#ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
-    fallback = impl_->native.get();
-#endif
-    impl_->bus = std::make_unique<BusProviders>(loop, fallback);
+    impl_->bus = std::make_unique<BusProviders>(loop);
   }
 #endif
-  impl_->sync_native();
-  impl_->x11.prefer_evdev(impl_->selected() == runtime::DisplaySession::wayland);
   if (impl_->input.selection == InputSelection::invalid)
     display.reasons.emplace_back("invalid_input_backend");
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
   if (impl_->native && impl_->selected() == runtime::DisplaySession::wayland) {
     (void)impl_->native->take_keymap_changed();
-    impl_->x11.set_input_keymap(impl_->native->keymap());
+    impl_->evdev.set_keymap(impl_->native->keymap());
   }
 #endif
   impl_->publish(status);
 }
 void DisplayAdapters::configure_input(const InputOptions &options) {
   impl_->input = options;
-  impl_->x11.configure_input(options);
+  // A new opt-in applies from the next demand-driven reconcile.
+  impl_->engine.release_input();
+  impl_->evdev.configure(options);
 }
 void DisplayAdapters::refresh(std::span<const layerc::platform::StoredProfile> profiles,
     bool configuration_changed, layerc::runtime::DaemonKernel &kernel,
@@ -411,12 +429,17 @@ void DisplayAdapters::refresh(std::span<const layerc::platform::StoredProfile> p
     impl_->bus->configure(tracking, impl_->display.desktop, configuration_changed);
   }
 #endif
-  impl_->sync_native();
-  if (impl_->selected() == runtime::DisplaySession::none) {
-    impl_->x11.stop_sessions(layerc::core::MonotonicClock::now());
-    impl_->x11.refresh({}, true, kernel, status, diagnostics);
+  const auto facts = impl_->route_facts(status);
+  const auto plan = resolve_display_route(facts);
+  const auto route = bind_display_route(plan, impl_->providers());
+#ifdef LAYERC_HAVE_BUS_PROVIDERS
+  if (impl_->bus) impl_->bus->use_window_source(route.windows);
+#endif
+  if (facts.session == runtime::DisplaySession::none) {
+    impl_->engine.stop_sessions(layerc::core::MonotonicClock::now());
+    impl_->engine.refresh({}, true, route, kernel, status, diagnostics);
   } else {
-    impl_->x11.refresh(profiles, configuration_changed, kernel, status, diagnostics);
+    impl_->engine.refresh(profiles, configuration_changed, route, kernel, status, diagnostics);
   }
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
   if (impl_->bus) impl_->bus->want_overlay(kernel.demand().required(runtime::Capability::overlay));
@@ -425,18 +448,21 @@ void DisplayAdapters::refresh(std::span<const layerc::platform::StoredProfile> p
 }
 void DisplayAdapters::refresh_status(const layerc::runtime::DaemonKernel &kernel,
                                      LinuxStatusSnapshot &status) const {
-  impl_->x11.refresh_status(kernel, status);
+  impl_->engine.refresh_status(kernel, status);
   impl_->publish(status);
 }
 DisplayDispatch DisplayAdapters::dispatch(std::span<const int> ready) {
   const bool wayland_changed = impl_->dispatch_wayland();
   const bool changed = impl_->dispatch_bus(ready) || wayland_changed;
-  auto result = impl_->dispatch_x11(ready, false);
+  auto result = impl_->dispatch_input(ready, false);
   result.windows_changed = result.windows_changed || changed;
   return result;
 }
 bool DisplayAdapters::has_pending_events() {
-  bool pending = impl_->x11.has_pending_events();
+  bool pending = false;
+#ifdef LAYERC_HAVE_X11
+  pending = impl_->x11.has_pending_events();
+#endif
 #ifdef LAYERC_HAVE_WAYLAND_CONNECTION
   pending = impl_->wayland.has_pending_events() || pending;
 #ifdef LAYERC_HAVE_WAYLAND_PROVIDERS
@@ -458,12 +484,12 @@ bool DisplayAdapters::has_pending_events() {
 DisplayDispatch DisplayAdapters::dispatch_pending() {
   const bool wayland_changed = impl_->dispatch_wayland();
   const bool changed = impl_->dispatch_bus({}) || wayland_changed;
-  auto result = impl_->dispatch_x11({}, true);
+  auto result = impl_->dispatch_input({}, true);
   result.windows_changed = result.windows_changed || changed;
   return result;
 }
 bool DisplayAdapters::render(layerc::core::TimePoint now) {
-  const bool changed = impl_->selected() != runtime::DisplaySession::none && impl_->x11.render(now);
+  const bool changed = impl_->selected() != runtime::DisplaySession::none && impl_->engine.render(now);
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
   if (impl_->bus) impl_->bus->present();
 #endif
@@ -477,23 +503,23 @@ bool DisplayAdapters::render(layerc::core::TimePoint now) {
   return changed;
 }
 void DisplayAdapters::stop_sessions(layerc::core::TimePoint now) {
-  impl_->x11.stop_sessions(now);
+  impl_->engine.stop_sessions(now);
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
   if (impl_->bus) impl_->bus->stop();
 #endif
 }
 std::optional<layerc::core::TimePoint> DisplayAdapters::next_deadline(layerc::core::TimePoint now) const {
-  auto next = impl_->x11.next_deadline(now);
+  auto next = impl_->engine.next_deadline(now);
 #ifdef LAYERC_HAVE_BUS_PROVIDERS
   if (impl_->bus) next = layerc::core::earliest_deadline(next, impl_->bus->next_deadline());
 #endif
   return next;
 }
-std::size_t DisplayAdapters::session_count() const noexcept { return impl_->x11.session_count(); }
+std::size_t DisplayAdapters::session_count() const noexcept { return impl_->engine.session_count(); }
 std::vector<layerc::runtime::SessionDiagnostics> DisplayAdapters::session_diagnostics() const {
-  return impl_->x11.session_diagnostics();
+  return impl_->engine.session_diagnostics();
 }
 TraceControlResult DisplayAdapters::trace_request(const layerc::core::TraceControlRequest &request) {
-  return impl_->x11.trace_request(request);
+  return impl_->engine.trace_request(request);
 }
 } // namespace layerc::daemon

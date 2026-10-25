@@ -56,6 +56,7 @@ int main() {
       {"test_visual_trigger_state_machine", test_visual_trigger_state_machine},
       {"test_visual_repeat_when_ready", test_visual_repeat_when_ready},
       {"test_calibration_protocol", test_calibration_protocol},
+      {"test_calibration_readiness", test_calibration_readiness},
       {"test_automation_profile_round_trip", test_automation_profile_round_trip},
       {"test_automation_session_trigger_policy", test_automation_session_trigger_policy},
       {"test_automation_session_origin_and_persistence", test_automation_session_origin_and_persistence},

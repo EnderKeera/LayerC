@@ -1,4 +1,5 @@
 #include "evdev_route.hpp"
+#include "display_route.hpp"
 
 #include <algorithm>
 #include <string_view>
@@ -130,6 +131,28 @@ void EvdevInputRoute::sync_registrations() noexcept {
     if (std::ranges::find(next, fd) == next.end()) loop_->unregister_fd(fd);
   for (const int fd : next) loop_->register_fd(fd);
   registered_ = std::move(next);
+}
+
+InputRouteStatus input_route_status(const EvdevInputRoute &evdev, const PassiveInputSource *xi2,
+                                    const bool prefer_evdev, const InputDeviceNeeds needed) {
+  InputRouteStatus result;
+  result.built = true;
+  result.selection = evdev.enabled() ? InputSelection::evdev : InputSelection::automatic;
+  // select_input_sources takes mutable borrowed pointers but only compares and queries them.
+  auto *native = evdev.enabled() ? const_cast<EvdevInputRoute *>(&evdev) : nullptr;
+  const auto sources =
+      select_input_sources(native, const_cast<PassiveInputSource *>(xi2), prefer_evdev);
+  result.evdev_selected = native && !sources.empty() && sources.front() == native;
+  result.evdev_attached = evdev.attached();
+  result.xi2_attached = xi2 && xi2->input_open();
+  if (result.evdev_attached) {
+    result.evdev_reasons = evdev_reason_tokens(evdev.unavailable(
+        {.keyboard = needed.keyboard, .mouse = needed.mouse, .gamepad = needed.gamepad}));
+  } else if (!evdev.fault().empty()) {
+    const std::string fault = evdev.fault();
+    result.evdev_reasons = evdev_reason_tokens(std::span{&fault, 1});
+  }
+  return result;
 }
 
 } // namespace layerc::daemon

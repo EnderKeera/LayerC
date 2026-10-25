@@ -127,10 +127,6 @@ void headless_input_rows() {
       return std::ranges::find(row.reasons, reason) != row.reasons.end();
     };
     expect(row.name == "evdev", "the Wayland input row names evdev");
-    if (row.state == DisplayProviderState::not_built) {
-      expect(has("input_provider_not_built"), "a build without the session engine says so");
-      continue;
-    }
     expect(row.state == DisplayProviderState::unavailable, "headless evdev is unavailable");
     if (input == InputSelection::automatic)
       expect(has("evdev_not_enabled"), "without the opt-in evdev reports evdev_not_enabled");

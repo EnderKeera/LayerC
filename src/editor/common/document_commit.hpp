@@ -44,16 +44,22 @@ commit_profile_bundle(const std::filesystem::path &path, ProfileBundle &bundle,
                           companion = layerc::platform::KeepModule{},
                       const layerc::platform::ProfileMutationPlanner &additional_mutations = {});
 
-// Commits the document's current values (the caller syncs its controls
-// first). The normalized values are kept unless the profile is invalid; the
+// Commits a detached copy of the document's current values (the caller syncs
+// its controls first). Only a successful durable commit installs normalized
+// values; refusal or failure preserves both values and their storage. The
 // document is marked saved only by the caller once the commit is accepted.
+// An optional candidate mutates the detached bundle before validation, so a
+// frontend commits a computed change (calibration, enablement) without touching
+// the document first. A successful candidate commit is one undoable step; a
+// refusal or failure leaves values, storage, path, history and dirty untouched.
 [[nodiscard]] CommitOutcome
 commit_document(ProfileDocument &document, const std::filesystem::path &path,
                 const CommitOptions &options,
                 const ConfirmUpgrade &confirm_upgrade,
                 layerc::platform::ModuleIntent<layerc::core::CompanionProfile>
                     companion = layerc::platform::KeepModule{},
-                const layerc::platform::ProfileMutationPlanner &additional_mutations = {});
+                const layerc::platform::ProfileMutationPlanner &additional_mutations = {},
+                const std::function<void(ProfileBundle &)> &candidate = {});
 
 // Same store file as the open document (canonical, case-insensitive where
 // the store is).

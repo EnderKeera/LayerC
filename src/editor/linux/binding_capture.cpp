@@ -1,5 +1,6 @@
 #include "binding_capture.hpp"
 #include "profile_mutations.hpp"
+#include "x11_error.hpp"
 #include "x11_input.hpp"
 
 #include <FL/Fl.H>
@@ -73,9 +74,34 @@ private:
   std::string unavailable_;
 };
 
+// Mapping-only Display connection to the same server as FLTK. XkbSelectEvents
+// cannot report FLTK's prior mask, so selecting on the shared connection could
+// destroy its subscriptions; closing this owned connection drops only ours.
+// No polling, grab or key/button selection happens here.
+class KeyboardMapListener final {
+public:
+  explicit KeyboardMapListener(CaptureWindow &owner) : owner_(owner) {}
+  KeyboardMapListener(const KeyboardMapListener &) = delete;
+  KeyboardMapListener &operator=(const KeyboardMapListener &) = delete;
+  ~KeyboardMapListener() { stop(); }
+  [[nodiscard]] std::string start();
+  void stop();
+  [[nodiscard]] std::optional<std::uint16_t> scan_code(std::uint32_t keycode);
+private:
+  static void readable(int, void *data);
+  void drain();
+  CaptureWindow &owner_;
+  Display *display_{};
+  int event_base_{};
+  bool watching_{};
+  platform::X11PhysicalKeymap keymap_;
+};
+
 class CaptureWindow final : public Fl_Double_Window {
 public:
-  CaptureWindow() : Fl_Double_Window(560, 300, "Capture focused binding"), gamepad(*this) {
+  CaptureWindow()
+      : Fl_Double_Window(560, 300, "Capture focused binding"), keyboard(*this),
+        gamepad(*this) {
     begin();
     status = new Fl_Box(15, 10, 530, 60, "Focus this dialog and press the chord, click in the area "
         "below, or press gamepad buttons. Escape cancels; Accept records the captured chord.");
@@ -106,13 +132,7 @@ public:
       auto *display = fl_x11_display();
       const auto *native = fl_xevent;
       if (!display || !native || native->type != KeyPress) return Fl_Double_Window::handle(event);
-      auto *map = XkbGetKeyboard(display, XkbAllComponentsMask, XkbUseCoreKbd);
-      std::optional<std::uint16_t> code;
-      const auto key = native->xkey.keycode;
-      if (map && map->names && map->names->keys && key >= map->min_key_code && key <= map->max_key_code)
-        code = platform::xkb_key_name_to_scan_code(
-            std::string_view(map->names->keys[key].name, XkbKeyNameLength));
-      if (map) XkbFreeKeyboard(map, XkbAllComponentsMask, True);
+      const auto code = keyboard.scan_code(native->xkey.keycode);
       if (code) record({core::InputDevice::keyboard, *code, 0});
       else show_status("This key's physical position is unavailable; no token was guessed.");
       return 1;
@@ -137,8 +157,88 @@ public:
   Fl_Button *accept{};
   core::InputChord chord;
   bool accepted{};
-  GamepadListener gamepad; // declared after the widgets it updates
+  KeyboardMapListener keyboard; // declared after the widgets it updates
+  GamepadListener gamepad;
 };
+
+std::string KeyboardMapListener::start() {
+  stop();
+  auto *shared = fl_x11_display();
+  if (shared == nullptr)
+    return "Keyboard: the X display is unavailable; mouse/gamepad capture is unchanged.";
+  display_ = XOpenDisplay(DisplayString(shared));
+  if (display_ == nullptr)
+    return "Keyboard: the physical-map connection is unavailable; mouse/gamepad capture is unchanged.";
+  int opcode{}, error{};
+  int major = XkbMajorVersion, minor = XkbMinorVersion;
+  bool subscribed{};
+  {
+    platform::X11ErrorTrap trap{display_};
+    subscribed = XkbQueryExtension(display_, &opcode, &event_base_, &error,
+                                   &major, &minor) != 0;
+    if (subscribed) {
+      constexpr unsigned int events = XkbNewKeyboardNotifyMask |
+          XkbMapNotifyMask | XkbNamesNotifyMask;
+      subscribed = XkbSelectEvents(display_, XkbUseCoreKbd, events, events) != 0;
+    }
+    subscribed = trap.ok() && subscribed;
+  }
+  if (!subscribed) {
+    stop();
+    return "Keyboard: XKB map notifications are unavailable; no keyboard token will be guessed.";
+  }
+  (void)keymap_.refresh(display_);
+  Fl::add_fd(ConnectionNumber(display_), FL_READ, &KeyboardMapListener::readable, this);
+  watching_ = true;
+  drain(); // Xlib synchronous queries can buffer notices without fd readiness.
+  return keymap_.available() ? std::string{} :
+      "Keyboard: XKB physical key names are unavailable; no keyboard token will be guessed.";
+}
+
+void KeyboardMapListener::stop() {
+  if (display_ != nullptr) {
+    if (watching_) Fl::remove_fd(ConnectionNumber(display_));
+    watching_ = false;
+    XCloseDisplay(display_);
+    display_ = nullptr;
+  }
+  event_base_ = 0;
+  (void)keymap_.refresh(nullptr);
+}
+
+void KeyboardMapListener::readable(int, void *data) {
+  static_cast<KeyboardMapListener *>(data)->drain();
+}
+
+void KeyboardMapListener::drain() {
+  if (display_ == nullptr) return;
+  for (;;) {
+    bool changed{};
+    while (XPending(display_) != 0) {
+      XEvent event{};
+      XNextEvent(display_, &event);
+      if (event.type == MappingNotify) {
+        XRefreshKeyboardMapping(&event.xmapping);
+        changed = true;
+      } else if (event.type == event_base_) {
+        const auto &xkb = *reinterpret_cast<const XkbEvent *>(&event);
+        changed = changed || xkb.any.xkb_type == XkbNewKeyboardNotify ||
+            xkb.any.xkb_type == XkbMapNotify || xkb.any.xkb_type == XkbNamesNotify;
+      }
+    }
+    if (!changed) return;
+    if (!keymap_.refresh(display_))
+      owner_.show_status("Keyboard: XKB physical key names are unavailable; no token was guessed.");
+    // refresh can synchronously buffer another notice. Drain that before
+    // returning to a loop that otherwise blocks on socket readability.
+  }
+}
+
+std::optional<std::uint16_t>
+KeyboardMapListener::scan_code(const std::uint32_t keycode) {
+  drain(); // Refresh queued changes before converting a focused keypress.
+  return keymap_.scan_code(keycode);
+}
 
 int MousePad::handle(const int event) {
   if (event == FL_PUSH) {
@@ -233,9 +333,12 @@ int GamepadListener::handle(XEvent &event) {
 std::optional<layerc::core::InputChord> capture_focused_binding() {
   CaptureWindow dialog;
   dialog.show();
+  if (const auto error = dialog.keyboard.start(); !error.empty())
+    dialog.show_status(error);
   (void)dialog.gamepad.start(); // an unavailable reason is shown by describe()
   dialog.show_gamepad(dialog.gamepad.describe());
   while (dialog.shown()) Fl::wait();
+  dialog.keyboard.stop();
   dialog.gamepad.stop();
   if (!dialog.accepted || dialog.chord.tokens.empty()) return std::nullopt;
   return dialog.chord;

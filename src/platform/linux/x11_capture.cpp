@@ -92,15 +92,7 @@ struct XImageDeleter {
       (value * 255UL + shifted_mask / 2UL) / shifted_mask);
 }
 
-[[nodiscard]] std::uint32_t sampled_coordinate(const std::uint32_t index,
-                                               const std::uint32_t source,
-                                               const std::uint32_t output) {
-  return std::min<std::uint32_t>(
-      source - 1U,
-      static_cast<std::uint32_t>(
-          (static_cast<std::uint64_t>(index) * source + source / 2U) /
-          output));
-}
+using capture::sampled_coordinate;
 
 } // namespace
 

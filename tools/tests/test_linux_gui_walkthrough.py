@@ -9,6 +9,7 @@ from walkthrough import Failure, Walk  # noqa: E402
 from parity_walkthrough import reviewed_destinations  # noqa: E402
 
 
+
 class ProfileRows(Walk):
     def __init__(self, labels: list[str]) -> None:
         self.tree = [{"role": "list", "name": "Profiles", "depth": 2}]

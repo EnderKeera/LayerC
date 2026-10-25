@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,6 +13,10 @@
 namespace layerc::core::json {
 
 inline constexpr std::size_t maximum_nesting_depth = 128;
+inline constexpr std::string_view value_count_limit_error =
+    "maximum JSON value count exceeded";
+// Counts every JSON value, including the root and containers, not object keys.
+// Exhaustion is reported before constructing the next value.
 
 namespace detail { class Parser; }
 
@@ -31,8 +36,15 @@ class Value {
 public:
   using Array = std::vector<Value>;
   using Object = std::map<std::string, Value, std::less<>>;
+  // The public alternatives remain source-compatible; complex payloads are
+  // immutable and shared internally.
   using Storage = std::variant<std::nullptr_t, bool, std::int64_t, double,
                                std::string, Array, Object, ParsedNumber, ParsedInteger>;
+
+  Value(const Value &) = default;
+  Value &operator=(const Value &other) noexcept;
+  Value(Value &&other) noexcept;
+  Value &operator=(Value &&other) noexcept;
 
   Value() noexcept;
   explicit Value(std::nullptr_t) noexcept;
@@ -63,13 +75,21 @@ public:
   [[nodiscard]] const Object& as_object() const;
   [[nodiscard]] const Value* find(std::string_view key) const;
 
-  bool operator==(const Value &) const = default;
+  bool operator==(const Value &other) const;
 
 private:
   friend class detail::Parser;
+  using SharedString = std::shared_ptr<const std::string>;
+  using SharedArray = std::shared_ptr<const Array>;
+  using SharedObject = std::shared_ptr<const Object>;
+  using SharedNumber = std::shared_ptr<const ParsedNumber>;
+  using SharedInteger = std::shared_ptr<const ParsedInteger>;
+  using SharedStorage = std::variant<std::nullptr_t, bool, std::int64_t, double,
+      SharedString, SharedArray, SharedObject, SharedNumber, SharedInteger>;
   Value(std::int64_t value, std::string source);
   Value(double value, std::string source);
-  Storage storage_;
+  // Shared complex payloads are immutable; equality remains value-based.
+  SharedStorage storage_;
 };
 
 struct ParseError {
@@ -80,6 +100,7 @@ struct ParseError {
 using ParseResult = std::variant<Value, ParseError>;
 
 [[nodiscard]] ParseResult parse(std::string_view source);
+[[nodiscard]] ParseResult parse(std::string_view source, std::size_t max_values);
 void append_unsigned(std::string &output, std::uint64_t value);
 // Rejects non-finite values with std::invalid_argument and leaves output unchanged.
 void append_number(std::string &output, double value);
@@ -100,6 +121,12 @@ void append_bool(std::string &output, bool value);
 // A non-finite double is rejected with std::invalid_argument; output is restored
 // to its original size before the exception propagates.
 void append_value(std::string &output, const Value &value, unsigned indent = 0);
+// max_output_bytes bounds the complete output, including any existing prefix.
+// False leaves output unchanged. Preflight allocates no formatted containers;
+// successful output is byte-identical to append_value with the same indent.
+[[nodiscard]] bool append_value_bounded(std::string &output, const Value &value,
+                                        std::size_t max_output_bytes,
+                                        unsigned indent = 0);
 // Invalid source is returned unchanged so an editor never discards an error.
 [[nodiscard]] std::string format(std::string_view source);
 

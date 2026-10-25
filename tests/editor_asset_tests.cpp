@@ -18,6 +18,7 @@ using layerc::test::expect;
 std::optional<layerc::platform::ImportedTemplateAsset>
 publish_fixture_asset(const std::uint8_t salt) {
   layerc::core::TemplateImage image{
+      .asset_sha256 = {},
       .width = 8, .height = 8,
       .pixels = std::vector<layerc::core::RgbPixel>(64),
       .alpha = std::vector<std::uint8_t>(64, 255)};

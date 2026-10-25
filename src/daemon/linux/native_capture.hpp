@@ -25,9 +25,9 @@ public:
   [[nodiscard]] virtual layerc::runtime::RuntimeResourceStats resources() const noexcept = 0;
 };
 
-class NativeCaptureFactory {
+class CaptureFactory {
 public:
-  virtual ~NativeCaptureFactory() = default;
+  virtual ~CaptureFactory() = default;
   // A compositor report can explicitly identify an XWayland window; that
   // window still uses X11 capture rather than asking for portal consent.
   [[nodiscard]] virtual std::optional<std::uint64_t> x11_window(std::uint64_t window) const = 0;

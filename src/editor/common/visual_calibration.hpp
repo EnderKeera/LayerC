@@ -49,16 +49,9 @@ struct CalibrationControls {
   bool operator==(const CalibrationControls &) const = default;
 };
 
-// Centered search area twice the selection on each axis, within the frame.
-[[nodiscard]] layerc::core::NormalizedRegion
-expanded_template_search_region(layerc::core::NormalizedRegion selected);
-
-// Samples the source pixel under the center of each downscaled pixel so the
-// image never exceeds core::max_template_axis on its longer side. Nullopt
-// when the selection covers fewer than 64 captured pixels.
-[[nodiscard]] std::optional<layerc::core::TemplateImage>
-template_from_selection(layerc::core::PixelFrameView frame,
-                        const layerc::core::NormalizedRegion &selection);
+// Template geometry shared with the Windows calibration window lives in core.
+using layerc::core::expanded_template_search_region;
+using layerc::core::template_from_selection;
 
 // Paints a round brush into the alpha mask at normalized image coordinates:
 // opaque restores pixels, transparent excludes them from matching.

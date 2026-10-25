@@ -468,7 +468,7 @@ INT_PTR CALLBACK EditorWindow::import_pack_dialog_proc(const HWND window,
 }
 
 void EditorWindow::export_profile_pack() {
-  if (document_.dirty() && !save_profile(false))
+  if (has_unsaved_changes() && !save_profile(false))
     return;
   ExportDialogState state{};
   state.editor = this;

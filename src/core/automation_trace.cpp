@@ -95,7 +95,13 @@ std::string export_layerc_trace(const std::span<const AutomationTraceEntry> entr
 }
 
 AutomationTraceParseResult parse_layerc_trace(const std::string_view source) {
-  const auto parsed = json::parse_bounded(source, max_automation_trace_bytes);
+  return parse_layerc_trace(source, std::numeric_limits<std::size_t>::max());
+}
+
+AutomationTraceParseResult parse_layerc_trace(const std::string_view source,
+                                              const std::size_t max_json_values) {
+  const auto parsed = json::parse_bounded(source, max_automation_trace_bytes,
+                                          max_json_values);
   if (const auto *parse_error = std::get_if<json::FieldError>(&parsed))
     return *parse_error;
   const auto &root = std::get<json::Value>(parsed);

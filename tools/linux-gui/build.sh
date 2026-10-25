@@ -98,7 +98,7 @@ find "$source_dir" -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r
 
 cmake -S "$source_dir" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DLAYERC_BUILD_TESTS=ON "$@" >/dev/null
-cmake --build "$build" --target layere layerd layerctl layerc_linux_x11_smoke_fixture
+cmake --build "$build" --target layere layerd layerctl layerc_linux_x11_smoke_fixture layerc_editor_resource_probe
 if [[ -n $stamp ]]; then
   (cd "$build" && sha256sum layere layerd layerctl layerc_linux_x11_smoke_fixture) > "$stamp"
 fi

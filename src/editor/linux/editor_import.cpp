@@ -38,12 +38,14 @@ void EditorApp::import_profiles() {
   for (auto &row : plan->rows) {
     const auto message = row.name + "\n" + (row.collides ? "Existing profile collision." : "New profile.") +
                          "\nCopy preserves the original. Replace uses the reviewed destination.";
+    fl_message_title("Import profile");
     const auto include = fl_choice("%s", "Cancel import", "Skip", "Include", message.c_str());
     if (include == 0) { report("Import canceled. No files changed."); return; }
     row.action = layerc::bundle::ImportAction::skip;
     if (include == 2) {
       row.action = layerc::bundle::ImportAction::copy;
       if (row.collides) {
+        fl_message_title("Import profile");
         const auto action = fl_choice("%s", "Cancel import", "Copy", "Replace", message.c_str());
         if (action == 0) { report("Import canceled. No files changed."); return; }
         if (action == 2) row.action = layerc::bundle::ImportAction::replace;
@@ -59,6 +61,7 @@ void EditorApp::import_profiles() {
         (row.action == layerc::bundle::ImportAction::copy ? "copy" :
          row.action == layerc::bundle::ImportAction::replace ? "replace" : "skip") + "\n";
   }
+  fl_message_title("Import profile");
   if (fl_choice("%s", "Cancel", "Import", nullptr, summary.c_str()) != 1) {
     report("Import canceled. No files changed."); return;
   }

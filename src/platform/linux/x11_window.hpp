@@ -13,34 +13,10 @@
 
 namespace layerc::platform {
 
-// One window as scanned. Identity fields are empty when the server or the WM
-// does not publish them, and executable resolution degrades silently.
-struct X11WindowSnapshot {
-  std::uint64_t window{};
-  std::string title;
-  std::string class_name;
-  std::string instance_name;
-  std::optional<std::uint32_t> pid;
-  std::string executable_name;
-  std::string executable_path;
-  int x{};
-  int y{};
-  int width{};
-  int height{};
-  bool active{};
-  bool fullscreen{};
-  bool hidden{};
-};
-
-struct X11WindowScan {
-  bool ewmh{};
-  std::vector<X11WindowSnapshot> windows;
-  std::optional<std::uint64_t> active;
-  // Set when the EWMH list is missing, unreadable, or a query failed: the
-  // caller surfaces it instead of silently tracking a partial list.
-  std::string warning;
-  std::uint32_t truncated{};
-};
+// The tracker reports the display-server-neutral shapes; `authoritative`
+// means the scan came from the EWMH client list.
+using X11WindowSnapshot = WindowSnapshot;
+using X11WindowScan = WindowScan;
 
 class X11WindowTracker {
 public:
@@ -54,6 +30,9 @@ public:
 
   // Discovery observes the same dispatcher as input: client identity/state,
   // root properties, and map/unmap/destroy/configure events invalidate scans.
+  // The daemon's own overlay windows: their map/restack/destroy never
+  // invalidate scans, so raising an overlay cannot trigger another refresh.
+  void ignore_windows(std::vector<std::uint64_t> windows) noexcept;
   [[nodiscard]] bool observe(const union _XEvent &event) const noexcept;
   // Uses the shared dispatcher while input is inactive, without polling timers.
   [[nodiscard]] bool poll_changes() noexcept;
@@ -71,14 +50,8 @@ private:
   long root_previous_mask_{};
   bool root_selected_{};
   mutable std::vector<Watch> watched_;
+  std::vector<std::uint64_t> ignored_windows_;
 };
 
-// One window for a profile under the shared core::resolve_game_match
-// policy: every specified identity field must hold (byte-exact executable
-// path), the active window wins, and a previous window breaks background
-// ties so losing focus does not change an existing session's target.
-[[nodiscard]] const X11WindowSnapshot *
-match_window(const X11WindowScan &scan, const layerc::core::GameMatch &match,
-             std::uint64_t previous_window = 0);
 
 } // namespace layerc::platform

@@ -63,7 +63,7 @@ private:
   bool running_{};
 };
 
-class FakeFactory final : public daemon::NativeCaptureFactory {
+class FakeFactory final : public daemon::CaptureFactory {
 public:
   CaptureState state;
   bool xwayland{};
@@ -112,8 +112,8 @@ void native_visual_shares_evaluator_and_releases_demand() {
   layerc::test::TempDirectory temp{"layerc-native-visual"};
   layerc::platform::AutomationPersistence persistence;
   FakeFactory factory;
-  daemon::X11VisualService visual;
-  visual.use_native(&factory);
+  daemon::VisualService visual;
+  visual.use_capture(&factory);
   std::vector<daemon::InputSession> sessions;
   sessions.emplace_back(profile(temp.path() / "a.json", "a", core::CaptureQuality::low, 10),
                         55, persistence);
@@ -153,7 +153,7 @@ void native_visual_shares_evaluator_and_releases_demand() {
   expect(factory.state.live == 0 && visual.resources().capture_sessions == 0 &&
              visual.resources().timers == 0 && !visual.next_deadline(now),
          "lost visual demand releases capture and the sampling deadline");
-  visual.use_native(nullptr);
+  visual.use_capture(nullptr);
 }
 
 void xwayland_identity_does_not_request_portal_consent() {
@@ -161,8 +161,8 @@ void xwayland_identity_does_not_request_portal_consent() {
   layerc::platform::AutomationPersistence persistence;
   FakeFactory factory;
   factory.xwayland = true;
-  daemon::X11VisualService visual;
-  visual.use_native(&factory);
+  daemon::VisualService visual;
+  visual.use_capture(&factory);
   std::vector<daemon::InputSession> sessions;
   sessions.emplace_back(profile(temp.path() / "a.json", "a", core::CaptureQuality::low, 10),
                         55, persistence);

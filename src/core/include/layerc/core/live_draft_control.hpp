@@ -11,6 +11,10 @@
 #include <string_view>
 
 namespace layerc::core {
+namespace json {
+class Value;
+}
+
 // A typed, versioned live-draft payload for authenticated local transports:
 // an editor publishes an unsaved base profile that the daemon applies in
 // memory only, for the lifetime of a renewed lease. The codec owns no
@@ -34,6 +38,37 @@ inline constexpr std::array live_draft_state_wire{
     EnumWireEntry{LiveDraftState::ended, "ended"},
 };
 
+// Machine-readable control failures; the text stays presentation only.
+enum class LiveDraftError : std::uint8_t {
+  invalid_request,
+  unavailable,
+  owned_elsewhere,
+  clock_limit,
+  expired,
+  revision_mismatch,
+  stale_revision,
+  invalid_profile,
+  id_mismatch,
+  unknown_profile,
+};
+inline constexpr std::array live_draft_error_wire{
+    EnumWireEntry{LiveDraftError::invalid_request, "invalid-request"},
+    EnumWireEntry{LiveDraftError::unavailable, "unavailable"},
+    EnumWireEntry{LiveDraftError::owned_elsewhere, "owned-elsewhere"},
+    EnumWireEntry{LiveDraftError::clock_limit, "clock-limit"},
+    EnumWireEntry{LiveDraftError::expired, "expired"},
+    EnumWireEntry{LiveDraftError::revision_mismatch, "revision-mismatch"},
+    EnumWireEntry{LiveDraftError::stale_revision, "stale-revision"},
+    EnumWireEntry{LiveDraftError::invalid_profile, "invalid-profile"},
+    EnumWireEntry{LiveDraftError::id_mismatch, "id-mismatch"},
+    EnumWireEntry{LiveDraftError::unknown_profile, "unknown-profile"},
+};
+struct LiveDraftFailure {
+  LiveDraftError code{};
+  std::string message;
+  bool operator==(const LiveDraftFailure &) const = default;
+};
+[[nodiscard]] LiveDraftFailure live_draft_failure(LiveDraftError code);
 struct LiveDraftRequest {
   LiveDraftOperation operation{LiveDraftOperation::publish};
   std::string profile_id;
@@ -53,6 +88,8 @@ struct LiveDraftReply {
 [[nodiscard]] bool live_draft_request_valid(const LiveDraftRequest &) noexcept;
 [[nodiscard]] std::string serialize_live_draft_request(const LiveDraftRequest &);
 [[nodiscard]] std::optional<LiveDraftRequest> parse_live_draft_request(std::string_view);
+[[nodiscard]] std::optional<LiveDraftRequest> parse_live_draft_request(const json::Value &value);
 [[nodiscard]] std::string serialize_live_draft_reply(const LiveDraftReply &);
 [[nodiscard]] std::optional<LiveDraftReply> parse_live_draft_reply(std::string_view);
+[[nodiscard]] std::optional<LiveDraftReply> parse_live_draft_reply(const json::Value &value);
 } // namespace layerc::core

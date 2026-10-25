@@ -47,31 +47,13 @@ inline void destroy_dialog_font(HFONT &font) noexcept {
 // baseline includes the text size (Windows setting and Options > Text size)
 // so code layouts grow with their text. Fonts take the raw window DPI.
 [[nodiscard]] inline int window_base_dpi(const HWND window) {
-  const UINT raw = GetDpiForWindow(window);
-  const UINT dpi = raw == 0 ? 96U : raw;
+  const UINT dpi = layerc::platform::native_window_dpi(window);
   return MulDiv(static_cast<int>(dpi),
                 layerc::platform::native_text_percent(dpi), 100);
 }
 
 [[nodiscard]] inline int dpi_scaled(const int logical, const int dpi) {
   return MulDiv(logical, dpi, 96);
-}
-
-[[nodiscard]] inline int
-geometry_dpi_for_extent(const int dpi, const int width, const int height,
-                        const int design_width, const int design_height) {
-  return std::max(80, std::min({dpi, MulDiv(width, 96, design_width),
-                                MulDiv(height, 96, design_height)}));
-}
-
-[[nodiscard]] inline int geometry_dpi(const HWND window,
-                                      const int design_width,
-                                      const int design_height) {
-  RECT client{};
-  GetClientRect(window, &client);
-  return geometry_dpi_for_extent(
-      window_base_dpi(window), std::max(1L, client.right - client.left),
-      std::max(1L, client.bottom - client.top), design_width, design_height);
 }
 
 inline void move_control(const HWND dialog, const int id, const int x,

@@ -221,22 +221,26 @@ void EditorWindow::browse_application() {
   dialog->Release();
   if (chosen.empty())
     return;
-  auto &game = document_.profile().game;
-  game.executable_name =
-      wide_to_utf8(std::filesystem::path(chosen).filename().wstring());
-  if (owner_draw_checkbox_checked(
-          GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH)))
-    game.executable_path = wide_to_utf8(chosen);
-  else
-    game.executable_path.clear();
+  const bool exact_path = owner_draw_checkbox_checked(
+      GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH));
+  (void)apply_profile_change(
+      ChangeKind::immediate, [&](layerc::core::GameProfile &profile) {
+        auto &game = profile.game;
+        game.executable_name =
+            wide_to_utf8(std::filesystem::path(chosen).filename().wstring());
+        if (exact_path)
+          game.executable_path = wide_to_utf8(chosen);
+        else
+          game.executable_path.clear();
+      });
   {
     auto sync = shell_.sync_scope();
+    const auto &game = document_.profile().game;
     set_text(shell_.application_path,
              to_wide(game.executable_path.empty() ? game.executable_name
                                                   : game.executable_path));
   }
-  record_profile_change(ChangeKind::immediate);
-  set_status(L"Application set to " + to_wide(game.executable_name) + L".");
+  set_status(L"Application set to " + to_wide(document_.profile().game.executable_name) + L".");
 }
 
 // Typed text is an executable name ("game.exe") or a full path; a path only
@@ -249,25 +253,23 @@ void EditorWindow::apply_application_text() {
   const auto last = text.find_last_not_of(L" \t\"");
   text = first == std::wstring::npos ? std::wstring{}
                                      : text.substr(first, last - first + 1);
-  auto &game = document_.profile().game;
   const bool path_like = text.find_first_of(L"\\/") != std::wstring::npos;
   const std::filesystem::path typed(text);
-  game.executable_name = wide_to_utf8(path_like ? typed.filename().wstring() : text);
   const bool exact = owner_draw_checkbox_checked(
       GetDlgItem(shell_.window, IDC_APPLICATION_EXACT_PATH));
-  game.executable_path =
-      exact && path_like && typed.is_absolute() ? wide_to_utf8(text) : std::string{};
-  record_profile_change(ChangeKind::text);
+  (void)apply_profile_change(ChangeKind::text, [&](layerc::core::GameProfile &candidate) {
+    auto &game = candidate.game;
+    game.executable_name = wide_to_utf8(path_like ? typed.filename().wstring() : text);
+    game.executable_path =
+        exact && path_like && typed.is_absolute() ? wide_to_utf8(text) : std::string{};
+  });
 }
 
 void EditorWindow::refresh_title() {
   if (shell_.window == nullptr)
     return;
   const bool draft = document_.path().empty();
-  const bool modified =
-      document_.dirty() &&
-      !document_.history().is_baseline(document_.profile(), document_.visual(),
-                                       document_.automation());
+  const bool modified = has_unsaved_changes();
   std::wstring name = to_wide(document_.profile().name);
   if (name.empty())
     name = L"Untitled profile";
@@ -441,21 +443,16 @@ bool EditorWindow::handle_list_key(const MSG &message) {
 }
 
 void EditorWindow::duplicate_profile() {
-  sync_profile_from_controls();
+  (void)apply_profile_controls(DocumentChangeKind::text);
   if (!confirm_unsaved_changes())
     return;
   auto copy = document_.profile();
   copy.name += " copy";
   copy.id = layerc::core::slugify(copy.name, "profile");
   end_edit_on_window();
-  document_.profile() = std::move(copy);
   // Visual triggers and automation reference this profile's own assets and
-  // rules; the copy starts without them.
-  document_.clear_sidecars();
-  document_.clear_legacy_schemas();
-  document_.path().clear();
-  document_.set_dirty(true);
-  reset_history();
+  // rules; the copy starts without them. A copy draft is dirty by construction.
+  document_.start_draft(std::move(copy), DraftOrigin::copy);
   refresh_profile_controls();
   visual_editor_.refresh();
   sync_draft_row();
