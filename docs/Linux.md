@@ -8,14 +8,15 @@ gate details.
 ## Support status
 
 The daemon and CLIs shipped in the `v2.6.0` release as **source/CLI only**.
-v2.6c (package version 2.6.2) adds the X11 `layere` editor, a native Debian
-package and an editor Flatpak; they were built and gated in local Debian
-container and WSL runs (automated evidence only) but are not yet published,
-so build from source as described below. The [2026-10-21 source-bound local qualification](LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21) covers the repaired calibration layout and faithful explicit-black appearance, directly inspected rendered states, active-operation peaks, selected validator-derived boundary/exhaustion envelope, fresh empty and representative idle, 100-cycle drift and the original 32-case walkthrough, plus fresh Windows/Linux and native-package/Flatpak gates. It binds the complete source snapshot and the final documentation-only delta; the rejected earlier rendered verdict and older measurements remain historical, not current qualification. The original 32-case count omitted a required controlled-target group and did not close the full walkthrough contract. Its [fresh 36-case successor](LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) passes mandatory overlay focus/resize, actual click-through and cleanup in the owned Xvfb/Openbox session; it does not establish physical-desktop coverage.
+v2.6c (package version 2.6.2, released as `v2.6.2`) adds the X11 `layere`
+editor, a native Debian package and an editor Flatpak. The release attaches
+the `.deb` and Flatpak bundle that its own container and Flatpak gates built,
+installed and smoke tested (automated evidence only); see
+[Release packages](#release-packages). The [2026-10-21 source-bound local qualification](LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21) covers the repaired calibration layout and faithful explicit-black appearance, directly inspected rendered states, active-operation peaks, selected validator-derived boundary/exhaustion envelope, fresh empty and representative idle, 100-cycle drift and the original 32-case walkthrough, plus fresh Windows/Linux and native-package/Flatpak gates. It binds the complete source snapshot and the final documentation-only delta; the rejected earlier rendered verdict and older measurements remain historical, not current qualification. The original 32-case count omitted a required controlled-target group and did not close the full walkthrough contract. Its [fresh 36-case successor](LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) passes mandatory overlay focus/resize, actual click-through and cleanup in the owned Xvfb/Openbox session; it does not establish physical-desktop coverage.
 The physical GNOME Xorg/KDE X11 evidence below is also **pending**: it has not been archived. `ci.yml` is
 configured to verify headless, Xvfb, installed-native, package and Flatpak
-runtime behavior, but no CI run has been recorded for v2.6c, and CI is not a
-substitute for the hardware checklist. The
+runtime behavior, and `v2.6.2` was tagged only on a green `ci.yml` run; CI is
+not a substitute for the hardware checklist. The
 [Linux editor resource targets](#linux-editor-resource-targets) are
 implementation contracts, not release acceptance claims.
 
@@ -24,7 +25,7 @@ implementation contracts, not release acceptance claims.
 | V2.6.0 portable runtime | implemented | Foreground `layerd`, `layerctl`, XDG storage, Unix-socket control, bundles, install metadata |
 | V2.6.1 X11 interaction | implemented | EWMH tracking, passive XI2 input, Shape overlays, RandR scaling |
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
-| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; not yet published |
+| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; published in `v2.6.2` |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
 | Wayland (V2.7, in development) | implemented locally, automated evidence only | Native/degraded providers and evidence gaps below; no support claim in V2.6 |
 | Gamescope | unsupported | Out of scope |
@@ -85,7 +86,7 @@ running the testing environment.
 
 The backend is implemented on the local integration branch, not released or
 physically qualified. [`Wayland.md`](Wayland.md) owns its architecture and
-provider contracts. V2.6 and the unpublished v2.6c remain X11-only support scopes;
+provider contracts. V2.6 and v2.6c (`v2.6.2`) remain X11-only support scopes;
 Gamescope remains unsupported.
 
 `layerd` selects a connected Wayland display in `auto`, then X11, then headless.
@@ -634,6 +635,22 @@ With the editor, the install also places the `io.github.EnderKeera.LayerC`
 desktop entry, hicolor icons (48–256 px) and a desktop-application metainfo;
 without it, only the console-application metainfo is installed.
 
+### Release packages
+
+Each `v*.*.*` release attaches `layerc_<version>-1_amd64.deb`,
+`layerc-<version>-x86_64.flatpak` and `SHA256SUMS`. Verify the download, then
+install the `.deb` as described under [Debian package](#debian-package), or
+the Flatpak bundle, which fetches its runtime from Flathub:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+flatpak install --user ./layerc-2.6.2-x86_64.flatpak
+flatpak run io.github.EnderKeera.LayerC          # layere
+```
+
+The bundle is unsigned (it is not served from a GPG-signed repository), so
+`SHA256SUMS` from the release page is its integrity check.
+
 ### Debian package
 
 ```sh
@@ -743,9 +760,10 @@ job details are in
 [`../CONTRIBUTING.md`](../CONTRIBUTING.md#ci-and-release-gates). The
 `debian:stable` job runs `--editor required --package required`; `ubuntu:24.04`
 (AT-SPI below 2.62) runs `--editor off --package off`, keeping the source and
-headless build without the editor. No Linux package is published yet:
-`windows-msvc` produces the only release ZIP, and the `.deb` and
-`LayerC.flatpak` exist only as gate evidence. Physical
+headless build without the editor. `release.yml` reruns the
+`debian:stable` gate and the Flatpak gate on the tag and publishes their
+`.deb` and bundle with the Windows ZIP; `ci.yml` and `rolling` keep them as
+gate evidence only. Physical
 input/click-through, real-monitor/driver behavior, and GNOME Xorg/KDE X11
 native plus Flatpak evidence remain manual and pending until archived.
 Future Gamescope or Wayland lanes could reuse the evidence schema, but no such

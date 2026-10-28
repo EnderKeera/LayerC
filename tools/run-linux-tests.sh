@@ -545,8 +545,10 @@ PY
       "$evidence_dir/flatpak-editor" "$source_dir/examples/lctest.json"
   fi
   mkdir -p "$evidence_dir/packages"
-  run_logged flatpak-bundle flatpak build-bundle "$flatpak_repo" \
-    "$evidence_dir/packages/LayerC.flatpak" "$app_id"
+  # The runtime repository lets an installed bundle fetch its runtime.
+  run_logged flatpak-bundle flatpak build-bundle \
+    --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+    "$flatpak_repo" "$evidence_dir/packages/LayerC.flatpak" "$app_id"
   rm -rf -- "$flatpak_root"
   record_stage flatpak pass
 fi

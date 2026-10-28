@@ -8,8 +8,9 @@ click-through cooldown panels, opt-in visual recognition, bounded automation,
 typed JSON profiles, and deterministic `.layercprofile` bundles.
 
 Windows is the complete desktop experience. Linux V2.6 is an X11
-implementation with a headless fallback; the unpublished v2.6c adds the first
-Linux `layere` editor. Linux physical desktop evidence is still pending. LayerC has no telemetry and never injects input, reads game memory, or
+implementation with a headless fallback; v2.6c (released as `v2.6.2`) adds the
+first Linux `layere` editor and the first published `.deb` and Flatpak. Linux
+physical desktop evidence is still pending. LayerC has no telemetry and never injects input, reads game memory, or
 requires elevation.
 
 ## Support and release status
@@ -24,18 +25,18 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c, unpublished) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); unpublished; CI and physical evidence pending |
+| Linux editor (v2.6c, released as `v2.6.2`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the `v2.6.2` `.deb` and Flatpak are the gate-built packages; physical evidence pending |
 | Wayland (V2.7, in development) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented locally; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
 | Gamescope | Not supported | Out of scope |
 
-Package metadata reports **2.6.2** for the unpublished v2.6c, which the
-`v*.*.*` tag convention would publish as `v2.6.2`; the V2.6.1–V2.6.2 rows
-above are implementation milestones that shipped in `v2.6.0`. The latest
-published release, `v2.6.0`, ships only the Windows x64 ZIP. The ZIP starts LayerC via `layerd.exe`. It omits
-`layerc.exe` until a release-signing key is provisioned, and launcher
-self-updates are OFF by default. Linux in `v2.6.0` is source/CLI only; the v2.6c
-`.deb` and Flatpak are gate artifacts until published, and the physical X11
-evidence is pending. The Game Bar
+Package metadata reports **2.6.2**, published as the `v2.6.2` release of
+v2.6c; the V2.6.1–V2.6.2 rows above are implementation milestones that
+shipped in `v2.6.0`. `v2.6.2` ships the Windows x64 ZIP, the Debian 13
+`.deb`, the Flatpak bundle and `SHA256SUMS`. The ZIP starts LayerC via
+`layerd.exe`. It omits `layerc.exe` until a release-signing key is
+provisioned, and launcher self-updates are OFF by default. The Linux packages
+are the exact artifacts the release gates built, installed and smoke tested;
+physical X11 evidence is pending. The Game Bar
 companion's manual matrix, certification, and production signing remain open.
 
 ## Non-negotiable guarantees
@@ -111,7 +112,7 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 | --- | ---: | ---: | --- |
 | `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
 | `layerd` | yes | yes | Cooldown/automation daemon; background desktop app on Windows, foreground service on Linux |
-| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c, not yet shipped; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
+| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c, shipped in `v2.6.2`; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |
