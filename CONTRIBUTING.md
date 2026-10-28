@@ -100,13 +100,18 @@ suites also include the PowerShell benchmark-result test and dependency-dependen
 fixtures; `tools/test-gates.json` is authoritative.
 [`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
 same setup and `build-package` actions, so benchmark gating cannot drift.
-Releases and `rolling` ship only the Windows x64 ZIP. A tag publishes a
-non-prerelease release whose notes state that `layerc.exe` is omitted until a
-release-signing key exists and that launcher self-updates are OFF by default.
-The notes also state that no Linux package is published (the `.deb` and
-Flatpak are CI evidence only), with physical X11 evidence pending. Bump `project(LayerC VERSION ...)` and the README/`docs/Linux.md`
-status text in one change before tagging, and tag only a commit whose `ci.yml`
-run is green.
+`rolling` ships only the Windows x64 ZIP. A tag publishes a non-prerelease
+release with the Windows ZIP, the Debian 13 `.deb` that its own
+`debian:stable` gate (`--editor required --package required --wayland
+required`, the same image digest as `ci.yml`) built, installed and removed,
+the `layerc-<version>-x86_64.flatpak` bundle that its required Flatpak smoke
+installed, and `SHA256SUMS`. Its `version` job refuses a tag that differs from
+`project(LayerC VERSION ...)`, from either AppStream `<release>` entry, or from
+the `LayerC <version>` line of
+[`packaging/release-notes.md`](packaging/release-notes.md), which is the
+release body. Bump the version, both metainfo release entries, the release
+notes and the README/`docs/Linux.md` status text in one change before tagging,
+and tag only a commit whose `ci.yml` run is green.
 
 [`tools/publish-rolling.sh`](tools/publish-rolling.sh) promotes `rolling` in
 one serialized job (`concurrency: publish-rolling`). It skips a commit older

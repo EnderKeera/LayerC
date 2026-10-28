@@ -8,9 +8,41 @@ permissions:
   contents: read
 
 jobs:
+  # A tag publishes only the version the tree declares: CMake, both AppStream
+  # release entries and the release notes must name the tag's version.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Require the tag to match the declared version
+        shell: bash
+        run: |
+          pattern='s/^project\(LayerC VERSION ([0-9.]+) .*/\1/p'
+          version=$(sed -nE "$pattern" CMakeLists.txt)
+          if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME is not version $version"
+            exit 1
+          fi
+          app=io.github.EnderKeera.LayerC
+          for metainfo in "packaging/flatpak/$app.metainfo.xml" \
+              "packaging/linux/$app.editor.metainfo.xml"; do
+            if ! grep -q "<release version=\"$version\"" "$metainfo"; then
+              echo "::error::$metainfo has no $version release entry"
+              exit 1
+            fi
+          done
+          notes=packaging/release-notes.md
+          if ! grep -q "LayerC $version" "$notes"; then
+            echo "::error::$notes does not name LayerC $version"
+            exit 1
+          fi
+
   build:
     runs-on: windows-2022
-    # Match the CI deadline for the shared build/test/benchmark/package pipeline.
+    # Match the CI deadline for the shared build/test/package pipeline.
     timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -28,26 +60,113 @@ jobs:
           path: build/ci/*.zip
           if-no-files-found: error
 
+  # The published .deb is the one the full Debian gate (editor, package
+  # build/install/remove, Wayland fixtures) built and installed. Keep the
+  # image digest and gates identical to ci.yml's debian:stable entry.
+  linux-deb:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build, test, and package (debian:stable)
+        shell: bash
+        run: >-
+          bash tools/ci-linux.sh
+          "debian@sha256:7fa362f5e7c036d7f45621a6c721c03493cdcb5889adfcd65587759e34fe4c6f"
+          out/linux-release/debian-stable
+          --editor required --package required --wayland required
+      - name: Upload Linux evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-evidence-release-linux
+          path: out/linux-release/debian-stable/**
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-release-deb
+          path: out/linux-release/debian-stable/packages/layerc_*.deb
+          if-no-files-found: error
+
+  # The published bundle is the one the required Flatpak smoke installed.
+  linux-flatpak:
+    runs-on: ubuntu-24.04
+    # SDK installation plus a cold Flatpak build/export exceeds ten minutes.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Linux and Flatpak build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          mapfile -t packages < tools/linux-deps.txt
+          sudo apt-get install -y --no-install-recommends \
+            "${packages[@]}" flatpak flatpak-builder elfutils bzip2 xz-utils \
+            dbus xdotool
+          sudo flatpak remote-add --system --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install --system -y flathub \
+            org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+      - name: Run required Flatpak smoke
+        shell: bash
+        run: >-
+          bash tools/run-linux-tests.sh
+          --build-dir build/linux-flatpak-release
+          --evidence-dir out/linux-flatpak-release
+          --flatpak required --flatpak-only
+      - name: Upload Flatpak evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-evidence-release-flatpak
+          path: out/linux-flatpak-release/**
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: layerc-release-flatpak
+          path: out/linux-flatpak-release/packages/LayerC.flatpak
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [version, build, linux-deb, linux-flatpak]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      # The release notes are versioned with the tree they describe.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: layerc-release-package
+          # Only the three package artifacts carry this prefix.
+          pattern: layerc-release-*
           path: release-input
+          merge-multiple: true
+      - name: Name the Flatpak bundle and record checksums
+        shell: bash
+        run: |
+          cd release-input
+          mv LayerC.flatpak "layerc-${GITHUB_REF_NAME#v}-x86_64.flatpak"
+          shopt -s nullglob
+          assets=(*.zip *.deb *.flatpak)
+          if [[ ${#assets[@]} -ne 3 ]]; then
+            echo "::error::want one ZIP, .deb and .flatpak: ${assets[*]}"
+            exit 1
+          fi
+          sha256sum "${assets[@]}" > SHA256SUMS
+          cat SHA256SUMS
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
-          files: release-input/*.zip
+          files: |
+            release-input/*.zip
+            release-input/*.deb
+            release-input/*.flatpak
+            release-input/SHA256SUMS
           generate_release_notes: true
-          body: |
-            Windows x64 package only. Start LayerC with `layerd.exe`. The
-            launcher's self-update is OFF by default, and `layerc.exe` is
-            omitted from the ZIP until a release-signing key is provisioned.
-
-            No Linux package is published: build from source; the .deb and Flatpak are CI evidence only.
-            Physical X11 evidence (GNOME Xorg, KDE Plasma X11) is pending;
-            see docs/Linux.md. Gamescope and Wayland are not supported.
+          body_path: packaging/release-notes.md
