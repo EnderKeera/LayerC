@@ -454,6 +454,22 @@ void profile_edit_contracts() {
          "finishing capture clears it");
 }
 
+// Snapshots are whole bundle copies; building and comparing them in this
+// helper's frame keeps each case's stack bounded under /analyze (C6262).
+bool document_equals(const ProfileDocument &document,
+                     const layerc::editor::EditorProfileSnapshot &expected) {
+  return layerc::editor::EditorProfileSnapshot{
+             document.profile(), document.visual(), document.automation()} ==
+         expected;
+}
+
+int undo_depth(const ProfileDocument &document) {
+  auto probe = document;
+  int depth{};
+  while (probe.undo()) ++depth;
+  return depth;
+}
+
 void enablement_policy_contracts() {
   using layerc::editor::EnablementRefusal;
   using layerc::editor::OpenDocumentEnablement;
@@ -532,9 +548,8 @@ void enablement_policy_contracts() {
                bundle->automation == stored_bundle.automation,
            "both policies load non-current rows from disk despite open edits");
   }
-  expect(layerc::editor::EditorProfileSnapshot{
-             document.profile(), document.visual(), document.automation()} ==
-             open_before_noncurrent && document.path() == path_before_noncurrent &&
+  expect(document_equals(document, open_before_noncurrent) &&
+             document.path() == path_before_noncurrent &&
              document.dirty() == dirty_before_noncurrent &&
              document.can_undo() == undo_before_noncurrent &&
              document.can_redo() == redo_before_noncurrent,
@@ -549,26 +564,16 @@ void enablement_policy_contracts() {
   expect(layerc::test::write_file(invalid_path, "{ invalid"),
          "invalid enablement fixture should be written");
   const auto document_before_invalid = document.profile();
-  auto invalid_depth_probe = document;
-  int invalid_undo_depth{};
-  while (invalid_depth_probe.undo()) ++invalid_undo_depth;
+  const auto invalid_undo_depth = undo_depth(document);
   const auto invalid = profile_enablement_bundle(
       document, false, invalid_path, OpenDocumentEnablement::require_clean);
-  auto invalid_depth_after = document;
-  int invalid_undo_depth_after{};
-  while (invalid_depth_after.undo()) ++invalid_undo_depth_after;
   expect(std::get_if<EnablementRefusal>(&invalid) &&
              std::get<EnablementRefusal>(invalid) == EnablementRefusal::invalid_profile &&
              document.profile() == document_before_invalid &&
-             invalid_undo_depth_after == invalid_undo_depth,
+             undo_depth(document) == invalid_undo_depth,
          "invalid stored profiles are distinct from unreadable ones and leave the document alone");
   const auto enabled_before = layerc::editor::EditorProfileSnapshot{
       reopened.profile(), reopened.visual(), reopened.automation()};
-  const auto undo_depth = [](ProfileDocument probe) {
-    int depth{};
-    while (probe.undo()) ++depth;
-    return depth;
-  };
   const auto depth_before = undo_depth(reopened);
   const auto committed_enablement = layerc::editor::commit_document(
       reopened, *path, {}, [] { return true; },
@@ -581,14 +586,10 @@ void enablement_policy_contracts() {
     return;
   const auto enabled_after = layerc::editor::EditorProfileSnapshot{
       reopened.profile(), reopened.visual(), reopened.automation()};
-  expect(reopened.undo() &&
-             layerc::editor::EditorProfileSnapshot{
-                 reopened.profile(), reopened.visual(), reopened.automation()} == enabled_before &&
+  expect(reopened.undo() && document_equals(reopened, enabled_before) &&
              reopened.dirty() && reopened.path() == *path,
          "one undo restores the complete pre-enablement bundle without changing the path");
-  expect(reopened.redo() &&
-             layerc::editor::EditorProfileSnapshot{
-                 reopened.profile(), reopened.visual(), reopened.automation()} == enabled_after &&
+  expect(reopened.redo() && document_equals(reopened, enabled_after) &&
              !reopened.dirty() && !reopened.can_redo(),
          "one redo restores the exact saved current-row enablement bundle");
 }
