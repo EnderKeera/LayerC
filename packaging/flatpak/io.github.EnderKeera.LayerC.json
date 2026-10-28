@@ -47,7 +47,8 @@
                 "-Dintrospection=disabled",
                 "-Dgtk2_atk_adaptor=false",
                 "-Duse_systemd=false",
-                "-Ddefault_bus=dbus-daemon"
+                "-Ddefault_bus=dbus-daemon",
+                "-Dlibdir=lib"
             ],
             "cleanup": [
                 "/etc", "/include", "/lib/pkgconfig", "/lib/systemd",

@@ -59,6 +59,7 @@ jobs:
           name: layerc-release-package
           path: build/ci/*.zip
           if-no-files-found: error
+          retention-days: 30
 
   # The published .deb is the one the full Debian gate (editor, package
   # build/install/remove, Wayland fixtures) built and installed. Keep the
@@ -84,11 +85,13 @@ jobs:
           name: layerc-evidence-release-linux
           path: out/linux-release/debian-stable/**
           if-no-files-found: warn
+          retention-days: 30
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: layerc-release-deb
           path: out/linux-release/debian-stable/packages/layerc_*.deb
           if-no-files-found: error
+          retention-days: 30
 
   # The published bundle is the one the required Flatpak smoke installed.
   linux-flatpak:
@@ -125,11 +128,13 @@ jobs:
           name: layerc-evidence-release-flatpak
           path: out/linux-flatpak-release/**
           if-no-files-found: warn
+          retention-days: 30
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: layerc-release-flatpak
           path: out/linux-flatpak-release/packages/LayerC.flatpak
           if-no-files-found: error
+          retention-days: 30
 
   publish:
     needs: [version, build, linux-deb, linux-flatpak]
