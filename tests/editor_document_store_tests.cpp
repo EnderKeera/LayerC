@@ -255,117 +255,132 @@ void rejected_commit_contracts() {
 // Every refusal or failure keeps the accepted values in place: a refused save
 // must not replace document storage, normalize its modules, or consume the
 // legacy-schema consent it never obtained.
-void refused_commit_preserves_storage_contracts() {
-  const IsolatedStore store;
-  const auto attempt = [&](ProfileDocument &document,
-                           const std::filesystem::path &path,
-                           const layerc::editor::CommitOptions &options,
-                           const layerc::editor::ConfirmUpgrade &confirm,
-                           const CommitResult expected) {
-    const auto before = document.bundle();
-    const auto old_path = document.path();
-    const bool old_dirty = document.dirty();
-    const bool old_base_legacy = document.legacy_base_schema();
-    const bool old_visual_legacy = document.legacy_visual_schema();
-    const bool old_ack = document.upgrade_acknowledged();
-    const bool old_undo = document.history().can_undo();
-    const bool old_redo = document.history().can_redo();
-    const auto *cooldowns = document.profile().cooldowns.data();
-    const auto *panels = document.profile().panels.data();
-    const auto *observations =
-        document.visual() ? document.visual()->observations.data() : nullptr;
-    const auto *automations =
-        document.automation() ? document.automation()->automations.data() : nullptr;
-    const auto outcome =
-        layerc::editor::commit_document(document, path, options, confirm);
-    expect(outcome.result == expected,
-           "the intended save refusal/failure is exercised");
-    expect(document.profile() == before.profile &&
-               document.visual() == before.visual &&
-               document.automation() == before.automation &&
-               document.path() == old_path && document.dirty() == old_dirty &&
-               document.legacy_base_schema() == old_base_legacy &&
-               document.legacy_visual_schema() == old_visual_legacy &&
-               document.upgrade_acknowledged() == old_ack &&
-               document.history().can_undo() == old_undo &&
-               document.history().can_redo() == old_redo,
-           "a refused save preserves accepted values, identity, schema consent and history");
-    expect(document.profile().cooldowns.data() == cooldowns &&
-               document.profile().panels.data() == panels &&
-               (!document.visual() ||
-                document.visual()->observations.data() == observations) &&
-               (!document.automation() ||
-                document.automation()->automations.data() == automations),
-           "a refused save cannot invalidate references into unchanged document storage");
-    return outcome;
-  };
-  {
-    auto seeded = full_document();
-    auto malformed = seeded.profile();
-    malformed.cooldowns.front().duration = std::chrono::milliseconds(0);
-    ProfileDocument document;
-    document.start_draft(std::move(malformed), layerc::editor::DraftOrigin::copy,
-                         seeded.visual(), seeded.automation());
-    const auto path = store.directory() / "invalid-storage.json";
-    const auto outcome =
-        attempt(document, path, {}, nullptr, CommitResult::invalid_profile);
-    std::error_code error;
-    expect(outcome.result == CommitResult::invalid_profile &&
-               !std::filesystem::exists(path, error),
-           "an invalid candidate writes nothing");
-  }
-  {
-    auto seeded = full_document();
-    auto loaded = fixture_load(seeded.profile(), seeded.visual(),
-                               seeded.automation());
-    loaded.legacy_base_schema = true;
-    ProfileDocument document;
-    document.open({}, std::move(loaded));
-    const auto path = store.directory() / "legacy-storage.json";
-    (void)attempt(document, path, {}, [] { return false; },
-                  CommitResult::upgrade_declined);
-    (void)attempt(document, path, {.prompt_upgrade = false},
-                  [] { return true; }, CommitResult::upgrade_declined);
-    (void)attempt(document, path, {}, nullptr, CommitResult::upgrade_declined);
-    std::error_code error;
-    expect(document.legacy_base_schema() && !document.upgrade_acknowledged() &&
-               !std::filesystem::exists(path, error),
-           "a refused upgrade keeps the legacy schema unacknowledged and writes nothing");
-  }
-  {
-    auto seeded = full_document();
-    auto loaded = fixture_load(seeded.profile(), seeded.visual());
-    loaded.modules.get<AutomationModule>() =
-        layerc::platform::AutomationSidecarLoad::invalid(
-            {.path = "$", .message = "fixture invalid sidecar"}, {});
-    ProfileDocument document;
-    document.open({}, std::move(loaded));
-    const auto path = store.directory() / "blocked-storage.json";
-    (void)attempt(document, path, {}, nullptr, CommitResult::blocked_by_sidecar);
-    std::error_code error;
-    expect(document.automation_state() ==
-                   layerc::platform::ModuleSidecarState::invalid &&
-               !document.automation() && !std::filesystem::exists(path, error),
-           "a blocked commit preserves the unreadable module and writes nothing");
-  }
+// Commits a save the fixture expects to be refused or to fail, and checks the
+// document kept its accepted values, identity, consent, history and storage.
+layerc::editor::CommitOutcome
+attempt_refused(ProfileDocument &document, const std::filesystem::path &path,
+                const layerc::editor::CommitOptions &options,
+                const layerc::editor::ConfirmUpgrade &confirm,
+                const CommitResult expected) {
+  const auto before = document.bundle();
+  const auto old_path = document.path();
+  const bool old_dirty = document.dirty();
+  const bool old_base_legacy = document.legacy_base_schema();
+  const bool old_visual_legacy = document.legacy_visual_schema();
+  const bool old_ack = document.upgrade_acknowledged();
+  const bool old_undo = document.history().can_undo();
+  const bool old_redo = document.history().can_redo();
+  const auto *cooldowns = document.profile().cooldowns.data();
+  const auto *panels = document.profile().panels.data();
+  const auto *observations =
+      document.visual() ? document.visual()->observations.data() : nullptr;
+  const auto *automations =
+      document.automation() ? document.automation()->automations.data() : nullptr;
+  const auto outcome =
+      layerc::editor::commit_document(document, path, options, confirm);
+  expect(outcome.result == expected,
+         "the intended save refusal/failure is exercised");
+  expect(document.profile() == before.profile &&
+             document.visual() == before.visual &&
+             document.automation() == before.automation &&
+             document.path() == old_path && document.dirty() == old_dirty &&
+             document.legacy_base_schema() == old_base_legacy &&
+             document.legacy_visual_schema() == old_visual_legacy &&
+             document.upgrade_acknowledged() == old_ack &&
+             document.history().can_undo() == old_undo &&
+             document.history().can_redo() == old_redo,
+         "a refused save preserves accepted values, identity, schema consent and history");
+  expect(document.profile().cooldowns.data() == cooldowns &&
+             document.profile().panels.data() == panels &&
+             (!document.visual() ||
+              document.visual()->observations.data() == observations) &&
+             (!document.automation() ||
+              document.automation()->automations.data() == automations),
+         "a refused save cannot invalidate references into unchanged document storage");
+  return outcome;
+}
+
+// Each refusal fixture is a separate function so /analyze bounds the stack of
+// every case independently (C6262).
+void refused_invalid_candidate(const IsolatedStore &store) {
+  auto seeded = full_document();
+  auto malformed = seeded.profile();
+  malformed.cooldowns.front().duration = std::chrono::milliseconds(0);
+  ProfileDocument document;
+  document.start_draft(std::move(malformed), layerc::editor::DraftOrigin::copy,
+                       seeded.visual(), seeded.automation());
+  const auto path = store.directory() / "invalid-storage.json";
+  const auto outcome =
+      attempt_refused(document, path, {}, nullptr, CommitResult::invalid_profile);
+  std::error_code error;
+  expect(outcome.result == CommitResult::invalid_profile &&
+             !std::filesystem::exists(path, error),
+         "an invalid candidate writes nothing");
+}
+
+void refused_legacy_upgrade(const IsolatedStore &store) {
+  auto seeded = full_document();
+  auto loaded = fixture_load(seeded.profile(), seeded.visual(),
+                             seeded.automation());
+  loaded.legacy_base_schema = true;
+  ProfileDocument document;
+  document.open({}, std::move(loaded));
+  const auto path = store.directory() / "legacy-storage.json";
+  (void)attempt_refused(document, path, {}, [] { return false; },
+                        CommitResult::upgrade_declined);
+  (void)attempt_refused(document, path, {.prompt_upgrade = false},
+                        [] { return true; }, CommitResult::upgrade_declined);
+  (void)attempt_refused(document, path, {}, nullptr,
+                        CommitResult::upgrade_declined);
+  std::error_code error;
+  expect(document.legacy_base_schema() && !document.upgrade_acknowledged() &&
+             !std::filesystem::exists(path, error),
+         "a refused upgrade keeps the legacy schema unacknowledged and writes nothing");
+}
+
+void refused_blocked_sidecar(const IsolatedStore &store) {
+  auto seeded = full_document();
+  auto loaded = fixture_load(seeded.profile(), seeded.visual());
+  loaded.modules.get<AutomationModule>() =
+      layerc::platform::AutomationSidecarLoad::invalid(
+          {.path = "$", .message = "fixture invalid sidecar"}, {});
+  ProfileDocument document;
+  document.open({}, std::move(loaded));
+  const auto path = store.directory() / "blocked-storage.json";
+  (void)attempt_refused(document, path, {}, nullptr,
+                        CommitResult::blocked_by_sidecar);
+  std::error_code error;
+  expect(document.automation_state() ==
+                 layerc::platform::ModuleSidecarState::invalid &&
+             !document.automation() && !std::filesystem::exists(path, error),
+         "a blocked commit preserves the unreadable module and writes nothing");
+}
+
+void refused_write_failures(const IsolatedStore &store) {
   {
     auto document = full_document();
     const auto outcome =
-        attempt(document, {}, {}, nullptr, CommitResult::write_failed);
+        attempt_refused(document, {}, {}, nullptr, CommitResult::write_failed);
     expect(outcome.write_error ==
                layerc::platform::ProfileWriteError::invalid_input,
            "a missing destination is a typed write failure without document mutation");
   }
-  {
-    auto document = full_document();
-    const auto path = store.directory() / "directory-storage.json";
-    std::error_code error;
-    std::filesystem::create_directory(path, error);
-    expect(!error, "the fixture creates a directory at the destination");
-    (void)attempt(document, path, {}, nullptr, CommitResult::write_failed);
-    expect(std::filesystem::is_directory(path, error),
-           "a failed durable write leaves the existing destination in place");
-  }
+  auto document = full_document();
+  const auto path = store.directory() / "directory-storage.json";
+  std::error_code error;
+  std::filesystem::create_directory(path, error);
+  expect(!error, "the fixture creates a directory at the destination");
+  (void)attempt_refused(document, path, {}, nullptr, CommitResult::write_failed);
+  expect(std::filesystem::is_directory(path, error),
+         "a failed durable write leaves the existing destination in place");
+}
+
+void refused_commit_preserves_storage_contracts() {
+  const IsolatedStore store;
+  refused_invalid_candidate(store);
+  refused_legacy_upgrade(store);
+  refused_blocked_sidecar(store);
+  refused_write_failures(store);
 }
 
 void profile_edit_contracts() {

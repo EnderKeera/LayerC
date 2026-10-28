@@ -7,10 +7,20 @@
 #include <string>
 #include <string_view>
 
+#if defined(_MSC_VER)
+#include <sal.h>
+// Tells /analyze that expect returns its condition, so a case guarded by
+// `if (!expect(pointer != nullptr, ...)) return;` may dereference it.
+#define LAYERC_TEST_RETURNS_CONDITION _Post_equal_to_(condition)
+#else
+#define LAYERC_TEST_RETURNS_CONDITION
+#endif
+
 namespace layerc::test {
 
 extern int failures;
-bool expect(bool condition, std::string_view message);
+LAYERC_TEST_RETURNS_CONDITION bool expect(bool condition,
+                                          std::string_view message);
 
 struct Case {
   std::string_view name;

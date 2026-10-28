@@ -76,7 +76,8 @@ bool write_environment(const std::string &name, const char *value) {
 
 int failures{};
 
-bool expect(const bool condition, const std::string_view message) {
+LAYERC_TEST_RETURNS_CONDITION bool expect(const bool condition,
+                                          const std::string_view message) {
   if (!condition) {
     ++failures;
     std::cerr << "FAIL: " << message << '\n';
