@@ -1,7 +1,6 @@
 """Boundary-evidence gate tests. All parser/GUI verdicts here are MOCK fixtures."""
 import copy
 import hashlib
-import os
 import sys
 import tempfile
 import unittest
@@ -11,13 +10,7 @@ from unittest import mock
 import test_active_resources as raw_fixtures
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "linux-gui"))
-if hasattr(os, "sysconf"):
-    import report as gui_report  # noqa: E402
-else:
-    # Only import the Linux report dependencies on Windows. These MOCK tests
-    # exercise policy/evidence, never /proc sampling or a measured CPU result.
-    with mock.patch.object(os, "sysconf", return_value=100, create=True):
-        import report as gui_report  # noqa: E402
+import report as gui_report  # noqa: E402
 from limit_inputs import REQUIRED_GUI_CASES  # noqa: E402
 from limit_resources import evaluate  # noqa: E402
 from limits_walkthrough import REQUIRED_WINDOWS, contains_authored, verify_automation_preserved  # noqa: E402

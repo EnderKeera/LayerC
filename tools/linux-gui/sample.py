@@ -13,7 +13,11 @@ import sys
 import time
 from pathlib import Path
 
-TICKS = os.sysconf("SC_CLK_TCK")
+
+def clock_ticks():
+    # Resolved per call, not at import: the Windows tooling-policy tests import
+    # the report chain that reaches this module but never sample /proc.
+    return os.sysconf("SC_CLK_TCK")
 
 
 def memory(pid):
@@ -35,7 +39,7 @@ def cpu_snapshot(pid):
 
 def cpu_seconds(pid):
     sample = cpu_snapshot(pid)
-    return (sample["userTicks"] + sample["systemTicks"]) / TICKS
+    return (sample["userTicks"] + sample["systemTicks"]) / clock_ticks()
 
 
 def write(path, data):
@@ -58,10 +62,10 @@ def idle(pid, seconds, output):
     final_ticks = final["userTicks"] + final["systemTicks"]
     if final_ticks < initial_ticks:
         raise RuntimeError("editor CPU ticks decreased during idle sampling")
-    elapsed = ended - start
+    elapsed, ticks = ended - start, clock_ticks()
     write(output, {"process": "layere", "pid": pid, "idleSeconds": round(elapsed, 3),
-                   "idleCpuPercent": round(100 * (final_ticks - initial_ticks) / TICKS / elapsed, 4),
-                   "clockTicksPerSecond": TICKS,
+                   "idleCpuPercent": round(100 * (final_ticks - initial_ticks) / ticks / elapsed, 4),
+                   "clockTicksPerSecond": ticks,
                    "idleStartedMonotonic": start, "idleEndedMonotonic": ended,
                    "cpuTicksStart": initial, "cpuTicksEnd": final,
                    "peakIdleUssBytes": max(s["ussBytes"] for s in samples),

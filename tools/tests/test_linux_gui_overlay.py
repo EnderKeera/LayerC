@@ -114,6 +114,7 @@ class OverlayBridgeTests(unittest.TestCase):
         self.assertEqual(self.bridge.sequence, 0, "an invalid request consumed freshness")
 
 
+@unittest.skipUnless(os.name == "posix", "select() polls pipes only on POSIX")
 class PipeObserverTests(unittest.TestCase):
     def pipe(self):
         reader, writer = os.pipe()
