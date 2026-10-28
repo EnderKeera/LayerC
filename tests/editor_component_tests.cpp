@@ -315,7 +315,8 @@ void editor_visual_component_contracts() {
          "visual fixture starts saved via the owned document transition");
 
   layerc::editor::EditorShell shell;
-  const layerc::editor::LiveEditSession live_edit;
+  // LiveEditSession is about 64 KiB; keep it off the case's stack (C6262).
+  const auto live_edit = std::make_unique<const layerc::editor::LiveEditSession>();
   layerc::editor::TaskPicker task_picker;
   auto commit = CommitResult::ok;
   int commits{};
@@ -323,7 +324,7 @@ void editor_visual_component_contracts() {
   int tasks_shown{};
   std::optional<VisualProfile> last_candidate;
   VisualEditor editor(
-      document, shell, live_edit, task_picker,
+      document, shell, *live_edit, task_picker,
       {.selected_cooldown = [&]() -> const CooldownDefinition * {
          return &document.profile().cooldowns.front();
        },
@@ -417,13 +418,13 @@ void editor_automation_component_contracts() {
   baseline.automations.push_back(first);
   ProfileDocument document;
   document.start_draft(profile, DraftOrigin::fresh, std::nullopt, baseline);
-  LiveEditSession live;
+  const auto live = std::make_unique<LiveEditSession>();
   EditorShell shell;
   const NullTheme theme;
   int immediate{};
   int text{};
   AutomationEditor editor(
-      document, live, shell, theme,
+      document, *live, shell, theme,
       [&](const ModuleEditOutcome &outcome, const DocumentChangeKind kind) {
         if (outcome.accepted()) {
           if (kind == DocumentChangeKind::text)
