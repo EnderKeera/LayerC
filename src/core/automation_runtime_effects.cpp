@@ -35,7 +35,8 @@ std::string runtime_effect_key(const AutomationEffect &effect) {
   case AutomationActionKind::cancel_timer:
     return "t:" + effect.target;
   case AutomationActionKind::set_overlay_override:
-    return "o:" + effect.name + ":" + effect.property;
+    // Names and property names never contain ':'; the item ID is last.
+    return "o:" + effect.name + ":" + effect.property + ":" + effect.item_id;
   case AutomationActionKind::clear_overlay_override:
     return "o:" + effect.target + ":*";
   }
@@ -240,12 +241,14 @@ bool AutomationRuntime::Impl::apply_internal(
       }
     }
     std::erase_if(target.overlay_overrides, [&](const auto &item) {
-      return item.name == effect.name && item.property == effect.property;
+      return item.name == effect.name && item.item_id == effect.item_id &&
+             item.property == effect.property;
     });
     target.overlay_overrides.push_back(
         {.name = effect.name,
          .owner_automation = effect.automation_id,
          .panel_id = effect.target,
+         .item_id = effect.item_id,
          .property = effect.property,
          .value = effect.value,
          .expires_at = expiry,

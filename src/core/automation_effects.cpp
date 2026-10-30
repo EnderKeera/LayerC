@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <map>
+#include <utility>
 #include <optional>
 #include <ratio>
 #include <string_view>
@@ -72,12 +73,26 @@ void apply_visibility(ResolvedPanelOverrides &resolved, const AutomationValue &v
 void apply_text(ResolvedPanelOverrides &resolved, const AutomationValue &value) {
   resolved.text = std::get<std::string>(value.storage);
 }
+void apply_item_visibility(ItemPresentationOverride &item, const AutomationValue &value) {
+  item.visible = std::get<bool>(value.storage);
+}
+void apply_item_text(ItemPresentationOverride &item, const AutomationValue &value) {
+  item.text = std::get<std::string>(value.storage);
+}
+void apply_item_color(ItemPresentationOverride &item, const AutomationValue &value) {
+  item.color = static_cast<std::uint32_t>(std::get<std::int64_t>(value.storage));
+}
+
+constexpr std::uint8_t panel_and_item = overlay_scope_panel | overlay_scope_item;
 
 constexpr OverlayPropertySpec overlay_properties[] = {
     {.name = "visible",
      .type = AutomationValueType::boolean,
      .validate = validate_boolean,
-     .apply = apply_visibility},
+     .apply = apply_visibility,
+     .scopes = panel_and_item,
+     .item_kinds = overlay_all_item_kinds,
+     .apply_item = apply_item_visibility},
     {.name = "showText",
      .type = AutomationValueType::boolean,
      .validate = validate_boolean,
@@ -89,7 +104,10 @@ constexpr OverlayPropertySpec overlay_properties[] = {
     {.name = "text",
      .type = AutomationValueType::string,
      .validate = validate_text,
-     .apply = apply_text},
+     .apply = apply_text,
+     .scopes = panel_and_item,
+     .item_kinds = overlay_all_item_kinds,
+     .apply_item = apply_item_text},
     {.name = "layout",
      .type = AutomationValueType::string,
      .validate = validate_layout,
@@ -142,6 +160,16 @@ constexpr OverlayPropertySpec overlay_properties[] = {
      .max_value = 1.0,
      .validate = validate_number,
      .apply = apply_anchor<&Panel::anchor_y>},
+    // Fill, pip and indicator accent of one item; never the panel's colors.
+    {.name = "color",
+     .type = AutomationValueType::integer,
+     .min_value = 0,
+     .max_value = 0xFFFFFF,
+     .validate = validate_integer,
+     .apply = nullptr,
+     .scopes = overlay_scope_item,
+     .item_kinds = overlay_all_item_kinds,
+     .apply_item = apply_item_color},
 };
 
 } // namespace
@@ -157,19 +185,34 @@ find_overlay_property(const std::string_view name) noexcept {
 ResolvedPanelOverrides resolve_panel_overrides(
     const Panel &base,
     const std::span<const OverlayPropertyOverride> overrides) {
-  std::map<std::string_view, const OverlayPropertyOverride *> winners;
+  // One winner per (item, property); the empty item ID is the panel scope.
+  using Scope = std::pair<std::string_view, std::string_view>;
+  std::map<Scope, const OverlayPropertyOverride *> winners;
   for (const auto &item : overrides) {
     if (item.panel_id != base.id) continue;
-    const auto found = winners.find(item.property);
+    const Scope scope{item.item_id, item.property};
+    const auto found = winners.find(scope);
     if (found == winners.end() ||
         overlay_override_precedes(item, *found->second))
-      winners[item.property] = &item;
+      winners[scope] = &item;
   }
   ResolvedPanelOverrides result{.panel = base};
-  for (const auto &[property, item] : winners) {
-    const auto *spec = find_overlay_property(property);
-    if (spec != nullptr && overlay_value_valid(*spec, item->value))
-      spec->apply(result, item->value);
+  for (const auto &[scope, item] : winners) {
+    const auto *spec = find_overlay_property(scope.second);
+    if (spec == nullptr || !overlay_value_valid(*spec, item->value)) continue;
+    if (scope.first.empty()) {
+      if (overlay_property_in_scope(*spec, false) && spec->apply != nullptr)
+        spec->apply(result, item->value);
+      continue;
+    }
+    if (!overlay_property_in_scope(*spec, true) || spec->apply_item == nullptr)
+      continue;
+    if (result.items.empty() || result.items.back().item_id != scope.first)
+      result.items.push_back({.item_id = std::string(scope.first),
+                              .visible = std::nullopt,
+                              .text = std::nullopt,
+                              .color = std::nullopt});
+    spec->apply_item(result.items.back(), item->value);
   }
   return result;
 }
@@ -190,6 +233,9 @@ std::optional<AutomationError> automation_effect_error(
     const auto *spec = find_overlay_property(effect.property);
     if (spec == nullptr || !overlay_value_valid(*spec, effect.value))
       return AutomationError{"$runtime", "invalid overlay property value"};
+    if (!overlay_property_in_scope(*spec, !effect.item_id.empty()) ||
+        effect.item_id.size() > max_automation_string_bytes)
+      return AutomationError{"$runtime", "overlay property scope does not match"};
     if (!std::holds_alternative<std::nullptr_t>(effect.secondary.storage) &&
         !as_duration(effect.secondary))
       return AutomationError{"$runtime", "invalid overlay expiry duration"};

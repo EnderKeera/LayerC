@@ -8,6 +8,7 @@
 #include <vector>
 
 void diagnostics_display_contracts();
+void diagnostics_overlay_fault_contracts();
 
 namespace {
 
@@ -662,5 +663,6 @@ int main() {
       {"diagnostics_linux_adapter_preserves_shared_fields", diagnostics_linux_adapter_preserves_shared_fields},
       {"diagnostics_linux_parser_failure_paths", diagnostics_linux_parser_failure_paths},
       {"diagnostics_display_contracts", diagnostics_display_contracts},
+      {"diagnostics_overlay_fault_contracts", diagnostics_overlay_fault_contracts},
   });
 }

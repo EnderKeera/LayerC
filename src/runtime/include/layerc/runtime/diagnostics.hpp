@@ -129,6 +129,9 @@ struct RuntimeDiagnostics {
   // Current automation faults (checkpoint, state load, runtime), one line
   // each, reported identically by both daemons.
   std::vector<std::string> automation_faults;
+  // Preserved-but-unsupported overlay items and unavailable item sources,
+  // reported identically by both daemons.
+  std::vector<std::string> overlay_faults;
   // Absent for producers without Linux probes. Emitted as the existing
   // top-level x11/capabilities fields, not a new nested wire section.
   std::optional<LinuxDiagnostics> linux_extension;
@@ -142,6 +145,9 @@ struct LinuxStatusSnapshot {
   // not inside the x11 extension.
   std::vector<SessionDiagnostics> sessions;
   std::optional<DisplayStatusSnapshot> display{};
+  // Shared-schema overlay item diagnostics; warnings only, never capability
+  // availability or automation faults.
+  std::vector<std::string> overlay_faults;
 };
 
 // Adapts native Linux probes to the shared typed diagnostics serializer.

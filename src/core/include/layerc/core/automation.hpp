@@ -2,6 +2,7 @@
 
 #include "layerc/core/cooldown_groups.hpp"
 #include "layerc/core/document_error.hpp"
+#include "layerc/core/panel_presentation.hpp"
 #include "layerc/core/types.hpp"
 #include "layerc/core/enum_wire.hpp"
 
@@ -368,6 +369,8 @@ struct AutomationActionSpec {
   bool allows_repeating{};
   bool requires_name{};
   bool requires_property{};
+  // Accepts an optional itemId narrowing a panel target to one item.
+  bool accepts_item{};
 
   // True for actions whose primary value expression is evaluated before the
   // transaction commits.
@@ -459,7 +462,7 @@ inline constexpr std::array automation_action_specs{
         AutomationActionKind::set_overlay_override, "setOverlayOverride",
         "Set overlay override", AutomationEffectDomain::overlay,
         ActionSecondaryPolicy::optional_duration, ActionTargetRole::panel,
-        ActionValuePolicy::overlay_property, false, true, true},
+        ActionValuePolicy::overlay_property, false, true, true, true},
     AutomationActionSpec{
         AutomationActionKind::clear_overlay_override, "clearOverlayOverride",
         "Clear overlay override", AutomationEffectDomain::overlay,
@@ -496,6 +499,8 @@ struct AutomationAction {
   // session-local layer and can later be cleared explicitly by this name.
   std::string name;
   std::string property;
+  // setOverlayOverride only: one item of the target panel; empty = the panel.
+  std::string item_id{};
   // Absent when the action's spec does not accept that argument. Replaces the
   // old null-literal sentinel so illegal states are unrepresentable.
   std::optional<AutomationExpression> value;
@@ -636,6 +641,8 @@ struct OverlayPropertyOverride {
   std::string name;
   std::string owner_automation;
   std::string panel_id;
+  // Empty for panel scope; otherwise the targeted item of panel_id.
+  std::string item_id{};
   std::string property;
   AutomationValue value;
   std::optional<TimePoint> expires_at;
@@ -656,6 +663,19 @@ struct OverlayPropertyOverride {
 // type hints, so the bounds cannot drift between processes.
 struct ResolvedPanelOverrides;
 
+// Where an overlay property applies: the whole panel, one item, or both.
+inline constexpr std::uint8_t overlay_scope_panel = 1U;
+inline constexpr std::uint8_t overlay_scope_item = 2U;
+[[nodiscard]] constexpr std::uint8_t
+overlay_item_kind_bit(const OverlayItemKind kind) noexcept {
+  return static_cast<std::uint8_t>(1U << static_cast<unsigned>(kind));
+}
+inline constexpr std::uint8_t overlay_all_item_kinds =
+    overlay_item_kind_bit(OverlayItemKind::cooldown) |
+    overlay_item_kind_bit(OverlayItemKind::timer) |
+    overlay_item_kind_bit(OverlayItemKind::counter) |
+    overlay_item_kind_bit(OverlayItemKind::indicator);
+
 struct OverlayPropertySpec {
   std::string_view name;
   AutomationValueType type;
@@ -663,8 +683,20 @@ struct OverlayPropertySpec {
   double min_value{};
   double max_value{};
   bool (*validate)(const OverlayPropertySpec &, const AutomationValue &) noexcept;
+  // Panel-scope application; null for item-only properties.
   void (*apply)(ResolvedPanelOverrides &, const AutomationValue &);
+  std::uint8_t scopes{overlay_scope_panel};
+  // Item kinds an item-scoped value applies to.
+  std::uint8_t item_kinds{};
+  void (*apply_item)(ItemPresentationOverride &, const AutomationValue &){};
 };
+
+[[nodiscard]] constexpr bool
+overlay_property_in_scope(const OverlayPropertySpec &spec,
+                          const bool item_scope) noexcept {
+  return (spec.scopes & (item_scope ? overlay_scope_item
+                                    : overlay_scope_panel)) != 0U;
+}
 
 [[nodiscard]] const OverlayPropertySpec *
 find_overlay_property(std::string_view name) noexcept;
@@ -716,6 +748,8 @@ struct ResolvedPanelOverrides {
   Panel panel;
   std::optional<bool> visible{};
   std::optional<std::string> text{};
+  // Item-scoped winners, ordered by item ID.
+  std::vector<ItemPresentationOverride> items{};
 };
 [[nodiscard]] ResolvedPanelOverrides
 resolve_panel_overrides(const Panel &base,
@@ -727,6 +761,7 @@ struct AutomationEffect {
   std::string target;
   std::string name;
   std::string property;
+  std::string item_id{};
   TimePoint timestamp{};
   AutomationValue value;
   AutomationValue secondary;
@@ -765,7 +800,16 @@ struct AutomationRuntimeSnapshot {
   std::map<std::string, AutomationValue, std::less<>> variables;
   std::vector<AutomationTimer> timers;
   std::vector<OverlayPropertyOverride> overlay_overrides;
+  // Session-wide createTimer targets, including disabled rules/definitions.
+  // Declaration survives cancellation/expiry; absent IDs are missing sources.
+  std::vector<std::string> declared_timer_ids;
 };
+
+// What presentation reads when no evaluator runs: declared variable defaults
+// and declared timer IDs, but no running timers and no overrides. Never starts
+// an automation loop.
+[[nodiscard]] AutomationRuntimeSnapshot
+automation_default_snapshot(const AutomationProfile &profile);
 
 // Session-scoped edge-detection state the daemon uses to emit ready and
 // value-changed events (previous observations, last emission times). Owned by

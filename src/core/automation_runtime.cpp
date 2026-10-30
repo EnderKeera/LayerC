@@ -158,6 +158,22 @@ AutomationRuntime::due_timer_events(TimePoint now) {
   }
   return events;
 }
+AutomationRuntimeSnapshot
+automation_default_snapshot(const AutomationProfile &profile) {
+  AutomationRuntimeSnapshot snapshot;
+  for (const auto &variable : profile.variables)
+    snapshot.variables.emplace(variable.id, variable.default_value);
+  for (const auto &automation : profile.automations)
+    for (const auto &rule : automation.rules)
+      for (const auto &action : rule.actions)
+        if (action.kind == AutomationActionKind::create_timer)
+          snapshot.declared_timer_ids.push_back(action.target);
+  std::ranges::sort(snapshot.declared_timer_ids);
+  const auto duplicate = std::ranges::unique(snapshot.declared_timer_ids);
+  snapshot.declared_timer_ids.erase(duplicate.begin(), duplicate.end());
+  return snapshot;
+}
+
 bool AutomationRuntime::expire_overlay_overrides(const TimePoint now) {
   const auto before = impl_->state.overlay_overrides.size();
   std::erase_if(impl_->state.overlay_overrides, [&](const auto &item) {
@@ -178,14 +194,12 @@ std::optional<TimePoint> AutomationRuntime::next_deadline() const noexcept {
 void AutomationRuntime::reconfigure(
     AutomationProfile profile,
     CooldownGroupTopology cooldown_groups) {
-  AutomationRuntimeSnapshot next;
+  auto next = automation_default_snapshot(profile);
   for (const auto &variable : profile.variables) {
-    auto value = variable.default_value;
     const auto old = impl_->state.variables.find(variable.id);
     if (old != impl_->state.variables.end() &&
         value_type(old->second) == variable.type)
-      value = old->second;
-    next.variables[variable.id] = value;
+      next.variables[variable.id] = old->second;
   }
   std::set<std::string, std::less<>> retained;
   for (const auto &automation : profile.automations) {

@@ -181,8 +181,8 @@ struct Parser {
     if (!raw.is_object())
       return fail(path, "action must be an object");
     if (!known(raw,
-               {"type", "target", "name", "property", "repeating", "value",
-                "secondary"},
+               {"type", "target", "name", "property", "itemId", "repeating",
+                "value", "secondary"},
                path))
       return false;
     std::string kind;
@@ -195,8 +195,16 @@ struct Parser {
     if (!string(raw, "target", path, out.target) ||
         !string(raw, "name", path, out.name, true) ||
         !string(raw, "property", path, out.property, true) ||
+        !string(raw, "itemId", path, out.item_id, true) ||
         !boolean(raw, "repeating", path, out.repeating, true))
       return false;
+    if (raw.find("itemId") != nullptr) {
+      const auto *spec = automation_action_spec(out.kind);
+      if (spec == nullptr || !spec->accepts_item)
+        return fail(path + ".itemId", "only setOverlayOverride accepts itemId");
+      if (out.item_id.empty())
+        return fail(path + ".itemId", "itemId must not be empty");
+    }
     if (const auto *value = raw.find("value")) {
       out.value.emplace();
       if (!expression(*value, *out.value, path + ".value"))
@@ -457,6 +465,7 @@ std::string serialize_automation_profile_json(const AutomationProfile &profile) 
             {"target", Value(action.target)}};
         if (!action.name.empty()) object.emplace("name", Value(action.name));
         if (!action.property.empty()) object.emplace("property", Value(action.property));
+        if (!action.item_id.empty()) object.emplace("itemId", Value(action.item_id));
         if (action.repeating) object.emplace("repeating", Value(true));
         if (action.value) object.emplace("value", expression_tree(*action.value));
         if (action.secondary) object.emplace("secondary", expression_tree(*action.secondary));

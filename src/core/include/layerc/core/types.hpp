@@ -163,6 +163,10 @@ struct CooldownState {
   // Engine snapshots project the effective owner settings onto public IDs.
   // This runtime-only field is never persisted in profile JSON.
   Milliseconds recharge_duration{};
+  // The public ID's own active window: armed by each accepted trigger, never
+  // shared through a pool and never persisted. Absent once expired.
+  std::optional<TimePoint> active_until;
+  Milliseconds active_duration{};
 };
 
 enum class CooldownGroupMode : std::uint8_t {

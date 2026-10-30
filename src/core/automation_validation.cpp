@@ -21,6 +21,13 @@ bool panel_exists(const GameProfile &profile, const std::string_view id) {
       profile.panels, [&](const Panel &panel) { return panel.id == id; });
 }
 
+bool panel_item_exists(const GameProfile &profile, const std::string_view panel_id,
+                       const std::string_view item_id) {
+  return std::ranges::any_of(profile.panels, [&](const Panel &panel) {
+    return panel.id == panel_id && panel_item_targetable(panel, item_id);
+  });
+}
+
 std::optional<AutomationValueType>
 overlay_property_type(const std::string_view property) {
   const auto *spec = find_overlay_property(property);
@@ -216,10 +223,20 @@ AutomationError validate_action(const AutomationAction &action,
     return {path + ".repeating", "only createTimer accepts repeating"};
   if (spec->requires_name && !detail::valid_automation_id(action.name))
     return {path + ".name", "overlay overrides require a valid name"};
+  if (!action.item_id.empty() &&
+      (!spec->accepts_item ||
+       action.item_id.size() > max_automation_string_bytes ||
+       !is_valid_utf8(action.item_id)))
+    return {path + ".itemId", "only setOverlayOverride accepts a bounded itemId"};
   if (spec->requires_property) {
     const auto property_type = overlay_property_type(action.property);
     if (!property_type.has_value())
       return {path + ".property", "unsupported overlay property"};
+    const auto *property = find_overlay_property(action.property);
+    if (!action.item_id.empty() && !overlay_property_in_scope(*property, true))
+      return {path + ".property", "overlay property does not apply to items"};
+    if (action.item_id.empty() && !overlay_property_in_scope(*property, false))
+      return {path + ".property", "overlay property requires itemId"};
     if (!is_compatible_type(primary_type, *property_type))
       return {path + ".value",
               "overlay value does not match the property type"};
@@ -268,6 +285,9 @@ AutomationError validate_action(const AutomationAction &action,
   case ActionTargetRole::panel:
     if (!panel_exists(base, action.target))
       return {target_path, "unknown panel ID"};
+    if (!action.item_id.empty() &&
+        !panel_item_exists(base, action.target, action.item_id))
+      return {path + ".itemId", "unknown or opaque item ID for the target panel"};
     break;
   case ActionTargetRole::override_name:
     if (!detail::valid_automation_id(action.target))
