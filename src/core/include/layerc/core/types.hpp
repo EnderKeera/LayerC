@@ -14,6 +14,7 @@
 
 #include "layerc/core/enum_wire.hpp"
 #include "layerc/core/json.hpp"
+#include "layerc/core/overlay_item.hpp"
 
 namespace layerc::core {
 
@@ -148,6 +149,7 @@ struct CooldownDefinition {
   // Opaque, value-owned JSON fields not interpreted by this profile schema.
   // Keep them with the entity through edits, history and durable writes.
   json::Value::Object extra_fields{};
+  Milliseconds active_duration{};
 
   bool operator==(const CooldownDefinition&) const = default;
 };
@@ -321,6 +323,7 @@ struct Panel {
   // Opaque, value-owned JSON fields not interpreted by this profile schema.
   // Keep them with the entity through edits, history and durable writes.
   json::Value::Object extra_fields{};
+  std::optional<std::vector<OverlayItem>> items{};
 
   bool operator==(const Panel&) const = default;
 };

@@ -13,7 +13,11 @@ namespace layerc::core {
 namespace json { class Value; }
 
 inline constexpr std::size_t max_profile_json_bytes = 256U * 1024U;
-inline constexpr std::uint32_t profile_schema_version = 4;
+inline constexpr std::uint32_t legacy_profile_schema_version = 4;
+inline constexpr std::uint32_t profile_schema_version = 5;
+
+[[nodiscard]] std::uint32_t
+profile_serialization_schema(const GameProfile &profile) noexcept;
 
 using ProfileError = DocumentError;
 

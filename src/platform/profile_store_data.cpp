@@ -367,7 +367,7 @@ template <typename Module>
 [[nodiscard]] std::optional<std::vector<ProfileFileMutation>>
 plan_profile_bundle(BundleInputs inputs, ProfileWriteError &failure) {
   auto stored = std::move(inputs.profile);
-  stored.schema_version = layerc::core::profile_schema_version;
+  stored.schema_version = layerc::core::profile_serialization_schema(stored);
   const auto &path = inputs.path;
   if (path.parent_path().empty()) return std::nullopt;
 

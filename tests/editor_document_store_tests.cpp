@@ -720,6 +720,44 @@ void module_identity_commit_contracts() {
          "a successful durable commit aligns both sidecar ids and adopts its clean values");
 }
 
+void overlay_item_store_schema_contracts() {
+  const IsolatedStore store;
+  const auto path = store.directory() / "schema-compatibility.json";
+  const auto check = [&](const GameProfile &profile) {
+    const auto expected = serialize_profile_json(profile);
+    const auto saved = layerc::platform::write_profile_bundle(
+        path, profile, layerc::platform::ProfileModuleIntents{});
+    if (!expect(saved.ok(), "schema compatibility fixture durably saves"))
+      return;
+    expect(layerc::test::read_file(path) == expected,
+           "durable bundle save uses the compatibility serializer byte-for-byte");
+    const auto loaded = layerc::platform::load_profile_bundle(path);
+    const auto *bundle = std::get_if<layerc::platform::ProfileBundleLoad>(&loaded);
+    expect(bundle && !bundle->legacy_base_schema &&
+               bundle->profile.schema_version == profile_serialization_schema(profile),
+           "supported schema4 and schema5 loads do not request an automatic upgrade");
+  };
+  auto legacy = layerc::editor::make_new_profile();
+  legacy.game.executable_name = "fixture.exe";
+  legacy.panels.front().extra_fields.emplace(
+      "items", json::Value(std::string("opaque schema4 data")));
+  legacy.cooldowns.front().extra_fields.emplace("activeDurationMs", json::Value(true));
+  check(legacy);
+
+  auto typed = layerc::editor::make_new_profile();
+  typed.game.executable_name = "fixture.exe";
+  typed.schema_version = profile_schema_version;
+  typed.panels.front().items = std::vector<OverlayItem>{
+      OverlayItem{.id = "stacks", .content = CounterItem{.variable = "stacks"}}};
+  typed.panels.front().cooldown_ids.clear();
+  check(typed);
+
+  auto duration = layerc::editor::make_new_profile();
+  duration.game.executable_name = "fixture.exe";
+  duration.cooldowns.front().active_duration = Milliseconds{1000};
+  check(duration);
+}
+
 void create_only_contracts() {
   const IsolatedStore store;
   auto document = full_document();
@@ -767,5 +805,6 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(editor_cooldown_removal_contracts),
                  LAYERC_TEST_CASE(create_only_contracts),
                  LAYERC_TEST_CASE(module_identity_commit_contracts),
                  LAYERC_TEST_CASE(enablement_policy_contracts),
+                 LAYERC_TEST_CASE(overlay_item_store_schema_contracts),
                  LAYERC_TEST_CASE(editor_document_ownership_contracts),
                  LAYERC_TEST_CASE(diagnostic_text_contracts))

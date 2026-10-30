@@ -45,5 +45,19 @@ inline constexpr std::array visual_runtime{
     EnumWireEntry{VisualRuntime::inline_process, "inline"},
     EnumWireEntry{VisualRuntime::isolated, "isolated"},
 };
+inline constexpr std::array overlay_item_kind{
+    EnumWireEntry{OverlayItemKind::cooldown, "cooldown"},
+    EnumWireEntry{OverlayItemKind::timer, "timer"},
+    EnumWireEntry{OverlayItemKind::counter, "counter"},
+    EnumWireEntry{OverlayItemKind::indicator, "indicator"},
+};
+inline constexpr std::array overlay_timer_source{
+    EnumWireEntry{OverlayTimerSource::automation, "automation"},
+    EnumWireEntry{OverlayTimerSource::cooldown_active, "cooldownActive"},
+};
+inline constexpr std::array counter_display{
+    EnumWireEntry{CounterDisplay::number, "number"},
+    EnumWireEntry{CounterDisplay::pips, "pips"},
+};
 
 } // namespace layerc::core::profile_wire
