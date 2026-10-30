@@ -34,6 +34,9 @@ void Session::configure_module(const bool visual_enabled) {
     last_visual_sequence = 0;
     automation.configure_visual(sidecar.profile, visual_enabled);
   } else if constexpr (std::is_same_v<Module, layerc::core::AutomationModule>) {
+    presentation_defaults = sidecar.profile
+        ? std::optional(layerc::core::automation_default_snapshot(*sidecar.profile))
+        : std::nullopt;
     if (!sidecar.profile) automation.discard_runtime();
     rebuild_input_configuration();
   }

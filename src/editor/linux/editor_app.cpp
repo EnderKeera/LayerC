@@ -185,7 +185,10 @@ bool EditorApp::save() {
     return false;
   }
   session.end_text_edit();
-  const auto outcome = session.save(confirm_profile_upgrade);
+  const auto outcome = session.save([&] {
+    return session.document().bundle().items_upgrade_needed
+        ? confirm_items_profile_upgrade() : confirm_profile_upgrade();
+  });
   saving_ = false;
   observed_generation_ = session.edit_generation();
   if (outcome.saved()) { stop_edit_services(); refresh(); }
@@ -224,6 +227,12 @@ void EditorApp::command(const EditorCommand action) {
   command_spec(action).run(*this);
 }
 
+bool confirm_items_profile_upgrade() {
+  fl_message_title("Upgrade profile");
+  return fl_choice("Saving adds overlay items or active durations (profile schema 5).\n"
+                   "LayerC versions before 2.7 cannot open the saved profile.",
+                   "Cancel", "Upgrade", nullptr) == 1;
+}
 bool confirm_profile_upgrade() {
   fl_message_title("Upgrade profile");
   return fl_choice("Upgrade this legacy profile to the current format?\n"

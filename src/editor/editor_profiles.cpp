@@ -51,10 +51,11 @@ void ProfileEntry::describe(const layerc::core::GameProfile &profile) {
   enabled = profile.enabled;
 }
 
-bool confirm_schema_upgrade(const HWND owner) {
+bool confirm_schema_upgrade(const HWND owner, const bool items) {
   return themed_message_box(
              owner,
-             L"This profile was saved by an older LayerC. Saving upgrades it, with its visual and automation settings, to the current profile format. Older LayerC versions cannot open it afterwards. Continue?",
+             items ? L"Saving adds overlay items or active durations (profile schema 5). LayerC versions before 2.7 cannot open the saved profile. Continue?"
+                    : L"This profile was saved by an older LayerC. Saving upgrades it, with its visual and automation settings, to the current profile format. Older LayerC versions cannot open it afterwards. Continue?",
              L"Upgrade profile format", MB_YESNO | MB_ICONWARNING) ==
          IDYES;
 }
@@ -74,10 +75,9 @@ bool EditorWindow::validate_profile() {
 }
 
 bool EditorWindow::confirm_v2_upgrade() {
-  if ((!document_.legacy_base_schema() && !document_.legacy_visual_schema()) ||
-      document_.upgrade_acknowledged())
-    return true;
-  if (!confirm_schema_upgrade(shell_.window))
+  const auto bundle = document_.bundle();
+  if (!bundle.upgrade_needed) return true;
+  if (!confirm_schema_upgrade(shell_.window, bundle.items_upgrade_needed))
     return false;
   document_.acknowledge_upgrade();
   return true;
@@ -470,6 +470,7 @@ CommitResult EditorWindow::commit_bundle(const std::filesystem::path &path,
                                          ProfileBundle &bundle,
                                          const CommitOptions &options) {
   const auto outcome = commit_profile_bundle(path, bundle, options, [&] {
+    if (bundle.items_upgrade_needed) return confirm_schema_upgrade(shell_.window, true);
     return is_document_path(document_, path)
                ? confirm_v2_upgrade()
                : confirm_schema_upgrade(shell_.window);
@@ -484,12 +485,19 @@ CommitResult EditorWindow::commit_document(
   if (!draft_controls_valid()) return CommitResult::invalid_fields;
   if (!apply_profile_controls(DocumentChangeKind::text))
     return CommitResult::invalid_fields;
+  bool items_upgrade = document_.bundle().items_upgrade_needed;
+  std::function<void(ProfileBundle &)> prepare;
+  if (candidate) prepare = [&](ProfileBundle &bundle) {
+    candidate(bundle);
+    items_upgrade = document_.requires_items_upgrade(bundle.profile);
+  };
   const auto outcome = layerc::editor::commit_document(
       document_, path, options, [&] {
+        if (items_upgrade) return confirm_schema_upgrade(shell_.window, true);
         return is_document_path(document_, path)
                    ? confirm_v2_upgrade()
                    : confirm_schema_upgrade(shell_.window);
-      }, layerc::platform::KeepModule{}, {}, candidate);
+      }, layerc::platform::KeepModule{}, {}, prepare);
   last_write_error_ = outcome.write_error;
   return outcome.result;
 }

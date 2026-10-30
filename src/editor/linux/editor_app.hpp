@@ -35,6 +35,7 @@ namespace layerc::editor {
 
 // The one schema-upgrade confirmation every save path and command shares.
 [[nodiscard]] bool confirm_profile_upgrade();
+[[nodiscard]] bool confirm_items_profile_upgrade();
 
 class EditorApp;
 class PanelPreview final : public Fl_Widget {

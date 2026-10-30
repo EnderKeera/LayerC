@@ -1,5 +1,6 @@
 #include "profile_document.hpp"
 #include "profile_edit.hpp"
+#include "panel_items.hpp"
 #include "layerc/core/hid.hpp"
 
 #include <algorithm>
@@ -19,12 +20,14 @@ ProfileBundle loaded_bundle(layerc::platform::ProfileBundleLoad loaded) {
   const auto &visual = loaded.modules.get<layerc::core::VisualModule>();
   const auto &automation = loaded.modules.get<layerc::core::AutomationModule>();
   const bool blocked = unreadable(visual) || unreadable(automation);
+  const bool items_upgrade = loaded.base_schema_below_items &&
+      core::profile_serialization_schema(loaded.profile) >= core::profile_schema_version;
   return {.profile = std::move(loaded.profile),
           .visual = visual.optional_profile(),
           .automation = automation.optional_profile(),
           .unreadable_module = blocked,
-          .upgrade_needed =
-              loaded.legacy_base_schema || loaded.legacy_visual_schema};
+          .upgrade_needed = loaded.legacy_base_schema || loaded.legacy_visual_schema || items_upgrade,
+          .items_upgrade_needed = items_upgrade};
 }
 
 ModuleEditOutcome ProfileDocument::edit_automation_value(
@@ -44,6 +47,8 @@ ModuleEditOutcome ProfileDocument::edit_automation_value(
     if (!error.message.empty())
       return {ModuleEditStatus::invalid, error.describe()};
   }
+  if (const auto error = item_variable_removal_error(profile_, automation_.profile, candidate))
+    return {ModuleEditStatus::refused, *error};
   if (candidate == automation_.profile) return {};
   automation_.profile = std::move(candidate);
   mark_automation_edited();
@@ -108,61 +113,99 @@ std::variant<ProfileBundle, EnablementRefusal> profile_enablement_bundle(
   return loaded_bundle(std::move(std::get<platform::ProfileBundleLoad>(loaded)));
 }
 
+ModuleEditOutcome ProfileDocument::edit_profile_and_automation(
+    const std::function<std::optional<std::string>(
+        core::GameProfile &, std::optional<core::AutomationProfile> &)> &edit,
+    const DocumentChangeKind kind) {
+  if (!platform::may_write_primary(automation_.state))
+    return {ModuleEditStatus::blocked, "Repair the automation module first."};
+  auto profile = profile_;
+  auto automation = automation_.profile;
+  if (const auto error = edit(profile, automation))
+    return {ModuleEditStatus::refused, *error};
+  if (const auto error = core::validate_profile(profile))
+    return {ModuleEditStatus::invalid, error->describe()};
+  if (visual_.profile && !core::VisualModule::valid(*visual_.profile, profile))
+    return {ModuleEditStatus::invalid, "The edit would invalidate the existing visual module."};
+  if (automation) {
+    const auto error = core::validate_automation_profile(*automation, profile);
+    if (!error.message.empty()) return {ModuleEditStatus::invalid, error.describe()};
+  }
+  if (const auto error = item_variable_removal_error(profile, automation_.profile, automation))
+    return {ModuleEditStatus::refused, *error};
+  if (profile == profile_ && automation == automation_.profile) return {};
+  if (kind != DocumentChangeKind::text) history_.end_text_coalescing();
+  if (automation != automation_.profile) {
+    automation_.profile = std::move(automation);
+    mark_automation_edited();
+  }
+  profile_ = std::move(profile);
+  (void)history_.record(profile_, visual_.profile, automation_.profile,
+                        kind == DocumentChangeKind::text);
+  return {ModuleEditStatus::accepted, {}};
+}
+
 void sync_bar_panels(layerc::core::GameProfile &profile,
                      const std::optional<std::string_view> added) {
-  const bool independent =
-      !profile.panels.empty() &&
-      std::ranges::all_of(profile.panels, [](const layerc::core::Panel &panel) {
-        return panel.style == layerc::core::PanelStyle::bar &&
-               panel.cooldown_ids.size() == 1;
+  using namespace core;
+  const bool independent = !profile.panels.empty() &&
+      std::ranges::all_of(profile.panels, [](const Panel &panel) {
+        return panel.style == PanelStyle::bar &&
+            (panel.items ? panel.items->size() == 1 &&
+                std::holds_alternative<CooldownItem>(panel.items->front().content)
+                         : panel.cooldown_ids.size() == 1);
       });
   const auto exists = [&](const std::string_view id) {
     return std::ranges::any_of(profile.cooldowns, [&](const auto &cooldown) {
       return cooldown.id == id;
     });
   };
-  for (auto &panel : profile.panels)
-    std::erase_if(panel.cooldown_ids,
-                  [&](const auto &id) { return !exists(id); });
-  std::erase_if(profile.panels,
-                [](const auto &panel) { return panel.cooldown_ids.empty(); });
-  if (profile.cooldowns.empty())
-    return;
-
+  for (auto &panel : profile.panels) {
+    if (panel.items) {
+      std::erase_if(*panel.items, [&](const auto &item) {
+        if (const auto *source = std::get_if<CooldownItem>(&item.content))
+          return !exists(source->cooldown_id);
+        if (const auto *source = std::get_if<CooldownActiveTimerItem>(&item.content))
+          return !exists(source->cooldown_id);
+        return false;
+      });
+    } else {
+      std::erase_if(panel.cooldown_ids, [&](const auto &id) { return !exists(id); });
+    }
+  }
+  std::erase_if(profile.panels, [](const auto &panel) {
+    return panel.items ? panel.items->empty() : panel.cooldown_ids.empty();
+  });
+  if (profile.cooldowns.empty()) return;
   if (added && independent) {
-    const auto cooldown = std::ranges::find(
-        profile.cooldowns, *added, &layerc::core::CooldownDefinition::id);
+    const auto cooldown = std::ranges::find(profile.cooldowns, *added, &CooldownDefinition::id);
     if (cooldown != profile.cooldowns.end()) {
-      layerc::core::Panel panel;
+      Panel panel;
       panel.id = unique_panel_id(cooldown->id + "-bar", profile.panels);
       panel.name = cooldown->name;
-      panel.style = layerc::core::PanelStyle::bar;
+      panel.style = PanelStyle::bar;
       panel.anchor_x = 0.5;
       panel.anchor_y = std::clamp(
-          0.2 + 0.10 * static_cast<double>(profile.cooldowns.size() - 1U), 0.0,
-          1.0);
+          0.2 + 0.10 * static_cast<double>(profile.cooldowns.size() - 1U), 0.0, 1.0);
       panel.cooldown_ids = {cooldown->id};
       profile.panels.push_back(std::move(panel));
       return;
     }
   }
-
-  if (profile.panels.empty()) {
-    profile.panels.push_back({.id = "main",
-                              .name = "Main",
-                              .style = layerc::core::PanelStyle::bar,
-                              .bar = {},
-                              .cooldown_ids = {}});
+  if (profile.panels.empty())
+    profile.panels.push_back({.id = "main", .name = "Main", .style = PanelStyle::bar,
+                              .bar = {}, .cooldown_ids = {}});
+  const std::string_view required = added.value_or(profile.cooldowns.front().id);
+  if (std::ranges::none_of(profile.panels, [&](const auto &panel) {
+        return panel_has_cooldown(panel, required);
+      })) {
+    auto &front = profile.panels.front();
+    if (front.items)
+      front.items->push_back({.id = make_uuid_item_id(), .label = std::nullopt,
+                             .content = CooldownItem{std::string(required)}});
+    else
+      front.cooldown_ids.emplace_back(required);
   }
-  const std::string_view required =
-      added.value_or(profile.cooldowns.front().id);
-  const bool assigned = std::ranges::any_of(
-      profile.panels, [&](const layerc::core::Panel &panel) {
-        return std::ranges::find(panel.cooldown_ids, required) !=
-               panel.cooldown_ids.end();
-      });
-  if (!assigned)
-    profile.panels.front().cooldown_ids.emplace_back(required);
 }
 
 std::optional<CooldownRemovalError>
@@ -180,6 +223,7 @@ ProfileDocument::cooldown_removal_error(const std::string_view id) const {
 
   std::vector<std::string_view> affected_groups;
   std::vector<std::string_view> removed_panels;
+  std::vector<std::pair<std::string, std::string>> removed_items;
   std::string dependencies;
   for (const auto &group : profile_.cooldown_groups) {
     if (std::ranges::find(group.cooldown_ids, id) == group.cooldown_ids.end())
@@ -190,8 +234,25 @@ ProfileDocument::cooldown_removal_error(const std::string_view id) const {
       dependencies += " (" + group.name + ")";
   }
   for (const auto &panel : profile_.panels) {
-    if (panel.cooldown_ids.size() == 1 && panel.cooldown_ids.front() == id)
-      removed_panels.push_back(panel.id);
+    std::size_t removed = 0;
+    if (panel.items) {
+      for (const auto &item : *panel.items) {
+        const auto *cd = std::get_if<CooldownItem>(&item.content);
+        const auto *active = std::get_if<CooldownActiveTimerItem>(&item.content);
+        if ((cd && cd->cooldown_id == id) || (active && active->cooldown_id == id)) {
+          removed_items.emplace_back(panel.id, item.id);
+          ++removed;
+        }
+      }
+    } else {
+      for (std::size_t index = 0; index < panel.cooldown_ids.size(); ++index)
+        if (panel.cooldown_ids[index] == id) {
+          removed_items.emplace_back(panel.id, "@legacy:" + std::to_string(index));
+          ++removed;
+        }
+    }
+    const auto count = panel.items ? panel.items->size() : panel.cooldown_ids.size();
+    if (removed != 0 && removed == count) removed_panels.push_back(panel.id);
   }
   auto remaining_visual = visual_.profile;
   if (remaining_visual)
@@ -229,7 +290,11 @@ ProfileDocument::cooldown_removal_error(const std::string_view id) const {
               spec->target == ActionTargetRole::panel &&
               std::ranges::find(removed_panels, action.target) !=
                   removed_panels.end();
-          if (direct || group || panel)
+          const bool item = action.kind == AutomationActionKind::set_overlay_override &&
+              std::ranges::any_of(removed_items, [&](const auto &removed) {
+                return action.target == removed.first && action.item_id == removed.second;
+              });
+          if (direct || group || panel || item)
             dependencies += "\n- Automation '" + automation.id + "', rule '" +
                             rule.id + "': " + std::string(spec->wire_name) +
                             " target '" + action.target + "'";
@@ -254,6 +319,26 @@ ProfileDocument::remove_cooldown(const std::string_view id) {
   const std::string removed_id(id);
   auto candidate = profile_;
   auto visual = visual_.profile;
+  auto automation = automation_.profile;
+  // Legacy item aliases are positional. Promote an affected panel before
+  // deleting a row so surviving overrides retain their original identity.
+  if (automation) {
+    for (std::size_t index = 0; index < candidate.panels.size(); ++index) {
+      const auto &panel = candidate.panels[index];
+      if (panel.items || !panel_has_cooldown(panel, removed_id)) continue;
+      const bool item_override = std::ranges::any_of(automation->automations, [&](const auto &a) {
+        return std::ranges::any_of(a.rules, [&](const auto &rule) {
+          return std::ranges::any_of(rule.actions, [&](const auto &action) {
+            return action.kind == core::AutomationActionKind::set_overlay_override &&
+                   action.target == panel.id && !action.item_id.empty();
+          });
+        });
+      });
+      if (item_override)
+        if (const auto error = promote_panel_items(candidate, automation, index))
+          return CooldownRemovalError{error->message};
+    }
+  }
   std::erase_if(candidate.cooldowns,
                 [&](const auto &cooldown) { return cooldown.id == removed_id; });
   std::erase_if(candidate.bindings, [&](const auto &binding) {
@@ -271,14 +356,18 @@ ProfileDocument::remove_cooldown(const std::string_view id) {
     if (!error.message.empty())
       return CooldownRemovalError{error.describe()};
   }
-  if (automation_.profile) {
+  if (automation) {
     const auto error = layerc::core::validate_automation_profile(
-        *automation_.profile, candidate);
+        *automation, candidate);
     if (!error.message.empty())
       return CooldownRemovalError{error.describe()};
   }
 
   profile_ = std::move(candidate);
+  if (automation != automation_.profile) {
+    automation_.profile = std::move(automation);
+    mark_automation_edited();
+  }
   if (visual_.profile) {
     visual_.profile = std::move(visual);
     mark_visual_edited();
@@ -299,6 +388,8 @@ void ProfileDocument::open(std::filesystem::path path,
   set_visual(visual, loaded.legacy_visual_schema);
   set_automation(loaded.modules.get<layerc::core::AutomationModule>());
   legacy_base_schema_ = loaded.legacy_base_schema;
+  base_schema_below_items_ = loaded.base_schema_below_items;
+  items_upgrade_acknowledged_ = false;
   upgrade_acknowledged_ = false;
   // Retain an unreadable visual sidecar so undo can restore exactly its state
   // and diagnostic after an explicit calibration repair.
@@ -316,6 +407,8 @@ void ProfileDocument::start_draft(
   path_.clear();
   legacy_base_schema_ = false;
   legacy_visual_schema_ = false;
+  base_schema_below_items_ = false;
+  items_upgrade_acknowledged_ = false;
   upgrade_acknowledged_ = false;
   retained_visual_.reset();
   visual_.profile = std::move(visual);
@@ -355,6 +448,8 @@ void ProfileDocument::accept_commit(std::filesystem::path path,
   path_ = std::move(path);
   legacy_base_schema_ = false;
   legacy_visual_schema_ = false;
+  base_schema_below_items_ = core::profile_serialization_schema(profile_) < core::profile_schema_version;
+  items_upgrade_acknowledged_ = false;
   upgrade_acknowledged_ = false;
   retained_visual_.reset();
   history_.rebase(profile_, visual_.profile, automation_.profile);

@@ -51,6 +51,7 @@ public:
 
 private:
   friend struct EditorWindowTestAccess;
+  friend struct PanelItemDialogState;
 
   static constexpr UINT_PTR autosave_timer = 10;
   static constexpr UINT_PTR live_channel_timer = 11;
@@ -150,6 +151,18 @@ private:
                       const CommitOptions &options = {});
   void refresh_bar_list(std::size_t preferred_panel = SIZE_MAX);
   void refresh_bar_controls();
+  void refresh_panel_items(std::size_t preferred = SIZE_MAX);
+  void refresh_item_actions();
+  [[nodiscard]] bool handle_item_command(int id, int notification);
+  void open_panel_item_dialog(bool editing);
+  static INT_PTR CALLBACK panel_item_dialog_proc(HWND, UINT, WPARAM, LPARAM);
+  [[nodiscard]] bool commit_panel_item(
+      std::size_t panel, std::optional<std::size_t> index,
+      layerc::core::OverlayItem item,
+      std::optional<layerc::core::Milliseconds> preset_interval,
+      std::string &error);
+  [[nodiscard]] layerc::core::PanelPresentation
+  preview_presentation(const layerc::core::Panel &) const;
   void refresh_position_hint();
   [[nodiscard]] const layerc::core::Panel *selected_bar() const;
   [[nodiscard]] bool validate_profile();

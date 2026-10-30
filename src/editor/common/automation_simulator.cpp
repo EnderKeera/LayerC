@@ -3,6 +3,7 @@
 #include "automation_graph.hpp"
 
 #include "layerc/core/cooldown_groups.hpp"
+#include "layerc/core/automation_session.hpp"
 #include "layerc/core/json.hpp"
 
 #include <algorithm>
@@ -46,6 +47,10 @@ AutomationSimulator::Reset
 AutomationSimulator::reset(const std::string_view graph_json,
                            const core::GameProfile &profile) {
   runtime_.reset();
+  cooldowns_.reset();
+  base_profile_.reset();
+  cooldown_states_.clear();
+  presentation_time_ = {};
   index_ = 0;
   last_step_.reset();
   const auto parsed = core::parse_automation_profile_json(graph_json, profile);
@@ -58,6 +63,10 @@ AutomationSimulator::reset(const std::string_view graph_json,
       *graph, core::AutomationPersistentValues{},
       core::CooldownGroupTopology(profile.cooldown_groups), [] { return core::TimePoint{}; });
   runtime_->set_trace_enabled(true);
+  base_profile_ = profile;
+  cooldowns_ = std::make_unique<core::CooldownEngine>(
+      profile.cooldowns, profile.cooldown_groups);
+  cooldowns_->snapshot(presentation_time_, cooldown_states_);
   Reset result;
   if (seed_empty_ && events_.empty()) {
     core::AutomationEvent event;
@@ -81,7 +90,23 @@ bool AutomationSimulator::step(const std::string_view breakpoint_rule) {
     const auto before = runtime_->trace().empty()
                             ? std::uint64_t{}
                             : runtime_->trace().back().sequence;
-    auto result = runtime_->process(root);
+    if (root.timestamp >= presentation_time_) {
+      presentation_time_ = root.timestamp;
+      cooldowns_->update(presentation_time_);
+    }
+    auto result = runtime_->process(root,
+        [&](const core::AutomationEffect &effect) {
+          if ((effect.kind == core::AutomationActionKind::trigger_cooldown ||
+               effect.kind == core::AutomationActionKind::trigger_group) &&
+              !cooldowns_->can_arm_active(root.timestamp))
+            return false;
+          return core::validate_session_effect(effect, base_profile_->panels,
+              base_profile_->cooldowns, base_profile_->cooldown_groups);
+        },
+        [&](const std::span<const core::AutomationEffect> effects) {
+          return core::commit_automation_cooldown_effects(
+              *cooldowns_, effects, root.timestamp, root.origin_token);
+        });
     for (const auto &entry : runtime_->trace())
       if (entry.sequence > before &&
           entry.phase != core::automation_trace_root_phase)
@@ -99,7 +124,19 @@ bool AutomationSimulator::step(const std::string_view breakpoint_rule) {
     ++report.timer_events;
     (void)evaluate(timer_event);
   }
+  // These trace roots describe accepted external facts. Action effects use
+  // the same staged engine committer as real sessions; no OS input is emitted.
+  if (event.timestamp >= presentation_time_) {
+    cooldowns_->update(event.timestamp);
+    if (event.kind == core::AutomationEventKind::cooldown_triggered)
+      (void)cooldowns_->trigger_with_propagation(
+          event.source_id, event.timestamp, event.origin_token);
+    else if (event.kind == core::AutomationEventKind::group_triggered)
+      (void)cooldowns_->trigger_group(
+          event.source_id, event.timestamp, event.origin_token);
+  }
   const auto result = evaluate(event);
+  cooldowns_->snapshot(presentation_time_, cooldown_states_);
   bool keep_playing = result.committed;
   if (!result.committed)
     report.rejection = result.error
@@ -171,6 +208,10 @@ void AutomationSimulator::load(std::vector<core::AutomationEvent> events) {
   seed_empty_ = false;
   index_ = 0;
   runtime_.reset();
+  cooldowns_.reset();
+  base_profile_.reset();
+  cooldown_states_.clear();
+  presentation_time_ = {};
   last_step_.reset();
 }
 
@@ -221,6 +262,25 @@ void append_step_report(std::string &output, const SimulatorStepReport &report) 
 
 } // namespace
 
+std::optional<SimulatorPanelPreview>
+AutomationSimulator::panel_preview(const std::string_view panel_id) const {
+  if (!runtime_ || !base_profile_) return std::nullopt;
+  const auto source = std::ranges::find(
+      base_profile_->panels, panel_id, &core::Panel::id);
+  if (source == base_profile_->panels.end()) return std::nullopt;
+  const auto &snapshot = runtime_->snapshot();
+  const auto resolved = core::resolve_panel_overrides(
+      *source, snapshot.overlay_overrides);
+  core::PanelPresentationOverrides overrides;
+  overrides.visible = resolved.visible;
+  overrides.text = resolved.text;
+  overrides.edit_mode = true;
+  overrides.items = resolved.items;
+  return SimulatorPanelPreview{resolved.panel,
+      core::present_panel(resolved.panel, base_profile_->cooldowns,
+          cooldown_states_, &snapshot, overrides, presentation_time_)};
+}
+
 std::string
 AutomationSimulator::describe(const std::string_view assertions) const {
   std::string output = "Events: " + std::to_string(index_) + "/" +
@@ -232,6 +292,18 @@ AutomationSimulator::describe(const std::string_view assertions) const {
   for (const auto &[id, value] : runtime_->snapshot().variables)
     output += " " + id + "=" + core::automation_value_json(value) + ";";
   if (last_step_) append_step_report(output, *last_step_);
+  output += "\nOverlay items (simulated):";
+  std::size_t shown{};
+  for (const auto &panel : base_profile_->panels) {
+    const auto frame = panel_preview(panel.id);
+    if (!frame || !frame->presentation.visible) continue;
+    for (const auto &item : frame->presentation.items) {
+      if (shown == 64) break;
+      output += "\n- " + panel.name + "/" + item.item_id + ": " + item.label;
+      ++shown;
+    }
+    if (shown == 64) { output += "\n(Preview limited to 64 rows.)"; break; }
+  }
   if (assertions.empty())
     return output;
   bool all_passed = true;

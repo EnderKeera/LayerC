@@ -39,6 +39,8 @@ public:
   void open();
   [[nodiscard]] bool handle_live_message(const layerc::core::LiveMessage &message);
   void restore_live_subscription();
+  [[nodiscard]] std::optional<SimulatorPanelPreview>
+  panel_preview(std::string_view panel_id) const;
 
 private:
   void update_add_enabled(HWND dialog);

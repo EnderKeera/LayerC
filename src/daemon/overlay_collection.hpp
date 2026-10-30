@@ -45,14 +45,21 @@ public:
   void release() noexcept;
   void render_for(HWND target,
                   const std::vector<layerc::core::CooldownState> &states,
-                  layerc::core::TimePoint now);
+                  layerc::core::TimePoint now,
+                  const layerc::core::AutomationRuntimeSnapshot *automation = nullptr,
+                  layerc::core::TimePoint epoch = {});
   void render_on_rect(const RECT &target,
                       const std::vector<layerc::core::CooldownState> &states,
-                      layerc::core::TimePoint now);
+                      layerc::core::TimePoint now,
+                      const layerc::core::AutomationRuntimeSnapshot *automation = nullptr,
+                      layerc::core::TimePoint epoch = {});
+  [[nodiscard]] std::span<const layerc::core::PanelPresentation>
+  last_presentations() const noexcept { return frames_; }
 
 private:
   std::vector<layerc::core::CooldownDefinition> cooldowns_;
   std::vector<std::unique_ptr<OverlayWindow>> windows_;
+  std::vector<layerc::core::PanelPresentation> frames_;
 };
 
 } // namespace layerc::daemon

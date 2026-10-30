@@ -1,6 +1,7 @@
 #include "daemon_owner_tests.hpp"
 #include "input_demand.hpp"
 #include "maintenance_schedule.hpp"
+#include "overlay_cadence.hpp"
 #include "test_support.hpp"
 
 #include <algorithm>
@@ -132,10 +133,49 @@ void automation_input_rules_request_their_own_devices() {
          "a configured HID filter requests its HID device");
 }
 
+void typed_overlay_cadence_is_demand_driven() {
+  using namespace layerc::core;
+  using layerc::daemon::overlay_cadence;
+  const TimePoint now{};
+  PanelPresentation frame{.visible = true};
+  frame.items.push_back({.kind = OverlayItemKind::counter, .has_progress = false});
+  expect(!overlay_cadence(std::span(&frame, 1), false, now).delay,
+         "a static counter creates no render timer");
+  const auto running = overlay_cadence(std::span(&frame, 1), true, now);
+  expect(running.continuous && running.delay == Milliseconds{16},
+         "an engine cooldown retains the existing 16 ms cadence");
+  frame.items.front().kind = OverlayItemKind::timer;
+  frame.items.front().active = true;
+  expect(overlay_cadence(std::span(&frame, 1), false, now).continuous,
+         "an active-duration or automation timer animates continuously");
+  frame.items.front().kind = OverlayItemKind::indicator;
+  frame.next_wakeup = now + Milliseconds{125};
+  const auto flash = overlay_cadence(std::span(&frame, 1), false, now);
+  expect(!flash.continuous && flash.delay == Milliseconds{125},
+         "a flashing indicator wakes only at its next edge");
+  frame.next_wakeup = now + std::chrono::microseconds{1};
+  expect(overlay_cadence(std::span(&frame, 1), false, now).delay == Milliseconds{1},
+         "fractional millisecond deadlines round up, never busy-spin");
+  frame.next_wakeup = now - Milliseconds{1};
+  expect(overlay_cadence(std::span(&frame, 1), false, now).delay == Milliseconds{1},
+         "a past edge is bounded by a one-millisecond retry");
+  frame.visible = false;
+  expect(!overlay_cadence(std::span(&frame, 1), false, now).delay,
+         "hidden panels do not request wakeups");
+  frame.visible = true;
+  frame.next_wakeup.reset();
+  frame.items.front().kind = OverlayItemKind::cooldown;
+  frame.items.front().ready = false;
+  frame.items.front().unavailable = true;
+  expect(!overlay_cadence(std::span(&frame, 1), false, now).delay,
+         "unavailable rows never create a countdown timer");
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(busy_wakeups_cannot_postpone_maintenance),
+    LAYERC_TEST_CASE(typed_overlay_cadence_is_demand_driven),
     LAYERC_TEST_CASE(automation_input_rules_request_their_own_devices),
     LAYERC_TEST_CASE(
         layerc::test::daemon_owner::input_owner_dispatches_without_a_daemon_app),

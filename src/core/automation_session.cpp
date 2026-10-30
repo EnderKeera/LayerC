@@ -27,6 +27,7 @@ bool validate_automation_cooldown_effect(
         return cooldown.id == effect.target;
       });
 }
+} // namespace
 
 bool validate_session_effect(
     const AutomationEffect &effect, const std::span<const Panel> panels,
@@ -50,6 +51,7 @@ bool validate_session_effect(
   }
 }
 
+namespace {
 bool apply_validated_cooldown_effect(CooldownEngine &cooldowns,
                                       const AutomationEffect &effect,
                                       const TimePoint now,
@@ -82,6 +84,7 @@ bool apply_validated_cooldown_effect(CooldownEngine &cooldowns,
     return false;
   }
 }
+} // namespace
 
 bool commit_automation_cooldown_effects(
     CooldownEngine &engine, const std::span<const AutomationEffect> effects,
@@ -101,6 +104,7 @@ bool commit_automation_cooldown_effects(
   return true;
 }
 
+namespace {
 std::optional<TimePoint> next_automation_deadline(
     const AutomationRuntime &runtime, const std::span<const CooldownState> cooldowns_,
     const std::optional<TimePoint> checkpoint) {

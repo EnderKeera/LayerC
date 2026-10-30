@@ -84,6 +84,7 @@ layerc_add_test(layerc_core_tests
     tests/game_match_tests.cpp
     tests/cooldown_group_tests.cpp
     tests/panel_presentation_tests.cpp
+    tests/item_geometry_tests.cpp
     tests/panel_item_presentation_tests.cpp
     tests/cooldown_active_tests.cpp
     tests/automation_item_override_tests.cpp
@@ -105,6 +106,8 @@ layerc_add_test(layerc_automation_persistence_tests
 # Shared editor document, history, and commit behavior on every platform.
 layerc_add_test(layerc_editor_document_tests
     SOURCES tests/editor_document_tests.cpp
+        tests/editor_panel_items_tests.cpp
+        tests/editor_panel_items_additional_tests.cpp
         tests/editor_document_store_tests.cpp
         tests/editor_document_ownership_tests.cpp
         tests/editor_document_scan_tests.cpp

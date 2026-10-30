@@ -14,43 +14,42 @@ OverlayWindow::OverlayWindow(const layerc::core::Panel &panel,
                              const std::span<const layerc::core::CooldownDefinition>
                                  cooldowns)
     : panel_(panel) {
-  (void)assign_bars(cooldowns);
+  (void)assign_rows(cooldowns);
   calculate_size();
 }
 
-// Rebuilds bars_ from the panel's cooldown ids. false when the bars already
-// match, so an unchanged panel keeps its cached labels.
-bool OverlayWindow::assign_bars(
+bool OverlayWindow::assign_rows(
     const std::span<const layerc::core::CooldownDefinition> cooldowns) {
   cooldowns_.assign(cooldowns.begin(), cooldowns.end());
-  std::size_t count{};
-  bool same = true;
-  for (const auto &cooldown_id : panel_.cooldown_ids) {
-    const auto definition =
-        std::ranges::find(cooldowns, cooldown_id,
-                          &layerc::core::CooldownDefinition::id);
-    if (definition == cooldowns.end()) continue;
-    const auto index = static_cast<std::size_t>(definition - cooldowns.begin());
-    same = same && count < bars_.size() &&
-           bars_[count].state_index == index &&
-           bars_[count].definition == *definition;
-    ++count;
-  }
-  if (same && count == bars_.size()) return false;
+  auto seed = overrides_;
+  seed.edit_mode = true;
+  seed.visible = true;
+  seed.items.clear();
+  return sync_rows(layerc::core::present_panel(panel_, cooldowns_, {}, nullptr, seed, {}));
+}
 
-  bars_.clear();
-  bars_.reserve(count);
-  for (const auto &cooldown_id : panel_.cooldown_ids) {
-    const auto definition =
-        std::ranges::find(cooldowns, cooldown_id,
-                          &layerc::core::CooldownDefinition::id);
-    if (definition != cooldowns.end())
-      bars_.push_back(
-          {.definition = *definition,
-           .state_index =
-               static_cast<std::size_t>(definition - cooldowns.begin()),
-           .label = {},
-           .wide_label = {}});
+bool OverlayWindow::sync_rows(const layerc::core::PanelPresentation &presentation) {
+  if (rows_.size() == presentation.items.size() &&
+      std::ranges::equal(rows_, presentation.items, {}, &Row::item_id,
+                         &layerc::core::ItemPresentation::item_id)) return false;
+  const bool resized = rows_.size() != presentation.items.size();
+  std::vector<Row> next;
+  next.reserve(presentation.items.size());
+  for (const auto &item : presentation.items) {
+    const auto found = std::ranges::find(rows_, item.item_id, &Row::item_id);
+    if (found != rows_.end()) next.push_back(std::move(*found));
+    else next.push_back({item.item_id, {}, {}});
+  }
+  rows_ = std::move(next);
+  if (resized) {
+    release_render_resources();
+    calculate_size();
+    if (window_ != nullptr && IsWindow(window_)) {
+      SetWindowRgn(window_, nullptr, TRUE);
+      last_region_width_ = -1;
+      SetWindowPos(window_, nullptr, 0, 0, size_.cx, size_.cy,
+                   SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
   }
   return true;
 }
@@ -65,11 +64,12 @@ void OverlayWindow::update_snapshot(
   moved.anchor_y = panel.anchor_y;
   const bool anchor_changed = moved != panel_;
   const bool appearance_changed = moved != panel;
+  const bool definitions_changed = !std::ranges::equal(cooldowns_, cooldowns);
   panel_ = panel;
-  const bool bars_changed = assign_bars(cooldowns);
-  if (!anchor_changed && !appearance_changed && !bars_changed) return;
+  const bool rows_changed = (appearance_changed || definitions_changed) && assign_rows(cooldowns);
+  if (!anchor_changed && !appearance_changed && !definitions_changed && !rows_changed) return;
   const bool window_valid = window_ != nullptr && IsWindow(window_);
-  if (appearance_changed || bars_changed) {
+  if (appearance_changed || rows_changed) {
     release_render_resources();
     calculate_size();
     if (window_valid) {
@@ -86,9 +86,11 @@ void OverlayWindow::update_snapshot(
 
 void OverlayWindow::set_session_override(
     const std::optional<bool> visible,
-    std::optional<std::string> text) {
+    std::optional<std::string> text,
+    std::vector<layerc::core::ItemPresentationOverride> items) {
   overrides_.visible = visible;
   overrides_.text = std::move(text);
+  overrides_.items = std::move(items);
 }
 void OverlayWindow::set_edit_mode(const bool enabled, const bool direct_drag,
                                   const bool selected,
@@ -142,7 +144,7 @@ OverlayWindow::~OverlayWindow() {
 
 void OverlayWindow::calculate_size() {
   const auto geometry =
-      layerc::core::panel_geometry(panel_, bars_.size());
+      layerc::core::panel_geometry(panel_, rows_.size());
   size_.cx = std::max(1L, scaled(geometry.size.width));
   size_.cy = std::max(1L, scaled(geometry.size.height));
 }
@@ -257,9 +259,12 @@ void OverlayWindow::show_on_rect(const RECT &target) {
 
 layerc::core::PanelPresentation OverlayWindow::present(
     const std::span<const layerc::core::CooldownState> states,
-    const layerc::core::TimePoint now) const {
-  return layerc::core::present_panel(panel_, cooldowns_, states, overrides_,
-                                     now);
+    const layerc::core::TimePoint now,
+    const layerc::core::AutomationRuntimeSnapshot *automation,
+    const layerc::core::TimePoint epoch) const {
+  auto options = overrides_;
+  options.presentation_epoch = epoch;
+  return layerc::core::present_panel(panel_, cooldowns_, states, automation, options, now);
 }
 
 void OverlayWindow::clear_window_state() {

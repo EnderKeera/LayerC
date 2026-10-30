@@ -475,7 +475,54 @@ void main_dialog_contracts(const HINSTANCE instance, bool &passed) {
     passed &=
         expect(SendMessageW(isolated, BM_GETCHECK, 0, 0) == BST_CHECKED,
                "the isolated visual checkbox should toggle through BM_CLICK");
+    passed &= expect(
+        GetDlgItem(editor_dialog, IDC_COOLDOWN_ACTIVE) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_PANEL_ITEMS) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_ITEM_ADD) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_ITEM_EDIT) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_ITEM_REMOVE) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_ITEM_UP) != nullptr &&
+            GetDlgItem(editor_dialog, IDC_ITEM_DOWN) != nullptr,
+        "the editor resource exposes active duration and ordered item actions");
+    passed &= expect(
+        (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_COOLDOWN_ACTIVE),
+                           GWL_STYLE) & ES_NUMBER) != 0,
+        "active duration uses integer milliseconds");
+    passed &= expect(
+        (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_PANEL_ITEMS),
+                           GWL_STYLE) & LBS_MULTIPLESEL) == 0,
+        "the ordered item list selects one editable item at a time");
+    passed &= expect(
+        (GetWindowLongPtrW(GetDlgItem(editor_dialog, IDC_PANEL_ITEMS),
+                           GWL_STYLE) & LBS_OWNERDRAWFIXED) != 0,
+        "the ordered item list retains the shared themed selection palette");
     DestroyWindow(editor_dialog);
+  }
+  const HWND item_dialog = CreateDialogParamW(
+      instance, MAKEINTRESOURCEW(IDD_PANEL_ITEM), nullptr, &test_dialog_proc, 0);
+  passed &= expect(item_dialog != nullptr, "the overlay-item dialog resource loads");
+  if (item_dialog != nullptr) {
+    for (const int id : {IDC_ITEM_KIND, IDC_ITEM_TIMER_SOURCE, IDC_ITEM_PRESET,
+                         IDC_ITEM_SOURCE, IDC_ITEM_CUSTOM_LABEL, IDC_ITEM_LABEL,
+                         IDC_ITEM_MAX, IDC_ITEM_DISPLAY, IDC_ITEM_FLASH,
+                         IDC_ITEM_INTERVAL, IDC_ITEM_ERROR, IDOK, IDCANCEL})
+      passed &= expect(GetDlgItem(item_dialog, id) != nullptr,
+                       "the item dialog contains every kind-specific control");
+    passed &= expect(
+        LOWORD(SendMessageW(item_dialog, DM_GETDEFID, 0, 0)) == IDOK,
+        "the item dialog retains its default Apply action");
+    for (const int id : {IDC_ITEM_KIND, IDC_ITEM_TIMER_SOURCE, IDC_ITEM_SOURCE,
+                         IDC_ITEM_DISPLAY, IDC_ITEM_FLASH})
+      passed &= expect(
+          (GetWindowLongPtrW(GetDlgItem(item_dialog, id), GWL_STYLE) &
+           CBS_DROPDOWNLIST) == CBS_DROPDOWNLIST,
+          "item selectors retain native bounded-choice semantics");
+    for (const int id : {IDC_ITEM_PRESET, IDC_ITEM_CUSTOM_LABEL})
+      passed &= expect(
+          (GetWindowLongPtrW(GetDlgItem(item_dialog, id), GWL_STYLE) & BS_TYPEMASK) ==
+              BS_AUTOCHECKBOX,
+          "item options retain native checkbox semantics");
+    DestroyWindow(item_dialog);
   }
 }
 

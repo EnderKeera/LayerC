@@ -81,6 +81,9 @@ struct Session {
   // reconfigured against; reconcile compares this instead of deep-comparing
   // profiles on every state change.
   layerc::core::ProfileRevision automation_revision{};
+  // Defaults are rebuilt only on module reconciliation, never on idle paints.
+  std::optional<layerc::core::AutomationRuntimeSnapshot> presentation_defaults;
+  const layerc::core::TimePoint presentation_epoch{layerc::core::MonotonicClock::now()};
   std::uint64_t last_visual_sequence{};
   std::vector<PolledKeyState> global_keyboard;
   std::vector<layerc::core::HidControlState> hid_states;

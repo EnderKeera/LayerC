@@ -18,6 +18,7 @@ struct ProfileBundleLoad {
   ProfileModuleLoads modules;
   bool legacy_base_schema{};
   bool legacy_visual_schema{};
+  bool base_schema_below_items{};
 };
 
 enum class ProfileBundleLoadError { unreadable, invalid_profile };

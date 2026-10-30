@@ -54,11 +54,18 @@ std::wstring trace_window_text(const std::string_view text) {
   return to_wide(output);
 }
 
+std::optional<SimulatorPanelPreview>
+AutomationEditor::panel_preview(const std::string_view panel_id) const {
+  if (dialog_ == nullptr || !IsWindow(dialog_)) return std::nullopt;
+  return simulator_.panel_preview(panel_id);
+}
+
 void AutomationEditor::update_simulator_view(const HWND dialog) {
   trace_display_ = simulator_.describe(wide_to_utf8(
       window_text(GetDlgItem(dialog, IDC_AUTOMATION_SIM_ASSERTIONS))));
   set_text(GetDlgItem(dialog, IDC_AUTOMATION_TRACE_TEXT),
            trace_window_text(trace_display_));
+  RedrawWindow(shell_.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 
 void AutomationEditor::reset_simulator(const HWND dialog) {

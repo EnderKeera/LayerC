@@ -16,6 +16,17 @@
 
 namespace layerc::core {
 
+// Admission and atomic cooldown application shared by real sessions and the
+// deterministic editor simulator. Validate the full winning set before commit;
+// the committer changes no engine state on failure. Internal/overlay effects
+// remain owned by AutomationRuntime.
+[[nodiscard]] bool validate_session_effect(
+    const AutomationEffect &, std::span<const Panel>,
+    std::span<const CooldownDefinition>, std::span<const CooldownGroup>);
+[[nodiscard]] bool commit_automation_cooldown_effects(
+    CooldownEngine &, std::span<const AutomationEffect>, TimePoint,
+    std::uint64_t origin_token);
+
 // Platform-neutral output: native adapters publish traces, diagnostics and
 // durable checkpoints without making the session depend on a profile store.
 class AutomationSessionSink {

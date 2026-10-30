@@ -4,6 +4,7 @@
 #include "layerc/core/panel_presentation.hpp"
 
 #include <memory>
+#include <map>
 #include <optional>
 #include <functional>
 #include <span>
@@ -33,7 +34,9 @@ public:
   void update_snapshot(const layerc::core::Panel &panel,
                        std::span<const layerc::core::CooldownDefinition> cooldowns);
   void set_session_override(std::optional<bool> visible,
-                            std::optional<std::string> text);
+                            std::optional<std::string> text,
+                            std::vector<layerc::core::ItemPresentationOverride> items = {});
+  [[nodiscard]] bool sync_rows(const layerc::core::PanelPresentation &presentation);
   void set_edit_mode(bool enabled, bool direct_drag, bool selected,
                      DragCallback callback = {});
   [[nodiscard]] std::string_view panel_id() const noexcept { return panel_.id; }
@@ -44,11 +47,14 @@ public:
   // The shared core presentation of this panel for one frame.
   [[nodiscard]] layerc::core::PanelPresentation
   present(std::span<const layerc::core::CooldownState> states,
-          layerc::core::TimePoint now) const;
+          layerc::core::TimePoint now,
+          const layerc::core::AutomationRuntimeSnapshot *automation = nullptr,
+          layerc::core::TimePoint epoch = {}) const;
   void hide();
   void render(const layerc::core::PanelPresentation &presentation);
 
 private:
+  friend struct OverlayWindowTestAccess;
   static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam,
                                       LPARAM lparam);
   bool create_window();
@@ -60,17 +66,14 @@ private:
   [[nodiscard]] LONG scaled(LONG value) const noexcept;
   void update_position(const RECT &target);
   [[nodiscard]] bool
-  assign_bars(std::span<const layerc::core::CooldownDefinition> cooldowns);
+  assign_rows(std::span<const layerc::core::CooldownDefinition> cooldowns);
   void set_direct_drag(bool enabled);
   void update_drag(POINT screen_point, bool final);
   void clear_window_state();
 
-  // One entry per drawn cooldown. state_index is the definition's position
-  // in the profile, which is also its position in engine snapshots.
-  struct Bar {
-    layerc::core::CooldownDefinition definition;
-    std::size_t state_index{};
-    // Last status text and its wide form; converted only when it changes.
+  struct Row {
+    std::string item_id;
+    // Converted only when the core-provided label changes.
     std::string label;
     std::wstring wide_label;
   };
@@ -78,7 +81,7 @@ private:
   layerc::core::Panel panel_;
   // The profile's definitions, positioned like engine snapshots.
   std::vector<layerc::core::CooldownDefinition> cooldowns_;
-  std::vector<Bar> bars_;
+  std::vector<Row> rows_;
   HWND window_{};
   HWND owner_{};
   RECT target_{};
@@ -107,6 +110,8 @@ private:
   HBRUSH fill_brush_{};
   HPEN border_pen_{};
   COLORREF text_color_{};
+  // Cleared after each frame, so changing automation colors cannot grow GDI use.
+  std::map<std::uint32_t, HBRUSH> row_brushes_;
 };
 
 } // namespace layerc::daemon

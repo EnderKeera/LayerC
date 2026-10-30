@@ -110,6 +110,10 @@ void append_details(std::vector<std::string> &lines, const runtime::RuntimeDiagn
   lines.push_back("Automation faults:");
   if (diagnostics.automation_faults.empty()) lines.push_back("  None");
   for (const auto &fault : diagnostics.automation_faults) lines.push_back("  " + fault);
+  if (!diagnostics.overlay_faults.empty()) {
+    lines.push_back("Overlay item diagnostics:");
+    for (const auto &fault : diagnostics.overlay_faults) lines.push_back("  " + fault);
+  }
 }
 } // namespace
 
@@ -174,6 +178,8 @@ RuntimeDiagnosticsView runtime_diagnostics_view(const std::string_view source,
   if (last_error.empty()) last_error = first_last_error(diagnostics->services);
   if (last_error.empty()) last_error = diagnostics->gamebar.last_error;
   if (last_error.empty()) last_error = diagnostics->settings.last_error;
+  if (last_error.empty() && !diagnostics->overlay_faults.empty())
+    last_error = diagnostics->overlay_faults.front();
   view.lines.push_back("Last error: " + (last_error.empty() ? std::string("None reported") : last_error));
   if (detailed) append_details(view.lines, *diagnostics);
   return view;

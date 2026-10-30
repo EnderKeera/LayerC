@@ -415,6 +415,14 @@ bool EditorWindow::handle_list_key(const MSG &message) {
                      (GetKeyState(VK_MENU) & 0x8000) == 0;
   if (!plain)
     return false;
+  if (message.hwnd == GetDlgItem(shell_.window, IDC_PANEL_ITEMS)) {
+    if (message.wParam == VK_DELETE)
+      return handle_item_command(IDC_ITEM_REMOVE, BN_CLICKED);
+    if (message.wParam == VK_F2) {
+      open_panel_item_dialog(true);
+      return true;
+    }
+  }
   if (message.hwnd == shell_.profile_list) {
     if (message.wParam == VK_DELETE) {
       delete_profile();

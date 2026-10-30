@@ -57,6 +57,6 @@ profile_list_label(const layerc::core::GameProfile &profile);
 
 [[nodiscard]] std::wstring
 profile_error_text(const layerc::core::ProfileError &error);
-[[nodiscard]] bool confirm_schema_upgrade(HWND owner);
+[[nodiscard]] bool confirm_schema_upgrade(HWND owner, bool items = false);
 
 } // namespace layerc::editor

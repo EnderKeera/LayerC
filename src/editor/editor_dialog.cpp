@@ -3,6 +3,7 @@
 #include "editor_app.hpp"
 #include "editor_dialog_dispatch.hpp"
 #include "editor_window.hpp"
+#include "panel_items.hpp"
 
 #include "editor_resource.h"
 #include "layerc/platform/profile_transaction.hpp"
@@ -285,6 +286,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       }
       return TRUE;
     }
+    if (handle_item_command(id, notification)) return TRUE;
     if ((id == IDC_ADVANCED && notification == BN_CLICKED) ||
         id == IDM_VIEW_ADVANCED) {
       set_advanced_visible(!shell_.advanced_visible, true);
@@ -522,15 +524,14 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
       (void)apply_profile_controls(DocumentChangeKind::text);
       refresh_bar_controls();
       // Keep the cooldown selection on a cooldown this bar shows.
-      if (const auto *panel = selected_bar();
-          panel != nullptr && !panel->cooldown_ids.empty()) {
+      if (const auto *panel = selected_bar(); panel != nullptr) {
+        const auto members = panel_cooldown_members(*panel);
         const auto *cooldown = cooldown_editor_.selected();
-        if (cooldown == nullptr ||
-            std::ranges::find(panel->cooldown_ids, cooldown->id) ==
-                panel->cooldown_ids.end()) {
+        if (!members.empty() &&
+            (cooldown == nullptr || !panel_has_cooldown(*panel, cooldown->id))) {
           const auto &cooldowns = document_.profile().cooldowns;
           const auto first = std::ranges::find(
-              cooldowns, panel->cooldown_ids.front(),
+              cooldowns, members.front(),
               &layerc::core::CooldownDefinition::id);
           if (first != cooldowns.end())
             cooldown_editor_.refresh_list(static_cast<int>(first - cooldowns.begin()));

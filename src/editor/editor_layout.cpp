@@ -38,7 +38,7 @@ constexpr std::array preview_controls{IDC_PREVIEW_LABEL, IDC_PREVIEW};
 constexpr std::array heading_controls{
     IDC_SAVED_PROFILES_LABEL, IDC_COOLDOWNS_LABEL,  IDC_TIMING_LABEL,
     IDC_OVERLAY_LABEL,        IDC_VISUAL_SECTION_LABEL, IDC_PREVIEW_LABEL,
-    IDC_BARS_LABEL};
+    IDC_BARS_LABEL, IDC_PANEL_ITEMS_LABEL};
 
 // Logical (96-DPI, 100 % text) metrics: one control height per surface and
 // an 8 px rhythm.
@@ -122,15 +122,37 @@ void layout_sidebar(const MainLayout &f) {
   ui.move(IDC_SAVED_PROFILES_LABEL, f.margin, f.margin, f.sidebar_width,
           ui.scaled(20));
   const int list_top = f.margin + f.heading;
-  const int buttons_top = f.status_top - f.margin - f.row;
-  ui.move(IDC_PROFILE_LIST, f.margin, list_top, f.sidebar_width,
-          std::max(ui.scaled(80), buttons_top - ui.scaled(8) - list_top));
+  // Keep panel items visible without making the main form taller. The two
+  // sidebar lists share the available height; their controls never overlap.
+  const int bottom = f.status_top - f.margin;
+  const int profile_height = std::max(
+      ui.scaled(80), (bottom - list_top - f.heading - f.pitch * 3 -
+                     ui.scaled(16)) / 2);
+  ui.move(IDC_PROFILE_LIST, f.margin, list_top, f.sidebar_width, profile_height);
+  const int buttons_top = list_top + profile_height + ui.scaled(8);
   const int button = ui.scaled(36);
   int left = f.margin;
   for (const int id : {IDC_PROFILE_NEW, IDC_PROFILE_DELETE, IDC_PROFILE_MORE}) {
     ui.move(id, left, buttons_top, button, f.row);
     left += button + ui.scaled(4);
   }
+  const int heading_top = buttons_top + f.pitch + ui.scaled(8);
+  ui.move(IDC_PANEL_ITEMS_LABEL, f.margin, heading_top, f.sidebar_width,
+          ui.scaled(20));
+  const int item_top = heading_top + f.heading;
+  const int actions_top = bottom - f.pitch - f.row;
+  ui.move(IDC_PANEL_ITEMS, f.margin, item_top, f.sidebar_width,
+          std::max(ui.scaled(40), actions_top - ui.scaled(8) - item_top));
+  const int third = (f.sidebar_width - ui.scaled(16)) / 3;
+  left = f.margin;
+  for (const int id : {IDC_ITEM_ADD, IDC_ITEM_EDIT, IDC_ITEM_REMOVE}) {
+    ui.move(id, left, actions_top, third, f.row);
+    left += third + ui.scaled(8);
+  }
+  const int half = (f.sidebar_width - ui.scaled(8)) / 2;
+  ui.move(IDC_ITEM_UP, f.margin, actions_top + f.pitch, half, f.row);
+  ui.move(IDC_ITEM_DOWN, f.margin + half + ui.scaled(8),
+          actions_top + f.pitch, f.sidebar_width - half - ui.scaled(8), f.row);
 }
 
 // Title, profile fields and the advanced toggle; returns the next top.
@@ -198,7 +220,7 @@ GroupHeights group_heights(const MainLayout &f, const int timing_width) {
   const int advanced_rows = f.advanced ? 4 : 0;
   const int wrapped_rows = binding_wraps(f, timing_width) ? 1 : 0;
   return {
-      .timing = f.heading + f.pitch * (3 + advanced_rows + wrapped_rows),
+      .timing = f.heading + f.pitch * (4 + advanced_rows + wrapped_rows),
       .visual = f.heading + f.pitch * (f.advanced ? 3 : 2) + f.ui.scaled(40),
       .overlay = f.heading + (f.legacy_bars ? f.ui.scaled(24 + 80 + 8) : 0) +
                  f.pitch * 3 + f.row * 2 + f.ui.scaled(60) +
@@ -220,6 +242,11 @@ int layout_timing(const MainLayout &f, const int left, const int right,
   top += f.pitch;
   label(f, IDC_COOLDOWN_DURATION_LABEL, left, top, label_width - ui.scaled(8));
   ui.move(IDC_COOLDOWN_DURATION, field_left, top, ui.scaled(80), f.row);
+  top += f.pitch;
+  label(f, IDC_COOLDOWN_ACTIVE_LABEL, left, top, label_width - ui.scaled(8));
+  ui.move(IDC_COOLDOWN_ACTIVE, field_left, top, ui.scaled(80), f.row);
+  label(f, IDC_COOLDOWN_ACTIVE_HINT, field_left + ui.scaled(88), top,
+        std::max(1, right - field_left - ui.scaled(88)));
   top += f.pitch;
   const int capture_width = ui.scaled(100);
   const int hid_width = f.advanced ? ui.scaled(60) : 0;
@@ -464,7 +491,8 @@ void EditorWindow::layout() {
     return;
   const bool legacy_bars = std::ranges::any_of(
       document_.profile().panels, [](const layerc::core::Panel &panel) {
-        return panel.style == layerc::core::PanelStyle::bar &&
+        return panel.items.has_value() ||
+               panel.style != layerc::core::PanelStyle::bar ||
                panel.cooldown_ids.size() > 1;
       });
   const MainLayout frame =

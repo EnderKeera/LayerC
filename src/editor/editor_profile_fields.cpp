@@ -129,6 +129,39 @@ const std::array kProfileFields{
                          .has_value();
             }},
     ProfileFieldBinding{
+        .control_id = IDC_COOLDOWN_ACTIVE,
+        .notification = EN_CHANGE,
+        .owner = ProfileFieldOwner::cooldown,
+        .change = ProfileFieldChange::text,
+        .refresh_cooldown_label = false,
+        .invalidate_preview = true,
+        .read =
+            +[](ProfileFieldContext &context) {
+              if (const auto value = parse_bounded(
+                      window_text(field_control(context, IDC_COOLDOWN_ACTIVE)),
+                      0, static_cast<std::uint32_t>(
+                             layerc::core::max_cooldown_duration.count())))
+                context.cooldown->active_duration =
+                    layerc::core::Milliseconds{*value};
+            },
+        .write =
+            +[](const ProfileFieldView &context) {
+              set_text(field_control(context, IDC_COOLDOWN_ACTIVE),
+                       context.cooldown == nullptr
+                           ? L""
+                           : std::to_wstring(
+                                 context.cooldown->active_duration.count()));
+            },
+        .valid =
+            +[](const ProfileFieldView &context) {
+              return context.cooldown != nullptr &&
+                     parse_bounded(
+                         window_text(field_control(context, IDC_COOLDOWN_ACTIVE)),
+                         0, static_cast<std::uint32_t>(
+                                layerc::core::max_cooldown_duration.count()))
+                         .has_value();
+            }},
+    ProfileFieldBinding{
         .control_id = IDC_COOLDOWN_CHARGES,
         .notification = EN_CHANGE,
         .owner = ProfileFieldOwner::cooldown,
