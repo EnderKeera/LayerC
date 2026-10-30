@@ -144,8 +144,14 @@ def extract_report(body: str) -> str:
     return text
 
 
+def merge_build_parents(commit: str, built_parents: list[str] | None) -> bool:
+    return (type(built_parents) is list and len(built_parents) == 2 and
+            all(matches(COMMIT, parent) for parent in built_parents) and built_parents[1] == commit)
+
+
 def validate_report(report: dict, config: dict, repository: str,
-                    allowed_commits: set | None = None) -> list[str]:
+                    allowed_commits: set | None = None,
+                    built_parents: list[str] | None = None) -> list[str]:
     problems = []
 
     def keys(value: object, required: set, path: str,
@@ -211,6 +217,15 @@ def validate_report(report: dict, config: dict, repository: str,
         else:
             problems.append("build.source is unknown")
         pattern(build.get("builtCommit"), COMMIT, "build.builtCommit")
+        if build.get("builtCommit") != commit:
+            if source == "local-build":
+                problems.append("build.builtCommit must equal commit for a local build")
+            elif source == "ci-artifact" and not merge_build_parents(commit, built_parents):
+                problem = ("build.builtCommit must equal commit or be its pull request merge commit "
+                           "(two parents, the second being commit)")
+                if built_parents is None:
+                    problem += " ; pass --built-commit-parents to verify a merge build"
+                problems.append(problem)
         if harness is not None and source not in harness["builds"]:
             problems.append("build.source is not allowed by the harness")
     environment = report.get("environment")
@@ -285,7 +300,8 @@ def canonical_digest(report: dict) -> str:
 
 
 def check_run_payload(report: dict, config: dict, repository: str, comment_id: str,
-                      comment_url: str, author: str, association: str) -> dict:
+                      comment_url: str, author: str, association: str,
+                      built_parents: list[str] | None = None) -> dict:
     maintainer = trust_tier(association) == "maintainer-attested"
     harness_id, version = report["harness"]["id"], report["harness"]["version"]
     harness = config["harnesses"][harness_id]
@@ -311,8 +327,10 @@ def check_run_payload(report: dict, config: dict, repository: str, comment_id: s
         build_line = (f"- Build: local build of `{build['builtCommit']}`, "
                       f"{'dirty' if build['dirty'] else 'clean'} tree "
                       "(reported by the submitter, not verified)")
-    if build["builtCommit"] != report["commit"]:
-        build_line += " (built commit differs from the reported commit)"
+    if (build["source"] == "ci-artifact" and build["builtCommit"] != report["commit"] and
+            merge_build_parents(report["commit"], built_parents)):
+        build_line += (f" (pull request merge of `{report['commit']}` into `{built_parents[0]}`; "
+                       "parents read from GitHub)")
     environment_line = (f"- Environment: `{environment['os']}`, session `{session}`, "
                         f"`{environment['machine']}` machine")
     if environment.get("gpu"):
@@ -339,11 +357,26 @@ def check_run_payload(report: dict, config: dict, repository: str, comment_id: s
 
 
 def render_comment(report: dict, config: dict) -> str:
+    text = json.dumps(report, indent=2, ensure_ascii=False)
+    if len(text.encode("utf-8")) > MAX_REPORT_BYTES:
+        raise ReportError("report exceeds 16384 UTF-8 bytes")
     lines = [MARKER, f"### Desktop evidence: `{report['harness']['id']}` on `{report['commit'][:12]}`", ""]
     lines.extend(f"- `{result['id']}`: `{result['status']}`" for result in report["results"])
-    lines.extend(["", "See the repository's desktop-evidence documentation.", "", "```json",
-                  json.dumps(report, indent=2, ensure_ascii=False), "```", ""])
-    return "\n".join(lines)
+    lines.extend(["", "See the repository's desktop-evidence documentation.", "", "```json", text, "```", ""])
+    comment = "\n".join(lines)
+    if len(comment) > MAX_COMMENT_CHARS:
+        raise ReportError("comment exceeds 65536 characters")
+    return comment
+
+
+def read_report(path: Path) -> dict:
+    data = path.read_bytes()
+    if len(data) > MAX_REPORT_BYTES:
+        raise ReportError("report exceeds 16384 UTF-8 bytes")
+    try:
+        return parse_report(data.decode("utf-8"))
+    except UnicodeError as error:
+        raise ReportError("report is not valid UTF-8 text") from error
 
 
 def load_allowed_commits(path: Path) -> set[str]:
@@ -355,6 +388,26 @@ def load_allowed_commits(path: Path) -> set[str]:
                 raise ConfigError("allowed-commits file contains an invalid commit")
             commits.add(line)
     return commits
+
+
+def load_built_commit_parents(path: Path) -> list[str]:
+    parents = [line.strip().lower() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(parents) > 2 or not all(matches(COMMIT, parent) for parent in parents):
+        raise ConfigError("built-commit-parents file must contain at most two 40-hex commits")
+    return parents
+
+
+def differing_built_commit(body: str) -> str | None:
+    try:
+        report = parse_report(extract_report(body))
+    except (ValueError, UnicodeError, RecursionError):
+        return None
+    build = report.get("build")
+    commit = report.get("commit")
+    built = build.get("builtCommit") if type(build) is dict else None
+    if matches(COMMIT, commit) and matches(COMMIT, built) and built != commit:
+        return built
+    return None
 
 
 def write_output(destination: str, text: str) -> None:
@@ -380,10 +433,13 @@ class _ArgumentParser(argparse.ArgumentParser):
 def main(argv: list[str] | None = None) -> int:
     parser = _ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    built = commands.add_parser("built-commit")
+    built.add_argument("--comment-env", required=True)
     for command in ("validate", "comment", "publish"):
         sub = commands.add_parser(command)
         sub.add_argument("--config", type=Path, required=True)
         sub.add_argument("--repository", required=True)
+        sub.add_argument("--built-commit-parents", type=Path)
         if command == "validate":
             source = sub.add_mutually_exclusive_group(required=True)
             source.add_argument("--report", type=Path)
@@ -402,10 +458,18 @@ def main(argv: list[str] | None = None) -> int:
     args = None
     try:
         args = parser.parse_args(argv)
+        if args.command == "built-commit":
+            if args.comment_env not in os.environ:
+                raise UsageError("comment environment variable is not set")
+            built_commit = differing_built_commit(os.environ[args.comment_env])
+            if built_commit is not None:
+                print(built_commit)
+            return 0
         if not matches(PROJECT, args.repository):
             raise UsageError("repository must be OWNER/REPO")
         config = load_config(args.config)
         allowed = load_allowed_commits(args.allowed_commits) if getattr(args, "allowed_commits", None) else None
+        built_parents = load_built_commit_parents(args.built_commit_parents) if args.built_commit_parents else None
         if args.command == "publish":
             if not re.fullmatch(r"[1-9][0-9]{0,19}", args.comment_id):
                 raise ReportError("invalid comment id")
@@ -423,8 +487,8 @@ def main(argv: list[str] | None = None) -> int:
         elif getattr(args, "comment_file", None) is not None:
             report = parse_report(extract_report(args.comment_file.read_text(encoding="utf-8")))
         else:
-            report = parse_report(args.report.read_text(encoding="utf-8"))
-        problems = validate_report(report, config, args.repository, allowed)
+            report = read_report(args.report)
+        problems = validate_report(report, config, args.repository, allowed, built_parents)
         if problems:
             raise ReportError("\n".join(problems))
         if args.command == "validate":
@@ -433,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
             write_output(args.out, render_comment(report, config))
         else:
             payload = check_run_payload(report, config, args.repository, args.comment_id,
-                                        args.comment_url, args.author, args.association)
+                                        args.comment_url, args.author, args.association, built_parents)
             write_output(args.out, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
             step_summary(["### " + payload["output"]["title"], "", payload["name"], ""])
         return 0

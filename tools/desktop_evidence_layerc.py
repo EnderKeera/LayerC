@@ -14,7 +14,8 @@ from pathlib import Path
 
 MODULE_PATH = Path(__file__).with_name("desktop_evidence.py")
 SPEC = importlib.util.spec_from_file_location("desktop_evidence", MODULE_PATH)
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise ImportError(f"could not load desktop evidence validator from {MODULE_PATH}")
 subject = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = subject
 SPEC.loader.exec_module(subject)
@@ -102,12 +103,30 @@ def linux_report(args: argparse.Namespace) -> dict:
     head = (args.evidence / "git-head.txt").read_text(encoding="utf-8").strip()
     if head != args.commit:
         raise ValueError("evidence git-head.txt does not match --commit")
-    dirty = any(line.strip() for line in
-                (args.evidence / "git-status.txt").read_text(encoding="utf-8").splitlines())
+    automated_path = args.evidence / "automated-summary.json"
+    if not automated_path.is_file():
+        raise ValueError("evidence has no automated summary; rerun with "
+                         "LAYERC_RUN_AUTOMATION=1 LAYERC_REQUIRE_AUTOMATION=1")
+    automated_summary = read_object(automated_path)
+    if automated_summary.get("commit") != args.commit:
+        raise ValueError("automated summary commit does not match --commit")
+    if automated_summary.get("sourceTreeClean") is not True:
+        raise ValueError("automated summary sourceTreeClean must be JSON true")
+    if args.package_mode == "flatpak":
+        message = "the harness did not run the Flatpak this helper installed"
+        if (type(args.flatpak_commit) is not str or
+                re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", args.flatpak_commit) is None):
+            raise ValueError(message)
+        try:
+            info = (args.evidence / "flatpak-info.txt").read_text(encoding="utf-8")
+        except OSError as error:
+            raise ValueError(message) from error
+        if not any(line.strip() == "Commit: " + args.flatpak_commit for line in info.splitlines()):
+            raise ValueError(message)
     recorded_at = datetime.strptime(summary["recordedAtUtc"], "%Y%m%dT%H%M%SZ").strftime("%Y-%m-%dT%H:%M:%SZ")
     report = base_report(args, "layerc-linux-x11-" + args.package_mode,
                          "gnome-xorg" if args.desktop == "gnome" else "kde-x11", recorded_at,
-                         {"source": "local-build", "builtCommit": head, "dirty": dirty})
+                         {"source": "local-build", "builtCommit": automated_summary["commit"], "dirty": False})
     manual = summary.get("manualResult")
     if manual not in ("pass", "fail", "pending"):
         raise ValueError("evidence manualResult must be pass, fail, or pending")
@@ -115,17 +134,13 @@ def linux_report(args: argparse.Namespace) -> dict:
                               "status": "unavailable" if manual == "pending" else manual,
                               "detail": "operator result pending" if manual == "pending" else
                               "operator recorded " + manual})
-    automated_path = args.evidence / "automated-summary.json"
-    automated = read_object(automated_path).get("automatedEvidence", {}) if automated_path.exists() else None
+    automated = automated_summary.get("automatedEvidence", {})
     stages = LINUX_STAGES + (("flatpak",) if args.package_mode == "flatpak" else ())
     for stage in stages:
-        status, detail = "unavailable", "automated evidence not bound"
-        if automated is not None:
-            entry = automated.get(stage, {}) if type(automated) is dict else {}
-            value = entry.get("status", "missing") if type(entry) is dict else "missing"
-            if value in ("pass", "fail", "skip", "skipped"):
-                status = "skip" if value == "skipped" else value
-            detail = sanitize_text("automated stage status " + str(value), 200)
+        entry = automated.get(stage, {}) if type(automated) is dict else {}
+        value = entry.get("status", "missing") if type(entry) is dict else "missing"
+        status = "skip" if value == "skipped" else value if value in ("pass", "fail", "skip") else "unavailable"
+        detail = sanitize_text("automated stage status " + str(value), 200)
         report["results"].append({"id": stage, "status": status, "detail": detail})
     return report
 
@@ -139,10 +154,12 @@ def main(argv: list[str] | None = None) -> int:
     windows.add_argument("--gpu", default="")
     windows.add_argument("--visual-only", action="store_true")
     windows.add_argument("--recorded-at")
+    windows.add_argument("--built-commit-parents", type=Path)
     linux = commands.add_parser("linux-report")
     linux.add_argument("--evidence", type=Path, required=True)
     linux.add_argument("--desktop", choices=("gnome", "kde"), required=True)
     linux.add_argument("--package-mode", choices=("native", "flatpak"), required=True)
+    linux.add_argument("--flatpak-commit")
     for sub in (windows, linux):
         sub.add_argument("--commit", required=True)
         sub.add_argument("--repository", required=True)
@@ -153,8 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
         config = subject.load_config(args.config)
+        parents_path = getattr(args, "built_commit_parents", None)
+        built_parents = subject.load_built_commit_parents(parents_path) if parents_path else None
         report = windows_report(args) if args.command == "windows-report" else linux_report(args)
-        problems = subject.validate_report(report, config, args.repository)
+        problems = subject.validate_report(report, config, args.repository, built_parents=built_parents)
         if problems:
             for problem in problems:
                 print("rejected: " + problem, file=sys.stderr)

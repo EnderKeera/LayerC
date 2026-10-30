@@ -136,8 +136,9 @@ JSON, ZIP); `layerc-windows-x64-tools` feeds
 that file, never from the workflow event. `push-and-test.ps1` refuses to
 measure unless it and the checkout match the resolved candidate.
 `submit-desktop-evidence.ps1` requires the identity to name the resolved CI
-run and reports the built commit: a pull request CI run builds the test merge
-commit. Results from a local build directory are marked `local-build` with
+run and its built commit to be the reported commit or that commit's pull
+request test merge commit (checked with the GitHub API). Results from a local
+build directory are marked `local-build` with
 the checkout's commit and dirty state.
 
 Other workflows:

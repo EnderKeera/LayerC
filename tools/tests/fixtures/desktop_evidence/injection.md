@@ -13,7 +13,7 @@ Example evidence for unit tests.
   "build": {
     "source": "ci-artifact",
     "ciRunId": 123456,
-    "builtCommit": "cccccccccccccccccccccccccccccccccccccccc",
+    "builtCommit": "cccccccccccccccccccccccccccccccccccccccc`|<script>",
     "identitySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
   },
   "environment": {
