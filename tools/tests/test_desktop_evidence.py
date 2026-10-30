@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 MODULE_PATH = Path(__file__).parents[1] / "desktop_evidence.py"
 SPEC = importlib.util.spec_from_file_location("desktop_evidence", MODULE_PATH)
@@ -18,6 +19,7 @@ SPEC.loader.exec_module(subject)
 FIXTURES = Path(__file__).with_name("fixtures") / "desktop_evidence"
 REPOSITORY = "Example/Project"
 COMMENT_URL = "https://github.com/Example/Project/pull/7#issuecomment-99"
+PARENTS = ["e" * 40, "a" * 40]
 
 
 def fixture_report(name="valid-complete.md"):
@@ -29,9 +31,9 @@ class DesktopEvidenceTests(unittest.TestCase):
         self.config = subject.load_config(FIXTURES / "config.json")
         self.report = fixture_report()
 
-    def validate(self, report=None, allowed=None):
+    def validate(self, report=None, allowed=None, built_parents=PARENTS):
         return subject.validate_report(self.report if report is None else report,
-                                       self.config, REPOSITORY, allowed)
+                                       self.config, REPOSITORY, allowed, built_parents)
 
     def mutate(self, path, value):
         report = copy.deepcopy(self.report)
@@ -62,7 +64,7 @@ class DesktopEvidenceTests(unittest.TestCase):
                     else:
                         del target[next(iter(target))]
                     self.assertTrue(self.validate(report))
-        local = self.mutate(("build",), {"source": "local-build", "builtCommit": "c" * 40, "dirty": False})
+        local = self.mutate(("build",), {"source": "local-build", "builtCommit": "a" * 40, "dirty": False})
         self.assertEqual([], self.validate(local))
         local["build"]["ciRunId"] = 1
         self.assertTrue(self.validate(local))
@@ -91,8 +93,40 @@ class DesktopEvidenceTests(unittest.TestCase):
         for value in (1, 2**53 - 1):
             self.assertEqual([], self.validate(self.mutate(("build", "ciRunId"), value)))
         for value in (True, False, 0, 1, "false", None):
-            build = {"source": "local-build", "builtCommit": "c" * 40, "dirty": value}
+            build = {"source": "local-build", "builtCommit": "a" * 40, "dirty": value}
             self.assertEqual(type(value) is not bool, bool(self.validate(self.mutate(("build",), build))))
+
+    def test_build_commit_attribution_and_verified_merge_suffix(self):
+        problem = ("build.builtCommit must equal commit or be its pull request merge commit "
+                   "(two parents, the second being commit)")
+        self.assertEqual([problem + " ; pass --built-commit-parents to verify a merge build"],
+                         self.validate(built_parents=None))
+        for parents in ([], ["a" * 40], ["a" * 40, "e" * 40], ["e" * 40, "b" * 40],
+                        ["bad", "a" * 40]):
+            with self.subTest(parents=parents):
+                self.assertEqual([problem], self.validate(built_parents=parents))
+        self.assertEqual([], self.validate(built_parents=PARENTS))
+        payload = subject.check_run_payload(self.report, self.config, REPOSITORY, "99", COMMENT_URL,
+                                            "tester", "OWNER", PARENTS)
+        self.assertIn(" (pull request merge of `" + "a" * 40 + "` into `" + "e" * 40 +
+                      "`; parents read from GitHub)", payload["output"]["summary"])
+        equal = self.mutate(("build", "builtCommit"), "a" * 40)
+        self.assertEqual([], self.validate(equal, built_parents=None))
+        payload = subject.check_run_payload(equal, self.config, REPOSITORY, "99", COMMENT_URL,
+                                            "tester", "OWNER", PARENTS)
+        self.assertNotIn("parents read", payload["output"]["summary"])
+        local = self.mutate(("build",), {"source": "local-build", "builtCommit": "c" * 40, "dirty": False})
+        self.assertEqual(["build.builtCommit must equal commit for a local build"], self.validate(local))
+
+    def test_render_comment_enforces_pretty_json_and_comment_limits(self):
+        report = self.mutate(("results",), [{"id": "test-" + str(index), "status": "pass", "detail": "x" * 190}
+                                           for index in range(64)])
+        self.assertLessEqual(len(json.dumps(report, separators=(",", ":")).encode("utf-8")), subject.MAX_REPORT_BYTES)
+        with self.assertRaisesRegex(subject.ReportError, "report exceeds 16384 UTF-8 bytes"):
+            subject.render_comment(report, self.config)
+        with mock.patch.object(subject, "MAX_COMMENT_CHARS", 100):
+            with self.assertRaisesRegex(subject.ReportError, "comment exceeds 65536 characters"):
+                subject.render_comment(self.report, self.config)
 
     def test_patterns_and_known_harness_members(self):
         cases = [(("schema",), "other/1"), (("project",), "Other/Project"),
@@ -192,7 +226,7 @@ class DesktopEvidenceTests(unittest.TestCase):
                                              ("valid-complete.md", "CONTRIBUTOR", "contributor-neutral.json")):
             with self.subTest(golden=golden):
                 payload = subject.check_run_payload(fixture_report(fixture), self.config, REPOSITORY,
-                                                    "99", COMMENT_URL, "tester", association)
+                                                    "99", COMMENT_URL, "tester", association, PARENTS)
                 expected = json.loads((FIXTURES / "expected" / golden).read_text(encoding="utf-8"))
                 self.assertEqual(expected, payload)
 
@@ -300,18 +334,22 @@ class DesktopEvidenceCliTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
-    def run_cli(self, command, *arguments, environment=None):
-        return subprocess.run([sys.executable, str(MODULE_PATH), command, "--config", str(FIXTURES / "config.json"),
-                               "--repository", REPOSITORY, *map(str, arguments)],
+    def run_cli(self, command, *arguments, environment=None, parents=True):
+        options = [sys.executable, str(MODULE_PATH), command]
+        if command != "built-commit":
+            options += ["--config", str(FIXTURES / "config.json"), "--repository", REPOSITORY]
+            if parents:
+                options += ["--built-commit-parents", str(FIXTURES / "built-commit-parents.txt")]
+        return subprocess.run([*options, *map(str, arguments)],
                               env=self.environment if environment is None else environment,
                               capture_output=True, text=True, encoding="utf-8")
 
-    def publish(self, fixture="valid-complete.md", *arguments, environment=None):
+    def publish(self, fixture="valid-complete.md", *arguments, environment=None, parents=True):
         return self.run_cli("publish", "--comment-file", FIXTURES / fixture,
                             "--comment-id", "99", "--comment-url", COMMENT_URL,
                             "--author", "tester", "--association", "OWNER",
                             "--allowed-commits", FIXTURES / "allowed-commits.txt",
-                            "--out", self.out, *arguments, environment=environment)
+                            "--out", self.out, *arguments, environment=environment, parents=parents)
 
     def test_publish_writes_exact_payload_and_appends_summary(self):
         self.summary.write_text("Existing summary\n", encoding="utf-8")
@@ -374,6 +412,90 @@ class DesktopEvidenceCliTests(unittest.TestCase):
         for value in ("bad", "g" * 40, "a" * 39):
             allowed.write_text(value, encoding="utf-8")
             self.assertEqual(1, self.publish("valid-complete.md", "--allowed-commits", allowed).returncode)
+
+    def test_publish_requires_merge_parents_and_parent_file_validation(self):
+        result = self.publish(parents=False)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("pass --built-commit-parents", result.stderr)
+        self.assertFalse(self.out.exists())
+        path = self.root / "parents.txt"
+        for content in ("e" * 40 + "\n" + "a" * 40 + "\n" + "b" * 40, "bad\n", "g" * 40):
+            path.write_text(content, encoding="utf-8")
+            for command in ("validate", "comment", "publish"):
+                with self.subTest(content=content, command=command):
+                    if command == "publish":
+                        result = self.publish("valid-complete.md", "--built-commit-parents", path)
+                    else:
+                        report = self.root / "report.json"
+                        report.write_text(json.dumps(fixture_report()), encoding="utf-8")
+                        result = self.run_cli(command, "--report", report, "--built-commit-parents", path)
+                    self.assertEqual(1, result.returncode, result.stderr)
+        path.write_text("\n", encoding="utf-8")
+        self.assertEqual([], subject.load_built_commit_parents(path))
+        self.assertEqual(2, self.publish("valid-complete.md", "--built-commit-parents", path).returncode)
+        path.write_text(" E" + "E" * 39 + " \n\n " + "A" * 40 + " \n", encoding="utf-8")
+        self.assertEqual(PARENTS, subject.load_built_commit_parents(path))
+        self.assertEqual(0, self.publish("valid-complete.md", "--built-commit-parents", path).returncode)
+
+    def test_built_commit_prints_only_a_valid_differing_sha(self):
+        def run(body):
+            return self.run_cli("built-commit", "--comment-env", "DESKTOP_BUILT_COMMENT",
+                                environment={**self.environment, "DESKTOP_BUILT_COMMENT": body})
+
+        result = run((FIXTURES / "valid-complete.md").read_text(encoding="utf-8"))
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("c" * 40 + "\n", result.stdout)
+        reports = [{"commit": "a" * 40, "build": {"builtCommit": "a" * 40}},
+                   {"commit": "bad", "build": {"builtCommit": "c" * 40}},
+                   {"commit": "a" * 40, "build": {"builtCommit": "C" * 40}},
+                   {"commit": "a" * 40, "build": {"builtCommit": "c" * 40 + "`|<script>"}},
+                   {"commit": "a" * 40 + "\n", "build": {"builtCommit": "c" * 40}},
+                   {"commit": "a" * 40, "build": []}, {}, []]
+        hostile = [(FIXTURES / name).read_text(encoding="utf-8") for name in ("malformed.md", "injection.md")]
+        hostile += ["missing marker", "<script>`|\u202e"]
+        hostile += [subject.MARKER + "\n```json\n" + json.dumps(report) + "\n```" for report in reports]
+        hostile += [subject.MARKER + '\n```json\n{"deep":' + '[' * 7000 + '0' + ']' * 7000 + '}\n```']
+        for body in hostile:
+            result = run(body)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("", result.stdout)
+            self.assertEqual("", result.stderr)
+        environment = dict(self.environment)
+        environment.pop("DESKTOP_BUILT_COMMENT", None)
+        result = self.run_cli("built-commit", "--comment-env", "DESKTOP_BUILT_COMMENT", environment=environment)
+        self.assertEqual(1, result.returncode)
+        self.assertEqual("", result.stdout)
+
+    def test_report_files_enforce_raw_byte_limit_before_decoding(self):
+        report = self.root / "large.json"
+        for content in (b" " * 16385, b"\xff" * 20000, ("é" * 8193).encode("utf-8")):
+            report.write_bytes(content)
+            for command in ("validate", "comment"):
+                arguments = ("--out", self.out) if command == "comment" else ()
+                result = self.run_cli(command, "--report", report, *arguments)
+                self.assertEqual(2, result.returncode, result.stderr)
+                self.assertIn("report exceeds 16384 UTF-8 bytes", result.stderr)
+                self.assertFalse(self.out.exists())
+
+    def test_comment_rejects_compact_report_whose_pretty_json_is_too_large(self):
+        config = subject.load_config(FIXTURES / "config.json")
+        harness = config["harnesses"]["demo-desktop"]
+        harness.update(required=["test-" + str(index) for index in range(64)], optional=[], allowUnavailable={})
+        config_path = self.root / "config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        report = fixture_report()
+        report["results"] = [{"id": test_id, "status": "pass", "detail": "x" * 190} for test_id in harness["required"]]
+        text = json.dumps(report, separators=(",", ":"), ensure_ascii=False)
+        self.assertLessEqual(len(text.encode("utf-8")), subject.MAX_REPORT_BYTES)
+        self.assertGreater(len(json.dumps(report, indent=2).encode("utf-8")), subject.MAX_REPORT_BYTES)
+        path = self.root / "compact.json"
+        path.write_text(text, encoding="utf-8")
+        result = self.run_cli("validate", "--config", config_path, "--report", path)
+        self.assertEqual(0, result.returncode, result.stderr)
+        result = self.run_cli("comment", "--config", config_path, "--report", path, "--out", self.out)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("report exceeds 16384 UTF-8 bytes", result.stderr)
+        self.assertFalse(self.out.exists())
 
     def test_validate_comment_and_report_and_render(self):
         report = self.root / "report.json"

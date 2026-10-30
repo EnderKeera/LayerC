@@ -21,6 +21,8 @@ FIXTURES = Path(__file__).with_name("fixtures") / "desktop_evidence"
 CONFIG_PATH = Path(__file__).parents[2] / ".github/desktop-evidence.json"
 REPOSITORY = "EnderKeera/LayerC"
 COMMIT = "a" * 40
+PARENTS = ["e" * 40, COMMIT]
+FLATPAK_COMMIT = "1" * 64
 
 
 class LayerCAdapterTests(unittest.TestCase):
@@ -29,8 +31,10 @@ class LayerCAdapterTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.windows = self.root / "windows"
         self.linux = self.root / "linux"
+        self.flatpak = self.root / "flatpak"
         shutil.copytree(FIXTURES / "windows-results", self.windows)
         shutil.copytree(FIXTURES / "linux-evidence/20260520T123456Z-gnome-native", self.linux)
+        shutil.copytree(FIXTURES / "linux-evidence/20260520T123456Z-gnome-flatpak", self.flatpak)
         self.identity = self.windows / "layerc-build-identity.json"
         self.config = validator.load_config(CONFIG_PATH)
 
@@ -46,7 +50,7 @@ class LayerCAdapterTests(unittest.TestCase):
 
     def linux_args(self, **changes):
         values = dict(evidence=self.linux, desktop="gnome", package_mode="native", commit=COMMIT,
-                      repository=REPOSITORY, os="Example Linux", machine="physical")
+                      repository=REPOSITORY, os="Example Linux", machine="physical", flatpak_commit=None)
         values.update(changes)
         return argparse.Namespace(**values)
 
@@ -57,19 +61,21 @@ class LayerCAdapterTests(unittest.TestCase):
         return value
 
     def assert_valid_round_trip(self, report):
-        self.assertEqual([], validator.validate_report(report, self.config, REPOSITORY))
+        self.assertEqual([], validator.validate_report(report, self.config, REPOSITORY, built_parents=PARENTS))
         comment = validator.render_comment(report, self.config)
         parsed = validator.parse_report(validator.extract_report(comment))
         self.assertEqual(report, parsed)
-        self.assertEqual([], validator.validate_report(parsed, self.config, REPOSITORY))
+        self.assertEqual([], validator.validate_report(parsed, self.config, REPOSITORY, built_parents=PARENTS))
         for secret in ("SECRET-HOST", "SECRET-USER", "C:/", str(self.root)):
             self.assertNotIn(secret, comment)
 
-    def run_cli(self, command, *arguments):
-        return subprocess.run([sys.executable, str(MODULE_PATH), command, "--config", str(CONFIG_PATH),
-                               "--repository", REPOSITORY, "--commit", COMMIT, "--os", "Example OS",
-                               "--machine", "physical", "--out", str(self.root / "report.json"),
-                               *map(str, arguments)], capture_output=True, text=True, encoding="utf-8")
+    def run_cli(self, command, *arguments, parents=True):
+        options = [sys.executable, str(MODULE_PATH), command, "--config", str(CONFIG_PATH),
+                   "--repository", REPOSITORY, "--commit", COMMIT, "--os", "Example OS",
+                   "--machine", "physical", "--out", str(self.root / "report.json")]
+        if command == "windows-report" and parents:
+            options += ["--built-commit-parents", str(FIXTURES / "built-commit-parents.txt")]
+        return subprocess.run([*options, *map(str, arguments)], capture_output=True, text=True, encoding="utf-8")
 
     def test_windows_maps_real_benchmark_shape_and_hashes_exact_identity_bytes(self):
         report = subject.windows_report(self.windows_args())
@@ -181,6 +187,21 @@ class LayerCAdapterTests(unittest.TestCase):
             self.assertEqual(2, result.returncode, result.stderr)
             self.assertFalse((self.root / "report.json").exists())
 
+    def test_windows_cli_requires_verified_parents_for_merge_build(self):
+        arguments = ("--results", self.windows, "--identity", self.identity)
+        result = self.run_cli("windows-report", *arguments, parents=False)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("pass --built-commit-parents", result.stderr)
+        self.assertFalse((self.root / "report.json").exists())
+        parents = self.root / "parents.txt"
+        parents.write_text(COMMIT + "\n" + "e" * 40 + "\n", encoding="utf-8")
+        result = self.run_cli("windows-report", *arguments, "--built-commit-parents", parents)
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertFalse((self.root / "report.json").exists())
+        result = self.run_cli("windows-report", *arguments)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assert_valid_round_trip(json.loads((self.root / "report.json").read_text(encoding="utf-8")))
+
     def test_linux_maps_summary_stages_time_and_clean_tree(self):
         report = subject.linux_report(self.linux_args())
         self.assertEqual("layerc-linux-x11-native", report["harness"]["id"])
@@ -201,17 +222,35 @@ class LayerCAdapterTests(unittest.TestCase):
             self.assertEqual(evaluation, validator.evaluate(report, self.config["harnesses"][report["harness"]["id"]])[0])
             self.assert_valid_round_trip(report)
 
-    def test_linux_dirty_detection_and_unbound_evidence(self):
-        (self.linux / "automated-summary.json").unlink()
-        self.update_json(self.linux / "summary.json", automatedEvidence="not-bound")
-        for content, dirty in (("\n  \n", False), (" M src/example.cpp\n", True), ("?? scratch.txt\n", True)):
-            (self.linux / "git-status.txt").write_text(content, encoding="utf-8")
-            report = subject.linux_report(self.linux_args())
-            self.assertEqual(dirty, report["build"]["dirty"])
-            for result in report["results"][1:]:
-                self.assertEqual("unavailable", result["status"])
-                self.assertEqual("automated evidence not bound", result["detail"])
-            self.assert_valid_round_trip(report)
+    def test_linux_requires_commit_bound_clean_automated_summary(self):
+        path = self.linux / "automated-summary.json"
+        original = path.read_bytes()
+        path.unlink()
+        arguments = ("--evidence", self.linux, "--desktop", "gnome", "--package-mode", "native")
+        result = self.run_cli("linux-report", *arguments)
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("evidence has no automated summary; rerun with LAYERC_RUN_AUTOMATION=1 LAYERC_REQUIRE_AUTOMATION=1", result.stderr)
+        self.assertFalse((self.root / "report.json").exists())
+        for changes, reason in (({"commit": "b" * 40}, "automated summary commit does not match"),
+                                ({"sourceTreeClean": False}, "sourceTreeClean must be JSON true"),
+                                ({"sourceTreeClean": 1}, "sourceTreeClean must be JSON true"),
+                                ({"sourceTreeClean": "true"}, "sourceTreeClean must be JSON true"),
+                                ({"sourceTreeClean": None}, "sourceTreeClean must be JSON true")):
+            path.write_bytes(original)
+            self.update_json(path, **changes)
+            result = self.run_cli("linux-report", *arguments)
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertIn(reason, result.stderr)
+            self.assertFalse((self.root / "report.json").exists())
+
+    def test_linux_build_identity_comes_from_automation_not_physical_git_status(self):
+        path = self.linux / "git-status.txt"
+        path.write_text(" M src/example.cpp\n", encoding="utf-8")
+        report = subject.linux_report(self.linux_args())
+        self.assertEqual({"source": "local-build", "builtCommit": COMMIT, "dirty": False}, report["build"])
+        self.assert_valid_round_trip(report)
+        path.unlink()
+        self.assert_valid_round_trip(subject.linux_report(self.linux_args()))
 
     def test_linux_automated_statuses_and_sanitized_details(self):
         path = self.linux / "automated-summary.json"
@@ -226,12 +265,34 @@ class LayerCAdapterTests(unittest.TestCase):
 
     def test_linux_kde_flatpak_includes_flatpak_stage(self):
         self.update_json(self.linux / "summary.json", desktop="kde", packageMode="flatpak")
-        report = subject.linux_report(self.linux_args(desktop="kde", package_mode="flatpak"))
+        (self.linux / "flatpak-info.txt").write_text("      Commit: " + FLATPAK_COMMIT + "\n", encoding="utf-8")
+        report = subject.linux_report(self.linux_args(desktop="kde", package_mode="flatpak", flatpak_commit=FLATPAK_COMMIT))
         self.assertEqual("layerc-linux-x11-flatpak", report["harness"]["id"])
         self.assertEqual("kde-x11", report["environment"]["session"])
         self.assertEqual("flatpak", report["results"][-1]["id"])
         self.assertEqual("pass", report["results"][-1]["status"])
         self.assert_valid_round_trip(report)
+
+    def test_linux_flatpak_requires_matching_installed_commit(self):
+        arguments = ("--evidence", self.flatpak, "--desktop", "gnome", "--package-mode", "flatpak")
+        for value in (None, "bad", "A" * 40, "1" * 41, "2" * 64):
+            extra = ("--flatpak-commit", value) if value is not None else ()
+            result = self.run_cli("linux-report", *arguments, *extra)
+            self.assertEqual(1, result.returncode, result.stderr)
+            self.assertIn("the harness did not run the Flatpak this helper installed", result.stderr)
+            self.assertFalse((self.root / "report.json").exists())
+        info = self.flatpak / "flatpak-info.txt"
+        original = info.read_bytes()
+        info.unlink()
+        result = self.run_cli("linux-report", *arguments, "--flatpak-commit", FLATPAK_COMMIT)
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("the harness did not run the Flatpak this helper installed", result.stderr)
+        info.write_bytes(original)
+        for commit in (FLATPAK_COMMIT, "1" * 40):
+            info.write_text("    Commit: " + commit + "  \n", encoding="utf-8")
+            result = self.run_cli("linux-report", *arguments, "--flatpak-commit", commit)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assert_valid_round_trip(json.loads((self.root / "report.json").read_text(encoding="utf-8")))
 
     def test_linux_cli_mismatches_exit_one_and_normal_output_validates(self):
         arguments = ("--evidence", self.linux, "--desktop", "gnome", "--package-mode", "native")

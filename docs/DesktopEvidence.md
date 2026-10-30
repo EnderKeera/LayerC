@@ -56,11 +56,17 @@ code from anyone you do not trust as hostile:
 The helpers resolve the commit from the pull request: the head commit of an
 open or closed pull request, or the merge commit of a merged one (post-merge
 evidence on `main`). They require the checkout to be that commit with no
-tracked changes, build the report, validate it with
-`tools/desktop_evidence.py`, and post it with `gh pr comment`.
+tracked changes (the Linux helper also refuses untracked files, which its builds
+could include), bind the tested binaries to that commit, build the report,
+validate it with `tools/desktop_evidence.py`, and post it with `gh pr comment`.
 
 Windows hardware benchmarks (interactive desktop, quiescent box: no `layerd` or
-`layere` running) on the binaries that `ci.yml` built for that commit:
+`layere` running) on the binaries that `ci.yml` built for that commit. The
+helper downloads `layerc-windows-x64-tools` from the commit's successful CI run
+and requires its build identity to name that run, and its built commit to be
+either the reported commit or that commit's pull request test merge commit: a
+commit with exactly two parents whose second parent is the reported commit
+(parents read with `gh api`).
 
 ```powershell
 pwsh -File tools\submit-desktop-evidence.ps1 -PullRequest 123
@@ -68,7 +74,13 @@ pwsh -File tools\submit-desktop-evidence.ps1 -PullRequest 123 -DryRun
 ```
 
 Physical Linux X11 checklist (wraps `tools/run-linux-v26-evidence.sh`; see
-[`Linux.md`](Linux.md#v262-calibration-and-evidence)):
+[`Linux.md`](Linux.md#v262-calibration-and-evidence)). The helper always sets
+`LAYERC_RUN_AUTOMATION=1` and `LAYERC_REQUIRE_AUTOMATION=1`, so the native build
+directory is rebuilt from the clean checkout and the automated gate is bound to
+the same commit; the report's build is the automated summary's commit and clean
+state. In Flatpak mode it first builds and installs the Flatpak from the
+checkout with `flatpak-builder --user --install`, and requires the harness's
+`flatpak info` commit to be the one it installed.
 
 ```sh
 bash tools/submit-desktop-evidence.sh 123 gnome native 0x4600007
@@ -84,6 +96,10 @@ and CR to LF, must:
 2. contain exactly one line that is exactly `` ```json ``, followed later by a
    line that is exactly `` ``` ``. The lines between them are the report, at
    most 16384 UTF-8 bytes.
+
+The same 16384-byte limit applies to a report read from a file, and the
+`comment` command refuses to render a report whose pretty-printed JSON exceeds
+it.
 
 Everything else is free text for human readers and is ignored. Only newly
 created comments are evaluated; editing a comment changes nothing.
@@ -108,9 +124,14 @@ level, and wrong JSON types (for example `1` for a boolean) are rejected.
 
 - `{ "source": "ci-artifact", "ciRunId": <integer 1..2^53-1>, "builtCommit": <40 hex>, "identitySha256": <64 lowercase hex> }`.
   The CI run and the SHA-256 of its build-identity file, as reported by the
-  tester. A pull request CI run builds the test merge commit, so
-  `builtCommit` may differ from `commit`.
+  tester. `builtCommit` must equal `commit`, or be the pull request test merge
+  commit of `commit` (a pull request CI run builds that merge): a commit with
+  exactly two parents whose second parent is `commit`. The validator accepts the
+  merge case only when given the parents of `builtCommit`
+  (`--built-commit-parents`); the workflow and the Windows helper read them from
+  the GitHub API.
 - `{ "source": "local-build", "builtCommit": <40 hex>, "dirty": <boolean> }`.
+  `builtCommit` must equal `commit`.
 
 Patterns:
 
@@ -155,7 +176,10 @@ non-bot accounts that start with the marker. It runs the default branch's copy
 of itself, checks out only `tools/desktop_evidence.py` and the configuration,
 never builds or runs pull request code, and receives the comment through the
 environment. Its token has `checks: write`, `contents: read`, and
-`pull-requests: read`.
+`pull-requests: read`. When a report's `builtCommit` differs from `commit`, the
+workflow reads that commit's parents with
+`gh api repos/<repo>/commits/<builtCommit>` (an unknown commit fails the run)
+and passes them to the validator.
 
 An accepted report becomes one completed check run on `commit`:
 
@@ -183,6 +207,6 @@ are possible there.
 ## Validating locally
 
 ```sh
-python tools/desktop_evidence.py validate --config .github/desktop-evidence.json --comment-file comment.md --repository EnderKeera/LayerC
+python tools/desktop_evidence.py validate --config .github/desktop-evidence.json --comment-file comment.md --repository EnderKeera/LayerC [--built-commit-parents parents.txt]
 python -m unittest discover -s tools/tests
 ```

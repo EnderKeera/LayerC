@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 usage() {
-  echo 'Usage: submit-desktop-evidence.sh <pr-number|-> <gnome|kde> <native|flatpak> <window-xid|-> [--dry-run] [--commit SHA] [--repository OWNER/REPO] [--from-evidence DIR] [--machine physical|vm]'
+  echo 'Usage: submit-desktop-evidence.sh <pr-number|-> <gnome|kde> <native|flatpak> <window-xid|-> [--dry-run] [--commit SHA] [--repository OWNER/REPO] [--from-evidence DIR] [--flatpak-commit HEX] [--machine physical|vm]'
 }
 fail() { echo "error: $*" >&2; exit 1; }
 
@@ -21,17 +21,19 @@ case "$mode" in native | flatpak) ;; *) fail 'Package mode must be native or fla
 commit=
 repository=
 from_evidence=
+flatpak_commit=
 machine=physical
 dry_run=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) dry_run=1; shift ;;
-    --commit | --repository | --from-evidence | --machine)
+    --commit | --repository | --from-evidence | --flatpak-commit | --machine)
       [[ $# -ge 2 ]] || fail "Missing value for $1."
       case "$1" in
         --commit) commit=$2 ;;
         --repository) repository=$2 ;;
         --from-evidence) from_evidence=$2 ;;
+        --flatpak-commit) flatpak_commit=$2 ;;
         --machine) machine=$2 ;;
       esac
       shift 2
@@ -62,18 +64,32 @@ mkdir -p -- "$root/out/desktop-evidence"
 stage=$(mktemp -d "$root/out/desktop-evidence/linux-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
 if [[ -n $from_evidence ]]; then
   evidence=$from_evidence
+  if [[ $mode == flatpak ]]; then
+    [[ $flatpak_commit =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || fail 'Flatpak evidence requires --flatpak-commit (40 or 64 lowercase hex digits).'
+  fi
 else
   head=$(git rev-parse --verify HEAD)
   [[ $head == "$commit" ]] || fail "Checkout HEAD ($head) does not match $commit."
-  tracked_changes=$(git status --porcelain --untracked-files=no)
-  [[ -z $tracked_changes ]] || fail 'Tracked changes are present; use a clean checkout.'
+  changes=$(git status --porcelain)
+  [[ -z $changes ]] || fail 'Tracked or untracked changes are present; use a clean checkout.'
+  if [[ $mode == flatpak ]]; then
+    command -v flatpak >/dev/null || fail 'flatpak is required.'
+    command -v flatpak-builder >/dev/null || fail 'flatpak-builder is required.'
+    # Automation uses a disposable Flatpak install; the physical run needs this checkout installed for the user.
+    flatpak-builder --user --install --force-clean --disable-rofiles-fuse \
+      --state-dir="$stage/flatpak-state" "$stage/flatpak-build" packaging/flatpak/io.github.EnderKeera.LayerC.json
+    flatpak_commit=$(flatpak info --user --show-commit io.github.EnderKeera.LayerC)
+    [[ $flatpak_commit =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || fail 'flatpak returned an invalid installed commit.'
+    printf '%s\n' "$flatpak_commit" >"$stage/flatpak-installed-commit.txt"
+  fi
   rc=0
-  LAYERC_EVIDENCE_DIR="$stage" bash tools/run-linux-v26-evidence.sh "$desktop" "$mode" "$xid" || rc=$?
+  LAYERC_RUN_AUTOMATION=1 LAYERC_REQUIRE_AUTOMATION=1 LAYERC_EVIDENCE_DIR="$stage" \
+    bash tools/run-linux-v26-evidence.sh "$desktop" "$mode" "$xid" || rc=$?
   if [[ $rc -ne 0 && $rc -ne 2 ]]; then
     exit "$rc"
   fi
   shopt -s nullglob
-  directories=("$stage"/*/)
+  directories=("$stage"/*-"$desktop"-"$mode"/)
   [[ ${#directories[@]} -eq 1 ]] || fail 'Expected exactly one evidence directory from the harness.'
   evidence=${directories[0]%/}
 fi
@@ -93,9 +109,13 @@ if [[ -z $os ]]; then
 fi
 report="$stage/report.json"
 comment="$stage/comment.md"
+adapter_arguments=()
+if [[ $mode == flatpak ]]; then
+  adapter_arguments+=(--flatpak-commit "$flatpak_commit")
+fi
 "$PYTHON" tools/desktop_evidence_layerc.py linux-report --evidence "$evidence" \
   --desktop "$desktop" --package-mode "$mode" --commit "$commit" \
-  --repository "$repository" --os "$os" --machine "$machine" --out "$report"
+  --repository "$repository" --os "$os" --machine "$machine" --out "$report" "${adapter_arguments[@]}"
 "$PYTHON" tools/desktop_evidence.py comment --config .github/desktop-evidence.json \
   --report "$report" --repository "$repository" --out "$comment"
 if [[ $dry_run == 1 ]]; then

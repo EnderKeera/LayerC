@@ -6,6 +6,7 @@ param(
     [string]$Repository = '',
     [string]$FromResults = '',
     [string]$BaselineBuildDirectory = '',
+    [string]$BuiltCommitParentsFile = '',
     [ValidateSet('physical', 'vm')][string]$Machine = 'physical',
     [switch]$VisualOnly,
     [switch]$DryRun
@@ -13,6 +14,34 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'LayerC.Tools.psm1') -Force
+
+function Resolve-EvidenceBuildParents {
+    param(
+        [string]$Built,
+        [string]$Commit,
+        [string]$Repository,
+        [string]$Stage,
+        [string]$ParentsFile
+    )
+    if ($Built -eq $Commit) { return '' }
+    if ([string]::IsNullOrWhiteSpace($ParentsFile)) {
+        $parents = @(gh api "repos/$Repository/commits/$Built" --jq '.parents[].sha')
+        Assert-NativeSuccess 'Reading the CI build commit parents'
+        $ParentsFile = Join-Path $Stage 'built-commit-parents.txt'
+        [IO.File]::WriteAllText($ParentsFile, ($parents -join "`n") + "`n",
+            (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $parents = @(Get-Content -LiteralPath $ParentsFile | ForEach-Object {
+        $_.Trim().ToLowerInvariant()
+    } | Where-Object { $_ -ne '' })
+    if ($parents.Count -ne 2 -or
+        @($parents | Where-Object { $_ -cnotmatch '^[0-9a-f]{40}$' }).Count -ne 0 -or
+        $parents[1] -ne $Commit) {
+        throw "CI artifact was built from $Built, which is neither $Commit nor its pull request merge commit."
+    }
+    return $ParentsFile
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $python = if ([string]::IsNullOrWhiteSpace($env:PYTHON)) { 'python' } else { $env:PYTHON }
 if (-not [string]::IsNullOrWhiteSpace($FromResults)) {
@@ -20,6 +49,9 @@ if (-not [string]::IsNullOrWhiteSpace($FromResults)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
     $BaselineBuildDirectory = [IO.Path]::GetFullPath($BaselineBuildDirectory)
+}
+if (-not [string]::IsNullOrWhiteSpace($BuiltCommitParentsFile)) {
+    $BuiltCommitParentsFile = [IO.Path]::GetFullPath($BuiltCommitParentsFile)
 }
 if (-not $DryRun -and $PullRequest -le 0) {
     throw 'PullRequest is required unless DryRun is set.'
@@ -51,6 +83,13 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($FromResults)) {
         $results = $FromResults
         $identityPath = Join-Path $results 'layerc-build-identity.json'
+        if (-not (Test-Path -LiteralPath $identityPath -PathType Leaf)) {
+            throw "Missing CI artifact build identity: $identityPath"
+        }
+        $identity = Get-LayerCBuildIdentity -BuildDirectory $results
+        if ($identity.source -ne 'ci-artifact') { throw 'Results have no CI artifact build identity.' }
+        $parentsPath = Resolve-EvidenceBuildParents -Built $identity.commitSha -Commit $Commit `
+            -Repository $Repository -Stage $stage -ParentsFile $BuiltCommitParentsFile
     } else {
         $head = Get-LayerCCommitSha
         if ($head -ne $Commit) { throw "Checkout HEAD ($head) does not match $Commit." }
@@ -78,6 +117,8 @@ try {
             throw 'Downloaded build identity does not name the resolved CI run.'
         }
         $identityPath = Join-Path $tools 'layerc-build-identity.json'
+        $parentsPath = Resolve-EvidenceBuildParents -Built $identity.commitSha -Commit $Commit `
+            -Repository $Repository -Stage $stage -ParentsFile $BuiltCommitParentsFile
         if (-not $VisualOnly) {
             if ([string]::IsNullOrWhiteSpace($BaselineBuildDirectory)) {
                 $baseline = Join-Path $stage 'baseline'
@@ -117,12 +158,14 @@ try {
         '--machine', $Machine, '--out', $report)
     if (-not [string]::IsNullOrWhiteSpace($gpu)) { $adapterArguments += @('--gpu', $gpu) }
     if ($VisualOnly) { $adapterArguments += '--visual-only' }
+    if ($parentsPath) { $adapterArguments += @('--built-commit-parents', $parentsPath) }
     & $python (Join-Path $PSScriptRoot 'desktop_evidence_layerc.py') @adapterArguments
     Assert-NativeSuccess 'Creating the desktop report'
     $comment = Join-Path $stage 'comment.md'
-    & $python (Join-Path $PSScriptRoot 'desktop_evidence.py') comment `
-        --config (Join-Path $root '.github/desktop-evidence.json') `
-        --report $report --repository $Repository --out $comment
+    $commentArguments = @('comment', '--config', (Join-Path $root '.github/desktop-evidence.json'),
+        '--report', $report, '--repository', $Repository, '--out', $comment)
+    if ($parentsPath) { $commentArguments += @('--built-commit-parents', $parentsPath) }
+    & $python (Join-Path $PSScriptRoot 'desktop_evidence.py') @commentArguments
     Assert-NativeSuccess 'Validating and rendering the comment'
     if ($DryRun) {
         Get-Content -LiteralPath $comment -Raw

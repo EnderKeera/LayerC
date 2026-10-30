@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "recordedAtUtc": "20260520T123456Z",
+  "desktop": "gnome",
+  "packageMode": "flatpak",
+  "manualResult": "pass",
+  "automatedEvidence": "bound",
+  "evidenceKind": "physical-x11"
+}

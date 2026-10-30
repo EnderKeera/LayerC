@@ -54,6 +54,23 @@ jobs:
             --jq 'select(.merged == true) | .merge_commit_sha' \
             >> "$RUNNER_TEMP/allowed-commits.txt"
 
+      # A CI artifact built for a pull request is its test merge commit. The
+      # validator prints builtCommit (40 hex digits) only when it differs from
+      # commit; its parents decide whether that build contains commit.
+      - name: Look up the parents of a differing build commit
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          built=$(python3 -I -B tools/desktop_evidence.py built-commit \
+            --comment-env COMMENT_BODY)
+          : > "$RUNNER_TEMP/built-commit-parents.txt"
+          if [ -n "$built" ]; then
+            gh api "repos/$REPOSITORY/commits/$built" --jq '.parents[].sha' \
+              > "$RUNNER_TEMP/built-commit-parents.txt"
+          fi
+
       # Exit 2 rejects the report: no check run, and the reasons go to the job
       # summary.
       - name: Validate the report and build the check run
@@ -74,6 +91,7 @@ jobs:
           --association "$AUTHOR_ASSOCIATION"
           --repository "$REPOSITORY"
           --allowed-commits "$RUNNER_TEMP/allowed-commits.txt"
+          --built-commit-parents "$RUNNER_TEMP/built-commit-parents.txt"
           --out "$RUNNER_TEMP/check-run.json"
 
       - name: Publish the advisory check run

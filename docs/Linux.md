@@ -450,8 +450,11 @@ requires clean automated and physical source trees. It still never marks any
 manual observation as passed.
 
 `tools/submit-desktop-evidence.sh` wraps this harness and posts the run to a
-pull request; see [DesktopEvidence.md](DesktopEvidence.md). A posted report
-is advisory and does not by itself change the pending status above.
+pull request; see [DesktopEvidence.md](DesktopEvidence.md). It runs the harness
+with `LAYERC_RUN_AUTOMATION=1 LAYERC_REQUIRE_AUTOMATION=1` and, in Flatpak mode,
+first builds and installs the Flatpak from the checkout with
+`flatpak-builder --user --install`. A posted report is advisory and does not
+by itself change the pending status above.
 
 ## Building
 
