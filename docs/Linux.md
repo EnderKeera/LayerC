@@ -449,6 +449,10 @@ commit-matched `summary.json`. Release collection can set
 requires clean automated and physical source trees. It still never marks any
 manual observation as passed.
 
+`tools/submit-desktop-evidence.sh` wraps this harness and posts the run to a
+pull request; see [DesktopEvidence.md](DesktopEvidence.md). A posted report
+is advisory and does not by itself change the pending status above.
+
 ## Building
 
 Requires a C++20 compiler, CMake 3.28+, Ninja (or make). The full X11/Xvfb

@@ -1,7 +1,7 @@
 {
   "gates": {
     "windows": {
-      "description": "Every Windows CI and manual self-hosted CTest run (ci and vs2026 presets).",
+      "description": "Windows CTest runs: the windows-msvc CI job (ci preset) and any local run validated with tools/linux_test_report.py --gate windows.",
       "label": "required",
       "required": [
         "layerc_automation_benchmark",

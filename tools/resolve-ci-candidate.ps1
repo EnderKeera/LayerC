@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # Resolves the CI run (id + head SHA) that produced the binaries under test.
-# Shared by .github/workflows/benchmarks.yml and tools/push-and-test.ps1 so
-# the "latest green run" and "run for this commit" queries live in one place.
+# Used by tools/push-and-test.ps1 so the "latest green run" and
+# "run for this commit" queries live in one place.
 # Writes runId=/headSha= to $env:GITHUB_OUTPUT when present (CI) and always
 # emits the resolved pair as an object for local callers.
 [CmdletBinding()]
