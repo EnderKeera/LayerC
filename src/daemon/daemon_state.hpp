@@ -279,6 +279,7 @@ private:
   bool dirty_{};
   bool active_{};
   bool timer_running_{};
+  std::optional<layerc::core::Milliseconds> timer_delay_;
   bool capture_exclusion_{true};
 };
 

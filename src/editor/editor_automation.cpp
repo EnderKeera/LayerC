@@ -407,6 +407,7 @@ void AutomationEditor::open() {
       &dispatch_member_dialog<AutomationEditor, &AutomationEditor::initialize,
                               &AutomationEditor::handle_message>,
       reinterpret_cast<LPARAM>(this));
+  RedrawWindow(shell_.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 
 void AutomationEditor::add_basic(const HWND dialog) {

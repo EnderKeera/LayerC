@@ -103,6 +103,11 @@ void OverlayWindow::release_render_resources() {
     SelectObject(buffer_dc_, previous_bitmap_);
   }
   previous_bitmap_ = nullptr;
+  for (auto &[color, brush] : row_brushes_) {
+    (void)color;
+    delete_gdi_object(brush);
+  }
+  row_brushes_.clear();
   delete_gdi_object(buffer_bitmap_);
   delete_gdi_object(font_);
   delete_gdi_object(window_brush_);
@@ -116,9 +121,9 @@ void OverlayWindow::release_render_resources() {
 }
 
 void OverlayWindow::render(const layerc::core::PanelPresentation &presentation) {
-  if (!visible_ || !ensure_render_resources()) {
-    return;
-  }
+  if (!visible_) return;
+  (void)sync_rows(presentation);
+  if (!ensure_render_resources()) return;
   update_position(target_);
 
   RECT canvas{0, 0, size_.cx, size_.cy};
@@ -128,80 +133,82 @@ void OverlayWindow::render(const layerc::core::PanelPresentation &presentation) 
   SetTextColor(buffer_dc_, text_color_);
   SelectObject(buffer_dc_, font_);
 
-  const auto geometry =
-      layerc::core::panel_geometry(panel_, bars_.size());
-  const auto scaled_rect = [&](const layerc::core::PanelRect rect) {
-    return RECT{scaled(rect.left), scaled(rect.top), scaled(rect.right),
-                scaled(rect.bottom)};
+  using namespace layerc::core;
+  const auto geometry = panel_geometry(panel_, rows_.size());
+  const auto scaled_rect = [&](const PanelRect rect) {
+    return RECT{scaled(rect.left), scaled(rect.top), scaled(rect.right), scaled(rect.bottom)};
   };
   const auto null_pen = static_cast<HPEN>(GetStockObject(NULL_PEN));
   const HPEN selection_pen = edit_selected_
-      ? CreatePen(PS_SOLID, 2, native_color_ref(0xE0A15AU))
-      : nullptr;
-  const HPEN visible_border = selection_pen != nullptr ? selection_pen
-                                                        : border_pen_;
-
-  const auto count = std::min(bars_.size(), presentation.items.size());
-  for (std::size_t index = 0; index < count; ++index) {
-    auto &bar_source = bars_[index];
-    const auto &shown = presentation.items[index];
-    // The text changes only when the shown tenths or charges do; skip the
-    // wide conversion on the frames in between.
-    if (shown.label != bar_source.label) {
-      bar_source.wide_label = layerc::platform::utf8_to_wide(shown.label);
-      bar_source.label = shown.label;
+      ? CreatePen(PS_SOLID, 2, native_color_ref(0xE0A15AU)) : nullptr;
+  const HPEN visible_border = selection_pen != nullptr ? selection_pen : border_pen_;
+  const auto color_brush = [&](const std::uint32_t color) {
+    auto [entry, inserted] = row_brushes_.try_emplace(color, nullptr);
+    if (inserted) entry->second = CreateSolidBrush(native_color_ref(color));
+    return entry->second != nullptr ? entry->second : fill_brush_;
+  };
+  const auto draw_pips = [&](const ItemPipLayout &layout, const ItemPresentation &shown,
+                             const HBRUSH brush) {
+    if (layout.pips.empty()) return;
+    const HPEN pen = CreatePen(PS_SOLID, std::max(1L, scaled(1)), native_color_ref(shown.color));
+    if (pen == nullptr) return;
+    for (std::size_t pip = 0; pip < layout.pips.size(); ++pip) {
+      const RECT rect = scaled_rect(layout.pips[pip]);
+      const bool filled = pip < shown.filled_pips;
+      draw_rounded_rectangle(buffer_dc_, rect, std::max(1L, scaled(2)),
+          filled ? brush : panel_brush_,
+          filled ? null_pen : pen);
     }
-    const std::wstring &label_text = bar_source.wide_label;
-    const double progress = shown.remaining;
-
-    if (panel_.style == layerc::core::PanelStyle::bar) {
-      const auto shape = layerc::core::bar_geometry(
-          panel_, index, bars_.size(), progress);
+    DeleteObject(pen);
+  };
+  for (std::size_t index = 0; index < presentation.items.size(); ++index) {
+    auto &row = rows_[index];
+    const auto &shown = presentation.items[index];
+    if (shown.label != row.label) {
+      row.wide_label = layerc::platform::utf8_to_wide(shown.label);
+      row.label = shown.label;
+    }
+    const HBRUSH brush = color_brush(shown.color);
+    const bool indicator_on = shown.kind == OverlayItemKind::indicator &&
+                               !shown.unavailable && shown.active && shown.flash_on;
+    const bool fill_visible = !shown.unavailable && (shown.has_progress || indicator_on);
+    const double progress = shown.has_progress ? shown.remaining : 1.0;
+    if (panel_.style == PanelStyle::bar) {
+      const auto shape = bar_geometry(panel_, index, rows_.size(), progress);
       const RECT bar = scaled_rect(shape.outline);
       const int radius = std::max(1L, scaled(shape.corner_radius));
       if (!shape.grouped) {
-        // Single-bar panels clip the window region to the bar shape so the
-        // transparent surround is truly click-through.
         if (bar.right - bar.left != last_region_width_) {
           const HRGN region = CreateRoundRectRgn(
               bar.left, bar.top, bar.right, bar.bottom, radius, radius);
           if (region != nullptr) {
-            if (SetWindowRgn(window_, region, TRUE) == 0)
-              DeleteObject(region);
-            else
-              last_region_width_ = bar.right - bar.left;
+            if (SetWindowRgn(window_, region, TRUE) == 0) DeleteObject(region);
+            else last_region_width_ = bar.right - bar.left;
           }
         }
-        draw_rounded_rectangle(buffer_dc_, bar, radius, fill_brush_,
-                               visible_border);
+        draw_rounded_rectangle(buffer_dc_, bar, radius,
+                               fill_visible ? brush : panel_brush_, visible_border);
       } else {
-        draw_rounded_rectangle(buffer_dc_, bar, radius, panel_brush_,
-                               visible_border);
+        draw_rounded_rectangle(buffer_dc_, bar, radius, panel_brush_, visible_border);
         const RECT fill = scaled_rect(shape.fill);
-        if (fill.right > fill.left && fill.bottom > fill.top) {
+        if (fill_visible && fill.right > fill.left && fill.bottom > fill.top)
           draw_rounded_rectangle(buffer_dc_, fill,
-                                 std::max(1L, scaled(shape.fill_radius)),
-                                 fill_brush_, null_pen);
-        }
+              std::max(1L, scaled(shape.fill_radius)), brush, null_pen);
       }
-
-      RECT text_rectangle = scaled_rect(shape.text);
-      if (panel_.bar.show_text &&
-          text_rectangle.right > text_rectangle.left) {
-        draw_label(buffer_dc_, label_text, text_rectangle);
-      }
-      continue;
+      const auto layout = item_pip_layout(PanelStyle::bar, shape.text, shown.pips);
+      draw_pips(layout, shown, brush);
+      RECT text = scaled_rect(layout.text);
+      if (panel_.bar.show_text && text.right > text.left) draw_label(buffer_dc_, row.wide_label, text);
+    } else {
+      const RECT item = scaled_rect(geometry.items[index]);
+      draw_rounded_rectangle(buffer_dc_, item, std::max(1L, scaled(overlay_metrics.fill_radius)),
+                             indicator_on ? brush : panel_brush_, visible_border);
+      const auto layout = item_pip_layout(PanelStyle::card,
+          inset_panel_rect(geometry.items[index], overlay_metrics.card_text_inset), shown.pips);
+      draw_pips(layout, shown, brush);
+      RECT text = scaled_rect(layout.text);
+      if (panel_.bar.show_text && text.right > text.left) draw_label(buffer_dc_, row.wide_label, text);
     }
-
-    const RECT item = scaled_rect(geometry.items[index]);
-    draw_rounded_rectangle(
-        buffer_dc_, item,
-        std::max(1L, scaled(layerc::core::overlay_metrics.fill_radius)),
-                            panel_brush_, visible_border);
-
-    RECT text_rectangle = scaled_rect(layerc::core::inset_panel_rect(
-        geometry.items[index], layerc::core::overlay_metrics.card_text_inset));
-    draw_label(buffer_dc_, label_text, text_rectangle);
   }
 
   if (selection_pen != nullptr) DeleteObject(selection_pen);
@@ -209,6 +216,11 @@ void OverlayWindow::render(const layerc::core::PanelPresentation &presentation) 
   if (saved_state != 0) {
     RestoreDC(buffer_dc_, saved_state);
   }
+  for (auto &[color, brush] : row_brushes_) {
+    (void)color;
+    delete_gdi_object(brush);
+  }
+  row_brushes_.clear();
   InvalidateRect(window_, nullptr, FALSE);
   UpdateWindow(window_);
 }

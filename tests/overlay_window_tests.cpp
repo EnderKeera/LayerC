@@ -1,4 +1,6 @@
 #include "layerc/core/live_edit.hpp"
+#include "layerc/core/cooldown_engine.hpp"
+#include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/bounded_helper.hpp"
 #include "layerc/platform/window_query.hpp"
 #include "overlay_collection.hpp"
@@ -14,6 +16,14 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace layerc::daemon {
+struct OverlayWindowTestAccess {
+  static COLORREF pixel(const OverlayWindow &window, const int x, const int y) {
+    return window.buffer_dc_ != nullptr ? GetPixel(window.buffer_dc_, x, y) : CLR_INVALID;
+  }
+};
+} // namespace layerc::daemon
 
 namespace {
 
@@ -568,6 +578,82 @@ void collection_overrides_survive_recreation() {
   }
 }
 
+void typed_rows_render_and_resize() {
+  using namespace layerc::core;
+  using layerc::daemon::OverlayWindowTestAccess;
+  OverlayFixture fixture;
+  fixture.panel.style = PanelStyle::bar;
+  fixture.panel.bar.show_text = false;
+  fixture.cooldowns.front().active_duration = Milliseconds{2'000};
+  fixture.panel.cooldown_ids.clear();
+  fixture.panel.items = std::vector<OverlayItem>{
+      {.id = "cooldown", .content = CooldownItem{"dash"}},
+      {.id = "active", .content = CooldownActiveTimerItem{"dash"}},
+      {.id = "counter", .content = CounterItem{"count", 8., CounterDisplay::pips}},
+      {.id = "flag", .content = IndicatorItem{"flag", 2.}}};
+  AutomationProfile graph;
+  graph.profile_id = "fixture";
+  graph.variables = {{"count", AutomationValueType::integer, AutomationValue(std::int64_t{2})},
+                     {"flag", AutomationValueType::boolean, AutomationValue(true)}};
+  const auto automation = automation_default_snapshot(graph);
+  CooldownEngine engine(fixture.cooldowns);
+  const TimePoint origin{};
+  (void)engine.trigger("dash", origin);
+  const auto states = engine.snapshot(origin);
+  if (!fixture.show_overlay()) return;
+  const UINT dpi = GetDpiForWindow(fixture.overlay_window);
+  const auto scale = [&](const int dip) { return MulDiv(dip, static_cast<int>(dpi), 96); };
+  const auto pixel = [&](const int x, const int y) {
+    return OverlayWindowTestAccess::pixel(*fixture.overlay, scale(x), scale(y));
+  };
+  auto frame = fixture.overlay->present(states, origin, &automation, origin);
+  fixture.overlay->render(frame);
+  expect(frame.items.size() == 4, "all four typed item kinds reach GDI");
+  const auto expected = panel_geometry(fixture.panel, frame.items.size());
+  RECT bounds{};
+  GetWindowRect(fixture.overlay_window, &bounds);
+  expect(bounds.right - bounds.left == scale(expected.size.width) &&
+         bounds.bottom - bounds.top == scale(expected.size.height),
+         "typed row count determines the native window size");
+  const auto flag = bar_geometry(fixture.panel, 3, 4, 1.).outline;
+  const int flag_x = flag.left + 8;
+  const int flag_y = (flag.top + flag.bottom) / 2;
+  expect(pixel(flag_x, flag_y) == layerc::platform::native_color_ref(frame.items[3].color),
+         "an ON indicator paints its resolved accent");
+  const auto counter = bar_geometry(fixture.panel, 2, 4, frame.items[2].remaining);
+  const auto pips = item_pip_layout(PanelStyle::bar, counter.text, frame.items[2].pips);
+  if (expect(pips.pips.size() == 8, "pips reach the native drawing geometry")) {
+    const auto sample = [&](const PanelRect &pip) {
+      return pixel((pip.left + pip.right) / 2, (pip.top + pip.bottom) / 2);
+    };
+    expect(sample(pips.pips.front()) == layerc::platform::native_color_ref(frame.items[2].color),
+           "a filled pip has the row accent");
+    expect(sample(pips.pips.back()) == layerc::platform::native_color_ref(fixture.panel.bar.background_color),
+           "an empty pip has a background center, not a solid accent");
+  }
+  frame = fixture.overlay->present(states, origin + Milliseconds{250}, &automation, origin);
+  fixture.overlay->render(frame);
+  expect(pixel(flag_x, flag_y) == layerc::platform::native_color_ref(fixture.panel.bar.background_color),
+         "the core-computed OFF flash phase clears the accent");
+  fixture.overlay->set_session_override({}, {}, {{.item_id = "counter", .visible = false}});
+  frame = fixture.overlay->present(states, origin, &automation, origin);
+  fixture.overlay->render(frame);
+  GetWindowRect(fixture.overlay_window, &bounds);
+  expect(frame.items.size() == 3 && bounds.bottom - bounds.top ==
+         scale(panel_geometry(fixture.panel, 3).size.height),
+         "hiding one item shrinks the native row cache and window");
+  fixture.overlay->set_session_override({}, {}, {{.item_id = "flag", .color = 0xFA7B1EU}});
+  frame = fixture.overlay->present(states, origin, &automation, origin);
+  fixture.overlay->render(frame);
+  expect(pixel(flag_x, flag_y) == layerc::platform::native_color_ref(0xFA7B1EU),
+         "an item color override reaches the native fill");
+  const auto style = GetWindowLongPtrW(fixture.overlay_window, GWL_EXSTYLE);
+  expect((style & (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)) ==
+         (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE) &&
+         SendMessageW(fixture.overlay_window, WM_NCHITTEST, 0, 0) == HTTRANSPARENT,
+         "typed drawing remains layered, click-through and non-activating");
+}
+
 } // namespace
 
 int wmain(const int argc, wchar_t *argv[]) {
@@ -583,5 +669,6 @@ int wmain(const int argc, wchar_t *argv[]) {
                             LAYERC_TEST_CASE(direct_edit_restores_click_through),
                             LAYERC_TEST_CASE(background_overlay_tracks_target),
                             LAYERC_TEST_CASE(target_window_matching),
-                            LAYERC_TEST_CASE(collection_overrides_survive_recreation)});
+                            LAYERC_TEST_CASE(collection_overrides_survive_recreation),
+                             LAYERC_TEST_CASE(typed_rows_render_and_resize)});
 }

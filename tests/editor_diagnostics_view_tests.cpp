@@ -47,6 +47,8 @@ void windows_summary_and_linux_details() {
                                   .state = runtime::ServiceState::active, .consumers = 1,
                                   .last_error = "overlay lost"});
   diagnostics.automation_faults.push_back("checkpoint failed");
+  diagnostics.overlay_faults.push_back(
+      "profile typed, panel main, item future: unsupported item kind (preserved; not rendered)");
   runtime::LinuxStatusSnapshot linux_status;
   linux_status.x11.connected = true;
   linux_status.x11.xi2 = {.available = true, .major = 2, .minor = 4};
@@ -68,7 +70,9 @@ void windows_summary_and_linux_details() {
              has_line(detailed, "visual: degraded (profile_invalid; bad region)") &&
              has_line(detailed, "overlay: active, 1 consumer, 0 faults; last error: overlay lost") &&
              has_line(detailed, "fixture on window 0x2a, foreground, 1 overlay window; last input: dash") &&
-             has_line(detailed, "checkpoint failed"),
+             has_line(detailed, "checkpoint failed") &&
+             has_line(detailed, "Overlay item diagnostics:") &&
+             has_line(detailed, "  profile typed, panel main, item future: unsupported item kind"),
          "details list process, X11, capability, service, session and automation state");
   expect(!has_line(detailed, "Display:"), "a V2.6 snapshot without display rows adds none");
 
@@ -102,6 +106,16 @@ void worker_states_and_error_precedence() {
   expect(view(diagnostics).lines[3] == "Last error: gamebar", "Game Bar errors precede settings");
   diagnostics.services.push_back({.capability = runtime::Capability::visual, .last_error = "service"});
   expect(view(diagnostics).lines[3] == "Last error: service", "service errors precede Game Bar");
+  diagnostics.overlay_faults = {
+      "profile typed, panel main, item gone: missing source"};
+  expect(view(diagnostics).lines[3] == "Last error: service",
+         "an overlay item warning never overrides a service error");
+  diagnostics.services.clear();
+  diagnostics.gamebar.last_error.clear();
+  diagnostics.settings.last_error.clear();
+  expect(view(diagnostics).lines[3] ==
+                 "Last error: profile typed, panel main, item gone: missing source",
+         "an overlay item warning is the compact last error when nothing else reports");
   diagnostics.helpers = {{.window = 1, .running = true}, {.window = 2, .running = true}};
   expect(view(diagnostics).lines[2] == "Isolated visual worker: Running (2)", "all helpers running");
   diagnostics.helpers[1].running = false;

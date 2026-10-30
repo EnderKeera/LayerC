@@ -77,7 +77,7 @@ void OverlayCollection::apply_overrides(
     const auto resolved =
         layerc::core::resolve_panel_overrides(base_panel, overrides);
     (*found)->update_snapshot(resolved.panel, cooldowns_);
-    (*found)->set_session_override(resolved.visible, resolved.text);
+    (*found)->set_session_override(resolved.visible, resolved.text, resolved.items);
   }
 }
 
@@ -93,6 +93,7 @@ void OverlayCollection::set_capture_exclusion(const bool enabled) {
 }
 
 void OverlayCollection::hide() noexcept {
+  frames_.clear();
   for (auto &overlay : windows_) {
     if (overlay) overlay->hide();
   }
@@ -104,17 +105,23 @@ void OverlayCollection::release() noexcept {
   windows_.shrink_to_fit();
   cooldowns_.clear();
   cooldowns_.shrink_to_fit();
+  frames_.shrink_to_fit();
 }
 
 void OverlayCollection::render_for(
     const HWND target, const std::vector<layerc::core::CooldownState> &states,
-    const layerc::core::TimePoint now) {
+    const layerc::core::TimePoint now,
+    const layerc::core::AutomationRuntimeSnapshot *automation,
+    const layerc::core::TimePoint epoch) {
+  frames_.clear();
+  frames_.reserve(windows_.size());
   for (auto &overlay : windows_) {
-    const auto presentation = overlay->present(states, now);
+    auto &presentation = frames_.emplace_back(overlay->present(states, now, automation, epoch));
     if (!presentation.visible) {
       overlay->hide();
       continue;
     }
+    (void)overlay->sync_rows(presentation);
     overlay->show_for(target);
     overlay->render(presentation);
   }
@@ -122,13 +129,18 @@ void OverlayCollection::render_for(
 
 void OverlayCollection::render_on_rect(
     const RECT &target, const std::vector<layerc::core::CooldownState> &states,
-    const layerc::core::TimePoint now) {
+    const layerc::core::TimePoint now,
+    const layerc::core::AutomationRuntimeSnapshot *automation,
+    const layerc::core::TimePoint epoch) {
+  frames_.clear();
+  frames_.reserve(windows_.size());
   for (auto &overlay : windows_) {
-    const auto presentation = overlay->present(states, now);
+    auto &presentation = frames_.emplace_back(overlay->present(states, now, automation, epoch));
     if (!presentation.visible) {
       overlay->hide();
       continue;
     }
+    (void)overlay->sync_rows(presentation);
     overlay->show_on_rect(target);
     overlay->render(presentation);
   }

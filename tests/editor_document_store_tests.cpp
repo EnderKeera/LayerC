@@ -793,7 +793,10 @@ void create_only_contracts() {
 }
 } // namespace
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(editor_cooldown_removal_contracts),
+void editor_panel_item_contracts();
+
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(editor_panel_item_contracts),
+                 LAYERC_TEST_CASE(editor_cooldown_removal_contracts),
                  LAYERC_TEST_CASE(round_trip_contracts),
                  LAYERC_TEST_CASE(profile_scan_summary_preserves_store),
                  LAYERC_TEST_CASE(history_nested_unknown_fields_contracts),

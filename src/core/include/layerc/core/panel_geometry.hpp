@@ -39,6 +39,11 @@ struct BarGeometry {
   bool grouped{};
 };
 
+struct ItemPipLayout {
+  PanelRect text;
+  std::vector<PanelRect> pips;
+};
+
 // Geometry is expressed in profile DIPs. Hosts apply their one scale when
 // converting the returned sizes and rectangles to device pixels.
 [[nodiscard]] PanelGeometry panel_geometry(const Panel &panel,
@@ -47,5 +52,7 @@ struct BarGeometry {
                                        std::size_t item_index,
                                        std::size_t item_count, double progress);
 [[nodiscard]] PanelRect inset_panel_rect(PanelRect rect, int inset) noexcept;
+[[nodiscard]] ItemPipLayout item_pip_layout(PanelStyle style,
+    const PanelRect &text_area, std::uint32_t pips);
 
 } // namespace layerc::core

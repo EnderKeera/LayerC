@@ -741,6 +741,118 @@ void simulator_step_report_contracts() {
   }
 }
 
+void simulator_item_previews() {
+  using namespace std::chrono_literals;
+  auto profile = base_profile();
+  auto &cooldown = profile.cooldowns.front();
+  cooldown.duration = 5s;
+  cooldown.active_duration = 2s;
+  auto &panel = profile.panels.front();
+  panel.cooldown_ids.clear();
+  panel.items = std::vector<OverlayItem>{
+      {.id = "cooldown-row", .content = CooldownItem{cooldown.id}},
+      {.id = "active-row", .content = CooldownActiveTimerItem{cooldown.id}},
+      {.id = "timer-row", .content = AutomationTimerItem{"tick"}},
+      {.id = "counter-row", .content = CounterItem{"stacks", 8, CounterDisplay::pips}},
+      {.id = "indicator-row", .content = IndicatorItem{"flag-1", 2}}};
+  auto graph = flag_graph(profile);
+  graph.variables.push_back({.id = "stacks", .type = AutomationValueType::integer,
+                            .default_value = AutomationValue(std::int64_t{3})});
+  AutomationAction trigger;
+  trigger.kind = AutomationActionKind::trigger_cooldown;
+  trigger.target = cooldown.id;
+  AutomationAction timer;
+  timer.kind = AutomationActionKind::create_timer;
+  timer.target = "tick";
+  timer.value = expr::literal(AutomationValue(DurationValue{2s}));
+  AutomationAction label;
+  label.kind = AutomationActionKind::set_overlay_override;
+  label.target = panel.id;
+  label.item_id = "counter-row";
+  label.name = "live-label";
+  label.property = "text";
+  label.value = expr::literal(AutomationValue(std::string("Live count")));
+  graph.automations.front().rules.front().actions.insert(
+      graph.automations.front().rules.front().actions.end(), {trigger, timer, label});
+
+  AutomationSimulator simulator;
+  expect(!simulator.panel_preview(panel.id), "an uncompiled simulator has no panel preview");
+  simulator.load({
+      {.kind = AutomationEventKind::session_started, .timestamp = TimePoint{}, .origin_token = 1},
+      {.kind = AutomationEventKind::input_pressed, .timestamp = TimePoint(250ms), .origin_token = 2},
+      {.kind = AutomationEventKind::input_pressed, .timestamp = TimePoint(2s), .origin_token = 3},
+      {.kind = AutomationEventKind::input_pressed, .timestamp = TimePoint(5s), .origin_token = 4}});
+  const auto reset = simulator.reset(automation_graph_json(graph), profile);
+  expect(!reset.error, "the item simulator graph compiles");
+  if (reset.error) return;
+  const auto initial = simulator.panel_preview(panel.id);
+  expect(initial && initial->presentation.items.size() == 5 &&
+             initial->presentation.items[0].ready &&
+             !initial->presentation.items[1].active &&
+             initial->presentation.items[3].filled_pips == 3,
+         "reset projects ready cooldowns and declared default counter values");
+  expect(!simulator.panel_preview("unknown-panel"), "unknown panel IDs have no preview");
+  (void)simulator.step("");
+  const auto started = simulator.panel_preview(panel.id);
+  expect(started && !started->presentation.items[0].ready &&
+             started->presentation.items[1].active &&
+             started->presentation.items[2].active &&
+             started->presentation.items[3].label == "Live count" &&
+             started->presentation.items[4].active &&
+             started->presentation.items[4].flash_on,
+         "committed cooldown effects, timers, item overrides and variables feed the preview");
+  (void)simulator.step("");
+  const auto flashing = simulator.panel_preview(panel.id);
+  expect(flashing && flashing->presentation.items[1].active &&
+             flashing->presentation.items[1].remaining < 1.0 &&
+             !flashing->presentation.items[4].flash_on,
+         "progress and flash phase use replay time, not a wall clock");
+  (void)simulator.step("");
+  const auto expired = simulator.panel_preview(panel.id);
+  expect(expired && !expired->presentation.items[1].active &&
+             !expired->presentation.items[2].active &&
+             !expired->presentation.items[0].ready,
+         "active duration and automation timer end before the cooldown is ready");
+  (void)simulator.step("");
+  const auto ready = simulator.panel_preview(panel.id);
+  expect(ready && ready->presentation.items[0].ready,
+         "later replay roots advance the cooldown engine to ready");
+
+  AutomationAction hidden = label;
+  hidden.item_id.clear();
+  hidden.name = "hide-panel";
+  hidden.property = "visible";
+  hidden.value = expr::literal(AutomationValue(false));
+  graph.automations.front().rules.front().actions.push_back(hidden);
+  expect(!simulator.reset(automation_graph_json(graph), profile).error,
+         "reset accepts a panel visibility override");
+  (void)simulator.step("");
+  const auto invisible = simulator.panel_preview(panel.id);
+  expect(invisible && !invisible->presentation.visible,
+         "panel override resolution is shared with the live overlay");
+  expect(simulator.reset("{", profile).error && !simulator.panel_preview(panel.id),
+         "a failed reset clears stale simulated panels");
+
+  AutomationProfile empty;
+  empty.profile_id = profile.id;
+  simulator.load({
+      {.kind = AutomationEventKind::cooldown_triggered, .timestamp = TimePoint{},
+       .source_id = cooldown.id, .origin_token = 1},
+      {.kind = AutomationEventKind::input_pressed, .timestamp = TimePoint(2s), .origin_token = 2}});
+  expect(!simulator.reset(automation_graph_json(empty), profile).error,
+         "standalone active duration does not need an automation rule");
+  (void)simulator.step("");
+  const auto standalone = simulator.panel_preview(panel.id);
+  expect(standalone && standalone->presentation.items[1].active,
+         "accepted cooldown trace facts arm standalone active-duration timers");
+  (void)simulator.step("");
+  const auto ended = simulator.panel_preview(panel.id);
+  expect(ended && !ended->presentation.items[1].active,
+         "standalone active-duration preview expires monotonically");
+  simulator.clear();
+  expect(!simulator.panel_preview(panel.id), "clear removes every stale preview value");
+}
+
 void simulator_event_bounds() {
   AutomationSimulator simulator;
   for (std::size_t i = 0; i < max_automation_trace_entries; ++i)
@@ -766,6 +878,7 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(presets_and_palette),
                  LAYERC_TEST_CASE(simulator_replay),
                  LAYERC_TEST_CASE(simulator_empty_loaded_trace),
                  LAYERC_TEST_CASE(simulator_timer_ordering),
+                 LAYERC_TEST_CASE(simulator_item_previews),
                  LAYERC_TEST_CASE(simulator_step_report_contracts),
                  LAYERC_TEST_CASE(trace_files),
                  LAYERC_TEST_CASE(trace_control_codec_contracts),

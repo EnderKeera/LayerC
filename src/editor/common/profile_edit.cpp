@@ -73,7 +73,8 @@ split_grouped_bars(layerc::core::GameProfile &profile, const long target_height)
   std::optional<std::size_t> first_split;
   const auto height = static_cast<double>(std::max(1L, target_height));
   for (const auto &panel : profile.panels) {
-    if (panel.style != layerc::core::PanelStyle::bar || panel.cooldown_ids.size() <= 1) {
+    if (panel.items || panel.style != layerc::core::PanelStyle::bar ||
+        panel.cooldown_ids.size() <= 1) {
       split.push_back(panel);
       continue;
     }

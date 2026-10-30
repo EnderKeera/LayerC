@@ -2,6 +2,7 @@
 
 #include "layerc/core/automation.hpp"
 #include "layerc/core/profile.hpp"
+#include "layerc/core/panel_presentation.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -14,7 +15,14 @@
 #include <variant>
 #include <vector>
 
+namespace layerc::core { class CooldownEngine; }
+
 namespace layerc::editor {
+
+struct SimulatorPanelPreview {
+  layerc::core::Panel panel;
+  layerc::core::PanelPresentation presentation;
+};
 
 // What the last processed event actually did: the committed effects and
 // derived events the runtime returns, plus the trace entries that call added.
@@ -84,9 +92,17 @@ public:
   // given, whether every declared variable currently equals its value.
   // Lines end with '\n'.
   [[nodiscard]] std::string describe(std::string_view assertions) const;
+  // Value copies at the last replay timestamp, using the same presentation
+  // and override resolver as the native daemons. No wall clock or input I/O.
+  [[nodiscard]] std::optional<SimulatorPanelPreview>
+  panel_preview(std::string_view panel_id) const;
 
 private:
   std::unique_ptr<layerc::core::AutomationRuntime> runtime_;
+  std::unique_ptr<layerc::core::CooldownEngine> cooldowns_;
+  std::optional<layerc::core::GameProfile> base_profile_;
+  std::vector<layerc::core::CooldownState> cooldown_states_;
+  layerc::core::TimePoint presentation_time_{};
   std::vector<layerc::core::AutomationEvent> events_;
   std::size_t index_{};
   bool seed_empty_{true};

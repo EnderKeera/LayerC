@@ -124,6 +124,7 @@ add_library(layerc_core STATIC
     src/core/profile_validation.cpp
     src/core/profile_serialize.cpp
     src/core/panel_geometry.cpp
+    src/core/item_geometry.cpp
     src/core/runtime_instances.cpp
     src/core/visual.cpp
     src/core/pixel_evaluator.cpp
@@ -374,6 +375,9 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_util.cpp
         src/editor/editor_cooldowns.cpp
         src/editor/editor_bars.cpp
+        src/editor/editor_preview_render.cpp
+        src/editor/editor_items.cpp
+        src/editor/editor_item_dialog.cpp
         src/editor/editor_tasks.cpp
         src/editor/editor_theme.cpp
         src/editor/editor_draw.cpp
@@ -559,6 +563,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/common/diagnostic_text.cpp
         src/editor/common/profile_document.cpp
         src/editor/common/profile_edit.cpp
+        src/editor/common/panel_items.cpp
         src/editor/common/runtime_diagnostics_view.cpp
         src/editor/common/visual_assignment.cpp
         src/editor/common/visual_calibration.cpp)

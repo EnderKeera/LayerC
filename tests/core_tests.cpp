@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <iostream>
 
+namespace layerc::test { void test_item_pip_geometry(); }
+
 int main() {
   using namespace layerc::test;
   return run({
@@ -26,6 +28,7 @@ int main() {
       {"test_profile_enabled_and_independent_bar_placement", test_profile_enabled_and_independent_bar_placement},
       {"test_profile_schema3_hid", test_profile_schema3_hid},
       {"test_panel_geometry", test_panel_geometry},
+      {"test_item_pip_geometry", test_item_pip_geometry},
       {"test_profile_validation_owns_semantics",
        test_profile_validation_owns_semantics},
       {"test_profile_items_round_trip", test_profile_items_round_trip},

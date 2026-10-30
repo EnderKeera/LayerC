@@ -62,6 +62,7 @@ struct ProfileBundle {
   bool unreadable_module{};
   // A legacy schema that needs the one-way upgrade confirmation.
   bool upgrade_needed{};
+  bool items_upgrade_needed{};
 };
 
 [[nodiscard]] ProfileBundle
@@ -134,7 +135,14 @@ public:
   [[nodiscard]] bool legacy_visual_schema() const noexcept {
     return legacy_visual_schema_;
   }
-  void acknowledge_upgrade() noexcept { upgrade_acknowledged_ = true; }
+  void acknowledge_upgrade() noexcept {
+    if (requires_items_upgrade(profile_)) items_upgrade_acknowledged_ = true;
+    upgrade_acknowledged_ = true;
+  }
+  [[nodiscard]] bool requires_items_upgrade(const core::GameProfile &candidate) const noexcept {
+    return base_schema_below_items_ && !items_upgrade_acknowledged_ &&
+           core::profile_serialization_schema(candidate) >= core::profile_schema_version;
+  }
   [[nodiscard]] bool upgrade_acknowledged() const noexcept {
     return upgrade_acknowledged_;
   }
@@ -194,6 +202,10 @@ public:
       const std::function<std::optional<std::string>(
           std::optional<layerc::core::AutomationProfile> &)> &edit,
       DocumentChangeKind kind, bool repair = false);
+  ModuleEditOutcome edit_profile_and_automation(
+      const std::function<std::optional<std::string>(
+          core::GameProfile &, std::optional<core::AutomationProfile> &)> &edit,
+      DocumentChangeKind kind);
   // The only edit allowed to replace an unreadable visual module.
   ModuleEditOutcome
   replace_visual_from_calibration(layerc::core::VisualProfile visual);
@@ -207,8 +219,9 @@ public:
             .visual = visual_.profile,
             .automation = automation_.profile,
             .unreadable_module = has_unreadable_module(),
-            .upgrade_needed = (legacy_base_schema_ || legacy_visual_schema_) &&
-                              !upgrade_acknowledged_};
+            .upgrade_needed = ((legacy_base_schema_ || legacy_visual_schema_) &&
+                               !upgrade_acknowledged_) || requires_items_upgrade(profile_),
+            .items_upgrade_needed = requires_items_upgrade(profile_)};
   }
 private:
   // Value implementations of the recorded edits: they validate and replace a
@@ -243,7 +256,9 @@ private:
   std::filesystem::path path_;
   bool legacy_base_schema_{};
   bool legacy_visual_schema_{};
+  bool base_schema_below_items_{};
   bool upgrade_acknowledged_{};
+  bool items_upgrade_acknowledged_{};
   // The loaded invalid visual sidecar, so undo can restore exactly that state
   // and diagnostic after a calibration repair.
   std::optional<layerc::platform::VisualSidecarLoad> retained_visual_;

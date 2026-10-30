@@ -78,6 +78,8 @@ CommitOutcome commit_document(ProfileDocument &document,
         return {CommitResult::invalid_profile, std::nullopt};
     }
   }
+  bundle.items_upgrade_needed = document.requires_items_upgrade(bundle.profile);
+  bundle.upgrade_needed = bundle.upgrade_needed || bundle.items_upgrade_needed;
   const auto outcome =
       commit_profile_bundle(path, bundle, options, confirm_upgrade, std::move(companion),
                             additional_mutations);

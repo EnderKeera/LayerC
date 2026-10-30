@@ -3,11 +3,14 @@
 
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/win32_handle.hpp"
+#include "layerc/core/panel_presentation.hpp"
 #include "layerc/runtime/diagnostics.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <iterator>
+#include <optional>
 #include <string>
 
 #include <psapi.h>
@@ -94,6 +97,19 @@ std::string DaemonApp::runtime_diagnostics_json() const {
             static_cast<std::uint32_t>(session.overlays.window_count()),
         .last_input_match = session.last_input_match,
     });
+    std::optional<layerc::core::AutomationRuntimeSnapshot> snapshot;
+    if (session.automation.runtime())
+      snapshot = session.automation.runtime()->snapshot();
+    const auto *automation = snapshot ? &*snapshot
+        : (session.presentation_defaults ? &*session.presentation_defaults
+                                         : nullptr);
+    auto lines = layerc::core::overlay_item_diagnostics(
+        session.automation.profile(), automation,
+        layerc::core::MonotonicClock::now());
+    diagnostics.overlay_faults.insert(
+        diagnostics.overlay_faults.end(),
+        std::make_move_iterator(lines.begin()),
+        std::make_move_iterator(lines.end()));
   }
   diagnostics.automation_faults = automation_runtime_host_.persistence().diagnostics();
   for (const auto &entry : session_registry_.sessions) {
