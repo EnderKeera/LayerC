@@ -1,0 +1,32 @@
+{
+  "schema": "desktop-evidence-config/1",
+  "harnesses": {
+    "layerc-windows-hardware": {
+      "description": "Windows hardware benchmarks (tools/submit-desktop-evidence.ps1) on ci.yml binaries: V1.1 visual Low/Balanced, V2.1 template, and V2.2 input-to-overlay latency against the baseline-v22 release.",
+      "sessions": ["windows-desktop"],
+      "machines": ["physical"],
+      "builds": ["ci-artifact"],
+      "required": ["v11-visual-low", "v11-visual-balanced", "v21-template", "v22-latency"],
+      "optional": [],
+      "allowUnavailable": {}
+    },
+    "layerc-linux-x11-native": {
+      "description": "Physical GNOME Xorg or KDE Plasma X11 checklist (tools/submit-desktop-evidence.sh wrapping tools/run-linux-v26-evidence.sh) on a native build of the checkout.",
+      "sessions": ["gnome-xorg", "kde-x11"],
+      "machines": ["physical"],
+      "builds": ["local-build"],
+      "required": ["manual-checklist"],
+      "optional": ["verify-headless", "verify-x11", "native-headless-smoke", "native-x11-smoke"],
+      "allowUnavailable": {}
+    },
+    "layerc-linux-x11-flatpak": {
+      "description": "Physical GNOME Xorg or KDE Plasma X11 checklist (tools/submit-desktop-evidence.sh wrapping tools/run-linux-v26-evidence.sh) on the installed Flatpak built from the checkout.",
+      "sessions": ["gnome-xorg", "kde-x11"],
+      "machines": ["physical"],
+      "builds": ["local-build"],
+      "required": ["manual-checklist"],
+      "optional": ["verify-headless", "verify-x11", "native-headless-smoke", "native-x11-smoke", "flatpak"],
+      "allowUnavailable": {}
+    }
+  }
+}

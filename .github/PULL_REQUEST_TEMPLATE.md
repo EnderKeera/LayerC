@@ -19,4 +19,4 @@
 - [ ] No unrelated files or generated `build*/`, `out/`, `review/`, `.review_tmp/`, `.codewhale/`, `.mimosa/`, or `.codegraph/` output is staged
 - [ ] Affected user/platform documentation is accurate
 
-<!-- Note only applicable risks: passive input, anti-cheat boundary, network/telemetry, monotonic timing, service demand, profile/bundle compatibility, manual hardware evidence. -->
+<!-- Note only applicable risks: passive input, anti-cheat boundary, network/telemetry, monotonic timing, service demand, profile/bundle compatibility, manual hardware evidence, desktop evidence (docs/DesktopEvidence.md). -->

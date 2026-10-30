@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "sourceTreeClean": true,
+  "automatedEvidence": {
+    "verify-headless": {
+      "status": "pass",
+      "reason": ""
+    },
+    "verify-x11": {
+      "status": "pass",
+      "reason": ""
+    },
+    "native-headless-smoke": {
+      "status": "skipped",
+      "reason": ""
+    },
+    "native-x11-smoke": {
+      "status": "pass",
+      "reason": ""
+    },
+    "flatpak": {
+      "status": "pass",
+      "reason": ""
+    }
+  }
+}

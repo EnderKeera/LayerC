@@ -10,6 +10,7 @@ owns each decision and describes the CI and release gates.
 | Setup, programs, supported surfaces, profile format, test targets | [`README.md`](README.md) |
 | Architecture, invariants, code conventions, validation boundaries | [`AGENTS.md`](AGENTS.md) |
 | Linux adapters, CLI, packaging, or physical evidence | [`docs/Linux.md`](docs/Linux.md) |
+| Desktop/hardware evidence | [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md) |
 | Game Bar transport, widgets, or MSIX | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
 | Exact build graph or CI behavior | current `CMakeLists.txt` or affected workflow |
 
@@ -65,10 +66,9 @@ jobs, and `ubuntu-latest` for workflow lint, publishing, and automation.
 GitHub-hosted jobs normally have a 10-minute timeout. The Windows CI and
 release build jobs allow 30 minutes; `windows-analyze` and `linux-flatpak`
 allow 60 minutes for cold builds, SDK setup, and analysis recovery retries.
-Pull requests, including forks, receive both Windows and Linux CI checks. Only
-hardware benchmarks and the manual Windows workflow use the interactive
-self-hosted `[self-hosted, windows, x64, layerc-bench]` runner, with their
-existing timeouts.
+Pull requests, including forks, receive both Windows and Linux CI checks. There
+are no self-hosted runners; desktop/hardware checks arrive as advisory pull
+request evidence.
 
 [`ci.yml`](.github/workflows/ci.yml) runs on pushes to `main`, pull requests,
 and manual dispatch; a newer push to a pull request cancels its older run.
@@ -82,7 +82,7 @@ and manual dispatch; a newer push to a pull request cancels its older run.
 | `linux-flatpak` | 25.08 manifest (bundled FLTK and AT-SPI 2.62) with required daemon/control/X11 and editor smoke under Xvfb (`--flatpak-only`) |
 | `publish-rolling` | `main` pushes only; needs all five jobs above and publishes the `rolling` prerelease |
 
-Every CTest gate (`windows-msvc`, `windows-selfhosted.yml`, and the Linux
+Every CTest gate (`windows-msvc` and the Linux
 `headless`, `x11`, `editor`, `wayland`, `dbus` and `gjs` stages) is validated by
 [`tools/linux_test_report.py`](tools/linux_test_report.py) against the suites
 that [`tools/test-gates.json`](tools/test-gates.json) names for it, not against
@@ -127,40 +127,39 @@ publication is refused rather than half-used, and rerunning the job converges.
 against a fake `gh`.
 
 Artifacts: `layerc-windows-x64` is the full bundle (install layout, benchmark
-JSON, ZIP); `layerc-windows-x64-tools` feeds hardware benchmarks and
-`tools/push-and-test.ps1`; only `publish-rolling` consumes
+JSON, ZIP); `layerc-windows-x64-tools` feeds
+`tools/submit-desktop-evidence.ps1` and `tools/push-and-test.ps1`; only
+`publish-rolling` consumes
 `layerc-rolling-package`. The build writes `layerc-build-identity.json`
 (commit, run, attempt, configuration) next to its binaries and ships it in
 `layerc-windows-x64-tools`. Benchmark results take `commitSha` and `build` from
-that file, never from the workflow event; `benchmarks.yml` and
-`push-and-test.ps1` refuse to measure unless it and the checkout match the
-resolved candidate. Results from a local build directory are marked
-`local-build` with the checkout's commit and dirty state.
+that file, never from the workflow event. `push-and-test.ps1` refuses to
+measure unless it and the checkout match the resolved candidate.
+`submit-desktop-evidence.ps1` requires the identity to name the resolved CI
+run and reports the built commit: a pull request CI run builds the test merge
+commit. Results from a local build directory are marked `local-build` with
+the checkout's commit and dirty state.
 
 Other workflows:
 
-- [`benchmarks.yml`](.github/workflows/benchmarks.yml): after a green `main` CI
-  run (or manually), runs V1.1 visual, V2.1 template, and latency checks
-  against the `baseline-v22` release on `layerc-bench` for that exact CI
-  commit and uploads `benchmark-evidence`.
-- [`windows-selfhosted.yml`](.github/workflows/windows-selfhosted.yml): manual
-  Debug build and full CTest of one ref on `layerc-bench` with a low-memory
-  MSBuild configuration; uploads `windows-selfhosted-logs-<run>-<attempt>`.
-  Run `gh workflow run windows-selfhosted.yml -f ref=<branch|tag|sha>`.
+- [`desktop-evidence.yml`](.github/workflows/desktop-evidence.yml): validates
+  new pull request comments carrying a report using the default branch's
+  validator and harness configuration, then publishes an advisory,
+  non-required check on the reported commit. See
+  [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md).
 - [`pr-agent.yml`](.github/workflows/pr-agent.yml) reviews pull requests
   through OpenRouter and answers `/review`, `/ask`, and `/describe` comments.
   A newer push cancels the superseded automatic review of the same pull
   request; each command runs in its own group and is never dropped.
   [`claude.yml`](.github/workflows/claude.yml) answers `@claude` mentions.
 
-### Hardware runner and local benchmarks
+### Local hardware benchmarks and desktop evidence
 
-`layerc-bench` is an interactive desktop, not a headless agent. Register it
-with `run.cmd` under a signed-in user with autostart, never as a service,
-because visual capture needs the real screen. Keep it quiescent: CI fails,
-listing PIDs, when `layerd` or `layere` is running and never kills them. CI
-writes only inside `GITHUB_WORKSPACE`; syncing the rolling install locally is
-the manual `tools/pull-ci.ps1` step. Benchmarks run their daemons with
+Run hardware benchmarks on an interactive, signed-in desktop, not a headless
+agent: visual capture needs the real screen. Keep the box quiescent: checks
+fail, listing PIDs, when `layerd` or `layere` is running and never kill them.
+Syncing the rolling install locally is the manual `tools/pull-ci.ps1` step.
+Benchmarks run their daemons with
 disposable profiles (`LAYERC_PROFILE_DIR`) and a disposable
 `HKCU\Software\LayerC.Benchmark\<run>` settings key (`LAYERC_SETTINGS_KEY`),
 both removed afterwards; they never read or write the user's
@@ -192,6 +191,12 @@ exact commit, and can then run these checks (`-WatchOnly`, `-NoPush`,
 `-VisualOnly`). Linux CI is the automated compatibility gate; the physical
 GNOME Xorg/KDE X11 native and Flatpak checklist in
 [`docs/Linux.md`](docs/Linux.md) stays pending until evidence is archived.
+
+Submit results with `tools/submit-desktop-evidence.ps1` (Windows) or
+`tools/submit-desktop-evidence.sh` (Linux); their dry-run modes render the
+comment without posting. Posted reports become maintainer-attested or
+unverified advisory checks, not mandatory CI gates. See
+[`docs/DesktopEvidence.md`](docs/DesktopEvidence.md).
 
 ## Pull requests
 

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "packageVersion": "2.7.0",
+  "commitSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "build": {
+    "source": "ci-artifact",
+    "commitSha": "cccccccccccccccccccccccccccccccccccccccc",
+    "dirty": false,
+    "workflow": "CI",
+    "runId": "123456",
+    "runAttempt": "1",
+    "configuration": "ci"
+  },
+  "measuredAt": "2026-05-20T12:34:56.0000000Z",
+  "host": {
+    "computerName": "SECRET-HOST",
+    "os": "Windows Test",
+    "logicalProcessors": 8,
+    "gpuAdapters": [
+      "Example GPU"
+    ]
+  },
+  "buildDirectory": "C:/SECRET-USER/build",
+  "workload": "v11-visual-low",
+  "measurement": {
+    "averageCpuPercent": 0.5
+  },
+  "thresholds": {
+    "maxAverageCpuPercent": 1.0
+  },
+  "passed": true
+}

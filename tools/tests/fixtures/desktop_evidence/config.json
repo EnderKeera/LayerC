@@ -1,0 +1,29 @@
+{
+  "schema": "desktop-evidence-config/1",
+  "harnesses": {
+    "demo-desktop": {
+      "description": "Example desktop checks.",
+      "sessions": [
+        "demo-x11"
+      ],
+      "machines": [
+        "physical",
+        "vm"
+      ],
+      "builds": [
+        "ci-artifact",
+        "local-build"
+      ],
+      "required": [
+        "capture",
+        "overlay"
+      ],
+      "optional": [
+        "latency"
+      ],
+      "allowUnavailable": {
+        "overlay": "Overlay capture is not supported on this session."
+      }
+    }
+  }
+}
