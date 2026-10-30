@@ -32,8 +32,7 @@ AutomationRuntime::Impl::Impl(AutomationProfile source,
                               ClockReader clock_reader)
     : profile(std::move(source)), groups(std::move(group_definitions)),
       clock(std::move(clock_reader)) {
-  for (const auto &variable : profile.variables)
-    state.variables[variable.id] = variable.default_value;
+  state = automation_default_snapshot(profile);
   apply_persistent(persistent);
 }
 
@@ -194,6 +193,7 @@ AutomationRuntime::Impl::evaluate_event(const AutomationEvent &root,
       effect.target = action.target;
       effect.name = action.name;
       effect.property = action.property;
+      effect.item_id = action.item_id;
       effect.timestamp = event.timestamp;
       effect.repeating = action.repeating;
       effect.order = {match.rule->priority, match.ai, match.ri};

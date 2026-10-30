@@ -74,7 +74,7 @@ fill_bars(layerc::platform::OverlayFrame &frame, const InputSession &session,
       {.visible = overrides.visible, .text = overrides.text, .edit_mode = false},
       now);
   frame.bars.clear();
-  for (const auto &item : presentation.bars) {
+  for (const auto &item : presentation.items) {
     layerc::platform::OverlayBar bar;
     bar.label = item.label;
     bar.running = !item.ready;

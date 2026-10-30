@@ -46,10 +46,10 @@ void build_available_catalog(
   return found == preferences.end() ? nullptr : &*found;
 }
 
-// Companion items mirror the native bars from present_panel(); only the
-// progress direction differs (elapsed toward ready instead of remaining).
+// Companion items mirror the native cooldown rows from present_panel(); only
+// the progress direction differs (elapsed toward ready instead of remaining).
 CompanionSnapshotItem
-make_snapshot_item(const BarPresentation &bar) {
+make_snapshot_item(const ItemPresentation &bar) {
   CompanionSnapshotItem item;
   item.cooldown_id = bar.cooldown_id;
   item.name = bar.name;
@@ -78,7 +78,9 @@ void build_panel_snapshots(
     panel_snapshot.slot_index = mapping->slot_index;
     const auto presentation =
         present_panel(panel, definitions, states, {}, now);
-    for (const auto &bar : presentation.bars) {
+    for (const auto &bar : presentation.items) {
+      // The version-1 wire carries cooldown rows only.
+      if (bar.kind != OverlayItemKind::cooldown) continue;
       if (panel_snapshot.items.size() >=
           max_companion_snapshot_items)
         break;

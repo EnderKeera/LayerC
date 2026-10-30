@@ -121,6 +121,10 @@ public:
   [[nodiscard]] const VisualTriggerEngine *visual_triggers() const noexcept { return visual_triggers_.get(); }
   [[nodiscard]] AutomationRuntime *runtime() noexcept { return automation_runtime_.get(); }
   [[nodiscard]] const AutomationRuntime *runtime() const noexcept { return automation_runtime_.get(); }
+  // The live runtime state presentation reads, or nullptr without a runtime.
+  [[nodiscard]] const AutomationRuntimeSnapshot *presentation_snapshot() const noexcept {
+    return automation_runtime_ ? &automation_runtime_->snapshot() : nullptr;
+  }
   [[nodiscard]] const std::vector<CooldownState> &snapshot_buffer() const noexcept { return snapshot_buffer_; }
 
 private:

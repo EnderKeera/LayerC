@@ -141,10 +141,10 @@ void OverlayWindow::render(const layerc::core::PanelPresentation &presentation) 
   const HPEN visible_border = selection_pen != nullptr ? selection_pen
                                                         : border_pen_;
 
-  const auto count = std::min(bars_.size(), presentation.bars.size());
+  const auto count = std::min(bars_.size(), presentation.items.size());
   for (std::size_t index = 0; index < count; ++index) {
     auto &bar_source = bars_[index];
-    const auto &shown = presentation.bars[index];
+    const auto &shown = presentation.items[index];
     // The text changes only when the shown tenths or charges do; skip the
     // wide conversion on the frames in between.
     if (shown.label != bar_source.label) {

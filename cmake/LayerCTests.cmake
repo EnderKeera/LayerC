@@ -84,6 +84,9 @@ layerc_add_test(layerc_core_tests
     tests/game_match_tests.cpp
     tests/cooldown_group_tests.cpp
     tests/panel_presentation_tests.cpp
+    tests/panel_item_presentation_tests.cpp
+    tests/cooldown_active_tests.cpp
+    tests/automation_item_override_tests.cpp
     tests/profile_module_tests.cpp
     tests/live_edit_tests.cpp
     tests/visual_profile_tests.cpp

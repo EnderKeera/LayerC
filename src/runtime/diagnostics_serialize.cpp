@@ -164,6 +164,8 @@ std::string serialize_runtime_diagnostics_json(const RuntimeDiagnostics &value) 
       {"sessions", array(value.sessions, session)}, {"isolatedHelpers", array(value.helpers, helper)},
       {"captures", array(value.captures, capture)},
       {"automationFaults", strings(value.automation_faults)}};
+  if (!value.overlay_faults.empty())
+    root.emplace("overlayFaults", strings(value.overlay_faults));
   if (value.linux_extension) {
     root.emplace("x11", x11(value.linux_extension->x11));
     if (value.linux_extension->display)

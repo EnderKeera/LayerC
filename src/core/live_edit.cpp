@@ -173,7 +173,9 @@ ProfileDelta diff_profiles(const GameProfile &before,
       if (previous.owner(before.cooldowns, definition.id) !=
           replacement.owner(after.cooldowns, definition.id))
         delta.reset_cooldown_ids.push_back(definition.id);
-      if (definition.name != updated->name)
+      // Overlays hold definition copies for names and active durations.
+      if (definition.name != updated->name ||
+          definition.active_duration != updated->active_duration)
         delta.cooldown_visuals_changed = true;
     }
   }

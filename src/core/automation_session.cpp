@@ -37,7 +37,9 @@ bool validate_session_effect(
   case AutomationEffectDomain::overlay:
     if (effect.kind != AutomationActionKind::set_overlay_override) return true;
     return std::ranges::any_of(panels, [&](const Panel &panel) {
-             return panel.id == effect.target;
+             return panel.id == effect.target &&
+                    (effect.item_id.empty() ||
+                     panel_item_targetable(panel, effect.item_id));
            });
   case AutomationEffectDomain::cooldown_engine:
     return validate_automation_cooldown_effect(effect, cooldowns_, groups);
@@ -258,6 +260,12 @@ bool AutomationSession::process(const AutomationEvent &value,
   const auto result = automation_runtime_->process(
       value,
       [&](const AutomationEffect &effect) {
+        // An active window that cannot be armed rejects the whole winning set
+        // before any external effect commits.
+        if ((effect.kind == AutomationActionKind::trigger_cooldown ||
+             effect.kind == AutomationActionKind::trigger_group) &&
+            !cooldowns_.can_arm_active(value.timestamp))
+          return false;
         return validate_session_effect(effect, profile_.panels,
                                           profile_.cooldowns,
                                           profile_.cooldown_groups);

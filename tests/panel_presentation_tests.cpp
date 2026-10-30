@@ -33,25 +33,25 @@ void test_panel_presentation_rule() {
   CooldownEngine engine(definitions);
   const auto ready = engine.snapshot(start);
   auto shown = present_panel(bar_panel, definitions, ready, {}, start);
-  expect(!shown.visible && shown.bars.size() == 2 && shown.bars[0].ready &&
-             shown.bars[0].remaining == 1.0 &&
-             shown.bars[0].label == "Dash  READY",
+  expect(!shown.visible && shown.items.size() == 2 && shown.items[0].ready &&
+             shown.items[0].remaining == 1.0 &&
+             shown.items[0].label == "Dash  READY",
          "a ready hide-when-ready bar panel is hidden; unknown ids are skipped");
 
   expect(engine.trigger("dash", start), "dash triggers");
   const auto running = engine.snapshot(start + 1s);
   shown = present_panel(bar_panel, definitions, running, {}, start + 1s);
-  expect(shown.visible && !shown.bars[0].ready &&
-             shown.bars[0].remaining > 0.74 && shown.bars[0].remaining < 0.76 &&
-             shown.bars[0].remaining_time == 3s &&
-             shown.bars[0].label == "Dash  3.0s" && shown.bars[1].ready,
+  expect(shown.visible && !shown.items[0].ready &&
+             shown.items[0].remaining > 0.74 && shown.items[0].remaining < 0.76 &&
+             shown.items[0].remaining_time == 3s &&
+             shown.items[0].label == "Dash  3.0s" && shown.items[1].ready,
          "a recovering bar shows the panel with remaining fraction and label");
 
   shown = present_panel(bar_panel, definitions, running,
                         {.visible = false, .text = "Hold", .edit_mode = true},
                         start + 1s);
-  expect(!shown.visible && shown.bars[0].label == "Hold" &&
-             shown.bars[1].label == "Hold",
+  expect(!shown.visible && shown.items[0].label == "Hold" &&
+             shown.items[1].label == "Hold",
          "an automation visibility override wins over running and edit mode");
   shown = present_panel(bar_panel, definitions, ready,
                         {.visible = true, .text = {}, .edit_mode = false}, start);
@@ -64,12 +64,12 @@ void test_panel_presentation_rule() {
   card.style = PanelStyle::card;
   card.cooldown_ids.clear();
   shown = present_panel(card, definitions, ready, {}, start);
-  expect(shown.visible && shown.bars.empty(),
+  expect(shown.visible && shown.items.empty(),
          "panels that do not hide when ready show even without bars");
 
   shown = present_panel(bar_panel, definitions, {}, {}, start);
-  expect(shown.bars.size() == 2 && shown.bars[0].ready &&
-             shown.bars[0].label == "Dash",
+  expect(shown.items.size() == 2 && shown.items[0].ready &&
+             shown.items[0].label == "Dash",
          "a missing state presents the bar as ready under its name");
 
   CooldownState state{.id = "dash",

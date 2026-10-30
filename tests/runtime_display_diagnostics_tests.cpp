@@ -1,6 +1,9 @@
 #include "layerc/runtime/diagnostics.hpp"
 #include "test_support.hpp"
 
+#include <string>
+#include <variant>
+
 namespace {
 namespace runtime = layerc::runtime;
 namespace json = layerc::core::json;
@@ -92,4 +95,43 @@ void diagnostics_display_contracts() {
   const auto parsed = runtime::parse_runtime_diagnostics_json(wire);
   const auto *error = std::get_if<json::FieldError>(&parsed);
   expect(error && error->path == "$.x11", "display without Linux probes is rejected");
+}
+
+void diagnostics_overlay_fault_contracts() {
+  runtime::RuntimeDiagnostics snapshot;
+  const auto empty_wire = runtime::serialize_runtime_diagnostics_json(snapshot);
+  expect(std::string::npos == empty_wire.find("overlayFaults"),
+         "an empty overlay fault list keeps the pre-existing snapshot bytes");
+  const auto empty_parsed = runtime::parse_runtime_diagnostics_json(empty_wire);
+  const auto *empty_value = std::get_if<runtime::RuntimeDiagnostics>(&empty_parsed);
+  expect(empty_value != nullptr && empty_value->overlay_faults.empty(),
+         "omitting overlayFaults stays accepted and parses empty");
+
+  snapshot.overlay_faults = {
+      "profile \"typed\", panel main, item future: unsupported item kind",
+      "profile typed, panel main, item gone: missing source \xC3\xA9"};
+  const auto wire = runtime::serialize_runtime_diagnostics_json(snapshot);
+  const auto parsed = runtime::parse_runtime_diagnostics_json(wire);
+  const auto *value = std::get_if<runtime::RuntimeDiagnostics>(&parsed);
+  expect(value != nullptr && value->overlay_faults == snapshot.overlay_faults &&
+             runtime::serialize_runtime_diagnostics_json(*value) == wire,
+         "nonempty overlay fault lines round-trip with quotes and UTF-8");
+  const auto parsed_document = [&](json::Value root) {
+    std::string text;
+    json::append_value(text, std::move(root));
+    return runtime::parse_runtime_diagnostics_json(text);
+  };
+  auto object_value = document(snapshot).as_object();
+  object_value["overlayFaults"] = json::Value(std::string("not a list"));
+  const auto wrong_shape = parsed_document(json::Value(std::move(object_value)));
+  const auto *shape_error = std::get_if<json::FieldError>(&wrong_shape);
+  expect(shape_error != nullptr && shape_error->path == "$.overlayFaults",
+         "a non-list overlayFaults value is rejected at its path");
+  auto element = document(snapshot).as_object();
+  element["overlayFaults"] = json::Value(json::Value::Array{json::Value(std::int64_t{7})});
+  const auto wrong_element = parsed_document(json::Value(std::move(element)));
+  const auto *element_error = std::get_if<json::FieldError>(&wrong_element);
+  expect(element_error != nullptr &&
+             element_error->path == "$.overlayFaults[0]",
+         "a non-string overlay fault line is rejected at its index");
 }

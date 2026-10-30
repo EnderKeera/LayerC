@@ -346,7 +346,8 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
           {"schemaVersion", "packageVersion", "protocolVersion", "process",
            "services", "gameBarTransport", "settings",
            "aggregateOwnedResources", "sessions", "isolatedHelpers", "captures",
-           "automationFaults", "x11", "capabilities", "display"},
+           "automationFaults", "overlayFaults", "x11", "capabilities",
+           "display"},
           "$") ||
       !r.integer(*root, "schemaVersion", "$", runtime_diagnostics_schema,
                   runtime_diagnostics_schema, Required::yes) ||
@@ -386,6 +387,10 @@ RuntimeDiagnosticsResult parse_runtime_diagnostics_json(const std::string_view s
                line = value.as_string();
                return true;
              }))
+    return r.error();
+  // Older producers predate the shared overlay item diagnostic list.
+  if (!strings(r, *root, "overlayFaults", "$", result.overlay_faults,
+               Required::no))
     return r.error();
   std::array<bool, capability_count> seen{};
   for (std::size_t index{}; index < result.services.size(); ++index) {

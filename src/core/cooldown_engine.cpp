@@ -1,5 +1,7 @@
 #include "layerc/core/cooldown_engine.hpp"
 
+#include "layerc/core/automation.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -31,21 +33,28 @@ Milliseconds cooldown_remaining_ms(
       std::chrono::duration_cast<Milliseconds>(*next_charge_at - now));
 }
 
+std::string format_tenths(const Milliseconds remaining) {
+  const auto tenths =
+      (std::max(Milliseconds::zero(), remaining).count() + 99) / 100;
+  return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) +
+         "s";
+}
+
+std::string cooldown_status_value(const CooldownState &state,
+                                  const TimePoint now) {
+  std::string value =
+      state.next_charge_at.has_value()
+          ? format_tenths(cooldown_remaining_ms(state.next_charge_at, now))
+          : std::string("READY");
+  if (state.max_charges > 1)
+    value += "  [" + std::to_string(state.available_charges) + "]";
+  return value;
+}
+
 std::string cooldown_status_text(const CooldownDefinition &definition,
                                  const CooldownState &state,
                                  const TimePoint now) {
-  std::string label = definition.name;
-  if (state.next_charge_at.has_value()) {
-    const auto remaining = cooldown_remaining_ms(state.next_charge_at, now);
-    const auto tenths = (remaining.count() + 99) / 100;
-    label += "  " + std::to_string(tenths / 10) + "." +
-             std::to_string(tenths % 10) + "s";
-  } else {
-    label += "  READY";
-  }
-  if (state.max_charges > 1)
-    label += "  [" + std::to_string(state.available_charges) + "]";
-  return label;
+  return definition.name + "  " + cooldown_status_value(state, now);
 }
 
 const CooldownState *cooldown_state_at(
@@ -86,10 +95,17 @@ CooldownEngine::CooldownEngine(
       throw std::invalid_argument("cooldown duration must be positive");
     if (source.max_charges == 0)
       throw std::invalid_argument("cooldown max_charges must be positive");
+    if (source.active_duration < Milliseconds::zero())
+      throw std::invalid_argument("cooldown active duration must not be negative");
 
     if (!owner_slots_.emplace(source.id, unassigned).second)
       throw std::invalid_argument("duplicate cooldown id: " + source.id);
+    public_slots_.emplace(source.id, order_.size());
     order_.push_back(source.id);
+    activity_.push_back({.duration = source.active_duration,
+                         .until = std::nullopt,
+                         .owner = unassigned});
+    max_active_duration_ = std::max(max_active_duration_, source.active_duration);
   }
 
   std::unordered_set<std::string> group_ids;
@@ -134,6 +150,28 @@ CooldownEngine::CooldownEngine(
                         .next_charge_at = std::nullopt,
                         .recovery_deadlines = {}});
   }
+  for (std::size_t index = 0; index < order_.size(); ++index)
+    activity_[index].owner = owner_slots_.at(order_[index]);
+}
+
+bool CooldownEngine::can_arm_active(const TimePoint now) const noexcept {
+  return max_active_duration_ <= Milliseconds::zero() ||
+         automation_time_after(now, max_active_duration_).has_value();
+}
+
+// Callers checked can_arm_active(now) before mutating anything.
+void CooldownEngine::arm(const std::string_view cooldown_id,
+                         const TimePoint now) {
+  const auto found = public_slots_.find(cooldown_id);
+  if (found == public_slots_.end()) return;
+  auto &activity = activity_[found->second];
+  if (activity.duration > Milliseconds::zero())
+    activity.until = now + activity.duration;
+}
+
+void CooldownEngine::clear_owner_activity(const std::size_t owner) {
+  for (auto &activity : activity_)
+    if (activity.owner == owner) activity.until.reset();
 }
 
 CooldownEngine::Entry *
@@ -215,6 +253,7 @@ std::vector<std::string> CooldownEngine::trigger_many_with_propagation(
         !claim_origin(*entry, origin_token) || !trigger_entry(*entry, now))
       continue;
 
+    arm(id, now);
     triggered.push_back(id);
     if (!expanded_members.insert(id).second)
       continue;
@@ -229,26 +268,33 @@ std::vector<std::string>
 CooldownEngine::trigger_with_propagation(const std::string_view cooldown_id,
                                          const TimePoint now,
                                          const std::uint64_t origin_token) {
+  if (!can_arm_active(now)) return {};
   const std::array<std::string, 1> seed{std::string(cooldown_id)};
   return trigger_many_with_propagation(seed, now, origin_token);
 }
 
 bool CooldownEngine::trigger(const std::string_view cooldown_id,
                              const TimePoint now) {
+  if (!can_arm_active(now)) return false;
   // Profiles without groups never propagate; skip the closure bookkeeping.
   if (groups_.empty()) {
     auto *entry = entry_for(cooldown_id);
-    return entry != nullptr && trigger_entry(*entry, now);
+    if (entry == nullptr || !trigger_entry(*entry, now)) return false;
+    arm(cooldown_id, now);
+    return true;
   }
   return !trigger_with_propagation(cooldown_id, now).empty();
 }
 bool CooldownEngine::reset(const std::string_view cooldown_id) {
-  auto *entry = entry_for(cooldown_id);
-  if (entry == nullptr)
+  const auto slot = owner_slots_.find(cooldown_id);
+  if (slot == owner_slots_.end())
     return false;
-  entry->available_charges = entry->definition.max_charges;
-  entry->next_charge_at.reset();
-  entry->recovery_deadlines.clear();
+  auto &entry = entries_[slot->second];
+  entry.available_charges = entry.definition.max_charges;
+  entry.next_charge_at.reset();
+  entry.recovery_deadlines.clear();
+  // A pool reset through any alias ends every member's active window.
+  clear_owner_activity(slot->second);
   return true;
 }
 
@@ -312,7 +358,7 @@ CooldownEngine::trigger_group(const std::string_view group_id,
                               const TimePoint now,
                               const std::uint64_t origin_token) {
   const auto *found = groups_.find(group_id);
-  if (found == nullptr)
+  if (found == nullptr || !can_arm_active(now))
     return {};
   if (found->mode == CooldownGroupMode::shared_pool) {
     // One pool charge for every member; pools never propagate.
@@ -320,7 +366,9 @@ CooldownEngine::trigger_group(const std::string_view group_id,
     if (entry == nullptr || !claim_origin(*entry, origin_token) ||
         !trigger_entry(*entry, now))
       return {};
-    return groups_.group_trigger_members(group_id);
+    auto members = groups_.group_trigger_members(group_id);
+    for (const auto &member : members) arm(member, now);
+    return members;
   }
   return trigger_many_with_propagation(found->cooldown_ids, now, origin_token);
 }
@@ -335,6 +383,9 @@ bool CooldownEngine::reset_group(const std::string_view group_id) {
 void CooldownEngine::update(const TimePoint now) {
   for (auto &entry : entries_)
     update_entry(entry, now);
+  // Exact expiry is inactive.
+  for (auto &activity : activity_)
+    if (activity.until && *activity.until <= now) activity.until.reset();
 }
 
 std::vector<CooldownState> CooldownEngine::snapshot(const TimePoint now) {
@@ -357,6 +408,8 @@ void CooldownEngine::snapshot(const TimePoint now,
     state.next_charge_at = entry.next_charge_at;
     state.recovery_deadlines = entry.recovery_deadlines;
     state.recharge_duration = entry.definition.duration;
+    state.active_until = activity_[index].until;
+    state.active_duration = activity_[index].duration;
   }
 }
 
@@ -424,6 +477,19 @@ void CooldownEngine::reconfigure(
         entries_, replacement.definition, &Entry::definition);
     if (previous != entries_.end())
       replacement = *previous;
+  }
+  // An active window survives only an unchanged ID, active duration and
+  // effective recharge owner that was not explicitly reset; name edits keep it.
+  for (std::size_t index = 0; index < next.order_.size(); ++index) {
+    auto &activity = next.activity_[index];
+    if (reset_owners[activity.owner]) continue;
+    const auto previous = public_slots_.find(next.order_[index]);
+    if (previous == public_slots_.end()) continue;
+    const auto &old = activity_[previous->second];
+    if (old.duration == activity.duration &&
+        entries_[old.owner].definition ==
+            next.entries_[activity.owner].definition)
+      activity.until = old.until;
   }
   *this = std::move(next);
 }

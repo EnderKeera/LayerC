@@ -260,8 +260,10 @@ void profile_checkbox_contracts(bool &passed) {
 
 void source_schema_contracts(bool &passed) {
   const auto legacy_base = [](const std::string_view source) {
+    // The V2.2 upgrade warning boundary is schema 4; schema 5 adds items
+    // without migrating anything older readers could parse.
     return layerc::platform::source_schema_before(
-        source, layerc::core::profile_schema_version);
+        source, layerc::core::legacy_profile_schema_version);
   };
   const auto legacy_visual = [](const std::string_view source) {
     return layerc::platform::source_schema_before(
@@ -272,6 +274,7 @@ void source_schema_contracts(bool &passed) {
                  legacy_base(R"({"schemaVersion":2,"name":"legacy"})") &&
                  legacy_base(R"({"schemaVersion":3,"name":"legacy"})") &&
                  !legacy_base(R"({"schemaVersion":4,"name":"current"})") &&
+                 !legacy_base(R"({"schemaVersion":5,"name":"items"})") &&
                  legacy_visual(R"({"schemaVersion":1})") &&
                  !legacy_visual(R"({"schemaVersion":2})") &&
                  !legacy_base("{broken"),
