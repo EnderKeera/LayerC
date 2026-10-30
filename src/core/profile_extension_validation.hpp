@@ -32,8 +32,9 @@ inline std::optional<ProfileError> validate_opaque_value(
 
 inline std::optional<ProfileError> validate_extensions(
     const json::Value::Object &fields, const ProfileObject kind,
-    const std::string &path, const std::size_t depth) {
-  const auto known = known_profile_fields(kind);
+    const std::string &path, const std::size_t depth,
+    const std::uint32_t schema) {
+  const auto known = known_profile_fields(kind, schema);
   for (const auto &[key, value] : fields) {
     if (std::ranges::find(known, key) != known.end())
       return ProfileError{path + "." + key, "opaque field overlaps a known field"};
@@ -44,15 +45,18 @@ inline std::optional<ProfileError> validate_extensions(
 }
 
 inline std::optional<ProfileError> validate_profile_extensions(const GameProfile &p) {
-  if (auto error = validate_extensions(p.extra_fields, ProfileObject::root, "$", 1))
+  const auto schema = profile_serialization_schema(p);
+  if (auto error = validate_extensions(p.extra_fields, ProfileObject::root, "$", 1, schema))
     return error;
-  if (auto error = validate_extensions(p.game.extra_fields, ProfileObject::game, "$.game", 2))
+  if (auto error = validate_extensions(p.game.extra_fields, ProfileObject::game,
+                                       "$.game", 2, schema))
     return error;
-  const auto collection = [] (const auto &items, const ProfileObject kind,
-                              const std::string &path) -> std::optional<ProfileError> {
+  const auto collection = [schema] (const auto &items, const ProfileObject kind,
+                                    const std::string &path)
+      -> std::optional<ProfileError> {
     for (std::size_t i{}; i < items.size(); ++i)
       if (auto error = validate_extensions(items[i].extra_fields, kind,
-              path + "[" + std::to_string(i) + "]", 3)) return error;
+              path + "[" + std::to_string(i) + "]", 3, schema)) return error;
     return std::nullopt;
   };
   if (auto error = collection(p.modules, ProfileObject::module, "$.modules")) return error;
@@ -61,16 +65,26 @@ inline std::optional<ProfileError> validate_profile_extensions(const GameProfile
   if (auto error = collection(p.hid_bindings, ProfileObject::hid, "$.hidBindings")) return error;
   if (auto error = collection(p.panels, ProfileObject::panel, "$.panels")) return error;
   if (auto error = collection(p.bindings, ProfileObject::binding, "$.bindings")) return error;
-  for (std::size_t i{}; i < p.panels.size(); ++i)
-    if (auto error = validate_extensions(p.panels[i].bar.extra_fields, ProfileObject::bar,
-            "$.panels[" + std::to_string(i) + "].bar", 4)) return error;
+  for (std::size_t i{}; i < p.panels.size(); ++i) {
+    const auto path = "$.panels[" + std::to_string(i) + "]";
+    if (auto error = validate_extensions(p.panels[i].bar.extra_fields,
+            ProfileObject::bar, path + ".bar", 4, schema)) return error;
+    if (!p.panels[i].items.has_value()) continue;
+    for (std::size_t j{}; j < p.panels[i].items->size(); ++j) {
+      const auto &item = (*p.panels[i].items)[j];
+      if (std::holds_alternative<OpaqueOverlayItem>(item.content)) continue;
+      if (auto error = validate_extensions(item.extra_fields, ProfileObject::item,
+              path + ".items[" + std::to_string(j) + "]", 5, schema))
+        return error;
+    }
+  }
   for (std::size_t i{}; i < p.hid_bindings.size(); ++i) {
     const auto &binding = p.hid_bindings[i];
     const auto path = "$.hidBindings[" + std::to_string(i) + "]";
     if (auto error = validate_extensions(binding.device_extra_fields,
-            ProfileObject::device, path + ".device", 4)) return error;
+            ProfileObject::device, path + ".device", 4, schema)) return error;
     if (auto error = validate_extensions(binding.control_extra_fields,
-            ProfileObject::control, path + ".control", 4)) return error;
+            ProfileObject::control, path + ".control", 4, schema)) return error;
   }
   for (std::size_t i{}; i < p.bindings.size(); ++i) {
     const auto &binding = p.bindings[i];
@@ -78,7 +92,8 @@ inline std::optional<ProfileError> validate_profile_extensions(const GameProfile
       const auto extra = binding.token_extra_fields.find(binding.chord.tokens[j]);
       if (extra == binding.token_extra_fields.end()) continue;
       if (auto error = validate_extensions(extra->second, ProfileObject::token,
-              "$.bindings[" + std::to_string(i) + "].chord[" + std::to_string(j) + "]", 5))
+              "$.bindings[" + std::to_string(i) + "].chord[" +
+                  std::to_string(j) + "]", 5, schema))
         return error;
     }
   }

@@ -32,9 +32,9 @@ ProfileResult ProfileReader::read() {
   if (!schema_version.has_value()) {
     return failure();
   }
-  // Schemas 1 and 2 are migrated in memory. LayerE retains the source schema
-  // separately so only an explicit Save can approve the V2.2 boundary.
-  profile.schema_version = profile_schema_version;
+  const auto source_schema = static_cast<std::uint32_t>(*schema_version);
+  profile.schema_version = source_schema >= profile_schema_version
+      ? profile_schema_version : legacy_profile_schema_version;
 
   if (!fields_.string(root_, keys::root::id, "$", profile.id,
                       json::Required::yes, json::EmptyString::allow) ||
@@ -82,12 +82,11 @@ ProfileResult ProfileReader::read() {
   }
   profile.visual_runtime = *parsed_visual_runtime;
 
-  const auto source_schema = static_cast<std::uint32_t>(*schema_version);
   if (!read_modules(profile, source_schema) ||
       !read_hid_bindings(profile, source_schema) ||
       !read_cooldowns(profile, source_schema) ||
       !read_cooldown_groups(profile, source_schema) ||
-      !read_panels(profile) || !read_bindings(profile)) {
+      !read_panels(profile, source_schema) || !read_bindings(profile)) {
     return failure();
   }
   profile.extra_fields = unknown_profile_fields(root_, ProfileObject::root);
@@ -298,6 +297,14 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
     }
     definition.duration = Milliseconds(*duration);
     definition.max_charges = static_cast<std::uint32_t>(*charges);
+    if (source_schema >= profile_schema_version) {
+      const auto active_duration = fields_.integer(
+          value, keys::cooldown::active_duration_ms, path,
+          std::numeric_limits<std::int64_t>::min(),
+          std::numeric_limits<std::int64_t>::max(), json::Required::no);
+      if (!active_duration.has_value()) return false;
+      definition.active_duration = Milliseconds(*active_duration);
+    }
 
     std::string retrigger = "ignore";
     fields_.string(value, keys::cooldown::retrigger, path, retrigger,
@@ -330,7 +337,8 @@ bool ProfileReader::read_cooldowns(GameProfile &profile,
                           "expected 'ignore' or 'restart'");
     }
     definition.retrigger = *parsed_retrigger;
-    definition.extra_fields = unknown_profile_fields(value, ProfileObject::cooldown);
+    definition.extra_fields = unknown_profile_fields(
+        value, ProfileObject::cooldown, source_schema);
     profile.cooldowns.push_back(std::move(definition));
   }
   return true;
@@ -435,7 +443,8 @@ bool ProfileReader::read_cooldown_groups(
   }
   return true;
 }
-bool ProfileReader::read_panels(GameProfile &profile) {
+bool ProfileReader::read_panels(GameProfile &profile,
+                                const std::uint32_t source_schema) {
   const auto *values =
       fields_.array(root_, keys::root::panels, "$", json::Required::yes);
   if (values == nullptr) {
@@ -535,20 +544,24 @@ bool ProfileReader::read_panels(GameProfile &profile) {
     panel.anchor_x = *x;
     panel.anchor_y = *y;
 
-    const auto *cooldowns =
-        fields_.array(value, keys::panel::cooldowns, path, json::Required::yes);
-    if (cooldowns == nullptr) {
-      return false;
-    }
-    for (std::size_t item = 0; item < cooldowns->size(); ++item) {
-      const auto item_path =
-          path + ".cooldowns[" + std::to_string(item) + "]";
-      if (!(*cooldowns)[item].is_string()) {
-        return fields_.fail(item_path, "expected string cooldown id");
+    const auto *items = source_schema >= profile_schema_version
+        ? value.find(keys::panel::items) : nullptr;
+    if (items != nullptr) {
+      if (!read_items(*items, path + ".items", panel)) return false;
+    } else {
+      const auto *cooldowns = fields_.array(
+          value, keys::panel::cooldowns, path, json::Required::yes);
+      if (cooldowns == nullptr) return false;
+      for (std::size_t item = 0; item < cooldowns->size(); ++item) {
+        const auto item_path =
+            path + ".cooldowns[" + std::to_string(item) + "]";
+        if (!(*cooldowns)[item].is_string())
+          return fields_.fail(item_path, "expected string cooldown id");
+        panel.cooldown_ids.push_back((*cooldowns)[item].as_string());
       }
-      panel.cooldown_ids.push_back((*cooldowns)[item].as_string());
     }
-    panel.extra_fields = unknown_profile_fields(value, ProfileObject::panel);
+    panel.extra_fields = unknown_profile_fields(
+        value, ProfileObject::panel, source_schema);
     profile.panels.push_back(std::move(panel));
   }
   return true;
@@ -643,6 +656,18 @@ ProfileResult parse_profile_value(const json::Value &root) {
   if (const auto *profile = std::get_if<GameProfile>(&result))
     if (auto error = validate_profile(*profile)) return *std::move(error);
   return result;
+}
+
+std::uint32_t profile_serialization_schema(const GameProfile &profile) noexcept {
+  if (profile.schema_version >= profile_schema_version ||
+      std::ranges::any_of(profile.cooldowns, [](const CooldownDefinition &cooldown) {
+        return cooldown.active_duration.count() != 0;
+      }) ||
+      std::ranges::any_of(profile.panels, [](const Panel &panel) {
+        return panel.items.has_value();
+      }))
+    return profile_schema_version;
+  return legacy_profile_schema_version;
 }
 
 } // namespace layerc::core

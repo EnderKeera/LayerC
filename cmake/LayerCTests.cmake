@@ -77,6 +77,7 @@ layerc_add_test(layerc_core_tests
     tests/automation_contract_tests.cpp
     tests/automation_session_tests.cpp
     tests/profile_tests.cpp
+    tests/profile_item_tests.cpp
     tests/runtime_json_tests.cpp
     tests/utf8_tests.cpp
     tests/update_manifest_tests.cpp

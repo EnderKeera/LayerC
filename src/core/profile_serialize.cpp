@@ -5,6 +5,7 @@
 #include "layerc/core/profile_wire.hpp"
 #include "profile_keys.hpp"
 #include "profile_extensions.hpp"
+#include "profile_item_codec.hpp"
 
 #include <cstdint>
 #include <string_view>
@@ -15,6 +16,7 @@ namespace {
 namespace keys = profile_keys;
 using json::Value;
 using detail::ProfileObject;
+using detail::serialize_overlay_item;
 using detail::with_profile_extensions;
 
 std::pair<std::string, Value> member(const std::string_view key, Value value) {
@@ -56,11 +58,12 @@ Value modules_section(const std::vector<ProfileModule> &modules) {
   }
   return Value(std::move(result));
 }
-Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns) {
+Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns,
+                        const std::uint32_t schema) {
   Value::Array result;
   result.reserve(cooldowns.size());
-  for (const auto &cooldown : cooldowns)
-    result.push_back(with_profile_extensions(Value::Object{
+  for (const auto &cooldown : cooldowns) {
+    Value::Object fields{
         member(keys::cooldown::id, text(cooldown.id)),
         member(keys::cooldown::name, text(cooldown.name)),
         member(keys::cooldown::duration_ms, integer(cooldown.duration.count())),
@@ -73,7 +76,13 @@ Value cooldowns_section(const std::vector<CooldownDefinition> &cooldowns) {
                text(enum_wire_name(profile_wire::recovery,
                                    cooldown.recovery)
                         .value_or(""))),
-    }, cooldown.extra_fields, ProfileObject::cooldown));
+    };
+    if (cooldown.active_duration.count() != 0)
+      fields.emplace(member(keys::cooldown::active_duration_ms,
+                            integer(cooldown.active_duration.count())));
+    result.push_back(with_profile_extensions(std::move(fields),
+        cooldown.extra_fields, ProfileObject::cooldown, schema));
+  }
   return Value(std::move(result));
 }
 Value cooldown_groups_section(const std::vector<CooldownGroup> &groups) {
@@ -148,7 +157,8 @@ Value hid_bindings_section(const std::vector<HidControlBinding> &bindings) {
   }
   return Value(std::move(result));
 }
-Value panels_section(const std::vector<Panel> &panels) {
+Value panels_section(const std::vector<Panel> &panels,
+                     const std::uint32_t schema) {
   Value::Array result;
   result.reserve(panels.size());
   for (const auto &panel : panels) {
@@ -163,7 +173,7 @@ Value panels_section(const std::vector<Panel> &panels) {
         member(keys::bar::show_text, Value(panel.bar.show_text)),
         member(keys::bar::hide_when_ready, Value(panel.bar.hide_when_ready)),
     };
-    result.push_back(with_profile_extensions(Value::Object{
+    Value::Object fields{
         member(keys::panel::id, text(panel.id)),
         member(keys::panel::name, text(panel.name)),
         member(keys::panel::layout,
@@ -175,11 +185,23 @@ Value panels_section(const std::vector<Panel> &panels) {
                                    panel.style)
                         .value_or(""))),
         member(keys::panel::bar, with_profile_extensions(std::move(bar),
-            panel.bar.extra_fields, ProfileObject::bar)),
+            panel.bar.extra_fields, ProfileObject::bar, schema)),
         member(keys::panel::anchor_x, Value(panel.anchor_x)),
         member(keys::panel::anchor_y, Value(panel.anchor_y)),
-        member(keys::panel::cooldowns, text_list(panel.cooldown_ids)),
-    }, panel.extra_fields, ProfileObject::panel));
+    };
+    if (panel.items.has_value()) {
+      Value::Array items;
+      items.reserve(panel.items->size());
+      for (const auto &item : *panel.items)
+        items.push_back(serialize_overlay_item(item));
+      fields.emplace(member(keys::panel::items, Value(std::move(items))));
+      fields.emplace(member(keys::panel::cooldowns,
+                            text_list(overlay_cooldown_projection(*panel.items))));
+    } else {
+      fields.emplace(member(keys::panel::cooldowns, text_list(panel.cooldown_ids)));
+    }
+    result.push_back(with_profile_extensions(std::move(fields),
+        panel.extra_fields, ProfileObject::panel, schema));
   }
   return Value(std::move(result));
 }
@@ -220,8 +242,9 @@ Value bindings_section(const GameProfile &profile) {
 } // namespace
 
 std::string serialize_profile_json(const GameProfile &profile) {
+  const auto schema = profile_serialization_schema(profile);
   Value root = with_profile_extensions(Value::Object{
-      member(keys::root::schema_version, integer(profile_schema_version)),
+      member(keys::root::schema_version, integer(schema)),
       member(keys::root::id, text(profile.id)),
       member(keys::root::name, text(profile.name)),
       member(keys::root::enabled, Value(profile.enabled)),
@@ -231,13 +254,13 @@ std::string serialize_profile_json(const GameProfile &profile) {
                                  profile.visual_runtime)
                       .value_or(""))),
       member(keys::root::modules, modules_section(profile.modules)),
-      member(keys::root::cooldowns, cooldowns_section(profile.cooldowns)),
+      member(keys::root::cooldowns, cooldowns_section(profile.cooldowns, schema)),
       member(keys::root::cooldown_groups,
              cooldown_groups_section(profile.cooldown_groups)),
       member(keys::root::hid_bindings, hid_bindings_section(profile.hid_bindings)),
-      member(keys::root::panels, panels_section(profile.panels)),
+      member(keys::root::panels, panels_section(profile.panels, schema)),
       member(keys::root::bindings, bindings_section(profile)),
-  }, profile.extra_fields, ProfileObject::root);
+  }, profile.extra_fields, ProfileObject::root, schema);
   std::string output;
   output.reserve(2'048);
   if (!json::append_value_bounded(output, root, max_profile_json_bytes - 2U, 2))

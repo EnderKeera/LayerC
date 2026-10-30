@@ -3,6 +3,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/core/profile_modules.hpp"
 #include "profile_extension_validation.hpp"
+#include "profile_item_validation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -132,6 +133,9 @@ using Result = std::optional<ProfileError>;
     if (auto failure =
             recharge(path, cooldown.duration, cooldown.max_charges))
       return failure;
+    if (!within(cooldown.active_duration.count(), 0,
+                max_cooldown_duration.count()))
+      return error(path + ".activeDurationMs", integer_range);
   }
   return std::nullopt;
 }
@@ -189,6 +193,7 @@ using Result = std::optional<ProfileError>;
       return error(path + ".anchorX", number_range);
     if (!within_number(panel.anchor_y, 0.0, 1.0))
       return error(path + ".anchorY", number_range);
+    if (panel.items.has_value()) continue;
     if (panel.cooldown_ids.empty())
       return error(path + ".cooldowns", "panel requires at least one cooldown id");
     for (std::size_t item{}; item < panel.cooldown_ids.size(); ++item)
@@ -264,6 +269,7 @@ std::optional<ProfileError> validate_profile(const GameProfile &profile) {
   if (auto failure = validate_cooldowns(profile, cooldowns)) return failure;
   if (auto failure = validate_groups(profile, cooldowns)) return failure;
   if (auto failure = validate_panels(profile, cooldowns)) return failure;
+  if (auto failure = detail::validate_profile_items(profile)) return failure;
   if (auto failure = validate_bindings(profile, cooldowns)) return failure;
   return detail::validate_profile_extensions(profile);
 }
