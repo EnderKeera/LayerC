@@ -2,8 +2,8 @@
 // panel, shaped to an empty input region so it can never intercept a click.
 // Rectangles only — no compositing, no toolkit, no input synthesis.
 #include "x11_overlay.hpp"
+#include "display_types.hpp"
 #include "x11_error.hpp"
-#include "layerc/core/panel_geometry.hpp"
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -118,8 +118,9 @@ X11OverlayWindow::create(const X11Display &display, std::string &error) {
   attributes.override_redirect = True;
   attributes.background_pixel = BlackPixel(raw, DefaultScreen(raw));
   attributes.border_pixel = 0;
-  // The daemon repaints on its own deadline, so the window asks for no events.
-  attributes.event_mask = 0;
+  // Static presentations have no repaint timer. Exposure wakes the shared
+  // dispatcher without synthesizing input or invalidating window discovery.
+  attributes.event_mask = ExposureMask;
   const ::Window window = XCreateWindow(
       raw, static_cast<::Window>(display.root()), 0, 0, 1, 1, 0, CopyFromParent,
       InputOutput, CopyFromParent,
@@ -212,7 +213,8 @@ bool X11OverlayWindow::update(const X11OverlayFrame &frame) {
   auto *raw = reinterpret_cast<Display *>(display_->raw());
   if (raw == nullptr) return false;
   const auto window = static_cast<::Window>(window_);
-  const X11OverlayRect next = panel_rect(frame);
+  const auto list = build_overlay_display_list(frame);
+  const X11OverlayRect next = list.bounds;
   if (next.width <= 0 || next.height <= 0) {
     hide();
     return false;
@@ -230,84 +232,39 @@ bool X11OverlayWindow::update(const X11OverlayFrame &frame) {
     visible_ = true;
   }
 
-  const auto *panel = &frame.panel;
-  const bool bar_style = panel->style == layerc::core::PanelStyle::bar;
-  const auto background = resolve_pixel(bar_style ? panel->bar.background_color
-                                                  : 0x272D35U);
-  const auto border =
-      resolve_pixel(bar_style ? panel->bar.border_color : 0x50BAC8U);
-  const auto fill =
-      resolve_pixel(bar_style ? panel->bar.fill_color : 0x50BAC8U);
-  const auto text_color =
-      resolve_pixel(bar_style ? panel->bar.text_color : 0xE4E8ECU);
-
-  XSetForeground(raw, gc_, background);
-  XFillRectangle(raw, window, gc_, 0, 0, static_cast<unsigned int>(next.width),
-                 static_cast<unsigned int>(next.height));
-  XSetForeground(raw, gc_, border);
-  XDrawRectangle(raw, window, gc_, 0, 0,
-                 static_cast<unsigned int>(next.width - 1),
-                 static_cast<unsigned int>(next.height - 1));
-
-  const auto geometry =
-      layerc::core::panel_geometry(*panel, frame.bars.size());
-  XFontSet font_set = nullptr;
-  if (!bar_style || panel->bar.show_text) {
-    if (font_set_ == nullptr && !font_set_tried_) {
-      font_set_tried_ = true;
-      char **missing{};
-      int missing_count{};
-      char *default_string{};
-      font_set_ = XCreateFontSet(raw, "fixed", &missing, &missing_count,
-                                 &default_string);
-      if (missing != nullptr) XFreeStringList(missing);
-    }
-    font_set = font_set_;
-  }
-
-  for (std::size_t index = 0; index < frame.bars.size(); ++index) {
-    const auto &bar = frame.bars[index];
-    auto item = geometry.items[index];
-    if (bar_style) {
-      const auto shape = layerc::core::bar_geometry(
-          *panel, index, frame.bars.size(), bar.remaining);
-      item = shape.outline;
-      if (shape.fill.right > shape.fill.left &&
-          shape.fill.bottom > shape.fill.top) {
-        XSetForeground(raw, gc_, fill);
-        XFillRectangle(
-            raw, window, gc_, scaled_pixels(shape.fill.left, frame.dpi),
-            scaled_pixels(shape.fill.top, frame.dpi),
-            static_cast<unsigned int>(
-                std::max(1, scaled_pixels(shape.fill.width(), frame.dpi))),
-            static_cast<unsigned int>(
-                std::max(1, scaled_pixels(shape.fill.height(), frame.dpi))));
+  for (const auto &op : list.ops) {
+    if (op.rect.width <= 0 || op.rect.height <= 0) continue;
+    XSetForeground(raw, gc_, resolve_pixel(op.rgb));
+    if (op.kind == OverlayOpKind::fill_rect) {
+      XFillRectangle(raw, window, gc_, op.rect.x, op.rect.y,
+          static_cast<unsigned int>(op.rect.width),
+          static_cast<unsigned int>(op.rect.height));
+    } else if (op.kind == OverlayOpKind::stroke_rect) {
+      XDrawRectangle(raw, window, gc_, op.rect.x, op.rect.y,
+          static_cast<unsigned int>(std::max(0, op.rect.width - 1)),
+          static_cast<unsigned int>(std::max(0, op.rect.height - 1)));
+    } else if (!op.text.empty()) {
+      if (font_set_ == nullptr && !font_set_tried_) {
+        font_set_tried_ = true;
+        char **missing{};
+        int missing_count{};
+        char *default_string{};
+        font_set_ = XCreateFontSet(raw, "fixed", &missing, &missing_count, &default_string);
+        if (missing != nullptr) XFreeStringList(missing);
       }
-    } else {
-      XSetForeground(raw, gc_, border);
-      XDrawRectangle(
-          raw, window, gc_, scaled_pixels(item.left, frame.dpi),
-          scaled_pixels(item.top, frame.dpi),
-          static_cast<unsigned int>(
-              std::max(1, scaled_pixels(item.width(), frame.dpi) - 1)),
-          static_cast<unsigned int>(
-              std::max(1, scaled_pixels(item.height(), frame.dpi) - 1)));
+      if (font_set_ == nullptr) continue;
+      XRectangle ink{}, logical{};
+      Xutf8TextExtents(font_set_, op.text.data(), static_cast<int>(op.text.size()), &ink, &logical);
+      const int text_x = op.rect.x + (op.rect.width - logical.width) / 2;
+      const int text_y = op.rect.y + (op.rect.height - logical.height) / 2 - logical.y;
+      XRectangle clip{static_cast<short>(op.rect.x), static_cast<short>(op.rect.y),
+          static_cast<unsigned short>(op.rect.width),
+          static_cast<unsigned short>(op.rect.height)};
+      XSetClipRectangles(raw, gc_, 0, 0, &clip, 1, Unsorted);
+      Xutf8DrawString(raw, window, font_set_, gc_, text_x, text_y,
+          op.text.data(), static_cast<int>(op.text.size()));
+      XSetClipMask(raw, gc_, None);
     }
-
-    if (font_set == nullptr || bar.label.empty()) continue;
-    XRectangle ink{};
-    XRectangle logical{};
-    Xutf8TextExtents(font_set, bar.label.data(),
-                     static_cast<int>(bar.label.size()), &ink, &logical);
-    const int left = scaled_pixels(item.left, frame.dpi);
-    const int top = scaled_pixels(item.top, frame.dpi);
-    const int item_width = scaled_pixels(item.width(), frame.dpi);
-    const int item_height = scaled_pixels(item.height(), frame.dpi);
-    const int text_x = left + (item_width - logical.width) / 2;
-    const int text_y = top + (item_height - logical.height) / 2 - logical.y;
-    XSetForeground(raw, gc_, text_color);
-    Xutf8DrawString(raw, window, font_set, gc_, text_x, text_y,
-                    bar.label.data(), static_cast<int>(bar.label.size()));
   }
 
   // Nothing in the repaint path waits for a reply, so the buffered drawing

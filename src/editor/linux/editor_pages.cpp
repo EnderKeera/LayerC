@@ -230,7 +230,8 @@ void CooldownPage::build(FormBuilder &builder) {
   duration_ = builder.input(545, 155, 220, "Duration (seconds)");
   charges_ = builder.input(795, 155, 220, "Max charges");
   recovery_ = builder.choice(545, 225, 470, "Recovery mode", "Single|Sequential|Parallel");
-  retrigger_ = builder.choice(545, 295, 470, "Retrigger policy", "Ignore|Restart");
+  retrigger_ = builder.choice(545, 280, 470, "Retrigger policy", "Ignore|Restart");
+  active_duration_ = builder.input(545, 350, 470, "Active duration (seconds; 0 = off)");
   cooldown_fields_->end();
   cooldown_tab_->end();
 }
@@ -254,6 +255,7 @@ void CooldownPage::show(const layerc::core::GameProfile &profile,
   const auto &item = profile.cooldowns[*index];
   cooldown_name_->value(item.name.c_str());
   duration_->value(format_seconds(item.duration).c_str());
+  active_duration_->value(format_seconds(item.active_duration).c_str());
   charges_->value(std::to_string(item.max_charges).c_str());
   recovery_->value(static_cast<int>(item.recovery));
   retrigger_->value(static_cast<int>(item.retrigger));
@@ -271,6 +273,12 @@ CooldownPage::read(layerc::core::CooldownDefinition &item) const {
     return "Max charges must be between " +
            std::to_string(layerc::core::min_cooldown_charges) + " and " +
            std::to_string(layerc::core::max_cooldown_charges) + ".";
+  const std::string_view active_text = active_duration_->value();
+  const auto active = active_text.empty() || active_text == "0"
+      ? std::optional<core::Milliseconds>(core::Milliseconds::zero())
+      : parse_duration_seconds(active_text);
+  if (!active) return "Active duration must be 0 (off) or a valid positive number of seconds.";
+  item.active_duration = *active;
   item.name = cooldown_name_->value();
   item.duration = *seconds;
   item.max_charges = *count;
@@ -291,7 +299,8 @@ bool CooldownPage::owns_list(const Fl_Widget *widget) const {
 bool CooldownPage::owns(const Fl_Widget *widget) const {
   return widget != nullptr &&
          (widget == cooldown_tab_ || widget == cooldown_fields_ || widget == cooldowns_ ||
-          widget == cooldown_name_ || widget == duration_ || widget == charges_ ||
+          widget == cooldown_name_ || widget == duration_ || widget == active_duration_ ||
+          widget == charges_ ||
           widget == recovery_ || widget == retrigger_);
 }
 
@@ -381,13 +390,7 @@ void PanelPage::build(FormBuilder &builder) {
   show_text_ = builder.check(500, 255, 180, "Show bar text");
   (void)builder.button(685, 250, 90, "Colours...", EditorCommand::panel_colors);
   hide_ready_ = builder.check(780, 255, 250, "Hide bars when ready");
-  member_ = builder.choice(500, 320, 260, "Panel cooldown membership", nullptr);
-  member_enabled_ = builder.check(780, 320, 250, "Include selected cooldown");
-  auto *preview_note = new Fl_Box(500, 365, 530, 60,
-      "Drag panels in the local preview to place them.\n"
-      "Ready placeholders remain visible in preview, including hidden-ready bars.");
-  preview_note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-  preview_note->labelsize(11);
+  items_.build();
   panel_fields_->end();
   panel_tab_->end();
 }
@@ -403,11 +406,7 @@ void PanelPage::fill_list(const layerc::core::GameProfile &profile,
 
 void PanelPage::show(const layerc::core::GameProfile &profile,
                      const std::optional<std::size_t> selected) {
-  const auto membership = member_->value();
-  member_->clear();
-  for (const auto &item : profile.cooldowns) add_choice(*member_, item.name);
-  const auto count = static_cast<int>(profile.cooldowns.size());
-  member_->value(count ? std::clamp(membership, 0, count - 1) : -1);
+  items_.show(profile, selected);
   if (!selected) {
     panel_fields_->deactivate();
     return;
@@ -427,12 +426,7 @@ void PanelPage::show(const layerc::core::GameProfile &profile,
   text_color_->value(format_rgb(item.bar.text_color).c_str());
   show_text_->value(item.bar.show_text ? 1 : 0);
   hide_ready_->value(item.bar.hide_when_ready ? 1 : 0);
-  const auto chosen = member_->value();
-  member_enabled_->value(
-      chosen >= 0 && chosen < count &&
-      std::ranges::find(item.cooldown_ids,
-                        profile.cooldowns[static_cast<std::size_t>(chosen)].id) !=
-          item.cooldown_ids.end());
+
 }
 
 std::optional<std::string> PanelPage::read(layerc::core::Panel &item) const {
@@ -474,20 +468,6 @@ std::optional<std::string> PanelPage::read(layerc::core::Panel &item) const {
   return std::nullopt;
 }
 
-int PanelPage::member_index() const { return member_->value(); }
-
-void PanelPage::set_member_index(const int index) { member_->value(index); }
-
-bool PanelPage::member_checked() const { return member_enabled_->value() != 0; }
-
-bool PanelPage::owns_member(const Fl_Widget *widget) const {
-  return widget != nullptr && widget == member_;
-}
-
-bool PanelPage::owns_member_toggle(const Fl_Widget *widget) const {
-  return widget != nullptr && widget == member_enabled_;
-}
-
 bool PanelPage::owns_list(const Fl_Widget *widget) const {
   return widget != nullptr && widget == panels_;
 }
@@ -498,9 +478,8 @@ bool PanelPage::owns(const Fl_Widget *widget) const {
           widget == panel_name_ || widget == anchor_x_ || widget == anchor_y_ ||
           widget == bar_width_ || widget == bar_height_ || widget == fill_ ||
           widget == background_ || widget == border_ || widget == text_color_ ||
-          widget == layout_ || widget == style_ || widget == member_ ||
-          widget == member_enabled_ || widget == show_text_ || widget == hide_ready_ ||
-          widget == position_button_);
+          widget == layout_ || widget == style_ || items_.owns(widget) ||
+          widget == show_text_ || widget == hide_ready_ || widget == position_button_);
 }
 
 void PanelPage::show_position(const bool active) {

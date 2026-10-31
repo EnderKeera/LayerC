@@ -73,6 +73,8 @@ struct ItemPresentation {
   // False for number-only counters, indicators and unavailable rows.
   bool has_progress{true};
   ItemUnavailableReason unavailable_reason{};
+
+  bool operator==(const ItemPresentation &) const = default;
 };
 
 struct PanelPresentation {

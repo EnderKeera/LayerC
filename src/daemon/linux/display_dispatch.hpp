@@ -11,5 +11,6 @@ struct DisplayDispatch {
   std::size_t events{};
   bool windows_changed{};
   bool devices_changed{};
+  bool repaint_requested{};
 };
 } // namespace layerc::daemon

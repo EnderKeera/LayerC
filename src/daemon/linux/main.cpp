@@ -204,7 +204,7 @@ private:
     }
     for (const auto &cooldown : dispatch.triggered)
       std::fprintf(stderr, "layerd: triggered %s\n", cooldown.c_str());
-    if (dispatch.events > 0)
+    if (dispatch.events > 0 || dispatch.repaint_requested)
       sessions_dirty_ = adapters_.render(MonotonicClock::now()) ||
                         sessions_dirty_;
   }

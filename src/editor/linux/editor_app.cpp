@@ -107,26 +107,6 @@ void EditorApp::module_fields_changed(const bool pending) {
 void EditorApp::field_changed(Fl_Widget *widget) {
   if (widget != last_field_) session.end_text_edit();
   last_field_ = widget;
-  if (panel_page_->owns_member(widget)) {
-    // Navigation must not discard a locally invalid panel field buffer.
-    if (!apply_fields()) { panel_page_->set_member_index(member_index_); return; }
-    session.end_text_edit();
-    member_index_ = panel_page_->member_index();
-    refresh_forms();
-    return;
-  }
-  if (panel_page_->owns_member_toggle(widget)) {
-    if (!apply_fields()) return;
-    const auto index = panel_page_->member_index();
-    const auto &items = session.document().profile().cooldowns;
-    if (index >= 0 && static_cast<std::size_t>(index) < items.size()) {
-      const auto id = items[static_cast<std::size_t>(index)].id;
-      changed(session.edit([&](auto &profile) {
-        (void)set_panel_member(profile, panel_id_, id, panel_page_->member_checked());
-      }));
-    }
-    return;
-  }
   if (apply_fields(dynamic_cast<Fl_Input *>(widget) != nullptr)) {
     fill_lists();
     report(edit_status());

@@ -311,7 +311,8 @@ if(NOT WIN32)
         # Shape overlays + monitor scale; XTest checks real event routing
         # when available and remains linked only into this test executable.
         layerc_add_test(layerc_linux_x11_overlay_tests
-            SOURCES tests/linux_x11_overlay_tests.cpp LINK layerc_daemon_linux
+            SOURCES tests/linux_x11_overlay_tests.cpp
+                tests/linux_typed_overlay_tests.cpp LINK layerc_daemon_linux
             TIMEOUT 60 LABELS required x11 RESOURCE_LOCK layerc_x11_display
             SKIP_RETURN_CODE 77)
         if(X11_Xtst_LIB)
@@ -364,6 +365,7 @@ if(NOT WIN32)
     if(TARGET layerc_editor_fltk)
         layerc_add_test(layerc_linux_editor_widget_tests
             SOURCES tests/linux_editor_widget_tests.cpp
+                tests/linux_editor_items_tests.cpp
                 tests/linux_editor_dialog_tests.cpp
                 tests/linux_editor_accessibility_tests.cpp
                 tests/linux_editor_visual_contract_tests.cpp

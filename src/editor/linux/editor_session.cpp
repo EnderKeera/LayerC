@@ -194,6 +194,18 @@ EditorSession::edit(const std::function<void(core::GameProfile &)> &change,
   return outcome.message;
 }
 
+std::optional<std::string> EditorSession::edit_items(
+    const std::function<std::optional<std::string>(
+        core::GameProfile &, std::optional<core::AutomationProfile> &)> &change) {
+  if (!opened_) return "No profile is open.";
+  const auto outcome = document_.edit_profile_and_automation(
+      change, DocumentChangeKind::immediate);
+  if (outcome.accepted()) mark_changed(false);
+  if (outcome.accepted() || outcome.status == ModuleEditStatus::unchanged)
+    return std::nullopt;
+  return outcome.message;
+}
+
 std::optional<std::string> EditorSession::edit_automation(
     const std::function<std::optional<std::string>(
         std::optional<core::AutomationProfile> &)> &change,

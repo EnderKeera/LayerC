@@ -205,6 +205,7 @@ struct DisplayAdapters::Impl {
       engine.feed_input(poll.events, result);
       result.windows_changed = result.windows_changed || poll.windows_changed;
       result.devices_changed = result.devices_changed || poll.devices_changed;
+      result.repaint_requested = result.repaint_requested || poll.repaint_requested;
     }
 #else
     (void)pending;

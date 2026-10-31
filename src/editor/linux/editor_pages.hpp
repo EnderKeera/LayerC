@@ -2,6 +2,7 @@
 
 #include "editor_commands.hpp"
 #include "editor_menus.hpp"
+#include "panel_items_controls.hpp"
 
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Multiline_Output.H>
@@ -130,6 +131,7 @@ private:
   [[nodiscard]] ContextBrowser *list() const { return cooldowns_; }
   [[nodiscard]] Fl_Input *name() const { return cooldown_name_; }
   [[nodiscard]] Fl_Input *duration() const { return duration_; }
+  [[nodiscard]] Fl_Input *active_duration() const { return active_duration_; }
   [[nodiscard]] Fl_Input *charges() const { return charges_; }
   [[nodiscard]] Fl_Choice *recovery() const { return recovery_; }
   [[nodiscard]] Fl_Choice *retrigger() const { return retrigger_; }
@@ -138,7 +140,7 @@ private:
   Fl_Group *cooldown_fields_{};
   ContextBrowser *cooldowns_{};
   Fl_Input *cooldown_name_{};
-  Fl_Input *duration_{};
+  Fl_Input *duration_{}, *active_duration_{};
   Fl_Input *charges_{};
   Fl_Choice *recovery_{};
   Fl_Choice *retrigger_{};
@@ -176,7 +178,7 @@ private:
 // The Panels tab: the list, its buttons and the placement fields.
 class PanelPage final {
 public:
-  explicit PanelPage(EditorApp &app) noexcept : app_(app) {}
+  explicit PanelPage(EditorApp &app) noexcept : app_(app), items_(app) {}
   void build(FormBuilder &builder);
   [[nodiscard]] Fl_Group *group() const { return panel_tab_; }
   void clear_list();
@@ -184,11 +186,6 @@ public:
                  std::optional<std::size_t> selected);
   void show(const layerc::core::GameProfile &profile, std::optional<std::size_t> selected);
   [[nodiscard]] std::optional<std::string> read(layerc::core::Panel &item) const;
-  [[nodiscard]] int member_index() const;
-  void set_member_index(int index);
-  [[nodiscard]] bool member_checked() const;
-  [[nodiscard]] bool owns_member(const Fl_Widget *widget) const;
-  [[nodiscard]] bool owns_member_toggle(const Fl_Widget *widget) const;
   [[nodiscard]] bool owns_list(const Fl_Widget *widget) const;
   [[nodiscard]] bool owns(const Fl_Widget *widget) const;
   void show_position(bool active);
@@ -199,8 +196,9 @@ private:
   ContextBrowser *panels_{};
   Fl_Input *panel_name_{}, *anchor_x_{}, *anchor_y_{}, *bar_width_{}, *bar_height_{};
   Fl_Input *fill_{}, *background_{}, *border_{}, *text_color_{};
-  Fl_Choice *layout_{}, *style_{}, *member_{};
-  Fl_Check_Button *member_enabled_{}, *show_text_{}, *hide_ready_{};
+  Fl_Choice *layout_{}, *style_{};
+  Fl_Check_Button *show_text_{}, *hide_ready_{};
+  PanelItemsControls items_;
   Fl_Button *position_button_{};
 };
 

@@ -34,6 +34,11 @@ public:
   // invalidate scans, so raising an overlay cannot trigger another refresh.
   void ignore_windows(std::vector<std::uint64_t> windows) noexcept;
   [[nodiscard]] bool observe(const union _XEvent &event) const noexcept;
+  [[nodiscard]] bool take_overlay_exposed() noexcept {
+    const bool exposed = overlay_exposed_;
+    overlay_exposed_ = false;
+    return exposed;
+  }
   // Uses the shared dispatcher while input is inactive, without polling timers.
   [[nodiscard]] bool poll_changes() noexcept;
 
@@ -51,6 +56,7 @@ private:
   bool root_selected_{};
   mutable std::vector<Watch> watched_;
   std::vector<std::uint64_t> ignored_windows_;
+  mutable bool overlay_exposed_{};
 };
 
 

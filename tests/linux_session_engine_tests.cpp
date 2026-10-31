@@ -1,5 +1,6 @@
 #include "input_service.hpp"
 #include "session_engine.hpp"
+#include "daemon_host.hpp"
 #include "overlay_service.hpp"
 #include "test_support.hpp"
 #include "layerc/core/automation.hpp"
@@ -604,8 +605,10 @@ void overlay_retry_lifecycle() {
                row->availability == runtime::CapabilityAvailability::active &&
                row->diagnostics.empty(),
            "successful retry maps the panel and clears its fault");
-    expect(engine.next_deadline(*due) == std::optional{repaint},
-           "a shown panel schedules its normal repaint deadline");
+    // The ready card is static: static items arm no idle repaint; Expose and
+    // state changes drive later renders.
+    expect(!engine.next_deadline(*due).has_value(),
+           "a shown static panel arms no idle repaint deadline");
 
     provider.fail_show = true;
     (void)engine.render(repaint);
@@ -909,9 +912,129 @@ void passive_service_contracts() {
          "with no source the existing reason is unchanged");
   registry.stop_sessions(core::MonotonicClock::now());
 }
+void typed_overlay_item_diagnostics_producer() {
+  layerc::test::TempDirectory temp("layerc-typed-diagnostics");
+  layerc::test::ScopedEnvironment config("XDG_CONFIG_HOME", temp.path() / "config");
+  layerc::test::ScopedEnvironment data("XDG_DATA_HOME", temp.path() / "data");
+  const auto roots = platform::profile_store_roots();
+  if (!expect(platform::ensure_profile_store_roots(roots),
+              "private diagnostics fixture roots exist"))
+    return;
+  core::GameProfile profile;
+  profile.id = "typed-diag";
+  profile.name = "Typed diagnostics";
+  profile.game.executable_name = "fixture.exe";
+  profile.cooldowns.push_back({.id = "dash", .name = "Dash",
+                               .duration = std::chrono::seconds(5)});
+  core::Panel panel;
+  panel.id = "main";
+  panel.name = "Main";
+  core::OpaqueOverlayItem future;
+  future.value = core::json::Value(core::json::Value::Object{
+      {"id", core::json::Value(std::string("future"))},
+      {"kind", core::json::Value(std::string("hologram"))}});
+  const auto make_item = [](std::string id, core::OverlayItemContent content) {
+    core::OverlayItem item;
+    item.id = std::move(id);
+    item.content = std::move(content);
+    return item;
+  };
+  panel.items = std::vector<core::OverlayItem>{
+      make_item("cd", core::CooldownItem{"dash"}),
+      make_item("future", future),
+      make_item("timer", core::AutomationTimerItem{"undeclared"})};
+  profile.panels.push_back(panel);
+  core::AutomationProfile automation;
+  automation.profile_id = profile.id;
+  automation.variables.push_back(
+      {.id = "count", .type = core::AutomationValueType::integer,
+       .default_value = core::AutomationValue(std::int64_t{0})});
+  core::AutomationRule rule;
+  rule.id = "count-rule";
+  rule.event = core::AutomationEventKind::timer_fired;
+  rule.source_filter = "never-fired";
+  core::AutomationAction increment;
+  increment.kind = core::AutomationActionKind::increment_variable;
+  increment.target = "count";
+  increment.value = core::expr::literal(core::AutomationValue(std::int64_t{1}));
+  rule.actions.push_back(std::move(increment));
+  automation.automations.push_back(
+      {.id = "diagnostics", .name = "Diagnostics", .rules = {rule}});
+  const platform::StoredProfile stored{roots.config_profiles / "typed-diag.json",
+                                       profile};
+  if (!expect(platform::write_profile_bundle(stored.path, profile, std::nullopt,
+                                             automation)
+                  .ok(),
+              "the typed diagnostics fixture and sidecar are stored"))
+    return;
+  FakeDisplay provider;
+  platform::WindowSnapshot window;
+  window.window = 11;
+  window.executable_name = "fixture.exe";
+  window.width = 800;
+  window.height = 600;
+  window.active = true;
+  provider.scan.windows.push_back(window);
+  provider.scan.active = 11;
+  daemon::DisplayRoute route{.windows = &provider,
+                             .monitors = &provider,
+                             .overlay = &provider,
+                             .capture = &provider,
+                             .native_windows = true,
+                             .native_overlay = true,
+                             .inputs = {&provider}};
+  daemon::SessionEngine engine;
+  runtime::DaemonKernel kernel(engine.runtime_services());
+  daemon::LinuxStatusSnapshot status;
+  status.capabilities.push_back(
+      {.capability = runtime::Capability::overlay,
+       .availability = runtime::CapabilityAvailability::inactive,
+       .reasons = {},
+       .diagnostics = {}});
+  std::vector<std::string> diagnostics;
+  engine.refresh(std::span{&stored, 1}, true, route, kernel, status, diagnostics);
+  if (!expect(engine.session_count() == 1,
+              "a typed profile with an opaque item and an undeclared timer admits"))
+    return;
+  engine.refresh_status(kernel, status);
+  const auto has_entry = [](const std::vector<std::string> &lines,
+                            const std::string_view text) {
+    return std::ranges::any_of(lines, [&](const std::string &line) {
+      return line.find(text) != std::string::npos;
+    });
+  };
+  const auto unsupported =
+      "profile typed-diag, panel main, item future: unsupported item kind";
+  const auto missing = "profile typed-diag, panel main, item timer: missing source";
+  expect(has_entry(status.overlay_faults, unsupported) &&
+             has_entry(status.overlay_faults, missing) &&
+             !has_entry(status.overlay_faults, ", item cd:"),
+         "session status carries unsupported and missing-source item warnings");
+  expect(has_entry(diagnostics, unsupported) && has_entry(diagnostics, missing),
+         "refresh diagnostics repeat the overlay item warnings");
+  const auto payload = daemon::status_payload_json(kernel, status);
+  const auto parsed = runtime::parse_runtime_diagnostics_json(payload);
+  const auto *value = std::get_if<runtime::RuntimeDiagnostics>(&parsed);
+  expect(value != nullptr && has_entry(value->overlay_faults, unsupported) &&
+             has_entry(value->overlay_faults, missing),
+         "the status payload publishes the producer warnings on the wire");
+  const auto overlay_row = std::ranges::find(status.capabilities,
+                                             runtime::Capability::overlay,
+                                             &runtime::CapabilityStatus::capability);
+  expect(overlay_row != status.capabilities.end() &&
+             overlay_row->availability == runtime::CapabilityAvailability::active,
+         "item warnings never degrade the overlay capability itself");
+  (void)engine.render(core::MonotonicClock::now());
+  expect(provider.shows != 0 && provider.shown,
+         "the valid typed rows still paint while warnings are reported");
+  kernel.quiesce();
+  engine.stop_sessions(core::MonotonicClock::now());
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(neutral_session_engine),
+                 LAYERC_TEST_CASE(typed_overlay_item_diagnostics_producer),
                  LAYERC_TEST_CASE(passive_service_contracts),
                  LAYERC_TEST_CASE(provider_loss_lifecycle),
                  LAYERC_TEST_CASE(overlay_retry_lifecycle),

@@ -91,6 +91,11 @@ public:
   [[nodiscard]] std::optional<std::string>
   edit(const std::function<void(layerc::core::GameProfile &)> &change,
        bool text_change = false);
+  // Typed-row edits can promote IDs and create/remap automation references.
+  // Both values validate and enter history as one transaction.
+  [[nodiscard]] std::optional<std::string> edit_items(
+      const std::function<std::optional<std::string>(
+          core::GameProfile &, std::optional<core::AutomationProfile> &)> &change);
   // Edits a module copy, validates the complete result against the base, and
   // records one normal history transaction. Unreadable sidecars stay blocked.
   [[nodiscard]] std::optional<std::string> edit_automation(

@@ -98,7 +98,7 @@ class SemanticRowTests(unittest.TestCase):
         self.assertTrue(all(action[0] == "scroll" for action in walk.actions))
 
     def test_registry_keeps_all_cases_and_rejects_duplicate_ids(self):
-        self.assertEqual(len(EXPECTED), 36)
+        self.assertEqual(len(EXPECTED), 39)
         self.assertEqual(next(iter(EXPECTED)), "bridge-guards")
         with self.assertRaisesRegex(ValueError, "duplicate required case IDs: a"):
             merge_cases({"a": "one"}, {"a": "two"})
