@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.EnderKeera.LayerC</id>
   <name>LayerC</name>
-  <summary>Passive X11 cooldown overlay with a profile editor</summary>
+  <summary>Passive X11 overlay with a profile editor</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>LicenseRef-proprietary</project_license>
   <developer id="io.github.enderkeera">
@@ -10,9 +10,10 @@
   </developer>
   <description>
     <p>
-      LayerC runs a passive, click-through cooldown overlay on X11. The LayerE
-      editor creates and edits profiles, cooldowns, bindings and panels, saves
-      them durably and asks the running daemon to reload them. Command-line
+      LayerC runs passive, click-through cooldown, timer, counter and indicator
+      panels on X11. The LayerE editor creates and edits profiles, cooldowns,
+      bindings and ordered panel items, saves them durably and asks the running
+      daemon to reload them. Command-line
       tools cover profile and bundle management, runtime control and visual
       calibration.
     </p>
@@ -36,6 +37,9 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.7.0" type="development" date="2026-10-31">
+      <description><p>Adds typed panel items, cooldown active duration and timer presets in both editors. The Wayland backend remains an unqualified preview.</p></description>
+    </release>
     <release version="2.6.2" date="2026-10-28">
       <description>
         <p>LayerC 2.6.2 (release label v2.6c) adds the LayerE profile editor for X11, packaged with the daemon and tools.</p>

@@ -64,6 +64,13 @@ Display-server-neutral values live in
 (Xlib, cairo on a layer-shell buffer, the GNOME extension) consumes. No
 backend header may reach it.
 
+V2.7 typed cooldown, timer, counter, and indicator rows pass through the same
+shared presentation before this paint model is built. Values, item overrides,
+unavailable states, and monotonic indicator flash phases are resolved by the
+core, not by cairo or Shell JavaScript. Pips use at most eight filled/outlined
+rectangles. This changes rendering content, not the provider/input/support
+contracts below.
+
 Session detection: `wayland` when `$WAYLAND_DISPLAY` connects, otherwise `x11`
 when `$DISPLAY` connects, otherwise `none` (headless store/control bridge).
 `LAYERC_DISPLAY_BACKEND=auto|x11|wayland` overrides detection for tests and
