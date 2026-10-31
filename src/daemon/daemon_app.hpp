@@ -80,7 +80,8 @@ private:
   IsolatedVisualCaptureService isolated_visual_service_{visual_capture_runtime_};
   AutomationRuntimeHost automation_runtime_host_{
       session_registry_, live_edit_host_, overlay_runtime_, window_};
-  CompanionHost companion_host_{session_registry_, session_coordinator_, session_coordinator_};
+  CompanionHost companion_host_{session_registry_, session_coordinator_,
+                               session_coordinator_, window_};
   layerc::platform::OwnedHandle reload_event_;
   layerc::platform::OwnedHandle settings_reload_event_;
   bool shutting_down_{};

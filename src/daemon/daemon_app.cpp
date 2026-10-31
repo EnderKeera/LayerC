@@ -280,6 +280,8 @@ LRESULT DaemonApp::dispatch_message(const HWND window, const UINT message,
       overlay_runtime_.mark_dirty();
     } else if (wparam == automation_timer) {
       automation_runtime_host_.poll_timer();
+    } else if (wparam == companion_snapshot_timer) {
+      companion_host_.publish_snapshot(layerc::core::MonotonicClock::now());
     }
     return 0;
   case WM_COMMAND:

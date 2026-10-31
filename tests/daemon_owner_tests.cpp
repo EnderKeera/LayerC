@@ -7,12 +7,27 @@
 #include <chrono>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include <windows.h>
+
+namespace layerc::daemon {
+
+// Reaches the private presentation-timer owner with a caller-supplied
+// message-only window; no transport, package resource or input is involved.
+struct CompanionHostTestAccess {
+  static void schedule(CompanionHost &host,
+                       const std::optional<layerc::core::TimePoint> next,
+                       const layerc::core::TimePoint now) {
+    host.schedule_publication(next, now);
+  }
+};
+
+} // namespace layerc::daemon
 
 namespace layerc::test::daemon_owner {
 namespace {
@@ -56,7 +71,7 @@ public:
         hid(sessions, window, input, automation, *this),
         captures(sessions, live, overlays, automation, *this),
         isolated(captures), automation(sessions, live, overlays, window),
-        companion(sessions, *this, *this) {}
+        companion(sessions, *this, *this, window) {}
 
   ~OwnerFixture() {
     live.quiesce();
@@ -189,6 +204,7 @@ void dormant_owners_do_not_recreate_resources() {
              fixture.isolated.resources() == RuntimeResourceStats{} &&
              fixture.overlays.resources() == RuntimeResourceStats{} &&
              fixture.companion.resources() == RuntimeResourceStats{} &&
+             fixture.companion.resources().timers == 0 &&
              fixture.input.resources() == RuntimeResourceStats{} &&
              fixture.hid.resources() == RuntimeResourceStats{} &&
              fixture.automation.resources() == RuntimeResourceStats{},
@@ -295,6 +311,44 @@ void live_owner_owns_control_resources_and_faults() {
                fixture.live.resources() == RuntimeResourceStats{},
            "control startup faults stay visible and release partial resources");
   }
+}
+
+void companion_owner_timer_lifecycle() {
+  OwnerFixture fixture;
+  const HWND messages = CreateWindowExW(0, L"STATIC", L"LayerC owner timer", 0, 0,
+                                        0, 0, 0, HWND_MESSAGE, nullptr, nullptr,
+                                        nullptr);
+  if (!expect(messages != nullptr,
+              "the owner timer fixture creates a message-only window"))
+    return;
+  // CompanionHost holds a reference to the fixture's window member.
+  fixture.window = messages;
+  const auto now = layerc::core::MonotonicClock::now();
+  const auto first = now + layerc::core::Milliseconds{125};
+  layerc::daemon::CompanionHostTestAccess::schedule(fixture.companion, first, now);
+  expect(fixture.companion.resources().timers == 1,
+         "a 125 ms scheduled publication owns exactly one timer");
+  layerc::daemon::CompanionHostTestAccess::schedule(
+      fixture.companion, now + layerc::core::Milliseconds{250}, now);
+  expect(fixture.companion.resources().timers == 1,
+         "replacing the deadline still owns exactly one timer");
+  layerc::daemon::CompanionHostTestAccess::schedule(fixture.companion, std::nullopt,
+                                                    now);
+  expect(fixture.companion.resources().timers == 0,
+         "a null deadline cancels the owner timer");
+  layerc::daemon::CompanionHostTestAccess::schedule(fixture.companion, first, now);
+  expect(fixture.companion.resources().timers == 1,
+         "a new deadline re-arms the single owner timer");
+  fixture.overlays.quiesce();
+  fixture.companion.quiesce();
+  expect(fixture.companion.resources().timers == 0 &&
+             fixture.overlays.resources() == RuntimeResourceStats{},
+         "quiescence removes the owner timer and keeps native overlays released");
+  fixture.companion.publish_snapshot(layerc::core::MonotonicClock::now());
+  expect(fixture.companion.resources().timers == 0,
+         "a stale publication cannot recreate the quiesced owner timer");
+  fixture.window = nullptr;
+  DestroyWindow(messages);
 }
 
 } // namespace layerc::test::daemon_owner

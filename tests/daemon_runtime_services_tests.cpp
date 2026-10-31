@@ -184,4 +184,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(
         layerc::test::daemon_owner::automation_owner_controls_runtime_and_trace),
     LAYERC_TEST_CASE(
-        layerc::test::daemon_owner::live_owner_owns_control_resources_and_faults))
+        layerc::test::daemon_owner::live_owner_owns_control_resources_and_faults),
+    LAYERC_TEST_CASE(
+        layerc::test::daemon_owner::companion_owner_timer_lifecycle))

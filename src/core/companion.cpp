@@ -1,5 +1,6 @@
 #include "layerc/core/companion.hpp"
 #include "layerc/core/json_reader.hpp"
+#include "layerc/core/profile_wire.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -257,8 +258,61 @@ validate_snapshot_item(const CompanionSnapshotItem &item,
 }
 
 CompanionValidationResult
+validate_typed_item(const CompanionTypedItem &item, const std::string &item_path) {
+  if (auto error = bounded_text(item_path, "itemId", item.item_id, false))
+    return error;
+  if (!enum_wire_name(profile_wire::overlay_item_kind, item.kind))
+    return CompanionError{item_path + ".kind", "kind must be a known item kind"};
+  if (auto error = bounded_text(item_path, "label", item.label, true))
+    return error;
+  if (auto error = bounded_text(item_path, "valueText", item.value_text, true))
+    return error;
+  if (!std::isfinite(item.fill) || item.fill < 0.0 || item.fill > 1.0)
+    return CompanionError{item_path + ".fill", "fill must be finite and within [0,1]"};
+  if (item.pips > max_counter_pips || item.filled_pips > item.pips)
+    return CompanionError{item_path + ".pips",
+                          "pips must be at most 8 and cover filledPips"};
+  if (item.color > 0xFFFFFFU)
+    return CompanionError{item_path + ".color", "color must be 0xRRGGBB"};
+  return std::nullopt;
+}
+
+// Version 1 keeps its exact cooldown-only shape; version 2 carries only
+// resolved typed rows, so neither wire can smuggle the other's fields.
+CompanionValidationResult
+validate_panel_rows(const CompanionPanelSnapshot &panel, const std::uint32_t version,
+                    const std::string &path) {
+  if (version == companion_snapshot_version_legacy) {
+    if (!panel.typed_items.empty() || !panel.visible || panel.omitted_items != 0)
+      return CompanionError{path, "typed panel fields require snapshotVersion 2"};
+    if (panel.items.size() > max_companion_snapshot_items)
+      return CompanionError{path + ".items", "item count exceeds its bound"};
+    for (std::size_t index = 0; index < panel.items.size(); ++index)
+      if (auto error = validate_snapshot_item(
+              panel.items[index], path + ".items[" + std::to_string(index) + "]"))
+        return error;
+    return std::nullopt;
+  }
+  if (!panel.items.empty())
+    return CompanionError{path + ".items", "version 2 panels carry typed rows only"};
+  if (panel.typed_items.size() > max_companion_snapshot_items)
+    return CompanionError{path + ".items", "item count exceeds its bound"};
+  std::vector<std::string_view> ids;
+  for (std::size_t index = 0; index < panel.typed_items.size(); ++index) {
+    const auto &item = panel.typed_items[index];
+    const auto item_path = path + ".items[" + std::to_string(index) + "]";
+    if (auto error = validate_typed_item(item, item_path)) return error;
+    if (std::ranges::find(ids, item.item_id) != ids.end())
+      return CompanionError{item_path + ".itemId", "duplicate itemId in panel"};
+    ids.push_back(item.item_id);
+  }
+  return std::nullopt;
+}
+
+CompanionValidationResult
 validate_snapshot_panels(const std::vector<CompanionPanelSnapshot> &panels,
-                         const std::vector<CompanionSlotMapping> &preferences) {
+                         const std::vector<CompanionSlotMapping> &preferences,
+                         const std::uint32_t version) {
   std::vector<std::uint32_t> slots;
   for (std::size_t panel_index = 0; panel_index < panels.size(); ++panel_index) {
     const auto &panel = panels[panel_index];
@@ -278,15 +332,7 @@ validate_snapshot_panels(const std::vector<CompanionPanelSnapshot> &panels,
       return CompanionError{path + ".slotIndex",
                             "duplicate slotIndex in snapshot"};
     slots.push_back(panel.slot_index);
-    if (panel.items.size() > max_companion_snapshot_items)
-      return CompanionError{path + ".items", "item count exceeds its bound"};
-    for (std::size_t item_index = 0; item_index < panel.items.size();
-         ++item_index) {
-      const auto item_path =
-          path + ".items[" + std::to_string(item_index) + "]";
-      if (auto error = validate_snapshot_item(panel.items[item_index], item_path))
-        return error;
-    }
+    if (auto error = validate_panel_rows(panel, version, path)) return error;
   }
   return std::nullopt;
 }
@@ -295,6 +341,9 @@ validate_snapshot_panels(const std::vector<CompanionPanelSnapshot> &panels,
 
 CompanionValidationResult
 validate_companion_snapshot(const CompanionSessionSnapshot &snapshot) {
+  if (snapshot.snapshot_version != companion_snapshot_version_legacy &&
+      snapshot.snapshot_version != companion_snapshot_version_typed)
+    return CompanionError{"$.snapshotVersion", "unsupported snapshotVersion"};
   if (auto error = bounded_text("$", "profileId", snapshot.profile_id, false))
     return error;
   if (auto error = bounded_text("$", "sessionKey", snapshot.session_key, false))
@@ -319,46 +368,88 @@ validate_companion_snapshot(const CompanionSessionSnapshot &snapshot) {
                    available_ids.end();
           }))
     return error;
-  return validate_snapshot_panels(snapshot.panels, snapshot.preferences);
+  return validate_snapshot_panels(snapshot.panels, snapshot.preferences,
+                                  snapshot.snapshot_version);
 }
+
+namespace {
+
+json::Value typed_item_value(const CompanionTypedItem &item) {
+  return json::Value(json::Value::Object{
+      {"itemId", json::Value(item.item_id)},
+      {"kind", json::Value(std::string(
+                   *enum_wire_name(profile_wire::overlay_item_kind, item.kind)))},
+      {"label", json::Value(item.label)},
+      {"valueText", json::Value(item.value_text)},
+      {"fill", json::Value(item.fill)},
+      {"hasProgress", json::Value(item.has_progress)},
+      {"pips", json::Value(std::int64_t{item.pips})},
+      {"filledPips", json::Value(std::int64_t{item.filled_pips})},
+      {"color", json::Value(std::int64_t{item.color})},
+      {"active", json::Value(item.active)},
+      {"flashOn", json::Value(item.flash_on)},
+      {"unavailable", json::Value(item.unavailable)}});
+}
+
+json::Value legacy_item_value(const CompanionSnapshotItem &item) {
+  return json::Value(json::Value::Object{
+      {"cooldownId", json::Value(item.cooldown_id)},
+      {"name", json::Value(item.name)},
+      {"progress", json::Value(item.progress)},
+      {"availableCharges", json::Value(std::int64_t{item.available_charges})},
+      {"maxCharges", json::Value(std::int64_t{item.max_charges})},
+      {"remainingMs", json::Value(item.remaining_ms)},
+      {"isReady", json::Value(item.is_ready)}});
+}
+
+json::Value panel_value(const CompanionPanelSnapshot &panel, const bool typed) {
+  json::Value::Array items;
+  if (typed) {
+    items.reserve(panel.typed_items.size());
+    for (const auto &item : panel.typed_items) items.push_back(typed_item_value(item));
+    return json::Value(json::Value::Object{
+        {"panelId", json::Value(panel.panel_id)},
+        {"slotIndex", json::Value(std::int64_t{panel.slot_index})},
+        {"visible", json::Value(panel.visible)},
+        {"omittedItems", json::Value(std::int64_t{panel.omitted_items})},
+        {"items", json::Value(std::move(items))}});
+  }
+  items.reserve(panel.items.size());
+  for (const auto &item : panel.items) items.push_back(legacy_item_value(item));
+  return json::Value(json::Value::Object{
+      {"panelId", json::Value(panel.panel_id)},
+      {"slotIndex", json::Value(std::int64_t{panel.slot_index})},
+      {"items", json::Value(std::move(items))}});
+}
+
+} // namespace
 
 CompanionSerializeResult
 serialize_companion_snapshot_json(const CompanionSessionSnapshot &snapshot) {
   if (const auto error = validate_companion_snapshot(snapshot))
     return *error;
 
+  const bool typed = snapshot.snapshot_version == companion_snapshot_version_typed;
   json::Value::Array panels;
   panels.reserve(snapshot.panels.size());
-  for (const auto &panel : snapshot.panels) {
-    json::Value::Array items;
-    items.reserve(panel.items.size());
-    for (const auto &item : panel.items)
-      items.emplace_back(json::Value::Object{
-          {"cooldownId", json::Value(item.cooldown_id)},
-          {"name", json::Value(item.name)},
-          {"progress", json::Value(item.progress)},
-          {"availableCharges", json::Value(std::int64_t{item.available_charges})},
-          {"maxCharges", json::Value(std::int64_t{item.max_charges})},
-          {"remainingMs", json::Value(item.remaining_ms)},
-          {"isReady", json::Value(item.is_ready)}});
-    panels.emplace_back(json::Value::Object{
-        {"panelId", json::Value(panel.panel_id)},
-        {"slotIndex", json::Value(std::int64_t{panel.slot_index})},
-        {"items", json::Value(std::move(items))}});
-  }
+  for (const auto &panel : snapshot.panels) panels.push_back(panel_value(panel, typed));
   json::Value::Array available_panels;
   available_panels.reserve(snapshot.available_panels.size());
   for (const auto &panel : snapshot.available_panels)
     available_panels.emplace_back(json::Value::Object{
         {"panelId", json::Value(panel.panel_id)},
         {"name", json::Value(panel.name)}});
-  const json::Value root(json::Value::Object{
+  json::Value::Object fields{
       {"profileId", json::Value(snapshot.profile_id)},
       {"sessionKey", json::Value(snapshot.session_key)},
       {"timestampMs", json::Value(static_cast<std::int64_t>(snapshot.timestamp_ms))},
       {"panels", json::Value(std::move(panels))},
       {"availablePanels", json::Value(std::move(available_panels))},
-      {"preferences", slot_mappings_value(snapshot.preferences)}});
+      {"preferences", slot_mappings_value(snapshot.preferences)}};
+  // Version 1 output stays byte-identical: it never names its version.
+  if (typed)
+    fields.emplace("snapshotVersion", json::Value(std::int64_t{snapshot.snapshot_version}));
+  const json::Value root(std::move(fields));
   std::string out;
   json::append_value(out, root);
   if (out.size() > max_companion_snapshot_bytes)
@@ -418,6 +509,47 @@ bool parse_snapshot_panel(json::Reader &reader, const json::Value &value,
                     panel.items);
 }
 
+bool parse_typed_item(json::Reader &reader, const json::Value &value,
+                      const std::string &path, CompanionTypedItem &item) {
+  if (!value.is_object()) return reader.fail(path, "item must be an object");
+  std::string kind;
+  if (!read_text(reader, value, "itemId", path, item.item_id) ||
+      !read_text(reader, value, "kind", path, kind))
+    return false;
+  // Unlike opaque profile items, an unknown wire kind rejects the snapshot.
+  const auto parsed = parse_enum_wire(profile_wire::overlay_item_kind, kind);
+  if (!parsed) return reader.fail(path + ".kind", "unknown item kind");
+  item.kind = *parsed;
+  return read_text(reader, value, "label", path, item.label) &&
+         read_text(reader, value, "valueText", path, item.value_text) &&
+         read_number(reader, value, "fill", path, item.fill) &&
+         reader.boolean(value, "hasProgress", path, item.has_progress,
+                        json::Required::yes) &&
+         read_count(reader, value, "pips", path, 0,
+                    std::numeric_limits<std::uint32_t>::max(), item.pips) &&
+         read_count(reader, value, "filledPips", path, 0,
+                    std::numeric_limits<std::uint32_t>::max(), item.filled_pips) &&
+         read_count(reader, value, "color", path, 0,
+                    std::numeric_limits<std::uint32_t>::max(), item.color) &&
+         reader.boolean(value, "active", path, item.active, json::Required::yes) &&
+         reader.boolean(value, "flashOn", path, item.flash_on, json::Required::yes) &&
+         reader.boolean(value, "unavailable", path, item.unavailable,
+                        json::Required::yes);
+}
+
+bool parse_typed_panel(json::Reader &reader, const json::Value &value,
+                       const std::string &path, CompanionPanelSnapshot &panel) {
+  if (!value.is_object()) return reader.fail(path, "panel must be an object");
+  return read_text(reader, value, "panelId", path, panel.panel_id) &&
+         read_count(reader, value, "slotIndex", path, 0,
+                    std::numeric_limits<std::uint32_t>::max(), panel.slot_index) &&
+         reader.boolean(value, "visible", path, panel.visible, json::Required::yes) &&
+         read_count(reader, value, "omittedItems", path, 0,
+                    std::numeric_limits<std::uint32_t>::max(), panel.omitted_items) &&
+         read_array(reader, value, "items", path, parse_typed_item,
+                    panel.typed_items);
+}
+
 bool parse_available_panel(json::Reader &reader, const json::Value &value,
                            const std::string &path,
                            CompanionAvailablePanel &panel) {
@@ -463,14 +595,27 @@ parse_companion_snapshot_json(const std::string_view json_str) {
 
   CompanionSessionSnapshot snapshot;
   json::Reader reader;
+  // An absent snapshotVersion is the cooldown-only version 1 wire.
+  const auto version = reader.integer(
+      root, "snapshotVersion", "$", 0, std::numeric_limits<std::uint32_t>::max(),
+      json::Required::no, companion_snapshot_version_legacy,
+      json::IntegerEncoding::integer_token);
+  if (!version) return reader_error(reader);
+  snapshot.snapshot_version = static_cast<std::uint32_t>(*version);
+  if (snapshot.snapshot_version != companion_snapshot_version_legacy &&
+      snapshot.snapshot_version != companion_snapshot_version_typed)
+    return CompanionError{"$.snapshotVersion", "unsupported snapshotVersion"};
+  const bool typed = snapshot.snapshot_version == companion_snapshot_version_typed;
   // timestampMs is unsigned on the wire; a negative token is unrepresentable.
   if (!read_text(reader, root, "profileId", "$", snapshot.profile_id) ||
       !read_text(reader, root, "sessionKey", "$", snapshot.session_key) ||
       !read_count(reader, root, "timestampMs", "$", 0,
                   std::numeric_limits<std::int64_t>::max(),
                   snapshot.timestamp_ms) ||
-      !read_array(reader, root, "panels", "$", parse_snapshot_panel,
-                  snapshot.panels) ||
+      !(typed ? read_array(reader, root, "panels", "$", parse_typed_panel,
+                           snapshot.panels)
+              : read_array(reader, root, "panels", "$", parse_snapshot_panel,
+                           snapshot.panels)) ||
       !read_array(reader, root, "availablePanels", "$", parse_available_panel,
                   snapshot.available_panels) ||
       !read_array(reader, root, "preferences", "$", parse_preference,

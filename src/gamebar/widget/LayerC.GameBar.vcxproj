@@ -95,6 +95,7 @@
     <ClInclude Include="SettingsWidgetPage.h"><DependentUpon>SettingsWidgetPage.xaml</DependentUpon></ClInclude>
     <ClInclude Include="WidgetSnapshotHub.hpp" />
     <ClInclude Include="WidgetSnapshotState.hpp" />
+    <ClInclude Include="WidgetRowModel.hpp" />
     <ClInclude Include="WidgetServiceSession.hpp" />
     <ClInclude Include="..\GameBarEnvelope.hpp" />
   </ItemGroup>

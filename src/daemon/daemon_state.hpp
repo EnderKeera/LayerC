@@ -32,6 +32,7 @@ inline constexpr UINT_PTR game_scan_timer = 1;
 inline constexpr UINT_PTR input_poll_timer = 2;
 inline constexpr UINT_PTR overlay_render_timer = 3;
 inline constexpr UINT_PTR automation_timer = 4;
+inline constexpr UINT_PTR companion_snapshot_timer = 5;
 
 struct HidRuntimeState;
 class HidRuntime;
@@ -453,8 +454,10 @@ private:
 class CompanionHost final : public layerc::runtime::IRuntimeService {
 public:
   CompanionHost(SessionRegistry &sessions, SessionQueries &queries,
-                SessionControl &control) noexcept
-      : sessions_(sessions), queries_(queries), control_(control) {}
+                SessionControl &control, const HWND &window) noexcept
+      : sessions_(sessions), queries_(queries), control_(control),
+        window_(window) {}
+  ~CompanionHost() override;
   [[nodiscard]] layerc::runtime::ServiceReconcileResult
   reconcile(const layerc::runtime::CapabilityDemand &demand) override;
   void quiesce() noexcept override;
@@ -468,18 +471,29 @@ public:
     return transport_.wait_handle();
   }
   [[nodiscard]] bool connected() const { return transport_.connected(); }
-  [[nodiscard]] std::wstring last_error() const { return transport_.last_error(); }
+  // A transport fault wins; otherwise a snapshot that shed rows or could not
+  // be published at all stays visible until a later snapshot fits.
+  [[nodiscard]] std::wstring last_error() const {
+    auto error = transport_.last_error();
+    return error.empty() ? snapshot_fault_ : error;
+  }
 
 private:
+  friend struct CompanionHostTestAccess;
   [[nodiscard]] bool apply_preferences(std::string_view json);
   void set_active_session_count(std::size_t count) noexcept;
+  void schedule_publication(std::optional<layerc::core::TimePoint> next,
+                            layerc::core::TimePoint now) noexcept;
 
   SessionRegistry &sessions_;
   SessionQueries &queries_;
   SessionControl &control_;
+  const HWND &window_;
   layerc::gamebar::GameBarTransport transport_;
   HWND last_game_foreground_{};
   std::uint32_t active_session_count_{};
+  std::wstring snapshot_fault_;
+  bool timer_running_{};
 };
 
 } // namespace layerc::daemon

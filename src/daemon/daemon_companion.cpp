@@ -4,23 +4,48 @@
 #include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <limits>
+#include <optional>
+#include <string>
 #include <type_traits>
 #include <variant>
 
 namespace layerc::daemon {
 
+CompanionHost::~CompanionHost() { quiesce(); }
+
 layerc::runtime::ServiceReconcileResult
 CompanionHost::reconcile(const layerc::runtime::CapabilityDemand &) {
-  return transport_.start()
-             ? layerc::runtime::ServiceReconcileResult{}
-             : layerc::runtime::ServiceReconcileResult::failed(
-                   "Game Bar transport could not start");
+  if (!transport_.start()) {
+    schedule_publication(std::nullopt, layerc::core::MonotonicClock::now());
+    return layerc::runtime::ServiceReconcileResult::failed(
+        "Game Bar transport could not start");
+  }
+  // Seed the presentation timer from the producer itself instead of waiting
+  // for a native overlay render.
+  publish_snapshot(layerc::core::MonotonicClock::now());
+  return {};
 }
 
 void CompanionHost::quiesce() noexcept {
+  schedule_publication(std::nullopt, layerc::core::MonotonicClock::now());
   transport_.stop();
   set_active_session_count(0);
+}
+
+void CompanionHost::schedule_publication(
+    const std::optional<layerc::core::TimePoint> next,
+    const layerc::core::TimePoint now) noexcept {
+  if (timer_running_ && window_ != nullptr)
+    KillTimer(window_, companion_snapshot_timer);
+  timer_running_ = false;
+  if (!next || window_ == nullptr) return;
+  const auto delay = std::chrono::ceil<layerc::core::Milliseconds>(*next - now);
+  const auto milliseconds = static_cast<UINT>(std::clamp<std::int64_t>(
+      delay.count(), 1, USER_TIMER_MAXIMUM));
+  timer_running_ = SetTimer(window_, companion_snapshot_timer, milliseconds, nullptr) != 0;
 }
 
 void CompanionHost::set_active_session_count(const std::size_t count) noexcept {
@@ -33,12 +58,16 @@ layerc::runtime::RuntimeResourceStats CompanionHost::resources() const noexcept 
       layerc::gamebar::GameBarTransport::current_process_is_expected_package()
           ? active_session_count_
           : 0U;
-  return {.handles =
+  return {.timers = timer_running_ ? 1U : 0U,
+          .handles =
               static_cast<std::uint32_t>(transport_.resource_handle_count()),
           .objects = owned_sessions};
 }
 
 void CompanionHost::publish_snapshot(const layerc::core::TimePoint now) {
+  // Every publication rebuilds the producer-owned deadline from scratch, so
+  // a stale timer never survives a failed or empty build.
+  schedule_publication(std::nullopt, now);
   if (transport_.wait_handle() == nullptr)
     return;
   const auto foreground = current_sessions();
@@ -46,16 +75,33 @@ void CompanionHost::publish_snapshot(const layerc::core::TimePoint now) {
   if (session == nullptr)
     return;
   (void)session->automation.snapshot(now);
+  // Typed rows use the same automation values, overrides and flash epoch as
+  // the session's native overlays.
+  std::optional<layerc::core::AutomationRuntimeSnapshot> runtime_snapshot;
+  if (session->automation.runtime())
+    runtime_snapshot = session->automation.runtime()->snapshot();
+  const auto *automation = runtime_snapshot ? &*runtime_snapshot
+      : (session->presentation_defaults ? &*session->presentation_defaults : nullptr);
   const auto session_key =
       layerc::platform::window_session_key(session->game_window);
-  const auto json = layerc::core::build_companion_snapshot(
+  const auto built = layerc::core::build_companion_snapshot_report(
       session->automation.profile().id, session_key,
       session->automation.profile().panels,
       session->automation.profile().cooldowns,
       session->automation.snapshot_buffer(),
-      session->modules.get<layerc::core::CompanionModule>().profile, now);
-  if (!json.empty())
-    (void)transport_.publish(json);
+      session->modules.get<layerc::core::CompanionModule>().profile, now,
+      {.automation = automation, .presentation_epoch = session->presentation_epoch});
+  if (built.json.empty()) {
+    snapshot_fault_ = L"Game Bar snapshot not published: invalid or over 64 KiB";
+    return;
+  }
+  snapshot_fault_ = built.omitted_items == 0 ? std::wstring{}
+      : L"Game Bar snapshot omitted " + std::to_wstring(built.omitted_items) +
+            L" item rows to fit 64 KiB";
+  if (!transport_.publish(built.json)) return;
+  schedule_publication(built.next_wakeup, now);
+  if (built.next_wakeup && !timer_running_)
+    snapshot_fault_ = L"Game Bar snapshot timer could not be scheduled";
 }
 
 void CompanionHost::poll() {

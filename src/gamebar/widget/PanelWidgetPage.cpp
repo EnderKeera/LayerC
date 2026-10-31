@@ -3,22 +3,95 @@
 #include "PanelWidgetPage.h"
 // Generated definitions require the projected page declaration above.
 #include "PanelWidgetPage.g.cpp"
+#include "WidgetRowModel.hpp"
 
 namespace winrt::LayerC::GameBar::implementation {
 namespace {
+using namespace Windows::UI::Xaml;
+using namespace Windows::UI::Xaml::Controls;
 
-hstring remaining_text(const layerc::core::CompanionSnapshotItem &item) {
-  if (item.is_ready)
-    return L"Ready";
-  const auto seconds = (item.remaining_ms + 999) / 1000;
-  std::wstring text = std::to_wstring(seconds) + L" s";
-  if (item.max_charges > 1) {
-    text += L"  ·  ";
-    text += std::to_wstring(item.available_charges);
-    text += L"/";
-    text += std::to_wstring(item.max_charges);
+constexpr std::uint32_t default_accent = 0x50BAC8;
+
+Media::SolidColorBrush brush(const std::uint32_t rgb) {
+  return Media::SolidColorBrush(Windows::UI::ColorHelper::FromArgb(
+      255, static_cast<std::uint8_t>(rgb >> 16), static_cast<std::uint8_t>(rgb >> 8),
+      static_cast<std::uint8_t>(rgb)));
+}
+
+// A fixed 8x8 DIP square with a 3 DIP gap (eight pips = 85 DIP), outlined
+// when empty, so pips never widen a row beyond its slot.
+Border pip(const Media::SolidColorBrush &accent, const bool filled) {
+  Border square;
+  square.Width(8.0);
+  square.Height(8.0);
+  square.BorderThickness(ThicknessHelper::FromUniformLength(1.0));
+  square.BorderBrush(accent);
+  if (filled) square.Background(accent);
+  return square;
+}
+
+// Label and value share one row; the label wraps instead of widening it.
+UIElement row_view(const layerc::gamebar::widget::RowModel &item) {
+  const auto accent = brush(item.color.value_or(default_accent));
+  StackPanel row;
+  row.Spacing(4);
+  row.MinHeight(36.0);
+  if (item.unavailable) row.Opacity(0.55);
+
+  Grid heading;
+  heading.ColumnSpacing(8);
+  for (const auto width : {GridLengthHelper::Auto(),
+                           GridLengthHelper::FromValueAndType(1.0, GridUnitType::Star),
+                           GridLengthHelper::Auto()}) {
+    ColumnDefinition column;
+    column.Width(width);
+    heading.ColumnDefinitions().Append(column);
   }
-  return hstring(text);
+  if (item.indicator) {
+    // The swatch keeps its space in both flash phases.
+    Border swatch;
+    swatch.Width(12.0);
+    swatch.Height(12.0);
+    swatch.CornerRadius(CornerRadiusHelper::FromUniformRadius(6.0));
+    swatch.BorderThickness(ThicknessHelper::FromUniformLength(1.0));
+    swatch.BorderBrush(accent);
+    if (item.accent_on) swatch.Background(accent);
+    swatch.VerticalAlignment(VerticalAlignment::Center);
+    heading.Children().Append(swatch);
+  }
+  TextBlock label;
+  label.Text(winrt::to_hstring(item.label));
+  label.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+  label.TextWrapping(TextWrapping::Wrap);
+  Grid::SetColumn(label, 1);
+  heading.Children().Append(label);
+  if (!item.value.empty()) {
+    TextBlock value;
+    value.Text(winrt::to_hstring(item.value));
+    value.Opacity(0.8);
+    Grid::SetColumn(value, 2);
+    heading.Children().Append(value);
+  }
+  row.Children().Append(heading);
+
+  if (item.pips != 0) {
+    StackPanel pips;
+    pips.Orientation(Orientation::Horizontal);
+    pips.Spacing(3);
+    for (std::uint32_t index = 0; index < item.pips; ++index)
+      pips.Children().Append(pip(accent, index < item.filled_pips));
+    row.Children().Append(pips);
+  }
+  if (item.fill) {
+    ProgressBar progress;
+    progress.Minimum(0.0);
+    progress.Maximum(100.0);
+    progress.Value(*item.fill * 100.0);
+    progress.Height(5.0);
+    if (item.color) progress.Foreground(accent);
+    row.Children().Append(progress);
+  }
+  return row;
 }
 
 } // namespace
@@ -115,37 +188,10 @@ void PanelWidgetPage::render(
   PanelTitle().Text(winrt::to_hstring(
       descriptor != snapshot_->available_panels.end() ? descriptor->name
                                                       : panel->panel_id));
-  StatusText().Text(panel->items.empty() ? L"No cooldowns in this panel."
-                                         : L"");
-
-  for (const auto &item : panel->items) {
-    Windows::UI::Xaml::Controls::StackPanel row;
-    row.Spacing(4);
-
-    Windows::UI::Xaml::Controls::StackPanel heading;
-    heading.Orientation(Windows::UI::Xaml::Controls::Orientation::Horizontal);
-    heading.Spacing(8);
-
-    Windows::UI::Xaml::Controls::TextBlock name;
-    name.Text(winrt::to_hstring(item.name));
-    name.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
-    name.TextWrapping(Windows::UI::Xaml::TextWrapping::Wrap);
-    heading.Children().Append(name);
-
-    Windows::UI::Xaml::Controls::TextBlock remaining;
-    remaining.Text(remaining_text(item));
-    remaining.Opacity(0.8);
-    heading.Children().Append(remaining);
-    row.Children().Append(heading);
-
-    Windows::UI::Xaml::Controls::ProgressBar progress;
-    progress.Minimum(0.0);
-    progress.Maximum(100.0);
-    progress.Value(item.progress * 100.0);
-    progress.Height(5.0);
-    row.Children().Append(progress);
-    ItemsHost().Children().Append(row);
-  }
+  const auto model =
+      layerc::gamebar::widget::panel_model(*panel, snapshot_->snapshot_version);
+  StatusText().Text(winrt::to_hstring(model.status));
+  for (const auto &item : model.rows) ItemsHost().Children().Append(row_view(item));
   apply_presentation();
 }
 
