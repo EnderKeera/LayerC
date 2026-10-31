@@ -5,7 +5,7 @@
 // labels are bounded only by the frame size, as on the daemon side.
 
 export const MAX_PANELS = 64;
-export const MAX_OPS = 256;
+export const MAX_OPS = 512;
 export const MAX_FRAME_BYTES = 64 * 1024;
 export const MAX_EXTENT = 32768;
 export const MAX_FONT_PX = 4096;

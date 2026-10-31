@@ -14,7 +14,9 @@
 namespace layerc::platform {
 
 inline constexpr std::size_t gnome_frame_max_panels = 64;
-inline constexpr std::size_t gnome_frame_max_ops = 256;
+// The largest legal typed panel, 32 rows of progress fill, outline, eight pips
+// and label (2 + 32 * 11 = 354 ops), fits; the JS validator uses the same bound.
+inline constexpr std::size_t gnome_frame_max_ops = 512;
 inline constexpr std::size_t gnome_frame_max_bytes = 64 * 1024;
 
 struct GnomePanel {
