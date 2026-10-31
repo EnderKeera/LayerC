@@ -728,6 +728,13 @@ void test_widget_connection_ownership();
 void test_widget_service_registration_cleanup();
 void test_widget_latest_state_delivery();
 void test_widget_owned_subscriptions();
+void test_companion_typed_snapshot_roundtrip();
+void test_companion_typed_snapshot_rejects_invalid();
+void test_companion_typed_wire_boundary();
+void test_companion_typed_producer_and_degradation();
+void test_companion_widget_rows();
+void test_companion_presentation_schedule();
+void test_companion_legacy_item_overrides();
 
 // Readers check shape and type only; validate_companion_snapshot owns every
 // semantic bound, so a parsed snapshot and a directly constructed one report
@@ -841,5 +848,12 @@ int main() {
       {"test_companion_profile_write_validation", test_companion_profile_write_validation},
       {"test_companion_sidecar_survives_unrelated_bundle_save", test_companion_sidecar_survives_unrelated_bundle_save},
       {"test_gamebar_selects_multiple_game_sessions", test_gamebar_selects_multiple_game_sessions},
+      {"test_companion_typed_snapshot_roundtrip", test_companion_typed_snapshot_roundtrip},
+      {"test_companion_typed_snapshot_rejects_invalid", test_companion_typed_snapshot_rejects_invalid},
+      {"test_companion_typed_wire_boundary", test_companion_typed_wire_boundary},
+      {"test_companion_typed_producer_and_degradation", test_companion_typed_producer_and_degradation},
+      {"test_companion_widget_rows", test_companion_widget_rows},
+      {"test_companion_presentation_schedule", test_companion_presentation_schedule},
+      {"test_companion_legacy_item_overrides", test_companion_legacy_item_overrides},
   });
 }

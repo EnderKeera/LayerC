@@ -22,6 +22,10 @@ inline constexpr std::size_t max_companion_snapshot_panels = 8;
 inline constexpr std::size_t max_companion_snapshot_items = 32;
 inline constexpr std::size_t max_companion_available_panels = 64;
 inline constexpr std::size_t max_companion_text_bytes = 512;
+// Snapshot wire versions: an absent snapshotVersion is the cooldown-only
+// version 1; version 2 carries resolved typed overlay rows.
+inline constexpr std::uint32_t companion_snapshot_version_legacy = 1;
+inline constexpr std::uint32_t companion_snapshot_version_typed = 2;
 
 struct CompanionSlotMapping {
   std::uint32_t slot_index{}; // 0..7
@@ -56,6 +60,31 @@ struct CompanionSnapshotItem {
 
   bool operator==(const CompanionSnapshotItem &) const = default;
 };
+// One version-2 row, fully resolved by the producer from present_panel():
+// widgets never resolve references, evaluate variables, run countdowns or
+// derive flash phases. Unknown wire kinds reject the whole snapshot.
+struct CompanionTypedItem {
+  std::string item_id;
+  OverlayItemKind kind{OverlayItemKind::cooldown};
+  // Resolved label and formatted value, separately bounded to 512 bytes.
+  // A whole-row text override uses label alone and leaves value_text empty.
+  std::string label;
+  std::string value_text;
+  // The native bar fill fraction in [0,1]; meaningful when has_progress.
+  double fill{1.0};
+  bool has_progress{true};
+  std::uint32_t pips{};
+  std::uint32_t filled_pips{};
+  // Resolved 0xRRGGBB fill, pip and indicator accent.
+  std::uint32_t color{};
+  bool active{};
+  // The producer's flash phase; true whenever the row is not flashing.
+  bool flash_on{true};
+  bool unavailable{};
+
+  bool operator==(const CompanionTypedItem &) const = default;
+};
+
 struct CompanionAvailablePanel {
   std::string panel_id;
   std::string name;
@@ -66,12 +95,19 @@ struct CompanionAvailablePanel {
 struct CompanionPanelSnapshot {
   std::string panel_id;
   std::uint32_t slot_index{};
+  // Version 1 rows; empty in version 2.
   std::vector<CompanionSnapshotItem> items;
+  // Version 2 only: resolved rows, resolved panel visibility, and the number
+  // of rows left out to honor the item or byte bound.
+  std::vector<CompanionTypedItem> typed_items;
+  bool visible{true};
+  std::uint32_t omitted_items{};
 
   bool operator==(const CompanionPanelSnapshot &) const = default;
 };
 
 struct CompanionSessionSnapshot {
+  std::uint32_t snapshot_version{companion_snapshot_version_legacy};
   std::string profile_id;
   // Opaque producer-defined runtime-instance identifier. Consumers must not
   // parse or persist its representation.
