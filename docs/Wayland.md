@@ -180,7 +180,7 @@ with `gnome-extensions enable`; it never accesses the network.
   that name equals the owner of `org.gnome.Shell`.
 - `frame` is a full replacement:
   `{"version":1,"panels":[{"id":"…", <append_overlay_display_list_json fields>}]}`,
-  ≤ 64 panels, ≤ 256 ops per panel, ≤ 64 KiB. Panels are drawn in logical
+  ≤ 64 panels, ≤ 512 ops per panel, ≤ 64 KiB. Panels are drawn in logical
   stage coordinates by non-reactive actors that never take input and stay above
   fullscreen windows. Every panel is removed on `Clear()`, when the daemon's
   name vanishes, and on `disable()`.

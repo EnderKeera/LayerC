@@ -1,12 +1,14 @@
 // The layer-shell painter without a compositor: display-list ops land on the
 // exact device pixels at integer buffer scales.
 
+#include "display_types.hpp"
 #include "wayland_overlay.hpp"
 #include "test_support.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -85,8 +87,79 @@ void draws_centered_text_inside_its_rect() {
          "text is centred horizontally inside its rect");
 }
 
+constexpr std::uint32_t pip_color = 0x38A97C;
+constexpr std::uint32_t accent_color = 0xD04A36;
+
+// A pips counter (2 of 4) above an active indicator in the given flash phase,
+// resolved the way the overlay service hands typed rows to every provider.
+OverlayFrame typed_frame(const bool flash_on) {
+  OverlayFrame frame;
+  frame.target = {0, 0, 800, 600};
+  frame.panel.id = "typed";
+  frame.panel.layout = layerc::core::PanelLayout::column;
+  frame.panel.style = layerc::core::PanelStyle::bar;
+  layerc::core::ItemPresentation counter;
+  counter.item_id = "stacks";
+  counter.kind = layerc::core::OverlayItemKind::counter;
+  counter.label = "Stacks  2/4";
+  counter.has_progress = false;
+  counter.pips = 4;
+  counter.filled_pips = 2;
+  counter.color = pip_color;
+  layerc::core::ItemPresentation indicator;
+  indicator.item_id = "power";
+  indicator.kind = layerc::core::OverlayItemKind::indicator;
+  indicator.label = "Power";
+  indicator.has_progress = false;
+  indicator.active = true;
+  indicator.ready = false;
+  indicator.flash_on = flash_on;
+  indicator.color = accent_color;
+  frame.bars.push_back(overlay_bar_from_presentation(counter));
+  frame.bars.push_back(overlay_bar_from_presentation(indicator));
+  return frame;
+}
+
+Canvas painted(const OverlayDisplayList &list) {
+  Canvas canvas(list.bounds.width, list.bounds.height);
+  paint_overlay_display_list(list, canvas.bytes.data(), canvas.width, canvas.height,
+                             canvas.width * 4, 1);
+  return canvas;
+}
+
+void paints_typed_pips_and_indicator_flash() {
+  const auto on = build_overlay_display_list(typed_frame(true));
+  const auto off = build_overlay_display_list(typed_frame(false));
+  if (!expect(on.bounds.width > 0 && on.bounds.height > 0 && on.bounds == off.bounds,
+              "both flash phases keep identical layer-surface bounds")) return;
+  const auto canvas = painted(on);
+  std::vector<OverlayRect> filled, empty;
+  std::optional<OverlayRect> accent;
+  for (const auto &op : on.ops) {
+    if (op.rgb == pip_color && op.rect.width == op.rect.height)
+      (op.kind == OverlayOpKind::fill_rect ? filled : empty).push_back(op.rect);
+    if (op.rgb == accent_color && op.kind == OverlayOpKind::fill_rect) accent = op.rect;
+  }
+  if (!expect(filled.size() == 2 && empty.size() == 2, "two filled and two empty pips")) return;
+  const auto centre = [&](const OverlayRect &rect) {
+    return canvas.at(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  };
+  expect(centre(filled[0]) == pip_color && centre(filled[1]) == pip_color,
+         "filled pips paint the item color");
+  expect(centre(empty[0]) != pip_color && canvas.at(empty[0].x, empty[0].y) == pip_color,
+         "empty pips are one-pixel outlines in the item color");
+  if (!expect(accent.has_value(), "an active indicator paints its accent in the on phase")) return;
+  expect(canvas.at(accent->x, accent->y) == accent_color, "the accent lands on its pixels");
+  const auto dark = painted(off);
+  expect(std::ranges::none_of(off.ops, [](const OverlayOp &op) {
+           return op.rgb == accent_color && op.kind == OverlayOpKind::fill_rect;
+         }) && dark.at(accent->x, accent->y) != accent_color,
+         "the off phase paints no accent and leaves no stale accent pixels");
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(paints_fills_and_one_pixel_outlines_at_scale_one),
                  LAYERC_TEST_CASE(scales_logical_ops_to_device_pixels),
-                 LAYERC_TEST_CASE(draws_centered_text_inside_its_rect))
+                 LAYERC_TEST_CASE(draws_centered_text_inside_its_rect),
+                 LAYERC_TEST_CASE(paints_typed_pips_and_indicator_flash))

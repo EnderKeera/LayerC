@@ -152,6 +152,25 @@ void reporting_overlay_and_idle() {
              shell.frame == *platform::build_gnome_overlay_frame(std::vector{b}),
          "hide preserves other live panels");
 
+  // Typed rows travel as the shared display list's fill/stroke/text ops.
+  auto typed = frame;
+  core::ItemPresentation pips;
+  pips.item_id = "stacks";
+  pips.kind = core::OverlayItemKind::counter;
+  pips.label = "Stacks  2/4";
+  pips.has_progress = false;
+  pips.pips = 4;
+  pips.filled_pips = 2;
+  pips.color = 0x38A97C;
+  typed.bars.push_back(platform::overlay_bar_from_presentation(pips));
+  const platform::GnomePanel typed_panel{"typed", platform::build_overlay_display_list(typed)};
+  expect(providers.show("typed", typed), "a typed panel is accepted");
+  providers.present();
+  expect(pump(providers, loop, peers, [&] { return shell.presents == 3; }) &&
+             shell.frame == *platform::build_gnome_overlay_frame(std::vector{b, typed_panel}),
+         "typed rows are presented unchanged beside other panels");
+  providers.hide("typed");
+
   // Frame bounds: a rejected panel degrades the overlay but leaves the
   // transport and accepted panels intact; freeing room recovers it.
   bool filled = true;
@@ -169,7 +188,7 @@ void reporting_overlay_and_idle() {
   expect(overlay_status && overlay_status->state == runtime::DisplayProviderState::active,
          "recovery clears the bounds failure");
   providers.present();
-  expect(pump(providers, loop, peers, [&] { return shell.presents == 3; }),
+  expect(pump(providers, loop, peers, [&] { return shell.presents == 4; }),
          "the recovered frame is presented");
   const std::vector<std::string> keep{"b"};
   providers.retain(keep);

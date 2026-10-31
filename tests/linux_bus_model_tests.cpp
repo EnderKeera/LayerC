@@ -10,7 +10,9 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -120,11 +122,48 @@ void gnome_frame_is_byte_stable_and_bounded() {
   std::vector<GnomePanel> many(gnome_frame_max_panels + 1, panels.front());
   expect(!build_gnome_overlay_frame(many), "more than 64 panels are refused");
   GnomePanel busy{"busy", list};
-  busy.list.ops.resize(gnome_frame_max_ops + 1, list.ops.front());
-  expect(!build_gnome_overlay_frame(std::vector{busy}), "more than 256 ops are refused");
+  busy.list.ops.resize(gnome_frame_max_ops, list.ops.front());
+  expect(gnome_frame_max_ops == 512 && build_gnome_overlay_frame(std::vector{busy}),
+         "exactly 512 ops are accepted");
+  busy.list.ops.push_back(list.ops.front());
+  expect(!build_gnome_overlay_frame(std::vector{busy}), "513 ops are refused");
   GnomePanel wordy{"wordy", list};
   wordy.list.ops = std::vector(200, OverlayOp{OverlayOpKind::text, {}, 0, std::string(400, 'x'), 13});
   expect(!build_gnome_overlay_frame(std::vector{wordy}), "frames over 64 KiB are refused");
+}
+
+// The largest legal typed panel: 32 bar rows, each with a progress fill,
+// outline, eight pips and a label, through the shared display list.
+void gnome_frame_carries_the_largest_typed_panel() {
+  OverlayFrame frame;
+  frame.target = {0, 0, 1920, 1600};
+  frame.panel.id = "pips";
+  frame.panel.layout = layerc::core::PanelLayout::column;
+  frame.panel.style = layerc::core::PanelStyle::bar;
+  for (std::uint32_t row = 0; row < layerc::core::max_overlay_items_per_panel; ++row) {
+    layerc::core::ItemPresentation item;
+    item.item_id = "row" + std::to_string(row);
+    item.kind = layerc::core::OverlayItemKind::counter;
+    item.label = "Charges " + std::to_string(row) + "  4/8";
+    item.remaining = 0.5;
+    item.ready = false;
+    item.pips = layerc::core::max_counter_pips;
+    item.filled_pips = 4;
+    item.color = 0x38A97C;
+    frame.bars.push_back(overlay_bar_from_presentation(item));
+  }
+  const auto list = build_overlay_display_list(frame);
+  expect(list.ops.size() == 2 + layerc::core::max_overlay_items_per_panel * 11,
+         "32 rows of fill, outline, eight pips and label emit 354 ops");
+  expect(list.ops.size() > 256 && list.ops.size() <= gnome_frame_max_ops,
+         "the legal maximum needs the raised bound and fits it");
+  const auto pips = std::ranges::count_if(list.ops, [](const OverlayOp &op) {
+    return op.rgb == 0x38A97C && op.rect.width == op.rect.height;
+  });
+  expect(pips == 32 * 8, "every row draws its eight pips");
+  const auto encoded = build_gnome_overlay_frame(std::vector{GnomePanel{"pips", list}});
+  expect(encoded && encoded->size() <= gnome_frame_max_bytes,
+         "the maximum typed panel stays inside the 64 KiB frame");
 }
 
 void restore_tokens_persist_per_profile() {
@@ -251,5 +290,6 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(window_report_parses_full_snapshots),
                  LAYERC_TEST_CASE(window_report_rejects_malformed_reports),
                  LAYERC_TEST_CASE(window_report_truncates_excess_windows),
                  LAYERC_TEST_CASE(gnome_frame_is_byte_stable_and_bounded),
+                 LAYERC_TEST_CASE(gnome_frame_carries_the_largest_typed_panel),
                  LAYERC_TEST_CASE(restore_tokens_persist_per_profile),
                  LAYERC_TEST_CASE(pipewire_frames_convert_formats_and_crops))
