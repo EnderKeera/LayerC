@@ -1,7 +1,7 @@
 {
   "uuid": "layerc@enderkeera.github.io",
   "name": "LayerC",
-  "description": "Reports windows to the LayerC daemon and draws its cooldown overlay panels. Local session-bus IPC only; never accesses the network.",
+  "description": "Reports windows to the LayerC daemon and draws its typed overlay panels. Local session-bus IPC only; never accesses the network.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
-  "version-name": "2.7"
+  "version-name": "2.7.0"
 }

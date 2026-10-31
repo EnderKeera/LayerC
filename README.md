@@ -2,16 +2,16 @@
 
 [![CI](https://github.com/EnderKeera/LayerC/actions/workflows/ci.yml/badge.svg)](https://github.com/EnderKeera/LayerC/actions/workflows/ci.yml) ![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg) ![Windows](https://img.shields.io/badge/Windows-10_22H2%2B_%7C_11-blue.svg) ![Linux](https://img.shields.io/badge/Linux-X11_%2F_headless-lightgrey.svg)
 
-LayerC is a lightweight, open-source cooldown overlay with a dependency-free
-C++20 core and native platform backends. It provides passive input tracking,
-click-through cooldown panels, opt-in visual recognition, bounded automation,
-typed JSON profiles, and deterministic `.layercprofile` bundles.
+LayerC is a lightweight, open-source overlay with a dependency-free C++20 core
+and native platform backends. It provides passive input tracking, click-through
+panels, opt-in visual recognition, bounded automation, typed JSON profiles, and
+deterministic `.layercprofile` bundles. The V2.7 development tree adds cooldown,
+timer, counter, and indicator items instead of limiting panels to cooldowns.
 
-Windows is the complete desktop experience. Linux V2.6 is an X11
-implementation with a headless fallback; v2.6c (released as `v2.6.2`) adds the
-first Linux `layere` editor and the first published `.deb` and Flatpak. Linux
-physical desktop evidence is still pending. LayerC has no telemetry and never injects input, reads game memory, or
-requires elevation.
+Windows is the complete desktop experience. Linux's supported desktop scope is
+X11 with a headless fallback; the V2.7 Wayland backend remains a preview without
+a support claim. Linux physical desktop evidence is still pending. LayerC has
+no telemetry and never injects input, reads game memory, or requires elevation.
 
 ## Support and release status
 
@@ -26,18 +26,18 @@ published release.
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
 | Linux editor (v2.6c, released as `v2.6.2`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the `v2.6.2` `.deb` and Flatpak are the gate-built packages; physical evidence pending |
+| Typed overlay items (V2.7, in development) | Cooldown, timer, counter, and indicator items in the shared core, both editors, Win32/X11 overlays, Wayland/GNOME frames, and Game Bar slots | Local implementation; no published release or expanded desktop/hardware support claim |
 | Wayland (V2.7, in development) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented locally; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
 | Gamescope | Not supported | Out of scope |
 
-Package metadata reports **2.6.2**, published as the `v2.6.2` release of
-v2.6c; the V2.6.1–V2.6.2 rows above are implementation milestones that
-shipped in `v2.6.0`. `v2.6.2` ships the Windows x64 ZIP, the Debian 13
-`.deb`, the Flatpak bundle and `SHA256SUMS`. The ZIP starts LayerC via
-`layerd.exe`. It omits `layerc.exe` until a release-signing key is
-provisioned, and launcher self-updates are OFF by default. The Linux packages
-are the exact artifacts the release gates built, installed and smoke tested;
-physical X11 evidence is pending. The Game Bar
-companion's manual matrix, certification, and production signing remain open.
+Package metadata reports **2.7.0** for this **unreleased development tree**,
+combining typed overlay items with the Wayland preview. The version bump does
+not publish a release or qualify additional desktops. The V2.6/V2.6c rows and
+dated evidence above describe their historical scopes, not V2.7 qualification.
+Windows ZIP packaging starts LayerC via `layerd.exe`; it omits `layerc.exe`
+until a release-signing key is provisioned, and launcher self-updates remain
+OFF by default. Physical Linux evidence and the Game Bar companion's manual
+matrix, certification, and production signing remain open.
 
 ## Non-negotiable guarantees
 
@@ -111,7 +111,7 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 | Program | Windows | Linux | Purpose |
 | --- | ---: | ---: | --- |
 | `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
-| `layerd` | yes | yes | Cooldown/automation daemon; background desktop app on Windows, foreground service on Linux |
+| `layerd` | yes | yes | Overlay/automation daemon; background desktop app on Windows, foreground service on Linux |
 | `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c, shipped in `v2.6.2`; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
@@ -210,7 +210,10 @@ package installs it without enabling it. The Debian package
 ### Shared core
 
 - Typed, versioned UTF-8 JSON profiles and sidecars.
-- Cooldown state machines with charges and ignore/restart retrigger policies.
+- Ordered cooldown, timer, counter, and indicator panel items with shared
+  presentation and item-scoped automation overrides; see [overlay items](#overlay-items-v27-in-development).
+- Cooldown state machines with charges, ignore/restart retrigger policies, and
+  optional standalone active-duration windows.
 - Demand-driven `DaemonKernel`, `CapabilityDemand`, and runtime-service lifecycle.
 - Deterministic miniz ZIP bundles with SHA-256 asset deduplication and
   crash-recoverable transactions. Unconfirmed durability retains recovery evidence;
@@ -255,7 +258,8 @@ package installs it without enabling it. The Debian package
 - Passive XI2 keyboard/mouse/gamepad-class input and EWMH window tracking.
   Focus loss clears held keys while preserving cooldowns; final shutdown runs
   session-stopping automation and checkpoints its persistent effects.
-- Click-through Shape overlays with RandR monitor scaling.
+- Click-through Shape overlays with RandR monitor scaling and the same typed
+  overlay items as Windows.
 - Composite/Damage capture with a bounded direct-window fallback.
 - `layerctl` profile/bundle transfer compatible with Windows JSON and
   `.layercprofile` payloads.
@@ -264,7 +268,8 @@ package installs it without enabling it. The Debian package
 
 ### Xbox Game Bar companion
 
-- Eight fixed panel slots and one settings widget.
+- Eight fixed panel slots and one settings widget, including all four typed
+  item kinds through bounded immutable presentation snapshots.
 - Same-package App Service `LayerC.GameBar.v1`.
 - Immutable snapshots capped at 64 KiB, with stale data cleared after 2 seconds.
 - Zero unpackaged runtime cost. See [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md).
@@ -341,10 +346,9 @@ tests skip with code 77 when a display or required extension is unavailable.
 CI runs on pushes to `main`, pull requests, and manual dispatch: workflow
 lint, Windows MSVC build/test/benchmarks/package, MSVC `/analyze`, Linux
 containers, and Flatpak smoke. Green `main` publishes the `rolling`
-prerelease; `v*.*.*` tags publish a release. Both ship only the Windows x64
-ZIP; the Linux `.deb` and Flatpak bundle are CI evidence artifacts, not
-published downloads. Jobs, runners,
-artifacts, and hardware benchmarks are described in
+prerelease; `v*.*.*` tags publish a release. Package contents and their gates
+are defined by the current release workflow, not by the local version bump.
+Jobs, runners, artifacts, and hardware benchmarks are described in
 [`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates).
 
 ## Profile locations and format
@@ -418,10 +422,61 @@ case-folded substrings), so the sample above needs both `game.exe` and a title
 containing "Game Window". A profile with no identity field never matches.
 
 Keyboard `code` values are Win32 virtual-key codes on both platforms
-(`16` is Shift, `69` is E), so this binding fires on Shift+E. Schema 4 requires
-the empty `modules`, `cooldownGroups`, and `hidBindings` arrays; older schemas
-(1 and 2) are migrated when loaded. `layerctl profile import-json` names the
+(`16` is Shift, `69` is E), so this binding fires on Shift+E. The schema-4
+example requires the empty `modules`, `cooldownGroups`, and `hidBindings`
+arrays; older schemas (1 and 2) are migrated when loaded. Existing canonical
+legacy serialization is unchanged. `layerctl profile import-json` names the
 first field it rejects.
+
+### Overlay items (V2.7, in development)
+
+Schema 5 adds optional cooldown `activeDurationMs` and a panel's ordered `items`
+array. Unchanged legacy cooldown-only panels keep writing `cooldowns`; using
+new typed features promotes the profile to schema 5. In schema 5, `items` is
+authoritative when both panel lists are present; saving rewrites `cooldowns`
+as the ordered projection of known cooldown-kind items, not a second list to
+render. Unknown item kinds are preserved for round trips, skipped by rendering,
+and reported in diagnostics rather than deleted or guessed.
+
+Each known item has a stable `id`, a `kind`, and an optional `label`:
+
+| Kind | Source and options |
+| --- | --- |
+| `cooldown` | `cooldownId`; existing remaining time and charge behavior |
+| `timer` | `source: "automation"` with `timerId`, or `source: "cooldownActive"` with `cooldownId` |
+| `counter` | Numeric `variable`; optional positive finite `max`; `display: "number"` or `"pips"` (pips require an integer `max` from 1 to 8) |
+| `indicator` | Boolean, integer, or number `variable` (active when true or nonzero); `flashHz` is 0 (off), or 0.5–4 Hz while active |
+
+For example, the following is a schema-5 panel's item list, not a complete
+profile:
+
+```json
+{
+  "items": [
+    { "id": "dash-row", "kind": "cooldown", "cooldownId": "dash" },
+    { "id": "dash-active", "kind": "timer", "source": "cooldownActive", "cooldownId": "dash" },
+    { "id": "buff-timer", "kind": "timer", "source": "automation", "timerId": "buff" },
+    { "id": "stacks-row", "kind": "counter", "variable": "stacks", "max": 8, "display": "pips" },
+    { "id": "buff-indicator", "kind": "indicator", "variable": "buffActive", "flashHz": 2 }
+  ]
+}
+```
+
+A positive `activeDurationMs` on `dash` starts a separate active window whenever
+that cooldown accepts a trigger; it needs no automation. Automation-backed
+timers and variables are authored in the Automation editor. Missing sources or
+wrong variable types display an unavailable row instead of a fabricated zero.
+A declared automation timer that is not running is an ordinary stopped row;
+an undeclared or removed timer ID is unavailable and reports a shared overlay
+item diagnostic in both daemons and both editors. Declared variable defaults
+can be presented without starting automation.
+Typed profiles allow at most 64 panels and 1–32 items per typed panel.
+
+Both editors provide an ordered item list with add, edit, reorder, and remove,
+a cooldown active-duration control, and an automation-timer preset. Preview and
+simulation use the same core presentation as the daemon. Native overlays,
+Wayland/GNOME frames, and Game Bar consume resolved values and flash phases;
+none independently evaluates automation or changes input behavior.
 
 Windows sidecars use these directories beneath the profile root:
 

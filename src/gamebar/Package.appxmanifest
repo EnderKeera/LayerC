@@ -10,7 +10,7 @@
   <Properties>
     <DisplayName>LayerC Game Bar Companion</DisplayName>
     <PublisherDisplayName>LayerC</PublisherDisplayName>
-    <Description>LayerC cooldown panel companion</Description>
+    <Description>LayerC typed overlay panel companion</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   <Resources><Resource Language="en-us" /></Resources>
@@ -23,7 +23,7 @@
   <Applications>
     <Application Id="LayerC.GameBar" Executable="layerc-gamebar.exe" EntryPoint="LayerC.GameBar.App">
       <uap:VisualElements AppListEntry="none" DisplayName="LayerC Game Bar Companion"
-                          Description="LayerC cooldown panel companion"
+                          Description="LayerC typed overlay panel companion"
                           BackgroundColor="#20252B"
                           Square44x44Logo="Assets\StoreLogo.png"
                           Square150x150Logo="Assets\StoreLogo.png" />
@@ -34,7 +34,7 @@
         <desktop:Extension Category="windows.fullTrustProcess" Executable="layerd.exe" />
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot1"
-                             DisplayName="LayerC Panel 1" Description="LayerC cooldown panel slot 1" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 1" Description="LayerC overlay panel slot 1" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported>
               <SettingsSupported AppExtensionId="Settings" />
@@ -47,7 +47,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot2"
-                             DisplayName="LayerC Panel 2" Description="LayerC cooldown panel slot 2" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 2" Description="LayerC overlay panel slot 2" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>
@@ -56,7 +56,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot3"
-                             DisplayName="LayerC Panel 3" Description="LayerC cooldown panel slot 3" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 3" Description="LayerC overlay panel slot 3" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>
@@ -65,7 +65,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot4"
-                             DisplayName="LayerC Panel 4" Description="LayerC cooldown panel slot 4" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 4" Description="LayerC overlay panel slot 4" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>
@@ -74,7 +74,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot5"
-                             DisplayName="LayerC Panel 5" Description="LayerC cooldown panel slot 5" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 5" Description="LayerC overlay panel slot 5" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>
@@ -83,7 +83,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot6"
-                             DisplayName="LayerC Panel 6" Description="LayerC cooldown panel slot 6" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 6" Description="LayerC overlay panel slot 6" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>
@@ -92,7 +92,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot7"
-                             DisplayName="LayerC Panel 7" Description="LayerC cooldown panel slot 7" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 7" Description="LayerC overlay panel slot 7" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>
@@ -101,7 +101,7 @@
         </uap3:Extension>
         <uap3:Extension Category="windows.appExtension">
           <uap3:AppExtension Name="microsoft.gameBarUIExtension" Id="PanelSlot8"
-                             DisplayName="LayerC Panel 8" Description="LayerC cooldown panel slot 8" PublicFolder="Assets">
+                             DisplayName="LayerC Panel 8" Description="LayerC overlay panel slot 8" PublicFolder="Assets">
             <uap3:Properties><GameBarWidget Type="Standard">
               <HomeMenuVisible>true</HomeMenuVisible><PinningSupported>true</PinningSupported><SettingsSupported AppExtensionId="Settings" />
               <Window><AllowForegroundTransparency>true</AllowForegroundTransparency><Size><Height>300</Height><Width>400</Width><MinHeight>150</MinHeight><MinWidth>220</MinWidth><MaxHeight>900</MaxHeight><MaxWidth>900</MaxWidth></Size><ResizeSupported><Horizontal>true</Horizontal><Vertical>true</Vertical></ResizeSupported></Window>

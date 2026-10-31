@@ -1,4 +1,4 @@
-# LayerC on Linux (V2.6)
+# LayerC on Linux (V2.6 support; V2.7 in development)
 
 This document owns Linux behavior, commands, packaging, permissions, and
 physical evidence. Use [`../README.md`](../README.md) for the project-wide
@@ -37,6 +37,11 @@ capabilities as unavailable; `layercal` fails visibly. Name matching on both
 platforms uses the shared deterministic fold (ASCII plus the cased Latin-1
 supplement rows; all other codepoints compare byte-exact), replacing the
 former Windows `LCMapStringEx` invariant mapping so Windows and Linux agree.
+
+The local development tree reports package version **2.7.0**. It folds typed
+overlay items into the V2.7 Wayland preview; the version bump is not a release
+or an expansion of the supported desktop matrix. The historical V2.6 evidence
+above does not qualify this tree.
 
 ## Linux editor resource targets
 
@@ -167,16 +172,31 @@ extension the overlay stays hidden and the daemon publishes
 Overlays are painted with plain rectangles — no compositor, no toolkit. Bars
 fill from the left and drain towards ready; a bar panel also honours
 `hideWhenReady` and unmaps itself. Only active sessions get overlay targets.
-Automation can force a ready bar visible, hide any panel, or replace its text.
-Visibility and bar text come from the shared core panel presentation, so
-Windows, Linux, and the Game Bar companion apply one rule.
-While an overlay is mapped the daemon arms a 100 ms repaint deadline and
-nothing else: once every panel is hidden or no session is active, the loop
-blocks again.
+V2.7 adds ordered cooldown, timer, counter, and indicator items. Counter pips
+are bounded at eight; inactive indicator phases preserve row geometry. Missing
+or mistyped sources remain visibly unavailable. Visibility, labels, values,
+colors, and flash phases come from shared core presentation, including
+item-scoped automation overrides, so the native and companion renderers do
+not independently evaluate automation.
+While an overlay is mapped, static panels add no repaint timer. Running
+cooldowns and countdowns request a repaint at most 100 ms later, and flashing
+indicators request their next half-period edge from shared presentation.
+Expose, geometry, input and automation events still invalidate the overlay;
+with no pending visual change, the event loop blocks even while a static panel
+remains mapped.
 
 The monitor scale comes from RandR physical size (clamped to 72–288 dpi, 96
 when a server reports nothing usable), matching the Windows `MulDiv`-style
 scaling so one profile looks the same on both platforms.
+
+The Linux editor's Panels page uses an ordered item list with add, edit,
+reorder, and remove. It exposes cooldown active duration, automation-timer
+presets, numeric/pip counters, and indicators with flashing off or 0.5–4 Hz.
+Preview and simulation use the same typed presentation. Existing legacy
+cooldown-only profiles retain their `cooldowns` representation; schema 5 is
+used for new typed features. See the [profile/item format](../README.md#overlay-items-v27-in-development).
+The editor remains an X11/XWayland client; these controls do not add native
+Wayland editor support or physical-desktop evidence.
 
 Smoke test on a headless box:
 
