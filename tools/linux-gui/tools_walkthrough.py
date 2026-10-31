@@ -1,5 +1,8 @@
 """File and Tools menu cases: Options, Save As, profiles folder, Split grouped
 bars and editor Appearance. Real X input only."""
+from copy import deepcopy
+import json
+from pathlib import Path
 from typing import Any
 
 from automation_walkthrough import require
@@ -118,42 +121,69 @@ class ToolsWalk:
     def case_split_grouped_bars(self: Any):
         self.focus("LayerE", "split-focused")
         self.select_fixture("split-fixture")
-        snapshot = self.profile()[0]["json"]
+        original = self.profile()[0]["json"]
         self.menu_item("alt+t", 3, "split-none")
         self.until(lambda n: "already independent" in self.status_text(n),
                    "Split on independent bars did not report the unchanged profile")
-        require(self.profile()[0]["json"] == snapshot, "an empty split changed the profile")
-        self.key("ctrl+2", "split-cooldowns")
-        self.menu_item("alt+c", 2, "split-duplicate")
-        self.autosaved("split-duplicate-saved",
-                       lambda: len(self.profile()[0]["json"]["cooldowns"]) == len(snapshot["cooldowns"]) + 1)
-        second = self.profile()[0]["json"]["cooldowns"][-1]["id"]
-        self.key("ctrl+4", "split-panels")
-        self.automation_choice("Panel cooldown membership", len(snapshot["cooldowns"]), "split-member")
-        self.click(self.find("check box", "Include selected cooldown"), "split-member-included")
-        self.autosaved("split-grouped-saved",
-                       lambda: self.profile()[0]["json"]["panels"][0]["cooldowns"][-1:] == [second])
-        # Duplicate also gave the copy its own bar; only the shared bar splits.
-        before_split = self.profile()[0]["json"]["panels"]
-        grouped = before_split[0]
+        require(self.profile()[0]["json"] == original, "an empty split changed the profile")
+
+        # The ordered item editor deliberately authors typed panels, which
+        # Split must preserve (IDs may be automation targets). Import a legacy
+        # grouped-panel input through the normal UI instead of writing a store
+        # file or making the product drop typed identity to satisfy this case.
+        filename = "split-legacy-fixture.json"
+        before = set(self.store())
+        require(filename not in before, "the split import fixture already exists")
+        fixture = deepcopy(original)
+        fixture.update(id="split-legacy-fixture", name="Split legacy fixture",
+                       schemaVersion=4, modules=[])
+        first = deepcopy(original["cooldowns"][0])
+        second = deepcopy(first)
+        second.update(id="split-second", name="Second cooldown")
+        fixture["cooldowns"] = [first, second]
+        fixture["cooldownGroups"] = []
+        grouped = deepcopy(original["panels"][0])
+        grouped.pop("items", None)
+        grouped["cooldowns"] = [first["id"], second["id"]]
+        fixture["panels"] = [grouped]
+        external = Path(self.state()["exchange"]) / filename
+        external.write_text(json.dumps(fixture, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.key("ctrl+o", "split-import-open")
+        self.choose("Import", str(external), "split-import-chosen")
+        for button in ("Include", "Import"):
+            self.until(lambda _: self.dialog(), f"split import stopped before {button}")
+            self.press(button, "split-import-" + button.lower())
+        added = self.until(lambda _: set(self.store()) - before or None,
+                           "split import added no profile")
+        require(len(added) == 1, f"split import added {sorted(added)}")
+        filename = next(iter(added))
+        profile = lambda: self.profile(filename)[0]  # noqa: E731
+        snapshot = profile()["json"]
+        require(snapshot["panels"][0]["cooldowns"] == grouped["cooldowns"] and
+                "items" not in snapshot["panels"][0], "the imported panel is not legacy grouped")
+        self.key("ctrl+1", "split-import-profile-page")
+        self.row(self.row_of(snapshot["name"]), "split-import-selected")
         self.menu_item("alt+t", 3, "split-applied")
-        self.autosaved("split-saved",
-                       lambda: len(self.profile()[0]["json"]["panels"]) == len(before_split) + 1)
-        saved_panels = self.profile()[0]["json"]["panels"]
-        panels = saved_panels[:2]
-        members = [p["cooldowns"] for p in panels]
-        ids = [p["id"] for p in saved_panels]
-        require(saved_panels[2:] == before_split[1:], "Split changed the independent bars")
-        require(members == [[c] for c in grouped["cooldowns"]] and len(set(ids)) == len(ids) and
+        self.autosaved("split-saved", lambda: len(profile()["json"]["panels"]) == 2)
+        panels = profile()["json"]["panels"]
+        ids = [p["id"] for p in panels]
+        require([p["cooldowns"] for p in panels] == [[c] for c in grouped["cooldowns"]] and
+                len(set(ids)) == 2 and
                 all(p["style"] == "bar" and p["anchorX"] == grouped["anchorX"] for p in panels) and
                 panels[0]["anchorY"] < grouped["anchorY"] < panels[1]["anchorY"] and
                 abs((panels[0]["anchorY"] + panels[1]["anchorY"]) / 2 - grouped["anchorY"]) < 1e-6,
                 f"the split bars are not stacked single-cooldown bars: {panels!r}"[:500])
-        for step, label in enumerate(("split", "membership", "duplicate")):
-            self.menu_item("alt+e", 1, f"split-undo-{step}-{label}")
-        self.autosaved("split-undone", lambda: self.profile()[0]["json"] == snapshot)
+        self.menu_item("alt+e", 1, "split-undone")
+        self.autosaved("split-undo-saved", lambda: profile()["json"] == snapshot)
+        self.menu_item("alt+p", 2, "split-delete-prompt")
+        self.until(lambda _: self.dialog(), "Delete did not prompt for the split fixture")
+        self.press("Delete", "split-fixture-deleted")
+        self.until(lambda _: set(self.store()) == before, "the split fixture was not removed")
+        external.unlink()
+        self.select_fixture("split-original-restored")
+        require(self.profile()[0]["json"] == original, "the split case changed the original profile")
         self.base_hash = self.profile()[0]["sha256"]
-        return f"bars {ids[:2]} at anchorY {[round(p['anchorY'], 4) for p in panels]}; undone exactly"
+        return f"legacy bars {ids} split and undid exactly; imported fixture deleted; original unchanged"
 
     def case_editor_appearance(self: Any):
         self.focus("LayerE", "appearance-focused")

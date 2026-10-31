@@ -69,6 +69,7 @@ private:
     bool shown{};
     // A failed demanded show is retried without depending on another event.
     std::optional<layerc::core::TimePoint> retry_at;
+    std::optional<layerc::core::TimePoint> next_presentation;
   };
 
   [[nodiscard]] static std::string key(const Target &target);

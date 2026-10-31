@@ -214,6 +214,7 @@ std::string status_payload_json(const layerc::runtime::DaemonKernel &kernel,
   for (const auto &status : linux.capabilities)
     if (status.capability == layerc::runtime::Capability::automation)
       diagnostics.automation_faults = status.diagnostics;
+  diagnostics.overlay_faults = linux.overlay_faults;
   return layerc::runtime::serialize_linux_status_json(diagnostics, linux);
 }
 

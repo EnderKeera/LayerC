@@ -4,6 +4,7 @@
 // GNOME Shell adapters. No Xlib, wayland-client, D-Bus or PipeWire header may
 // reach this file: every backend converts into these types at its boundary.
 
+#include "layerc/core/panel_presentation.hpp"
 #include "layerc/core/types.hpp"
 
 #include <cstdint>
@@ -133,13 +134,19 @@ struct OverlayRect {
 
 // One cooldown bar inside a panel. `remaining` is the fraction of the
 // cooldown still running: 1 right after a trigger, 0 once it is ready.
+// Historical name retained for existing frame producers. Resolved typed rows
+// carry their complete immutable presentation; legacy callers can omit it.
 struct OverlayBar {
   std::string label;
   double remaining{};
   bool running{};
+  std::optional<layerc::core::ItemPresentation> presentation{};
 
   bool operator==(const OverlayBar &) const = default;
 };
+
+[[nodiscard]] OverlayBar overlay_bar_from_presentation(
+    const layerc::core::ItemPresentation &item);
 
 // Everything one overlay needs for one paint: the game window it is anchored
 // to (global coordinates), the panel, its bars and the monitor scale.

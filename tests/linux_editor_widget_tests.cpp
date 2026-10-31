@@ -57,6 +57,8 @@ void linux_editor_main_window_text_and_tab_labels();
 void linux_editor_text_views_fit_content();
 void linux_editor_empty_automation_simulator_ready();
 void linux_editor_empty_template_apply_is_not_an_edit();
+void linux_editor_typed_item_controls();
+void linux_editor_item_preview_and_active_duration();
 
 namespace {
 namespace editor = layerc::editor;
@@ -953,6 +955,8 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_text_views_fit_content),
   LAYERC_TEST_CASE(linux_editor_empty_automation_simulator_ready),
   LAYERC_TEST_CASE(linux_editor_empty_template_apply_is_not_an_edit),
+  LAYERC_TEST_CASE(linux_editor_typed_item_controls),
+  LAYERC_TEST_CASE(linux_editor_item_preview_and_active_duration),
   LAYERC_TEST_CASE(linux_editor_system_theme_restores_tab_class_colors),
   LAYERC_TEST_CASE(linux_editor_cooldown_group_dialog_transactions),
   LAYERC_TEST_CASE(linux_editor_export_profile_checklist),

@@ -110,6 +110,16 @@ int scaled_pixels(const int value, const int dpi) noexcept {
   return (value * dpi + baseline_dpi / 2) / baseline_dpi;
 }
 
+OverlayBar overlay_bar_from_presentation(
+    const layerc::core::ItemPresentation &item) {
+  OverlayBar result;
+  result.label = item.label;
+  result.remaining = item.remaining;
+  result.running = !item.ready;
+  result.presentation = item;
+  return result;
+}
+
 OverlayRect panel_rect(const OverlayFrame &frame) {
   const int dpi = frame.dpi;
   const auto geometry =
@@ -156,59 +166,79 @@ void append_int(std::string &out, const int value) {
 } // namespace
 
 OverlayDisplayList build_overlay_display_list(const OverlayFrame &frame) {
+  using namespace layerc::core;
   OverlayDisplayList list;
   list.bounds = panel_rect(frame);
   if (list.bounds.width <= 0 || list.bounds.height <= 0) return list;
-
   const auto &panel = frame.panel;
-  const bool bar_style = panel.style == layerc::core::PanelStyle::bar;
-  const std::uint32_t background =
-      bar_style ? panel.bar.background_color : 0x272D35U;
-  const std::uint32_t border = bar_style ? panel.bar.border_color : 0x50BAC8U;
-  const std::uint32_t fill = bar_style ? panel.bar.fill_color : 0x50BAC8U;
-  const std::uint32_t text_color =
-      bar_style ? panel.bar.text_color : 0xE4E8ECU;
+  const bool bar_style = panel.style == PanelStyle::bar;
+  const auto background = bar_style ? panel.bar.background_color : 0x272D35U;
+  const auto border = bar_style ? panel.bar.border_color : 0x50BAC8U;
+  const auto fill = bar_style ? panel.bar.fill_color : 0x50BAC8U;
+  const auto text_color = bar_style ? panel.bar.text_color : 0xE4E8ECU;
   const bool show_text = !bar_style || panel.bar.show_text;
   const int font_px = scaled_pixels(overlay_font_dip, frame.dpi);
-
   list.ops.push_back({OverlayOpKind::fill_rect,
-                      {0, 0, list.bounds.width, list.bounds.height},
-                      background, {}, 0});
+      {0, 0, list.bounds.width, list.bounds.height}, background, {}, 0});
   list.ops.push_back({OverlayOpKind::stroke_rect,
-                      {0, 0, list.bounds.width, list.bounds.height},
-                      border, {}, 0});
-
-  const auto geometry =
-      layerc::core::panel_geometry(panel, frame.bars.size());
+      {0, 0, list.bounds.width, list.bounds.height}, border, {}, 0});
+  const auto geometry = panel_geometry(panel, frame.bars.size());
+  const auto push_rect = [&](const OverlayOpKind kind, const PanelRect &rect,
+                             const std::uint32_t color) {
+    if (rect.width() > 0 && rect.height() > 0)
+      list.ops.push_back({kind, scaled_rect(rect, frame.dpi), color, {}, 0});
+  };
   for (std::size_t index = 0; index < frame.bars.size(); ++index) {
     const auto &bar = frame.bars[index];
-    auto item = geometry.items[index];
-    if (bar_style) {
-      const auto shape = layerc::core::bar_geometry(
-          panel, index, frame.bars.size(), bar.remaining);
-      item = shape.outline;
-      if (shape.fill.right > shape.fill.left &&
-          shape.fill.bottom > shape.fill.top)
-        list.ops.push_back(
-            {OverlayOpKind::fill_rect,
-             {scaled_pixels(shape.fill.left, frame.dpi),
-              scaled_pixels(shape.fill.top, frame.dpi),
-              std::max(1, scaled_pixels(shape.fill.width(), frame.dpi)),
-              std::max(1, scaled_pixels(shape.fill.height(), frame.dpi))},
-             fill, {}, 0});
+    const auto *typed = bar.presentation ? &*bar.presentation : nullptr;
+    const auto &label = typed != nullptr ? typed->label : bar.label;
+    auto text_area = geometry.items[index];
+    if (typed == nullptr) {
+      // Existing direct frame fixtures retain their original operations.
+      if (bar_style) {
+        const auto shape = bar_geometry(panel, index, frame.bars.size(), bar.remaining);
+        text_area = shape.outline;
+        if (shape.fill.width() > 0 && shape.fill.height() > 0)
+          list.ops.push_back({OverlayOpKind::fill_rect,
+              {scaled_pixels(shape.fill.left, frame.dpi),
+               scaled_pixels(shape.fill.top, frame.dpi),
+               std::max(1, scaled_pixels(shape.fill.width(), frame.dpi)),
+               std::max(1, scaled_pixels(shape.fill.height(), frame.dpi))},
+              fill, {}, 0});
+      } else {
+        const auto scaled = scaled_rect(text_area, frame.dpi);
+        list.ops.push_back({OverlayOpKind::stroke_rect,
+            {scaled.x, scaled.y, std::max(1, scaled.width - 1) + 1,
+             std::max(1, scaled.height - 1) + 1}, border, {}, 0});
+      }
     } else {
-      // Xlib draws (w-1)x(h-1) outlines that cover w x h pixels; keep that
-      // covered area as the op rect so every renderer agrees.
-      const auto scaled = scaled_rect(item, frame.dpi);
-      list.ops.push_back({OverlayOpKind::stroke_rect,
-                          {scaled.x, scaled.y,
-                           std::max(1, scaled.width - 1) + 1,
-                           std::max(1, scaled.height - 1) + 1},
-                          border, {}, 0});
+      const bool indicator_on = typed->kind == OverlayItemKind::indicator &&
+          !typed->unavailable && typed->active && typed->flash_on;
+      const bool fill_visible = !typed->unavailable &&
+          (typed->has_progress || indicator_on);
+      if (bar_style) {
+        const auto shape = bar_geometry(panel, index, frame.bars.size(),
+            typed->has_progress ? typed->remaining : 1.0);
+        if (fill_visible) push_rect(OverlayOpKind::fill_rect, shape.fill, typed->color);
+        push_rect(OverlayOpKind::stroke_rect, shape.outline, border);
+        text_area = shape.text;
+      } else {
+        if (indicator_on)
+          push_rect(OverlayOpKind::fill_rect, geometry.items[index], typed->color);
+        push_rect(OverlayOpKind::stroke_rect, geometry.items[index], border);
+        text_area = inset_panel_rect(geometry.items[index], overlay_metrics.card_text_inset);
+      }
+      const auto layout = item_pip_layout(panel.style, text_area,
+          typed->unavailable ? 0U : typed->pips);
+      for (std::size_t pip = 0; pip < layout.pips.size(); ++pip)
+        push_rect(pip < typed->filled_pips ? OverlayOpKind::fill_rect
+                                          : OverlayOpKind::stroke_rect,
+                  layout.pips[pip], typed->color);
+      text_area = layout.text;
     }
-    if (!show_text || bar.label.empty()) continue;
-    list.ops.push_back({OverlayOpKind::text, scaled_rect(item, frame.dpi),
-                        text_color, bar.label, font_px});
+    if (show_text && !label.empty() && text_area.width() > 0 && text_area.height() > 0)
+      list.ops.push_back({OverlayOpKind::text, scaled_rect(text_area, frame.dpi),
+          text_color, label, font_px});
   }
   return list;
 }

@@ -77,6 +77,7 @@ struct LinuxAutomationEditor::Impl {
   bool trace_gap{};
   std::string profile_id;
   std::string simulated_graph; // graph JSON the simulator was last reset with
+  std::optional<core::GameProfile> simulated_profile;
   Pending pending{Pending::none};
   int current_view{};
   bool playing{};
@@ -296,6 +297,7 @@ struct LinuxAutomationEditor::Impl {
     app.report(text);
   }
   void describe() {
+    app.redraw_preview();
     const auto text = simulator.describe(assertions->value());
     state->value(text.c_str());
     fl_font(state->textfont(), state->textsize());
@@ -334,6 +336,7 @@ struct LinuxAutomationEditor::Impl {
       stop_live();
       profile_id.clear();
       simulated_graph.clear();
+      simulated_profile.reset();
       trace.clear();
       simulator.clear();
       json->value(""); state->value(""); validation->value("");
@@ -349,6 +352,7 @@ struct LinuxAutomationEditor::Impl {
       trace.clear();
       simulator.clear();
       simulated_graph.clear();
+      simulated_profile.reset();
     }
     const auto &graph = document.automation();
     selection = clamp_selection(graph, selection);
@@ -392,9 +396,11 @@ struct LinuxAutomationEditor::Impl {
       basic->deactivate(); advanced->deactivate(); create->deactivate(); remove->deactivate();
       validation->value("Unreadable automation module preserved; editing blocked.");
     } else { basic->activate(); advanced->activate(); create->activate(); }
-    // Unrelated form refreshes keep simulator progress; graph edits rewind it.
-    if (graph_json != simulated_graph) {
+    // Refreshing unchanged data preserves progress; graph or base edits rewind.
+    if (graph_json != simulated_graph || !simulated_profile ||
+        *simulated_profile != document.profile()) {
       simulated_graph = std::move(graph_json);
+      simulated_profile = document.profile();
       rewind();
     }
     show_view();
@@ -623,4 +629,11 @@ std::optional<std::string> LinuxAutomationEditor::apply_pending() {
   return impl_ ? impl_->apply_pending() : std::nullopt;
 }
 void LinuxAutomationEditor::stop() { if (impl_) impl_->suspend(); }
+std::optional<SimulatorPanelPreview>
+LinuxAutomationEditor::panel_preview(const std::string_view panel_id) const {
+  if (!impl_ || impl_->current_view != 1 || !app_.session.has_document() ||
+      !impl_->simulated_profile ||
+      *impl_->simulated_profile != app_.session.document().profile()) return std::nullopt;
+  return impl_->simulator.panel_preview(panel_id);
+}
 } // namespace layerc::editor

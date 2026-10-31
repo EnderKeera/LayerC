@@ -5,6 +5,7 @@ order. The runner and report import the same manifest. No thresholds or case
 requirements are inferred from observed results.
 """
 from automation_walkthrough import EXPECTED as AUTOMATION_EXPECTED
+from items_walkthrough import EXPECTED as ITEMS_EXPECTED
 from autosave_walkthrough import EXPECTED as AUTOSAVE_EXPECTED
 from runtime_walkthrough import EXPECTED as RUNTIME_EXPECTED
 from device_walkthrough import EXPECTED as DEVICE_EXPECTED
@@ -51,6 +52,7 @@ EXPECTED = merge_cases(
                          "request, and a cancelled import writes nothing.",
     },
     AUTOMATION_EXPECTED,
+    ITEMS_EXPECTED,
     VISUAL_EXPECTED,
     AUTOSAVE_EXPECTED,
     RUNTIME_EXPECTED,

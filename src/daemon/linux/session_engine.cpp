@@ -5,8 +5,12 @@
 #include "overlay_service.hpp"
 #include "visual_service.hpp"
 
+#include "layerc/core/panel_presentation.hpp"
+
 #include <algorithm>
 #include <cstdlib>
+#include <iterator>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -22,6 +26,24 @@ struct SessionEngine::Impl {
   OverlayService overlay;
   VisualService visual;
   DisplayRoute route;
+
+  [[nodiscard]] std::vector<std::string> overlay_faults() const {
+    std::vector<std::string> result;
+    for (const auto &session : std::as_const(sessions).sessions()) {
+      std::optional<layerc::core::AutomationRuntimeSnapshot> snapshot;
+      if (session.automation.runtime())
+        snapshot = session.automation.runtime()->snapshot();
+      const auto *automation = snapshot ? &*snapshot
+          : (session.presentation_defaults ? &*session.presentation_defaults
+                                           : nullptr);
+      auto lines = layerc::core::overlay_item_diagnostics(
+          session.automation.profile(), automation,
+          layerc::core::MonotonicClock::now());
+      result.insert(result.end(), std::make_move_iterator(lines.begin()),
+                    std::make_move_iterator(lines.end()));
+    }
+    return result;
+  }
 };
 
 SessionEngine::SessionEngine() : impl_(std::make_unique<Impl>()) {}
@@ -113,6 +135,9 @@ void SessionEngine::refresh(
                                                    kernel.services()))
     diagnostics.push_back("capability " + std::string{name} +
                           " demanded but unavailable");
+  status.overlay_faults = impl_->overlay_faults();
+  for (const auto &line : status.overlay_faults)
+    diagnostics.push_back(line);
 }
 
 void SessionEngine::refresh_status(
@@ -134,6 +159,7 @@ void SessionEngine::refresh_status(
        .visual = visual_unavailable,
        .native_overlay = route.native_overlay,
        .native_input = impl_->native_input});
+  status.overlay_faults = impl_->overlay_faults();
 }
 
 void SessionEngine::feed_input(const std::span<const layerc::core::InputEvent> events,

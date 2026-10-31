@@ -13,7 +13,8 @@ MAX_NODES = 400
 MAX_DEPTH = 8
 MAX_TEXT = 400
 # Multi-line views whose full text the walkthrough verifies.
-LONG_TEXT = ("Advanced automation JSON", "Runtime diagnostics", "Keyboard shortcuts — LayerE")
+LONG_TEXT = ("Advanced automation JSON", "Runtime diagnostics", "Keyboard shortcuts — LayerE",
+             "Simulator state")
 
 
 def describe_one(node, budget):

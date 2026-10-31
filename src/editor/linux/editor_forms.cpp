@@ -110,6 +110,10 @@ void EditorApp::build() {
   if (!appearance_error_.empty()) report(appearance_error_);
 }
 
+void EditorApp::redraw_preview() {
+  if (preview) preview->redraw();
+}
+
 void EditorApp::fill_lists() {
   profiles->clear();
   const auto current = session.current_row();
@@ -147,7 +151,6 @@ void EditorApp::refresh_forms() {
   cooldown_page_->show(profile, cooldown_index());
   binding_page_->show(profile);
   panel_page_->show(profile, panel_index());
-  member_index_ = panel_page_->member_index();
   std::string modules = "Modules and unsupported bindings are preserved.";
   const auto &document = session.document();
   if (document.has_unreadable_module()) modules += "\nUnreadable module: Save is blocked, not repaired by discarding data.";

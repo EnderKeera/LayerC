@@ -32,6 +32,7 @@ InputSession *find_session(const std::span<InputSession> sessions,
 struct PanelOverrides {
   std::optional<bool> visible;
   std::optional<std::string> text;
+  std::vector<layerc::core::ItemPresentationOverride> items;
 };
 
 // Resolves the panel and its overrides into `frame.panel` and `result`.
@@ -41,14 +42,14 @@ struct PanelOverrides {
 [[nodiscard]] bool apply_automation_overrides(
     layerc::platform::OverlayFrame &frame, bool &overridden,
     const InputSession &session, const std::string_view panel_id,
+    const layerc::core::AutomationRuntimeSnapshot *snapshot,
     PanelOverrides &result) {
   const auto base = std::ranges::find(session.automation.profile().panels, panel_id,
                                       &layerc::core::Panel::id);
   if (base == session.automation.profile().panels.end()) return false;
-  const auto overrides =
-      session.automation.runtime()
-          ? std::span(session.automation.runtime()->snapshot().overlay_overrides)
-          : std::span<const layerc::core::OverlayPropertyOverride>{};
+  const auto overrides = snapshot != nullptr
+      ? std::span<const layerc::core::OverlayPropertyOverride>(snapshot->overlay_overrides)
+      : std::span<const layerc::core::OverlayPropertyOverride>{};
   if (std::ranges::none_of(overrides, [&](const auto &item) {
         return item.panel_id == panel_id;
       })) {
@@ -60,28 +61,24 @@ struct PanelOverrides {
   auto resolved = layerc::core::resolve_panel_overrides(*base, overrides);
   frame.panel = std::move(resolved.panel);
   overridden = true;
-  result = {resolved.visible, std::move(resolved.text)};
+  result = {resolved.visible, std::move(resolved.text), std::move(resolved.items)};
   return true;
 }
 
-// Fills `frame.bars` from the shared panel presentation. false means the
-// panel is hidden right now.
-[[nodiscard]] bool
-fill_bars(layerc::platform::OverlayFrame &frame, const InputSession &session,
-          const TimePoint now, const PanelOverrides &overrides) {
-  const auto presentation = layerc::core::present_panel(
-      frame.panel, session.automation.profile().cooldowns, session.automation.snapshot_buffer(),
-      {.visible = overrides.visible, .text = overrides.text, .edit_mode = false},
-      now);
+[[nodiscard]] core::PanelPresentation fill_bars(
+    platform::OverlayFrame &frame, const InputSession &session,
+    const core::AutomationRuntimeSnapshot *snapshot, const core::TimePoint now,
+    const PanelOverrides &overrides) {
+  auto shown = core::present_panel(frame.panel,
+      session.automation.profile().cooldowns, session.automation.snapshot_buffer(),
+      snapshot, {.visible = overrides.visible, .text = overrides.text,
+                 .edit_mode = false, .presentation_epoch = session.presentation_epoch,
+                 .items = overrides.items}, now);
   frame.bars.clear();
-  for (const auto &item : presentation.items) {
-    layerc::platform::OverlayBar bar;
-    bar.label = item.label;
-    bar.running = !item.ready;
-    bar.remaining = item.remaining;
-    frame.bars.push_back(std::move(bar));
-  }
-  return presentation.visible;
+  frame.bars.reserve(shown.items.size());
+  for (const auto &item : shown.items)
+    frame.bars.push_back(platform::overlay_bar_from_presentation(item));
+  return shown;
 }
 
 } // namespace
@@ -92,6 +89,7 @@ void OverlayService::use_backend(OverlayBackend *backend) noexcept {
   for (auto &target : targets_) {
     target.shown = false;
     target.retry_at.reset();
+    target.next_presentation.reset();
   }
   backend_ = backend;
 }
@@ -134,8 +132,10 @@ void OverlayService::refresh(
           });
       if (previous != targets_.end()) {
         entry.shown = previous->shown;
-        if (previous->session_window == entry.session_window)
+        if (previous->session_window == entry.session_window) {
           entry.retry_at = previous->retry_at;
+          entry.next_presentation = previous->next_presentation;
+        }
       }
       next.push_back(std::move(entry));
     }
@@ -155,22 +155,48 @@ void OverlayService::render(const std::span<InputSession> sessions,
   // refresh() emits each session's panels together, so one snapshot per run
   // of targets covers every panel of that session.
   const InputSession *snapshotted = nullptr;
+  core::AutomationRuntimeSnapshot runtime_snapshot;
+  const core::AutomationRuntimeSnapshot *snapshot = nullptr;
   for (auto &target : targets_) {
     auto *session = find_session(sessions, target.profile_id);
     if (session == nullptr) continue;
     if (session != snapshotted) {
       (void)session->automation.snapshot(now);
+      if (const auto *live = session->automation.presentation_snapshot()) {
+        runtime_snapshot = *live;
+        snapshot = &runtime_snapshot;
+      } else if (session->presentation_defaults) {
+        runtime_snapshot = *session->presentation_defaults;
+        snapshot = &runtime_snapshot;
+      } else {
+        snapshot = nullptr;
+      }
       snapshotted = session;
     }
     PanelOverrides overrides;
     if (!apply_automation_overrides(target.frame, target.overridden, *session,
-                                    target.panel_id, overrides) ||
-        !fill_bars(target.frame, *session, now, overrides)) {
+                                    target.panel_id, snapshot, overrides)) {
       backend_->hide(key(target));
       target.shown = false;
       target.retry_at.reset();
+      target.next_presentation.reset();
       continue;
     }
+    auto shown = fill_bars(target.frame, *session, snapshot, now, overrides);
+    if (!shown.visible) {
+      backend_->hide(key(target));
+      target.shown = false;
+      target.retry_at.reset();
+      target.next_presentation.reset();
+      continue;
+    }
+    target.next_presentation = shown.next_wakeup;
+    if (std::ranges::any_of(shown.items, [](const auto &item) {
+          return (item.kind == core::OverlayItemKind::cooldown && !item.ready) ||
+                 (item.kind == core::OverlayItemKind::timer && item.active);
+        }))
+      target.next_presentation = core::earliest_deadline(
+          target.next_presentation, now + overlay_repaint_interval);
     if (target.retry_at && now < *target.retry_at) continue;
     target.shown = backend_->show(key(target), target.frame);
     target.retry_at = target.shown
@@ -180,13 +206,13 @@ void OverlayService::render(const std::span<InputSession> sessions,
 }
 
 std::optional<TimePoint>
-OverlayService::next_render_deadline(const TimePoint now) const {
+OverlayService::next_render_deadline(const TimePoint) const {
   if (!reconciled_ || !backend_) return std::nullopt;
   std::optional<TimePoint> next;
   for (const auto &target : targets_) {
     next = core::earliest_deadline(next, target.retry_at);
     if (target.shown)
-      next = core::earliest_deadline(next, now + overlay_repaint_interval);
+      next = core::earliest_deadline(next, target.next_presentation);
   }
   return next;
 }
@@ -245,6 +271,11 @@ OverlayService::reconcile(
 void OverlayService::quiesce() noexcept {
   reconciled_ = false;
   if (backend_) backend_->retain({});
+  for (auto &target : targets_) {
+    target.retry_at.reset();
+    target.next_presentation.reset();
+    target.shown = false;
+  }
   targets_.clear();
 }
 

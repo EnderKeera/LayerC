@@ -24,6 +24,7 @@ from tools_walkthrough import ToolsWalk  # noqa: E402
 from parity_walkthrough import ParityWalk  # noqa: E402
 from visual_walkthrough import VisualWalk  # noqa: E402
 from overlay_walkthrough import OverlayWalk  # noqa: E402
+from items_walkthrough import ItemsWalk  # noqa: E402
 from cases import EXPECTED  # noqa: E402 -- the ordered required-case manifest
 
 EDITOR = "LayerE"  # Title prefix; the title also names the open profile.
@@ -64,7 +65,7 @@ def center(node):
 
 
 class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, ToolsWalk, ParityWalk,
-           OverlayWalk):
+           ItemsWalk, OverlayWalk):
     def __init__(self, session):
         self.session = session
         self.shot = {}

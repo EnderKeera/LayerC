@@ -1,5 +1,8 @@
 #include "editor_app.hpp"
 #include "layerc/core/panel_geometry.hpp"
+#include "layerc/core/cooldown_engine.hpp"
+#include "automation_simulator.hpp"
+#include "display_types.hpp"
 
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
@@ -23,8 +26,9 @@ PlacementFrame frame_of(const Fl_Widget &view, const EditorApp &app) {
                            app.placement()->width, app.placement()->height);
   return {view.x(), view.y(), view.w(), view.h(), 0.0};
 }
-PlacedPanel placement(const layerc::core::Panel &panel, const PlacementFrame &frame) {
-  auto geometry = layerc::core::panel_geometry(panel, panel.cooldown_ids.size());
+PlacedPanel placement(const layerc::core::Panel &panel, const PlacementFrame &frame,
+                      const std::size_t count) {
+  auto geometry = layerc::core::panel_geometry(panel, count);
   // Positioning shows bars at the game's scale; otherwise they fit the preview.
   const auto scale = frame.scale > 0.0
       ? frame.scale
@@ -49,43 +53,89 @@ PanelPreview::PanelPreview(int x, int y, int width, int height, EditorApp &app)
     : Fl_Widget(x, y, width, height, "Local panel preview"), app_(app) {
   color(fl_rgb_color(31, 36, 41)); // the Preview role's default; Appearance may override it
 }
+PanelPreview::~PanelPreview() { Fl::remove_timeout(wake, this); }
+void PanelPreview::wake(void *data) {
+  static_cast<PanelPreview *>(data)->redraw();
+}
+
+SimulatorPanelPreview PanelPreview::present(const core::Panel &panel,
+                                           bool *simulated) const {
+  if (simulated) *simulated = false;
+  if (app_.automation) {
+    if (auto value = app_.automation->panel_preview(panel.id)) {
+      if (simulated) *simulated = true;
+      return *value;
+    }
+  }
+  const auto &document = app_.session.document();
+  const auto &profile = document.profile();
+  const auto now = core::MonotonicClock::now();
+  core::CooldownEngine engine(profile.cooldowns, profile.cooldown_groups);
+  const auto states = engine.snapshot(now);
+  std::optional<core::AutomationRuntimeSnapshot> automation;
+  if (document.automation())
+    automation = core::automation_default_snapshot(*document.automation());
+  core::PanelPresentationOverrides overrides;
+  overrides.edit_mode = true;
+  overrides.presentation_epoch = epoch_;
+  return {panel, core::present_panel(panel, profile.cooldowns, states,
+      automation ? &*automation : nullptr, overrides, now)};
+}
+
 void PanelPreview::draw() {
+  // The only preview wakeup is a real core flash edge. Deterministic replay
+  // redraws on a simulator step, never against the wall clock.
+  Fl::remove_timeout(wake, this);
+  std::optional<core::TimePoint> next;
   fl_push_clip(x(), y(), w(), h());
   fl_rectf(x(), y(), w(), h(), color());
   const auto frame = frame_of(*this, app_);
   if (app_.placement_active()) {
-    // The target window's outline, named so the mapping is explicit.
     fl_color(fl_rgb_color(120, 130, 140));
     fl_rect(frame.x, frame.y, frame.width, frame.height);
     fl_font(FL_HELVETICA, 11);
     const auto &target = *app_.placement();
-    const auto caption = "Positioning on " + (target.title.empty() ? std::string("window") : target.title) +
-                         " (" + std::to_string(target.width) + "x" + std::to_string(target.height) + ")";
+    const auto caption = "Positioning on " +
+        (target.title.empty() ? std::string("window") : target.title) +
+        " (" + std::to_string(target.width) + "x" + std::to_string(target.height) + ")";
     fl_draw(caption.c_str(), frame.x + 4, frame.y + 14);
   }
   if (app_.session.has_document()) {
     const auto &profile = app_.session.document().profile();
     for (const auto &panel : profile.panels) {
-      const auto placed = placement(panel, frame);
-      for (std::size_t index = 0; index < placed.geometry.items.size(); ++index) {
-        const auto &item = placed.geometry.items[index];
-        const int left = placed.left + static_cast<int>(item.left * placed.scale);
-        const int top = placed.top + static_cast<int>(item.top * placed.scale);
-        const int width = std::max(1, static_cast<int>(item.width() * placed.scale));
-        const int height = std::max(1, static_cast<int>(item.height() * placed.scale));
-        fl_rectf(left, top, width, height, rgb(panel.bar.background_color));
-        fl_rectf(left + 2, top + 2, std::max(width - 4, 1), std::max(height - 4, 1), rgb(panel.bar.fill_color));
-        fl_color(rgb(panel.bar.border_color)); fl_rect(left, top, width, height);
-        if (panel.style != layerc::core::PanelStyle::bar || panel.bar.show_text) {
-          const auto &id = panel.cooldown_ids[index];
-          const auto found = std::ranges::find_if(profile.cooldowns, [&](const auto &cd) { return cd.id == id; });
-          const auto &name = found == profile.cooldowns.end() ? id : found->name;
-          fl_font(FL_HELVETICA, std::max(8, static_cast<int>(12 * placed.scale)));
-          fl_color(rgb(panel.bar.text_color));
-          fl_draw(name.c_str(), left + 3, top + 3, std::max(width - 6, 1),
-                  std::max(height - 6, 1), FL_ALIGN_INSIDE | FL_ALIGN_CENTER);
+      bool simulated = false;
+      const auto view = present(panel, &simulated);
+      if (!view.presentation.visible) continue;
+      const auto placed = placement(view.panel, frame, view.presentation.items.size());
+      platform::OverlayFrame overlay;
+      overlay.panel = view.panel;
+      for (const auto &item : view.presentation.items)
+        overlay.bars.push_back(platform::overlay_bar_from_presentation(item));
+      const auto display = platform::build_overlay_display_list(overlay);
+      // This is the exact same typed paint model as X11, cairo and GNOME.
+      for (const auto &op : display.ops) {
+        const int left = placed.left + static_cast<int>(op.rect.x * placed.scale);
+        const int top = placed.top + static_cast<int>(op.rect.y * placed.scale);
+        const int width = std::max(1, static_cast<int>(op.rect.width * placed.scale));
+        const int height = std::max(1, static_cast<int>(op.rect.height * placed.scale));
+        fl_color(rgb(op.rgb));
+        switch (op.kind) {
+        case platform::OverlayOpKind::fill_rect:
+          fl_rectf(left, top, width, height);
+          break;
+        case platform::OverlayOpKind::stroke_rect:
+          fl_rect(left, top, width, height);
+          break;
+        case platform::OverlayOpKind::text:
+          fl_font(FL_COURIER, std::max(8, static_cast<int>(op.font_px * placed.scale)));
+          fl_draw(op.text.c_str(), left + 2, top + 1, std::max(width - 4, 1),
+                  std::max(height - 2, 1), FL_ALIGN_INSIDE | FL_ALIGN_CENTER);
+          break;
         }
       }
+      if (!simulated && view.presentation.next_wakeup &&
+          (!next || *view.presentation.next_wakeup < *next))
+        next = view.presentation.next_wakeup;
       if (panel.id == app_.selected_panel()) {
         fl_color(FL_WHITE);
         fl_rect(placed.left, placed.top,
@@ -95,6 +145,10 @@ void PanelPreview::draw() {
     }
   }
   fl_pop_clip();
+  if (next && visible_r()) {
+    const auto seconds = std::chrono::duration<double>(*next - core::MonotonicClock::now()).count();
+    Fl::add_timeout(std::max(seconds, 0.001), wake, this);
+  }
 }
 int PanelPreview::handle(int event) {
   if (!app_.session.has_document()) return Fl_Widget::handle(event);
@@ -102,7 +156,9 @@ int PanelPreview::handle(int event) {
     if (!app_.apply_fields()) return 1;
     const auto frame = frame_of(*this, app_);
     for (const auto &panel : app_.session.document().profile().panels) {
-      const auto placed = placement(panel, frame);
+      const auto view = present(panel);
+      if (!view.presentation.visible) continue;
+      const auto placed = placement(view.panel, frame, view.presentation.items.size());
       if (Fl::event_x() >= placed.left && Fl::event_y() >= placed.top &&
           Fl::event_x() < placed.left + placed.geometry.size.width * placed.scale &&
           Fl::event_y() < placed.top + placed.geometry.size.height * placed.scale) {
@@ -114,7 +170,8 @@ int PanelPreview::handle(int event) {
     const auto frame = frame_of(*this, app_);
     const auto error = app_.session.edit([&](auto &profile) {
       for (auto &panel : profile.panels) if (panel.id == dragging_) {
-        const auto placed = placement(panel, frame);
+        const auto view = present(panel);
+        const auto placed = placement(view.panel, frame, view.presentation.items.size());
         const auto width = static_cast<int>(placed.geometry.size.width * placed.scale);
         const auto height = static_cast<int>(placed.geometry.size.height * placed.scale);
         if (frame.scale > 0.0) { // positioning: the cursor is the overlay's centre

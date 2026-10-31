@@ -37,6 +37,7 @@ struct VisualConfiguration {
 struct ConfiguredProfile {
   layerc::platform::StoredProfile source;
   layerc::platform::ProfileModuleSidecars modules;
+  std::optional<layerc::core::AutomationRuntimeSnapshot> presentation_defaults;
 
   // Sidecars whose definitions are enabled; invalid ones contribute nothing.
   [[nodiscard]] const std::optional<layerc::core::VisualProfile> &
@@ -71,6 +72,8 @@ struct InputSession {
   bool active{};
   layerc::core::InputMatcher matcher;
   layerc::platform::ProfileModuleSidecars modules;
+  std::optional<layerc::core::AutomationRuntimeSnapshot> presentation_defaults;
+  layerc::core::TimePoint presentation_epoch{layerc::core::MonotonicClock::now()};
   [[nodiscard]] std::optional<layerc::core::VisualProfile> &
   visual_profile() noexcept {
     return modules.get<layerc::core::VisualModule>().profile;
@@ -114,7 +117,9 @@ public:
   void configure(std::span<const layerc::platform::StoredProfile> profiles);
   // Rebuilds sessions from configured profiles that resolve in the scan. A
   // global profile follows the active window; an unmatched profile has none.
-  void refresh(const layerc::platform::WindowScan &scan);
+  void refresh(const layerc::platform::WindowScan &scan,
+               layerc::core::TimePoint now =
+                   layerc::core::MonotonicClock::now());
 
   // Final shutdown runs session-stopping rules; capability release does not.
   void stop_sessions(layerc::core::TimePoint now);

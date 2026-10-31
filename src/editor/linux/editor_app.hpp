@@ -38,14 +38,21 @@ namespace layerc::editor {
 [[nodiscard]] bool confirm_items_profile_upgrade();
 
 class EditorApp;
+struct SimulatorPanelPreview;
 class PanelPreview final : public Fl_Widget {
 public:
   PanelPreview(int x, int y, int width, int height, EditorApp &app);
+  ~PanelPreview() override;
   void draw() override;
   int handle(int event) override;
 private:
+  friend struct EditorAppTestAccess;
+  [[nodiscard]] SimulatorPanelPreview present(const core::Panel &panel,
+                                             bool *simulated = nullptr) const;
+  static void wake(void *data);
   EditorApp &app_;
   std::string dragging_;
+  core::TimePoint epoch_{core::MonotonicClock::now()};
 };
 
 // The toolkit frontend owns only controls and the local, possibly invalid
@@ -85,6 +92,7 @@ public:
   [[nodiscard]] bool handle_shortcut(int key, int modifiers);
   void show_context_menu(EditorMenuContext context, bool has_target);
   void refresh();
+  void redraw_preview();
   void fill_lists();
   void refresh_forms();
   void report(std::string text);
@@ -116,7 +124,6 @@ public:
 private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_, title_text_;
   int binding_index_{-1};
-  int member_index_{};
   Fl_Widget *last_field_{};
   Fl_Group *active_tab_{};
   bool pending_fields_{};

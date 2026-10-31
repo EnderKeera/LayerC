@@ -83,6 +83,9 @@ struct EditorAppTestAccess {
   static Fl_Input *duration(EditorApp &app) {
     return app.cooldown_page_ ? app.cooldown_page_->duration() : nullptr;
   }
+  static Fl_Input *active_duration(EditorApp &app) {
+    return app.cooldown_page_ ? app.cooldown_page_->active_duration() : nullptr;
+  }
   static Fl_Input *charges(EditorApp &app) {
     return app.cooldown_page_ ? app.cooldown_page_->charges() : nullptr;
   }
@@ -147,11 +150,23 @@ struct EditorAppTestAccess {
   static Fl_Choice *style(EditorApp &app) {
     return app.panel_page_ ? app.panel_page_->style_ : nullptr;
   }
-  static Fl_Choice *member(EditorApp &app) {
-    return app.panel_page_ ? app.panel_page_->member_ : nullptr;
+  static Fl_Hold_Browser *items(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->items_.items_ : nullptr;
   }
-  static Fl_Check_Button *member_enabled(EditorApp &app) {
-    return app.panel_page_ ? app.panel_page_->member_enabled_ : nullptr;
+  static Fl_Button *add_item(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->items_.add_ : nullptr;
+  }
+  static Fl_Button *edit_item(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->items_.edit_ : nullptr;
+  }
+  static Fl_Button *remove_item(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->items_.remove_ : nullptr;
+  }
+  static Fl_Button *item_up(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->items_.up_ : nullptr;
+  }
+  static Fl_Button *item_down(EditorApp &app) {
+    return app.panel_page_ ? app.panel_page_->items_.down_ : nullptr;
   }
   static Fl_Check_Button *show_text(EditorApp &app) {
     return app.panel_page_ ? app.panel_page_->show_text_ : nullptr;
@@ -171,6 +186,9 @@ struct EditorAppTestAccess {
   static Fl_Group *binding_tab(EditorApp &app) { return app.binding_tab; }
   static Fl_Group *panel_tab(EditorApp &app) { return app.panel_tab; }
   static PanelPreview *preview(EditorApp &app) { return app.preview; }
+  static SimulatorPanelPreview preview_panel(EditorApp &app, const core::Panel &panel) {
+    return app.preview->present(panel);
+  }
   static EditorMenus *menus(EditorApp &app) { return app.menus.get(); }
   static LinuxAutomationEditor *automation(EditorApp &app) { return app.automation.get(); }
   static LinuxVisualEditor *visual(EditorApp &app) { return app.visual.get(); }

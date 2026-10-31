@@ -127,6 +127,8 @@ add_library(layerc_editor_fltk STATIC
     src/editor/linux/export_selection_window.cpp
     src/editor/linux/editor_commands.cpp
     src/editor/linux/editor_pages.cpp
+    src/editor/linux/panel_item_dialog.cpp
+    src/editor/linux/panel_items_controls.cpp
     src/editor/linux/editor_menus.cpp
     src/editor/linux/editor_preview.cpp
     src/editor/linux/binding_capture.cpp)

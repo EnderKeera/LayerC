@@ -69,6 +69,7 @@ public:
     std::vector<layerc::core::InputEvent> events;
     bool windows_changed{};
     bool devices_changed{};
+    bool repaint_requested{};
   };
   X11Provider() = default;
   explicit X11Provider(layerc::platform::X11Display display);

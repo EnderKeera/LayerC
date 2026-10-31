@@ -194,6 +194,7 @@ X11Provider::Dispatch X11Provider::dispatch(const std::span<const int> ready) {
   } else {
     result.windows_changed = tracker_ && tracker_->poll_changes();
   }
+  result.repaint_requested = tracker_ && tracker_->take_overlay_exposed();
   if (result.windows_changed && overlay_) overlay_->restack();
   return result;
 }

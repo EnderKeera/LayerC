@@ -274,6 +274,9 @@ bool X11WindowTracker::observe(const _XEvent &event) const noexcept {
                ignored_windows_.end();
   };
   switch (event.type) {
+  case Expose:
+    if (ignored(event.xexpose.window)) overlay_exposed_ = true;
+    return false;
   case PropertyNotify:
     if (event.xproperty.window == root) return true;
     return tracked(event.xproperty.window) &&

@@ -1,8 +1,11 @@
 #pragma once
 
+#include "automation_simulator.hpp"
+
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 class Fl_Group;
 
@@ -23,6 +26,8 @@ public:
   // selection/focus side effects stay inside the editor.
   [[nodiscard]] std::optional<std::string> apply_pending();
   void stop();
+  [[nodiscard]] std::optional<SimulatorPanelPreview>
+  panel_preview(std::string_view panel_id) const;
 private:
   struct Impl;
   EditorApp &app_;

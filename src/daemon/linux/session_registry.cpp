@@ -18,11 +18,15 @@ load_configured(const layerc::platform::StoredProfile &source) {
   ConfiguredProfile bundle{
       .source = source,
       .modules = layerc::platform::module_sidecars(
-          layerc::platform::load_profile_modules(source.path, source.profile))};
+          layerc::platform::load_profile_modules(source.path, source.profile)),
+      .presentation_defaults = std::nullopt};
   auto &visual = bundle.modules.get<layerc::core::VisualModule>().profile;
   auto &automation = bundle.modules.get<layerc::core::AutomationModule>().profile;
   if (visual && !layerc::core::has_enabled_visual_assignments(*visual))
     visual.reset();
+  if (automation)
+    bundle.presentation_defaults =
+        layerc::core::automation_default_snapshot(*automation);
   if (automation && !layerc::core::has_enabled_automations(*automation))
     automation.reset();
   return bundle;
@@ -119,6 +123,7 @@ InputSession::InputSession(const ConfiguredProfile &bundle,
       source_path(bundle.source.path), window(window),
       global(bundle.source.profile.game.global), matcher(automation.profile().bindings),
       modules(bundle.modules),
+      presentation_defaults(bundle.presentation_defaults),
       invalid_automation_sidecar(bundle.invalid_automation()),
       persistence(&owner) {
   automation.set_invalid_visual_sidecar(bundle.invalid_visual());
@@ -186,12 +191,12 @@ void SessionRegistry::configure(
   configuration_changed_ = true;
 }
 
-void SessionRegistry::refresh(const layerc::platform::WindowScan &scan) {
+void SessionRegistry::refresh(const layerc::platform::WindowScan &scan,
+                              const TimePoint now) {
   auto previous = std::move(sessions_);
   std::vector<InputSession> next;
   visual_diagnostics_.clear();
   matched_automation_diagnostics_.clear();
-  const auto now = layerc::core::MonotonicClock::now();
   for (const auto &bundle : configured_) {
     const auto &source = bundle.source;
     const auto &profile = source.profile;
@@ -233,13 +238,17 @@ void SessionRegistry::refresh(const layerc::platform::WindowScan &scan) {
     if (retained == previous.end()) {
       const auto stale = std::ranges::find(previous, source.path,
                                            &InputSession::source_path);
+      std::optional<TimePoint> presentation_epoch;
       if (stale != previous.end()) {
+        if (stale->global || stale->window == window->window)
+          presentation_epoch = stale->presentation_epoch;
         stale->stop_automation(now);
         previous.erase(stale);
       }
       // A replacement continues from the owner's values, including unsaved
       // ones whose write is still being retried.
       next.emplace_back(bundle, window->window, persistence_);
+      next.back().presentation_epoch = presentation_epoch.value_or(now);
       next.back().trace_generation = ++trace_generation_;
     } else {
       if (configuration_changed_ && retained->automation.runtime()) {
@@ -263,6 +272,7 @@ void SessionRegistry::refresh(const layerc::platform::WindowScan &scan) {
     // Every loaded module travels with the retained session, even when no
     // platform capability currently consumes that module.
     next.back().modules = bundle.modules;
+    next.back().presentation_defaults = bundle.presentation_defaults;
     if (!active) next.back().matcher.clear();
     next.back().active = active;
   }

@@ -38,6 +38,10 @@
 #include <string>
 #include <vector>
 
+void linux_typed_paint_contracts();
+void linux_typed_service_contracts();
+void linux_typed_x11_pixels();
+
 namespace {
 
 using layerc::core::GameProfile;
@@ -586,8 +590,8 @@ int run_linux_x11_overlay_tests() {
   overlay.render(input_sessions.sessions(), ready);
   XGetWindowAttributes(raw, overlay_window, &attributes);
   passed &= expect(attributes.map_state == IsViewable &&
-                       overlay.next_render_deadline(ready).has_value(),
-                   "true visibility override shows a ready bar");
+                       !overlay.next_render_deadline(ready).has_value(),
+                   "true visibility override shows a static ready bar without polling");
   XImage *normal_label = attributes.map_state == IsViewable
                              ? XGetImage(raw, overlay_window, 0, 0,
                                          static_cast<unsigned int>(expected.width),
@@ -829,6 +833,9 @@ int main() {
        }},
       {"restack_notifications", restack_notifications},
       {"update_failure_recovery", update_failure_recovery},
+      {"typed_paint_contracts", linux_typed_paint_contracts},
+      {"typed_service_contracts", linux_typed_service_contracts},
+      {"typed_x11_pixels", linux_typed_x11_pixels},
       {"multiple_update_failures", multiple_update_failures},
       {"live_overlay", [] {
          layerc::test::require_x11();
