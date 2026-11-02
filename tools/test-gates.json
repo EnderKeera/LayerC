@@ -17,6 +17,7 @@
         "layerc_editor_diagnostics_view_tests",
         "layerc_editor_automation_tests",
         "layerc_editor_visual_tests",
+        "layerc_editor_live_edit_tests",
         "layerc_editor_tests",
         "layerc_isolated_visual_tests",
         "layerc_launcher_tests",
