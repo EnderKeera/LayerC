@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <ranges>
 #include <utility>
+#include <variant>
 
 namespace layerc::daemon {
 namespace {
@@ -127,7 +128,16 @@ InputSession::InputSession(const ConfiguredProfile &bundle,
     const auto now = layerc::core::MonotonicClock::now();
     const auto &state = owner.attach(source_path, *automation, now);
     InputSessionSink sink(*this);
-    (void)this->automation.start(*automation, state.values, now, &sink);
+    auto validated = layerc::core::ValidatedAutomationProfile::validate(
+        *automation, bundle.source.profile);
+    if (const auto *error =
+            std::get_if<layerc::core::AutomationError>(&validated))
+      this->automation.reject_automation(*error);
+    else
+      (void)this->automation.start(
+          std::get<layerc::core::ValidatedAutomationProfile>(
+              std::move(validated)),
+          state.values, now, &sink);
   }
 }
 

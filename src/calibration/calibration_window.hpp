@@ -2,6 +2,7 @@
 
 #include "calibration_mode.hpp"
 #include "calibration_preview.hpp"
+#include "visual_calibration.hpp"
 
 #include "layerc/capture/window_capture.hpp"
 #include "layerc/core/calibration.hpp"
@@ -23,7 +24,6 @@ struct ImportedTemplateAsset;
 }
 
 namespace layerc::calibration {
-
 
 class CalibrationWindow {
 public:
@@ -67,8 +67,6 @@ private:
   void sample_target_color();
   void capture_template_reference();
   void import_template_reference();
-  void set_reference_selection(const layerc::core::NormalizedRegion &selected);
-  void restore_reference_selection();
   [[nodiscard]] std::optional<layerc::core::TemplateImage>
   captured_reference_image() const;
   [[nodiscard]] bool append_template_reference(
@@ -87,23 +85,19 @@ private:
                                     int maximum) const;
   void set_control_text(int id, std::wstring_view text) const;
   [[nodiscard]] RECT preview_image_rect() const;
-  [[nodiscard]] layerc::core::PixelRule current_rule_from_controls() const;
-  [[nodiscard]] layerc::core::TemplateState
-  current_template_from_controls() const;
+  // The one adapter between the dialog and the shared model's controls.
+  void write_controls(const layerc::editor::CalibrationControls &controls);
+  [[nodiscard]] layerc::editor::CalibrationControls controls() const;
   [[nodiscard]] CalibrationMode mode() const;
 
   layerc::core::CalibrationRequest request_;
   layerc::core::CalibrationResponse response_;
   layerc::core::GameProfile profile_;
   std::optional<layerc::core::VisualProfile> existing_visual_;
-  layerc::core::PixelRule rule_;
-  layerc::core::TemplateState template_state_;
-  // The crop belongs to the explicit selection, never the expanded search area.
-  layerc::core::NormalizedRegion reference_selection_;
-  layerc::core::VisualTrigger trigger_;
-  std::uint8_t sample_rate_hz_{10};
+  // The shared model owns the rule, template state, selection, trigger and
+  // target colour; only the live capture quality is adapter state here.
+  std::optional<layerc::editor::CalibrationModel> model_;
   layerc::core::CaptureQuality quality_{layerc::core::CaptureQuality::balanced};
-  std::uint32_t target_color_{};
 
   HINSTANCE instance_{};
   HWND dialog_{};

@@ -18,6 +18,7 @@ memory and historical plans.
 | Game Bar release evidence | [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Build graph, options, versions, exact target registration | [`CMakeLists.txt`](CMakeLists.txt), test registration in [`cmake/LayerCTests.cmake`](cmake/LayerCTests.cmake), and current source |
 | CI, benchmark, package, and release gates | [`CONTRIBUTING.md`](CONTRIBUTING.md#ci-and-release-gates), then the affected file under `.github/workflows/` and `tools/` |
+| Desktop/hardware evidence reports, PR-comment workflow, trust tiers | [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md) |
 
 Local-only `archive/PLAN.md` (which includes V2.5) and
 `archive/PLAN-v26-linux.md` are historical design records, not current
@@ -110,7 +111,9 @@ workflow-only edits may need only parser, link, or reference validation. Use a
 full local build and all CTest suites only when the change has comparable breadth.
 `ci.yml` on `main` pushes and pull requests is the authoritative cross-platform
 gate on GitHub-hosted Windows and Linux runners, including fork pull requests.
-`windows-selfhosted.yml` is the manual Windows build/test for any ref.
+Desktop and hardware evidence is advisory: pull request comment reports become
+non-required checks through [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md);
+there are no self-hosted runners.
 
 Resolve exact commands, targets, thresholds, artifact names, and registration
 from current CMake, tests, tools, and workflows. Bind CI, benchmark, and package

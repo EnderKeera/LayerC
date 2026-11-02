@@ -1,4 +1,5 @@
 #include "core_test_cases.hpp"
+#include "automation_test_support.hpp"
 #include "test_support.hpp"
 
 #include "layerc/core/automation.hpp"
@@ -149,7 +150,8 @@ void test_automation_value_round_trip_and_bounds() {
   expect(!validate_automation_profile(invalid, base).message.empty(),
          "programmatic invalid UTF-8 should fail static validation");
 
-  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime runtime(accept_automation(profile, base), {}, {},
+                            [] { return TimePoint{}; });
   AutomationEvent oversized;
   oversized.kind = AutomationEventKind::session_started;
   for (std::size_t index{}; index <= max_automation_collection_entries; ++index)
@@ -207,7 +209,8 @@ void test_automation_mutation_postconditions() {
     expect(validate_automation_profile(profile, base).message.empty(),
            "AR-02 mutation fixture must be statically valid");
     unsigned external_effects{};
-    AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+    AutomationRuntime runtime(accept_automation(profile, base), {}, {},
+                              [] { return TimePoint{}; });
     const auto result = runtime.process(
         {.kind = AutomationEventKind::session_started}, {},
         [&](std::span<const AutomationEffect> effects) {
@@ -257,7 +260,8 @@ void test_automation_mutation_postconditions() {
                                    AutomationValue(std::string("self")))},
                               {.kind = AutomationActionKind::reset_cooldown,
                                .target = "dash"}}}}}};
-  AutomationRuntime nesting(recursive, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime nesting(accept_automation(recursive, base), {}, {},
+                            [] { return TimePoint{}; });
   unsigned commits{};
   const auto commit = [&](std::span<const AutomationEffect> effects) {
     commits += static_cast<unsigned>(
@@ -346,7 +350,8 @@ void test_automation_clock_boundaries() {
       expect(
           validate_automation_profile(profile, base).message.empty(),
           "AR-03 integer duration fixture must remain statically compatible");
-      AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+      AutomationRuntime runtime(accept_automation(profile, base), {}, {},
+                                [] { return TimePoint{}; });
       unsigned commits{};
       const auto result = runtime.process(
           {.kind = AutomationEventKind::session_started, .timestamp = start},
@@ -382,7 +387,8 @@ void test_automation_clock_boundaries() {
                   .source_filter = "tick",
                   .actions = {{.kind = AutomationActionKind::reset_cooldown,
                                .target = "dash"}}}}}};
-  AutomationRuntime rearm(repeating, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime rearm(accept_automation(repeating, base), {}, {},
+                          [] { return TimePoint{}; });
   expect(
       rearm.process({.kind = AutomationEventKind::session_started}).committed,
       "AR-03 representable repeating timers must start");

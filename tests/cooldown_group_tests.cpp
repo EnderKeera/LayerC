@@ -3,6 +3,7 @@
 // CooldownGroupTopology the engine applies, for every group kind.
 
 #include "core_test_cases.hpp"
+#include "automation_test_support.hpp"
 #include "test_support.hpp"
 
 #include "layerc/core/automation.hpp"
@@ -51,6 +52,17 @@ std::vector<CooldownGroup> parity_groups() {
            .cooldown_ids = {"c", "d"}}};
 }
 
+// The base profile every parity graph is admitted against.
+GameProfile parity_base() {
+  GameProfile base;
+  base.id = "parity";
+  base.name = "Parity";
+  base.game.executable_name = "parity.exe";
+  base.cooldowns = parity_definitions();
+  base.cooldown_groups = parity_groups();
+  return base;
+}
+
 IdSet runtime_events(const AutomationActionKind action, const std::string &target,
                      const AutomationEventKind kind) {
   AutomationProfile profile;
@@ -63,7 +75,8 @@ IdSet runtime_events(const AutomationActionKind action, const std::string &targe
       {.id = "parity", .name = "Parity", .enabled = true, .rules = {rule}});
   const auto groups = parity_groups();
   const CooldownEngine engine(parity_definitions(), groups);
-  AutomationRuntime runtime(profile, {}, engine.group_topology(),
+  AutomationRuntime runtime(accept_automation(profile, parity_base()), {},
+                            engine.group_topology(),
                             [] { return TimePoint{}; });
   expect(runtime.cooldown_groups().data() == engine.group_topology().groups().data(),
          "engine and runtime share definitions rather than deep-copying them");
@@ -139,7 +152,9 @@ void test_cooldown_group_engine_runtime_parity() {
   // Engine staging and reconciliation do not invalidate the runtime's
   // immutable topology. Only explicit runtime reconciliation changes its view.
   CooldownEngine engine(definitions, groups);
-  AutomationRuntime runtime({}, {}, engine.group_topology(),
+  const auto empty_graph = accept_automation({.profile_id = "parity"},
+                                             parity_base());
+  AutomationRuntime runtime(empty_graph, {}, engine.group_topology(),
                             [] { return TimePoint{}; });
   const auto staged = engine;
   expect(staged.group_topology().groups().data() == runtime.cooldown_groups().data(),
@@ -149,7 +164,7 @@ void test_cooldown_group_engine_runtime_parity() {
   engine.reconfigure(definitions, {}, TimePoint{}, changed_groups);
   expect(std::ranges::equal(runtime.cooldown_groups(), groups),
          "engine reconciliation retains the runtime's old safe topology");
-  runtime.reconfigure({}, engine.group_topology());
+  runtime.reconfigure(empty_graph, engine.group_topology());
   expect(runtime.cooldown_groups().data() == engine.group_topology().groups().data() &&
              std::ranges::equal(runtime.cooldown_groups(), changed_groups),
          "runtime reconciliation adopts the engine's new storage without copying");

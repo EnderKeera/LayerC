@@ -1,5 +1,6 @@
 #pragma once
 
+#include "capture_route.hpp"
 #include "session_registry.hpp"
 
 #include "layerc/core/template_matcher.hpp"
@@ -29,8 +30,8 @@ public:
     bool operator==(const WorkStats &) const = default;
   };
 
-  void use_x11_capture(CaptureFactory *factory) noexcept;
-  void use_capture(CaptureFactory *factory) noexcept;
+  // The routing owner's answer: which capture providers this engine offers.
+  void use_route(const CaptureRoute &route) noexcept;
   void refresh(std::span<InputSession> sessions,
                const layerc::runtime::CapabilityDemand &demand,
                bool configuration_changed = false,
@@ -77,17 +78,16 @@ private:
   struct Target {
     std::uint64_t window{};
     layerc::core::CaptureQuality quality{layerc::core::CaptureQuality::low};
-    // Transport chosen by create_capture(); the evaluator never branches on it.
+    // Transport chosen by resolve_capture(); the evaluator never branches on it.
     std::unique_ptr<VisualCaptureSession> capture;
+    // The identity the session was created for, never a second route decision.
     std::optional<std::uint64_t> x11_window;
+    // Why this target has no capture; the only source of its fault reason.
+    std::string unavailable;
     std::vector<Evaluation *> evaluations;
   };
 
-  [[nodiscard]] std::unique_ptr<VisualCaptureSession>
-  create_capture(const Target &target, std::string_view profile_id, std::uint8_t sample_rate);
-
-  CaptureFactory *x11_{};
-  CaptureFactory *native_{};
+  CaptureRoute route_;
   std::vector<Target> targets_;
   // Matched-profile configuration survives foreground/capture quiescence.
   std::map<std::filesystem::path, Evaluation> evaluations_;

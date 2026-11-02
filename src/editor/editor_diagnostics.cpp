@@ -110,9 +110,9 @@ void EditorWindow::refresh_runtime_diagnostics_dialog() {
     return;
 
   const auto &snapshot = pack_dialogs_.runtime_diagnostics_json;
-  const bool connected = live_edit_.channel().connected();
-  const auto view = diagnostics_view(snapshot, connected,
-                                     live_edit_.package_authenticated());
+  const bool connected = live_edit_.connected();
+  const auto view =
+      diagnostics_view(snapshot, connected, live_edit_.authenticated());
   set_text(GetDlgItem(dialog, IDC_DIAGNOSTICS_SUMMARY), view.summary);
 
   const bool have_snapshot = !snapshot.empty();
@@ -127,7 +127,7 @@ void EditorWindow::refresh_runtime_diagnostics_dialog() {
   EnableWindow(GetDlgItem(dialog, IDC_DIAGNOSTICS_COPY),
                have_snapshot ? TRUE : FALSE);
   ShowWindow(GetDlgItem(dialog, IDC_DIAGNOSTICS_RETRY_VISUAL),
-             view.retry_visual && connected && live_edit_.package_authenticated()
+             view.retry_visual && connected && live_edit_.authenticated()
                  ? SW_SHOW
                  : SW_HIDE);
   layout_diagnostics_dialog(dialog);
@@ -135,13 +135,8 @@ void EditorWindow::refresh_runtime_diagnostics_dialog() {
 
 void EditorWindow::request_runtime_diagnostics() {
   refresh_runtime_diagnostics_dialog();
-  if (!live_edit_.channel().connected() || !live_edit_.package_authenticated())
-    return;
-  live_edit_.advance_revision();
-  (void)live_edit_.channel().send({
-      .type = layerc::core::LiveMessageType::diagnostics_request,
-      .revision = live_edit_.revision(),
-  });
+  (void)live_edit_.send_authenticated(
+      {.type = layerc::core::LiveMessageType::diagnostics_request});
 }
 
 void EditorWindow::open_runtime_diagnostics() {
@@ -191,16 +186,11 @@ INT_PTR CALLBACK EditorWindow::diagnostics_dialog_proc(
       editor->refresh_runtime_diagnostics_dialog();
       return TRUE;
     case IDC_DIAGNOSTICS_RETRY_VISUAL:
-      if (!editor->live_edit_.channel().connected() ||
-          !editor->live_edit_.package_authenticated()) {
+      if (!editor->live_edit_.send_authenticated(
+              {.type = layerc::core::LiveMessageType::retry_visual})) {
         editor->request_runtime_diagnostics();
         return TRUE;
       }
-      editor->live_edit_.advance_revision();
-      (void)editor->live_edit_.channel().send({
-          .type = layerc::core::LiveMessageType::retry_visual,
-          .revision = editor->live_edit_.revision(),
-      });
       editor->request_runtime_diagnostics();
       return TRUE;
     case IDC_DIAGNOSTICS_COPY:

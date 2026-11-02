@@ -524,8 +524,8 @@ bool EditorWindow::restore_window_placement(const int show_command) {
 
 void EditorWindow::refresh_connection_status() {
   const wchar_t *text =
-      !live_edit_.channel().connected()      ? L"LayerD: not running"
-      : live_edit_.package_authenticated()   ? L"LayerD: connected"
+      !live_edit_.connected()      ? L"LayerD: not running"
+      : live_edit_.authenticated()   ? L"LayerD: connected"
                                              : L"LayerD: connecting";
   if (shell_.connection_cache != text) {
     shell_.connection_cache = text;

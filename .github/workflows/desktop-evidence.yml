@@ -1,0 +1,103 @@
+name: Desktop evidence
+
+# Publishes desktop/hardware test reports posted as pull request comments
+# (docs/DesktopEvidence.md) as advisory, non-required check runs. An
+# issue_comment workflow runs from the default branch with a base-repository
+# token, even for fork pull requests, so this job never checks out, builds, or
+# runs pull request code: it reads only the default branch's validator and
+# harness configuration, and receives the comment as data through the
+# environment.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+concurrency:
+  group: desktop-evidence-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.user.type != 'Bot' &&
+      startsWith(github.event.comment.body, '<!-- desktop-evidence/1 -->')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout validator from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools/desktop_evidence.py
+            .github/desktop-evidence.json
+          sparse-checkout-cone-mode: false
+
+      # A report may name any commit of the pull request (at most 250 are
+      # listed), or its merge commit once merged.
+      - name: List commits the report may attach to
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh api --paginate "repos/$REPOSITORY/pulls/$PR_NUMBER/commits" \
+            --jq '.[].sha' > "$RUNNER_TEMP/allowed-commits.txt"
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" \
+            --jq 'select(.merged == true) | .merge_commit_sha' \
+            >> "$RUNNER_TEMP/allowed-commits.txt"
+
+      # A CI artifact built for a pull request is its test merge commit. The
+      # validator prints builtCommit (40 hex digits) only when it differs from
+      # commit; its parents decide whether that build contains commit.
+      - name: Look up the parents of a differing build commit
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          built=$(python3 -I -B tools/desktop_evidence.py built-commit \
+            --comment-env COMMENT_BODY)
+          : > "$RUNNER_TEMP/built-commit-parents.txt"
+          if [ -n "$built" ]; then
+            gh api "repos/$REPOSITORY/commits/$built" --jq '.parents[].sha' \
+              > "$RUNNER_TEMP/built-commit-parents.txt"
+          fi
+
+      # Exit 2 rejects the report: no check run, and the reasons go to the job
+      # summary.
+      - name: Validate the report and build the check run
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          REPOSITORY: ${{ github.repository }}
+        run: >-
+          python3 -I -B tools/desktop_evidence.py publish
+          --config .github/desktop-evidence.json
+          --comment-env COMMENT_BODY
+          --comment-id "$COMMENT_ID"
+          --comment-url "$COMMENT_URL"
+          --author "$COMMENT_AUTHOR"
+          --association "$AUTHOR_ASSOCIATION"
+          --repository "$REPOSITORY"
+          --allowed-commits "$RUNNER_TEMP/allowed-commits.txt"
+          --built-commit-parents "$RUNNER_TEMP/built-commit-parents.txt"
+          --out "$RUNNER_TEMP/check-run.json"
+
+      - name: Publish the advisory check run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: >-
+          gh api --method POST "repos/$REPOSITORY/check-runs"
+          --input "$RUNNER_TEMP/check-run.json" --jq '.html_url'

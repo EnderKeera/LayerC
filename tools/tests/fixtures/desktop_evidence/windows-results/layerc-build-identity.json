@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "source": "ci-artifact",
+  "commitSha": "cccccccccccccccccccccccccccccccccccccccc",
+  "dirty": false,
+  "workflow": "CI",
+  "runId": "123456",
+  "runAttempt": "1",
+  "configuration": "ci"
+}

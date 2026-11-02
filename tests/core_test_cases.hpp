@@ -70,5 +70,7 @@ void test_automation_numeric_promotion();
 void test_automation_decode_postconditions();
 void test_automation_parse_validate_parity();
 void test_automation_trace_root_provenance();
+void test_automation_validated_profile_boundary();
+void test_automation_session_current_health();
 
 } // namespace layerc::test
