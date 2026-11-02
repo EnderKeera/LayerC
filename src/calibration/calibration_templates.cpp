@@ -5,7 +5,7 @@
 #include "layerc/platform/text.hpp"
 #include "layerc/platform/visual_assets_windows.hpp"
 
-#include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <variant>
 #include <vector>
@@ -15,9 +15,10 @@
 namespace layerc::calibration {
 namespace {
 
-[[nodiscard]] bool reject_when_reference_limit_reached(
-    const HWND dialog, const layerc::core::TemplateState &state) {
-  if (state.references.size() < layerc::core::max_template_references)
+[[nodiscard]] bool
+reject_when_reference_limit_reached(const HWND dialog,
+                                    const std::size_t reference_count) {
+  if (reference_count < layerc::core::max_template_references)
     return false;
   MessageBoxW(dialog, L"A template state supports at most four references.",
               L"Template reference limit", MB_OK | MB_ICONINFORMATION);
@@ -33,50 +34,19 @@ void show_asset_error(const HWND dialog,
 
 } // namespace
 
-void CalibrationWindow::set_reference_selection(
-    const layerc::core::NormalizedRegion &selected) {
-  reference_selection_ = selected;
-  rule_.region = selected;
-  template_state_.expected_width = selected.width;
-  template_state_.expected_height = selected.height;
-  template_state_.search_region =
-      layerc::core::expanded_template_search_region(selected);
-  template_matcher_.clear();
-}
-
-void CalibrationWindow::restore_reference_selection() {
-  // Older profiles persist dimensions/search, not the original crop origin.
-  // Seed a same-sized central crop without changing persisted geometry.
-  reference_selection_ = {
-      std::clamp(template_state_.search_region.x +
-                     (template_state_.search_region.width -
-                      template_state_.expected_width) * 0.5,
-                 0.0, 1.0 - template_state_.expected_width),
-      std::clamp(template_state_.search_region.y +
-                     (template_state_.search_region.height -
-                      template_state_.expected_height) * 0.5,
-                 0.0, 1.0 - template_state_.expected_height),
-      template_state_.expected_width, template_state_.expected_height};
-  rule_.region = reference_selection_;
-}
-
 std::optional<layerc::core::TemplateImage>
 CalibrationWindow::captured_reference_image() const {
   const auto &frame = preview_.frame();
   if (!frame)
     return std::nullopt;
   return layerc::core::template_from_selection(frame->view(),
-                                               reference_selection_);
+                                               model_->selection());
 }
 
 bool CalibrationWindow::append_template_reference(
     const layerc::platform::ImportedTemplateAsset &asset) {
-  if (template_state_.references.size() >= layerc::core::max_template_references ||
-      std::ranges::any_of(template_state_.references, [&](const auto &item) {
-        return item.asset_sha256 == asset.reference.asset_sha256;
-      }))
+  if (!model_ || !model_->add_reference(asset.reference))
     return false;
-  template_state_.references.push_back(asset.reference);
   template_images_.push_back(asset.image);
   template_matcher_.clear();
   refresh_template_reference_label();
@@ -92,7 +62,7 @@ void CalibrationWindow::capture_template_reference() {
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
-  if (reject_when_reference_limit_reached(dialog_, template_state_))
+  if (reject_when_reference_limit_reached(dialog_, model_->references().size()))
     return;
   const auto image = captured_reference_image();
   if (!image) {
@@ -114,7 +84,7 @@ void CalibrationWindow::capture_template_reference() {
 }
 
 void CalibrationWindow::import_template_reference() {
-  if (reject_when_reference_limit_reached(dialog_, template_state_))
+  if (reject_when_reference_limit_reached(dialog_, model_->references().size()))
     return;
   std::vector<wchar_t> path(32'768);
   OPENFILENAMEW picker{};
@@ -142,7 +112,7 @@ void CalibrationWindow::import_template_reference() {
 
 void CalibrationWindow::clear_template_references() {
   mask_editor_.clear();
-  template_state_.references.clear();
+  model_->clear_references();
   template_images_.clear();
   template_matcher_.clear();
   refresh_template_reference_label();
@@ -155,7 +125,7 @@ void CalibrationWindow::toggle_template_mask_editing() {
     return;
   }
   if (template_images_.empty() ||
-      template_images_.size() != template_state_.references.size()) {
+      template_images_.size() != model_->references().size()) {
     MessageBoxW(dialog_, L"All template references must be available first.",
                 L"Mask unavailable", MB_OK | MB_ICONINFORMATION);
     return;
@@ -185,18 +155,12 @@ bool CalibrationWindow::finish_template_mask_editing() {
                        L"Mask save failed");
       return false;
     }
-    const bool duplicates_earlier = std::ranges::any_of(
-        template_state_.references.begin(),
-        template_state_.references.end() - 1, [&](const auto &reference) {
-          return reference.asset_sha256 == asset->reference.asset_sha256;
-        });
-    if (duplicates_earlier) {
+    if (!model_->replace_last_reference(asset->reference)) {
       MessageBoxW(dialog_,
                   L"This mask duplicates an earlier reference. Change it or clear the duplicate reference.",
                   L"Duplicate template", MB_OK | MB_ICONWARNING);
       return false;
     }
-    template_state_.references.back() = asset->reference;
     image = asset->image;
     template_matcher_.clear();
   }

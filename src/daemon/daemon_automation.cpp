@@ -11,6 +11,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace layerc::daemon {
@@ -111,11 +112,25 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
     }
     const auto &profile = *source->modules.get<layerc::core::AutomationModule>().profile;
     if (!session->automation.runtime()) {
+      // A candidate the canonical validator rejected is not re-validated on
+      // every reconcile: the recorded revision keeps the rejection sticky
+      // until the source's automation content changes again.
+      if (session->automation.automation_rejected() &&
+          session->automation_revision == source->automation_revision)
+        continue;
       session->automation_revision = source->automation_revision;
-      if (session->automation.start(profile,
-                         persistence_.attach(source->path, profile, now)
-                             .values,
-                         now, nullptr, trace_subscribed_))
+      auto validated = layerc::core::ValidatedAutomationProfile::validate(
+          profile, source->profile);
+      if (const auto *error =
+              std::get_if<layerc::core::AutomationError>(&validated)) {
+        session->automation.reject_automation(*error);
+        continue;
+      }
+      if (session->automation.start(
+              std::get<layerc::core::ValidatedAutomationProfile>(
+                  std::move(validated)),
+              persistence_.attach(source->path, profile, now).values, now,
+              nullptr, trace_subscribed_))
         overlays_.mark_dirty();
       after_step(*session, now);
     } else if (session->automation_revision != source->automation_revision) {
@@ -128,8 +143,18 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
           !std::ranges::equal(
               session->automation.runtime()->cooldown_groups(),
               session->automation.profile().cooldown_groups)) {
-        session->automation.runtime()->reconfigure(
-            profile, session->automation.cooldowns().group_topology());
+        auto validated = layerc::core::ValidatedAutomationProfile::validate(
+            profile, source->profile);
+        if (const auto *error =
+                std::get_if<layerc::core::AutomationError>(&validated)) {
+          // The rejection is reported, and the previous runtime keeps running
+          // against the profile it was accepted with.
+          session->automation.reject_automation(*error);
+          continue;
+        }
+        session->automation.reconfigure_automation(
+            std::get<layerc::core::ValidatedAutomationProfile>(
+                std::move(validated)));
         session->automation.runtime()->apply_persistent_values(
             persistence_.attach(source->path, profile, now).values);
         // Reconfigure resets session-scoped state (variables, timers, edge
@@ -137,6 +162,11 @@ AutomationRuntimeHost::reconcile(const layerc::runtime::CapabilityDemand &) {
         // keyed on it re-run against the edited profile instead of waiting
         // for the next session.
         start_session(*session);
+      } else {
+        // The edit reverted to the profile this runtime already runs: the
+        // accepted running profile is the current candidate, so a rejection
+        // of the intermediate candidate is no longer current health.
+        session->automation.clear_automation_rejection();
       }
     }
   }

@@ -136,6 +136,10 @@ capture::CapturePoll PipeWireCapture::poll(const core::TimePoint now) {
       core::CaptureBackendKind::pipewire_portal,
       stale ? "stale_frames" : reason_.empty() && !frame_ ? "portal_pending" : reason_,
       available ? frame_ : nullptr});
+  // The grant relates frames to the user's chosen source, never to the
+  // session's target window; monitor sources are cropped to that target.
+  result.binding = monitor_ ? capture::CaptureTargetBinding::monitor_crop
+                            : capture::CaptureTargetBinding::user_selected_window;
   return capture::normalize_capture_poll(window_, std::move(result));
 }
 

@@ -49,6 +49,8 @@ public:
   bool shown{};
   bool anchor_active{};
   bool fail_show{};
+  std::optional<std::uint64_t> xid;
+  bool refuse_capture{};
   std::string failed_panel;
   std::map<std::string, std::string, std::less<>> visible;
 
@@ -91,11 +93,13 @@ public:
     shown = !visible.empty();
   }
   std::vector<std::string> unavailable() const override { return {}; }
-  std::optional<std::uint64_t> x11_window(std::uint64_t) const override { return std::nullopt; }
+  std::optional<std::uint64_t> x11_window(std::uint64_t) const override {
+    return xid;
+  }
   std::unique_ptr<daemon::VisualCaptureSession> create_capture(
       std::string_view, core::WindowId, core::CaptureQuality, std::uint8_t) override {
     ++captures;
-    return std::make_unique<FakeCapture>();
+    return refuse_capture ? nullptr : std::make_unique<FakeCapture>();
   }
 };
 
@@ -149,8 +153,9 @@ void neutral_session_engine() {
   provider.scan.windows.push_back(window);
   provider.scan.active = 9;
   daemon::DisplayRoute route{.windows = &provider, .monitors = &provider,
-      .overlay = &provider, .capture = &provider,
-      .native_windows = true, .native_overlay = true,
+      .overlay = &provider,
+      .capture = {.native = &provider, .native_windows = true},
+      .native_overlay = true,
       .inputs = {&provider}};
   daemon::SessionEngine engine;
   runtime::DaemonKernel kernel(engine.runtime_services());
@@ -277,6 +282,7 @@ void provider_loss_case(const std::string_view mode,
   const daemon::DisplayRoute route{.windows = &provider,
                                    .monitors = &provider,
                                    .overlay = &provider,
+                                   .capture = {},
                                    .inputs = {}};
 
   daemon::SessionEngine engine;
@@ -490,6 +496,7 @@ void provider_loss_lifecycle() {
   return {.windows = &provider,
           .monitors = &provider,
           .overlay = &provider,
+          .capture = {},
           .native_overlay = true,
           .inputs = {}};
 }
@@ -979,8 +986,8 @@ void typed_overlay_item_diagnostics_producer() {
   daemon::DisplayRoute route{.windows = &provider,
                              .monitors = &provider,
                              .overlay = &provider,
-                             .capture = &provider,
-                             .native_windows = true,
+                             .capture = {.native = &provider,
+                                         .native_windows = true},
                              .native_overlay = true,
                              .inputs = {&provider}};
   daemon::SessionEngine engine;
@@ -1031,6 +1038,133 @@ void typed_overlay_item_diagnostics_producer() {
   engine.stop_sessions(core::MonotonicClock::now());
 }
 
+// F02: capture is resolved per target. A window that cannot be captured reports
+// one visible reason and never contributes a sampling deadline, and a route
+// that gains the missing factory starts capturing without restarting anything.
+void unpollable_capture_lifecycle() {
+  layerc::test::TempDirectory temp("layerc-unpollable-capture");
+  layerc::test::ScopedEnvironment config{"XDG_CONFIG_HOME", temp.path() / "config"};
+  layerc::test::ScopedEnvironment data{"XDG_DATA_HOME", temp.path() / "data"};
+  const auto roots = platform::profile_store_roots();
+  if (!expect(config.applied() && data.applied() &&
+                  platform::ensure_profile_store_roots(roots),
+              "private capture fixture roots exist"))
+    return;
+  core::GameProfile profile;
+  profile.id = "capture";
+  profile.name = "Capture";
+  profile.game.executable_name = "fixture.exe";
+  profile.cooldowns.push_back({.id = "dash", .name = "Dash",
+                               .duration = std::chrono::seconds(5)});
+  profile.bindings.push_back({.cooldown_id = "dash",
+                              .chord = {{{core::InputDevice::keyboard, 18, 0}}}});
+  core::VisualProfile visual;
+  visual.profile_id = profile.id;
+  visual.sample_rate_hz = 10;
+  core::PixelRule ready;
+  ready.id = "ready";
+  ready.name = "Ready";
+  visual.observations.push_back(ready);
+  visual.triggers.push_back({.cooldown_id = "dash",
+                             .observation_id = "ready",
+                             .keep_input = true});
+  // No panel and no timer: visual sampling is the only deadline source here.
+  const platform::StoredProfile stored{roots.config_profiles / "capture.json",
+                                       profile};
+  if (!expect(platform::write_profile_bundle(stored.path, profile, visual).ok(),
+              "the capture fixture and its visual sidecar are stored"))
+    return;
+
+  FakeDisplay provider;
+  platform::WindowSnapshot window;
+  window.window = 9;
+  window.executable_name = "fixture.exe";
+  window.width = 800;
+  window.height = 600;
+  window.active = true;
+  provider.scan.windows.push_back(window);
+  provider.scan.active = 9;
+  daemon::DisplayRoute route{.windows = &provider,
+                             .monitors = &provider,
+                             .capture = {.native = &provider,
+                                         .native_windows = true},
+                             .inputs = {&provider}};
+  daemon::SessionEngine engine;
+  runtime::DaemonKernel kernel(engine.runtime_services());
+  daemon::LinuxStatusSnapshot status;
+  std::vector<std::string> diagnostics;
+  engine.refresh(std::span{&stored, 1}, true, route, kernel, status, diagnostics);
+  if (!expect(engine.session_count() == 1 && provider.captures == 1,
+              "a native route captures the admitted window"))
+    return;
+
+  // The compositor now identifies the window as XWayland, but this route has
+  // no X11 factory.
+  provider.xid = 23;
+  provider.captures = 0;
+  diagnostics.clear();
+  engine.refresh(std::span{&stored, 1}, false, route, kernel, status, diagnostics);
+  const std::string xwayland_reason =
+      "visual visual: window 9 is an XWayland window but X11 capture is "
+      "unavailable";
+  const auto now = core::MonotonicClock::now();
+  const auto unpollable = engine.next_deadline(now);
+  expect(provider.captures == 0 && engine.session_count() == 1 &&
+             std::ranges::find(diagnostics, xwayland_reason) !=
+                 diagnostics.end() &&
+             (!unpollable.has_value() || *unpollable > now),
+         "an XWayland window without X11 capture reports its reason and "
+         "contributes no sampling deadline");
+  const core::InputEvent press{{core::InputDevice::keyboard, 18, 0}, true};
+  daemon::DisplayDispatch dispatched;
+  engine.feed_input(std::span{&press, 1}, dispatched);
+
+  expect(dispatched.triggered == std::vector<std::string>{"dash"},
+         "an uncapturable visual target leaves input and automation working");
+
+  // The X11 factory appears: the same engine resolves capture for the target.
+  FakeDisplay x11_factory;
+  auto routed = route;
+  routed.capture.x11 = &x11_factory;
+  diagnostics.clear();
+  engine.refresh(std::span{&stored, 1}, false, routed, kernel, status,
+                 diagnostics);
+  const auto captured = engine.next_deadline(now);
+
+  expect(x11_factory.captures == 1 &&
+             std::ranges::find(diagnostics, xwayland_reason) ==
+                 diagnostics.end() &&
+             captured.has_value(),
+         "a provider transition creates the missing capture and restores the "
+         "visual deadline");
+  (void)engine.render(now);
+  const auto sampled = engine.next_deadline(now);
+  expect(sampled.has_value() && *sampled > now,
+         "a captured target schedules its next sample instead of a due loop");
+
+  // A factory that refuses the capture reports the same class of reason and
+  // the deadline property holds for it too.
+  FakeDisplay refusing;
+  refusing.refuse_capture = true;
+  const daemon::DisplayRoute refusing_route{.windows = &provider,
+                                           .monitors = &provider,
+                                           .capture = {.native = &refusing,
+                                                       .native_windows = true},
+                                           .inputs = {&provider}};
+  std::vector<std::string> refused_diagnostics;
+  engine.refresh(std::span{&stored, 1}, false, refusing_route, kernel, status,
+                 refused_diagnostics);
+  const auto refused_deadline = engine.next_deadline(now);
+  expect(refusing.captures != 0 &&
+             std::ranges::find(
+                 refused_diagnostics,
+                 "visual visual: capture could not be created for window 9") !=
+                 refused_diagnostics.end() &&
+             (!refused_deadline.has_value() || *refused_deadline > now),
+         "a refused capture reports its reason and arms no sampling deadline");
+  kernel.quiesce();
+  engine.stop_sessions(core::MonotonicClock::now());
+}
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(neutral_session_engine),
@@ -1038,4 +1172,5 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(neutral_session_engine),
                  LAYERC_TEST_CASE(passive_service_contracts),
                  LAYERC_TEST_CASE(provider_loss_lifecycle),
                  LAYERC_TEST_CASE(overlay_retry_lifecycle),
-                 LAYERC_TEST_CASE(provider_free_ownership))
+                 LAYERC_TEST_CASE(provider_free_ownership),
+                 LAYERC_TEST_CASE(unpollable_capture_lifecycle))

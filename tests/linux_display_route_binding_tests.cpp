@@ -192,10 +192,11 @@ void run_case(const Case &test) {
     expect(route.inputs == expected_inputs &&
                route.native_input == (!expected_inputs.empty() && expected_inputs.front() == &evdev),
            std::string(test.name) + ": the route binds an opted-in evdev before the XI2 fallback");
-    expect(route.x11_capture == (test.x11 ? static_cast<daemon::CaptureFactory *>(&x11) : nullptr),
+    expect(route.capture.x11 ==
+               (test.x11 ? static_cast<daemon::CaptureFactory *>(&x11) : nullptr),
            "the explicit XID factory remains available alongside native capture");
     if (plan.native_windows && !test.bus) {
-      expect(plan.capture.serving == Id::none && !route.capture,
+      expect(plan.capture.serving == Id::none && !route.capture.native,
              "native windows without a bus have no capture factory");
       expect(std::ranges::find(diagnostics, "visual visual: native windows have no X11 window id") != diagnostics.end(),
              "absent native capture preserves the exact visual reason");

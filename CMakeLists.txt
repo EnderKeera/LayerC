@@ -364,6 +364,16 @@ if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
     endif()
 endif()
 
+# Toolkit-free calibration model shared by the native calibration window and
+# the editor calibration pages; it owns the domain rules, never a dialog.
+if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
+    add_library(layerc_calibration_model STATIC
+        src/editor/common/visual_calibration.cpp)
+    target_include_directories(layerc_calibration_model PUBLIC src/editor/common)
+    target_link_libraries(layerc_calibration_model PUBLIC layerc_core)
+    layerc_enable_warnings(layerc_calibration_model)
+endif()
+
 if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
     add_library(layerc_editor_ui STATIC
         src/editor/editor_dialog.cpp
@@ -392,7 +402,8 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_automation_simulator.cpp
         src/editor/editor_packs.cpp
         src/editor/editor_diagnostics.cpp
-        src/editor/editor_hid.cpp)
+        src/editor/editor_hid.cpp
+        src/editor/live_edit_session.cpp)
     target_include_directories(layerc_editor_ui PUBLIC src/editor)
     target_link_libraries(layerc_editor_ui PUBLIC
         layerc_editor_core layerc_core layerc_runtime layerc_windows layerc_bundle
@@ -407,7 +418,7 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/calibration/calibration_templates.cpp)
     target_include_directories(layerc_calibration_ui PUBLIC src/calibration)
     target_link_libraries(layerc_calibration_ui PUBLIC
-        layerc_core layerc_windows layerc_capture
+        layerc_calibration_model layerc_core layerc_windows layerc_capture
         comctl32 dwmapi shell32 uxtheme user32 gdi32)
     layerc_win32(layerc_calibration_ui)
 endif()
@@ -497,6 +508,7 @@ if(NOT WIN32)
             src/daemon/linux/display_adapters.cpp
             src/daemon/linux/display_selection.cpp
             src/daemon/linux/display_route.cpp
+            src/daemon/linux/capture_route.cpp
             src/daemon/linux/session_registry.cpp
             src/daemon/linux/session_engine.cpp
             src/daemon/linux/evdev_route.cpp
@@ -565,9 +577,9 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/common/profile_edit.cpp
         src/editor/common/panel_items.cpp
         src/editor/common/runtime_diagnostics_view.cpp
-        src/editor/common/visual_assignment.cpp
-        src/editor/common/visual_calibration.cpp)
+        src/editor/common/visual_assignment.cpp)
     target_include_directories(layerc_editor_core PUBLIC src/editor/common)
+    target_link_libraries(layerc_editor_core PUBLIC layerc_calibration_model)
     target_link_libraries(layerc_editor_core PUBLIC layerc_runtime)
     if(WIN32)
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_windows)

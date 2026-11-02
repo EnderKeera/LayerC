@@ -416,4 +416,13 @@ AutomationError validate_automation_profile(const AutomationProfile &profile,
   }
   return {};
 }
+
+ValidatedAutomationProfile::Result
+ValidatedAutomationProfile::validate(AutomationProfile profile,
+                                     const GameProfile &base) {
+  auto error = validate_automation_profile(profile, base);
+  if (!error.message.empty())
+    return error;
+  return ValidatedAutomationProfile(std::move(profile));
+}
 } // namespace layerc::core

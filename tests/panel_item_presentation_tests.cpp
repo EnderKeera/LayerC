@@ -1,6 +1,7 @@
 // Typed overlay item presentation: the one renderer-neutral contract every
 // surface draws (PLAN §8.5).
 
+#include "automation_test_support.hpp"
 #include "core_test_cases.hpp"
 #include "test_support.hpp"
 
@@ -363,6 +364,7 @@ void test_panel_item_presentation_values() {
   AutomationAction rage;
   rage.kind = AutomationActionKind::create_timer;
   rage.target = "rage";
+  rage.value = expr::literal(AutomationValue(DurationValue{1s}));
   auto other_timer = rage;
   other_timer.target = "other";
   AutomationRule enabled;
@@ -380,13 +382,16 @@ void test_panel_item_presentation_values() {
   expect(defaults.declared_timer_ids == std::vector<std::string>{"other", "rage"} &&
              defaults.timers.empty(),
          "declared defaults carry sorted unique timer IDs and no running timers");
-  AutomationRuntime runtime(graph);
+  GameProfile timer_base;
+  timer_base.id = graph.profile_id;
+  timer_base.name = "Declared timers";
+  AutomationRuntime runtime(accept_automation(graph, timer_base));
   expect(runtime.snapshot().declared_timer_ids == defaults.declared_timer_ids &&
              runtime.snapshot().timers.empty(),
          "a constructed runtime declares the same inventory without timer activity");
   graph.automations.front().rules.front().actions = {other_timer};
-  graph.automations.back().rules.front().actions.clear();
-  runtime.reconfigure(graph, {});
+  graph.automations.pop_back();
+  runtime.reconfigure(accept_automation(graph, timer_base), {});
   expect(runtime.snapshot().declared_timer_ids == std::vector<std::string>{"other"} &&
              automation_default_snapshot(graph).declared_timer_ids ==
                  std::vector<std::string>{"other"},

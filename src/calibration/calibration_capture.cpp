@@ -134,7 +134,7 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
                 image.bottom - image.top, 0, 0, width, height, pixels, &bitmap,
                 DIB_RGB_COLORS, SRCCOPY);
 
-  if (mask_preview)
+  if (mask_preview || !model_)
     return;
 
   const auto to_x = [&](const double fraction) {
@@ -145,9 +145,10 @@ void CalibrationWindow::paint_preview(const DRAWITEMSTRUCT &draw) {
     return image.top +
            static_cast<LONG>(std::lround(fraction * (image.bottom - image.top)));
   };
-  const RECT region{to_x(rule_.region.x), to_y(rule_.region.y),
-                    to_x(rule_.region.x + rule_.region.width),
-                    to_y(rule_.region.y + rule_.region.height)};
+  const auto &selected = model_->selection();
+  const RECT region{to_x(selected.x), to_y(selected.y),
+                    to_x(selected.x + selected.width),
+                    to_y(selected.y + selected.height)};
   const HPEN pen = CreatePen(PS_SOLID, 2, palette_.selection);
   const auto old_pen = SelectObject(draw.hDC, pen);
   const auto old_brush = SelectObject(draw.hDC, GetStockObject(HOLLOW_BRUSH));
@@ -182,11 +183,12 @@ void CalibrationWindow::update_region_from_pointer(POINT point,
   const auto bottom = std::max(start.y, point.y);
   if (right - left < 2 || bottom - top < 2)
     return;
-  set_reference_selection(
+  model_->set_selection(
       {static_cast<double>(left - image.left) / width,
        static_cast<double>(top - image.top) / height,
        static_cast<double>(right - left) / width,
        static_cast<double>(bottom - top) / height});
+  template_matcher_.clear();
   preview_.invalidate();
   update_match_status(final);
 }

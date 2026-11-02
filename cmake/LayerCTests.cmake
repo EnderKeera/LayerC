@@ -487,6 +487,11 @@ if(WIN32)
         LINK layerc_editor_ui WIN32 TIMEOUT 30)
     target_include_directories(layerc_editor_tests PRIVATE src/editor)
 
+    # F01: the live-edit controller against a scripted transport and clock.
+    layerc_add_test(layerc_editor_live_edit_tests
+        SOURCES tests/editor_live_edit_session_tests.cpp
+        LINK layerc_editor_ui WIN32 TIMEOUT 30)
+
     layerc_add_test(layerc_calibration_tests
         SOURCES tests/calibration_window_tests.cpp
             tests/calibration_reference_tests.cpp
