@@ -1,0 +1,12 @@
+{
+  "name": "Desktop evidence: demo-desktop (demo-x11) by @tester",
+  "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": "completed",
+  "conclusion": "failure",
+  "external_id": "comment-99",
+  "details_url": "https://github.com/Example/Project/pull/7#issuecomment-99",
+  "output": {
+    "title": "Maintainer-attested: failed, 1 passed, 1 failed, 1 skipped, 0 unavailable",
+    "summary": "Reported by @tester (OWNER). Maintainer-attested: GitHub did not run these tests; this check records the maintainer's report.\n\n- Harness: `demo-desktop` version `1.0`: Example desktop checks.\n- Commit: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`\n- Build: CI run [`123456`](https://github.com/Example/Project/actions/runs/123456) built `cccccccccccccccccccccccccccccccccccccccc`, identity SHA-256 `dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd` (reported by the submitter, not verified) (pull request merge of `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` into `eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`; parents read from GitHub)\n- Environment: `Example OS 1`, session `demo-x11`, `physical` machine, GPU `Example GPU`\n- Recorded at: `2026-05-20T12:34:56Z`\n- Evaluation: `failed`\n- Report SHA-256: `1be2595882c00d90bb170bbd156df8290d86c29e1f89aa34088feb796ab0d14f`\n- Source comment: https://github.com/Example/Project/pull/7#issuecomment-99\n\n| Test | Status | Detail |\n| --- | --- | --- |\n| `capture` | `pass` | `Visible window captured` |\n| `overlay` | `fail` | `Overlay was not visible` |\n| `latency` | `skip` | `Optional measurement not run` |"
+  }
+}

@@ -1,4 +1,5 @@
 #include "core_test_cases.hpp"
+#include "automation_test_support.hpp"
 #include "test_support.hpp"
 
 #include "layerc/core/automation_session.hpp"
@@ -71,6 +72,59 @@ InputMatcher dash_matcher(const InputToken key) {
 }
 } // namespace
 
+// F04: two automations that separate a fault of one from a successful event
+// handled by the other. "fault-a" divides by the divisor, so it faults while
+// the divisor is zero and recovers once the session sets it.
+AutomationProfile health_profile(const double divisor,
+                                 const bool include_faulting) {
+  AutomationProfile profile;
+  profile.profile_id = "game";
+  profile.variables = {
+      {.id = "divisor",
+       .type = AutomationValueType::number,
+       .default_value = AutomationValue(divisor)},
+      {.id = "ratio",
+       .type = AutomationValueType::number,
+       .default_value = AutomationValue(0.0)},
+      {.id = "count",
+       .type = AutomationValueType::integer,
+       .default_value = AutomationValue(std::int64_t{0})}};
+  if (include_faulting)
+    profile.automations.push_back(
+        {.id = "fault-a",
+         .name = "Fault A",
+         .rules = {{.id = "divide",
+                    .event = AutomationEventKind::session_started,
+                    .actions = {{.kind = AutomationActionKind::set_variable,
+                                 .target = "ratio",
+                                 .value = expr::binary(
+                                     "divide",
+                                     expr::literal(AutomationValue(1.0)),
+                                     expr::variable("divisor"))}}}}});
+  profile.automations.push_back(
+      {.id = "healthy-b",
+       .name = "Healthy B",
+       .rules = {{.id = "bump",
+                  .event = AutomationEventKind::cooldown_triggered,
+                  .source_filter = "dash",
+                  .actions = {
+                      {.kind = AutomationActionKind::increment_variable,
+                       .target = "count",
+                       .value = expr::literal(
+                           AutomationValue(std::int64_t{1}))},
+                      {.kind = AutomationActionKind::set_variable,
+                       .target = "divisor",
+                       .value = expr::literal(AutomationValue(1.0))}}},
+                 {.id = "reset-divisor",
+                  .event = AutomationEventKind::input_pressed,
+                  .source_filter = "reset",
+                  .actions = {{.kind = AutomationActionKind::set_variable,
+                               .target = "divisor",
+                               .value = expr::literal(
+                                   AutomationValue(0.0))}}}}});
+  return profile;
+}
+
 // Windows and Linux daemon sessions both compose core::AutomationSession,
 // so this fixes the trigger policy for every platform in one place.
 void test_automation_session_trigger_policy() {
@@ -119,8 +173,8 @@ void test_automation_session_origin_and_persistence() {
 
   AutomationSession left(base);
   AutomationSession right(base);
-  (void)left.start(counting_profile(), {}, now);
-  (void)right.start(counting_profile(), {}, now);
+  (void)left.start(accept_automation(counting_profile(), base), {}, now);
+  (void)right.start(accept_automation(counting_profile(), base), {}, now);
   expect(!left.sync_persistent_to(right),
          "an unchanged session should not sync persistent values");
 
@@ -146,7 +200,7 @@ void test_automation_session_continuous_input() {
   AutomationSession session(base);
   expect(!session.input_value_event(axis, 0.5, now),
          "a session without automation should not emit input values");
-  (void)session.start(axis_profile(), {}, now);
+  (void)session.start(accept_automation(axis_profile(), base), {}, now);
 
   expect(!session.input_value_event("controller:0:leftY", 0.9, now) &&
              !session.input_value_event(axis, std::nan(""), now),
@@ -191,6 +245,134 @@ void test_automation_input_source_ids() {
              !source_filter_names_device("", InputDevice::controller) &&
              source_filter_names_device("hid:3", InputDevice::generic_hid),
          "a source filter should name a device only by its '<label>:' prefix");
+}
+
+// F04: the session reports the runtime's current faults, so retry,
+// reconfiguration, stop/start and a replacement runtime cannot leave a stale
+// fault line behind.
+void test_automation_session_current_health() {
+  const auto base = session_base();
+  const auto now = TimePoint{} + 1s;
+  const auto started = [&](const TimePoint at) {
+    return AutomationSession::event(AutomationEventKind::session_started, {},
+                                    at);
+  };
+  const auto reset = AutomationSession::event(
+      AutomationEventKind::input_pressed, "reset", now);
+
+  AutomationSession session(base);
+  (void)session.start(accept_automation(health_profile(0.0, true), base), {},
+                      now);
+  const auto fault_lines = session.health().lines("game.json");
+  expect(session.health().runtime_faults.size() == 1 &&
+             session.health().runtime_faults.contains("fault-a") &&
+             !session.health().runtime_error.has_value() &&
+             fault_lines ==
+                 std::vector<std::string>{
+                     "game.json: automation fault: fault-a: faulted during "
+                     "event"},
+         "a faulting automation must report its canonical current-fault line");
+
+  // A successful event handled by B must not hide A's standing fault.
+  const auto triggered = session.trigger("dash", now);
+  expect(triggered.triggered == std::vector<std::string>{"dash"} &&
+             session.runtime()->snapshot().variables.at("count") ==
+                 AutomationValue(std::int64_t{1}) &&
+             session.health().runtime_faults.contains("fault-a"),
+         "a successful automation must not hide another automation's fault");
+
+  // Retry clears the runtime fault, and the recovered automation then commits.
+  session.runtime()->retry("fault-a");
+  (void)session.process(started(now));
+  expect(session.health().runtime_faults.empty() &&
+             !session.health().runtime_error.has_value() &&
+             session.health().lines("game.json").empty() &&
+             session.runtime()->snapshot().variables.at("ratio") ==
+                 AutomationValue(1.0),
+         "a retried automation must leave the current health once it commits");
+
+  // A later fault of the same automation is reported again.
+  (void)session.process(reset);
+  (void)session.process(started(now));
+  expect(session.health().runtime_faults.contains("fault-a"),
+         "a repeated fault of the same automation must be reported again");
+
+  // Reconfiguration is the second lifecycle owner: a profile that drops A
+  // removes its fault instead of keeping a stale identity.
+  session.reconfigure_automation(
+      accept_automation(health_profile(0.0, false), base));
+  expect(session.health().runtime_faults.empty() &&
+             session.health().lines("game.json").empty() &&
+             !session.automation_rejected(),
+         "reconfiguration must retire the faults of removed automations");
+
+  // Stop and start on the same session object cannot resurrect them either.
+  session.reconfigure_automation(
+      accept_automation(health_profile(0.0, true), base));
+  (void)session.process(started(now));
+  expect(session.health().runtime_faults.contains("fault-a"),
+         "a reconfigured faulting automation must report its current fault");
+  (void)session.stop(now);
+  expect(session.health().runtime_faults.empty() &&
+             session.health().lines("game.json").empty(),
+         "stopping a session must drop its runtime faults");
+  (void)session.start(accept_automation(health_profile(1.0, true), base), {},
+                      now);
+  expect(session.health().runtime_faults.empty() &&
+             session.health().lines("game.json").empty(),
+         "a replacement runtime must not inherit the previous runtime's "
+         "faults");
+  (void)session.process(reset);
+  (void)session.process(started(now));
+  expect(session.health().runtime_faults.contains("fault-a"),
+         "a new fault of a replacement runtime must be reported");
+
+  // A rejected candidate is reported by the session alone: the running
+  // runtime keeps its own current state.
+  session.reject_automation(
+      {.path = "$.automations[0].rules[0].condition",
+       .message = "index expressions require target and key"});
+  const auto rejected_lines = session.health().lines("game.json");
+  expect(session.automation_rejected() &&
+             session.health().rejected.has_value() &&
+             rejected_lines.size() == 2 &&
+             rejected_lines.front() ==
+                 "game.json: automation profile rejected: "
+                 "$.automations[0].rules[0].condition: index expressions "
+                 "require target and key" &&
+             rejected_lines.back() ==
+                 "game.json: automation fault: fault-a: faulted during event" &&
+             session.runtime() != nullptr,
+         "a rejected candidate must be reported beside the running faults");
+  session.reconfigure_automation(
+      accept_automation(health_profile(1.0, true), base));
+  expect(!session.automation_rejected() &&
+             !session.health().rejected.has_value() &&
+             session.health().lines("game.json").empty(),
+         "an accepted reconfiguration must clear the rejection line");
+  session.reject_automation({.path = "$.profileId", .message = "mismatch"});
+  (void)session.start(accept_automation(health_profile(1.0, true), base), {},
+                      now);
+  expect(!session.automation_rejected() &&
+             !session.health().rejected.has_value(),
+         "a new start must clear a recorded rejection");
+
+  // Clearing a rejection drops only the rejected line: the runtime's current
+  // faults are unchanged.
+  (void)session.process(reset);
+  (void)session.process(started(now));
+  session.reject_automation({.path = "$.profileId", .message = "mismatch"});
+  expect(session.automation_rejected() &&
+             session.health().lines("game.json").size() == 2,
+         "a recorded rejection must precede the running faults");
+  session.clear_automation_rejection();
+  expect(!session.automation_rejected() &&
+             !session.health().rejected.has_value() &&
+             session.health().lines("game.json") ==
+                 std::vector<std::string>{
+                     "game.json: automation fault: fault-a: faulted during "
+                     "event"},
+         "clearing a rejection must remove only the rejected line");
 }
 
 } // namespace layerc::test

@@ -8,14 +8,15 @@ gate details.
 ## Support status
 
 The daemon and CLIs shipped in the `v2.6.0` release as **source/CLI only**.
-v2.6c (package version 2.6.2, released as `v2.6.2`) adds the X11 `layere`
-editor, a native Debian package and an editor Flatpak. The release attaches
-the `.deb` and Flatpak bundle that its own container and Flatpak gates built,
-installed and smoke tested (automated evidence only); see
+The v2.6c feature set adds the X11 `layere` editor, a native Debian package,
+and an editor Flatpak. These are included in package version **2.7.0**.
+The version-tag workflow attaches the `.deb` and Flatpak bundle that its own
+container and Flatpak gates built, installed and smoke tested (automated
+evidence only); see
 [Release packages](#release-packages). The [2026-10-21 source-bound local qualification](LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21) covers the repaired calibration layout and faithful explicit-black appearance, directly inspected rendered states, active-operation peaks, selected validator-derived boundary/exhaustion envelope, fresh empty and representative idle, 100-cycle drift and the original 32-case walkthrough, plus fresh Windows/Linux and native-package/Flatpak gates. It binds the complete source snapshot and the final documentation-only delta; the rejected earlier rendered verdict and older measurements remain historical, not current qualification. The original 32-case count omitted a required controlled-target group and did not close the full walkthrough contract. Its [fresh 36-case successor](LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) passes mandatory overlay focus/resize, actual click-through and cleanup in the owned Xvfb/Openbox session; it does not establish physical-desktop coverage.
 The physical GNOME Xorg/KDE X11 evidence below is also **pending**: it has not been archived. `ci.yml` is
 configured to verify headless, Xvfb, installed-native, package and Flatpak
-runtime behavior, and `v2.6.2` was tagged only on a green `ci.yml` run; CI is
+runtime behavior. Release tags require a green `ci.yml` run; CI is
 not a substitute for the hardware checklist. The
 [Linux editor resource targets](#linux-editor-resource-targets) are
 implementation contracts, not release acceptance claims.
@@ -25,9 +26,9 @@ implementation contracts, not release acceptance claims.
 | V2.6.0 portable runtime | implemented | Foreground `layerd`, `layerctl`, XDG storage, Unix-socket control, bundles, install metadata |
 | V2.6.1 X11 interaction | implemented | EWMH tracking, passive XI2 input, Shape overlays, RandR scaling |
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
-| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; published in `v2.6.2` |
+| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; included in package version `2.7.0` |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
-| Wayland (V2.7, in development) | implemented locally, automated evidence only | Native/degraded providers and evidence gaps below; no support claim in V2.6 |
+| Wayland (V2.7 preview) | preview implementation, automated evidence only | Native/degraded providers and evidence gaps below; no expanded desktop support claim |
 | Gamescope | unsupported | Out of scope |
 
 On X11, `layerd` reads passive input and paints click-through overlays; the
@@ -38,10 +39,10 @@ platforms uses the shared deterministic fold (ASCII plus the cased Latin-1
 supplement rows; all other codepoints compare byte-exact), replacing the
 former Windows `LCMapStringEx` invariant mapping so Windows and Linux agree.
 
-The local development tree reports package version **2.7.0**. It folds typed
-overlay items into the V2.7 Wayland preview; the version bump is not a release
-or an expansion of the supported desktop matrix. The historical V2.6 evidence
-above does not qualify this tree.
+The package version is **2.7.0**. Typed overlay items and the Wayland preview
+are included; support remains X11/headless. Publication does not expand the
+supported desktop matrix, and historical V2.6 evidence does not qualify
+additional desktop/compositor combinations.
 
 ## Linux editor resource targets
 
@@ -89,9 +90,9 @@ running the testing environment.
 
 ## Wayland development (V2.7)
 
-The backend is implemented on the local integration branch, not released or
-physically qualified. [`Wayland.md`](Wayland.md) owns its architecture and
-provider contracts. V2.6 and v2.6c (`v2.6.2`) remain X11-only support scopes;
+The backend is included as a V2.7 preview, not physically qualified.
+[`Wayland.md`](Wayland.md) owns its architecture and provider contracts.
+The supported Linux desktop scope remains X11; native Wayland is experimental.
 Gamescope remains unsupported.
 
 `layerd` selects a connected Wayland display in `auto`, then X11, then headless.
@@ -111,7 +112,10 @@ reason tokens; the editor's Runtime Diagnostics repeats those rows.
   elevates or changes groups. Devices are opened read-only and never grabbed.
 - Native visual capture uses the ScreenCast portal and a portal-granted
   PipeWire connection. The user chooses a source; denial remains visible and
-  does not trigger repeated prompts. XWayland windows can retain X11 capture.
+  does not trigger repeated prompts. A granted window stream is reported
+  degraded `user_selected_window`, because the portal does not verify that the
+  stream is the tracked window; `monitor_crop` marks the explicit degraded
+  monitor mode. XWayland windows can retain X11 capture.
 - `layere` remains an X11 client and requires XWayland. Its Detected Tasks,
   placement and calibration address XWayland windows only, not native windows;
   status and diagnostics do not hide that degradation.
@@ -469,6 +473,13 @@ commit-matched `summary.json`. Release collection can set
 requires clean automated and physical source trees. It still never marks any
 manual observation as passed.
 
+`tools/submit-desktop-evidence.sh` wraps this harness and posts the run to a
+pull request; see [DesktopEvidence.md](DesktopEvidence.md). It runs the harness
+with `LAYERC_RUN_AUTOMATION=1 LAYERC_REQUIRE_AUTOMATION=1` and, in Flatpak mode,
+first builds and installs the Flatpak from the checkout with
+`flatpak-builder --user --install`. A posted report is advisory and does not
+by itself change the pending status above.
+
 ## Building
 
 Requires a C++20 compiler, CMake 3.28+, Ninja (or make). The full X11/Xvfb
@@ -606,7 +617,7 @@ layercal snapshot <x11-window-id> [--region x y width height] --json > snapshot.
                              # region: normalized 0..1 fractions, recorded in the JSON metadata
 ```
 
-In the development tree, `layerctl status` also prints a `display:` line with
+In LayerC 2.7, `layerctl status` also prints a `display:` line with
 session, compositor, and provider names, states, and fault reasons. JSON status
 keeps the existing `x11` object and adds a separate `display` object. Backend
 overrides, the opt-in evdev input source (`layerd --input=evdev` or
@@ -664,7 +675,7 @@ the Flatpak bundle, which fetches its runtime from Flathub:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-flatpak install --user ./layerc-2.6.2-x86_64.flatpak
+flatpak install --user ./layerc-2.7.0-x86_64.flatpak
 flatpak run io.github.EnderKeera.LayerC          # layere
 ```
 
@@ -677,7 +688,7 @@ The bundle is unsigned (it is not served from a GPG-signed repository), so
 cmake -S . -B build-deb -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr -DLAYERC_REQUIRE_EDITOR=ON
 cmake --build build-deb --parallel
-cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.6.2-1_amd64.deb
+cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.7.0-1_amd64.deb
 ```
 
 CPack derives the library dependencies with `dpkg-shlibdeps` (needs
@@ -686,7 +697,7 @@ Debian 13's main archive has 2.56, so enable `trixie-backports` and install
 from it explicitly:
 
 ```sh
-sudo apt install -t trixie-backports ./layerc_2.6.2-1_amd64.deb
+sudo apt install -t trixie-backports ./layerc_2.7.0-1_amd64.deb
 ```
 
 One `layerc` package carries the daemon, CLIs and editor. It also installs

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "capture_route.hpp"
 #include "daemon_host.hpp"
 #include "display_providers.hpp"
 #include "display_dispatch.hpp"
@@ -23,9 +24,7 @@ struct DisplayRoute {
   DisplaySource *windows{};
   DisplaySource *monitors{};
   OverlayBackend *overlay{};
-  CaptureFactory *capture{};
-  CaptureFactory *x11_capture{};
-  bool native_windows{};
+  CaptureRoute capture;
   bool native_overlay{};
   std::vector<PassiveInputSource *> inputs; // ordered; fallback last
   bool native_input{};

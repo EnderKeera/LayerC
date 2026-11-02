@@ -258,8 +258,8 @@ void EditorWindow::initialize(const HWND window) {
   }
   layout();
   reload_profile_list({}, true);
-  live_edit_.set_revision((static_cast<std::uint64_t>(GetTickCount64()) << 16U) |
-              static_cast<std::uint64_t>(GetCurrentProcessId()));
+  live_edit_.seed_revision((static_cast<std::uint64_t>(GetTickCount64()) << 16U) |
+                           static_cast<std::uint64_t>(GetCurrentProcessId()));
   EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), FALSE);
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
   (void)start_daemon();
@@ -537,16 +537,11 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
             cooldown_editor_.refresh_list(static_cast<int>(first - cooldowns.begin()));
         }
       }
-      if (live_edit_.session_id() != 0) {
-        if (const auto *panel = selected_bar(); panel != nullptr) {
-          live_edit_.advance_revision();
-          (void)live_edit_.channel().send({
-              .type = layerc::core::LiveMessageType::select_panel,
-              .revision = live_edit_.revision(),
-              .edit_session = live_edit_.session_id(),
-              .panel_id = panel->id,
-          });
-        }
+      if (live_edit_.editing()) {
+        if (const auto *panel = selected_bar(); panel != nullptr)
+          (void)live_edit_.send_in_session(
+              {.type = layerc::core::LiveMessageType::select_panel,
+               .panel_id = panel->id});
       }
       return TRUE;
     }
@@ -680,10 +675,6 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
       poll_live_channel();
       return TRUE;
     }
-    if (wparam == live_profile_timer) {
-      flush_live_profile();
-      return TRUE;
-    }
     break;
   case WM_GETMINMAXINFO: {
     // The layout reflows rather than shrinking text, so the minimum is what
@@ -796,7 +787,6 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     cancel_picker();
     KillTimer(window, autosave_timer);
     KillTimer(window, live_channel_timer);
-    KillTimer(window, live_profile_timer);
     if (task_picker_.window != nullptr && IsWindow(task_picker_.window))
       DestroyWindow(task_picker_.window);
     task_picker_.window = nullptr;

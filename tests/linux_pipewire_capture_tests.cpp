@@ -169,8 +169,48 @@ void pipewire_repeated_and_overlapping_demand_is_quiescent() {
   }
   expect(!loop.poll_once(10).any(), "100 cycles leave the loop idle-blocking");
 }
+
+// F05: a portal grant selects a stream; it never verifies that the stream is
+// the session's target window, so the binding says which choice produced it.
+void pipewire_portal_streams_report_their_binding() {
+  EventLoop loop;
+  const auto now = layerc::core::MonotonicClock::now();
+  {
+    PipeWireCapture window_stream{loop, layerc::core::WindowId{9},
+                                  layerc::core::CaptureQuality::low};
+    // No remote is started: the binding still describes the requested source,
+    // and every result carries it.
+    const auto idle = window_stream.poll(now).result;
+    expect(idle.binding ==
+               layerc::capture::CaptureTargetBinding::user_selected_window,
+           "a window stream is a user-selected source, never a target binding");
+  }
+  {
+    PipeWireCapture monitor_stream{loop, layerc::core::WindowId{9},
+                                   layerc::core::CaptureQuality::low};
+    int sockets[2]{-1, -1};
+    if (!expect(::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) == 0,
+                "monitor-stream socketpair opens"))
+      return;
+    PortalRemote remote;
+    remote.fd = sockets[0];
+    remote.node = 12;
+    remote.monitor = true;
+    remote.geometry = LogicalRect{0, 0, 1920, 1080};
+    (void)monitor_stream.start(std::move(remote));
+    expect(monitor_stream.poll(now).result.binding ==
+               layerc::capture::CaptureTargetBinding::monitor_crop,
+           "a monitor source is the explicit degraded monitor crop");
+    monitor_stream.stop();
+    expect(monitor_stream.poll(now).result.binding ==
+               layerc::capture::CaptureTargetBinding::user_selected_window,
+           "the binding follows the source the portal selected");
+    ::close(sockets[1]);
+  }
+}
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(pipewire_private_remote_lifecycle_has_no_threads),
                  LAYERC_TEST_CASE(pipewire_disconnect_and_config_override_are_visible),
-                 LAYERC_TEST_CASE(pipewire_repeated_and_overlapping_demand_is_quiescent))
+                 LAYERC_TEST_CASE(pipewire_repeated_and_overlapping_demand_is_quiescent),
+                 LAYERC_TEST_CASE(pipewire_portal_streams_report_their_binding))

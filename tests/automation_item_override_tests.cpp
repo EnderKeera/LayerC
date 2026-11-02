@@ -1,6 +1,7 @@
 // Item-scoped setOverlayOverride: wire, validation, runtime layering and
 // session admission (PLAN §8.6).
 
+#include "automation_test_support.hpp"
 #include "core_test_cases.hpp"
 #include "test_support.hpp"
 
@@ -191,10 +192,11 @@ void test_automation_item_override_runtime() {
                {overlay("high", "cd", "text", AutomationValue(std::string("High")))}, 5),
        rule_on("clear", "keyboard:2", {clear}),
        rule_on("bad", "keyboard:3",
-               {overlay("bad", "nope", "text", AutomationValue(std::string("x"))),
+               {overlay("bad", "cd", "text", AutomationValue(std::string("x"))),
                 overlay("bad", "", "text", AutomationValue(std::string("Never")))})});
   AutomationSession session(base);
-  (void)session.start(automation, {}, start, nullptr, false);
+  (void)session.start(accept_automation(automation, base), {}, start,
+                      nullptr, false);
   (void)session.process(press("keyboard:1", start, 1), nullptr);
   const auto &overrides = session.runtime()->snapshot().overlay_overrides;
   expect(overrides.size() == 4, "one named layer holds panel and item properties");
@@ -224,9 +226,14 @@ void test_automation_item_override_runtime() {
          "clearing a named layer clears its panel and item properties together");
 
   const auto before = session.runtime()->snapshot().overlay_overrides;
+  auto without_item = base;
+  without_item.panels.front().items->erase(
+      without_item.panels.front().items->begin());
+  session.reconfigure_profile(std::move(without_item), {}, start + 900ms);
   (void)session.process(press("keyboard:3", start + 900ms, 4), nullptr);
   expect(session.runtime()->snapshot().overlay_overrides == before,
-         "a bad item reference rejects the whole winning set at admission");
+         "an item removed after admission rejects the whole winning set");
+  session.reconfigure_profile(base, {}, start + 900ms);
 
   PanelPresentationOverrides shown_overrides;
   shown_overrides.items = resolve_panel_overrides(base.panels.front(),

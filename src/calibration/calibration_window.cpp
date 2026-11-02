@@ -140,87 +140,28 @@ bool CalibrationWindow::initialize(const HWND window) {
       !layerc::platform::profile_matches_window(*candidate, matching_profile)) {
     return reject("calibration target does not match the selected profile");
   }
-  const auto cooldown =
-      std::ranges::find_if(profile_.cooldowns, [&](const auto &definition) {
-        return definition.id == request_.cooldown_id;
-      });
-  if (cooldown == profile_.cooldowns.end()) {
-    return reject("selected calibration cooldown is invalid");
-  }
-
   if (!request_.visual_json.empty()) {
     auto visual =
         layerc::core::parse_visual_profile_json(request_.visual_json, profile_);
-    if (const auto *value = std::get_if<layerc::core::VisualProfile>(&visual)) {
+    if (const auto *value = std::get_if<layerc::core::VisualProfile>(&visual))
       existing_visual_ = *value;
-      sample_rate_hz_ = value->sample_rate_hz;
-      quality_ = value->quality;
-    } else {
+    else
       return reject("existing visual sidecar is invalid");
-    }
   }
 
-  trigger_ = {.cooldown_id = cooldown->id,
-              .observation_id = cooldown->id + "-visual",
-              .enabled = true,
-              .mode = layerc::core::VisualTriggerMode::pixel_only,
-              .keep_input = false};
-  rule_ = {.id = trigger_.observation_id,
-           .name = cooldown->name + " Ready",
-           .region = {0.4, 0.4, 0.2, 0.2},
-           .predicate = layerc::core::AverageColorPredicate{0xFFFFFF, 16}};
-  template_state_ = {.id = trigger_.observation_id,
-                     .name = cooldown->name + " Ready",
-                     .search_region = rule_.region,
-                     .expected_width = rule_.region.width,
-                     .expected_height = rule_.region.height,
-                     .references = {}};
-  bool existing_template_assignment = false;
-  if (existing_visual_) {
-    const auto assignment = std::ranges::find_if(
-        existing_visual_->triggers, [&](const auto &candidate_trigger) {
-          return candidate_trigger.cooldown_id == cooldown->id;
-        });
-    if (assignment != existing_visual_->triggers.end()) {
-      trigger_ = *assignment;
-      rule_.id = trigger_.observation_id;
-      template_state_.id = trigger_.observation_id;
-      const auto *existing = layerc::core::find_observation(
-          *existing_visual_, trigger_.observation_id);
-      if (const auto *existing_rule =
-              std::get_if<layerc::core::PixelRule>(existing)) {
-        rule_ = *existing_rule;
-      } else if (const auto *existing_template =
-                     std::get_if<layerc::core::TemplateState>(existing)) {
-        template_state_ = *existing_template;
-        existing_template_assignment = true;
-        restore_reference_selection();
-        for (const auto &reference : template_state_.references) {
-          auto loaded =
-              layerc::platform::load_template_asset(reference.asset_sha256);
-          if (auto *image = std::get_if<layerc::core::TemplateImage>(&loaded))
-            template_images_.push_back(std::move(*image));
-        }
-      }
-    } else {
-      std::string base = trigger_.observation_id;
-      unsigned suffix = 2;
-      while (layerc::core::find_observation(*existing_visual_,
-                                            trigger_.observation_id))
-        trigger_.observation_id = base + "-" + std::to_string(suffix++);
-      rule_.id = trigger_.observation_id;
-      template_state_.id = trigger_.observation_id;
-    }
+  // The shared model owns seeding, existing-assignment restore, observation-id
+  // uniqueness, the explicit selection and the target colour.
+  auto model = layerc::editor::CalibrationModel::open(
+      profile_, request_.cooldown_id, existing_visual_);
+  if (!model)
+    return reject("selected calibration cooldown is invalid");
+  model_ = std::move(*model);
+  quality_ = model_->initial_controls().quality;
+  for (const auto &reference : model_->references()) {
+    auto loaded = layerc::platform::load_template_asset(reference.asset_sha256);
+    if (auto *image = std::get_if<layerc::core::TemplateImage>(&loaded))
+      template_images_.push_back(std::move(*image));
   }
-  if (!existing_template_assignment)
-    set_reference_selection(rule_.region);
-  if (const auto *average =
-          std::get_if<layerc::core::AverageColorPredicate>(&rule_.predicate))
-    target_color_ = average->target_color;
-  else if (const auto *coverage =
-               std::get_if<layerc::core::ColorCoveragePredicate>(
-                   &rule_.predicate))
-    target_color_ = coverage->target_color;
 
   initialize_palette();
   layerc::platform::set_dark_title_bar(dialog_);
@@ -292,81 +233,92 @@ void CalibrationWindow::initialize_controls() {
   add(IDC_CAL_QUALITY, L"Balanced");
   add(IDC_CAL_QUALITY, L"Exact");
 
-  CalibrationMode selected_mode = CalibrationMode::average_color;
-  int tolerance = 16;
-  int threshold = 128;
-  int comparison{};
-  int minimum_percent = 50;
-  if (!template_state_.references.empty()) {
-    selected_mode = CalibrationMode::template_match;
-    tolerance = template_state_.color_tolerance;
-  } else if (const auto *average =
-                 std::get_if<layerc::core::AverageColorPredicate>(
-                     &rule_.predicate)) {
-    tolerance = average->tolerance;
-  } else if (const auto *brightness =
-                 std::get_if<layerc::core::BrightnessPredicate>(
-                     &rule_.predicate)) {
-    selected_mode = CalibrationMode::brightness;
-    threshold = brightness->threshold;
-    comparison =
-        brightness->comparison == layerc::core::BrightnessComparison::below ? 1
-                                                                            : 0;
-  } else if (const auto *coverage =
-                 std::get_if<layerc::core::ColorCoveragePredicate>(
-                     &rule_.predicate)) {
-    selected_mode = CalibrationMode::coverage;
-    tolerance = coverage->tolerance;
-    minimum_percent =
-        static_cast<int>(std::lround(coverage->minimum_fraction * 100.0));
-  }
-  SendDlgItemMessageW(dialog_, IDC_CAL_PREDICATE, CB_SETCURSEL,
-                      calibration_mode_index(selected_mode), 0);
-  SendDlgItemMessageW(dialog_, IDC_CAL_COMPARISON, CB_SETCURSEL, comparison, 0);
-  SendDlgItemMessageW(
-      dialog_, IDC_CAL_REPEAT, CB_SETCURSEL,
-      (selected_mode == CalibrationMode::template_match ? template_state_.repeat
-                                                        : rule_.repeat) ==
-              layerc::core::PixelRepeatPolicy::when_fully_ready
-          ? 1
-          : 0,
-      0);
-  SendDlgItemMessageW(
-      dialog_, IDC_CAL_TRIGGER_MODE, CB_SETCURSEL,
-      trigger_.mode == layerc::core::VisualTriggerMode::confirm_input ? 1 : 0,
-      0);
-  SendDlgItemMessageW(
-      dialog_, IDC_CAL_UNAVAILABLE, CB_SETCURSEL,
-      trigger_.unavailable_policy ==
-              layerc::core::CaptureUnavailablePolicy::trigger_from_input
-          ? 1
-          : 0,
-      0);
-  SendDlgItemMessageW(dialog_, IDC_CAL_SAMPLE_RATE, CB_SETCURSEL,
-                      sample_rate_combobox_index(sample_rate_hz_), 0);
-  SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_SETCURSEL,
-                      capture_quality_combobox_index(quality_), 0);
-  CheckDlgButton(dialog_, IDC_CAL_KEEP_INPUT,
-                 trigger_.keep_input ? BST_CHECKED : BST_UNCHECKED);
-  set_control_text(IDC_CAL_COLOR_VALUE, color_text(target_color_));
-  set_control_text(IDC_CAL_TOLERANCE, std::to_wstring(tolerance));
-  set_control_text(IDC_CAL_THRESHOLD, std::to_wstring(threshold));
-  set_control_text(IDC_CAL_MINIMUM_PERCENT, std::to_wstring(minimum_percent));
-  set_control_text(IDC_CAL_STABLE_SAMPLES,
-                   std::to_wstring(
-                       selected_mode == CalibrationMode::template_match
-                           ? template_state_.stable_samples
-                           : rule_.stable_samples));
-  set_control_text(IDC_CAL_CONFIDENCE,
-                   std::to_wstring(static_cast<int>(std::lround(
-                       template_state_.confidence_threshold * 100.0))));
-  set_control_text(IDC_CAL_SCALE_TOLERANCE,
-                   std::to_wstring(static_cast<int>(
-                       std::lround(template_state_.scale_tolerance * 100.0))));
-  set_control_text(IDC_CAL_TIMEOUT,
-                   std::to_wstring(trigger_.confirmation_timeout.count()));
+  write_controls(model_->initial_controls());
   refresh_template_reference_label();
   update_control_enablement();
+}
+
+void CalibrationWindow::write_controls(
+    const layerc::editor::CalibrationControls &controls) {
+  const auto select = [&](const int id, const WPARAM index) {
+    SendDlgItemMessageW(dialog_, id, CB_SETCURSEL, index, 0);
+  };
+  select(IDC_CAL_PREDICATE, calibration_mode_index(controls.predicate));
+  select(IDC_CAL_COMPARISON,
+         controls.comparison == layerc::core::BrightnessComparison::below ? 1
+                                                                         : 0);
+  select(IDC_CAL_REPEAT,
+         controls.repeat == layerc::core::PixelRepeatPolicy::when_fully_ready
+             ? 1
+             : 0);
+  select(IDC_CAL_TRIGGER_MODE,
+         controls.trigger_mode == layerc::core::VisualTriggerMode::confirm_input
+             ? 1
+             : 0);
+  select(IDC_CAL_UNAVAILABLE,
+         controls.unavailable ==
+                 layerc::core::CaptureUnavailablePolicy::trigger_from_input
+             ? 1
+             : 0);
+  select(IDC_CAL_SAMPLE_RATE,
+         sample_rate_combobox_index(controls.sample_rate_hz));
+  select(IDC_CAL_QUALITY, capture_quality_combobox_index(controls.quality));
+  CheckDlgButton(dialog_, IDC_CAL_KEEP_INPUT,
+                 controls.keep_input ? BST_CHECKED : BST_UNCHECKED);
+  set_control_text(IDC_CAL_COLOR_VALUE, color_text(model_->target_color()));
+  set_control_text(IDC_CAL_TOLERANCE, std::to_wstring(controls.tolerance));
+  set_control_text(IDC_CAL_THRESHOLD, std::to_wstring(controls.threshold));
+  set_control_text(IDC_CAL_MINIMUM_PERCENT,
+                   std::to_wstring(controls.minimum_percent));
+  set_control_text(IDC_CAL_STABLE_SAMPLES,
+                   std::to_wstring(controls.stable_samples));
+  set_control_text(IDC_CAL_CONFIDENCE,
+                   std::to_wstring(controls.confidence_percent));
+  set_control_text(IDC_CAL_SCALE_TOLERANCE,
+                   std::to_wstring(controls.scale_percent));
+  set_control_text(IDC_CAL_TIMEOUT, std::to_wstring(controls.timeout_ms));
+}
+
+layerc::editor::CalibrationControls CalibrationWindow::controls() const {
+  if (!model_) return {};
+  // Without a dialog the model's own controls are the only values in play, so
+  // an unchanged assignment keeps its persisted fractions.
+  if (dialog_ == nullptr) return model_->initial_controls();
+  auto result = model_->initial_controls();
+  result.predicate = mode();
+  result.tolerance = integer_control(IDC_CAL_TOLERANCE, result.tolerance, 0, 255);
+  result.threshold = integer_control(IDC_CAL_THRESHOLD, result.threshold, 0, 255);
+  result.minimum_percent = integer_control(IDC_CAL_MINIMUM_PERCENT,
+                                           result.minimum_percent, 0, 100);
+  result.confidence_percent = integer_control(IDC_CAL_CONFIDENCE,
+                                              result.confidence_percent, 0, 100);
+  result.scale_percent = integer_control(IDC_CAL_SCALE_TOLERANCE,
+                                         result.scale_percent, 0, 20);
+  result.stable_samples = integer_control(IDC_CAL_STABLE_SAMPLES,
+                                          result.stable_samples, 1, 15);
+  result.timeout_ms = integer_control(IDC_CAL_TIMEOUT, result.timeout_ms, 50,
+                                      5'000);
+  result.comparison =
+      SendDlgItemMessageW(dialog_, IDC_CAL_COMPARISON, CB_GETCURSEL, 0, 0) == 1
+          ? layerc::core::BrightnessComparison::below
+          : layerc::core::BrightnessComparison::above;
+  result.repeat = repeat_policy_from_combobox(
+      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0));
+  result.trigger_mode =
+      SendDlgItemMessageW(dialog_, IDC_CAL_TRIGGER_MODE, CB_GETCURSEL, 0, 0) == 1
+          ? layerc::core::VisualTriggerMode::confirm_input
+          : layerc::core::VisualTriggerMode::pixel_only;
+  result.unavailable =
+      SendDlgItemMessageW(dialog_, IDC_CAL_UNAVAILABLE, CB_GETCURSEL, 0, 0) == 1
+          ? layerc::core::CaptureUnavailablePolicy::trigger_from_input
+          : layerc::core::CaptureUnavailablePolicy::ignore;
+  result.sample_rate_hz = sample_rate_from_combobox(
+      SendDlgItemMessageW(dialog_, IDC_CAL_SAMPLE_RATE, CB_GETCURSEL, 0, 0));
+  result.quality = capture_quality_from_combobox(
+      SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0));
+  result.keep_input =
+      IsDlgButtonChecked(dialog_, IDC_CAL_KEEP_INPUT) == BST_CHECKED;
+  return result;
 }
 
 void CalibrationWindow::update_control_enablement() {
@@ -395,16 +347,17 @@ void CalibrationWindow::update_control_enablement() {
     ShowWindow(GetDlgItem(dialog_, id), mode_spec.template_controls ? SW_SHOW : SW_HIDE);
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_CLEAR_TEMPLATES),
                mode_spec.template_controls && !mask_editor_.editing() &&
-                   !template_state_.references.empty());
+                   !model_->references().empty());
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_CAPTURE_TEMPLATE),
                mode_spec.template_controls && !mask_editor_.editing());
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_IMPORT_TEMPLATE),
                mode_spec.template_controls && !mask_editor_.editing());
   EnableWindow(GetDlgItem(dialog_, IDC_CAL_EDIT_TEMPLATE_MASK),
                mode_spec.template_controls &&
-                   (mask_editor_.editing() || (template_images_.size() ==
-                                          template_state_.references.size() &&
-                                      !template_images_.empty())));
+                   (mask_editor_.editing() ||
+                    (model_ &&
+                     template_images_.size() == model_->references().size() &&
+                     !template_images_.empty())));
 
   const bool confirmation = SendDlgItemMessageW(dialog_, IDC_CAL_TRIGGER_MODE,
                                                 CB_GETCURSEL, 0, 0) == 1;
@@ -414,10 +367,12 @@ void CalibrationWindow::update_control_enablement() {
 }
 
 bool CalibrationWindow::sampling_ready() const {
+  if (!model_) return false;
+  const auto values = controls();
   const layerc::core::VisualObservation observation =
-      mode() == CalibrationMode::template_match
-          ? layerc::core::VisualObservation{current_template_from_controls()}
-          : layerc::core::VisualObservation{current_rule_from_controls()};
+      values.predicate == CalibrationMode::template_match
+          ? layerc::core::VisualObservation{model_->template_state(values)}
+          : layerc::core::VisualObservation{model_->pixel_rule(values)};
   return readiness_.ready_for(observation, quality_);
 }
 
@@ -616,14 +571,11 @@ void CalibrationWindow::sample_target_color() {
                 MB_OK | MB_ICONINFORMATION);
     return;
   }
-  auto sample = rule_;
-  sample.predicate = layerc::core::AverageColorPredicate{0, 255};
-  const auto evaluation =
-      layerc::core::evaluate_pixel_rule(sample, frame->view(), quality_);
-  if (evaluation.sampled_pixels == 0)
+  const auto color = model_->sample_color(frame->view(), quality_);
+  if (!color.has_value())
     return;
-  target_color_ = evaluation.average_color;
-  set_control_text(IDC_CAL_COLOR_VALUE, color_text(target_color_));
+  model_->set_target_color(*color);
+  set_control_text(IDC_CAL_COLOR_VALUE, color_text(*color));
   update_match_status();
 }
 
@@ -634,64 +586,15 @@ CalibrationMode CalibrationWindow::mode() const {
                    dialog_, IDC_CAL_PREDICATE, CB_GETCURSEL, 0, 0));
 }
 
-layerc::core::TemplateState
-CalibrationWindow::current_template_from_controls() const {
-  auto state = template_state_;
-  state.confidence_threshold =
-      integer_control(IDC_CAL_CONFIDENCE, 90, 0, 100) / 100.0;
-  state.scale_tolerance =
-      integer_control(IDC_CAL_SCALE_TOLERANCE, 5, 0, 20) / 100.0;
-  state.color_tolerance =
-      static_cast<std::uint8_t>(integer_control(IDC_CAL_TOLERANCE, 24, 0, 255));
-  state.stable_samples = static_cast<std::uint8_t>(
-      integer_control(IDC_CAL_STABLE_SAMPLES, 2, 1, 15));
-  state.repeat = repeat_policy_from_combobox(
-      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0));
-  return state;
-}
-
 void CalibrationWindow::refresh_template_reference_label() {
-  std::wstring label =
-      std::to_wstring(template_state_.references.size()) + L" / " +
-      std::to_wstring(layerc::core::max_template_references) + L" references";
-  if (template_images_.size() != template_state_.references.size())
+  const auto count = model_ ? model_->references().size() : 0U;
+  std::wstring label = std::to_wstring(count) + L" / " +
+                       std::to_wstring(layerc::core::max_template_references) +
+                       L" references";
+  if (template_images_.size() != count)
     label += L" (one or more assets unavailable)";
   set_control_text(IDC_CAL_TEMPLATE_REFERENCES, label);
-  EnableWindow(GetDlgItem(dialog_, IDC_CAL_CLEAR_TEMPLATES),
-               !template_state_.references.empty());
-}
-
-layerc::core::PixelRule CalibrationWindow::current_rule_from_controls() const {
-  auto rule = rule_;
-  rule.stable_samples = static_cast<std::uint8_t>(
-      integer_control(IDC_CAL_STABLE_SAMPLES, rule.stable_samples, 1, 15));
-  rule.repeat = repeat_policy_from_combobox(
-      SendDlgItemMessageW(dialog_, IDC_CAL_REPEAT, CB_GETCURSEL, 0, 0));
-  switch (mode()) {
-  case CalibrationMode::brightness:
-    rule.predicate = layerc::core::BrightnessPredicate{
-        static_cast<std::uint8_t>(
-            integer_control(IDC_CAL_THRESHOLD, 128, 0, 255)),
-        SendDlgItemMessageW(dialog_, IDC_CAL_COMPARISON, CB_GETCURSEL, 0, 0) ==
-                1
-            ? layerc::core::BrightnessComparison::below
-            : layerc::core::BrightnessComparison::above};
-    break;
-  case CalibrationMode::coverage:
-    rule.predicate = layerc::core::ColorCoveragePredicate{
-        target_color_,
-        static_cast<std::uint8_t>(
-            integer_control(IDC_CAL_TOLERANCE, 16, 0, 255)),
-        integer_control(IDC_CAL_MINIMUM_PERCENT, 50, 0, 100) / 100.0};
-    break;
-  case CalibrationMode::average_color:
-  case CalibrationMode::template_match:
-    rule.predicate = layerc::core::AverageColorPredicate{
-        target_color_, static_cast<std::uint8_t>(
-                           integer_control(IDC_CAL_TOLERANCE, 16, 0, 255))};
-    break;
-  }
-  return rule;
+  EnableWindow(GetDlgItem(dialog_, IDC_CAL_CLEAR_TEMPLATES), count != 0U);
 }
 
 void CalibrationWindow::update_match_status(const bool force) {
@@ -708,15 +611,17 @@ void CalibrationWindow::update_match_status(const bool force) {
     refresh_apply_readiness();
     return;
   }
-  if (mode() == CalibrationMode::template_match) {
-    if (template_state_.references.empty()) {
+  if (!model_) return;
+  const auto values = controls();
+  if (values.predicate == CalibrationMode::template_match) {
+    if (model_->references().empty()) {
       readiness_.invalidate();
       refresh_apply_readiness();
       set_control_text(IDC_CAL_MATCH,
                        L"Capture or import at least one template reference.");
       return;
     }
-    if (template_images_.size() != template_state_.references.size()) {
+    if (template_images_.size() != model_->references().size()) {
       readiness_.invalidate();
       refresh_apply_readiness();
       set_control_text(
@@ -733,7 +638,7 @@ void CalibrationWindow::update_match_status(const bool force) {
     // evaluation off the 15 Hz paint/capture cadence so the modal UI remains
     // responsive while still refreshing live status twice per second.
     next_template_match_at_ = now + 500;
-    const auto state = current_template_from_controls();
+    const auto state = model_->template_state(values);
     const auto result = template_matcher_.evaluate(
         state, template_images_, frame->view(), quality_,
         frame->available_region, frame->unavailable_regions);
@@ -754,7 +659,7 @@ void CalibrationWindow::update_match_status(const bool force) {
     set_control_text(IDC_CAL_MATCH, status);
     return;
   }
-  const auto rule = current_rule_from_controls();
+  const auto rule = model_->pixel_rule(values);
   if (!layerc::capture::region_is_available(rule.region, *frame)) {
     readiness_.invalidate();
     refresh_apply_readiness();
@@ -781,35 +686,18 @@ void CalibrationWindow::update_match_status(const bool force) {
 bool CalibrationWindow::apply() {
   if (!finish_template_mask_editing())
     return false;
-  const bool use_template = mode() == CalibrationMode::template_match;
-  if (use_template) {
-    template_state_ = current_template_from_controls();
-    template_state_.id = trigger_.observation_id;
-    if (template_state_.references.empty()) {
-      MessageBoxW(dialog_,
-                  L"Capture or import at least one template reference first.",
-                  L"Template reference required", MB_OK | MB_ICONINFORMATION);
-      return false;
-    }
-    if (template_images_.size() != template_state_.references.size() ||
-        !std::ranges::all_of(template_images_,
-                             layerc::core::template_image_has_structure)) {
-      MessageBoxW(dialog_,
-                  L"Every referenced template asset must be available and "
-                  L"contain visible visual structure.",
-                  L"Template assets unavailable", MB_OK | MB_ICONWARNING);
-      return false;
-    }
-  } else {
-    rule_ = current_rule_from_controls();
-    rule_.id = trigger_.observation_id;
+  const auto values = controls();
+  if (values.quality != quality_) {
+    quality_ = values.quality;
+    if (capture_)
+      capture_->set_quality(quality_);
   }
-  const auto rate_index =
-      SendDlgItemMessageW(dialog_, IDC_CAL_SAMPLE_RATE, CB_GETCURSEL, 0, 0);
-  sample_rate_hz_ = sample_rate_from_combobox(rate_index);
-  const auto quality_index =
-      SendDlgItemMessageW(dialog_, IDC_CAL_QUALITY, CB_GETCURSEL, 0, 0);
-  quality_ = capture_quality_from_combobox(quality_index);
+  auto built = model_->build_result(values, template_images_);
+  if (const auto *reason = std::get_if<std::string>(&built)) {
+    MessageBoxW(dialog_, layerc::platform::utf8_to_wide(*reason).c_str(),
+                L"Calibration cannot be applied", MB_OK | MB_ICONWARNING);
+    return false;
+  }
   update_match_status();
   if (!sampling_ready()) {
     MessageBoxW(dialog_,
@@ -826,47 +714,9 @@ bool CalibrationWindow::apply() {
           L"Exact quality", MB_YESNO | MB_ICONWARNING) != IDYES)
     return false;
 
-  trigger_.enabled = true;
-  trigger_.mode = SendDlgItemMessageW(dialog_, IDC_CAL_TRIGGER_MODE,
-                                      CB_GETCURSEL, 0, 0) == 1
-                      ? layerc::core::VisualTriggerMode::confirm_input
-                      : layerc::core::VisualTriggerMode::pixel_only;
-  trigger_.keep_input =
-      IsDlgButtonChecked(dialog_, IDC_CAL_KEEP_INPUT) == BST_CHECKED;
-  trigger_.confirmation_timeout = layerc::core::Milliseconds(
-      integer_control(IDC_CAL_TIMEOUT, 500, 50, 5'000));
-  trigger_.unavailable_policy =
-      SendDlgItemMessageW(dialog_, IDC_CAL_UNAVAILABLE, CB_GETCURSEL, 0, 0) == 1
-          ? layerc::core::CaptureUnavailablePolicy::trigger_from_input
-          : layerc::core::CaptureUnavailablePolicy::ignore;
-  if (trigger_.mode == layerc::core::VisualTriggerMode::confirm_input &&
-      !layerc::core::has_binding(profile_, trigger_.cooldown_id)) {
-    MessageBoxW(dialog_,
-                L"Input confirmation requires a captured input binding for "
-                L"this cooldown.",
-                L"LayerC", MB_OK | MB_ICONWARNING);
-    return false;
-  }
-
-  layerc::core::VisualProfile result;
-  result.profile_id = profile_.id;
-  result.sample_rate_hz = sample_rate_hz_;
-  result.quality = quality_;
-  if (use_template)
-    result.observations.emplace_back(template_state_);
-  else
-    result.observations.emplace_back(rule_);
-  result.triggers.push_back(trigger_);
-  const auto validation =
-      layerc::core::validate_visual_profile(result, profile_);
-  if (!validation.message.empty()) {
-    MessageBoxW(dialog_,
-                layerc::platform::utf8_to_wide(validation.message).c_str(),
-                L"Visual rule is invalid", MB_OK | MB_ICONWARNING);
-    return false;
-  }
   response_.applied = true;
-  response_.visual_json = layerc::core::serialize_visual_profile_json(result);
+  response_.visual_json = layerc::core::serialize_visual_profile_json(
+      std::get<layerc::core::VisualProfile>(built));
   return true;
 }
 

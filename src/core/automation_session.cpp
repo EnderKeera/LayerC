@@ -169,23 +169,12 @@ void append(SessionFeedResult &to, SessionFeedResult from) {
 }
 } // namespace
 
-void AutomationRuntimeHealth::record(const AutomationEvaluationResult &result) {
-  if (result.faulted_automations.empty()) {
-    if (result.error.has_value())
-      runtime_error = result.error->describe();
-    else
-      runtime_error.reset();
-    return;
-  }
-  runtime_error.reset();
-  for (const auto &id : result.faulted_automations)
-    runtime_faults.insert_or_assign(id, "faulted during event");
-}
-
 std::vector<std::string>
 AutomationRuntimeHealth::lines(const std::string_view source) const {
   std::vector<std::string> result;
   const std::string prefix(source);
+  if (rejected)
+    result.push_back(prefix + ": automation profile rejected: " + *rejected);
   if (runtime_error) result.push_back(prefix + ": " + *runtime_error);
   for (const auto &[id, error] : runtime_faults)
     result.push_back(prefix + ": automation fault: " + id + ": " + error);
@@ -237,11 +226,12 @@ AutomationEvent AutomationSession::event(const AutomationEventKind kind,
           .origin_token = origin.value_or(next_origin()), .fields = {}};
 }
 
-bool AutomationSession::start(AutomationProfile automation,
+bool AutomationSession::start(ValidatedAutomationProfile automation,
                               AutomationPersistentValues values,
                               const TimePoint now, AutomationSessionSink *sink,
                               const bool trace_enabled, AutomationRuntime::ClockReader clock) {
   if (!clock) clock = std::chrono::steady_clock::now;
+  automation_rejection_.reset();
   automation_runtime_ = std::make_unique<AutomationRuntime>(
       std::move(automation), std::move(values), cooldowns_.group_topology(),
       std::move(clock));
@@ -250,11 +240,31 @@ bool AutomationSession::start(AutomationProfile automation,
   return process(event(AutomationEventKind::session_started, {}, now), sink);
 }
 
+void AutomationSession::reconfigure_automation(
+    ValidatedAutomationProfile automation) {
+  if (!automation_runtime_) return;
+  automation_rejection_.reset();
+  automation_runtime_->reconfigure(std::move(automation),
+                                   cooldowns_.group_topology());
+}
+
+void AutomationSession::reject_automation(AutomationError error) {
+  automation_rejection_ = error.describe();
+}
+
+AutomationRuntimeHealth AutomationSession::health() const {
+  auto result = automation_runtime_ ? automation_runtime_->health()
+                                    : AutomationRuntimeHealth{};
+  result.rejected = automation_rejection_;
+  return result;
+}
+
 bool AutomationSession::stop(const TimePoint now, AutomationSessionSink *sink) {
   if (!automation_runtime_) return false;
   const bool changed = process(event(AutomationEventKind::session_stopping, {}, now), sink);
   if (sink != nullptr) sink->on_stopping(now);
   automation_runtime_.reset();
+  automation_rejection_.reset();
   return changed;
 }
 
@@ -279,7 +289,6 @@ bool AutomationSession::process(const AutomationEvent &value,
             cooldowns_, effects, value.timestamp, value.origin_token);
       });
   (void)poll_ready(value.timestamp, false, sink);
-  automation_health_.record(result);
   if (sink != nullptr) {
     sink->on_result(result);
     if (automation_runtime_->persistent_dirty())

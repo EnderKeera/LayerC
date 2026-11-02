@@ -1,6 +1,7 @@
 // Standalone cooldown active windows (profile activeDurationMs): a second
 // per-public-ID clock armed only by accepted triggers.
 
+#include "automation_test_support.hpp"
 #include "core_test_cases.hpp"
 #include "test_support.hpp"
 
@@ -270,7 +271,8 @@ void test_cooldown_active_session_and_diff() {
                           .fields = {}};
   {
     AutomationSession overflow(profile);
-    (void)overflow.start(automation, {}, start, nullptr, false);
+    (void)overflow.start(accept_automation(automation, profile), {}, start,
+                         nullptr, false);
     expect(!overflow.process(pressed, nullptr),
            "an unrepresentable active window commits nothing");
     const auto after_overflow = overflow.snapshot(edge);
@@ -280,7 +282,8 @@ void test_cooldown_active_session_and_diff() {
            "session admission rejects the whole batch on active overflow");
   }
   AutomationSession session(profile);
-  (void)session.start(automation, {}, start, nullptr, false);
+  (void)session.start(accept_automation(automation, profile), {}, start,
+                      nullptr, false);
   pressed.timestamp = start + 1s;
   pressed.origin_token = 42;
   (void)session.process(pressed, nullptr);

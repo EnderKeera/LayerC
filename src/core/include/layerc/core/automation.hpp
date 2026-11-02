@@ -822,6 +822,40 @@ struct AutomationSessionEdges {
   std::map<std::string, TimePoint, std::less<>> input_emitted;
 };
 
+// An AutomationProfile the canonical validator accepted against its base
+// GameProfile. The evaluator relies on the arity, operator and type
+// invariants validate_automation_profile establishes, so this — never a raw
+// AutomationProfile — is what AutomationRuntime accepts. Immutable after
+// acceptance; validate() is the only way to construct one.
+class ValidatedAutomationProfile {
+public:
+  using Result = std::variant<ValidatedAutomationProfile, AutomationError>;
+  [[nodiscard]] static Result validate(AutomationProfile profile,
+                                       const GameProfile &base);
+  [[nodiscard]] const AutomationProfile &profile() const noexcept {
+    return profile_;
+  }
+  bool operator==(const ValidatedAutomationProfile &) const = default;
+
+private:
+  explicit ValidatedAutomationProfile(AutomationProfile profile) noexcept
+      : profile_(std::move(profile)) {}
+  AutomationProfile profile_;
+};
+
+// Current runtime faults of one automation runtime: the last evaluation
+// error, and one reason per automation that faulted during an event. Both
+// daemons report these lines; they never block unrelated automations.
+struct AutomationRuntimeHealth {
+  // Set by the session when the canonical validator rejected a candidate.
+  std::optional<std::string> rejected;
+  std::optional<std::string> runtime_error;
+  std::map<std::string, std::string, std::less<>> runtime_faults;
+
+  // One line per current fault, prefixed with the session's profile source.
+  [[nodiscard]] std::vector<std::string> lines(std::string_view source) const;
+};
+
 class AutomationRuntime {
 public:
   using EffectValidator = std::function<bool(const AutomationEffect &)>;
@@ -833,7 +867,7 @@ public:
   // Clock injection permits deterministic budget tests; production uses the
   // monotonic clock. The reader is cooperative, not callback preemption.
   using ClockReader = std::function<TimePoint()>;
-  AutomationRuntime(AutomationProfile profile,
+  AutomationRuntime(ValidatedAutomationProfile profile,
                     AutomationPersistentValues persistent_values = {},
                     CooldownGroupTopology cooldown_groups = {},
                     ClockReader clock = MonotonicClock::now);
@@ -874,10 +908,13 @@ public:
   [[nodiscard]] std::optional<TimePoint> next_deadline() const noexcept;
   // Native sessions pass the engine's immutable topology handle; no second
   // group-definition copy or borrowed lifetime is held by the runtime.
-  void reconfigure(AutomationProfile profile,
+  void reconfigure(ValidatedAutomationProfile profile,
                    CooldownGroupTopology cooldown_groups = {});
   void apply_persistent_values(const AutomationPersistentValues &values);
   void retry(std::string_view automation_id);
+  // A value copy of the faults this runtime currently owns; reconfiguration,
+  // retry and a fresh runtime in the owning session are its only lifecycle.
+  [[nodiscard]] AutomationRuntimeHealth health() const;
   [[nodiscard]] bool persistent_dirty() const noexcept;
   void mark_persistent_saved() noexcept;
   [[nodiscard]] const std::vector<AutomationTraceEntry> &trace() const noexcept;
@@ -903,7 +940,8 @@ struct AutomationReplayResult {
   AutomationRuntimeSnapshot final_state;
 };
 [[nodiscard]] AutomationReplayResult replay_automation_events(
-    const AutomationProfile &profile, std::span<const AutomationEvent> events,
+    const ValidatedAutomationProfile &profile,
+    std::span<const AutomationEvent> events,
     std::span<const AutomationReplayAssertion> assertions = {},
     std::span<const CooldownGroup> cooldown_groups = {});
 // Records one external event as a replay root (for example, simulator input).

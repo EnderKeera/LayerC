@@ -46,7 +46,7 @@ jobs:
 
       # Artifact contract: layerc-windows-x64 is the full debug bundle
       # (install layout + benchmark evidence + package ZIP).
-      # benchmarks.yml and push-and-test.ps1 consume
+      # tools/submit-desktop-evidence.ps1 and push-and-test.ps1 consume
       # layerc-windows-x64-tools; only publish-rolling consumes
       # layerc-rolling-package.
       - name: Upload artifacts

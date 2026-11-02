@@ -1,4 +1,5 @@
 #include "core_test_cases.hpp"
+#include "automation_test_support.hpp"
 #include "test_support.hpp"
 
 #include "layerc/core/automation.hpp"
@@ -163,7 +164,8 @@ void test_automation_profile_round_trip() {
 void test_automation_runtime_transaction_and_replay() {
   using namespace layerc::core;
   const auto profile = automation_fixture();
-  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime runtime(accept_automation(profile, automation_base()), {},
+                            {}, [] { return TimePoint{}; });
   runtime.set_trace_enabled(true);
 
   std::vector<AutomationEffect> committed;
@@ -264,8 +266,9 @@ void test_automation_runtime_transaction_and_replay() {
   immutable.automations = {{.id = "immutable-root",
                             .name = "Immutable root",
                             .rules = {increment, observe}}};
-  AutomationRuntime immutable_runtime(immutable, {}, {},
-                                      [] { return TimePoint{}; });
+  AutomationRuntime immutable_runtime(
+      accept_automation(immutable, automation_base()), {}, {},
+      [] { return TimePoint{}; });
   const auto immutable_first = immutable_runtime.process(event);
   expect(immutable_first.committed &&
              immutable_runtime.snapshot().variables.at("value") ==
@@ -280,7 +283,8 @@ void test_automation_runtime_transaction_and_replay() {
                  AutomationValue(true),
          "a later root event should observe the previously committed snapshot");
 
-  AutomationRuntime rejected(profile, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime rejected(accept_automation(profile, automation_base()), {},
+                             {}, [] { return TimePoint{}; });
   rejected.set_trace_enabled(true);
   const auto rolled_back =
       rejected.process(event, [](const AutomationEffect &effect) {
@@ -305,7 +309,8 @@ void test_automation_runtime_transaction_and_replay() {
   const std::vector<AutomationEvent> events{event, event};
   const std::vector<AutomationReplayAssertion> assertions{
       {.variable_id = "count", .expected = AutomationValue(std::int64_t{2})}};
-  const auto replay = replay_automation_events(profile, events, assertions);
+  const auto replay = replay_automation_events(
+      accept_automation(profile, automation_base()), events, assertions);
   expect(replay.passed && replay.processed_events == 2,
          "deterministic replay should use the production evaluator");
 
@@ -333,7 +338,9 @@ void test_automation_runtime_transaction_and_replay() {
     .rules = {{.id = "press", .event = AutomationEventKind::input_pressed,
       .actions = {{.kind = AutomationActionKind::trigger_cooldown, .target = "dash"}}}}}};
   AutomationSession propagation_session(propagation_base);
-  (void)propagation_session.start(trigger_profile, {}, TimePoint{}, nullptr, false, frozen_clock);
+  (void)propagation_session.start(
+      accept_automation(trigger_profile, propagation_base), {}, TimePoint{},
+      nullptr, false, frozen_clock);
   auto trigger_event = AutomationSession::event(AutomationEventKind::input_pressed, {}, TimePoint{}, 77U);
   expect(propagation_session.process(trigger_event),
          "the session cooldown adapter should accept triggerCooldown");
@@ -371,10 +378,10 @@ void test_automation_runtime_transaction_and_replay() {
                       .target = target,
                       .value = literal(AutomationValue(std::int64_t{1}))}}});
   }
-  AutomationRuntime propagation_runtime(propagation_profile, {},
-                                        CooldownGroupTopology(
-                                            propagation_base.cooldown_groups),
-                                        [] { return TimePoint{}; });
+  AutomationRuntime propagation_runtime(
+      accept_automation(propagation_profile, propagation_base), {},
+      CooldownGroupTopology(propagation_base.cooldown_groups),
+      [] { return TimePoint{}; });
   const auto propagation_result = propagation_runtime.process(event);
   expect(propagation_result.committed &&
              propagation_runtime.snapshot().variables.at("dashSeen") ==
@@ -443,7 +450,8 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
        .value = literal(AutomationValue(std::int64_t{99}))}};
   profile.automations.push_back(lower);
 
-  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime runtime(accept_automation(profile, automation_base()), {},
+                            {}, [] { return TimePoint{}; });
   const AutomationEvent event{AutomationEventKind::input_pressed, TimePoint{},
                               "key-e", 1};
   const auto result = runtime.process(event);
@@ -457,7 +465,8 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
   auto later_rule = tied.automations.back().rules.front();
   later_rule.id = "later-rule";
   tied.automations.front().rules.push_back(later_rule);
-  AutomationRuntime tied_runtime(tied, {}, {}, frozen_clock);
+  AutomationRuntime tied_runtime(accept_automation(tied, automation_base()), {},
+                                 {}, frozen_clock);
   expect(tied_runtime.process(event).committed &&
              tied_runtime.snapshot().variables.at("count") ==
                  AutomationValue(std::int64_t{1}),
@@ -465,7 +474,7 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
 
   auto changed = profile;
   changed.automations.front().name = "Changed";
-  runtime.reconfigure(changed);
+  runtime.reconfigure(accept_automation(changed, automation_base()));
   expect(runtime.snapshot().timers.empty(),
          "editing an automation should cancel timers owned by that automation");
 
@@ -475,12 +484,15 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
       {.id = "count",
        .type = AutomationValueType::integer,
        .default_value = AutomationValue(std::int64_t{0})});
+  isolated.variables.push_back({.id = "ratio",
+                                .type = AutomationValueType::number,
+                                .default_value = AutomationValue(0.0)});
   AutomationRule broken{
       .id = "broken",
       .priority = 20,
       .event = AutomationEventKind::session_started,
       .actions = {{.kind = AutomationActionKind::set_variable,
-                   .target = "count",
+                   .target = "ratio",
                    .value = AutomationExpression{
                        .kind = ExpressionKind::binary,
                        .operation = "divide",
@@ -494,7 +506,9 @@ void test_automation_priority_fault_isolation_and_reconfigure() {
                    .value = literal(AutomationValue(std::int64_t{1}))}}};
   isolated.automations = {{.id = "bad", .name = "Bad", .rules = {broken}},
                           {.id = "good", .name = "Good", .rules = {healthy}}};
-  AutomationRuntime fault_runtime(isolated, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime fault_runtime(
+      accept_automation(isolated, automation_base()), {}, {},
+      [] { return TimePoint{}; });
   const auto fault = fault_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 2});
   expect(fault.committed &&
@@ -511,7 +525,8 @@ void test_automation_persistent_sync_and_cascade_bounds() {
   // A sibling persistent-value push is not a durable write of THIS runtime's
   // snapshot and must not clear the unsaved-edit marker.
   const auto profile = automation_fixture();
-  AutomationRuntime runtime(profile, {}, {}, [] { return TimePoint{}; });
+  AutomationRuntime runtime(accept_automation(profile, automation_base()), {},
+                            {}, [] { return TimePoint{}; });
   (void)runtime.process(
       {AutomationEventKind::input_pressed, TimePoint{}, "key-e", 1});
   expect(runtime.persistent_dirty(),
@@ -530,7 +545,7 @@ void test_automation_persistent_sync_and_cascade_bounds() {
   edges.input_values["controller:1:0"] = 0.5;
   auto switched = profile;
   switched.automations.front().name = "Switched";
-  runtime.reconfigure(switched);
+  runtime.reconfigure(accept_automation(switched, automation_base()));
   expect(runtime.edges().cooldown_ready.empty() &&
              runtime.edges().group_ready.empty() &&
              runtime.edges().input_values.empty() &&
@@ -549,8 +564,16 @@ void test_automation_persistent_sync_and_cascade_bounds() {
     AutomationRule rule;
     rule.id = id;
     rule.event = AutomationEventKind::session_started;
-    rule.condition = {.kind = ExpressionKind::variable,
-                      .reference = "missing-" + id};
+    // Statically valid and still an attributable runtime fault, so the trust
+    // boundary admits exactly the fixture this cascade tests.
+    rule.condition = {
+        .kind = ExpressionKind::binary,
+        .operation = "equal",
+        .arguments = {{.kind = ExpressionKind::binary,
+                       .operation = "divide",
+                       .arguments = {literal(AutomationValue(1.0)),
+                                     literal(AutomationValue(0.0))}},
+                      literal(AutomationValue(0.0))}};
     rule.actions = {{.kind = AutomationActionKind::increment_variable,
                      .target = "count",
                      .value = literal(AutomationValue(std::int64_t{100}))}};
@@ -567,8 +590,21 @@ void test_automation_persistent_sync_and_cascade_bounds() {
       {.id = "broken-2", .name = "B2", .rules = {broken_rule("two")}},
       {.id = "broken-3", .name = "B3", .rules = {broken_rule("three")}},
       {.id = "healthy-root", .name = "Healthy", .rules = {healthy}}};
-  AutomationRuntime cascade_runtime(cascade, {}, {},
-                                    [] { return TimePoint{}; });
+  // The unresolved-variable fixture the cascade used to exercise is now
+  // rejected at the trust boundary, so it can never reach the evaluator.
+  auto unresolved = cascade;
+  unresolved.automations.front().rules.front().condition = {
+      .kind = ExpressionKind::variable, .reference = "missing-one"};
+  const auto rejected_cascade =
+      ValidatedAutomationProfile::validate(unresolved, automation_base());
+  expect(std::holds_alternative<AutomationError>(rejected_cascade) &&
+             std::get<AutomationError>(rejected_cascade).message ==
+                 "unknown variable reference",
+         "an unresolved condition reference must be rejected at the "
+         "automation trust boundary");
+  AutomationRuntime cascade_runtime(
+      accept_automation(cascade, automation_base()), {}, {},
+      [] { return TimePoint{}; });
   const auto cascade_result = cascade_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 3});
   expect(cascade_result.committed &&
@@ -578,7 +614,7 @@ void test_automation_persistent_sync_and_cascade_bounds() {
                  AutomationValue(std::int64_t{1}) &&
              cascade_result.node_evaluations > 0 &&
              cascade_result.error.has_value() &&
-             cascade_result.error->message.find("missing-three") !=
+             cascade_result.error->message.find("division by zero") !=
                  std::string::npos,
          "one deadline should drive the fault cascade while healthy "
          "automations commit after the faults");
@@ -617,8 +653,11 @@ void test_automation_persistent_sync_and_cascade_bounds() {
        .cooldown_ids = burst_members}};
   fanout.automations = {{.id = "keeper", .name = "Keeper", .rules = {marker_rule}},
                         {.id = "fanout", .name = "Fanout", .rules = {fan_rule}}};
-  AutomationRuntime fanout_runtime(fanout, {}, CooldownGroupTopology(burst_groups),
-                                    [] { return TimePoint{}; });
+  auto burst_base = automation_base();
+  burst_base.cooldown_groups.push_back(burst_groups.front());
+  AutomationRuntime fanout_runtime(accept_automation(fanout, burst_base), {},
+                                   CooldownGroupTopology(burst_groups),
+                                   [] { return TimePoint{}; });
   const auto fanout_result = fanout_runtime.process(
       {AutomationEventKind::session_started, TimePoint{}, "", 4});
   expect(fanout_result.committed &&
@@ -685,7 +724,8 @@ void test_automation_numeric_promotion() {
       {.kind = AutomationEventKind::input_pressed},
       {.kind = AutomationEventKind::input_released}};
   AutomationSession production_session(base);
-  (void)production_session.start(accepted, {}, TimePoint{}, nullptr, false, frozen_clock);
+  (void)production_session.start(accept_automation(accepted, base), {},
+                                 TimePoint{}, nullptr, false, frozen_clock);
   auto &production = *production_session.runtime();
   struct ResultSink final : AutomationSessionSink {
     AutomationEvaluationResult result;
@@ -704,7 +744,8 @@ void test_automation_numeric_promotion() {
            "AR-04 accepted promotions must produce one normalized winning "
            "value before production validation");
   }
-  const auto simulation = replay_automation_events(accepted, events);
+  const auto simulation =
+      replay_automation_events(accept_automation(accepted, base), events);
   expect(
       simulation.passed &&
           simulation.final_state.variables == production.snapshot().variables &&
@@ -843,8 +884,10 @@ void test_automation_trace_root_provenance() {
                                .target = "dash"}}}}}};
   expect(validate_automation_profile(profile, base).message.empty(),
          "AR-06 replay fixture must be statically valid");
+  const auto accepted_replay = accept_automation(profile, base);
   for (const auto origin : {std::uint64_t{}, std::uint64_t{42}}) {
-    AutomationRuntime original(profile, {}, {}, [] { return TimePoint{}; });
+    AutomationRuntime original(accepted_replay, {}, {},
+                               [] { return TimePoint{}; });
     original.set_trace_enabled(true);
     AutomationEvent root{.kind = AutomationEventKind::session_started,
                          .timestamp = TimePoint(100ms),
@@ -872,7 +915,7 @@ void test_automation_trace_root_provenance() {
     if (const auto *events =
             std::get_if<std::vector<AutomationEvent>>(&first_trace);
         events != nullptr && !events->empty()) {
-      const auto replay = replay_automation_events(profile, *events);
+      const auto replay = replay_automation_events(accepted_replay, *events);
       expect(replay.passed && replay.processed_events == 1U &&
                  replay.final_state.variables ==
                      original.snapshot().variables &&
@@ -886,7 +929,8 @@ void test_automation_trace_root_provenance() {
                      original.snapshot().timers.front().interval,
              "AR-06 replay must match variables, timers and overrides after "
              "one real root");
-      AutomationRuntime replayed(profile, {}, {}, [] { return TimePoint{}; });
+      AutomationRuntime replayed(accepted_replay, {}, {},
+                                 [] { return TimePoint{}; });
       const auto replay_fault = replayed.process(events->front());
       expect(
           replay_fault.faulted_automations == first.faulted_automations,
@@ -902,7 +946,7 @@ void test_automation_trace_root_provenance() {
            "AR-06 roots sharing an origin token must not be guessed away");
     if (const auto *events =
             std::get_if<std::vector<AutomationEvent>>(&decoded)) {
-      const auto replay = replay_automation_events(profile, *events);
+      const auto replay = replay_automation_events(accepted_replay, *events);
       expect(replay.passed && replay.processed_events == 2U &&
                  replay.final_state.variables ==
                      original.snapshot().variables &&

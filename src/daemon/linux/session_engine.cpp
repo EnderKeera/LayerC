@@ -83,8 +83,7 @@ void SessionEngine::refresh(
   impl_->input.use_sources(route.inputs);
   impl_->native_input = route.native_input;
   impl_->overlay.use_backend(route.overlay);
-  impl_->visual.use_x11_capture(route.x11_capture);
-  impl_->visual.use_capture(route.capture);
+  impl_->visual.use_route(route.capture);
   // Losing a provider retires its sessions through the normal checkpoint
   // path. Session-less failed writes still contribute automation demand.
   const auto scan = route.windows ? route.windows->windows()
@@ -99,10 +98,10 @@ void SessionEngine::refresh(
   const auto requests = impl_->sessions.session_requests();
   const auto demand =
       layerc::runtime::calculate_capability_demand(requests, false);
-  // A native factory distinguishes XWayland XIDs from opaque identities.
-  impl_->visual.refresh(route.native_windows && !route.capture
-                            ? std::span<InputSession>{} : impl_->sessions.sessions(),
-                        demand, configuration_changed,
+  // Capture resolution reasons live in the visual service, which owns the
+  // route: every session is offered and an unpollable target reports itself.
+  impl_->visual.refresh(impl_->sessions.sessions(), demand,
+                        configuration_changed,
                         impl_->sessions.visual_configurations());
   (void)kernel.reconcile(demand);
 
@@ -113,8 +112,6 @@ void SessionEngine::refresh(
   visual_unavailable.insert(visual_unavailable.end(),
                             impl_->sessions.visual_diagnostics().begin(),
                             impl_->sessions.visual_diagnostics().end());
-  if (route.native_windows && !route.capture && demand.required(layerc::runtime::Capability::visual))
-    visual_unavailable.emplace_back("visual: native windows have no X11 window id");
   derive_capability_status(
       status, demand,
       {.input = input_unavailable,
@@ -148,9 +145,6 @@ void SessionEngine::refresh_status(
   visual_unavailable.insert(visual_unavailable.end(),
                             impl_->sessions.visual_diagnostics().begin(),
                             impl_->sessions.visual_diagnostics().end());
-  if (route.native_windows && !route.capture &&
-      kernel.demand().required(layerc::runtime::Capability::visual))
-    visual_unavailable.emplace_back("visual: native windows have no X11 window id");
   derive_capability_status(
       status, kernel.demand(),
       {.input = impl_->input.unavailable(),

@@ -117,6 +117,26 @@ void capture_math_contracts() {
              !oversized_poll.result.frame,
          "a tightly packed frame should reject pixels outside its bounds");
 
+  // Only a capture addressed by the target's own native identity is
+  // target_bound; the shared seam keeps whatever the backend reported.
+  const layerc::capture::CapturePollResult default_binding;
+  expect(default_binding.binding ==
+                 layerc::capture::CaptureTargetBinding::target_bound,
+         "capture results default to a target-bound association");
+  for (const auto binding :
+       {layerc::capture::CaptureTargetBinding::monitor_crop,
+        layerc::capture::CaptureTargetBinding::user_selected_window}) {
+    const auto preserved = layerc::capture::normalize_capture_poll(
+        window, {.availability = layerc::core::CaptureAvailability::unavailable,
+                 .backend = layerc::core::CaptureBackendKind::pipewire_portal,
+                 .diagnostic = "portal_pending",
+                 .frame = {},
+                 .recovery = layerc::capture::CaptureRecovery::none,
+                 .binding = binding});
+    expect(preserved.result.binding == binding,
+           "the shared capture seam preserves the backend's target binding");
+  }
+
   const auto missing_poll = layerc::capture::normalize_capture_poll(
       window, {.availability = layerc::core::CaptureAvailability::available});
   expect(missing_poll.result.availability ==

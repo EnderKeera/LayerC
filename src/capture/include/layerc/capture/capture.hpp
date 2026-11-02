@@ -50,12 +50,24 @@ enum class CaptureRecovery : std::uint8_t {
   restart_backend,
 };
 
+// How a capture's frames relate to the requested target window. Only a
+// capture addressed by the target's own native identity (an HWND or X11
+// XID) is target_bound; a portal grant proves only that the user chose a
+// stream, so its frames are user-selected (or a monitor crop at the
+// target's reported geometry), never a verified target association.
+enum class CaptureTargetBinding : std::uint8_t {
+  target_bound,
+  monitor_crop,
+  user_selected_window,
+};
+
 struct CapturePollResult {
   core::CaptureAvailability availability{core::CaptureAvailability::inactive};
   core::CaptureBackendKind backend{core::CaptureBackendKind::none};
   std::string diagnostic{};
   std::shared_ptr<const CaptureFrame> frame{};
   CaptureRecovery recovery{CaptureRecovery::none};
+  CaptureTargetBinding binding{CaptureTargetBinding::target_bound};
 
   [[nodiscard]] core::CaptureHealth health() const {
     return {availability, backend, diagnostic};

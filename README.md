@@ -5,7 +5,7 @@
 LayerC is a lightweight, open-source overlay with a dependency-free C++20 core
 and native platform backends. It provides passive input tracking, click-through
 panels, opt-in visual recognition, bounded automation, typed JSON profiles, and
-deterministic `.layercprofile` bundles. The V2.7 development tree adds cooldown,
+deterministic `.layercprofile` bundles. LayerC 2.7 adds cooldown,
 timer, counter, and indicator items instead of limiting panels to cooldowns.
 
 Windows is the complete desktop experience. Linux's supported desktop scope is
@@ -21,19 +21,19 @@ published release.
 
 | Surface | State in this tree | Release boundary |
 | --- | --- | --- |
-| Windows desktop (`layerd`, `layere`, `layercal`, `layerw`) | Implemented through the V2.5 feature set | Windows CI, benchmarks, install, and ZIP packaging are the release path |
+| Windows desktop (`layerd`, `layere`, `layercal`, `layerw`) | Implemented, including typed overlay items | Windows CI, benchmarks, install, and ZIP packaging are the release path |
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c, released as `v2.6.2`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the `v2.6.2` `.deb` and Flatpak are the gate-built packages; physical evidence pending |
-| Typed overlay items (V2.7, in development) | Cooldown, timer, counter, and indicator items in the shared core, both editors, Win32/X11 overlays, Wayland/GNOME frames, and Game Bar slots | Local implementation; no published release or expanded desktop/hardware support claim |
-| Wayland (V2.7, in development) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented locally; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
+| Linux editor (v2.6c feature set; package version `2.7.0`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the release workflow publishes the gate-built `.deb` and Flatpak; physical evidence pending |
+| Typed overlay items (V2.7) | Cooldown, timer, counter, and indicator items in the shared core, both editors, Win32/X11 overlays, Wayland/GNOME frames, and Game Bar slots | Shared presentation in release packages; no expanded desktop/hardware support claim |
+| Wayland (V2.7 preview) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented as a preview; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
 | Gamescope | Not supported | Out of scope |
 
-Package metadata reports **2.7.0** for this **unreleased development tree**,
-combining typed overlay items with the Wayland preview. The version bump does
-not publish a release or qualify additional desktops. The V2.6/V2.6c rows and
-dated evidence above describe their historical scopes, not V2.7 qualification.
+Package metadata reports **2.7.0**, combining typed overlay items with the
+Wayland preview. The version-tag workflow publishes packages only after its
+Windows, Debian, and Flatpak gates pass. Publication does not expand the
+supported desktop matrix; dated evidence retains its stated scope.
 Windows ZIP packaging starts LayerC via `layerd.exe`; it omits `layerc.exe`
 until a release-signing key is provisioned, and launcher self-updates remain
 OFF by default. Physical Linux evidence and the Game Bar companion's manual
@@ -112,7 +112,7 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 | --- | ---: | ---: | --- |
 | `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
 | `layerd` | yes | yes | Overlay/automation daemon; background desktop app on Windows, foreground service on Linux |
-| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c, shipped in `v2.6.2`; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
+| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c feature set, included in `v2.7.0`; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |
@@ -504,8 +504,9 @@ Each document has a narrow owner; open the one that matches the task instead of
 treating the list as a required reading stack.
 
 - [`docs/Linux.md`](docs/Linux.md) — Linux support, commands, packaging, permissions, and evidence.
+- [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md) — submitting desktop and hardware test evidence to pull requests.
 - [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) — Game Bar architecture and invariants.
 - [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) — V2.4 release-evidence record.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, CI/release gates, hardware runner, and PR rules.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, CI/release gates, desktop evidence, and PR rules.
 - [`AGENTS.md`](AGENTS.md) — contributor/agent architecture, validation, and repository rules.
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — vendored dependency notices.
