@@ -36,7 +36,7 @@ void unchanged_x11_provider() {
   expect(status.x11.connected && status.x11 == old_status.x11, "seam preserves every native X11 probe");
   const layerc::daemon::DisplayRoute route{
       .windows = &provider, .monitors = &provider,
-      .overlay = provider.overlay(), .x11_capture = provider.capture(),
+      .overlay = provider.overlay(), .capture = {.x11 = provider.capture()},
       .inputs = {&provider}};
   baseline.refresh({}, true, route, old_kernel, old_status, old_diagnostics);
   current.refresh({}, true, kernel, status, diagnostics);

@@ -42,31 +42,10 @@ void append_unique(std::vector<std::string> &values, std::string value) {
 
 } // namespace
 
-// Explicit XWayland/X11 windows use Composite capture; opaque native windows
-// use the provider's portal stream.
-std::unique_ptr<VisualCaptureSession>
-VisualService::create_capture(const Target &target, const std::string_view profile_id,
-                                 const std::uint8_t sample_rate) {
-  if (target.x11_window)
-    return x11_ == nullptr
-               ? nullptr
-               : x11_->create_capture(profile_id, {*target.x11_window},
-                                      target.quality, sample_rate);
-  return native_ == nullptr
-             ? nullptr
-             : native_->create_capture(profile_id, {target.window}, target.quality, sample_rate);
-}
-
-void VisualService::use_x11_capture(CaptureFactory *factory) noexcept {
-  if (x11_ == factory) return;
-  quiesce();
-  x11_ = factory;
-}
-
-void VisualService::use_capture(CaptureFactory *factory) noexcept {
-  if (native_ == factory) return;
-  quiesce(); // XIDs and opaque native identities are not interchangeable
-  native_ = factory;
+void VisualService::use_route(const CaptureRoute &route) noexcept {
+  if (route_ == route) return;
+  quiesce(); // the previous route's captures belong to other identities
+  route_ = route;
 }
 
 void VisualService::refresh(
@@ -209,19 +188,25 @@ void VisualService::refresh(
     Target target;
     target.window = window;
     target.quality = entry.quality;
-    target.x11_window = native_ ? native_->x11_window(window) : std::optional{window};
-    if (const auto previous = std::ranges::find(targets_, window, &Target::window);
-        previous != targets_.end() && previous->x11_window == target.x11_window &&
-        !(configuration_changed && native_)) {
+    // The identity only decides whether the existing session can be reused;
+    // resolve_capture() still owns which transport serves the target.
+    target.x11_window = capture_x11_identity(route_, window);
+    const auto previous = std::ranges::find(targets_, window, &Target::window);
+    const bool reusable = previous != targets_.end() && previous->capture &&
+                          previous->x11_window == target.x11_window &&
+                          !(configuration_changed && route_.native);
+    if (reusable) {
       target.capture = std::move(previous->capture);
-      if (target.capture) {
-        target.capture->set_quality(target.quality);
-        target.capture->set_sample_rate(entry.sample_rate);
-      }
+      target.capture->set_quality(target.quality);
+      target.capture->set_sample_rate(entry.sample_rate);
+    } else if (!entry.sessions.empty()) {
+      auto resolution =
+          resolve_capture(route_, entry.sessions.front()->automation.profile().id,
+                          window, target.quality, entry.sample_rate);
+      target.capture = std::move(resolution.session);
+      target.x11_window = resolution.x11_window;
+      target.unavailable = std::move(resolution.unavailable);
     }
-    if (!target.capture && !entry.sessions.empty())
-      target.capture = create_capture(target, entry.sessions.front()->automation.profile().id,
-                                      entry.sample_rate);
 
     for (const auto *session : entry.sessions)
       if (const auto found = evaluations_.find(session->source_path);
@@ -287,13 +272,17 @@ VisualService::poll(const std::span<InputSession> sessions,
 std::optional<TimePoint>
 VisualService::next_deadline(const TimePoint now) const noexcept {
   std::optional<TimePoint> result;
-  for (const auto &target : targets_)
+  for (const auto &target : targets_) {
+    // The same predicate poll() uses: a target without a capture session is
+    // never sampleable, so it must not arm a deadline either.
+    if (!target.capture) continue;
     for (const auto *evaluation : target.evaluations) {
       const auto due = evaluation->next_sample == TimePoint{}
                            ? now
                            : evaluation->next_sample;
       if (!result.has_value() || due < *result) result = due;
     }
+  }
   return result;
 }
 
@@ -302,6 +291,8 @@ std::vector<std::string> VisualService::unavailable() const {
   for (const auto &diagnostic : capture_diagnostics_)
     append_unique(result, diagnostic);
   append_unique(result, fault_);
+  for (const auto &target : targets_)
+    append_unique(result, target.unavailable);
   return result;
 }
 
@@ -311,12 +302,20 @@ VisualService::reconcile(
   if (!demand.required(layerc::runtime::Capability::visual))
     return layerc::runtime::ServiceReconcileResult::failed(
         "visual: service invoked without demand");
-  if (!native_ && !x11_)
+  if (!route_.native && !route_.x11 &&
+      std::ranges::none_of(targets_, [](const Target &target) {
+        return !target.unavailable.empty();
+      }))
+    // With no factory at all and nothing resolved, the service itself is the
+    // fault. A target that already published its own route reason keeps that
+    // reason instead of a generic one.
     return layerc::runtime::ServiceReconcileResult::failed(
         "visual: no X display for capture");
   fault_.clear();
   for (auto &target : targets_) {
-    if (target.capture && target.capture->start()) continue;
+    // A target without a capture session already published why; only a real
+    // session can fail to start.
+    if (!target.capture || target.capture->start()) continue;
     append_unique(capture_diagnostics_,
                   "visual: capture could not start for window " +
                       std::to_string(target.window));

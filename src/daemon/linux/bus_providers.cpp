@@ -4,6 +4,7 @@
 #include "dbus_shell_service.hpp"
 #include "gnome_bridge.hpp"
 #include "kwin_script.hpp"
+#include "portal_capture_status.hpp"
 #include "portal_screencast.hpp"
 #ifdef LAYERC_HAVE_PIPEWIRE
 #include "pipewire_capture.hpp"
@@ -97,7 +98,7 @@ struct BusProviders::Impl::Session final : VisualCaptureSession {
 #endif
   core::WindowId window;
   std::string profile, identity, fault;
-  bool started{}, monitor{};
+  bool started{};
   std::optional<runtime::DisplayProviderStatus> previous;
 
   Session(std::shared_ptr<Impl> host, std::string_view id, core::WindowId target,
@@ -139,7 +140,7 @@ struct BusProviders::Impl::Session final : VisualCaptureSession {
     pipewire.stop();
 #endif
     portal.stop();
-    started = monitor = false;
+    started = false;
     fault.clear();
     previous.reset();
   }
@@ -179,7 +180,6 @@ struct BusProviders::Impl::Session final : VisualCaptureSession {
         if (!portal.ready() && portal.reason() != "portal_pending") {
           invalidate(portal.reason().empty() ? "portal_unavailable" : portal.reason());
         } else if (auto remote = portal.take_remote()) {
-          monitor = remote->monitor;
           if (!pipewire.start(std::move(*remote))) invalidate(pipewire.reason());
         }
         const bool active = pipewire.active();
@@ -214,12 +214,8 @@ struct BusProviders::Impl::Session final : VisualCaptureSession {
 #endif
   }
   [[nodiscard]] runtime::DisplayProviderStatus status() {
-    if (!started) return {"portal_screencast", State::inactive, {"not_demanded"}};
-    const auto result = poll(core::MonotonicClock::now()).result;
-    if (result.availability != core::CaptureAvailability::available)
-      return {"portal_screencast", State::unavailable, {result.diagnostic}};
-    return {"portal_screencast", monitor ? State::degraded : State::active,
-            monitor ? std::vector<std::string>{"monitor_crop"} : std::vector<std::string>{}};
+    return portal_capture_status(
+        started, poll(core::MonotonicClock::now()).result);
   }
   runtime::RuntimeResourceStats resources() const noexcept override {
     runtime::RuntimeResourceStats result;

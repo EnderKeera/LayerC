@@ -157,11 +157,8 @@ bool AutomationEditor::handle_live_message(
 void AutomationEditor::restore_live_subscription() {
   if (!trace_enabled_)
     return;
-  live_edit_.advance_revision();
-  (void)live_edit_.channel().send({
-      .type = layerc::core::LiveMessageType::automation_trace_subscribe,
-      .revision = live_edit_.revision(),
-  });
+  (void)live_edit_.send_authenticated(
+      {.type = layerc::core::LiveMessageType::automation_trace_subscribe});
 }
 void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
   trace_enabled_ = enabled;
@@ -170,8 +167,7 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
     trace_log_.clear();
     trace_display_ = "Waiting for authenticated LayerD events...";
   }
-  if (!live_edit_.channel().connected() ||
-      !live_edit_.package_authenticated()) {
+  if (!live_edit_.connected() || !live_edit_.authenticated()) {
     trace_display_ =
         "LayerD is not authenticated; start or restart LayerD and try again.";
     set_text(GetDlgItem(dialog, IDC_AUTOMATION_TRACE_TEXT),
@@ -180,13 +176,10 @@ void AutomationEditor::set_trace(const HWND dialog, const bool enabled) {
     set_owner_draw_checkbox(GetDlgItem(dialog, IDC_AUTOMATION_TRACE), false);
     return;
   }
-  live_edit_.advance_revision();
-  layerc::core::LiveMessage message;
-  message.type =
-      enabled ? layerc::core::LiveMessageType::automation_trace_subscribe
-              : layerc::core::LiveMessageType::automation_trace_unsubscribe;
-  message.revision = live_edit_.revision();
-  (void)live_edit_.channel().send(message);
+  (void)live_edit_.send_authenticated(
+      {.type = enabled
+                   ? layerc::core::LiveMessageType::automation_trace_subscribe
+                   : layerc::core::LiveMessageType::automation_trace_unsubscribe});
 }
 
 void AutomationEditor::save_trace(const HWND dialog) {
@@ -213,13 +206,9 @@ void AutomationEditor::retry_selected(const HWND dialog) {
   const auto *automation = selected_automation(dialog);
   if (automation == nullptr)
     return;
-  live_edit_.advance_revision();
-  layerc::core::LiveMessage message;
-  message.type = layerc::core::LiveMessageType::retry_automation;
-  message.revision = live_edit_.revision();
-  message.profile_key =
-      layerc::platform::canonical_profile_key(document_.path());
-  message.text = automation->id;
-  (void)live_edit_.channel().send(message);
+  (void)live_edit_.send_authenticated(
+      {.type = layerc::core::LiveMessageType::retry_automation,
+       .profile_key = layerc::platform::canonical_profile_key(document_.path()),
+       .text = automation->id});
 }
 } // namespace layerc::editor

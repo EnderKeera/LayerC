@@ -160,15 +160,16 @@ DisplayRoute bind_display_route(const RoutePlan &plan, const ProviderSet &provid
   route.monitors = source(plan.monitors.serving);
   if (auto *provider = source(plan.overlay.serving)) route.overlay = provider->overlay();
   if (plan.native_windows)
-    if (auto *provider = source(plan.capture.serving)) route.capture = provider->capture();
+    if (auto *provider = source(plan.capture.serving))
+      route.capture.native = provider->capture();
   PassiveInputSource *xi2{};
   if (providers.x11_connected && providers.x11) {
     xi2 = providers.x11->input();
-    route.x11_capture = providers.x11->capture();
+    route.capture.x11 = providers.x11->capture();
   }
   route.inputs = select_input_sources(providers.evdev, xi2, plan.prefer_evdev);
   route.native_input = !route.inputs.empty() && route.inputs.front() == providers.evdev;
-  route.native_windows = plan.native_windows;
+  route.capture.native_windows = plan.native_windows;
   route.native_overlay = plan.native_overlay;
   return route;
 }

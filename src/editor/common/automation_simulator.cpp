@@ -54,8 +54,16 @@ AutomationSimulator::reset(const std::string_view graph_json,
     return {.error = "Simulator reset failed: " +
                      std::get<core::AutomationError>(parsed).describe(),
             .seeded = std::nullopt};
+  // The parser already validated against this base profile; the runtime still
+  // only accepts the accepted value, never the editable graph.
+  auto validated =
+      core::ValidatedAutomationProfile::validate(*graph, profile);
+  if (const auto *error = std::get_if<core::AutomationError>(&validated))
+    return {.error = "Simulator reset failed: " + error->describe(),
+            .seeded = std::nullopt};
   runtime_ = std::make_unique<core::AutomationRuntime>(
-      *graph, core::AutomationPersistentValues{},
+      std::get<core::ValidatedAutomationProfile>(std::move(validated)),
+      core::AutomationPersistentValues{},
       core::CooldownGroupTopology(profile.cooldown_groups), [] { return core::TimePoint{}; });
   runtime_->set_trace_enabled(true);
   Reset result;

@@ -8,7 +8,7 @@
 
 namespace layerc::core {
 AutomationReplayResult replay_automation_events(
-    const AutomationProfile &profile,
+    const ValidatedAutomationProfile &profile,
     const std::span<const AutomationEvent> events,
     const std::span<const AutomationReplayAssertion> assertions,
     const std::span<const CooldownGroup> cooldown_groups) {

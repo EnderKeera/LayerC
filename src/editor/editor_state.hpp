@@ -4,6 +4,7 @@
 #include "binding_capture.hpp"
 #include "dialog_layout.hpp"
 #include "editor_util.hpp"
+#include "live_edit_session.hpp"
 
 #include "layerc/core/live_edit.hpp"
 #include "layerc/platform/live_channel.hpp"
@@ -209,110 +210,6 @@ struct PackDialogs final {
   HWND diagnostics_window{};
   DialogChrome diagnostics_chrome;
   std::string runtime_diagnostics_json;
-};
-
-// Owns the authenticated daemon channel and one optional on-window edit session.
-// Session identifiers, targets, revisions, and deadlines are advanced together.
-class LiveEditSession final {
-public:
-  [[nodiscard]] layerc::platform::NamedPipeEditorDaemonChannel &channel()
-      noexcept {
-    return channel_;
-  }
-  [[nodiscard]] const layerc::platform::NamedPipeEditorDaemonChannel &channel()
-      const noexcept {
-    return channel_;
-  }
-  [[nodiscard]] layerc::core::ProfileRevision revision() const noexcept {
-    return revision_;
-  }
-  void set_revision(const layerc::core::ProfileRevision revision) noexcept {
-    revision_ = revision;
-  }
-  void advance_revision() noexcept { ++revision_; }
-  [[nodiscard]] layerc::core::ProfileRevision peer_revision() const noexcept {
-    return peer_revision_;
-  }
-  void observe_peer(const layerc::core::ProfileRevision revision) noexcept {
-    peer_revision_ = revision;
-  }
-  [[nodiscard]] layerc::core::EditSessionId session_id() const noexcept {
-    return session_id_;
-  }
-  [[nodiscard]] HWND target() const noexcept { return target_; }
-  [[nodiscard]] HWND pending_target() const noexcept { return pending_target_; }
-  [[nodiscard]] ULONGLONG pending_deadline() const noexcept {
-    return pending_deadline_;
-  }
-  [[nodiscard]] bool direct_drag_notice_shown() const noexcept {
-    return direct_drag_notice_shown_;
-  }
-  [[nodiscard]] ULONGLONG last_drag_send() const noexcept {
-    return last_drag_send_;
-  }
-  [[nodiscard]] ULONGLONG last_heartbeat_send() const noexcept {
-    return last_heartbeat_send_;
-  }
-  [[nodiscard]] UINT timer_interval() const noexcept { return timer_interval_; }
-  [[nodiscard]] bool package_authenticated() const noexcept {
-    return package_authenticated_;
-  }
-
-  void set_package_authenticated(const bool authenticated) noexcept {
-    package_authenticated_ = authenticated;
-  }
-  void set_timer_interval(const UINT interval) noexcept {
-    timer_interval_ = interval;
-  }
-  void note_drag_send(const ULONGLONG now) noexcept { last_drag_send_ = now; }
-  void note_heartbeat_send(const ULONGLONG now) noexcept {
-    last_heartbeat_send_ = now;
-  }
-  void note_direct_drag_notice() noexcept { direct_drag_notice_shown_ = true; }
-  void await_target(const HWND target, const ULONGLONG deadline) noexcept {
-    pending_target_ = target;
-    pending_deadline_ = deadline;
-  }
-  [[nodiscard]] HWND take_pending_target() noexcept {
-    const HWND result = pending_target_;
-    pending_target_ = nullptr;
-    pending_deadline_ = 0;
-    return result;
-  }
-  void clear_pending_target() noexcept {
-    pending_target_ = nullptr;
-    pending_deadline_ = 0;
-  }
-  void begin_session(const HWND target,
-                     const layerc::core::EditSessionId session_id) noexcept {
-    clear_pending_target();
-    target_ = target;
-    session_id_ = session_id == 0 ? 1 : session_id;
-    peer_revision_ = 0;
-    direct_drag_notice_shown_ = false;
-  }
-  void clear_session() noexcept {
-    session_id_ = 0;
-    peer_revision_ = 0;
-    target_ = nullptr;
-    clear_pending_target();
-    direct_drag_notice_shown_ = false;
-  }
-
-private:
-  layerc::platform::NamedPipeEditorDaemonChannel channel_{
-      layerc::platform::NamedPipeEditorDaemonChannel::Role::client};
-  layerc::core::ProfileRevision revision_{};
-  layerc::core::ProfileRevision peer_revision_{};
-  layerc::core::EditSessionId session_id_{};
-  HWND target_{};
-  HWND pending_target_{};
-  ULONGLONG pending_deadline_{};
-  ULONGLONG last_drag_send_{};
-  ULONGLONG last_heartbeat_send_{};
-  UINT timer_interval_{100};
-  bool direct_drag_notice_shown_{};
-  bool package_authenticated_{};
 };
 
 } // namespace layerc::editor
