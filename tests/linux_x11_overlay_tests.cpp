@@ -17,6 +17,7 @@
 #include "layerc/core/profile.hpp"
 #include "layerc/runtime/daemon_kernel.hpp"
 
+#include "automation_test_support.hpp"
 #include "test_support.hpp"
 
 #include <X11/Xatom.h>
@@ -573,7 +574,10 @@ int run_linux_x11_overlay_tests() {
   // start() reports whether session_started changed state; this fixture has
   // no session rule, so only the later input-driven overrides matter.
   (void)session.automation.start(
-      overlay_automation(session.automation.profile().id), {}, ready);
+      layerc::test::accept_automation(
+          overlay_automation(session.automation.profile().id),
+          session.automation.profile()),
+      {}, ready);
   const layerc::core::InputEvent show_press{
       {layerc::core::InputDevice::keyboard, 70, 0}, true};
   const layerc::core::InputEvent show_release{

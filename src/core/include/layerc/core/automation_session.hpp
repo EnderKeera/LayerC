@@ -27,18 +27,6 @@ public:
   virtual void on_stopping(TimePoint) {}
 };
 
-// Current runtime faults of one session's automation: the last evaluation
-// error, and at most one fault per automation that faulted during an event.
-// Both daemons report these lines; they never block unrelated automations.
-struct AutomationRuntimeHealth {
-  std::optional<std::string> runtime_error;
-  std::map<std::string, std::string, std::less<>> runtime_faults;
-
-  void record(const AutomationEvaluationResult &result);
-  // One line per fault, prefixed with the session's profile source.
-  [[nodiscard]] std::vector<std::string> lines(std::string_view source) const;
-};
-
 struct SessionFeedResult {
   std::vector<std::string> triggered;
   bool changed{};
@@ -68,11 +56,24 @@ public:
                                              std::string source, TimePoint now,
                                              std::optional<std::uint64_t> origin = std::nullopt);
 
-  [[nodiscard]] bool start(AutomationProfile automation,
+  [[nodiscard]] bool start(ValidatedAutomationProfile automation,
                            AutomationPersistentValues values, TimePoint now,
                            AutomationSessionSink *sink = nullptr,
                            bool trace_enabled = false,
                            AutomationRuntime::ClockReader clock = {});
+  // Replaces the running runtime's profile. A no-op without a runtime, so a
+  // session that never started cannot acquire one here.
+  void reconfigure_automation(ValidatedAutomationProfile automation);
+  // Records that the canonical validator rejected a candidate profile without
+  // touching the runtime: a rejected reconfiguration leaves the previous
+  // runtime running and observable.
+  void reject_automation(AutomationError error);
+  // The candidate a rejection described is no longer current: the source
+  // reverted to the profile the running runtime already holds.
+  void clear_automation_rejection() noexcept { automation_rejection_.reset(); }
+  [[nodiscard]] bool automation_rejected() const noexcept {
+    return automation_rejection_.has_value();
+  }
   [[nodiscard]] bool stop(TimePoint now, AutomationSessionSink *sink = nullptr);
   [[nodiscard]] bool process(const AutomationEvent &value,
                              AutomationSessionSink *sink = nullptr);
@@ -110,11 +111,16 @@ public:
                         bool enabled = true);
   // Used when a sidecar/capability disappears, without synthesizing lifecycle
   // events. Normal retirement uses stop() and publishes through the sink.
-  void discard_runtime() noexcept { automation_runtime_.reset(); }
+  void discard_runtime() noexcept {
+    automation_runtime_.reset();
+    automation_rejection_.reset();
+  }
   [[nodiscard]] std::span<const CooldownState> snapshot(TimePoint now);
 
   [[nodiscard]] const GameProfile &profile() const noexcept { return profile_; }
-  [[nodiscard]] const AutomationRuntimeHealth &health() const noexcept { return automation_health_; }
+  // A value copy of the current faults, so no fault outlives the runtime,
+  // retry or reconfiguration that resolved it.
+  [[nodiscard]] AutomationRuntimeHealth health() const;
   [[nodiscard]] CooldownEngine &cooldowns() noexcept { return cooldowns_; }
   [[nodiscard]] const CooldownEngine &cooldowns() const noexcept { return cooldowns_; }
   [[nodiscard]] VisualTriggerEngine *visual_triggers() noexcept { return visual_triggers_.get(); }
@@ -125,7 +131,9 @@ public:
 
 private:
   GameProfile profile_;
-  AutomationRuntimeHealth automation_health_;
+  // The last candidate the canonical validator rejected, until a start,
+  // reconfiguration, stop or discard retires it.
+  std::optional<std::string> automation_rejection_;
   CooldownEngine cooldowns_;
   std::unique_ptr<VisualTriggerEngine> visual_triggers_;
   std::unique_ptr<AutomationRuntime> automation_runtime_;

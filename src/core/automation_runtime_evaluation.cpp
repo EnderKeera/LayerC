@@ -26,15 +26,27 @@ bool consume_timer_firing(AutomationRuntimeSnapshot &target,
 
 } // namespace
 
-AutomationRuntime::Impl::Impl(AutomationProfile source,
+AutomationRuntime::Impl::Impl(const ValidatedAutomationProfile &source,
                               AutomationPersistentValues persistent,
                               CooldownGroupTopology group_definitions,
                               ClockReader clock_reader)
-    : profile(std::move(source)), groups(std::move(group_definitions)),
+    : profile(source.profile()), groups(std::move(group_definitions)),
       clock(std::move(clock_reader)) {
   for (const auto &variable : profile.variables)
     state.variables[variable.id] = variable.default_value;
   apply_persistent(persistent);
+}
+
+void AutomationRuntime::Impl::record_health(
+    const AutomationEvaluationResult &result) {
+  if (!result.faulted_automations.empty()) {
+    last_error.reset();
+    return;
+  }
+  if (result.error.has_value())
+    last_error = result.error->describe();
+  else
+    last_error.reset();
 }
 
 void AutomationRuntime::Impl::apply_persistent(

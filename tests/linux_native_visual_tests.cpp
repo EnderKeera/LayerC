@@ -113,7 +113,7 @@ void native_visual_shares_evaluator_and_releases_demand() {
   layerc::platform::AutomationPersistence persistence;
   FakeFactory factory;
   daemon::VisualService visual;
-  visual.use_capture(&factory);
+  visual.use_route({.native = &factory, .native_windows = true});
   std::vector<daemon::InputSession> sessions;
   sessions.emplace_back(profile(temp.path() / "a.json", "a", core::CaptureQuality::low, 10),
                         55, persistence);
@@ -153,7 +153,7 @@ void native_visual_shares_evaluator_and_releases_demand() {
   expect(factory.state.live == 0 && visual.resources().capture_sessions == 0 &&
              visual.resources().timers == 0 && !visual.next_deadline(now),
          "lost visual demand releases capture and the sampling deadline");
-  visual.use_capture(nullptr);
+  visual.use_route({});
 }
 
 void xwayland_identity_does_not_request_portal_consent() {
@@ -162,7 +162,7 @@ void xwayland_identity_does_not_request_portal_consent() {
   FakeFactory factory;
   factory.xwayland = true;
   daemon::VisualService visual;
-  visual.use_capture(&factory);
+  visual.use_route({.native = &factory, .native_windows = true});
   std::vector<daemon::InputSession> sessions;
   sessions.emplace_back(profile(temp.path() / "a.json", "a", core::CaptureQuality::low, 10),
                         55, persistence);

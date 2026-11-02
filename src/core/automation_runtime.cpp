@@ -53,13 +53,18 @@ void AutomationRuntime::Impl::add_trace(const AutomationEvent &event,
 }
 
 AutomationRuntime::AutomationRuntime(
-    AutomationProfile profile, AutomationPersistentValues persistent,
+    ValidatedAutomationProfile profile, AutomationPersistentValues persistent,
     CooldownGroupTopology cooldown_groups, ClockReader clock)
-    : impl_(std::make_unique<Impl>(std::move(profile), std::move(persistent),
+    : impl_(std::make_unique<Impl>(profile, std::move(persistent),
                                    std::move(cooldown_groups), std::move(clock))) {}
 AutomationRuntime::~AutomationRuntime() = default;
 const AutomationProfile &AutomationRuntime::profile() const noexcept {
   return impl_->profile;
+}
+AutomationRuntimeHealth AutomationRuntime::health() const {
+  return {.rejected = std::nullopt,
+          .runtime_error = impl_->last_error,
+          .runtime_faults = impl_->faulted};
 }
 std::span<const CooldownGroup>
 AutomationRuntime::cooldown_groups() const noexcept {
@@ -88,6 +93,7 @@ AutomationRuntime::process(const AutomationEvent &root,
       root.fields.size() > max_automation_collection_entries ||
       !std::ranges::all_of(root.fields, field_in_bounds)) {
     result.error = {"$event", "source event exceeds automation bounds"};
+    impl_->record_health(result);
     return result;
   }
   // One budget spans every attributable-fault retry. Root provenance belongs
@@ -99,6 +105,7 @@ AutomationRuntime::process(const AutomationEvent &root,
   if (!deadline) {
     result.error = {"$runtime",
                     "execution deadline is outside the clock range"};
+    impl_->record_health(result);
     return result;
   }
   EvaluationBudget budget{*deadline, result.node_evaluations, impl_->clock};
@@ -107,7 +114,8 @@ AutomationRuntime::process(const AutomationEvent &root,
     const auto outcome =
         impl_->evaluate(root, validator, committer, budget, result);
     if (const auto *failure = std::get_if<AutomationFault>(&outcome)) {
-      impl_->faulted.insert(failure->automation_id);
+      impl_->faulted.insert_or_assign(failure->automation_id,
+                                      "faulted during event");
       if (std::ranges::find(result.faulted_automations,
                             failure->automation_id) ==
           result.faulted_automations.end())
@@ -125,6 +133,7 @@ AutomationRuntime::process(const AutomationEvent &root,
       result.effects.clear();
       result.derived_events.clear();
     }
+    impl_->record_health(result);
     return result;
   }
 }
@@ -176,10 +185,11 @@ std::optional<TimePoint> AutomationRuntime::next_deadline() const noexcept {
   return result;
 }
 void AutomationRuntime::reconfigure(
-    AutomationProfile profile,
+    ValidatedAutomationProfile profile,
     CooldownGroupTopology cooldown_groups) {
+  const auto &next_profile = profile.profile();
   AutomationRuntimeSnapshot next;
-  for (const auto &variable : profile.variables) {
+  for (const auto &variable : next_profile.variables) {
     auto value = variable.default_value;
     const auto old = impl_->state.variables.find(variable.id);
     if (old != impl_->state.variables.end() &&
@@ -188,7 +198,7 @@ void AutomationRuntime::reconfigure(
     next.variables[variable.id] = value;
   }
   std::set<std::string, std::less<>> retained;
-  for (const auto &automation : profile.automations) {
+  for (const auto &automation : next_profile.automations) {
     const auto previous = std::ranges::find(
         impl_->profile.automations, automation.id, &AutomationDefinition::id);
     if (previous != impl_->profile.automations.end() && *previous == automation)
@@ -200,13 +210,14 @@ void AutomationRuntime::reconfigure(
   for (const auto &item : impl_->state.overlay_overrides)
     if (retained.contains(item.owner_automation))
       next.overlay_overrides.push_back(item);
-  impl_->profile = std::move(profile);
+  impl_->profile = next_profile;
   impl_->groups = std::move(cooldown_groups);
   impl_->state = std::move(next);
   // A profile switch invalidates the daemon's previous ready/value
   // observations: re-baseline the edge monitors with the new profile.
   impl_->edges = {};
   impl_->faulted.clear();
+  impl_->last_error.reset();
 }
 AutomationPersistentValues AutomationRuntime::persistent_values() const {
   AutomationPersistentValues values;

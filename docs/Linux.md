@@ -106,7 +106,10 @@ reason tokens; the editor's Runtime Diagnostics repeats those rows.
   elevates or changes groups. Devices are opened read-only and never grabbed.
 - Native visual capture uses the ScreenCast portal and a portal-granted
   PipeWire connection. The user chooses a source; denial remains visible and
-  does not trigger repeated prompts. XWayland windows can retain X11 capture.
+  does not trigger repeated prompts. A granted window stream is reported
+  degraded `user_selected_window`, because the portal does not verify that the
+  stream is the tracked window; `monitor_crop` marks the explicit degraded
+  monitor mode. XWayland windows can retain X11 capture.
 - `layere` remains an X11 client and requires XWayland. Its Detected Tasks,
   placement and calibration address XWayland windows only, not native windows;
   status and diagnostics do not hide that degradation.
@@ -448,6 +451,13 @@ commit-matched `summary.json`. Release collection can set
 `LAYERC_REQUIRE_AUTOMATION=1`; this rejects an unbound physical run and
 requires clean automated and physical source trees. It still never marks any
 manual observation as passed.
+
+`tools/submit-desktop-evidence.sh` wraps this harness and posts the run to a
+pull request; see [DesktopEvidence.md](DesktopEvidence.md). It runs the harness
+with `LAYERC_RUN_AUTOMATION=1 LAYERC_REQUIRE_AUTOMATION=1` and, in Flatpak mode,
+first builds and installs the Flatpak from the checkout with
+`flatpak-builder --user --install`. A posted report is advisory and does not
+by itself change the pending status above.
 
 ## Building
 

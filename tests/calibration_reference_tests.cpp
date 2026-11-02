@@ -5,6 +5,7 @@
 
 #include "layerc/platform/visual_assets_windows.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -17,14 +18,45 @@ namespace layerc::calibration {
 // opened. Both production reference paths share this acceptance operation;
 // capture additionally exercises the real crop/downscale operation.
 struct CalibrationWindowTestAccess {
+  // One cooldown fixture: every hidden dialog seeds its model from it.
+  static const layerc::core::GameProfile &fixture_profile() {
+    static const auto profile = [] {
+      layerc::core::GameProfile value;
+      value.id = "calibration-fixture";
+      value.name = "Calibration Fixture";
+      value.game.executable_name = "calibration-fixture.exe";
+      value.cooldowns.push_back(
+          {.id = "dash", .name = "Dash", .duration = std::chrono::seconds{5}});
+      return value;
+    }();
+    return profile;
+  }
+  static void open(CalibrationWindow &window,
+                   const std::optional<layerc::core::VisualProfile> &visual =
+                       std::nullopt) {
+    window.profile_ = fixture_profile();
+    window.model_ =
+        layerc::editor::CalibrationModel::open(window.profile_, "dash", visual);
+  }
+  static const layerc::editor::CalibrationModel &
+  model(const CalibrationWindow &window) {
+    return *window.model_;
+  }
   static void select(CalibrationWindow &window,
                      const layerc::core::NormalizedRegion region) {
-    window.set_reference_selection(region);
+    if (!window.model_) open(window);
+    window.model_->set_selection(region);
+    window.template_matcher_.clear();
   }
   static void load(CalibrationWindow &window,
                    const layerc::core::TemplateState &state) {
-    window.template_state_ = state;
-    window.restore_reference_selection();
+    layerc::core::VisualProfile visual;
+    visual.profile_id = fixture_profile().id;
+    visual.observations.emplace_back(state);
+    visual.triggers.push_back({.cooldown_id = "dash",
+                               .observation_id = state.id,
+                               .enabled = true});
+    open(window, visual);
   }
   static void frame(CalibrationWindow &window,
                     std::shared_ptr<const layerc::capture::CaptureFrame> frame) {
@@ -35,27 +67,38 @@ struct CalibrationWindowTestAccess {
   }
   static bool append(CalibrationWindow &window,
                      const layerc::platform::ImportedTemplateAsset &asset) {
+    if (!window.model_) open(window);
     return window.append_template_reference(asset);
   }
-  static const auto &state(const CalibrationWindow &window) {
-    return window.template_state_;
+  static auto state(const CalibrationWindow &window) {
+    return window.model_->template_state(window.controls());
   }
   static auto controls(const CalibrationWindow &window) {
-    return window.current_template_from_controls();
+    return window.controls();
+  }
+  static void controls(CalibrationWindow &window,
+                       const layerc::editor::CalibrationControls &values) {
+    window.write_controls(values);
   }
   static const auto &selection(const CalibrationWindow &window) {
-    return window.reference_selection_;
+    return window.model_->selection();
+  }
+  static void image(CalibrationWindow &window,
+                    layerc::core::TemplateImage image) {
+    window.template_images_.push_back(std::move(image));
   }
   static const auto &images(const CalibrationWindow &window) {
     return window.template_images_;
   }
   static void attach(CalibrationWindow &window, HWND dialog) {
     window.dialog_ = dialog;
-    window.rule_.id = "readiness-pixel";
-    window.rule_.name = "Readiness pixel";
-    window.rule_.region = {0.0, 0.0, 1.0, 1.0};
-    window.target_color_ = 0xFFFFFFU;
-    window.quality_ = layerc::core::CaptureQuality::balanced;
+    // A fixture that already loaded a model keeps its selection: only a fresh
+    // dialog takes the full-frame readiness region.
+    if (!window.model_) {
+      open(window);
+      window.model_->set_selection({0.0, 0.0, 1.0, 1.0});
+    }
+    window.quality_ = window.model_->initial_controls().quality;
     window.initialize_controls();
   }
   static bool ready(const CalibrationWindow &window) {
@@ -141,7 +184,7 @@ void expect_geometry(const CalibrationWindow &window,
              state.expected_height == crop.height &&
              state.search_region == expected_search,
          "references must preserve the explicit crop and expected/search geometry");
-  expect(Access::controls(window).search_region == expected_search,
+  expect(Access::state(window).search_region == expected_search,
          "reading/applying controls must not replace search with the crop");
 }
 
@@ -306,4 +349,173 @@ void calibration_sampling_readiness_contracts() {
   Access::evaluate(window);
   expect(!Access::ready(window) && !IsWindowEnabled(apply),
          "missing native template image bytes cannot enable Apply");
+}
+
+// F06: the native dialog is an adapter over the shared calibration model, so an
+// untouched assignment keeps its persisted fractions and the model owns
+// refusal, observation naming and trigger policy.
+void calibration_model_adapter_contracts() {
+  using layerc::core::CaptureQuality;
+  using layerc::core::VisualProfile;
+  using layerc::editor::CalibrationControls;
+  using layerc::editor::CalibrationModel;
+
+  ReadinessDialog template_dialog;
+  ReadinessDialog coverage_dialog;
+  ReadinessDialog mode_dialog;
+  if (!expect(template_dialog.handle != nullptr &&
+                  coverage_dialog.handle != nullptr &&
+                  mode_dialog.handle != nullptr,
+              "the hidden calibration dialogs must load"))
+    return;
+
+  // An existing template assignment with fractions the percentage controls
+  // cannot express.
+  layerc::core::TemplateState template_state;
+  template_state.id = "dash-visual";
+  template_state.name = "Dash Ready";
+  template_state.search_region = {0.25, 0.25, 0.5, 0.5};
+  template_state.expected_width = 0.25;
+  template_state.expected_height = 0.25;
+  template_state.confidence_threshold = 0.904;
+  template_state.scale_tolerance = 0.054;
+  template_state.references.push_back({.asset_sha256 = std::string(64, 'a')});
+
+  CalibrationWindow window({});
+  Access::load(window, template_state);
+  Access::image(window, imported('a').image);
+  Access::attach(window, template_dialog.handle);
+  auto built = Access::model(window).build_result(Access::controls(window),
+                                                  Access::images(window));
+  const auto *visual = std::get_if<VisualProfile>(&built);
+  const auto *kept_state =
+      visual == nullptr || visual->observations.empty()
+          ? nullptr
+          : std::get_if<layerc::core::TemplateState>(&visual->observations.front());
+  expect(kept_state != nullptr && kept_state->confidence_threshold == 0.904 &&
+             kept_state->scale_tolerance == 0.054,
+         "an untouched template assignment must keep 0.904 confidence and "
+         "0.054 scale tolerance");
+
+  // Only an explicit edit replaces the persisted fraction.
+  SetDlgItemTextW(template_dialog.handle, IDC_CAL_CONFIDENCE, L"80");
+  built = Access::model(window).build_result(Access::controls(window),
+                                             Access::images(window));
+  visual = std::get_if<VisualProfile>(&built);
+  kept_state =
+      visual == nullptr || visual->observations.empty()
+          ? nullptr
+          : std::get_if<layerc::core::TemplateState>(&visual->observations.front());
+  expect(kept_state != nullptr && kept_state->confidence_threshold == 0.80 &&
+             kept_state->scale_tolerance == 0.054,
+         "an edited confidence control must replace its fraction while an "
+         "untouched scale tolerance keeps its own");
+
+  // A coverage rule has the same preservation contract.
+  layerc::core::PixelRule coverage;
+  coverage.id = "dash-visual";
+  coverage.name = "Dash Ready";
+  coverage.region = {0.25, 0.25, 0.25, 0.25};
+  coverage.predicate =
+      layerc::core::ColorCoveragePredicate{0x336699U, 12, 0.604};
+  VisualProfile coverage_visual;
+  coverage_visual.profile_id = Access::fixture_profile().id;
+  coverage_visual.observations.emplace_back(coverage);
+  coverage_visual.triggers.push_back(
+      {.cooldown_id = "dash", .observation_id = "dash-visual", .enabled = true});
+  CalibrationWindow coverage_window({});
+  Access::open(coverage_window, coverage_visual);
+  Access::attach(coverage_window, coverage_dialog.handle);
+  const auto coverage_result = Access::model(coverage_window).build_result(
+      Access::controls(coverage_window), {});
+  const auto *coverage_profile = std::get_if<VisualProfile>(&coverage_result);
+  const auto *coverage_rule =
+      coverage_profile == nullptr || coverage_profile->observations.empty()
+          ? nullptr
+          : std::get_if<layerc::core::PixelRule>(
+                &coverage_profile->observations.front());
+  const auto *kept_coverage =
+      coverage_rule == nullptr
+          ? nullptr
+          : std::get_if<layerc::core::ColorCoveragePredicate>(
+                &coverage_rule->predicate);
+  expect(kept_coverage != nullptr && kept_coverage->minimum_fraction == 0.604,
+         "an untouched coverage assignment must keep 0.604 minimum fraction");
+
+  // Every mode round-trips through the dialog adapter, as do the trigger
+  // policy controls.
+  CalibrationWindow modes({});
+  Access::attach(modes, mode_dialog.handle);
+  for (const auto predicate :
+       {layerc::editor::CalibrationPredicate::average_color,
+        layerc::editor::CalibrationPredicate::brightness,
+        layerc::editor::CalibrationPredicate::coverage,
+        layerc::editor::CalibrationPredicate::template_match}) {
+    auto values = Access::controls(modes);
+    values.predicate = predicate;
+    Access::controls(modes, values);
+    expect(Access::controls(modes).predicate == predicate,
+           "every calibration mode must round-trip through the dialog");
+  }
+  auto values = Access::controls(modes);
+  values.predicate = layerc::editor::CalibrationPredicate::brightness;
+  values.comparison = layerc::core::BrightnessComparison::below;
+  values.threshold = 200;
+  values.repeat = layerc::core::PixelRepeatPolicy::when_fully_ready;
+  values.trigger_mode = layerc::core::VisualTriggerMode::confirm_input;
+  values.keep_input = false;
+  values.timeout_ms = 750;
+  values.sample_rate_hz = 15;
+  values.quality = CaptureQuality::exact;
+  Access::controls(modes, values);
+  const auto read = Access::controls(modes);
+  expect(read.predicate == values.predicate &&
+             read.comparison == values.comparison &&
+             read.threshold == values.threshold && read.repeat == values.repeat &&
+             read.trigger_mode == values.trigger_mode &&
+             read.keep_input == values.keep_input &&
+             read.timeout_ms == values.timeout_ms &&
+             read.sample_rate_hz == values.sample_rate_hz &&
+             read.quality == values.quality,
+         "comparison, repeat, trigger mode, timeout, rate and quality must "
+         "round-trip through the dialog");
+
+  // The model owns refusal: an unknown cooldown, a missing template asset and
+  // input confirmation without a binding.
+  expect(!CalibrationModel::open(Access::fixture_profile(), "missing",
+                                std::nullopt)
+              .has_value(),
+         "an unknown cooldown must be refused by the shared model");
+  auto confirm = Access::controls(window);
+  confirm.trigger_mode = layerc::core::VisualTriggerMode::confirm_input;
+  Access::controls(window, confirm);
+  const auto unbound =
+      Access::model(window).build_result(Access::controls(window),
+                                        Access::images(window));
+  const auto *unbound_reason = std::get_if<std::string>(&unbound);
+  expect(unbound_reason != nullptr &&
+             unbound_reason->find(
+                 "Input confirmation requires a captured input binding") !=
+                 std::string::npos,
+         "input confirmation without a binding must be refused");
+  CalibrationWindow missing_assets({});
+  Access::load(missing_assets, template_state);
+  Access::attach(missing_assets, mode_dialog.handle);
+  const auto missing = Access::model(missing_assets).build_result(
+      Access::controls(missing_assets), Access::images(missing_assets));
+  const auto *missing_reason = std::get_if<std::string>(&missing);
+  expect(missing_reason != nullptr &&
+             missing_reason->find("must be available and contain visible") !=
+                 std::string::npos,
+         "a missing template asset must be refused with the shared message");
+
+  // Observation identities stay unique through the model's naming rule.
+  VisualProfile collision;
+  collision.profile_id = Access::fixture_profile().id;
+  collision.observations.emplace_back(coverage);
+  auto bumped =
+      CalibrationModel::open(Access::fixture_profile(), "dash", collision);
+  expect(bumped.has_value() &&
+             bumped->trigger().observation_id == "dash-visual-2",
+         "a colliding observation identity must take the next numeric suffix");
 }

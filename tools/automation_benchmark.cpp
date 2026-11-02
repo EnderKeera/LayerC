@@ -9,6 +9,7 @@
 #include <iostream>
 #include <numeric>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -46,6 +47,16 @@ AutomationProfile workload() {
   }
   profile.automations.push_back(std::move(automation));
   return profile;
+}
+
+// The base profile the workload graph is admitted against; it names no
+// cooldown, panel or group, so the canonical validator checks structure only.
+GameProfile workload_base() {
+  GameProfile base;
+  base.id = "automation-benchmark";
+  base.name = "Automation benchmark";
+  base.game.executable_name = "automation-benchmark.exe";
+  return base;
 }
 
 std::string read_file(const std::filesystem::path &path) {
@@ -92,7 +103,16 @@ int main(const int argc, const char *const argv[]) {
   // average/p99 gates, not AR-01 deadline rejections that abort the benchmark.
   // Deterministic deadline/exhaustion coverage lives in the core contract tests.
   TimePoint runtime_now{};
-  AutomationRuntime runtime(workload(), {}, {}, [&] { return runtime_now; });
+  auto accepted =
+      ValidatedAutomationProfile::validate(workload(), workload_base());
+  if (const auto *error = std::get_if<AutomationError>(&accepted)) {
+    std::cerr << "benchmark workload is not a valid automation profile: "
+              << error->describe() << '\n';
+    return 6;
+  }
+  AutomationRuntime runtime(
+      std::get<ValidatedAutomationProfile>(std::move(accepted)), {}, {},
+      [&] { return runtime_now; });
   AutomationEvent event{.kind = AutomationEventKind::input_pressed,
                         .timestamp = {},
                         .source_id = "keyboard:18",

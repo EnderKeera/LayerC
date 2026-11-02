@@ -1,5 +1,7 @@
 #include "calibration_preview.hpp"
 
+#include "visual_calibration.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -108,28 +110,14 @@ bool MaskEditor::update(layerc::core::TemplateImage &image, const POINT point,
       point.y >= image_bounds.bottom)
     return false;
 
-  const auto x = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(point.x - image_bounds.left) * image.width /
-      std::max<LONG>(1, image_bounds.right - image_bounds.left));
-  const auto y = static_cast<std::uint32_t>(
-      static_cast<std::uint64_t>(point.y - image_bounds.top) * image.height /
-      std::max<LONG>(1, image_bounds.bottom - image_bounds.top));
-  const int radius =
-      std::max<int>(1, std::min(image.width, image.height) / 32);
-  for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
-    for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
-      if (offset_x * offset_x + offset_y * offset_y > radius * radius)
-        continue;
-      const int target_x = static_cast<int>(x) + offset_x;
-      const int target_y = static_cast<int>(y) + offset_y;
-      if (target_x < 0 || target_y < 0 ||
-          target_x >= static_cast<int>(image.width) ||
-          target_y >= static_cast<int>(image.height))
-        continue;
-      image.alpha[static_cast<std::size_t>(target_y) * image.width + target_x] =
-          opaque ? 255 : 0;
-    }
-  }
+  // The shared model paints the brush; the adapter only maps the dialog point
+  // into the normalized image coordinates that operation is defined on.
+  const auto width = std::max<LONG>(1, image_bounds.right - image_bounds.left);
+  const auto height = std::max<LONG>(1, image_bounds.bottom - image_bounds.top);
+  if (!layerc::editor::paint_template_mask(
+          image, static_cast<double>(point.x - image_bounds.left) / width,
+          static_cast<double>(point.y - image_bounds.top) / height, opaque))
+    return false;
   changed_ = true;
   refresh(image);
   return true;

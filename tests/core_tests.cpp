@@ -82,5 +82,9 @@ int main() {
        test_automation_parse_validate_parity},
       {"test_automation_trace_root_provenance",
        test_automation_trace_root_provenance},
+      {"test_automation_validated_profile_boundary",
+       test_automation_validated_profile_boundary},
+      {"test_automation_session_current_health",
+       test_automation_session_current_health},
   });
 }
