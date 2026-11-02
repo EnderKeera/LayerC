@@ -290,7 +290,7 @@ int run_linux_x11_visual_tests() {
 
   layerc::daemon::VisualService visual;
   layerc::daemon::X11CaptureFactory capture_factory(*display);
-  visual.use_x11_capture(&capture_factory);
+  visual.use_route({.x11 = &capture_factory});
   const layerc::runtime::SessionCapabilityRequest request{
       .window = {window}, .active = true, .visual = true,
       .profile_id = sessions.front().automation.profile().id};
@@ -306,7 +306,7 @@ int run_linux_x11_visual_tests() {
         *sessions.front().visual_profile()};
     const std::span configurations{&configuration, 1};
     layerc::daemon::VisualService initially_unmatched;
-    initially_unmatched.use_x11_capture(&capture_factory);
+    initially_unmatched.use_route({.x11 = &capture_factory});
     initially_unmatched.refresh({}, {}, true, configurations);
     const auto loaded_work = initially_unmatched.work_stats();
     initially_unmatched.refresh({}, {}, true, configurations);
@@ -329,7 +329,7 @@ int run_linux_x11_visual_tests() {
         std::span{&inactive_request, 1}, false);
     sessions.front().active = false;
     layerc::daemon::VisualService initially_inactive;
-    initially_inactive.use_x11_capture(&capture_factory);
+    initially_inactive.use_route({.x11 = &capture_factory});
     initially_inactive.refresh(sessions, inactive_demand, true);
     const auto loaded_work = initially_inactive.work_stats();
     sessions.front().active = true;

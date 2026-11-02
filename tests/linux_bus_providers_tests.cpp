@@ -1,6 +1,7 @@
 #include "bus_providers.hpp"
 #include "dbus_shell_service.hpp"
 #include "gnome_bridge.hpp"
+#include "portal_capture_status.hpp"
 #include "portal_screencast.hpp"
 #include "linux_dbus_test_support.hpp"
 
@@ -101,6 +102,45 @@ std::string native_report() {
   return R"({"version":1,"source":"gnome","windows":[{"id":"native","title":"Native","class":"fixture","pid":)" +
       std::to_string(::getpid()) +
       R"(,"x":10,"y":20,"width":200,"height":100,"active":true},{"id":"xwayland","title":"XWayland","x11Window":17}]})";
+}
+
+void portal_capture_status_mapping() {
+  using layerc::capture::CapturePollResult;
+  using layerc::capture::CaptureTargetBinding;
+  using layerc::core::CaptureAvailability;
+  using layerc::core::CaptureBackendKind;
+  using State = runtime::DisplayProviderState;
+
+  const auto idle = daemon::portal_capture_status(false, {});
+  expect(idle.name == "portal_screencast" && idle.state == State::inactive &&
+             idle.reasons == std::vector<std::string>{"not_demanded"},
+         "an undemanded portal session is inactive");
+
+  const auto pending = daemon::portal_capture_status(
+      true, {.availability = CaptureAvailability::unavailable,
+             .backend = CaptureBackendKind::pipewire_portal,
+             .diagnostic = "portal_denied"});
+  expect(pending.name == "portal_screencast" &&
+             pending.state == State::unavailable &&
+             pending.reasons == std::vector<std::string>{"portal_denied"},
+         "an unavailable portal stream publishes its diagnostic");
+
+  const auto window_stream = daemon::portal_capture_status(
+      true, {.availability = CaptureAvailability::available,
+             .backend = CaptureBackendKind::pipewire_portal,
+             .binding = CaptureTargetBinding::user_selected_window});
+  expect(window_stream.state == State::degraded &&
+             window_stream.reasons ==
+                 std::vector<std::string>{"user_selected_window"},
+         "a user-selected window stream is degraded, never active");
+
+  const auto monitor_stream = daemon::portal_capture_status(
+      true, {.availability = CaptureAvailability::available,
+             .backend = CaptureBackendKind::pipewire_portal,
+             .binding = CaptureTargetBinding::monitor_crop});
+  expect(monitor_stream.state == State::degraded &&
+             monitor_stream.reasons == std::vector<std::string>{"monitor_crop"},
+         "a monitor crop stays the explicit degraded mode");
 }
 
 void reporting_overlay_and_idle() {
@@ -268,6 +308,11 @@ void consent_failure_is_sticky() {
   expect(status.state == runtime::DisplayProviderState::unavailable &&
              std::ranges::find(status.reasons, "portal_denied") != status.reasons.end(),
          "provider diagnostics retain the denial");
+  // This fixture cannot deliver PipeWire frames, so an available window
+  // stream is unreachable here; the reachable states must still never claim
+  // verified target capture.
+  expect(status.state != runtime::DisplayProviderState::active,
+         "a portal session never reports verified target capture as active");
   expect(capture->resources().threads == 0 && capture->resources().capture_sessions == 0,
          "a denied session owns no PipeWire stream or background thread");
   providers.configure(true, "GNOME", true);
@@ -314,9 +359,11 @@ void capture_window_source_changes() {
 } // namespace
 
 #ifdef LAYERC_TEST_PIPEWIRE
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(reporting_overlay_and_idle),
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(portal_capture_status_mapping),
+                 LAYERC_TEST_CASE(reporting_overlay_and_idle),
                  LAYERC_TEST_CASE(consent_failure_is_sticky),
                  LAYERC_TEST_CASE(capture_window_source_changes))
 #else
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(reporting_overlay_and_idle))
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(portal_capture_status_mapping),
+                 LAYERC_TEST_CASE(reporting_overlay_and_idle))
 #endif

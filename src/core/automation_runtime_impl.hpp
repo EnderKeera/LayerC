@@ -5,6 +5,7 @@
 #include "layerc/core/cooldown_groups.hpp"
 
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -62,16 +63,26 @@ struct AutomationRuntime::Impl {
   CooldownGroupTopology groups;
   AutomationRuntimeSnapshot state;
   AutomationSessionEdges edges;
-  std::set<std::string, std::less<>> faulted;
+  // The current fault of each automation that faulted during an event, with
+  // the reason the diagnostics publish; retry and reconfigure are its only
+  // removals.
+  std::map<std::string, std::string, std::less<>> faulted;
+  // The last root-level evaluation error, replaced by every process() call.
+  std::optional<std::string> last_error;
   bool persistent_dirty{};
   bool trace_enabled{};
   std::uint64_t trace_sequence{};
   std::vector<AutomationTraceEntry> trace_entries;
   ClockReader clock;
 
-  Impl(AutomationProfile source, AutomationPersistentValues persistent,
+  Impl(const ValidatedAutomationProfile &source,
+       AutomationPersistentValues persistent,
        CooldownGroupTopology group_definitions,
        ClockReader clock_reader);
+
+  // One owner of the fault-transition rule: a faulted automation clears the
+  // root error, a non-fault result publishes or clears it.
+  void record_health(const AutomationEvaluationResult &result);
 
   // Accepted stored values replace persistent variables' current values.
   void apply_persistent(const AutomationPersistentValues &values);

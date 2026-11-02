@@ -179,83 +179,81 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
 void EditorWindow::notify_profile_committed(
     const std::filesystem::path &path,
     const layerc::core::GameProfile &profile) {
-  live_edit_.advance_revision();
-  if (live_edit_.channel().connected() && live_edit_.package_authenticated()) {
-    (void)live_edit_.channel().send({
-        .type = layerc::core::LiveMessageType::committed_profile,
-        .revision = live_edit_.revision(),
-        .profile_key = layerc::platform::canonical_profile_key(path),
-        .profile_json = layerc::core::serialize_profile_json(profile),
-    });
-  } else {
+  if (!live_edit_.publish_committed(
+          layerc::platform::canonical_profile_key(path),
+          layerc::core::serialize_profile_json(profile))) {
     (void)start_daemon();
     (void)layerc::platform::signal_profile_reload();
   }
 }
 
 void EditorWindow::poll_live_channel() {
-  for (auto &result : live_edit_.channel().poll()) {
-    if (const auto *error =
-            std::get_if<layerc::core::LiveProtocolError>(&result)) {
-      set_status(L"Live channel error: " + to_wide(error->message));
-      continue;
-    }
-    handle_live_message(std::get<layerc::core::LiveMessage>(result));
+  const auto step = live_edit_.poll([this](const std::string_view panel_id) {
+    return std::ranges::any_of(document_.profile().panels,
+                               [&](const auto &panel) {
+                                 return panel.id == panel_id;
+                               });
+  });
+  for (const auto &error : step.protocol_errors)
+    set_status(L"Live channel error: " + to_wide(error.message));
+  for (const auto &message : step.forwarded) handle_live_message(message);
+  if (step.authenticating)
+    set_status(L"Authenticating LayerD package...");
+  if (step.authentication_rejected)
+    set_status(L"Connected LayerD is not from the current LayerC package.");
+  if (step.authenticated_now) {
+    set_status(L"Ready — authenticated matching LayerD connection.");
+    automation_editor_->restore_live_subscription();
+    if (!document_.path().empty() && !has_unsaved_changes())
+      notify_profile_committed(document_.path(), document_.profile());
   }
-  if (live_edit_.channel().take_connection_changed()) {
-    live_edit_.set_package_authenticated(false);
-    if (live_edit_.channel().connected()) {
-      (void)live_edit_.channel().send({
-          .type = layerc::core::LiveMessageType::handshake,
-          .revision = live_edit_.revision(),
-          .text = layerc::core::package_identity("LayerE"),
-      });
-      set_status(L"Authenticating LayerD package...");
-    } else if (live_edit_.session_id() != 0) {
+  if (step.session_acknowledged)
+    set_status(L"Editing bars on the selected window.");
+  for (const auto &anchor : step.anchors) {
+    panel_preview_.pending_anchor =
+        PanelPreview::PendingAnchor{anchor.panel_id, anchor.x, anchor.y};
+    select_bar_by_id(anchor.panel_id);
+    InvalidateRect(panel_preview_.window, nullptr, TRUE);
+    // An incoming final applies once locally and is never echoed as final.
+    if (anchor.final) (void)commit_pending_anchor(false);
+  }
+  if (step.ended) {
+    switch (step.ended->reason) {
+    case LiveEditEndReason::daemon_error:
+      end_edit_on_window(
+          L"LayerD ended editing: " + to_wide(step.ended->text), false);
+      break;
+    case LiveEditEndReason::daemon_ended:
+      end_edit_on_window(
+          step.ended->text.empty()
+              ? std::wstring(L"LayerD ended the on-window edit session.")
+              : L"LayerD ended editing: " + to_wide(step.ended->text),
+          false);
+      break;
+    case LiveEditEndReason::connection_lost:
       end_edit_on_window(
           L"Live editor connection lost; normal overlays restored.", false);
+      break;
+    case LiveEditEndReason::target_closed:
+      end_edit_on_window(L"Edit target closed or minimized.", false);
+      break;
     }
   }
-
-  if (live_edit_.pending_target() != nullptr) {
-    if (live_edit_.channel().connected() && live_edit_.package_authenticated()) {
-      begin_edit_on_window(live_edit_.take_pending_target());
-    } else if (GetTickCount64() >= live_edit_.pending_deadline()) {
-      live_edit_.clear_pending_target();
-      set_status(L"Live editing is unavailable — restart LayerD to update its protocol version.");
-      themed_message_box(shell_.window,
-                  L"LayerD did not expose the live-edit service. Exit the "
-                  L"older LayerD from its tray icon, then try Position on "
-                  L"Window again.",
-                  L"Restart LayerD", MB_OK | MB_ICONINFORMATION);
-    }
+  if (step.begin_ready) begin_edit_on_window(*step.begin_ready);
+  if (step.pending_expired) {
+    set_status(L"Live editing is unavailable — restart LayerD to update its protocol version.");
+    themed_message_box(shell_.window,
+                L"LayerD did not expose the live-edit service. Exit the "
+                L"older LayerD from its tray icon, then try Position on "
+                L"Window again.",
+                L"Restart LayerD", MB_OK | MB_ICONINFORMATION);
   }
+  if (step.live_profile_due) flush_live_profile();
+  if (step.timer_interval)
+    SetTimer(shell_.window, live_channel_timer, *step.timer_interval, nullptr);
 
   refresh_connection_status();
   refresh_title();
-
-  const ULONGLONG now = GetTickCount64();
-  if (live_edit_.package_authenticated() && live_edit_.session_id() != 0 &&
-      now - live_edit_.last_heartbeat_send() >= 250) {
-    live_edit_.note_heartbeat_send(now);
-    (void)live_edit_.channel().send({
-        .type = layerc::core::LiveMessageType::heartbeat,
-        .revision = live_edit_.revision(),
-        .edit_session = live_edit_.session_id(),
-    });
-    if (live_edit_.target() == nullptr || !IsWindow(live_edit_.target()) ||
-        IsIconic(live_edit_.target()))
-      end_edit_on_window(L"Edit target closed or minimized.");
-  }
-  // Poll at frame rate only while an edit session exchanges drags and
-  // heartbeats; an idle connection needs no more than the reconnect cadence.
-  const UINT desired_interval =
-      live_edit_.channel().connected() && live_edit_.session_id() != 0 ? 16U
-                                                                         : 100U;
-  if (desired_interval != live_edit_.timer_interval()) {
-    live_edit_.set_timer_interval(desired_interval);
-    SetTimer(shell_.window, live_channel_timer, live_edit_.timer_interval(), nullptr);
-  }
 }
 
 void EditorWindow::handle_live_message(
@@ -271,110 +269,25 @@ void EditorWindow::handle_live_message(
     return;
   }
   if (automation_editor_->handle_live_message(message)) return;
-  if (message.type == layerc::core::LiveMessageType::error) {
-    if (live_edit_.session_id() != 0 &&
-        message.edit_session == live_edit_.session_id()) {
-      end_edit_on_window(L"LayerD ended editing: " + to_wide(message.text),
-                         false);
-    } else {
-      set_status(L"LayerD: " + to_wide(message.text));
-    }
-    return;
-  }
-  if (message.type == layerc::core::LiveMessageType::end_edit) {
-    if (live_edit_.session_id() != 0 &&
-        message.edit_session == live_edit_.session_id()) {
-      const std::wstring status =
-          message.text.empty()
-              ? L"LayerD ended the on-window edit session."
-              : L"LayerD ended editing: " + to_wide(message.text);
-      end_edit_on_window(status, false);
-    }
-    return;
-  }
-  if (message.type == layerc::core::LiveMessageType::acknowledgement) {
-    if (!live_edit_.package_authenticated()) {
-      const auto expected = layerc::core::package_identity("LayerD") + ";";
-      if (!message.text.starts_with(expected)) {
-        set_status(L"Connected LayerD is not from the current LayerC package.");
-        return;
-      }
-      live_edit_.set_package_authenticated(true);
-      set_status(L"Ready — authenticated matching LayerD connection.");
-      automation_editor_->restore_live_subscription();
-
-      if (!document_.path().empty() && !has_unsaved_changes())
-        notify_profile_committed(document_.path(), document_.profile());
-      return;
-    }
-    if (message.edit_session == live_edit_.session_id() && live_edit_.session_id() != 0)
-      set_status(L"Editing bars on the selected window.");
-    return;
-  }
-  if (message.type != layerc::core::LiveMessageType::anchor_changed ||
-      message.edit_session != live_edit_.session_id())
-    return;
-  if (live_edit_.session_id() == 0) return;
-  if (layerc::core::revision_decision(message.revision, live_edit_.peer_revision()) !=
-      layerc::core::RevisionDecision::accept)
-    return;
-  const auto panel = std::ranges::find(document_.profile().panels,
-                                       message.panel_id,
-                                       &layerc::core::Panel::id);
-  if (panel == document_.profile().panels.end()) return;
-  if (!std::isfinite(message.anchor_x) || !std::isfinite(message.anchor_y) ||
-      message.anchor_x < 0.0 || message.anchor_x > 1.0 ||
-      message.anchor_y < 0.0 || message.anchor_y > 1.0)
-    return;
-  // Only accepted input advances the peer revision.
-  live_edit_.observe_peer(message.revision);
-  panel_preview_.pending_anchor = PanelPreview::PendingAnchor{
-      message.panel_id, message.anchor_x, message.anchor_y};
-  select_bar_by_id(message.panel_id);
-  InvalidateRect(panel_preview_.window, nullptr, TRUE);
-  // An incoming final applies once locally and is never echoed as final.
-  if (message.final) (void)commit_pending_anchor(false);
+  if (message.type == layerc::core::LiveMessageType::error)
+    set_status(L"LayerD: " + to_wide(message.text));
 }
 
-void EditorWindow::send_live_profile() {
-  if (live_edit_.session_id() == 0 || live_profile_pending_) return;
-  live_profile_pending_ = true;
-  SetTimer(shell_.window, live_profile_timer, live_profile_interval_ms,
-           nullptr);
-}
+void EditorWindow::send_live_profile() { live_edit_.request_live_profile(); }
 
 void EditorWindow::flush_live_profile() {
-  KillTimer(shell_.window, live_profile_timer);
-  live_profile_pending_ = false;
-  if (live_edit_.session_id() == 0 || !draft_controls_valid()) return;
+  if (!live_edit_.editing() || !draft_controls_valid()) return;
   if (layerc::core::validate_profile(document_.profile())) return;
-  const auto serialized = layerc::core::serialize_profile_json(document_.profile());
-  live_edit_.advance_revision();
-  (void)live_edit_.channel().send({
-      .type = layerc::core::LiveMessageType::live_profile,
-      .revision = live_edit_.revision(),
-      .edit_session = live_edit_.session_id(),
-      .profile_json = serialized,
-  });
+  (void)live_edit_.send_live_profile(
+      layerc::core::serialize_profile_json(document_.profile()));
 }
 
 void EditorWindow::send_live_anchor(const bool final) {
   const auto *panel = selected_bar();
-  if (live_edit_.session_id() == 0 || panel == nullptr) return;
-  const ULONGLONG now = GetTickCount64();
-  if (!final && now - live_edit_.last_drag_send() < 16) return;
-  live_edit_.note_drag_send(now);
+  if (panel == nullptr) return;
   const auto effective = preview_panel(*panel);
-  live_edit_.advance_revision();
-  (void)live_edit_.channel().send({
-      .type = layerc::core::LiveMessageType::anchor_changed,
-      .revision = live_edit_.revision(),
-      .edit_session = live_edit_.session_id(),
-      .panel_id = effective.id,
-      .anchor_x = effective.anchor_x,
-      .anchor_y = effective.anchor_y,
-      .final = final,
-  });
+  (void)live_edit_.send_anchor(effective.id, effective.anchor_x,
+                               effective.anchor_y, final);
 }
 
 void EditorWindow::select_bar_by_id(const std::string_view panel_id) {
@@ -447,33 +360,22 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
     set_status(L"On-window editing needs the profile format upgrade, which was not approved.");
     return;
   }
-  if (!live_edit_.channel().connected() || !live_edit_.package_authenticated()) {
+  const auto *panel = selected_bar();
+  const auto begun = live_edit_.request_begin(
+      target,
+      {.profile_key = layerc::platform::canonical_profile_key(document_.path()),
+       .panel_id = panel == nullptr ? std::string{} : panel->id,
+       .profile_json = layerc::core::serialize_profile_json(document_.profile())},
+      live_edit_await_ms);
+  if (begun == LiveEditBegin::awaiting_daemon) {
     (void)start_daemon();
-    live_edit_.await_target(target, GetTickCount64() + 2000);
     set_status(L"Waiting for LayerD's live-edit service...");
     return;
   }
-  const auto session_id =
-      (static_cast<std::uint64_t>(GetTickCount64()) << 16U) ^
-      (static_cast<std::uint64_t>(GetCurrentProcessId()) << 1U) ^
-      reinterpret_cast<std::uintptr_t>(target);
-  live_edit_.begin_session(target, session_id);
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
   EnableWindow(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), TRUE);
   set_text(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW), L"&End positioning");
   refresh_bar_controls();
-  const auto *panel = selected_bar();
-  live_edit_.advance_revision();
-  (void)live_edit_.channel().send({
-      .type = layerc::core::LiveMessageType::begin_edit,
-      .revision = live_edit_.revision(),
-      .edit_session = live_edit_.session_id(),
-      .target_window = reinterpret_cast<std::uintptr_t>(target),
-      .profile_key = layerc::platform::canonical_profile_key(document_.path()),
-      .panel_id = panel == nullptr ? std::string{} : panel->id,
-      .profile_json = layerc::core::serialize_profile_json(document_.profile()),
-  });
-  live_edit_.note_heartbeat_send(GetTickCount64());
   set_status(L"Starting mirrored on-window editing; game overlay stays click-through.");
 }
 
@@ -482,16 +384,7 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
   // A cancelled gesture is discarded, never committed.
   panel_preview_.finish_drag();
   if (GetCapture() == panel_preview_.window) ReleaseCapture();
-  if (notify_daemon && live_edit_.session_id() != 0) {
-    (void)live_edit_.channel().send({
-        .type = layerc::core::LiveMessageType::end_edit,
-        .revision = live_edit_.revision(),
-        .edit_session = live_edit_.session_id(),
-    });
-  }
-  live_edit_.clear_session();
-  KillTimer(shell_.window, live_profile_timer);
-  live_profile_pending_ = false;
+  (void)live_edit_.end(notify_daemon);
   if (task_picker_.awaiting_live_edit())
     task_picker_.clear_request();
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
@@ -503,8 +396,8 @@ void EditorWindow::end_edit_on_window(const std::wstring_view status,
 }
 
 void EditorWindow::set_direct_drag_enabled(const bool enabled) {
-  if (live_edit_.session_id() == 0) return;
-  if (enabled && !live_edit_.direct_drag_notice_shown() &&
+  if (!live_edit_.editing()) return;
+  if (enabled && live_edit_.direct_drag_notice_needed() &&
       themed_message_box(shell_.window,
                   L"Direct Drag temporarily lets LayerD receive clicks only inside visible bar rectangles. It uses no injection or game hooks, but anti-cheat compatibility cannot be guaranteed. Continue?",
                   L"Enable Direct Drag", MB_OKCANCEL | MB_ICONINFORMATION) !=
@@ -514,13 +407,7 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   }
   if (enabled) live_edit_.note_direct_drag_notice();
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), enabled);
-  live_edit_.advance_revision();
-  (void)live_edit_.channel().send({
-      .type = layerc::core::LiveMessageType::set_direct_drag,
-      .revision = live_edit_.revision(),
-      .edit_session = live_edit_.session_id(),
-      .direct_drag = enabled,
-  });
+  (void)live_edit_.send_direct_drag(enabled);
   set_status(enabled ? L"Direct Drag enabled for this edit session."
                      : L"Mirrored click-through editing restored.");
 }

@@ -1,4 +1,5 @@
 #include "core_test_cases.hpp"
+#include "automation_test_support.hpp"
 #include "test_support.hpp"
 
 #include "layerc/core/automation.hpp"
@@ -15,6 +16,7 @@
 #include <ranges>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -90,7 +92,8 @@ std::optional<AutomationValue> evaluate(AutomationExpression expression,
   if (!validate_automation_profile(profile, contract_base()).message.empty())
     return std::nullopt;
   // Operator contracts must not depend on the CI host's scheduling latency.
-  AutomationRuntime runtime(profile, {}, {}, frozen_clock);
+  AutomationRuntime runtime(accept_automation(profile, contract_base()), {}, {},
+                            frozen_clock);
   const auto result = runtime.process(event);
   if (!result.committed)
     return std::nullopt;
@@ -114,14 +117,33 @@ void test_automation_expression_and_action_contract() {
     graph.automations = {{.id = "atomic", .name = "Atomic",
       .rules = {{.id = "start", .event = AutomationEventKind::session_started,
         .actions = {{.kind = AutomationActionKind::trigger_cooldown, .target = "dash"},
-                    {.kind = AutomationActionKind::reduce_cooldown_next, .target = "blink"}}}}}};
+                    {.kind = AutomationActionKind::create_timer,
+                     .target = "pulse",
+                     .value = literal(AutomationValue(
+                         std::numeric_limits<std::int64_t>::max()))}}}}}};
+    // The canonical validator rejects an action that omits its required
+    // value, so this fixture faults through a statically valid overflow.
+    auto missing_value = graph;
+    missing_value.automations.front().rules.front().actions = {
+        {.kind = AutomationActionKind::trigger_cooldown, .target = "dash"},
+        {.kind = AutomationActionKind::reduce_cooldown_next,
+         .target = "blink"}};
+    const auto rejected_candidate =
+        ValidatedAutomationProfile::validate(missing_value, base);
+    expect(std::holds_alternative<AutomationError>(rejected_candidate) &&
+               std::get<AutomationError>(rejected_candidate).path ==
+                   "$.automations[0].rules[0].actions[1].value",
+           "an action without its required value must be rejected at the "
+           "automation trust boundary");
     AutomationSession session(base);
-    (void)session.start(graph, {}, TimePoint{}, nullptr, false, frozen_clock);
+    (void)session.start(accept_automation(graph, base), {}, TimePoint{},
+                        nullptr, false, frozen_clock);
     expect(session.health().runtime_faults.contains("atomic") &&
                session.cooldowns().remaining("dash", TimePoint{}) == 0ms,
            "a rejected later effect must fault its automation without consuming an earlier charge");
     graph.automations.clear();
-    (void)session.start(graph, {}, TimePoint{}, nullptr, false, frozen_clock);
+    (void)session.start(accept_automation(graph, base), {}, TimePoint{},
+                        nullptr, false, frozen_clock);
     expect(!session.next_deadline(TimePoint{}).has_value(),
            "idle automation must have no deadline");
     (void)session.trigger("dash", TimePoint{});
@@ -135,7 +157,8 @@ void test_automation_expression_and_action_contract() {
           .target = "main", .name = "temporary", .property = "visible",
           .value = literal(AutomationValue(false)),
           .secondary = literal(AutomationValue(DurationValue{25ms}))}}}}}};
-    (void)session.start(graph, {}, TimePoint{}, nullptr, false, frozen_clock);
+    (void)session.start(accept_automation(graph, base), {}, TimePoint{},
+                        nullptr, false, frozen_clock);
     expect(session.runtime()->next_deadline() == TimePoint{} + 25ms &&
                session.next_deadline(TimePoint{}) == TimePoint{} + 25ms,
            "overlay expiry must schedule a wakeup without any runtime timer");
@@ -344,7 +367,8 @@ void test_automation_expression_and_action_contract() {
   expect(validate_automation_profile(action_profile, contract_base())
              .message.empty(),
          "the complete internal action fixture should validate");
-  AutomationRuntime action_runtime(action_profile, {}, {}, frozen_clock);
+  AutomationRuntime action_runtime(
+      accept_automation(action_profile, contract_base()), {}, {}, frozen_clock);
   const auto started =
       action_runtime.process({.kind = AutomationEventKind::session_started,
                               .timestamp = TimePoint{},
@@ -392,7 +416,8 @@ void test_automation_expression_and_action_contract() {
                     .repeating = true}};
     rearm_profile.automations = {
         {.id = "clock", .name = "Clock", .rules = {arm}}};
-    AutomationRuntime rearm(rearm_profile, {}, {}, frozen_clock);
+    AutomationRuntime rearm(accept_automation(rearm_profile, contract_base()),
+                            {}, {}, frozen_clock);
     (void)rearm.process({.kind = AutomationEventKind::session_started,
                          .timestamp = TimePoint{},
                          .origin_token = 1});
@@ -438,10 +463,9 @@ void test_automation_expression_and_action_contract() {
                        .target = "defense"}}}}});
   expect(validate_automation_profile(external, contract_base()).message.empty(),
          "every cooldown/group action kind should validate");
-  AutomationRuntime external_runtime(external, {},
-                                     CooldownGroupTopology(
-                                         contract_base().cooldown_groups),
-                                     frozen_clock);
+  AutomationRuntime external_runtime(
+      accept_automation(external, contract_base()), {},
+      CooldownGroupTopology(contract_base().cooldown_groups), frozen_clock);
   const auto effects =
       external_runtime.process({.kind = AutomationEventKind::input_pressed,
                                 .timestamp = TimePoint{},
@@ -481,7 +505,8 @@ void test_automation_timer_commit_rollback() {
       expect(validate_automation_profile(profile, contract_base())
                  .message.empty(),
              "timer rollback fixture should validate");
-      AutomationRuntime runtime(profile, {}, {}, frozen_clock);
+      AutomationRuntime runtime(accept_automation(profile, contract_base()), {},
+                                {}, frozen_clock);
       const auto armed = runtime.process(
           {.kind = AutomationEventKind::session_started});
       expect(armed.committed,
@@ -555,7 +580,8 @@ void test_automation_timer_commit_rollback() {
   expect(validate_automation_profile(full, contract_base()).message.empty(),
          "full timer fixture should validate");
   // Capacity is a functional boundary, not an execution-time benchmark.
-  AutomationRuntime runtime(full, {}, {}, frozen_clock);
+  AutomationRuntime runtime(accept_automation(full, contract_base()), {}, {},
+                            frozen_clock);
   const auto armed = runtime.process(
       {.kind = AutomationEventKind::session_started});
   expect(armed.committed, "the timer capacity fixture should arm all timers");
@@ -684,8 +710,8 @@ void test_automation_limits_and_fault_rollback() {
        .value = literal(AutomationValue(DurationValue{50ms}))});
   timer_profile.automations = {
       {.id = "timers", .name = "Timers", .rules = {fill, overflow}}};
-  AutomationRuntime timer_runtime(timer_profile, {}, {},
-                                  frozen_clock);
+  AutomationRuntime timer_runtime(accept_automation(timer_profile, base), {},
+                                  {}, frozen_clock);
   expect(timer_runtime
                  .process({.kind = AutomationEventKind::session_started,
                            .timestamp = TimePoint{},
@@ -705,8 +731,8 @@ void test_automation_limits_and_fault_rollback() {
   AutomationProfile rollback;
   rollback.profile_id = "game";
   rollback.variables = {{.id = "early",
-                         .type = AutomationValueType::integer,
-                         .default_value = AutomationValue(std::int64_t{0})},
+                         .type = AutomationValueType::number,
+                         .default_value = AutomationValue(0.0)},
                         {.id = "healthy",
                          .type = AutomationValueType::integer,
                          .default_value = AutomationValue(std::int64_t{0})}};
@@ -736,7 +762,8 @@ void test_automation_limits_and_fault_rollback() {
                       {.kind = AutomationActionKind::set_variable,
                        .target = "healthy",
                        .value = literal(AutomationValue(std::int64_t{1}))}}}}}};
-  AutomationRuntime rollback_runtime(rollback, {}, {}, frozen_clock);
+  AutomationRuntime rollback_runtime(accept_automation(rollback, base), {}, {},
+                                     frozen_clock);
   const auto isolated =
       rollback_runtime.process({.kind = AutomationEventKind::session_started,
                                 .timestamp = TimePoint{},
@@ -745,7 +772,7 @@ void test_automation_limits_and_fault_rollback() {
              std::ranges::find(isolated.faulted_automations, "bad") !=
                  isolated.faulted_automations.end() &&
              rollback_runtime.snapshot().variables.at("early") ==
-                 AutomationValue(std::int64_t{0}) &&
+                 AutomationValue(0.0) &&
              rollback_runtime.snapshot().variables.at("healthy") ==
                  AutomationValue(std::int64_t{1}),
          "faulting a later rule should roll back all effects from that "
@@ -770,7 +797,8 @@ void test_automation_limits_and_fault_rollback() {
                              literal(AutomationValue(
                                  std::numeric_limits<std::int64_t>::max())),
                              literal(AutomationValue(std::int64_t{1})))}}}}});
-  AutomationRuntime math_runtime(overflow_math, {}, {}, frozen_clock);
+  AutomationRuntime math_runtime(accept_automation(overflow_math, base), {}, {},
+                                 frozen_clock);
   const auto math_result =
       math_runtime.process({.kind = AutomationEventKind::session_started,
                             .timestamp = TimePoint{},
@@ -791,12 +819,13 @@ void test_automation_limits_and_fault_rollback() {
   }
 
   auto reconfigured = rollback;
-  AutomationRuntime group_runtime(reconfigured, {},
-                                  CooldownGroupTopology(base.cooldown_groups),
-                                  frozen_clock);
+  AutomationRuntime group_runtime(
+      accept_automation(reconfigured, base), {},
+      CooldownGroupTopology(base.cooldown_groups), frozen_clock);
   auto changed_groups = base.cooldown_groups;
   changed_groups.front().cooldown_ids = {"dash", "roll"};
-  group_runtime.reconfigure(reconfigured, CooldownGroupTopology(changed_groups));
+  group_runtime.reconfigure(accept_automation(reconfigured, base),
+                            CooldownGroupTopology(changed_groups));
   expect(std::ranges::equal(group_runtime.cooldown_groups(), changed_groups),
          "runtime reconfiguration should refresh base cooldown-group metadata");
 }
@@ -818,7 +847,8 @@ void test_automation_root_budget_isolation() {
   const auto clock = [&] { return now; };
   const AutomationEvent root{.kind = AutomationEventKind::session_started};
   unsigned commits{};
-  AutomationRuntime rejected(profile, {}, {}, clock);
+  AutomationRuntime rejected(accept_automation(profile, contract_base()), {},
+                             {}, clock);
   const auto failure = rejected.process(
       root,
       [&](const AutomationEffect &) {
@@ -838,7 +868,8 @@ void test_automation_root_budget_isolation() {
           recovered.effects.front().automation_id == "untouched",
       "AR-01 the untouched automation must run on the next root without retry");
 
-  AutomationRuntime late(profile, {}, {}, clock);
+  AutomationRuntime late(accept_automation(profile, contract_base()), {}, {},
+                         clock);
   late.set_trace_enabled(true);
   const auto expired = late.process(
       root,
@@ -876,7 +907,8 @@ void test_automation_root_budget_isolation() {
       {.id = "healthy", .name = "Healthy", .rules = {healthy}});
   expect(validate_automation_profile(nodes, contract_base()).message.empty(),
          "AR-01 node exhaustion must be tested with a valid bounded graph");
-  AutomationRuntime exhausted(nodes, {}, {}, clock);
+  AutomationRuntime exhausted(accept_automation(nodes, contract_base()), {}, {},
+                              clock);
   const auto capped =
       exhausted.process({.kind = root.kind, .source_id = "stress"});
   expect(!capped.committed && capped.error &&
@@ -893,13 +925,96 @@ void test_automation_root_budget_isolation() {
   profile.automations.front().rules.front().condition = boolean_tree(7U);
   unsigned reads{};
   AutomationRuntime cooperative(
-      profile, {}, {}, [&] { return TimePoint(++reads >= 20U ? 3ms : 0ms); });
+      accept_automation(profile, contract_base()), {}, {},
+      [&] { return TimePoint(++reads >= 20U ? 3ms : 0ms); });
   const auto interrupted = cooperative.process(root);
   expect(!interrupted.committed && interrupted.error &&
              interrupted.faulted_automations.empty() &&
              interrupted.node_evaluations > 0U &&
              interrupted.node_evaluations < 255U,
          "AR-01 cooperative checks must stop within expression evaluation");
+}
+
+// F03: the evaluator's arity, operator and type assumptions are established
+// once by the canonical validator, and only an accepted value reaches the
+// runtime.
+void test_automation_validated_profile_boundary() {
+  static_assert(
+      !std::is_constructible_v<AutomationRuntime, AutomationProfile>,
+      "the runtime must not accept an unvalidated automation graph");
+  static_assert(
+      !std::is_constructible_v<ValidatedAutomationProfile, AutomationProfile>,
+      "only validate() may accept an automation graph");
+  static_assert(
+      std::is_same_v<
+          decltype(std::declval<const AutomationRuntime &>().profile()),
+          const AutomationProfile &>,
+      "the runtime must expose its profile by const reference only");
+  static_assert(
+      std::is_same_v<decltype(std::declval<const ValidatedAutomationProfile &>()
+                                  .profile()),
+                     const AutomationProfile &>,
+      "an accepted profile must stay immutable after acceptance");
+
+  const auto base = contract_base();
+  const auto candidate = [&](AutomationExpression condition) {
+    AutomationProfile profile;
+    profile.profile_id = base.id;
+    profile.variables.push_back({.id = "flag",
+                                 .type = AutomationValueType::boolean,
+                                 .default_value = AutomationValue(false)});
+    profile.automations = {
+        {.id = "guard",
+         .name = "Guard",
+         .rules = {{.id = "start",
+                    .event = AutomationEventKind::session_started,
+                    .condition = std::move(condition),
+                    .actions = {{.kind = AutomationActionKind::set_variable,
+                                 .target = "flag",
+                                 .value = literal(AutomationValue(true))}}}}}};
+    return profile;
+  };
+  const auto rejection = [&](AutomationExpression condition) {
+    const auto result = ValidatedAutomationProfile::validate(
+        candidate(std::move(condition)), base);
+    const auto *error = std::get_if<AutomationError>(&result);
+    return error == nullptr ? std::string{} : error->message;
+  };
+
+  expect(rejection({.kind = ExpressionKind::index}) ==
+                 "index expressions require target and key" &&
+             rejection(call("clamp", {literal(AutomationValue(1.0))})) ==
+                 "operator has an invalid argument count" &&
+             rejection({.kind = ExpressionKind::call,
+                        .operation = "explode"}) ==
+                 "unsupported expression operator" &&
+             rejection({.kind = static_cast<ExpressionKind>(250)}) ==
+                 "unsupported expression operator",
+         "the trust boundary must reject unindexable index expressions, "
+         "wrong operator arity and unsupported operators");
+
+  const auto accepted =
+      accept_automation(candidate(literal(AutomationValue(true))), base);
+  expect(accepted ==
+                 accept_automation(candidate(literal(AutomationValue(true))),
+                                   base) &&
+             accepted.profile().profile_id == base.id,
+         "an accepted profile must compare by value and expose its graph");
+  AutomationRuntime runtime(accepted, {}, {}, frozen_clock);
+  const auto control = runtime.process(
+      {AutomationEventKind::session_started, TimePoint{}, "", 1U});
+  expect(control.committed && control.faulted_automations.empty() &&
+             runtime.snapshot().variables.at("flag") == AutomationValue(true),
+         "an accepted profile must evaluate its rule normally");
+  expect(rejection({.kind = ExpressionKind::index}) ==
+                 "index expressions require target and key",
+         "a candidate rejected while a runtime is running must still be "
+         "rejected at the boundary");
+  const auto after = runtime.process(
+      {AutomationEventKind::session_started, TimePoint{}, "", 2U});
+  expect(after.committed && after.faulted_automations.empty() &&
+             runtime.health().runtime_faults.empty(),
+         "a rejected candidate must not disturb the accepted runtime");
 }
 
 } // namespace layerc::test

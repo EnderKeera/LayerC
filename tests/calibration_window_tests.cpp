@@ -12,6 +12,7 @@ void calibration_reference_geometry_contracts();
 void calibration_reference_loaded_contracts();
 void calibration_reference_negative_contracts();
 void calibration_sampling_readiness_contracts();
+void calibration_model_adapter_contracts();
 
 namespace {
 
@@ -176,5 +177,7 @@ int main() {
        calibration_reference_negative_contracts},
       {"calibration_sampling_readiness_contracts",
        calibration_sampling_readiness_contracts},
+      {"calibration_model_adapter_contracts",
+       calibration_model_adapter_contracts},
   });
 }

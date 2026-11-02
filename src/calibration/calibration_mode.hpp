@@ -1,18 +1,16 @@
 #pragma once
 
+#include "visual_calibration.hpp"
+
 #include <cstddef>
-#include <cstdint>
 #include <span>
 #include <string_view>
 
 namespace layerc::calibration {
 
-enum class CalibrationMode : std::uint8_t {
-  average_color,
-  brightness,
-  coverage,
-  template_match,
-};
+// The native modes are the shared model's predicates: one enumerator set, so a
+// dialog selection cannot drift from the rule the model builds.
+using CalibrationMode = layerc::editor::CalibrationPredicate;
 
 struct CalibrationModeSpec {
   CalibrationMode mode;

@@ -276,8 +276,14 @@ position and size. `dpi = 96`, `buffer_scale = wl_output.scale`.
   custom `PIPEWIRE_CONFIG_NAME` overrides report `pipewire_config_override`
   rather than executing helpers or starting threads. Library diagnostics use
   stderr, never the default persistent journal/file logger.
+- A granted window stream is the user's choice, not a verified association
+  with the session's target window: the portal never reports which window the
+  stream shows, so these frames are labelled `user_selected_window` and the
+  session stays degraded instead of claiming target-bound capture. LayerC never
+  infers the association from geometry, title or selection order.
 - Monitor sources are cropped to the window rect (logical → buffer pixels) and
-  reported degraded `monitor_crop`, because overlays may appear in the pixels.
+  reported degraded `monitor_crop`, because overlays may appear in the pixels
+  and the crop is an explicit degraded mode, not target association.
   The frame keeps whole-window coordinates: a window partly outside its
   monitor is placed on a whole-window canvas whose missing part is excluded
   through `available_region`, so rule regions sample the same window pixels.

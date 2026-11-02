@@ -2,6 +2,7 @@
 #include "editor_layout_rules.hpp"
 #include "profile_edit.hpp"
 #include "editor_resource.h"
+#include "editor_live_edit_test_access.hpp"
 #include "editor_window.hpp"
 #include "test_support.hpp"
 
@@ -69,14 +70,19 @@ struct EditorWindowTestAccess {
   static HFONT owner_font(const EditorWindow &editor) {
     return editor.shell_.font;
   }
-  static void bind_drag(EditorWindow &editor, const HWND owner,
-                        const HWND list, const HWND preview) {
+  static FakeLiveEditTransport &bind_drag(EditorWindow &editor,
+                                          const HWND owner, const HWND list,
+                                          const HWND preview) {
     editor.shell_.instance = GetModuleHandleW(nullptr);
     editor.shell_.window = owner;
     editor.panel_preview_.list = list;
     editor.panel_preview_.window = preview;
     editor.panel_preview_.controls_panel = 0;
-    editor.live_edit_.begin_session(preview, 42);
+    auto &transport = LiveEditSessionTestAccess::install(editor.live_edit_);
+    transport.changed = false;
+    LiveEditSessionTestAccess::authenticate(editor.live_edit_);
+    LiveEditSessionTestAccess::begin_session(editor.live_edit_, preview, 42);
+    return transport;
   }
   static void unbind_drag(EditorWindow &editor) {
     editor.end_edit_on_window({}, false);
@@ -86,7 +92,10 @@ struct EditorWindowTestAccess {
   }
   static void receive_anchor(EditorWindow &editor,
                              const layerc::core::LiveMessage &message) {
-    editor.handle_live_message(message);
+    if (auto *transport = dynamic_cast<FakeLiveEditTransport *>(
+            LiveEditSessionTestAccess::transport_of(editor.live_edit_)))
+      transport->inbox.push_back(message);
+    editor.poll_live_channel();
   }
   static layerc::core::Panel effective_panel(EditorWindow &editor) {
     return editor.preview_panel(editor.document_.profile().panels.front());
@@ -118,10 +127,10 @@ struct EditorWindowTestAccess {
     editor.end_edit_on_window({}, false);
   }
   static void clear_drag_session(EditorWindow &editor) {
-    editor.live_edit_.clear_session();
+    LiveEditSessionTestAccess::clear_session(editor.live_edit_);
   }
   static void begin_drag_session(EditorWindow &editor, const HWND preview) {
-    editor.live_edit_.begin_session(preview, 42);
+    LiveEditSessionTestAccess::begin_session(editor.live_edit_, preview, 42);
   }
   static layerc::core::ProfileRevision sent_revision(EditorWindow &editor) {
     return editor.live_edit_.revision();
@@ -130,7 +139,7 @@ struct EditorWindowTestAccess {
     return editor.live_edit_.peer_revision();
   }
   static bool pending_live_profile(EditorWindow &editor) {
-    return editor.live_profile_pending_;
+    return editor.live_edit_.live_profile_pending();
   }
   static void draw(EditorWindow &editor, const HWND dialog,
                    const DRAWITEMSTRUCT &item) {
