@@ -103,7 +103,8 @@ struct LinuxVisualEditor::Impl {
     app.refresh();
     // A draft toggle follows every click; a refusal repeats while its cause
     // stays.
-    app.report(error ? "Not changed: " + *error : "Unsaved visual changes. Save applies them.",
+    app.report(error ? StatusKind::failure : StatusKind::information,
+               error ? "Not changed: " + *error : "Unsaved visual changes. Save applies them.",
                error ? StatusVoice::changed : StatusVoice::silent);
   }
   auto unchanged_guard() const {
@@ -150,7 +151,7 @@ struct LinuxVisualEditor::Impl {
       if (fl_choice("Remove this cooldown's visual assignment? Shared observations stay in use.",
                     "Cancel", "Remove assignment", nullptr) != 1) return;
       if (!unchanged()) {
-        app.report("Not removed: the active document or cooldown changed during confirmation."); return;
+        app.report(StatusKind::failure, "Not removed: the active document or cooldown changed during confirmation."); return;
       }
       changed(session.edit_visual([&](auto &visual) -> std::optional<std::string> {
         if (!visual || !find_visual_trigger(*visual, cooldown)) return "No visual assignment for this cooldown.";
@@ -166,7 +167,7 @@ struct LinuxVisualEditor::Impl {
     const auto unchanged = unchanged_guard();
     auto seed = CalibrationModel::open(session.document().profile(), cooldown,
                                        session.document().visual());
-    if (!seed) { app.report("Unavailable: the selected cooldown no longer exists."); return; }
+    if (!seed) { app.report(StatusKind::failure, "Unavailable: the selected cooldown no longer exists."); return; }
     const auto chooser = [&] {
       fl_message_title("Shared observation");
       const auto answer = fl_choice("Other cooldowns share this observation. Update all or clone for this cooldown?",
@@ -186,12 +187,12 @@ struct LinuxVisualEditor::Impl {
     };
     auto accepted = run_x11_calibration(path, std::move(*seed), accept,
                                         session.owned_template_assets());
-    if (!accepted) { app.report("Calibration cancelled. No calibration data or assets were written."); return; }
-    if (!unchanged()) { app.report("Not applied: the active document changed during calibration."); return; }
+    if (!accepted) { app.report(StatusKind::information, "Calibration cancelled. No calibration data or assets were written."); return; }
+    if (!unchanged()) { app.report(StatusKind::failure, "Not applied: the active document changed during calibration."); return; }
     // The session owns the prepared template bytes; Save publishes them with
     // the profile and sidecars in one durable transaction.
     if (const auto error = session.apply_calibration(std::move(*accepted))) {
-      app.report("Not applied: " + *error); return;
+      app.report(StatusKind::failure, "Not applied: " + *error); return;
     }
     // A refused durable Save keeps the complete calibration in the document
     // for retry; it never claims reload acknowledgement or publishes assets.

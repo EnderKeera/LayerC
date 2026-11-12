@@ -263,6 +263,8 @@ void VisualCaptureRuntime::publish_status(
     });
 }
 
+// LayerE reads these phrases in visual_runtime_status_kind
+// (src/editor/visual_runtime_status.hpp); change both together.
 std::wstring format_visual_status(const VisualStatusSummary &summary) {
   std::wstring next;
   if (summary.invalid_sidecar) {

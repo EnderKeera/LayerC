@@ -243,14 +243,14 @@ struct LinuxAutomationEditor::Impl {
     if (auto update = self.trace_client->take_update()) {
       if (!update->reply) {
         self.stop_live("Unavailable: " + update->error);
-        self.message("Automation trace unavailable: " + update->error);
+        self.message(StatusKind::failure, "Automation trace unavailable: " + update->error);
         return;
       }
       const auto &reply = *update->reply;
       if (!reply.packet.empty() &&
           std::holds_alternative<core::AutomationError>(core::parse_layerc_trace(reply.packet))) {
         self.stop_live("Unavailable: LayerD returned an invalid trace packet.");
-        self.message("Automation trace packet was refused.");
+        self.message(StatusKind::failure, "Automation trace packet was refused.");
         return;
       }
       if (reply.reset) { self.trace.clear(); self.trace_gap = false; }
@@ -295,9 +295,9 @@ struct LinuxAutomationEditor::Impl {
     }
     validation->value("Pending changes are not applied yet.");
   }
-  void message(const std::string &text,
+  void message(const StatusKind kind, const std::string &text,
                const StatusVoice voice = StatusVoice::announced) {
-    app.report(text, voice);
+    app.report(kind, text, voice);
   }
   void describe() {
     app.redraw_preview();
@@ -327,7 +327,7 @@ struct LinuxAutomationEditor::Impl {
   void rewind() {
     stop();
     const auto result = simulator.reset(current_graph_json(), app.session.document().profile());
-    if (result.error) message("Simulator unavailable: " + *result.error);
+    if (result.error) message(StatusKind::failure, "Simulator unavailable: " + *result.error);
     else if (result.seeded) trace.record(*result.seeded);
     describe();
   }
@@ -455,7 +455,7 @@ struct LinuxAutomationEditor::Impl {
     pending = Pending::none;
     app.module_fields_changed(false);
     refresh();
-    message("Automation applied to the document. Save publishes it.");
+    message(StatusKind::success, "Automation applied to the document. Save publishes it.");
     return std::nullopt;
   }
   bool edit_graph(const std::function<AutomationEditResult(std::optional<core::AutomationProfile> &)> &edit,
@@ -468,10 +468,10 @@ struct LinuxAutomationEditor::Impl {
       next = std::get<AutomationSelection>(result);
       return std::nullopt;
     }, false, repair);
-    if (error) { message("Not changed: " + *error); return false; }
+    if (error) { message(StatusKind::failure, "Not changed: " + *error); return false; }
     selection = next;
     refresh();
-    message("Unsaved automation changes. Save applies them.", StatusVoice::silent);
+    message(StatusKind::information, "Unsaved automation changes. Save applies them.", StatusVoice::silent);
     return true;
   }
   static void tick(void *data) {
@@ -487,25 +487,27 @@ struct LinuxAutomationEditor::Impl {
   }
   void trace_file(bool save) {
     suspend();
-    if (save && trace.empty()) { message("No trace to save."); return; }
+    if (save && trace.empty()) { message(StatusKind::failure, "No trace to save."); return; }
     fl_message_title("Save simulator trace");
     if (save && fl_choice("Trace files may contain user-authored strings or maps. Save?",
                           "Cancel", "Save", nullptr) != 1) return;
     const auto destination = trace_destination(save);
     if (!destination) return;
     if (save) {
-      message(write_trace_file(*destination, trace.export_text()) ? "Trace saved." : "Trace write failed.");
+      const bool saved = write_trace_file(*destination, trace.export_text());
+      message(saved ? StatusKind::success : StatusKind::failure,
+              saved ? "Trace saved." : "Trace write failed.");
       return;
     }
     auto loaded = read_trace_file(*destination);
     if (const auto *error = std::get_if<TraceLoadError>(&loaded)) {
-      message(error->message); return;
+      message(StatusKind::failure, error->message); return;
     }
     auto &record = std::get<LoadedTrace>(loaded);
     simulator.load(record.events);
     trace.assign(std::move(record.events), std::move(record.text));
     rewind();
-    message("Trace loaded as simulator roots.");
+    message(StatusKind::success, "Trace loaded as simulator roots.");
   }
   void handle(Fl_Widget *widget) {
     if (!app.session.has_document()) return;
@@ -531,11 +533,11 @@ struct LinuxAutomationEditor::Impl {
       return;
     }
     if (widget == trace_replay) {
-      if (trace.empty()) { message("No LayerD trace roots to replay."); return; }
+      if (trace.empty()) { message(StatusKind::failure, "No LayerD trace roots to replay."); return; }
       stop_live();
       simulator.load(trace.events());
       current_view = 1; view->value(1); show_view(); rewind();
-      message("LayerD trace copied to simulator. Local replay does not modify LayerD.");
+      message(StatusKind::success, "LayerD trace copied to simulator. Local replay does not modify LayerD.");
       return;
     }
     if (widget == preset || widget == palette || widget == sim_event) return;
@@ -582,7 +584,7 @@ struct LinuxAutomationEditor::Impl {
       refresh(); return;
     }
     if (widget == apply || widget == json_apply) {
-      if (const auto error = apply_pending()) message(*error);
+      if (const auto error = apply_pending()) message(StatusKind::failure, *error);
       return;
     }
     if (widget == load_trace || widget == save_trace) { trace_file(widget == save_trace); return; }
@@ -593,14 +595,14 @@ struct LinuxAutomationEditor::Impl {
       if (index < 0 || static_cast<std::size_t>(index) >= core::automation_event_kinds.size()) return;
       const auto result = simulator.add_event(core::automation_event_kinds[static_cast<std::size_t>(index)],
                                                sim_source->value(), sim_fields->value());
-      if (const auto *error = std::get_if<std::string>(&result)) message(*error);
-      else { trace.record(std::get<core::AutomationEvent>(result)); message("Synthetic event added."); }
+      if (const auto *error = std::get_if<std::string>(&result)) message(StatusKind::failure, *error);
+      else { trace.record(std::get<core::AutomationEvent>(result)); message(StatusKind::success, "Synthetic event added."); }
       describe(); return;
     }
     if (widget == play) {
       if (playing) { stop(); return; }
       if (!simulator.compiled() || simulator.position() >= simulator.events().size()) {
-        message("Reset the simulator or add an event before playback."); return;
+        message(StatusKind::information, "Reset the simulator or add an event before playback."); return;
       }
       playing = true; play->copy_label("Pause");
       Fl::add_timeout(static_cast<double>(simulator_interval(speed->value()).count()) / 1000.0, tick, this);

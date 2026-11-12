@@ -126,9 +126,10 @@ class TokenRules(unittest.TestCase):
         self.write_spec()
         fields = "\n".join(f".{name} = 0x{value[1:]}," for name, value in fixed.items())
         presets = "\n".join(f"int {p}_accent = 0x{value[1:]};" for p, value in preset_values.items())
-        source = fields + "\n" + presets + "\nint accent_2_blue = 0x60b0ff; int accent_2_violet = 0xb99bff;\n"
+        source = fields + "\n" + presets + "\n"
         self.put(rules.NATIVE_THEME, source)
         self.put(rules.LINUX_THEME, source)
+        self.put(rules.COLOR_MATH, "int accent_2_blue = 0x60b0ff; int accent_2_violet = 0xb99bff;\n")
         self.put("src/editor/dialog_layout.hpp", "int native_control_height = 26;")
         self.put("src/editor/linux/editor_style.hpp", "int editor_input_height = 28; int editor_button_height = 30;")
 
@@ -169,6 +170,16 @@ class TokenRules(unittest.TestCase):
                 self.put(relative, original.replace("0x1f1f1f", "0x202020"))
                 self.assertTrue(rules.token_violations(self.root))
                 self.put(relative, original)
+
+    def test_shared_accent_2_mutation_is_caught(self):
+        path = self.root / rules.COLOR_MATH
+        original = path.read_text(encoding="utf-8")
+        for old, new in (("0x60b0ff", "0x60b0fe"), ("0xb99bff", "0xb99bfe")):
+            with self.subTest(old=old):
+                self.put(rules.COLOR_MATH, original.replace(old, new))
+                self.assertTrue(rules.token_violations(self.root))
+        path.unlink()
+        self.assertTrue(rules.token_violations(self.root))
 
     def test_json_mutation_is_caught(self):
         self.data["color"]["tokens"][0]["value"] = "#202020"

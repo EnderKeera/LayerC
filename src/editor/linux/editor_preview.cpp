@@ -196,11 +196,11 @@ int PanelPreview::handle(int event) {
                                       std::max(frame.height - height, 1), 0.0, 1.0);
       }
     }, true);
-    if (error) app_.report(*error);
+    if (error) app_.report(StatusKind::failure, *error);
     else {
       app_.refresh_forms();
       // Every drag of the bar says this again; the reader hears it once.
-      app_.report(app_.placement_active() ? "Positioning on the window: the live draft moves LayerD's overlay."
+      app_.report(StatusKind::information, app_.placement_active() ? "Positioning on the window: the live draft moves LayerD's overlay."
                                           : "Unsaved preview placement.",
                   StatusVoice::silent);
       redraw();

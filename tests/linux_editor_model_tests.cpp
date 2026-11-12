@@ -1,4 +1,5 @@
 #include "editor_appearance.hpp"
+#include "editor_color.hpp"
 #include "editor_session.hpp"
 #include "profile_edit.hpp"
 #include "task_list.hpp"
@@ -311,13 +312,15 @@ void detected_tasks_and_placement() {
   auto profile = layerc::editor::make_new_profile();
   profile.game.window_title = "old";
   auto applied = layerc::editor::apply_task(profile, game, false, true);
-  expect(applied.applied && profile.game.executable_name == "game.bin" &&
+  expect(applied.applied && applied.kind == layerc::editor::StatusKind::success &&
+             profile.game.executable_name == "game.bin" &&
              profile.game.executable_path.empty() && profile.game.window_title.empty() &&
              profile.name == "game" && profile.id == "game" &&
              applied.status == "Application selected — Save once to create the profile.",
          "an unsaved New Profile takes the executable matcher and its name");
   applied = layerc::editor::apply_task(profile, game, true, false);
-  expect(applied.applied && profile.game.executable_path == "/opt/game/game.bin" &&
+  expect(applied.applied && applied.kind == layerc::editor::StatusKind::success &&
+             profile.game.executable_path == "/opt/game/game.bin" &&
              profile.name == "game" &&
              applied.status == "Application selected — matching its exact path.",
          "a saved profile keeps its name and can match the exact path");
@@ -325,12 +328,14 @@ void detected_tasks_and_placement() {
   unreadable.executable_name.clear();
   unreadable.executable_path.clear();
   applied = layerc::editor::apply_task(profile, unreadable, true, false);
-  expect(applied.applied && profile.game.executable_name.empty() &&
+  expect(applied.applied && applied.kind == layerc::editor::StatusKind::warning &&
+             profile.game.executable_name.empty() &&
              profile.game.executable_path.empty() && profile.game.window_class == "game",
          "an unreadable process falls back to the window class");
   const auto before = profile;
   applied = layerc::editor::apply_task(profile, TaskCandidate{}, false, false);
-  expect(!applied.applied && profile == before,
+  expect(!applied.applied && applied.kind == layerc::editor::StatusKind::failure &&
+             profile == before,
          "a window without executable or class leaves the profile unchanged");
 
   const auto frame = layerc::editor::placement_frame(10, 20, 400, 300, 1600, 900);
@@ -375,11 +380,11 @@ void editor_token_contracts() {
     const auto expected = theme == EditorTheme::teal || theme == EditorTheme::dark
                               ? 0xB99BFFU
                               : 0x60B0FFU;
-    expect(editor_accent_2(tokens.accent) == expected,
+    expect(rgb_accent_2(tokens.accent) == expected,
            "the second accent mark is the one far enough from the accent");
     expect(tokens.accent == preset_accent(theme) && tokens.selection != 0,
            "the preset accent and its selection blend come from the same source");
-    expect(editor_contrast_ratio(tokens.on_accent, tokens.accent) >= 4.5,
+    expect(rgb_contrast_ratio(tokens.on_accent, tokens.accent) >= 4.5,
            "ink on the accent clears 4.5:1");
   }
   for (const auto theme : presets) {
@@ -389,7 +394,7 @@ void editor_token_contracts() {
   const std::array<std::uint32_t, 4> fills{tokens.background, tokens.input,
                                            tokens.panel, tokens.selection};
   const auto floor = [](std::uint32_t first, std::uint32_t second, double ratio) {
-    return editor_contrast_ratio(first, second) >= ratio;
+    return rgb_contrast_ratio(first, second) >= ratio;
   };
   bool text_floors = true, secondary_floors = true;
   for (const auto fill : fills) {
@@ -425,30 +430,72 @@ void editor_token_contracts() {
          "the body size keeps 11..14 px and a larger desktop scales the screens");
 }
 
-// Failure, degraded, success and plain information, in that order.
-void editor_status_glyph_contracts() {
+// Outcome kinds belong to producers, not to display wording or file paths.
+void typed_status_outcome_contracts() {
   using namespace layerc::editor;
-  expect(editor_status_glyph("LayerD is not running") == EditorStatusGlyph::no &&
-             editor_status_glyph("LayerD is running") == EditorStatusGlyph::yes,
-         "a negated state never reads as its success");
-  expect(editor_status_glyph("Visual recognition: inactive") ==
-                 EditorStatusGlyph::warning &&
-             editor_status_glyph("Visual recognition: active") ==
-                 EditorStatusGlyph::yes,
-         "inactive is degraded, active is a success");
-  expect(editor_status_glyph("Saved.") == EditorStatusGlyph::yes &&
-             editor_status_glyph("Disconnected.") == EditorStatusGlyph::no,
-         "sentence case still classifies, and a refusal stays a failure");
-  expect(editor_status_glyph("Not saved. the profile is invalid") ==
-             EditorStatusGlyph::no &&
-             editor_status_glyph("Profile saved.") == EditorStatusGlyph::yes &&
-             editor_status_glyph("Profile loaded.") == EditorStatusGlyph::yes &&
-             editor_status_glyph("Could not save the selected options.") ==
-                 EditorStatusGlyph::no &&
-             editor_status_glyph("") == EditorStatusGlyph::none &&
-             editor_status_glyph("Edit the profile fields.") ==
-                 EditorStatusGlyph::information,
-         "failures come before successes and empty text has no mark");
+  Fixture fixture;
+  EditorSession session(fixture.directory);
+  expect(session.save([] { return true; }).kind == StatusKind::failure,
+         "saving without an open document is a typed failure");
+  const auto destination = fixture.directory.parent_path() / "saved-loaded-active.json";
+  auto refused = session.export_json(destination, session.profiles().profiles.size());
+  expect(!refused.ok && refused.kind == StatusKind::failure &&
+             !std::filesystem::exists(destination),
+         "a refusal containing saved is a failure and writes nothing");
+  for (const auto copy : {"No saved profile selected.", "Select a loaded profile.",
+                          "No active profile selected.", "/tmp/saved/loaded/active.json"}) {
+    refused.text = copy;
+    expect(refused.kind == StatusKind::failure,
+           "changing wording or a path cannot change the assigned kind");
+  }
+  auto exported = session.export_json(destination, 0);
+  expect(exported.ok && exported.kind == StatusKind::success &&
+             std::filesystem::is_regular_file(destination),
+         "a real JSON export reports the successful operation");
+  exported.text = "Could not save /tmp/saved/loaded/active.json";
+  expect(exported.ok && exported.kind == StatusKind::success,
+         "even failure words cannot reclassify an assigned success");
+  exported.text += " — unavailable: /tmp/not-saved/failed.json";
+  expect(exported.kind == StatusKind::success,
+         "appended diagnostic wording does not change the assigned kind");
+  expect(most_severe(StatusKind::none, StatusKind::information) == StatusKind::information &&
+             most_severe(StatusKind::success, StatusKind::warning) == StatusKind::warning &&
+             most_severe(StatusKind::failure, StatusKind::success) == StatusKind::failure,
+         "combined status lines retain the more severe typed outcome");
+}
+
+void daemon_status_kind_contracts() {
+  using namespace layerc::editor;
+  using layerc::runtime::CapabilityAvailability;
+  DaemonStatus status;
+  expect(status.kind() == StatusKind::failure, "a stopped daemon is a failure");
+  status.running = true;
+  status.x11_connected = true;
+  status.version = "saved-loaded-active";
+  expect(status.kind() == StatusKind::success, "a healthy daemon is a success");
+  for (const auto availability : {CapabilityAvailability::active,
+                                  CapabilityAvailability::inactive}) {
+    status.capabilities = {{"capture", availability, "unavailable failed saved"}};
+    expect(status.kind() == StatusKind::success,
+           "active and inactive typed capabilities are not faults, regardless of reason text");
+  }
+  for (const auto availability : {CapabilityAvailability::degraded,
+                                  CapabilityAvailability::unavailable}) {
+    status.capabilities = {{"capture", availability, "active loaded saved"}};
+    expect(status.kind() == StatusKind::warning,
+           "degraded and unavailable typed capabilities warn, regardless of reason text");
+  }
+  status.capabilities.clear();
+  status.error = "saved loaded active";
+  expect(status.kind() == StatusKind::warning, "a running daemon with a payload error warns");
+  status.error.clear();
+  status.x11_connected = false;
+  expect(status.kind() == StatusKind::warning, "an X11 session needs its X11 connection");
+  status.display.emplace();
+  status.display->session = layerc::runtime::DisplaySession::wayland;
+  expect(status.kind() == StatusKind::success, "a Wayland session does not require XWayland");
+  status.running = false;
+  expect(status.kind() == StatusKind::failure, "stopped takes precedence over healthy capabilities");
 }
 
 // The same speaking rule the Windows editor applies to wide text
@@ -470,9 +517,51 @@ void accessible_status_voice_contracts() {
              status_is_announced("Failed", "Other", StatusVoice::changed),
          "a repeating failure is spoken once, then only after another one");
 }
+
+// The save outcome's kind is assigned where the commit and reload results are
+// known, and never read back from the message (DesignSystem.md, StatusText).
+void save_report_kind_contracts() {
+  using namespace layerc::editor;
+  CommitOutcome commit;
+  commit.result = CommitResult::ok;
+  expect(save_report_kind(commit, std::nullopt, SaveMode::manual) == StatusKind::success &&
+             save_report_kind(commit, std::nullopt, SaveMode::autosave) == StatusKind::success,
+         "a written profile is a success in both save modes");
+  ReloadResult acknowledged;
+  acknowledged.state = ReloadState::acknowledged;
+  ReloadResult unavailable;
+  unavailable.state = ReloadState::daemon_unavailable;
+  ReloadResult failed;
+  failed.state = ReloadState::failed;
+  expect(save_report_kind(commit, acknowledged, SaveMode::manual) == StatusKind::success &&
+             save_report_kind(commit, unavailable, SaveMode::manual) == StatusKind::success,
+         "acknowledged and daemon-unavailable reloads keep the success");
+  expect(save_report_kind(commit, failed, SaveMode::manual) == StatusKind::warning,
+         "an unconfirmed reload warns although the profile was saved");
+  CommitOutcome unconfirmed;
+  unconfirmed.result = CommitResult::write_failed;
+  unconfirmed.write_error = layerc::platform::ProfileWriteError::durability_unconfirmed;
+  expect(save_report_kind(unconfirmed, std::nullopt, SaveMode::manual) == StatusKind::warning,
+         "unconfirmed durability warns");
+  CommitOutcome declined;
+  declined.result = CommitResult::upgrade_declined;
+  expect(save_report_kind(declined, std::nullopt, SaveMode::autosave) == StatusKind::warning &&
+             save_report_kind(declined, std::nullopt, SaveMode::manual) == StatusKind::information,
+         "a paused autosave warns, a declined manual save is information");
+  for (const auto result : {CommitResult::invalid_fields, CommitResult::invalid_profile,
+                            CommitResult::blocked_by_sidecar, CommitResult::write_failed}) {
+    CommitOutcome failed_commit;
+    failed_commit.result = result;
+    expect(save_report_kind(failed_commit, std::nullopt, SaveMode::manual) == StatusKind::failure,
+           "every other refusal is a failure");
+  }
+}
+
 } // namespace
 
 LAYERC_TEST_MAIN(
+    LAYERC_TEST_CASE(save_report_kind_contracts),
+    LAYERC_TEST_CASE(daemon_status_kind_contracts),
     LAYERC_TEST_CASE(edit_save_roundtrip_and_disconnected),
     LAYERC_TEST_CASE(selection_survives_save_rescan),
     LAYERC_TEST_CASE(invalid_candidates_are_atomic),
@@ -481,5 +570,5 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(native_style_helpers),
     LAYERC_TEST_CASE(accessible_status_voice_contracts),
     LAYERC_TEST_CASE(editor_token_contracts),
-    LAYERC_TEST_CASE(editor_status_glyph_contracts),
+    LAYERC_TEST_CASE(typed_status_outcome_contracts),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

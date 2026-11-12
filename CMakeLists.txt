@@ -301,8 +301,9 @@ if(WIN32)
     target_link_libraries(layerc_windows PUBLIC
         layerc_core layerc_durable user32 advapi32 shell32 ole32 gdi32 shcore
         bcrypt hid comctl32 dwmapi uxtheme)
-    # miniz serves the shared template-asset PNG codec.
-    target_link_libraries(layerc_windows PRIVATE layerc_miniz)
+    # miniz serves the shared template-asset PNG codec; the shared color math
+    # derives the theme's accent ink and second accent.
+    target_link_libraries(layerc_windows PRIVATE layerc_miniz layerc_editor_color)
     target_compile_definitions(layerc_windows PUBLIC
         WINVER=0x0A00
         _WIN32_WINNT=0x0A00
@@ -362,6 +363,15 @@ if(WIN32 AND (LAYERC_BUILD_DAEMON OR LAYERC_BUILD_TESTS))
     if(MSVC)
         target_link_libraries(layerc_gamebar PUBLIC runtimeobject)
     endif()
+endif()
+
+# Platform-neutral color math shared by both editors: packed 0xRRGGBB only,
+# so the renderers agree on contrast, hue and the accent mark. layerc_windows
+# always links it for the native theme.
+if(WIN32 OR LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
+    add_library(layerc_editor_color STATIC src/editor/common/editor_color.cpp)
+    target_include_directories(layerc_editor_color PUBLIC src/editor/common)
+    layerc_enable_warnings(layerc_editor_color)
 endif()
 
 # Toolkit-free calibration model shared by the native calibration window and
@@ -583,7 +593,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         src/editor/common/runtime_diagnostics_view.cpp
         src/editor/common/visual_assignment.cpp)
     target_include_directories(layerc_editor_core PUBLIC src/editor/common)
-    target_link_libraries(layerc_editor_core PUBLIC layerc_calibration_model)
+    target_link_libraries(layerc_editor_core PUBLIC layerc_calibration_model layerc_editor_color)
     target_link_libraries(layerc_editor_core PUBLIC layerc_runtime)
     if(WIN32)
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_windows)

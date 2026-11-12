@@ -261,24 +261,24 @@ EditorStatusMark::EditorStatusMark(int x, int y, int width, int height)
   box(FL_FLAT_BOX);
   clear_visible_focus();
 }
-void EditorStatusMark::glyph(EditorStatusGlyph value) {
-  if (glyph_ != value) { glyph_ = value; redraw(); }
+void EditorStatusMark::kind(const StatusKind value) {
+  if (kind_ != value) { kind_ = value; redraw(); }
 }
 void EditorStatusMark::draw() {
   draw_box();
   const int top = y() + std::max(0, (std::min(h(), FL_NORMAL_SIZE + 8) - 12) / 2);
-  draw_editor_status_glyph(glyph_, x() + (w() - 12) / 2, top);
+  draw_editor_status_glyph(kind_, x() + (w() - 12) / 2, top);
 }
 
-void draw_editor_status_glyph(const EditorStatusGlyph glyph, const int x, const int y,
+void draw_editor_status_glyph(const StatusKind kind, const int x, const int y,
                               const int size) {
-  if (glyph == EditorStatusGlyph::none || size <= 0) return;
+  if (kind == StatusKind::none || size <= 0) return;
   const auto tokens = current_editor_tokens();
   const auto color = [&] {
-    switch (glyph) {
-    case EditorStatusGlyph::no: return fl_of(tokens.no);
-    case EditorStatusGlyph::warning: return fl_of(tokens.warning);
-    case EditorStatusGlyph::yes: return fl_of(tokens.yes);
+    switch (kind) {
+    case StatusKind::failure: return fl_of(tokens.no);
+    case StatusKind::warning: return fl_of(tokens.warning);
+    case StatusKind::success: return fl_of(tokens.yes);
     default: return fl_of(tokens.accent_2);
     }
   }();
@@ -289,17 +289,17 @@ void draw_editor_status_glyph(const EditorStatusGlyph glyph, const int x, const 
   const int left = x + unit, right = x + size - unit;
   const int top = y + unit, bottom = y + size - unit;
   const int middle = y + size / 2;
-  switch (glyph) {
-  case EditorStatusGlyph::yes:
+  switch (kind) {
+  case StatusKind::success:
     // A tick: down to the low point, then up to the right shoulder.
     fl_line(left, middle, x + size / 2, bottom);
     fl_line(x + size / 2, bottom, right, top + unit / 2);
     break;
-  case EditorStatusGlyph::no:
+  case StatusKind::failure:
     fl_line(left, top, right, bottom);
     fl_line(left, bottom, right, top);
     break;
-  case EditorStatusGlyph::warning:
+  case StatusKind::warning:
     // An exclamation: the stem, then its dot.
     fl_line(x + size / 2, top, x + size / 2, bottom - unit * 2);
     fl_rectf(x + size / 2 - unit / 2, bottom - unit, unit, unit);

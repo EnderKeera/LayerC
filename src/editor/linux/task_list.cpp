@@ -43,7 +43,8 @@ TaskApplied apply_task(layerc::core::GameProfile &profile, const TaskCandidate &
                        const bool exact_path, const bool unsaved) {
   auto &game = profile.game;
   if (task.executable_name.empty() && task.class_name.empty())
-    return {false, "This window publishes neither an executable nor a class; it cannot be matched."};
+    return {StatusKind::failure, false,
+            "This window publishes neither an executable nor a class; it cannot be matched."};
   game.global = false;
   game.window_title.clear();
   std::string status;
@@ -71,7 +72,8 @@ TaskApplied apply_task(layerc::core::GameProfile &profile, const TaskCandidate &
     }
   }
   if (unsaved) status = "Application selected — Save once to create the profile.";
-  return {true, std::move(status)};
+  return {task.executable_name.empty() ? StatusKind::warning : StatusKind::success,
+          true, std::move(status)};
 }
 
 PlacementFrame placement_frame(const int x, const int y, const int width, const int height,

@@ -11,7 +11,10 @@ from pathlib import Path
 
 NATIVE_THEME = "src/platform/win32/include/layerc/platform/native_theme.hpp"
 LINUX_THEME = "src/editor/linux/editor_appearance.cpp"
-TOKEN_SOURCES = frozenset({NATIVE_THEME, LINUX_THEME, "src/platform/win32/native_theme.cpp"})
+# The color math both editors share, with the two `accent_2` values.
+COLOR_MATH = "src/editor/common/editor_color.hpp"
+TOKEN_SOURCES = frozenset({NATIVE_THEME, LINUX_THEME, "src/platform/win32/native_theme.cpp",
+                           COLOR_MATH, "src/editor/common/editor_color.cpp"})
 SHARED_CHROME = (NATIVE_THEME, "src/platform/win32/native_theme.cpp",
                  "src/platform/win32/native_controls.cpp")
 METRIC_SOURCES = frozenset({"src/editor/dialog_layout.hpp", "src/editor/linux/editor_style.hpp"})
@@ -180,11 +183,17 @@ def token_violations(root: Path) -> list[tuple[Path, int, str, str]]:
             actual = int(match[1], 16) if match else None
             if actual != fixed.get(f"preset-{preset}"):
                 mismatch(path, f"preset-{preset}", actual, fixed.get(f"preset-{preset}"))
-        for color, preset in (("blue", "copper"), ("violet", "teal")):
-            match = re.search(rf"\baccent_2_{color}\s*=\s*(0x[0-9a-fA-F]+)", source)
-            expected = int(tokens["accent_2"][preset][1:], 16)
-            if match is None or int(match[1], 16) != expected:
-                mismatch(path, f"accent_2_{color}", match[1] if match else None, expected)
+    path = root / COLOR_MATH
+    try:
+        source = code_only(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        found.append((path, 1, "token-agreement", str(error)))
+        source = ""
+    for color, preset in (("blue", "copper"), ("violet", "teal")):
+        match = re.search(rf"\baccent_2_{color}\s*=\s*(0x[0-9a-fA-F]+)", source)
+        expected = int(tokens["accent_2"][preset][1:], 16)
+        if match is None or int(match[1], 16) != expected:
+            mismatch(path, f"accent_2_{color}", match[1] if match else None, expected)
 
     for preset in presets:
         accent = fixed.get(f"preset-{preset}")

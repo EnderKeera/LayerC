@@ -90,10 +90,6 @@ inline constexpr std::uint32_t copper_accent = 0xD88E4B;
 inline constexpr std::uint32_t teal_accent = 0x5AB6AA;
 inline constexpr std::uint32_t plum_accent = 0xB382E2;
 inline constexpr std::uint32_t slate_accent = 0x8FA3B8;
-// The two values of `accent_2`; theme_accent_2 picks the one whose hue keeps
-// clear of the accent.
-inline constexpr std::uint32_t accent_2_blue = 0x60B0FF;
-inline constexpr std::uint32_t accent_2_violet = 0xB99BFF;
 
 // Choose color's palette; order and names are preserved.
 struct PaletteColor {
@@ -133,9 +129,6 @@ inline constexpr std::array<PaletteColor, 24> color_palette{
 [[nodiscard]] COLORREF blend_color(COLORREF base, COLORREF over, int amount);
 // Preset accent; `system` follows the Windows accent color.
 [[nodiscard]] std::uint32_t theme_accent(EditorTheme theme);
-// `accent_2` for an accent: violet when the accent's hue lies within 45
-// degrees of the blue's (Teal, Slate, the default Windows blue), else blue.
-[[nodiscard]] std::uint32_t theme_accent_2(std::uint32_t accent);
 // WCAG 2 contrast ratio of two colors (1 to 21).
 [[nodiscard]] double contrast_ratio(COLORREF first, COLORREF second);
 // True while a Windows contrast theme is on (SPI_GETHIGHCONTRAST): every

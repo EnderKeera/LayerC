@@ -331,7 +331,7 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
   const bool autosave = mode == SaveMode::autosave;
   if (!opened_) return {{CommitResult::invalid_fields, std::nullopt}, std::nullopt,
                         autosave ? "Not autosaved: no profile is open."
-                                 : "Not saved: no profile is open."};
+                                 : "Not saved: no profile is open.", StatusKind::failure};
   const bool draft = is_draft();
   const auto path = draft ? default_profile_path(directory_, document_.profile())
                           : document_.path();
@@ -345,7 +345,8 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
         {}, *document_.visual(), owned_assets_);
     if (const auto *error = std::get_if<platform::VisualAssetError>(&snapshot))
       return {{CommitResult::invalid_fields, std::nullopt}, std::nullopt,
-              (autosave ? "Not autosaved: " : "Not saved: ") + error->message};
+              (autosave ? "Not autosaved: " : "Not saved: ") + error->message,
+              StatusKind::failure};
     assets = std::get<std::vector<platform::EncodedTemplateAsset>>(std::move(snapshot));
   } else if (document_.visual()) {
     for (const auto &asset : owned_assets_)
@@ -369,43 +370,49 @@ SessionSaveOutcome EditorSession::save(const ConfirmUpgrade &confirm_upgrade,
     rescan();
     mark_changed(false);
   }
-  return {commit, reload, save_report_text(commit, reload, mode)};
+  return {commit, reload, save_report_text(commit, reload, mode),
+          save_report_kind(commit, reload, mode)};
 }
 
 OperationOutcome EditorSession::reload_report(const std::string &done) {
   rescan();
   const auto reload = request_daemon_reload();
   if (reload.state == ReloadState::acknowledged)
-    return {true, done + " LayerD acknowledged the reload request."};
+    return {StatusKind::success, true,
+            done + " LayerD acknowledged the reload request."};
   if (reload.state == ReloadState::daemon_unavailable)
-    return {true, done + " LayerD is not running; it will load the change when it starts."};
-  return {true, done + " LayerD's reload could not be confirmed: " + reload.error};
+    return {StatusKind::success, true,
+            done + " LayerD is not running; it will load the change when it starts."};
+  return {StatusKind::warning, true,
+          done + " LayerD's reload could not be confirmed: " + reload.error};
 }
 
 OperationOutcome EditorSession::set_enabled(const std::size_t row, const bool enabled,
                                             const ConfirmUpgrade &confirm_upgrade) {
-  if (row >= scan_.profiles.size()) return {false, "No profile selected."};
+  if (row >= scan_.profiles.size()) return {StatusKind::failure, false, "No profile selected."};
   const auto path = scan_.profiles[row].path;
   const bool is_current = opened_ && is_document_path(document_, path);
   auto selected = profile_enablement_bundle(
       document_, is_current, path, OpenDocumentEnablement::require_clean);
   if (const auto *refusal = std::get_if<EnablementRefusal>(&selected)) {
     if (*refusal == EnablementRefusal::dirty_open_document)
-      return {false, "Save or undo the open profile's changes before turning it on or off."};
-    return {false, "Could not read that profile; it was not changed."};
+      return {StatusKind::failure, false, "Save or undo the open profile's changes before turning it on or off."};
+    return {StatusKind::failure, false, "Could not read that profile; it was not changed."};
   }
   auto candidate = std::get<ProfileBundle>(std::move(selected));
-  if (candidate.profile.enabled == enabled) return {true, "No change."};
+  if (candidate.profile.enabled == enabled) return {StatusKind::information, true, "No change."};
   candidate.profile.enabled = enabled;
   const auto commit = commit_profile_bundle(path, candidate, {}, confirm_upgrade);
   if (!commit.ok())
-    return {false, commit.result == CommitResult::write_failed
+    return {save_report_kind(commit, std::nullopt, SaveMode::manual), false,
+            commit.result == CommitResult::write_failed
                        ? "Not changed. " + write_failure_text(commit.write_error) + "."
                        : std::string("Not changed: the profile or its modules need repair.")};
   auto outcome = reload_report(enabled ? "Profile enabled." : "Profile disabled.");
   if (is_current) {
     if (const auto error = open_path(path)) {
       close_document();
+      outcome.kind = most_severe(outcome.kind, StatusKind::warning);
       outcome.text += " Could not reopen the saved profile: " + *error;
     }
   }
@@ -413,10 +420,10 @@ OperationOutcome EditorSession::set_enabled(const std::size_t row, const bool en
 }
 
 OperationOutcome EditorSession::delete_current() {
-  if (!opened_) return {false, "No profile is open."};
+  if (!opened_) return {StatusKind::failure, false, "No profile is open."};
   if (is_draft()) {
     close_document();
-    return {true, "Draft discarded."};
+    return {StatusKind::success, true, "Draft discarded."};
   }
   const auto path = document_.path();
   const auto planner = [&](std::vector<platform::ProfileFileMutation> &mutations)
@@ -436,7 +443,9 @@ OperationOutcome EditorSession::delete_current() {
   const auto result = platform::commit_profile_transaction(
       platform::ProfileTransactionScope(directory_), platform::ProfileMutationPlan(planner));
   if (!result.ok())
-    return {false, std::string("Not deleted: ") +
+    return {result.failure == platform::ProfileWriteError::durability_unconfirmed
+                ? StatusKind::warning : StatusKind::failure,
+            false, std::string("Not deleted: ") +
                        platform::profile_write_error_text(*result.failure) + "."};
   close_document();
   return reload_report("Profile deleted.");
@@ -445,35 +454,35 @@ OperationOutcome EditorSession::delete_current() {
 OperationOutcome EditorSession::export_json(const std::filesystem::path &destination,
                                             const std::size_t row) {
   if (!export_destination_allowed(destination, directory_))
-    return {false, "Export failed: choose a destination outside the live profile store."};
-  if (row >= scan_.profiles.size()) return {false, "No saved profile selected."};
+    return {StatusKind::failure, false, "Export failed: choose a destination outside the live profile store."};
+  if (row >= scan_.profiles.size()) return {StatusKind::failure, false, "No saved profile selected."};
   const auto bytes = platform::read_profile_file(scan_.profiles[row].path);
   if (!bytes || !std::holds_alternative<core::GameProfile>(core::parse_profile_json(*bytes)))
-    return {false, "Export failed: the saved base profile is unreadable or invalid."};
+    return {StatusKind::failure, false, "Export failed: the saved base profile is unreadable or invalid."};
   const auto published = platform::write_durable_file(destination, core::owned_bytes(*bytes));
   if (published == platform::DurablePublishOutcome::failed)
-    return {false, "JSON export failed; the destination was not changed."};
+    return {StatusKind::failure, false, "JSON export failed; the destination was not changed."};
   if (published == platform::DurablePublishOutcome::published_unconfirmed)
-    return {false, "JSON is exported, but its crash durability could not be confirmed."};
-  return {true, "Exported the saved base JSON (without module sidecars). Use a profile "
+    return {StatusKind::warning, false, "JSON is exported, but its crash durability could not be confirmed."};
+  return {StatusKind::success, true, "Exported the saved base JSON (without module sidecars). Use a profile "
                 "pack to export the complete bundle."};
 }
 
 OperationOutcome EditorSession::export_pack(const std::filesystem::path &destination,
                                             const std::vector<std::size_t> &rows) {
   if (!export_destination_allowed(destination, directory_))
-    return {false, "Export failed: choose a destination outside the live profile store."};
+    return {StatusKind::failure, false, "Export failed: choose a destination outside the live profile store."};
   std::vector<std::filesystem::path> paths;
   for (const auto row : rows) {
     if (row >= scan_.profiles.size())
-      return {false, "Export failed: the profile selection is no longer valid."};
+      return {StatusKind::failure, false, "Export failed: the profile selection is no longer valid."};
     paths.push_back(scan_.profiles[row].path);
   }
-  if (paths.empty()) return {false, "Select at least one saved profile to export."};
+  if (paths.empty()) return {StatusKind::failure, false, "Select at least one saved profile to export."};
   const auto result = bundle::export_profile_pack(destination, paths);
   if (const auto *error = std::get_if<bundle::PackError>(&result))
-    return {false, pack_error_text("Export failed", *error)};
-  return {true, "Exported " + std::to_string(paths.size()) + " profile(s) to " +
+    return {StatusKind::failure, false, pack_error_text("Export failed", *error)};
+  return {StatusKind::success, true, "Exported " + std::to_string(paths.size()) + " profile(s) to " +
                     destination.filename().string() + "."};
 }
 
@@ -535,32 +544,33 @@ std::variant<ImportPlan, std::string> EditorSession::review_import(ImportPlan pl
 
 OperationOutcome EditorSession::import_pack(const ImportPlan &plan) {
   if (plan.rows.size() != plan.reviewed.size())
-    return {false, "Import failed: the reviewed plan is incomplete."};
+    return {StatusKind::failure, false, "Import failed: the reviewed plan is incomplete."};
   std::vector<bundle::ImportChoice> choices;
   std::size_t imported = 0;
   for (std::size_t index = 0; index < plan.rows.size(); ++index) {
     auto choice = plan.reviewed[index];
     if (choice.action != plan.rows[index].action || !choice.expected_target)
-      return {false, "Import actions changed; review their destinations again."};
+      return {StatusKind::failure, false, "Import actions changed; review their destinations again."};
     if (choice.action != bundle::ImportAction::skip) ++imported;
     choices.push_back(std::move(choice));
   }
-  if (imported == 0) return {true, "Nothing imported."};
+  if (imported == 0) return {StatusKind::information, true, "Nothing imported."};
   const bool replaces_current = opened_ && !is_draft() &&
       std::ranges::any_of(choices, [&](const auto &choice) {
         return choice.action != bundle::ImportAction::skip &&
                is_document_path(document_, *choice.expected_target);
       });
   if (replaces_current && has_unsaved_changes())
-    return {false, "Save or discard the open profile's edits before replacing it."};
+    return {StatusKind::failure, false, "Save or discard the open profile's edits before replacing it."};
   const auto path = document_.path();
   const auto result = bundle::import_profile_pack(plan.pack, choices, directory_);
   if (const auto *error = std::get_if<bundle::PackError>(&result))
-    return {false, pack_error_text("Import failed", *error)};
+    return {StatusKind::failure, false, pack_error_text("Import failed", *error)};
   auto outcome = reload_report("Imported " + std::to_string(imported) + " profile(s).");
   if (replaces_current) {
     if (const auto error = open_path(path)) {
       close_document();
+      outcome.kind = most_severe(outcome.kind, StatusKind::warning);
       outcome.text += " Could not reopen the replaced profile: " + *error;
     }
   }

@@ -191,8 +191,20 @@ void refused_save_and_presentation_only_report() {
          "an accepted edit without the listener still dirties the document");
   expect(!editor::EditorAppTestAccess::autosave_pending(quiet),
          "a session edit cannot schedule autosave once the listener is cleared");
-  quiet.report("x");
-  quiet.report("x");
+  quiet.report(editor::StatusKind::information, "x");
+  quiet.report(editor::StatusKind::information, "x");
+  auto refused = quiet.session.export_json(
+      report_fixture.path.parent_path() / "saved-active.json",
+      quiet.session.profiles().profiles.size());
+  quiet.report(refused.kind, refused.text);
+  expect(!refused.ok && editor::EditorAppTestAccess::status_kind(quiet) ==
+                           editor::StatusKind::failure &&
+             std::string(editor::EditorAppTestAccess::status(quiet)->value()) == refused.text,
+         "a saved-profile refusal reaches the status renderer as failure");
+  refused.text = "Profile saved. /tmp/loaded/active.json";
+  quiet.report(refused.kind, refused.text);
+  expect(editor::EditorAppTestAccess::status_kind(quiet) == editor::StatusKind::failure,
+         "rewording the refusal cannot turn its displayed glyph into success");
   expect(!editor::EditorAppTestAccess::autosave_pending(quiet) &&
              editor::EditorAppTestAccess::live_sequence(quiet) == sequence &&
              layerc::test::read_file(report_fixture.path) == quiet_durable,

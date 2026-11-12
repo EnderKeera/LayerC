@@ -165,8 +165,8 @@ void EditorApp::load_appearance() {
 
 void EditorApp::open_profiles_folder() {
   const auto directory = session.directory();
-  if (directory.empty()) { report("No profiles folder: HOME is not an absolute path."); return; }
-  if (opener_ > 0) { report("The file manager is still starting."); return; }
+  if (directory.empty()) { report(StatusKind::failure, "No profiles folder: HOME is not an absolute path."); return; }
+  if (opener_ > 0) { report(StatusKind::information, "The file manager is still starting."); return; }
   posix_spawnattr_t attributes;
   posix_spawnattr_init(&attributes);
   // Its own session: closing LayerE never signals the file manager. Default
@@ -191,12 +191,12 @@ void EditorApp::open_profiles_folder() {
   posix_spawn_file_actions_destroy(&files);
   posix_spawnattr_destroy(&attributes);
   if (result != 0) {
-    report("Could not start xdg-open; the profiles folder is " + path);
+    report(StatusKind::failure, "Could not start xdg-open; the profiles folder is " + path);
     return;
   }
   opener_ = child;
   opener_path_ = path;
-  report("Opening the profiles folder: " + path);
+  report(StatusKind::information, "Opening the profiles folder: " + path);
   Fl::add_timeout(0.1, &EditorApp::opener_tick, this);
 }
 
@@ -208,12 +208,12 @@ void EditorApp::opener_tick(void *data) {
   if (done == 0) { Fl::repeat_timeout(0.1, &EditorApp::opener_tick, data); return; }
   app.opener_ = 0;
   if (done < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
-    app.report("xdg-open could not open the profiles folder (" +
+    app.report(StatusKind::failure, "xdg-open could not open the profiles folder (" +
                (done > 0 && WIFEXITED(status) ? "exit " + std::to_string(WEXITSTATUS(status))
                                               : std::string("no exit status")) +
                "); it is " + app.opener_path_);
   else
-    app.report("Opened the profiles folder: " + app.opener_path_);
+    app.report(StatusKind::success, "Opened the profiles folder: " + app.opener_path_);
 }
 
 void EditorApp::stop_opener() {

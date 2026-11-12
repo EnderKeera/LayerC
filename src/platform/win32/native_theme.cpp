@@ -1,5 +1,7 @@
 #include "layerc/platform/native_theme.hpp"
 
+#include "editor_color.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -11,6 +13,9 @@
 #include <uxtheme.h>
 
 namespace layerc::platform {
+using layerc::editor::rgb_accent_2;
+using layerc::editor::rgb_contrast_ratio;
+using layerc::editor::rgb_on_accent;
 namespace {
 
 constexpr DWORD dark_title_bar_attribute = 20;
@@ -52,46 +57,6 @@ std::uint32_t system_accent() {
   if (SUCCEEDED(DwmGetColorizationColor(&colorization, &opaque)))
     return colorization & 0xFFFFFFU;
   return native_rgb_value(GetSysColor(COLOR_HIGHLIGHT));
-}
-
-// Relative luminance above ~0.4 reads better with dark content on top.
-bool light_color(const COLORREF color) {
-  const int luma = GetRValue(color) * 299 + GetGValue(color) * 587 +
-                   GetBValue(color) * 114;
-  return luma >= 140000;
-}
-
-// Hue in degrees (0 to 360); 0 for a gray.
-double hue_degrees(const std::uint32_t color) {
-  const int red = static_cast<int>((color >> 16U) & 0xFFU);
-  const int green = static_cast<int>((color >> 8U) & 0xFFU);
-  const int blue = static_cast<int>(color & 0xFFU);
-  const int high = std::max({red, green, blue});
-  const int chroma = high - std::min({red, green, blue});
-  if (chroma == 0)
-    return 0.0;
-  double sector = 0.0;
-  if (high == red)
-    sector = static_cast<double>(green - blue) / chroma;
-  else if (high == green)
-    sector = static_cast<double>(blue - red) / chroma + 2.0;
-  else
-    sector = static_cast<double>(red - green) / chroma + 4.0;
-  const double hue = sector * 60.0;
-  return hue < 0.0 ? hue + 360.0 : hue;
-}
-
-// WCAG 2 relative luminance.
-double relative_luminance(const COLORREF color) {
-  const auto channel = [](const BYTE value) {
-    const double component = static_cast<double>(value) / 255.0;
-    return component <= 0.04045
-               ? component / 12.92
-               : std::pow((component + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * channel(GetRValue(color)) +
-         0.7152 * channel(GetGValue(color)) +
-         0.0722 * channel(GetBValue(color));
 }
 
 // -1 follows SPI_GETHIGHCONTRAST; 0 or 1 is the test seam's forced value.
@@ -146,8 +111,7 @@ NativeThemeColors default_theme_colors(const EditorTheme theme,
       .selection = blend_color(window, accent_color, 60),
       .disabled = native_color_ref(base.disabled),
       .accent = accent_color,
-      .on_accent = light_color(accent_color) ? RGB(0x14, 0x14, 0x14)
-                                             : RGB(0xFF, 0xFF, 0xFF),
+      .on_accent = native_color_ref(rgb_on_accent(native_rgb_value(accent_color))),
       .pressed = native_color_ref(base.pressed),
       .divider = native_color_ref(base.divider),
       .secondary = native_color_ref(base.secondary),
@@ -158,7 +122,7 @@ NativeThemeColors default_theme_colors(const EditorTheme theme,
       .no = native_color_ref(base.no),
       .warning = native_color_ref(base.warning),
       .accent_2 =
-          native_color_ref(theme_accent_2(native_rgb_value(accent_color))),
+          native_color_ref(rgb_accent_2(native_rgb_value(accent_color))),
       .on_status = native_color_ref(base.on_status),
   };
   switch (role) {
@@ -294,18 +258,8 @@ std::uint32_t theme_accent(const EditorTheme theme) {
   }
 }
 
-std::uint32_t theme_accent_2(const std::uint32_t accent) {
-  const double distance =
-      std::abs(hue_degrees(accent) - hue_degrees(accent_2_blue));
-  return std::min(distance, 360.0 - distance) <= 45.0 ? accent_2_violet
-                                                      : accent_2_blue;
-}
-
 double contrast_ratio(const COLORREF first, const COLORREF second) {
-  const double first_luminance = relative_luminance(first);
-  const double second_luminance = relative_luminance(second);
-  return (std::max(first_luminance, second_luminance) + 0.05) /
-         (std::min(first_luminance, second_luminance) + 0.05);
+  return rgb_contrast_ratio(native_rgb_value(first), native_rgb_value(second));
 }
 
 bool native_high_contrast() {

@@ -4,6 +4,7 @@
 #include "daemon_link.hpp"
 #include "document_commit.hpp"
 #include "profile_document.hpp"
+#include "status_kind.hpp"
 #include "visual_assignment.hpp"
 #include "layerc/bundle/profile_pack.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -21,8 +22,9 @@
 
 namespace layerc::editor {
 
-// Result of a store operation, with the text every frontend shows.
+// Result of a store operation; the kind is independent of display wording.
 struct OperationOutcome {
+  StatusKind kind{StatusKind::information};
   bool ok{};
   std::string text;
 };
@@ -31,6 +33,7 @@ struct SessionSaveOutcome {
   CommitOutcome commit;
   std::optional<ReloadResult> reload;
   std::string text;
+  StatusKind kind{StatusKind::none};
   [[nodiscard]] bool saved() const noexcept { return commit.ok(); }
 };
 

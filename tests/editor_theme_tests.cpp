@@ -1,3 +1,4 @@
+#include "editor_color.hpp"
 #include "layerc/platform/native_theme.hpp"
 #include "test_support.hpp"
 
@@ -30,13 +31,13 @@ struct Preset {
 
 constexpr std::array presets{
     Preset{EditorTheme::copper, "Copper", layerc::platform::copper_accent,
-           layerc::platform::accent_2_blue},
+           layerc::editor::accent_2_blue},
     Preset{EditorTheme::teal, "Teal", layerc::platform::teal_accent,
-           layerc::platform::accent_2_violet},
+           layerc::editor::accent_2_violet},
     Preset{EditorTheme::plum, "Plum", layerc::platform::plum_accent,
-           layerc::platform::accent_2_blue},
+           layerc::editor::accent_2_blue},
     Preset{EditorTheme::dark, "Slate", layerc::platform::slate_accent,
-           layerc::platform::accent_2_violet},
+           layerc::editor::accent_2_violet},
 };
 
 NativeThemeColors preset_colors(const Preset &preset,
@@ -122,10 +123,10 @@ void editor_theme_contrast_contracts() {
          "the v2 text and status tokens");
   // The System preset's accent_2 follows the same hue rule: the default
   // Windows blue takes violet, an orange accent blue.
-  expect(layerc::platform::theme_accent_2(0x0078D4) ==
-                 layerc::platform::accent_2_violet &&
-             layerc::platform::theme_accent_2(0xE81123) ==
-                 layerc::platform::accent_2_blue,
+  expect(layerc::editor::rgb_accent_2(0x0078D4) ==
+                 layerc::editor::accent_2_violet &&
+             layerc::editor::rgb_accent_2(0xE81123) ==
+                 layerc::editor::accent_2_blue,
          "accent_2 picks the hue away from any accent");
   layerc::platform::set_native_high_contrast_override(std::nullopt);
 }

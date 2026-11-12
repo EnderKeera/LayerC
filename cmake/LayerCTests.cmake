@@ -124,6 +124,10 @@ layerc_add_test(layerc_editor_diagnostics_view_tests
 layerc_add_test(layerc_editor_visual_tests
     SOURCES tests/editor_visual_assignment_tests.cpp
     LINK layerc_editor_core TIMEOUT 30)
+# Platform-neutral color math shared by both editors.
+layerc_add_test(layerc_editor_color_tests
+    SOURCES tests/editor_color_tests.cpp
+    LINK layerc_editor_color TIMEOUT 30)
 if(WIN32)
     layerc_add_test(layerc_launcher_win_tests
         SOURCES tests/launcher_win_tests.cpp

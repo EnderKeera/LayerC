@@ -127,20 +127,20 @@ void StatusPane::build_footer(FormBuilder &builder) {
   accessibility_status_->labelsize(FL_NORMAL_SIZE);
 }
 
-void StatusPane::set_status(const std::string &text) {
+void StatusPane::set_status(const StatusKind kind, const std::string &text) {
   status_->value(text.c_str());
-  status_mark_->glyph(editor_status_glyph(text));
+  status_mark_->kind(kind);
   status_->redraw();
 }
 
-void StatusPane::set_daemon(const std::string &text) {
+void StatusPane::set_daemon(const StatusKind kind, const std::string &text) {
   daemon_status_->value(text.c_str());
-  daemon_mark_->glyph(editor_status_glyph(text));
+  daemon_mark_->kind(kind);
 }
 
-void StatusPane::set_modules(const std::string &text) {
+void StatusPane::set_modules(const StatusKind kind, const std::string &text) {
   module_status_->value(text.c_str());
-  module_mark_->glyph(editor_status_glyph(text));
+  module_mark_->kind(kind);
 }
 
 void StatusPane::set_accessibility(const std::string &text) {

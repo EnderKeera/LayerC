@@ -1,6 +1,7 @@
 #include "editor_window.hpp"
 #include "automation_editor.hpp"
 #include "editor_resource.h"
+#include "visual_runtime_status.hpp"
 
 #include "layerc/core/profile.hpp"
 #include "layerc/platform/profile_store.hpp"
@@ -271,6 +272,8 @@ void EditorWindow::handle_live_message(
     const layerc::core::LiveMessage &message) {
   if (message.type == layerc::core::LiveMessageType::runtime_status) {
     shell_.visual_runtime_status = to_wide(message.text);
+    shell_.visual_runtime_kind =
+        visual_runtime_status_kind(shell_.visual_runtime_status);
     visual_editor_.refresh();
     return;
   }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor_appearance.hpp"
+#include "status_kind.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -31,9 +32,8 @@ inline constexpr int editor_button_height = 30;
 // The appearance the authored drawing resolves its tokens from.
 void set_editor_style_appearance(const EditorAppearance &appearance);
 
-// Paints the status strip's leading mark; the types and the rule live in the
-// pure palette model (editor_appearance.hpp).
-void draw_editor_status_glyph(EditorStatusGlyph glyph, int x, int y, int size = 12);
+// Paints the status strip's leading mark from the producer's semantic kind.
+void draw_editor_status_glyph(StatusKind kind, int x, int y, int size = 12);
 
 // The palette authored drawing resolves for the applied appearance.
 [[nodiscard]] EditorTokens current_editor_tokens();
@@ -72,12 +72,12 @@ protected:
 class EditorStatusMark final : public Fl_Box {
 public:
   EditorStatusMark(int x, int y, int width, int height);
-  void glyph(EditorStatusGlyph value);
-  [[nodiscard]] EditorStatusGlyph glyph() const noexcept { return glyph_; }
+  void kind(StatusKind value);
+  [[nodiscard]] StatusKind kind() const noexcept { return kind_; }
 protected:
   void draw() override;
 private:
-  EditorStatusGlyph glyph_{EditorStatusGlyph::none};
+  StatusKind kind_{StatusKind::none};
 };
 
 } // namespace layerc::editor

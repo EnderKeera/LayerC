@@ -58,17 +58,6 @@ struct EditorTokens {
   bool operator==(const EditorTokens &) const = default;
 };
 [[nodiscard]] EditorTokens editor_tokens(const EditorAppearance &appearance) noexcept;
-// WCAG 2 contrast of two #RRGGBB colours, 1:1 to 21:1.
-[[nodiscard]] double editor_contrast_ratio(std::uint32_t first, std::uint32_t second) noexcept;
-// The second accent mark: violet when the accent is near the blue one, as the
-// Windows theme picks it.
-[[nodiscard]] std::uint32_t editor_accent_2(std::uint32_t accent) noexcept;
-
-// The status strip's leading mark: a drawn glyph, never colour alone
-// (DesignSystem.md, Status strip). Pure, so the model tests read the rule.
-enum class EditorStatusGlyph : std::uint8_t { none, yes, no, warning, information };
-[[nodiscard]] EditorStatusGlyph editor_status_glyph(std::string_view text);
-
 // Body text size and this app's scale, from the desktop's pixel size: the
 // scale leaves the base size alone when the desktop asks for more than 14 px.
 struct DesktopTextMetrics {

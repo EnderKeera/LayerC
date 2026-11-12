@@ -21,15 +21,15 @@ void EditorApp::show_tasks(const std::string &reason) {
 }
 
 void EditorApp::use_task(const TaskCandidate &task, const bool exact_path) {
-  if (!session.has_document()) { report("Open or create a profile first."); return; }
-  if (!apply_fields()) { report("Use selected task needs valid fields first."); return; }
+  if (!session.has_document()) { report(StatusKind::failure, "Open or create a profile first."); return; }
+  if (!apply_fields()) { report(StatusKind::failure, "Use selected task needs valid fields first."); return; }
   TaskApplied applied;
   const auto error = session.edit([&](auto &profile) {
     applied = apply_task(profile, task, exact_path, session.is_draft());
   });
   changed(error);
   if (error) return;
-  report(applied.status);
+  report(applied.kind, applied.status);
   if (tasks_window) tasks_window->set_message(applied.status);
 }
 
@@ -39,16 +39,16 @@ bool EditorApp::placement_active() const {
 }
 
 void EditorApp::position_command() {
-  if (placement_active()) { end_placement("Positioning on the window ended."); return; }
+  if (placement_active()) { end_placement(StatusKind::information, "Positioning on the window ended."); return; }
   if (!session.has_document()) return;
   if (session.is_draft()) {
-    report("Save this new profile once before positioning it on a window.");
+    report(StatusKind::failure, "Save this new profile once before positioning it on a window.");
     return;
   }
   if (!apply_fields()) return;
   std::string error;
   const auto tasks = scan_tasks(error);
-  if (!error.empty() && tasks.empty()) { report("Window discovery failed: " + error); return; }
+  if (!error.empty() && tasks.empty()) { report(StatusKind::failure, "Window discovery failed: " + error); return; }
   auto game = session.document().profile().game;
   std::size_t matches = 0;
   for (const auto &task : tasks)
@@ -62,25 +62,25 @@ void EditorApp::position_command() {
       ? "No running window matches this profile. Start the game, or check the profile's "
         "Application, then press Refresh."
       : "Several windows match — select one, then Position on window.";
-  report(matches == 0 ? "No automatic match — select an eligible window in Detected Tasks."
+  report(StatusKind::information, matches == 0 ? "No automatic match — select an eligible window in Detected Tasks."
                       : "Multiple windows match — select one in Detected Tasks.");
   show_tasks(reason);
 }
 
 void EditorApp::position_on(const TaskCandidate &task) {
   if (!session.has_document() || session.is_draft()) {
-    report("Save this new profile once before positioning it on a window.");
+    report(StatusKind::failure, "Save this new profile once before positioning it on a window.");
     return;
   }
   if (!task_matches(task, session.document().profile().game)) {
     const std::string text = "That window does not match this profile. Use selected task first "
                              "to change the profile's Application.";
-    report(text);
+    report(StatusKind::failure, text);
     if (tasks_window) tasks_window->set_message(text);
     return;
   }
   if (task.width <= 0 || task.height <= 0) {
-    report("That window has no visible size to position against.");
+    report(StatusKind::failure, "That window has no visible size to position against.");
     return;
   }
   placement_ = task;
@@ -98,15 +98,15 @@ void EditorApp::position_on(const TaskCandidate &task) {
   if (const auto note = wayland_scope_note(query_daemon_status(), wayland_environment());
       !note.empty())
     text += " " + note;
-  report(text);
+  report(StatusKind::information, text);
 }
 
-void EditorApp::end_placement(const std::string &status) {
+void EditorApp::end_placement(const StatusKind kind, const std::string &status) {
   placement_.reset();
   placement_profile_.clear();
   update_position_button();
   preview->redraw();
-  if (!status.empty()) report(status);
+  if (!status.empty()) report(kind, status);
 }
 
 void EditorApp::update_position_button() {

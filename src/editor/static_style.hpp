@@ -1,5 +1,7 @@
 #pragma once
 
+#include "status_kind.hpp"
+
 #include "layerc/platform/native_theme.hpp"
 
 #include <cstdint>
@@ -69,32 +71,34 @@ inline void set_status_line(const HWND control,
                              .glyph = glyph});
 }
 
-// The glyph a status strip state leads with (DesignSystem.md, StatusStrip),
-// from the LayerD and visual recognition messages as written: running or
-// active is `yes`, a fallback `warning`, a stop or fault `no`, and waiting
-// or switched off `accent_2`.
-[[nodiscard]] inline layerc::platform::StatusGlyph
-status_strip_glyph(const std::wstring_view text) {
+// The drawn glyph of a status kind (DesignSystem.md, StatusText); `none`
+// draws nothing.
+[[nodiscard]] inline std::optional<layerc::platform::StatusGlyph>
+status_glyph(const StatusKind kind) noexcept {
   using layerc::platform::StatusGlyph;
-  const auto has = [text](const std::wstring_view part) {
-    return text.find(part) != std::wstring_view::npos;
-  };
-  if (has(L"not running") || has(L"blocked") || has(L"quarantined") ||
-      has(L"missing") || has(L"unavailable"))
-    return StatusGlyph::no;
-  if (has(L"connected") || (has(L"active") && !has(L"inactive")))
+  switch (kind) {
+  case StatusKind::success:
     return StatusGlyph::yes;
-  if (has(L"fallback"))
+  case StatusKind::failure:
+    return StatusGlyph::no;
+  case StatusKind::warning:
     return StatusGlyph::warning;
-  return StatusGlyph::accent_2;
+  case StatusKind::information:
+    return StatusGlyph::accent_2;
+  case StatusKind::none:
+    break;
+  }
+  return std::nullopt;
 }
 
-// A status strip state: its glyph, then the message in the strip's
-// `secondary` text, right-aligned. The text stays the accessible name.
-inline void set_strip_status(const HWND control, const std::wstring_view text) {
+// A status strip state (DesignSystem.md, StatusStrip): the glyph of its kind,
+// then the message in the strip's `secondary` text, right-aligned. The text
+// stays the accessible name.
+inline void set_strip_status(const HWND control, const StatusKind kind,
+                             const std::wstring_view text) {
   if (control == nullptr)
     return;
-  const auto glyph = status_strip_glyph(text);
+  const auto glyph = status_glyph(kind);
   std::wstring current(
       static_cast<std::size_t>(GetWindowTextLengthW(control)) + 1, L'\0');
   current.resize(static_cast<std::size_t>(GetWindowTextW(

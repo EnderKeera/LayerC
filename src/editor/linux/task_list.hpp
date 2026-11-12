@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layerc/core/types.hpp"
+#include "status_kind.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -36,6 +37,7 @@ visible_tasks(std::vector<TaskCandidate> all, std::uint32_t own_pid, bool show_a
 [[nodiscard]] std::string task_detail_text(const TaskCandidate &task);
 
 struct TaskApplied {
+  StatusKind kind{StatusKind::information};
   bool applied{};
   std::string status;
 };

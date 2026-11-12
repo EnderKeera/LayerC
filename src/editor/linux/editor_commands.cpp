@@ -59,7 +59,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          app.active_tab_ = app.profile_tab;
          app.tabs->value(app.profile_tab);
          app.refresh();
-         app.report("New unsaved profile. Enter an executable name or path.");
+         app.report(StatusKind::information, "New unsaved profile. Enter an executable name or path.");
        }},
       {EditorCommand::import_profiles, "&File/&Import...", "&Import...",
        FL_CTRL | 'o', 0, 0, profiles, 0,
@@ -70,7 +70,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.session.has_document(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          app.export_profile(false);
@@ -80,7 +80,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.session.has_document(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          app.export_profile(true);
@@ -94,11 +94,11 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &) { return true; },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Open a profile before Save As.");
+           app.report(StatusKind::failure, "Open a profile before Save As.");
            return;
          }
          if (!app.apply_fields()) {
-           app.report("Save As needs valid fields first.");
+           app.report(StatusKind::failure, "Save As needs valid fields first.");
            return;
          }
          const auto current = app.session.document().profile().name;
@@ -108,18 +108,18 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
              (current + " (copy)").c_str());
          if (!chosen_name) return;
          if (std::string_view(chosen_name).empty()) {
-           app.report("Save As needs a profile name.");
+           app.report(StatusKind::failure, "Save As needs a profile name.");
            return;
          }
          const std::string chosen(chosen_name);
          if (const auto error = app.session.duplicate_current()) {
-           app.report(*error);
+           app.report(StatusKind::failure, *error);
            app.refresh();
            return;
          }
          if (const auto error =
                  app.session.edit([&](auto &profile) { profile.name = chosen; })) {
-           app.report(*error);
+           app.report(StatusKind::failure, *error);
            app.refresh();
            return;
          }
@@ -145,18 +145,19 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (app.pending_fields_) {
            app.refresh();
-           app.report("Invalid field edit discarded.");
+           app.report(StatusKind::failure, "Invalid field edit discarded.");
            return;
          }
          app.session.end_text_edit();
          const bool done = app.session.undo();
          app.refresh();
-         app.report(done ? "History restored. " + app.edit_status()
+         app.report(done ? StatusKind::success : StatusKind::information,
+                    done ? "History restored. " + app.edit_status()
                          : "No history in that direction.");
        }},
       {EditorCommand::redo, "&Edit/&Redo", "&Redo", FL_CTRL | FL_SHIFT | 'z',
@@ -167,18 +168,19 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (app.pending_fields_) {
            app.refresh();
-           app.report("Invalid field edit discarded.");
+           app.report(StatusKind::failure, "Invalid field edit discarded.");
            return;
          }
          app.session.end_text_edit();
          const bool done = app.session.redo();
          app.refresh();
-         app.report(done ? "History restored. " + app.edit_status()
+         app.report(done ? StatusKind::success : StatusKind::information,
+                    done ? "History restored. " + app.edit_status()
                          : "No history in that direction.");
        }},
       {EditorCommand::rename, "&Edit/Re&name", "Re&name", FL_F + 2, 0, 0, 0, 0,
@@ -215,7 +217,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](EditorApp &app) {
          if (!app.may_leave()) return;
          if (!app.session.has_document()) {
-           app.report("Draft discarded.");
+           app.report(StatusKind::success, "Draft discarded.");
            return;
          }
          fl_message_title("Delete profile");
@@ -225,7 +227,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
            return;
          const auto outcome = app.session.delete_current();
          app.refresh();
-         app.report(outcome.text);
+         app.report(outcome.kind, outcome.text);
          app.query_status();
        }},
       {EditorCommand::toggle_enabled, "&Profile/Toggle saved &enabled",
@@ -237,14 +239,14 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          if (!app.may_leave()) return;
          const auto row = app.session.current_row();
          if (!row) {
-           app.report("Save this draft before toggling it on disk.");
+           app.report(StatusKind::failure, "Save this draft before toggling it on disk.");
            return;
          }
          const auto outcome = app.session.set_enabled(
              *row, !app.session.document().profile().enabled,
              confirm_profile_upgrade);
          app.refresh();
-         app.report(outcome.text);
+         app.report(outcome.kind, outcome.text);
          app.query_status();
        }},
       {EditorCommand::add_cooldown, "&Cooldowns/&Add cooldown", "&Add cooldown", 0,
@@ -252,7 +254,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.session.has_document(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (!app.apply_fields()) return;
@@ -268,7 +270,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.cooldown_index().has_value(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (!app.apply_fields()) return;
@@ -277,13 +279,13 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          const auto error = app.session.edit(
              [&](auto &profile) { id = duplicate_cooldown(profile, app.cooldown_id_); });
          if (!error && id.empty()) {
-           app.report("Select a cooldown to duplicate.");
+           app.report(StatusKind::failure, "Select a cooldown to duplicate.");
            return;
          }
          if (!error) app.cooldown_id_ = std::move(id);
          app.changed(error);
          if (!error)
-           app.report(
+           app.report(StatusKind::success,
                "Cooldown duplicated without bindings; add a binding for the copy.");
        }},
       {EditorCommand::delete_cooldown, "&Cooldowns/&Remove cooldown...",
@@ -291,7 +293,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.cooldown_index().has_value(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (!app.apply_fields()) return;
@@ -313,7 +315,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          if (dialog.applied)
            app.changed(std::nullopt);
          else
-           app.report("Cooldown groups unchanged.");
+           app.report(StatusKind::information, "Cooldown groups unchanged.");
        }},
       {EditorCommand::add_keyboard, "&Bindings/Add &key", "Add &key", 0, 0, 0,
        bindings, 0,
@@ -330,7 +332,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          const auto code = parse_count(app.binding_page_->key_code(), 1,
                                        std::numeric_limits<std::uint16_t>::max());
          if (!code) {
-           app.report("Use a physical scan code from 1 to 65535, or focused capture.");
+           app.report(StatusKind::failure, "Use a physical scan code from 1 to 65535, or focused capture.");
            return;
          }
          chord.tokens.push_back(
@@ -385,7 +387,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (!app.apply_fields()) return;
@@ -400,7 +402,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.session.has_document(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (!app.apply_fields()) return;
@@ -416,7 +418,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.panel_index().has_value(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          if (!app.apply_fields()) return;
@@ -438,7 +440,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
              PanelColorValues{{bar.fill_color, bar.background_color,
                                bar.border_color, bar.text_color}});
          if (!chosen) {
-           app.report("Panel colors unchanged.");
+           app.report(StatusKind::information, "Panel colors unchanged.");
            return;
          }
          const auto id = app.panel_id_;
@@ -457,7 +459,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        +[](const EditorApp &app) { return app.session.has_document(); },
        +[](EditorApp &app) {
          if (!app.session.has_document()) {
-           app.report("Create or select a profile first.");
+           app.report(StatusKind::failure, "Create or select a profile first.");
            return;
          }
          app.position_command();
@@ -529,16 +531,16 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          const auto chosen =
              edit_editor_appearance(app.appearance_, app.window, app.profiles, app.preview);
          if (!chosen) {
-           app.report("Appearance unchanged.");
+           app.report(StatusKind::information, "Appearance unchanged.");
            return;
          }
          app.appearance_ = *chosen;
          if (const auto error =
                  save_editor_appearance(app.appearance_path_, app.appearance_)) {
-           app.report(*error + " The choice applies until LayerE closes.");
+           app.report(StatusKind::warning, *error + " The choice applies until LayerE closes.");
          } else {
            app.appearance_error_.clear();
-           app.report("Appearance saved: " +
+           app.report(StatusKind::success, "Appearance saved: " +
                       std::string(theme_label(app.appearance_.theme)) + ".");
          }
        }},
@@ -556,12 +558,12 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
            return;
          }
          if (!first) {
-           app.report("Bars are already independent; nothing was split.");
+           app.report(StatusKind::information, "Bars are already independent; nothing was split.");
            return;
          }
          app.panel_id_ = app.session.document().profile().panels[*first].id;
          app.changed(std::nullopt);
-         app.report("Split grouped bars into independently positioned cooldown "
+         app.report(StatusKind::success, "Split grouped bars into independently positioned cooldown "
                     "bars. " +
                     app.edit_status());
        }},

@@ -3,6 +3,7 @@
 // Tests-only access to the editor's widgets: the pages own them, so tests reach
 // them through this friend struct instead of public Fl_* members.
 #include "editor_app.hpp"
+#include "editor_style.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -46,6 +47,10 @@ struct EditorAppTestAccess {
   }
   static Fl_Button *redo_button(EditorApp &app) {
     return app.status_pane_ ? app.status_pane_->redo() : nullptr;
+  }
+  static StatusKind status_kind(EditorApp &app) {
+    return app.status_pane_ && app.status_pane_->status_mark_
+        ? app.status_pane_->status_mark_->kind() : StatusKind::none;
   }
   // The Profile tab.
   static Fl_Group *profile_tab(EditorApp &app) {

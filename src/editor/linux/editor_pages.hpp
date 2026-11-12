@@ -3,6 +3,7 @@
 #include "editor_commands.hpp"
 #include "editor_menus.hpp"
 #include "panel_items_controls.hpp"
+#include "status_kind.hpp"
 
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Multiline_Output.H>
@@ -53,9 +54,9 @@ public:
   explicit StatusPane(EditorApp &app) noexcept : app_(app) {}
   void build_modules(FormBuilder &builder, int x, int y, int width, int height);
   void build_footer(FormBuilder &builder);
-  void set_status(const std::string &text);
-  void set_daemon(const std::string &text);
-  void set_modules(const std::string &text);
+  void set_status(StatusKind kind, const std::string &text);
+  void set_daemon(StatusKind kind, const std::string &text);
+  void set_modules(StatusKind kind, const std::string &text);
   void set_accessibility(const std::string &text);
   void set_history(bool undo_active, bool redo_active);
   [[nodiscard]] std::string accessibility_text() const;

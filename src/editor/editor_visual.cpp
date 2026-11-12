@@ -64,7 +64,7 @@ void VisualEditor::refresh() {
   const HWND remove = GetDlgItem(shell_.window, IDC_REMOVE_VISUAL);
   const HWND isolated = GetDlgItem(shell_.window, IDC_VISUAL_ISOLATED);
   set_strip_status(GetDlgItem(shell_.window, IDC_VISUAL_RUNTIME_STATUS),
-                   shell_.visual_runtime_status);
+                   shell_.visual_runtime_kind, shell_.visual_runtime_status);
 
   const auto *cooldown = host_.selected_cooldown();
   const bool editable = cooldown != nullptr && !document_.profile().game.global;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "status_kind.hpp"
 #include "editor_accessibility.hpp"
 #include "editor_session.hpp"
 #include "editor_menus.hpp"
@@ -96,7 +97,8 @@ public:
   void redraw_preview();
   void fill_lists();
   void refresh_forms();
-  void report(std::string text, StatusVoice voice = StatusVoice::announced);
+  void report(StatusKind kind, std::string text,
+              StatusVoice voice = StatusVoice::announced);
   void query_status();
   void module_fields_changed(bool pending);
   void field_changed(Fl_Widget *widget);
@@ -124,6 +126,7 @@ public:
 
 private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_, title_text_;
+  StatusKind daemon_kind_{StatusKind::none};
   // The last message spoken, so a repeating failure is said once.
   std::string last_announced_;
   int binding_index_{-1};
@@ -134,6 +137,7 @@ private:
   std::uint64_t observed_generation_{};
   std::unique_ptr<LiveDraftClient> live_draft_;
   std::string live_draft_text_;
+  StatusKind live_draft_kind_{StatusKind::none};
   std::uint64_t live_draft_sequence_{}; // latest publish; 0 when none is current
   void sync_edit_services();
   void schedule_autosave(bool text_change);
@@ -155,7 +159,7 @@ private:
   void use_task(const TaskCandidate &task, bool exact_path);
   void position_command();
   void position_on(const TaskCandidate &task);
-  void end_placement(const std::string &status);
+  void end_placement(StatusKind kind, const std::string &status);
   void update_position_button();
   std::optional<TaskCandidate> placement_;
   std::string placement_profile_;

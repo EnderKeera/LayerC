@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <commctrl.h>
@@ -197,9 +198,9 @@ void EditorWindow::install_shell_helpers() {
                    {.tone = TextTone::text,
                     .glyph = layerc::platform::StatusGlyph::warning});
   set_strip_status(GetDlgItem(window, IDC_CONNECTION_STATUS),
-                   L"LayerD: connecting");
+                   StatusKind::information, L"LayerD: connecting");
   set_strip_status(GetDlgItem(window, IDC_VISUAL_RUNTIME_STATUS),
-                   shell_.visual_runtime_status);
+                   shell_.visual_runtime_kind, shell_.visual_runtime_status);
   SendMessageW(shell_.application_path, EM_SETCUEBANNER, TRUE,
                reinterpret_cast<LPARAM>(
                    L"Type app.exe, Browse, or choose a running app"));
@@ -636,13 +637,16 @@ bool EditorWindow::restore_window_placement(const int show_command) {
 }
 
 void EditorWindow::refresh_connection_status() {
-  const wchar_t *text =
-      !live_edit_.connected()      ? L"LayerD: not running"
-      : live_edit_.authenticated()   ? L"LayerD: connected"
-                                             : L"LayerD: connecting";
+  const auto [kind, text] =
+      !live_edit_.connected()
+          ? std::pair{StatusKind::failure, L"LayerD: not running"}
+      : live_edit_.authenticated()
+          ? std::pair{StatusKind::success, L"LayerD: connected"}
+          : std::pair{StatusKind::information, L"LayerD: connecting"};
   if (shell_.connection_cache != text) {
     shell_.connection_cache = text;
-    set_strip_status(GetDlgItem(shell_.window, IDC_CONNECTION_STATUS), text);
+    set_strip_status(GetDlgItem(shell_.window, IDC_CONNECTION_STATUS), kind,
+                     text);
   }
 }
 

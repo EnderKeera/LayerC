@@ -1,4 +1,5 @@
 #include "daemon_link.hpp"
+#include "status_kind.hpp"
 
 #include "control_channel.hpp"
 #include "runtime_diagnostics_view.hpp"
@@ -72,6 +73,17 @@ std::string DaemonStatus::summary() const {
   return text;
 }
 
+StatusKind DaemonStatus::kind() const noexcept {
+  if (!running) return StatusKind::failure;
+  if (!error.empty() || (!wayland_session() && !x11_connected))
+    return StatusKind::warning;
+  for (const auto &capability : capabilities)
+    if (capability.availability == layerc::runtime::CapabilityAvailability::degraded ||
+        capability.availability == layerc::runtime::CapabilityAvailability::unavailable)
+      return StatusKind::warning;
+  return StatusKind::success;
+}
+
 bool DaemonStatus::wayland_session() const noexcept {
   return display && display->session == layerc::runtime::DisplaySession::wayland;
 }
@@ -134,8 +146,7 @@ DaemonStatus query_daemon_status() {
     for (const auto &capability : diagnostics->linux_extension->capabilities) {
       CapabilityLine line{
           .name = std::string(runtime::capability_name(capability.capability)),
-          .availability =
-              std::string(runtime::availability_name(capability.availability)),
+          .availability = capability.availability,
           .reasons = {}};
       for (const auto *list : {&capability.reasons, &capability.diagnostics})
         for (const auto &reason : *list)
@@ -155,6 +166,31 @@ ReloadResult request_daemon_reload() {
   if (daemon_socket_absent())
     return {ReloadState::daemon_unavailable, std::move(error)};
   return {ReloadState::failed, std::move(error)};
+}
+
+// Follows save_report_text's branches: a write LayerD loaded, or loads when it
+// starts, is a success; unconfirmed durability or reload and a paused autosave
+// need a look; a declined manual upgrade was the user's choice; any other
+// refusal wrote nothing.
+StatusKind save_report_kind(const CommitOutcome &commit,
+                            const std::optional<ReloadResult> &reload,
+                            const SaveMode mode) {
+  switch (commit.result) {
+  case CommitResult::ok:
+    break;
+  case CommitResult::upgrade_declined:
+    return mode == SaveMode::autosave ? StatusKind::warning : StatusKind::information;
+  case CommitResult::write_failed:
+    if (commit.write_error == layerc::platform::ProfileWriteError::durability_unconfirmed)
+      return StatusKind::warning;
+    return StatusKind::failure;
+  case CommitResult::invalid_fields:
+  case CommitResult::invalid_profile:
+  case CommitResult::blocked_by_sidecar:
+    return StatusKind::failure;
+  }
+  return reload && reload->state == ReloadState::failed ? StatusKind::warning
+                                                        : StatusKind::success;
 }
 
 std::string save_report_text(const CommitOutcome &commit,

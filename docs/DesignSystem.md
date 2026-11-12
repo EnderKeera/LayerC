@@ -903,10 +903,10 @@ line along its top, `secondary` text, `win-status-strip` (28 px) tall.
   recognition: connecting in `accent_2`. The action outcome on the left stays
   `secondary`. StatusText shows it.
 
-The consumer supplies the three messages. Linux shows the same information in
-fixed regions instead (Save / reload outcome; LayerD status, in the body
-size). Explicit outcomes and failures are announced ([Screen
-readers](#screen-readers)).
+The consumer supplies the three messages and each state's `StatusKind` (see
+StatusText). Linux shows the same information in fixed regions instead (Save /
+reload outcome; LayerD status, in the body size). Explicit outcomes and
+failures are announced ([Screen readers](#screen-readers)).
 
 The preview is a static HTML rendition of these rules; the painters named
 above are the source of truth. The Screens pages show it in place.
@@ -934,10 +934,17 @@ A status or information message: a glyph and a semibold status word in `yes`,
   Never a control fill, focus or selection.
 - **Hints** next to fields use `subtext`, not a status color.
 
-The consumer supplies the state and the message. Windows uses
-`paint_status_glyph` and `set_status_line`; Linux uses `EditorStatusMark` and
-`draw_editor_status_glyph`. The adjacent text carries the accessible message;
-the decorative glyph is not a second tab stop or announcement.
+The consumer supplies a `StatusKind` (`src/editor/common/status_kind.hpp`:
+`success`, `failure`, `warning`, `information` or `none`) and the message. The
+kind is assigned where the outcome is known and carried beside the message;
+renderers never read it back from the text. LayerD sends its visual
+recognition state as text only, so the Windows editor reads that one known
+vocabulary in `visual_runtime_status_kind`, and anything it does not know is
+`information`. Windows maps the kind with `status_glyph` and draws it with
+`paint_status_glyph` through `set_status_line` and `set_strip_status`; Linux
+uses `EditorStatusMark` and `draw_editor_status_glyph`. The adjacent text
+carries the accessible message; the decorative glyph is not a second tab stop
+or announcement.
 
 The preview is a static HTML rendition of these rules.
 
@@ -1066,15 +1073,19 @@ evidence limits are listed under [Verification](#verification).
 
 | Concern | Windows | Linux |
 | --- | --- | --- |
-| Tokens and roles | `native_theme.hpp/.cpp` (`neutral_theme`, `native_theme_colors`) | `editor_appearance.hpp/.cpp` (`editor_tokens`, `theme_role_colors`, `control_border`, `editor_contrast_ratio`) |
+| Tokens and roles | `native_theme.hpp/.cpp` (`neutral_theme`, `native_theme_colors`); shared color math below | `editor_appearance.hpp/.cpp` (`editor_tokens`, `theme_role_colors`, `control_border`); shared color math below |
 | Fonts | `create_native_font`, `ui_face` | `editor_style.cpp` (`apply_desktop_font`, `parse_desktop_font`, `xsettings_string`) |
 | Control painting | `native_controls.cpp` (`paint_native_button`, `paint_native_check_box`, `paint_flat_combo`, `paint_flat_frame`, menu bar); `native_theme.cpp` (`paint_focus_ring`, `paint_status_glyph`, `high_contrast_colors`) | `editor_style.hpp/.cpp` (`install_editor_style`, `EditorField`, `EditorChoice`, `draw_editor_focus`, `primary_button`); `editor_geometry.cpp` (`EditorTabs::draw`); `editor_menus.cpp` (`ContextBrowser::draw`) |
 | Applying a theme | `editor_theme.cpp`; `EditorWindow` drawing in `editor_draw.cpp` | `appearance_window.cpp` (`apply_editor_appearance`) |
 | Metrics | `dialog_layout.hpp` (`native_control_height`, `DialogLayout`), `editor_dialog_layouts.cpp` (Options, Appearance, Choose color, Keyboard shortcuts), `editor_layout.cpp`, `editor_automation_layout.cpp` | `editor_input_height`, `editor_button_height` in `editor_style.hpp`; form builders in `editor_pages.cpp`; `desktop_text_metrics` and `apply_desktop_font` for app-local text scaling |
 | Contrast checks | `appearance_contrast.cpp` (Appearance refusal and live lines, Choose color line) | — |
-| Status lines and text tones | `static_style.hpp` (`set_status_line`, `set_text_tone`); `EditorWindow::draw_status_line` | `EditorStatusMark`, `draw_editor_status_glyph`, `StatusPane`; `editor_status_glyph` in the pure model |
+| Status lines and text tones | `StatusKind` in the shared `status_kind.hpp`; `static_style.hpp` (`status_glyph`, `set_status_line`, `set_strip_status`, `set_text_tone`); `visual_runtime_status.hpp` (`visual_runtime_status_kind`); `EditorWindow::draw_status_line` | `StatusKind` in the shared `status_kind.hpp`; `EditorStatusMark`, `draw_editor_status_glyph`, `StatusPane`; `DaemonStatus::kind` and `save_report_kind` in `daemon_link.hpp` |
 | Keyboard shortcuts | `editor_shortcuts.cpp` (command table, `shortcut_rows` from the accelerators) | `editor_commands.cpp` (`shortcut_help`, including F1); `diagnostics_window.cpp` (`show_shortcuts_dialog`, measured browser columns) |
 | Startup | dialog chrome on create | `main.cpp` calls `install_editor_style()` before any widget |
+
+Both platforms use `src/editor/common/editor_color.hpp` for color calculations
+(`rgb_contrast_ratio`, `rgb_hue_degrees`, `rgb_accent_2`, `rgb_on_accent`); toolkit
+color conversion and resources stay in their platform adapters.
 
 ## Not yet in the code
 
@@ -1096,6 +1107,10 @@ production helpers; the tests and rendered checks below cover the refit.
   commit, and is checked against these rules in rendered screenshots of both
   platforms.
 - Keep the System theme working on both platforms; it is the escape hatch.
+- Give every status message its `StatusKind` where the outcome is known and
+  pass it with the text. Never pick a glyph or status color by searching the
+  message text: a message can mention "saved" or "active" while reporting a
+  failure.
 - Check contrast by test, not by eye: the floors in [Where each color may
   go](#where-each-color-may-go) belong in `layerc_editor_tests`, the Linux
   outlines in `layerc_linux_editor_model_tests`.

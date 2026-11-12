@@ -7,6 +7,7 @@
 #include "editor_shortcuts.hpp"
 #include "static_style.hpp"
 #include "test_support.hpp"
+#include "visual_runtime_status.hpp"
 
 #include <windows.h>
 
@@ -14,6 +15,7 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 // The code-laid-out dialogs (DesignSystem.md, Dialogs): one control height,
@@ -339,30 +341,53 @@ void editor_main_layout_contracts() {
              line->text.ends_with(L"; aim for 4.5:1."),
          "Choose color states the aim for a bar color, not a requirement");
 
-  // Every status strip state carries the glyph of its meaning.
-  using layerc::editor::status_strip_glyph;
-  expect(status_strip_glyph(L"LayerD: not running") == StatusGlyph::no &&
-             status_strip_glyph(L"LayerD: connecting") ==
-                 StatusGlyph::accent_2 &&
-             status_strip_glyph(L"LayerD: connected") == StatusGlyph::yes,
-         "the LayerD state maps to no, accent_2 and yes");
-  expect(status_strip_glyph(L"Visual: WGC active") == StatusGlyph::yes &&
-             status_strip_glyph(L"Visual: Desktop Duplication fallback") ==
-                 StatusGlyph::warning &&
-             status_strip_glyph(L"Visual: inactive") ==
-                 StatusGlyph::accent_2 &&
-             status_strip_glyph(L"Visual: disabled") ==
-                 StatusGlyph::accent_2 &&
-             status_strip_glyph(L"Visual: blocked (invalid sidecar)") ==
-                 StatusGlyph::no &&
-             status_strip_glyph(L"Visual: isolated helper quarantined") ==
-                 StatusGlyph::no &&
-             status_strip_glyph(
-                 L"Visual: template asset missing or corrupt") ==
-                 StatusGlyph::no &&
-             status_strip_glyph(L"Visual: capture unavailable") ==
-                 StatusGlyph::no,
-         "each visual runtime state maps to its glyph");
+  // A status kind draws the glyph of its meaning; `none` draws nothing.
+  using layerc::editor::StatusKind;
+  using layerc::editor::status_glyph;
+  expect(status_glyph(StatusKind::success) == StatusGlyph::yes &&
+             status_glyph(StatusKind::failure) == StatusGlyph::no &&
+             status_glyph(StatusKind::warning) == StatusGlyph::warning &&
+             status_glyph(StatusKind::information) == StatusGlyph::accent_2 &&
+             !status_glyph(StatusKind::none),
+         "each status kind maps to its glyph");
+
+  // LayerD's visual recognition phrases, read only at the adapter.
+  using layerc::editor::visual_runtime_status_kind;
+  const std::pair<std::wstring_view, StatusKind> visual_states[]{
+      {L"WGC active", StatusKind::success},
+      {L"Desktop Duplication fallback", StatusKind::warning},
+      {L"inactive", StatusKind::information},
+      {L"disabled", StatusKind::information},
+      {L"connecting", StatusKind::information},
+      {L"blocked (invalid sidecar)", StatusKind::failure},
+      {L"isolated helper quarantined (use Runtime Diagnostics to retry)",
+       StatusKind::failure},
+      {L"template asset missing or corrupt", StatusKind::failure},
+      {L"capture unavailable", StatusKind::failure},
+  };
+  for (const auto &[state, kind] : visual_states) {
+    const std::wstring text = L"Visual recognition: " + std::wstring(state);
+    expect(visual_runtime_status_kind(text) == kind &&
+               visual_runtime_status_kind(text + L" - NVIDIA GeForce RTX") ==
+                   kind,
+           "each visual runtime state keeps its kind with a GPU suffix");
+  }
+  expect(visual_runtime_status_kind(
+             L"Visual recognition: capture unavailable - active GPU") ==
+                 StatusKind::failure &&
+             visual_runtime_status_kind(L"Visual recognition: rebooting") ==
+                 StatusKind::information &&
+             visual_runtime_status_kind(L"WGC active") ==
+                 StatusKind::information &&
+             visual_runtime_status_kind(L"Visual: WGC active") ==
+                 StatusKind::information,
+         "a word in the GPU name never decides; unknown or unprefixed text "
+         "is information");
+  expect(visual_runtime_status_kind(L"Visual recognition: WGC active-not-really") ==
+             StatusKind::information &&
+             visual_runtime_status_kind(L"Visual recognition: Desktop Duplication fallback-new-state") ==
+             StatusKind::information,
+         "a known phrase prefix is not a recognized state");
 
   const HWND editor = open_dialog(IDD_EDITOR);
   if (editor == nullptr) {
@@ -415,15 +440,20 @@ void editor_main_layout_contracts() {
     expect((GetWindowLongPtrW(GetDlgItem(editor, id), GWL_STYLE) &
             LBS_NOINTEGRALHEIGHT) != 0,
            "list " + std::to_string(id) + " must take the height it is given");
-  layerc::editor::set_strip_status(
-      GetDlgItem(editor, IDC_CONNECTION_STATUS), L"LayerD: connected");
-  const auto strip =
-      layerc::editor::static_style(GetDlgItem(editor, IDC_CONNECTION_STATUS));
-  wchar_t name[32]{};
-  GetDlgItemTextW(editor, IDC_CONNECTION_STATUS, name, 32);
-  expect(strip && strip->align_right && strip->glyph == StatusGlyph::yes &&
-             std::wstring_view(name) == L"LayerD: connected",
-         "a strip state keeps its text as the accessible name beside the "
-         "glyph");
+  // The strip stores the glyph of the kind it is given, whatever the text
+  // says, and keeps the text as the accessible name.
+  const HWND strip_control = GetDlgItem(editor, IDC_CONNECTION_STATUS);
+  for (const auto kind : {StatusKind::failure, StatusKind::success,
+                          StatusKind::warning, StatusKind::information,
+                          StatusKind::none}) {
+    layerc::editor::set_strip_status(strip_control, kind, L"LayerD: connected");
+    const auto strip = layerc::editor::static_style(strip_control);
+    wchar_t name[32]{};
+    GetDlgItemTextW(editor, IDC_CONNECTION_STATUS, name, 32);
+    expect(strip && strip->align_right && strip->glyph == status_glyph(kind) &&
+               std::wstring_view(name) == L"LayerD: connected",
+           "a strip state keeps its text as the accessible name beside the "
+           "glyph of its kind");
+  }
   DestroyWindow(editor);
 }

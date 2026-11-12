@@ -172,17 +172,17 @@ void PanelItemDialog::update_fields() {
   const auto rate = number(flash_->value());
   if (kind == 4 && rate && *rate > core::max_shown_indicator_flash_hz) {
     message_->copy_label("Flashes at 3 Hz; faster flashing is capped.");
-    message_mark_->glyph(EditorStatusGlyph::warning);
+    message_mark_->kind(StatusKind::warning);
   } else {
     message_->copy_label(item_help);
-    message_mark_->glyph(EditorStatusGlyph::none);
+    message_mark_->kind(StatusKind::none);
   }
   redraw();
 }
 
 void PanelItemDialog::error(const std::string &message) {
   message_->copy_label(message.c_str());
-  message_mark_->glyph(EditorStatusGlyph::no);
+  message_mark_->kind(StatusKind::failure);
   message_->redraw();
 }
 

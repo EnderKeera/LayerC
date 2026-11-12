@@ -29,7 +29,7 @@ std::string EditorApp::edit_status() const {
 void EditorApp::update_daemon_status() {
   const auto text = daemon_text_ +
       (live_draft_text_.empty() ? "" : "\nLive draft: " + live_draft_text_);
-  status_pane_->set_daemon(text);
+  status_pane_->set_daemon(most_severe(daemon_kind_, live_draft_kind_), text);
 }
 void EditorApp::end_live_draft() {
   // Queued, never joined here: the worker ends any lease off the UI thread.
@@ -41,6 +41,7 @@ void EditorApp::stop_edit_services() {
   Fl::remove_timeout(autosave_tick, this);
   end_live_draft();
   live_draft_text_.clear();
+  live_draft_kind_ = StatusKind::none;
 }
 void EditorApp::schedule_autosave(const bool text_change) {
   if (saving_ || !session.has_document() || session.is_draft()) return;
@@ -61,6 +62,7 @@ void EditorApp::sync_edit_services() {
                        document.upgrade_acknowledged();
   if (!allowed) {
     end_live_draft();
+    live_draft_kind_ = StatusKind::warning;
     live_draft_text_ = "paused — use Save to approve the profile format upgrade.";
     update_daemon_status();
     return;
@@ -72,6 +74,7 @@ void EditorApp::sync_edit_services() {
   // The worker ends another profile's lease before publishing this one.
   live_draft_sequence_ =
       live_draft_->publish(document.profile().id, core::serialize_profile_json(document.profile()));
+  live_draft_kind_ = StatusKind::information;
   live_draft_text_ = "publishing accepted base-profile edits; modules apply after autosave.";
   update_daemon_status();
 }
@@ -84,6 +87,7 @@ void EditorApp::live_draft_ready(int, void *data) {
   // Only the latest publish describes the current draft; older or ended
   // results (including stale failures) are ignored.
   if (update && update->sequence != 0 && update->sequence == app.live_draft_sequence_) {
+    app.live_draft_kind_ = update->reply ? StatusKind::success : StatusKind::warning;
     app.live_draft_text_ = update->reply
         ? "base-profile edits applied in memory, revision " +
               std::to_string(update->reply->revision) + "; modules apply after autosave."
@@ -112,7 +116,7 @@ bool EditorApp::flush_autosave() {
     saving_ = false;
     observed_generation_ = session.edit_generation();
     // The same failure repeats on every autosave while its cause stays.
-    report("Not autosaved. " + *error, StatusVoice::changed);
+    report(StatusKind::failure, "Not autosaved. " + *error, StatusVoice::changed);
     return false;
   }
   session.end_text_edit();
@@ -134,7 +138,8 @@ bool EditorApp::flush_autosave() {
   }
   // A saved autosave follows every edit and stays silent; a refusal is a
   // failure that repeats until the cause goes.
-  report(outcome.text, outcome.saved() ? StatusVoice::silent : StatusVoice::changed);
+  report(outcome.kind, outcome.text,
+         outcome.saved() ? StatusVoice::silent : StatusVoice::changed);
   query_status();
   return outcome.saved();
 }

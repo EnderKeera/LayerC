@@ -329,10 +329,10 @@ void test_panel_item_presentation_values() {
          "the second half period is OFF");
   flash = indicator(AutomationValue(true), 3.0, now + 166ms);
   expect(flash.items.front().flash_on && flash.next_wakeup == now + 167ms,
-         "3 Hz rounds to 333 ms: phase 166 is still ON");
+         "3 Hz rounds to 334 ms: phase 166 is still ON");
   flash = indicator(AutomationValue(true), 3.0, now + 167ms);
-  expect(!flash.items.front().flash_on && flash.next_wakeup == now + 333ms,
-         "phase 167 of 333 ms is OFF");
+  expect(!flash.items.front().flash_on && flash.next_wakeup == now + 334ms,
+         "phase 167 of 334 ms is OFF");
   expect(indicator_flash_hz(0.0) == 0.0 && indicator_flash_hz(-1.0) == 0.0 &&
              indicator_flash_hz(std::numeric_limits<double>::infinity()) == 0.0 &&
              indicator_flash_hz(std::numeric_limits<double>::quiet_NaN()) == 0.0 &&
@@ -343,13 +343,15 @@ void test_panel_item_presentation_values() {
   flash = indicator(AutomationValue(true), 0.5, now + 1999ms);
   expect(!flash.items.front().flash_on && flash.next_wakeup == now + 2000ms,
          "0.5 Hz has a two second period");
-  for (const double capped : {3.5, 4.0}) {
+  for (const double capped : {3.0, 3.5, 4.0}) {
     flash = indicator(AutomationValue(true), capped, now + 166ms);
     expect(flash.items.front().flash_on && flash.next_wakeup == now + 167ms,
-           "rates above 3 Hz stay ON through the 3 Hz half period");
+           "3 Hz and faster stay ON through the 3 Hz half period");
     flash = indicator(AutomationValue(true), capped, now + 167ms);
-    expect(!flash.items.front().flash_on && flash.next_wakeup == now + 333ms,
-           "rates above 3 Hz flip on the 3 Hz half-period edge");
+    expect(!flash.items.front().flash_on && flash.next_wakeup == now + 334ms,
+           "3 Hz and faster flip on the 3 Hz half-period edge");
+    expect(flash.next_wakeup && 3 * (*flash.next_wakeup - now) >= 1000ms,
+           "the measured cycle keeps every stored rate at or below 3 Hz");
   }
   flash = indicator(AutomationValue(true), 2.0, now, now + 1s);
   expect(flash.items.front().flash_on, "an epoch in the future starts ON");

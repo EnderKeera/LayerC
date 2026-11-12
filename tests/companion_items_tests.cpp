@@ -489,7 +489,8 @@ void test_companion_presentation_schedule() {
                     snapshot->panels.front().typed_items.size() == 1,
                 "a 4 Hz indicator publishes one typed row per capped 3 Hz edge"))
       return;
-    const auto next = edge + std::chrono::milliseconds{step % 2 == 0 ? 167 : 166};
+    // The 3 Hz cap rounds up to a 334 ms period: two 167 ms halves.
+    const auto next = edge + 167ms;
     expect(snapshot->panels.front().typed_items.front().flash_on == (step % 2 == 0) &&
                built.next_wakeup == next,
            "eight capped 3 Hz producer edges alternate phase and request the next edge");

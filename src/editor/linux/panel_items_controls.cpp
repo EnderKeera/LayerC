@@ -136,7 +136,7 @@ void PanelItemsControls::edit(const bool adding) {
           app_.refresh();
           if (adding) items_->value(items_->size());
           select();
-          app_.report("Overlay item applied. Save publishes the profile and modules together.");
+          app_.report(StatusKind::success, "Overlay item applied. Save publishes the profile and modules together.");
         }
         return error;
       });
@@ -154,7 +154,8 @@ void PanelItemsControls::remove() {
         return failure ? std::optional<std::string>(failure->message) : std::nullopt;
       });
   app_.refresh();
-  app_.report(error.value_or("Overlay item removed."));
+  app_.report(error ? StatusKind::failure : StatusKind::success,
+              error.value_or("Overlay item removed."));
 }
 
 void PanelItemsControls::move(const int direction) {
@@ -172,7 +173,8 @@ void PanelItemsControls::move(const int direction) {
   app_.refresh();
   if (!error) items_->value(static_cast<int>(target + 1));
   select();
-  app_.report(error.value_or("Overlay item reordered."));
+  app_.report(error ? StatusKind::failure : StatusKind::success,
+              error.value_or("Overlay item reordered."));
 }
 
 bool PanelItemsControls::owns(const Fl_Widget *widget) const {

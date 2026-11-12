@@ -6,6 +6,7 @@
 #include "dialog_layout.hpp"
 #include "editor_util.hpp"
 #include "live_edit_session.hpp"
+#include "status_kind.hpp"
 
 #include "layerc/core/live_edit.hpp"
 #include "layerc/platform/live_channel.hpp"
@@ -67,6 +68,7 @@ struct EditorShell final {
   HIMAGELIST profile_check_hit_images{};
   std::vector<ProfileEntry> profiles;
   std::wstring visual_runtime_status{L"Visual recognition: connecting"};
+  StatusKind visual_runtime_kind{StatusKind::information};
   // The editor stays visible to screenshots, sharing and Magnifier unless the
   // user opts out; overlay exclusion is LayerD's separate setting.
   bool capture_exclusion{false};

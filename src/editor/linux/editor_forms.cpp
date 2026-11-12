@@ -101,13 +101,16 @@ void EditorApp::build() {
           : "Accessibility unavailable: " + accessibility->fault());
   load_appearance();
   if (!session.profiles().profiles.empty()) {
-    if (const auto error = session.open(0)) report(*error);
+    if (const auto error = session.open(0)) report(StatusKind::failure, *error);
   }
   refresh();
-  report(session.has_document() ? "Profile loaded. Explicit Save applies changes." :
+  const auto initial_kind = session.has_document() ? StatusKind::success
+      : session.profiles().profiles.empty() && session.profiles().error.empty()
+          ? StatusKind::information : StatusKind::failure;
+  report(initial_kind, session.has_document() ? "Profile loaded. Explicit Save applies changes." :
          "No readable profiles. Use New or Import to begin. " + session.profiles().error);
   query_status();
-  if (!appearance_error_.empty()) report(appearance_error_);
+  if (!appearance_error_.empty()) report(StatusKind::warning, appearance_error_);
 }
 
 void EditorApp::redraw_preview() {
@@ -142,7 +145,7 @@ void EditorApp::refresh_forms() {
   if (!session.has_document()) {
     tabs->deactivate();
     profile_page_->show(nullptr);
-    status_pane_->set_modules("No open profile.");
+    status_pane_->set_modules(StatusKind::information, "No open profile.");
     return;
   }
   tabs->activate();
@@ -151,11 +154,21 @@ void EditorApp::refresh_forms() {
   cooldown_page_->show(profile, cooldown_index());
   binding_page_->show(profile);
   panel_page_->show(profile, panel_index());
+  StatusKind modules_kind = StatusKind::information;
   std::string modules = "Modules and unsupported bindings are preserved.";
   const auto &document = session.document();
-  if (document.has_unreadable_module()) modules += "\nUnreadable module: Save is blocked, not repaired by discarding data.";
-  if (!document.visual_error().empty()) modules += "\nVisual: " + document.visual_error();
-  if (!session.profiles().warning_text().empty()) modules += "\n" + session.profiles().warning_text();
-  status_pane_->set_modules(modules);
+  if (document.has_unreadable_module()) {
+    modules_kind = StatusKind::failure;
+    modules += "\nUnreadable module: Save is blocked, not repaired by discarding data.";
+  }
+  if (!document.visual_error().empty()) {
+    modules_kind = StatusKind::failure;
+    modules += "\nVisual: " + document.visual_error();
+  }
+  if (!session.profiles().warning_text().empty()) {
+    modules_kind = most_severe(modules_kind, StatusKind::warning);
+    modules += "\n" + session.profiles().warning_text();
+  }
+  status_pane_->set_modules(modules_kind, modules);
 }
 } // namespace layerc::editor

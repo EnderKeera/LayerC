@@ -169,11 +169,12 @@ void linux_editor_design_system_tab_and_glyph_contracts() {
              focused.at(bounds->x + 1, bounds->y + bounds->height - 2) == tokens.accent,
          "tab focus outlines the selected tab, not the page or its content");
   Fl::focus(nullptr);
-  const std::array glyphs{editor::EditorStatusGlyph::yes, editor::EditorStatusGlyph::no,
-                          editor::EditorStatusGlyph::warning, editor::EditorStatusGlyph::information};
+  const auto unmarked = capture(window);
+  const std::array kinds{editor::StatusKind::success, editor::StatusKind::failure,
+                         editor::StatusKind::warning, editor::StatusKind::information};
   const std::array colors{tokens.yes, tokens.no, tokens.warning, tokens.accent_2};
-  for (std::size_t index = 0; index < glyphs.size(); ++index) {
-    mark.glyph(glyphs[index]);
+  for (std::size_t index = 0; index < kinds.size(); ++index) {
+    mark.kind(kinds[index]);
     const auto image = capture(window);
     int ink = 0;
     for (int y = mark.y(); y < mark.y() + mark.h(); ++y)
@@ -182,6 +183,14 @@ void linux_editor_design_system_tab_and_glyph_contracts() {
     expect(ink > 0 && ink < 72,
            "each status glyph is sparse token-colored ink, not a solid message background");
   }
+  mark.kind(editor::StatusKind::none);
+  const auto cleared = capture(window);
+  bool no_ink = true;
+  for (int y = mark.y(); y < mark.y() + mark.h(); ++y)
+    for (int x = mark.x(); x < mark.x() + mark.w(); ++x)
+      no_ink = no_ink && cleared.at(x, y) == unmarked.at(x, y);
+  expect(mark.kind() == editor::StatusKind::none && no_ink,
+         "clearing a status removes every pixel of its previous colored glyph");
   expect((!mark.label() || !*mark.label()) && !mark.visible_focus(),
           "the decorative glyph adds no duplicate accessible text or tab stop");
 }

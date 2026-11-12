@@ -239,7 +239,9 @@ void present_indicator(ItemPresentation &row, RowSources &sources,
   if (!row.active || hz == 0.0)
     return;
   // 50% duty from the presentation epoch; phase zero is ON.
-  const auto period = std::max<std::int64_t>(1, std::llround(1000.0 / hz));
+  // Upward, so no stored rate can shorten the period below the 3 Hz cap.
+  const auto period =
+      std::max<std::int64_t>(1, static_cast<std::int64_t>(std::ceil(1000.0 / hz)));
   const auto elapsed =
       sources.now > sources.epoch
           ? std::chrono::duration_cast<Milliseconds>(sources.now - sources.epoch).count()

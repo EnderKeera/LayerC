@@ -1,4 +1,5 @@
 #include "editor_appearance.hpp"
+#include "editor_color.hpp"
 
 #include "layerc/core/json.hpp"
 #include "layerc/platform/durable_file.hpp"
@@ -20,16 +21,12 @@ namespace json = layerc::core::json;
 constexpr std::size_t max_appearance_bytes = 64 * 1024;
 constexpr std::int64_t appearance_version = 1;
 
-// The Windows neutral dark ramp (layerc::platform::neutral_theme) and preset
-// accents, so both editors render a preset alike.
 // The Windows neutral dark ramp (layerc::platform::neutral_theme) and the
 // preset accents, named once so no UI file writes a hex colour of its own.
 constexpr std::uint32_t copper_accent = 0xD88E4B;
 constexpr std::uint32_t teal_accent = 0x5AB6AA;
 constexpr std::uint32_t plum_accent = 0xB382E2;
 constexpr std::uint32_t slate_accent = 0x8FA3B8;
-constexpr std::uint32_t accent_2_blue = 0x60B0FF;
-constexpr std::uint32_t accent_2_violet = 0xB99BFF;
 
 constexpr EditorTokens neutral_tokens{
     .background = 0x1F1F1F,
@@ -54,42 +51,6 @@ constexpr EditorTokens neutral_tokens{
     .accent_2 = accent_2_blue,
     .on_status = 0x141414,
 };
-
-// Hue in degrees; 0 for a gray.
-double hue_degrees(const std::uint32_t color) {
-  const int red = static_cast<int>((color >> 16U) & 0xFFU);
-  const int green = static_cast<int>((color >> 8U) & 0xFFU);
-  const int blue = static_cast<int>(color & 0xFFU);
-  const int high = std::max({red, green, blue});
-  const int chroma = high - std::min({red, green, blue});
-  if (chroma == 0) return 0;
-  double sector{};
-  if (high == red) sector = static_cast<double>(green - blue) / chroma;
-  else if (high == green) sector = static_cast<double>(blue - red) / chroma + 2.0;
-  else sector = static_cast<double>(red - green) / chroma + 4.0;
-  const double hue = sector * 60.0;
-  return hue < 0.0 ? hue + 360.0 : hue;
-}
-
-// WCAG 2 relative luminance of one #RRGGBB colour.
-double relative_luminance(const std::uint32_t color) {
-  const auto channel = [](const std::uint32_t value) {
-    const double component = static_cast<double>(value) / 255.0;
-    return component <= 0.04045 ? component / 12.92
-                                : std::pow((component + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * channel((color >> 16U) & 0xFFU) +
-         0.7152 * channel((color >> 8U) & 0xFFU) +
-         0.0722 * channel(color & 0xFFU);
-}
-
-// Ink for text on a filled status mark: the weighted luma picks white or the
-// neutral ink.
-std::uint32_t on_color(const std::uint32_t color) {
-  const auto luma = ((color >> 16U) & 0xFFU) * 299U +
-                    ((color >> 8U) & 0xFFU) * 587U + (color & 0xFFU) * 114U;
-  return luma >= 140000U ? 0x141414U : 0xFFFFFFU;
-}
 
 constexpr std::array<std::string_view, static_cast<std::size_t>(EditorTheme::count)> theme_names{
     "copper", "teal", "plum", "system", "dark"};
@@ -167,47 +128,9 @@ EditorTokens editor_tokens(const EditorAppearance &appearance) noexcept {
   tokens.accent = accent;
   // About a quarter of the accent over the window, as on Windows.
   tokens.selection = blend(neutral_tokens.background, accent, 60);
-  tokens.on_accent = on_color(accent);
-  tokens.accent_2 = editor_accent_2(accent);
+  tokens.on_accent = rgb_on_accent(accent);
+  tokens.accent_2 = rgb_accent_2(accent);
   return tokens;
-}
-
-std::uint32_t editor_accent_2(const std::uint32_t accent) noexcept {
-  const auto distance = hue_degrees(accent) - hue_degrees(accent_2_blue);
-  const double gap = std::abs(distance);
-  return std::min(gap, 360.0 - gap) <= 45.0 ? accent_2_violet : accent_2_blue;
-}
-
-double editor_contrast_ratio(const std::uint32_t first, const std::uint32_t second) noexcept {
-  const double one = relative_luminance(first);
-  const double two = relative_luminance(second);
-  return (std::max(one, two) + 0.05) / (std::min(one, two) + 0.05);
-}
-
-EditorStatusGlyph editor_status_glyph(const std::string_view text) {
-  if (text.empty()) return EditorStatusGlyph::none;
-  std::string folded(text);
-  for (auto &letter : folded)
-    letter = static_cast<char>(std::tolower(static_cast<unsigned char>(letter)));
-  const auto has = [&folded](const std::string_view part) {
-    return folded.find(part) != std::string::npos;
-  };
-  // Failures first: "not running" must never read as "running".
-  constexpr std::array failures{"not running", "could not", "not saved",
-                                "not autosaved", "invalid", "blocked",
-                                "unavailable", "failed", "not loaded",
-                                "not connected", "disconnected"};
-  for (const auto *part : failures)
-    if (has(part)) return EditorStatusGlyph::no;
-  constexpr std::array degraded{"warning", "degraded", "unsaved", "inactive"};
-  for (const auto *part : degraded)
-    if (has(part)) return EditorStatusGlyph::warning;
-  constexpr std::array successes{"saved", "loaded", "running", "connected",
-                                 "active"};
-  if (!has("not "))
-    for (const auto *part : successes)
-      if (has(part)) return EditorStatusGlyph::yes;
-  return EditorStatusGlyph::information;
 }
 
 DesktopTextMetrics desktop_text_metrics(const std::optional<int> pixels) noexcept {

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "document_commit.hpp"
+#include "status_kind.hpp"
 
 #include "layerc/runtime/display_diagnostics.hpp"
+#include "layerc/runtime/diagnostics.hpp"
 
 #include <cstddef>
 #include <optional>
@@ -16,7 +18,8 @@ namespace layerc::editor {
 
 struct CapabilityLine {
   std::string name;
-  std::string availability;
+  layerc::runtime::CapabilityAvailability availability{
+      layerc::runtime::CapabilityAvailability::inactive};
   // Stable reason tokens and current fault text, joined for display.
   std::string reasons;
 };
@@ -41,6 +44,7 @@ struct DaemonStatus {
   // One status-bar line: "LayerD 2.6.0 — X11 connected, 1 session", or
   // "LayerD 2.7.0 — Wayland (wlroots), XWayland connected, 1 session".
   [[nodiscard]] std::string summary() const;
+  [[nodiscard]] StatusKind kind() const noexcept;
   [[nodiscard]] bool wayland_session() const noexcept;
 };
 
@@ -69,6 +73,12 @@ struct ReloadResult {
 // Manual Save and background autosave phrase the same durable outcome
 // differently; the wording is derived from the mode, never rewritten.
 enum class SaveMode { manual, autosave };
+
+// The StatusKind of the outcome save_report_text words, assigned here where
+// the commit and reload results are known.
+[[nodiscard]] StatusKind save_report_kind(const CommitOutcome &commit,
+                                          const std::optional<ReloadResult> &reload,
+                                          SaveMode mode);
 
 // A disk save and a runtime reload are distinct outcomes: the text reports
 // both, and a failed commit never claims a reload.

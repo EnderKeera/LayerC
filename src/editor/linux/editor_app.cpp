@@ -36,9 +36,9 @@ std::optional<std::size_t> EditorApp::panel_index() const {
     if (items[i].id == panel_id_) return i;
   return std::nullopt;
 }
-void EditorApp::report(std::string text, const StatusVoice voice) {
+void EditorApp::report(const StatusKind kind, std::string text, const StatusVoice voice) {
   status_text_ = std::move(text);
-  status_pane_->set_status(status_text_);
+  status_pane_->set_status(kind, status_text_);
   title_text_ = "LayerE — Linux X11 editor";
   if (session.has_document()) {
     title_text_ += " — " + session.document().profile().name;
@@ -58,8 +58,10 @@ void EditorApp::report(std::string text, const StatusVoice voice) {
 void EditorApp::query_status() {
   const auto state = query_daemon_status();
   daemon_text_ = state.summary();
+  daemon_kind_ = state.kind();
   for (const auto &capability : state.capabilities) {
-    daemon_text_ += "\n" + capability.name + ": " + capability.availability;
+    daemon_text_ += "\n" + capability.name + ": " +
+                    std::string(layerc::runtime::availability_name(capability.availability));
     if (!capability.reasons.empty()) daemon_text_ += " (" + capability.reasons + ")";
   }
   update_daemon_status();
@@ -76,7 +78,7 @@ void EditorApp::refresh() {
 bool EditorApp::apply_fields(const bool text_change) {
   if (const auto error = apply_field_buffers(text_change)) {
     // Repeated on every keystroke while the field stays invalid.
-    report(*error, StatusVoice::changed);
+    report(StatusKind::failure, *error, StatusVoice::changed);
     return false;
   }
   return true;
@@ -108,7 +110,7 @@ std::optional<std::string> EditorApp::apply_field_buffers(const bool text_change
 void EditorApp::module_fields_changed(const bool pending) {
   pending_fields_ = pending;
   last_field_ = nullptr;
-  report(pending ? "Pending automation fields. Autosave validates them." : edit_status(),
+  report(StatusKind::information, pending ? "Pending automation fields. Autosave validates them." : edit_status(),
          StatusVoice::silent);
   if (pending) schedule_autosave(true);
 }
@@ -117,7 +119,7 @@ void EditorApp::field_changed(Fl_Widget *widget) {
   last_field_ = widget;
   if (apply_fields(dynamic_cast<Fl_Input *>(widget) != nullptr)) {
     fill_lists();
-    report(edit_status(), StatusVoice::silent);
+    report(StatusKind::information, edit_status(), StatusVoice::silent);
     preview->redraw();
   }
 }
@@ -130,10 +132,10 @@ void EditorApp::selection_changed(Fl_Widget *widget) {
     const auto path = session.profiles().profiles[index].path;
     if (session.has_document() && path == session.document().path()) return;
     if (!may_leave()) { fill_lists(); return; }
-    if (const auto error = session.open_path(path)) { report(*error); fill_lists(); return; }
+    if (const auto error = session.open_path(path)) { report(StatusKind::failure, *error); fill_lists(); return; }
     cooldown_id_.clear(); panel_id_.clear(); binding_index_ = -1;
     refresh();
-    report("Profile loaded. Changes autosave; new profiles need Save once.");
+    report(StatusKind::success, "Profile loaded. Changes autosave; new profiles need Save once.");
     return;
   }
   if (!apply_fields()) { fill_lists(); return; }
@@ -162,14 +164,14 @@ void EditorApp::tab_changed() {
   menus->update();
 }
 bool EditorApp::save() {
-  if (!session.has_document()) { report("No profile is open."); return false; }
+  if (!session.has_document()) { report(StatusKind::failure, "No profile is open."); return false; }
   if (saving_) return false;
   Fl::remove_timeout(autosave_tick, this);
   saving_ = true;
   if (const auto error = apply_field_buffers()) {
     saving_ = false;
     observed_generation_ = session.edit_generation();
-    report("Not saved. " + *error);
+    report(StatusKind::failure, "Not saved. " + *error);
     return false;
   }
   session.end_text_edit();
@@ -180,7 +182,7 @@ bool EditorApp::save() {
   saving_ = false;
   observed_generation_ = session.edit_generation();
   if (outcome.saved()) { stop_edit_services(); refresh(); }
-  report(outcome.text);
+  report(outcome.kind, outcome.text);
   query_status();
   return outcome.saved();
 }
@@ -194,15 +196,15 @@ bool EditorApp::may_leave() {
   if (decision != 1) return false;
   if (session.is_draft()) session.close_document();
   else if (const auto error = session.open_path(session.document().path())) {
-    report("Could not discard safely: " + *error); return false;
+    report(StatusKind::failure, "Could not discard safely: " + *error); return false;
   }
   refresh();
   return true;
 }
 void EditorApp::changed(const std::optional<std::string> &error) {
-  if (error) { report("Not changed: " + *error); return; }
+  if (error) { report(StatusKind::failure, "Not changed: " + *error); return; }
   refresh();
-  report(edit_status(), StatusVoice::silent);
+  report(StatusKind::information, edit_status(), StatusVoice::silent);
 }
 
 bool EditorApp::command_enabled(const EditorCommand action) const {
