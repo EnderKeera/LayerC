@@ -523,6 +523,67 @@ The latest editor GUI bundles are
 `out/linux-gui/c7b-20261015T065624Z` (30/30). CI was not run (nothing pushed).
 No VM or physical-compositor evidence, release, signing or publication is claimed.
 
+### Pending physical preview qualification
+
+These rows are pending; there was no physical host in this run. Follow the
+[Linux physical qualification identity and safety handoff](Linux.md#physical-qualification-handoff).
+Record the exact GNOME Shell version and LayerC extension version, or the exact
+KWin version and script package version, for every result. Evidence is specific
+to those versions and must not be generalized to other compositor or extension
+versions.
+
+| Compositor/session | Delivery | Status | Version/evidence |
+| --- | --- | --- | --- |
+| GNOME Shell | Native | pending — no physical host in this run | Record exact Shell and LayerC extension versions |
+| GNOME Shell | Flatpak | pending — no physical host in this run | Record exact Shell and LayerC extension versions |
+| KWin 5.27 | Native | pending — no physical host in this run | Record exact KWin and script package versions |
+| KWin 5.27 | Flatpak | pending — no physical host in this run | Record exact KWin and script package versions |
+| KWin 6 | Native | pending — no physical host in this run | Record exact KWin and script package versions |
+| KWin 6 | Flatpak | pending — no physical host in this run | Record exact KWin and script package versions |
+
+For a native preview, use the documented backend selector and archive status
+before and after. Wait for the owned daemon to be ready before the first status
+query; a failed launch or status is evidence, not a pass:
+
+```sh
+LAYERC_DISPLAY_BACKEND=wayland layerd > "$run/wayland-layerd.log" 2>&1 &
+test_pid=$!
+layerctl status --json > "$run/wayland-status-before.json"
+# Exercise the preview checklist; then capture status after.
+layerctl status --json > "$run/wayland-status-after.json"
+kill -TERM "$test_pid"
+wait "$test_pid"
+```
+
+Flatpak uses the existing sandbox and exact backend/command form; do not add a
+device override or broaden permissions automatically:
+
+```sh
+flatpak run --env=LAYERC_DISPLAY_BACKEND=wayland --command=layerd io.github.EnderKeera.LayerC > "$run/flatpak-wayland-layerd.log" 2>&1 &
+test_pid=$!
+flatpak run --command=layerctl io.github.EnderKeera.LayerC status --json > "$run/flatpak-wayland-status-before.json"
+# Exercise the preview checklist; then capture status after.
+flatpak run --command=layerctl io.github.EnderKeera.LayerC status --json > "$run/flatpak-wayland-status-after.json"
+kill -TERM "$test_pid"
+wait "$test_pid"
+```
+
+Record provider names, states and reasons; native versus XWayland matching; and
+the editor's degraded XWayland-only task and calibration view. Exercise
+layer-shell/KWin/GNOME overlay stacking, click-through, real fullscreen and
+mixed DPI. Validate real portal deny/cancel/grant/revoke and decoded
+selected-window/monitor-crop frames without repeated consent loops. Physical
+input is only through the user's pre-existing `input` group membership and
+explicit evdev opt-in; verify hotplug/recovery without grabbing, synthesizing,
+or changing group membership. Default Flatpak evdev remains unavailable and
+must not receive a device override automatically. Enabling the GNOME extension
+is a separate, explicit host-user approval and the previous state must be
+restored afterward.
+
+Physical portal grants and decoded GPU-backed frames are unobserved here;
+headless Shell consent and fake portal evidence are not substitutes. Linux
+support remains X11/headless: Wayland is a preview and Gamescope is unsupported.
+
 ## Development lanes
 
 | Lane | Branch | Owns |

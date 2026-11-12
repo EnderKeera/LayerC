@@ -229,9 +229,99 @@ block implementation or container CI:
 - Headless/non-X11 and missing-extension snapshots showing the affected
   adapter as unavailable rather than silently omitted.
 
+### Physical qualification handoff
+
+The matrix is pending for every physical desktop. Use a dedicated, disposable,
+physical logged-in desktop account. Obtain explicit permission before
+installations or session, display, or extension changes. Preserve the real
+`DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, and session bus; do not redirect
+`XDG_RUNTIME_DIR` away from compositor or portal sockets. Do not run native and
+Flatpak sessions simultaneously or stop someone else's daemon.
+
+| Physical session | Delivery | Status | Required evidence |
+| --- | --- | --- | --- |
+| GNOME Xorg | Native | pending — no physical host in this run | Identity/environment, interaction, capture, cleanup and resources below |
+| GNOME Xorg | Flatpak | pending — no physical host in this run | Same, including sandbox matching and effective permissions |
+| KDE Plasma X11 | Native | pending — no physical host in this run | Same |
+| KDE Plasma X11 | Flatpak | pending — no physical host in this run | Same, including sandbox matching and effective permissions |
+
+Start an evidence directory and identify the exact source state before each
+physical run. This preflight is for a future physical tester; it was not run in
+this handoff:
+
+```sh
+mkdir -p out/linux-physical
+run=$(mktemp -d "$PWD/out/linux-physical/x11-XXXXXXXX")
+git rev-parse HEAD > "$run/commit.txt"
+git status --porcelain=v1 --untracked-files=all > "$run/worktree.txt"
+git diff --binary HEAD > "$run/tracked-source.patch"
+printf 'session=%s desktop=%s\n' "${XDG_SESSION_TYPE-}" "${XDG_CURRENT_DESKTOP-}" > "$run/session.txt"
+uname -a > "$run/kernel.txt"
+```
+
+Record checksums for each changed tracked source file and each untracked source
+file separately; the tracked patch does not capture untracked files. Record the
+executable/package SHA-256, distro, kernel, session, compositor and GPU driver,
+physical monitor scales/layout, backend status before/after, screenshots/video,
+test PIDs, logs, and cleanup. Do not dump the full environment or include
+secrets. For Flatpak, also capture the exact commit, package information,
+effective permissions, and bundle hash; retain normal sandbox restrictions and
+do not broaden device, host, or network access:
+
+```sh
+flatpak info --show-commit io.github.EnderKeera.LayerC > "$run/flatpak-commit.txt"
+flatpak info io.github.EnderKeera.LayerC > "$run/flatpak-info.txt"
+flatpak info --show-permissions io.github.EnderKeera.LayerC > "$run/flatpak-permissions.txt"
+sha256sum /path/to/layerc-2.7.0-x86_64.flatpak > "$run/flatpak-bundle.sha256"
+```
+
+For native X11, launch only an installed build whose binary hashes were
+recorded. Wait until the owned daemon is ready before the first status query; a
+failed launch or status query is evidence, not a pass. Use only a disposable
+profile store in the logged-in test account, and stop only the recorded
+`test_pid`:
+
+```sh
+LAYERC_DISPLAY_BACKEND=x11 layerd > "$run/native-layerd.log" 2>&1 &
+test_pid=$!
+layerctl status --json > "$run/native-status-before.json"
+# Activate a disposable profile in layere; exercise the checklist; capture status after.
+layerctl status --json > "$run/native-status-after.json"
+kill -TERM "$test_pid"
+wait "$test_pid"
+```
+
+For Flatpak, use the same installed package and its documented commands, but
+only its disposable private profile store in that account. Wait for the owned
+daemon before the first status query, keep the normal sandbox, and stop only
+this run's `test_pid`:
+
+```sh
+flatpak run --env=LAYERC_DISPLAY_BACKEND=x11 --command=layerd io.github.EnderKeera.LayerC > "$run/flatpak-layerd.log" 2>&1 &
+test_pid=$!
+flatpak run --command=layerctl io.github.EnderKeera.LayerC status --json > "$run/flatpak-status-before.json"
+# Activate a disposable profile in layere; exercise the checklist; capture status after.
+flatpak run --command=layerctl io.github.EnderKeera.LayerC status --json > "$run/flatpak-status-after.json"
+kill -TERM "$test_pid"
+wait "$test_pid"
+```
+
+Qualification includes passive E (`scan 0x12`) and mouse delivery to an
+underlying controlled application, hotplug, executable/title/class matching
+(including Flatpak's unreadable `/proc/<pid>/exe` case), and two independent
+panels including ready-hide. Verify real pointer click-through and target
+focus/move/resize, physical mixed DPI, Composite/Damage/fallback capture and
+calibration, recovery/status faults, and that user-initiated close clears only
+owned windows, processes, socket, and capture. Archive USS/PSS/RSS/swap/GPU
+metrics and separate harness overhead against the existing resource target
+table. An Xvfb walkthrough is not physical evidence. For every case record the
+expected and observed result, artifact, and pass/fail/blocked; pending is not
+passed.
+
 ## X11 editor (v2.6c)
 
-The v2.6c editor is not yet published. Compared with the Windows editor, X11
+The v2.6c editor is included in package version 2.7.0; publication does not
+qualify physical desktops. Compared with the Windows editor, X11
 has no Generic HID capture, Game Bar companion, capture exclusion or isolated
 recognition (their data is preserved), the isolated-runtime setting has no
 Linux counterpart (its value is preserved), and there is no Pick Window or direct
