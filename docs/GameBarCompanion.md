@@ -88,4 +88,5 @@ The package manifest registers:
 ## Related documentation
 
 - [`GameBarCompanion.audit.md`](GameBarCompanion.audit.md) — recorded automated evidence and outstanding manual/certification gates.
+- [`../packaging/windows/GAMEBAR-SIDELOAD.md`](../packaging/windows/GAMEBAR-SIDELOAD.md) — local unsigned/signed MSIX build, signing, and sideload instructions.
 - [`../README.md`](../README.md) — project-wide support and release status.

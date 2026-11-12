@@ -61,7 +61,8 @@ matrix, certification, and production signing remain open.
 
 Requirements: Windows 10 22H2+ or Windows 11 x64, Visual Studio 2026 with the
 Desktop C++ workload, and CMake 3.28+. The optional Game Bar package also needs
-Universal Windows Platform and C++ UWP tools.
+Universal Windows Platform and C++ UWP tools; see [local MSIX signing and
+sideloading](packaging/windows/GAMEBAR-SIDELOAD.md) for development setup.
 
 ```powershell
 # Focused local iteration
@@ -173,9 +174,10 @@ The future signing job must use the PEM private key in the repository Actions
 secret **`LAYERC_UPDATE_SIGNING_KEY`**, sign the exact `layerc_manifest` output
 with `openssl dgst -sha256 -sign`, and publish `manifest.json`, its detached
 DER `manifest.sig`, and the SHA-256-named file assets. This is not wired into
-`release.yml` yet; do not enable unsigned updates. See
-[release signing instructions](CONTRIBUTING.md#release-signing-windows-updates)
-for key extraction, configuration, signing, and publication details.
+`release.yml` yet; do not enable unsigned updates. See the
+[offline Windows update signing instructions](packaging/windows/UPDATE-SIGNING.md)
+for local preparation and verification; local signing does not publish assets
+or provision a production key.
 
 ## Build and package commands
 

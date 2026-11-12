@@ -217,6 +217,11 @@ if(WIN32)
     set_target_properties(layerc_launcher PROPERTIES OUTPUT_NAME layerc)
     target_link_libraries(layerc_launcher PRIVATE layerc_launcher_win user32)
     layerc_win32_exe(layerc_launcher)
+
+    # Offline packaging/test utility; not installed or shipped with LayerC.
+    add_executable(layerc_verify_update tools/verify_update_signature.cpp)
+    target_link_libraries(layerc_verify_update PRIVATE layerc_launcher_win)
+    layerc_win32(layerc_verify_update)
 endif()
 
 add_library(layerc_runtime STATIC
@@ -719,6 +724,9 @@ if(MINGW)
     endforeach()
 endif()
 
+set(LAYERC_GAMEBAR_SIGNING_THUMBPRINT "" CACHE STRING
+    "Public thumbprint of the CurrentUser My certificate for opt-in Game Bar MSIX signing")
+
 if(TARGET layerc_gamebar_host)
     find_program(LAYERC_MAKEAPPX makeappx.exe
         HINTS "${LAYERC_WINSDK_ROOT}/bin/${LAYERC_WINSDK_VER}/x64")
@@ -773,6 +781,27 @@ if(TARGET layerc_gamebar_host)
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/gamebar/StageGameBarPackage.ps1"
             VERBATIM)
     endif()
+endif()
+
+if(LAYERC_GAMEBAR_SIGNING_THUMBPRINT AND TARGET layerc_gamebar_msix)
+    get_filename_component(_layerc_gamebar_sdk_bin "${LAYERC_MAKEAPPX}" DIRECTORY)
+    find_program(LAYERC_SIGNTOOL signtool.exe
+        HINTS "${_layerc_gamebar_sdk_bin}" NO_DEFAULT_PATH)
+    if(NOT LAYERC_SIGNTOOL)
+        message(FATAL_ERROR
+            "Game Bar signing was configured but SignTool was not found beside MakeAppx")
+    endif()
+    add_custom_target(layerc_gamebar_signed_msix
+        COMMAND "${LAYERC_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/Sign-GameBarMsix.ps1"
+            -InputPath "${LAYERC_GAMEBAR_MSIX}"
+            -OutputPath "${LAYERC_GAMEBAR_MSIX_DIR}/LayerC.GameBar.v1.signed.msix"
+            -CertificateThumbprint "${LAYERC_GAMEBAR_SIGNING_THUMBPRINT}"
+            -SignToolPath "${LAYERC_SIGNTOOL}"
+        BYPRODUCTS "${LAYERC_GAMEBAR_MSIX_DIR}/LayerC.GameBar.v1.signed.msix"
+        DEPENDS layerc_gamebar_msix
+            "${CMAKE_CURRENT_SOURCE_DIR}/tools/Sign-GameBarMsix.ps1"
+        VERBATIM)
 endif()
 
 if(WIN32)
