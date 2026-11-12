@@ -1,5 +1,6 @@
 #pragma once
 
+#include "accessible_text.hpp"
 #include "appearance_draft.hpp"
 #include "automation_editor.hpp"
 #include "cooldown_editor.hpp"
@@ -41,6 +42,10 @@ struct VisualAssetGcReport;
 }
 
 namespace layerc::editor {
+
+// The preview's tooltip, and the end of its description.
+inline constexpr wchar_t preview_tooltip[] =
+    L"Drag the selected bar. Arrow keys nudge it 1 px (Shift: 10 px).";
 
 class EditorWindow final : private DialogTheme {
 public:
@@ -102,6 +107,9 @@ private:
   [[nodiscard]] std::optional<LRESULT> handle_shell_notify(const NMHDR &header);
   void browse_application();
   void apply_application_text();
+  // What the application field matches: its tooltip and its description.
+  [[nodiscard]] std::wstring application_match_text() const;
+  void describe_application();
   void refresh_title();
   void sync_draft_row();
   void focus_field(int id);
@@ -120,7 +128,10 @@ private:
   // Selects the bar that shows the selected cooldown.
   void follow_cooldown_bar();
   void layout_tasks(HWND);
-  void set_status(std::wstring_view text) { set_text(shell_.status, text); }
+  void set_status(std::wstring_view text,
+                  StatusVoice voice = StatusVoice::announced) {
+    set_status_text(shell_.status, text, voice);
+  }
   [[nodiscard]] HBRUSH brush(layerc::platform::EditorControlRole role) const {
     return appearance_editor_.brushes()[static_cast<std::size_t>(role)];
   }
@@ -164,6 +175,10 @@ private:
   [[nodiscard]] layerc::core::PanelPresentation
   preview_presentation(const layerc::core::Panel &) const;
   void refresh_position_hint();
+  void refresh_overlay_contrast();
+  // Sets a wrapping hint, reason or warning line and lays the window out
+  // again when the text changed, since the line's height sizes its group.
+  void set_sized_line(int id, std::wstring_view text);
   [[nodiscard]] const layerc::core::Panel *selected_bar() const;
   [[nodiscard]] bool validate_profile();
   [[nodiscard]] bool confirm_v2_upgrade();
@@ -211,6 +226,7 @@ private:
   void update_color_picker_from_rgb(HWND);
   void update_color_picker_from_hex(HWND);
   [[nodiscard]] bool draw_color_picker_item(const DRAWITEMSTRUCT &) const;
+  void initialize_shortcuts(HWND);
 
   [[nodiscard]] SIZE preview_target_size() const;
   [[nodiscard]] RECT preview_canvas() const;
@@ -283,6 +299,7 @@ private:
   void draw_profile_item(const DRAWITEMSTRUCT &) const;
 
   void draw_appearance_preview(const DRAWITEMSTRUCT &, HWND) const;
+  void draw_status_line(const DRAWITEMSTRUCT &) const;
   LRESULT color_message(UINT, WPARAM, LPARAM) const;
   LRESULT erase_dialog_background(HWND, WPARAM) const;
   [[nodiscard]] std::optional<LRESULT>
@@ -295,6 +312,7 @@ private:
   LRESULT handle_options_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_appearance_message(HWND, UINT, WPARAM, LPARAM);
   LRESULT handle_color_picker_message(HWND, UINT, WPARAM, LPARAM);
+  LRESULT handle_shortcuts_message(HWND, UINT, WPARAM, LPARAM);
 
   EditorShell shell_;
   ProfileDocument document_;

@@ -1,5 +1,6 @@
 #include "visual_editor.hpp"
 
+#include "accessible_widgets.hpp"
 #include "calibration_window.hpp"
 #include "editor_app.hpp"
 #include "profile_edit.hpp"
@@ -17,6 +18,8 @@
 #include <string>
 #include <utility>
 
+#include "editor_style.hpp"
+
 namespace layerc::editor {
 namespace core = layerc::core;
 namespace platform = layerc::platform;
@@ -30,18 +33,18 @@ struct LinuxVisualEditor::Impl {
 
   Impl(EditorApp &owner, Fl_Group &page) : app(owner) {
     page.begin();
-    target = new Fl_Choice(290, 105, 730, 28, "Visual target cooldown");
+    target = new EditorChoice(290, 105, 730, editor_input_height, "Visual target cooldown");
     target->align(FL_ALIGN_TOP_LEFT);
-    summary = new Fl_Multiline_Output(290, 165, 730, 90, "Visual assignment");
+    summary = new EditorField<Fl_Multiline_Output>(290, 165, 730, 90, "Visual assignment");
     summary->wrap(1);
     summary->align(FL_ALIGN_TOP_LEFT);
     enabled = new Fl_Check_Button(290, 265, 300, 30, "Visual trigger enabled");
     isolated = new Fl_Check_Button(620, 265, 400, 30, "Isolated visual runtime");
-    calibrate = new Fl_Button(290, 310, 350, 30, "Calibrate visual...");
-    remove = new Fl_Button(660, 310, 360, 30, "Remove visual assignment");
-    hint = new Fl_Multiline_Output(290, 370, 730, 75, "Visual availability / preservation");
+    calibrate = new Fl_Button(290, 310, 350, editor_button_height, "Calibrate visual...");
+    remove = new Fl_Button(660, 310, 360, editor_button_height, "Remove visual assignment");
+    hint = new EditorField<Fl_Multiline_Output>(290, 370, 730, 75, "Visual availability / preservation");
     hint->wrap(1);
-    hint->align(FL_ALIGN_TOP_LEFT); hint->textsize(11);
+    hint->align(FL_ALIGN_TOP_LEFT); hint->textsize(FL_NORMAL_SIZE);
     for (Fl_Widget *w : std::array<Fl_Widget *, 5>{target, enabled, isolated, calibrate, remove})
       w->callback([](Fl_Widget *widget, void *data) {
         static_cast<Impl *>(data)->handle(widget);
@@ -92,10 +95,16 @@ struct LinuxVisualEditor::Impl {
     reason += "Enabled, Remove and runtime edits are drafts until Save. Calibration Apply validates and commits.\n"
               "Imported modules, shared observations and unsupported data are preserved.";
     hint->value(reason.c_str());
+    // The availability line explains Calibrate, which it also disables
+    // (DesignSystem.md, Screen readers).
+    accessibility::describe_with(*calibrate, *hint);
   }
   void changed(const std::optional<std::string> &error) {
     app.refresh();
-    app.report(error ? "Not changed: " + *error : "Unsaved visual changes. Save applies them.");
+    // A draft toggle follows every click; a refusal repeats while its cause
+    // stays.
+    app.report(error ? "Not changed: " + *error : "Unsaved visual changes. Save applies them.",
+               error ? StatusVoice::changed : StatusVoice::silent);
   }
   auto unchanged_guard() const {
     const auto &document = app.session.document();

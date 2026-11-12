@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 class Fl_Double_Window;
 class Fl_Multiline_Output;
@@ -40,6 +41,11 @@ private:
 void fit_text_view(Fl_Window &window, Fl_Multiline_Output &text);
 void show_text_dialog(const char *title, const std::string &text,
                       const std::string &copy_text = {});
+
+// Keyboard shortcuts in two measured columns (DesignSystem.md, Keyboard):
+// rows are "key<TAB>description", the key column is the widest key plus its
+// gutter, and the description column the widest description. Modal, read-only.
+void show_shortcuts_dialog(std::string_view rows);
 
 // About LayerE, with a "Copy details" button for version and runtime state.
 void show_about_dialog(const std::string &daemon_summary, const std::string &accessibility);

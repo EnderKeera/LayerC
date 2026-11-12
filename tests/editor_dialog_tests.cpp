@@ -129,6 +129,13 @@ void editor_cooldown_component_contracts();
 void editor_visual_component_contracts();
 void editor_drag_transaction_contracts();
 void editor_automation_component_contracts();
+void editor_theme_contrast_contracts();
+void editor_theme_high_contrast_contracts();
+void editor_status_glyph_contracts();
+void editor_dialog_layout_contracts();
+void editor_shortcut_contracts();
+void editor_main_layout_contracts();
+void editor_accessibility_contracts();
 
 int main(const int argc, char **argv) {
   if (argc == 5 && std::string_view(argv[1]) == "--request-pipe" &&
@@ -160,5 +167,13 @@ int main(const int argc, char **argv) {
        {"editor_visual_component_contracts",
         editor_visual_component_contracts},
        {"editor_drag_transaction_contracts",
-        editor_drag_transaction_contracts}});
+        editor_drag_transaction_contracts},
+       {"editor_theme_contrast_contracts", editor_theme_contrast_contracts},
+       {"editor_theme_high_contrast_contracts",
+        editor_theme_high_contrast_contracts},
+       {"editor_status_glyph_contracts", editor_status_glyph_contracts},
+       {"editor_dialog_layout_contracts", editor_dialog_layout_contracts},
+       {"editor_shortcut_contracts", editor_shortcut_contracts},
+       {"editor_main_layout_contracts", editor_main_layout_contracts},
+       {"editor_accessibility_contracts", editor_accessibility_contracts}});
 }

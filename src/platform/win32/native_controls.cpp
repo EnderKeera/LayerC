@@ -205,6 +205,18 @@ void paint_flat_frame(const HWND window) {
   OffsetRect(&client, -window_rect.left, -window_rect.top);
   const int saved = SaveDC(dc);
   ExcludeClipRect(dc, client.left, client.top, client.right, client.bottom);
+  // A list's scroll bars live in the same band and keep their own drawing.
+  for (const LONG bar : {static_cast<LONG>(OBJID_VSCROLL),
+                         static_cast<LONG>(OBJID_HSCROLL)}) {
+    SCROLLBARINFO info{};
+    info.cbSize = sizeof(info);
+    if (GetScrollBarInfo(window, bar, &info) == FALSE ||
+        (info.rgstate[0] & (STATE_SYSTEM_INVISIBLE | STATE_SYSTEM_OFFSCREEN)) != 0)
+      continue;
+    OffsetRect(&info.rcScrollBar, -window_rect.left, -window_rect.top);
+    ExcludeClipRect(dc, info.rcScrollBar.left, info.rcScrollBar.top,
+                    info.rcScrollBar.right, info.rcScrollBar.bottom);
+  }
   HBRUSH background = nullptr;
   if (window_class(window) == L"Edit") {
     const bool read_only = (style & ES_READONLY) != 0;
@@ -218,12 +230,21 @@ void paint_flat_frame(const HWND window) {
   else
     fill_solid_rect(dc, bounds, palette.fill);
   RestoreDC(dc, saved);
-  frame_solid_rect(dc, bounds, enabled ? palette.border : palette.divider);
-  if (focused && enabled) {
-    const int accent_height = std::max(2, MulDiv(2, static_cast<int>(native_window_dpi(window)), 96));
-    RECT accent{bounds.left, bounds.bottom - accent_height, bounds.right,
-                bounds.bottom};
-    fill_solid_rect(dc, accent, palette.accent);
+  const UINT dpi = native_window_dpi(window);
+  if (focused && enabled && window_class(window) == L"Edit") {
+    // A focused field's 1 px outline becomes the 2 px accent ring.
+    paint_focus_ring(dc, bounds, palette.accent, dpi);
+  } else {
+    frame_solid_rect(dc, bounds, enabled ? palette.border : palette.divider);
+    if (focused && enabled) {
+      // A focused list keeps its outline and takes a 2 px accent bottom
+      // edge; its focused row carries the ring.
+      const int accent_height =
+          std::max(2, MulDiv(2, static_cast<int>(dpi), 96));
+      RECT accent{bounds.left, bounds.bottom - accent_height, bounds.right,
+                  bounds.bottom};
+      fill_solid_rect(dc, accent, palette.accent);
+    }
   }
   ReleaseDC(window, dc);
 }
@@ -325,8 +346,9 @@ LRESULT CALLBACK frame_subclass(const HWND window, const UINT message,
 }
 
 // A drop-down list painted like the flat edits: square input fill, 1 px
-// border, 2 px accent bottom edge while focused or open, and a chevron. The
-// Windows 11 themed combo box would otherwise draw rounded corners.
+// border that becomes the 2 px accent ring while focused or open, and a
+// chevron. The Windows 11 themed combo box would otherwise draw rounded
+// corners.
 void paint_flat_combo(const HWND combo, const HDC dc, const bool hot) {
   RECT client{};
   GetClientRect(combo, &client);
@@ -340,14 +362,14 @@ void paint_flat_combo(const HWND combo, const HDC dc, const bool hot) {
                         : hot || open ? palette.hover
                                       : palette.input;
   fill_solid_rect(dc, client, fill);
-  frame_solid_rect(dc, client, enabled ? palette.border : palette.divider);
-  if (focused && enabled) {
-    const int accent_height = std::max(2, MulDiv(2, dpi, 96));
-    fill_solid_rect(dc,
-                    {client.left, client.bottom - accent_height, client.right,
-                     client.bottom},
-                    palette.accent);
-  }
+  if (focused && enabled)
+    paint_focus_ring(dc, client, palette.accent, static_cast<UINT>(dpi));
+  else
+    // A contrast theme keeps the hover fill and outlines it instead.
+    frame_solid_rect(dc, client,
+                     !enabled ? palette.divider
+                     : palette.high_contrast && hot ? palette.accent
+                                                    : palette.border);
   const COLORREF ink = enabled ? palette.text : palette.disabled;
   const int chevron_width = MulDiv(26, dpi, 96);
   const int center_x = client.right - chevron_width / 2;
@@ -481,6 +503,8 @@ void paint_menu_item(const UahDrawMenuItem &item) {
   const bool hot = (state & (ODS_HOTLIGHT | ODS_SELECTED)) != 0;
   fill_solid_rect(item.menu.dc, item.draw.rcItem,
                   hot && !disabled ? palette.hover : palette.fill);
+  if (hot && !disabled && palette.high_contrast)
+    frame_solid_rect(item.menu.dc, item.draw.rcItem, palette.accent);
   RECT text_rect = item.draw.rcItem;
   SetBkMode(item.menu.dc, TRANSPARENT);
   SetTextColor(item.menu.dc, disabled ? palette.disabled : palette.text);
@@ -602,6 +626,22 @@ void style_listview_child(const HWND child) {
   install_flat_frame(child);
 }
 
+// A bordered static (a preview or a color sample) keeps one flat 1 px frame;
+// the dialog's 3D look would otherwise turn WS_BORDER into a sunken edge.
+void style_static_child(const HWND child) {
+  const auto ex_style = GetWindowLongPtrW(child, GWL_EXSTYLE);
+  const auto style = GetWindowLongPtrW(child, GWL_STYLE);
+  constexpr LONG_PTR edges = WS_EX_CLIENTEDGE | WS_EX_STATICEDGE;
+  if ((ex_style & edges) == 0 && (style & WS_BORDER) == 0)
+    return;
+  SetWindowLongPtrW(child, GWL_EXSTYLE, ex_style & ~edges);
+  SetWindowLongPtrW(child, GWL_STYLE, style | WS_BORDER);
+  SetWindowPos(child, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+  install_flat_frame(child);
+}
+
 } // namespace
 
 void set_native_chrome_palette(const NativeChromePalette &palette) {
@@ -692,6 +732,8 @@ void style_native_dialog_children(const HWND dialog, const HFONT font,
     } else if (class_name == L"Edit") {
       SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
       install_flat_frame(child);
+    } else if (class_name == L"Static") {
+      style_static_child(child);
     } else if (class_name == L"ScrollBar" || class_name == TOOLTIPS_CLASSW) {
       SetWindowTheme(child, L"DarkMode_Explorer", nullptr);
     }
@@ -716,15 +758,19 @@ RECT paint_native_check_box(const HDC dc, const RECT &bounds,
     fill = filled ? colors.divider : colors.fill;
     frame = colors.divider;
   } else if (filled) {
-    fill = state.pressed ? blend_color(colors.accent, colors.fill, 60)
-           : state.hot   ? blend_color(colors.accent, colors.text, 40)
-                         : colors.accent;
+    // A contrast theme keeps COLOR_HIGHLIGHT under hover and press.
+    fill = colors.high_contrast ? colors.accent
+           : state.pressed      ? blend_color(colors.accent, colors.fill, 60)
+           : state.hot ? blend_color(colors.accent, colors.text, 40)
+                       : colors.accent;
     frame = fill;
   } else if (state.pressed) {
     fill = colors.pressed;
+    if (colors.high_contrast)
+      frame = colors.accent;
   } else if (state.hot) {
     fill = colors.hover;
-    frame = colors.text;
+    frame = colors.high_contrast ? colors.accent : colors.text;
   }
   const int scale = static_cast<int>(dpi == 0 ? 96U : dpi);
   const HBRUSH brush = CreateSolidBrush(fill);
@@ -849,15 +895,17 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
     outline = colors.divider;
     text_color = colors.disabled;
   } else if (primary) {
-    fill = pressed ? blend_color(colors.accent, colors.fill, 60)
-           : hot   ? blend_color(colors.accent, colors.text, 40)
-                   : colors.accent;
+    // A contrast theme keeps COLOR_HIGHLIGHT under hover and press.
+    fill = colors.high_contrast ? colors.accent
+           : pressed            ? blend_color(colors.accent, colors.fill, 60)
+           : hot ? blend_color(colors.accent, colors.text, 40)
+                 : colors.accent;
     outline = fill;
     text_color = colors.on_accent;
-  } else if (pressed) {
-    fill = colors.pressed;
-  } else if (hot) {
-    fill = colors.hover;
+  } else if (pressed || hot) {
+    fill = pressed ? colors.pressed : colors.hover;
+    if (colors.high_contrast)
+      outline = colors.accent;
   }
   // Square, flat: a 1 px outline around the fill.
   fill_solid_rect(draw.hDC, draw.rcItem, fill);
@@ -895,8 +943,13 @@ void paint_native_button(const DRAWITEMSTRUCT &draw,
   SelectObject(draw.hDC, previous_font);
   if ((draw.itemState & ODS_FOCUS) != 0 &&
       (draw.itemState & ODS_NOFOCUSRECT) == 0) {
+    // The ring on an accent fill is `text`, or COLOR_HIGHLIGHTTEXT on a
+    // contrast theme's COLOR_HIGHLIGHT.
     paint_focus_ring(draw.hDC, draw.rcItem,
-                     primary ? colors.text : colors.accent, dpi);
+                     !primary               ? colors.accent
+                     : colors.high_contrast ? colors.on_accent
+                                            : colors.text,
+                     dpi);
   }
 }
 

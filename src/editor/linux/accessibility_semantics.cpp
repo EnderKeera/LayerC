@@ -1,4 +1,5 @@
 #include "accessibility_semantics.hpp"
+#include "accessible_widgets.hpp"
 #include "editor_app.hpp"
 #include "editor_menus.hpp"
 #include "calibration_window.hpp"
@@ -219,6 +220,9 @@ std::string raw_name(const Node &n) {
   case Kind::widget: break;
   }
   auto name = clean_label(w->label());
+  // A registered name wins over the label: it is what the control says
+  // (DesignSystem.md, Screen readers).
+  if (auto registered = accessible_name(*w); registered) return *registered;
   if (!name.empty()) return name;
   if (dynamic_cast<Fl_Window *>(w)) return "LayerE dialog";
   if (dynamic_cast<PanelPreview *>(w)) return "Panel placement preview";
@@ -239,12 +243,39 @@ std::string current_keybinding(const Node &n) {
 }
 
 std::string current_name(const Node &n) { return valid_utf8(raw_name(n)); }
+// The line that belongs to a control is its description: the registry's, else
+// the tooltip a labelled control does not already say as its name, else what
+// the adaptor itself stored, such as the panel preview's static text.
+std::string current_description(AtkObject *object) {
+  auto &n = node(object);
+  if (!live(n)) return {};
+  std::string description;
+  if (n.kind == Kind::widget)
+    if (auto *w = n.widget()) {
+      description = accessible_description(*w);
+      if (description.empty() && !clean_label(w->label()).empty() && w->tooltip())
+        description = w->tooltip();
+    }
+  if (description.empty()) {
+    const auto inherited = ATK_OBJECT_CLASS(semantic_parent_class)->get_description;
+    if (inherited != nullptr)
+      if (const gchar *text = inherited(object); text != nullptr) description = text;
+  }
+  description = valid_utf8(description);
+  // Nothing exists only as a description: repeating the name says it twice.
+  return description == current_name(n) ? std::string() : description;
+}
 // Answers from its own buffer: overwriting the last reported name here would
 // hide the change from report_changes and leave other clients' caches stale.
 const gchar *get_name(AtkObject *object) {
   auto &n = node(object);
   n.name_reply = current_name(n);
   return n.name_reply.c_str();
+}
+const gchar *get_description(AtkObject *object) {
+  auto &n = node(object);
+  n.description_reply = current_description(object);
+  return n.description_reply.c_str();
 }
 AtkObject *get_parent(AtkObject *object) { return node(object).parent; }
 gint get_n_children(AtkObject *object) {
@@ -313,6 +344,7 @@ void semantic_class_init(LayerCSemanticClass *type) {
   G_OBJECT_CLASS(type)->finalize = finalize;
   auto *object = ATK_OBJECT_CLASS(type);
   object->get_name = get_name;
+  object->get_description = get_description;
   object->get_parent = get_parent;
   object->get_n_children = get_n_children;
   object->ref_child = ref_child;
@@ -731,6 +763,7 @@ bool exported(Fl_Widget *w) {
 void remember(AtkObject *object) {
   auto &n = node(object);
   n.name = current_name(n);
+  n.description = current_description(object);
   n.focused = focused(n);
   n.selected = selected(n);
   n.checked = checked(n);

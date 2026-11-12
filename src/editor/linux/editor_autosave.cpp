@@ -111,7 +111,8 @@ bool EditorApp::flush_autosave() {
   if (const auto error = apply_field_buffers()) {
     saving_ = false;
     observed_generation_ = session.edit_generation();
-    report("Not autosaved. " + *error);
+    // The same failure repeats on every autosave while its cause stays.
+    report("Not autosaved. " + *error, StatusVoice::changed);
     return false;
   }
   session.end_text_edit();
@@ -131,7 +132,9 @@ bool EditorApp::flush_autosave() {
     fill_lists();
     preview->redraw();
   }
-  report(outcome.text);
+  // A saved autosave follows every edit and stays silent; a refusal is a
+  // failure that repeats until the cause goes.
+  report(outcome.text, outcome.saved() ? StatusVoice::silent : StatusVoice::changed);
   query_status();
   return outcome.saved();
 }

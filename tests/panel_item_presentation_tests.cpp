@@ -333,12 +333,24 @@ void test_panel_item_presentation_values() {
   flash = indicator(AutomationValue(true), 3.0, now + 167ms);
   expect(!flash.items.front().flash_on && flash.next_wakeup == now + 333ms,
          "phase 167 of 333 ms is OFF");
+  expect(indicator_flash_hz(0.0) == 0.0 && indicator_flash_hz(-1.0) == 0.0 &&
+             indicator_flash_hz(std::numeric_limits<double>::infinity()) == 0.0 &&
+             indicator_flash_hz(std::numeric_limits<double>::quiet_NaN()) == 0.0 &&
+             indicator_flash_hz(0.5) == 0.5 && indicator_flash_hz(2.0) == 2.0 &&
+             indicator_flash_hz(3.0) == 3.0 && indicator_flash_hz(3.5) == 3.0 &&
+             indicator_flash_hz(4.0) == 3.0,
+         "indicator_flash_hz caps positive rates at 3 Hz and turns non-flashing inputs off");
   flash = indicator(AutomationValue(true), 0.5, now + 1999ms);
   expect(!flash.items.front().flash_on && flash.next_wakeup == now + 2000ms,
          "0.5 Hz has a two second period");
-  flash = indicator(AutomationValue(true), 4.0, now + 125ms);
-  expect(!flash.items.front().flash_on && flash.next_wakeup == now + 250ms,
-         "4 Hz flips every 125 ms");
+  for (const double capped : {3.5, 4.0}) {
+    flash = indicator(AutomationValue(true), capped, now + 166ms);
+    expect(flash.items.front().flash_on && flash.next_wakeup == now + 167ms,
+           "rates above 3 Hz stay ON through the 3 Hz half period");
+    flash = indicator(AutomationValue(true), capped, now + 167ms);
+    expect(!flash.items.front().flash_on && flash.next_wakeup == now + 333ms,
+           "rates above 3 Hz flip on the 3 Hz half-period edge");
+  }
   flash = indicator(AutomationValue(true), 2.0, now, now + 1s);
   expect(flash.items.front().flash_on, "an epoch in the future starts ON");
   flash = indicator(AutomationValue(false), 4.0, now + 125ms);

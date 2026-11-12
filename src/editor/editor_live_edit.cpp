@@ -101,12 +101,14 @@ bool EditorWindow::has_unsaved_changes() const {
 
 void EditorWindow::schedule_autosave(const bool immediate) {
   if (document_.path().empty()) {
-    set_status(L"Draft changed — use Save once to create the profile.");
+    set_status(L"Draft changed — use Save once to create the profile.",
+               StatusVoice::silent);
     return;
   }
   KillTimer(shell_.window, autosave_timer);
   SetTimer(shell_.window, autosave_timer, immediate ? 1U : 400U, nullptr);
-  if (!immediate) set_status(L"Editing — autosave pending.");
+  if (!immediate)
+    set_status(L"Editing — autosave pending.", StatusVoice::silent);
 }
 
 bool EditorWindow::draft_controls_valid() const {
@@ -146,31 +148,38 @@ bool EditorWindow::flush_autosave(const bool allow_upgrade_prompt) {
   if (document_.path().empty() || !draft_controls_valid()) {
     set_status(document_.path().empty()
                    ? L"Draft is not created yet — use Save."
-                   : L"Not autosaved — finish the invalid field.");
+                   : L"Not autosaved — finish the invalid field.",
+               StatusVoice::changed);
     return false;
   }
   switch (commit_document(document_.path(),
                         {.prompt_upgrade = allow_upgrade_prompt})) {
   case CommitResult::ok:
     mark_committed();
-    set_status(L"Autosaved — LayerD updated live.");
+    // Autosave follows every edit: its success stays quiet, and a failure
+    // is spoken once while its cause stays.
+    set_status(L"Autosaved — LayerD updated live.", StatusVoice::silent);
     return true;
   case CommitResult::invalid_fields:
-    set_status(L"Not autosaved — finish the invalid field.");
+    set_status(L"Not autosaved — finish the invalid field.",
+               StatusVoice::changed);
     break;
   case CommitResult::invalid_profile:
-    set_status(L"Not autosaved — profile validation failed.");
+    set_status(L"Not autosaved — profile validation failed.",
+               StatusVoice::changed);
     break;
   case CommitResult::upgrade_declined:
     set_status(allow_upgrade_prompt
                    ? L"Not saved — the profile format upgrade was not confirmed."
-                   : L"Autosave paused — use Save to approve the profile format upgrade.");
+                   : L"Autosave paused — use Save to approve the profile format upgrade.",
+               StatusVoice::changed);
     break;
   case CommitResult::blocked_by_sidecar:
-    set_status(L"Not autosaved — repair the invalid visual or automation settings first.");
+    set_status(L"Not autosaved — repair the invalid visual or automation settings first.",
+               StatusVoice::changed);
     break;
   case CommitResult::write_failed:
-    set_status(write_failure_message());
+    set_status(write_failure_message(), StatusVoice::changed);
     break;
   }
   return false;
@@ -195,14 +204,16 @@ void EditorWindow::poll_live_channel() {
                                });
   });
   for (const auto &error : step.protocol_errors)
-    set_status(L"Live channel error: " + to_wide(error.message));
+    set_status(L"Live channel error: " + to_wide(error.message),
+               StatusVoice::changed);
   for (const auto &message : step.forwarded) handle_live_message(message);
   if (step.authenticating)
-    set_status(L"Authenticating LayerD package...");
+    set_status(L"Authenticating LayerD package...", StatusVoice::silent);
   if (step.authentication_rejected)
     set_status(L"Connected LayerD is not from the current LayerC package.");
   if (step.authenticated_now) {
-    set_status(L"Ready — authenticated matching LayerD connection.");
+    set_status(L"Ready — authenticated matching LayerD connection.",
+               StatusVoice::silent);
     automation_editor_->restore_live_subscription();
     if (!document_.path().empty() && !has_unsaved_changes())
       notify_profile_committed(document_.path(), document_.profile());
@@ -325,8 +336,8 @@ void EditorWindow::edit_on_window() {
     task_picker_.request_live_edit();
     show_tasks();
     set_status(matches.empty()
-                   ? L"No automatic match — select an eligible window in Detected Tasks."
-                   : L"Multiple windows match — select one in Detected Tasks.");
+                   ? L"No automatic match — select an eligible window in Detected tasks."
+                   : L"Multiple windows match — select one in Detected tasks.");
   }
 }
 
@@ -338,7 +349,7 @@ void EditorWindow::edit_selected_task() {
   if (!matching.game.global &&
       !layerc::platform::profile_matches_window(*candidate, matching)) {
     themed_message_box(task_picker_.window,
-                L"That window does not match this profile. Use Selected Task first if you want to change the profile matcher.",
+                L"That window does not match this profile. Use selected first if you want to change the profile matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
     return;
   }
@@ -369,7 +380,8 @@ void EditorWindow::begin_edit_on_window(const HWND target) {
       live_edit_await_ms);
   if (begun == LiveEditBegin::awaiting_daemon) {
     (void)start_daemon();
-    set_status(L"Waiting for LayerD's live-edit service...");
+    set_status(L"Waiting for LayerD's live-edit service...",
+               StatusVoice::silent);
     return;
   }
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
@@ -399,8 +411,8 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   if (!live_edit_.editing()) return;
   if (enabled && live_edit_.direct_drag_notice_needed() &&
       themed_message_box(shell_.window,
-                  L"Direct Drag temporarily lets LayerD receive clicks only inside visible bar rectangles. It uses no injection or game hooks, but anti-cheat compatibility cannot be guaranteed. Continue?",
-                  L"Enable Direct Drag", MB_OKCANCEL | MB_ICONINFORMATION) !=
+                  L"Direct drag temporarily lets LayerD receive clicks only inside visible bar rectangles. It uses no injection or game hooks, but anti-cheat compatibility cannot be guaranteed. Continue?",
+                  L"Enable direct drag", MB_OKCANCEL | MB_ICONINFORMATION) !=
           IDOK) {
     set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), false);
     return;
@@ -408,7 +420,7 @@ void EditorWindow::set_direct_drag_enabled(const bool enabled) {
   if (enabled) live_edit_.note_direct_drag_notice();
   set_owner_draw_checkbox(GetDlgItem(shell_.window, IDC_DIRECT_DRAG), enabled);
   (void)live_edit_.send_direct_drag(enabled);
-  set_status(enabled ? L"Direct Drag enabled for this edit session."
+  set_status(enabled ? L"Direct drag enabled for this edit session."
                      : L"Mirrored click-through editing restored.");
 }
 

@@ -1,5 +1,6 @@
 #include "editor_window.hpp"
 #include "editor_resource.h"
+#include "static_style.hpp"
 
 #include <algorithm>
 #include <array>
@@ -39,7 +40,17 @@ void paint_row_background(const HDC dc, const RECT &row, const bool selected,
     RECT rail = row;
     rail.right = rail.left + std::max(2, scaled(3, dpi));
     fill_solid_rect(dc, rail, colors.accent);
+  } else if (hot && colors.high_contrast) {
+    // A contrast theme's hover fill is the row's own; outline it instead.
+    frame_solid_rect(dc, row, colors.accent);
   }
+}
+
+// Ink on a selected row: a contrast theme's selection is COLOR_HIGHLIGHT,
+// which only COLOR_HIGHLIGHTTEXT (`on_accent`) reads on.
+COLORREF row_ink(const RoleColors &colors, const bool selected,
+                 const COLORREF ink) {
+  return selected && colors.high_contrast ? colors.on_accent : ink;
 }
 
 void draw_text(const HDC dc, const HFONT font, const std::wstring_view text,
@@ -95,14 +106,16 @@ void EditorWindow::draw_list_box_item(const DRAWITEMSTRUCT &draw) const {
       text_rect.left += scaled(combo_field ? 4 : 10, dpi);
       text_rect.right -= scaled(6, dpi);
       draw_text(draw.hDC, control_font(draw.hwndItem), label, text_rect,
-                disabled ? list_colors.disabled : list_colors.text,
+                disabled ? list_colors.disabled
+                         : row_ink(list_colors, selected, list_colors.text),
                 single_line);
     }
   }
   if (!combo_field && (draw.itemState & ODS_FOCUS) != 0 &&
       (draw.itemState & ODS_NOFOCUSRECT) == 0)
-    layerc::platform::paint_focus_ring(draw.hDC, draw.rcItem,
-                                       list_colors.accent, dpi);
+    layerc::platform::paint_focus_ring(
+        draw.hDC, draw.rcItem,
+        row_ink(list_colors, selected, list_colors.accent), dpi);
 }
 
 void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
@@ -147,7 +160,8 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
   if (entry != nullptr && !entry->enabled) {
     RECT tag = text;
     tag.left = std::max(text.left, text.right - scaled(28, dpi));
-    draw_text(draw.hDC, shell_.font, L"Off", tag, list_colors.secondary,
+    draw_text(draw.hDC, shell_.font, L"Off", tag,
+              row_ink(list_colors, selected, list_colors.secondary),
               DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     text.right = tag.left - scaled(4, dpi);
   }
@@ -158,18 +172,20 @@ void EditorWindow::draw_profile_item(const DRAWITEMSTRUCT &draw) const {
               static_cast<int>(entry->name.size()), &measured,
               single_line | DT_CALCRECT);
     SelectObject(draw.hDC, previous);
-    draw_text(draw.hDC, shell_.font, entry->name, text, list_colors.text,
-              single_line);
+    draw_text(draw.hDC, shell_.font, entry->name, text,
+              row_ink(list_colors, selected, list_colors.text), single_line);
     if (!entry->executable.empty() && measured.right + scaled(24, dpi) < text.right) {
       RECT executable = text;
       executable.left = measured.right + scaled(8, dpi);
       draw_text(draw.hDC, shell_.font, entry->executable, executable,
-                list_colors.secondary, single_line);
+                row_ink(list_colors, selected, list_colors.secondary),
+                single_line);
     }
   }
   if ((draw.itemState & ODS_FOCUS) != 0 &&
       (draw.itemState & ODS_NOFOCUSRECT) == 0)
-    layerc::platform::paint_focus_ring(draw.hDC, row, list_colors.accent, dpi);
+    layerc::platform::paint_focus_ring(
+        draw.hDC, row, row_ink(list_colors, selected, list_colors.accent), dpi);
 }
 
 // A miniature editor in the staged appearance: every role in place, with the
@@ -365,12 +381,79 @@ LRESULT EditorWindow::color_message(const UINT message, const WPARAM wparam,
     unavailable = IsWindowEnabled(control) == FALSE;
   }
   const auto role_colors = colors(role);
-  // Section headings use primary text; labels and hints the secondary tone.
+  const auto tone = role == EditorControlRole::label
+                        ? static_style(control).value_or(StaticStyle{}).tone
+                        : TextTone::label;
+  // Section headings and `text`-toned statics use primary text, labels the
+  // secondary tone and hints beside a field `subtext`.
   SetTextColor(dc, unavailable ? role_colors.disabled
-                   : heading   ? colors(EditorControlRole::window).text
-                               : role_colors.text);
+                   : heading || tone == TextTone::text
+                       ? colors(EditorControlRole::window).text
+                   : tone == TextTone::subtext ? role_colors.subtext
+                                               : role_colors.text);
   SetBkColor(dc, role_colors.fill);
   return reinterpret_cast<LRESULT>(brush(role));
+}
+
+// A status line (DesignSystem.md, StatusText): the drawn glyph in its status
+// color, then the message in `text`; a line without a glyph is a hint in
+// `subtext`. The static's own text stays its accessible name. A line at
+// least two text lines tall wraps, its glyph beside the first line.
+void EditorWindow::draw_status_line(const DRAWITEMSTRUCT &draw) const {
+  const auto style = static_style(draw.hwndItem).value_or(StaticStyle{});
+  // Right-aligned lines are the status strip's states, on the strip's fill.
+  const auto label = colors(style.align_right ? EditorControlRole::status
+                                              : EditorControlRole::label);
+  const HDC dc = draw.hDC;
+  RECT bounds = draw.rcItem;
+  fill_solid_rect(dc, bounds, label.fill);
+  const UINT dpi = layerc::platform::native_window_dpi(draw.hwndItem);
+  const HFONT font = control_font(draw.hwndItem);
+  const std::wstring text = window_text(draw.hwndItem);
+  const HGDIOBJ previous = SelectObject(dc, font);
+  TEXTMETRICW metrics{};
+  GetTextMetricsW(dc, &metrics);
+  RECT extent{};
+  DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &extent,
+            DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+  SelectObject(dc, previous);
+  const bool wrap = bounds.bottom - bounds.top >= metrics.tmHeight * 2;
+  if (style.align_right) {
+    const int glyph_width =
+        style.glyph ? layerc::platform::status_glyph_size(dpi) + scaled(6, dpi)
+                    : 0;
+    bounds.left = std::max(bounds.left, bounds.right - glyph_width -
+                                            (extent.right - extent.left));
+  }
+  COLORREF ink = style.tone == TextTone::subtext ? label.subtext
+                 : style.tone == TextTone::text
+                     ? colors(EditorControlRole::window).text
+                     : label.text;
+  if (IsWindowEnabled(draw.hwndItem) == FALSE)
+    ink = label.disabled;
+  // An Appearance draft below the floor must not hide the line that warns
+  // about it: below 4.5:1 the message takes the better of `text` and
+  // `on_status` on the line's fill.
+  else if (layerc::platform::contrast_ratio(ink, label.fill) < 4.5) {
+    const COLORREF light =
+        layerc::platform::native_color_ref(layerc::platform::neutral_theme.text);
+    ink = layerc::platform::contrast_ratio(light, label.fill) >=
+                  layerc::platform::contrast_ratio(label.on_status, label.fill)
+              ? light
+              : label.on_status;
+  }
+  if (style.glyph) {
+    RECT first_line = bounds;
+    if (wrap)
+      first_line.bottom = bounds.top + metrics.tmHeight;
+    const RECT glyph = layerc::platform::paint_status_glyph(
+        dc, first_line, *style.glyph,
+        layerc::platform::status_color(label, *style.glyph), dpi);
+    bounds.left = glyph.right + scaled(6, dpi);
+  }
+  draw_text(dc, font, text, bounds, ink,
+            wrap ? DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX
+                 : single_line);
 }
 
 LRESULT EditorWindow::erase_dialog_background(const HWND window,
@@ -394,6 +477,10 @@ EditorWindow::dialog_theme_message(const HWND window, const UINT message,
     }
     if (item.CtlType == ODT_LISTBOX || item.CtlType == ODT_COMBOBOX) {
       draw_list_box_item(item);
+      return TRUE;
+    }
+    if (item.CtlType == ODT_STATIC && static_style(item.hwndItem)) {
+      draw_status_line(item);
       return TRUE;
     }
   } else if (message == WM_NOTIFY) {

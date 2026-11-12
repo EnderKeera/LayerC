@@ -3,6 +3,8 @@
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
 
+#include "editor_style.hpp"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
@@ -28,17 +30,17 @@ CooldownGroupsDialog::CooldownGroupsDialog(EditorSession &session)
     static_cast<CooldownGroupsDialog *>(self)->select();
   }, this);
   const auto input = [](int y, const char *label) {
-    return new Fl_Input(390, y, 350, 28, label);
+    return new EditorField<Fl_Input>(390, y, 350, editor_input_height, label);
   };
   id = input(20, "Group ID");
   name = input(58, "Group name");
-  mode = new Fl_Choice(390, 96, 350, 28, "Group mode");
+  mode = new EditorChoice(390, 96, 350, editor_input_height, "Group mode");
   mode->add("Trigger propagation|Shared pool");
   duration = input(134, "Group seconds");
   charges = input(172, "Group charges");
-  recovery = new Fl_Choice(390, 210, 350, 28, "Group recovery");
+  recovery = new EditorChoice(390, 210, 350, editor_input_height, "Group recovery");
   recovery->add("Single|Sequential|Parallel");
-  retrigger = new Fl_Choice(390, 248, 350, 28, "Group retrigger");
+  retrigger = new EditorChoice(390, 248, 350, editor_input_height, "Group retrigger");
   retrigger->add("Ignore|Restart");
   auto *scroll = new Fl_Scroll(270, 305, 470, 110, "Group members");
   scroll->begin();
@@ -49,20 +51,20 @@ CooldownGroupsDialog::CooldownGroupsDialog(EditorSession &session)
     members.push_back(check);
   }
   scroll->end();
-  auto *add_button = new Fl_Button(15, 395, 105, 30, "Add group");
+  auto *add_button = new Fl_Button(15, 395, 105, editor_button_height, "Add group");
   add_button->callback([](Fl_Widget *, void *self) {
     static_cast<CooldownGroupsDialog *>(self)->add();
   }, this);
-  auto *remove_button = new Fl_Button(130, 395, 105, 30, "Remove group");
+  auto *remove_button = new Fl_Button(130, 395, 105, editor_button_height, "Remove group");
   remove_button->callback([](Fl_Widget *, void *self) {
     static_cast<CooldownGroupsDialog *>(self)->remove();
   }, this);
   status_ = new Fl_Box(15, 440, 725, 55,
       "Shared pools own timing and charges. Propagation groups use each member's settings.");
   status_->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-  auto *cancel = new Fl_Button(510, 505, 110, 30, "Cancel");
+  auto *cancel = new Fl_Button(510, 505, 110, editor_button_height, "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  auto *apply_button = new Fl_Button(630, 505, 110, 30, "Apply");
+  auto *apply_button = new Fl_Button(630, 505, 110, editor_button_height, "Apply");
   apply_button->callback([](Fl_Widget *, void *self) {
     static_cast<CooldownGroupsDialog *>(self)->apply();
   }, this);

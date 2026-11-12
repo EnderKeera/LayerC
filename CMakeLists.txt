@@ -392,7 +392,11 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
         src/editor/editor_theme.cpp
         src/editor/editor_draw.cpp
         src/editor/editor_appearance.cpp
+        src/editor/appearance_contrast.cpp
+        src/editor/accessible_text.cpp
         src/editor/editor_color_picker.cpp
+        src/editor/editor_dialog_layouts.cpp
+        src/editor/editor_shortcuts.cpp
         src/editor/editor_live_edit.cpp
         src/editor/editor_visual.cpp
         src/editor/calibration_session.cpp
@@ -407,7 +411,7 @@ if(WIN32 AND (LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS))
     target_include_directories(layerc_editor_ui PUBLIC src/editor)
     target_link_libraries(layerc_editor_ui PUBLIC
         layerc_editor_core layerc_core layerc_runtime layerc_windows layerc_bundle
-        comctl32 comdlg32 dwmapi shell32 uxtheme user32 gdi32)
+        comctl32 comdlg32 dwmapi oleacc oleaut32 ole32 shell32 uxtheme user32 gdi32)
     layerc_win32(layerc_editor_ui)
 
     add_library(layerc_calibration_ui STATIC
@@ -607,6 +611,12 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         layerc_enable_warnings(layerc_editor_linux)
         if(LAYERC_BUILD_EDITOR AND LAYERC_HAVE_X11)
             include(cmake/LinuxEditorGUI.cmake)
+            if(TARGET layerc_editor_fltk)
+                # The FLTK-only accessible text registry (DesignSystem.md, Screen
+                # readers) belongs to the GUI library the include defines.
+                target_sources(layerc_editor_fltk PRIVATE
+                    src/editor/linux/accessible_widgets.cpp)
+            endif()
         elseif(LAYERC_REQUIRE_EDITOR)
             message(FATAL_ERROR "Linux LayerE required but not buildable: X11 development files were not found")
         endif()

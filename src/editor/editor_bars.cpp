@@ -1,4 +1,5 @@
 #include "editor_window.hpp"
+#include "appearance_contrast.hpp"
 #include "editor_resource.h"
 #include "panel_items.hpp"
 
@@ -101,13 +102,55 @@ void EditorWindow::refresh_bar_controls() {
     set_text(GetDlgItem(shell_.window, IDC_BAR_BORDER), L"Border");
     set_text(GetDlgItem(shell_.window, IDC_BAR_TEXT), L"Text");
   }
+  // Each color button says its color, which is otherwise only painted.
+  const auto name_color = [&](const int id, const std::uint32_t color) {
+    const HWND button = GetDlgItem(shell_.window, id);
+    if (panel == nullptr)
+      set_accessible_name(button, {});
+    else
+      set_color_button_name(button, color_hex(color));
+  };
+  const layerc::core::BarAppearance none{};
+  const auto &bar = panel == nullptr ? none : panel->bar;
+  name_color(IDC_BAR_FILL, bar.fill_color);
+  name_color(IDC_BAR_BACKGROUND, bar.background_color);
+  name_color(IDC_BAR_BORDER, bar.border_color);
+  name_color(IDC_BAR_TEXT, bar.text_color);
   refresh_panel_items();
   refresh_position_hint();
+  refresh_overlay_contrast();
   InvalidateRect(panel_preview_.window, nullptr, TRUE);
 }
 
+namespace {
+
+OverlayColors overlay_colors(const layerc::core::BarAppearance &bar) {
+  using layerc::platform::native_color_ref;
+  return {.fill = native_color_ref(bar.fill_color),
+          .background = native_color_ref(bar.background_color),
+          .border = native_color_ref(bar.border_color),
+          .text = native_color_ref(bar.text_color),
+          .show_text = bar.show_text};
+}
+
+} // namespace
+
+// The warning under the color buttons while the bar's own colors are below
+// the Overlay minimums (DesignSystem.md, OverlayBar). It never changes the
+// profile or blocks a save.
+void EditorWindow::refresh_overlay_contrast() {
+  const auto *panel = selected_bar();
+  const std::wstring warning =
+      panel == nullptr ? std::wstring{}
+                       : overlay_contrast_text(overlay_colors(panel->bar));
+  set_sized_line(IDC_OVERLAY_CONTRAST, warning);
+  for (const int id :
+       {IDC_BAR_FILL, IDC_BAR_BACKGROUND, IDC_BAR_BORDER, IDC_BAR_TEXT})
+    set_accessible_description(GetDlgItem(shell_.window, id), warning);
+}
+
 // The hint names only surfaces the window currently shows: narrow windows
-// collapse the preview column, so they point at Position on window instead.
+// hide the preview corner, so they point at Position on window instead.
 void EditorWindow::refresh_position_hint() {
   const auto *panel = selected_bar();
   const bool direct_drag_unavailable =
@@ -118,15 +161,18 @@ void EditorWindow::refresh_position_hint() {
           ? L"This panel contains several items. Dragging moves the whole panel."
       : shell_.preview_visible
           ? (direct_drag_unavailable
-                 ? L"Drag the bar in the preview to position it. Direct drag "
-                   L"works during Position on window."
-                 : L"Drag the bar in the preview to position it.")
+                 ? L"Drag the bar in the preview, or nudge it with the arrow "
+                   L"keys. Direct drag works during Position on window."
+                 : L"Drag the bar in the preview, or nudge it with the arrow "
+                   L"keys.")
       : direct_drag_unavailable
           ? L"Use Position on window to place the bar over its window. "
             L"Widen the editor to show the preview."
           : L"Drag the bar over its window to position it. Widen the "
             L"editor to show the preview.";
-  set_text(GetDlgItem(shell_.window, IDC_POSITION_STATUS), hint);
+  set_sized_line(IDC_POSITION_STATUS, hint);
+  set_accessible_description(GetDlgItem(shell_.window, IDC_PREVIEW),
+                             std::wstring(hint) + L" " + preview_tooltip);
 }
 
 
@@ -172,15 +218,31 @@ void EditorWindow::choose_bar_color(const int id) {
         if (panel_index >= profile.panels.size()) return;
         auto &bar = profile.panels[panel_index].bar;
         std::uint32_t *value{};
+        auto field = OverlayColorField::fill;
         switch (id) {
         case IDC_BAR_FILL: value = &bar.fill_color; break;
-        case IDC_BAR_BACKGROUND: value = &bar.background_color; break;
-        case IDC_BAR_BORDER: value = &bar.border_color; break;
-        case IDC_BAR_TEXT: value = &bar.text_color; break;
+        case IDC_BAR_BACKGROUND:
+          value = &bar.background_color;
+          field = OverlayColorField::background;
+          break;
+        case IDC_BAR_BORDER:
+          value = &bar.border_color;
+          field = OverlayColorField::border;
+          break;
+        case IDC_BAR_TEXT:
+          value = &bar.text_color;
+          field = OverlayColorField::text;
+          break;
         default: return;
         }
         std::uint32_t chosen = *value;
-        if (!choose_color(shell_.window, chosen)) return;
+        // Choose color measures the new color against the bar colors it
+        // pairs with.
+        appearance_editor_.set_picker_targets(
+            overlay_contrast_targets(overlay_colors(bar), field));
+        const bool accepted = choose_color(shell_.window, chosen);
+        appearance_editor_.set_picker_targets({});
+        if (!accepted) return;
         *value = chosen;
       });
   refresh_bar_controls();

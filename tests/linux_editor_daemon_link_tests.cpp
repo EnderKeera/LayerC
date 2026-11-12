@@ -504,9 +504,28 @@ void live_draft_client_shutdown_is_bounded() {
   expect(layerc::core::MonotonicClock::now() - start < std::chrono::seconds(1),
          "close joins a stalled worker within the two bounded control roundtrips");
 }
+void display_name_contracts() {
+  layerc::editor::DaemonStatus status;
+  status.error = "the LayerC daemon is not reachable: No such file or directory";
+  expect(status.summary().find("the LayerD is not reachable: No such file or directory") != std::string::npos &&
+         status.error == "the LayerC daemon is not reachable: No such file or directory",
+         "summary names LayerD without altering the transport diagnostic");
+  status.error = "LayerC daemon: permission denied";
+  expect(status.summary().find("LayerD: permission denied") != std::string::npos,
+         "summary replaces the unprefixed compatibility name");
+  status.error = "/home/user/LayerC daemon/socket: permission denied";
+  expect(status.summary().find(status.error) != std::string::npos,
+         "summary preserves literal runtime paths");
+  status.running = true;
+  status.error = "the LayerC daemon returned an invalid status";
+  expect(status.summary().find("the LayerD returned an invalid status") != std::string::npos,
+         "running summaries also use the product name");
+}
+
 } // namespace
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(offline_contracts),
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(display_name_contracts),
+  LAYERC_TEST_CASE(offline_contracts),
                  LAYERC_TEST_CASE(running_contracts),
                  LAYERC_TEST_CASE(wayland_status_and_scope_notes),
                  LAYERC_TEST_CASE(save_mode_text_contracts),

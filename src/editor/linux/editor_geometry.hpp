@@ -19,5 +19,7 @@ class EditorTabs final : public Fl_Tabs {
 public:
   using Fl_Tabs::Fl_Tabs;
   [[nodiscard]] std::optional<EditorBounds> tab_bounds(int index);
+protected:
+  void draw() override;
 };
 } // namespace layerc::editor

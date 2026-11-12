@@ -8,6 +8,8 @@
 #include "layerc/platform/template_png.hpp"
 #include "layerc/platform/visual_assets_linux.hpp"
 
+#include "editor_style.hpp"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
@@ -66,11 +68,11 @@ public:
     capture_ = button(305, 510, 265, "Capture reference");
     import_ = button(20, 550, 265, "Import PNG reference...");
     clear_ = button(305, 550, 265, "Clear references");
-    references_ = new Fl_Output(20, 605, 550, 28, "Template references");
+    references_ = new EditorField<Fl_Output>(20, 605, 550, editor_input_height, "Template references");
     references_->align(FL_ALIGN_TOP_LEFT);
-    outcome_ = new Fl_Multiline_Output(20, 665, 550, 65, "Capture / live match status");
+    outcome_ = new EditorField<Fl_Multiline_Output>(20, 665, 550, 65, "Capture / live match status");
     outcome_->wrap(1);
-    outcome_->align(FL_ALIGN_TOP_LEFT); outcome_->textsize(11);
+    outcome_->align(FL_ALIGN_TOP_LEFT); outcome_->textsize(FL_NORMAL_SIZE);
 
     mode_ = choice(610, 45, 420, "Calibration predicate", "Average color|Brightness|Color coverage|Template match");
     color_ = input(610, 105, 200, "Target color #RRGGBB");
@@ -88,9 +90,9 @@ public:
     keep_ = check(610, 450, 420, "Keep input alongside the visual trigger");
     timeout_ = input(610, 510, 200, "Input timeout (50–5000 ms)");
     unavailable_ = choice(830, 510, 200, "Capture unavailable", "Ignore|Trigger from input");
-    auto *note = new Fl_Multiline_Output(610, 560, 420, 80, "Calibration semantics");
+    auto *note = new EditorField<Fl_Multiline_Output>(610, 560, 420, 80, "Calibration semantics");
     note->wrap(1);
-    note->align(FL_ALIGN_TOP_LEFT); note->textsize(11);
+    note->align(FL_ALIGN_TOP_LEFT); note->textsize(FL_NORMAL_SIZE);
     note->value("Passive X11 capture; no input is blocked or synthesized.\n"
                 "Confirm input requires an existing cooldown binding.\n"
                 "Cancel discards all calibration edits and captured/imported assets.");
@@ -153,14 +155,14 @@ private:
     }, this);
   }
   Fl_Button *button(int x, int y, int width, const char *label) {
-    auto *w = new Fl_Button(x, y, width, 30, label); bind(*w); return w;
+    auto *w = new Fl_Button(x, y, width, editor_button_height, label); bind(*w); return w;
   }
   Fl_Input *input(int x, int y, int width, const char *label) {
-    auto *w = new Fl_Input(x, y, width, 28, label);
+    auto *w = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
     w->align(FL_ALIGN_TOP_LEFT); w->when(FL_WHEN_CHANGED); bind(*w); return w;
   }
   Fl_Choice *choice(int x, int y, int width, const char *label, const char *items) {
-    auto *w = new Fl_Choice(x, y, width, 28, label);
+    auto *w = new EditorChoice(x, y, width, editor_input_height, label);
     w->align(FL_ALIGN_TOP_LEFT); if (items) w->add(items);
     w->value(0); bind(*w); return w;
   }

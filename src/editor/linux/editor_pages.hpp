@@ -24,6 +24,7 @@ struct Panel;
 
 namespace layerc::editor {
 class EditorApp;
+class EditorStatusMark;
 
 // Adds an authored name as a labelled choice item ('/' and '&' are text).
 void add_choice(Fl_Choice &choice, const std::string &name);
@@ -70,6 +71,7 @@ private:
   Fl_Multiline_Output *status_{};
   Fl_Multiline_Output *daemon_status_{};
   Fl_Multiline_Output *module_status_{};
+  EditorStatusMark *status_mark_{}, *daemon_mark_{}, *module_mark_{};
   Fl_Box *accessibility_status_{};
   Fl_Button *undo_button_{};
   Fl_Button *redo_button_{};

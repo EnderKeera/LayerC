@@ -5,6 +5,8 @@
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Scroll.H>
 
+#include "editor_style.hpp"
+
 namespace layerc::editor {
 void ExportSelectionDialog::build(const std::vector<std::string> &entries,
                                   const std::size_t selected) {
@@ -21,19 +23,19 @@ void ExportSelectionDialog::build(const std::vector<std::string> &entries,
     profiles.push_back(check);
   }
   scroll->end();
-  auto *all = new Fl_Button(15, 345, 100, 28, "Select all");
+  auto *all = new Fl_Button(15, 345, 100, editor_button_height, "Select all");
   all->callback([](Fl_Widget *, void *self) {
     static_cast<ExportSelectionDialog *>(self)->check_all(true);
   }, this);
-  auto *none = new Fl_Button(125, 345, 100, 28, "Select none");
+  auto *none = new Fl_Button(125, 345, 100, editor_button_height, "Select none");
   none->callback([](Fl_Widget *, void *self) {
     static_cast<ExportSelectionDialog *>(self)->check_all(false);
   }, this);
   status_ = new Fl_Box(15, 380, 590, 28);
   status_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT);
-  auto *cancel = new Fl_Button(375, 415, 110, 30, "Cancel");
+  auto *cancel = new Fl_Button(375, 415, 110, editor_button_height, "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  auto *export_button = new Fl_Button(495, 415, 110, 30, "Export");
+  auto *export_button = new Fl_Button(495, 415, 110, editor_button_height, "Export");
   export_button->callback([](Fl_Widget *, void *self) {
     static_cast<ExportSelectionDialog *>(self)->apply();
   }, this);

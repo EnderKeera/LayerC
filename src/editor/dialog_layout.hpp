@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 #include <windows.h>
@@ -66,6 +67,40 @@ inline void move_control(const HWND dialog, const int id, const int x,
     MoveWindow(control, x, y, std::max(1, width), std::max(1, height), TRUE);
 }
 
+// A control's own text measured in its font, in physical pixels: one line,
+// or wrapped to `wrap_width` and as tall as its lines. Access-key markers
+// don't count. The height is the font's line height even for empty text.
+[[nodiscard]] inline SIZE control_text_extent(const HWND control,
+                                              const int wrap_width = 0) {
+  SIZE size{};
+  if (control == nullptr)
+    return size;
+  const int length = GetWindowTextLengthW(control);
+  std::wstring text(static_cast<std::size_t>(std::max(0, length)) + 1, L'\0');
+  text.resize(static_cast<std::size_t>(
+      GetWindowTextW(control, text.data(), length + 1)));
+  const HDC dc = GetDC(control);
+  if (dc == nullptr)
+    return size;
+  const auto font =
+      reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0));
+  const HGDIOBJ previous = font != nullptr ? SelectObject(dc, font) : nullptr;
+  TEXTMETRICW metrics{};
+  GetTextMetricsW(dc, &metrics);
+  RECT bounds{0, 0, std::max(1, wrap_width), 0};
+  if (!text.empty())
+    DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &bounds,
+              DT_CALCRECT | DT_NOCLIP |
+                  (wrap_width > 0 ? DT_WORDBREAK : DT_SINGLELINE));
+  if (previous != nullptr)
+    SelectObject(dc, previous);
+  ReleaseDC(control, dc);
+  size.cx = text.empty() ? 0 : bounds.right - bounds.left;
+  size.cy = std::max(static_cast<LONG>(metrics.tmHeight),
+                     text.empty() ? 0 : bounds.bottom - bounds.top);
+  return size;
+}
+
 // Keeps logical units, placement, and repeating rows together for resizable
 // native dialogs. Positions remain in physical client pixels.
 class DialogLayout final {
@@ -103,6 +138,58 @@ public:
                    const int gap) const {
     move(id, x, y, scaled(logical_width), height);
     x += scaled(logical_width) + gap;
+  }
+
+  [[nodiscard]] HWND control(const int id) const noexcept {
+    return GetDlgItem(dialog_, id);
+  }
+  [[nodiscard]] SIZE text_extent(const int id, const int wrap_width = 0) const {
+    return control_text_extent(control(id), wrap_width);
+  }
+  // A dialog button is at least 88 px wide, wider when its label needs it.
+  [[nodiscard]] int button_width(const int id) const {
+    return std::max(scaled(88),
+                    static_cast<int>(text_extent(id).cx) + scaled(24));
+  }
+  // A drop-down centered in its row: Windows sets its closed height from the
+  // font, and its window height also holds the open list.
+  void combo(const int id, const int x, const int y, const int width,
+             const int row_height) const {
+    const int list = scaled(200);
+    move(id, x, y, width, list);
+    RECT closed{};
+    if (const HWND box = control(id);
+        box != nullptr && GetWindowRect(box, &closed) != FALSE &&
+        closed.bottom - closed.top < row_height)
+      move(id, x, y + (row_height - (closed.bottom - closed.top)) / 2, width,
+           list);
+  }
+  // A dialog's button row: the buttons in order, ending at `right`, 8 px
+  // apart (OK, Cancel, Apply). Returns the left edge of the first.
+  int button_row(const std::initializer_list<int> ids, const int right,
+                 const int y, const int height) const {
+    int x = right + scaled(8);
+    for (const int id : ids)
+      x -= button_width(id) + scaled(8);
+    const int left = x;
+    for (const int id : ids) {
+      const int width = button_width(id);
+      move(id, x, y, width, height);
+      x += width + scaled(8);
+    }
+    return left;
+  }
+  // Sizes a fixed dialog so its client area is `width` by `height`.
+  void fit_client(const int width, const int height) const {
+    RECT frame{0, 0, width, height};
+    AdjustWindowRectExForDpi(
+        &frame, static_cast<DWORD>(GetWindowLongPtrW(dialog_, GWL_STYLE)),
+        GetMenu(dialog_) != nullptr,
+        static_cast<DWORD>(GetWindowLongPtrW(dialog_, GWL_EXSTYLE)),
+        GetDpiForWindow(dialog_));
+    SetWindowPos(dialog_, nullptr, 0, 0, frame.right - frame.left,
+                 frame.bottom - frame.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
   }
 
 private:

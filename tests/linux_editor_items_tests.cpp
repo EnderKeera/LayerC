@@ -241,12 +241,35 @@ void linux_editor_typed_item_controls() {
         click(dialog, "Apply item");
       },
       [&](Fl_Group &dialog) {
-        refused = field<Fl_Box>(dialog, "Flash Hz must be 0 (off), or between 0.5 and 4.") != nullptr;
+        refused = field<Fl_Box>(dialog, "Flash Hz must be 0 (off), or between 0.5 and 3.") != nullptr;
         click(dialog, "Cancel");
       }});
     editor::EditorAppTestAccess::add_item(app)->do_callback();
     expect(invalid.delivered() && refused && *panel(app).items == before,
            "out-of-range flash leaves the modal open and changes no document data");
+  }
+  {
+    (void)app.session.edit_items([&](auto &profile, auto &) -> std::optional<std::string> {
+      std::get<core::IndicatorItem>((*profile.panels[0].items)[2].content).flash_hz = 3.5;
+      return std::nullopt;
+    });
+    app.refresh();
+    editor::EditorAppTestAccess::items(app)->value(3);
+    editor::EditorAppTestAccess::items(app)->do_callback();
+    bool warned = false;
+    ModalReply high_flash({[&](Fl_Group &dialog) {
+      warned = field<Fl_Box>(dialog, "Flashes at 3 Hz; faster flashing is capped.") != nullptr;
+      click(dialog, "Apply item");
+    }});
+    editor::EditorAppTestAccess::edit_item(app)->do_callback();
+    expect(high_flash.delivered() && warned &&
+               std::get<core::IndicatorItem>((*panel(app).items)[2].content).flash_hz == 3.5,
+           "loaded indicator above 3 Hz shows the cap warning and stays in the profile");
+    (void)app.session.edit_items([&](auto &profile, auto &) -> std::optional<std::string> {
+      std::get<core::IndicatorItem>((*profile.panels[0].items)[2].content).flash_hz = 2.0;
+      return std::nullopt;
+    });
+    app.refresh();
   }
 
   const auto automation_before = app.session.document().automation();

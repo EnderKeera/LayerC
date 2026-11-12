@@ -32,13 +32,27 @@ bool daemon_socket_absent() {
   return errno == ENOENT;
 }
 
+// The wire status says "the LayerC daemon ..." for compatibility; a person
+// reads LayerD. Only an exact leading product/component name is replaced, so
+// paths and user text pass through unchanged.
+std::string display_status_error(const std::string &error) {
+  std::string text = error;
+  const std::size_t at = text.starts_with("the LayerC ") ? 4U
+      : text.starts_with("LayerC ") ? 0U : std::string::npos;
+  if (at != std::string::npos && text.compare(at + 7U, 6U, "daemon") == 0 &&
+      (text.size() == at + 13U || text[at + 13U] == ' ' || text[at + 13U] == ':'))
+    text.replace(at, 13U, "LayerD");
+  return text;
+}
+
 } // namespace
 
 std::string DaemonStatus::summary() const {
+  const std::string detail = display_status_error(error);
   if (!running) {
     const std::string text = socket_missing
         ? "LayerD is not running" : "LayerD status unavailable";
-    return text + (error.empty() ? "" : " (" + error + ")");
+    return text + (detail.empty() ? "" : " (" + detail + ")");
   }
   std::string text = "LayerD " + (version.empty() ? std::string("running") : version);
   if (wayland_session()) {
@@ -54,7 +68,7 @@ std::string DaemonStatus::summary() const {
   }
   if (!x11_connected && !x11_reason.empty()) text += " (" + x11_reason + ")";
   text += ", " + std::to_string(sessions) + (sessions == 1 ? " session" : " sessions");
-  if (!error.empty()) text += " (" + error + ")";
+  if (!detail.empty()) text += " (" + detail + ")";
   return text;
 }
 

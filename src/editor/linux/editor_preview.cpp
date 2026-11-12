@@ -1,4 +1,5 @@
 #include "editor_app.hpp"
+#include "editor_style.hpp"
 #include "layerc/core/panel_geometry.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "automation_simulator.hpp"
@@ -12,6 +13,14 @@
 #include <string>
 
 namespace layerc::editor {
+namespace {
+Fl_Color token_color(const std::uint32_t value) {
+  return fl_rgb_color(static_cast<uchar>((value >> 16U) & 0xFFU),
+                      static_cast<uchar>((value >> 8U) & 0xFFU),
+                      static_cast<uchar>(value & 0xFFU));
+}
+} // namespace
+
 namespace {
 struct PlacedPanel {
   layerc::core::PanelGeometry geometry;
@@ -51,7 +60,8 @@ Fl_Color rgb(std::uint32_t color) {
 }
 PanelPreview::PanelPreview(int x, int y, int width, int height, EditorApp &app)
     : Fl_Widget(x, y, width, height, "Local panel preview"), app_(app) {
-  color(fl_rgb_color(31, 36, 41)); // the Preview role's default; Appearance may override it
+  // The Preview role's default; Appearance may override it.
+  color(token_color(current_editor_tokens().input));
 }
 PanelPreview::~PanelPreview() { Fl::remove_timeout(wake, this); }
 void PanelPreview::wake(void *data) {
@@ -91,9 +101,9 @@ void PanelPreview::draw() {
   fl_rectf(x(), y(), w(), h(), color());
   const auto frame = frame_of(*this, app_);
   if (app_.placement_active()) {
-    fl_color(fl_rgb_color(120, 130, 140));
+    fl_color(token_color(current_editor_tokens().border));
     fl_rect(frame.x, frame.y, frame.width, frame.height);
-    fl_font(FL_HELVETICA, 11);
+    fl_font(FL_HELVETICA, static_cast<int>(FL_NORMAL_SIZE));
     const auto &target = *app_.placement();
     const auto caption = "Positioning on " +
         (target.title.empty() ? std::string("window") : target.title) +
@@ -137,7 +147,7 @@ void PanelPreview::draw() {
           (!next || *view.presentation.next_wakeup < *next))
         next = view.presentation.next_wakeup;
       if (panel.id == app_.selected_panel()) {
-        fl_color(FL_WHITE);
+        fl_color(token_color(current_editor_tokens().accent));
         fl_rect(placed.left, placed.top,
                 static_cast<int>(placed.geometry.size.width * placed.scale),
                 static_cast<int>(placed.geometry.size.height * placed.scale));
@@ -189,8 +199,10 @@ int PanelPreview::handle(int event) {
     if (error) app_.report(*error);
     else {
       app_.refresh_forms();
+      // Every drag of the bar says this again; the reader hears it once.
       app_.report(app_.placement_active() ? "Positioning on the window: the live draft moves LayerD's overlay."
-                                          : "Unsaved preview placement.");
+                                          : "Unsaved preview placement.",
+                  StatusVoice::silent);
       redraw();
     }
     return 1;

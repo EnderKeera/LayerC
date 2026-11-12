@@ -540,6 +540,7 @@ void EditorWindow::refresh_profile_controls() {
   SendMessageW(shell_.application_path, EM_SETSEL, static_cast<WPARAM>(length),
                length);
   SendMessageW(shell_.application_path, EM_SCROLLCARET, 0, 0);
+  describe_application();
   cooldown_editor_.refresh_list();
   refresh_bar_list();
   InvalidateRect(panel_preview_.window, nullptr, TRUE);

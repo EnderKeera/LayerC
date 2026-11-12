@@ -1,5 +1,6 @@
 #include "cooldown_editor.hpp"
 
+#include "accessible_text.hpp"
 #include "editor_profile_fields.hpp"
 #include "editor_prompt.hpp"
 #include "editor_resource.h"
@@ -136,7 +137,7 @@ CooldownEditor::CooldownEditor(ProfileDocument &document, EditorShell &shell,
       report_edit_(std::move(report_edit)), host_(std::move(host)) {}
 
 void CooldownEditor::set_status(const std::wstring_view text) const {
-  set_text(shell_.status, text);
+  set_status_text(shell_.status, text);
 }
 
 bool CooldownEditor::handle_capture_message(const MSG &message) {
@@ -253,9 +254,18 @@ void CooldownEditor::refresh_controls() {
                        IDC_CAPTURE_HID})
     EnableWindow(GetDlgItem(shell_.window, id), has_selection);
   // A profile keeps at least one cooldown: removal is unavailable, not an
-  // error to report afterwards.
+  // error to report afterwards, and the button says why.
+  const bool last =
+      has_selection && document_.profile().cooldowns.size() <= 1;
   EnableWindow(GetDlgItem(shell_.window, IDC_REMOVE_COOLDOWN),
-               has_selection && document_.profile().cooldowns.size() > 1);
+               has_selection && !last);
+  const std::wstring_view reason =
+      last ? L"A profile needs at least one cooldown." : L"";
+  (void)set_button_reason(shell_, IDC_REMOVE_COOLDOWN, reason);
+  const HWND reason_line =
+      GetDlgItem(shell_.window, IDC_COOLDOWN_REMOVE_REASON);
+  set_text(reason_line, reason);
+  ShowWindow(reason_line, reason.empty() ? SW_HIDE : SW_SHOWNA);
   host_.follow_bar();
   set_text(capture,
            capture_.capturing_binding() ? L"Press chord..."

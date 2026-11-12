@@ -1,4 +1,5 @@
 #include "editor_pages.hpp"
+#include "accessible_widgets.hpp"
 #include "editor_app.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
@@ -12,6 +13,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "editor_style.hpp"
+
 namespace layerc::editor {
 namespace {
 
@@ -21,7 +24,7 @@ class CommandButton final : public Fl_Button {
 public:
   CommandButton(int x, int y, int width, const char *label, EditorApp &app,
                 EditorCommand action)
-      : Fl_Button(x, y, width, 30, label), app_(app), action_(action) {
+      : Fl_Button(x, y, width, editor_button_height, label), app_(app), action_(action) {
     callback([](Fl_Widget *, void *data) {
       auto &self = *static_cast<CommandButton *>(data);
       self.app_.command(self.action_);
@@ -43,7 +46,7 @@ void add_choice(Fl_Choice &choice, const std::string &name) {
 }
 
 Fl_Input *FormBuilder::input(int x, int y, int width, const char *label) {
-  auto *field = new Fl_Input(x, y, width, 28, label);
+  auto *field = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
   field->align(FL_ALIGN_TOP_LEFT);
   field->when(FL_WHEN_CHANGED);
   field->callback([](Fl_Widget *w, void *data) {
@@ -54,7 +57,7 @@ Fl_Input *FormBuilder::input(int x, int y, int width, const char *label) {
 
 Fl_Choice *FormBuilder::choice(int x, int y, int width, const char *label,
                                const char *items) {
-  auto *field = new Fl_Choice(x, y, width, 28, label);
+  auto *field = new EditorChoice(x, y, width, editor_input_height, label);
   field->align(FL_ALIGN_TOP_LEFT);
   if (items) field->add(items);
   field->value(0);
@@ -65,7 +68,7 @@ Fl_Choice *FormBuilder::choice(int x, int y, int width, const char *label,
 }
 
 Fl_Check_Button *FormBuilder::check(int x, int y, int width, const char *label) {
-  auto *field = new Fl_Check_Button(x, y, width, 28, label);
+  auto *field = new Fl_Check_Button(x, y, width, editor_input_height, label);
   field->callback([](Fl_Widget *w, void *data) {
     static_cast<EditorApp *>(data)->field_changed(w);
   }, &app_);
@@ -91,11 +94,13 @@ Fl_Button *FormBuilder::button(int x, int y, int width, const char *label,
 void StatusPane::build_modules(FormBuilder &builder, const int x, const int y,
                                const int width, const int height) {
   (void)builder;
-  module_status_ = new Fl_Multiline_Output(x, y, width, height,
-                                           "Preservation / module faults");
+  module_mark_ = new EditorStatusMark(x, y, 18, height);
+  module_status_ = new EditorField<Fl_Multiline_Output>(x + 18, y, width - 18, height,
+                                                       "Preservation / module faults");
   module_status_->wrap(1);
   module_status_->align(FL_ALIGN_TOP_LEFT);
-  module_status_->textsize(11);
+  module_status_->textfont(FL_COURIER);
+  module_status_->textsize(FL_NORMAL_SIZE);
 }
 
 void StatusPane::build_footer(FormBuilder &builder) {
@@ -105,31 +110,37 @@ void StatusPane::build_footer(FormBuilder &builder) {
   undo_button_->shortcut(FL_CTRL | 'z');
   redo_button_ = builder.button(215, 722, 80, "&Redo", EditorCommand::redo);
   redo_button_->shortcut(FL_CTRL | FL_SHIFT | 'z');
-  (void)builder.button(305, 722, 130, "Daemon status", EditorCommand::refresh);
-  status_ = new Fl_Multiline_Output(270, 676, 775, 38, "Save / reload outcome");
+  (void)builder.button(305, 722, 130, "LayerD status", EditorCommand::refresh);
+  status_mark_ = new EditorStatusMark(270, 676, 18, 38);
+  status_ = new EditorField<Fl_Multiline_Output>(288, 676, 757, 38, "Save / reload outcome");
   status_->wrap(1);
   status_->align(FL_ALIGN_TOP_LEFT);
-  daemon_status_ =
-      new Fl_Multiline_Output(15, 572, 240, 142, "Daemon status and capability faults");
+  status_->textsize(FL_NORMAL_SIZE);
+  daemon_mark_ = new EditorStatusMark(15, 572, 18, 142);
+  daemon_status_ = new EditorField<Fl_Multiline_Output>(
+      33, 572, 222, 142, "LayerD status and capability faults");
   daemon_status_->wrap(1);
   daemon_status_->align(FL_ALIGN_TOP_LEFT);
-  daemon_status_->textsize(11);
+  daemon_status_->textsize(FL_NORMAL_SIZE);
   accessibility_status_ = new Fl_Box(450, 723, 595, 28);
   accessibility_status_->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
-  accessibility_status_->labelsize(11);
+  accessibility_status_->labelsize(FL_NORMAL_SIZE);
 }
 
 void StatusPane::set_status(const std::string &text) {
   status_->value(text.c_str());
+  status_mark_->glyph(editor_status_glyph(text));
   status_->redraw();
 }
 
 void StatusPane::set_daemon(const std::string &text) {
   daemon_status_->value(text.c_str());
+  daemon_mark_->glyph(editor_status_glyph(text));
 }
 
 void StatusPane::set_modules(const std::string &text) {
   module_status_->value(text.c_str());
+  module_mark_->glyph(editor_status_glyph(text));
 }
 
 void StatusPane::set_accessibility(const std::string &text) {
@@ -160,7 +171,7 @@ void ProfilePage::build(FormBuilder &builder) {
   window_class_ = builder.input(285, 210, 340, "Window class (optional)");
   window_title_ = builder.input(660, 210, 370, "Window title (optional)");
   enabled_ = builder.check(285, 265, 260, "Profile enabled");
-  profile_id_ = new Fl_Multiline_Output(285, 320, 745, 30, "Profile ID (read-only)");
+  profile_id_ = new EditorField<Fl_Multiline_Output>(285, 320, 745, 30, "Profile ID (read-only)");
   profile_id_->wrap(1);
   profile_id_->align(FL_ALIGN_TOP_LEFT);
   auto *note = new Fl_Box(285, 370, 745, 65,
@@ -318,13 +329,14 @@ void BindingPage::build(FormBuilder &builder) {
   mouse_button_ = builder.choice(710, 210, 155, "Mouse input",
                                  "Left|Right|Middle|Back|Forward|Wheel up|Wheel down");
   (void)builder.button(880, 210, 150, "Add mouse", EditorCommand::add_mouse);
-  (void)builder.button(710, 275, 320, "Capture focused chord...",
+  auto *capture = builder.button(710, 275, 320, "Capture focused chord...",
                        EditorCommand::capture_binding);
   auto *capture_note = new Fl_Box(710, 330, 320, 80,
       "Capture reads only events in its focused editor dialog.\n"
       "Controller and HID bindings stay read-only until device capture is implemented.");
   capture_note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
   capture_note->labelsize(11);
+  accessibility::describe_with(*capture, *capture_note);
   binding_tab_->end();
 }
 

@@ -1,0 +1,123 @@
+<!-- @dsCard group="Layout" width=1195 height=1300 page subtitle="Target main window: a preview corner over three settings slots that any overlay kind can fill" -->
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"><script>(function(){var t=new URLSearchParams(location.search).get("theme");if(t)document.documentElement.setAttribute("data-theme",t);})();</script><style>body{margin:0;background:var(--background)}</style><meta charset="utf-8"><title>Main window layout</title><style>
+.lay{display:grid;grid-template-columns:598px 1fr;gap:24px;margin-top:24px;width:1195px;color:var(--text);font-family:var(--font-windows);font-size:12px;line-height:17px}
+.lay h3{font-size:12px;font-weight:600;margin:0 0 8px;color:var(--text)}
+.lay .cap{color:var(--secondary);margin:6px 0 0}
+.map{position:relative;background:var(--background);outline:1px solid var(--divider)}
+.map .z{position:absolute;box-sizing:border-box;border:1px solid var(--border);background:var(--panel);padding:5px 7px;color:var(--secondary);font-size:11px;line-height:14px}
+.map .z b{display:block;color:var(--text);font-weight:600}
+.map .z.slot{border-top:3px solid var(--accent)}
+.map .z.pv{background:var(--input)}
+.map .rule{position:absolute;left:133px;right:6px;border-top:1px dashed var(--accent)}
+.lay ul{margin:0 0 16px;padding-left:16px}
+.lay li{margin:0 0 6px}
+.lay code{font-family:var(--font-windows-mono);font-size:11px;color:var(--secondary)}
+.lay table{border-collapse:collapse;width:100%}
+.lay th,.lay td{text-align:left;vertical-align:top;padding:5px 8px;border-bottom:1px solid var(--divider)}
+.lay th{color:var(--secondary);font-weight:600;white-space:nowrap}
+.lay td:first-child{white-space:nowrap}
+.lay td:nth-child(3),.lay td:nth-child(4){white-space:nowrap}
+.lay td.dim{color:var(--disabled)}
+</style></head>
+<body class="le-screens">
+<div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="../../assets/Logos/layerc-16.png" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:738px;top:64px;width:132px;height:26px;"><span>Show advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:256px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:887px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:886px;top:100px;width:296px;height:356px;"></div>
+<div class="a target" style="left:898px;top:161px;width:272px;height:153px;"></div>
+<div class="a bar-mini" style="left:1004px;top:290px;width:37px;height:6px;"></div>
+<span class="t lbl" style="left:898px;top:371px;">Actual size</span>
+<div class="a bar-real" style="left:904px;top:399px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<span class="t h" style="left:266px;top:471px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:504px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:500px;width:210px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:538px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:534px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:572px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:568px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:572px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:606px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:602px;width:102px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:460px;top:602px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="t h" style="left:576px;top:471px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:577px;top:502px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:774px;top:505px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:576px;top:534px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:688px;top:534px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="t lbl" style="left:576px;top:567px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:576px;top:582px;">cooldown starts.</span>
+<span class="t h" style="left:886px;top:471px;">Overlay bar</span>
+<span class="t lbl" style="left:886px;top:504px;">Width</span>
+<span class="le-edit a " style="left:942px;top:500px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1039px;top:504px;">Height</span>
+<span class="le-edit a " style="left:1094px;top:500px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:886px;top:534px;width:144px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:534px;width:144px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:886px;top:568px;width:144px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:568px;width:144px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:886px;top:607px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1038px;top:607px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:886px;top:633px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:887px;top:653px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:886px;top:668px;">works during Position on window.</span>
+</div>
+<div class="lay"><div><h3>Grid</h3><div class="map" style="width:597px;height:377px"><div class="z " style="left:6px;top:32px;width:119px;height:325px"><b>Sidebar</b><span>width / 5,<br>200–280</span></div><div class="z " style="left:133px;top:32px;width:302px;height:48px"><b>Profile fields</b><span>stop at 480</span></div><div class="z " style="left:133px;top:88px;width:302px;height:140px"><b>Item list + buttons</b><span>list ≥ 84 tall, ≤ 560 wide</span></div><div class="z pv" style="left:443px;top:32px;width:148px;height:196px"><b>Preview corner</b><span>over slot 3; ends on<br>the list’s bottom line</span></div><div class="z slot" style="left:133px;top:236px;width:147px;height:121px"><b>1 · Source</b><span>what drives the item</span></div><div class="z slot" style="left:288px;top:236px;width:147px;height:121px"><b>2 · Detection</b><span>how LayerC sees it start</span></div><div class="z slot" style="left:443px;top:236px;width:148px;height:121px"><b>3 · Look</b><span>the item’s panel</span></div><div class="rule" style="top:232px"></div><div class="rule" style="top:358px"></div></div><p class="cap">Same window at 1:2. Dashed lines: the list and preview share a bottom line; the slots sit on the status strip.</p></div><div><h3>Rules</h3><ul>
+<li>Two bands right of the sidebar. The top band holds the profile fields, the item list and the preview corner; the list and the preview end on one line.</li>
+<li>The settings row is three equal slots, <code>win-gap-main</code> apart, anchored to the status strip. Its height is the tallest group’s; the list and the preview take what is left, so Show advanced never grows the window.</li>
+<li>Slots keep their place: a kind with no group for a slot leaves it empty, so the look always sits under the preview.</li>
+<li>Three slots need 260 px each. Narrower, the preview hides, slots 1 and 2 stack in the first column, and Position on window moves into the look slot.</li>
+<li>Tab follows reading order: fields, list, preview corner, then slots 1 to 3.</li>
+</ul><h3>How each overlay kind fills the slots</h3><table><thead><tr><th>Kind</th><th>1 · Source</th><th>2 · Detection</th><th>3 · Look</th></tr></thead><tbody><tr><td>Cooldown</td><td>Timing and key: name, duration, active, binding</td><td class="">Visual trigger</td><td>Overlay bar</td></tr><tr><td>Timer</td><td>Timer: source (cooldown active duration or automation timer)</td><td class="dim">—</td><td>Overlay bar</td></tr><tr><td>Counter</td><td>Counter: variable, max, display (number or pips)</td><td class="dim">—</td><td>Overlay bar</td></tr><tr><td>Indicator</td><td>Indicator: variable, flash (Hz)</td><td class="dim">—</td><td>Overlay bar</td></tr></tbody></table><p class="cap">Timer, Counter and Indicator are set in the Overlay item dialog today; when the main window shows them, they take these slots.</p></div></div>
+</body>
+</html>

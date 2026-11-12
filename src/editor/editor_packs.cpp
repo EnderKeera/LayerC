@@ -266,7 +266,7 @@ void set_import_action_text(const HWND list, const int index,
   const wchar_t *text = L"Import";
   if (item.conflict) {
     if (item.action == layerc::bundle::ImportAction::copy)
-      text = L"Import Copy";
+      text = L"Import copy";
     else
       text = L"Replace";
   }
@@ -495,7 +495,7 @@ void EditorWindow::export_profile_pack() {
   }
   if (state.items.empty()) {
     themed_message_box(shell_.window, L"There are no saved profiles to export.",
-                L"Export Pack", MB_OK | MB_ICONINFORMATION);
+                L"Export pack", MB_OK | MB_ICONINFORMATION);
     return;
   }
   if (state.current_index == SIZE_MAX)

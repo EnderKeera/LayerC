@@ -37,6 +37,23 @@ void AccessibilityTree::collect(AtkObject *object, std::vector<AtkObject *> &obj
   objects.push_back(object);
   for (auto *child : node(object).children) collect(child, objects);
 }
+AtkObject *AccessibilityTree::find(AtkObject *object, const Fl_Widget *widget) {
+  auto &n = node(object);
+  if (n.kind == Kind::widget && n.widget() == widget) return object;
+  for (auto *child : n.children)
+    if (auto *found = find(child, widget)) return found;
+  return nullptr;
+}
+void AccessibilityTree::announce(Fl_Widget *source, const std::string &text) {
+  if (root_ == nullptr || text.empty()) return;
+  auto *object = source != nullptr ? find(root_, source) : nullptr;
+  if (object == nullptr) object = active_window_;
+  if (object == nullptr) object = root_;
+  // ATK's notification event is what the adaptor forwards as an AT-SPI
+  // announcement; the text is spoken, the widget is only its origin.
+  g_signal_emit_by_name(object, "notification", valid_utf8(text).c_str(),
+                        ATK_LIVE_POLITE);
+}
 void AccessibilityTree::detach() {
   if (!root_ || !detached_.empty()) return;
   collect(root_, detached_);
@@ -120,6 +137,11 @@ void AccessibilityTree::report_changes(AtkObject *object) {
   if (auto name = current_name(n); name != n.name) {
     n.name = std::move(name);
     g_object_notify(G_OBJECT(object), "accessible-name");
+  }
+  if (auto description = current_description(object);
+      description != n.description) {
+    n.description = std::move(description);
+    g_object_notify(G_OBJECT(object), "accessible-description");
   }
   const auto state = [&](bool &last, bool next, AtkStateType type) {
     if (next == last) return false;

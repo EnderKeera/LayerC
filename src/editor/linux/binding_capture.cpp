@@ -3,6 +3,8 @@
 #include "x11_error.hpp"
 #include "x11_input.hpp"
 
+#include "editor_style.hpp"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
@@ -112,11 +114,11 @@ public:
     auto *hid = new Fl_Box(15, 190, 530, 40, "Generic HID capture is unavailable on Linux; "
         "existing HID bindings are kept unchanged.");
     hid->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-    auto *clear = new Fl_Button(110, 250, 130, 30, "Clear");
+    auto *clear = new Fl_Button(110, 250, 130, editor_button_height, "Clear");
     clear->callback([](Fl_Widget *, void *self) { static_cast<CaptureWindow *>(self)->reset(); }, this);
-    auto *cancel = new Fl_Button(250, 250, 130, 30, "Cancel");
+    auto *cancel = new Fl_Button(250, 250, 130, editor_button_height, "Cancel");
     cancel->callback([](Fl_Widget *, void *self) { static_cast<CaptureWindow *>(self)->hide(); }, this);
-    accept = new Fl_Button(400, 250, 130, 30, "Accept");
+    accept = new Fl_Button(400, 250, 130, editor_button_height, "Accept");
     accept->deactivate();
     accept->callback([](Fl_Widget *, void *self) {
       auto &window = *static_cast<CaptureWindow *>(self);

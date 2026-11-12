@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 
+class Fl_Widget;
+
 namespace layerc::editor {
 class EditorApp;
 
@@ -19,6 +21,10 @@ public:
   EditorAccessibility &operator=(const EditorAccessibility &) = delete;
   [[nodiscard]] bool available() const;
   [[nodiscard]] const std::string &fault() const;
+  // Speaks `text` as an AT-SPI announcement (DesignSystem.md, Screen readers)
+  // after syncing the tree so a just-written status line is known. Does
+  // nothing while the bridge is unavailable; never queues on a thread.
+  void announce(Fl_Widget *source, const std::string &text);
 
 private:
   struct Impl;

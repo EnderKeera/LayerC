@@ -1,12 +1,15 @@
 // Tools and file commands beyond the core edit loop: Save As, the profiles
 // folder, Split grouped bars, panel colours, Options and editor Appearance.
 #include "editor_tools.hpp"
+#include "accessible_widgets.hpp"
 #include "editor_app.hpp"
 #include "appearance_window.hpp"
 #include "cooldown_groups_window.hpp"
 #include "diagnostics_window.hpp"
 #include "profile_edit.hpp"
 #include "profile_mutations.hpp"
+
+#include "editor_style.hpp"
 
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
@@ -39,33 +42,55 @@ constexpr int button_width = 155;
 // Modal panel colours: a #RRGGBB field and a chooser per bar colour.
 std::optional<PanelColorSet> edit_panel_colors_internal(const PanelColorSet &current) {
   const auto layout = panel_colors_layout();
-  Fl_Double_Window dialog(layout.window_width, 250, "Panel colours — LayerE");
+  Fl_Double_Window dialog(layout.window_width, 250, "Panel colors — LayerE");
   std::array<Fl_Input *, 4> fields{};
-  struct Pick { Fl_Input *field; const char *title; };
+  std::array<Fl_Button *, 4> buttons{};
+  struct Pick {
+    Fl_Input *field;
+    Fl_Button *button;
+    const char *title;
+    void sync_name() const {
+      const auto color = parse_rgb(field->value()).value_or(current_editor_tokens().disabled);
+      accessibility::set_accessible_name(
+          *button, accessibility::color_button_name(title, format_rgb(color)));
+    }
+  };
   std::array<Pick, 4> picks{};
   for (std::size_t index = 0; index < fields.size(); ++index) {
     const int y = 15 + static_cast<int>(index) * 40;
-    fields[index] = new Fl_Input(layout.input_x, y, input_width, 28, nullptr);
+    fields[index] = new EditorField<Fl_Input>(layout.input_x, y, input_width, editor_input_height, nullptr);
     fields[index]->copy_label((std::string(color_names[index]) + " #RRGGBB").c_str());
     fields[index]->value(format_rgb(current.values[index]).c_str());
-    picks[index] = {fields[index], color_names[index]};
-    auto *choose = new Fl_Button(layout.button_x, y, button_width, 28, nullptr);
+    auto *choose = new Fl_Button(layout.button_x, y, button_width, editor_button_height, nullptr);
+    buttons[index] = choose;
     choose->copy_label(("Choose " + std::string(color_names[index]) + "...").c_str());
+    picks[index] = {fields[index], choose, color_names[index]};
+    picks[index].sync_name();
+    fields[index]->when(FL_WHEN_CHANGED);
+    fields[index]->callback([](Fl_Widget *, void *data) {
+      static_cast<const Pick *>(data)->sync_name();
+    }, &picks[index]);
     choose->callback([](Fl_Widget *, void *data) {
       auto &pick = *static_cast<Pick *>(data);
-      const auto initial = parse_rgb(pick.field->value()).value_or(0x808080);
-      if (const auto color = choose_color(pick.title, initial))
+      const auto initial = parse_rgb(pick.field->value()).value_or(current_editor_tokens().disabled);
+      if (const auto color = choose_color(pick.title, initial)) {
         pick.field->value(format_rgb(*color).c_str());
+        pick.sync_name();
+      }
     }, &picks[index]);
   }
   auto *message = new Fl_Box(15, 170, layout.window_width - 30, 28);
   message->align(FL_ALIGN_INSIDE | FL_ALIGN_LEFT | FL_ALIGN_WRAP);
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    accessibility::describe_with(*fields[index], *message);
+    accessibility::describe_with(*buttons[index], *message);
+  }
   bool accepted = false;
-  auto *cancel = new Fl_Button(layout.window_width - 250, 205, 110, 30, "Cancel");
+  auto *cancel = new Fl_Button(layout.window_width - 250, 205, 110, editor_button_height, "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
   struct Accept { bool *accepted; std::array<Fl_Input *, 4> *fields; Fl_Box *message; };
   Accept accept_state{&accepted, &fields, message};
-  auto *ok = new Fl_Button(layout.window_width - 125, 205, 110, 30, "OK");
+  auto *ok = new Fl_Button(layout.window_width - 125, 205, 110, editor_button_height, "OK");
   ok->callback([](Fl_Widget *widget, void *data) {
     auto &state = *static_cast<Accept *>(data);
     for (std::size_t index = 0; index < state.fields->size(); ++index)

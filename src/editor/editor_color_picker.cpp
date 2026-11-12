@@ -1,6 +1,10 @@
 #include "editor_window.hpp"
+#include "accessible_text.hpp"
+#include "appearance_contrast.hpp"
 #include "editor_dialog_dispatch.hpp"
+#include "editor_dialog_layouts.hpp"
 #include "editor_resource.h"
+#include "static_style.hpp"
 #include "layerc/core/json.hpp"
 #include "layerc/platform/native_theme.hpp"
 #include "layerc/platform/text.hpp"
@@ -10,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <windows.h>
 #include <commctrl.h>
@@ -20,37 +25,9 @@ namespace {
 
 namespace theme = layerc::platform;
 
-struct PaletteColor {
-  std::uint32_t value;
-  std::wstring_view name;
-};
+constexpr const auto &color_palette = theme::color_palette;
 
-constexpr std::array<PaletteColor, 24> color_palette{
-    PaletteColor{theme::neutral_theme.background, L"Graphite"},
-    PaletteColor{theme::neutral_theme.panel, L"Charcoal"},
-    PaletteColor{theme::neutral_theme.border, L"Gray"},
-    PaletteColor{theme::neutral_theme.secondary, L"Silver"},
-    PaletteColor{0xE9E4DD, L"Warm white"},
-    PaletteColor{0xF1F5F7, L"Ice white"},
-    PaletteColor{theme::copper_accent, L"Copper"},
-    PaletteColor{0xE0A15A, L"Amber"},
-    PaletteColor{0xE85D5D, L"Red"},
-    PaletteColor{0xF08A5D, L"Coral"},
-    PaletteColor{0xE7C84B, L"Gold"},
-    PaletteColor{0x8BC34A, L"Lime"},
-    PaletteColor{0x4FCB83, L"Green"},
-    PaletteColor{theme::teal_accent, L"Seafoam"},
-    PaletteColor{0x50BAC8, L"Teal"},
-    PaletteColor{0x5DADE2, L"Sky blue"},
-    PaletteColor{0x4B7BEC, L"Blue"},
-    PaletteColor{0x6C5CE7, L"Indigo"},
-    PaletteColor{0x9B72E8, L"Violet"},
-    PaletteColor{theme::plum_accent, L"Plum"},
-    PaletteColor{0xD65DB1, L"Magenta"},
-    PaletteColor{0xF06292, L"Pink"},
-    PaletteColor{0x8D6E63, L"Brown"},
-    PaletteColor{0x607D8B, L"Blue gray"},
-};
+
 
 std::optional<std::uint32_t> channel_value(const HWND window, const int id) {
   return parse_bounded(window_text(GetDlgItem(window, id)), 0, 255);
@@ -73,10 +50,6 @@ std::optional<std::uint32_t> hex_value(std::wstring text) {
 
 std::wstring hex_label(const std::uint32_t color) {
   return layerc::platform::utf8_to_wide(layerc::core::json::color_text(color));
-}
-
-std::wstring swatch_label(const PaletteColor &color) {
-  return std::wstring(color.name) + L", " + hex_label(color.value);
 }
 
 // The swatch grid is one tab stop (the selected or focused swatch) navigated
@@ -125,10 +98,40 @@ LRESULT CALLBACK swatch_proc(const HWND swatch, const UINT message,
   return DefSubclassProc(swatch, message, wparam, lparam);
 }
 
-void invalidate_picker(const HWND window) {
+// The hint and the contrast line belong to the value fields; a swatch's
+// description is the contrast line alone, which measures its color
+// (DesignSystem.md, Screen readers).
+void describe_picker_controls(const HWND window) {
+  const std::wstring hint = window_text(GetDlgItem(window, IDC_COLOR_HINT));
+  const std::wstring contrast =
+      window_text(GetDlgItem(window, IDC_COLOR_CONTRAST));
+  std::wstring fields(hint);
+  if (!contrast.empty()) {
+    if (!fields.empty())
+      fields += L' ';
+    fields += contrast;
+  }
+  for (const int id :
+       {IDC_COLOR_RED, IDC_COLOR_GREEN, IDC_COLOR_BLUE, IDC_COLOR_HEX})
+    set_accessible_description(GetDlgItem(window, id), fields);
+  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
+    set_accessible_description(GetDlgItem(window, id), contrast);
+}
+
+// Repaints the swatches and the preview, and rewrites the contrast line
+// under the preview for `color` (DesignSystem.md, Roles).
+void invalidate_picker(const HWND window, const std::uint32_t color,
+                       const std::vector<ContrastTarget> &targets) {
   for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
     InvalidateRect(GetDlgItem(window, id), nullptr, TRUE);
   InvalidateRect(GetDlgItem(window, IDC_COLOR_PREVIEW), nullptr, TRUE);
+  const auto line = picker_contrast_line(native_color_ref(color), targets);
+  std::optional<theme::StatusGlyph> glyph;
+  if (line && line->below_minimum)
+    glyph = theme::StatusGlyph::warning;
+  set_status_line(GetDlgItem(window, IDC_COLOR_CONTRAST), glyph,
+                  line ? std::wstring_view(line->text) : std::wstring_view{});
+  describe_picker_controls(window);
 }
 
 } // namespace
@@ -149,11 +152,18 @@ bool EditorWindow::choose_color(const HWND owner, std::uint32_t &value) {
 void EditorWindow::initialize_color_picker(const HWND window) {
   apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
+  set_text_tone(GetDlgItem(window, IDC_COLOR_HINT), TextTone::subtext);
+  layout_color_picker_dialog(window);
+  center_over_owner(window);
   int active = IDC_COLOR_SWATCH_FIRST;
   for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id) {
     const auto &color =
         color_palette[static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST)];
-    set_text(GetDlgItem(window, id), swatch_label(color));
+    // The swatch paints its color and no words, so its text is only the
+    // name read out (DesignSystem.md, Screen readers).
+    set_text(GetDlgItem(window, id),
+             swatch_name(color.name, hex_label(color.value),
+                         id - IDC_COLOR_SWATCH_FIRST + 1, swatch_count));
     SetWindowSubclass(GetDlgItem(window, id), &swatch_proc, 1, 0);
     if (color.value == appearance_editor_.picker_color())
       active = id;
@@ -170,7 +180,8 @@ void EditorWindow::refresh_color_picker(const HWND window) {
     refresh_color_picker_rgb(window);
     set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
   }
-  invalidate_picker(window);
+  invalidate_picker(window, appearance_editor_.picker_color(),
+                    appearance_editor_.picker_targets());
 }
 
 void EditorWindow::refresh_color_picker_rgb(const HWND window) {
@@ -191,7 +202,8 @@ void EditorWindow::update_color_picker_from_rgb(const HWND window) {
     auto sync = appearance_editor_.picker_sync_scope();
     set_text(GetDlgItem(window, IDC_COLOR_HEX), hex_label(appearance_editor_.picker_color()));
   }
-  invalidate_picker(window);
+  invalidate_picker(window, appearance_editor_.picker_color(),
+                    appearance_editor_.picker_targets());
 }
 
 void EditorWindow::update_color_picker_from_hex(const HWND window) {
@@ -203,7 +215,8 @@ void EditorWindow::update_color_picker_from_hex(const HWND window) {
     auto sync = appearance_editor_.picker_sync_scope();
     refresh_color_picker_rgb(window);
   }
-  invalidate_picker(window);
+  invalidate_picker(window, appearance_editor_.picker_color(),
+                    appearance_editor_.picker_targets());
 }
 
 bool EditorWindow::draw_color_picker_item(const DRAWITEMSTRUCT &draw) const {
@@ -266,8 +279,11 @@ LRESULT EditorWindow::handle_color_picker_message(const HWND window,
       const auto rgb = rgb_fields(window);
       const auto hex = hex_value(window_text(GetDlgItem(window, IDC_COLOR_HEX)));
       if (!rgb.has_value() || !hex.has_value() || *rgb != *hex) {
-        themed_message_box(window, L"Enter RGB values from 0 to 255 or a #RRGGBB value.",
-                    L"Invalid color", MB_OK | MB_ICONWARNING);
+        themed_message_box(
+            window,
+            L"Could not use this color: a value is missing or out of range. "
+            L"Enter red, green and blue from 0 to 255, or a hex #RRGGBB value.",
+            L"Choose color", MB_OK | MB_ICONWARNING);
         return TRUE;
       }
       appearance_editor_.set_picker_color(*rgb);

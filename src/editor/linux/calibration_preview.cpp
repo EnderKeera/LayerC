@@ -1,5 +1,6 @@
 #include "calibration_window.hpp"
 
+#include "editor_style.hpp"
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
 
@@ -8,6 +9,14 @@
 #include <vector>
 
 namespace layerc::editor {
+namespace {
+Fl_Color token_color(const std::uint32_t value) {
+  return fl_rgb_color(static_cast<uchar>((value >> 16U) & 0xFFU),
+                      static_cast<uchar>((value >> 8U) & 0xFFU),
+                      static_cast<uchar>(value & 0xFFU));
+}
+} // namespace
+
 CalibrationPreview::CalibrationPreview(int x, int y, int width, int height)
     : Fl_Widget(x, y, width, height, "Calibration preview") {}
 layerc::core::NormalizedRegion CalibrationPreview::image_bounds() const {
@@ -20,7 +29,8 @@ layerc::core::NormalizedRegion CalibrationPreview::image_bounds() const {
 }
 void CalibrationPreview::draw() {
   fl_push_clip(x(), y(), w(), h());
-  fl_color(FL_DARK3); fl_rectf(x(), y(), w(), h());
+  fl_color(token_color(current_editor_tokens().input));
+  fl_rectf(x(), y(), w(), h());
   const auto bounds = image_bounds();
   const auto source_width = mask ? mask->width : frame ? frame->width : 0;
   const auto source_height = mask ? mask->height : frame ? frame->height : 0;
@@ -46,14 +56,14 @@ void CalibrationPreview::draw() {
     fl_draw_image(rgb.data(), static_cast<int>(bounds.x), static_cast<int>(bounds.y),
                   width, height, 3);
     if (!mask) {
-      fl_color(FL_YELLOW);
+      fl_color(token_color(current_editor_tokens().accent));
       fl_rect(static_cast<int>(bounds.x + selection.x * bounds.width),
               static_cast<int>(bounds.y + selection.y * bounds.height),
               std::max(1, static_cast<int>(selection.width * bounds.width)),
               std::max(1, static_cast<int>(selection.height * bounds.height)));
     }
   } else {
-    fl_color(FL_WHITE);
+    fl_color(token_color(current_editor_tokens().subtext));
     fl_draw("Acknowledge capture, select a window, then enable Live preview.",
             x() + 12, y() + h() / 2);
   }

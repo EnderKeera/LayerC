@@ -1,5 +1,6 @@
 #pragma once
 
+#include "appearance_contrast.hpp"
 #include "appearance_draft.hpp"
 #include "binding_capture.hpp"
 #include "dialog_layout.hpp"
@@ -19,6 +20,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace layerc::editor {
@@ -77,9 +80,23 @@ struct EditorShell final {
   std::wstring tooltip_text;
   std::wstring title_cache;
   std::wstring connection_cache;
+  // Why each disabled button is unavailable (DesignSystem.md, Button): the
+  // line under it, its tooltip and its accessible description.
+  std::vector<std::pair<int, std::wstring>> button_reasons;
   bool advanced_visible{};
   bool syncing{};
+  // Set while layout() runs, so lines it sizes don't re-enter it.
+  bool laying_out{};
 };
+
+// Records why `button` is disabled (empty: it isn't) and gives the reason to
+// screen readers as the button's description. Returns whether it changed.
+bool set_button_reason(EditorShell &shell, int button, std::wstring_view reason);
+[[nodiscard]] std::wstring_view button_reason(const EditorShell &shell,
+                                              int button);
+// A disabled button takes no mouse input, so its reason tooltip belongs to
+// the window over the button's rectangle; call after the buttons move.
+void place_button_reason_tools(const EditorShell &shell);
 
 // Panel-list selection, preview drag state, and the panel whose controls are
 // currently projected. A completed or cancelled drag resets all drag fields.
@@ -143,6 +160,13 @@ public:
   [[nodiscard]] std::uint32_t picker_color() const noexcept {
     return picker_color_;
   }
+  // What Choose color measures its color against; empty shows no line.
+  void set_picker_targets(std::vector<ContrastTarget> targets) {
+    picker_targets_ = std::move(targets);
+  }
+  [[nodiscard]] const std::vector<ContrastTarget> &picker_targets() const noexcept {
+    return picker_targets_;
+  }
   [[nodiscard]] bool picker_syncing() const noexcept { return picker_syncing_; }
   [[nodiscard]] EditorShell::SyncScope picker_sync_scope() noexcept {
     return EditorShell::SyncScope(picker_syncing_);
@@ -151,13 +175,14 @@ public:
 private:
   layerc::platform::EditorTheme theme_{
       layerc::platform::EditorTheme::copper};
-  std::uint32_t accent_{0xD88E4BU};
+  std::uint32_t accent_{layerc::platform::copper_accent};
   AppearanceDraft draft_;
   bool open_{};
   std::array<HBRUSH, static_cast<std::size_t>(
                          layerc::platform::EditorControlRole::count)>
       brushes_{};
   std::uint32_t picker_color_{};
+  std::vector<ContrastTarget> picker_targets_;
   bool picker_syncing_{};
 };
 

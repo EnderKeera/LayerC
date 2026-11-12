@@ -2,6 +2,7 @@
 #include "tasks_window.hpp"
 #include "daemon_link.hpp"
 #include "x11_window.hpp"
+#include "editor_style.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -12,9 +13,11 @@
 
 #include <unistd.h>
 
+
 namespace layerc::editor {
 namespace {
-constexpr int width = 640, height = 420, margin = 10, button_height = 30;
+constexpr int width = 640, height = 420, margin = 10;
+constexpr int button_height = editor_button_height;
 constexpr std::uint32_t scan_limit = 64;
 
 TaskCandidate candidate(const platform::X11WindowSnapshot &window) {

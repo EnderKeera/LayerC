@@ -1,0 +1,95 @@
+/* Generated from tokens.json; do not edit. */
+:root, [data-theme="copper"] {
+  --background: #1f1f1f;
+  --panel: #2d2d2d;
+  --input: #171717;
+  --border: #6e6e6e;
+  --divider: #333333;
+  --text: #f3f3f3;
+  --secondary: #b8b8b8;
+  --subtext: #a3a3a3;
+  --verbose: #9a9a9a;
+  --disabled: #808080;
+  --button_hover: #383838;
+  --row_hover: #2a2a2a;
+  --pressed: #262626;
+  --accent: var(--preset-copper);
+  --on_accent: #141414;
+  --selection: #4a3929;
+  --primary_hover: #dc9d65;
+  --primary_pressed: #b07844;
+  --yes: #00e676;
+  --no: #ff5a5a;
+  --warning: #ffd740;
+  --on_status: #141414;
+  --accent_2: #60b0ff;
+  --preset-copper: #d88e4b;
+  --preset-teal: #5ab6aa;
+  --preset-plum: #b382e2;
+  --preset-slate: #8fa3b8;
+  --linux-outline-background: #6e6e6e;
+  --linux-outline-panel: #777777;
+}
+[data-theme="teal"] {
+  --accent: var(--preset-teal);
+  --on_accent: #141414;
+  --selection: #2c423f;
+  --primary_hover: #72bfb5;
+  --primary_pressed: #50968d;
+  --accent_2: #b99bff;
+}
+[data-theme="plum"] {
+  --accent: var(--preset-plum);
+  --on_accent: #141414;
+  --selection: #41364c;
+  --primary_hover: #bd93e4;
+  --primary_pressed: #946eb8;
+  --accent_2: #60b0ff;
+}
+[data-theme="slate"] {
+  --accent: var(--preset-slate);
+  --on_accent: #141414;
+  --selection: #393e43;
+  --primary_hover: #9eafc1;
+  --primary_pressed: #788898;
+  --accent_2: #b99bff;
+}
+:root {
+  --win-gap-dialog: 8px;
+  --win-margin: 12px;
+  --win-gap-main: 16px;
+  --win-section-gap: 12px;
+  --swatch-inset: 8px;
+  --linux-group-gap: 10px;
+  --linux-margin: 15px;
+  --radius-none: 0px;
+  --radius-radio: 50%;
+  --outline: 1px;
+  --focus-width: 2px;
+  --accent-rail: 3px;
+  --checkbox: 16px;
+  --swatch: 16px;
+  --win-control-height: 26px;
+  --win-combo-height: 23px;
+  --win-row-pitch: 34px;
+  --win-list-row: 27px;
+  --win-profile-row: 21px;
+  --win-heading-pitch: 28px;
+  --win-chevron-zone: 26px;
+  --win-status-strip: 28px;
+  --win-sidebar-min: 200px;
+  --win-sidebar-max: 280px;
+  --win-preview-from: 1100px;
+  --win-slot-min: 260px;
+  --win-field-cap: 480px;
+  --win-timing-label: 84px;
+  --linux-input-height: 28px;
+  --linux-button-height: 30px;
+  --linux-sidebar: 240px;
+  --linux-window-width: 1080px;
+  --linux-window-height: 790px;
+  --font-windows: "Segoe UI", sans-serif;
+  --font-linux: sans-serif;
+  --font-windows-mono: "Cascadia Mono", Consolas, monospace;
+  --font-linux-mono: monospace;
+}

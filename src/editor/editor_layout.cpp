@@ -2,9 +2,13 @@
 #include "dialog_layout.hpp"
 #include "editor_layout_rules.hpp"
 #include "editor_resource.h"
+#include "editor_text.hpp"
+
+#include "layerc/platform/window_query.hpp"
 
 #include <algorithm>
 #include <array>
+#include <string_view>
 
 #include <commctrl.h>
 #include <windows.h>
@@ -34,6 +38,9 @@ constexpr std::array advanced_controls{
 // overlay bar follows the selected cooldown.
 constexpr std::array legacy_bar_controls{IDC_BARS_LABEL, IDC_BAR_LIST};
 constexpr std::array preview_controls{IDC_PREVIEW_LABEL, IDC_PREVIEW};
+// Lines that show only while they have text.
+constexpr std::array text_lines{IDC_COOLDOWN_REMOVE_REASON, IDC_ITEM_REASON,
+                                IDC_OVERLAY_CONTRAST};
 
 constexpr std::array heading_controls{
     IDC_SAVED_PROFILES_LABEL, IDC_COOLDOWNS_LABEL,  IDC_TIMING_LABEL,
@@ -48,10 +55,17 @@ constexpr int heading_pitch = 28;
 constexpr int section_gap = 12;
 constexpr int field_cap = 480;
 constexpr int preview_threshold = 1100;
+constexpr int slot_min = 260;
+constexpr int cooldown_list_min = 84;
 constexpr int timing_label_width = 84;
 
+// The main window (DesignSystem.md, Layout): a top band of profile fields,
+// the cooldown list and the preview corner, over three equal settings slots
+// anchored to the status strip. `preview` is the wide form; without it the
+// slots stack in one or two columns.
 struct MainLayout {
   DialogLayout ui;
+  HWND window{};
   bool advanced{};
   bool legacy_bars{};
   bool preview{};
@@ -67,6 +81,7 @@ struct MainLayout {
   int detail_left{};
   int detail_right{};
   int preview_left{};
+  int slot{};
 };
 
 MainLayout make_main_layout(const HWND window, const bool advanced,
@@ -76,12 +91,12 @@ MainLayout make_main_layout(const HWND window, const bool advanced,
   const int width = std::max(1, static_cast<int>(client.right - client.left));
   const int height = std::max(1, static_cast<int>(client.bottom - client.top));
   // Geometry follows DPI and text size and never shrinks below the text:
-  // narrow windows reflow (the preview column collapses) instead.
+  // narrow windows reflow (the preview corner hides) instead.
   const DialogLayout ui(window, window_base_dpi(window));
   MainLayout f{.ui = ui,
+               .window = window,
                .advanced = advanced,
                .legacy_bars = legacy_bars,
-               .preview = width >= ui.scaled(preview_threshold),
                .width = width,
                .height = height,
                .margin = ui.scaled(12),
@@ -92,10 +107,12 @@ MainLayout make_main_layout(const HWND window, const bool advanced,
                .status_top = height - ui.scaled(28)};
   f.sidebar_width = std::clamp(width / 5, ui.scaled(200), ui.scaled(280));
   f.detail_left = f.margin + f.sidebar_width + f.gap;
+  f.slot = main_slot_width(width, f.margin, f.detail_left, f.gap);
+  f.preview = main_layout_wide(width, f.slot, ui.scaled(preview_threshold),
+                               ui.scaled(slot_min));
   if (f.preview) {
-    const int preview_width =
-        std::clamp(width * 26 / 100, ui.scaled(280), ui.scaled(440));
-    f.preview_left = width - f.margin - preview_width;
+    // The preview corner is slot 3's width and sits right over it.
+    f.preview_left = f.detail_left + (f.slot + f.gap) * 2;
     f.detail_right = f.preview_left - f.gap;
   } else {
     f.preview_left = width;
@@ -115,6 +132,33 @@ void show_controls(const HWND window, const auto &ids, const bool visible) {
 void label(const MainLayout &f, const int id, const int left, const int top,
            const int width) {
   f.ui.row_label(id, left, top, width, f.row);
+}
+
+// A hint, reason or warning line's height wrapped to `width`; 0 while it has
+// no text, so an empty line takes no room.
+int line_height(const MainLayout &f, const int id, const int width) {
+  const HWND control = GetDlgItem(f.window, id);
+  if (control == nullptr || GetWindowTextLengthW(control) == 0)
+    return 0;
+  return static_cast<int>(control_text_extent(control, std::max(1, width)).cy);
+}
+
+// The overlay contrast line leads with a drawn glyph; its text wraps in the
+// width that leaves.
+int contrast_line_height(const MainLayout &f, const int width) {
+  const int glyph =
+      layerc::platform::status_glyph_size(
+          layerc::platform::native_window_dpi(f.window)) +
+      f.ui.scaled(6);
+  return line_height(f, IDC_OVERLAY_CONTRAST, width - glyph);
+}
+
+// The look slot's closing lines: the drag hint, then the contrast line.
+int overlay_lines_height(const MainLayout &f, const int width) {
+  int height = f.ui.scaled(4) + line_height(f, IDC_POSITION_STATUS, width);
+  if (const int contrast = contrast_line_height(f, width); contrast > 0)
+    height += f.ui.scaled(4) + contrast;
+  return height;
 }
 
 void layout_sidebar(const MainLayout &f) {
@@ -140,7 +184,10 @@ void layout_sidebar(const MainLayout &f) {
   ui.move(IDC_PANEL_ITEMS_LABEL, f.margin, heading_top, f.sidebar_width,
           ui.scaled(20));
   const int item_top = heading_top + f.heading;
-  const int actions_top = bottom - f.pitch - f.row;
+  // Why an item button is unavailable, under the buttons it explains.
+  const int reason = line_height(f, IDC_ITEM_REASON, f.sidebar_width);
+  const int actions_top =
+      bottom - f.pitch - f.row - (reason > 0 ? reason + ui.scaled(4) : 0);
   ui.move(IDC_PANEL_ITEMS, f.margin, item_top, f.sidebar_width,
           std::max(ui.scaled(40), actions_top - ui.scaled(8) - item_top));
   const int third = (f.sidebar_width - ui.scaled(16)) / 3;
@@ -153,6 +200,9 @@ void layout_sidebar(const MainLayout &f) {
   ui.move(IDC_ITEM_UP, f.margin, actions_top + f.pitch, half, f.row);
   ui.move(IDC_ITEM_DOWN, f.margin + half + ui.scaled(8),
           actions_top + f.pitch, f.sidebar_width - half - ui.scaled(8), f.row);
+  ui.move(IDC_ITEM_REASON, f.margin,
+          actions_top + f.pitch + f.row + ui.scaled(4), f.sidebar_width,
+          std::max(1, reason));
 }
 
 // Title, profile fields and the advanced toggle; returns the next top.
@@ -216,15 +266,19 @@ bool binding_wraps(const MainLayout &f, const int timing_width) {
                               f.ui.scaled(binding_field_floor));
 }
 
-GroupHeights group_heights(const MainLayout &f, const int timing_width) {
+GroupHeights group_heights(const MainLayout &f, const int timing_width,
+                           const int overlay_width) {
   const int advanced_rows = f.advanced ? 4 : 0;
   const int wrapped_rows = binding_wraps(f, timing_width) ? 1 : 0;
   return {
       .timing = f.heading + f.pitch * (4 + advanced_rows + wrapped_rows),
       .visual = f.heading + f.pitch * (f.advanced ? 3 : 2) + f.ui.scaled(40),
+      // Size, two color rows, the two check rows, Position on window when
+      // the preview corner is hidden, then the closing lines.
       .overlay = f.heading + (f.legacy_bars ? f.ui.scaled(24 + 80 + 8) : 0) +
-                 f.pitch * 3 + f.row * 2 + f.ui.scaled(60) +
-                 (f.preview ? 0 : f.pitch),
+                 f.pitch * 3 + f.row * 2 +
+                 (f.preview ? 0 : f.ui.scaled(4) + f.row) +
+                 overlay_lines_height(f, overlay_width),
   };
 }
 
@@ -292,8 +346,9 @@ int layout_timing(const MainLayout &f, const int left, const int right,
   return top + f.pitch;
 }
 
+// `bottom` is the settings row's bottom line: the hint takes what is left.
 void layout_visual(const MainLayout &f, const int left, const int right,
-                   int top) {
+                   int top, const int bottom) {
   const DialogLayout &ui = f.ui;
   ui.move(IDC_VISUAL_SECTION_LABEL, left, top, right - left, ui.scaled(20));
   top += f.heading;
@@ -312,7 +367,8 @@ void layout_visual(const MainLayout &f, const int left, const int right,
     ui.move(IDC_VISUAL_ISOLATED, left, top, right - left, f.row);
     top += f.pitch;
   }
-  ui.move(IDC_VISUAL_HINT, left, top, right - left, ui.scaled(40));
+  ui.move(IDC_VISUAL_HINT, left, top, right - left,
+          std::max(ui.scaled(40), bottom - top));
 }
 
 void layout_overlay(const MainLayout &f, const int left, const int right,
@@ -347,34 +403,65 @@ void layout_overlay(const MainLayout &f, const int left, const int right,
   top += f.row;
   ui.move(IDC_DIRECT_DRAG, left, top, width, f.row);
   top += f.row;
-  ui.move(IDC_POSITION_STATUS, left, top, width, ui.scaled(60));
-  top += ui.scaled(60);
-  if (!f.preview)
-    ui.move(IDC_POSITION_ON_WINDOW, left, top + ui.scaled(4),
+  if (!f.preview) {
+    // No preview corner to carry it: Position on window joins the look.
+    top += ui.scaled(4);
+    ui.move(IDC_POSITION_ON_WINDOW, left, top,
             std::min(width, ui.scaled(180)), f.row);
+    top += f.row;
+  }
+  top += ui.scaled(4);
+  const int hint = line_height(f, IDC_POSITION_STATUS, width);
+  ui.move(IDC_POSITION_STATUS, left, top, width, std::max(1, hint));
+  top += hint + ui.scaled(4);
+  ui.move(IDC_OVERLAY_CONTRAST, left, top, width,
+          std::max(1, contrast_line_height(f, width)));
 }
 
-// Cooldowns, then the selected cooldown's detail in two columns (one when
-// narrow). Returns the height the detail column needs.
+// The preview corner over slot 3: its heading and Position on window, then
+// the frame down to the list's bottom line.
+void layout_preview(const MainLayout &f, const int bottom) {
+  if (!f.preview)
+    return;
+  const DialogLayout &ui = f.ui;
+  const int width = f.width - f.margin - f.preview_left;
+  const int button_width = std::min(ui.scaled(180), width / 2);
+  ui.move(IDC_PREVIEW_LABEL, f.preview_left, f.margin,
+          width - button_width - ui.scaled(8), ui.scaled(20));
+  ui.move(IDC_POSITION_ON_WINDOW, f.preview_left + width - button_width,
+          f.margin, button_width, f.row);
+  const int top = f.margin + f.row + ui.scaled(10);
+  ui.move(IDC_PREVIEW, f.preview_left, top, width, std::max(1, bottom - top));
+}
+
+// The cooldown list and the preview corner, then the selected cooldown's
+// settings row: three slots when wide, else two columns (one when narrow).
+// The row is anchored to the status strip and the list takes the rest.
+// Returns the height the detail column needs.
 int layout_cooldowns(const MainLayout &f, const int top) {
   const DialogLayout &ui = f.ui;
-  const int width = f.detail_right - f.detail_left;
-  const bool two_columns = width >= ui.scaled(480);
-  const int column = (width - f.gap) / 2;
-  const auto heights = group_heights(f, two_columns ? column : width);
+  const int row_right = f.width - f.margin;
+  const int row_width = row_right - f.detail_left;
+  const bool two_columns = !f.preview && row_width >= ui.scaled(480);
+  const int column = (row_width - f.gap) / 2;
+  const int timing_width = f.preview ? f.slot : two_columns ? column : row_width;
+  const int overlay_left = f.preview      ? f.preview_left
+                           : two_columns ? f.detail_left + column + f.gap
+                                         : f.detail_left;
+  const auto heights = group_heights(f, timing_width, row_right - overlay_left);
   const int groups_height =
-      two_columns ? std::max(heights.timing + ui.scaled(section_gap) +
-                                 heights.visual,
-                             heights.overlay)
-                  : heights.timing + heights.visual + heights.overlay +
-                        ui.scaled(section_gap) * 2;
+      f.preview ? std::max({heights.timing, heights.visual, heights.overlay})
+      : two_columns
+          ? std::max(heights.timing + ui.scaled(section_gap) + heights.visual,
+                     heights.overlay)
+          : heights.timing + heights.visual + heights.overlay +
+                ui.scaled(section_gap) * 2;
   const int list_top = top + f.heading;
-  const int min_list = ui.scaled(84);
-  const int max_list = ui.scaled(180);
-  const int list_height =
-      std::clamp(f.status_top - f.margin - groups_height - ui.scaled(16) -
-                     list_top,
-                 min_list, max_list);
+  const int min_list = ui.scaled(cooldown_list_min);
+  const int groups_top = main_groups_top(list_top, min_list, ui.scaled(16),
+                                         f.status_top - f.margin, groups_height);
+  const int list_height = groups_top - ui.scaled(16) - list_top;
+  const int width = f.detail_right - f.detail_left;
   const int button_width = ui.scaled(150);
   const int list_width = std::min(ui.scaled(560),
                                   width - button_width - ui.scaled(8));
@@ -384,46 +471,44 @@ int layout_cooldowns(const MainLayout &f, const int top) {
   ui.move(IDC_ADD_COOLDOWN, button_left, list_top, button_width, f.row);
   ui.move(IDC_REMOVE_COOLDOWN, button_left, list_top + f.pitch, button_width,
           f.row);
+  // Why Remove cooldown is unavailable, under it and above the settings row.
+  const int reason_top = list_top + f.pitch + f.row + ui.scaled(4);
+  ui.move(IDC_COOLDOWN_REMOVE_REASON, button_left, reason_top, button_width,
+          std::max(1, groups_top - reason_top));
+  layout_preview(f, list_top + list_height);
 
-  const int groups_top = list_top + list_height + ui.scaled(16);
-  if (two_columns) {
+  const int groups_bottom = groups_top + groups_height;
+  if (f.preview) {
+    const int second = f.detail_left + f.slot + f.gap;
+    (void)layout_timing(f, f.detail_left, f.detail_left + f.slot, groups_top);
+    layout_visual(f, second, second + f.slot, groups_top, groups_bottom);
+    layout_overlay(f, overlay_left, row_right, groups_top);
+  } else if (two_columns) {
     const int left_right = f.detail_left + column;
     const int visual_top =
         layout_timing(f, f.detail_left, left_right, groups_top) +
         ui.scaled(section_gap);
-    layout_visual(f, f.detail_left, left_right, visual_top);
-    layout_overlay(f, left_right + f.gap, f.detail_right, groups_top);
+    layout_visual(f, f.detail_left, left_right, visual_top,
+                  visual_top + heights.visual);
+    layout_overlay(f, overlay_left, row_right, groups_top);
   } else {
     const int visual_top =
-        layout_timing(f, f.detail_left, f.detail_right, groups_top) +
+        layout_timing(f, f.detail_left, row_right, groups_top) +
         ui.scaled(section_gap);
-    layout_visual(f, f.detail_left, f.detail_right, visual_top);
-    layout_overlay(f, f.detail_left, f.detail_right,
+    layout_visual(f, f.detail_left, row_right, visual_top,
+                  visual_top + heights.visual);
+    layout_overlay(f, f.detail_left, row_right,
                    visual_top + heights.visual + ui.scaled(section_gap));
   }
   return list_top + min_list + ui.scaled(16) + groups_height;
 }
 
-void layout_preview(const MainLayout &f) {
-  if (!f.preview)
-    return;
-  const DialogLayout &ui = f.ui;
-  const int width = f.width - f.margin - f.preview_left;
-  const int button_width = ui.scaled(180);
-  ui.move(IDC_PREVIEW_LABEL, f.preview_left, f.margin,
-          width - button_width - ui.scaled(8), ui.scaled(20));
-  ui.move(IDC_POSITION_ON_WINDOW, f.preview_left + width - button_width,
-          f.margin, button_width, f.row);
-  const int top = f.margin + f.row + ui.scaled(10);
-  ui.move(IDC_PREVIEW, f.preview_left, top, width,
-          std::max(ui.scaled(120), f.status_top - f.margin - top));
-}
-
 void layout_status(const MainLayout &f) {
   const DialogLayout &ui = f.ui;
   const int text_top = f.status_top + ui.scaled(5);
-  const int connection_width = ui.scaled(170);
-  const int runtime_width = ui.scaled(250);
+  // Each state leads with its glyph.
+  const int connection_width = ui.scaled(190);
+  const int runtime_width = ui.scaled(270);
   const int right = f.width - f.margin;
   ui.move(IDC_CONNECTION_STATUS, right - connection_width, text_top,
           connection_width, ui.scaled(20));
@@ -471,6 +556,15 @@ void grow_to_minimum_height(const HWND window, const int min_client_height) {
 
 } // namespace
 
+void EditorWindow::set_sized_line(const int id, const std::wstring_view text) {
+  const HWND line = GetDlgItem(shell_.window, id);
+  if (line == nullptr || layerc::platform::window_text(line) == text)
+    return;
+  set_text(line, text);
+  if (!shell_.laying_out && IsIconic(shell_.window) == FALSE)
+    layout();
+}
+
 void EditorWindow::apply_heading_fonts() {
   if (shell_.window == nullptr)
     return;
@@ -497,22 +591,37 @@ void EditorWindow::layout() {
       });
   const MainLayout frame =
       make_main_layout(shell_.window, shell_.advanced_visible, legacy_bars);
-  show_controls(shell_.window, advanced_controls, frame.advanced);
-  show_controls(shell_.window, legacy_bar_controls, frame.legacy_bars);
-  show_controls(shell_.window, preview_controls, frame.preview);
-  layout_sidebar(frame);
-  const int detail_bottom =
-      layout_cooldowns(frame, layout_profile(frame));
-  layout_preview(frame);
-  layout_status(frame);
-  shell_.status_strip_top = frame.status_top;
-  // The smallest client height that keeps every row visible.
-  shell_.min_client_height = detail_bottom + frame.margin +
-                             (frame.height - frame.status_top);
+  // Lines resized below must not re-enter through set_sized_line().
+  shell_.laying_out = true;
+  // The drag hint names the preview only while it shows, and its height
+  // sizes the look slot.
   if (shell_.preview_visible != frame.preview) {
     shell_.preview_visible = frame.preview;
     refresh_position_hint();
   }
+  show_controls(shell_.window, advanced_controls, frame.advanced);
+  show_controls(shell_.window, legacy_bar_controls, frame.legacy_bars);
+  show_controls(shell_.window, preview_controls, frame.preview);
+  for (const int id : text_lines) {
+    if (const HWND line = GetDlgItem(shell_.window, id); line != nullptr)
+      ShowWindow(line, GetWindowTextLengthW(line) > 0 ? SW_SHOWNA : SW_HIDE);
+  }
+  // Tab order is reading order: Position on window follows the preview
+  // heading in the corner, or Direct drag once it moves into the look slot.
+  SetWindowPos(GetDlgItem(shell_.window, IDC_POSITION_ON_WINDOW),
+               GetDlgItem(shell_.window,
+                          frame.preview ? IDC_PREVIEW_LABEL : IDC_DIRECT_DRAG),
+               0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  layout_sidebar(frame);
+  const int detail_bottom =
+      layout_cooldowns(frame, layout_profile(frame));
+  layout_status(frame);
+  place_button_reason_tools(shell_);
+  shell_.status_strip_top = frame.status_top;
+  // The smallest client height that keeps every row visible.
+  shell_.min_client_height = detail_bottom + frame.margin +
+                             (frame.height - frame.status_top);
+  shell_.laying_out = false;
 
   RECT list_client{};
   GetClientRect(shell_.profile_list, &list_client);

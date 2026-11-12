@@ -32,7 +32,7 @@ constexpr std::string_view shortcut_help_baseline =
     "Ctrl+Shift+E\tExport JSON...\n"
     "Ctrl+Alt+Shift+E\tExport pack...\n"
     "Ctrl+S\tSave\n"
-    "Ctrl+Shift+S\tSave As...\n"
+    "Ctrl+Shift+S\tSave as...\n"
     "Ctrl+Q\tQuit\n"
     "Ctrl+Z\tUndo\n"
     "Ctrl+Shift+Z\tRedo\n"
@@ -56,17 +56,17 @@ constexpr std::string_view shortcut_help_baseline =
 // The menu bar item paths in bar order, as the editor shipped them.
 constexpr std::array<std::string_view, 40> menu_path_baseline{
     "&File/&New profile", "&File/&Import...", "&File/Export &JSON...",
-    "&File/Export &pack...", "&File/&Save", "&File/Save &As...",
+    "&File/Export &pack...", "&File/&Save", "&File/Save &as...",
     "&File/Open profiles &folder", "&File/&Quit", "&Edit/&Undo", "&Edit/&Redo",
     "&Edit/Re&name", "&Profile/&Duplicate", "&Profile/&Delete...",
     "&Profile/Toggle saved &enabled", "&Cooldowns/&Add cooldown",
     "&Cooldowns/D&uplicate cooldown", "&Cooldowns/&Remove cooldown...",
     "&Cooldowns/Edit &groups...", "&Bindings/Add &key", "&Bindings/Add &mouse",
     "&Bindings/&Capture focused chord...", "&Bindings/&Remove binding",
-    "&Panels/&Add panel", "&Panels/&Remove panel...", "&Panels/Choose &colours...",
+    "&Panels/&Add panel", "&Panels/&Remove panel...", "&Panels/Choose &colors...",
     "&Panels/&Position on window", "&View/&Profile", "&View/&Cooldowns",
     "&View/&Bindings", "&View/&Panels", "&View/&Automation", "&View/&Visual",
-    "&View/Daemon &status", "&View/Runtime &diagnostics...", "&Tools/&Options...",
+    "&View/LayerD &status", "&View/Runtime &diagnostics...", "&Tools/&Options...",
     "&Tools/A&ppearance...", "&Tools/Split grouped &bars", "&Tools/Detected &tasks...",
     "&Help/&Keyboard shortcuts", "&Help/&About LayerE"};
 
@@ -109,7 +109,7 @@ void linux_editor_command_registry_contracts() {
     ++row;
   }
   expect(paths_match && row == menu_path_baseline.size(),
-         "every menu path keeps the shipped label and bar order");
+         "every menu path uses the v2 label and keeps the bar order");
   bool contexts_match = true;
   for (std::size_t i = 0; i < specs.size() && i < context_baseline.size(); ++i)
     contexts_match = contexts_match && specs[i].contexts == context_baseline[i].first &&
@@ -120,5 +120,5 @@ void linux_editor_command_registry_contracts() {
              (FL_CTRL | 'y'),
          "Ctrl+Y stays the alternate redo shortcut");
   expect(layerc::editor::shortcut_help() == shortcut_help_baseline,
-         "the shortcut help is byte-identical to the shipped text");
+         "the shortcut help uses the v2 labels and unchanged bindings");
 }

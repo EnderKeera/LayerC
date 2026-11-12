@@ -1,6 +1,14 @@
 #pragma once
 
-#include <FL/Enumerations.H>
+#include "editor_appearance.hpp"
+
+#include <FL/Fl.H>
+#include <FL/Fl_Box.H>
+#include <FL/Fl_Button.H>
+#include <FL/Fl_Choice.H>
+
+#include <cstdint>
+#include <string_view>
 
 namespace layerc::editor {
 
@@ -14,5 +22,62 @@ void install_editor_style();
 
 // The menu bar's box once the style is installed, else FL_UP_BOX.
 [[nodiscard]] Fl_Boxtype editor_menu_bar_box() noexcept;
+
+// One height per single-line control class: authored forms never repeat the
+// number (DesignSystem.md, Density).
+inline constexpr int editor_input_height = 28;
+inline constexpr int editor_button_height = 30;
+
+// The appearance the authored drawing resolves its tokens from.
+void set_editor_style_appearance(const EditorAppearance &appearance);
+
+// Paints the status strip's leading mark; the types and the rule live in the
+// pure palette model (editor_appearance.hpp).
+void draw_editor_status_glyph(EditorStatusGlyph glyph, int x, int y, int size = 12);
+
+// The palette authored drawing resolves for the applied appearance.
+[[nodiscard]] EditorTokens current_editor_tokens();
+
+void draw_editor_focus(int x, int y, int width, int height, bool primary = false);
+void primary_button(Fl_Button &button);
+[[nodiscard]] bool is_primary_button(const Fl_Widget &widget) noexcept;
+void refresh_primary_button(Fl_Button &button);
+
+// Redraw the whole field without changing its native editing behavior.
+template <class Base> class EditorField : public Base {
+public:
+  using Base::Base;
+  int handle(int event) override {
+    const int result = Base::handle(event);
+    if (event == FL_FOCUS || event == FL_UNFOCUS) this->redraw();
+    return result;
+  }
+protected:
+  void draw() override {
+    Base::draw();
+    if (Fl::focus() == this && this->active_r() && this->visible_focus() &&
+        Fl::visible_focus())
+      draw_editor_focus(this->x(), this->y(), this->w(), this->h());
+  }
+};
+
+class EditorChoice final : public Fl_Choice {
+public:
+  using Fl_Choice::Fl_Choice;
+protected:
+  void draw() override;
+};
+
+// Decorative: the adjacent existing output owns the accessible message.
+class EditorStatusMark final : public Fl_Box {
+public:
+  EditorStatusMark(int x, int y, int width, int height);
+  void glyph(EditorStatusGlyph value);
+  [[nodiscard]] EditorStatusGlyph glyph() const noexcept { return glyph_; }
+protected:
+  void draw() override;
+private:
+  EditorStatusGlyph glyph_{EditorStatusGlyph::none};
+};
 
 } // namespace layerc::editor

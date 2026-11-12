@@ -480,18 +480,20 @@ void test_companion_presentation_schedule() {
         "typed", "session", panels, no_definitions, {}, std::nullopt, at,
         {.automation = &automation, .presentation_epoch = start});
   };
+  TimePoint edge = start;
   for (int step = 0; step < 8; ++step) {
-    const auto at = start + std::chrono::milliseconds{step * 125};
-    const auto built = indicator_build(AutomationValue(true), 4.0, at);
+    const auto built = indicator_build(AutomationValue(true), 4.0, edge);
     const auto parsed = parse_companion_snapshot_json(built.json);
     const auto *snapshot = std::get_if<CompanionSessionSnapshot>(&parsed);
     if (!expect(snapshot != nullptr && snapshot->panels.size() == 1 &&
                     snapshot->panels.front().typed_items.size() == 1,
-                "a 4 Hz indicator publishes one typed row per producer edge"))
+                "a 4 Hz indicator publishes one typed row per capped 3 Hz edge"))
       return;
+    const auto next = edge + std::chrono::milliseconds{step % 2 == 0 ? 167 : 166};
     expect(snapshot->panels.front().typed_items.front().flash_on == (step % 2 == 0) &&
-               built.next_wakeup == at + std::chrono::milliseconds{125},
-           "eight 4 Hz producer edges alternate phase and request the next edge");
+               built.next_wakeup == next,
+           "eight capped 3 Hz producer edges alternate phase and request the next edge");
+    edge = next;
   }
 
   expect(!indicator_build(AutomationValue(true), 0.0, start).next_wakeup,

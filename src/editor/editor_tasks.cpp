@@ -20,9 +20,9 @@ void show_task_actions_menu(const HWND window) {
   if (menu == nullptr)
     return;
   AppendMenuW(menu, MF_STRING, IDC_EDIT_SELECTED_TASK,
-              L"&Position on Window");
+              L"&Position on window");
   AppendMenuW(menu, MF_STRING, IDC_CALIBRATE_SELECTED_TASK,
-              L"&Calibrate Visual");
+              L"&Calibrate visual");
   RECT anchor{};
   const HWND button = GetDlgItem(window, IDC_TASK_ACTIONS);
   if (button != nullptr && GetWindowRect(button, &anchor) != FALSE) {
@@ -294,7 +294,7 @@ void EditorWindow::begin_picker() {
   SetFocus(shell_.window);
   SetCapture(shell_.window);
   set_status(
-      L"Pick Window active — click a game window, or press Esc to cancel.");
+      L"Pick window active — click a game window, or press Esc to cancel.");
 }
 
 void EditorWindow::finish_picker() {

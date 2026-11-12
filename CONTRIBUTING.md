@@ -8,6 +8,7 @@ owns each decision and describes the CI and release gates.
 | Change | Read |
 | --- | --- |
 | Setup, programs, supported surfaces, profile format, test targets | [`README.md`](README.md) |
+| Editor UI on either platform (binding design rules) | [`docs/DesignSystem.md`](docs/DesignSystem.md) |
 | Linux adapters, CLI, packaging, or physical evidence | [`docs/Linux.md`](docs/Linux.md) |
 | Desktop/hardware evidence | [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md) |
 | Game Bar transport, widgets, or MSIX | [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) |
@@ -34,6 +35,24 @@ full local build and every suite only for work with that breadth. Resolve curren
 commands and targets from [`README.md`](README.md), CMake, and the affected
 test registration.
 
+### Editor UI changes
+
+[`docs/DesignSystem.md`](docs/DesignSystem.md) is binding for Windows and Linux
+editor chrome. Read the affected component rules before implementation. Reuse
+the owning theme tokens, native fonts and shared geometry; keep System and
+contrast themes, keyboard navigation, screen-reader semantics and role overrides
+working. An overlay preview must remain faithful to its profile.
+
+Run `python tools/tests/test_design_system.py` and
+`python tools/check_design_system.py` before submitting, plus focused native
+tests. The checker compares token tables/JSON/source, rejects local colors,
+rounded chrome and literal control heights, and checks resource/menu wording.
+It does not prove layout, reading order or accessibility: attach relevant
+rendered screenshots and describe keyboard/accessibility checks, including
+unobserved platform or hardware gaps. Follow the PR
+checklist. Propose and agree a specification change before deviating;
+update its implementation, tokens, documentation and tests together.
+
 ## CI and release gates
 
 CI, release, and review/comment automation use GitHub-hosted runners:
@@ -51,7 +70,7 @@ and manual dispatch; a newer push to a pull request cancels its older run.
 
 | Job | Gate |
 | --- | --- |
-| `workflow-lint` | `actionlint` over every workflow |
+| `workflow-lint` | `actionlint` over every workflow; design-system checker and planted-violation tests (`tools/check_design_system.py`, `tools/tests/test_design_system.py`) |
 | `windows-msvc` | [`build-package`](.github/actions/build-package/action.yml): `ci` preset (Ninja, sccache, unity), CTest with registration/JUnit policy, `benchmark_v22`, `benchmark_v23`, install, ZIP, artifacts |
 | `windows-analyze` | Non-unity Release build with MSVC `/analyze` for every LayerC target (compile-time only) |
 | `linux` | [`tools/ci-linux.sh`](tools/ci-linux.sh) in digest-pinned `debian:stable` and `ubuntu:24.04`: headless and required Xvfb suites, installed-binary smoke with private XDG roots, commit-bound evidence. `debian:stable` also requires the `editor` gate, installed-editor smoke and the `.deb` build/install/remove (`--editor required --package required`); `ubuntu:24.04` runs without the editor. Both require `--wayland required`: headless sway, private-bus and GJS fixtures, not physical compositor qualification |

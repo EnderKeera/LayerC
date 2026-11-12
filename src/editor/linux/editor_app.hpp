@@ -11,6 +11,7 @@
 #include "tasks_window.hpp"
 #include "diagnostics_window.hpp"
 #include "editor_appearance.hpp"
+#include "status_voice.hpp"
 
 #include <memory>
 
@@ -95,7 +96,7 @@ public:
   void redraw_preview();
   void fill_lists();
   void refresh_forms();
-  void report(std::string text);
+  void report(std::string text, StatusVoice voice = StatusVoice::announced);
   void query_status();
   void module_fields_changed(bool pending);
   void field_changed(Fl_Widget *widget);
@@ -123,6 +124,8 @@ public:
 
 private:
   std::string cooldown_id_, panel_id_, status_text_, daemon_text_, title_text_;
+  // The last message spoken, so a repeating failure is said once.
+  std::string last_announced_;
   int binding_index_{-1};
   Fl_Widget *last_field_{};
   Fl_Group *active_tab_{};

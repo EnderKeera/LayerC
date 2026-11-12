@@ -3,6 +3,7 @@
 #include "panel_items.hpp"
 #include "editor_app.hpp"
 #include "layerc/core/panel_presentation.hpp"
+#include "editor_style.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <string>
 #include <utility>
+
 
 namespace layerc::editor {
 namespace {
@@ -35,8 +37,8 @@ void PanelItemsControls::build() {
     static_cast<PanelItemsControls *>(data)->select();
   }, this);
   const auto button = [&](const int x, const int y, const char *label) {
-    auto *value = new Fl_Button(x, y, 80, 28, label);
-    value->labelsize(12);
+    auto *value = new Fl_Button(x, y, 80, editor_button_height, label);
+    value->labelsize(FL_NORMAL_SIZE);
     return value;
   };
   add_ = button(865, 310, "Add item");

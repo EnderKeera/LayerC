@@ -16,6 +16,16 @@ class EditorApp;
 
 // Linux frontend menus use the same accepted-edit commands as its buttons.
 // Menu widgets are owned by the window; their callback data is owned here.
+// Empty list copy: what the list says before anything exists, drawn inside the
+// list itself (DesignSystem.md, EmptyState).
+struct EditorEmptyState {
+  const char *title;
+  const char *hint;
+};
+[[nodiscard]] EditorEmptyState editor_empty_state(EditorMenuContext context) noexcept;
+void draw_editor_empty_state(const EditorBounds &bounds, EditorEmptyState copy,
+                             Fl_Font face, Fl_Fontsize size);
+
 class EditorMenus final {
 public:
   static constexpr int bar_height = 28;
@@ -61,6 +71,8 @@ public:
   // The visible row slice in the browser viewport, not the entire browser.
   [[nodiscard]] std::optional<EditorBounds> row_bounds(int row);
   int handle(int event) override;
+protected:
+  void draw() override;
 private:
   EditorApp &app_;
   EditorMenuContext context_;

@@ -195,7 +195,8 @@ scaling so one profile looks the same on both platforms.
 
 The Linux editor's Panels page uses an ordered item list with add, edit,
 reorder, and remove. It exposes cooldown active duration, automation-timer
-presets, numeric/pip counters, and indicators with flashing off or 0.5–4 Hz.
+presets, numeric/pip counters, and indicators with flashing off or 0.5–3 Hz
+(stored rates above 3 up to 4 Hz remain in the profile and flash at 3 Hz).
 Preview and simulation use the same typed presentation. Existing legacy
 cooldown-only profiles retain their `cooldowns` representation; schema 5 is
 used for new typed features. See the [profile/item format](../README.md#overlay-items-v27-in-development).
@@ -307,15 +308,18 @@ service, session and automation-fault state, refreshed on request, with the raw
 JSON available for copying. Help lists the keyboard shortcuts (F1) and the
 version. Captured bindings come from focused input only: keys, mouse buttons
 and buttons of XI2 gamepad-class devices; generic HID capture is unavailable.
-File > Save As writes the open profile and its modules under a new name, and
+File > Save as writes the open profile and its modules under a new name, and
 File > Open profiles folder starts `xdg-open` (or names the path when it is
-missing). The editor draws flat, square controls with 1 px outlines, like
-the Windows editor ([design system](DesignSystem.md)), in the desktop's
-interface font: the XSETTINGS
-`Gtk/FontName` family when a settings manager runs, else fontconfig's sans,
-at that size up to the forms' 14 px. Tools > Appearance applies the Windows
-presets (Graphite / Copper by default; System keeps FLTK's colours), an accent
-and per-role colours, stored in `<config>/layerc/editor-appearance.json`; Tools >
+missing). The editor follows the [v2 design system](DesignSystem.md): flat,
+square controls, 1 px outlines, a 2 px accent focus ring without a focus tint,
+and a 3 px accent bar on the selected tab. It uses the desktop interface font:
+the XSETTINGS `Gtk/FontName` family when a settings manager runs, else
+fontconfig's sans. Sizes from 11 to 14 px set the text directly; smaller sizes
+stay at 11 px. Above 14 px, app-local FLTK screen scaling grows the authored
+layout with the text. The LayerD status pane uses the body size. Tools >
+Appearance applies the Windows presets (Graphite / Copper by default; System
+keeps FLTK's palette), an accent and per-role colors, stored in
+`<config>/layerc/editor-appearance.json`; Tools >
 Options states that capture exclusion and isolated recognition are unavailable
 on X11. Tools > Detected tasks (Ctrl+T) lists top-level EWMH windows (never the
 editor) through a short-lived X11 connection, scanned only on open and Refresh,
@@ -325,8 +329,11 @@ each drag is published through the live draft, so the overlay follows. Direct
 Drag is not offered because X11 overlays never accept input.
 Closing or selecting another profile flushes autosave first. It prompts to
 save, discard or cancel only when edits remain unsaved: invalid field text, a
-new profile, a failed save, or a declined upgrade. Daemon capabilities/faults are
-visible, with an explicit refresh button.
+new profile, a failed save, or a declined upgrade. LayerD capabilities/faults are
+visible, with an explicit refresh button. Status panes pair drawn status glyphs
+with text; accessible names, descriptions and explicit save/reload announcements
+remain available through AT-SPI. Help > Keyboard shortcuts uses measured key
+and action columns, including F1, from the command registry.
 
 The installed `layere` is smoke-tested by `tools/linux-editor-smoke.sh`: it
 starts beside the installed daemon on a disposable display with private XDG

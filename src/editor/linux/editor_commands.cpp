@@ -89,7 +89,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        profiles, 0,
        +[](const EditorApp &app) { return app.session.has_document(); },
        +[](EditorApp &app) { (void)app.save(); }},
-      {EditorCommand::save_as, "&File/Save &As...", "Save &As...",
+      {EditorCommand::save_as, "&File/Save &as...", "Save &as...",
        FL_CTRL | FL_SHIFT | 's', 0, 0, 0, 0,
        +[](const EditorApp &) { return true; },
        +[](EditorApp &app) {
@@ -427,8 +427,8 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
            app.changed(app.session.edit(
                [&](auto &profile) { (void)remove_panel(profile, app.panel_id_); }));
        }},
-      {EditorCommand::panel_colors, "&Panels/Choose &colours...",
-       "Choose &colours...", 0, 0, 0, panels, panels,
+      {EditorCommand::panel_colors, "&Panels/Choose &colors...",
+       "Choose &colors...", 0, 0, 0, panels, panels,
        +[](const EditorApp &app) { return app.panel_index().has_value(); },
        +[](EditorApp &app) {
          const auto index = app.panel_index();
@@ -438,7 +438,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
              PanelColorValues{{bar.fill_color, bar.background_color,
                                bar.border_color, bar.text_color}});
          if (!chosen) {
-           app.report("Panel colours unchanged.");
+           app.report("Panel colors unchanged.");
            return;
          }
          const auto id = app.panel_id_;
@@ -504,7 +504,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
          app.tab_changed();
          app.tabs->redraw();
        }},
-      {EditorCommand::refresh, "&View/Daemon &status", "Daemon &status", 0, 0, 0,
+      {EditorCommand::refresh, "&View/LayerD &status", "LayerD &status", 0, 0, 0,
        0, 0, +[](const EditorApp &) { return true; },
        +[](EditorApp &app) { app.query_status(); }},
       {EditorCommand::diagnostics, "&View/Runtime &diagnostics...",
@@ -572,7 +572,7 @@ const std::array<EditorCommandSpec, row_count> &EditorCommandRegistry::rows() {
        "&Keyboard shortcuts", FL_F + 1, 0, 0, 0, 0,
        +[](const EditorApp &) { return true; },
        +[](EditorApp &) {
-         show_text_dialog("Keyboard shortcuts — LayerE", shortcut_help());
+         show_shortcuts_dialog(shortcut_help());
        }},
       {EditorCommand::about, "&Help/&About LayerE", "&About LayerE", 0, 0, 0, 0,
        0, +[](const EditorApp &) { return true; },

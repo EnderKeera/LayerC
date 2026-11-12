@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
@@ -60,6 +61,74 @@ bool light_color(const COLORREF color) {
   return luma >= 140000;
 }
 
+// Hue in degrees (0 to 360); 0 for a gray.
+double hue_degrees(const std::uint32_t color) {
+  const int red = static_cast<int>((color >> 16U) & 0xFFU);
+  const int green = static_cast<int>((color >> 8U) & 0xFFU);
+  const int blue = static_cast<int>(color & 0xFFU);
+  const int high = std::max({red, green, blue});
+  const int chroma = high - std::min({red, green, blue});
+  if (chroma == 0)
+    return 0.0;
+  double sector = 0.0;
+  if (high == red)
+    sector = static_cast<double>(green - blue) / chroma;
+  else if (high == green)
+    sector = static_cast<double>(blue - red) / chroma + 2.0;
+  else
+    sector = static_cast<double>(red - green) / chroma + 4.0;
+  const double hue = sector * 60.0;
+  return hue < 0.0 ? hue + 360.0 : hue;
+}
+
+// WCAG 2 relative luminance.
+double relative_luminance(const COLORREF color) {
+  const auto channel = [](const BYTE value) {
+    const double component = static_cast<double>(value) / 255.0;
+    return component <= 0.04045
+               ? component / 12.92
+               : std::pow((component + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(GetRValue(color)) +
+         0.7152 * channel(GetGValue(color)) +
+         0.0722 * channel(GetBValue(color));
+}
+
+// -1 follows SPI_GETHIGHCONTRAST; 0 or 1 is the test seam's forced value.
+std::atomic<int> high_contrast_override{-1};
+
+// A Windows contrast theme: every role in the theme's system colors, with
+// the preset and the Appearance overrides set aside.
+NativeThemeColors high_contrast_colors(const EditorControlRole role) {
+  const bool button = role == EditorControlRole::button;
+  const COLORREF fill = GetSysColor(button ? COLOR_BTNFACE : COLOR_WINDOW);
+  const COLORREF ink = GetSysColor(button ? COLOR_BTNTEXT : COLOR_WINDOWTEXT);
+  const COLORREF gray = GetSysColor(COLOR_GRAYTEXT);
+  const COLORREF highlight = GetSysColor(COLOR_HIGHLIGHT);
+  return {
+      .fill = fill,
+      .text = ink,
+      .border = ink,
+      .hover = fill,
+      .selection = highlight,
+      .disabled = gray,
+      .accent = highlight,
+      .on_accent = GetSysColor(COLOR_HIGHLIGHTTEXT),
+      .pressed = fill,
+      .divider = gray,
+      .secondary = ink,
+      .input = GetSysColor(COLOR_WINDOW),
+      .subtext = ink,
+      .verbose = ink,
+      .yes = ink,
+      .no = ink,
+      .warning = ink,
+      .accent_2 = ink,
+      .on_status = fill,
+      .high_contrast = true,
+  };
+}
+
 NativeThemeColors default_theme_colors(const EditorTheme theme,
                                        const std::uint32_t accent,
                                        const EditorControlRole role) {
@@ -83,6 +152,14 @@ NativeThemeColors default_theme_colors(const EditorTheme theme,
       .divider = native_color_ref(base.divider),
       .secondary = native_color_ref(base.secondary),
       .input = native_color_ref(base.input),
+      .subtext = native_color_ref(base.subtext),
+      .verbose = native_color_ref(base.verbose),
+      .yes = native_color_ref(base.yes),
+      .no = native_color_ref(base.no),
+      .warning = native_color_ref(base.warning),
+      .accent_2 =
+          native_color_ref(theme_accent_2(native_rgb_value(accent_color))),
+      .on_status = native_color_ref(base.on_status),
   };
   switch (role) {
   case EditorControlRole::toolbar:
@@ -217,7 +294,45 @@ std::uint32_t theme_accent(const EditorTheme theme) {
   }
 }
 
+std::uint32_t theme_accent_2(const std::uint32_t accent) {
+  const double distance =
+      std::abs(hue_degrees(accent) - hue_degrees(accent_2_blue));
+  return std::min(distance, 360.0 - distance) <= 45.0 ? accent_2_violet
+                                                      : accent_2_blue;
+}
+
+double contrast_ratio(const COLORREF first, const COLORREF second) {
+  const double first_luminance = relative_luminance(first);
+  const double second_luminance = relative_luminance(second);
+  return (std::max(first_luminance, second_luminance) + 0.05) /
+         (std::min(first_luminance, second_luminance) + 0.05);
+}
+
+bool native_high_contrast() {
+  if (const int forced = high_contrast_override.load(); forced >= 0)
+    return forced != 0;
+  HIGHCONTRASTW contrast{};
+  contrast.cbSize = sizeof(contrast);
+  return SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize,
+                               &contrast, 0) != FALSE &&
+         (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+}
+
+void set_native_high_contrast_override(
+    const std::optional<bool> enabled) noexcept {
+  high_contrast_override.store(enabled ? (*enabled ? 1 : 0) : -1);
+}
+
 NativeThemeColors native_theme_colors(
+    const EditorTheme theme, const std::uint32_t accent,
+    const EditorControlRole role,
+    const EditorAppearanceOverrides &overrides) {
+  if (native_high_contrast())
+    return high_contrast_colors(role);
+  return preset_theme_colors(theme, accent, role, overrides);
+}
+
+NativeThemeColors preset_theme_colors(
     const EditorTheme theme, const std::uint32_t accent,
     const EditorControlRole role,
     const EditorAppearanceOverrides &overrides) {
@@ -313,6 +428,87 @@ void paint_focus_ring(const HDC dc, const RECT &rect, const COLORREF accent,
   const int width = std::max(2, MulDiv(2, dpi == 0 ? 96 : static_cast<int>(dpi),
                                        96));
   outline_rect(dc, rect, width, accent);
+}
+
+COLORREF status_color(const NativeThemeColors &colors,
+                      const StatusGlyph glyph) {
+  switch (glyph) {
+  case StatusGlyph::yes:
+    return colors.yes;
+  case StatusGlyph::no:
+    return colors.no;
+  case StatusGlyph::warning:
+    return colors.warning;
+  case StatusGlyph::accent_2:
+  default:
+    return colors.accent_2;
+  }
+}
+
+int status_glyph_size(const UINT dpi) {
+  const UINT effective_dpi = dpi == 0 ? 96U : dpi;
+  return MulDiv(MulDiv(12, static_cast<int>(effective_dpi), 96),
+                native_text_percent(effective_dpi), 100);
+}
+
+RECT paint_status_glyph(const HDC dc, const RECT &bounds,
+                        const StatusGlyph glyph, const COLORREF color,
+                        const UINT dpi) {
+  const int height = std::max(1L, bounds.bottom - bounds.top);
+  const int size = std::min(status_glyph_size(dpi), height);
+  const int top = bounds.top + (height - size) / 2;
+  const RECT box{bounds.left, top, bounds.left + size, top + size};
+  // Positions on the glyphs' 12-unit grid, in pixels.
+  const auto at = [size](const double grid) {
+    return static_cast<int>(std::lround(grid * size / 12.0));
+  };
+  const auto square = [&](const double left, const double square_top,
+                          const double width, const double square_height) {
+    fill_solid_rect(dc,
+                    {box.left + at(left), box.top + at(square_top),
+                     box.left + at(left + width),
+                     box.top + at(square_top + square_height)},
+                    color);
+  };
+  switch (glyph) {
+  case StatusGlyph::warning:
+    square(5, 1, 2, 7);
+    square(5, 9.5, 2, 2);
+    break;
+  case StatusGlyph::accent_2:
+    square(1, 8, 2, 2);
+    square(5, 8, 2, 2);
+    square(9, 8, 2, 2);
+    break;
+  case StatusGlyph::yes:
+  case StatusGlyph::no:
+  default: {
+    // 2-unit strokes with square caps, as in the Glyphs SVGs.
+    const LOGBRUSH ink{.lbStyle = BS_SOLID, .lbColor = color, .lbHatch = 0};
+    const HPEN pen = ExtCreatePen(PS_SOLID | PS_GEOMETRIC | PS_ENDCAP_SQUARE |
+                                      PS_JOIN_MITER,
+                                  static_cast<DWORD>(std::max(2, at(2))), &ink,
+                                  0, nullptr);
+    const HGDIOBJ previous = SelectObject(dc, pen);
+    const auto point = [&](const double x, const double y) {
+      return POINT{box.left + at(x), box.top + at(y)};
+    };
+    if (glyph == StatusGlyph::yes) {
+      const std::array<POINT, 3> tick{point(2.5, 6.5), point(5, 9),
+                                      point(9.5, 3.5)};
+      Polyline(dc, tick.data(), static_cast<int>(tick.size()));
+    } else {
+      const std::array<POINT, 2> down{point(3, 3), point(9, 9)};
+      const std::array<POINT, 2> up{point(9, 3), point(3, 9)};
+      Polyline(dc, down.data(), static_cast<int>(down.size()));
+      Polyline(dc, up.data(), static_cast<int>(up.size()));
+    }
+    SelectObject(dc, previous);
+    DeleteObject(pen);
+    break;
+  }
+  }
+  return box;
 }
 
 void enable_native_dark_mode() {

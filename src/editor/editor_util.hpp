@@ -31,6 +31,9 @@ using layerc::platform::set_dark_title_bar;
 // Dark title bar plus the capture-exclusion policy: the chrome every LayerC
 // dialog window applies before its children are laid out.
 void apply_dialog_chrome(HWND window, bool capture_exclusion);
+// Centers an owned dialog on its owner inside the owner's work area; a code
+// layout calls it again once it has sized the dialog.
+void center_over_owner(HWND dialog);
 
 struct ProfileCheckboxMetrics {
   int image_size{};

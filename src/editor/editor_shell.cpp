@@ -1,6 +1,11 @@
+#include "accessible_text.hpp"
 #include "dialog_layout.hpp"
+#include "editor_dialog_dispatch.hpp"
+#include "editor_dialog_layouts.hpp"
 #include "editor_resource.h"
+#include "editor_shortcuts.hpp"
 #include "editor_window.hpp"
+#include "static_style.hpp"
 
 #include "layerc/core/version.hpp"
 #include "layerc/platform/settings_store.hpp"
@@ -122,12 +127,79 @@ bool placement_visible(const WINDOWPLACEMENT &placement) {
                          MONITOR_DEFAULTTONULL) != nullptr;
 }
 
+// The buttons that say why they are unavailable (DesignSystem.md, Button).
+constexpr std::array reason_buttons{IDC_REMOVE_COOLDOWN, IDC_ITEM_ADD,
+                                    IDC_ITEM_EDIT, IDC_ITEM_REMOVE};
+
 } // namespace
+
+bool set_button_reason(EditorShell &shell, const int button,
+                       const std::wstring_view reason) {
+  const auto found = std::ranges::find(
+      shell.button_reasons, button, &std::pair<int, std::wstring>::first);
+  if (found == shell.button_reasons.end()) {
+    if (reason.empty())
+      return false;
+    shell.button_reasons.emplace_back(button, reason);
+  } else if (found->second == reason) {
+    return false;
+  } else {
+    found->second = reason;
+  }
+  set_accessible_description(GetDlgItem(shell.window, button), reason);
+  return true;
+}
+
+std::wstring_view button_reason(const EditorShell &shell, const int button) {
+  const auto found = std::ranges::find(
+      shell.button_reasons, button, &std::pair<int, std::wstring>::first);
+  return found == shell.button_reasons.end() ? std::wstring_view{}
+                                             : std::wstring_view(found->second);
+}
+
+void place_button_reason_tools(const EditorShell &shell) {
+  if (shell.tooltip == nullptr)
+    return;
+  for (const int id : reason_buttons) {
+    TTTOOLINFOW tool{};
+    tool.cbSize = sizeof(tool);
+    tool.hwnd = shell.window;
+    tool.uId = static_cast<UINT_PTR>(id);
+    if (const HWND button = GetDlgItem(shell.window, id);
+        button != nullptr && GetWindowRect(button, &tool.rect) != FALSE)
+      MapWindowPoints(nullptr, shell.window,
+                      reinterpret_cast<POINT *>(&tool.rect), 2);
+    SendMessageW(shell.tooltip, TTM_NEWTOOLRECTW, 0,
+                 reinterpret_cast<LPARAM>(&tool));
+  }
+}
 
 void EditorWindow::install_shell_helpers() {
   const HWND window = shell_.window;
   set_text(GetDlgItem(window, IDC_PROFILE_DELETE), L"\u2212");
   set_text(GetDlgItem(window, IDC_PROFILE_MORE), L"\u2026");
+  // A button without a word takes its tooltip's words as its name
+  // (DesignSystem.md, Screen readers).
+  set_accessible_name(GetDlgItem(window, IDC_PROFILE_NEW), L"New profile");
+  set_accessible_name(GetDlgItem(window, IDC_PROFILE_DELETE),
+                      L"Delete profile");
+  set_accessible_name(GetDlgItem(window, IDC_PROFILE_MORE),
+                      L"More profile actions");
+  describe_with(GetDlgItem(window, IDC_COOLDOWN_ACTIVE),
+                GetDlgItem(window, IDC_COOLDOWN_ACTIVE_HINT));
+  // Hints and reasons read in `subtext`; the contrast line and the status
+  // strip's states lead with a drawn glyph.
+  for (const int id : {IDC_POSITION_STATUS, IDC_COOLDOWN_ACTIVE_HINT,
+                       IDC_VISUAL_HINT, IDC_COOLDOWN_REMOVE_REASON,
+                       IDC_ITEM_REASON})
+    set_text_tone(GetDlgItem(window, id), TextTone::subtext);
+  set_static_style(GetDlgItem(window, IDC_OVERLAY_CONTRAST),
+                   {.tone = TextTone::text,
+                    .glyph = layerc::platform::StatusGlyph::warning});
+  set_strip_status(GetDlgItem(window, IDC_CONNECTION_STATUS),
+                   L"LayerD: connecting");
+  set_strip_status(GetDlgItem(window, IDC_VISUAL_RUNTIME_STATUS),
+                   shell_.visual_runtime_status);
   SendMessageW(shell_.application_path, EM_SETCUEBANNER, TRUE,
                reinterpret_cast<LPARAM>(
                    L"Type app.exe, Browse, or choose a running app"));
@@ -144,31 +216,50 @@ void EditorWindow::install_shell_helpers() {
   SetWindowTheme(shell_.tooltip, L"DarkMode_Explorer", nullptr);
   SendMessageW(shell_.tooltip, TTM_SETMAXTIPWIDTH, 0,
                dpi_scaled(360, window_base_dpi(window)));
-  const auto tool = [&](const int id, const wchar_t *text) {
+  // A tooltip is also its control's description. One that changes is
+  // written where its text does, and one that only repeats the name is not
+  // said twice.
+  const auto tip = [&](const int id, const wchar_t *text) {
     add_tool(shell_.tooltip, window, GetDlgItem(window, id), text);
   };
+  const auto tool = [&](const int id, const wchar_t *text) {
+    tip(id, text);
+    set_accessible_description(GetDlgItem(window, id), text);
+  };
   tool(IDC_PROFILE_NEW, L"New profile (Ctrl+N)");
-  tool(IDC_PROFILE_DELETE, L"Delete profile");
-  tool(IDC_PROFILE_MORE, L"More profile actions");
+  tip(IDC_PROFILE_DELETE, L"Delete profile");
+  tip(IDC_PROFILE_MORE, L"More profile actions");
   tool(IDC_ADVANCED,
        L"Show profile ID, exact path matching, HID bindings and cooldown "
        L"policies (Ctrl+Shift+A)");
-  tool(IDC_APPLICATION_PATH, LPSTR_TEXTCALLBACKW);
+  tip(IDC_APPLICATION_PATH, LPSTR_TEXTCALLBACKW);
   tool(IDC_BROWSE_APPLICATION, L"Choose the game's .exe file");
   tool(IDC_CHOOSE_APPLICATION, L"Pick from applications running now");
-  tool(IDC_COOLDOWN_DURATION, L"Up/Down or the mouse wheel step 0.1 s "
+  tool(IDC_COOLDOWN_DURATION, L"Up / Down or the mouse wheel step 0.1 s "
                               L"(Shift: 1 s)");
   tool(IDC_CAPTURE_BINDING, L"Press the key or chord that starts this "
                             L"cooldown");
   tool(IDC_CAPTURE_HID, L"Bind a control on a generic HID device");
   tool(IDC_POSITION_ON_WINDOW,
        L"Place the bars directly on the running game window");
-  tool(IDC_PREVIEW, L"Drag the selected bar. Arrow keys nudge it 1 px "
-                    L"(Shift: 10 px).");
-  tool(IDC_BAR_WIDTH, L"Up/Down or the mouse wheel step 1 px");
-  tool(IDC_BAR_HEIGHT, L"Up/Down or the mouse wheel step 1 px");
+  tip(IDC_PREVIEW, preview_tooltip);
+  tool(IDC_BAR_WIDTH, L"Up / Down or the mouse wheel step 1 px");
+  tool(IDC_BAR_HEIGHT, L"Up / Down or the mouse wheel step 1 px");
   // The binding shows key names; its tooltip carries the scan codes.
-  tool(IDC_COOLDOWN_BINDING, LPSTR_TEXTCALLBACKW);
+  tip(IDC_COOLDOWN_BINDING, LPSTR_TEXTCALLBACKW);
+  // A disabled button takes no mouse input, so its reason is a tool of the
+  // window over the button's rectangle.
+  for (const int id : reason_buttons) {
+    TTTOOLINFOW reason{};
+    reason.cbSize = sizeof(reason);
+    reason.uFlags = TTF_SUBCLASS;
+    reason.hwnd = window;
+    reason.uId = static_cast<UINT_PTR>(id);
+    reason.lpszText = LPSTR_TEXTCALLBACKW;
+    SendMessageW(shell_.tooltip, TTM_ADDTOOLW, 0,
+                 reinterpret_cast<LPARAM>(&reason));
+  }
+  place_button_reason_tools(shell_);
 }
 
 std::optional<LRESULT> EditorWindow::handle_shell_notify(const NMHDR &header) {
@@ -178,15 +269,12 @@ std::optional<LRESULT> EditorWindow::handle_shell_notify(const NMHDR &header) {
       reinterpret_cast<const NMTTDISPINFOW &>(header));
   const HWND control = reinterpret_cast<HWND>(header.idFrom);
   shell_.tooltip_text.clear();
-  if (control == shell_.application_path) {
-    const auto &game = document_.profile().game;
+  if ((info.uFlags & TTF_IDISHWND) == 0) {
+    // A reason tool: its id is the disabled button's.
     shell_.tooltip_text =
-        !game.executable_path.empty()
-            ? L"Matches exactly " + to_wide(game.executable_path)
-        : !game.executable_name.empty()
-            ? L"Matches any " + to_wide(game.executable_name) +
-                  L" regardless of folder"
-            : L"No application chosen yet";
+        button_reason(shell_, static_cast<int>(header.idFrom));
+  } else if (control == shell_.application_path) {
+    shell_.tooltip_text = application_match_text();
   } else if (control == GetDlgItem(shell_.window, IDC_COOLDOWN_BINDING)) {
     shell_.tooltip_text = cooldown_editor_.binding_codes_text();
   }
@@ -240,7 +328,23 @@ void EditorWindow::browse_application() {
              to_wide(game.executable_path.empty() ? game.executable_name
                                                   : game.executable_path));
   }
+  describe_application();
   set_status(L"Application set to " + to_wide(document_.profile().game.executable_name) + L".");
+}
+
+std::wstring EditorWindow::application_match_text() const {
+  const auto &game = document_.profile().game;
+  return !game.executable_path.empty()
+             ? L"Matches exactly " + to_wide(game.executable_path)
+         : !game.executable_name.empty()
+             ? L"Matches any " + to_wide(game.executable_name) +
+                   L" regardless of folder"
+             : L"No application chosen yet";
+}
+
+void EditorWindow::describe_application() {
+  set_accessible_description(shell_.application_path,
+                             application_match_text());
 }
 
 // Typed text is an executable name ("game.exe") or a full path; a path only
@@ -263,6 +367,7 @@ void EditorWindow::apply_application_text() {
     game.executable_path =
         exact && path_like && typed.is_absolute() ? wide_to_utf8(text) : std::string{};
   });
+  describe_application();
 }
 
 void EditorWindow::refresh_title() {
@@ -389,7 +494,7 @@ void EditorWindow::show_context_menu(const HWND source, POINT screen) {
   if (profiles) {
     ModifyMenuW(menu, IDM_PROFILE_TOGGLE, MF_BYCOMMAND | MF_STRING,
                 IDM_PROFILE_TOGGLE,
-                document_.profile().enabled ? L"&Turn Off" : L"&Turn On");
+                document_.profile().enabled ? L"&Turn off" : L"&Turn on");
     EnableMenuItem(menu, IDM_PROFILE_TOGGLE,
                    MF_BYCOMMAND | (draft ? MF_GRAYED : MF_ENABLED));
     EnableMenuItem(menu, IDM_FILE_EXPORT_PACK,
@@ -537,7 +642,7 @@ void EditorWindow::refresh_connection_status() {
                                              : L"LayerD: connecting";
   if (shell_.connection_cache != text) {
     shell_.connection_cache = text;
-    set_text(GetDlgItem(shell_.window, IDC_CONNECTION_STATUS), text);
+    set_strip_status(GetDlgItem(shell_.window, IDC_CONNECTION_STATUS), text);
   }
 }
 
@@ -613,21 +718,38 @@ void EditorWindow::show_about() {
 }
 
 void EditorWindow::show_keyboard_shortcuts() {
-  themed_message_box(shell_.window,
-              L"Ctrl+N\tNew profile\n"
-              L"Ctrl+S\tSave\n"
-              L"Ctrl+Shift+S\tSave as\n"
-              L"Ctrl+Z / Ctrl+Y\tUndo / Redo\n"
-              L"Ctrl+D\tDuplicate the selected cooldown\n"
-              L"Ctrl+Shift+A\tShow or hide advanced settings\n"
-              L"Ctrl+,\tOptions\n"
-              L"F2\tRename the selected profile or cooldown\n"
-              L"Del\tDelete the selected profile or cooldown\n"
-              L"Shift+F10\tContext menu\n"
-              L"Up / Down\tStep the focused number (Shift: x10)\n"
-              L"Arrow keys\tNudge the selected bar in the preview\n"
-              L"Alt+letter\tJump to the underlined field",
-              L"Keyboard shortcuts", MB_OK | MB_ICONINFORMATION);
+  DialogBoxParamW(
+      shell_.instance, MAKEINTRESOURCEW(IDD_SHORTCUTS), shell_.window,
+      &dispatch_member_dialog<EditorWindow,
+                              &EditorWindow::initialize_shortcuts,
+                              &EditorWindow::handle_shortcuts_message>,
+      reinterpret_cast<LPARAM>(this));
+}
+
+// One row per shortcut (DesignSystem.md, Keyboard): the keys in a single
+// left-aligned column in `label`, the action beside them in `text`.
+void EditorWindow::initialize_shortcuts(const HWND window) {
+  apply_dialog_chrome(window, shell_.capture_exclusion);
+  const HMENU menu = GetMenu(shell_.window);
+  const auto rows = shortcut_rows(
+      editor_accelerators(shell_.instance),
+      [menu](const int command) { return menu_action_text(menu, command); });
+  create_shortcut_cells(window, rows);
+  style_dialog_children(window);
+  layout_shortcuts_dialog(window, rows.size());
+  center_over_owner(window);
+}
+
+LRESULT EditorWindow::handle_shortcuts_message(const HWND window,
+                                               const UINT message,
+                                               const WPARAM wparam,
+                                               const LPARAM lparam) {
+  if (message == WM_COMMAND &&
+      (LOWORD(wparam) == IDOK || LOWORD(wparam) == IDCANCEL)) {
+    EndDialog(window, IDOK);
+    return TRUE;
+  }
+  return dialog_theme_message(window, message, wparam, lparam).value_or(FALSE);
 }
 
 } // namespace layerc::editor

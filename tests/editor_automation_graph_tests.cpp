@@ -730,7 +730,7 @@ void simulator_step_report_contracts() {
     while (at != std::string::npos) {
       const auto next = described.find('\n', at + 1);
       const auto line = described.substr(at + 1, next - at - 1);
-      if (line.starts_with("  \u2026 "))
+      if (line.starts_with("  and ") && line.ends_with(" more"))
         ++omissions;
       else if (line.starts_with("  "))
         ++details;

@@ -234,12 +234,12 @@ void present_indicator(ItemPresentation &row, RowSources &sources,
   row.available_charges = 0;
   row.max_charges = 1;
   row.label = row.name;
-  if (!row.active || !(item.flash_hz > 0.0) || !std::isfinite(item.flash_hz))
+  // Every renderer draws this phase, so the cap holds on every surface.
+  const double hz = indicator_flash_hz(item.flash_hz);
+  if (!row.active || hz == 0.0)
     return;
   // 50% duty from the presentation epoch; phase zero is ON.
-  const auto period = std::max<std::int64_t>(
-      1, std::llround(1000.0 / std::clamp(item.flash_hz, min_indicator_flash_hz,
-                                          max_indicator_flash_hz)));
+  const auto period = std::max<std::int64_t>(1, std::llround(1000.0 / hz));
   const auto elapsed =
       sources.now > sources.epoch
           ? std::chrono::duration_cast<Milliseconds>(sources.now - sources.epoch).count()

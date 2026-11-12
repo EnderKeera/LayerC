@@ -265,7 +265,7 @@ void append_step_report(std::string &output, const SimulatorStepReport &report) 
   if (report.trace.empty() && report.effects.empty() && report.derived.empty() &&
       !report.rejection)
     detail("Nothing matched this event.");
-  if (count > 32U) output += "\n  … " + std::to_string(count - 32U) + " more";
+  if (count > 32U) output += "\n  and " + std::to_string(count - 32U) + " more";
 }
 
 } // namespace

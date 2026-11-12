@@ -372,6 +372,7 @@ if(NOT WIN32)
                 tests/linux_editor_binding_capture_tests.cpp
                 tests/linux_editor_diagnostics_tests.cpp
                 tests/linux_editor_command_registry_tests.cpp
+                tests/linux_editor_design_system_paint_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
             LABELS required editor RESOURCE_LOCK layerc_x11_display)
         set_source_files_properties(
@@ -483,6 +484,8 @@ if(WIN32)
             tests/editor_diagnostics_dialog_tests.cpp
             tests/editor_calibration_tests.cpp
             tests/editor_asset_tests.cpp tests/editor_component_tests.cpp
+            tests/editor_theme_tests.cpp tests/editor_layout_tests.cpp
+            tests/editor_accessibility_tests.cpp
             src/editor/editor_resources.rc
         LINK layerc_editor_ui WIN32 TIMEOUT 30)
     target_include_directories(layerc_editor_tests PRIVATE src/editor)

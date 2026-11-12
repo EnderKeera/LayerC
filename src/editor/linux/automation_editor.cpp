@@ -5,6 +5,8 @@
 #include "automation_graph.hpp"
 #include "automation_simulator.hpp"
 
+#include "editor_style.hpp"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
@@ -126,10 +128,10 @@ struct LinuxAutomationEditor::Impl {
 
     advanced = new Fl_Group(270, 130, 775, 335);
     advanced->begin();
-    json = new Fl_Multiline_Input(285, 165, 745, 185, "Advanced automation JSON");
+    json = new EditorField<Fl_Multiline_Input>(285, 165, 745, 185, "Advanced automation JSON");
     json->align(FL_ALIGN_TOP_LEFT);
     json->textfont(FL_COURIER);
-    json->textsize(12);
+    json->textsize(FL_NORMAL_SIZE);
     json->when(FL_WHEN_CHANGED);
     bind(*json);
     json_apply = button(285, 365, 220, "Validate / Apply JSON");
@@ -154,28 +156,28 @@ struct LinuxAutomationEditor::Impl {
     state_scroll = new Fl_Scroll(279, 309, 757, 92);
     state_scroll->type(Fl_Scroll::VERTICAL);
     state_scroll->begin();
-    state = new Fl_Multiline_Output(285, 330, 725, 65, "Simulator state");
+    state = new EditorField<Fl_Multiline_Output>(285, 330, 725, 65, "Simulator state");
     state->wrap(1);
     state->align(FL_ALIGN_TOP_LEFT);
     state->textfont(FL_COURIER);
-    state->textsize(12);
+    state->textsize(FL_NORMAL_SIZE);
     state_scroll->end();
     simulation->end();
     live_view = new Fl_Group(270, 130, 775, 270);
     live_view->begin();
     trace_enabled = check(285, 165, 650, "Record authenticated LayerD trace (saved profile only)");
     trace_replay = button(285, 215, 350, "Replay collected trace in simulator");
-    trace_state = new Fl_Multiline_Output(285, 275, 745, 100, "Live trace status");
+    trace_state = new EditorField<Fl_Multiline_Output>(285, 275, 745, 100, "Live trace status");
     trace_state->wrap(1);
     trace_state->align(FL_ALIGN_TOP_LEFT);
-    trace_state->value("Stopped. No daemon subscription.");
+    trace_state->value("Stopped. No LayerD subscription.");
     live_view->end();
     page->end();
     // Trace files work in every view and never access a running daemon.
     page->begin();
     load_trace = button(285, 415, 160, "Load trace...");
     save_trace = button(460, 415, 160, "Save trace...");
-    validation = new Fl_Output(645, 415, 385, 28, "Automation validation");
+    validation = new EditorField<Fl_Output>(645, 415, 385, editor_input_height, "Automation validation");
     validation->align(FL_ALIGN_TOP_LEFT);
     page->end();
     show_view();
@@ -185,18 +187,18 @@ struct LinuxAutomationEditor::Impl {
     widget.callback([](Fl_Widget *w, void *data) { static_cast<Impl *>(data)->handle(w); }, this);
   }
   Fl_Button *button(int x, int y, int width, const char *label) {
-    auto *widget = new Fl_Button(x, y, width, 28, label);
+    auto *widget = new Fl_Button(x, y, width, editor_button_height, label);
     bind(*widget);
     return widget;
   }
   Fl_Input *input(int x, int y, int width, const char *label, bool edit = true) {
-    auto *widget = new Fl_Input(x, y, width, 28, label);
+    auto *widget = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
     widget->align(FL_ALIGN_TOP_LEFT);
     if (edit) { widget->when(FL_WHEN_CHANGED); bind(*widget); }
     return widget;
   }
   Fl_Choice *choice(int x, int y, int width, const char *label) {
-    auto *widget = new Fl_Choice(x, y, width, 28, label);
+    auto *widget = new EditorChoice(x, y, width, editor_input_height, label);
     widget->align(FL_ALIGN_TOP_LEFT);
     bind(*widget);
     return widget;
@@ -226,7 +228,7 @@ struct LinuxAutomationEditor::Impl {
     Fl::remove_timeout(tick, this);
     play->copy_label("Play");
   }
-  void stop_live(const std::string &status = "Stopped. No daemon subscription.") {
+  void stop_live(const std::string &status = "Stopped. No LayerD subscription.") {
     Fl::remove_timeout(trace_tick, this);
     trace_enabled->value(0);
     trace_client.reset(); // owned, joined worker; unsubscribes or lease expires
@@ -254,9 +256,9 @@ struct LinuxAutomationEditor::Impl {
       if (reply.reset) { self.trace.clear(); self.trace_gap = false; }
       self.trace_gap = self.trace_gap || reply.gap;
       if (!reply.packet.empty()) (void)self.trace.append_packet(reply.packet);
-      const auto status = "Recording saved daemon profile. Roots: " +
+      const auto status = "Recording saved LayerD profile. Roots: " +
           std::to_string(self.trace.events().size()) +
-          (self.trace_gap ? "\nOlder trace events were lost from the bounded daemon buffer." : "") +
+          (self.trace_gap ? "\nOlder trace events were lost from the bounded LayerD buffer." : "") +
           "\nTrace files may contain user-authored strings or maps.";
       self.trace_state->value(status.c_str());
       self.trace_state->redraw();
@@ -293,8 +295,9 @@ struct LinuxAutomationEditor::Impl {
     }
     validation->value("Pending changes are not applied yet.");
   }
-  void message(const std::string &text) {
-    app.report(text);
+  void message(const std::string &text,
+               const StatusVoice voice = StatusVoice::announced) {
+    app.report(text, voice);
   }
   void describe() {
     app.redraw_preview();
@@ -468,7 +471,7 @@ struct LinuxAutomationEditor::Impl {
     if (error) { message("Not changed: " + *error); return false; }
     selection = next;
     refresh();
-    message("Unsaved automation changes. Save applies them.");
+    message("Unsaved automation changes. Save applies them.", StatusVoice::silent);
     return true;
   }
   static void tick(void *data) {
@@ -528,11 +531,11 @@ struct LinuxAutomationEditor::Impl {
       return;
     }
     if (widget == trace_replay) {
-      if (trace.empty()) { message("No daemon trace roots to replay."); return; }
+      if (trace.empty()) { message("No LayerD trace roots to replay."); return; }
       stop_live();
       simulator.load(trace.events());
       current_view = 1; view->value(1); show_view(); rewind();
-      message("Daemon trace copied to simulator. Local replay does not modify LayerD.");
+      message("LayerD trace copied to simulator. Local replay does not modify LayerD.");
       return;
     }
     if (widget == preset || widget == palette || widget == sim_event) return;

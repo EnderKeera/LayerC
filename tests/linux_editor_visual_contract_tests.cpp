@@ -343,10 +343,10 @@ void linux_editor_black_accent_dialog_contracts() {
 
   bool reset_empty{};
   ModalAction reset([&](Fl_Window &modal) {
-    auto *reset_all = dynamic_cast<Fl_Button *>(control(modal, "Reset all colours"));
+    auto *reset_all = dynamic_cast<Fl_Button *>(control(modal, "Reset all colors"));
     auto *apply = dynamic_cast<Fl_Button *>(control(modal, "Apply"));
     if (!reset_all || !apply) {
-      expect(false, "the reopened dialog owns Reset all colours and Apply");
+      expect(false, "the reopened dialog owns Reset all colors and Apply");
       modal.hide();
       return;
     }
@@ -387,7 +387,7 @@ void linux_editor_main_window_text_and_tab_labels() {
   });
   expect(outputs >= 8, "the main window owns its multiline outputs");
   for (const char *label : {"Preservation / module faults", "Save / reload outcome",
-                            "Daemon status and capability faults", "Visual assignment"})
+                            "LayerD status and capability faults", "Visual assignment"})
     expect(wrapped_labels.count(label) == 1, "the labelled multiline output is present and wrapped");
   auto *tabs = editor::EditorAppTestAccess::tabs(app);
   int bar_bottom = tabs->y();

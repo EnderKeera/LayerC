@@ -45,6 +45,39 @@ struct RoleColors {
   bool operator==(const RoleColors &) const = default;
 };
 
+// Every colour the Linux editor draws with, in one place (DesignSystem.md,
+// "Where each color may go"). The neutral values are the Windows neutral
+// theme, so a preset renders alike on both editors; System keeps FLTK's own
+// palette and resolves from it instead.
+struct EditorTokens {
+  std::uint32_t background{}, panel{}, input{}, border{}, divider{}, text{};
+  std::uint32_t secondary{}, subtext{}, verbose{}, disabled{};
+  std::uint32_t button_hover{}, row_hover{}, pressed{};
+  std::uint32_t accent{}, selection{}, on_accent{};
+  std::uint32_t yes{}, no{}, warning{}, accent_2{}, on_status{};
+  bool operator==(const EditorTokens &) const = default;
+};
+[[nodiscard]] EditorTokens editor_tokens(const EditorAppearance &appearance) noexcept;
+// WCAG 2 contrast of two #RRGGBB colours, 1:1 to 21:1.
+[[nodiscard]] double editor_contrast_ratio(std::uint32_t first, std::uint32_t second) noexcept;
+// The second accent mark: violet when the accent is near the blue one, as the
+// Windows theme picks it.
+[[nodiscard]] std::uint32_t editor_accent_2(std::uint32_t accent) noexcept;
+
+// The status strip's leading mark: a drawn glyph, never colour alone
+// (DesignSystem.md, Status strip). Pure, so the model tests read the rule.
+enum class EditorStatusGlyph : std::uint8_t { none, yes, no, warning, information };
+[[nodiscard]] EditorStatusGlyph editor_status_glyph(std::string_view text);
+
+// Body text size and this app's scale, from the desktop's pixel size: the
+// scale leaves the base size alone when the desktop asks for more than 14 px.
+struct DesktopTextMetrics {
+  int normal_size{};
+  float scale{};
+  bool operator==(const DesktopTextMetrics &) const = default;
+};
+[[nodiscard]] DesktopTextMetrics desktop_text_metrics(std::optional<int> pixels) noexcept;
+
 [[nodiscard]] std::string_view theme_name(EditorTheme theme) noexcept;  // "copper"
 [[nodiscard]] std::string_view theme_label(EditorTheme theme) noexcept; // "Graphite / Copper"
 [[nodiscard]] std::string_view role_name(EditorRole role) noexcept;     // "edit"

@@ -1,4 +1,6 @@
 #include "appearance_window.hpp"
+#include "accessible_widgets.hpp"
+#include "editor_style.hpp"
 #include "profile_mutations.hpp"
 
 #include <FL/Fl.H>
@@ -10,6 +12,7 @@
 #include <FL/Fl_Color_Chooser.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Input.H>
+#include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Light_Button.H>
 #include <FL/Fl_Menu_.H>
 #include <FL/Fl_Menu_Bar.H>
@@ -78,7 +81,12 @@ RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
   const bool field = role == EditorRole::status || role == EditorRole::list ||
       role == EditorRole::sidebar || (role == EditorRole::edit && dynamic_cast<Fl_Input_ *>(widget));
   Fl_Color fill = field ? FL_BACKGROUND2_COLOR : FL_BACKGROUND_COLOR;
-  if (role == EditorRole::preview) fill = fl_rgb_color(31, 36, 41);
+  if (role == EditorRole::preview) {
+    const auto input = current_editor_tokens().input;
+    fill = fl_rgb_color(static_cast<uchar>((input >> 16U) & 0xFFU),
+                        static_cast<uchar>((input >> 8U) & 0xFFU),
+                        static_cast<uchar>(input & 0xFFU));
+  }
   // Tabs and their page groups use this colour as the tab's fill, not a text highlight.
   const Fl_Color selection = (role == EditorRole::button || role == EditorRole::window)
                                  ? FL_BACKGROUND_COLOR
@@ -92,7 +100,8 @@ RoleColors system_colors(Fl_Widget *widget, const EditorRole role) {
   return {rgb(fill), rgb(FL_FOREGROUND_COLOR), rgb(selection)};
 }
 
-void paint(Fl_Widget *widget, const RoleColors &colors, const Fl_Color label) {
+void paint(Fl_Widget *widget, const RoleColors &colors, const Fl_Color label,
+           const bool use_verbose) {
   widget->color(fl(colors.fill));
   widget->selection_color(fl(colors.selection));
   widget->labelcolor(label);
@@ -100,6 +109,18 @@ void paint(Fl_Widget *widget, const RoleColors &colors, const Fl_Color label) {
   else if (auto *browser = dynamic_cast<Fl_Browser_ *>(widget)) browser->textcolor(fl(colors.text));
   else if (auto *menu = dynamic_cast<Fl_Menu_ *>(widget)) menu->textcolor(fl(colors.text));
   if (dynamic_cast<Fl_Button *>(widget) || dynamic_cast<Fl_Box *>(widget)) widget->labelcolor(fl(colors.text));
+  // Mono diagnostics keep their own ink at the verbose tone unless the
+  // status role overrides it (DesignSystem.md, Status strip).
+  if (auto *output = dynamic_cast<Fl_Multiline_Output *>(widget);
+      output != nullptr && output->textfont() == FL_COURIER && use_verbose) {
+    output->textcolor(fl(current_editor_tokens().verbose));
+    return;
+  }
+  // A primary button keeps its accent fill and contrasting label through a
+  // live theme-role application (DesignSystem.md, Buttons).
+  if (auto *button = dynamic_cast<Fl_Button *>(widget);
+      button != nullptr && is_primary_button(*button))
+    refresh_primary_button(*button);
 }
 
 void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_Widget *sidebar,
@@ -113,7 +134,8 @@ void apply_tree(Fl_Widget *widget, const EditorAppearance &appearance, const Fl_
       if (item.text) colors->text = *item.text;
       if (item.selection) colors->selection = *item.selection;
     }
-    paint(widget, *colors, label);
+    paint(widget, *colors, label,
+          !appearance.overrides[static_cast<std::size_t>(*role)].text.has_value());
     // Fl_Tabs fills each unselected tab with its page's selection colour and
     // only the selected tab with its own: neutral pages keep the accent tint
     // on the selected tab alone.
@@ -137,7 +159,7 @@ public:
       : Fl_Double_Window(520, 430, "Appearance — LayerE"), staged(current), root_(root),
         sidebar_(sidebar), preview_(preview) {
     begin();
-    theme = new Fl_Choice(150, 15, 355, 28, "Theme");
+    theme = new EditorChoice(150, 15, 355, editor_input_height, "Theme");
     // Menu paths treat '/' as a submenu: add a placeholder, then the label.
     for (std::size_t index = 0; index < static_cast<std::size_t>(EditorTheme::count); ++index) {
       const auto item = theme->add(("theme-" + std::to_string(index)).c_str());
@@ -145,10 +167,10 @@ public:
     }
     accent = input(150, 55, 200, "Accent #RRGGBB");
     chooser(360, 55, "Choose accent...", &AppearanceDialog::choose_accent);
-    auto *note = new Fl_Box(15, 90, 490, 40, "An empty accent uses the preset's. Colours below "
+    auto *note = new Fl_Box(15, 90, 490, 40, "An empty accent uses the preset's. Colors below "
         "override one role; empty fields use the theme.");
     note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-    role = new Fl_Choice(150, 135, 355, 28, "Role");
+    role = new EditorChoice(150, 135, 355, editor_input_height, "Role");
     for (std::size_t index = 0; index < editor_role_count; ++index)
       role->add(std::string(role_label(static_cast<EditorRole>(index))).c_str());
     role->value(0);
@@ -159,13 +181,13 @@ public:
     chooser(360, 210, "Choose text...", &AppearanceDialog::choose_text);
     selection = input(150, 245, 200, "Role selection");
     chooser(360, 245, "Choose selection...", &AppearanceDialog::choose_selection);
-    auto *reset_role = new Fl_Button(150, 285, 170, 30, "Reset role colours");
+    auto *reset_role = new Fl_Button(150, 285, 170, editor_button_height, "Reset role colors");
     reset_role->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
       dialog.staged.overrides[static_cast<std::size_t>(dialog.role->value())] = {};
       dialog.load_role(); dialog.preview_changes();
     }, this);
-    auto *reset_all = new Fl_Button(335, 285, 170, 30, "Reset all colours");
+    auto *reset_all = new Fl_Button(335, 285, 170, editor_button_height, "Reset all colors");
     reset_all->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
       dialog.staged.overrides = {}; dialog.staged.accent.reset();
@@ -173,9 +195,17 @@ public:
     }, this);
     status = new Fl_Box(15, 325, 490, 50);
     status->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-    auto *cancel = new Fl_Button(265, 385, 115, 30, "Cancel");
+    // The line under the fields explains every colour control the way the
+    // role list's contrast line does (DesignSystem.md, Screen readers).
+    for (Fl_Widget *control : std::array<Fl_Widget *, 8>{
+             accent, fill, text, selection, choosers_[0].button, choosers_[1].button,
+             choosers_[2].button, choosers_[3].button})
+      accessibility::describe_with(*control, *status);
+    auto *cancel = new Fl_Button(265, 385, 115, editor_button_height, "Cancel");
     cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-    auto *apply = new Fl_Button(390, 385, 115, 30, "Apply");
+    auto *apply = new Fl_Button(390, 385, 115, editor_button_height, "Apply");
+    // Cancel stays left, the primary Apply right (DesignSystem.md, Dialogs).
+    primary_button(*apply);
     apply->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
       if (dialog.read_fields()) { dialog.applied = true; dialog.hide(); }
@@ -196,7 +226,7 @@ public:
 private:
   using Choose = void (AppearanceDialog::*)();
   Fl_Input *input(int x, int y, int width, const char *label) {
-    auto *field = new Fl_Input(x, y, width, 28, label);
+    auto *field = new EditorField<Fl_Input>(x, y, width, editor_input_height, label);
     field->when(FL_WHEN_CHANGED);
     field->callback([](Fl_Widget *, void *self) {
       auto &dialog = *static_cast<AppearanceDialog *>(self);
@@ -205,12 +235,34 @@ private:
     return field;
   }
   void chooser(int x, int y, const char *label, Choose choose) {
-    auto *button = new Fl_Button(x, y, 145, 28, label);
-    choosers_[chooser_count_] = {this, choose};
+    auto *button = new Fl_Button(x, y, 145, editor_button_height, label);
+    choosers_[chooser_count_] = {this, choose, button, label};
     button->callback([](Fl_Widget *, void *data) {
       const auto &target = *static_cast<const Target *>(data);
       (target.dialog->*target.choose)();
     }, &choosers_[chooser_count_++]);
+  }
+  // Each chooser button says the colour it would open with: what its field
+  // parses, else the fallback pick() starts from (DesignSystem.md, Screen
+  // readers).
+  void name_choosers() {
+    const std::array<Fl_Input *, 4> fields{accent, fill, text, selection};
+    for (std::size_t index = 0; index < chooser_count_; ++index) {
+      const auto &target = choosers_[index];
+      if (target.button == nullptr || target.label == nullptr) continue;
+      const auto color =
+          parse_rgb(fields[index]->value()).value_or(fallback_color(index));
+      accessibility::set_accessible_name(
+          *target.button,
+          accessibility::color_button_name(target.label, format_rgb(color)));
+    }
+  }
+  [[nodiscard]] std::uint32_t fallback_color(const std::size_t chooser) const {
+    const auto role_colors = current_role_colors();
+    if (chooser == 0) return staged.accent.value_or(preset_accent(staged.theme));
+    return chooser == 1   ? role_colors.fill
+           : chooser == 2 ? role_colors.text
+                          : role_colors.selection;
   }
   void pick(Fl_Input *field, const char *title, std::uint32_t fallback) {
     const auto initial = parse_rgb(field->value()).value_or(fallback);
@@ -221,14 +273,15 @@ private:
   }
   [[nodiscard]] RoleColors current_role_colors() const {
     const auto colors = theme_role_colors(staged, static_cast<EditorRole>(role->value()));
-    return colors.value_or(RoleColors{0xFFFFFF, 0x000000, 0x0000FF});
+    const auto tokens = current_editor_tokens();
+    return colors.value_or(RoleColors{tokens.input, tokens.text, tokens.selection});
   }
   void choose_accent() {
-    pick(accent, "Accent colour", staged.accent.value_or(preset_accent(staged.theme)));
+    pick(accent, "Accent color", staged.accent.value_or(preset_accent(staged.theme)));
   }
-  void choose_fill() { pick(fill, "Role fill colour", current_role_colors().fill); }
-  void choose_text() { pick(text, "Role text colour", current_role_colors().text); }
-  void choose_selection() { pick(selection, "Role selection colour", current_role_colors().selection); }
+  void choose_fill() { pick(fill, "Role fill color", current_role_colors().fill); }
+  void choose_text() { pick(text, "Role text color", current_role_colors().text); }
+  void choose_selection() { pick(selection, "Role selection color", current_role_colors().selection); }
 
   void load() {
     theme->value(static_cast<int>(staged.theme));
@@ -240,6 +293,7 @@ private:
     fill->value(hex_or_empty(item.fill).c_str());
     text->value(hex_or_empty(item.text).c_str());
     selection->value(hex_or_empty(item.selection).c_str());
+    name_choosers();
   }
   // Empty means "not overridden"; anything else must be #RRGGBB.
   [[nodiscard]] bool read_fields() {
@@ -255,7 +309,7 @@ private:
     auto &item = staged.overrides[static_cast<std::size_t>(role->value())];
     RoleOverride next{read(fill, "Role fill"), read(text, "Role text"), read(selection, "Role selection")};
     if (!invalid.empty()) {
-      status->copy_label((invalid + " must be #RRGGBB or empty; the last valid colours stay previewed.").c_str());
+      status->copy_label((invalid + " must be #RRGGBB or empty; the last valid colors stay previewed.").c_str());
       status->redraw();
       return false;
     }
@@ -268,9 +322,15 @@ private:
   void preview_changes() {
     apply_editor_appearance(staged, root_, sidebar_, preview_);
     apply_editor_appearance(staged, *this);
+    name_choosers();
   }
 
-  struct Target { AppearanceDialog *dialog{}; Choose choose{}; };
+  struct Target {
+    AppearanceDialog *dialog{};
+    Choose choose{};
+    Fl_Button *button{};
+    const char *label{};
+  };
   std::array<Target, 4> choosers_{};
   std::size_t chooser_count_{};
   Fl_Choice *theme{}, *role{};
@@ -290,11 +350,16 @@ void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root
   const auto edit = theme_role_colors(appearance, EditorRole::edit);
   if (window && edit) set_global(*window, *edit);
   else system_palette.restore();
+  // Resolve the tokens before anything paints, or a preset change would draw
+  // with the previous theme (DesignSystem.md, Themes).
+  set_editor_style_appearance(appearance);
   const auto label = theme_role_colors(appearance, EditorRole::label);
   const auto &label_override = appearance.overrides[static_cast<std::size_t>(EditorRole::label)];
   const Fl_Color label_color = label ? fl(label->text)
                                : label_override.text ? fl(*label_override.text) : FL_FOREGROUND_COLOR;
   apply_tree(&root, appearance, sidebar, preview, label_color);
+  // Authored drawing (status marks, focus rings) resolves the same tokens.
+  set_editor_style_appearance(appearance);
   root.redraw();
 }
 

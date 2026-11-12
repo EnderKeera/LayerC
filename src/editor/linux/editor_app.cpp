@@ -36,7 +36,7 @@ std::optional<std::size_t> EditorApp::panel_index() const {
     if (items[i].id == panel_id_) return i;
   return std::nullopt;
 }
-void EditorApp::report(std::string text) {
+void EditorApp::report(std::string text, const StatusVoice voice) {
   status_text_ = std::move(text);
   status_pane_->set_status(status_text_);
   title_text_ = "LayerE — Linux X11 editor";
@@ -48,6 +48,12 @@ void EditorApp::report(std::string text) {
   status_pane_->set_history(session.can_undo() || pending_fields_,
                             session.can_redo() && !pending_fields_);
   if (menus) menus->update();
+  // The outcome of an explicit action and every failure are spoken; an edit's
+  // own status line is not (DesignSystem.md, Screen readers).
+  if (accessibility && status_is_announced(last_announced_, status_text_, voice)) {
+    last_announced_ = status_text_;
+    accessibility->announce(nullptr, last_announced_);
+  }
 }
 void EditorApp::query_status() {
   const auto state = query_daemon_status();
@@ -69,7 +75,8 @@ void EditorApp::refresh() {
 
 bool EditorApp::apply_fields(const bool text_change) {
   if (const auto error = apply_field_buffers(text_change)) {
-    report(*error);
+    // Repeated on every keystroke while the field stays invalid.
+    report(*error, StatusVoice::changed);
     return false;
   }
   return true;
@@ -101,7 +108,8 @@ std::optional<std::string> EditorApp::apply_field_buffers(const bool text_change
 void EditorApp::module_fields_changed(const bool pending) {
   pending_fields_ = pending;
   last_field_ = nullptr;
-  report(pending ? "Pending automation fields. Autosave validates them." : edit_status());
+  report(pending ? "Pending automation fields. Autosave validates them." : edit_status(),
+         StatusVoice::silent);
   if (pending) schedule_autosave(true);
 }
 void EditorApp::field_changed(Fl_Widget *widget) {
@@ -109,7 +117,7 @@ void EditorApp::field_changed(Fl_Widget *widget) {
   last_field_ = widget;
   if (apply_fields(dynamic_cast<Fl_Input *>(widget) != nullptr)) {
     fill_lists();
-    report(edit_status());
+    report(edit_status(), StatusVoice::silent);
     preview->redraw();
   }
 }
@@ -194,7 +202,7 @@ bool EditorApp::may_leave() {
 void EditorApp::changed(const std::optional<std::string> &error) {
   if (error) { report("Not changed: " + *error); return; }
   refresh();
-  report(edit_status());
+  report(edit_status(), StatusVoice::silent);
 }
 
 bool EditorApp::command_enabled(const EditorCommand action) const {

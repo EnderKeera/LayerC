@@ -5,6 +5,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class Fl_Menu_;
@@ -29,6 +30,8 @@ struct Node {
   // Last state reported to the adaptor; changes become ATK events.
   std::string name, text, keybinding;
   std::string name_reply; // get_name's buffer; never the reported name.
+  std::string description;
+  std::string description_reply; // get_description's buffer, like name_reply.
   int caret{-1};
   bool focused{}, selected{}, checked{}, showing{}, enabled{};
   Fl_Widget *widget() const { return tracker ? tracker->widget() : nullptr; }
@@ -43,6 +46,9 @@ bool showing(const Node &node);
 bool enabled(const Node &node);
 bool checked(const Node &node);
 std::string current_name(const Node &node);
+// Text as ATK and its adaptor accept it: invalid UTF-8 is repaired.
+std::string valid_utf8(const std::string &text);
+std::string current_description(AtkObject *object);
 std::string input_text(void *object);
 gint caret(AtkText *object);
 gint char_count(const std::string &text);

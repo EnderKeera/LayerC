@@ -1,9 +1,11 @@
 #include "visual_editor.hpp"
 
+#include "accessible_text.hpp"
 #include "editor_prompt.hpp"
 #include "editor_resource.h"
 #include "editor_text.hpp"
 #include "editor_util.hpp"
+#include "static_style.hpp"
 #include "calibration_session.hpp"
 #include "visual_assignment.hpp"
 
@@ -51,7 +53,7 @@ VisualEditor::VisualEditor(ProfileDocument &document, EditorShell &shell,
       task_picker_(task_picker), host_(std::move(host)) {}
 
 void VisualEditor::set_status(const std::wstring_view text) const {
-  set_text(shell_.status, text);
+  set_status_text(shell_.status, text);
 }
 
 void VisualEditor::refresh() {
@@ -61,8 +63,8 @@ void VisualEditor::refresh() {
   const HWND calibrate = GetDlgItem(shell_.window, IDC_CALIBRATE_VISUAL);
   const HWND remove = GetDlgItem(shell_.window, IDC_REMOVE_VISUAL);
   const HWND isolated = GetDlgItem(shell_.window, IDC_VISUAL_ISOLATED);
-  set_text(GetDlgItem(shell_.window, IDC_VISUAL_RUNTIME_STATUS),
-           shell_.visual_runtime_status);
+  set_strip_status(GetDlgItem(shell_.window, IDC_VISUAL_RUNTIME_STATUS),
+                   shell_.visual_runtime_status);
 
   const auto *cooldown = host_.selected_cooldown();
   const bool editable = cooldown != nullptr && !document_.profile().game.global;
@@ -122,6 +124,9 @@ void VisualEditor::refresh() {
     hint = L"Calibrate captures what the game shows when this cooldown "
            L"starts.";
   set_text(GetDlgItem(shell_.window, IDC_VISUAL_HINT), hint);
+  // The line also says why Calibrate is unavailable (DesignSystem.md, Screen
+  // readers).
+  describe_with(calibrate, GetDlgItem(shell_.window, IDC_VISUAL_HINT));
   InvalidateRect(enabled, nullptr, TRUE);
   InvalidateRect(isolated, nullptr, TRUE);
 }
@@ -213,7 +218,7 @@ void VisualEditor::calibrate() {
   }
   task_picker_.request_calibration();
   host_.show_tasks();
-  set_status(L"Select a matching game window, then choose Calibrate Visual.");
+  set_status(L"Select a matching game window, then choose Calibrate visual.");
 }
 
 void VisualEditor::calibrate_task(
@@ -222,7 +227,7 @@ void VisualEditor::calibrate_task(
   matching.enabled = true;
   if (!layerc::platform::profile_matches_window(candidate, matching)) {
     themed_message_box(task_picker_.window,
-                L"That window does not match this profile. Use Selected Task first if you intend to change the matcher.",
+                L"That window does not match this profile. Use selected first if you intend to change the matcher.",
                 L"Window does not match", MB_OK | MB_ICONINFORMATION);
     return;
   }

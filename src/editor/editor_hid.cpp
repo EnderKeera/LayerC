@@ -347,7 +347,7 @@ INT_PTR CALLBACK hid_binding_dialog_proc(const HWND window, const UINT message,
       stop_listening(window, *state);
       set_text(GetDlgItem(window, IDC_HID_SUMMARY),
                L"Captured " + state->inferred->description +
-                   L". Refine values if needed, then Use Binding.");
+                   L". Refine values if needed, then Use binding.");
       set_text(GetDlgItem(window, IDC_HID_THRESHOLD),
                std::to_wstring(static_cast<unsigned>(
                    std::lround(state->inferred->binding.threshold * 100.0))));

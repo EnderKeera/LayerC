@@ -1,7 +1,7 @@
 #include "editor_window.hpp"
 #include "editor_resource.h"
 #include "dialog_layout.hpp"
-#include "panel_items.hpp"
+#include "static_style.hpp"
 
 #include <algorithm>
 #include <array>
@@ -49,7 +49,7 @@ struct PanelItemDialogState {
   HWND window{};
   DialogChrome chrome;
   std::vector<std::string> sources;
-  std::vector<double> flash_values{0, 0.5, 1, 2, 3, 4};
+  std::vector<double> flash_values{0, 0.5, 1, 2, 3};
 
   int kind() const { return combo_selection(window, IDC_ITEM_KIND); }
   bool automation_timer() const {
@@ -64,8 +64,37 @@ struct PanelItemDialogState {
     return selection < 0 || static_cast<std::size_t>(selection) >= sources.size()
         ? std::string{} : sources[static_cast<std::size_t>(selection)];
   }
+  std::optional<double> selected_flash() const {
+    const int selection = combo_selection(window, IDC_ITEM_FLASH);
+    if (selection < 0 || static_cast<std::size_t>(selection) >= flash_values.size())
+      return std::nullopt;
+    return flash_values[static_cast<std::size_t>(selection)];
+  }
+  void set_feedback(const std::optional<layerc::platform::StatusGlyph> glyph,
+                    const std::wstring_view text) const {
+    const HWND label = GetDlgItem(window, IDC_ITEM_ERROR);
+    set_status_line(label, glyph, text);
+    for (const int id : {IDC_ITEM_KIND, IDC_ITEM_TIMER_SOURCE, IDC_ITEM_PRESET,
+                         IDC_ITEM_SOURCE, IDC_ITEM_CUSTOM_LABEL, IDC_ITEM_LABEL,
+                         IDC_ITEM_MAX, IDC_ITEM_DISPLAY, IDC_ITEM_FLASH,
+                         IDC_ITEM_INTERVAL})
+      describe_with(GetDlgItem(window, id), label);
+  }
+  void refresh_flash_warning() const {
+    if (kind() == 3 &&
+        selected_flash().value_or(0.0) > core::max_shown_indicator_flash_hz) {
+      set_feedback(layerc::platform::StatusGlyph::warning,
+                   L"Flashes at 3 Hz; faster flashing is capped.");
+      return;
+    }
+    set_feedback(std::nullopt, {});
+  }
   void error(const std::string_view text) {
-    set_text(GetDlgItem(window, IDC_ITEM_ERROR), to_wide(text));
+    if (text.empty()) {
+      refresh_flash_warning();
+      return;
+    }
+    set_feedback(layerc::platform::StatusGlyph::no, to_wide(text));
   }
   void refresh_sources(const bool first = false) {
     const auto previous = first ? source_id(item) : selected_source();
@@ -180,6 +209,11 @@ struct PanelItemDialogState {
   void initialize() {
     (void)chrome.attach(window);
     apply_dialog_chrome(window, owner.shell_.capture_exclusion);
+    if (const HWND label = GetDlgItem(window, IDC_ITEM_ERROR); label != nullptr)
+      SetWindowLongPtrW(
+          label, GWL_STYLE,
+          (GetWindowLongPtrW(label, GWL_STYLE) & ~static_cast<LONG_PTR>(SS_TYPEMASK)) |
+              SS_OWNERDRAW | SS_NOPREFIX);
     resize_to_logical_size(window, 540, 430);
     SetWindowTextW(window, index ? L"Edit overlay item" : L"Add overlay item");
     for (const auto text : {L"Cooldown", L"Timer", L"Counter", L"Indicator"})
@@ -249,7 +283,7 @@ struct PanelItemDialogState {
         const auto [end, code] = std::from_chars(text.data(), text.data() + text.size(), value);
         if (code != std::errc{} || end != text.data() + text.size() ||
             !std::isfinite(value) || value <= 0) {
-          error("Counter Max must be empty, or a finite number greater than zero.");
+          error("Counter max must be empty, or a finite number greater than zero.");
           return false;
         }
         maximum = value;
@@ -331,6 +365,10 @@ INT_PTR CALLBACK EditorWindow::panel_item_dialog_proc(const HWND window,
     if (((id == IDC_ITEM_KIND || id == IDC_ITEM_TIMER_SOURCE) && notification == CBN_SELCHANGE) ||
         ((id == IDC_ITEM_PRESET || id == IDC_ITEM_CUSTOM_LABEL) && notification == BN_CLICKED)) {
       state->refresh_controls();
+      return TRUE;
+    }
+    if (id == IDC_ITEM_FLASH && notification == CBN_SELCHANGE) {
+      state->refresh_flash_warning();
       return TRUE;
     }
     break;

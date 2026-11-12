@@ -42,6 +42,12 @@
 #include <utility>
 
 void linux_editor_accessibility_tree_rows();
+void linux_editor_accessibility_descriptions();
+void linux_editor_accessibility_hint_and_names();
+void linux_editor_accessibility_color_names();
+void linux_editor_accessibility_announcements();
+void linux_editor_empty_state_contracts();
+void linux_editor_shortcuts_columns();
 void linux_editor_diagnostic_text_contracts();
 void linux_editor_command_registry_contracts();
 void linux_editor_page_lists_clear_without_document();
@@ -59,6 +65,8 @@ void linux_editor_empty_automation_simulator_ready();
 void linux_editor_empty_template_apply_is_not_an_edit();
 void linux_editor_typed_item_controls();
 void linux_editor_item_preview_and_active_duration();
+void linux_editor_design_system_paint_contracts();
+void linux_editor_design_system_tab_and_glyph_contracts();
 
 namespace {
 namespace editor = layerc::editor;
@@ -289,7 +297,8 @@ void capture_cancel_and_small_window() {
   expect(app.session.document().profile() == before, "canceled capture changes no binding");
   editor::EditorAppTestAccess::window(app).size(640, 480); Fl::check();
   expect(editor::EditorAppTestAccess::content(app)->w() == 640 && editor::EditorAppTestAccess::content(app)->h() == 480 - editor::EditorMenus::bar_height &&
-         editor::EditorAppTestAccess::status(app)->w() == 775 && editor::EditorAppTestAccess::panel_name(app)->w() == 260,
+    // The status output reserves 18 px inside its original rectangle for the glyph.
+         editor::EditorAppTestAccess::status(app)->w() + 18 == 775 && editor::EditorAppTestAccess::panel_name(app)->w() == 260,
          "a small viewport scrolls intact forms rather than squeezing them into overlap");
   editor::EditorAppTestAccess::content(app)->scroll_to(0, 300); Fl::check();
   expect(editor::EditorAppTestAccess::content(app)->yposition() > 0, "the small viewport exposes the bottom status area by scrolling");
@@ -943,6 +952,11 @@ void linux_editor_focused_keyboard_capture_contracts();
 
 LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_accessibility_tree_rows),
+  LAYERC_TEST_CASE(linux_editor_accessibility_descriptions),
+  LAYERC_TEST_CASE(linux_editor_accessibility_hint_and_names),
+  LAYERC_TEST_CASE(linux_editor_accessibility_color_names),
+  LAYERC_TEST_CASE(linux_editor_accessibility_announcements),
+  LAYERC_TEST_CASE(linux_editor_shortcuts_columns),
   LAYERC_TEST_CASE(linux_editor_diagnostic_text_contracts),
   LAYERC_TEST_CASE(linux_editor_command_registry_contracts),
   LAYERC_TEST_CASE(linux_editor_page_lists_clear_without_document),
@@ -957,6 +971,9 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_empty_template_apply_is_not_an_edit),
   LAYERC_TEST_CASE(linux_editor_typed_item_controls),
   LAYERC_TEST_CASE(linux_editor_item_preview_and_active_duration),
+  LAYERC_TEST_CASE(linux_editor_design_system_paint_contracts),
+  LAYERC_TEST_CASE(linux_editor_design_system_tab_and_glyph_contracts),
+  LAYERC_TEST_CASE(linux_editor_empty_state_contracts),
   LAYERC_TEST_CASE(linux_editor_system_theme_restores_tab_class_colors),
   LAYERC_TEST_CASE(linux_editor_cooldown_group_dialog_transactions),
   LAYERC_TEST_CASE(linux_editor_export_profile_checklist),

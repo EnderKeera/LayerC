@@ -1,0 +1,30 @@
+<!-- @dsCard group="Text" height=260 -->
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"><script>(function(){var t=new URLSearchParams(location.search).get("theme");if(t)document.documentElement.setAttribute("data-theme",t);})();</script><style>body{margin:0;background:var(--background)}</style><meta charset="utf-8"><title>StatusText — preview</title></head>
+<body>
+<div class="le-stage">
+<div class="le-state" style="width:400px">
+  <div class="le-window" style="width:400px;height:auto"><div class="le-statusstrip" style="white-space:nowrap"><span class="le-no le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3 L9 9 M9 3 L3 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> LayerD: not running</span><span class="le-info"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="8" width="2" height="2" fill="currentColor"/><rect x="5" y="8" width="2" height="2" fill="currentColor"/><rect x="9" y="8" width="2" height="2" fill="currentColor"/></svg> Visual recognition: connecting</span></div></div>
+  <div class="le-window" style="width:400px;height:auto"><div class="le-statusstrip" style="white-space:nowrap"><span>Profile saved.</span><span class="le-yes le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> LayerD: running</span></div></div>
+  <div class="le-list" style="width:400px;padding:5px 7px">
+    <div class="le-yes le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> <span class="le-msg">Rule 1: valid</span></div>
+    <div class="le-no le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3 L9 9 M9 3 L3 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> <span class="le-msg">Rule 2: timer "buff" is not declared</span></div>
+    <div class="le-warning le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="5" y="1" width="2" height="7" fill="currentColor"/><rect x="5" y="9.5" width="2" height="2" fill="currentColor"/></svg> <span class="le-msg">Rule 3: never fires while Off</span></div>
+    <div class="le-verbose">  eval 0.04 ms · 3 rules · depth 2</div>
+  </div>
+  <span class="le-cap">Status strip and validation output</span>
+</div>
+<div class="le-state" style="width:300px">
+  <div class="le-list" style="width:300px">
+    <div class="le-row is-selected" style="height:var(--win-list-row)">Cooldown: Dash<span class="le-tag"><span class="le-no"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3 L9 9 M9 3 L3 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg></span> <span style="color:var(--text)">source missing</span></span></div>
+    <div class="le-row" style="height:var(--win-list-row)">Timer: Buff<span class="le-tag le-warning le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="5" y="1" width="2" height="7" fill="currentColor"/><rect x="5" y="9.5" width="2" height="2" fill="currentColor"/></svg> stopped</span></div>
+  </div>
+  <div><span class="le-warning le-st"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="5" y="1" width="2" height="7" fill="currentColor"/><rect x="5" y="9.5" width="2" height="2" fill="currentColor"/></svg> Low contrast.</span> <span class="le-subtext">Text is 1.7:1 on Fill.</span></div>
+  <div class="le-subtext">0 = off · Drag the bar, or nudge it with the arrow keys.</div>
+  <div style="display:flex;gap:8px;align-items:center"><span class="le-badge" style="background:var(--yes)">OK</span><span class="le-badge" style="background:var(--no)">Fault</span><span class="le-badge" style="background:var(--warning)">Draft</span><span class="le-pip" style="background:var(--yes)"></span><span class="le-pip" style="background:var(--no)"></span></div>
+  <span class="le-cap">Rows, hints, badges and pips</span>
+</div>
+</div>
+</body>
+</html>

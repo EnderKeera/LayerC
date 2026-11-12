@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 
 namespace layerc::editor {
@@ -60,13 +61,41 @@ void EditorWindow::refresh_item_actions() {
   const bool opaque = has_row && panel->items &&
       std::holds_alternative<core::OpaqueOverlayItem>(
           (*panel->items)[static_cast<std::size_t>(selected)].content);
+  const bool full =
+      panel != nullptr && count >= core::max_overlay_items_per_panel;
+  const bool last = has_row && count <= 1;
   EnableWindow(GetDlgItem(shell_.window, IDC_ITEM_ADD),
-               panel != nullptr && count < core::max_overlay_items_per_panel);
+               panel != nullptr && !full);
   EnableWindow(GetDlgItem(shell_.window, IDC_ITEM_EDIT), has_row && !opaque);
-  EnableWindow(GetDlgItem(shell_.window, IDC_ITEM_REMOVE), has_row && count > 1);
+  EnableWindow(GetDlgItem(shell_.window, IDC_ITEM_REMOVE), has_row && !last);
   EnableWindow(GetDlgItem(shell_.window, IDC_ITEM_UP), has_row && selected > 0);
   EnableWindow(GetDlgItem(shell_.window, IDC_ITEM_DOWN),
                has_row && static_cast<std::size_t>(selected) + 1 < count);
+  // Each unavailable button says why: on the line under the buttons, as its
+  // tooltip and as its accessible description.
+  const std::wstring add_reason =
+      full ? L"A panel holds at most " +
+                 std::to_wstring(core::max_overlay_items_per_panel) +
+                 L" items."
+           : std::wstring{};
+  const std::wstring_view edit_reason =
+      opaque ? L"This item kind is kept as it is and can't be edited here."
+             : L"";
+  const std::wstring_view remove_reason =
+      last ? L"A panel needs at least one item." : L"";
+  (void)set_button_reason(shell_, IDC_ITEM_ADD, add_reason);
+  (void)set_button_reason(shell_, IDC_ITEM_EDIT, edit_reason);
+  (void)set_button_reason(shell_, IDC_ITEM_REMOVE, remove_reason);
+  std::wstring line;
+  for (const std::wstring_view reason :
+       {std::wstring_view(add_reason), edit_reason, remove_reason}) {
+    if (reason.empty())
+      continue;
+    if (!line.empty())
+      line += L' ';
+    line += reason;
+  }
+  set_sized_line(IDC_ITEM_REASON, line);
 }
 
 bool EditorWindow::commit_panel_item(

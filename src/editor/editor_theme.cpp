@@ -35,9 +35,10 @@ std::optional<SIZE> font_base_units(const HWND window, const HFONT font) {
 
 // Fixed dialog templates are laid out in dialog units of their 9 pt template
 // font, the native body size; a larger text size (Windows or Options) renders
-// the body font larger. Scale the template once so its text fits; resizable
-// dialogs lay out in code through window_base_dpi instead. Per-monitor DPI changes later rescale
-// the dialog proportionally, so this runs only at creation.
+// the body font larger. Scale the template once so its text fits. Resizable
+// dialogs, and fixed ones with a code layout (editor_dialog_layouts), place
+// their children through window_base_dpi afterwards. Per-monitor DPI changes
+// later rescale the dialog proportionally, so this runs only at creation.
 void fit_dialog_to_font(const HWND dialog) {
   const auto style = GetWindowLongPtrW(dialog, GWL_STYLE);
   if ((style & WS_THICKFRAME) != 0 || (style & WS_CHILD) != 0)
@@ -111,6 +112,8 @@ void fit_dialog_to_font(const HWND dialog) {
                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+} // namespace
+
 // Owned dialogs open centered on their owner, inside its monitor's work area.
 void center_over_owner(const HWND dialog) {
   const HWND owner = GetWindow(dialog, GW_OWNER);
@@ -137,8 +140,6 @@ void center_over_owner(const HWND dialog) {
   SetWindowPos(dialog, nullptr, left, top, 0, 0,
                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
-
-} // namespace
 
 void style_native_dialog_children(const HWND dialog, const HFONT font) {
   layerc::platform::style_native_dialog_children(dialog, font, true);
@@ -242,12 +243,21 @@ void EditorWindow::refresh_theme() {
   style_list_view(shell_.profile_list, true);
   rebuild_profile_check_hit_images();
   style_list_view(task_picker_.list, false);
-  const auto frame = colors(layerc::platform::EditorControlRole::toolbar);
-  for (const HWND window : {shell_.window, task_picker_.window}) {
-    if (window != nullptr && IsWindow(window))
-      layerc::platform::set_window_frame_colors(window, frame.fill,
-                                                frame.divider, frame.text);
-  }
+  // Every captioned window of the editor thread: the main window, Detected
+  // Tasks and any open dialog (a contrast theme can change under them).
+  EnumThreadWindows(
+      GetCurrentThreadId(),
+      [](const HWND window, LPARAM) -> BOOL {
+        if ((GetWindowLongPtrW(window, GWL_STYLE) & WS_CAPTION) != WS_CAPTION)
+          return TRUE;
+        const auto frame = layerc::platform::native_chrome_palette().menu;
+        layerc::platform::set_window_frame_colors(window, frame.fill,
+                                                  frame.divider, frame.text);
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+        return TRUE;
+      },
+      0);
   if (shell_.window != nullptr) {
     RedrawWindow(shell_.window, nullptr, nullptr,
                  RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);

@@ -1,4 +1,7 @@
 #include "panel_item_dialog.hpp"
+
+#include <array>
+#include "accessible_widgets.hpp"
 #include "editor_pages.hpp"
 #include "profile_edit.hpp"
 
@@ -12,8 +15,14 @@
 #include <cmath>
 #include <utility>
 
+#include "editor_style.hpp"
+
 namespace layerc::editor {
 namespace {
+constexpr const char *item_help =
+    "Select a source. Active-duration timers use the cooldown's active duration.\n"
+    "Timer preset starts a one-shot automation timer on an accepted cooldown trigger.";
+
 std::optional<double> number(const std::string_view text) {
   const auto parsed = core::json::parse(text, 1);
   const auto *value = std::get_if<core::json::Value>(&parsed);
@@ -37,29 +46,29 @@ PanelItemDialog::PanelItemDialog(
       apply_(std::move(apply)) {
   begin();
   const auto input = [](const int y, const char *label) {
-    auto *field = new Fl_Input(235, y, 380, 28, label);
+    auto *field = new EditorField<Fl_Input>(235, y, 380, editor_input_height, label);
     return field;
   };
-  kind_ = new Fl_Choice(235, 25, 380, 28, "Item type");
+  kind_ = new EditorChoice(235, 25, 380, editor_input_height, "Item type");
   kind_->add("Cooldown|Automation timer|Active-duration timer|Counter|Indicator");
   if (!current_) kind_->add("Timer preset");
   kind_->value(current_ ? static_cast<int>(current_->content.index()) : 0);
-  source_ = new Fl_Choice(235, 78, 380, 28, "Source");
+  source_ = new EditorChoice(235, 78, 380, editor_input_height, "Source");
   custom_label_ = new Fl_Check_Button(20, 130, 200, 28, "Custom label");
   label_ = input(166, "Item label");
   label_->tooltip("An explicitly empty custom label is preserved.");
   maximum_ = input(222, "Counter maximum (optional)");
-  display_ = new Fl_Choice(235, 278, 380, 28, "Counter display");
+  display_ = new EditorChoice(235, 278, 380, editor_input_height, "Counter display");
   display_->add("Number|Pips"); display_->value(0);
   flash_ = input(334, "Flash Hz (0 = off)"); flash_->value("0");
   interval_ = input(390, "Preset seconds"); interval_->value("5");
-  message_ = new Fl_Box(20, 440, 595, 80,
-      "Select a source. Active-duration timers use the cooldown's active duration.\n"
-      "Timer preset starts a one-shot automation timer on an accepted cooldown trigger.");
+  message_mark_ = new EditorStatusMark(20, 440, 18, 80);
+  message_ = new Fl_Box(38, 440, 577, 80, item_help);
   message_->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-  auto *cancel = new Fl_Button(375, 540, 110, 30, "Cancel");
+  auto *cancel = new Fl_Button(375, 540, 110, editor_button_height, "Cancel");
   cancel->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  auto *apply_button = new Fl_Button(505, 540, 110, 30, "Apply item");
+  auto *apply_button = new Fl_Button(505, 540, 110, editor_button_height, "Apply item");
+  primary_button(*apply_button);
   apply_button->callback([](Fl_Widget *, void *data) {
     static_cast<PanelItemDialog *>(data)->accept();
   }, this);
@@ -71,6 +80,14 @@ PanelItemDialog::PanelItemDialog(
   custom_label_->callback([](Fl_Widget *, void *data) {
     static_cast<PanelItemDialog *>(data)->update_fields();
   }, this);
+  flash_->when(FL_WHEN_CHANGED);
+  flash_->callback([](Fl_Widget *, void *data) {
+    static_cast<PanelItemDialog *>(data)->update_fields();
+  }, this);
+  for (Fl_Widget *field :
+       std::array<Fl_Widget *, 8>{kind_, source_, custom_label_, label_, maximum_,
+                                  display_, flash_, interval_})
+    accessibility::describe_with(*field, *message_);
   std::string source;
   if (current_) {
     custom_label_->value(current_->label.has_value());
@@ -152,11 +169,20 @@ void PanelItemDialog::update_fields() {
   if (kind == 4) flash_->activate(); else flash_->deactivate();
   if (kind == 5) interval_->activate(); else interval_->deactivate();
   if (custom_label_->value()) label_->activate(); else label_->deactivate();
+  const auto rate = number(flash_->value());
+  if (kind == 4 && rate && *rate > core::max_shown_indicator_flash_hz) {
+    message_->copy_label("Flashes at 3 Hz; faster flashing is capped.");
+    message_mark_->glyph(EditorStatusGlyph::warning);
+  } else {
+    message_->copy_label(item_help);
+    message_mark_->glyph(EditorStatusGlyph::none);
+  }
   redraw();
 }
 
 void PanelItemDialog::error(const std::string &message) {
   message_->copy_label(message.c_str());
+  message_mark_->glyph(EditorStatusGlyph::no);
   message_->redraw();
 }
 
@@ -199,9 +225,18 @@ void PanelItemDialog::accept() {
   }
   case 4: {
     const auto rate = number(flash_->value());
-    if (!rate || (*rate != 0.0 && (*rate < core::min_indicator_flash_hz ||
-                                  *rate > core::max_indicator_flash_hz))) {
-      error("Flash Hz must be 0 (off), or between 0.5 and 4.");
+    const auto *existing =
+        current_ ? std::get_if<core::IndicatorItem>(&current_->content) : nullptr;
+    const bool preserved_high_flash =
+        existing != nullptr &&
+        existing->flash_hz > core::max_shown_indicator_flash_hz &&
+        existing->flash_hz <= core::max_indicator_flash_hz &&
+        rate && *rate == existing->flash_hz;
+    if (!rate ||
+        (*rate != 0.0 && !preserved_high_flash &&
+         (*rate < core::min_indicator_flash_hz ||
+          *rate > core::max_shown_indicator_flash_hz))) {
+      error("Flash Hz must be 0 (off), or between 0.5 and 3.");
       return;
     }
     draft.item.content = core::IndicatorItem{id, *rate};

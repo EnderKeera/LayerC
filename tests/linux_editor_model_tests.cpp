@@ -2,11 +2,13 @@
 #include "editor_session.hpp"
 #include "profile_edit.hpp"
 #include "task_list.hpp"
+#include "status_voice.hpp"
 #include "test_support.hpp"
 #include "layerc/platform/profile_bundle_load.hpp"
 
 #include <sys/stat.h>
 #include <unistd.h>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <optional>
@@ -165,10 +167,10 @@ void write_failure_and_invalid_module_are_visible() {
 
 void native_style_helpers() {
   using namespace layerc::editor;
-  // A third of the way toward white on the dark ramp, toward black on light fills.
-  expect(control_border(0x1F1F1F) == 0x686868 && control_border(0x2D2D2D) == 0x727272 &&
-             control_border(0xFFFFFF) == 0xABABAB,
-         "flat controls outline a third of the way toward the contrasting extreme");
+  // 91/255 of the way toward white on the dark ramp, toward black on light fills.
+  expect(control_border(0x1F1F1F) == 0x6E6E6E && control_border(0x2D2D2D) == 0x777777 &&
+             control_border(0xFFFFFF) == 0xA4A4A4,
+         "flat controls outline 91/255 of the way toward the contrasting extreme");
 
   expect(parse_desktop_font("Cantarell 11") == DesktopFont{"Cantarell", 15} &&
              parse_desktop_font("Noto Sans, Medium 10") == DesktopFont{"Noto Sans", 13} &&
@@ -343,6 +345,131 @@ void detected_tasks_and_placement() {
   const auto outside = layerc::editor::anchor_at(frame, -50, 9999);
   expect(outside.x == 0.0 && outside.y == 1.0, "anchors are clamped to the target window");
 }
+
+// One token source for every colour, the desktop's text metrics, and the
+// status mark rule (DesignSystem.md, "Where each color may go" and Status
+// strip).
+void editor_token_contracts() {
+  using namespace layerc::editor;
+  const auto neutral = [](const EditorAppearance &appearance) {
+    const auto tokens = editor_tokens(appearance);
+    return tokens.background == 0x1F1F1F && tokens.panel == 0x2D2D2D &&
+           tokens.input == 0x171717 && tokens.border == 0x6E6E6E &&
+           tokens.divider == 0x333333 && tokens.text == 0xF3F3F3 &&
+           tokens.secondary == 0xB8B8B8 && tokens.subtext == 0xA3A3A3 &&
+           tokens.verbose == 0x9A9A9A && tokens.disabled == 0x808080 &&
+           tokens.button_hover == 0x383838 && tokens.row_hover == 0x2A2A2A &&
+           tokens.pressed == 0x262626 && tokens.yes == 0x00E676 &&
+           tokens.no == 0xFF5A5A && tokens.warning == 0xFFD740 &&
+           tokens.on_status == 0x141414;
+  };
+  const std::array<EditorTheme, 4> presets{EditorTheme::copper, EditorTheme::teal,
+                                           EditorTheme::plum, EditorTheme::dark};
+  for (const auto theme : presets) {
+    EditorAppearance appearance;
+    appearance.theme = theme;
+    expect(neutral(appearance), "every preset shares the Windows neutral ramp");
+    const auto tokens = editor_tokens(appearance);
+    // Copper and plum keep the blue mark; teal and slate sit near it and take
+    // the violet one, exactly as the Windows theme picks.
+    const auto expected = theme == EditorTheme::teal || theme == EditorTheme::dark
+                              ? 0xB99BFFU
+                              : 0x60B0FFU;
+    expect(editor_accent_2(tokens.accent) == expected,
+           "the second accent mark is the one far enough from the accent");
+    expect(tokens.accent == preset_accent(theme) && tokens.selection != 0,
+           "the preset accent and its selection blend come from the same source");
+    expect(editor_contrast_ratio(tokens.on_accent, tokens.accent) >= 4.5,
+           "ink on the accent clears 4.5:1");
+  }
+  for (const auto theme : presets) {
+  EditorAppearance appearance;
+  appearance.theme = theme;
+  const auto tokens = editor_tokens(appearance);
+  const std::array<std::uint32_t, 4> fills{tokens.background, tokens.input,
+                                           tokens.panel, tokens.selection};
+  const auto floor = [](std::uint32_t first, std::uint32_t second, double ratio) {
+    return editor_contrast_ratio(first, second) >= ratio;
+  };
+  bool text_floors = true, secondary_floors = true;
+  for (const auto fill : fills) {
+    text_floors = text_floors && floor(tokens.text, fill, 4.5);
+    secondary_floors = secondary_floors && floor(tokens.secondary, fill, 4.5);
+    for (const auto mark : {tokens.yes, tokens.warning, tokens.accent_2})
+      text_floors = text_floors && floor(mark, fill, 4.5);
+    text_floors = text_floors && floor(tokens.accent, fill, 3.0);
+  }
+  for (const auto fill : {tokens.background, tokens.input, tokens.panel}) {
+    secondary_floors = secondary_floors && floor(tokens.subtext, fill, 4.5) &&
+                       floor(tokens.verbose, fill, 4.5) &&
+                       floor(tokens.no, fill, 4.5) &&
+                       floor(tokens.disabled, fill, 3.0) &&
+                       floor(control_border(fill), fill, 3.0);
+  }
+  expect(text_floors, "text, secondary, status marks and the accent clear their floors");
+  expect(secondary_floors,
+         "hints, verbose text, the failure mark and control outlines clear their floors");
+  expect(floor(tokens.no, tokens.selection, 3.0) &&
+             floor(tokens.on_accent, tokens.accent, 4.5) &&
+             floor(tokens.on_status, tokens.yes, 4.5) &&
+             floor(tokens.on_status, tokens.no, 4.5) &&
+             floor(tokens.on_status, tokens.warning, 4.5),
+         "the marks and the status ink clear their floors");
+  }
+
+  expect(desktop_text_metrics(std::nullopt) == DesktopTextMetrics{14, 1.0F} &&
+             desktop_text_metrics(10) == DesktopTextMetrics{11, 1.0F} &&
+             desktop_text_metrics(13) == DesktopTextMetrics{13, 1.0F} &&
+             desktop_text_metrics(14) == DesktopTextMetrics{14, 1.0F} &&
+             desktop_text_metrics(21) == DesktopTextMetrics{14, 1.5F},
+         "the body size keeps 11..14 px and a larger desktop scales the screens");
+}
+
+// Failure, degraded, success and plain information, in that order.
+void editor_status_glyph_contracts() {
+  using namespace layerc::editor;
+  expect(editor_status_glyph("LayerD is not running") == EditorStatusGlyph::no &&
+             editor_status_glyph("LayerD is running") == EditorStatusGlyph::yes,
+         "a negated state never reads as its success");
+  expect(editor_status_glyph("Visual recognition: inactive") ==
+                 EditorStatusGlyph::warning &&
+             editor_status_glyph("Visual recognition: active") ==
+                 EditorStatusGlyph::yes,
+         "inactive is degraded, active is a success");
+  expect(editor_status_glyph("Saved.") == EditorStatusGlyph::yes &&
+             editor_status_glyph("Disconnected.") == EditorStatusGlyph::no,
+         "sentence case still classifies, and a refusal stays a failure");
+  expect(editor_status_glyph("Not saved. the profile is invalid") ==
+             EditorStatusGlyph::no &&
+             editor_status_glyph("Profile saved.") == EditorStatusGlyph::yes &&
+             editor_status_glyph("Profile loaded.") == EditorStatusGlyph::yes &&
+             editor_status_glyph("Could not save the selected options.") ==
+                 EditorStatusGlyph::no &&
+             editor_status_glyph("") == EditorStatusGlyph::none &&
+             editor_status_glyph("Edit the profile fields.") ==
+                 EditorStatusGlyph::information,
+         "failures come before successes and empty text has no mark");
+}
+
+// The same speaking rule the Windows editor applies to wide text
+// (DesignSystem.md, Screen readers).
+void accessible_status_voice_contracts() {
+  using layerc::editor::StatusVoice;
+  using layerc::editor::status_is_announced;
+  expect(!status_is_announced("", "", StatusVoice::announced) &&
+             !status_is_announced("Saved", "", StatusVoice::announced),
+         "an empty status line is never spoken");
+  expect(!status_is_announced("", "Saved", StatusVoice::silent) &&
+             !status_is_announced("Failed", "Failed", StatusVoice::silent),
+         "a silent message is never spoken");
+  expect(status_is_announced("", "Saved", StatusVoice::announced) &&
+             status_is_announced("Saved", "Saved", StatusVoice::announced),
+         "an explicit outcome is spoken again even when it repeats");
+  expect(status_is_announced("", "Failed", StatusVoice::changed) &&
+             !status_is_announced("Failed", "Failed", StatusVoice::changed) &&
+             status_is_announced("Failed", "Other", StatusVoice::changed),
+         "a repeating failure is spoken once, then only after another one");
+}
 } // namespace
 
 LAYERC_TEST_MAIN(
@@ -352,4 +479,7 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(write_failure_and_invalid_module_are_visible),
     LAYERC_TEST_CASE(appearance_persistence),
     LAYERC_TEST_CASE(native_style_helpers),
+    LAYERC_TEST_CASE(accessible_status_voice_contracts),
+    LAYERC_TEST_CASE(editor_token_contracts),
+    LAYERC_TEST_CASE(editor_status_glyph_contracts),
     LAYERC_TEST_CASE(detected_tasks_and_placement))

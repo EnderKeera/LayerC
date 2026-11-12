@@ -2,8 +2,10 @@
 
 #include "layerc/core/json.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -17,6 +19,17 @@ inline constexpr std::size_t max_overlay_items_per_panel = 32;
 inline constexpr std::uint32_t max_counter_pips = 8;
 inline constexpr double min_indicator_flash_hz = 0.5;
 inline constexpr double max_indicator_flash_hz = 4.0;
+// Flashing stays within WCAG 2.3.1's three flashes per second. Profiles keep
+// any stored rate up to max_indicator_flash_hz; every renderer flashes at
+// indicator_flash_hz's capped rate (DesignSystem.md, Readability).
+inline constexpr double max_shown_indicator_flash_hz = 3.0;
+
+// The rate an indicator flashes at: its stored rate capped at three flashes
+// per second, or 0 when it does not flash.
+[[nodiscard]] constexpr double indicator_flash_hz(const double stored) noexcept {
+  if (!(stored > 0.0) || stored > std::numeric_limits<double>::max()) return 0.0;
+  return std::clamp(stored, min_indicator_flash_hz, max_shown_indicator_flash_hz);
+}
 
 enum class OverlayItemKind : std::uint8_t { cooldown, timer, counter, indicator };
 enum class OverlayTimerSource : std::uint8_t { automation, cooldown_active };

@@ -2,6 +2,7 @@
 
 #include "layerc/platform/editor_appearance.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -26,6 +27,20 @@ struct NativeThemeColors {
   COLORREF divider{};
   COLORREF secondary{};
   COLORREF input{};
+  // Hints beside a field, and mono diagnostics (below `secondary`).
+  COLORREF subtext{};
+  COLORREF verbose{};
+  // Status text and glyphs (never a control fill), the secondary color for
+  // neutral information, and the text on a status fill.
+  COLORREF yes{};
+  COLORREF no{};
+  COLORREF warning{};
+  COLORREF accent_2{};
+  COLORREF on_status{};
+  // A Windows contrast theme supplied these colors (native_high_contrast):
+  // painters then keep hover and pressed fills, outline them in `accent`,
+  // and put `on_accent` on every `selection` and `accent` fill.
+  bool high_contrast{};
 };
 
 // Neutral dark ramp shared by every preset (Windows 11 / Fluent dark values);
@@ -43,6 +58,12 @@ struct ThemeBase {
   std::uint32_t row_hover{};
   std::uint32_t pressed{};
   std::uint32_t accent{};
+  std::uint32_t subtext{};
+  std::uint32_t verbose{};
+  std::uint32_t yes{};
+  std::uint32_t no{};
+  std::uint32_t warning{};
+  std::uint32_t on_status{};
 };
 
 inline constexpr ThemeBase neutral_theme{
@@ -58,11 +79,53 @@ inline constexpr ThemeBase neutral_theme{
     .row_hover = 0x2A2A2A,
     .pressed = 0x262626,
     .accent = 0xD88E4B,
+    .subtext = 0xA3A3A3,
+    .verbose = 0x9A9A9A,
+    .yes = 0x00E676,
+    .no = 0xFF5A5A,
+    .warning = 0xFFD740,
+    .on_status = 0x141414,
 };
 inline constexpr std::uint32_t copper_accent = 0xD88E4B;
 inline constexpr std::uint32_t teal_accent = 0x5AB6AA;
 inline constexpr std::uint32_t plum_accent = 0xB382E2;
 inline constexpr std::uint32_t slate_accent = 0x8FA3B8;
+// The two values of `accent_2`; theme_accent_2 picks the one whose hue keeps
+// clear of the accent.
+inline constexpr std::uint32_t accent_2_blue = 0x60B0FF;
+inline constexpr std::uint32_t accent_2_violet = 0xB99BFF;
+
+// Choose color's palette; order and names are preserved.
+struct PaletteColor {
+  std::uint32_t value;
+  std::wstring_view name;
+};
+inline constexpr std::array<PaletteColor, 24> color_palette{
+    PaletteColor{neutral_theme.background, L"Graphite"},
+    PaletteColor{neutral_theme.panel, L"Charcoal"},
+    PaletteColor{neutral_theme.border, L"Gray"},
+    PaletteColor{neutral_theme.secondary, L"Silver"},
+    PaletteColor{0xE9E4DD, L"Warm white"},
+    PaletteColor{0xF1F5F7, L"Ice white"},
+    PaletteColor{copper_accent, L"Copper"},
+    PaletteColor{0xE0A15A, L"Amber"},
+    PaletteColor{0xE85D5D, L"Red"},
+    PaletteColor{0xF08A5D, L"Coral"},
+    PaletteColor{0xE7C84B, L"Gold"},
+    PaletteColor{0x8BC34A, L"Lime"},
+    PaletteColor{0x4FCB83, L"Green"},
+    PaletteColor{teal_accent, L"Seafoam"},
+    PaletteColor{0x50BAC8, L"Teal"},
+    PaletteColor{0x5DADE2, L"Sky blue"},
+    PaletteColor{0x4B7BEC, L"Blue"},
+    PaletteColor{0x6C5CE7, L"Indigo"},
+    PaletteColor{0x9B72E8, L"Violet"},
+    PaletteColor{plum_accent, L"Plum"},
+    PaletteColor{0xD65DB1, L"Magenta"},
+    PaletteColor{0xF06292, L"Pink"},
+    PaletteColor{0x8D6E63, L"Brown"},
+    PaletteColor{0x607D8B, L"Blue gray"},
+};
 
 [[nodiscard]] COLORREF native_color_ref(std::uint32_t color);
 [[nodiscard]] std::uint32_t native_rgb_value(COLORREF color);
@@ -70,7 +133,24 @@ inline constexpr std::uint32_t slate_accent = 0x8FA3B8;
 [[nodiscard]] COLORREF blend_color(COLORREF base, COLORREF over, int amount);
 // Preset accent; `system` follows the Windows accent color.
 [[nodiscard]] std::uint32_t theme_accent(EditorTheme theme);
+// `accent_2` for an accent: violet when the accent's hue lies within 45
+// degrees of the blue's (Teal, Slate, the default Windows blue), else blue.
+[[nodiscard]] std::uint32_t theme_accent_2(std::uint32_t accent);
+// WCAG 2 contrast ratio of two colors (1 to 21).
+[[nodiscard]] double contrast_ratio(COLORREF first, COLORREF second);
+// True while a Windows contrast theme is on (SPI_GETHIGHCONTRAST): every
+// role then paints in the theme's system colors, setting the preset and its
+// overrides aside.
+[[nodiscard]] bool native_high_contrast();
+// Test seam: forces native_high_contrast() on or off; nullopt follows the
+// system setting again.
+void set_native_high_contrast_override(std::optional<bool> enabled) noexcept;
 [[nodiscard]] NativeThemeColors native_theme_colors(
+    EditorTheme theme, std::uint32_t accent, EditorControlRole role,
+    const EditorAppearanceOverrides &overrides);
+// The preset and its overrides alone, ignoring a contrast theme: what
+// Appearance validates and the contrast-floor tests measure.
+[[nodiscard]] NativeThemeColors preset_theme_colors(
     EditorTheme theme, std::uint32_t accent, EditorControlRole role,
     const EditorAppearanceOverrides &overrides);
 // One role of a full appearance, including that role's overrides.
@@ -108,6 +188,19 @@ void outline_rect(HDC dc, const RECT &rect, int pen_width, COLORREF color);
 // The single keyboard-focus indicator: a 2 px accent ring (scaled by DPI).
 void paint_focus_ring(HDC dc, const RECT &rect, COLORREF accent, UINT dpi);
 
+// The drawn status glyphs (never font characters): yes ✓, no ✕, warning
+// !, accent_2 … (neutral information). Each pairs with its status word.
+enum class StatusGlyph { yes, no, warning, accent_2 };
+[[nodiscard]] COLORREF status_color(const NativeThemeColors &colors,
+                                    StatusGlyph glyph);
+// Side of the square glyph: 12 px at 96 DPI and 100 %, scaled like body text.
+[[nodiscard]] int status_glyph_size(UINT dpi);
+// Paints `glyph` in `color`, vertically centered at the left of `bounds`, on
+// the 12 px grid of the design system's Glyphs SVGs (2 px square strokes);
+// returns the glyph's square.
+RECT paint_status_glyph(HDC dc, const RECT &bounds, StatusGlyph glyph,
+                        COLORREF color, UINT dpi);
+
 void enable_native_dark_mode();
 void set_dark_title_bar(HWND window);
 // Resource id of every LayerC program's application icon (first ICON, so
@@ -133,8 +226,8 @@ void set_native_chrome_palette(const NativeChromePalette &palette);
 [[nodiscard]] NativeChromePalette native_chrome_palette();
 
 // Converts push buttons to owner draw (with hover tracking), gives edits,
-// list boxes and list views a flat 1 px frame with an accent focus edge,
-// and applies dark themes. Checkboxes and radio buttons keep their native
+// list boxes, list views and bordered statics a flat 1 px frame
+// (install_flat_frame), and applies dark themes. Checkboxes and radio buttons keep their native
 // type and are painted through NM_CUSTOMDRAW (native_button_custom_draw).
 void style_native_dialog_children(HWND dialog, HFONT font,
                                   bool owner_draw_list_boxes = false);
@@ -145,8 +238,9 @@ void track_native_button_hover(HWND button);
 // Hovered row of a list box or list view (-1 when none).
 void track_native_list_hover(HWND list);
 [[nodiscard]] int native_list_hot_item(HWND list);
-// Flat 1 px border drawn over the classic client edge; 2 px accent bottom
-// edge while focused.
+// Flat 1 px border drawn over the classic client edge. While focused, an
+// edit's border becomes the 2 px accent ring; a list keeps its border and
+// takes a 2 px accent bottom edge (its focused row carries the ring).
 void install_flat_frame(HWND control);
 // Paints a list view's column headers in the list's own text color, which
 // the dark header theme does not apply on its own.

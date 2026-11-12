@@ -1,0 +1,316 @@
+<!-- @dsCard group="Proposed" width=1320 height=3640 page subtitle="All 17 suggested accessibility fixes, applied together" -->
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"><script>(function(){var t=new URLSearchParams(location.search).get("theme");if(t)document.documentElement.setAttribute("data-theme",t);})();</script><style>body{margin:0;background:var(--background)}</style><meta charset="utf-8"><title>Proposed fixes</title><style>
+.fx-page { width: 1320px; padding: 24px; box-sizing: border-box; color: var(--text); font-family: var(--font-windows); font-size: 12px; line-height: 16px; }
+.fx-page h1 { margin: 0; font-size: 16px; font-weight: 600; }
+.fx-page h2 { margin: 32px 0 12px; font-size: 12px; font-weight: 600; }
+.fx-page h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 12px; font-weight: 600; }
+.fx-page p { margin: 8px 0 0; color: var(--secondary); max-width: 760px; }
+.fx-page code { font-family: var(--font-windows-mono); }
+.fx-page .lbl { color: var(--secondary); }
+.fx-legend { columns: 3; column-gap: 24px; margin: 16px 0 0; padding: 0; list-style: none; }
+.fx-legend li { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; break-inside: avoid; }
+.fx-n { position: absolute; z-index: 5; box-sizing: border-box; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;
+        background: var(--text); color: var(--background); font: 600 11px/1 var(--font-windows); }
+.fx-n.fx-inline { position: static; flex: none; }
+.fx-strong { color: var(--text); font-weight: 600; }
+.fx-tip { box-sizing: border-box; display: flex; align-items: center; padding: 0 8px; background: var(--panel); border: var(--outline) solid var(--border); color: var(--text); z-index: 4; white-space: nowrap; }
+.le-combo.is-focus.fx-full, .le-edit.is-focus.fx-full { border-color: var(--accent); }
+.le-screen .le-edit.is-disabled.fx-recede { background: var(--background); }
+.fx-row2 { display: flex; gap: 24px; align-items: flex-start; }
+.fx-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.fx-tile { border: var(--outline) solid var(--divider); padding: 16px; }
+.fx-ba { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.fx-lab { margin-bottom: 8px; color: var(--secondary); }
+.fx-pad { position: relative; padding: 8px 0; }
+.fx-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.fx-stack { display: flex; flex-direction: column; gap: 8px; }
+.fx-pair { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 26px; }
+.fx-says { color: var(--text); font-style: italic; }
+.fx-says.fx-quiet { color: var(--secondary); }
+.fx-cell { box-sizing: border-box; display: inline-block; width: 56px; height: 38px; padding: 3px; background: var(--panel); }
+.fx-cell > span { display: block; height: 100%; box-sizing: border-box; border: var(--outline) solid var(--border); }
+.fx-hitwrap { position: relative; display: inline-block; }
+.fx-hit { position: absolute; border: 1px dashed var(--text); pointer-events: none; }
+.fx-hc { --background: #000000; --panel: #000000; --input: #000000; --border: #ffffff; --divider: #3ff23f; --text: #ffffff; --secondary: #ffffff;
+         --disabled: #3ff23f; --selection: #1aebff; --accent: #1aebff; --on_accent: #000000; --button_hover: #000000; --row_hover: #000000;
+         background: #000000; padding: 8px; }
+.fx-hc .le-row.is-selected { color: #000000; }
+.fx-tabbar { box-shadow: inset 0 var(--accent-rail) 0 var(--accent); }
+.fx-lx { height: var(--linux-button-height); border-color: var(--linux-outline-panel); font-size: 14px; }
+.fx-dotted > span { outline: 1px dotted var(--text); outline-offset: 2px; }
+.fx-ol { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-right: 8px; }
+.fx-olbox { display: block; width: 72px; height: 28px; box-sizing: border-box; border: 1px solid; }
+.fx-sec { position: relative; height: 20px; border: var(--outline) solid var(--border); background: var(--input); }
+.fx-flash { position: absolute; top: 3px; width: 12px; height: 12px; margin-left: -6px; background: var(--accent); }
+</style></head>
+<body class="le-screens">
+<div class="fx-page">
+<h1>Proposed fixes</h1>
+<p>Every accessibility fix suggested so far, applied together. The shipped screens are on the Screens pages; numbered markers show what changes here. Fourteen are adopted as design-system rules; two turned out to be in the code already and one was withdrawn after reading the source.</p>
+<ul class="fx-legend"><li><span class="fx-n fx-inline">1</span>Overlay text contrast readout<span class="lbl"> · Main window, Choose color · adopted</span></li><li><span class="fx-n fx-inline">2</span>Disabled buttons say why<span class="lbl"> · Main window · adopted</span></li><li><span class="fx-n fx-inline">3</span>Drag hint names the arrow keys<span class="lbl"> · Main window · adopted; the preview tooltip already does</span></li><li><span class="fx-n fx-inline">4</span>Focused field: full accent outline<span class="lbl"> · Automation · adopted</span></li><li><span class="fx-n fx-inline">5</span>Access keys in Automation<span class="lbl"> · already in code, shown after Alt</span></li><li><span class="fx-n fx-inline">6</span>Disabled fields recede<span class="lbl"> · withdrawn: the code keeps the input fill on purpose</span></li><li><span class="fx-n fx-inline">7</span>One key column in the shortcut list<span class="lbl"> · Keyboard shortcuts · adopted</span></li><li><span class="fx-n fx-inline">8</span>Flat frames, no 3D edge<span class="lbl"> · Appearance, Choose color · adopted</span></li><li><span class="fx-n fx-inline">9</span>26 px controls in Appearance<span class="lbl"> · Appearance, Choose color · adopted</span></li><li><span class="fx-n fx-inline">10</span>Screen readers hear what is shown<span class="lbl"> · below · adopted</span></li><li><span class="fx-n fx-inline">11</span>Click area includes the label<span class="lbl"> · already in code on Windows</span></li><li><span class="fx-n fx-inline">12</span>Windows contrast themes<span class="lbl"> · below · adopted</span></li><li><span class="fx-n fx-inline">13</span>Linux: bar on the selected tab<span class="lbl"> · below · adopted</span></li><li><span class="fx-n fx-inline">14</span>Linux: accent focus ring<span class="lbl"> · below · adopted</span></li><li><span class="fx-n fx-inline">15</span>Linux: outlines clear 3:1<span class="lbl"> · below · adopted</span></li><li><span class="fx-n fx-inline">16</span>Linux: text follows the desktop size<span class="lbl"> · below · adopted</span></li><li><span class="fx-n fx-inline">17</span>Overlay flashing capped at 3 Hz<span class="lbl"> · below · adopted</span></li></ul>
+<h2>Main window</h2>
+<div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="../../assets/Logos/layerc-16.png" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Show advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:166px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:395px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:428px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:424px;width:203px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:462px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:458px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:496px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:492px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:496px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:530px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:526px;width:95px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:453px;top:526px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="t h" style="left:266px;top:571px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:267px;top:602px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:457px;top:605px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:266px;top:634px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:378px;top:634px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="t lbl" style="left:266px;top:667px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:266px;top:682px;">cooldown starts.</span>
+<span class="t h" style="left:569px;top:395px;">Overlay bar</span>
+<span class="t lbl" style="left:569px;top:428px;">Width</span>
+<span class="le-edit a " style="left:625px;top:424px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:717px;top:428px;">Height</span>
+<span class="le-edit a " style="left:772px;top:424px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:569px;top:458px;width:139px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:716px;top:458px;width:140px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:569px;top:492px;width:139px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:716px;top:492px;width:140px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:569px;top:531px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:716px;top:531px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:569px;top:557px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:570px;top:577px;">Drag the bar in the preview, or nudge it with</span>
+<span class="t lbl" style="left:569px;top:592px;">the arrow keys. Direct drag works during</span>
+<span class="t lbl" style="left:569px;top:607px;">Position on window.</span>
+<span class="fx-n" style="left:546px;top:580px;">3</span>
+<span class="t lbl" style="left:569px;top:632px;"><b class="fx-strong">Low contrast.</b> Text is 1.7:1 on Fill</span>
+<span class="t lbl" style="left:569px;top:647px;">and 1.9:1 on Background; aim for 4.5:1.</span>
+<span class="fx-n" style="left:546px;top:634px;">1</span>
+<span class="t lbl" style="left:706px;top:264px;">Used by the panel item</span>
+<span class="t lbl" style="left:706px;top:279px;">Cooldown: Dash.</span>
+<span class="fx-n" style="left:858px;top:234px;">2</span>
+<div class="a fx-tip" style="left:50px;top:622px;width:200px;height:22px;">A panel needs at least one item.</div>
+<span class="fx-n" style="left:241px;top:613px;">2</span>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:613px;"></div>
+<div class="a target" style="left:884px;top:283px;width:286px;height:161px;"></div>
+<div class="a bar-mini" style="left:996px;top:419px;width:40px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:628px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:656px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+</div>
+<h2>Automation</h2>
+<div class="le-screen framed" style="width:987px;height:693px">
+<div class="a capbar" style="left:0px;top:0px;width:987px;height:30px;"></div><span class="t" style="left:11px;top:7px;">Automation</span><span class="a cg off cmin" style="left:867px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:912px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:958px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<span class="t lbl" style="left:14px;top:47px;"><u>A</u>utomation</span>
+<span class="le-combo a is-focus fx-full" style="left:90px;top:43px;width:367px;height:23px;"><span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:474px;top:47px;">New <u>p</u>reset</span>
+<span class="le-combo a " style="left:544px;top:43px;width:200px;height:23px;">Blank<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="le-btn a " style="left:752px;top:43px;width:60px;height:26px;"><span>Ne<u>w</u></span></span>
+<span class="le-btn a is-disabled" style="left:820px;top:43px;width:68px;height:26px;"><span>De<u>l</u>ete</span></span>
+<span class="le-check a is-disabled" style="left:896px;top:48px;height:16px;"><span class="le-box"></span><span>Ena<u>b</u>led</span></span>
+<span class="t lbl" style="left:14px;top:81px;"><u>V</u>iew</span>
+<span class="le-combo a " style="left:51px;top:77px;width:170px;height:23px;">Basic<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:15px;top:113px;"><u>R</u>ules and actions</span>
+<span class="le-combo a " style="left:118px;top:111px;width:237px;height:23px;">Event: input pressed<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="le-btn a " style="left:363px;top:111px;width:64px;height:26px;"><span>A<u>d</u>d</span></span>
+<div class="a le-list" style="left:14px;top:145px;width:413px;height:382px;"></div>
+<span class="t lbl" style="left:436px;top:115px;"><u>N</u>ame</span>
+<span class="le-edit a is-disabled" style="left:518px;top:111px;width:456px;height:26px;"></span>
+<span class="t lbl" style="left:435px;top:149px;">Selected item</span>
+<span class="t lbl" style="left:436px;top:183px;">Rule <u>I</u>D</span>
+<span class="le-edit a is-disabled" style="left:518px;top:179px;width:456px;height:26px;"></span>
+<span class="t lbl" style="left:436px;top:217px;"><u>E</u>vent</span>
+<span class="le-combo a is-disabled" style="left:518px;top:213px;width:456px;height:23px;"><span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:435px;top:251px;"><u>S</u>ource</span>
+<span class="le-edit a is-disabled" style="left:518px;top:247px;width:456px;height:26px;"></span>
+<span class="t lbl" style="left:436px;top:285px;">Pri<u>o</u>rity</span>
+<span class="le-edit a is-disabled" style="left:518px;top:281px;width:456px;height:26px;"></span>
+<span class="t lbl" style="left:435px;top:319px;">A<u>c</u>tion</span>
+<span class="le-combo a is-disabled" style="left:518px;top:315px;width:456px;height:23px;"><span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:435px;top:353px;"><u>T</u>arget</span>
+<span class="le-edit a is-disabled" style="left:518px;top:349px;width:456px;height:26px;"></span>
+<span class="t lbl" style="left:435px;top:387px;">Val<u>u</u>e</span>
+<span class="le-edit a is-disabled" style="left:518px;top:383px;width:456px;height:26px;"></span>
+<span class="t lbl" style="left:519px;top:144px;">No automation yet — choose a preset above and press New.</span>
+<span class="le-check a is-disabled" style="left:518px;top:422px;height:16px;"><span class="le-box"></span><span>Repeatin<u>g</u> timer</span></span>
+<span class="le-btn a is-disabled" style="left:518px;top:451px;width:104px;height:26px;"><span>Appl<u>y</u> item</span></span>
+<span class="le-btn a is-disabled" style="left:630px;top:451px;width:104px;height:26px;"><span>Delete ite<u>m</u></span></span>
+<span class="t lbl" style="left:14px;top:545px;">Validation</span>
+<div class="a le-list" style="left:78px;top:542px;width:720px;height:85px;"></div>
+<span class="t " style="left:82px;top:543px;">No automations yet.</span>
+<span class="le-btn a " style="left:806px;top:542px;width:88px;height:26px;"><span>Validate</span></span>
+<span class="le-btn a is-disabled" style="left:902px;top:542px;width:72px;height:26px;"><span>Retry</span></span>
+<span class="le-btn a le-btn--primary" style="left:886px;top:654px;width:88px;height:26px;"><span>Close</span></span>
+<span class="fx-n" style="left:448px;top:34px;">4</span>
+<span class="fx-n" style="left:4px;top:34px;">5</span>
+</div>
+<div class="fx-row2"><div><h2>Keyboard shortcuts</h2>
+<div class="le-screen" style="width:360px;height:312px">
+<div class="a capbar" style="left:0px;top:0px;width:360px;height:30px;"></div><span class="t" style="left:8px;top:9px;">Keyboard shortcuts</span><span class="a cg cclose" style="left:344px;top:12px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<span class="t " style="left:19px;top:52px;">Ctrl+N</span>
+<span class="t " style="left:110px;top:52px;">New profile</span>
+<span class="t " style="left:19px;top:67px;">Ctrl+S</span>
+<span class="t " style="left:110px;top:67px;">Save</span>
+<span class="t " style="left:19px;top:82px;">Ctrl+Shift+S</span>
+<span class="t " style="left:110px;top:82px;">Save as</span>
+<span class="t " style="left:19px;top:97px;">Ctrl+Z / Ctrl+Y</span>
+<span class="t " style="left:110px;top:97px;">Undo / Redo</span>
+<span class="t " style="left:19px;top:112px;">Ctrl+D</span>
+<span class="t " style="left:110px;top:112px;">Duplicate the selected cooldown</span>
+<span class="t " style="left:19px;top:127px;">Ctrl+Shift+A</span>
+<span class="t " style="left:110px;top:127px;">Show or hide advanced settings</span>
+<span class="t " style="left:19px;top:142px;">Ctrl+,</span>
+<span class="t " style="left:110px;top:142px;">Options</span>
+<span class="t " style="left:19px;top:157px;">F2</span>
+<span class="t " style="left:110px;top:157px;">Rename the selected profile or cooldown</span>
+<span class="t " style="left:19px;top:172px;">Del</span>
+<span class="t " style="left:110px;top:172px;">Delete the selected profile or cooldown</span>
+<span class="t " style="left:19px;top:187px;">Shift+F10</span>
+<span class="t " style="left:110px;top:187px;">Context menu</span>
+<span class="t " style="left:19px;top:202px;">Up / Down</span>
+<span class="t " style="left:110px;top:202px;">Step the focused number (Shift: x10)</span>
+<span class="t " style="left:19px;top:217px;">Arrow keys</span>
+<span class="t " style="left:110px;top:217px;">Nudge the selected bar in the preview</span>
+<span class="t " style="left:19px;top:232px;">Alt+letter</span>
+<span class="t " style="left:110px;top:232px;">Jump to the underlined field</span>
+<span class="le-btn a le-btn--primary" style="left:256px;top:268px;width:88px;height:26px;"><span>OK</span></span>
+<span class="fx-n" style="left:101px;top:38px;">7</span>
+</div></div><div><h2>Appearance with Choose color</h2>
+<div class="le-screen framed" style="width:872px;height:598px">
+<div class="a capbar" style="left:0px;top:0px;width:872px;height:30px;"></div><span class="t" style="left:5px;top:4px;">LayerC Editor Appearance</span><span class="a cg off cclose" style="left:851px;top:7px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<span class="t lbl" style="left:18px;top:55px;">Preset</span>
+<span class="le-combo a " style="left:98px;top:51px;width:312px;height:23px;">Graphite / Copper<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="le-btn a " style="left:574px;top:51px;width:193px;height:26px;"><span>Hide advanced colors</span></span>
+<span class="t lbl" style="left:18px;top:108px;">Preview</span>
+<div class="a target" style="left:17px;top:133px;width:834px;height:165px;"></div>
+<span class="t " style="left:27px;top:138px;">File</span>
+<span class="t " style="left:54px;top:138px;">Edit</span>
+<span class="t " style="left:83px;top:138px;">Tools</span>
+<div class="a le-list" style="left:27px;top:167px;width:260px;height:99px;"></div>
+<div class="le-row a is-selected" style="left:28px;top:168px;width:258px;height:26px;padding:0;"></div>
+<div class="le-row a is-hover" style="left:28px;top:194px;width:258px;height:26px;padding:0;"></div>
+<span class="t " style="left:40px;top:172px;">Arena</span>
+<span class="t " style="left:40px;top:198px;">Raid</span>
+<span class="t " style="left:40px;top:224px;">Practice</span>
+<div class="a" style="left:19px;top:274px;width:830px;height:1px;background:var(--divider)"></div>
+<span class="t lbl" style="left:28px;top:276px;">Profile saved.</span>
+<span class="t lbl" style="left:17px;top:327px;">Control role</span>
+<div class="a le-list" style="left:17px;top:354px;width:260px;height:112px;"></div>
+<div class="le-row a is-selected" style="left:18px;top:356px;width:258px;height:27px;padding:0;"></div>
+<span class="t " style="left:35px;top:361px;">Window</span>
+<span class="t " style="left:35px;top:388px;">Toolbar</span>
+<span class="t " style="left:35px;top:415px;">Saved Profiles</span>
+<span class="t " style="left:35px;top:442px;">Labels</span>
+<span class="le-btn a " style="left:600px;top:354px;width:184px;height:26px;"><span></span></span>
+<span class="le-btn a " style="left:600px;top:403px;width:184px;height:26px;"><span></span></span>
+<span class="le-btn a " style="left:17px;top:552px;width:123px;height:26px;"><span>Reset All</span></span>
+<span class="le-btn a " style="left:525px;top:552px;width:102px;height:26px;"><span>Apply</span></span>
+<span class="le-btn a le-btn--primary" style="left:637px;top:552px;width:102px;height:26px;"><span>OK</span></span>
+<span class="le-btn a " style="left:749px;top:552px;width:102px;height:26px;"><span>Cancel</span></span>
+<div class="a modal" style="left:117px;top:76px;width:632px;height:445px;"></div>
+<span class="t" style="left:127px;top:83px;">Choose color</span>
+<span class="a cg cclose" style="left:728px;top:86px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<span class="t lbl" style="left:140px;top:125px;">Palette</span>
+<span class="a cell is-selected" style="left:139px;top:154px;width:56px;height:38px;"><span style="background:#1f1f1f"></span></span>
+<span class="a cell" style="left:207px;top:154px;width:56px;height:38px;"><span style="background:#2d2d2d"></span></span>
+<span class="a cell" style="left:276px;top:154px;width:56px;height:38px;"><span style="background:#6e6e6e"></span></span>
+<span class="a cell" style="left:344px;top:154px;width:56px;height:38px;"><span style="background:#b8b8b8"></span></span>
+<span class="a cell" style="left:412px;top:154px;width:56px;height:38px;"><span style="background:#e9e4dd"></span></span>
+<span class="a cell" style="left:480px;top:154px;width:56px;height:38px;"><span style="background:#f1f5f7"></span></span>
+<span class="a cell" style="left:549px;top:154px;width:56px;height:38px;"><span style="background:#d88e4b"></span></span>
+<span class="a cell" style="left:617px;top:154px;width:56px;height:38px;"><span style="background:#e0a15a"></span></span>
+<span class="a cell" style="left:139px;top:205px;width:56px;height:38px;"><span style="background:#e85d5d"></span></span>
+<span class="a cell" style="left:207px;top:205px;width:56px;height:38px;"><span style="background:#f08a5d"></span></span>
+<span class="a cell" style="left:276px;top:205px;width:56px;height:38px;"><span style="background:#e7c84b"></span></span>
+<span class="a cell" style="left:344px;top:205px;width:56px;height:38px;"><span style="background:#8bc34a"></span></span>
+<span class="a cell" style="left:412px;top:205px;width:56px;height:38px;"><span style="background:#4fcb83"></span></span>
+<span class="a cell" style="left:480px;top:205px;width:56px;height:38px;"><span style="background:#5ab6aa"></span></span>
+<span class="a cell" style="left:549px;top:205px;width:56px;height:38px;"><span style="background:#50bac8"></span></span>
+<span class="a cell" style="left:617px;top:205px;width:56px;height:38px;"><span style="background:#5dade2"></span></span>
+<span class="a cell" style="left:139px;top:255px;width:56px;height:38px;"><span style="background:#4b7bec"></span></span>
+<span class="a cell" style="left:207px;top:255px;width:56px;height:38px;"><span style="background:#6c5ce7"></span></span>
+<span class="a cell" style="left:276px;top:255px;width:56px;height:38px;"><span style="background:#9b72e8"></span></span>
+<span class="a cell" style="left:344px;top:255px;width:56px;height:38px;"><span style="background:#b382e2"></span></span>
+<span class="a cell" style="left:412px;top:255px;width:56px;height:38px;"><span style="background:#d65db1"></span></span>
+<span class="a cell" style="left:480px;top:255px;width:56px;height:38px;"><span style="background:#f06292"></span></span>
+<span class="a cell" style="left:549px;top:255px;width:56px;height:38px;"><span style="background:#8d6e63"></span></span>
+<span class="a cell" style="left:617px;top:255px;width:56px;height:38px;"><span style="background:#607d8b"></span></span>
+<span class="t lbl" style="left:139px;top:314px;">Custom color</span>
+<span class="t lbl" style="left:140px;top:357px;">Red</span>
+<span class="le-edit a " style="left:185px;top:354px;width:74px;height:26px;">42</span>
+<span class="t lbl" style="left:277px;top:357px;">Green</span>
+<span class="le-edit a " style="left:339px;top:354px;width:74px;height:26px;">42</span>
+<span class="t lbl" style="left:432px;top:357px;">Blue</span>
+<span class="le-edit a " style="left:482px;top:354px;width:74px;height:26px;">42</span>
+<span class="t lbl" style="left:576px;top:357px;">Hex</span>
+<span class="le-edit a " style="left:619px;top:354px;width:95px;height:26px;">#2A2A2A</span>
+<span class="t lbl" style="left:186px;top:385px;">Red, green and blue from 0 to 255, or hex #RRGGBB.</span>
+<span class="t lbl" style="left:140px;top:429px;">Preview</span>
+<div class="a target swatchpv" style="left:220px;top:415px;width:263px;height:53px;"><span style="background:#2a2a2a"></span></div>
+<span class="le-btn a le-btn--primary" style="left:531px;top:473px;width:91px;height:26px;"><span>OK</span></span>
+<span class="le-btn a " style="left:633px;top:473px;width:91px;height:26px;"><span>Cancel</span></span>
+<span class="t lbl" style="left:220px;top:476px;">Contrast with Window text: <b class="fx-strong">12.9:1</b></span>
+<span class="fx-n" style="left:197px;top:477px;">1</span>
+<span class="fx-n" style="left:8px;top:124px;">8</span>
+<span class="fx-n" style="left:497px;top:406px;">8</span>
+<span class="fx-n" style="left:522px;top:464px;">9</span>
+<span class="fx-n" style="left:840px;top:543px;">9</span>
+</div></div></div>
+<h2>Beyond these screens</h2>
+<div class="fx-tiles"><section class="fx-tile"><h3><span class="fx-n fx-inline">10</span>Screen readers hear what is shown</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-stack"><div class="fx-pair"><span class="le-btn le-btn--color"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span><div class="fx-says">“Fill, button”</div></div><div class="fx-pair"><span class="fx-cell"><span style="background:#d88e4b"></span></span><div class="fx-says">“button”</div></div><div class="fx-pair"><span class="le-label">Active (ms)</span><span class="le-edit" style="width:60px">0</span><div class="fx-says">“Active (ms), edit, 0”</div></div><div class="fx-pair"><span class="le-label">Profile saved</span><div class="fx-says fx-quiet">(nothing announced)</div></div></div></div><div><div class="fx-lab">Proposed</div><div class="fx-stack"><div class="fx-pair"><span class="le-btn le-btn--color"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span><div class="fx-says">“Fill, color #DDBC17, button”</div></div><div class="fx-pair"><span class="fx-cell"><span style="background:#d88e4b"></span></span><div class="fx-says">“Copper #D88E4B, 7 of 24”</div></div><div class="fx-pair"><span class="le-label">Active (ms)</span><span class="le-edit" style="width:60px">0</span><div class="fx-says">“Active (ms), edit, 0. 0 = off”</div></div><div class="fx-pair"><span class="le-label">Profile saved</span><div class="fx-says">“Profile saved”</div></div></div></div></div><p class="fx-note">Color buttons name their color, palette swatches have names and positions and move with the arrow keys, hint lines are attached as the field’s description, and save or reload outcomes are announced (UI Automation notifications on Windows, AT-SPI on Linux).</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">11</span>Click area includes the label</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad"><span class="fx-hitwrap"><span class="le-check is-checked "><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span><span class="fx-hit" style="left:-4px;top:-4px;width:24px;height:24px"></span></span></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad"><span class="fx-hitwrap"><span class="le-check is-checked "><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span><span class="fx-hit" style="left:-4px;top:-4px;right:-6px;height:24px"></span></span></div></div></div><p class="fx-note">The 16 px box alone is under the 24 px minimum target (WCAG 2.5.8). Clicking the label toggles the box too. The dashed line marks the click area.</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">12</span>Windows contrast themes</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad"><div class="fx-row"><span class="le-btn "><span>Show advanced</span></span><span class="le-btn is-disabled"><span>Remove</span></span></div><div class="fx-row"><span class="le-edit" style="width:120px">Dash</span><span class="le-check is-checked "><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span></div><div class="le-list" style="width:220px;margin-top:8px"><div class="le-row is-selected" style="height:var(--win-list-row)">Cooldown: Dash</div><div class="le-row" style="height:var(--win-list-row)">Timer: Buff</div></div></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad fx-hc"><div class="fx-row"><span class="le-btn "><span>Show advanced</span></span><span class="le-btn is-disabled"><span>Remove</span></span></div><div class="fx-row"><span class="le-edit" style="width:120px">Dash</span><span class="le-check is-checked "><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span></div><div class="le-list" style="width:220px;margin-top:8px"><div class="le-row is-selected" style="height:var(--win-list-row)">Cooldown: Dash</div><div class="le-row" style="height:var(--win-list-row)">Timer: Buff</div></div></div></div></div><p class="fx-note">With a contrast theme on (<code>SPI_GETHIGHCONTRAST</code>), the painters take <code>GetSysColor</code> values whatever the preset and repaint on <code>WM_SYSCOLORCHANGE</code>. Shown with High Contrast Black’s colors as an example.</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">13</span>Linux: bar on the selected tab</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad le-linux"><div class="le-tabs"><span class="le-tab is-selected">Profile</span><span class="le-tab">Visual</span></div><div class="le-pane" style="height:40px"></div></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad le-linux"><div class="le-tabs"><span class="le-tab is-selected fx-tabbar">Profile</span><span class="le-tab">Visual</span></div><div class="le-pane" style="height:40px"></div></div></div></div><p class="fx-note">The selection tint alone is at most 1.3:1 against an unselected tab. A 3 px <code>accent</code> bar, as on selected list rows, is 4.7:1 or more against <code>panel</code> in every preset.</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">14</span>Linux: accent focus ring</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad le-linux"><span class="le-btn fx-lx fx-dotted"><span>Capture key</span></span></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad le-linux"><span class="le-btn fx-lx is-focus"><span>Capture key</span></span></div></div></div><p class="fx-note">FLTK’s dotted focus box becomes the same 2 px <code>accent</code> ring Windows draws, so both platforms show focus the same way.</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">15</span>Linux: outlines clear 3:1</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad fx-row"><div class="fx-ol"><span class="fx-olbox" style="background:var(--background);border-color:#686868"></span><span class="lbl">on background</span><span class="fx-strong">2.96:1</span></div><div class="fx-ol"><span class="fx-olbox" style="background:var(--input);border-color:#636363"></span><span class="lbl">edit</span><span class="fx-strong">2.98:1</span></div><div class="fx-ol"><span class="fx-olbox" style="background:var(--panel);border-color:#727272"></span><span class="lbl">button</span><span class="fx-strong">2.86:1</span></div></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad fx-row"><div class="fx-ol"><span class="fx-olbox" style="background:var(--background);border-color:#6e6e6e"></span><span class="lbl">on background</span><span class="fx-strong">3.23:1</span></div><div class="fx-ol"><span class="fx-olbox" style="background:var(--input);border-color:#696969"></span><span class="lbl">edit</span><span class="fx-strong">3.27:1</span></div><div class="fx-ol"><span class="fx-olbox" style="background:var(--panel);border-color:#777777"></span><span class="lbl">button</span><span class="fx-strong">3.08:1</span></div></div></div></div><p class="fx-note"><code>control_border</code> blends 91/255 toward white instead of 84/255. On <code>background</code> that lands exactly on Windows’ <code>border</code>, #6e6e6e.</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">16</span>Linux: text follows the desktop size</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad le-linux" style="font-size:14px"><div class="lbl">Name</div><span class="le-edit" style="width:150px;height:28px;font-size:14px">Dash</span><div class="lbl" style="font-size:11px;margin-top:8px">Daemon status: running</div></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad le-linux" style="font-size:18px"><div class="lbl">Name</div><span class="le-edit" style="width:192px;height:36px;font-size:18px">Dash</span><div class="lbl" style="font-size:18px;margin-top:8px">Daemon status: running</div></div></div></div><p class="fx-note">With the desktop font at 18 px, the clamp holds the editor at 14 px and the status text at 11 px. Proposed: sizes above 14 px set FLTK’s screen scale, so the fixed layout grows with the text and status text matches the body size.</p></section><section class="fx-tile"><h3><span class="fx-n fx-inline">17</span>Overlay flashing capped at 3 Hz</h3><div class="fx-ba"><div><div class="fx-lab">Now</div><div class="fx-pad"><div class="fx-sec"><span class="fx-flash" style="left:12%"></span><span class="fx-flash" style="left:37%"></span><span class="fx-flash" style="left:62%"></span><span class="fx-flash" style="left:87%"></span></div><div class="lbl" style="margin-top:6px">4 flashes in one second</div></div></div><div><div class="fx-lab">Proposed</div><div class="fx-pad"><div class="fx-sec"><span class="fx-flash" style="left:16%"></span><span class="fx-flash" style="left:50%"></span><span class="fx-flash" style="left:83%"></span></div><div class="lbl" style="margin-top:6px">3 flashes in one second</div></div></div></div><p class="fx-note">Indicator items allow <code>flashHz</code> up to 4. WCAG 2.3.1 sets the limit at three flashes per second. Profiles keep loading unchanged; every renderer flashes at min(<code>flashHz</code>, 3) through one core helper, and the editor accepts 0.5–3 with a warning on a loaded value above 3.</p></section></div>
+</div>
+</body>
+</html>

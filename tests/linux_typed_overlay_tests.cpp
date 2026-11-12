@@ -597,8 +597,10 @@ void service_contracts() {
   };
   make_flash_deadline(0.5, 1000ms,
                       "0.5 Hz indicators schedule their exact 1000 ms edge");
-  make_flash_deadline(4.0, 125ms,
-                      "4 Hz indicators schedule their exact 125 ms edge");
+  make_flash_deadline(3.0, 167ms,
+                      "3 Hz indicators schedule their exact 167 ms edge");
+  make_flash_deadline(4.0, 167ms,
+                      "4 Hz indicators are capped at the 3 Hz 167 ms edge");
 
   layerc::test::TempDirectory live_temp{"layerc-typed-overlay-live"};
   layerc::platform::AutomationPersistence live_persistence;

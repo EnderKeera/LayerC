@@ -159,4 +159,11 @@ EditorAccessibility::EditorAccessibility(EditorApp &app) : impl_(std::make_uniqu
 EditorAccessibility::~EditorAccessibility() = default;
 bool EditorAccessibility::available() const { return impl_->initialized; }
 const std::string &EditorAccessibility::fault() const { return impl_->fault_reason; }
+void EditorAccessibility::announce(Fl_Widget *source, const std::string &text) {
+  if (!impl_->initialized || text.empty()) return;
+  // pump() syncs the tree first, so the widget the caller just wrote is
+  // already exported; while a pass runs it returns without nesting one.
+  impl_->pump();
+  impl_->tree.announce(source, text);
+}
 } // namespace layerc::editor

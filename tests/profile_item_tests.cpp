@@ -399,10 +399,21 @@ void test_profile_items_validation() {
   expect_valid(parse_root(root_with(std::move(deferred_variable))),
                "variable declarations are checked cross-document in a later step");
 
-  for (const double flash : {0.0, min_indicator_flash_hz, max_indicator_flash_hz}) {
+  for (const double flash : {0.0, min_indicator_flash_hz, max_shown_indicator_flash_hz,
+                             3.5, max_indicator_flash_hz}) {
     auto item = indicator_item();
     put(item, "flashHz", Value(flash));
-    expect_valid(parse_root(root_with(std::move(item))), "supported indicator rates parse");
+    const auto parsed = parse_root(root_with(std::move(item)));
+    if (!expect_valid(parsed, "supported indicator rates parse")) continue;
+    const auto &profile = std::get<GameProfile>(parsed);
+    const auto &stored =
+        std::get<IndicatorItem>(profile.panels.front().items->front().content);
+    const auto encoded = serialize_profile_json(profile);
+    const auto reparsed = parse_profile_json(encoded);
+    expect(stored.flash_hz == flash && std::holds_alternative<GameProfile>(reparsed) &&
+               serialize_profile_json(std::get<GameProfile>(reparsed)) == encoded &&
+               indicator_flash_hz(stored.flash_hz) == (flash == 0.0 ? 0.0 : std::min(flash, 3.0)),
+           "indicator flashHz loads and saves unchanged while rendering caps at 3 Hz");
   }
   for (const double flash : {-0.1, 0.25, 4.1}) {
     auto item = indicator_item();

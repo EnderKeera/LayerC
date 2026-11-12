@@ -133,9 +133,45 @@ void EditorMenus::popup(EditorMenuContext context, bool has_target) {
   (void)menu.popup();
 }
 
+EditorEmptyState editor_empty_state(EditorMenuContext context) noexcept {
+  switch (context) {
+  case EditorMenuContext::profiles: return {"No profiles", "Press New to create a profile."};
+  case EditorMenuContext::cooldowns: return {"No cooldowns", "Press Add cooldown to create one."};
+  case EditorMenuContext::bindings: return {"No bindings", "Press Add key or Add mouse to add one."};
+  case EditorMenuContext::panels: return {"No panels", "Press Add panel to create one."};
+  }
+  return {"No items", "Choose an add action to begin."};
+}
+
+void draw_editor_empty_state(const EditorBounds &bounds, EditorEmptyState copy,
+                             Fl_Font face, Fl_Fontsize size) {
+  if (bounds.width <= 16 || bounds.height <= 0) return;
+  const auto old_color = fl_color();
+  const auto old_face = fl_font();
+  const auto old_size = fl_size();
+  const auto ink = [](std::uint32_t rgb) {
+    return fl_rgb_color(static_cast<uchar>(rgb >> 16U),
+                        static_cast<uchar>(rgb >> 8U),
+                        static_cast<uchar>(rgb));
+  };
+  fl_font(face, size);
+  const int row = fl_height() + 4;
+  const int top = bounds.y + std::max(0, (bounds.height - row * 3) / 2);
+  fl_push_clip(bounds.x, bounds.y, bounds.width, bounds.height);
+  fl_color(ink(current_editor_tokens().secondary));
+  fl_draw(copy.title, bounds.x + 8, top, bounds.width - 16, row,
+          FL_ALIGN_CENTER | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+  fl_color(ink(current_editor_tokens().subtext));
+  fl_draw(copy.hint, bounds.x + 8, top + row, bounds.width - 16, row * 2,
+          FL_ALIGN_CENTER | FL_ALIGN_INSIDE | FL_ALIGN_WRAP);
+  fl_pop_clip();
+  fl_font(old_face, old_size);
+  fl_color(old_color);
+}
+
 ContextBrowser::ContextBrowser(int x, int y, int width, int height, const char *label,
                                EditorApp &app, EditorMenuContext context)
-    : Fl_Hold_Browser(x, y, width, height, label), app_(app), context_(context) {}
+    : Fl_Hold_Browser(x, y, width, height, label), app_(app), context_(context) { tooltip(editor_empty_state(context_).hint); }
 int ContextBrowser::row_at(int x, int y) {
   int left{}, top{}, width{}, height{};
   bbox(left, top, width, height);
@@ -168,7 +204,42 @@ std::optional<EditorBounds> ContextBrowser::row_bounds(int row) {
   }
   return std::nullopt;
 }
+void ContextBrowser::draw() {
+  const bool show_focus = visible_focus() != 0;
+  clear_visible_focus();
+  Fl_Hold_Browser::draw();
+  if (show_focus) set_visible_focus();
+  if (size() == 0) {
+    int left{}, top{}, width{}, height{};
+    bbox(left, top, width, height);
+    draw_editor_empty_state({left, top, width, height}, editor_empty_state(context_),
+                            textfont(), textsize());
+  }
+  const bool focused = Fl::focus() == this && active_r() && show_focus && Fl::visible_focus();
+  const auto accent = current_editor_tokens().accent;
+  const auto color = fl_rgb_color(static_cast<uchar>(accent >> 16U),
+                                 static_cast<uchar>(accent >> 8U), static_cast<uchar>(accent));
+  if (focused) {
+    fl_color(color);
+    fl_rectf(x(), y() + std::max(0, h() - 2), w(), std::min(h(), 2));
+  }
+  if (const auto row = row_bounds(value())) {
+    fl_push_clip(row->x, row->y, row->width, row->height);
+    if (focused) draw_editor_focus(row->x, row->y, row->width, row->height);
+    else {
+      fl_color(color);
+      fl_rectf(row->x, row->y, std::min(3, row->width), row->height);
+    }
+    fl_pop_clip();
+  }
+}
+
 int ContextBrowser::handle(int event) {
+  if (event == FL_FOCUS || event == FL_UNFOCUS) {
+    const int result = Fl_Hold_Browser::handle(event);
+    redraw();
+    return result;
+  }
   if (event != FL_PUSH || Fl::event_button() != FL_RIGHT_MOUSE)
     return Fl_Hold_Browser::handle(event);
   const int row = row_at(Fl::event_x(), Fl::event_y());

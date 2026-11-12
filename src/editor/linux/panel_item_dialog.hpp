@@ -15,6 +15,7 @@ class Fl_Choice;
 class Fl_Input;
 
 namespace layerc::editor {
+class EditorStatusMark;
 
 struct PanelItemDraft {
   core::OverlayItem item;
@@ -43,6 +44,7 @@ private:
   Fl_Input *label_{}, *maximum_{}, *flash_{}, *interval_{};
   Fl_Check_Button *custom_label_{};
   Fl_Box *message_{};
+  EditorStatusMark *message_mark_{};
   std::vector<std::string> source_ids_;
 };
 

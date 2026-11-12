@@ -1,0 +1,1029 @@
+<!doctype html><html lang="en" data-theme="copper"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Main window layouts</title><style>:root, [data-theme="copper"] {--background:#1f1f1f;--panel:#2d2d2d;--input:#171717;--border:#6e6e6e;--divider:#333333;--text:#f3f3f3;--secondary:#b8b8b8;--subtext:#a3a3a3;--verbose:#9a9a9a;--disabled:#808080;--button_hover:#383838;--row_hover:#2a2a2a;--pressed:#262626;--accent:var(--preset-copper);--on_accent:#141414;--selection:#4a3929;--primary_hover:#dc9d65;--primary_pressed:#b07844;--yes:#00e676;--no:#ff5a5a;--warning:#ffd740;--on_status:#141414;--accent_2:#60b0ff;--preset-copper:#d88e4b;--preset-teal:#5ab6aa;--preset-plum:#b382e2;--preset-slate:#8fa3b8;--linux-outline-background:#6e6e6e;--linux-outline-panel:#777777;}
+[data-theme="teal"] {--accent:var(--preset-teal);--on_accent:#141414;--selection:#2c423f;--primary_hover:#72bfb5;--primary_pressed:#50968d;--accent_2:#b99bff;}
+[data-theme="plum"] {--accent:var(--preset-plum);--on_accent:#141414;--selection:#41364c;--primary_hover:#bd93e4;--primary_pressed:#946eb8;--accent_2:#60b0ff;}
+[data-theme="slate"] {--accent:var(--preset-slate);--on_accent:#141414;--selection:#393e43;--primary_hover:#9eafc1;--primary_pressed:#788898;--accent_2:#b99bff;}
+:root {--win-gap-dialog:8px;--win-margin:12px;--win-gap-main:16px;--win-section-gap:12px;--swatch-inset:8px;--linux-group-gap:10px;--linux-margin:15px;--radius-none:0px;--radius-radio:50%;--outline:1px;--focus-width:2px;--accent-rail:3px;--checkbox:16px;--swatch:16px;--win-control-height:26px;--win-combo-height:23px;--win-row-pitch:34px;--win-list-row:27px;--win-profile-row:21px;--win-heading-pitch:28px;--win-chevron-zone:26px;--win-status-strip:28px;--win-sidebar-min:200px;--win-sidebar-max:280px;--win-preview-min:280px;--win-preview-max:440px;--win-preview-from:1100px;--win-field-cap:480px;--win-timing-label:84px;--linux-input-height:28px;--linux-button-height:30px;--linux-sidebar:240px;--linux-window-width:1080px;--linux-window-height:790px;--font-windows:"Segoe UI", sans-serif;--font-linux:sans-serif;--font-windows-mono:"Cascadia Mono", Consolas, monospace;--font-linux-mono:monospace;}
+
+/* LayerE — static web renditions of the editor painters, for the component previews. */
+body { margin: 0; background: var(--background); color: var(--text); font-family: var(--font-windows); font-size: 12px; }
+.le-stage { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--win-gap-main); padding: var(--win-margin) var(--win-gap-main); }
+.le-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--win-gap-dialog); }
+.le-cap { color: var(--secondary); }
+
+/* Button */
+.le-btn { box-sizing: border-box; display: inline-flex; align-items: center; gap: var(--swatch-inset); height: var(--win-control-height); padding: 0 var(--win-margin); border: var(--outline) solid var(--border); border-radius: var(--radius-none); background: var(--panel); color: var(--text); font: inherit; white-space: nowrap; }
+.le-btn.is-hover { background: var(--button_hover); }
+.le-btn.is-pressed { background: var(--pressed); }
+.le-btn.is-disabled { border-color: var(--divider); color: var(--disabled); }
+.le-btn--primary { background: var(--accent); border-color: var(--accent); color: var(--on_accent); }
+.le-btn--primary.is-hover { background: var(--primary_hover); border-color: var(--primary_hover); }
+.le-btn--primary.is-pressed { background: var(--primary_pressed); border-color: var(--primary_pressed); }
+.le-btn--color { padding-left: var(--swatch-inset); }
+.le-swatch { box-sizing: border-box; flex: none; width: var(--swatch); height: var(--swatch); border: var(--outline) solid var(--border); background: var(--accent); }
+.is-focus { outline: var(--focus-width) solid var(--accent); outline-offset: calc(-1 * var(--focus-width)); }
+.le-btn--primary.is-focus { outline-color: var(--text); }
+
+/* Edit and drop-down */
+.le-field { display: flex; align-items: center; gap: var(--win-gap-dialog); height: var(--win-row-pitch); }
+.le-label { color: var(--secondary); }
+.le-edit, .le-combo { box-sizing: border-box; display: flex; align-items: center; width: 160px; height: var(--win-control-height); padding: 0 5px; border: var(--outline) solid var(--border); border-radius: var(--radius-none); background: var(--input); color: var(--text); }
+.le-edit.is-focus, .le-combo.is-focus, .le-combo.is-open { outline: none; border-bottom: var(--focus-width) solid var(--accent); }
+.le-edit.is-disabled, .le-combo.is-disabled { border-color: var(--divider); color: var(--disabled); }
+.le-combo { position: relative; height: var(--win-combo-height); padding-left: 7px; padding-right: var(--win-chevron-zone); }
+.le-combo.is-hover, .le-combo.is-open { background: var(--row_hover); }
+.le-combo.is-disabled { background: var(--background); }
+.le-chev { position: absolute; top: 0; right: 0; bottom: 0; width: var(--win-chevron-zone); display: flex; align-items: center; justify-content: center; }
+.le-chev svg { display: block; stroke: currentColor; fill: none; }
+
+/* Check box and radio */
+.le-check { display: inline-flex; align-items: center; gap: var(--win-gap-dialog); }
+.le-box { box-sizing: border-box; flex: none; display: flex; align-items: center; justify-content: center; width: var(--checkbox); height: var(--checkbox); border: var(--outline) solid var(--border); border-radius: var(--radius-none); background: var(--input); }
+.le-box { position: relative; }
+.le-box svg { position: absolute; left: -1px; top: -1px; width: 16px; height: 16px; stroke: var(--on_accent); fill: none; stroke-width: 2; stroke-linejoin: miter; stroke-linecap: butt; }
+.le-check.is-checked .le-box { background: var(--accent); border-color: var(--accent); }
+.le-check.is-disabled { color: var(--disabled); }
+.le-check.is-disabled .le-box { border-color: var(--divider); background: var(--background); }
+.le-check.is-disabled.is-checked .le-box { background: var(--divider); border-color: var(--divider); }
+.le-check.is-disabled .le-box svg { stroke: var(--disabled); }
+.le-check.is-hover .le-box { background: var(--button_hover); border-color: var(--text); }
+.le-check.is-checked.is-hover .le-box { background: var(--primary_hover); border-color: var(--primary_hover); }
+.le-check.is-focusring { outline: var(--focus-width) solid var(--accent); padding-right: 4px; }
+.le-radio .le-box { border-radius: var(--radius-radio); }
+.le-radio .le-dot { width: var(--win-gap-dialog); height: var(--win-gap-dialog); border-radius: var(--radius-radio); background: var(--accent); }
+
+/* List rows */
+.le-list { box-sizing: border-box; width: 280px; padding: 1px; background: var(--input); border: var(--outline) solid var(--border); }
+.le-row { display: flex; align-items: center; gap: var(--win-gap-dialog); height: var(--win-row-pitch); padding: 0 var(--win-gap-dialog) 0 var(--win-margin); }
+.le-row.is-hover { background: var(--row_hover); }
+.le-row.is-selected { background: var(--selection); box-shadow: inset var(--accent-rail) 0 0 var(--accent); }
+.le-row.is-ring { box-shadow: inset 0 0 0 var(--focus-width) var(--accent); }
+.le-exe { color: var(--secondary); }
+.le-tag { margin-left: auto; color: var(--secondary); }
+
+/* Tabs (Linux) */
+.le-linux { font-family: var(--font-linux); font-size: 14px; }
+.le-tabs { display: flex; margin-bottom: -1px; }
+.le-tab { box-sizing: border-box; display: flex; align-items: center; height: var(--linux-input-height); padding: 0 var(--linux-margin); margin-right: -1px; border: var(--outline) solid var(--linux-outline-panel); border-radius: var(--radius-none); background: var(--panel); color: var(--text); }
+.le-tab.is-selected { background: var(--selection); }
+.le-pane { box-sizing: border-box; height: 72px; border: var(--outline) solid var(--linux-outline-background); background: var(--background); }
+
+/* Menu bar and status strip */
+.le-menubar { display: flex; background: var(--background); border-bottom: var(--outline) solid var(--divider); }
+.le-menu { display: flex; align-items: center; height: var(--win-control-height); padding: 0 var(--win-gap-dialog); color: var(--text); }
+.le-menu.is-hover { background: var(--button_hover); }
+.le-statusstrip { box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: var(--win-gap-main); height: var(--win-status-strip); padding: 0 var(--win-margin); background: var(--background); border-top: var(--outline) solid var(--divider); color: var(--secondary); }
+.le-window { box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; height: 64px; background: var(--background); }
+
+/* Screens: the reference pages, absolutely positioned in 96-DPI pixels as measured from screenshots */
+.le-screens { background: var(--background); }
+.le-screen { position: relative; overflow: hidden; background: var(--background); color: var(--text); font-family: var(--font-windows); font-size: 12px; line-height: 16px; }
+.le-screen.framed::after { content: ""; position: absolute; inset: 0; border: var(--outline) solid var(--divider); pointer-events: none; }
+.le-screen .a { position: absolute; box-sizing: border-box; }
+.le-screen .t { position: absolute; white-space: nowrap; }
+.le-screen .h { font-weight: 600; }
+.le-screen .title { font-size: 16px; font-weight: 600; color: var(--secondary); }
+.le-screen .lbl { color: var(--secondary); }
+.le-screen .dis { color: var(--disabled); }
+.le-screen .le-btn { justify-content: center; padding: 0; }
+.le-screen .le-btn--color { justify-content: flex-start; padding-left: 7px; }
+.le-screen .le-edit { width: auto; overflow: hidden; white-space: nowrap; }
+.le-screen .le-combo { width: auto; }
+.le-screen .le-check { height: 16px; }
+.le-screen .capbar { background: var(--background); }
+.le-screen .cg { color: var(--text); }
+.le-screen .cg.off { color: var(--disabled); }
+.le-screen .cmin { background: currentColor; }
+.le-screen .cmax { border: var(--outline) solid currentColor; }
+.le-screen .cclose svg { display: block; stroke: currentColor; fill: none; }
+.le-screen .menubar { background: var(--background); border-bottom: var(--outline) solid var(--divider); }
+.le-screen .status { background: var(--background); border-top: var(--outline) solid var(--divider); }
+.le-screen .well { background: var(--input); }
+.le-screen .target { background: var(--background); border: var(--outline) solid var(--border); }
+.le-screen .modal { background: var(--background); border: var(--outline) solid var(--divider); }
+/* The overlay bar is drawn in the profile's own colors and corner radius, not the editor's tokens. */
+.le-screen .bar-mini { background: #ddbc17; outline: var(--outline) solid var(--selection); }
+.le-screen .bar-real { display: flex; align-items: center; justify-content: center; background: #ddbc17; border: 2px solid var(--selection); border-radius: 3px; color: #f1f5f7; }
+/* As shipped: an unthemed Win32 client edge (system 3D colors), the one bevel in the editor. */
+.le-screen .bevel { border: 1px solid; border-color: #a0a0a0 #ffffff #ffffff #a0a0a0; box-shadow: inset 1px 1px 0 #696969, inset -1px -1px 0 #e3e3e3; }
+.le-screen .swatchpv { background: var(--panel); padding: 4px; }
+.le-screen .swatchpv > span { display: block; height: 100%; box-sizing: border-box; border: 2px solid var(--selection); }
+.le-screen .cell { background: var(--panel); padding: 3px; }
+.le-screen .cell > span { display: block; width: 100%; height: 100%; box-sizing: border-box; border: var(--outline) solid var(--border); }
+.le-screen .cell.is-selected { box-shadow: inset 0 0 0 var(--focus-width) var(--accent); }
+.le-list.is-focus { border-bottom: var(--focus-width) solid var(--accent); }
+.le-screen .le-edit.tail { justify-content: flex-end; }
+.le-list.is-focus { outline: none; }
+
+/* Status and information */
+.le-g { display: inline-block; width: 12px; font-weight: 700; text-align: center; }
+.le-st { font-weight: 600; }
+.le-yes { color: var(--yes); }
+.le-no { color: var(--no); }
+.le-warning { color: var(--warning); }
+.le-info { color: var(--accent_2); }
+.le-subtext { color: var(--subtext); }
+.le-verbose { color: var(--verbose); font-family: var(--font-windows-mono); }
+.le-msg { color: var(--text); font-weight: 400; }
+.le-pip { display: inline-block; width: 8px; height: 8px; vertical-align: middle; }
+.le-badge { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; color: var(--on_status); font-weight: 600; }
+
+/* Drawn status glyphs: 12 px grid, 2 px square strokes, painted in currentColor */
+.le-gl { display: inline-block; width: 12px; height: 12px; vertical-align: -1px; overflow: visible; }
+
+/* Tooltip */
+.le-tooltip { box-sizing: border-box; display: inline-flex; align-items: center; min-height: 22px; padding: 3px var(--win-gap-dialog); background: var(--panel); border: var(--outline) solid var(--border); color: var(--text); }
+
+/* Context menu */
+.le-menu-pop { box-sizing: border-box; width: 200px; padding: 1px; background: var(--background); border: var(--outline) solid var(--border); }
+.le-menu-item { display: flex; align-items: center; height: 24px; padding: 0 var(--win-gap-dialog) 0 var(--win-margin); color: var(--text); }
+.le-menu-item.is-hover { background: var(--button_hover); }
+.le-menu-item.is-disabled { color: var(--disabled); }
+.le-menu-item .le-key { margin-left: auto; color: var(--secondary); }
+.le-menu-item.is-disabled .le-key { color: var(--disabled); }
+.le-menu-sep { height: 1px; margin: 4px 0; background: var(--divider); }
+
+/* Scrollbar */
+.le-scroll { position: relative; box-sizing: border-box; width: 12px; background: var(--input); border-left: var(--outline) solid var(--divider); }
+.le-thumb { position: absolute; left: 3px; width: 6px; background: var(--border); }
+.le-thumb.is-hover { background: var(--secondary); }
+
+/* Empty state */
+.le-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; text-align: center; padding: var(--win-margin); }
+
+/* Dialog */
+.le-dialog { position: relative; box-sizing: border-box; background: var(--background); border: var(--outline) solid var(--divider); }
+.le-dialog-cap { display: flex; align-items: center; height: 30px; padding: 0 11px; color: var(--text); }
+.le-dialog-body { padding: 0 var(--win-margin); }
+.le-dialog-buttons { position: absolute; left: var(--win-margin); right: var(--win-margin); bottom: var(--win-margin); display: flex; gap: var(--win-gap-dialog); }
+.le-dialog-buttons .le-btn { min-width: 88px; justify-content: center; }
+.le-spacer { flex: 1; }
+
+/* Overlay bar: drawn in the profile's colors, so values come from the profile, not tokens */
+.le-ovl { box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: var(--win-gap-dialog); font-weight: 600; }
+.le-pips { display: inline-flex; gap: 3px; }
+.le-pips i { display: block; box-sizing: border-box; width: 10px; height: 10px; }
+
+
+html,body{margin:0;background:var(--background);color:var(--text);font-family:var(--font-windows);font-size:14px;line-height:1.5}
+.wrap{max-width:1240px;margin:0 auto;padding:28px 16px 64px}
+h1{font-size:24px;font-weight:600;margin:0 0 2px}
+h2{font-size:18px;font-weight:600;margin:0}
+.sub{color:var(--secondary);margin:0 0 18px}
+p{margin:0 0 12px;max-width:78ch}
+.bar{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;padding:10px 12px;background:var(--panel);border:1px solid var(--divider);margin:18px 0 22px;position:sticky;top:0;z-index:5}
+.bar label{display:inline-flex;gap:6px;align-items:center;cursor:pointer;user-select:none}
+.bar input{accent-color:var(--accent);width:16px;height:16px;margin:0}
+.seg{display:inline-flex;border:1px solid var(--border)}
+.seg button{font:inherit;color:var(--text);background:var(--background);border:0;padding:3px 10px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--border)}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--on_accent)}
+.seg button:focus-visible,.jump a:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.jump{display:flex;flex-wrap:wrap;gap:6px 14px}
+.jump a{color:var(--text);text-decoration:none;border-bottom:1px solid var(--border)}
+.jump a:hover{border-color:var(--accent)}
+table{border-collapse:collapse;width:100%;margin:6px 0 4px;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--divider);vertical-align:top}
+th{color:var(--secondary);font-weight:600}
+td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.pick td{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.tablewrap{overflow-x:auto}
+.foot{color:var(--subtext);font-size:12px}
+.pickbox{border-left:3px solid var(--accent);background:var(--panel);padding:10px 14px;margin:18px 0 6px;max-width:78ch}
+section{margin-top:44px}
+.head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;margin-bottom:10px}
+.tag{font-size:12px;color:var(--on_accent);background:var(--accent);padding:0 6px}
+.tag.alt{background:transparent;color:var(--secondary);border:1px solid var(--border)}
+.one{color:var(--secondary)}
+.vp{position:relative;overflow:hidden;border:1px solid var(--divider);background:var(--background);max-width:1197px}
+body.px .vp{overflow-x:auto}
+.vp .le-screen{transform-origin:0 0}
+.scr-adv{display:none}
+body.adv .scr-adv{display:block} body.adv .scr-off{display:none}
+body.nomark .mk{display:none}
+.le-screen .mk{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--no) 18%,transparent) 0 6px,transparent 6px 12px);outline:1px dashed color-mix(in srgb,var(--no) 70%,transparent);outline-offset:-1px}
+.le-screen .mk span{position:absolute;left:6px;top:4px;color:var(--no);font-size:11px}
+.notes{max-width:1197px;box-sizing:border-box;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--divider);border:1px solid var(--divider);border-top:0}
+.notes>div{background:var(--background);padding:12px 14px}
+.notes h3{font-size:12px;font-weight:600;color:var(--secondary);margin:0 0 6px;text-transform:none}
+.notes ul{margin:0;padding-left:18px}
+.notes li{margin:0 0 6px}
+.notes code{font-family:var(--font-windows-mono);font-size:12px;color:var(--secondary)}
+.menu{margin-top:10px}
+.menu .le-menu-pop{width:270px}
+.menu .le-menu-item .new{margin-left:8px;font-size:11px;color:var(--on_accent);background:var(--accent);padding:0 5px}
+.menu .le-menu-item .sub-arrow{margin-left:auto}
+@media (max-width:900px){.notes{grid-template-columns:1fr 1fr}}
+@media (max-width:700px){.bar{position:static}}
+@media (max-width:560px){.notes{grid-template-columns:1fr}.wrap{padding-top:18px}}
+</style></head><body class="le-screens"><div class="wrap">
+<h1>Main window layouts</h1><p class="sub">For review. Nothing here is in the design system yet.</p>
+<p>At this window size the Preview column is 310 × 613 px, but all it draws is a 286 × 161 frame and the 34 px Actual size bar. The frame can’t grow taller: the code fits it to the column’s width at the game’s shape (1920 × 1080 when no game is running), so the rest stays empty. Each sample gives that height to something else. Same window, same controls; only C adds a menu item. All four show five cooldowns (four made up) so the lists show how they fill.</p>
+<div class="bar" role="group" aria-label="View options"><span class="seg" role="group" aria-label="Accent"><button type="button" data-theme="copper" aria-pressed="true">Copper</button><button type="button" data-theme="teal" aria-pressed="false">Teal</button><button type="button" data-theme="plum" aria-pressed="false">Plum</button><button type="button" data-theme="slate" aria-pressed="false">Slate</button></span><label><input type="checkbox" id="adv"> Show advanced</label><label><input type="checkbox" id="mark" checked> Mark empty space</label><label><input type="checkbox" id="px"> Actual pixels</label><nav class="jump" aria-label="Versions"><a href="#shipped">As shipped</a><a href="#a">A</a><a href="#b">B</a><a href="#c">C</a></nav></div>
+<div class="tablewrap"><table><thead><tr><th>Version</th><th>Empty space*</th><th>Cooldown rows</th><th>With Show advanced</th><th>Code change</th></tr></thead><tbody><tr class=""><td><a href="#shipped" style="color:inherit">As shipped</a></td><td class="n">19 %</td><td class="n">6</td><td>Window grows 116 px; list drops to 3 rows</td><td>—</td></tr><tr class="pick"><td><a href="#a" style="color:inherit">A · Bar column</a></td><td class="n">4 %</td><td class="n">12</td><td>Fits; list 6 rows</td><td>Layout only</td></tr><tr class=""><td><a href="#b" style="color:inherit">B · Preview corner</a></td><td class="n">9 %</td><td class="n">9</td><td>Fits; list 6 rows</td><td>Layout only</td></tr><tr class=""><td><a href="#c" style="color:inherit">C · Preview on demand</a></td><td class="n">16 %</td><td class="n">8</td><td>Fits; list 6 rows</td><td>Layout + one View menu item</td></tr></tbody></table></div><p class="foot">* Hatched areas right of the sidebar at 1195 × 754 with Show advanced off. Empty list rows aren’t counted; they fill as you add cooldowns.</p>
+<div class="pickbox"><b>My pick: A.</b> It’s the only one where the column’s height goes to controls you use every time you change the bar. The cooldown list doubles and Show advanced stops resizing the window. C’s switch can come later on top of A if you want the room.</div>
+<section id="shipped"><div class="head"><h2>As shipped</h2><span class="tag alt">today</span><span class="one">The editor as it is now, rebuilt from the 96 DPI screenshot.</span></div><div class="vp scr-off" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Show advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:166px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:395px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:428px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:424px;width:203px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:462px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:458px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:496px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:492px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:496px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:530px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:526px;width:95px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:453px;top:526px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="t h" style="left:266px;top:571px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:267px;top:602px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:457px;top:605px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:266px;top:634px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:378px;top:634px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="t lbl" style="left:266px;top:667px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:266px;top:682px;">cooldown starts.</span>
+<span class="t h" style="left:569px;top:395px;">Overlay bar</span>
+<span class="t lbl" style="left:569px;top:428px;">Width</span>
+<span class="le-edit a " style="left:625px;top:424px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:717px;top:428px;">Height</span>
+<span class="le-edit a " style="left:772px;top:424px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:569px;top:458px;width:139px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:716px;top:458px;width:140px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:569px;top:492px;width:139px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:716px;top:492px;width:140px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:569px;top:531px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:716px;top:531px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:569px;top:557px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:570px;top:577px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:569px;top:592px;">works during Position on window.</span>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:613px;"></div>
+<div class="a target" style="left:884px;top:285px;width:286px;height:161px;"></div>
+<div class="a bar-mini" style="left:996px;top:421px;width:39px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:628px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:656px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<div class="a mk" style="left:872px;top:100px;width:310px;height:184px;"><span>empty</span></div>
+<div class="a mk" style="left:872px;top:447px;width:310px;height:181px;"><span>empty</span></div>
+</div></div><div class="vp scr-adv" data-w="1195" data-h="870"><div class="le-screen framed" style="width:1195px;height:870px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:295px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:395px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:395px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:395px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:436px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:465px;width:238px;height:296px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:467px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:472px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:769px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:769px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:769px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:803px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:803px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:841px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:845px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:845px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:845px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Hide advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:84px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:313px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:346px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:342px;width:203px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:380px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:376px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:414px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:410px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:414px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:448px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:444px;width:203px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:350px;top:478px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="le-btn a " style="left:458px;top:478px;width:60px;height:26px;"><span>HID...</span></span>
+<span class="t lbl" style="left:267px;top:516px;">ID</span>
+<span class="le-edit a " style="left:350px;top:512px;width:75px;height:26px;">dash</span>
+<span class="t lbl" style="left:433px;top:516px;">Charges</span>
+<span class="le-edit a " style="left:497px;top:512px;width:56px;height:26px;">1</span>
+<span class="t lbl" style="left:267px;top:550px;">Retrigger</span>
+<span class="le-combo a " style="left:350px;top:546px;width:203px;height:26px;">Ignore<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:584px;">Recovery</span>
+<span class="le-combo a " style="left:350px;top:580px;width:203px;height:26px;">Single<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:618px;">Groups</span>
+<span class="le-edit a " style="left:350px;top:614px;width:203px;height:26px;"></span>
+<span class="t h" style="left:266px;top:659px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:267px;top:690px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:457px;top:693px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:266px;top:722px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:378px;top:722px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="le-check a is-disabled" style="left:266px;top:761px;height:16px;"><span class="le-box"></span><span>Isolate capture</span></span>
+<span class="t lbl" style="left:266px;top:789px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:266px;top:804px;">cooldown starts.</span>
+<span class="t h" style="left:569px;top:313px;">Overlay bar</span>
+<span class="t lbl" style="left:569px;top:346px;">Width</span>
+<span class="le-edit a " style="left:625px;top:342px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:717px;top:346px;">Height</span>
+<span class="le-edit a " style="left:772px;top:342px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:569px;top:376px;width:139px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:716px;top:376px;width:140px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:569px;top:410px;width:139px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:716px;top:410px;width:140px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:569px;top:449px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:716px;top:449px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:569px;top:475px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:570px;top:495px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:569px;top:510px;">works during Position on window.</span>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:729px;"></div>
+<div class="a target" style="left:884px;top:343px;width:286px;height:161px;"></div>
+<div class="a bar-mini" style="left:996px;top:479px;width:39px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:744px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:772px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<div class="a mk" style="left:872px;top:100px;width:310px;height:242px;"><span>empty</span></div>
+<div class="a mk" style="left:872px;top:505px;width:310px;height:239px;"><span>empty</span></div>
+</div></div><div class="notes"><div><h3>What moves</h3><ul><li>The preview runs from the top of the window to the status bar.</li><li>The frame is fitted to the column’s width, so it sits in the middle of a tall, mostly empty well (about 60 % of it).</li></ul></div><div><h3>What you get</h3><ul><li>The frame and the Actual size bar are always in view while you edit anything.</li></ul></div><div><h3>What it costs</h3><ul><li>Overlay bar settings sit in the detail column, away from the bar they change.</li><li>Show advanced stacks five more rows under Timing; the list drops to 3 rows and the window still grows 116 px.</li></ul></div><div><h3>Code</h3><ul><li><code>layout_preview</code> sizes the well to the status bar.</li><li><code>preview_canvas</code> fits the frame to the width (16:9 at 1920 × 1080 when no game runs).</li></ul></div></div></section>
+<section id="a"><div class="head"><h2>A · Bar column</h2><span class="tag">my pick</span><span class="one">The right column becomes everything about the bar: preview on top, Overlay bar settings under it.</span></div><div class="vp scr-off" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Show advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:334px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:549px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:582px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:578px;width:203px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:616px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:612px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:650px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:646px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:650px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:684px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:680px;width:95px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:453px;top:680px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="t h" style="left:569px;top:549px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:570px;top:580px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:760px;top:583px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:569px;top:612px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:681px;top:612px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="t lbl" style="left:569px;top:645px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:569px;top:660px;">cooldown starts.</span>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:268px;"></div>
+<div class="a target" style="left:884px;top:113px;width:286px;height:161px;"></div>
+<div class="a bar-mini" style="left:996px;top:249px;width:39px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:283px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:311px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<span class="t h" style="left:872px;top:383px;">Overlay bar</span>
+<span class="t lbl" style="left:872px;top:416px;">Width</span>
+<span class="le-edit a " style="left:928px;top:412px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1032px;top:416px;">Height</span>
+<span class="le-edit a " style="left:1087px;top:412px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:872px;top:446px;width:151px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1031px;top:446px;width:151px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:872px;top:480px;width:151px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1031px;top:480px;width:151px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:872px;top:519px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1031px;top:519px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:872px;top:545px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:873px;top:565px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:872px;top:580px;">works during Position on window.</span>
+<div class="a mk" style="left:872px;top:630px;width:310px;height:84px;"><span>empty</span></div>
+</div></div><div class="vp scr-adv" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Hide advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:164px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:379px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:412px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:408px;width:203px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:446px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:442px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:480px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:476px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:480px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:514px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:510px;width:203px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:350px;top:544px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="le-btn a " style="left:458px;top:544px;width:60px;height:26px;"><span>HID...</span></span>
+<span class="t lbl" style="left:267px;top:582px;">ID</span>
+<span class="le-edit a " style="left:350px;top:578px;width:75px;height:26px;">dash</span>
+<span class="t lbl" style="left:433px;top:582px;">Charges</span>
+<span class="le-edit a " style="left:497px;top:578px;width:56px;height:26px;">1</span>
+<span class="t lbl" style="left:267px;top:616px;">Retrigger</span>
+<span class="le-combo a " style="left:350px;top:612px;width:203px;height:26px;">Ignore<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:650px;">Recovery</span>
+<span class="le-combo a " style="left:350px;top:646px;width:203px;height:26px;">Single<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:684px;">Groups</span>
+<span class="le-edit a " style="left:350px;top:680px;width:203px;height:26px;"></span>
+<span class="t h" style="left:569px;top:379px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:570px;top:410px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:760px;top:413px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:569px;top:442px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:681px;top:442px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="le-check a is-disabled" style="left:569px;top:481px;height:16px;"><span class="le-box"></span><span>Isolate capture</span></span>
+<span class="t lbl" style="left:569px;top:509px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:569px;top:524px;">cooldown starts.</span>
+<div class="a mk" style="left:569px;top:554px;width:287px;height:160px;"><span>empty</span></div>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:268px;"></div>
+<div class="a target" style="left:884px;top:113px;width:286px;height:161px;"></div>
+<div class="a bar-mini" style="left:996px;top:249px;width:39px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:283px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:311px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<span class="t h" style="left:872px;top:383px;">Overlay bar</span>
+<span class="t lbl" style="left:872px;top:416px;">Width</span>
+<span class="le-edit a " style="left:928px;top:412px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1032px;top:416px;">Height</span>
+<span class="le-edit a " style="left:1087px;top:412px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:872px;top:446px;width:151px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1031px;top:446px;width:151px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:872px;top:480px;width:151px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1031px;top:480px;width:151px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:872px;top:519px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1031px;top:519px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:872px;top:545px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:873px;top:565px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:872px;top:580px;">works during Position on window.</span>
+<div class="a mk" style="left:872px;top:630px;width:310px;height:84px;"><span>empty</span></div>
+</div></div><div class="notes"><div><h3>What moves</h3><ul><li>Overlay bar settings go under the preview.</li><li>The preview shrinks to its frame plus the Actual size bar.</li><li>Timing and key and Visual trigger sit side by side under the cooldowns; the list takes the rest of the height.</li></ul></div><div><h3>What you get</h3><ul><li>Change Fill or Height and see it right above.</li><li>The cooldown list shows 12 rows instead of 6.</li><li>Show advanced fits without growing the window: the list gives up rows instead.</li></ul></div><div><h3>What it costs</h3><ul><li>The well stays 16:9; a 4:3 or ultrawide game letterboxes inside it as it does now, so the settings don’t jump when the game starts.</li><li>Tab order: move the three Preview lines above Overlay bar in <code>editor_resources.rc</code> so Tab runs top to bottom.</li><li>Below 1100 px it falls back to today’s narrow layout.</li></ul></div><div><h3>Code</h3><ul><li><code>layout_preview</code>: well height = frame + Actual size strip.</li><li><code>layout_overlay</code>: called with the preview column, under the well.</li><li><code>layout_cooldowns</code>: Timing | Visual trigger side by side; drop the 180 px list cap.</li><li>No new controls.</li></ul></div></div></section>
+<section id="b"><div class="head"><h2>B · Preview corner</h2><span class="tag alt">option</span><span class="one">The preview stays top right beside the list; the three setting groups line up in one row.</span></div><div class="vp scr-off" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Show advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:256px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:356px;"></div>
+<div class="a target" style="left:884px;top:157px;width:286px;height:161px;"></div>
+<div class="a bar-mini" style="left:996px;top:293px;width:39px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:371px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:399px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<span class="t h" style="left:266px;top:471px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:504px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:500px;width:210px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:538px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:534px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:572px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:568px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:572px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:606px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:602px;width:102px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:460px;top:602px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="t h" style="left:576px;top:471px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:577px;top:502px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:774px;top:505px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:576px;top:534px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:688px;top:534px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="t lbl" style="left:576px;top:567px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:576px;top:582px;">cooldown starts.</span>
+<span class="t h" style="left:886px;top:471px;">Overlay bar</span>
+<span class="t lbl" style="left:886px;top:504px;">Width</span>
+<span class="le-edit a " style="left:942px;top:500px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1039px;top:504px;">Height</span>
+<span class="le-edit a " style="left:1094px;top:500px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:886px;top:534px;width:144px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:534px;width:144px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:886px;top:568px;width:144px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:568px;width:144px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:886px;top:607px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1038px;top:607px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:886px;top:633px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:887px;top:653px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:886px;top:668px;">works during Position on window.</span>
+<div class="a mk" style="left:266px;top:640px;width:294px;height:74px;"><span>empty</span></div>
+<div class="a mk" style="left:576px;top:612px;width:294px;height:102px;"><span>empty</span></div>
+</div></div><div class="vp scr-adv" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:724px;top:64px;width:132px;height:26px;"><span>Hide advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:432px;height:164px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:429px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:706px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:706px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:873px;top:63px;">Preview</span>
+<span class="le-btn a " style="left:1002px;top:64px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a well" style="left:872px;top:100px;width:310px;height:264px;"></div>
+<div class="a target" style="left:885px;top:112px;width:283px;height:159px;"></div>
+<div class="a bar-mini" style="left:995px;top:246px;width:38px;height:6px;"></div>
+<span class="t lbl" style="left:884px;top:279px;">Actual size</span>
+<div class="a bar-real" style="left:890px;top:307px;width:260px;height:34px;"><span>Dash&nbsp;&nbsp;READY</span></div>
+<span class="t h" style="left:266px;top:379px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:412px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:408px;width:210px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:446px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:442px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:480px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:476px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:480px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:514px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:510px;width:210px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:350px;top:544px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="le-btn a " style="left:458px;top:544px;width:60px;height:26px;"><span>HID...</span></span>
+<span class="t lbl" style="left:267px;top:582px;">ID</span>
+<span class="le-edit a " style="left:350px;top:578px;width:82px;height:26px;">dash</span>
+<span class="t lbl" style="left:440px;top:582px;">Charges</span>
+<span class="le-edit a " style="left:504px;top:578px;width:56px;height:26px;">1</span>
+<span class="t lbl" style="left:267px;top:616px;">Retrigger</span>
+<span class="le-combo a " style="left:350px;top:612px;width:210px;height:26px;">Ignore<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:650px;">Recovery</span>
+<span class="le-combo a " style="left:350px;top:646px;width:210px;height:26px;">Single<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:684px;">Groups</span>
+<span class="le-edit a " style="left:350px;top:680px;width:210px;height:26px;"></span>
+<span class="t h" style="left:576px;top:379px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:577px;top:410px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:774px;top:413px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:576px;top:442px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:688px;top:442px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="le-check a is-disabled" style="left:576px;top:481px;height:16px;"><span class="le-box"></span><span>Isolate capture</span></span>
+<span class="t lbl" style="left:576px;top:509px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:576px;top:524px;">cooldown starts.</span>
+<span class="t h" style="left:886px;top:379px;">Overlay bar</span>
+<span class="t lbl" style="left:886px;top:412px;">Width</span>
+<span class="le-edit a " style="left:942px;top:408px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1039px;top:412px;">Height</span>
+<span class="le-edit a " style="left:1094px;top:408px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:886px;top:442px;width:144px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:442px;width:144px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:886px;top:476px;width:144px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:476px;width:144px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:886px;top:515px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1038px;top:515px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:886px;top:541px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:887px;top:561px;">Drag the bar in the preview to position it. Direct drag</span>
+<span class="t lbl" style="left:886px;top:576px;">works during Position on window.</span>
+<div class="a mk" style="left:576px;top:554px;width:294px;height:160px;"><span>empty</span></div>
+<div class="a mk" style="left:886px;top:626px;width:294px;height:88px;"><span>empty</span></div>
+</div></div><div class="notes"><div><h3>What moves</h3><ul><li>The preview stops where the cooldown list stops.</li><li>Timing and key, Visual trigger and Overlay bar become three equal columns across the full width.</li></ul></div><div><h3>What you get</h3><ul><li>Settings read left to right: key, trigger, bar.</li><li>The frame keeps some air round it.</li><li>Show advanced fits.</li></ul></div><div><h3>What it costs</h3><ul><li>Gaps under Timing and Visual trigger while advanced is off.</li><li>Overlay bar is under the preview but not attached to it.</li><li>Tab order runs groups before the preview unless the .rc lines move.</li></ul></div><div><h3>Code</h3><ul><li><code>layout_cooldowns</code>: three columns to the window’s right margin, anchored to the bottom.</li><li><code>layout_preview</code>: well ends on the list’s bottom line.</li><li>No new controls.</li></ul></div></div></section>
+<section id="c"><div class="head"><h2>C · Preview on demand</h2><span class="tag alt">option, pairs with A</span><span class="one">A View menu switch hides the column; shown here switched off.</span></div><div class="vp scr-off" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:1050px;top:64px;width:132px;height:26px;"><span>Show advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:560px;height:226px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:557px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:834px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:834px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:441px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:474px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:470px;width:210px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:508px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:504px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:542px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:538px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:542px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:576px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:572px;width:102px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:460px;top:572px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="t h" style="left:576px;top:441px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:577px;top:472px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:774px;top:475px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:576px;top:504px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:688px;top:504px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="t lbl" style="left:576px;top:537px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:576px;top:552px;">cooldown starts.</span>
+<span class="t h" style="left:886px;top:441px;">Overlay bar</span>
+<span class="t lbl" style="left:886px;top:474px;">Width</span>
+<span class="le-edit a " style="left:942px;top:470px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1039px;top:474px;">Height</span>
+<span class="le-edit a " style="left:1094px;top:470px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:886px;top:504px;width:144px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:504px;width:144px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:886px;top:538px;width:144px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:538px;width:144px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:886px;top:577px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1038px;top:577px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:886px;top:603px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:887px;top:623px;">Position on window shows the bar on the game,</span>
+<span class="t lbl" style="left:886px;top:638px;">where you can drag it into place.</span>
+<span class="le-btn a " style="left:886px;top:688px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a mk" style="left:1000px;top:272px;width:182px;height:154px;"><span>empty</span></div>
+<div class="a mk" style="left:266px;top:610px;width:294px;height:104px;"><span>empty</span></div>
+<div class="a mk" style="left:576px;top:582px;width:294px;height:132px;"><span>empty</span></div>
+</div></div><div class="vp scr-adv" data-w="1195" data-h="754"><div class="le-screen framed" style="width:1195px;height:754px">
+<div class="a capbar" style="left:0px;top:0px;width:1195px;height:30px;"></div><span class="t" style="left:31px;top:8px;">iwcs - LayerC Editor</span><span class="a cg cmin" style="left:1075px;top:15px;width:10px;height:1px;"></span><span class="a cg cmax" style="left:1120px;top:10px;width:10px;height:10px;"></span><span class="a cg cclose" style="left:1166px;top:10px;width:10px;height:10px;"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"/></svg></span>
+<div class="a menubar" style="left:0px;top:30px;width:1195px;height:22px;"></div>
+<img class="a" alt="" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAACcklEQVR4XoVTy2oUURA9dbunpx8Bo4QQM3k4iQgZEHGhogvBRHDh0g9w4Qeo6E6QKMSFYNC1a5d+gAguBBV0YUTIyiREJiEMmcSA3TPTPfeWVM1IDFlYdNG3m1unqs6pIgDe5HRtnkG3AU4AUM8JRICRLzCskze455QS+MX6yvI8jU/PPPI9/6G1Vm/8NeccmBlZQTAGiAMDjwAnEJLV89C13cc0PjWTE5HXz0rMFoYMynGCgbCMuapDfTfHh9UMnS4rkHWslTCz9YmotJ/VIgwjDA+PwA8iDMaE+3MWHhy+brTx5E0D3zbaOBIasgwiIilO+wKz0+Djo2MIowiddor65haevm3gy88WzlYiPL8xijOVEFnBfW7ANDFd03oEqTI2gTCKsbvTRLPZgLVOOYgCwr3ZIdy8cAxL9RZuvaprVuFX4sDOIYwSLTvNUjS3GxBU3/dxNPb04rN32/i8nuH0aIiL1Rhpx/VVIgKDMRAFGIwMitZvOHYwxqgKXccolwyynPH+R4okMJgaCmBFTBKFCMhywmyV8fK6xZUTjDQneFrb/81IFgERqTxyuHoq0Z47hYNvSF3OcUC4fDJBmjusbstd1VEAgKRsVOelehvnJmMlTEjayay6nOXf+ckY3zfb+LSWaYzEigrOEKhVMGojZZWqMlhSwqRnMckswRu/Ctx5vYnlrQ6iEslU9mTU0SRgr+1U5wfXhpVtIUxMypbMC/uDpCSKHRhlzxBluUPZJ1yqxsq2mPT8ce3AKDvRgOH2Di2TECroAtTfQFXk32US+YikiuKuzMihdZZd1jWWU2/OdQt7D5iItsC8uL6yvPgH6BcwcJqoHv4AAAAASUVORK5CYII=" style="left:8px;top:8px;width:16px;height:16px;">
+<span class="t " style="left:7px;top:33px;">File</span>
+<span class="t " style="left:39px;top:33px;">Edit</span>
+<span class="t " style="left:73px;top:33px;">View</span>
+<span class="t " style="left:112px;top:33px;">Tools</span>
+<span class="t " style="left:154px;top:33px;">Help</span>
+<span class="t h" style="left:13px;top:63px;">Profiles</span>
+<div class="a le-list is-focus" style="left:12px;top:92px;width:238px;height:237px;"></div>
+<div class="le-row a is-selected is-ring" style="left:14px;top:94px;width:234px;height:21px;padding:0;"></div>
+<span class="le-check a " style="left:16px;top:96px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:96px;">iwcs</span>
+<span class="t lbl" style="left:72px;top:96px;">RobloxPlayerBeta.exe</span>
+<span class="t lbl" style="left:223px;top:96px;">Off</span>
+<span class="le-check a " style="left:16px;top:117px;"><span class="le-box"></span></span>
+<span class="t " style="left:40px;top:117px;">LC Test</span>
+<span class="t lbl" style="left:87px;top:117px;">lctest.exe</span>
+<span class="t lbl" style="left:223px;top:117px;">Off</span>
+<span class="le-btn a " style="left:12px;top:337px;width:36px;height:26px;"><span>+</span></span>
+<span class="le-btn a " style="left:52px;top:337px;width:36px;height:26px;"><span>−</span></span>
+<span class="le-btn a " style="left:92px;top:337px;width:36px;height:26px;"><span>...</span></span>
+<span class="t h" style="left:13px;top:378px;">Panel <u>i</u>tems</span>
+<div class="a le-list" style="left:12px;top:407px;width:238px;height:238px;"></div>
+<div class="le-row a is-selected" style="left:14px;top:409px;width:234px;height:27px;padding:0;"></div>
+<span class="t " style="left:24px;top:414px;">Cooldown: Dash</span>
+<span class="le-btn a " style="left:12px;top:653px;width:74px;height:26px;"><span><u>A</u>dd...</span></span>
+<span class="le-btn a " style="left:94px;top:653px;width:74px;height:26px;"><span><u>E</u>dit...</span></span>
+<span class="le-btn a is-disabled" style="left:176px;top:653px;width:74px;height:26px;"><span><u>R</u>emove</span></span>
+<span class="le-btn a is-disabled" style="left:12px;top:687px;width:115px;height:26px;"><span>Move <u>u</u>p</span></span>
+<span class="le-btn a is-disabled" style="left:135px;top:687px;width:115px;height:26px;"><span>Move down</span></span>
+<div class="a status" style="left:0px;top:725px;width:1195px;height:29px;"></div>
+<span class="t lbl" style="left:13px;top:729px;">Ready — connecting to LayerD.</span>
+<span class="t lbl" style="left:750px;top:729px;">Visual recognition: connecting</span>
+<span class="t lbl" style="left:1078px;top:729px;">LayerD: not running</span>
+<span class="t title" style="left:267px;top:65px;">iwcs</span>
+<span class="le-btn a " style="left:1050px;top:64px;width:132px;height:26px;"><span>Hide advanced</span></span>
+<span class="t lbl" style="left:267px;top:104px;">Profile <u>n</u>ame</span>
+<span class="le-edit a " style="left:362px;top:100px;width:480px;height:26px;">iwcs</span>
+<span class="t lbl" style="left:266px;top:138px;"><u>A</u>pplication</span>
+<span class="le-edit a tail" style="left:362px;top:134px;width:226px;height:26px;">-ddf602d9cfe44005\RobloxPlayerBeta.exe</span>
+<span class="le-btn a " style="left:596px;top:134px;width:88px;height:26px;"><span><u>B</u>rowse...</span></span>
+<span class="le-btn a " style="left:692px;top:134px;width:150px;height:26px;"><span>Choose <u>r</u>unning...</span></span>
+<span class="t h" style="left:266px;top:171px;">Cool<u>d</u>owns</span>
+<div class="a le-list" style="left:266px;top:200px;width:560px;height:164px;"></div>
+<div class="le-row a is-selected" style="left:268px;top:202px;width:557px;height:27px;padding:0;"></div>
+<span class="t " style="left:278px;top:207px;">Dash  ·  6.5 s  ·  Shift + C</span>
+<span class="t " style="left:278px;top:234px;">Block  ·  3 s  ·  F</span>
+<span class="t " style="left:278px;top:261px;">Heal  ·  12 s  ·  Q</span>
+<span class="t " style="left:278px;top:288px;">Grapple  ·  8 s  ·  E</span>
+<span class="t " style="left:278px;top:315px;">Ultimate  ·  60 s  ·  R</span>
+<span class="le-btn a " style="left:834px;top:200px;width:150px;height:26px;"><span>Add coo<u>l</u>down</span></span>
+<span class="le-btn a is-disabled" style="left:834px;top:234px;width:150px;height:26px;"><span>Remove cooldo<u>w</u>n</span></span>
+<span class="t h" style="left:266px;top:379px;">Timing and key</span>
+<span class="t lbl" style="left:267px;top:412px;">Na<u>m</u>e</span>
+<span class="le-edit a " style="left:350px;top:408px;width:210px;height:26px;">Dash</span>
+<span class="t lbl" style="left:267px;top:446px;">D<u>u</u>ration (s)</span>
+<span class="le-edit a " style="left:350px;top:442px;width:80px;height:26px;">6.5</span>
+<span class="t lbl" style="left:266px;top:480px;">Active (ms)</span>
+<span class="le-edit a " style="left:350px;top:476px;width:80px;height:26px;">0</span>
+<span class="t lbl" style="left:438px;top:480px;">0 = off</span>
+<span class="t lbl" style="left:267px;top:514px;">Binding</span>
+<span class="le-edit a " style="left:350px;top:510px;width:210px;height:26px;">Shift + C</span>
+<span class="le-btn a " style="left:350px;top:544px;width:100px;height:26px;"><span>Capture key</span></span>
+<span class="le-btn a " style="left:458px;top:544px;width:60px;height:26px;"><span>HID...</span></span>
+<span class="t lbl" style="left:267px;top:582px;">ID</span>
+<span class="le-edit a " style="left:350px;top:578px;width:82px;height:26px;">dash</span>
+<span class="t lbl" style="left:440px;top:582px;">Charges</span>
+<span class="le-edit a " style="left:504px;top:578px;width:56px;height:26px;">1</span>
+<span class="t lbl" style="left:267px;top:616px;">Retrigger</span>
+<span class="le-combo a " style="left:350px;top:612px;width:210px;height:26px;">Ignore<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:650px;">Recovery</span>
+<span class="le-combo a " style="left:350px;top:646px;width:210px;height:26px;">Single<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span>
+<span class="t lbl" style="left:267px;top:684px;">Groups</span>
+<span class="le-edit a " style="left:350px;top:680px;width:210px;height:26px;"></span>
+<span class="t h" style="left:576px;top:379px;">Visual trigger for Dash</span>
+<span class="t lbl" style="left:577px;top:410px;">No visual trigger</span>
+<span class="le-check a is-disabled" style="left:774px;top:413px;height:16px;"><span class="le-box"></span><span>Enabled</span></span>
+<span class="le-btn a " style="left:576px;top:442px;width:104px;height:26px;"><span><u>C</u>alibrate...</span></span>
+<span class="le-btn a is-disabled" style="left:688px;top:442px;width:124px;height:26px;"><span>Remove trigger</span></span>
+<span class="le-check a is-disabled" style="left:576px;top:481px;height:16px;"><span class="le-box"></span><span>Isolate capture</span></span>
+<span class="t lbl" style="left:576px;top:509px;">Calibrate captures what the game shows when this</span>
+<span class="t lbl" style="left:576px;top:524px;">cooldown starts.</span>
+<span class="t h" style="left:886px;top:379px;">Overlay bar</span>
+<span class="t lbl" style="left:886px;top:412px;">Width</span>
+<span class="le-edit a " style="left:942px;top:408px;width:80px;height:26px;">260</span>
+<span class="t lbl" style="left:1039px;top:412px;">Height</span>
+<span class="le-edit a " style="left:1094px;top:408px;width:80px;height:26px;">34</span>
+<span class="le-btn le-btn--color a" style="left:886px;top:442px;width:144px;height:26px;"><span class="le-swatch" style="background:#ddbc17"></span><span>Fill</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:442px;width:144px;height:26px;"><span class="le-swatch" style="background:#d1b31e"></span><span>Background</span></span>
+<span class="le-btn le-btn--color a" style="left:886px;top:476px;width:144px;height:26px;"><span class="le-swatch" style="background:#e7c84b"></span><span>Border</span></span>
+<span class="le-btn le-btn--color a" style="left:1038px;top:476px;width:144px;height:26px;"><span class="le-swatch" style="background:#f1f5f7"></span><span>Text</span></span>
+<span class="le-check a is-checked " style="left:886px;top:515px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>S</u>how text</span></span>
+<span class="le-check a is-checked " style="left:1038px;top:515px;height:16px;"><span class="le-box"><svg viewBox="0 0 16 16"><path d="M4 9 L7 12 L12 5"/></svg></span><span>Hide when read<u>y</u></span></span>
+<span class="le-check a is-disabled" style="left:886px;top:541px;height:16px;"><span class="le-box"></span><span>Direct drag in game</span></span>
+<span class="t lbl" style="left:887px;top:561px;">Position on window shows the bar on the game,</span>
+<span class="t lbl" style="left:886px;top:576px;">where you can drag it into place.</span>
+<span class="le-btn a " style="left:886px;top:626px;width:180px;height:26px;"><span><u>P</u>osition on window</span></span>
+<div class="a mk" style="left:1000px;top:272px;width:182px;height:92px;"><span>empty</span></div>
+<div class="a mk" style="left:576px;top:554px;width:294px;height:160px;"><span>empty</span></div>
+</div></div><div class="notes"><div><h3>What moves</h3><ul><li>View ▸ Show Preview turns the column off.</li><li>The window uses its narrow layout with three columns; Position on window moves into Overlay bar, as it already does below 1100 px.</li></ul><div class="menu"><div class="le-menu-pop"><div class="le-menu-item"><span>Show <u>A</u>dvanced Settings</span><span class="le-key">Ctrl+Shift+A</span></div><div class="le-menu-item is-hover"><span>Show <u>P</u>review</span><span class="new">new</span></div><div class="le-menu-item"><span><u>T</u>ext Size</span><span class="le-key sub-arrow">&#9656;</span></div></div></div></div><div><h3>What you get</h3><ul><li>The most room for the list and fields.</li><li>Reuses the narrow-window code path.</li><li>With A: the bar column when on, this when off.</li></ul></div><div><h3>What it costs</h3><ul><li>Without the preview you see the bar’s look and place only in game, through Position on window; the Actual size bar goes too.</li><li>An empty block right of the cooldown buttons.</li><li>One more setting to remember.</li></ul></div><div><h3>Code</h3><ul><li>New <code>IDM_VIEW_PREVIEW</code> item, saved like Text Size.</li><li><code>make_main_layout</code>: preview = setting and width ≥ 1100.</li><li><code>layout_cooldowns</code>: three columns when wide enough.</li></ul></div></div></section>
+<p class="foot" style="margin-top:40px">Built from LayerC v2.7.0 (<code>editor_layout.cpp</code>, <code>editor_bars.cpp</code>, <code>editor_preview_render.cpp</code>) and the 96 DPI screenshot. Read only: nothing in the repo or the design system changed.</p></div><script>
+const root=document.documentElement, B=document.body;
+function fit(){const px=B.classList.contains('px');document.querySelectorAll('.vp').forEach(v=>{if(!v.offsetParent)return;const w=+v.dataset.w,h=+v.dataset.h,s=px?1:Math.min(1,v.clientWidth/w);const sc=v.firstElementChild;sc.style.transform='scale('+s+')';v.style.height=Math.round(h*s)+'px';});}
+document.querySelectorAll('.seg button').forEach(b=>b.addEventListener('click',()=>{root.dataset.theme=b.dataset.theme;document.querySelectorAll('.seg button').forEach(x=>x.setAttribute('aria-pressed',x===b));}));
+const tog=(id,cls,inv)=>{const el=document.getElementById(id);const f=()=>{B.classList.toggle(cls,inv?!el.checked:el.checked);fit();};el.addEventListener('change',f);f();};
+tog('adv','adv');tog('mark','nomark',true);tog('px','px');
+addEventListener('resize',fit);new ResizeObserver(fit).observe(document.querySelector('.wrap'));fit();
+</script></body></html>

@@ -1,12 +1,15 @@
 #include "editor_window.hpp"
+#include "accessible_text.hpp"
+#include "appearance_contrast.hpp"
 #include "editor_dialog_dispatch.hpp"
+#include "editor_dialog_layouts.hpp"
 #include "editor_resource.h"
+#include "static_style.hpp"
 
 #include "layerc/platform/platform_events.hpp"
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -27,37 +30,16 @@ struct AppearancePreset {
   const wchar_t *name{};
 };
 
-// Hover contrast only applies to interactive chrome; selection contrast is
-// checked on list-like roles as well.
-bool contrast_pair_applies(const layerc::platform::EditorControlRole role,
-                           const int control) {
-  using Role = layerc::platform::EditorControlRole;
-  if (control == IDC_APPEARANCE_HOVER)
-    return role == Role::button || role == Role::checkbox;
-  if (control == IDC_APPEARANCE_SELECTION)
-    return role == Role::button || role == Role::checkbox ||
-           role == Role::list || role == Role::sidebar;
-  return true;
-}
-
-std::wstring find_role_label(const HWND roles,
-                             const layerc::platform::EditorControlRole role) {
+void select_role_row(const HWND roles,
+                     const layerc::platform::EditorControlRole role) {
   const auto count = SendMessageW(roles, LB_GETCOUNT, 0, 0);
   for (LRESULT row = 0; row < count; ++row) {
-    if (SendMessageW(roles, LB_GETITEMDATA, row, 0) !=
-        static_cast<LRESULT>(role))
-      continue;
-    SendMessageW(roles, LB_SETCURSEL, row, 0);
-    const auto length = SendMessageW(roles, LB_GETTEXTLEN, row, 0);
-    if (length == LB_ERR)
-      return {};
-    std::wstring name(static_cast<std::size_t>(length) + 1, L'\0');
-    SendMessageW(roles, LB_GETTEXT, row,
-                 reinterpret_cast<LPARAM>(name.data()));
-    name.resize(static_cast<std::size_t>(length));
-    return name;
+    if (SendMessageW(roles, LB_GETITEMDATA, static_cast<WPARAM>(row), 0) ==
+        static_cast<LRESULT>(role)) {
+      SendMessageW(roles, LB_SETCURSEL, static_cast<WPARAM>(row), 0);
+      return;
+    }
   }
-  return {};
 }
 
 constexpr std::array appearance_presets{
@@ -133,70 +115,22 @@ const AppearanceFieldAction *appearance_field_for_control(const int control) {
   return found == appearance_fields.end() ? nullptr : &*found;
 }
 
-constexpr std::array appearance_footer_controls{
-    IDC_APPEARANCE_RESET_ALL, IDC_APPEARANCE_APPLY, IDOK, IDCANCEL};
+bool advanced_appearance_shown(const HWND window) {
+  return (GetWindowLongPtrW(GetDlgItem(window, IDC_APPEARANCE_TREE),
+                            GWL_STYLE) &
+          WS_VISIBLE) != 0;
+}
 
-// Advanced colours are progressive disclosure, not a saved setting: the
-// button shows or hides the per-role overrides and the dialog grows or
-// shrinks by exactly their band, so no empty space is left behind.
+// Advanced colors are progressive disclosure, not a saved setting: the
+// button shows or hides the per-role overrides, and the code layout gives
+// their band room only while it shows, so no empty space is left behind.
 void show_advanced_appearance(const HWND window, const bool visible) {
-  const HWND tree = GetDlgItem(window, IDC_APPEARANCE_TREE);
-  const bool shown = (GetWindowLongPtrW(tree, GWL_STYLE) & WS_VISIBLE) != 0;
-  // Measured once while the template still shows the band: the distance
-  // from the role label down to the footer row.
-  constexpr wchar_t band_property[] = L"LayerC.AdvancedBand";
-  if (GetPropW(window, band_property) == nullptr && shown) {
-    RECT band_top{};
-    RECT footer{};
-    GetWindowRect(GetDlgItem(window, IDC_APPEARANCE_ROLE_LABEL), &band_top);
-    GetWindowRect(GetDlgItem(window, IDC_APPEARANCE_RESET_ALL), &footer);
-    SetPropW(window, band_property,
-             reinterpret_cast<HANDLE>(static_cast<INT_PTR>(
-                 std::max(0L, footer.top - band_top.top))));
-  }
-  const int band = static_cast<int>(
-      reinterpret_cast<INT_PTR>(GetPropW(window, band_property)));
-  if (shown != visible && band > 0) {
-    const int delta = visible ? band : -band;
-    for (const int id : appearance_footer_controls) {
-      const HWND control = GetDlgItem(window, id);
-      RECT bounds{};
-      GetWindowRect(control, &bounds);
-      MapWindowPoints(HWND_DESKTOP, window, reinterpret_cast<POINT *>(&bounds),
-                      2);
-      SetWindowPos(control, nullptr, bounds.left, bounds.top + delta, 0, 0,
-                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
-    RECT frame{};
-    GetWindowRect(window, &frame);
-    SetWindowPos(window, nullptr, 0, 0, frame.right - frame.left,
-                 frame.bottom - frame.top + delta,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-  }
   for (const int id : appearance_advanced_controls)
     ShowWindow(GetDlgItem(window, id), visible ? SW_SHOW : SW_HIDE);
   set_text(GetDlgItem(window, IDC_APPEARANCE_ADVANCED),
            visible ? L"Hide &advanced colors" : L"Show &advanced colors");
+  layout_appearance_dialog(window, visible);
   InvalidateRect(window, nullptr, TRUE);
-}
-
-double relative_luminance(const COLORREF color) {
-  const auto channel = [](const BYTE value) {
-    const double component = static_cast<double>(value) / 255.0;
-    return component <= 0.04045
-               ? component / 12.92
-               : std::pow((component + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * channel(GetRValue(color)) +
-         0.7152 * channel(GetGValue(color)) +
-         0.0722 * channel(GetBValue(color));
-}
-
-double contrast_ratio(const COLORREF first, const COLORREF second) {
-  const double first_luminance = relative_luminance(first);
-  const double second_luminance = relative_luminance(second);
-  return (std::max(first_luminance, second_luminance) + 0.05) /
-         (std::min(first_luminance, second_luminance) + 0.05);
 }
 
 } // namespace
@@ -235,6 +169,20 @@ void EditorWindow::open_appearance() {
 void EditorWindow::initialize_options(const HWND window) {
   apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
+  for (const int hint : {IDC_OPTIONS_VISUAL_HINT, IDC_OPTIONS_CAPTURE_HINT,
+                         IDC_TEXT_SIZE_HINT})
+    set_text_tone(GetDlgItem(window, hint), TextTone::subtext);
+  layout_options_dialog(window);
+  center_over_owner(window);
+  // Each hint line is the description of the control it explains
+  // (DesignSystem.md, Screen readers).
+  describe_with(GetDlgItem(window, IDC_VISUAL_MASTER),
+                GetDlgItem(window, IDC_OPTIONS_VISUAL_HINT));
+  for (const int id : {IDC_CAPTURE_PRIVACY, IDC_EDITOR_CAPTURE_PRIVACY})
+    describe_with(GetDlgItem(window, id),
+                  GetDlgItem(window, IDC_OPTIONS_CAPTURE_HINT));
+  describe_with(GetDlgItem(window, IDC_TEXT_SIZE),
+                GetDlgItem(window, IDC_TEXT_SIZE_HINT));
   const auto visual = layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::visual_recognition);
   if (visual.failed())
@@ -300,6 +248,9 @@ bool EditorWindow::apply_options(const HWND window) {
   if (text_scale != layerc::platform::native_text_scale()) {
     layerc::platform::set_native_text_scale(text_scale);
     reload_fonts();
+    // The dialog takes the new body font and lays out again around it.
+    style_dialog_children(window);
+    layout_options_dialog(window);
   }
   shell_.capture_exclusion = capture;
   (void)layerc::platform::apply_capture_exclusion(window, shell_.capture_exclusion);
@@ -340,29 +291,22 @@ void EditorWindow::initialize_appearance(const HWND window) {
   }
   select_appearance_preset(window, appearance_editor_.draft().staged().theme);
 
+  // One flat list in role order; the rows share the list's text inset.
   const HWND tree = GetDlgItem(window, IDC_APPEARANCE_TREE);
-  const std::array<
-      std::pair<layerc::platform::EditorControlRole, const wchar_t *>, 10>
-      roles{{
-          {layerc::platform::EditorControlRole::window, L"Window"},
-          {layerc::platform::EditorControlRole::toolbar, L"  Toolbar"},
-          {layerc::platform::EditorControlRole::sidebar, L"  Saved Profiles"},
-          {layerc::platform::EditorControlRole::label, L"  Labels"},
-          {layerc::platform::EditorControlRole::button, L"  Buttons"},
-          {layerc::platform::EditorControlRole::edit, L"  Text inputs"},
-          {layerc::platform::EditorControlRole::list, L"  Lists"},
-          {layerc::platform::EditorControlRole::checkbox, L"  Checkboxes"},
-          {layerc::platform::EditorControlRole::preview, L"  Preview"},
-          {layerc::platform::EditorControlRole::status, L"  Status"},
-      }};
-  for (const auto &[role, label] : roles) {
-    const auto row =
-        SendMessageW(tree, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+  for (std::uint32_t index = 0;
+       index < static_cast<std::uint32_t>(
+                   layerc::platform::EditorControlRole::count);
+       ++index) {
+    const auto role = static_cast<layerc::platform::EditorControlRole>(index);
+    const std::wstring label(appearance_role_label(role));
+    const auto row = SendMessageW(tree, LB_ADDSTRING, 0,
+                                  reinterpret_cast<LPARAM>(label.c_str()));
     SendMessageW(tree, LB_SETITEMDATA, static_cast<WPARAM>(row),
                  static_cast<LPARAM>(role));
   }
   SendMessageW(tree, LB_SETCURSEL, 0, 0);
   show_advanced_appearance(window, false);
+  center_over_owner(window);
   refresh_appearance_controls(window);
 }
 
@@ -386,6 +330,29 @@ EditorWindow::appearance_color(const HWND window,
 }
 
 void EditorWindow::refresh_appearance_controls(const HWND window) {
+  // The line under the role list warns in the refusal's own words before
+  // Apply or OK refuses (DesignSystem.md, Roles).
+  const HWND line = GetDlgItem(window, IDC_APPEARANCE_CONTRAST);
+  if (const auto failure =
+          first_contrast_failure(appearance_editor_.draft().staged()))
+    set_status_line(line, layerc::platform::StatusGlyph::warning,
+                    contrast_failure_text(*failure));
+  else if (colors(layerc::platform::EditorControlRole::window).high_contrast)
+    set_status_line(line, layerc::platform::StatusGlyph::accent_2,
+                    L"A contrast theme is on, so Windows colors are in use.");
+  else
+    set_status_line(line, std::nullopt, {});
+  // Each color button says the color it paints, which is otherwise only
+  // drawn; the contrast line belongs to them and to the role list
+  // (DesignSystem.md, Screen readers).
+  const std::wstring contrast = window_text(line);
+  for (const auto &entry : appearance_fields) {
+    const HWND button = GetDlgItem(window, entry.control);
+    if (const auto color = appearance_color(window, entry.field))
+      set_color_button_name(button, color_hex(native_rgb_value(*color)));
+    set_accessible_description(button, contrast);
+  }
+  set_accessible_description(GetDlgItem(window, IDC_APPEARANCE_TREE), contrast);
   RedrawWindow(window, nullptr, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
@@ -399,7 +366,12 @@ void EditorWindow::choose_appearance_color(const HWND window,
   if (!current)
     return;
   std::uint32_t selected = native_rgb_value(*current);
-  if (!choose_color(window, selected))
+  // Choose color measures the new color against the ones it pairs with.
+  appearance_editor_.set_picker_targets(
+      appearance_contrast_targets(appearance, role, field));
+  const bool chosen = choose_color(window, selected);
+  appearance_editor_.set_picker_targets({});
+  if (!chosen)
     return;
   if (auto *value = appearance_value(appearance.overrides[index], field);
       value != nullptr) {
@@ -430,45 +402,25 @@ void EditorWindow::reset_all_appearance(const HWND window) {
 
 bool EditorWindow::apply_appearance(const HWND window) {
   const auto &appearance = appearance_editor_.draft().staged();
-  for (std::size_t index = 0; index < appearance.overrides.size(); ++index) {
-    const auto role =
-        static_cast<layerc::platform::EditorControlRole>(index);
-    const auto role_colors =
-        layerc::platform::native_theme_colors(appearance, role);
-    struct ContrastPair {
-      const wchar_t *name;
-      COLORREF foreground;
-      COLORREF background;
-      double minimum;
-      int control;
-    };
-    const std::array pairs{
-        ContrastPair{L"Text / Fill", role_colors.text, role_colors.fill, 4.5, IDC_APPEARANCE_TEXT},
-        ContrastPair{L"Disabled / Fill", role_colors.disabled, role_colors.fill, 3.0, IDC_APPEARANCE_DISABLED},
-        ContrastPair{L"Text / Hover", role_colors.text, role_colors.hover, 4.5, IDC_APPEARANCE_HOVER},
-        ContrastPair{L"Text / Selection", role_colors.text, role_colors.selection, 4.5, IDC_APPEARANCE_SELECTION}};
-    for (const auto &pair : pairs) {
-      if (!contrast_pair_applies(role, pair.control))
-        continue;
-      const auto ratio = contrast_ratio(pair.foreground, pair.background);
-      if (ratio >= pair.minimum)
-        continue;
-      const HWND roles = GetDlgItem(window, IDC_APPEARANCE_TREE);
-      const auto role_name = find_role_label(roles, role);
-      refresh_appearance_controls(window);
-      const auto message = role_name + L": " + pair.name + L" contrast is " +
-          std::to_wstring(ratio).substr(0, 4) + L":1; at least " +
-          std::to_wstring(pair.minimum).substr(0, 3) +
-          L":1 is required. Adjust this override or use Reset selected.";
-      themed_message_box(window, message.c_str(), L"LayerC Editor", MB_OK | MB_ICONWARNING);
-      SetFocus(GetDlgItem(window, pair.control));
-      return false;
-    }
+  if (const auto failure = first_contrast_failure(appearance)) {
+    // Show the failing role and focus the override to adjust.
+    select_role_row(GetDlgItem(window, IDC_APPEARANCE_TREE), failure->role);
+    if (!advanced_appearance_shown(window))
+      show_advanced_appearance(window, true);
+    refresh_appearance_controls(window);
+    const auto message = L"Could not save the appearance. " +
+                         contrast_failure_text(*failure) +
+                         L" Adjust this override or use Reset selected.";
+    themed_message_box(window, message.c_str(), L"Appearance",
+                       MB_OK | MB_ICONWARNING);
+    if (const auto *entry = appearance_field(contrast_pair_field(failure->pair)))
+      SetFocus(GetDlgItem(window, entry->control));
+    return false;
   }
 
   if (!appearance_editor_.draft().apply(layerc::platform::write_editor_appearance)) {
     themed_message_box(window, L"Could not save the selected appearance.",
-                L"LayerC Editor", MB_OK | MB_ICONWARNING);
+                L"Appearance", MB_OK | MB_ICONWARNING);
     return false;
   }
 
@@ -535,10 +487,7 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
       return TRUE;
     }
     if (id == IDC_APPEARANCE_ADVANCED && notification == BN_CLICKED) {
-      show_advanced_appearance(
-          window, (GetWindowLongPtrW(GetDlgItem(window, IDC_APPEARANCE_TREE),
-                                     GWL_STYLE) &
-                   WS_VISIBLE) == 0);
+      show_advanced_appearance(window, !advanced_appearance_shown(window));
       return TRUE;
     }
     if (id == IDC_APPEARANCE_TREE && notification == LBN_SELCHANGE) {
@@ -593,9 +542,6 @@ LRESULT EditorWindow::handle_appearance_message(const HWND window,
     }
     break;
   }
-  case WM_DESTROY:
-    RemovePropW(window, L"LayerC.AdvancedBand");
-    break;
   default:
     break;
   }

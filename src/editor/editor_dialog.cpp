@@ -4,6 +4,7 @@
 #include "editor_dialog_dispatch.hpp"
 #include "editor_window.hpp"
 #include "panel_items.hpp"
+#include "static_style.hpp"
 
 #include "editor_resource.h"
 #include "layerc/platform/profile_transaction.hpp"
@@ -315,6 +316,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
         auto sync = shell_.sync_scope();
         set_text(shell_.application_path,
                  to_wide(document_.profile().game.executable_name));
+        describe_application();
       } else if (exact && document_.profile().game.executable_path.empty()) {
         const std::filesystem::path typed(window_text(shell_.application_path));
         if (typed.is_absolute()) {
@@ -417,7 +419,7 @@ std::optional<LRESULT> EditorWindow::handle_main_command(
         const bool draft = document_.path().empty();
         ModifyMenuW(menu, IDM_PROFILE_TOGGLE, MF_BYCOMMAND | MF_STRING,
                     IDM_PROFILE_TOGGLE,
-                    document_.profile().enabled ? L"&Turn Off" : L"&Turn On");
+                    document_.profile().enabled ? L"&Turn off" : L"&Turn on");
         for (const UINT item : {IDM_PROFILE_TOGGLE, IDM_FILE_EXPORT_PACK})
           EnableMenuItem(menu, item,
                          MF_BYCOMMAND | (draft ? MF_GRAYED : MF_ENABLED));
@@ -636,6 +638,10 @@ std::optional<LRESULT> EditorWindow::handle_main_draw_item(
       draw_list_box_item(*draw);
       return TRUE;
     }
+    if (draw->CtlType == ODT_STATIC && static_style(draw->hwndItem)) {
+      draw_status_line(*draw);
+      return TRUE;
+    }
     if (draw->CtlType != ODT_BUTTON)
       return std::nullopt;
     const int id = static_cast<int>(draw->CtlID);
@@ -666,6 +672,14 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     apply_suggested_dpi_rect(window, lparam);
     reload_fonts();
     return TRUE;
+  case WM_SYSCOLORCHANGE:
+    // A contrast theme turned on or off, or its colors changed.
+    refresh_theme();
+    break;
+  case WM_SETTINGCHANGE:
+    if (wparam == SPI_SETHIGHCONTRAST)
+      refresh_theme();
+    break;
   case WM_TIMER:
     if (wparam == autosave_timer) {
       (void)flush_autosave(false);
