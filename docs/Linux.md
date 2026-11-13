@@ -9,7 +9,7 @@ gate details.
 
 The daemon and CLIs shipped in the `v2.6.0` release as **source/CLI only**.
 The v2.6c feature set adds the X11 `layere` editor, a native Debian package,
-and an editor Flatpak. These are included in package version **2.7.0**.
+and an editor Flatpak. These have shipped since package version **2.7.0**.
 The version-tag workflow attaches the `.deb` and Flatpak bundle that its own
 container and Flatpak gates built, installed and smoke tested (automated
 evidence only); see
@@ -26,7 +26,7 @@ implementation contracts, not release acceptance claims.
 | V2.6.0 portable runtime | implemented | Foreground `layerd`, `layerctl`, XDG storage, Unix-socket control, bundles, install metadata |
 | V2.6.1 X11 interaction | implemented | EWMH tracking, passive XI2 input, Shape overlays, RandR scaling |
 | V2.6.2 capture/calibration | implemented | Composite/Damage capture, bounded fallback, `layercal` PPM/JSON output |
-| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; included in package version `2.7.0` |
+| v2.6c X11 editor | implemented with automated evidence | FLTK `layere`: profiles, matching, cooldowns, bindings, panels, import/export, accessibility, automation, visual calibration, autosave and live drafts, diagnostics, device capture, appearance, detected tasks and live placement; X11 limits under [X11 editor](#x11-editor-v26c); installed, `.deb` and Flatpak gates; included since package version `2.7.0` |
 | Physical native/Flatpak evidence | pending | GNOME Xorg and KDE Plasma X11 runs must be archived |
 | Wayland (V2.7 preview) | preview implementation, automated evidence only | Native/degraded providers and evidence gaps below; no expanded desktop support claim |
 | Gamescope | unsupported | Out of scope |
@@ -39,7 +39,7 @@ platforms uses the shared deterministic fold (ASCII plus the cased Latin-1
 supplement rows; all other codepoints compare byte-exact), replacing the
 former Windows `LCMapStringEx` invariant mapping so Windows and Linux agree.
 
-The package version is **2.7.0**. Typed overlay items and the Wayland preview
+The package version is **2.7.1**. Typed overlay items and the Wayland preview
 are included; support remains X11/headless. Publication does not expand the
 supported desktop matrix, and historical V2.6 evidence does not qualify
 additional desktop/compositor combinations.
@@ -272,7 +272,7 @@ do not broaden device, host, or network access:
 flatpak info --show-commit io.github.EnderKeera.LayerC > "$run/flatpak-commit.txt"
 flatpak info io.github.EnderKeera.LayerC > "$run/flatpak-info.txt"
 flatpak info --show-permissions io.github.EnderKeera.LayerC > "$run/flatpak-permissions.txt"
-sha256sum /path/to/layerc-2.7.0-x86_64.flatpak > "$run/flatpak-bundle.sha256"
+sha256sum /path/to/layerc-2.7.1-x86_64.flatpak > "$run/flatpak-bundle.sha256"
 ```
 
 For native X11, launch only an installed build whose binary hashes were
@@ -320,7 +320,7 @@ passed.
 
 ## X11 editor (v2.6c)
 
-The v2.6c editor is included in package version 2.7.0; publication does not
+The v2.6c editor is included since package version 2.7.0; publication does not
 qualify physical desktops. Compared with the Windows editor, X11
 has no Generic HID capture, Game Bar companion, capture exclusion or isolated
 recognition (their data is preserved), the isolated-runtime setting has no
@@ -772,7 +772,7 @@ the Flatpak bundle, which fetches its runtime from Flathub:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-flatpak install --user ./layerc-2.7.0-x86_64.flatpak
+flatpak install --user ./layerc-2.7.1-x86_64.flatpak
 flatpak run io.github.EnderKeera.LayerC          # layere
 ```
 
@@ -785,7 +785,7 @@ The bundle is unsigned (it is not served from a GPG-signed repository), so
 cmake -S . -B build-deb -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr -DLAYERC_REQUIRE_EDITOR=ON
 cmake --build build-deb --parallel
-cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.7.0-1_amd64.deb
+cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.7.1-1_amd64.deb
 ```
 
 CPack derives the library dependencies with `dpkg-shlibdeps` (needs
@@ -794,7 +794,7 @@ Debian 13's main archive has 2.56, so enable `trixie-backports` and install
 from it explicitly:
 
 ```sh
-sudo apt install -t trixie-backports ./layerc_2.7.0-1_amd64.deb
+sudo apt install -t trixie-backports ./layerc_2.7.1-1_amd64.deb
 ```
 
 One `layerc` package carries the daemon, CLIs and editor. It also installs

@@ -1,28 +1,38 @@
-# LayerC 2.7.0
+# LayerC 2.7.1
 
-## Typed overlay items
+LayerC 2.7.1 is a patch release on 2.7.0. Typed overlay items, the X11
+editor and the Wayland preview are unchanged; see the 2.7.0 release notes.
 
-Panels can now mix **cooldowns, timers, counters, and indicators** rather than
-showing only cooldowns.
+## Signed launcher updates
 
-- Show a cooldown's active-duration window or a declared automation timer.
-- Bind counters to numeric automation variables, displayed as a number or up
-  to eight pips.
-- Bind indicators to Boolean or numeric variables, with optional flashing.
-- Add, reorder, relabel, and configure items in both Windows and Linux editors.
-- Apply item-scoped visibility, text, and color overrides through automation.
-- Use the same presentation on Win32, X11, Wayland/GNOME preview frames, and
-  Game Bar, including item effects on legacy cooldown panels.
+- The Windows ZIP now also contains the `layerc.exe` launcher. Starting LayerC
+  directly through `layerd.exe` still works as before.
+- Launcher self-updates remain **OFF by default**. With updates OFF, the
+  launcher makes no network requests and cannot download a first build.
+- After opting in (`HKCU\Software\LayerC\Updates` set to 1), the launcher
+  follows tagged releases. Each release publishes an update feed signed with
+  the release ECDSA P-256 key. The launcher verifies the signature before it
+  uses any file and never moves to an older release.
+- `layerd`, `layere`, `layercal`, and `layerw` still never access the network.
 
-Legacy cooldown panels retain their existing format when new presentation
-features are not used. Unknown item kinds are preserved and reported through
-diagnostics. Missing or incompatible sources remain visibly unavailable.
+## Accessible editor design system
 
-## Linux editor and packages
+Both LayerE editors now follow design system v2:
 
-This release includes the native X11 `layere` editor: profiles and matching,
-cooldowns and bindings, panels, automation, visual calibration, live drafts,
-runtime diagnostics, appearance, and typed items.
+- Status marks are drawn shapes whose meaning comes from the operation's
+  outcome, not its wording. Status colors and a secondary accent meet contrast
+  floors on every theme preset.
+- Visual flashing is capped at 3 Hz in every renderer. Profiles keep their
+  stored rate.
+- **Windows:** consistent dialog layout and OK, Cancel, Apply button order; a
+  live contrast warning in Appearance; a Keyboard shortcuts dialog; full accent
+  focus outlines; and UI Automation names and descriptions on controls and
+  color swatches.
+- **Linux:** tokenized controls, accent focus rings, desktop text metrics with
+  app-local scaling, a Keyboard shortcuts dialog, and AT-SPI names, hints and
+  announcements.
+
+## Packages
 
 The release workflow publishes the Windows x64 ZIP, native Debian package,
 and editor Flatpak bundle that its package gates built and tested, plus
@@ -37,9 +47,8 @@ and editor Flatpak bundle that its package gates built and tested, plus
   remains unsupported.
 - Game Bar's real-host manual matrix, production signing, and certification
   remain pending. Package generation does not close those requirements.
-- The Windows ZIP starts through `layerd.exe`; `layerc.exe` remains omitted
-  until a release-signing key is provisioned. Launcher self-updates remain OFF
-  by default.
+- The signed update feed is new in this release. No opted-in update on a real
+  machine has been recorded yet.
 - Profiles using typed items require schema-5 support. Move profiles between
   platforms through validated JSON or `.layercprofile` bundles, not by copying
   platform stores.

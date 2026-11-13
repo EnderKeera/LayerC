@@ -25,19 +25,21 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c feature set; package version `2.7.0`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the release workflow publishes the gate-built `.deb` and Flatpak; physical evidence pending |
+| Linux editor (v2.6c feature set; package version `2.7.1`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the release workflow publishes the gate-built `.deb` and Flatpak; physical evidence pending |
 | Typed overlay items (V2.7) | Cooldown, timer, counter, and indicator items in the shared core, both editors, Win32/X11 overlays, Wayland/GNOME frames, and Game Bar slots | Shared presentation in release packages; no expanded desktop/hardware support claim |
 | Wayland (V2.7 preview) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented as a preview; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
 | Gamescope | Not supported | Out of scope |
 
-Package metadata reports **2.7.0**, combining typed overlay items with the
-Wayland preview. The version-tag workflow publishes packages only after its
-Windows, Debian, and Flatpak gates pass. Publication does not expand the
-supported desktop matrix; dated evidence retains its stated scope.
-Windows ZIP packaging starts LayerC via `layerd.exe`; it omits `layerc.exe`
-until a release-signing key is provisioned, and launcher self-updates remain
-OFF by default. Physical Linux evidence and the Game Bar companion's manual
-matrix, certification, and production signing remain open.
+Package metadata reports **2.7.1**: the typed overlay items and Wayland preview
+of 2.7.0, plus the accessible editor design system and signed launcher
+updates. The version-tag workflow publishes packages only after its Windows,
+Debian, and Flatpak gates pass. Publication does not expand the supported
+desktop matrix; dated evidence retains its stated scope.
+Windows ZIP packaging starts LayerC via `layerd.exe` and also contains the
+`layerc.exe` launcher, whose self-updates remain OFF by default
+([details](#windows-launcher-and-updates-v26b)). Physical Linux evidence and the
+Game Bar companion's manual matrix, certification, and production signing
+remain open.
 
 ## Non-negotiable guarantees
 
@@ -111,9 +113,9 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 
 | Program | Windows | Linux | Purpose |
 | --- | ---: | ---: | --- |
-| `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b, not yet shipped) |
+| `layerc` | yes | no | Per-user launcher with opt-in signed updates; starts the installed daemon and exits (v2.6b; in the Windows ZIP since 2.7.1) |
 | `layerd` | yes | yes | Overlay/automation daemon; background desktop app on Windows, foreground service on Linux |
-| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c feature set, included in `v2.7.0`; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
+| `layere` | yes | X11 (v2.6c) | Full native editor on Windows; on Linux the X11 editor (v2.6c feature set, included since `v2.7.0`; limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c)) |
 | `layercal` | GUI | CLI on X11 | Visual calibration helper or bounded PPM/JSON snapshot tool |
 | `layerw` | yes | no | Demand-launched isolated WGC capture worker with a 256 MiB Job limit |
 | `layerctl` | no | yes | Status, reload, stop, and transactional profile/bundle import/export |
@@ -283,7 +285,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | Target | Coverage |
 | --- | --- |
 | `layerc_core_tests` | Profiles, UTF-8, cooldowns, automation, live edit, visual-profile logic, and update manifests |
-| `layerc_launcher_tests` | Launcher update engine: signed manifest checks, delta downloads, atomic build switch, repair, and rollback (v2.6b, not yet shipped) |
+| `layerc_launcher_tests` | Launcher update engine: signed manifest checks, delta downloads, atomic build switch, repair, and rollback (v2.6b) |
 | `layerc_runtime_tests` | Capability demand, lazy lifecycle, reconciliation, rollback, and stress |
 | `layerc_capture_tests` | Capture math, normalization, and Low/Balanced/Exact bounds |
 | `layerc_template_png_tests` | Shared template PNG codec (every color type, depth, and Adam7), deterministic canonical encoding, and bundle-import asset canonicalization |
@@ -297,7 +299,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 
 | Target | Coverage |
 | --- | --- |
-| `layerc_launcher_win_tests` | Windows launcher: CNG signature verification, default-OFF update preference and opt-in/out, per-user registration/autostart in disposable HKCU keys, and the Start menu shortcut (v2.6b, not yet shipped) |
+| `layerc_launcher_win_tests` | Windows launcher: CNG signature verification, default-OFF update preference and opt-in/out, per-user registration/autostart in disposable HKCU keys, and the Start menu shortcut (v2.6b) |
 | `layerc_capture_integration_tests` | Interactive WGC/DD integration; registered only with `LAYERC_ENABLE_INTERACTIVE_CAPTURE_TESTS=ON` |
 | `layerc_overlay_tests` | HWND attachment, GDI rendering, capture exclusion, and `lctest` matching |
 | `layerc_platform_tests` | Profile store, transaction recovery, named-pipe IPC, and peer authentication |

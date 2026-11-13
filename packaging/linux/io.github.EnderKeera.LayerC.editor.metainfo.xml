@@ -37,6 +37,9 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.7.1" type="stable" date="2026-11-13">
+      <description><p>Applies the accessible design system to the editor: tokenized controls, accent focus rings, a keyboard shortcuts dialog, and AT-SPI names and announcements. Visual flashing is capped at 3 Hz.</p></description>
+    </release>
     <release version="2.7.0" type="stable" date="2026-11-02">
       <description><p>Adds typed panel items, cooldown active duration and timer presets in both editors. The Wayland backend remains an unqualified preview.</p></description>
     </release>
