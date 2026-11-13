@@ -25,16 +25,17 @@ published release.
 | Xbox Game Bar companion (V2.4) | Host, App Service, widgets, transport, and persistence implemented | Manual matrix, certification, and production signing remain; see [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) |
 | Linux portable runtime (V2.6.0) | Headless daemon, control CLI, XDG store, bundles, and packaging implemented | Container CI covers automated behavior |
 | Linux X11 input/overlay/capture (V2.6.1–V2.6.2) | Implemented with XI2, Shape, RandR, Composite, Damage, and XFixes | Physical GNOME Xorg/KDE X11 native and Flatpak evidence is pending; see [`docs/Linux.md`](docs/Linux.md) |
-| Linux editor (v2.6c feature set; package version `2.7.1`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the release workflow publishes the gate-built `.deb` and Flatpak; physical evidence pending |
+| Linux editor (v2.6c feature set; package version `2.7.2`) | FLTK X11 `layere` with the first-release feature set, AT-SPI accessibility, automation editing, visual calibration, autosave and leased live drafts, runtime diagnostics, device capture, appearance, detected tasks and live placement; X11 limits in [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c) | Native `.deb` and Flatpak installed-editor gates and source-bound local rendered/resource/regression qualification pass; [36/36 required walkthrough cases](docs/LinuxEditorPlan.md#required-overlay-walkthrough-audit-repair-2026-10-21) include controlled-target focus/resize, actual click-through and cleanup; [evidence and scope](docs/LinuxEditorPlan.md#rendered-audit-repairs-and-current-local-qualification-2026-10-21); the release workflow publishes the gate-built `.deb` and Flatpak; physical evidence pending |
 | Typed overlay items (V2.7) | Cooldown, timer, counter, and indicator items in the shared core, both editors, Win32/X11 overlays, Wayland/GNOME frames, and Game Bar slots | Shared presentation in release packages; no expanded desktop/hardware support claim |
 | Wayland (V2.7 preview) | Native providers, explicit XWayland degradation, opt-in passive evdev, portal capture and GNOME extension implemented as a preview; the editor remains an XWayland client | Automated headless sway and private-bus fixtures only; no support claim or physical KWin/GNOME evidence; see [`docs/Wayland.md`](docs/Wayland.md) |
 | Gamescope | Not supported | Out of scope |
 
-Package metadata reports **2.7.1**: the typed overlay items and Wayland preview
-of 2.7.0, plus the accessible editor design system and signed launcher
-updates. The version-tag workflow publishes packages only after its Windows,
-Debian, and Flatpak gates pass. Publication does not expand the supported
-desktop matrix; dated evidence retains its stated scope.
+Package metadata reports **2.7.2**: the typed overlay items and Wayland preview
+of 2.7.0, the accessible editor design system and signed launcher updates of
+2.7.1, and the Windows editor's launcher update setting. The version-tag
+workflow publishes packages only after its Windows, Debian, and Flatpak gates
+pass. Publication does not expand the supported desktop matrix; dated evidence
+retains its stated scope.
 Windows ZIP packaging starts LayerC via `layerd.exe` and also contains the
 `layerc.exe` launcher, whose self-updates remain OFF by default
 ([details](#windows-launcher-and-updates-v26b)). Physical Linux evidence and the

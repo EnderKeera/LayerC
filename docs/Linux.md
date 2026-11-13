@@ -39,7 +39,7 @@ platforms uses the shared deterministic fold (ASCII plus the cased Latin-1
 supplement rows; all other codepoints compare byte-exact), replacing the
 former Windows `LCMapStringEx` invariant mapping so Windows and Linux agree.
 
-The package version is **2.7.1**. Typed overlay items and the Wayland preview
+The package version is **2.7.2**. Typed overlay items and the Wayland preview
 are included; support remains X11/headless. Publication does not expand the
 supported desktop matrix, and historical V2.6 evidence does not qualify
 additional desktop/compositor combinations.
@@ -272,7 +272,7 @@ do not broaden device, host, or network access:
 flatpak info --show-commit io.github.EnderKeera.LayerC > "$run/flatpak-commit.txt"
 flatpak info io.github.EnderKeera.LayerC > "$run/flatpak-info.txt"
 flatpak info --show-permissions io.github.EnderKeera.LayerC > "$run/flatpak-permissions.txt"
-sha256sum /path/to/layerc-2.7.1-x86_64.flatpak > "$run/flatpak-bundle.sha256"
+sha256sum /path/to/layerc-2.7.2-x86_64.flatpak > "$run/flatpak-bundle.sha256"
 ```
 
 For native X11, launch only an installed build whose binary hashes were
@@ -772,7 +772,7 @@ the Flatpak bundle, which fetches its runtime from Flathub:
 
 ```sh
 sha256sum --check --ignore-missing SHA256SUMS
-flatpak install --user ./layerc-2.7.1-x86_64.flatpak
+flatpak install --user ./layerc-2.7.2-x86_64.flatpak
 flatpak run io.github.EnderKeera.LayerC          # layere
 ```
 
@@ -785,7 +785,7 @@ The bundle is unsigned (it is not served from a GPG-signed repository), so
 cmake -S . -B build-deb -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr -DLAYERC_REQUIRE_EDITOR=ON
 cmake --build build-deb --parallel
-cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.7.1-1_amd64.deb
+cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.7.2-1_amd64.deb
 ```
 
 CPack derives the library dependencies with `dpkg-shlibdeps` (needs
@@ -794,7 +794,7 @@ Debian 13's main archive has 2.56, so enable `trixie-backports` and install
 from it explicitly:
 
 ```sh
-sudo apt install -t trixie-backports ./layerc_2.7.1-1_amd64.deb
+sudo apt install -t trixie-backports ./layerc_2.7.2-1_amd64.deb
 ```
 
 One `layerc` package carries the daemon, CLIs and editor. It also installs

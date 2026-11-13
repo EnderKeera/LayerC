@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(LayerC VERSION 2.7.1 LANGUAGES C CXX)
+project(LayerC VERSION 2.7.2 LANGUAGES C CXX)
 
 set(LAYERC_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/include")
 file(MAKE_DIRECTORY "${LAYERC_GENERATED_INCLUDE_DIR}/layerc/core")

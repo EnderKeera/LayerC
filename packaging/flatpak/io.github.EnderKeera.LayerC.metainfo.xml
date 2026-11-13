@@ -25,6 +25,9 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.7.2" type="stable" date="2026-11-14">
+      <description><p>Adds a launcher update setting to the Windows editor. The Linux daemon and editor are unchanged from 2.7.1.</p></description>
+    </release>
     <release version="2.7.1" type="stable" date="2026-11-13">
       <description><p>Applies the accessible LayerE design system and caps visual flashing at 3 Hz in every renderer. Wayland remains an unqualified preview.</p></description>
     </release>
