@@ -260,11 +260,12 @@ void editor_main_layout_contracts() {
   constexpr int detail_left = margin + 240 + gap;
   constexpr int preview_from = 1100;
   constexpr int slot_min = 260;
-  const int slot = main_slot_width(1280, margin, detail_left, gap);
-  expect(slot == 322 &&
-             detail_left + slot * 3 + gap * 2 <= 1280 - margin &&
-             detail_left + slot * 3 + gap * 2 > 1280 - margin - 3,
-         "the three settings slots fill the detail column to the margin");
+  constexpr int slot = main_slot_width(1280, margin, detail_left, gap);
+  static_assert(slot == 322 &&
+                    detail_left + slot * 3 + gap * 2 <= 1280 - margin &&
+                    detail_left + slot * 3 + gap * 2 > 1280 - margin - 3,
+                "the three settings slots fill the detail column to the "
+                "margin");
   expect(main_layout_wide(1280, slot, preview_from, slot_min),
          "the default window shows three slots and the preview corner");
   expect(!main_layout_wide(preview_from - 1, slot_min, preview_from,
