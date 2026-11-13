@@ -170,7 +170,7 @@ void EditorWindow::initialize_options(const HWND window) {
   apply_dialog_chrome(window, shell_.capture_exclusion);
   style_dialog_children(window);
   for (const int hint : {IDC_OPTIONS_VISUAL_HINT, IDC_OPTIONS_CAPTURE_HINT,
-                         IDC_TEXT_SIZE_HINT})
+                         IDC_TEXT_SIZE_HINT, IDC_OPTIONS_UPDATES_HINT})
     set_text_tone(GetDlgItem(window, hint), TextTone::subtext);
   layout_options_dialog(window);
   center_over_owner(window);
@@ -183,6 +183,8 @@ void EditorWindow::initialize_options(const HWND window) {
                   GetDlgItem(window, IDC_OPTIONS_CAPTURE_HINT));
   describe_with(GetDlgItem(window, IDC_TEXT_SIZE),
                 GetDlgItem(window, IDC_TEXT_SIZE_HINT));
+  describe_with(GetDlgItem(window, IDC_LAUNCHER_UPDATES),
+                GetDlgItem(window, IDC_OPTIONS_UPDATES_HINT));
   const auto visual = layerc::platform::read_bool_setting(
           layerc::platform::BoolSetting::visual_recognition);
   if (visual.failed())
@@ -197,6 +199,11 @@ void EditorWindow::initialize_options(const HWND window) {
                  overlays.value.value_or(true) ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(window, IDC_EDITOR_CAPTURE_PRIVACY,
                  shell_.capture_exclusion ? BST_CHECKED : BST_UNCHECKED);
+  // Like the launcher, a missing or unreadable preference reads as off.
+  const auto updates = layerc::platform::read_bool_setting(
+      layerc::platform::BoolSetting::launcher_updates);
+  CheckDlgButton(window, IDC_LAUNCHER_UPDATES,
+                 updates.value.value_or(false) ? BST_CHECKED : BST_UNCHECKED);
   const HWND text_size = GetDlgItem(window, IDC_TEXT_SIZE);
   for (const int percent : text_scale_choices) {
     const auto label = std::to_wstring(percent) + L" %";
@@ -218,6 +225,8 @@ bool EditorWindow::apply_options(const HWND window) {
       IsDlgButtonChecked(window, IDC_EDITOR_CAPTURE_PRIVACY) == BST_CHECKED;
   const bool visual =
       IsDlgButtonChecked(window, IDC_VISUAL_MASTER) == BST_CHECKED;
+  const bool updates =
+      IsDlgButtonChecked(window, IDC_LAUNCHER_UPDATES) == BST_CHECKED;
   const LRESULT text_row =
       SendDlgItemMessageW(window, IDC_TEXT_SIZE, CB_GETCURSEL, 0, 0);
   const int text_scale =
@@ -233,6 +242,9 @@ bool EditorWindow::apply_options(const HWND window) {
     saved = false;
   if (!layerc::platform::write_bool_setting(
           layerc::platform::BoolSetting::visual_recognition, visual))
+    saved = false;
+  if (!layerc::platform::write_bool_setting(
+          layerc::platform::BoolSetting::launcher_updates, updates))
     saved = false;
   if (!layerc::platform::write_layerc_registry_dword(
           text_scale_setting, static_cast<std::uint32_t>(text_scale)))
@@ -440,7 +452,7 @@ LRESULT EditorWindow::handle_options_message(const HWND window,
     const int notification = HIWORD(wparam);
     if ((notification == BN_CLICKED &&
          (id == IDC_VISUAL_MASTER || id == IDC_CAPTURE_PRIVACY ||
-          id == IDC_EDITOR_CAPTURE_PRIVACY)) ||
+          id == IDC_EDITOR_CAPTURE_PRIVACY || id == IDC_LAUNCHER_UPDATES)) ||
         (id == IDC_TEXT_SIZE && notification == CBN_SELCHANGE)) {
       EnableWindow(GetDlgItem(window, IDC_OPTIONS_APPLY), TRUE);
       return TRUE;

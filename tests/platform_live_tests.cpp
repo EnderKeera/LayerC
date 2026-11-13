@@ -448,6 +448,24 @@ void settings_key_override() {
                         &stored, &size) == ERROR_SUCCESS &&
                stored == 1,
            "settings writes should land in LAYERC_SETTINGS_KEY");
+    // The editor's Options check box writes the DWORD the launcher reads
+    // (launcher_win_tests pins the launcher's side of the same value).
+    expect(static_cast<bool>(layerc::platform::write_bool_setting(
+               layerc::platform::BoolSetting::launcher_updates, true)),
+           "the launcher update preference should be written");
+    stored = 0;
+    size = sizeof(stored);
+    expect(RegGetValueW(HKEY_CURRENT_USER, key.c_str(), L"Updates",
+                        RRF_RT_REG_DWORD, nullptr, &stored, &size) ==
+                   ERROR_SUCCESS &&
+               stored == 1,
+           "the launcher update preference should be the Updates DWORD");
+    expect(static_cast<bool>(layerc::platform::write_bool_setting(
+               layerc::platform::BoolSetting::launcher_updates, false)) &&
+               layerc::platform::read_bool_setting(
+                   layerc::platform::BoolSetting::launcher_updates)
+                       .value == false,
+           "the launcher update preference should turn off");
   }
   SetEnvironmentVariableW(L"LAYERC_SETTINGS_KEY", nullptr);
   RegDeleteTreeW(HKEY_CURRENT_USER, key.c_str());

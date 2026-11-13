@@ -70,6 +70,14 @@ void editor_dialog_contracts() {
   passed &= expect(
       visual_checkbox_type == BS_AUTOCHECKBOX,
       "the visual master checkbox must retain native auto-toggle semantics");
+  const HWND updates_checkbox = GetDlgItem(dialog, IDC_LAUNCHER_UPDATES);
+  passed &= expect(
+      updates_checkbox != nullptr &&
+          (GetWindowLongPtrW(updates_checkbox, GWL_STYLE) & BS_TYPEMASK) ==
+              BS_AUTOCHECKBOX &&
+          GetDlgItem(dialog, IDC_OPTIONS_UPDATES_HINT) != nullptr,
+      "Options should offer the launcher update check as a native checkbox "
+      "with its hint");
 
   SendMessageW(checkbox, BM_SETCHECK, BST_UNCHECKED, 0);
   SendMessageW(checkbox, BM_CLICK, 0, 0);

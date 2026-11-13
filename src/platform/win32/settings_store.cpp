@@ -15,7 +15,9 @@ constexpr wchar_t settings_registry_key[] = L"Software\\LayerC";
 constexpr const wchar_t *bool_setting_values[] = {
     L"ExcludeFromCapture",      L"VisualRecognitionEnabled",
     L"VisualCaptureNoticeSeen", L"ExcludeEditorFromCapture",
-    L"EditorAdvancedView"};
+    L"EditorAdvancedView",      L"Updates"};
+static_assert(std::size(bool_setting_values) ==
+              static_cast<std::size_t>(BoolSetting::launcher_updates) + 1U);
 
 class UniqueHKey {
 public:

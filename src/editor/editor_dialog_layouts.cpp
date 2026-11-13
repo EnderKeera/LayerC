@@ -63,6 +63,11 @@ void layout_options_dialog(const HWND dialog) {
   top += m.height;
   top += place_text(ui, IDC_TEXT_SIZE_HINT, m.margin + label, top,
                     width - label) +
+         m.gap;
+  ui.move(IDC_LAUNCHER_UPDATES, m.margin, top, width, m.height);
+  top += m.height;
+  top += place_text(ui, IDC_OPTIONS_UPDATES_HINT, m.margin + indent, top,
+                    width - indent) +
          m.group;
   ui.button_row({IDOK, IDCANCEL, IDC_OPTIONS_APPLY}, m.margin + width, top,
                 m.height);

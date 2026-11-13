@@ -36,6 +36,9 @@ enum class BoolSetting : std::uint8_t {
   editor_capture_exclusion,
   // The editor's "Show advanced" view toggle.
   editor_advanced_view,
+  // The launcher's (layerc.exe) update check, the same Updates DWORD it reads.
+  // Missing means off: the launcher makes no network requests.
+  launcher_updates,
 };
 
 [[nodiscard]] SettingReadResult<bool> read_bool_setting(BoolSetting setting);

@@ -108,8 +108,8 @@ void editor_dialog_layout_contracts() {
     layerc::editor::layout_options_dialog(options);
     expect_control_height(options, "Options",
                           {IDC_VISUAL_MASTER, IDC_CAPTURE_PRIVACY,
-                           IDC_EDITOR_CAPTURE_PRIVACY, IDOK, IDCANCEL,
-                           IDC_OPTIONS_APPLY});
+                           IDC_EDITOR_CAPTURE_PRIVACY, IDC_LAUNCHER_UPDATES,
+                           IDOK, IDCANCEL, IDC_OPTIONS_APPLY});
     expect_button_order(options, "Options",
                         {IDOK, IDCANCEL, IDC_OPTIONS_APPLY});
     expect_flat_frames(options, "Options");

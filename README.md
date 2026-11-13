@@ -142,7 +142,9 @@ or run the packaged `layerd.exe` directly; an offline launcher cannot download
 a first build.
 
 The preference is `HKCU\Software\LayerC\Updates` (REG_DWORD); a nonzero value
-opts in, zero or deleting the value opts out. In PowerShell:
+opts in, zero or deleting the value opts out. The Windows editor sets it from
+Tools > Options > **Install updates when LayerC starts**, which reads an unset
+or unreadable value as off. In PowerShell:
 
 ```powershell
 # Opt in for subsequent launches
