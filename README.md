@@ -121,20 +121,19 @@ calibration, and hardware evidence are documented in [`docs/Linux.md`](docs/Linu
 
 ## Windows launcher and updates (v2.6b)
 
-The portable Windows ZIP starts LayerC via `layerd.exe`. With an empty
-`LAYERC_UPDATE_PUBLIC_KEY`, it omits `layerc.exe`; the launcher is packaged only
-once a release key is provisioned. The launcher and its tests are still built
-unconditionally.
+The portable Windows ZIP starts LayerC via `layerd.exe`. It also contains
+`layerc.exe` when `LAYERC_UPDATE_PUBLIC_KEY` is non-empty, which by default it
+is: CMake reads the committed release key from
+`packaging/windows/update-signing-key.hex`. The launcher and its tests are built
+either way.
 
 `layerc.exe` installs its launcher per user under
 `%LOCALAPPDATA%\Programs\LayerC`, registers Apps & Features and a Start menu
 shortcut, starts the already-installed `layerd`, and exits. Autostart is a
 separate opt-in (`--autostart=on|off`).
 
-**Self-updates are OFF by default.** Production release signing is not yet
-provisioned: this tree has no production public key, no release-signing secret
-is configured, and the release workflow publishes ZIPs rather than signed
-update assets. An unset, unreadable, or non-DWORD update preference stays OFF.
+**Self-updates are OFF by default.** An unset, unreadable, or non-DWORD update
+preference stays OFF.
 With updates OFF, the launcher skips the update path entirely, performs no
 network I/O, and still starts the installed daemon. Keep an existing install
 or run the packaged `layerd.exe` directly; an offline launcher cannot download
@@ -144,7 +143,7 @@ The preference is `HKCU\Software\LayerC\Updates` (REG_DWORD); a nonzero value
 opts in, zero or deleting the value opts out. In PowerShell:
 
 ```powershell
-# Opt in for subsequent launches, only after signed releases are provisioned
+# Opt in for subsequent launches
 reg add HKCU\Software\LayerC /v Updates /t REG_DWORD /d 1 /f
 # Opt out persistently (also the default when the value is absent)
 reg add HKCU\Software\LayerC /v Updates /t REG_DWORD /d 0 /f
@@ -165,19 +164,17 @@ interruption before activation keeps the previous build selected. Same-build-ID
 repairs park the old directory until the replacement is committed and recover
 it on the next read if the replacement directory is absent.
 
-To provision signing, the release owner generates an ECDSA P-256 key pair
-outside the repository (`openssl ecparam -name prime256v1 -genkey -noout -out
-<private-key-path>`), commits only the uncompressed public point (130 hex
-characters starting `04`) to `packaging/windows/update-signing-key.hex`, or
-supplies it through `LAYERC_UPDATE_PUBLIC_KEY` at CMake configure time.
-The future signing job must use the PEM private key in the repository Actions
-secret **`LAYERC_UPDATE_SIGNING_KEY`**, sign the exact `layerc_manifest` output
-with `openssl dgst -sha256 -sign`, and publish `manifest.json`, its detached
-DER `manifest.sig`, and the SHA-256-named file assets. This is not wired into
-`release.yml` yet; do not enable unsigned updates. See the
-[offline Windows update signing instructions](packaging/windows/UPDATE-SIGNING.md)
-for local preparation and verification; local signing does not publish assets
-or provision a production key.
+An opted-in launcher follows tagged releases only. Each `v*.*.*` tag's
+`release.yml` run signs the tested install tree with the ECDSA P-256 release
+key and publishes `manifest.json`, its detached DER `manifest.sig`, and the
+SHA-256-named file assets to the `rolling` release. The rolling `main` ZIP is
+not an update. The feed's sequence follows the version, so a launcher never
+moves to an older release. Until the first tag carrying the release key is
+published, there is no feed, and an opted-in launcher reports the update as
+skipped. Signing, key provisioning and the publication order are in
+[CONTRIBUTING.md](CONTRIBUTING.md#release-signing-windows-updates). Offline
+preparation and verification are in the
+[Windows update signing instructions](packaging/windows/UPDATE-SIGNING.md).
 
 ## Build and package commands
 

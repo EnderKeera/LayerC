@@ -806,8 +806,8 @@ endif()
 
 if(WIN32)
     foreach(layerc_runtime_target IN ITEMS layerc_launcher layerd layere layercal layerw)
-        # A keyless launcher cannot bootstrap a first build. Portable ZIPs
-        # start via layerd.exe until a release key is provisioned.
+        # A keyless launcher cannot bootstrap a first build, so a portable
+        # ZIP configured without a release key starts via layerd.exe only.
         if(layerc_runtime_target STREQUAL "layerc_launcher" AND
            "${LAYERC_UPDATE_PUBLIC_KEY}" STREQUAL "")
             continue()

@@ -95,7 +95,9 @@ suites also include the PowerShell benchmark-result test and dependency-dependen
 fixtures; `tools/test-gates.json` is authoritative.
 [`release.yml`](.github/workflows/release.yml) builds `v*.*.*` tags with the
 same setup and `build-package` actions, so benchmark gating cannot drift.
-`rolling` ships only the Windows x64 ZIP. A tag publishes a non-prerelease
+`main` puts only the Windows x64 ZIP on `rolling`; tags also add the signed
+launcher update feed there
+([Release signing](#release-signing-windows-updates)). A tag publishes a non-prerelease
 release with the Windows ZIP, the Debian 13 `.deb` that its own
 `debian:stable` gate (`--editor required --package required --wayland
 required`, the same image digest as `ci.yml`) built, installed and removed,
@@ -205,28 +207,45 @@ A contribution is ready when:
 
 ## Release signing (Windows updates)
 
-The launcher's self-update preference defaults to OFF because production
-signing is not provisioned. The empty-public-key guard is separate: opting in
-cannot make update requests from a build without a valid key. User opt-in/out
-and `--offline` are documented in
+The launcher's self-update preference defaults to OFF; users opt in. The
+empty-public-key guard is separate: opting in cannot make update requests from
+a build without a valid key. User opt-in/out and `--offline` are documented in
 [README.md](README.md#windows-launcher-and-updates-v26b).
 
 `tools/update_manifest.cpp` (`layerc_manifest`) emits **unsigned**, byte-stable
 JSON. The launcher verifies a detached ECDSA P-256 / SHA-256 signature over
 those exact bytes, in OpenSSL's DER format, before parsing. The public key in
 `cmake/release_key.hpp.in` comes from the CMake cache variable
-`LAYERC_UPDATE_PUBLIC_KEY`; its default is the contents of
+`LAYERC_UPDATE_PUBLIC_KEY`; its default is the contents of the committed
 `packaging/windows/update-signing-key.hex`, or empty if that file is absent.
-Neither a production key file nor a release-signing secret is currently
-configured. `.github/workflows/release.yml` only publishes the Windows ZIP;
-it does not generate, sign, or upload update manifests or hash-named assets.
-The portable ZIP starts LayerC via `layerd.exe`; CMake installs `layerc.exe`
-into it only once `LAYERC_UPDATE_PUBLIC_KEY` is non-empty. A keyless launcher
-cannot bootstrap a first build, so it is omitted from the ZIP while the
-launcher and its tests still build unconditionally. Do not attach an unsigned
-manifest to that workflow.
+The matching PEM private key is the repository Actions secret
+**`LAYERC_UPDATE_SIGNING_KEY`**; the release owner keeps its only other copy
+outside any checkout. Shipped launchers trust only their compiled-in key, so
+replacing it strands every install built with the old one.
 
-Before enabling release updates, the release owner must:
+The portable ZIP starts LayerC via `layerd.exe`; CMake installs `layerc.exe`
+into it only while `LAYERC_UPDATE_PUBLIC_KEY` is non-empty. A keyless launcher
+cannot bootstrap a first build, so it is then omitted from the ZIP while the
+launcher and its tests still build unconditionally.
+
+For every `v*.*.*` tag, `release.yml` publishes the update feed that launchers
+read from the release named by `LAYERC_UPDATE_CHANNEL` (`rolling`, embedded as
+`release_tag`):
+
+| Job | Update-feed role |
+| --- | --- |
+| `version` | Requires CMake's `LAYERC_UPDATE_CHANNEL` default to equal the workflow's `UPDATE_CHANNEL` and derives the sequence `major * 1000000 + minor * 1000 + patch` (minor and patch at most 999) |
+| `build` | Uploads the tested `out/layerc` install tree that the ZIP packages, with `layerc_manifest.exe` and `layerc_verify_update.exe`, as `layerc-update-payload` |
+| `sign-update` | The only job that reads the secret; builds nothing. Runs `tests/update_release_tests.py` with disposable keys, signs the payload with `tools/prepare_update_release.py`, deletes its temporary key file, and checks the result with the launcher's CNG verifier |
+| `publish-update` | Runs only after the versioned release is published (`concurrency: update-feed`). Refuses a feed whose published sequence is higher, or equal for another commit; uploads only the hash-named assets `rolling` lacks, then replaces `manifest.sig` and `manifest.json` |
+
+Launchers therefore move only between tagged releases, never to an older one,
+and `main` builds never change the feed: `publish-rolling.sh` replaces only
+`*.zip` and `*.staged` assets. Hash-named assets are never deleted, so a
+release owner who prunes them must keep every one the current manifest names.
+
+To provision a key, which was done once for **EnderKeera/LayerC** and is
+repeated only for a fork or a deliberate rotation, the release owner must:
 
 1. Generate a P-256 key pair in a protected directory **outside the checkout**.
    Never commit or print the private key. Example in PowerShell 7 with OpenSSL
@@ -260,38 +279,20 @@ Before enabling release updates, the release owner must:
    shipped launchers trust only their compiled-in key.
 
 3. Store the PEM private key in a repository Actions secret named
-   **`LAYERC_UPDATE_SIGNING_KEY`**, reserved for a future signing job. It is not
-   used by the current workflow. For example, supply it on standard input
-   without echoing it or placing its value in command arguments:
+   **`LAYERC_UPDATE_SIGNING_KEY`**, which only `sign-update` reads. Supply it
+   on standard input without echoing it or placing its value in command
+   arguments:
 
    ```powershell
    Get-Content -LiteralPath "$keyDir\update-signing.pem" -Raw |
      gh secret set LAYERC_UPDATE_SIGNING_KEY -R EnderKeera/LayerC
    ```
 
-4. Install the release payload, generate its manifest, then sign the exact
-   output bytes. Use a strictly increasing sequence for each publication and
-   the payload's full commit SHA; the channel must match
-   `LAYERC_UPDATE_CHANNEL` (default `rolling`):
-
-   ```powershell
-   cmake --install build/vs2026 --config Release --prefix out/layerc
-   $sequence = 1 # Example only: choose a value greater than every prior publication.
-   $commit = git rev-parse HEAD
-   .\build\vs2026\Release\layerc_manifest.exe --root .\out\layerc --channel rolling --sequence $sequence --commit $commit --output .\out\manifest.json
-   openssl dgst -sha256 -sign "$keyDir\update-signing.pem" -out .\out\manifest.sig .\out\manifest.json
-   ```
-
-   Verify the signature with the matching public key before publishing. Do
-   not reformat JSON, change newlines, or edit the manifest after signing.
-   Upload `manifest.json`, detached DER `manifest.sig`, and each payload file
-   as an asset named by its lowercase SHA-256 from the manifest (deduplicated
-   by hash) to **EnderKeera/LayerC** at the tag named by `LAYERC_UPDATE_CHANNEL`
-   (default `rolling`, also embedded as `release_tag`).
-   A future job must retrieve the secret without logging it and remove its
-   temporary private-key file after signing. Publishing only a ZIP is not
-   an update feed; retain the OFF default until this signed feed and embedded
-   key are provisioned and verified. Users must still explicitly opt in.
+Publish feeds only through `release.yml`. To prepare and verify one locally
+without publishing, use the offline helper in
+[packaging/windows/UPDATE-SIGNING.md](packaging/windows/UPDATE-SIGNING.md).
+Never upload an unsigned manifest or edit one after signing. Don't publish a
+feed by hand either: a higher sequence would block every later tag.
 
 ## Reporting issues
 

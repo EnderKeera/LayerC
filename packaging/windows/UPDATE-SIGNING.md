@@ -7,10 +7,11 @@ key matches an explicit pinned public key, signs the exact manifest bytes, and
 atomically writes a content-addressed output directory. It never uploads or
 publishes assets.
 
-**Production updates remain unprovisioned and OFF by default.** This helper
-creates no production key, does not change launcher behavior, and does not
-publish an update feed. Do not enable updates or infer production signing from
-a local disposable-key test.
+**Launcher updates stay OFF by default; users opt in.** This helper creates no
+key, does not change launcher behavior, and does not publish an update feed.
+The production feed is signed and published only by `release.yml` for `v*.*.*`
+tags ([CONTRIBUTING.md](../../CONTRIBUTING.md#release-signing-windows-updates)).
+Do not infer production signing from a local disposable-key test.
 
 ## Prerequisites and local invocation
 
@@ -107,9 +108,7 @@ key material.
 
 A passing local test establishes only that the local helper and native CNG
 verifier interoperate for disposable keys and test payloads. It is not evidence
-that a production key or secret is provisioned, a production release was
-signed, the release assets were published, or the update feed was tested. There
-is no automatic publishing step; release publication and any production key
-provisioning remain separate, explicit release-owner actions. Keep launcher
-updates OFF until production signing and the signed feed are provisioned and
-verified.
+that a production release was signed, the release assets were published, or the
+update feed was tested. The `sign-update` job runs this same suite before it
+signs with the production key; publication happens only in `publish-update`.
+Do not upload assets prepared locally to the `rolling` release.
