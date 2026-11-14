@@ -8,6 +8,7 @@ owns each decision and describes the CI and release gates.
 | Change | Read |
 | --- | --- |
 | Setup, programs, supported surfaces, profile format, test targets | [`README.md`](README.md) |
+| Architecture, invariants, code conventions | [Project boundaries](#project-boundaries) |
 | Editor UI on either platform (binding design rules) | [`docs/DesignSystem.md`](docs/DesignSystem.md) |
 | Linux adapters, CLI, packaging, or physical evidence | [`docs/Linux.md`](docs/Linux.md) |
 | Desktop/hardware evidence | [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md) |
@@ -24,7 +25,7 @@ Preserve unrelated worktree changes and keep generated `build/`, `build-*/`,
 content out of commits. Use disposable profiles under `examples/` for
 mutation-heavy local checks.
 
-The non-negotiable project boundaries apply to every
+The non-negotiable [project boundaries](#project-boundaries) apply to every
 change: passive input, no anti-cheat bypass, no telemetry/network beyond the
 same-package Game Bar service and the launch-time `layerc.exe` updater,
 monotonic timing, demand-driven services, and durable profile compatibility.
@@ -49,13 +50,84 @@ tests. The checker compares token tables/JSON/source, rejects local colors,
 rounded chrome and literal control heights, and checks resource/menu wording.
 It does not prove layout, reading order or accessibility: attach relevant
 rendered screenshots and describe keyboard/accessibility checks, including
-unobserved platform or hardware gaps. Follow the PR
-checklist. Propose and agree a specification change before deviating;
-update its implementation, tokens, documentation and tests together.
+unobserved platform or hardware gaps. Follow the PR checklist. Propose and agree
+a specification change before deviating; update its implementation, tokens,
+documentation and tests together.
+
+## Project boundaries
+
+### Product
+
+- Input is passive: never block, modify, or synthesize it. XTest is test-only and
+  must not link into `layerd`.
+- No injection, hooks, game-memory reads, drivers, administrator elevation, or
+  anti-cheat bypass.
+- No telemetry or network access, with two exceptions: the same-package Game
+  Bar App Service `LayerC.GameBar.v1`, and the Windows launcher `layerc.exe`,
+  which may make anonymous HTTPS GETs to this repository's GitHub release at
+  launch to update itself and the app, can be turned off by the user, and
+  exits after starting `layerd`. `layerd`, `layere`, `layercal`, and `layerw`
+  never access the network or link an HTTP client.
+- Cooldowns, retries, deadlines, and timers use monotonic clocks.
+- Optional services are demand-driven, idle-blocking, owned, and joined.
+  Unavailable capabilities retain visible fault reasons without weakening
+  unrelated features.
+- Preserve profile compatibility and unsupported bindings. Move profiles between
+  Windows and Linux through validated JSON or `.layercprofile` bundles, never by
+  copying a platform store.
+- Gamescope and Wayland are unsupported in V2.6; do not imply otherwise. The
+  V2.7 Wayland backend is in development under
+  [`docs/Wayland.md`](docs/Wayland.md); it makes no support claim until it
+  lands. Its only global Wayland input source is passive evdev, opt-in and
+  dependent on the user's own `input` group membership; uinput is test-only.
+  Gamescope stays unsupported.
+
+### Architecture
+
+- Keep shared-core interfaces free of Win32/X11 handles and platform headers.
+- Reuse core JSON, text, UTF-8, hashing, and validation. Emit byte-stable JSON
+  through `json::append_*`; do not add platform-local serializers or duplicate
+  normalization.
+- Profile writes use the existing durable `stage -> commit` transaction,
+  one-writer ownership, backup/journal markers, and crash recovery.
+- Derive automation limits and schemas from the current parser and
+  `src/core/include/layerc/core/automation.hpp`. Validate the complete winning
+  effect set before committing external effects; persistent state remains under
+  transactional `_state` storage.
+- Shared mutable data is mutex-protected with value-copy boundaries. The daemon
+  owns one platform event/message loop.
+
+On Windows, overlays stay non-activating and click-through. Visual capture uses
+WGC with Desktop Duplication fallback and explicit unavailable/fault
+diagnostics. The isolated worker remains authenticated, Job-bounded,
+kill-on-close, and demand-launched. Game Bar-specific limits and authority live
+in [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md).
+
+On Linux, base profiles live in XDG config, sidecars/state in XDG data, and
+authenticated control sockets in `XDG_RUNTIME_DIR` or the private documented
+fallback. One X11 connection is shared by adapters and integrated into the
+blocking event loop. XI2 input is read-only; Shape overlays stay hidden unless
+an empty input region is verified. Composite/Damage capture uses the bounded
+documented fallback. Headless operation retains store/control behavior while
+reporting graphical capabilities unavailable. See [`docs/Linux.md`](docs/Linux.md)
+for exact contracts.
+
+### Code conventions
+
+- Use C++20 and keep MSVC/GCC/MinGW builds warning-free with the flags configured
+  by CMake.
+- Keep translation units focused and around 1000 lines or less.
+- Prefer `optional`/`variant`, typed `*Error` values, and `[[nodiscard]]` for
+  fallible returns.
+- Use the existing `layerc::core`, `platform`, `capture`, `runtime`,
+  `daemon`, `editor`, and `gamebar` namespaces as appropriate.
+- Keep automated, interactive-hardware, physical Linux, signing, and
+  certification evidence distinct; do not promote unobserved or skipped
+  coverage.
 
 ## CI and release gates
 
-CI, release, and review/comment automation use GitHub-hosted runners:
+CI, release, and evidence-comment automation use GitHub-hosted runners:
 `windows-2022` for Windows builds, `ubuntu-24.04` for Linux build and Flatpak
 jobs, and `ubuntu-latest` for workflow lint, publishing, and automation.
 GitHub-hosted jobs normally have a 10-minute timeout. The Windows CI and

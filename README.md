@@ -511,5 +511,5 @@ treating the list as a required reading stack.
 - [`docs/DesktopEvidence.md`](docs/DesktopEvidence.md) — submitting desktop and hardware test evidence to pull requests.
 - [`docs/GameBarCompanion.md`](docs/GameBarCompanion.md) — Game Bar architecture and invariants.
 - [`docs/GameBarCompanion.audit.md`](docs/GameBarCompanion.audit.md) — V2.4 release-evidence record.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, CI/release gates, desktop evidence, and PR rules.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, project boundaries, CI/release gates, desktop evidence, and PR rules.
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — vendored dependency notices.

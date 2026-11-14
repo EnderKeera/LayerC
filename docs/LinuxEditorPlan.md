@@ -30,7 +30,7 @@ The ordinary editor window and the daemon's game overlays are separate surfaces.
 | Shared editor behavior | Document, history, validation, and core simulation are reuse candidates. Some implementation helpers and the commit/live-edit orchestration still depend on the Windows frontend; they need focused extraction. |
 | Linux V2.6 | `layerd`, `layerctl`, and X11 `layercal` exist. Linux LayerE and graphical calibration were deferred when this plan started (the v2.6c editor status is recorded below). [Linux.md](Linux.md) owns current support claims. |
 | Automated Linux checks | [run-linux-tests.sh](../tools/run-linux-tests.sh) covered headless, five required X11 suites under Xvfb, installed-program smokes, and optional/required Flatpak stages; Change 6 adds the editor and package stages. |
-| Existing GUI recipe | A local Xvfb/Openbox recipe describes, test input, screenshots, and overlay pixel checks. It is a recipe, not a complete walkthrough runner; its old keyboard-binding example needs correction against current source. |
+| Existing GUI recipe | A local Xvfb/Openbox recipe describes test input, screenshots, and overlay pixel checks. It is a recipe, not a complete walkthrough runner; its old keyboard-binding example needs correction against current source. |
 | Local tools | Debian WSL2 has Xvfb and build/X11 development dependencies. Openbox, xdotool, x11-apps, and ImageMagick were absent during inspection. Windows `cua-driver` is installed; a Linux computer-use bridge has not been verified. |
 | Resource evidence | No running Windows LayerE was available for a current memory measurement. The historical plan excludes the editor from gameplay memory budgets, so daemon budgets cannot be presented as editor measurements. |
 
