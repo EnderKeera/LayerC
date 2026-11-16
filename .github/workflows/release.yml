@@ -83,7 +83,7 @@ jobs:
         uses: ./.github/actions/setup-windows-build
       - name: Build, test, and package
         uses: ./.github/actions/build-package
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: layerc-release-package
           path: build/ci/*.zip
@@ -97,7 +97,7 @@ jobs:
           New-Item -ItemType Directory -Force build/update-tools | Out-Null
           Copy-Item build/ci/layerc_manifest.exe, `
             build/ci/layerc_verify_update.exe -Destination build/update-tools
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # Not layerc-release-*: publish expects exactly three package assets.
           name: layerc-update-payload
@@ -170,7 +170,7 @@ jobs:
           & "$env:TOOLS/layerc_verify_update.exe" $publicKey `
             "$feed/manifest.json" "$feed/manifest.sig"
           if ($LASTEXITCODE -ne 0) { throw 'Native CNG verification failed.' }
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: layerc-update-feed
           path: out/update-feed/
@@ -196,13 +196,13 @@ jobs:
           --editor required --package required --wayland required
       - name: Upload Linux evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: layerc-evidence-release-linux
           path: out/linux-release/debian-stable/**
           if-no-files-found: warn
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: layerc-release-deb
           path: out/linux-release/debian-stable/packages/layerc_*.deb
@@ -239,13 +239,13 @@ jobs:
           --flatpak required --flatpak-only
       - name: Upload Flatpak evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: layerc-evidence-release-flatpak
           path: out/linux-flatpak-release/**
           if-no-files-found: warn
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: layerc-release-flatpak
           path: out/linux-flatpak-release/packages/LayerC.flatpak
