@@ -56,13 +56,13 @@ class SourceRules(unittest.TestCase):
                 self.assertIn("square-chrome", [item[1] for item in self.visual(name + ";")])
 
     def test_only_actual_overlay_preview_can_round(self):
-        self.assertEqual([], self.visual("RoundRect();", "src/editor/linux/editor_preview.cpp"))
+        self.assertEqual([], self.visual("RoundRect();", "src/editor/fltk/editor_preview.cpp"))
         text = "void draw_bar_preview() { RoundRect(); }\nvoid draw_dialog() { RoundRect(); }"
         found = self.visual(text, "src/editor/editor_draw.cpp")
         self.assertEqual(1, len(found))
         self.assertEqual(2, found[0][0])
         self.assertEqual(2, len(self.visual(text)))
-        self.assertTrue(self.visual("auto fill = 0x123456;", "src/editor/linux/editor_preview.cpp"))
+        self.assertTrue(self.visual("auto fill = 0x123456;", "src/editor/fltk/editor_preview.cpp"))
 
     def test_control_heights_reject_literals_in_single_line_controls(self):
         for widget in ("Fl_Input", "Fl_Choice", "Fl_Button", "EditorChoice", "EditorField<Fl_Input>"):
@@ -76,7 +76,7 @@ class SourceRules(unittest.TestCase):
     def test_control_heights_allow_metrics_multiline_and_windows(self):
         text = "new Fl_Input(x, y, std::max(10, width), editor_input_height); new Fl_Multiline_Output(x, y, w, 120); new Fl_Double_Window(800, 600);"
         self.assertEqual([], self.visual(text))
-        self.assertEqual([], self.visual("const int button_h = 30;", "src/editor/linux/editor_style.hpp"))
+        self.assertEqual([], self.visual("const int button_h = 30;", "src/editor/fltk/editor_style.hpp"))
 
     def test_writing_resources_and_both_menu_formats(self):
         path = Path("menu.rc")
@@ -131,7 +131,7 @@ class TokenRules(unittest.TestCase):
         self.put(rules.LINUX_THEME, source)
         self.put(rules.COLOR_MATH, "int accent_2_blue = 0x60b0ff; int accent_2_violet = 0xb99bff;\n")
         self.put("src/editor/dialog_layout.hpp", "int native_control_height = 26;")
-        self.put("src/editor/linux/editor_style.hpp", "int editor_input_height = 28; int editor_button_height = 30;")
+        self.put("src/editor/fltk/editor_style.hpp", "int editor_input_height = 28; int editor_button_height = 30;")
 
     def put(self, relative, text):
         path = self.root / relative
@@ -195,7 +195,7 @@ class TokenRules(unittest.TestCase):
         self.assertTrue(rules.token_violations(self.root))
 
     def test_control_metric_mutation_is_caught(self):
-        self.put("src/editor/linux/editor_style.hpp", "int editor_input_height = 29; int editor_button_height = 30;")
+        self.put("src/editor/fltk/editor_style.hpp", "int editor_input_height = 29; int editor_button_height = 30;")
         self.assertTrue(rules.token_violations(self.root))
 
     def test_missing_spec_fails_closed(self):

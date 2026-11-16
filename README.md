@@ -297,6 +297,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_benchmark_result_tests` | Benchmark result-writer contract (registered when PowerShell is available) |
 | `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |
 | `layerc_editor_document_tests` | Shared editor document: cooldown-removal dependencies, undo/redo, the commit pipeline, store round trip, sidecar recovery, and upgrade consent |
+| `layerc_editor_accessibility_model_tests` | Toolkit-neutral editor accessibility model: validated atomic tree publication, text geometry checks, and value-copy boundaries |
 
 ### Windows
 
@@ -312,6 +313,8 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_companion_tests` | Companion sidecars, snapshots, transport, and stale expiration |
 | `layerc_editor_tests` | Editor dialogs, v2 contrast/focus/glyph and contrast-theme seams, layout and accessibility contracts, schema helpers, and automation palette |
 | `layerc_calibration_tests` | Calibration window layout, behavior, and worker interaction |
+| `layerc_windows_fltk_accessibility_tests` | FLTK editor trial (not shipped): a real `IUIAutomation` client reads a fixture window's names, roles, descriptions and reading order, edits and invokes through Value/Invoke, checks read-only refusal, text ranges, text/selection/value/focus events and status notifications, and sees providers disconnect on close |
+| `layerc_windows_fltk_smoke` | `layere_fltk --smoke`: the unshipped FLTK trial opens its empty window with its UI Automation bridge, then closes |
 
 ### Linux
 
@@ -335,6 +338,7 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
+| `layerc_linux_editor_platform_tests` | Editor platform services: stable process identity, folder launcher arguments and exit status, an idle missing launcher, and a visible calibration-unavailable fault |
 | `layerc_linux_editor_model_tests` | Production editor session: validated profile edits and durable save/roundtrip with retained cooldown/panel/binding fields, selection identity across a rescan, atomically refused invalid candidates, honest offline reload, and appearance (preset contrast floors, status glyph classification, outlines, desktop text scaling and XSETTINGS parsing)/task/placement helpers |
 | `layerc_linux_editor_session_tests` | Toolkit-free editor session: drafts and history, mutation candidates with preserved data, save/delete failures, enablement, reviewed import/export and import races, and field parsing |
 | `layerc_linux_editor_widget_tests` | FLTK editor under an X display (CTest label `editor`): drafts and history, cooldown/binding/panel forms, dirty prompts, binding capture, menus, measured shortcuts, small-window layout, AT-SPI semantics, and offscreen focus/tab/glyph painting |

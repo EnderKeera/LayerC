@@ -10,17 +10,17 @@ import re
 from pathlib import Path
 
 NATIVE_THEME = "src/platform/win32/include/layerc/platform/native_theme.hpp"
-LINUX_THEME = "src/editor/linux/editor_appearance.cpp"
+LINUX_THEME = "src/editor/fltk/editor_appearance.cpp"
 # The color math both editors share, with the two `accent_2` values.
 COLOR_MATH = "src/editor/common/editor_color.hpp"
 TOKEN_SOURCES = frozenset({NATIVE_THEME, LINUX_THEME, "src/platform/win32/native_theme.cpp",
                            COLOR_MATH, "src/editor/common/editor_color.cpp"})
 SHARED_CHROME = (NATIVE_THEME, "src/platform/win32/native_theme.cpp",
                  "src/platform/win32/native_controls.cpp")
-METRIC_SOURCES = frozenset({"src/editor/dialog_layout.hpp", "src/editor/linux/editor_style.hpp"})
+METRIC_SOURCES = frozenset({"src/editor/dialog_layout.hpp", "src/editor/fltk/editor_style.hpp"})
 # These modules render a profile's overlay, not editor chrome. Only rounding
 # (not arbitrary colors/metrics) is exempt here.
-OVERLAY_PREVIEWS = frozenset({"src/editor/linux/editor_preview.cpp", "src/editor/editor_preview_render.cpp"})
+OVERLAY_PREVIEWS = frozenset({"src/editor/fltk/editor_preview.cpp", "src/editor/editor_preview_render.cpp"})
 NONCODE = re.compile(
     r'//[^\n]*|/\*.*?\*/|(?:u8|u|U|L)?R"(?P<delim>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=delim)"'
     r'|(?:u8|u|U|L)?"(?:\\.|[^"\\])*"|(?:u|U|L)?\'(?:\\.|[^\'\\\n])\'', re.DOTALL)
@@ -215,8 +215,8 @@ def token_violations(root: Path) -> list[tuple[Path, int, str, str]]:
             mismatch(json_path, name, tokens.get(name), expected)
 
     metrics = (("src/editor/dialog_layout.hpp", "native_control_height", "win-control-height"),
-               ("src/editor/linux/editor_style.hpp", "editor_input_height", "linux-input-height"),
-               ("src/editor/linux/editor_style.hpp", "editor_button_height", "linux-button-height"))
+               ("src/editor/fltk/editor_style.hpp", "editor_input_height", "linux-input-height"),
+               ("src/editor/fltk/editor_style.hpp", "editor_button_height", "linux-button-height"))
     for relative, constant, name in metrics:
         path = root / relative
         try:

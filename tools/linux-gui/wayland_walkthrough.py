@@ -19,7 +19,7 @@ from walkthrough import GAME, MINIMUM, Walk, check  # noqa: E402
 
 NATIVE = "LayerC Native Window"
 DIAGNOSTICS = "Runtime diagnostics"
-DAEMON = "Daemon status and capability faults"
+DAEMON = "LayerD status and capability faults"
 TASKS = "Detected Tasks — LayerE"
 SCOPE = "Wayland session: only XWayland windows are listed (degraded)"
 PROVIDERS = ("windows", "monitors", "input", "overlay", "capture")
@@ -80,7 +80,7 @@ class WaylandWalk(Walk):
               "xwayland_windows_only" in windows["reasons"],
               f"XWayland window tracking is not reported degraded: {windows}")
         self.focus("LayerE", "wayland-status-focused")
-        self.click(self.find("button", "Daemon status"), "wayland-status-refresh")
+        self.click(self.find("button", "LayerD status"), "wayland-status-refresh")
         text = self.until(lambda n: (t := self.find("text", DAEMON, n).get("text", "")) and
                           "Wayland (wlroots), XWayland connected" in t and t,
                           "Daemon status does not name the Wayland session")

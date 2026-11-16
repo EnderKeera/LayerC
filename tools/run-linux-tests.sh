@@ -256,10 +256,12 @@ run_editor_smoke() {
     bash "$source_dir/tools/linux-editor-smoke.sh" "$@"
 }
 
-# Statically linked miniz must ship its MIT notice in every Linux install tree.
+# Statically linked miniz must ship its MIT notice in every Linux install tree,
+# and FLTK its licence (the Flatpak links FLTK statically).
 assert_notices() {
   local root=$1 notice
-  for notice in THIRD_PARTY_NOTICES.md miniz/LICENSE miniz/UPSTREAM.md; do
+  for notice in THIRD_PARTY_NOTICES.md miniz/LICENSE miniz/UPSTREAM.md \
+      fltk/COPYING fltk/UPSTREAM.md; do
     if [[ ! -s $root/share/licenses/LayerC/$notice ]]; then
       echo "error: $root lacks share/licenses/LayerC/$notice" >&2
       return 1

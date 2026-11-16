@@ -55,6 +55,26 @@ function(layerc_add_test target)
     set_tests_properties(${target} PROPERTIES ${properties} LABELS "${test_labels}")
 endfunction()
 
+if(TARGET layerc_editor_fltk_uia)
+    layerc_add_test(layerc_windows_fltk_accessibility_tests WIN32
+        SOURCES tests/windows_fltk_accessibility_tests.cpp
+        LINK layerc_editor_fltk_uia TIMEOUT 60 LABELS required editor)
+endif()
+if(TARGET layere_fltk)
+    add_test(NAME layerc_windows_fltk_smoke COMMAND layere_fltk --smoke)
+    set_tests_properties(layerc_windows_fltk_smoke PROPERTIES
+        TIMEOUT 15 LABELS "required;editor")
+    if(MINGW)
+        get_filename_component(fltk_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        set_tests_properties(layerc_windows_fltk_smoke PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${fltk_runtime_dir}")
+    endif()
+endif()
+
+layerc_add_test(layerc_editor_accessibility_model_tests
+    SOURCES tests/editor_accessibility_model_tests.cpp
+    LINK layerc_editor_accessibility TIMEOUT 30)
+
 layerc_add_test(layerc_runtime_tests
     SOURCES tests/runtime_services_tests.cpp tests/runtime_display_diagnostics_tests.cpp
     LINK layerc_runtime)
@@ -367,6 +387,10 @@ if(NOT WIN32)
     # The toolkit suite is its own gate (label editor), so builds without the
     # editor keep an unchanged x11 gate and editor gates require it by name.
     if(TARGET layerc_editor_fltk)
+        layerc_add_test(layerc_linux_editor_platform_tests
+            SOURCES tests/linux_editor_platform_tests.cpp
+            LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
+        layerc_editor_build_runtime(layerc_linux_editor_platform_tests)
         layerc_add_test(layerc_linux_editor_widget_tests
             SOURCES tests/linux_editor_widget_tests.cpp
                 tests/linux_editor_items_tests.cpp

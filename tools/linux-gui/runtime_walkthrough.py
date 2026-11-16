@@ -37,7 +37,7 @@ class RuntimeWalk:
         if version is None:
             raise AssertionError("diagnostics did not name the LayerD version")
         self.notes["version"] = version.group(1)
-        self.window("Runtime Diagnostics")
+        self.window(DIAGNOSTICS)
         self.automation_resources("diagnostics-open")
         self.request("daemon_stop")
         try:
@@ -62,7 +62,7 @@ class RuntimeWalk:
                     raise
         self.click(self.find("button", "Close"), "diagnostics-closed")
         for attempt in range(15):
-            if not any(w["name"].startswith("Runtime Diagnostics") for w in self.shot["windows"]):
+            if not any(w["name"].startswith(DIAGNOSTICS) for w in self.shot["windows"]):
                 break
             time.sleep(0.2)
             self.capture(f"diagnostics-close-wait-{attempt}")
@@ -74,11 +74,14 @@ class RuntimeWalk:
     def case_help_and_commands(self: Any):
         self.focus("LayerE", "help-focused")
         self.key("F1", "help-shortcuts")
-        shortcuts = self.until(lambda n: (t := self.find("text", "Keyboard shortcuts — LayerE", n)
-                                          .get("text", "")) and t,
+        # Keyboard shortcuts is a two-column list: every row is "key<TAB>description".
+        shortcuts = self.until(lambda n: [row["name"] for row in n
+                                          if row["role"] == "list item"
+                                          and "\t" in (row.get("name") or "")],
                                "F1 did not show the keyboard shortcuts")
-        require("F2\tRename" in shortcuts and "Ctrl+S\tSave" in shortcuts and
-                "F1\tKeyboard shortcuts" in shortcuts,
+        require(any(row.startswith("F2\tRename") for row in shortcuts) and
+                any(row.startswith("Ctrl+S\tSave") for row in shortcuts) and
+                any(row.startswith("F1\tKeyboard shortcuts") for row in shortcuts),
                 f"shortcut help is incomplete: {shortcuts!r}"[:400])
         self.press("Close", "help-shortcuts-closed")
         self.key("alt+h", "help-menu")

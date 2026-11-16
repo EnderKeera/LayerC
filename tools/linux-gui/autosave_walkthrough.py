@@ -6,7 +6,7 @@ from automation_walkthrough import require
 
 STATUS = "Save / reload outcome"
 ACKNOWLEDGED = "LayerD acknowledged the reload request"
-DAEMON = "Daemon status and capability faults"
+DAEMON = "LayerD status and capability faults"
 EXPECTED = {
     "autosave-history-invalid": "Text edits autosave without Save, retain focus, and remain "
                                 "undoable/redoable; invalid raw input never writes.",

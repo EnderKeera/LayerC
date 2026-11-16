@@ -826,13 +826,15 @@ and `UMask=0077`. Direct launch remains the baseline and behaves equivalently.
 
 Manifest: `packaging/flatpak/io.github.EnderKeera.LayerC.json`
 (runtime `org.freedesktop.Platform` 25.08). The runtime has no FLTK and only
-AT-SPI 2.54, so the manifest builds FLTK 1.4.3 (static) and at-spi2-core
-2.62.0 from checksum-pinned upstream archives before LayerC; the editor is
+AT-SPI 2.54, so the manifest builds FLTK 1.4.5 (static; the same release
+archive vendored in `third_party/fltk`) and at-spi2-core 2.62.0 from
+checksum-pinned upstream archives before LayerC; the editor is
 required there. Its default command is `layere`, and it installs the desktop
 entry, icons and desktop-application metainfo. Every Linux install, including the Flatpak, carries the notices for the
-statically linked miniz under `share/licenses/LayerC/`
-(`THIRD_PARTY_NOTICES.md`, `miniz/LICENSE`, `miniz/UPSTREAM.md`); the automated
-gate fails if the native or Flatpak install tree lacks them.
+statically linked miniz and for FLTK under `share/licenses/LayerC/`
+(`THIRD_PARTY_NOTICES.md`, `miniz/LICENSE`, `miniz/UPSTREAM.md`,
+`fltk/COPYING`, `fltk/UPSTREAM.md`); the automated gate fails if the native or
+Flatpak install tree lacks them.
 
 The metainfo uses `LicenseRef-proprietary` because the repository has no
 project-level license; replace it only with an owner-approved SPDX license.

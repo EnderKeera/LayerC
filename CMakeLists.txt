@@ -132,6 +132,7 @@ add_library(layerc_core STATIC
     src/core/template_search.cpp
     src/core/visual_trigger_engine.cpp
     src/core/calibration.cpp
+    src/core/calibration_readiness.cpp
     src/core/companion.cpp
     src/core/companion_snapshot.cpp
     src/core/update_manifest.cpp
@@ -141,6 +142,13 @@ target_include_directories(layerc_core PUBLIC
 target_compile_features(layerc_core PUBLIC cxx_std_20)
 
 layerc_enable_warnings(layerc_core)
+
+if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
+    add_library(layerc_editor_accessibility STATIC src/editor/fltk/a11y/model.cpp)
+    target_include_directories(layerc_editor_accessibility PUBLIC src/editor/fltk)
+    target_link_libraries(layerc_editor_accessibility PUBLIC layerc_core)
+    layerc_enable_warnings(layerc_editor_accessibility)
+endif()
 
 # Build-time tool that writes the launch-time updater manifest; CI signs its
 # output. It never ships in the install tree.
@@ -603,6 +611,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
     if(WIN32)
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_windows)
         layerc_win32(layerc_editor_core)
+        include(cmake/WindowsEditorFLTK.cmake)
     else()
         target_link_libraries(layerc_editor_core PUBLIC layerc_core layerc_linux)
         layerc_enable_warnings(layerc_editor_core)
@@ -610,15 +619,17 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
         # Linux editor services shared by the frontend and its tests: the
         # authenticated control client for daemon status and reload.
         add_library(layerc_editor_linux STATIC
-            src/editor/linux/daemon_link.cpp
-            src/editor/linux/automation_trace_client.cpp
-            src/editor/linux/lease_worker.cpp
-            src/editor/linux/live_draft_client.cpp
-            src/editor/linux/editor_session.cpp
-            src/editor/linux/profile_mutations.cpp
-            src/editor/linux/editor_appearance.cpp
-            src/editor/linux/task_list.cpp)
-        target_include_directories(layerc_editor_linux PUBLIC src/editor/linux)
+            src/editor/fltk/platform/linux/daemon_link.cpp
+            src/editor/fltk/platform/linux/automation_trace_client.cpp
+            src/editor/fltk/platform/linux/live_draft_client.cpp
+            src/editor/fltk/platform/linux/paths.cpp
+            src/editor/fltk/platform/linux/folder_opener.cpp
+            src/editor/fltk/lease_worker.cpp
+            src/editor/fltk/editor_session.cpp
+            src/editor/fltk/profile_mutations.cpp
+            src/editor/fltk/editor_appearance.cpp
+            src/editor/fltk/task_list.cpp)
+        target_include_directories(layerc_editor_linux PUBLIC src/editor/fltk)
         target_include_directories(layerc_editor_linux PRIVATE src/platform/linux)
         find_package(Threads REQUIRED)
         target_link_libraries(layerc_editor_linux PUBLIC
@@ -630,7 +641,7 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
                 # The FLTK-only accessible text registry (DesignSystem.md, Screen
                 # readers) belongs to the GUI library the include defines.
                 target_sources(layerc_editor_fltk PRIVATE
-                    src/editor/linux/accessible_widgets.cpp)
+                    src/editor/fltk/accessible_widgets.cpp)
             endif()
         elseif(LAYERC_REQUIRE_EDITOR)
             message(FATAL_ERROR "Linux LayerE required but not buildable: X11 development files were not found")
@@ -822,6 +833,7 @@ if(WIN32)
     install(FILES README.md DESTINATION . COMPONENT Runtime)
     set(layerc_notice_dir .)
     set(layerc_miniz_notice_dir licenses/miniz)
+    set(layerc_fltk_notice_dir licenses/fltk)
 
     if(MINGW AND LAYERC_MINGW_RUNTIME_DLLS)
         install(FILES ${LAYERC_MINGW_RUNTIME_DLLS}
@@ -869,6 +881,7 @@ else()
     endif()
     set(layerc_notice_dir ${CMAKE_INSTALL_DATADIR}/licenses/LayerC)
     set(layerc_miniz_notice_dir ${layerc_notice_dir}/miniz)
+    set(layerc_fltk_notice_dir ${layerc_notice_dir}/fltk)
 endif()
 # Every installed program statically links miniz (through layerc_bundle or the
 # Linux template decoder), so every install carries its MIT notice.
@@ -876,6 +889,8 @@ install(FILES THIRD_PARTY_NOTICES.md
     DESTINATION ${layerc_notice_dir} COMPONENT Runtime)
 install(FILES third_party/miniz/LICENSE third_party/miniz/UPSTREAM.md
     DESTINATION ${layerc_miniz_notice_dir} COMPONENT Runtime)
+install(FILES third_party/fltk/COPYING third_party/fltk/UPSTREAM.md
+    DESTINATION ${layerc_fltk_notice_dir} COMPONENT Runtime)
 
 if(WIN32)
 set(CPACK_GENERATOR "ZIP")

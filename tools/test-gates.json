@@ -13,6 +13,7 @@
         "layerc_companion_tests",
         "layerc_core_tests",
         "layerc_daemon_runtime_tests",
+        "layerc_editor_accessibility_model_tests",
         "layerc_editor_document_tests",
         "layerc_editor_diagnostics_view_tests",
         "layerc_editor_automation_tests",
@@ -27,7 +28,9 @@
         "layerc_platform_tests",
         "layerc_runtime_tests",
         "layerc_template_png_tests",
-        "layerc_visual_asset_gc_contract_tests"
+        "layerc_visual_asset_gc_contract_tests",
+        "layerc_windows_fltk_accessibility_tests",
+        "layerc_windows_fltk_smoke"
       ],
       "allowSkip": {
         "layerc_overlay_tests": "the runner cannot create an isolated desktop; unavailable interactive coverage, not a pass"
@@ -41,6 +44,7 @@
         "layerc_automation_persistence_tests",
         "layerc_capture_tests",
         "layerc_core_tests",
+        "layerc_editor_accessibility_model_tests",
         "layerc_editor_document_tests",
         "layerc_editor_diagnostics_view_tests",
         "layerc_editor_automation_tests",
@@ -110,6 +114,7 @@
       "label": "editor",
       "required": [
         "layerc_linux_editor_autosave_tests",
+        "layerc_linux_editor_platform_tests",
         "layerc_linux_editor_widget_tests"
       ]
     },

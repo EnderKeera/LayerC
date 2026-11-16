@@ -21,6 +21,8 @@ NOTICES = (
     "usr/share/licenses/LayerC/THIRD_PARTY_NOTICES.md",
     "usr/share/licenses/LayerC/miniz/LICENSE",
     "usr/share/licenses/LayerC/miniz/UPSTREAM.md",
+    "usr/share/licenses/LayerC/fltk/COPYING",
+    "usr/share/licenses/LayerC/fltk/UPSTREAM.md",
 )
 APP_ID = "io.github.EnderKeera.LayerC"
 # The release tree enables the optional user unit; it must run the packaged

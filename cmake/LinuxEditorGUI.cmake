@@ -105,36 +105,41 @@ endif()
 # The GUI-only library gives widget tests the real frontend without linking
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
-    src/editor/linux/editor_accessibility.cpp
-    src/editor/linux/accessibility_semantics.cpp
-    src/editor/linux/accessibility_tree.cpp
-    src/editor/linux/editor_app.cpp
-    src/editor/linux/editor_style.cpp
-    src/editor/linux/editor_scroll.cpp
-    src/editor/linux/editor_popup.cpp
-    src/editor/linux/editor_color_chooser.cpp
-    src/editor/linux/editor_autosave.cpp
-    src/editor/linux/diagnostics_window.cpp
-    src/editor/linux/appearance_window.cpp
-    src/editor/linux/editor_tools.cpp
-    src/editor/linux/editor_placement.cpp
-    src/editor/linux/tasks_window.cpp
-    src/editor/linux/automation_editor.cpp
-    src/editor/linux/visual_editor.cpp
-    src/editor/linux/calibration_window.cpp
-    src/editor/linux/calibration_preview.cpp
-    src/editor/linux/editor_forms.cpp
-    src/editor/linux/editor_geometry.cpp
-    src/editor/linux/editor_import.cpp
-    src/editor/linux/cooldown_groups_window.cpp
-    src/editor/linux/export_selection_window.cpp
-    src/editor/linux/editor_commands.cpp
-    src/editor/linux/editor_pages.cpp
-    src/editor/linux/panel_item_dialog.cpp
-    src/editor/linux/panel_items_controls.cpp
-    src/editor/linux/editor_menus.cpp
-    src/editor/linux/editor_preview.cpp
-    src/editor/linux/binding_capture.cpp)
+    src/editor/fltk/editor_accessibility.cpp
+    src/editor/fltk/accessibility_semantics.cpp
+    src/editor/fltk/accessibility_tree.cpp
+    src/editor/fltk/editor_app.cpp
+    src/editor/fltk/editor_style.cpp
+    src/editor/fltk/editor_scroll.cpp
+    src/editor/fltk/editor_popup.cpp
+    src/editor/fltk/editor_color_chooser.cpp
+    src/editor/fltk/editor_autosave.cpp
+    src/editor/fltk/diagnostics_window.cpp
+    src/editor/fltk/appearance_window.cpp
+    src/editor/fltk/editor_tools.cpp
+    src/editor/fltk/editor_placement.cpp
+    src/editor/fltk/tasks_window.cpp
+    src/editor/fltk/platform/linux/tasks.cpp
+    src/editor/fltk/automation_editor.cpp
+    src/editor/fltk/visual_editor.cpp
+    src/editor/fltk/calibration_window.cpp
+    src/editor/fltk/calibration_preview.cpp
+    src/editor/fltk/editor_forms.cpp
+    src/editor/fltk/editor_geometry.cpp
+    src/editor/fltk/editor_import.cpp
+    src/editor/fltk/cooldown_groups_window.cpp
+    src/editor/fltk/export_selection_window.cpp
+    src/editor/fltk/editor_commands.cpp
+    src/editor/fltk/editor_pages.cpp
+    src/editor/fltk/panel_item_dialog.cpp
+    src/editor/fltk/panel_items_controls.cpp
+    src/editor/fltk/editor_menus.cpp
+    src/editor/fltk/editor_preview.cpp
+    src/editor/fltk/binding_capture.cpp
+    src/editor/fltk/platform/linux/binding_events.cpp
+    src/editor/fltk/platform/linux/calibration_source.cpp
+    src/editor/fltk/platform/linux/desktop_font.cpp
+    src/editor/fltk/platform/linux/live_draft_watch.cpp)
 target_include_directories(layerc_editor_fltk PRIVATE src/platform/linux)
 if(LAYERC_EDITOR_SYSROOT)
     # fltk-config omits /usr/include when it is the compiler's default root.
@@ -145,14 +150,14 @@ target_compile_options(layerc_editor_fltk PUBLIC ${LAYERC_FLTK_CXXFLAGS})
 # Only the adapter sees the GLib/ATK headers; it links only what it calls,
 # and the loader resolves their own dependencies such as D-Bus.
 set_source_files_properties(
-    src/editor/linux/editor_accessibility.cpp
-    src/editor/linux/accessibility_semantics.cpp
-    src/editor/linux/accessibility_tree.cpp PROPERTIES
+    src/editor/fltk/editor_accessibility.cpp
+    src/editor/fltk/accessibility_semantics.cpp
+    src/editor/fltk/accessibility_tree.cpp PROPERTIES
     COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
 target_link_libraries(layerc_editor_fltk PUBLIC
     layerc_editor_linux layerc_x11 ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})
 layerc_enable_warnings(layerc_editor_fltk)
-add_executable(layere src/editor/linux/main.cpp)
+add_executable(layere src/editor/fltk/main.cpp)
 target_link_libraries(layere PRIVATE layerc_editor_fltk)
 layerc_enable_warnings(layere)
 

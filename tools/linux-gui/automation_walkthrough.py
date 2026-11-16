@@ -177,7 +177,8 @@ class AutomationWalk:
         require(len(index) == 1 and index[0] < 2, f"saved rule row is missing, ambiguous or clipped: {rows!r}")
         self.act("click", "simulator-rule-selected", x=x + width // 2, y=y + 4 + ROW * index[0] + ROW // 2)
         source = self.notes["automation-source"]
-        shown = self.text("Source filter", role="entry")
+        # The rule's properties sit below the compact Basic view.
+        shown = self.reveal("entry", "Source filter", "simulator-rule-properties").get("text", "")
         selected = [n["name"] for n in self.nodes() if n.get("selected") and n["name"].startswith("Rule: ")]
         require(shown == source, f"Basic rule selection showed source {shown!r}, saved {source!r}; "
                                  f"selected rows {selected!r}")
@@ -240,7 +241,7 @@ class AutomationWalk:
         self.automation_choice("Automation view", 3, "trace-returned")
         stopped = self.text("Live trace status")
         require(not self.find("check box", RECORD).get("checked", False)
-                and stopped == "Stopped. No daemon subscription.",
+                and stopped == "Stopped. No LayerD subscription.",
                 f"leaving the view left live recording active: {stopped!r}")
         self.focus("LayerC Automation Fixture", "trace-game-after")
         self.key("e", "trace-input-after-stop")

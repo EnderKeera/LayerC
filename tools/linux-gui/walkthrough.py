@@ -33,7 +33,7 @@ CYAN = [80, 186, 200]
 MINIMUM = (640, 480)
 PROFILE = "fixture.json"
 STATUS = "Save / reload outcome"
-DAEMON = "Daemon status and capability faults"
+DAEMON = "LayerD status and capability faults"
 DEFERRED = {
     "later-parity": "Wayland provider and portal cases run in --mode wayland and "
                     "tools/linux-portal-consent-tests.sh, not in this X11 walkthrough",
@@ -130,6 +130,21 @@ class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, To
 
     def text(self, name, role="text"):
         return self.find(role, name).get("text", "")
+
+    def reveal(self, role, name, label, presses=8):
+        """Tab until a field clipped by a scroll view is showing.
+
+        Snapshots omit the children of clipped containers, and LayerE scroll
+        views follow keyboard focus, so the field is reached as a keyboard
+        user reaches it.
+        """
+        for press in range(presses + 1):
+            for node in self.nodes():
+                if node["role"] == role and node["name"] == name and node.get("showing"):
+                    return node
+            if press < presses:
+                self.key("Tab", f"{label}-tab-{press}")
+        raise Failure(f"{role} {name!r} did not become visible by keyboard focus")
 
     def dialog(self):
         """The topmost dialog's subtree, or None."""
@@ -516,7 +531,7 @@ class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, To
                 f"scaled {scaled[0]}x{scaled[1]} and back")
 
     def refresh_daemon(self, label):
-        self.click(self.find("button", "Daemon status"), label)
+        self.click(self.find("button", "LayerD status"), label)
         return self.text(DAEMON)
 
     def case_daemon_reconnect(self):
