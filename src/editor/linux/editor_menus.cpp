@@ -1,6 +1,7 @@
 #include "editor_menus.hpp"
 #include "editor_app.hpp"
 #include "editor_style.hpp"
+#include "editor_popup.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Group.H>
@@ -18,7 +19,7 @@ namespace layerc::editor {
 
 EditorMenus::EditorMenus(EditorApp &app, Fl_Window &window)
     : app_(app), window_(window) {
-  bar_ = new Fl_Menu_Bar(0, 0, window_.w(), bar_height);
+  bar_ = new EditorMenuBar(0, 0, window_.w(), bar_height);
   // A strip with a bottom divider; its drop-down menus keep a full outline.
   bar_->box(editor_menu_bar_box());
   bar_->menu_box(FL_UP_BOX);
@@ -130,7 +131,7 @@ void EditorMenus::popup(EditorMenuContext context, bool has_target) {
   Fl_Menu_Button menu(Fl::event_x(), Fl::event_y(), 0, 0);
   Fl_Group::current(previous);
   configure_context(menu, context, has_target);
-  (void)menu.popup();
+  track_editor_popup(menu);
 }
 
 EditorEmptyState editor_empty_state(EditorMenuContext context) noexcept {

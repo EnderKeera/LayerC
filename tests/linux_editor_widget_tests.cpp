@@ -52,6 +52,7 @@ void linux_editor_diagnostic_text_contracts();
 void linux_editor_command_registry_contracts();
 void linux_editor_page_lists_clear_without_document();
 void linux_editor_semantic_row_extents();
+void linux_editor_review_regressions();
 void linux_editor_cooldown_group_dialog_transactions();
 void linux_editor_export_profile_checklist();
 void linux_editor_system_theme_restores_tab_class_colors();
@@ -302,6 +303,16 @@ void capture_cancel_and_small_window() {
          "a small viewport scrolls intact forms rather than squeezing them into overlap");
   editor::EditorAppTestAccess::content(app)->scroll_to(0, 300); Fl::check();
   expect(editor::EditorAppTestAccess::content(app)->yposition() > 0, "the small viewport exposes the bottom status area by scrolling");
+  for (auto *page : {editor::EditorAppTestAccess::visual(app)->group(),
+                     editor::EditorAppTestAccess::automation(app)->group()}) {
+    editor::EditorAppTestAccess::content(app)->scroll_to(100, 250);
+    tab(app, page); Fl::check();
+    auto *first = page->child(0);
+    expect(first->x() >= page->x() && first->y() >= page->y() &&
+               first->x() + first->w() <= page->x() + page->w() &&
+               first->y() + first->h() <= page->y() + page->h(),
+           "lazy tab controls keep their authored position within an already-scrolled page");
+  }
   editor::EditorAppTestAccess::window(app).hide();
 }
 const Fl_Menu_Item &menu_item(Fl_Menu_ &menu, const char *path) {
@@ -717,6 +728,9 @@ void exercise_calibration(void *data) {
     if (++probe.attempts < 100) Fl::add_timeout(.01, exercise_calibration, data);
     return;
   }
+  auto *empty_target = dynamic_cast<Fl_Choice *>(find_control(*modal, "Calibration target window"));
+  expect(empty_target && !empty_target->active() && !empty_target->take_focus(),
+         "LNX-05 empty calibration target is disabled and cannot receive focus");
   const auto control = [&](const char *label) {
     auto *widget = find_control(*modal, label);
     expect(widget != nullptr, "real calibration owns each named control");
@@ -735,13 +749,15 @@ void exercise_calibration(void *data) {
          "capture without acknowledgement is refused visibly");
   if (!probe.capture) {
     control("Rescan windows")->do_callback();
+    expect(!empty_target->active(), "LNX-05 a scan with no matching windows keeps the choice disabled");
     expect(std::string(status.value()).find("Unavailable:") == 0,
            "missing target has a visible unavailable reason");
     control("Cancel calibration")->do_callback(); probe.delivered = true; return;
   }
   control("Rescan windows")->do_callback();
   auto &target = *dynamic_cast<Fl_Choice *>(control("Calibration target window"));
-  expect(target.value() >= 0, "rescan finds the private matching X11 fixture");
+  expect(target.value() >= 0 && target.active() && target.take_focus(),
+         "LNX-05 rescan enables the populated private target and keyboard focus");
   auto &notice = *dynamic_cast<Fl_Check_Button *>(control(
       "I acknowledge passive capture of the selected game window"));
   notice.value(1); notice.do_callback();
@@ -961,6 +977,7 @@ LAYERC_TEST_MAIN(
   LAYERC_TEST_CASE(linux_editor_command_registry_contracts),
   LAYERC_TEST_CASE(linux_editor_page_lists_clear_without_document),
   LAYERC_TEST_CASE(linux_editor_semantic_row_extents),
+  LAYERC_TEST_CASE(linux_editor_review_regressions),
   LAYERC_TEST_CASE(linux_editor_field_error_contracts),
   LAYERC_TEST_CASE(linux_editor_pending_automation_status_contracts),
   LAYERC_TEST_CASE(linux_editor_calibration_layout_contracts),

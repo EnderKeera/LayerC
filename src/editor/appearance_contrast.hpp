@@ -75,6 +75,12 @@ appearance_contrast_targets(const layerc::platform::EditorAppearanceSettings &se
 // targets give no line.
 [[nodiscard]] std::optional<ContrastLine>
 picker_contrast_line(COLORREF candidate, const std::vector<ContrastTarget> &targets);
+// The screen-reader description of every Choose color swatch, in palette
+// order: each swatch's own color measured against `targets` with the line
+// above, so a swatch never describes the selected color (DesignSystem.md,
+// Screen readers). Empty strings when there are no targets.
+[[nodiscard]] std::vector<std::wstring>
+palette_swatch_descriptions(const std::vector<ContrastTarget> &targets);
 
 // An overlay bar's own colors, measured against the Overlay rules
 // (DesignSystem.md, OverlayBar): text 4.5:1 on Fill and Background while the

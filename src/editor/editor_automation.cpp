@@ -700,12 +700,15 @@ LRESULT AutomationEditor::handle_message(const HWND window, const UINT message,
     return TRUE;
   }
   if (message == WM_DPICHANGED) {
+    // The measured minimum belongs to the old DPI; the new layout remeasures.
+    minimum_client_ = {};
     (void)chrome_.on_dpi_changed(HIWORD(wparam), lparam);
     layout(window);
     return TRUE;
   }
   if (message == WM_GETMINMAXINFO) {
     chrome_.on_minimum_size(lparam, 780, 520);
+    apply_minimum_client_size(window, lparam, minimum_client_);
     return TRUE;
   }
   if (message == WM_TIMER && wparam == automation_simulator_timer) {

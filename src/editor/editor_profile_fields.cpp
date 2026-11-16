@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cwchar>
 
 namespace layerc::editor {
@@ -14,9 +15,29 @@ HWND field_control(const ProfileFieldView &context, const int id) {
   return GetDlgItem(context.dialog, id);
 }
 
-bool bounded_decimal(const std::wstring &text, const std::uint32_t minimum,
-                     const std::uint32_t maximum) {
-  return parse_bounded(text, minimum, maximum).has_value();
+// One numeric domain per stepped field. Whole-number fields accept exactly
+// their stepping range; durations are typed to the millisecond but step in
+// tenths of a second from 0.1 s to the longest accepted duration.
+constexpr ProfileFieldStepping duration_stepping{
+    .minimum = 1,
+    .maximum = layerc::core::max_cooldown_duration.count() / 100,
+    .decimals = 1};
+constexpr ProfileFieldStepping charges_stepping{
+    .minimum = layerc::core::min_cooldown_charges,
+    .maximum = layerc::core::max_cooldown_charges};
+constexpr ProfileFieldStepping bar_width_stepping{
+    .minimum = layerc::core::min_bar_width,
+    .maximum = layerc::core::max_bar_width};
+constexpr ProfileFieldStepping bar_height_stepping{
+    .minimum = layerc::core::min_bar_height,
+    .maximum = layerc::core::max_bar_height};
+
+bool whole_in_range(const std::wstring &text,
+                    const ProfileFieldStepping &range) {
+  return range.decimals == 0 &&
+         parse_bounded(text, static_cast<std::uint32_t>(range.minimum),
+                       static_cast<std::uint32_t>(range.maximum))
+             .has_value();
 }
 
 bool field_owner_available(const ProfileFieldView &context,
@@ -127,7 +148,8 @@ const std::array kProfileFields{
                      parse_duration_ms(window_text(
                          field_control(context, IDC_COOLDOWN_DURATION)))
                          .has_value();
-            }},
+            },
+        .stepping = &duration_stepping},
     ProfileFieldBinding{
         .control_id = IDC_COOLDOWN_ACTIVE,
         .notification = EN_CHANGE,
@@ -184,11 +206,11 @@ const std::array kProfileFields{
         .valid =
             +[](const ProfileFieldView &context) {
               return context.cooldown != nullptr &&
-                     bounded_decimal(
+                     whole_in_range(
                          window_text(field_control(context, IDC_COOLDOWN_CHARGES)),
-                         layerc::core::min_cooldown_charges,
-                         layerc::core::max_cooldown_charges);
-            }},
+                         charges_stepping);
+            },
+        .stepping = &charges_stepping},
     ProfileFieldBinding{
         .control_id = IDC_COOLDOWN_RETRIGGER,
         .notification = CBN_SELCHANGE,
@@ -261,10 +283,11 @@ const std::array kProfileFields{
         .valid =
             +[](const ProfileFieldView &context) {
               return context.panel == nullptr ||
-                     bounded_decimal(
+                     whole_in_range(
                          window_text(field_control(context, IDC_BAR_WIDTH)),
-                         layerc::core::min_bar_width, layerc::core::max_bar_width);
-            }},
+                         bar_width_stepping);
+            },
+        .stepping = &bar_width_stepping},
     ProfileFieldBinding{
         .control_id = IDC_BAR_HEIGHT,
         .notification = EN_CHANGE,
@@ -287,11 +310,11 @@ const std::array kProfileFields{
         .valid =
             +[](const ProfileFieldView &context) {
               return context.panel == nullptr ||
-                     bounded_decimal(
+                     whole_in_range(
                          window_text(field_control(context, IDC_BAR_HEIGHT)),
-                         layerc::core::min_bar_height,
-                         layerc::core::max_bar_height);
-            }},
+                         bar_height_stepping);
+            },
+        .stepping = &bar_height_stepping},
     ProfileFieldBinding{
         .control_id = IDC_SHOW_TEXT,
         .notification = BN_CLICKED,
@@ -371,6 +394,35 @@ void write_profile_fields(const ProfileFieldView &context,
                           const ProfileFieldOwner owner) {
   for (const auto &binding : kProfileFields)
     if (binding.owner == owner) binding.write(context);
+}
+
+std::wstring stepped_field_text(const std::wstring_view text,
+                                const ProfileFieldStepping &stepping,
+                                const int steps) {
+  std::int64_t scale = 1;
+  for (int digit = 0; digit < stepping.decimals; ++digit)
+    scale *= 10;
+  const std::wstring source(text);
+  wchar_t *end = nullptr;
+  const double parsed = std::wcstod(source.c_str(), &end);
+  // Text outside the range steps from its nearest bound.
+  std::int64_t units = stepping.minimum;
+  if (end != source.c_str() && std::isfinite(parsed))
+    units = std::llround(std::clamp(parsed * static_cast<double>(scale),
+                                    static_cast<double>(stepping.minimum),
+                                    static_cast<double>(stepping.maximum)));
+  units = std::clamp(units + stepping.step * steps, stepping.minimum,
+                     stepping.maximum);
+  std::wstring result = std::to_wstring(units / scale);
+  if (stepping.decimals > 0) {
+    std::wstring fraction = std::to_wstring(units % scale);
+    fraction.insert(0, static_cast<std::size_t>(stepping.decimals) -
+                           std::min(fraction.size(),
+                                    static_cast<std::size_t>(stepping.decimals)),
+                    L'0');
+    result += L'.' + fraction;
+  }
+  return result;
 }
 
 bool profile_fields_valid(const ProfileFieldView &context) {

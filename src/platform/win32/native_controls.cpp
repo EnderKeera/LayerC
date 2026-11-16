@@ -744,6 +744,15 @@ int native_check_box_size(const UINT dpi) {
   return MulDiv(16, static_cast<int>(dpi == 0 ? 96U : dpi), 96);
 }
 
+int native_check_box_label_offset(const UINT dpi) {
+  return native_check_box_size(dpi) +
+         MulDiv(8, static_cast<int>(dpi == 0 ? 96U : dpi), 96);
+}
+
+int native_check_box_ring_margin(const UINT dpi) {
+  return MulDiv(4, static_cast<int>(dpi == 0 ? 96U : dpi), 96);
+}
+
 RECT paint_native_check_box(const HDC dc, const RECT &bounds,
                             const NativeCheckState &state,
                             const NativeThemeColors &colors, const UINT dpi) {
@@ -846,26 +855,43 @@ native_button_custom_draw(const NMHDR &header, const NativeThemeColors &colors,
       .pressed = (draw.uItemState & CDIS_SELECTED) != 0,
       .radio = radio,
   };
-  const RECT box = paint_native_check_box(draw.hdc, client, state, colors, dpi);
   std::array<wchar_t, 256> label{};
   GetWindowTextW(control, label.data(), static_cast<int>(label.size()));
   RECT text = client;
-  text.left = box.right + MulDiv(8, static_cast<int>(dpi), 96);
+  text.left = client.left + native_check_box_label_offset(dpi);
   SetBkMode(draw.hdc, TRANSPARENT);
   SetTextColor(draw.hdc, state.disabled ? colors.disabled : colors.text);
   const HGDIOBJ previous_font = SelectObject(draw.hdc, font);
-  UINT format = DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
+  // A label too long for one line wraps when its layout asked for it
+  // (BS_MULTILINE); the lines center as one block and the box sits beside
+  // the first, as a status glyph does.
+  const bool wrap = (GetWindowLongPtrW(control, GWL_STYLE) & BS_MULTILINE) != 0;
+  UINT format = wrap ? DT_LEFT | DT_WORDBREAK
+                     : DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
   const LRESULT ui_state = SendMessageW(control, WM_QUERYUISTATE, 0, 0);
   if ((ui_state & UISF_HIDEACCEL) != 0)
     format |= DT_HIDEPREFIX;
   RECT measured = text;
   DrawTextW(draw.hdc, label.data(), -1, &measured, format | DT_CALCRECT);
+  RECT box_row = client;
+  if (wrap) {
+    const LONG block = measured.bottom - measured.top;
+    text.top = client.top + std::max(0L, (client.bottom - client.top - block) / 2);
+    text.bottom = std::min(client.bottom, text.top + block);
+    measured.right = std::min(measured.right, text.right);
+    TEXTMETRICW metrics{};
+    GetTextMetricsW(draw.hdc, &metrics);
+    box_row.top = text.top;
+    box_row.bottom = std::min(client.bottom, text.top + metrics.tmHeight);
+  }
+  const RECT box =
+      paint_native_check_box(draw.hdc, box_row, state, colors, dpi);
   DrawTextW(draw.hdc, label.data(), -1, &text, format);
   SelectObject(draw.hdc, previous_font);
   if ((draw.uItemState & CDIS_FOCUS) != 0 && (ui_state & UISF_HIDEFOCUS) == 0) {
     RECT focus{box.left, client.top,
                std::min(client.right,
-                        measured.right + MulDiv(4, static_cast<int>(dpi), 96)),
+                        measured.right + native_check_box_ring_margin(dpi)),
                client.bottom};
     paint_focus_ring(draw.hdc, focus, colors.accent, dpi);
   }

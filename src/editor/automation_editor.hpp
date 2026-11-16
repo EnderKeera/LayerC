@@ -58,7 +58,7 @@ private:
   void refresh_node_properties(HWND dialog);
   void select_node(HWND dialog);
   void update_view(HWND dialog);
-  void layout(HWND dialog) const;
+  void layout(HWND dialog);
   void apply_node_properties(HWND dialog);
   void delete_node(HWND dialog);
   void add_basic(HWND dialog);
@@ -98,6 +98,9 @@ private:
   int node_rule_{-1};
   int node_action_{-1};
   int view_{};
+  // The client size every view fits, measured by the last layout; the
+  // dialog's minimum track size (WM_GETMINMAXINFO) never goes below it.
+  SIZE minimum_client_{};
   bool validation_expanded_{};
   bool validation_has_error_{};
   bool trace_enabled_{};

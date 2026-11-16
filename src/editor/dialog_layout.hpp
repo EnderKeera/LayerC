@@ -3,6 +3,7 @@
 #include "layerc/platform/native_theme.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -26,6 +27,102 @@ inline void apply_suggested_dpi_rect(const HWND window, const LPARAM lparam) {
 }
 
 void style_native_dialog_children(HWND dialog, HFONT font);
+
+// Window placement: a dialog that changes size keeps its whole visible frame
+// on the work area of its monitor. The user's position stays while the frame
+// fits; otherwise the frame moves up or left just enough, and a frame larger
+// than the work area keeps its top-left corner (caption, first controls) on
+// it. `origin` and `size` describe the visible frame.
+[[nodiscard]] inline POINT place_in_work_area(POINT origin, const SIZE size,
+                                              const RECT &work) noexcept {
+  origin.x = std::max(work.left, std::min(origin.x, work.right - size.cx));
+  origin.y = std::max(work.top, std::min(origin.y, work.bottom - size.cy));
+  return origin;
+}
+
+// The usable area (taskbars excluded) of the monitor showing `window`.
+[[nodiscard]] inline RECT window_work_area(const HWND window) {
+  MONITORINFO monitor{};
+  monitor.cbSize = sizeof(monitor);
+  if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                      &monitor) == FALSE)
+    return {};
+  return monitor.rcWork;
+}
+
+// The invisible resize borders Windows draws outside a window's visible
+// frame; zero while the window has no DWM frame. Defined out of line so this
+// header does not pull DWM's headers (and their macros) into every user.
+[[nodiscard]] RECT invisible_frame_insets(HWND window);
+
+// Resizes a window's outer frame to `width` by `height` under the placement
+// rule above. An unchanged rectangle is left alone, so a layout that runs on
+// WM_SIZE can call this without re-entering itself.
+inline void resize_window_in_work_area(const HWND window, const int width,
+                                       const int height) {
+  RECT outer{};
+  if (GetWindowRect(window, &outer) == FALSE)
+    return;
+  POINT origin{outer.left, outer.top};
+  if (const RECT work = window_work_area(window);
+      work.right > work.left && work.bottom > work.top) {
+    const RECT insets = invisible_frame_insets(window);
+    const POINT visible = place_in_work_area(
+        {outer.left + insets.left, outer.top + insets.top},
+        {width - insets.left - insets.right,
+         height - insets.top - insets.bottom},
+        work);
+    origin = {visible.x - insets.left, visible.y - insets.top};
+  }
+  if (origin.x == outer.left && origin.y == outer.top &&
+      width == outer.right - outer.left && height == outer.bottom - outer.top)
+    return;
+  SetWindowPos(window, nullptr, origin.x, origin.y, width, height,
+               SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// The outer frame size whose client area is `width` by `height`.
+[[nodiscard]] inline SIZE window_size_for_client(const HWND window,
+                                                 const int width,
+                                                 const int height) {
+  RECT frame{0, 0, width, height};
+  AdjustWindowRectExForDpi(
+      &frame, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE)),
+      GetMenu(window) != nullptr,
+      static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE)),
+      GetDpiForWindow(window));
+  return {frame.right - frame.left, frame.bottom - frame.top};
+}
+
+// The largest client area a window shows whole on its monitor: the work
+// area less the visible frame (invisible resize borders may lie outside).
+// Unbounded while the window has no monitor.
+[[nodiscard]] inline SIZE work_area_client_size(const HWND window) {
+  const RECT work = window_work_area(window);
+  if (work.right <= work.left || work.bottom <= work.top)
+    return {LONG_MAX, LONG_MAX};
+  const SIZE frame = window_size_for_client(window, 0, 0);
+  const RECT insets = invisible_frame_insets(window);
+  return {std::max(1L, (work.right - work.left) -
+                           (frame.cx - insets.left - insets.right)),
+          std::max(1L, (work.bottom - work.top) -
+                           (frame.cy - insets.top - insets.bottom))};
+}
+
+// Grows a resizable dialog whose client area is smaller than `minimum`, a
+// size its layout measured from its own content, under the placement rule.
+// Minimized and maximized windows keep the size Windows gave them.
+inline void grow_client_to(const HWND dialog, const SIZE minimum) {
+  RECT client{};
+  if (IsIconic(dialog) != FALSE || IsZoomed(dialog) != FALSE ||
+      GetClientRect(dialog, &client) == FALSE ||
+      (client.right >= minimum.cx && client.bottom >= minimum.cy))
+    return;
+  const SIZE frame =
+      window_size_for_client(dialog, std::max(client.right, minimum.cx),
+                             std::max(client.bottom, minimum.cy));
+  resize_window_in_work_area(dialog, frame.cx, frame.cy);
+}
 
 [[nodiscard]] inline bool replace_dialog_font(const HWND dialog, const UINT dpi,
                                               HFONT &font) {
@@ -164,6 +261,13 @@ public:
       move(id, x, y + (row_height - (closed.bottom - closed.top)) / 2, width,
            list);
   }
+  // The width button_row() takes for `ids`.
+  [[nodiscard]] int button_row_width(const std::initializer_list<int> ids) const {
+    int width = 0;
+    for (const int id : ids)
+      width += button_width(id) + scaled(8);
+    return std::max(0, width - scaled(8));
+  }
   // A dialog's button row: the buttons in order, ending at `right`, 8 px
   // apart (OK, Cancel, Apply). Returns the left edge of the first.
   int button_row(const std::initializer_list<int> ids, const int right,
@@ -179,17 +283,12 @@ public:
     }
     return left;
   }
-  // Sizes a fixed dialog so its client area is `width` by `height`.
+  // Sizes a fixed dialog so its client area is `width` by `height`, kept on
+  // its monitor's work area (an expanding dialog never pushes its buttons
+  // below the screen).
   void fit_client(const int width, const int height) const {
-    RECT frame{0, 0, width, height};
-    AdjustWindowRectExForDpi(
-        &frame, static_cast<DWORD>(GetWindowLongPtrW(dialog_, GWL_STYLE)),
-        GetMenu(dialog_) != nullptr,
-        static_cast<DWORD>(GetWindowLongPtrW(dialog_, GWL_EXSTYLE)),
-        GetDpiForWindow(dialog_));
-    SetWindowPos(dialog_, nullptr, 0, 0, frame.right - frame.left,
-                 frame.bottom - frame.top,
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    const SIZE frame = window_size_for_client(dialog_, width, height);
+    resize_window_in_work_area(dialog_, frame.cx, frame.cy);
   }
 
 private:
@@ -197,12 +296,19 @@ private:
   int dpi_{};
 };
 
+// A resizable dialog's opening size: no larger than its work area, and placed
+// on it. The dialog's minimum track size still applies.
 inline void resize_to_logical_size(const HWND dialog, const int logical_width,
                                    const int logical_height) {
   const int dpi = window_base_dpi(dialog);
-  SetWindowPos(dialog, nullptr, 0, 0, dpi_scaled(logical_width, dpi),
-               dpi_scaled(logical_height, dpi),
-               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  int width = dpi_scaled(logical_width, dpi);
+  int height = dpi_scaled(logical_height, dpi);
+  if (const RECT work = window_work_area(dialog);
+      work.right > work.left && work.bottom > work.top) {
+    width = std::min(width, static_cast<int>(work.right - work.left));
+    height = std::min(height, static_cast<int>(work.bottom - work.top));
+  }
+  resize_window_in_work_area(dialog, width, height);
 }
 
 inline void apply_minimum_track_size(const HWND dialog, const LPARAM lparam,
@@ -212,6 +318,18 @@ inline void apply_minimum_track_size(const HWND dialog, const LPARAM lparam,
   auto *const limits = reinterpret_cast<MINMAXINFO *>(lparam);
   limits->ptMinTrackSize = {dpi_scaled(logical_width, dpi),
                             dpi_scaled(logical_height, dpi)};
+}
+
+// Raises a WM_GETMINMAXINFO minimum so the client area never becomes smaller
+// than `client`, a size the dialog's layout measured from its content.
+inline void apply_minimum_client_size(const HWND dialog, const LPARAM lparam,
+                                      const SIZE client) {
+  if (client.cx <= 0 || client.cy <= 0)
+    return;
+  const SIZE frame = window_size_for_client(dialog, client.cx, client.cy);
+  auto *const limits = reinterpret_cast<MINMAXINFO *>(lparam);
+  limits->ptMinTrackSize.x = std::max(limits->ptMinTrackSize.x, frame.cx);
+  limits->ptMinTrackSize.y = std::max(limits->ptMinTrackSize.y, frame.cy);
 }
 
 // Owns the shared font and DPI lifecycle for a native editor dialog.

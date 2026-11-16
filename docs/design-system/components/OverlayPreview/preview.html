@@ -1,0 +1,96 @@
+<!-- @dsCard group="Overlay" width=1240 height=1000 page subtitle="Add overlay item with its live preview, each kind as the renderer draws it, and the preview corner" -->
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"><script>(function(){var t=new URLSearchParams(location.search).get("theme");if(t)document.documentElement.setAttribute("data-theme",t);})();</script><style>body{margin:0;background:var(--background)}</style><meta charset="utf-8"><title>Overlay preview</title><style>body{margin:0}.cv{padding:12px 16px;font:12px/16px var(--font-windows);color:var(--text)}.cv .cap2{color:var(--secondary);margin:14px 0 6px}
+h2{font-size:18px;margin:0 0 4px;font-weight:600}
+.mock{font:12px/16px var(--font-windows);color:var(--text);flex:none}
+.mock .capx{margin-left:auto;display:flex;gap:18px}
+.mock .le-dialog-body{padding-top:6px}
+.mock .le-field{height:34px}
+.mock .hint{margin-top:-6px;margin-bottom:4px}
+.two{display:flex;gap:16px}
+.col{display:flex;flex-direction:column}
+.sl{display:block;margin-top:6px;font-weight:600}
+.sl .le-msg{font-weight:400}
+span.sl{display:inline;margin:0}
+.kinds{display:grid;grid-template-columns:repeat(4,288px);gap:16px;margin-top:20px}
+.kind{font:12px/16px var(--font-windows)}
+.kind .kh{display:flex;flex-direction:column;margin-bottom:6px}
+.kind .kh span{color:var(--secondary)}
+.kind.wide{margin-top:20px}
+.ov-well{position:relative;box-sizing:border-box;border:1px solid var(--border);background:var(--input);overflow:hidden}
+.ov-scene{position:absolute;inset:0}
+.ov-scene.dark{background:linear-gradient(160deg,#152029 0%,#1f2d27 48%,#3a3324 100%)}
+.ov-scene.bright{background:linear-gradient(172deg,#a9cbe5 0%,#dce8d4 55%,#cdb88b 100%)}
+.ov-note{position:absolute;right:6px;bottom:4px;font:11px/14px var(--font-windows);color:rgba(255,255,255,.72)}
+.ov-scene.bright~.ov-note{color:rgba(0,0,0,.6)}
+.ov-bar{position:absolute;box-sizing:border-box;border:1px solid;border-radius:4px;display:flex;align-items:center;justify-content:center;font:600 18.67px/1 'Segoe UI',sans-serif;white-space:nowrap;overflow:hidden}
+.ov-bar.mini{border-radius:1px;font-size:0}
+.ov-track{position:absolute;box-sizing:border-box;border:1px solid;border-radius:4px;overflow:hidden}
+.ov-track i{position:absolute;left:2px;top:2px;bottom:2px;border-radius:3px}
+.ov-track span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:600 18.67px/1 'Segoe UI',sans-serif;white-space:nowrap}
+.ov-card{position:absolute;box-sizing:border-box;width:78px;height:72px;border:1px solid #50bac8;border-radius:3px;background:#272d35}
+.ov-card .t{position:absolute;left:3px;right:3px;top:3px;bottom:3px;display:block;line-height:64px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:600 18.67px/64px 'Segoe UI',sans-serif}
+.ov-card .t.wp{bottom:14px;line-height:53px}
+.ov-card .pips{position:absolute;left:0;right:0;bottom:3px;display:flex;justify-content:center;gap:3px}
+.ov-card .pips i{display:block;box-sizing:border-box;width:8px;height:8px;border-radius:1px}
+.ov-sel{outline:2px solid #e0a15a;outline-offset:0}
+.ov-frame{position:absolute;left:12px;top:12px;width:272px;height:153px;box-sizing:border-box;border:1px solid var(--border);background:linear-gradient(160deg,#152029 0%,#1f2d27 48%,#3a3324 100%)}
+.ov-mini-cards{position:absolute;left:200px;top:18px;display:flex;gap:2px}
+.ov-mini-cards i{width:14px;height:13px;box-sizing:border-box;border:1px solid #50bac8;background:#272d35;border-radius:1px}
+.ov-actual{position:absolute;left:12px;top:186px}
+.pair{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.keys{display:flex;flex-direction:column}
+.kg{font-weight:600;margin:10px 0 2px}
+.kg:first-child{margin-top:4px}
+.kr{display:flex;align-items:center;min-height:26px;gap:12px}
+.kk{width:160px;flex:none;display:flex;align-items:center;flex-wrap:wrap;row-gap:2px}
+.kbd{display:inline-flex;align-items:center;height:20px;padding:0 6px;box-sizing:border-box;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px}
+.kp{color:var(--secondary);margin:0 3px}
+.kv{display:grid;grid-template-columns:120px 1fr;row-gap:8px;align-items:baseline}
+.mock .h{font-weight:600}
+.box{width:100%;box-sizing:border-box}
+.pal{display:grid;grid-template-columns:repeat(8,44px);gap:6px}
+.pal .sw{height:26px;box-sizing:border-box;border:1px solid var(--border)}
+.pal .sw.is-sel{outline:2px solid var(--accent);outline-offset:1px}
+.smps{display:flex;gap:12px;margin:12px 0 4px}
+.smp{display:flex;flex-direction:column;gap:4px}
+.sbox{width:200px;height:44px;box-sizing:border-box;border:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;padding:0 10px}
+.part{display:flex;align-items:center;gap:10px;height:34px}
+.mini{border:1px solid var(--border);background:var(--background);display:flex;flex-direction:column}
+.mini .mb{display:flex;gap:14px;padding:3px 8px;border-bottom:1px solid var(--divider)}
+.mini .mc{display:flex;height:98px}
+.mini .ms{width:140px;background:var(--input);border-right:1px solid var(--border);padding:1px}
+.mini .mm{flex:1;padding:6px 12px;display:flex;flex-direction:column;gap:8px}
+.menus{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.mcol{font:12px/16px var(--font-windows)}
+.mt{color:var(--secondary);margin-bottom:6px}
+.mcol .le-menu-item{gap:0}
+.rd{width:16px;flex:none;color:var(--text)}
+.le-radio.is-disabled .le-dot{background:var(--disabled)}
+.le-radio.is-disabled{color:var(--disabled)}
+.mv{margin-left:8px;font-size:11px;color:var(--accent_2)}
+.mv.new{color:var(--accent_2)}
+.mn{max-width:250px;margin-top:6px}</style></head>
+<body>
+<div class="cv"><div class="le-dialog mock " style="width:660px;height:380px"><div class="le-dialog-cap">Add overlay item<span class="capx"><span>✕</span></span></div><div class="le-dialog-body"><div class="two"><div class="col" style="width:320px"><div class="le-field"><span class="le-label" style="width:96px;flex:none"><u>K</u>ind</span><span class="le-combo " style="width:216px">Indicator<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span></div><div class="le-field"><span class="le-label" style="width:96px;flex:none"><u>S</u>ource</span><span class="le-combo " style="width:216px">shield_up (automation)<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span></div><div class="le-field"><span class="le-label" style="width:96px;flex:none"><u>L</u>abel</span><span class="le-check is-checked "><span class="le-box"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 9 L7 12 L12 5"/></svg></span><span><u>C</u>ustom</span></span><span class="le-edit " style="width:136px">Shield up</span></div><div class="le-subtext hint" style="margin-left:104px">Off: the item shows its source’s name.</div><div class="le-field"><span class="le-label" style="width:96px;flex:none"><u>F</u>lash (Hz)</span><span class="le-combo " style="width:96px">2<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span></div><div class="le-subtext hint" style="margin-left:104px">Flashes at most 3 times a second. Off stays lit.</div><div class="le-field"><span class="le-label" style="width:96px;flex:none">C<u>o</u>lor</span><span class="le-btn le-btn--color" style="width:216px;"><span class="le-swatch" style="background:#1d4ed8"></span><span>#1D4ED8</span></span></div><div class="le-subtext hint" style="margin-left:104px">Starts as the panel’s fill.</div></div><div class="col" style="width:300px"><div class="le-label" style="margin:8px 0 6px">Preview, at actual size</div><div class="ov-well" style="width:300px;height:150px"><div class="ov-scene dark"></div><div class="ov-card ov-sel" data-flash="2" style="left:60px;top:39px;background:#1d4ed8" data-lit="#1d4ed8"><span class="t" style="color:#e4e8ec">Shield up</span></div><div class="ov-card"  style="left:144px;top:39px;" data-lit=""><span class="t wp" style="color:#e4e8ec">Combo</span><b class="pips"><i style="background:#00e676"></i><i style="background:#00e676"></i><i style="background:#00e676"></i><i style="background:#272d35;border:1px solid #00e676"></i><i style="background:#272d35;border:1px solid #00e676"></i></b></div><span class="ov-note">Panel “Buffs” · card · row</span></div><div class="le-field" style="gap:8px"><span class="le-label">S<u>h</u>ow</span><span class="le-combo " style="width:132px">Lit, flashing<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span><span class="le-label" style="margin-left:4px"><u>B</u>ackdrop</span><span class="le-combo " style="width:72px">Dark<span class="le-chev"><svg width="9" height="5" viewBox="0 0 9 5"><path d="M0.5 0.5 L4.5 4.5 L8.5 0.5"/></svg></span></span></div><div class="le-yes le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> Readable. <span class="le-msg">Label 5.4:1 on the lit color.</span></div><div class="le-warning le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="5" y="1" width="2" height="7" fill="currentColor"/><rect x="5" y="9.5" width="2" height="2" fill="currentColor"/></svg> Cut off. <span class="le-msg">“Shield up” is cut to fit the 78 px card.</span></div></div></div></div><div class="le-dialog-buttons"><span class="le-spacer"></span><span class="le-btn le-btn--primary" style="justify-content:center;"><span><u>A</u>dd item</span></span><span class="le-btn" style="justify-content:center;"><span>Cancel</span></span></div></div><div class="cap2">Each kind at actual size, over the Dark backdrop</div><div class="kinds" style="margin-top:0"><div class="kind"><div class="kh"><b>Cooldown</b><span>Bar panel “iwcs”: cooling, then ready (hidden in game while ready)</span></div><div class="ov-well" style="width:288px;height:110px"><div class="ov-scene dark"></div><div class="ov-bar" data-cd="6.5" data-name="Dash" style="left:14px;top:18px;width:127px;height:34px;background:#ddbc17;border-color:#e7c84b;color:#f1f5f7" data-w="260"><span>Dash  3.2</span></div><div class="ov-bar"  style="left:14px;top:62px;width:260px;height:34px;background:#ddbc17;border-color:#e7c84b;color:#f1f5f7" data-w="260"><span>Dash  READY</span></div></div><div class="le-warning le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="5" y="1" width="2" height="7" fill="currentColor"/><rect x="5" y="9.5" width="2" height="2" fill="currentColor"/></svg> Low contrast. <span class="le-msg">Text is 1.7:1 on Fill; #141414 would be 9.9:1.</span></div></div><div class="kind"><div class="kh"><b>Timer</b><span>Grouped bars, item colors on a dark track</span></div><div class="ov-well" style="width:288px;height:110px"><div class="ov-scene dark"></div><div class="ov-track" style="left:14px;top:18px;width:260px;height:34px;background:#202a31;border-color:#80d8e8"><i style="width:159px;background:#c2410c"></i><span style="color:#f1f5f7">Rage  4.5</span></div><div class="ov-track" style="left:14px;top:58px;width:260px;height:34px;background:#202a31;border-color:#80d8e8"><i style="width:77px;background:#7c3aed"></i><span style="color:#f1f5f7">Haste  12.0</span></div></div><div class="le-yes le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> Readable. <span class="le-msg">Text 4.7:1 on Rage, 5.2:1 on Haste, 13:1 on the track.</span></div></div><div class="kind"><div class="kh"><b>Counter</b><span>Cards: pips when max is 1–8, else the number</span></div><div class="ov-well" style="width:288px;height:110px"><div class="ov-scene dark"></div><div class="ov-card"  style="left:42px;top:19px;" data-lit=""><span class="t wp" style="color:#e4e8ec">Combo</span><b class="pips"><i style="background:#00e676"></i><i style="background:#00e676"></i><i style="background:#00e676"></i><i style="background:#272d35;border:1px solid #00e676"></i><i style="background:#272d35;border:1px solid #00e676"></i></b></div><div class="ov-card"  style="left:126px;top:19px;" data-lit=""><span class="t" style="color:#e4e8ec">Gold  120</span></div></div><div class="le-warning le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><rect x="5" y="1" width="2" height="7" fill="currentColor"/><rect x="5" y="9.5" width="2" height="2" fill="currentColor"/></svg> Cut off. <span class="le-msg">“Gold  120” is cut to fit a 78 px card.</span></div></div><div class="kind"><div class="kh"><b>Indicator</b><span>Lit while true; flashes at the item’s rate</span></div><div class="ov-well" style="width:288px;height:110px"><div class="ov-scene dark"></div><div class="ov-card" data-flash="2" style="left:42px;top:19px;background:#1d4ed8" data-lit="#1d4ed8"><span class="t" style="color:#e4e8ec">Shield</span></div><div class="ov-card"  style="left:126px;top:19px;background:#60b0ff" data-lit="#60b0ff"><span class="t" style="color:#141414">Stun</span></div></div><div class="le-yes le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> Readable when lit. <span class="le-msg">A light item color takes #141414: 8.0:1 on #60B0FF.</span></div></div></div><div class="cap2">The preview corner in the main window: the same painter, scaled into the target frame</div><div class="ov-well" style="width:296px;height:268px"><div class="ov-scene dark"></div><div class="ov-frame"><div class="ov-bar mini ov-sel"  style="left:32px;top:108px;width:66px;height:9px;background:#ddbc17;border-color:#e7c84b;color:#f1f5f7" data-w="66"><span></span></div><div class="ov-mini-cards"><i style="background:#1d4ed8"></i><i></i></div></div><div class="ov-actual"><span class="le-label">Actual size</span></div><div class="ov-bar" data-cd="6.5" data-name="Dash" style="left:18px;top:214px;width:127px;height:34px;background:#ddbc17;border-color:#e7c84b;color:#f1f5f7" data-w="260"><span>Dash  3.2</span></div></div></div>
+<script>
+(function(){
+const reduce=matchMedia('(prefers-reduced-motion: reduce)');
+let on=!reduce.matches;
+const cds=[...document.querySelectorAll('[data-cd]')], fl=[...document.querySelectorAll('[data-flash]')];
+const t0=performance.now();
+function tick(now){
+  const t=(now-t0)/1000;
+  if(on){
+    cds.forEach(b=>{const d=+b.dataset.cd, cyc=d+1.5, p=t%cyc, w=+b.dataset.w, s=b.querySelector('span');
+      if(p<d){const left=d-p; b.style.width=Math.max(1,Math.round(w*left/d))+'px'; s.textContent=b.dataset.name+'\u00a0\u00a0'+left.toFixed(1);}
+      else{b.style.width=w+'px'; s.textContent=b.dataset.name+'\u00a0\u00a0READY';}});
+    fl.forEach(c=>{const hz=Math.min(3,+c.dataset.flash), lit=Math.floor(t*hz*2)%2===0; c.style.background=lit?c.dataset.lit:'#272d35';});
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+})();
+</script></body>
+</html>

@@ -20,7 +20,7 @@
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Output.H>
-#include <FL/Fl_Scroll.H>
+#include "editor_scroll.hpp"
 #include <FL/fl_ask.H>
 
 #include <algorithm>
@@ -40,7 +40,7 @@ public:
       : path_(std::move(path)), model_(std::move(seed)), controls_(model_.initial_controls()),
         accept_(accept) {
     window_.begin();
-    auto *scroll = new Fl_Scroll(0, 0, 1060, 750);
+    auto *scroll = new EditorScroll(0, 0, 1060, 750);
     scroll->begin();
     // Keep outside labels and form margins inside the scrollable bounds.
     auto *canvas = new Fl_Group(0, 0, 1060, 750);
@@ -231,8 +231,9 @@ private:
   void rescan() {
     stop_capture(); live_->value(0);
     preview_->frame.reset(); preview_->redraw();
-    readiness_.invalidate(); refresh_apply_readiness();
+    readiness_.invalidate();
     target_->clear(); windows_.clear();
+    refresh_apply_readiness();
     if (!open_display()) return;
     const auto scan = tracker_->scan();
     for (const auto &window : scan.windows) {
@@ -241,9 +242,10 @@ private:
       if (!platform::match_window(one, model_.profile().game)) continue;
       windows_.push_back(window);
       const auto index = target_->add("item");
-      target_->replace(index, (window.title + " — " + window.class_name).c_str());
+      target_->replace(index, (window.title + (window.class_name.empty() ? "" : " — " + window.class_name)).c_str());
     }
     target_->value(windows_.empty() ? -1 : 0);
+    refresh_apply_readiness();
     message(windows_.empty() ? "Unavailable: no visible X11 window matches this profile." :
             "Stopped. Select a matching window and acknowledge capture. " + scan.warning);
   }
@@ -324,6 +326,8 @@ private:
     return model_.pixel_rule(controls_);
   }
   void refresh_apply_readiness() {
+    if (windows_.empty()) target_->deactivate();
+    else target_->activate();
     if (readiness_.ready_for(current_observation(), controls_.quality))
       apply_->activate();
     else

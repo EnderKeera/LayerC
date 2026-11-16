@@ -1,6 +1,6 @@
 # LayerE design system: visual reference
 
-Exported from the LayerE design system on 2026-11-07, and updated by hand on 2026-11-08 for the fixes v2 adopted. [`../DesignSystem.md`](../DesignSystem.md) is the source of truth; this folder shows it. When the two disagree, the document wins.
+Exported from the LayerE design system on 2026-11-16 (v2.1 draft). [`../DesignSystem.md`](../DesignSystem.md) is the source of truth; this folder shows it. When the two disagree, the document wins.
 
 - [`index.html`](index.html) — every control and screen, with a Copper / Teal / Plum / Slate switch. Open it in a browser; it works offline.
 - [`tokens.json`](tokens.json) — every color, size, spacing and type token with its use. [`tokens.css`](tokens.css) is generated from it for the previews.

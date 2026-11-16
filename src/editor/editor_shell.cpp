@@ -12,9 +12,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstring>
-#include <cwchar>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -35,40 +33,17 @@ constexpr std::wstring_view placement_setting = L"EditorWindowPlacement";
 constexpr UINT_PTR numeric_subclass_id = 0x4C45'0001;
 constexpr wchar_t editor_title[] = L"LayerC Editor";
 
-// Step and floor per numeric field; Shift multiplies the step by ten.
-struct NumericField {
-  int id;
-  double step;
-  double minimum;
-  double maximum;
-  int decimals;
-};
-
-constexpr std::array numeric_fields{
-    NumericField{IDC_COOLDOWN_DURATION, 0.1, 0.1, 86400.0, 1},
-    NumericField{IDC_BAR_WIDTH, 1.0, 1.0, 4096.0, 0},
-    NumericField{IDC_BAR_HEIGHT, 1.0, 1.0, 4096.0, 0},
-    NumericField{IDC_COOLDOWN_CHARGES, 1.0, 1.0, 99.0, 0},
-};
-
-const NumericField *numeric_field(const int id) {
-  const auto found = std::ranges::find(numeric_fields, id, &NumericField::id);
-  return found == numeric_fields.end() ? nullptr : &*found;
+// The stepping of a profile field's binding, the one numeric domain its
+// validator also accepts.
+const ProfileFieldStepping *numeric_field(const int id) {
+  const auto *binding = profile_field_binding(id);
+  return binding == nullptr ? nullptr : binding->stepping;
 }
 
-void step_numeric(const HWND edit, const NumericField &field, const int steps) {
-  const auto text = window_text(edit);
-  wchar_t *end = nullptr;
-  double value = std::wcstod(text.c_str(), &end);
-  if (end == text.c_str() || !std::isfinite(value))
-    value = field.minimum;
-  const double scale = std::pow(10.0, field.decimals);
-  value = std::round((value + field.step * steps) * scale) / scale;
-  value = std::clamp(value, field.minimum, field.maximum);
-  wchar_t formatted[32]{};
-  swprintf_s(formatted, L"%.*f", field.decimals, value);
+void step_numeric(const HWND edit, const ProfileFieldStepping &field,
+                  const int steps) {
   // SetWindowText raises EN_CHANGE, which runs the field's normal binding.
-  SetWindowTextW(edit, formatted);
+  set_text(edit, stepped_field_text(window_text(edit), field, steps));
   SendMessageW(edit, EM_SETSEL, 0, -1);
 }
 
@@ -204,8 +179,9 @@ void EditorWindow::install_shell_helpers() {
   SendMessageW(shell_.application_path, EM_SETCUEBANNER, TRUE,
                reinterpret_cast<LPARAM>(
                    L"Type app.exe, Browse, or choose a running app"));
-  for (const auto &field : numeric_fields) {
-    if (const HWND edit = GetDlgItem(window, field.id); edit != nullptr)
+  for (const auto &binding : profile_field_bindings()) {
+    if (const HWND edit = GetDlgItem(window, binding.control_id);
+        binding.stepping != nullptr && edit != nullptr)
       SetWindowSubclass(edit, &numeric_edit_subclass, numeric_subclass_id, 0);
   }
   shell_.tooltip = CreateWindowExW(
@@ -585,8 +561,8 @@ void EditorWindow::set_advanced_visible(const bool visible, const bool persist) 
 }
 
 void EditorWindow::set_text_scale(const int percent) {
-  if (!layerc::platform::write_layerc_registry_dword(
-          text_scale_setting, static_cast<std::uint32_t>(percent)))
+  if (!layerc::platform::write_editor_text_scale(
+          static_cast<std::uint32_t>(percent)))
     set_status(L"Could not save the text size.");
   layerc::platform::set_native_text_scale(percent);
   reload_fonts();

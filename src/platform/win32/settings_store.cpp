@@ -3,7 +3,9 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <span>
 #include <utility>
+#include <vector>
 
 #include <windows.h>
 
@@ -18,6 +20,11 @@ constexpr const wchar_t *bool_setting_values[] = {
     L"EditorAdvancedView",      L"Updates"};
 static_assert(std::size(bool_setting_values) ==
               static_cast<std::size_t>(BoolSetting::launcher_updates) + 1U);
+constexpr wchar_t editor_text_scale_value[] = L"EditorTextScale";
+
+constexpr const wchar_t *bool_value_name(const BoolSetting setting) noexcept {
+  return bool_setting_values[static_cast<std::size_t>(setting)];
+}
 
 class UniqueHKey {
 public:
@@ -117,6 +124,79 @@ SettingReadResult<std::vector<std::byte>> query_value(
   return {.value = std::move(value), .error = 0};
 }
 
+// A value's exact type and bytes, whatever they are; missing reads as absent.
+LSTATUS read_stored_setting(const HKEY key, const wchar_t *const name,
+                            StoredSetting &stored) {
+  stored = {};
+  // The size query and the read race another writer; retry if it grew.
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    DWORD type{};
+    DWORD size{};
+    LSTATUS status = RegQueryValueExW(key, name, nullptr, &type, nullptr, &size);
+    if (is_missing(status))
+      return ERROR_SUCCESS;
+    if (status != ERROR_SUCCESS)
+      return status;
+    // Even a zero-byte value needs a non-null buffer: otherwise a concurrent
+    // growth would turn this read into another size query, losing its bytes.
+    std::vector<std::byte> data(size == 0 ? 1 : size);
+    status = RegQueryValueExW(key, name, nullptr, &type,
+                              reinterpret_cast<BYTE *>(data.data()), &size);
+    if (status == ERROR_MORE_DATA)
+      continue;
+    if (is_missing(status))
+      return ERROR_SUCCESS;
+    if (status != ERROR_SUCCESS)
+      return status;
+    data.resize(size);
+    stored = {.type = type, .data = std::move(data)};
+    return ERROR_SUCCESS;
+  }
+  return ERROR_MORE_DATA;
+}
+
+// DWORD values in one open settings key, as commit_settings writes them.
+struct DwordEntry {
+  const wchar_t *name{};
+  DWORD value{};
+};
+
+class RegistryDwordStore final {
+public:
+  RegistryDwordStore(const HKEY key, const std::span<const DwordEntry> entries)
+      : key_(key), entries_(entries) {}
+
+  [[nodiscard]] std::uint32_t read(const std::size_t index,
+                                   StoredSetting &prior) const {
+    return static_cast<std::uint32_t>(
+        read_stored_setting(key_, entries_[index].name, prior));
+  }
+  [[nodiscard]] std::uint32_t write(const std::size_t index) const {
+    const DWORD value = entries_[index].value;
+    return static_cast<std::uint32_t>(
+        RegSetValueExW(key_, entries_[index].name, 0, REG_DWORD,
+                       reinterpret_cast<const BYTE *>(&value), sizeof(value)));
+  }
+  [[nodiscard]] std::uint32_t restore(const std::size_t index,
+                                      const StoredSetting &prior) const {
+    const wchar_t *const name = entries_[index].name;
+    if (!prior.type) {
+      const LSTATUS status = RegDeleteValueW(key_, name);
+      return is_missing(status) ? 0U : static_cast<std::uint32_t>(status);
+    }
+    if (prior.data.size() > std::numeric_limits<DWORD>::max())
+      return ERROR_FILE_TOO_LARGE;
+    return static_cast<std::uint32_t>(RegSetValueExW(
+        key_, name, 0, *prior.type,
+        reinterpret_cast<const BYTE *>(prior.data.data()),
+        static_cast<DWORD>(prior.data.size())));
+  }
+
+private:
+  HKEY key_{};
+  std::span<const DwordEntry> entries_;
+};
+
 } // namespace
 
 SettingReadResult<std::uint32_t>
@@ -204,9 +284,39 @@ SettingReadResult<bool> read_bool_setting(const BoolSetting setting) {
 SettingWriteResult write_bool_setting(const BoolSetting setting,
                                       const bool value) {
   const DWORD stored = value ? 1U : 0U;
-  return set_layerc_value(
-      {}, bool_setting_values[static_cast<std::size_t>(setting)], REG_DWORD,
-      &stored, sizeof(stored));
+  return set_layerc_value({}, bool_value_name(setting), REG_DWORD, &stored,
+                          sizeof(stored));
+}
+
+SettingReadResult<std::uint32_t> read_editor_text_scale() {
+  return read_layerc_registry_dword(editor_text_scale_value);
+}
+
+SettingWriteResult write_editor_text_scale(const std::uint32_t percent) {
+  return write_layerc_registry_dword(editor_text_scale_value, percent);
+}
+
+SettingsCommitResult write_options_settings(const OptionsSettings &settings) {
+  const auto opened =
+      open_layerc_key({}, KEY_QUERY_VALUE | KEY_SET_VALUE, true);
+  if (opened.key == nullptr)
+    return {.state = SettingsCommitState::unchanged,
+            .error = static_cast<std::uint32_t>(opened.status)};
+  const UniqueHKey key(opened.key);
+  const auto flag = [](const bool value) -> DWORD { return value ? 1U : 0U; };
+  const std::array entries{
+      DwordEntry{bool_value_name(BoolSetting::capture_exclusion),
+                 flag(settings.capture_exclusion)},
+      DwordEntry{bool_value_name(BoolSetting::editor_capture_exclusion),
+                 flag(settings.editor_capture_exclusion)},
+      DwordEntry{bool_value_name(BoolSetting::visual_recognition),
+                 flag(settings.visual_recognition)},
+      DwordEntry{bool_value_name(BoolSetting::launcher_updates),
+                 flag(settings.launcher_updates)},
+      DwordEntry{editor_text_scale_value, settings.editor_text_scale},
+  };
+  RegistryDwordStore store(key.get(), entries);
+  return commit_settings(store, entries.size());
 }
 
 } // namespace layerc::platform

@@ -56,6 +56,8 @@ constexpr int section_gap = 12;
 constexpr int field_cap = 480;
 constexpr int preview_threshold = 1100;
 constexpr int slot_min = 260;
+constexpr int sidebar_min = 200;
+constexpr int sidebar_max = 280;
 constexpr int cooldown_list_min = 84;
 constexpr int timing_label_width = 84;
 
@@ -82,13 +84,17 @@ struct MainLayout {
   int detail_right{};
   int preview_left{};
   int slot{};
+  int wide_minimum{};
 };
 
 MainLayout make_main_layout(const HWND window, const bool advanced,
-                            const bool legacy_bars) {
+                            const bool legacy_bars,
+                            const int requested_width = 0) {
   RECT client{};
   GetClientRect(window, &client);
-  const int width = std::max(1, static_cast<int>(client.right - client.left));
+  const int width = requested_width > 0
+                        ? requested_width
+                        : std::max(1, static_cast<int>(client.right - client.left));
   const int height = std::max(1, static_cast<int>(client.bottom - client.top));
   // Geometry follows DPI and text size and never shrinks below the text:
   // narrow windows reflow (the preview corner hides) instead.
@@ -105,7 +111,13 @@ MainLayout make_main_layout(const HWND window, const bool advanced,
                .pitch = ui.scaled(row_pitch),
                .heading = ui.scaled(heading_pitch),
                .status_top = height - ui.scaled(28)};
-  f.sidebar_width = std::clamp(width / 5, ui.scaled(200), ui.scaled(280));
+  f.sidebar_width =
+      std::clamp(width / 5, ui.scaled(sidebar_min), ui.scaled(sidebar_max));
+  // Enough for all three slots even at the sidebar's widest, using the
+  // same metrics as placement rather than a separate resize threshold.
+  f.wide_minimum = std::max(ui.scaled(preview_threshold),
+                            f.margin * 2 + ui.scaled(sidebar_max) + f.gap * 3 +
+                                ui.scaled(slot_min) * 3);
   f.detail_left = f.margin + f.sidebar_width + f.gap;
   f.slot = main_slot_width(width, f.margin, f.detail_left, f.gap);
   f.preview = main_layout_wide(width, f.slot, ui.scaled(preview_threshold),
@@ -434,11 +446,16 @@ void layout_preview(const MainLayout &f, const int bottom) {
   ui.move(IDC_PREVIEW, f.preview_left, top, width, std::max(1, bottom - top));
 }
 
-// The cooldown list and the preview corner, then the selected cooldown's
-// settings row: three slots when wide, else two columns (one when narrow).
-// The row is anchored to the status strip and the list takes the rest.
-// Returns the height the detail column needs.
-int layout_cooldowns(const MainLayout &f, const int top) {
+struct CooldownGroups {
+  bool two_columns{};
+  int column{};
+  int overlay_left{};
+  GroupHeights heights;
+  int height{};
+};
+
+// Measurement and placement share the same reflow and wrapped-text extents.
+CooldownGroups cooldown_groups(const MainLayout &f) {
   const DialogLayout &ui = f.ui;
   const int row_right = f.width - f.margin;
   const int row_width = row_right - f.detail_left;
@@ -449,13 +466,31 @@ int layout_cooldowns(const MainLayout &f, const int top) {
                            : two_columns ? f.detail_left + column + f.gap
                                          : f.detail_left;
   const auto heights = group_heights(f, timing_width, row_right - overlay_left);
-  const int groups_height =
+  const int height =
       f.preview ? std::max({heights.timing, heights.visual, heights.overlay})
       : two_columns
           ? std::max(heights.timing + ui.scaled(section_gap) + heights.visual,
                      heights.overlay)
           : heights.timing + heights.visual + heights.overlay +
                 ui.scaled(section_gap) * 2;
+  return {two_columns, column, overlay_left, heights, height};
+}
+
+int cooldown_minimum_bottom(const MainLayout &f, const int top,
+                             const CooldownGroups &groups) {
+  return top + f.heading + f.ui.scaled(cooldown_list_min) + f.ui.scaled(16) +
+         groups.height;
+}
+
+// The cooldown list and the preview corner, then the selected cooldown's
+// settings row: three slots when wide, else two columns (one when narrow).
+// The row is anchored to the status strip and the list takes the rest.
+// Returns the height the detail column needs.
+int layout_cooldowns(const MainLayout &f, const int top) {
+  const DialogLayout &ui = f.ui;
+  const int row_right = f.width - f.margin;
+  const auto groups = cooldown_groups(f);
+  const auto &[two_columns, column, overlay_left, heights, groups_height] = groups;
   const int list_top = top + f.heading;
   const int min_list = ui.scaled(cooldown_list_min);
   const int groups_top = main_groups_top(list_top, min_list, ui.scaled(16),
@@ -500,7 +535,7 @@ int layout_cooldowns(const MainLayout &f, const int top) {
     layout_overlay(f, f.detail_left, row_right,
                    visual_top + heights.visual + ui.scaled(section_gap));
   }
-  return list_top + min_list + ui.scaled(16) + groups_height;
+  return cooldown_minimum_bottom(f, top, groups);
 }
 
 void layout_status(const MainLayout &f) {
@@ -519,39 +554,6 @@ void layout_status(const MainLayout &f) {
           std::max(1, right - connection_width - runtime_width -
                           ui.scaled(24) - f.margin),
           ui.scaled(20));
-}
-
-// Revealing rows (Show advanced, a wrapped binding row, larger text) raises
-// the minimum height. A restored window grows to it, within its monitor's
-// work area, so the new rows are not left below the status strip.
-void grow_to_minimum_height(const HWND window, const int min_client_height) {
-  if (IsZoomed(window) != FALSE || IsIconic(window) != FALSE)
-    return;
-  RECT client{};
-  GetClientRect(window, &client);
-  const int missing =
-      min_client_height - static_cast<int>(client.bottom - client.top);
-  if (missing <= 0)
-    return;
-  MONITORINFO monitor{};
-  monitor.cbSize = sizeof(monitor);
-  RECT bounds{};
-  if (GetWindowRect(window, &bounds) == FALSE ||
-      GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
-                      &monitor) == FALSE)
-    return;
-  const RECT &work = monitor.rcWork;
-  const int current = static_cast<int>(bounds.bottom - bounds.top);
-  const int height = std::min(current + missing,
-                              static_cast<int>(work.bottom - work.top));
-  if (height <= current)
-    return;
-  // Keep the top edge unless the grown window would leave the work area.
-  const int top = std::max(static_cast<int>(work.top),
-                           std::min(static_cast<int>(bounds.top),
-                                    static_cast<int>(work.bottom) - height));
-  SetWindowPos(window, nullptr, bounds.left, top, bounds.right - bounds.left,
-               height, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 } // namespace
@@ -613,14 +615,26 @@ void EditorWindow::layout() {
                           frame.preview ? IDC_PREVIEW_LABEL : IDC_DIRECT_DRAG),
                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   layout_sidebar(frame);
-  const int detail_bottom =
-      layout_cooldowns(frame, layout_profile(frame));
+  const int profile_bottom = layout_profile(frame);
+  const int detail_bottom = layout_cooldowns(frame, profile_bottom);
   layout_status(frame);
   place_button_reason_tools(shell_);
   shell_.status_strip_top = frame.status_top;
   // The smallest client height that keeps every row visible.
   shell_.min_client_height = detail_bottom + frame.margin +
                              (frame.height - frame.status_top);
+  const SIZE work = work_area_client_size(shell_.window);
+  const int narrow_width = frame.ui.scaled(main_client_min_width);
+  const MainLayout narrow = make_main_layout(
+      shell_.window, frame.advanced, frame.legacy_bars,
+      static_cast<int>(std::min<LONG>(narrow_width, work.cx)));
+  const int narrow_height =
+      cooldown_minimum_bottom(narrow, profile_bottom, cooldown_groups(narrow)) +
+      narrow.margin + (narrow.height - narrow.status_top);
+  // If stacking cannot fit vertically, retain the three-slot layout. Merely
+  // capping the height would leave the visual controls below the screen.
+  shell_.min_client_width = main_minimum_width(
+      narrow_width, narrow_height, frame.wide_minimum, work.cx, work.cy);
   shell_.laying_out = false;
 
   RECT list_client{};
@@ -629,8 +643,10 @@ void EditorWindow::layout() {
                           std::max(1L, list_client.right - list_client.left));
   RedrawWindow(shell_.window, nullptr, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
-  // Last: growing re-enters layout() through WM_SIZE at the new height.
-  grow_to_minimum_height(shell_.window, shell_.min_client_height);
+  // Last: growing re-enters layout() through WM_SIZE at the new extent.
+  grow_client_to(shell_.window,
+                 {shell_.min_client_width,
+                  std::min<LONG>(shell_.min_client_height, work.cy)});
 }
 
 } // namespace layerc::editor

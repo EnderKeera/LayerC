@@ -217,6 +217,18 @@ picker_contrast_line(const COLORREF candidate,
   return line;
 }
 
+std::vector<std::wstring>
+palette_swatch_descriptions(const std::vector<ContrastTarget> &targets) {
+  std::vector<std::wstring> descriptions;
+  descriptions.reserve(layerc::platform::color_palette.size());
+  for (const auto &swatch : layerc::platform::color_palette) {
+    auto line = picker_contrast_line(
+        layerc::platform::native_color_ref(swatch.value), targets);
+    descriptions.push_back(line ? std::move(line->text) : std::wstring{});
+  }
+  return descriptions;
+}
+
 namespace {
 
 constexpr double overlay_text_minimum = 4.5;

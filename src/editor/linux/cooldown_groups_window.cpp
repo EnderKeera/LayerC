@@ -12,7 +12,7 @@
 #include <FL/Fl_Choice.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
-#include <FL/Fl_Scroll.H>
+#include "editor_scroll.hpp"
 
 #include <algorithm>
 #include <array>
@@ -42,7 +42,7 @@ CooldownGroupsDialog::CooldownGroupsDialog(EditorSession &session)
   recovery->add("Single|Sequential|Parallel");
   retrigger = new EditorChoice(390, 248, 350, editor_input_height, "Group retrigger");
   retrigger->add("Ignore|Restart");
-  auto *scroll = new Fl_Scroll(270, 305, 470, 110, "Group members");
+  auto *scroll = new EditorScroll(270, 305, 470, 110, "Group members");
   scroll->begin();
   for (std::size_t i{}; i < source_.cooldowns.size(); ++i) {
     const auto &cooldown = source_.cooldowns[i];

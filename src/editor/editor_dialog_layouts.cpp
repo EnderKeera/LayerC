@@ -6,7 +6,23 @@
 #include <algorithm>
 #include <array>
 
+#include <dwmapi.h>
+
 namespace layerc::editor {
+
+RECT invisible_frame_insets(const HWND window) {
+  RECT outer{};
+  RECT visible{};
+  if (GetWindowRect(window, &outer) == FALSE ||
+      FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                   &visible, sizeof(visible))))
+    return {};
+  return {std::max(0L, visible.left - outer.left),
+          std::max(0L, visible.top - outer.top),
+          std::max(0L, outer.right - visible.right),
+          std::max(0L, outer.bottom - visible.bottom)};
+}
+
 namespace {
 
 // The shared frame: margins, control height, gaps, and the line height of
@@ -35,37 +51,92 @@ int place_text(const DialogLayout &ui, const int id, const int x,
   return lines;
 }
 
+// A check box as the painter draws it (DesignSystem.md, CheckBox): the box,
+// its label `offset` after the left edge, and the focus ring's `ring` after
+// the label's text.
+struct CheckBoxMetrics {
+  int offset{};
+  int ring{};
+  [[nodiscard]] int width(const DialogLayout &ui, const int id) const {
+    return offset + static_cast<int>(ui.text_extent(id).cx) + ring;
+  }
+};
+
+// A check box row `width` wide. A label that fits stays on one line in a
+// `row`-tall control; a longer one wraps (BS_MULTILINE) and the control grows
+// by its extra lines, never ellipsized. Returns the height taken.
+int place_check_box(const DialogLayout &ui, const CheckBoxMetrics &check,
+                    const int id, const int x, const int top, const int width,
+                    const int row) {
+  const HWND control = ui.control(id);
+  if (control == nullptr)
+    return row;
+  const bool wrap = check.width(ui, id) > width;
+  const auto style = GetWindowLongPtrW(control, GWL_STYLE);
+  const auto wanted = wrap ? style | BS_MULTILINE
+                           : style & ~static_cast<LONG_PTR>(BS_MULTILINE);
+  if (wanted != style)
+    SetWindowLongPtrW(control, GWL_STYLE, wanted);
+  int height = row;
+  if (wrap) {
+    const int line = static_cast<int>(ui.text_extent(id).cy);
+    const int lines = static_cast<int>(
+        ui.text_extent(id, std::max(1, width - check.offset - check.ring)).cy);
+    height = std::max(row, lines + std::max(0, row - line));
+  }
+  ui.move(id, x, top, width, height);
+  return height;
+}
+
 } // namespace
 
 void layout_options_dialog(const HWND dialog) {
   const DialogMetrics m(dialog, IDC_TEXT_SIZE_LABEL);
   const auto &ui = m.ui;
-  const int width = ui.scaled(480) - m.margin * 2;
-  // Hints line up with their check box's label: the 16 px box and its gap.
-  const int indent = ui.scaled(24);
+  const UINT dpi = layerc::platform::native_window_dpi(dialog);
+  // Hints line up with their check box's label, where the painter puts it.
+  const CheckBoxMetrics check{
+      .offset = layerc::platform::native_check_box_label_offset(dpi),
+      .ring = layerc::platform::native_check_box_ring_margin(dpi)};
+  const int indent = check.offset;
+  constexpr std::array check_boxes{IDC_VISUAL_MASTER, IDC_CAPTURE_PRIVACY,
+                                   IDC_EDITOR_CAPTURE_PRIVACY,
+                                   IDC_LAUNCHER_UPDATES};
+  const int label =
+      static_cast<int>(ui.text_extent(IDC_TEXT_SIZE_LABEL).cx) + m.gap;
+  const int combo = ui.scaled(110);
+  // The content is the design width, or wider when a row's measured text
+  // needs it, but never wider than the work area shows: a check box label
+  // still too long wraps under itself, and hints always wrap.
+  int width = std::max({ui.scaled(480) - m.margin * 2, label + combo,
+                        ui.button_row_width({IDOK, IDCANCEL, IDC_OPTIONS_APPLY})});
+  for (const int id : check_boxes)
+    width = std::max(width, check.width(ui, id));
+  width = static_cast<int>(std::min<LONG>(
+      width, std::max<LONG>(label + combo,
+                            work_area_client_size(dialog).cx - m.margin * 2)));
   int top = m.margin;
-  ui.move(IDC_VISUAL_MASTER, m.margin, top, width, m.height);
-  top += m.height;
+  top += place_check_box(ui, check, IDC_VISUAL_MASTER, m.margin, top, width,
+                         m.height);
   top += place_text(ui, IDC_OPTIONS_VISUAL_HINT, m.margin + indent, top,
                     width - indent) +
          m.gap;
-  ui.move(IDC_CAPTURE_PRIVACY, m.margin, top, width, m.height);
-  top += m.height + m.gap;
-  ui.move(IDC_EDITOR_CAPTURE_PRIVACY, m.margin, top, width, m.height);
-  top += m.height;
+  top += place_check_box(ui, check, IDC_CAPTURE_PRIVACY, m.margin, top, width,
+                         m.height) +
+         m.gap;
+  top += place_check_box(ui, check, IDC_EDITOR_CAPTURE_PRIVACY, m.margin, top,
+                         width, m.height);
   top += place_text(ui, IDC_OPTIONS_CAPTURE_HINT, m.margin + indent, top,
                     width - indent) +
          m.gap;
-  const int label =
-      static_cast<int>(ui.text_extent(IDC_TEXT_SIZE_LABEL).cx) + m.gap;
   ui.row_label(IDC_TEXT_SIZE_LABEL, m.margin, top, label, m.height);
-  ui.combo(IDC_TEXT_SIZE, m.margin + label, top, ui.scaled(110), m.height);
+  ui.combo(IDC_TEXT_SIZE, m.margin + label, top, combo, m.height);
   top += m.height;
   top += place_text(ui, IDC_TEXT_SIZE_HINT, m.margin + label, top,
                     width - label) +
          m.gap;
-  ui.move(IDC_LAUNCHER_UPDATES, m.margin, top, width, m.height);
-  top += m.height;
+  top += place_check_box(ui, check, IDC_LAUNCHER_UPDATES, m.margin, top, width,
+                         m.height);
   top += place_text(ui, IDC_OPTIONS_UPDATES_HINT, m.margin + indent, top,
                     width - indent) +
          m.group;

@@ -73,8 +73,9 @@ struct EditorShell final {
   // user opts out; overlay exclusion is LayerD's separate setting.
   bool capture_exclusion{false};
   // From the last layout(): the status strip's top edge and the smallest
-  // client height that shows every row (0 before the first layout).
+  // client extent that shows every row (0 before the first layout).
   int status_strip_top{};
+  int min_client_width{};
   int min_client_height{};
   // Whether the last layout() had room for the preview column.
   bool preview_visible{};

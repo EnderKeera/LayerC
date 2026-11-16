@@ -9,9 +9,12 @@
 #include "test_support.hpp"
 #include "visual_runtime_status.hpp"
 
+#include "layerc/platform/native_theme.hpp"
+
 #include <windows.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <initializer_list>
 #include <string>
 #include <string_view>
@@ -101,6 +104,91 @@ void expect_flat_frames(const HWND dialog, const std::string_view name) {
   }
 }
 
+// Options with its text in a `pixels`-tall font (a larger text size): every
+// check box label and hint shows whole, wrapped rather than ellipsized when
+// the work area is too narrow for one line, and no row overlaps the next.
+// `pixels` 0 picks a font too large for any label to fit its work area.
+void expect_options_text_fits(int pixels) {
+  const HWND options = open_dialog(IDD_OPTIONS);
+  if (options == nullptr) {
+    expect(false, "Options should load");
+    return;
+  }
+  const bool must_wrap = pixels == 0;
+  if (must_wrap)
+    pixels = std::clamp(
+        static_cast<int>(layerc::editor::work_area_client_size(options).cx / 8),
+        96, 1000);
+  const std::string name = "Options at a " + std::to_string(pixels) + " px font";
+  int wrapped = 0;
+  const HFONT font = CreateFontW(-pixels, 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                                 FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 DEFAULT_PITCH, L"Segoe UI");
+  layerc::editor::style_native_dialog_children(options, font);
+  layerc::editor::layout_options_dialog(options);
+  const UINT dpi = layerc::platform::native_window_dpi(options);
+  const int offset = layerc::platform::native_check_box_label_offset(dpi);
+  const int ring = layerc::platform::native_check_box_ring_margin(dpi);
+  RECT client{};
+  GetClientRect(options, &client);
+  const SIZE work = layerc::editor::work_area_client_size(options);
+  const int floor = layerc::editor::dpi_scaled(
+      480, layerc::editor::window_base_dpi(options));
+  expect(client.right <= std::max<LONG>(floor, work.cx),
+         name + ": the dialog must not grow wider than its work area");
+  for (const int id : {IDC_VISUAL_MASTER, IDC_CAPTURE_PRIVACY,
+                       IDC_EDITOR_CAPTURE_PRIVACY, IDC_LAUNCHER_UPDATES}) {
+    const HWND box = GetDlgItem(options, id);
+    const RECT rect = child_rect(options, id);
+    const int width = rect.right - rect.left;
+    const bool wrap =
+        (GetWindowLongPtrW(box, GWL_STYLE) & BS_MULTILINE) != 0;
+    const SIZE line = layerc::editor::control_text_extent(box);
+    if (wrap) {
+      ++wrapped;
+      const SIZE lines = layerc::editor::control_text_extent(
+          box, std::max(1, width - offset - ring));
+      expect(line.cx + offset + ring > width &&
+                 rect.bottom - rect.top >= lines.cy,
+             name + ": wrapped check box " + std::to_string(id) +
+                 " must be as tall as its lines");
+    } else {
+      expect(line.cx + offset + ring <= width,
+             name + ": check box " + std::to_string(id) +
+                 " must show its whole label on one line");
+    }
+    expect(rect.right <= client.right,
+           name + ": check box " + std::to_string(id) + " leaves the client");
+  }
+  for (const int id : {IDC_OPTIONS_VISUAL_HINT, IDC_OPTIONS_CAPTURE_HINT,
+                       IDC_TEXT_SIZE_HINT, IDC_OPTIONS_UPDATES_HINT}) {
+    const RECT rect = child_rect(options, id);
+    const SIZE lines = layerc::editor::control_text_extent(
+        GetDlgItem(options, id), rect.right - rect.left);
+    expect(rect.bottom - rect.top >= lines.cy && rect.right <= client.right,
+           name + ": hint " + std::to_string(id) + " must show every line");
+  }
+  int previous = 0;
+  for (const int id :
+       {IDC_VISUAL_MASTER, IDC_OPTIONS_VISUAL_HINT, IDC_CAPTURE_PRIVACY,
+        IDC_EDITOR_CAPTURE_PRIVACY, IDC_OPTIONS_CAPTURE_HINT,
+        IDC_TEXT_SIZE_LABEL, IDC_TEXT_SIZE_HINT, IDC_LAUNCHER_UPDATES,
+        IDC_OPTIONS_UPDATES_HINT, IDOK}) {
+    const RECT rect = child_rect(options, id);
+    expect(rect.top >= previous,
+           name + ": control " + std::to_string(id) +
+               " overlaps the row above it");
+    previous = rect.bottom;
+  }
+  expect(previous <= client.bottom,
+         name + ": the buttons must stay inside the client");
+  expect(!must_wrap || wrapped > 0,
+         name + ": a label wider than the work area must wrap");
+  DestroyWindow(options);
+  DeleteObject(font);
+}
+
 } // namespace
 
 void editor_dialog_layout_contracts() {
@@ -117,6 +205,10 @@ void editor_dialog_layout_contracts() {
   } else {
     expect(false, "Options should load");
   }
+  // The default font, a 130% text size, a larger one, and one too large for
+  // the work area to show a label on one line.
+  for (const int pixels : {12, 16, 24, 0})
+    expect_options_text_fits(pixels);
 
   for (const bool advanced : {false, true}) {
     const HWND appearance = open_dialog(IDD_APPEARANCE);
@@ -293,6 +385,17 @@ void editor_main_layout_contracts() {
   expect(main_groups_top(200, 84, gap, 500, 250) == 300,
          "the settings row moves down once the list is at its minimum");
 
+  // GUI-02: when larger text makes stacked rows taller than the work area,
+  // height clamping alone would hide the visual controls below the status.
+  using layerc::editor::main_minimum_width;
+  expect(main_minimum_width(880, 900, 1152, 1920, 980) == 880 &&
+             main_minimum_width(1146, 1170, 1500, 1920, 980) == 1500 &&
+             main_minimum_width(1146, 980, 1500, 1920, 980) == 1146 &&
+             main_minimum_width(1146, 1170, 1500, 1280, 980) == 1280 &&
+             main_minimum_width(1146, 900, 1500, 1000, 980) == 1000,
+         "main minimum width keeps stacked rows only when their height fits, "
+         "and never requires a width beyond the work area");
+
   // Overlay colors only warn, in the Writing rules' words.
   using layerc::editor::OverlayColorField;
   using layerc::editor::OverlayColors;
@@ -341,6 +444,30 @@ void editor_main_layout_contracts() {
   expect(line && line->below_minimum &&
              line->text.ends_with(L"; aim for 4.5:1."),
          "Choose color states the aim for a bar color, not a requirement");
+
+  // Review GUI-05: every swatch is described by its own color. The
+  // descriptions take no selected color, so moving the selection (Graphite
+  // to Charcoal) cannot change them.
+  const std::vector<layerc::editor::ContrastTarget> disabled_text{
+      {L"Window disabled text", RGB(0x80, 0x80, 0x80), 4.5, true}};
+  const auto swatches =
+      layerc::editor::palette_swatch_descriptions(disabled_text);
+  const auto &palette = layerc::platform::color_palette;
+  bool each_own = swatches.size() == palette.size();
+  for (std::size_t index = 0; each_own && index < palette.size(); ++index) {
+    const auto own = layerc::editor::picker_contrast_line(
+        layerc::platform::native_color_ref(palette[index].value),
+        disabled_text);
+    each_own = own && swatches[index] == own->text;
+  }
+  expect(each_own, "each swatch describes the contrast of its own color");
+  expect(swatches.size() > 1 && palette[0].name == L"Graphite" &&
+             palette[1].name == L"Charcoal" && swatches[0] != swatches[1],
+         "Graphite and Charcoal describe different contrasts");
+  expect(std::ranges::all_of(
+             layerc::editor::palette_swatch_descriptions({}),
+             [](const std::wstring &text) { return text.empty(); }),
+         "swatches without contrast targets have no description");
 
   // A status kind draws the glyph of its meaning; `none` draws nothing.
   using layerc::editor::StatusKind;
@@ -395,6 +522,27 @@ void editor_main_layout_contracts() {
     expect(false, "the editor resource should load");
     return;
   }
+  // Text-size changes must grow a retained narrow window to the same
+  // scaled width floor as interactive resizing, without shrinking its height.
+  const int prior_scale = layerc::platform::native_text_scale();
+  for (const int scale : {100, 130}) {
+    layerc::platform::set_native_text_scale(scale);
+    const SIZE narrow = layerc::editor::window_size_for_client(editor, 400, 400);
+    SetWindowPos(editor, nullptr, 0, 0, narrow.cx, narrow.cy,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    const SIZE work = layerc::editor::work_area_client_size(editor);
+    const LONG minimum = std::min<LONG>(
+        layerc::editor::dpi_scaled(layerc::editor::main_client_min_width,
+                                  layerc::editor::window_base_dpi(editor)),
+        work.cx);
+    layerc::editor::grow_client_to(editor, {minimum, 0});
+    RECT client{};
+    GetClientRect(editor, &client);
+    expect(client.right >= minimum && client.bottom == 400,
+           "a retained narrow editor must grow to its text-scaled width floor");
+  }
+  layerc::platform::set_native_text_scale(prior_scale);
+
   // Tab order is reading order: fields, list, preview corner, slots 1 to 3.
   std::vector<int> order;
   for (HWND child = GetWindow(editor, GW_CHILD); child != nullptr;

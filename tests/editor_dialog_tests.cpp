@@ -137,6 +137,8 @@ void editor_cooldown_component_contracts();
 void editor_visual_component_contracts();
 void editor_drag_transaction_contracts();
 void editor_automation_component_contracts();
+void editor_profile_field_stepping_contracts();
+void editor_automation_layout_contracts();
 void editor_theme_contrast_contracts();
 void editor_theme_high_contrast_contracts();
 void editor_status_glyph_contracts();
@@ -172,6 +174,10 @@ int main(const int argc, char **argv) {
         editor_cooldown_component_contracts},
        {"editor_automation_component_contracts",
         editor_automation_component_contracts},
+       {"editor_profile_field_stepping_contracts",
+        editor_profile_field_stepping_contracts},
+       {"editor_automation_layout_contracts",
+        editor_automation_layout_contracts},
        {"editor_visual_component_contracts",
         editor_visual_component_contracts},
        {"editor_drag_transaction_contracts",

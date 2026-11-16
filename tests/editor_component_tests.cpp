@@ -1,6 +1,9 @@
 #include "automation_editor.hpp"
 #include "automation_graph.hpp"
 #include "cooldown_editor.hpp"
+#include "editor_dialog_dispatch.hpp"
+#include "editor_profile_fields.hpp"
+#include "editor_text.hpp"
 #include "editor_util.hpp"
 #include "profile_document.hpp"
 #include "test_support.hpp"
@@ -11,6 +14,7 @@
 
 #include <windows.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -26,6 +30,19 @@ namespace layerc::editor {
 // Focused seam for the automation editor's private reporting paths; no public
 // production test API is added.
 struct AutomationEditorTestAccess {
+  // The hidden dialog through the production dispatch, so WM_SIZE,
+  // WM_GETMINMAXINFO and WM_DESTROY reach the editor as they do in open().
+  static HWND open_modeless(AutomationEditor &editor) {
+    return CreateDialogParamW(
+        GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_AUTOMATION), nullptr,
+        &dispatch_member_dialog<AutomationEditor,
+                                &AutomationEditor::initialize,
+                                &AutomationEditor::handle_message>,
+        reinterpret_cast<LPARAM>(&editor));
+  }
+  static SIZE minimum_client(const AutomationEditor &editor) {
+    return editor.minimum_client_;
+  }
   static void refresh(AutomationEditor &editor, const HWND dialog) {
     editor.refresh(dialog);
   }
@@ -495,4 +512,192 @@ void editor_automation_component_contracts() {
   expect(document.undo() && document.automation() == baseline &&
              !document.can_undo(),
          "one undo restores the baseline name");
+}
+
+// Review GUI-03: at the size Automation reports as its minimum, each view's
+// visible controls fit its client area without overlapping, and a window
+// made smaller grows back to that size. Review GUI-04: the simulator speed
+// list is named by the visible label just before it (MSAA takes a list's
+// name from that static), with an access key unique in the dialog.
+void editor_automation_layout_contracts() {
+  using namespace layerc::editor;
+  auto profile = make_new_profile();
+  profile.game.executable_name = "component.exe";
+  layerc::core::AutomationProfile automation;
+  automation.profile_id = profile.id;
+  layerc::core::AutomationDefinition first;
+  first.id = "automation-1";
+  first.name = "First";
+  automation.automations.push_back(first);
+  ProfileDocument document;
+  document.start_draft(profile, DraftOrigin::fresh, std::nullopt, automation);
+  const auto live = std::make_unique<LiveEditSession>();
+  EditorShell shell;
+  const NullTheme theme;
+  AutomationEditor editor(
+      document, *live, shell, theme,
+      [](const ModuleEditOutcome &, DocumentChangeKind) { return true; });
+  // Declared after the editor, so the dialog (and its WM_DESTROY) goes first.
+  struct DialogGuard final {
+    HWND handle{};
+    ~DialogGuard() { if (handle != nullptr) DestroyWindow(handle); }
+  } dialog{AutomationEditorTestAccess::open_modeless(editor)};
+  if (!expect(dialog.handle != nullptr,
+              "the automation dialog opens through its dispatch"))
+    return;
+  const HWND window = dialog.handle;
+  const auto visible = [](const HWND control) {
+    return (GetWindowLongPtrW(control, GWL_STYLE) & WS_VISIBLE) != 0;
+  };
+  const auto client_rect = [window](const HWND control) {
+    RECT rect{};
+    GetWindowRect(control, &rect);
+    MapWindowPoints(nullptr, window, reinterpret_cast<POINT *>(&rect), 2);
+    return rect;
+  };
+  const auto resize = [window](const LONG width, const LONG height) {
+    SetWindowPos(window, nullptr, 0, 0, width, height,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  };
+  constexpr std::array<const char *, 3> view_names{"Basic", "Simulator",
+                                                   "Advanced"};
+  for (int view = 0; view < static_cast<int>(view_names.size()); ++view) {
+    const std::string name = view_names[static_cast<std::size_t>(view)];
+    SendDlgItemMessageW(window, IDC_AUTOMATION_VIEW, CB_SETCURSEL,
+                        static_cast<WPARAM>(view), 0);
+    (void)AutomationEditorTestAccess::command(
+        editor, window, MAKEWPARAM(IDC_AUTOMATION_VIEW, CBN_SELCHANGE));
+    MINMAXINFO limits{};
+    SendMessageW(window, WM_GETMINMAXINFO, 0,
+                 reinterpret_cast<LPARAM>(&limits));
+    resize(limits.ptMinTrackSize.x, limits.ptMinTrackSize.y);
+    RECT client{};
+    GetClientRect(window, &client);
+    const SIZE minimum = AutomationEditorTestAccess::minimum_client(editor);
+    expect(minimum.cx > 0 && client.right >= minimum.cx &&
+               client.bottom >= minimum.cy,
+           "the " + name + " view's minimum frame holds its measured extent");
+    std::vector<std::pair<int, RECT>> shown;
+    for (HWND child = GetWindow(window, GW_CHILD); child != nullptr;
+         child = GetWindow(child, GW_HWNDNEXT))
+      if (visible(child))
+        shown.emplace_back(GetDlgCtrlID(child), client_rect(child));
+    for (std::size_t i = 0; i < shown.size(); ++i) {
+      const RECT &rect = shown[i].second;
+      expect(rect.left >= 0 && rect.top >= 0 && rect.right <= client.right &&
+                 rect.bottom <= client.bottom,
+             "control " + std::to_string(shown[i].first) + " of the " + name +
+                 " view fits the minimum client area");
+      for (std::size_t j = i + 1; j < shown.size(); ++j) {
+        RECT overlap{};
+        expect(IntersectRect(&overlap, &rect, &shown[j].second) == FALSE,
+               "controls " + std::to_string(shown[i].first) + " and " +
+                   std::to_string(shown[j].first) + " of the " + name +
+                   " view do not overlap at the minimum size");
+      }
+    }
+    resize(200, 150);
+    GetClientRect(window, &client);
+    expect(client.right >= minimum.cx && client.bottom >= minimum.cy,
+           "a " + name + " window made too small grows back to its extent");
+  }
+
+  const HWND speed = GetDlgItem(window, IDC_AUTOMATION_SIM_SPEED);
+  const HWND speed_label = GetDlgItem(window, IDC_AUTOMATION_SIM_SPEED_LABEL);
+  expect(speed != nullptr && speed_label != nullptr &&
+             GetWindow(speed, GW_HWNDPREV) == speed_label &&
+             window_text(speed_label) == L"Playbac&k speed",
+         "the speed list follows its visible label, which names it");
+  int access_k = 0;
+  for (HWND child = GetWindow(window, GW_CHILD); child != nullptr;
+       child = GetWindow(child, GW_HWNDNEXT)) {
+    const std::wstring text = window_text(child);
+    if (text.find(L"&k") != std::wstring::npos ||
+        text.find(L"&K") != std::wstring::npos)
+      ++access_k;
+  }
+  expect(access_k == 1, "Alt+K reaches only the speed list");
+  for (int view = 0; view < static_cast<int>(view_names.size()); ++view) {
+    SendDlgItemMessageW(window, IDC_AUTOMATION_VIEW, CB_SETCURSEL,
+                        static_cast<WPARAM>(view), 0);
+    (void)AutomationEditorTestAccess::command(
+        editor, window, MAKEWPARAM(IDC_AUTOMATION_VIEW, CBN_SELCHANGE));
+    expect(visible(speed_label) == (view == 1) &&
+               visible(speed) == (view == 1),
+           "the speed label shows and hides with the Simulator view");
+  }
+}
+
+// Up/Down, Shift and the wheel step through the binding's one numeric domain,
+// so stepping can never manufacture a value typing would be refused (review
+// GUI-01: Width 1200 + Up used to give 1201).
+void editor_profile_field_stepping_contracts() {
+  using layerc::editor::stepped_field_text;
+  const HINSTANCE instance = GetModuleHandleW(nullptr);
+  const HWND host = CreateWindowExW(0, L"STATIC", L"", WS_POPUP, 0, 0, 10, 10,
+                                    nullptr, nullptr, instance, nullptr);
+  if (!expect(host != nullptr, "the stepping host window should open"))
+    return;
+  const auto profile = layerc::editor::make_new_profile();
+  const layerc::core::CooldownDefinition cooldown{};
+  const layerc::core::Panel panel{};
+  const layerc::editor::ProfileFieldView view{host, profile, &cooldown, &panel};
+  int stepped = 0;
+  for (const auto &binding : layerc::editor::profile_field_bindings()) {
+    if (binding.stepping == nullptr)
+      continue;
+    ++stepped;
+    const HWND edit = CreateWindowExW(
+        0, L"EDIT", L"", WS_CHILD, 0, 0, 10, 10, host,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(binding.control_id)),
+        instance, nullptr);
+    const auto accepts = [&](const std::wstring &text) {
+      SetWindowTextW(edit, text.c_str());
+      return binding.valid(view);
+    };
+    const auto &range = *binding.stepping;
+    const std::wstring top = stepped_field_text(L"1e12", range, 0);
+    const std::wstring bottom = stepped_field_text(L"-1e12", range, 0);
+    const std::wstring name = std::to_wstring(binding.control_id);
+    expect(accepts(top) && accepts(bottom),
+           "both stepping bounds of field " +
+               layerc::platform::wide_to_utf8(name) + " are valid");
+    for (const int steps : {1, 10, -1, -10}) {
+      expect(accepts(stepped_field_text(top, range, steps)) &&
+                 accepts(stepped_field_text(bottom, range, steps)) &&
+                 accepts(stepped_field_text(L"not a number", range, steps)),
+             "stepping field " + layerc::platform::wide_to_utf8(name) +
+                 " stays inside its validated domain");
+    }
+    expect(stepped_field_text(top, range, 10) == top &&
+               stepped_field_text(bottom, range, -10) == bottom,
+           "stepping clamps at both bounds of field " +
+               layerc::platform::wide_to_utf8(name));
+    DestroyWindow(edit);
+  }
+  DestroyWindow(host);
+  expect(stepped == 4, "duration, charges, width and height step");
+
+  const auto *width = layerc::editor::profile_field_binding(IDC_BAR_WIDTH);
+  const auto *height = layerc::editor::profile_field_binding(IDC_BAR_HEIGHT);
+  const auto *duration =
+      layerc::editor::profile_field_binding(IDC_COOLDOWN_DURATION);
+  if (!expect(width != nullptr && width->stepping != nullptr &&
+                  height != nullptr && height->stepping != nullptr &&
+                  duration != nullptr && duration->stepping != nullptr,
+              "width, height and duration expose their stepping"))
+    return;
+  expect(stepped_field_text(L"1200", *width->stepping, 1) == L"1200" &&
+             stepped_field_text(L"1199", *width->stepping, 10) == L"1200" &&
+             stepped_field_text(L"40", *width->stepping, -1) == L"40" &&
+             stepped_field_text(L"5000", *width->stepping, -1) == L"1199",
+         "width steps inside 40-1200");
+  expect(stepped_field_text(L"240", *height->stepping, 1) == L"240" &&
+             stepped_field_text(L"16", *height->stepping, -10) == L"16",
+         "height steps inside 16-240");
+  expect(stepped_field_text(L"1.25", *duration->stepping, 1) == L"1.4" &&
+             stepped_field_text(L"0.1", *duration->stepping, -1) == L"0.1" &&
+             stepped_field_text(L"86400", *duration->stepping, 1) ==
+                 L"86400.0",
+         "duration steps in tenths from 0.1 s to 86400 s");
 }

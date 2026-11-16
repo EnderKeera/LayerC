@@ -68,8 +68,7 @@ ProfileCheckboxMetrics profile_checkbox_metrics(const UINT source_dpi) {
 }
 
 int stored_text_scale() {
-  const auto stored =
-      layerc::platform::read_layerc_registry_dword(text_scale_setting);
+  const auto stored = layerc::platform::read_editor_text_scale();
   if (!stored.value)
     return 100;
   const auto percent = static_cast<int>(*stored.value);

@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
 
 #include <windows.h>
 
@@ -32,6 +34,18 @@ struct ProfileFieldContext {
   }
 };
 
+// Up/Down and wheel stepping of a numeric field (Shift steps ten times as
+// far). Bounds and step count whole 10^-decimals units of the displayed
+// value, and the bounds lie inside the domain the field's validator accepts:
+// both are built from the same core constants, so stepping never produces a
+// value that typing would be refused.
+struct ProfileFieldStepping {
+  std::int64_t minimum{};
+  std::int64_t maximum{};
+  std::int64_t step{1};
+  int decimals{};
+};
+
 struct ProfileFieldBinding {
   int control_id{};
   UINT notification{};
@@ -42,6 +56,8 @@ struct ProfileFieldBinding {
   void (*read)(ProfileFieldContext &){};
   void (*write)(const ProfileFieldView &){};
   bool (*valid)(const ProfileFieldView &){};
+  // Present only on numeric fields that step.
+  const ProfileFieldStepping *stepping{};
 };
 
 [[nodiscard]] std::span<const ProfileFieldBinding> profile_field_bindings();
@@ -50,5 +66,10 @@ void read_profile_fields(ProfileFieldContext &context);
 void write_profile_fields(const ProfileFieldView &context,
                           ProfileFieldOwner owner);
 [[nodiscard]] bool profile_fields_valid(const ProfileFieldView &context);
+// The field text `steps` increments from `text`, clamped to the stepping
+// range. Text that is not a number steps from the minimum.
+[[nodiscard]] std::wstring stepped_field_text(std::wstring_view text,
+                                              const ProfileFieldStepping &stepping,
+                                              int steps);
 
 } // namespace layerc::editor

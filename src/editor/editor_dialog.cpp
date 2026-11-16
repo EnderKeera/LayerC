@@ -2,6 +2,7 @@
 #include "dialog_layout.hpp"
 #include "editor_app.hpp"
 #include "editor_dialog_dispatch.hpp"
+#include "editor_layout_rules.hpp"
 #include "editor_window.hpp"
 #include "panel_items.hpp"
 #include "static_style.hpp"
@@ -569,6 +570,7 @@ void EditorWindow::reload_fonts() {
   style_dialog_children(shell_.window);
   apply_heading_fonts();
   rebuild_profile_check_hit_images();
+  // Layout enforces the same measured minimum after font changes as resizing.
   layout();
 }
 
@@ -695,7 +697,9 @@ LRESULT EditorWindow::handle_main_message(const HWND window, const UINT message,
     // the content needs: ~900 px wide (half of a 1920 px screen still
     // snaps) and the height of the last layout's rows.
     const int dpi = window_base_dpi(window);
-    RECT frame{0, 0, dpi_scaled(880, dpi),
+    RECT frame{0, 0,
+               std::max(shell_.min_client_width,
+                        dpi_scaled(main_client_min_width, dpi)),
                std::max(shell_.min_client_height, dpi_scaled(520, dpi))};
     AdjustWindowRectExForDpi(
         &frame, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE)), TRUE,

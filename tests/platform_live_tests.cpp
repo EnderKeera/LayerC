@@ -11,8 +11,11 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -472,6 +475,149 @@ void settings_key_override() {
   RegDeleteKeyW(HKEY_CURRENT_USER, parent.c_str()); // only when now empty
 }
 
+// Absent-or-present DWORDs that can fail one chosen read, write or restore,
+// driving commit_settings through each failure path (review CQ-01).
+struct FaultingSettingsStore {
+  using Value = std::optional<std::uint32_t>;
+  std::vector<Value> values;
+  std::vector<std::uint32_t> next;
+  std::optional<std::size_t> fail_read;
+  std::optional<std::size_t> fail_write;
+  std::optional<std::size_t> fail_restore;
+  std::size_t writes{};
+
+  std::uint32_t read(const std::size_t index,
+                     layerc::platform::StoredSetting &prior) const {
+    if (fail_read == index)
+      return ERROR_ACCESS_DENIED;
+    prior = {};
+    if (const auto &value = values[index]; value) {
+      prior.type = REG_DWORD;
+      prior.data.resize(sizeof(*value));
+      std::memcpy(prior.data.data(), &*value, sizeof(*value));
+    }
+    return 0;
+  }
+  std::uint32_t write(const std::size_t index) {
+    ++writes;
+    if (fail_write == index)
+      return ERROR_ACCESS_DENIED;
+    values[index] = next[index];
+    return 0;
+  }
+  std::uint32_t restore(const std::size_t index,
+                        const layerc::platform::StoredSetting &prior) {
+    if (fail_restore == index)
+      return ERROR_WRITE_FAULT;
+    if (!prior.type) {
+      values[index].reset();
+      return 0;
+    }
+    std::uint32_t value{};
+    std::memcpy(&value, prior.data.data(), sizeof(value));
+    values[index] = value;
+    return 0;
+  }
+};
+
+void settings_commit_policy() {
+  using layerc::platform::SettingsCommitState;
+  using Value = FaultingSettingsStore::Value;
+  const std::vector<Value> before{7U, std::nullopt, 3U, 9U};
+  const auto store = [&] {
+    return FaultingSettingsStore{.values = before, .next = {1, 1, 1, 1}};
+  };
+  const auto commit = [](FaultingSettingsStore &target) {
+    return layerc::platform::commit_settings(target, target.values.size());
+  };
+
+  auto clean = store();
+  const auto committed = commit(clean);
+  expect(static_cast<bool>(committed) && committed.error == 0 &&
+             clean.values == std::vector<Value>{1U, 1U, 1U, 1U},
+         "a commit without faults writes every value");
+
+  auto failed_write = store();
+  failed_write.fail_write = 2;
+  const auto undone = commit(failed_write);
+  expect(!undone && undone.state == SettingsCommitState::unchanged &&
+             undone.error == ERROR_ACCESS_DENIED,
+         "a failed write reports the commit unchanged with its error");
+  expect(failed_write.values == before && failed_write.writes == 3,
+         "a failed write restores earlier values, an absent one included, "
+         "and writes nothing after it");
+
+  auto failed_restore = store();
+  failed_restore.fail_write = 2;
+  failed_restore.fail_restore = 0;
+  const auto partial = commit(failed_restore);
+  expect(!partial && partial.state == SettingsCommitState::partial &&
+             partial.error == ERROR_ACCESS_DENIED,
+         "an undo that fails reports a partial commit and the write error");
+  expect(failed_restore.values ==
+             std::vector<Value>{1U, std::nullopt, 3U, 9U},
+         "a partial commit still restores every other written value");
+
+  auto failed_read = store();
+  failed_read.fail_read = 3;
+  const auto unread = commit(failed_read);
+  expect(!unread && unread.state == SettingsCommitState::unchanged &&
+             failed_read.writes == 0 && failed_read.values == before,
+         "a failed read of any prior value writes nothing");
+
+  auto first_write = store();
+  first_write.fail_write = 0;
+  const auto nothing = commit(first_write);
+  expect(!nothing && nothing.state == SettingsCommitState::unchanged &&
+             first_write.values == before,
+         "a failed first write leaves every value as it was");
+}
+
+// Options > Apply's snapshot against a disposable registry key: every value
+// lands as the DWORD its reader expects, whatever type was there before.
+void options_settings_commit() {
+  const std::wstring parent = L"Software\\LayerC.Test";
+  const std::wstring key = parent + L"\\options-" +
+                           std::to_wstring(GetCurrentProcessId()) + L"-" +
+                           std::to_wstring(GetTickCount64());
+  constexpr wchar_t stale[] = L"stale";
+  expect(RegSetKeyValueW(HKEY_CURRENT_USER, key.c_str(), L"ExcludeFromCapture",
+                         REG_SZ, stale, sizeof(stale)) == ERROR_SUCCESS,
+         "disposable options key should be created");
+  expect(RegSetKeyValueW(HKEY_CURRENT_USER, key.c_str(),
+                         L"ExcludeEditorFromCapture", REG_BINARY, nullptr, 0) ==
+             ERROR_SUCCESS,
+         "a zero-byte prior option should be readable before commit");
+  expect(SetEnvironmentVariableW(L"LAYERC_SETTINGS_KEY", key.c_str()) != FALSE,
+         "settings override should be set");
+  using layerc::platform::BoolSetting;
+  using layerc::platform::read_bool_setting;
+  // The override is in effect before anything is written through it.
+  if (expect(read_bool_setting(BoolSetting::capture_exclusion).failed(),
+             "the seeded string reads from the disposable key")) {
+    const auto committed = layerc::platform::write_options_settings(
+        {.capture_exclusion = true,
+         .editor_capture_exclusion = false,
+         .visual_recognition = true,
+         .launcher_updates = true,
+         .editor_text_scale = 130});
+    expect(static_cast<bool>(committed) && committed.error == 0,
+           "the options snapshot commits");
+    expect(read_bool_setting(BoolSetting::capture_exclusion).value == true &&
+               read_bool_setting(BoolSetting::editor_capture_exclusion)
+                       .value == false &&
+               read_bool_setting(BoolSetting::visual_recognition).value ==
+                   true &&
+               read_bool_setting(BoolSetting::launcher_updates).value ==
+                   true &&
+               layerc::platform::read_editor_text_scale().value == 130U,
+           "every option reads back as committed");
+  }
+  SetEnvironmentVariableW(L"LAYERC_SETTINGS_KEY", nullptr);
+  RegDeleteTreeW(HKEY_CURRENT_USER, key.c_str());
+  RegDeleteKeyW(HKEY_CURRENT_USER, parent.c_str()); // only when now empty
+}
+
 } // namespace
 
 int main(const int argc, char *argv[]) {
@@ -502,6 +648,8 @@ int main(const int argc, char *argv[]) {
       LAYERC_TEST_CASE(live::platform_relative_profile_write),
       LAYERC_TEST_CASE(window_matcher_policy),
       LAYERC_TEST_CASE(settings_key_override),
+      LAYERC_TEST_CASE(settings_commit_policy),
+      LAYERC_TEST_CASE(options_settings_commit),
       LAYERC_TEST_CASE(live::platform_corrupt_profile_recovery),
       LAYERC_TEST_CASE(bounded_helper_failure),
       LAYERC_TEST_CASE(pipe_server_spoof),

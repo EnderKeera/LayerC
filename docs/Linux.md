@@ -374,6 +374,12 @@ private control socket.
 LayerE exports its windows, menus and controls to screen readers through ATK
 and the AT-SPI bus without GTK widgets. When the bus or a coherent ≥ 2.62
 library set is unavailable, the window shows the reason and editing continues.
+Keyboard focus scrolls controls into view in small main and calibration windows;
+AT-SPI visibility and extents are clipped to the scroll viewport. Open menus and
+choice popups expose the highlighted item's focus, selection and row geometry
+without disabling their owning window; closed popup items are not showing.
+Color chooser channels have RGB/HSV names and spin-button roles. The calibration
+target list stays disabled until a scan finds a selectable window.
 
 Invalid inputs and storage failures retain unsaved edits and show a reason.
 A successful offline save is distinguished from a save whose daemon reload
@@ -423,7 +429,9 @@ new profile, a failed save, or a declined upgrade. LayerD capabilities/faults ar
 visible, with an explicit refresh button. Status panes pair drawn status glyphs
 with text; accessible names, descriptions and explicit save/reload announcements
 remain available through AT-SPI. Help > Keyboard shortcuts uses measured key
-and action columns, including F1, from the command registry.
+and action columns, including F1, from the command registry. Keyboard shortcuts,
+Options and About enforce measured minimum sizes and keep their bottom actions
+fixed-width and right-aligned when resized.
 
 The installed `layere` is smoke-tested by `tools/linux-editor-smoke.sh`: it
 starts beside the installed daemon on a disposable display with private XDG

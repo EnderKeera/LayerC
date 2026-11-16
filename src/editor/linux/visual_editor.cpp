@@ -211,7 +211,13 @@ void LinuxVisualEditor::refresh() {
   if (!impl_) {
     if (!page_->visible()) return;
     auto *previous = Fl_Group::current();
-    impl_ = std::make_unique<Impl>(app_, *page_); Fl_Group::current(previous);
+    const int x = page_->x(), y = page_->y();
+    // Lazy controls use the authored page origin; the page may already have
+    // moved with the main scroll host (including its menu-bar offset).
+    page_->position(270, 45);
+    impl_ = std::make_unique<Impl>(app_, *page_);
+    page_->position(x, y);
+    Fl_Group::current(previous);
   }
   impl_->refresh();
 }

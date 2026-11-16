@@ -43,9 +43,8 @@ struct ProfileCheckboxMetrics {
 
 void set_owner_draw_checkbox(HWND control, bool checked);
 [[nodiscard]] bool owner_draw_checkbox_checked(HWND control);
-// Options > Text size, stored as a DWORD percent under HKCU\Software\LayerC.
+// Options > Text size, stored through platform::write_editor_text_scale.
 inline constexpr std::array text_scale_choices{100, 115, 130};
-inline constexpr std::wstring_view text_scale_setting = L"EditorTextScale";
 [[nodiscard]] int stored_text_scale();
 
 [[nodiscard]] ProfileCheckboxMetrics profile_checkbox_metrics(UINT dpi);

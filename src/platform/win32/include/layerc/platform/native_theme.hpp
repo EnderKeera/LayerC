@@ -250,13 +250,19 @@ struct NativeCheckState {
   bool radio{};
 };
 // Draws the check box glyph vertically centered at the left of `bounds` and
-// returns its rectangle. `dpi` sizes the 18 px (at 96 DPI) glyph.
+// returns its rectangle. `dpi` sizes the 16 px (at 96 DPI) glyph.
 RECT paint_native_check_box(HDC dc, const RECT &bounds,
                             const NativeCheckState &state,
                             const NativeThemeColors &colors, UINT dpi);
 [[nodiscard]] int native_check_box_size(UINT dpi);
+// Where a check box's label starts: the box, then 8 px (DesignSystem.md,
+// CheckBox). Layouts indent a check box's hint by the same amount.
+[[nodiscard]] int native_check_box_label_offset(UINT dpi);
+// The room the focus ring takes after a check box's label text.
+[[nodiscard]] int native_check_box_ring_margin(UINT dpi);
 // NM_CUSTOMDRAW for checkbox/radio buttons (Common Controls 6): paints the
 // whole control and returns CDRF_SKIPDEFAULT, or nullopt for other buttons.
+// A BS_MULTILINE check box wraps its label, the box beside the first line.
 [[nodiscard]] std::optional<LRESULT>
 native_button_custom_draw(const NMHDR &header, const NativeThemeColors &colors,
                           HFONT font);

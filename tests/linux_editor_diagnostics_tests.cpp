@@ -276,8 +276,10 @@ void linux_editor_semantic_row_extents() {
     expect(parent[0] == one[0] - owner[0] && parent[1] == one[1] - owner[1] &&
                parent[2] == one[2] && parent[3] == one[3],
            "row parent coordinates are relative to its browser");
-    expect(bounds(item.get()) == bounds(menu_object),
-           "menu items retain the owner-bounds contract");
+    const auto title = bounds(item.get()), bar_bounds = bounds(menu_object);
+    expect(title[2] > 0 && title[2] < bar_bounds[2] && title[3] > 0 &&
+               title[0] >= bar_bounds[0] && title[0] + title[2] <= bar_bounds[0] + bar_bounds[2],
+           "closed menu-bar titles retain their own header geometry, not the whole bar");
     list->topline(80);
     list->redraw();
     Fl::check();

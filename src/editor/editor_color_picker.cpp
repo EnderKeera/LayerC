@@ -98,10 +98,10 @@ LRESULT CALLBACK swatch_proc(const HWND swatch, const UINT message,
   return DefSubclassProc(swatch, message, wparam, lparam);
 }
 
-// The hint and the contrast line belong to the value fields; a swatch's
-// description is the contrast line alone, which measures its color
-// (DesignSystem.md, Screen readers).
-void describe_picker_controls(const HWND window) {
+// The hint and the contrast line belong to the value fields: the line
+// measures the color being chosen. Swatches describe their own colors
+// (describe_swatches), so selection never changes them.
+void describe_value_fields(const HWND window) {
   const std::wstring hint = window_text(GetDlgItem(window, IDC_COLOR_HINT));
   const std::wstring contrast =
       window_text(GetDlgItem(window, IDC_COLOR_CONTRAST));
@@ -114,8 +114,20 @@ void describe_picker_controls(const HWND window) {
   for (const int id :
        {IDC_COLOR_RED, IDC_COLOR_GREEN, IDC_COLOR_BLUE, IDC_COLOR_HEX})
     set_accessible_description(GetDlgItem(window, id), fields);
-  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id)
-    set_accessible_description(GetDlgItem(window, id), contrast);
+}
+
+// A swatch's description is its own color's contrast with the picker's
+// targets (DesignSystem.md, Screen readers). Swatch colors and targets are
+// fixed while the picker is open, so this runs once.
+void describe_swatches(const HWND window,
+                       const std::vector<ContrastTarget> &targets) {
+  const auto descriptions = palette_swatch_descriptions(targets);
+  for (int id = IDC_COLOR_SWATCH_FIRST; id <= IDC_COLOR_SWATCH_LAST; ++id) {
+    const auto slot = static_cast<std::size_t>(id - IDC_COLOR_SWATCH_FIRST);
+    set_accessible_description(GetDlgItem(window, id),
+                               slot < descriptions.size() ? descriptions[slot]
+                                                          : std::wstring{});
+  }
 }
 
 // Repaints the swatches and the preview, and rewrites the contrast line
@@ -131,7 +143,7 @@ void invalidate_picker(const HWND window, const std::uint32_t color,
     glyph = theme::StatusGlyph::warning;
   set_status_line(GetDlgItem(window, IDC_COLOR_CONTRAST), glyph,
                   line ? std::wstring_view(line->text) : std::wstring_view{});
-  describe_picker_controls(window);
+  describe_value_fields(window);
 }
 
 } // namespace
@@ -169,6 +181,7 @@ void EditorWindow::initialize_color_picker(const HWND window) {
       active = id;
   }
   set_swatch_tab_stop(window, active);
+  describe_swatches(window, appearance_editor_.picker_targets());
   SendMessageW(GetDlgItem(window, IDC_COLOR_HEX), EM_SETCUEBANNER, FALSE,
                reinterpret_cast<LPARAM>(L"#RRGGBB"));
   refresh_color_picker(window);

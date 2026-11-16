@@ -8,6 +8,8 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Browser.H>
+#include <FL/Fl_Box.H>
+#include <FL/Fl_Group.H>
 #include <FL/Fl_Multiline_Output.H>
 #include <FL/fl_draw.H>
 
@@ -17,6 +19,47 @@ namespace layerc::editor {
 namespace {
 constexpr int width = 680, height = 480, margin = 10;
 constexpr int button_height = editor_button_height;
+
+// The window stretches its content; the action row stretches only its spacer.
+// Buttons are measured once and stay fixed-width and right-aligned on resize.
+class TextDialogShell final : public Fl_Double_Window {
+public:
+  TextDialogShell(int width, int height, const char *title)
+      : Fl_Double_Window(width, height, title) {
+    body_ = new Fl_Group(margin, margin, width - 2 * margin,
+                          height - 3 * margin - button_height);
+    body_->end();
+    row_ = new Fl_Group(margin, height - margin - button_height,
+                         width - 2 * margin, button_height);
+    spacer_ = new Fl_Box(row_->x(), row_->y(), row_->w(), row_->h());
+    row_->resizable(spacer_); row_->end();
+    end(); resizable(body_);
+  }
+  Fl_Group &body() { return *body_; }
+  Fl_Button &action(const char *label) {
+    row_->begin();
+    fl_font(FL_HELVETICA, FL_NORMAL_SIZE);
+    const int width = std::max(110, static_cast<int>(fl_width(label)) + 2 * margin);
+    auto *button = new Fl_Button(0, row_->y(), width, button_height, label);
+    row_->end();
+    int x = row_->x() + row_->w();
+    for (int i = row_->children(); i-- > 1;) {
+      auto *child = row_->child(i); x -= child->w();
+      child->position(x, row_->y()); x -= margin;
+    }
+    spacer_->resize(row_->x(), row_->y(), std::max(0, x - row_->x()), row_->h());
+    row_->init_sizes();
+    return *button;
+  }
+  void minimum(int content_width, int content_height) {
+    const int actions = row_->w() - spacer_->w();
+    size_range(std::max(content_width, actions) + 2 * margin,
+                content_height + 3 * margin + button_height);
+  }
+private:
+  Fl_Group *body_{}, *row_{};
+  Fl_Box *spacer_{};
+};
 
 std::string join(const RuntimeDiagnosticsView &view) {
   std::string text;
@@ -95,24 +138,26 @@ void DiagnosticsWindow::on_close(Fl_Widget *, void *data) {
 }
 
 void show_text_dialog(const char *title, const std::string &text, const std::string &copy_text) {
-  Fl_Double_Window dialog(560, 400, title);
-  auto *output = new EditorField<Fl_Multiline_Output>(margin, margin, 560 - 2 * margin,
-                                         400 - 3 * margin - button_height, title);
+  TextDialogShell dialog(560, 400, title);
+  auto &body = dialog.body(); body.begin();
+  auto *output = new EditorField<Fl_Multiline_Output>(body.x(), body.y(), body.w(), body.h(), title);
   output->wrap(1);
   output->labeltype(FL_NO_LABEL);
   output->value(text.c_str());
-  const int y = 400 - margin - button_height;
+  body.resizable(output); body.end();
   if (!copy_text.empty()) {
-    auto *copy = new Fl_Button(margin, y, 140, button_height, "&Copy details");
+    auto *copy = &dialog.action("&Copy details");
     copy->callback([](Fl_Widget *, void *data) {
       const auto &details = *static_cast<const std::string *>(data);
       Fl::copy(details.c_str(), static_cast<int>(details.size()), 1);
     }, const_cast<std::string *>(&copy_text));
   }
-  auto *close = new Fl_Button(560 - margin - 110, y, 110, button_height, "Close");
+  auto *close = &dialog.action("Close");
+  primary_button(*close);
   close->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  dialog.resizable(output);
-  dialog.end();
+  fl_font(output->textfont(), output->textsize());
+  dialog.minimum(static_cast<int>(fl_width("LayerE — Runtime diagnostics")) + 2 * margin,
+                   8 * fl_height());
   fit_text_view(dialog, *output);
   dialog.set_modal();
   dialog.show();
@@ -121,7 +166,6 @@ void show_text_dialog(const char *title, const std::string &text, const std::str
 }
 
 void show_shortcuts_dialog(const std::string_view rows) {
-  constexpr int margin = 12;
   // Measure in the body font the browser draws with, never the default.
   fl_font(FL_HELVETICA, FL_NORMAL_SIZE);
   // Both columns come from the rendered text, so no row is padded with
@@ -154,9 +198,10 @@ void show_shortcuts_dialog(const std::string_view rows) {
   const int visible = std::min(static_cast<int>(pairs.size()), 22);
   const int height = std::min(2 * margin + visible * 20 + editor_button_height + margin,
                               screen_height);
-  Fl_Double_Window dialog(width, height, "Keyboard shortcuts — LayerE");
-  auto *browser = new Fl_Browser(margin, margin, width - 2 * margin,
-                                 height - 3 * margin - editor_button_height, nullptr);
+  TextDialogShell dialog(width, height, "Keyboard shortcuts — LayerE");
+  auto &body = dialog.body(); body.begin();
+  auto *browser = new Fl_Browser(body.x(), body.y(), body.w(), body.h(), "Keyboard shortcuts");
+  browser->labeltype(FL_NO_LABEL);
   browser->type(FL_HOLD_BROWSER);
   browser->textfont(FL_HELVETICA);
   browser->textsize(FL_NORMAL_SIZE);
@@ -164,13 +209,11 @@ void show_shortcuts_dialog(const std::string_view rows) {
   browser->column_widths(columns);
   for (const auto &[key, description] : pairs)
     browser->add((key + "\t" + description).c_str());
-  auto *close = new Fl_Button(width - margin - 110,
-                              height - margin - editor_button_height, 110,
-                              editor_button_height, "Close");
+  body.resizable(browser); body.end();
+  auto *close = &dialog.action("Close");
   primary_button(*close);
   close->callback([](Fl_Widget *widget, void *) { widget->window()->hide(); });
-  dialog.resizable(browser);
-  dialog.end();
+  dialog.minimum(keys + descriptions, 6 * (fl_height() + 4));
   dialog.set_modal();
   dialog.show();
   close->take_focus();

@@ -1,4 +1,5 @@
 #include "accessibility_tree.hpp"
+#include "editor_popup.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Window.H>
@@ -197,6 +198,7 @@ void AccessibilityTree::report_text(AtkObject *object, Node &n, const std::strin
 void AccessibilityTree::report_window() {
   AtkObject *next{};
   Fl_Window *window = Fl::modal() ? Fl::modal() : (Fl::focus() ? Fl::focus()->top_window() : nullptr);
+  if (auto *document = popup_document_window(window)) window = document;
   for (auto *child : node(root_).children)
     if (node(child).widget() == window) next = child;
   if (next == active_window_) return;

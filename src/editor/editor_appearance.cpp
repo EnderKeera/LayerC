@@ -12,7 +12,6 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <utility>
 
 #include <windows.h>
 namespace layerc::editor {
@@ -219,14 +218,8 @@ void EditorWindow::initialize_options(const HWND window) {
 }
 
 bool EditorWindow::apply_options(const HWND window) {
-  const bool overlays =
-      IsDlgButtonChecked(window, IDC_CAPTURE_PRIVACY) == BST_CHECKED;
   const bool capture =
       IsDlgButtonChecked(window, IDC_EDITOR_CAPTURE_PRIVACY) == BST_CHECKED;
-  const bool visual =
-      IsDlgButtonChecked(window, IDC_VISUAL_MASTER) == BST_CHECKED;
-  const bool updates =
-      IsDlgButtonChecked(window, IDC_LAUNCHER_UPDATES) == BST_CHECKED;
   const LRESULT text_row =
       SendDlgItemMessageW(window, IDC_TEXT_SIZE, CB_GETCURSEL, 0, 0);
   const int text_scale =
@@ -234,25 +227,30 @@ bool EditorWindow::apply_options(const HWND window) {
                           window, IDC_TEXT_SIZE, CB_GETITEMDATA,
                           static_cast<WPARAM>(text_row), 0))
                     : layerc::platform::native_text_scale();
-  bool saved = static_cast<bool>(
-      layerc::platform::write_bool_setting(
-          layerc::platform::BoolSetting::capture_exclusion, overlays));
-  if (!layerc::platform::write_bool_setting(
-          layerc::platform::BoolSetting::editor_capture_exclusion, capture))
-    saved = false;
-  if (!layerc::platform::write_bool_setting(
-          layerc::platform::BoolSetting::visual_recognition, visual))
-    saved = false;
-  if (!layerc::platform::write_bool_setting(
-          layerc::platform::BoolSetting::launcher_updates, updates))
-    saved = false;
-  if (!layerc::platform::write_layerc_registry_dword(
-          text_scale_setting, static_cast<std::uint32_t>(text_scale)))
-    saved = false;
-  if (!saved) {
+  // One commit: store every choice or restore the values already written
+  // (review CQ-01). Report any refused rollback explicitly; the runtime
+  // follows only a committed snapshot.
+  const auto checked = [window](const int id) {
+    return IsDlgButtonChecked(window, id) == BST_CHECKED;
+  };
+  const auto commit = layerc::platform::write_options_settings({
+      .capture_exclusion = checked(IDC_CAPTURE_PRIVACY),
+      .editor_capture_exclusion = capture,
+      .visual_recognition = checked(IDC_VISUAL_MASTER),
+      .launcher_updates = checked(IDC_LAUNCHER_UPDATES),
+      .editor_text_scale = static_cast<std::uint32_t>(text_scale),
+  });
+  if (!commit) {
+    // Apply stays enabled, so the same choices can be applied again.
+    const wchar_t *const message =
+        commit.state == layerc::platform::SettingsCommitState::partial
+            ? L"Could not save the selected options. Windows refused a "
+              L"setting, and some options it had already saved could not be "
+              L"restored. Choose Apply again to save them all."
+            : L"Could not save the selected options. Windows refused a "
+              L"setting, so no option was changed. Choose Apply to try again.";
     set_status(L"Could not save the selected options.");
-    themed_message_box(window, L"Could not save the selected options.",
-                L"Options", MB_OK | MB_ICONWARNING);
+    themed_message_box(window, message, L"Options", MB_OK | MB_ICONWARNING);
     return false;
   }
 

@@ -1,6 +1,21 @@
 #pragma once
 
+#include <algorithm>
+
 namespace layerc::editor {
+
+// The main editor's existing minimum client width, in logical pixels. Font
+// changes and interactive resizing must enforce the same scaled floor.
+inline constexpr int main_client_min_width = 880;
+
+// Stacking is usable only while its measured height fits the work area.
+// Otherwise keep the three-slot form, without requiring an off-screen width.
+[[nodiscard]] constexpr int main_minimum_width(
+    const int narrow_width, const int narrow_height, const int wide_width,
+    const int work_width, const int work_height) {
+  return std::min(work_width,
+                  narrow_height <= work_height ? narrow_width : wide_width);
+}
 
 // The binding field keeps the editor-shell minimum (logical 60 px). Capture key
 // (and HID) stay on the binding row unless that would push the field below it,

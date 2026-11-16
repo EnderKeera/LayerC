@@ -3,7 +3,7 @@
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
-#include <FL/Fl_Scroll.H>
+#include "editor_scroll.hpp"
 
 #include "editor_style.hpp"
 
@@ -14,7 +14,7 @@ void ExportSelectionDialog::build(const std::vector<std::string> &entries,
   auto *note = new Fl_Box(15, 15, 590, 40,
       "Choose the saved profiles to include. Modules and assets travel with each profile.");
   note->align(FL_ALIGN_INSIDE | FL_ALIGN_TOP_LEFT | FL_ALIGN_WRAP);
-  auto *scroll = new Fl_Scroll(15, 65, 590, 270, "Saved profiles");
+  auto *scroll = new EditorScroll(15, 65, 590, 270, "Saved profiles");
   scroll->begin();
   for (std::size_t i{}; i < entries.size(); ++i) {
     auto *check = new Fl_Check_Button(25, 70 + static_cast<int>(i) * 30, 545, 28);

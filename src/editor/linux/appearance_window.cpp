@@ -9,7 +9,6 @@
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Choice.H>
-#include <FL/Fl_Color_Chooser.H>
 #include <FL/Fl_Double_Window.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Multiline_Output.H>
@@ -361,13 +360,6 @@ void apply_editor_appearance(const EditorAppearance &appearance, Fl_Window &root
   // Authored drawing (status marks, focus rings) resolves the same tokens.
   set_editor_style_appearance(appearance);
   root.redraw();
-}
-
-std::optional<std::uint32_t> choose_color(const char *title, const std::uint32_t initial) {
-  auto r = static_cast<uchar>(initial >> 16U), g = static_cast<uchar>(initial >> 8U),
-       b = static_cast<uchar>(initial);
-  if (!fl_color_chooser(title, r, g, b, 2)) return std::nullopt;
-  return (static_cast<std::uint32_t>(r) << 16U) | (static_cast<std::uint32_t>(g) << 8U) | b;
 }
 
 std::optional<EditorAppearance>

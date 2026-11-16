@@ -1,0 +1,78 @@
+<!-- @dsCard group="Window" width=500 height=500 page subtitle="Choose color: the target, current and new in use, and each contrast pair" -->
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"><script>(function(){var t=new URLSearchParams(location.search).get("theme");if(t)document.documentElement.setAttribute("data-theme",t);})();</script><style>body{margin:0;background:var(--background)}</style><meta charset="utf-8"><title>Choose color</title><style>body{margin:0}.cv{padding:12px 16px;font:12px/16px var(--font-windows);color:var(--text)}.cv .cap2{color:var(--secondary);margin:14px 0 6px}
+h2{font-size:18px;margin:0 0 4px;font-weight:600}
+.mock{font:12px/16px var(--font-windows);color:var(--text);flex:none}
+.mock .capx{margin-left:auto;display:flex;gap:18px}
+.mock .le-dialog-body{padding-top:6px}
+.mock .le-field{height:34px}
+.mock .hint{margin-top:-6px;margin-bottom:4px}
+.two{display:flex;gap:16px}
+.col{display:flex;flex-direction:column}
+.sl{display:block;margin-top:6px;font-weight:600}
+.sl .le-msg{font-weight:400}
+span.sl{display:inline;margin:0}
+.kinds{display:grid;grid-template-columns:repeat(4,288px);gap:16px;margin-top:20px}
+.kind{font:12px/16px var(--font-windows)}
+.kind .kh{display:flex;flex-direction:column;margin-bottom:6px}
+.kind .kh span{color:var(--secondary)}
+.kind.wide{margin-top:20px}
+.ov-well{position:relative;box-sizing:border-box;border:1px solid var(--border);background:var(--input);overflow:hidden}
+.ov-scene{position:absolute;inset:0}
+.ov-scene.dark{background:linear-gradient(160deg,#152029 0%,#1f2d27 48%,#3a3324 100%)}
+.ov-scene.bright{background:linear-gradient(172deg,#a9cbe5 0%,#dce8d4 55%,#cdb88b 100%)}
+.ov-note{position:absolute;right:6px;bottom:4px;font:11px/14px var(--font-windows);color:rgba(255,255,255,.72)}
+.ov-scene.bright~.ov-note{color:rgba(0,0,0,.6)}
+.ov-bar{position:absolute;box-sizing:border-box;border:1px solid;border-radius:4px;display:flex;align-items:center;justify-content:center;font:600 18.67px/1 'Segoe UI',sans-serif;white-space:nowrap;overflow:hidden}
+.ov-bar.mini{border-radius:1px;font-size:0}
+.ov-track{position:absolute;box-sizing:border-box;border:1px solid;border-radius:4px;overflow:hidden}
+.ov-track i{position:absolute;left:2px;top:2px;bottom:2px;border-radius:3px}
+.ov-track span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:600 18.67px/1 'Segoe UI',sans-serif;white-space:nowrap}
+.ov-card{position:absolute;box-sizing:border-box;width:78px;height:72px;border:1px solid #50bac8;border-radius:3px;background:#272d35}
+.ov-card .t{position:absolute;left:3px;right:3px;top:3px;bottom:3px;display:block;line-height:64px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font:600 18.67px/64px 'Segoe UI',sans-serif}
+.ov-card .t.wp{bottom:14px;line-height:53px}
+.ov-card .pips{position:absolute;left:0;right:0;bottom:3px;display:flex;justify-content:center;gap:3px}
+.ov-card .pips i{display:block;box-sizing:border-box;width:8px;height:8px;border-radius:1px}
+.ov-sel{outline:2px solid #e0a15a;outline-offset:0}
+.ov-frame{position:absolute;left:12px;top:12px;width:272px;height:153px;box-sizing:border-box;border:1px solid var(--border);background:linear-gradient(160deg,#152029 0%,#1f2d27 48%,#3a3324 100%)}
+.ov-mini-cards{position:absolute;left:200px;top:18px;display:flex;gap:2px}
+.ov-mini-cards i{width:14px;height:13px;box-sizing:border-box;border:1px solid #50bac8;background:#272d35;border-radius:1px}
+.ov-actual{position:absolute;left:12px;top:186px}
+.pair{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.keys{display:flex;flex-direction:column}
+.kg{font-weight:600;margin:10px 0 2px}
+.kg:first-child{margin-top:4px}
+.kr{display:flex;align-items:center;min-height:26px;gap:12px}
+.kk{width:160px;flex:none;display:flex;align-items:center;flex-wrap:wrap;row-gap:2px}
+.kbd{display:inline-flex;align-items:center;height:20px;padding:0 6px;box-sizing:border-box;border:1px solid var(--border);background:var(--panel);color:var(--text);font-size:12px}
+.kp{color:var(--secondary);margin:0 3px}
+.kv{display:grid;grid-template-columns:120px 1fr;row-gap:8px;align-items:baseline}
+.mock .h{font-weight:600}
+.box{width:100%;box-sizing:border-box}
+.pal{display:grid;grid-template-columns:repeat(8,44px);gap:6px}
+.pal .sw{height:26px;box-sizing:border-box;border:1px solid var(--border)}
+.pal .sw.is-sel{outline:2px solid var(--accent);outline-offset:1px}
+.smps{display:flex;gap:12px;margin:12px 0 4px}
+.smp{display:flex;flex-direction:column;gap:4px}
+.sbox{width:200px;height:44px;box-sizing:border-box;border:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;padding:0 10px}
+.part{display:flex;align-items:center;gap:10px;height:34px}
+.mini{border:1px solid var(--border);background:var(--background);display:flex;flex-direction:column}
+.mini .mb{display:flex;gap:14px;padding:3px 8px;border-bottom:1px solid var(--divider)}
+.mini .mc{display:flex;height:98px}
+.mini .ms{width:140px;background:var(--input);border-right:1px solid var(--border);padding:1px}
+.mini .mm{flex:1;padding:6px 12px;display:flex;flex-direction:column;gap:8px}
+.menus{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.mcol{font:12px/16px var(--font-windows)}
+.mt{color:var(--secondary);margin-bottom:6px}
+.mcol .le-menu-item{gap:0}
+.rd{width:16px;flex:none;color:var(--text)}
+.le-radio.is-disabled .le-dot{background:var(--disabled)}
+.le-radio.is-disabled{color:var(--disabled)}
+.mv{margin-left:8px;font-size:11px;color:var(--accent_2)}
+.mv.new{color:var(--accent_2)}
+.mn{max-width:250px;margin-top:6px}</style></head>
+<body>
+<div class="cv"><div class="le-dialog mock " style="width:460px;height:470px"><div class="le-dialog-cap">Choose color<span class="capx"><span>✕</span></span></div><div class="le-dialog-body"><div class="le-label" style="margin:4px 0 10px"><b style="color:var(--text)">Window fill</b> · Graphite / Copper</div><div class="le-label" style="margin-bottom:6px"><u>P</u>alette</div><div class="pal"><span class="sw" style="background:#1f1f1f" title="#1f1f1f"></span><span class="sw is-sel" style="background:#2d2d2d" title="#2d2d2d"></span><span class="sw" style="background:#6e6e6e" title="#6e6e6e"></span><span class="sw" style="background:#b8b8b8" title="#b8b8b8"></span><span class="sw" style="background:#e9e4dd" title="#e9e4dd"></span><span class="sw" style="background:#f3f3f3" title="#f3f3f3"></span><span class="sw" style="background:#d88e4b" title="#d88e4b"></span><span class="sw" style="background:#e0a15a" title="#e0a15a"></span><span class="sw" style="background:#ef5350" title="#ef5350"></span><span class="sw" style="background:#f0845c" title="#f0845c"></span><span class="sw" style="background:#e8c547" title="#e8c547"></span><span class="sw" style="background:#8bc34a" title="#8bc34a"></span><span class="sw" style="background:#3fc380" title="#3fc380"></span><span class="sw" style="background:#4db6ac" title="#4db6ac"></span><span class="sw" style="background:#4fb3d0" title="#4fb3d0"></span><span class="sw" style="background:#64a8e8" title="#64a8e8"></span><span class="sw" style="background:#4c7cf0" title="#4c7cf0"></span><span class="sw" style="background:#7366e8" title="#7366e8"></span><span class="sw" style="background:#9d78e6" title="#9d78e6"></span><span class="sw" style="background:#b98ce6" title="#b98ce6"></span><span class="sw" style="background:#d65fb4" title="#d65fb4"></span><span class="sw" style="background:#ec6386" title="#ec6386"></span><span class="sw" style="background:#8d6e63" title="#8d6e63"></span><span class="sw" style="background:#607d8b" title="#607d8b"></span></div><div class="le-label" style="margin:14px 0 2px">Custom color</div><div class="le-field" style="gap:8px"><span class="le-label"><u>R</u>ed</span><span class="le-edit " style="width:52px">45</span><span class="le-label"><u>G</u>reen</span><span class="le-edit " style="width:52px">45</span><span class="le-label"><u>B</u>lue</span><span class="le-edit " style="width:52px">45</span><span class="le-label"><u>H</u>ex</span><span class="le-edit " style="width:76px;font-family:var(--font-windows-mono)">#2D2D2D</span></div><div class="le-subtext" style="margin-top:-4px">0 to 255 each, or #RRGGBB. Up and Down step a value.</div><div class="smps"><div class="smp"><span class="le-label">Current</span><div class="sbox" style="background:#1f1f1f"><span style="color:#f3f3f3">Label</span><span style="color:#808080">Disabled</span></div></div><div class="smp"><span class="le-label">New</span><div class="sbox" style="background:#2d2d2d"><span style="color:#f3f3f3">Label</span><span style="color:#808080">Disabled</span></div></div></div><div class="le-yes le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> Text 12.4:1 <span class="le-msg">needs 4.5:1</span></div><div class="le-yes le-st sl"><svg class="le-gl" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 6.5 L5 9 L9.5 3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg> Disabled text 3.5:1 <span class="le-msg">needs 3:1</span></div></div><div class="le-dialog-buttons"><span class="le-spacer"></span><span class="le-btn le-btn--primary" style="justify-content:center;"><span>OK</span></span><span class="le-btn" style="justify-content:center;"><span>Cancel</span></span></div></div></div>
+</body>
+</html>

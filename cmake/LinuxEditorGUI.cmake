@@ -110,6 +110,9 @@ add_library(layerc_editor_fltk STATIC
     src/editor/linux/accessibility_tree.cpp
     src/editor/linux/editor_app.cpp
     src/editor/linux/editor_style.cpp
+    src/editor/linux/editor_scroll.cpp
+    src/editor/linux/editor_popup.cpp
+    src/editor/linux/editor_color_chooser.cpp
     src/editor/linux/editor_autosave.cpp
     src/editor/linux/diagnostics_window.cpp
     src/editor/linux/appearance_window.cpp

@@ -45,6 +45,77 @@ enum class BoolSetting : std::uint8_t {
 [[nodiscard]] SettingWriteResult write_bool_setting(BoolSetting setting,
                                                     bool value);
 
+// The editor's own text size, a DWORD percent added to the Windows setting.
+[[nodiscard]] SettingReadResult<std::uint32_t> read_editor_text_scale();
+[[nodiscard]] SettingWriteResult write_editor_text_scale(std::uint32_t percent);
+
+// Settings that change as one unit: every value is written, or each value
+// already written is put back exactly as it was.
+enum class SettingsCommitState : std::uint8_t {
+  committed, // every value was written
+  unchanged, // nothing was written, or every write was undone
+  partial,   // a write failed and an earlier write could not be undone
+};
+
+struct SettingsCommitResult {
+  SettingsCommitState state{SettingsCommitState::committed};
+  // The Win32 error that stopped the commit; 0 once committed.
+  std::uint32_t error{};
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return state == SettingsCommitState::committed;
+  }
+};
+
+// A value as it was before a commit: absent, or its exact type and bytes.
+struct StoredSetting {
+  std::optional<std::uint32_t> type;
+  std::vector<std::byte> data;
+};
+
+// The commit policy over a store of `count` values. Every prior value is read
+// before any is written, so a failed read writes nothing; values are written
+// in order; after a failed write each value already written is restored,
+// newest first. A failed write leaves its own value as it was. `store`
+// provides, each returning 0 or a Win32 error:
+//   read(index, StoredSetting &prior)
+//   write(index)
+//   restore(index, const StoredSetting &prior)
+template <typename Store>
+[[nodiscard]] SettingsCommitResult commit_settings(Store &store,
+                                                   const std::size_t count) {
+  std::vector<StoredSetting> prior(count);
+  for (std::size_t index = 0; index < count; ++index)
+    if (const std::uint32_t error = store.read(index, prior[index]);
+        error != 0)
+      return {.state = SettingsCommitState::unchanged, .error = error};
+  for (std::size_t index = 0; index < count; ++index) {
+    const std::uint32_t error = store.write(index);
+    if (error == 0)
+      continue;
+    SettingsCommitResult result{.state = SettingsCommitState::unchanged,
+                                .error = error};
+    for (std::size_t written = index; written-- > 0;)
+      if (store.restore(written, prior[written]) != 0)
+        result.state = SettingsCommitState::partial;
+    return result;
+  }
+  return {};
+}
+
+// The choices Options > Apply persists, committed together through
+// commit_settings: the four BoolSetting values it shows and the text size.
+struct OptionsSettings {
+  bool capture_exclusion{};
+  bool editor_capture_exclusion{};
+  bool visual_recognition{};
+  bool launcher_updates{};
+  std::uint32_t editor_text_scale{100};
+};
+
+[[nodiscard]] SettingsCommitResult
+write_options_settings(const OptionsSettings &settings);
+
 // Registry primitives below share the single HKCU\Software\LayerC root (or the
 // HKCU-relative key in LAYERC_SETTINGS_KEY, which benchmarks and tests use to
 // keep the user's settings untouched). They are exposed for platform-owned

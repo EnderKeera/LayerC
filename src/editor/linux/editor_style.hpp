@@ -64,6 +64,7 @@ protected:
 class EditorChoice final : public Fl_Choice {
 public:
   using Fl_Choice::Fl_Choice;
+  int handle(int event) override;
 protected:
   void draw() override;
 };

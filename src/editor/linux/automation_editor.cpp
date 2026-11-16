@@ -16,11 +16,10 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Multiline_Input.H>
 #include <FL/Fl_Multiline_Output.H>
-#include <FL/Fl_Scroll.H>
+#include "editor_scroll.hpp"
 #include <FL/fl_draw.H>
 #include <FL/Fl_Native_File_Chooser.H>
 #include <FL/Fl_Output.H>
-#include <FL/Fl_Scroll.H>
 #include <FL/fl_ask.H>
 
 #include <algorithm>
@@ -96,7 +95,7 @@ struct LinuxAutomationEditor::Impl {
     create = button(750, 95, 120, "New automation");
     remove = button(880, 95, 150, "Remove automation");
 
-    basic = new Fl_Scroll(270, 130, 775, 265);
+    basic = new EditorScroll(270, 130, 775, 265);
     basic->begin();
     automations = browser(285, 165, 215, 200, "Automations");
     name = input(520, 165, 325, "Automation name");
@@ -153,7 +152,7 @@ struct LinuxAutomationEditor::Impl {
     speed->value(1);
     breakpoint = input(285, 275, 225, "Breakpoint rule id", false);
     assertions = input(530, 275, 500, "Assertions: variable=JSON; ...", false);
-    state_scroll = new Fl_Scroll(279, 309, 757, 92);
+    state_scroll = new EditorScroll(279, 309, 757, 92);
     state_scroll->type(Fl_Scroll::VERTICAL);
     state_scroll->begin();
     state = new EditorField<Fl_Multiline_Output>(285, 330, 725, 65, "Simulator state");
@@ -625,7 +624,12 @@ void LinuxAutomationEditor::refresh() {
     page_->activate();
     if (!page_->visible()) return; // no advanced widgets or graph copies until requested
     auto *previous = Fl_Group::current();
+    const int x = page_->x(), y = page_->y();
+    // Build at the authored origin, then move the new controls with their
+    // page into the main host's current scroll position.
+    page_->position(270, 45);
     impl_ = std::make_unique<Impl>(app_, *page_);
+    page_->position(x, y);
     Fl_Group::current(previous);
   }
   impl_->refresh();

@@ -375,12 +375,14 @@ if(NOT WIN32)
                 tests/linux_editor_visual_contract_tests.cpp
                 tests/linux_editor_binding_capture_tests.cpp
                 tests/linux_editor_diagnostics_tests.cpp
+                tests/linux_editor_review_tests.cpp
                 tests/linux_editor_command_registry_tests.cpp
                 tests/linux_editor_design_system_paint_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
             LABELS required editor RESOURCE_LOCK layerc_x11_display)
         set_source_files_properties(
             tests/linux_editor_accessibility_tests.cpp tests/linux_editor_diagnostics_tests.cpp
+            tests/linux_editor_review_tests.cpp
             PROPERTIES COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
         layerc_editor_build_runtime(layerc_linux_editor_widget_tests)
         if(X11_Xtst_LIB)

@@ -11,7 +11,7 @@
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Multiline_Output.H>
-#include <FL/Fl_Scroll.H>
+#include "editor_scroll.hpp"
 #include <FL/Fl_Tabs.H>
 
 #include <algorithm>
@@ -35,7 +35,7 @@ void EditorApp::show_context_menu(const EditorMenuContext context, const bool ha
 void EditorApp::build() {
   window.begin();
   menus = std::make_unique<EditorMenus>(*this, window);
-  content = new Fl_Scroll(0, 0, window.w(), window.h() - EditorMenus::bar_height);
+  content = new EditorScroll(0, 0, window.w(), window.h() - EditorMenus::bar_height);
   content->begin();
   FormBuilder builder(*this);
   auto button = [&](int x, int y, int width, const char *label, EditorCommand action) {

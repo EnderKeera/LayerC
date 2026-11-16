@@ -5,8 +5,10 @@ and Linux `layere` (FLTK on X11). This document owns the editor look; source
 owns exact behavior. Behavior, support claims and evidence stay in
 [`README.md`](../README.md) and [`Linux.md`](Linux.md).
 
-**Version:** v2, "square native, accessible" (2026-11-07). The implementation
-and this specification land together at `design-v2-accessible`.
+**Version:** v2.1 (2026-11-16), a draft on top of v2, "square native,
+accessible" (2026-11-07). v2 is in the code at `design-v2-accessible`; the
+v2.1 changes below are listed under [Not yet in the
+code](#not-yet-in-the-code) until they land.
 **Previous look:** v1, tagged `design-v1-square-native`; before it
 `design-v0-rounded`. See [Revert or reimplement](#revert-or-reimplement).
 **Visual reference:** [`design-system/`](design-system/) holds the tokens,
@@ -21,6 +23,25 @@ overlays), whose shape follows each profile's own `corner_radius`
 ([Overlay](#overlay) sets only its readability rules); the editor preview of
 that overlay (it must stay faithful to the profile); and the Game Bar XAML
 widgets.
+
+## Changes from v2
+
+- **Overlay preview:** Add overlay item and Edit overlay item show the item at
+  actual size, drawn by the overlay's own painter over a Dark or Bright
+  backdrop, with Show for its state, readability lines, an item Color and Add
+  item / Save item ([OverlayPreview](#overlaypreview)). The main window's
+  preview corner uses the same painter.
+- **Lit cards:** text on a lit indicator card follows the `on_accent` rule
+  ([Overlay](#overlay)).
+- **Keyboard shortcuts** grouped by menu, one shortcut per row, keys as chips
+  ([ShortcutsDialog](#shortcutsdialog)).
+- **Runtime diagnostics** with status marks, an empty state and Summary / Raw
+  JSON ([DiagnosticsDialog](#diagnosticsdialog)).
+- **Choose color** names its target, shows current and new in use and checks
+  every pair ([ColorPicker](#colorpicker)); **Appearance** lists a role's
+  colors with their contrast ([AppearanceRoles](#appearanceroles)).
+- **Menus:** one home per command, context menus that mirror the menu bar,
+  Text size in View only, unique access keys ([Menus](#menus)).
 
 ## Changes from v1
 
@@ -90,6 +111,10 @@ The editor's wording is plain and consistent. Keep it that way:
   everything a person reads, including transport-error summaries. Linux uses
   "LayerD status" for the button and "LayerD status and capability faults"
   for the pane.
+- **Delete or remove:** "Delete" takes a file off disk (profiles); "Remove"
+  takes something out of a profile (cooldowns, panel items).
+- **Buttons that close a dialog** name what they do: Add item, Save item.
+  "Apply" only keeps a settings dialog open.
 - **Reasons** for a disabled button are one sentence naming what holds it:
   "A profile needs at least one cooldown.", "A panel needs at least one
   item." ([Button](#button)).
@@ -272,7 +297,7 @@ Roboto or any other bundled face.
   at 96 DPI); section headings in `win-heading` (the body face, semibold);
   titles in `win-title` (16 px semibold); paths and code in `win-mono`
   (Cascadia Mono, else Consolas, at body size). Sizes scale with DPI, the
-  Windows text size and Options > Text size (100 / 115 / 130 %).
+  Windows text size and View > Text size (100 / 115 / 130 %).
 - **Linux** — the XSETTINGS `Gtk/FontName` family (from a GNOME or KDE
   settings manager), else fontconfig `sans`, at the desktop size. Forms are
   authored at 14 px: `linux-body`, `linux-heading` (FLTK bold of the same
@@ -370,7 +395,10 @@ page](design-system/components/MainWindowLayout/preview.html) draws them.
 - **Narrow windows.** Three slots need `win-slot-min` (260) each. Below
   `win-preview-from` (1100 px), or when they don't fit, the preview hides,
   slots 1 and 2 stack in the first column, and Position on window moves into
-  the look slot.
+  the look slot. Changing text size grows a retained narrow window to the
+  same scaled minimum extent as interactive resizing, capped to its monitor's
+  work area. When stacked rows would exceed the usable height, the minimum
+  width keeps the three slots side by side instead of clipping bottom rows.
 - **Tab order** follows reading order: fields, list, preview corner, then
   slots 1 to 3.
 - **The look slot** ends with the drag hint in `subtext` ("Drag the bar in
@@ -463,19 +491,20 @@ Linux keeps its command registry's bindings, shown by F1.
 | Ctrl+Shift+A | Show or hide advanced settings |
 | Ctrl+, | Options |
 | F2 | Rename the selected profile or cooldown |
-| Del | Delete the selected profile or cooldown |
+| Del | Delete the selected profile, or remove the selected cooldown |
 | Shift+F10 | Context menu |
 | Up / Down, mouse wheel | Step the focused number: Duration 0.1 s (Shift: 1 s), bar width and height 1 px |
 | Arrow keys | Nudge the selected bar in the preview 1 px (Shift: 10 px) |
 | Alt+letter | Jump to the underlined field |
 | F1 | Keyboard shortcuts (Help menu) |
 
-Help > Keyboard shortcuts (F1) lists the shortcuts in two columns: the keys
-in one left-aligned column as wide as its longest entry, the actions in
-`text` beside them, F1 included. On Windows it is a [Dialog](#dialog) with a
-primary OK, not a message box; on Linux the same two columns. Both build the
-list from the editor's command table, so a new shortcut appears in it without
-an edit.
+Help > Keyboard shortcuts (F1) groups the shortcuts by menu, one per row, with
+each key drawn as a square chip in a column as wide as its longest entry and
+the action in `text` beside it, F1 included
+([ShortcutsDialog](#shortcutsdialog)). On Windows it is a [Dialog](#dialog)
+with a primary OK, not a message box; Linux shows the same groups. Both build
+the list from the editor's command table, so a new shortcut appears in it
+without an edit.
 
 ## Screen readers
 
@@ -538,21 +567,25 @@ which follows the X resources.
 Each component below carries its rules: Button, Edit, NumberField, DropDown,
 CheckBox (and radio), ListRow, EmptyState, Scrollbar, Tabs (Linux), MenuBar,
 ContextMenu, Tooltip, StatusStrip, StatusText, Dialog and WindowFrame (Windows
-11). One primary button per surface; Dialog has the button order for each kind
-of dialog: OK · Cancel · Apply, the Windows order Options already uses. New
-controls reuse the existing painters; new surfaces use `native_control_height`
-and `DialogLayout` (Windows) or the existing form builders (Linux).
+11), and from v2.1 [OverlayPreview](#overlaypreview),
+[ShortcutsDialog](#shortcutsdialog), [DiagnosticsDialog](#diagnosticsdialog),
+[ColorPicker](#colorpicker), [AppearanceRoles](#appearanceroles) and
+[Menus](#menus). One primary button per surface; Dialog has the button order
+for each kind of dialog: OK · Cancel · Apply, the Windows order Options
+already uses. New controls reuse the existing painters; new surfaces use
+`native_control_height` and `DialogLayout` (Windows) or the existing form
+builders (Linux).
 
 The **Screens** pages in [`design-system/`](design-system/index.html) rebuild
-four pre-refit Windows surfaces from 96 DPI screenshots, pixel for pixel, out of
-these components: the main window with a profile open, Automation, Keyboard
+four pre-refit Windows surfaces from 96 DPI screenshots, pixel for pixel, out
+of these components: the main window with a profile open, Automation, Keyboard
 shortcuts, and Appearance with Choose color open. The original screenshots are
 in [`design-system/assets/Screenshots/`](design-system/assets/Screenshots/).
 Those captures are historical visual references, not the v2 acceptance
 baseline. Match the rules above and the Layout and adopted Proposed fixes
 instead. A fifth page draws the Linux main window from the documented
-coordinates and labels. The exported Screens, component notes and version
-metadata need a v2 re-export; this refit does not hand-edit that export.
+coordinates and labels. The Screens pages still show the pre-v2 editor; new
+screenshots will replace them.
 
 The [**Layout** page](design-system/components/MainWindowLayout/preview.html)
 draws the main window as it should be laid out: the preview corner over three
@@ -573,6 +606,32 @@ code keeps the input fill on purpose.
 
 The [Overlay](#overlay) section sets the rules for the in-game overlay, which
 follows each profile rather than these tokens.
+
+### AppearanceRoles
+
+Tools > Appearance with advanced colors shown. A settings Dialog: Reset all at
+the left; OK · Cancel · Apply at the right.
+
+- **Preset** drop-down at the top left; Show / Hide advanced colors at the
+  right.
+- **Preview:** a small editor drawn in the current colors: menu bar, profile
+  list with a selected row, a labelled field, primary, neutral and disabled
+  buttons, a checked box and a status strip with a mark. Clicking a part
+  selects its role.
+- **Roles and colors:** the Control role list (168 px) at the left; at the
+  right, "<Role> colors" with one row per color part the role has (Fill, Text,
+  Border, Hover, Selection, Disabled): its label, a color button with swatch
+  and hex (132 px), and its contrast as StatusText ("✓ 14.8:1 on fill"). Parts
+  a role doesn't have aren't shown. A part that differs from the preset adds
+  `accent_2` "Changed". Reset selected sits under the rows.
+- **Floors** as in Roles: Text / Fill 4.5:1, Disabled / Fill 3:1, Text / Hover
+  4.5:1, Text / Selection 4.5:1. Apply and OK refuse below them, naming the
+  role, the pair and the ratio; a contrast theme sets the overrides aside.
+
+The consumer supplies the preset, the roles and their overrides.
+
+Preview:
+[`components/AppearanceRoles/preview.html`](design-system/components/AppearanceRoles/preview.html).
 
 ### Button
 
@@ -619,7 +678,9 @@ Preview:
 ### CheckBox
 
 A 16 px square box (`checkbox`) with its label 8 px after it; the whole
-control, label included, is the click area.
+control, label included, is the click area. Labels that cannot fit on one
+line wrap, and the control grows to show every line; the box and focus-ring
+metrics stay unchanged.
 
 - **Unchecked:** `input` fill, `border` outline. Under the pointer the fill
   turns `button_hover` and the outline `text`; pressed, the fill is `pressed`.
@@ -631,9 +692,9 @@ control, label included, is the click area.
   label; a checked one fills with `divider` and draws its tick in `disabled`.
 - **Focus:** a 2 px `accent` ring around the box and its label, on both
   platforms.
-- **Radio:** the painter draws a 16 px circle with an 8 px `accent` dot, but
-  no LayerE dialog uses radio buttons today; Options > Text size is a
-  drop-down.
+- **Radio:** a 16 px circle with an 8 px `accent` dot; disabled, the dot turns
+  `disabled`. Runtime diagnostics' Summary / Raw JSON pair uses it
+  ([DiagnosticsDialog](#diagnosticsdialog)).
 - **Linux:** the FLTK down box, square; the check mark takes the full `accent`
   as its selection color.
 
@@ -647,6 +708,32 @@ above are the source of truth. The Screens pages show it in place.
 Preview:
 [`components/CheckBox/preview.html`](design-system/components/CheckBox/preview.html).
 
+### ColorPicker
+
+Choose color, opened from a color button in Appearance, the main window or Add
+overlay item. A Dialog with OK · Cancel.
+
+- **Target line** at the top: what is being picked, semibold, then where in
+  `secondary`: "Window fill · Graphite / Copper", "Fill · panel iwcs".
+- **Palette:** 24 swatches, 8 × 3, 44 × 26 px, 6 px apart, each with a 1 px
+  `border`. The chosen swatch takes a 2 px `accent` ring 1 px outside it.
+  Arrow keys move between swatches, and each is named for screen readers
+  ("Copper #D88E4B, 7 of 24").
+- **Custom color:** Red, Green and Blue as NumberFields (0–255, Up and Down
+  step) and Hex in the mono face, with the hint "0 to 255 each, or #RRGGBB. Up
+  and Down step a value."
+- **Current and New:** two 200 × 44 samples side by side showing the role's
+  real text on its fill, before and after.
+- **Contrast:** one StatusText line for each pair the color takes part in,
+  with its ratio and floor: "✓ Text 12.4:1 needs 4.5:1". Below an editor floor
+  the line is `warning` and ends "Appearance won't save it."; for an overlay
+  color the floors are the Overlay rules and the line only warns.
+
+The consumer supplies the target, its current color and the pairs to check.
+
+Preview:
+[`components/ColorPicker/preview.html`](design-system/components/ColorPicker/preview.html).
+
 ### ContextMenu
 
 The menu opened by right-click or Shift+F10 on a list row: a flat box with a 1
@@ -655,9 +742,12 @@ px `border` outline on `background` (Linux), or the dark system menu
 
 - Items are 24 px tall, `button_hover` under the pointer, `disabled` when
   unavailable; a 1 px `divider` separates groups.
-- Offer only what applies to the row, with the Edit menu's names and
-  shortcuts: Rename cooldown (F2), Duplicate cooldown (Ctrl+D), Remove
-  cooldown... (Del).
+- Offer the menu bar's group for the row, in the same order, with the same
+  verbs and shortcuts but without the noun, because the row is the object:
+  Rename (F2), Duplicate (Ctrl+D), Remove... (Del). Menus lists every context
+  menu.
+- F2 and Del act on the focused list, so they appear here rather than in the
+  menu bar.
 - Every item has a shortcut or access key, and the menu closes with Esc.
 
 The consumer supplies the items, their shortcuts and enabled states. The items
@@ -667,6 +757,35 @@ The preview is a static HTML rendition of these rules.
 
 Preview:
 [`components/ContextMenu/preview.html`](design-system/components/ContextMenu/preview.html).
+
+### DiagnosticsDialog
+
+Tools > Runtime diagnostics: a resizable tool window with a primary Close.
+
+- **Intro** in `subtext`: "LayerD’s health and a one-time snapshot. Nothing is
+  kept after this window closes."
+- **Summary** as label / value rows, labels in `secondary` in a 120 px column:
+  LayerD, Active profile, Visual worker, Last error. LayerD and Visual worker
+  lead with a StatusText mark and word: ✓ Connected, ! Quarantined or
+  Degraded, ✕ Not connected or Stopped. Not connected adds what to do: "Start
+  LayerC to run LayerD, then refresh." A value that doesn't exist yet reads
+  "Unavailable" in `disabled`.
+- **Details:** a semibold heading with Summary / Raw JSON radio buttons,
+  disabled until a snapshot arrives, over a read-only box in mono `verbose`
+  (Services, Sessions, Automation faults, overlay item diagnostics and, on
+  Linux, X11, capabilities and display). Without a snapshot the box holds an
+  EmptyState: "No snapshot yet." and "LayerD reports one while it runs."
+- **Buttons:** Refresh snapshot, Retry visual (only while a helper is
+  quarantined) and Copy raw JSON (disabled without a snapshot) at the left;
+  Close at the right.
+- **Source:** `runtime_diagnostics_view` returns each summary row with its
+  `StatusKind`, so the marks never come from parsing the text.
+
+The consumer supplies the connection state and the snapshot. The values shown
+are sample data.
+
+Preview:
+[`components/DiagnosticsDialog/preview.html`](design-system/components/DiagnosticsDialog/preview.html).
 
 ### Dialog
 
@@ -682,12 +801,20 @@ margins and `win-row-pitch` rows, and one row of buttons along the bottom.
 - **Layout:** code lays every dialog out with `DialogLayout` after the
   resource template loads (`editor_dialog_layouts.cpp`), and refits it when
   the text size or DPI changes; template sizes never reach the screen.
-  Hints sit under their control in `subtext`, indented to its label.
+  Hints sit under their control in `subtext`, indented to its label. Options
+  measures labels and wrapped hints in their own font rather than relying on
+  template widths. Resizable dialogs derive their minimum extent from the
+  same layout that places their content, including wrapped validation text.
+- **Placement:** content fitting preserves the user's position while the
+  visible frame fits its monitor's work area; otherwise it moves only as far
+  as needed to keep the frame on that work area. Expanding Appearance must
+  keep its bottom actions visible when its content fits the work area.
 - **By kind:** settings dialogs (Options, Appearance) use OK · Cancel · Apply,
   with Reset all at the left in Appearance; tool windows (Automation) use a
   primary Close; messages (Keyboard shortcuts) use a primary OK; a
   confirmation puts its action first as primary, then the alternative, then
-  Cancel.
+  Cancel; an editing dialog names its primary for what it does (Add item, Save
+  item) before Cancel.
 - Enter presses the primary button and Esc presses Cancel or Close.
 
 The consumer supplies the caption, the content and which kind of dialog it is.
@@ -800,13 +927,8 @@ Preview:
 A `background` strip with a 1 px `divider` line along its bottom: File, Edit,
 View, Tools, Help. Items take `button_hover` under the pointer.
 
-- **The menus today:** File (New profile, Save, Save as..., Duplicate profile,
-  Delete profile..., Import pack..., Export pack..., Open profiles folder,
-  Exit); Edit (Undo, Redo, Add cooldown, Duplicate cooldown, Rename cooldown,
-  Remove cooldown...); View (Show advanced settings, Text size 100 / 115 / 130
-  %); Tools (Options..., Appearance..., Automation..., Split grouped bars...);
-  Help (Keyboard shortcuts F1, Runtime diagnostics..., About LayerC Editor).
-  The source uses sentence case, as listed here.
+- **The menus:** File, Edit, View, Tools, Help, each command in one of them;
+  Menus lists their contents and the context menus. Sentence case throughout.
 - **Shortcuts** sit right-aligned in each item (`\t` in the menu resource).
 - **Drop-down menus:** the dark system menu on Windows
   (`install_dark_menu_bar`); outlined flat boxes on Linux, whose bar line is
@@ -820,6 +942,43 @@ above are the source of truth. The Screens pages show it in place.
 
 Preview:
 [`components/MenuBar/preview.html`](design-system/components/MenuBar/preview.html).
+
+### Menus
+
+Every command has one home in the menu bar; a context menu is that command's
+group for the row you clicked.
+
+- **File:** every profile command, since the profile is the document: New
+  profile (Ctrl+N), Duplicate profile, Rename profile, Turn on / Turn off
+  profile, Delete profile... · Save (Ctrl+S), Save as... (Ctrl+Shift+S) ·
+  Import pack..., Export pack... · Open profiles folder · Exit.
+- **Edit:** Undo (Ctrl+Z), Redo (Ctrl+Y) · Add cooldown, Duplicate cooldown
+  (Ctrl+D), Rename cooldown, Remove cooldown... · Add item..., Edit item...,
+  Move up, Move down, Remove item... · Split grouped bars....
+- **View:** Show advanced settings (Ctrl+Shift+A) · Text size: 100 %, 115 %,
+  130 % as radio items. Text size has no other home; Options doesn't repeat
+  it.
+- **Tools:** Options... (Ctrl+,), Appearance..., Automation... · Runtime
+  diagnostics....
+- **Help:** Keyboard shortcuts (F1) · About LayerC Editor.
+- **Context menus** for a profile row, a cooldown row, a panel item row and an
+  empty profile list (New profile, Import pack...). They use the menu bar's
+  verbs, order and shortcuts, without the noun, because the row is the object:
+  Rename, Duplicate, Remove....
+- **Shortcuts shown:** keys that always do the same thing appear in the menu
+  bar; F2 and Del act on the focused list, so they appear in context menus and
+  in Keyboard shortcuts.
+- **Access keys** are unique within each menu (Duplicate cooldown takes C,
+  since U is Undo's).
+- **Words:** Delete takes a file off disk (profiles); Remove takes something
+  out of a profile (cooldowns, panel items). "..." marks an item that opens a
+  window or a confirmation.
+
+The consumer supplies the commands and their enabled states; Linux builds the
+same menus from its command registry.
+
+Preview:
+[`components/Menus/preview.html`](design-system/components/Menus/preview.html).
 
 ### NumberField
 
@@ -870,6 +1029,52 @@ The preview is a static HTML rendition of these rules.
 Preview:
 [`components/OverlayBar/preview.html`](design-system/components/OverlayBar/preview.html).
 
+### OverlayPreview
+
+How the editor shows the overlay: in Add overlay item and Edit overlay item,
+at actual size, and in the main window's preview corner. It draws like
+`overlay_render.cpp`, not in the editor's tokens, so what you see is what the
+game shows, vivid colors included.
+
+- **One painter.** The preview uses the overlay's own geometry
+  (`panel_geometry`, `bar_geometry`, `item_pip_layout`) and metrics: Segoe UI
+  Semibold 14 pt labels on one line, centered and cut with an ellipsis; bar
+  corners `corner_radius` 8 and fills `fill_radius` 6 (RoundRect ellipse
+  sizes); cards 78 × 72; pips 8 px apart by 3 px; a grouped bar as a track
+  with a 2 px inset fill; the selected panel outlined 2 px #E0A15A, the
+  renderer's edit-mode pen. Never a second drawing of the overlay.
+- **Item dialog.** Fields in one column at the left: Kind, Source, Label
+  (Custom check box and its edit), the kind's own fields (Timer source,
+  Counter max and Display, Flash (Hz), Interval), then Color. The preview sits
+  at the right in a 300 × 150 well at 1:1, with the panel named under it
+  ("Panel “Buffs” · card · row").
+- **Show** picks the state: Ready or Cooling (cooldown); Running or Stopped
+  (timer); a value (counter); Lit, Lit flashing or Off (indicator);
+  Unavailable for every kind. **Backdrop** picks Dark or Bright, to check the
+  overlay over a light game.
+- **Motion.** A cooldown plays its duration and an indicator flashes at
+  min(flashHz, 3) Hz. Both stop when Windows' Show animations is off
+  (`SPI_GETCLIENTAREAANIMATION`); Linux starts still. Show still picks any
+  state by hand.
+- **Readability lines** under the preview, one StatusText line each, warning
+  but never blocking ([Overlay](#overlay)): text against fill and against
+  background at 4.5:1, marks against background at 3:1, and a label cut to fit
+  ("“Shield up” is cut to fit the 78 px card.").
+- **Color:** a color button showing the item's hex, starting as the panel's
+  fill (`OverlayItem::color`); Choose color opens with the overlay floors.
+- **Buttons:** Add item when adding, Save item when editing, as the primary;
+  then Cancel.
+- **Preview corner:** the same painter scaled into the target frame, with the
+  selected item at actual size under it.
+- **Screen readers:** the preview is one image whose description names the
+  item, its state and any readability line.
+
+The consumer supplies the profile, the panel, the item and the state to show.
+The overlay colors in the preview are sample profiles.
+
+Preview:
+[`components/OverlayPreview/preview.html`](design-system/components/OverlayPreview/preview.html).
+
 ### Scrollbar
 
 A thin, square scrollbar inside lists and the preview: a 12 px track in
@@ -888,6 +1093,31 @@ The preview is a static HTML rendition of these rules.
 
 Preview:
 [`components/Scrollbar/preview.html`](design-system/components/Scrollbar/preview.html).
+
+### ShortcutsDialog
+
+Help > Keyboard shortcuts (F1): a message Dialog with a primary OK.
+
+- **Groups** in menu order, each under a semibold heading: File, Edit, In a
+  list, In a field or the preview, View, tools and help.
+- **One shortcut per row:** the keys in one column as wide as its longest
+  entry, the action in `text` beside them. "Ctrl+S / Ctrl+Shift+S" becomes two
+  rows.
+- **Key chips:** each key in a square chip, `panel` fill inside a 1 px
+  `border`, 20 px tall with 6 px side padding, body text; "+" and "/" between
+  chips in `secondary`.
+- A `subtext` line under the list for input that isn't a key: "The mouse wheel
+  steps a focused number like Up and Down."
+- **Source:** the command table (`editor_shortcuts.cpp`; Linux
+  `shortcut_help`). A command's group is its menu, so a new shortcut lands in
+  the right group without an edit.
+- **Screen readers:** each row reads as one item, "Ctrl+Shift+S, Save as";
+  chips are drawn, not separate controls.
+
+The consumer supplies the command table.
+
+Preview:
+[`components/ShortcutsDialog/preview.html`](design-system/components/ShortcutsDialog/preview.html).
 
 ### StatusStrip
 
@@ -1033,6 +1263,10 @@ and the editor's overlay preview, which must stay faithful to the profile.
   flashes at min(`flashHz`, 3) through one core helper. The editor's field
   accepts 0 or 0.5–3; a loaded value above 3 stays in the profile and shows
   a drawn `warning` glyph beside "Flashes at 3 Hz; faster flashing is capped."
+- **Lit cards:** text on a lit indicator card is #141414 when the item color's
+  luma (299R + 587G + 114B) is at least 140000, else the card text #E4E8EC:
+  the `on_accent` rule, so a light item color stays readable (#141414 on
+  #60B0FF is 8.0:1).
 - **Missing data** shows an unavailable row, never a made-up zero.
 
 ### What a profile sets
@@ -1064,10 +1298,33 @@ page](design-system/components/MainWindowLayout/preview.html) has the table.
 The [OverlayBar preview](design-system/components/OverlayBar/preview.html)
 shows these rules on the example profile.
 
+### Editor preview
+
+The editor draws the overlay with the renderer's own painter and metrics, at
+actual size in Add overlay item and scaled in the main window's preview corner
+([OverlayPreview](#overlaypreview)). Two backdrops stand in for a game: Dark,
+a vertical blend #152029 → #1F2D27 → #3A3324, and Bright, #A9CBE5 → #DCE8D4 →
+#CDB88B. They are preview constants, not editor tokens. The selected panel
+takes the renderer's edit-mode outline, 2 px #E0A15A.
+
 ## Known deviations in the shipped editor
 
-None of the adopted v2 changes remain outstanding. Platform and physical
-evidence limits are listed under [Verification](#verification).
+Until v2.1 lands, the shipped editor differs from these rules here; don't copy
+any of it:
+
+- Text size is in both View and Options.
+- In the Edit menu, Undo and Duplicate cooldown share the access key U.
+- Rename profile and Turn on are only in the profile's context menu; panel
+  items have no menu; Runtime diagnostics sits under Help and Split grouped
+  bars under Tools.
+- Add overlay item's primary button says "Apply item" though it closes the
+  dialog, and the dialog has no preview.
+- Runtime diagnostics shows its summary as plain text, and a disabled, checked
+  "Show raw JSON" before any snapshot.
+- A lit indicator card keeps #E4E8EC text: 1.9:1 on #60B0FF.
+
+The v2 changes are all in the code. Platform and physical evidence limits are
+listed under [Verification](#verification).
 
 ## Implementation map
 
@@ -1089,8 +1346,37 @@ color conversion and resources stay in their platform adapters.
 
 ## Not yet in the code
 
-None of the adopted v2 changes. The implementation map identifies their
-production helpers; the tests and rendered checks below cover the refit.
+The v2 changes are all in the code. The v2.1 changes are not yet:
+
+- **Overlay preview ([OverlayPreview](#overlaypreview)):**
+  `editor_item_dialog.cpp` lays the dialog out in two columns, adds Show,
+  Backdrop and Color, renames the primary to Add item / Save item, and draws
+  the preview with the painter `paint_preview` uses, fed by `panel_geometry`,
+  `bar_geometry` and `item_pip_layout`. Readability lines come from
+  `appearance_contrast.cpp`'s overlay checks. Linux: the overlay item window
+  in `editor_pages.cpp`.
+- **Lit cards ([Overlay](#overlay)):** `overlay_render.cpp`, the X11 overlay
+  and the editor preview pick #141414 for a lit card's text when the item
+  color's luma is at least 140000, through one core helper.
+- **Keyboard shortcuts ([ShortcutsDialog](#shortcutsdialog)):**
+  `editor_shortcuts.cpp` adds each command's group and draws the key chips;
+  Linux `show_shortcuts_dialog`.
+- **Runtime diagnostics ([DiagnosticsDialog](#diagnosticsdialog)):**
+  `runtime_diagnostics_view` returns rows with a `StatusKind`;
+  `IDD_RUNTIME_DIAGNOSTICS` swaps the check box for Summary / Raw JSON radio
+  buttons and gains the empty state; Linux `diagnostics_window.cpp`.
+- **Choose color and Appearance ([ColorPicker](#colorpicker),
+  [AppearanceRoles](#appearanceroles)):** `editor_color_picker.cpp` (target
+  line, current and new, a line per pair) and `editor_appearance.cpp` (part
+  rows, Changed, a clickable preview), with `appearance_contrast.cpp` for the
+  ratios.
+- **Menus ([Menus](#menus)):** `IDR_EDITOR_MENU` and `IDR_CONTEXT_MENUS` in
+  `editor_resources.rc` (new panel item and empty profile list menus),
+  `IDD_OPTIONS` without Text size, and the Linux command registry in
+  `editor_commands.cpp`.
+
+The implementation map identifies the production helpers; the tests and
+rendered checks below cover each change.
 
 ## Rules for changes
 

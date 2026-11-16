@@ -3,6 +3,8 @@
 #include "editor_app.hpp"
 #include "editor_menus.hpp"
 #include "calibration_window.hpp"
+#include "editor_scroll.hpp"
+#include "editor_popup.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -19,6 +21,9 @@
 #include <FL/Fl_Scroll.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Valuator.H>
+#include <FL/Fl_Value_Input.H>
+#include <FL/Fl_Slider.H>
+#include <FL/Fl_Scrollbar.H>
 #include <FL/Fl_Window.H>
 #include <FL/platform.H>
 
@@ -142,6 +147,8 @@ bool selected(const Node &n) {
   if (!w || !live(n)) return false;
   if (n.kind == Kind::row) return static_cast<Fl_Browser *>(w)->selected(n.index) != 0;
   if (n.kind == Kind::menu_item) {
+    if (auto *menu = menu_owner(n); menu && popup_owner() == menu)
+      return popup_current(*menu, n.index);
     // Fl_Menu_::value() walks the whole menu; compare the chosen item itself.
     auto *choice = dynamic_cast<Fl_Choice *>(w);
     const auto *item = choice ? menu_item(n) : nullptr;
@@ -152,7 +159,10 @@ bool selected(const Node &n) {
 }
 bool focused(const Node &n) {
   auto *w = n.widget();
-  if (!w || !live(n) || n.kind == Kind::menu_item || Fl::focus() != w) return false;
+  if (!w || !live(n)) return false;
+  if (auto *owner = popup_owner())
+    return n.kind == Kind::menu_item && owner == w && popup_current(*owner, n.index);
+  if (n.kind == Kind::menu_item || Fl::focus() != w) return false;
   // A focused list reports its current row, as native toolkits do.
   if (n.kind == Kind::row) return static_cast<Fl_Browser *>(w)->value() == n.index;
   return dynamic_cast<Fl_Browser *>(w) == nullptr;
@@ -161,16 +171,21 @@ bool showing(const Node &n) {
   if (!live(n)) return false;
   auto *w = n.widget();
   if (!w) return true;
+  if (n.kind == Kind::menu_item)
+    return popup_item_bounds(*menu_owner(n), n.index).has_value();
   if (n.kind == Kind::row)
-    if (auto *list = dynamic_cast<ContextBrowser *>(w))
-      return list->row_bounds(n.index).has_value();
+    if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
+      const auto bounds = list->row_bounds(n.index);
+      return bounds && visible_bounds(*w, *bounds).has_value();
+    }
   // A page tab is visible whenever its tab strip is, selected or not.
   if (n.kind == Kind::widget && dynamic_cast<Fl_Tabs *>(w->parent()))
-    return w->parent()->visible_r() != 0;
-  return w->visible_r() != 0;
+    return visible_bounds(*w->parent()).has_value();
+  return visible_bounds(*w).has_value();
 }
 bool modal_allows(Fl_Widget &widget) {
   const auto *modal = Fl::modal();
+  if (auto *document = popup_document_window(modal)) modal = document;
   return !modal || widget.top_window() == modal;
 }
 bool enabled(const Node &n) {
@@ -327,8 +342,9 @@ AtkStateSet *ref_states(AtkObject *object) {
     if (dynamic_cast<Fl_Check_Button *>(w)) atk_state_set_add_state(state, ATK_STATE_CHECKABLE);
     if (dynamic_cast<Fl_Tabs *>(w->parent())) atk_state_set_add_state(state, ATK_STATE_SELECTABLE);
   }
-  if (n.kind == Kind::row || (n.kind == Kind::menu_item && dynamic_cast<Fl_Choice *>(w)))
+  if (n.kind == Kind::row || n.kind == Kind::menu_item)
     atk_state_set_add_state(state, ATK_STATE_SELECTABLE);
+  if (n.kind == Kind::menu_item) atk_state_set_add_state(state, ATK_STATE_FOCUSABLE);
   if (const auto *item = menu_item(n); item && (item->flags & (FL_MENU_TOGGLE | FL_MENU_RADIO)))
     atk_state_set_add_state(state, ATK_STATE_CHECKABLE);
   if (checked(n)) atk_state_set_add_state(state, ATK_STATE_CHECKED);
@@ -385,8 +401,14 @@ void extents(AtkComponent *object, gint *x, gint *y, gint *width, gint *height,
       width_units = bounds->width;
       height_units = bounds->height;
     }
+  auto bounds = n.kind == Kind::menu_item ? popup_item_bounds(*menu_owner(n), n.index)
+      : w == window ? std::optional<EditorBounds>{{0, 0, w->w(), w->h()}}
+                    : visible_bounds(*w, {left, top_y, width_units, height_units});
+  if (!bounds) return;
+  left = bounds->x; top_y = bounds->y;
+  width_units = bounds->width; height_units = bounds->height;
   const float scale = Fl::screen_scale(window->screen_num());
-  const bool top = w == window;
+  const bool top = w == window && n.kind != Kind::menu_item;
   *x = top ? 0 : static_cast<gint>(std::lround(left * scale));
   *y = top ? 0 : static_cast<gint>(std::lround(top_y * scale));
   *width = static_cast<gint>(std::lround(width_units * scale));
@@ -464,12 +486,12 @@ void defer(Fl_Widget *w, std::function<void(Fl_Widget &)> step) {
 gboolean activate(AtkObject *object) {
   auto &n = node(object);
   auto *w = n.widget();
-  if (!w || !enabled(n) || !showing(n)) return FALSE;
+  if (!w || !enabled(n) || (n.kind == Kind::menu_item ? !w->visible_r() : !showing(n))) return FALSE;
   const auto kind = n.kind;
   const int index = n.index;
   if (kind == Kind::menu_item) {
     const auto *item = menu_item(n);
-    if (!item || item->submenu()) return FALSE;
+    if (!item) return FALSE;
   }
   defer(w, [kind, index](Fl_Widget &target) {
     if (kind == Kind::row) {
@@ -481,7 +503,9 @@ gboolean activate(AtkObject *object) {
     } else if (kind == Kind::menu_item) {
       auto &menu = static_cast<Fl_Menu_ &>(target);
       if (index >= menu_size(menu) - 1 || !menu.menu()[index].activevisible()) return;
-      (void)menu.picked(&menu.menu()[index]);
+      if (popup_pick(menu, index)) return;
+      if (menu.menu()[index].submenu()) track_editor_popup(menu, index);
+      else (void)menu.picked(&menu.menu()[index]);
     } else if (auto *tabs = dynamic_cast<Fl_Tabs *>(target.parent())) {
       if (tabs->value(&target)) tabs->do_callback();
       tabs->redraw();
@@ -502,7 +526,7 @@ gint action_count(AtkAction *object) {
   auto &n = node(object);
   if (!live(n)) return 0;
   const auto *item = menu_item(n);
-  return n.kind == Kind::menu_item && (!item || item->submenu()) ? 0 : 1;
+  return n.kind == Kind::menu_item && !item ? 0 : 1;
 }
 const gchar *action_name(AtkAction *object, gint index) {
   if (index != 0) return nullptr;
@@ -755,6 +779,7 @@ bool same(const Node &n, const Key &key) {
 }
 // Popup menu buttons and unlabeled decoration are not separate semantics.
 bool exported(Fl_Widget *w) {
+  if (w == popup_owner()) return true;
   if (w->w() <= 0 || w->h() <= 0) return false;
   if (dynamic_cast<Fl_Box *>(w) && !(w->label() && *w->label())) return false;
   return !(dynamic_cast<Fl_Menu_ *>(w) && !dynamic_cast<Fl_Menu_Bar *>(w) &&
@@ -798,12 +823,17 @@ AtkObject *make(const Key &key, AtkObject *parent) {
     role = field->readonly() ? ATK_ROLE_TEXT : ATK_ROLE_ENTRY;
   } else if (dynamic_cast<Fl_Valuator *>(w)) {
     type = value_semantic_get_type();
-    role = ATK_ROLE_SCROLL_BAR;
+    role = dynamic_cast<Fl_Scrollbar *>(w) ? ATK_ROLE_SCROLL_BAR
+         : dynamic_cast<Fl_Value_Input *>(w) ? ATK_ROLE_SPIN_BUTTON
+         : dynamic_cast<Fl_Slider *>(w) ? ATK_ROLE_SLIDER : ATK_ROLE_SPIN_BUTTON;
   } else if (dynamic_cast<Fl_Menu_Bar *>(w)) {
     role = ATK_ROLE_MENU_BAR;
   } else if (dynamic_cast<Fl_Choice *>(w)) {
     type = selection_semantic_get_type();
     role = ATK_ROLE_COMBO_BOX;
+  } else if (dynamic_cast<Fl_Menu_ *>(w)) {
+    type = selection_semantic_get_type();
+    role = ATK_ROLE_MENU;
   } else if (dynamic_cast<Fl_Browser *>(w)) {
     type = selection_semantic_get_type();
     role = ATK_ROLE_LIST;

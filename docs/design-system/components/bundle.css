@@ -157,3 +157,5 @@ body { margin: 0; background: var(--background); color: var(--text); font-family
 .le-ovl { box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: var(--win-gap-dialog); font-weight: 600; }
 .le-pips { display: inline-flex; gap: 3px; }
 .le-pips i { display: block; box-sizing: border-box; width: 10px; height: 10px; }
+.le-radio.is-disabled { color: var(--disabled); }
+.le-radio.is-disabled .le-dot { background: var(--disabled); }

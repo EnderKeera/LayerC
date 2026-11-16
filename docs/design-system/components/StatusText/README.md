@@ -10,6 +10,6 @@ A status or information message: a glyph and a semibold status word in `yes`, `n
 - **As a fill** (a pip or badge): the status color with `on_status` text. Never a control fill, focus or selection.
 - **Hints** next to fields use `subtext`, not a status color.
 
-The consumer supplies the state and the message. Intentional addition: the source document defines no status colors; these were adopted in the design system and are not yet in the code.
+The consumer supplies a `StatusKind` (`src/editor/common/status_kind.hpp`: `success`, `failure`, `warning`, `information` or `none`) and the message. The kind is assigned where the outcome is known and carried beside the message; renderers never read it back from the text. LayerD sends its visual recognition state as text only, so the Windows editor reads that one known vocabulary in `visual_runtime_status_kind`, and anything it does not know is `information`. Windows maps the kind with `status_glyph` and draws it with `paint_status_glyph` through `set_status_line` and `set_strip_status`; Linux uses `EditorStatusMark` and `draw_editor_status_glyph`. The adjacent text carries the accessible message; the decorative glyph is not a second tab stop or announcement.
 
 The preview is a static HTML rendition of these rules.

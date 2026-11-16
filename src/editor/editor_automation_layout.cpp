@@ -23,6 +23,19 @@ struct AutomationFrame {
   int label_height{};
   int workspace_top{};
   int workspace_bottom{};
+  // The narrowest client width the header rows fit, and the client height
+  // below the workspace (the Close row and margins).
+  int min_width{};
+  int footer_height{};
+};
+
+// What a view needs to show every control without overlap: its narrowest
+// client width and the lowest workspace bottom its content fits above. Each
+// view computes it with the same arithmetic that places its controls, so the
+// dialog's minimum size cannot drift from its layout.
+struct ViewExtent {
+  int width{};
+  int workspace_bottom{};
 };
 
 // Width of a label's current text in its own font, plus a small gap, so
@@ -75,6 +88,7 @@ constexpr int simulator_ids[]{
     IDC_AUTOMATION_SIM_RESET,
     IDC_AUTOMATION_SIM_STEP,
     IDC_AUTOMATION_SIM_PLAY,
+    IDC_AUTOMATION_SIM_SPEED_LABEL,
     IDC_AUTOMATION_SIM_SPEED,
     IDC_AUTOMATION_TRACE,
     IDC_AUTOMATION_TRACE_LOAD,
@@ -88,34 +102,18 @@ constexpr int simulator_ids[]{
 constexpr int advanced_ids[]{IDC_AUTOMATION_ADVANCED_LABEL,
                              IDC_AUTOMATION_JSON, IDC_AUTOMATION_APPLY};
 
-void layout_basic_view(const AutomationFrame &f,
-                       const bool validation_expanded) {
+ViewExtent layout_basic_view(const AutomationFrame &f,
+                             const bool validation_expanded) {
   const DialogLayout &ui = f.ui;
-  // At least four rows so several findings read without scrolling.
-  const int validation_height = ui.scaled(validation_expanded ? 200 : 104);
-  const int validation_top = f.workspace_bottom - validation_height;
-  const int left_width = std::max(
-      ui.scaled(260), std::min(f.width * 42 / 100,
-                               f.width - ui.scaled(330) - f.margin * 2 - f.gap));
-  const int right = f.margin + left_width + f.gap;
-  const int right_width = f.width - f.margin - right;
   const int header_height = f.control_height + ui.scaled(8);
   const int basic_label =
       text_width(f.dialog, IDC_AUTOMATION_BASIC_LABEL, ui.scaled(60));
   const int add_width = ui.scaled(64);
-  ui.move(IDC_AUTOMATION_BASIC_LABEL, f.margin,
-          f.workspace_top + (f.control_height - f.label_height) / 2,
-          basic_label, f.label_height);
-  ui.move(IDC_AUTOMATION_PALETTE, f.margin + basic_label, f.workspace_top,
-          std::max(ui.scaled(100),
-                   left_width - basic_label - add_width - ui.scaled(8)),
-          ui.scaled(240));
-  ui.move(IDC_AUTOMATION_ADD_NODE, f.margin + left_width - add_width,
-          f.workspace_top, add_width, f.control_height);
-  ui.move(IDC_AUTOMATION_NODES, f.margin, f.workspace_top + header_height,
-          left_width,
-          std::max(ui.scaled(90), validation_top - f.gap - f.workspace_top -
-                                      header_height));
+  const int palette_minimum = ui.scaled(100);
+  // The left column is never narrower than its palette row.
+  const int left_minimum =
+      std::max(ui.scaled(260),
+               basic_label + palette_minimum + ui.scaled(8) + add_width);
 
   int field_label = ui.scaled(72);
   for (const int id :
@@ -125,6 +123,17 @@ void layout_basic_view(const AutomationFrame &f,
         IDC_AUTOMATION_ACTION_LABEL, IDC_AUTOMATION_TARGET_LABEL,
         IDC_AUTOMATION_VALUE_LABEL})
     field_label = std::max(field_label, text_width(f.dialog, id, 0));
+  // The selected item's two action buttons set the narrowest field column.
+  const int item_button = ui.scaled(104);
+  const int item_buttons = item_button * 2 + ui.scaled(8);
+  const int right_minimum =
+      std::max(ui.scaled(330),
+               field_label + std::max(item_buttons, ui.scaled(160)));
+  const int left_width = std::max(
+      left_minimum, std::min(f.width * 42 / 100,
+                             f.width - right_minimum - f.margin * 2 - f.gap));
+  const int right = f.margin + left_width + f.gap;
+  const int right_width = f.width - f.margin - right;
   const int field_left = right + field_label;
   const int row_height = f.control_height + ui.scaled(8);
   constexpr std::array<std::array<int, 2>, 9> fields{{
@@ -147,9 +156,35 @@ void layout_basic_view(const AutomationFrame &f,
   ui.move(IDC_AUTOMATION_REPEATING, field_left, y,
           ui.scaled(160), f.control_height);
   ui.move(IDC_AUTOMATION_APPLY_NODE, field_left, y + row_height,
-          ui.scaled(104), f.control_height);
-  ui.move(IDC_AUTOMATION_DELETE_NODE, field_left + ui.scaled(112),
-          y + row_height, ui.scaled(104), f.control_height);
+          item_button, f.control_height);
+  ui.move(IDC_AUTOMATION_DELETE_NODE, field_left + item_button + ui.scaled(8),
+          y + row_height, item_button, f.control_height);
+  const int form_bottom = y + row_height + f.control_height;
+
+  // Validation stays at the bottom, at least four rows so several findings
+  // read without scrolling (taller while expanded and the room allows), and
+  // never over the form above: the extent below reserves its collapsed
+  // height, and only a window smaller than that extent shrinks it further.
+  const int validation_collapsed = ui.scaled(104);
+  const int validation_height = std::clamp(
+      f.workspace_bottom - form_bottom - f.gap, f.control_height,
+      validation_expanded ? ui.scaled(200) : validation_collapsed);
+  const int validation_top = f.workspace_bottom - validation_height;
+  const int list_minimum = ui.scaled(90);
+
+  ui.move(IDC_AUTOMATION_BASIC_LABEL, f.margin,
+          f.workspace_top + (f.control_height - f.label_height) / 2,
+          basic_label, f.label_height);
+  ui.move(IDC_AUTOMATION_PALETTE, f.margin + basic_label, f.workspace_top,
+          std::max(palette_minimum,
+                   left_width - basic_label - add_width - ui.scaled(8)),
+          ui.scaled(240));
+  ui.move(IDC_AUTOMATION_ADD_NODE, f.margin + left_width - add_width,
+          f.workspace_top, add_width, f.control_height);
+  ui.move(IDC_AUTOMATION_NODES, f.margin, f.workspace_top + header_height,
+          left_width,
+          std::max(list_minimum, validation_top - f.gap - f.workspace_top -
+                                     header_height));
 
   const int validation_label =
       text_width(f.dialog, IDC_AUTOMATION_VALIDATION_LABEL, ui.scaled(60));
@@ -167,10 +202,17 @@ void layout_basic_view(const AutomationFrame &f,
           validate_width, f.control_height);
   ui.move(IDC_AUTOMATION_RETRY, retry_left, validation_top, retry_width,
           f.control_height);
+
+  const int content_bottom =
+      std::max(form_bottom, f.workspace_top + header_height + list_minimum);
+  return {.width = std::max(f.margin * 2 + left_minimum + f.gap + right_minimum,
+                            f.margin * 2 + validation_label + ui.scaled(160) +
+                                f.gap * 2 + validate_width + retry_width),
+          .workspace_bottom = content_bottom + f.gap + validation_collapsed};
 }
 
-void layout_simulator_view(const AutomationFrame &f,
-                           const bool /*validation_expanded*/) {
+ViewExtent layout_simulator_view(const AutomationFrame &f,
+                                 const bool /*validation_expanded*/) {
   const DialogLayout &ui = f.ui;
   ui.move(IDC_AUTOMATION_SIM_LABEL, f.margin, f.workspace_top + ui.scaled(3),
           ui.scaled(90), f.label_height);
@@ -188,12 +230,15 @@ void layout_simulator_view(const AutomationFrame &f,
           f.control_height);
   ui.move(IDC_AUTOMATION_SIM_FIELDS_LABEL, fields_left, first_row,
           ui.scaled(60), f.label_height);
+  const int fields_minimum = ui.scaled(160);
   ui.move(IDC_AUTOMATION_SIM_FIELDS, fields_left, input_top,
-          std::max(ui.scaled(160),
+          std::max(fields_minimum,
                    f.width - fields_left - f.margin - ui.scaled(84)),
           f.control_height);
   ui.move(IDC_AUTOMATION_SIM_ADD, f.width - f.margin - ui.scaled(76),
           input_top, ui.scaled(76), f.control_height);
+  const int input_row_width =
+      fields_left + fields_minimum + ui.scaled(84) + f.margin;
 
   const int controls_top = input_top + f.control_height + f.gap;
   int x = f.margin;
@@ -203,6 +248,13 @@ void layout_simulator_view(const AutomationFrame &f,
                  f.control_height, f.gap);
   ui.next_button(IDC_AUTOMATION_SIM_PLAY, x, controls_top, 52,
                  f.control_height, f.gap);
+  // The visible label also names the speed list for screen readers (the
+  // static before it in tab order).
+  const int speed_label =
+      text_width(f.dialog, IDC_AUTOMATION_SIM_SPEED_LABEL, 0);
+  ui.row_label(IDC_AUTOMATION_SIM_SPEED_LABEL, x, controls_top, speed_label,
+               f.control_height);
+  x += speed_label;
   ui.move(IDC_AUTOMATION_SIM_SPEED, x, controls_top, ui.scaled(74),
           f.control_height);
   x += ui.scaled(82);
@@ -217,6 +269,7 @@ void layout_simulator_view(const AutomationFrame &f,
                  f.control_height, f.gap);
   ui.next_button(IDC_AUTOMATION_SAVE_TRACE, x, controls_top, 90,
                  f.control_height, f.gap);
+  const int controls_row_width = x - f.gap + f.margin;
 
   const int options_top = controls_top + f.control_height + f.gap;
   const int breakpoint_label =
@@ -231,39 +284,50 @@ void layout_simulator_view(const AutomationFrame &f,
       text_width(f.dialog, IDC_AUTOMATION_SIM_ASSERTIONS_LABEL, 0);
   ui.move(IDC_AUTOMATION_SIM_ASSERTIONS_LABEL, assertions_left,
           options_top + ui.scaled(5), assertions_label, f.label_height);
+  const int assertions_minimum = ui.scaled(160);
   ui.move(IDC_AUTOMATION_SIM_ASSERTIONS, assertions_left + assertions_label,
           options_top,
-          std::max(ui.scaled(160),
+          std::max(assertions_minimum,
                    f.width - assertions_left - assertions_label - f.margin),
           f.control_height);
+  const int options_row_width =
+      assertions_left + assertions_label + assertions_minimum + f.margin;
   const int trace_top = options_top + f.control_height + f.gap;
+  const int trace_minimum = ui.scaled(100);
   ui.move(IDC_AUTOMATION_SIM_TRACE_LABEL, f.margin, trace_top + ui.scaled(3),
           ui.scaled(55), f.label_height);
   ui.move(IDC_AUTOMATION_TRACE_TEXT, f.margin + ui.scaled(58), trace_top,
           f.width - f.margin * 2 - ui.scaled(58),
-          std::max(ui.scaled(100), f.workspace_bottom - trace_top));
+          std::max(trace_minimum, f.workspace_bottom - trace_top));
+  return {.width = std::max({input_row_width, controls_row_width,
+                             options_row_width}),
+          .workspace_bottom = trace_top + trace_minimum};
 }
 
-void layout_advanced_view(const AutomationFrame &f,
-                          const bool /*validation_expanded*/) {
+ViewExtent layout_advanced_view(const AutomationFrame &f,
+                                const bool /*validation_expanded*/) {
   const DialogLayout &ui = f.ui;
   ui.move(IDC_AUTOMATION_ADVANCED_LABEL, f.margin,
           f.workspace_top + ui.scaled(3), f.width - f.margin * 2,
           f.label_height);
+  const int json_top = f.workspace_top + ui.scaled(24);
+  const int json_minimum = ui.scaled(100);
   const int apply_top = f.workspace_bottom - f.control_height;
-  ui.move(IDC_AUTOMATION_JSON, f.margin, f.workspace_top + ui.scaled(24),
-          f.width - f.margin * 2,
-          std::max(ui.scaled(100),
-                   apply_top - f.gap - f.workspace_top - ui.scaled(24)));
+  ui.move(IDC_AUTOMATION_JSON, f.margin, json_top, f.width - f.margin * 2,
+          std::max(json_minimum, apply_top - f.gap - json_top));
   ui.move(IDC_AUTOMATION_APPLY, f.width - f.margin - ui.scaled(92), apply_top,
           ui.scaled(92), f.control_height);
+  return {.width = f.margin * 2 +
+                   text_width(f.dialog, IDC_AUTOMATION_ADVANCED_LABEL, 0),
+          .workspace_bottom =
+              json_top + json_minimum + f.gap + f.control_height};
 }
 
 // One entry per IDC_AUTOMATION_VIEW item, in combo order: the controls the
-// view shows and how it lays them out.
+// view shows, how it lays them out, and the extent that layout needs.
 struct AutomationView {
   std::span<const int> ids;
-  void (*layout)(const AutomationFrame &frame, bool validation_expanded);
+  ViewExtent (*layout)(const AutomationFrame &frame, bool validation_expanded);
 };
 
 constexpr std::array automation_views{
@@ -320,6 +384,10 @@ AutomationFrame layout_automation_header(const HWND dialog) {
   const int close_top = height - margin - control_height;
   ui.move(IDOK, width - margin - ui.scaled(88), close_top, ui.scaled(88),
           control_height);
+  // The list keeps its 100 px minimum beside the right-anchored cluster.
+  const int header_width = margin * 2 + list_label + ui.scaled(100) +
+                           gap * 5 + preset_label + presets_width + new_width +
+                           remove_width + enabled_width;
   return {.dialog = dialog,
           .ui = ui,
           .width = width,
@@ -328,7 +396,10 @@ AutomationFrame layout_automation_header(const HWND dialog) {
           .control_height = control_height,
           .label_height = label_height,
           .workspace_top = view_top + control_height + gap,
-          .workspace_bottom = close_top - gap};
+          .workspace_bottom = close_top - gap,
+          .min_width = std::max(header_width,
+                                margin * 2 + view_label + ui.scaled(170)),
+          .footer_height = gap + control_height + margin};
 }
 
 [[nodiscard]] std::size_t view_slot(const int view) noexcept {
@@ -352,9 +423,22 @@ void AutomationEditor::update_view(const HWND dialog) {
   layout(dialog);
 }
 
-void AutomationEditor::layout(const HWND dialog) const {
+// Every view is laid out (the inactive ones while hidden), so the dialog's
+// minimum is the largest view extent and switching views never needs a
+// bigger window. A window smaller than that minimum (a DPI or font change)
+// grows to it, kept on its work area.
+void AutomationEditor::layout(const HWND dialog) {
   const AutomationFrame frame = layout_automation_header(dialog);
-  automation_views[view_slot(view_)].layout(frame, validation_expanded_);
+  SIZE minimum{frame.min_width, 0};
+  for (const auto &view : automation_views) {
+    const ViewExtent extent = view.layout(frame, validation_expanded_);
+    minimum.cx = std::max(minimum.cx, static_cast<LONG>(extent.width));
+    minimum.cy = std::max(
+        minimum.cy,
+        static_cast<LONG>(extent.workspace_bottom + frame.footer_height));
+  }
+  minimum_client_ = minimum;
+  grow_client_to(dialog, minimum);
 }
 
 } // namespace layerc::editor
