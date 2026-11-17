@@ -1,6 +1,6 @@
 #include "accessibility_semantics.hpp"
+#include "a11y/fltk_actions.hpp"
 #include "a11y/window_geometry.hpp"
-#include "editor_popup.hpp"
 
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -25,7 +25,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -80,7 +79,6 @@ bool focused(const Node &n) { return live(n) && a11y::focused(target(n)); }
 bool showing(const Node &n) { return live(n) && a11y::showing(target(n)); }
 bool enabled(const Node &n) { return live(n) && a11y::enabled(target(n)); }
 bool checked(const Node &n) { return live(n) && a11y::checked(target(n)); }
-using a11y::modal_allows;
 Fl_Input_ *input(void *object) {
   auto &n = node(object);
   return n.kind == Kind::widget && live(n) ? dynamic_cast<Fl_Input_ *>(n.widget()) : nullptr;
@@ -188,8 +186,6 @@ void selection_semantic_init(LayerCSelectionSemantic *) {}
 void window_semantic_class_init(LayerCWindowSemanticClass *) {}
 void window_semantic_init(LayerCWindowSemantic *) {}
 
-void defer(Fl_Widget *w, std::function<void(Fl_Widget &)> step);
-
 void extents(AtkComponent *object, gint *x, gint *y, gint *width, gint *height,
              AtkCoordType coordinates) {
   auto &n = node(object);
@@ -226,23 +222,7 @@ void extents(AtkComponent *object, gint *x, gint *y, gint *width, gint *height,
 }
 gboolean grab_focus(AtkComponent *object) {
   auto &n = node(object);
-  auto *w = n.widget();
-  if (!w || !showing(n) || !enabled(n) || n.kind == Kind::menu_item) return FALSE;
-  // take_focus() runs unfocus/focus handlers that may open a modal; like
-  // every action, it runs from FLTK's loop rather than inside this call.
-  const bool accepted = n.kind == Kind::row || w->visible_focus();
-  if (!accepted) return FALSE;
-  defer(w, [](Fl_Widget &target) { (void)target.take_focus(); });
-  if (n.kind == Kind::row) {
-    defer(w, [row = n.index](Fl_Widget &target) {
-      auto &list = static_cast<Fl_Browser &>(target);
-      if (row > list.size()) return;
-      list.value(row);
-      list.do_callback();
-    });
-  }
-  w->redraw();
-  return accepted;
+  return a11y::grab_focus(target(n)) ? TRUE : FALSE;
 }
 void component_init(AtkComponentIface *type) {
   type->get_extents = extents;
@@ -251,66 +231,10 @@ void component_init(AtkComponentIface *type) {
   type->get_alpha = [](AtkComponent *) { return 1.0; };
 }
 
-// AT-SPI calls arrive inside the adaptor's GLib dispatch. Application
-// callbacks may open modal dialogs, so, like GTK, they run from FLTK's own
-// loop after the call has returned; a deleted widget cancels its step.
-namespace {
-std::vector<std::function<void()>> deferred;
-}
-void run_deferred(void *) {
-  auto steps = std::move(deferred);
-  deferred.clear();
-  for (auto &step : steps) step();
-}
-void defer(Fl_Widget *w, std::function<void(Fl_Widget &)> step) {
-  auto tracker = std::make_shared<Fl_Widget_Tracker>(w);
-  if (deferred.empty()) Fl::add_timeout(0.0, run_deferred);
-  deferred.push_back([tracker, step = std::move(step)] {
-    if (auto *live_widget = tracker->widget();
-        live_widget && live_widget->active_r() && modal_allows(*live_widget))
-      step(*live_widget);
-  });
-}
-
 // Actions invoke the application's own callbacks; no input is synthesized.
 gboolean activate(AtkObject *object) {
   auto &n = node(object);
-  auto *w = n.widget();
-  if (!w || !enabled(n) || (n.kind == Kind::menu_item ? !w->visible_r() : !showing(n))) return FALSE;
-  const auto kind = n.kind;
-  const int index = n.index;
-  if (kind == Kind::menu_item) {
-    const auto *item = menu_item(n);
-    if (!item) return FALSE;
-  }
-  defer(w, [kind, index](Fl_Widget &target) {
-    if (kind == Kind::row) {
-      auto &list = static_cast<Fl_Browser &>(target);
-      if (index > list.size()) return;
-      list.value(index);
-      list.do_callback();
-      list.redraw();
-    } else if (kind == Kind::menu_item) {
-      auto &menu = static_cast<Fl_Menu_ &>(target);
-      if (index >= menu_size(menu) - 1 || !menu.menu()[index].activevisible()) return;
-      if (popup_pick(menu, index)) return;
-      if (menu.menu()[index].submenu()) track_editor_popup(menu, index);
-      else (void)menu.picked(&menu.menu()[index]);
-    } else if (auto *tabs = dynamic_cast<Fl_Tabs *>(target.parent())) {
-      if (tabs->value(&target)) tabs->do_callback();
-      tabs->redraw();
-    } else if (auto *button = dynamic_cast<Fl_Button *>(&target);
-               button && button->type() == FL_RADIO_BUTTON) {
-      button->setonly();
-      button->do_callback();
-    } else if (button && button->type() == FL_TOGGLE_BUTTON) {
-      button->value(!button->value());
-      button->do_callback();
-    } else {
-      target.do_callback();
-    }
-  });
-  return TRUE;
+  return a11y::activate(target(n)) ? TRUE : FALSE;
 }
 gint action_count(AtkAction *object) {
   auto &n = node(object);
@@ -362,11 +286,12 @@ gint caret(AtkText *object) {
   return w && w->value() ? static_cast<gint>(g_utf8_strlen(w->value(), w->insert_position())) : 0;
 }
 gboolean set_caret(AtkText *object, gint offset) {
-  auto *w = input(object);
-  if (!w || offset < 0 || offset > char_count(input_text(object))) return FALSE;
-  w->insert_position(byte_offset(w->value(), offset));
-  w->redraw();
-  return TRUE;
+  const auto text = input_text(object);
+  if (offset < 0 || offset > char_count(text)) return FALSE;
+  return a11y::set_caret(target(node(object)),
+                         static_cast<std::size_t>(byte_offset(text, offset)))
+             ? TRUE
+             : FALSE;
 }
 gunichar char_at(const std::string &text, gint offset) {
   return g_utf8_get_char(text.c_str() + byte_offset(text, offset));
@@ -416,53 +341,37 @@ void text_init(AtkTextIface *type) {
     return text_range(object, *start, *end);
   };
   type->set_selection = [](AtkText *object, gint index, gint start, gint end) -> gboolean {
-    auto *w = input(object);
-    if (!w || index != 0 || start < 0 || end < start || end > char_count(input_text(object)))
-      return FALSE;
-    w->insert_position(byte_offset(w->value(), end), byte_offset(w->value(), start));
-    w->redraw();
-    return TRUE;
+    const auto text = input_text(object);
+    if (index != 0 || start < 0 || end < start || end > char_count(text)) return FALSE;
+    return a11y::select_text(target(node(object)),
+                             static_cast<std::size_t>(byte_offset(text, start)),
+                             static_cast<std::size_t>(byte_offset(text, end)))
+               ? TRUE
+               : FALSE;
   };
 }
 // Edits go through the field's own callback, exactly like typed text.
-Fl_Input_ *editable(void *object) {
-  auto *w = input(object);
-  return w && a11y::editable(target(node(object))) ? w : nullptr;
-}
 void editable_init(AtkEditableTextIface *type) {
   type->set_text_contents = [](AtkEditableText *object, const gchar *text) {
-    auto *w = editable(object);
-    if (!w || !text || !g_utf8_validate(text, -1, nullptr)) return;
-    w->value(text);
-    w->redraw();
-    defer(w, [](Fl_Widget &target) { target.do_callback(); });
+    if (!text) return;
+    (void)a11y::set_text(target(node(object)), std::string_view{text});
   };
   type->insert_text = [](AtkEditableText *object, const gchar *text, gint length, gint *position) {
-    auto *w = editable(object);
-    if (!w || !text || !position || length < 0 || !g_utf8_validate(text, length, nullptr)) return;
+    if (!text || !position || length < 0) return;
     auto value = input_text(object);
     if (*position < 0 || *position > char_count(value)) return;
-    const auto at = byte_offset(value, *position);
-    value.insert(static_cast<std::size_t>(at), text, static_cast<std::size_t>(length));
-    // value() never runs callbacks; replace() would run FL_WHEN_CHANGED ones
-    // inside this D-Bus call, before the deferred callback repeats them.
-    w->value(value.c_str(), static_cast<int>(value.size()));
-    w->insert_position(at + length);
-    w->redraw();
+    const auto at = static_cast<std::size_t>(byte_offset(value, *position));
+    if (!a11y::insert_text(target(node(object)), at,
+                           std::string_view{text, static_cast<std::size_t>(length)}))
+      return;
     *position += static_cast<gint>(g_utf8_strlen(text, length));
-    defer(w, [](Fl_Widget &target) { target.do_callback(); });
   };
   type->delete_text = [](AtkEditableText *object, gint start, gint end) {
-    auto *w = editable(object);
     auto value = input_text(object);
-    if (!w || start < 0 || end < start || end > char_count(value)) return;
-    const auto first = byte_offset(value, start);
-    value.erase(static_cast<std::size_t>(first),
-                static_cast<std::size_t>(byte_offset(value, end) - first));
-    w->value(value.c_str(), static_cast<int>(value.size()));
-    w->insert_position(first);
-    w->redraw();
-    defer(w, [](Fl_Widget &target) { target.do_callback(); });
+    if (start < 0 || end < start || end > char_count(value)) return;
+    (void)a11y::delete_text(target(node(object)),
+                            static_cast<std::size_t>(byte_offset(value, start)),
+                            static_cast<std::size_t>(byte_offset(value, end)));
   };
 }
 
@@ -492,16 +401,8 @@ void value_init(AtkValueIface *type) {
     numeric_value(value, w ? w->step() : 0.0);
   };
   type->set_current_value = [](AtkValue *object, const GValue *value) -> gboolean {
-    auto *w = valuator(object);
-    if (!w || !enabled(node(object)) || !showing(node(object)) || !G_VALUE_HOLDS_DOUBLE(value))
-      return FALSE;
-    const double number = g_value_get_double(value);
-    if (!std::isfinite(number) || number < std::min(w->minimum(), w->maximum()) ||
-        number > std::max(w->minimum(), w->maximum()))
-      return FALSE;
-    if (w->value(number)) defer(w, [](Fl_Widget &target) { target.do_callback(); });
-    w->redraw();
-    return TRUE;
+    if (!G_VALUE_HOLDS_DOUBLE(value)) return FALSE;
+    return a11y::set_number(target(node(object)), g_value_get_double(value)) ? TRUE : FALSE;
   };
 }
 
@@ -555,10 +456,7 @@ void register_root(AtkObject *root) {
   g_type_class_unref(util);
 }
 void clear_root() noexcept { root_object = nullptr; }
-void cancel_deferred() {
-  Fl::remove_timeout(run_deferred);
-  deferred.clear();
-}
+void cancel_deferred() { a11y::cancel_deferred(); }
 
 bool same(const Node &n, const Key &key) {
   return live(n) && n.kind == key.kind && n.widget() == key.widget && n.index == key.index;

@@ -1,3 +1,4 @@
+#include "a11y/fltk_actions.hpp"
 #include "a11y/fltk_tree.hpp"
 #include "a11y/model.hpp"
 #include "a11y/input.hpp"
@@ -9,14 +10,18 @@
 #include <FL/Fl_Box.H>
 #include <FL/Fl_Browser.H>
 #include <FL/Fl_Button.H>
+#include <FL/Fl_Check_Button.H>
 #include <FL/Fl_Group.H>
+#include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
+#include <FL/Fl_Radio_Button.H>
 #include <FL/Fl_Slider.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Window.H>
 
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <string>
 
 namespace {
@@ -306,4 +311,193 @@ void fltk_accessibility_tree_snapshots() {
   fixture.window.hide();
 }
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fltk_accessibility_tree_snapshots))
+// Actions validate on the calling thread and run their application callback from
+// FLTK's loop, so the protocol call returns before a dialog can open.
+void fltk_accessibility_actions() {
+#ifndef _WIN32
+  layerc::test::require_x11();
+#endif
+  const auto count = [](Fl_Widget *, void *data) { ++*static_cast<int *>(data); };
+  const auto turn = [] { for (int round = 0; round < 3; ++round) Fl::check(); };
+
+  Fl_Window window(0, 0, 560, 420, "Action probe");
+  Fl_Input field(20, 20, 220, 24, "Text");
+  Fl_Check_Button toggle(20, 60, 220, 24, "Toggle");
+  Fl_Group radios(20, 95, 220, 65);
+  Fl_Radio_Button first_radio(30, 100, 200, 24, "First");
+  Fl_Radio_Button second_radio(30, 130, 200, 24, "Second");
+  radios.end();
+  Fl_Tabs tabs(20, 180, 220, 130);
+  Fl_Group left_page(20, 210, 220, 100, "Left");
+  left_page.end();
+  Fl_Group right_page(20, 210, 220, 100, "Right");
+  right_page.end();
+  tabs.end();
+  Fl_Hold_Browser list(260, 20, 280, 120);
+  Fl_Button apply(260, 160, 280, 24, "Apply");
+  Fl_Slider slider(260, 200, 280, 24, "Level");
+  window.end();
+  slider.bounds(0, 100);
+  slider.step(1);
+  slider.value(40);
+  for (int row = 1; row <= 3; ++row) list.add(("row " + std::to_string(row)).c_str());
+  tabs.value(&left_page);
+  window.show();
+  Fl::check();
+  if (!expect(window.shown(), "the action window is on screen")) return;
+
+  const a11y::Target apply_target{&apply, a11y::TargetKind::widget, 0};
+  int apply_calls{};
+  apply.callback(count, &apply_calls);
+  expect(a11y::activate(apply_target), "an active button accepts activation");
+  expect(apply_calls == 0, "activation runs no callback inside the call");
+  turn();
+  expect(apply_calls == 1, "activation runs the callback from the loop");
+  apply.deactivate();
+  expect(!a11y::activate(apply_target), "an inactive button rejects activation");
+  turn();
+  expect(apply_calls == 1, "a rejected activation queues nothing");
+  apply.activate();
+
+  // A deleted widget and a cancelled queue drop their steps.
+  auto *scratch = new Fl_Button(20, 320, 220, 24, "Scratch");
+  int scratch_calls{};
+  scratch->callback(count, &scratch_calls);
+  expect(a11y::activate(a11y::Target{scratch, a11y::TargetKind::widget, 0}),
+         "a queued activation is accepted");
+  delete scratch;
+  turn();
+  expect(scratch_calls == 0, "a deleted widget's queued step is dropped");
+  auto *cancelled = new Fl_Button(20, 350, 220, 24, "Cancelled");
+  int cancelled_calls{};
+  cancelled->callback(count, &cancelled_calls);
+  expect(a11y::activate(a11y::Target{cancelled, a11y::TargetKind::widget, 0}),
+         "a second queued activation is accepted");
+  a11y::cancel_deferred();
+  turn();
+  expect(cancelled_calls == 0, "cancel_deferred drops the queued step");
+  delete cancelled;
+  expect(a11y::activate(apply_target) && apply_calls == 1, "the queue resumes after a cancel");
+  turn();
+  expect(apply_calls == 2, "the resumed step runs from the loop");
+
+  // Buttons act like their own click, tabs like a page pick, rows like a select.
+  int toggle_calls{};
+  toggle.callback(count, &toggle_calls);
+  expect(a11y::activate(a11y::Target{&toggle, a11y::TargetKind::widget, 0}),
+         "a check box accepts activation");
+  expect(toggle.value() == 0, "a check box flips from the loop");
+  turn();
+  expect(toggle.value() == 1 && toggle_calls == 1, "a check box toggles and calls back");
+
+  int radio_calls{};
+  second_radio.callback(count, &radio_calls);
+  first_radio.setonly();
+  expect(a11y::activate(a11y::Target{&second_radio, a11y::TargetKind::widget, 0}),
+         "a radio button accepts activation");
+  turn();
+  expect(second_radio.value() == 1 && first_radio.value() == 0, "a radio button takes the group");
+  expect(radio_calls == 1, "the radio button's callback runs once");
+
+  int tab_calls{};
+  tabs.callback(count, &tab_calls);
+  expect(a11y::activate(a11y::Target{&right_page, a11y::TargetKind::widget, 0}),
+         "a page tab accepts activation");
+  turn();
+  expect(tabs.value() == &right_page, "the tab strip shows the chosen page");
+  expect(tab_calls == 1, "the tab strip's callback runs once");
+
+  int list_calls{};
+  list.callback(count, &list_calls);
+  expect(a11y::activate(a11y::Target{&list, a11y::TargetKind::row, 2}),
+         "a browser row accepts activation");
+  expect(list.selected(2) == 0, "a row selects from the loop");
+  turn();
+  expect(list.selected(2) != 0 && list.value() == 2, "the browser selects the row");
+  expect(list_calls == 1, "the browser's callback runs once");
+  expect(a11y::activate(a11y::Target{&list, a11y::TargetKind::row, 9}),
+         "a row past the list still queues, then drops");
+  turn();
+  expect(list_calls == 1, "a row past the list calls nothing back");
+
+  // A modal window stops steps aimed at another window.
+  Fl_Window modal_window(600, 0, 200, 120, "Modal probe");
+  modal_window.set_modal();
+  modal_window.show();
+  Fl::check();
+  if (!expect(Fl::modal() == &modal_window, "the modal window owns the modal state")) return;
+  const int before_modal = apply_calls;
+  expect(!a11y::activate(apply_target), "a widget behind a modal window rejects activation");
+  turn();
+  expect(apply_calls == before_modal, "a modal window stops the queued step");
+  modal_window.hide();
+  Fl::check();
+  expect(Fl::modal() == nullptr, "hiding the modal window releases it");
+
+  // Text offsets are UTF-8 byte offsets: "a\xe2\x82\xac" "b" is 61 e2 82 ac 62.
+  const a11y::Target text_target{&field, a11y::TargetKind::widget, 0};
+  field.value("a\xe2\x82\xac" "b");
+  expect(!a11y::set_caret(text_target, 2), "a caret inside a code point is rejected");
+  expect(!a11y::set_caret(text_target, 6), "a caret past the end is rejected");
+  expect(a11y::set_caret(text_target, 4) && field.insert_position() == 4,
+         "a caret on a boundary moves");
+  expect(a11y::select_text(text_target, 1, 4), "a selection on boundaries is accepted");
+  expect(field.insert_position() == 4 && field.mark() == 1,
+         "the selection reports its anchor and caret");
+  expect(!a11y::select_text(text_target, 1, 2), "a selection ending inside a code point is rejected");
+
+  field.value("a\xe2\x82\xac" "b");
+  int field_calls{};
+  field.callback(count, &field_calls);
+  expect(a11y::insert_text(text_target, 1, "X"), "an insertion on a boundary is accepted");
+  expect(std::string(field.value()) == "aX\xe2\x82\xac" "b", "an insertion lands immediately");
+  expect(field.insert_position() == 2, "an insertion moves the caret past the text");
+  expect(field_calls == 0, "an edit runs no callback inside the call");
+  turn();
+  expect(field_calls == 1, "an edit runs the field's callback from the loop");
+  expect(a11y::delete_text(text_target, 1, 2), "a deletion on boundaries is accepted");
+  expect(std::string(field.value()) == "a\xe2\x82\xac" "b", "a deletion lands immediately");
+  expect(a11y::set_text(text_target, "plain"), "a whole value is accepted");
+  expect(std::string(field.value()) == "plain", "a whole value lands immediately");
+  turn();
+  expect(field_calls == 3, "each edit calls back once");
+  field.value("a\xe2\x82\xac" "b");
+  expect(!a11y::insert_text(text_target, 2, "X"), "an insertion inside a code point is rejected");
+  expect(!a11y::delete_text(text_target, 0, 9), "a deletion past the end is rejected");
+  turn();
+  expect(field_calls == 3, "a rejected edit calls nothing back");
+
+  field.readonly(1);
+  expect(!a11y::set_text(text_target, "other") && !a11y::insert_text(text_target, 0, "x") &&
+             !a11y::delete_text(text_target, 0, 1),
+         "a read-only field rejects every edit");
+  turn();
+  expect(field_calls == 3 && std::string(field.value()) == "a\xe2\x82\xac" "b",
+         "a read-only field keeps its value");
+  field.readonly(0);
+  field.value("bad \xff byte");
+  expect(!a11y::set_caret(text_target, 0) && !a11y::set_text(text_target, "ok"),
+         "a field whose value is not UTF-8 is rejected");
+
+  // Valuators take a bounded number, and only a change calls back.
+  const a11y::Target slider_target{&slider, a11y::TargetKind::widget, 0};
+  int slider_calls{};
+  slider.callback(count, &slider_calls);
+  expect(!a11y::set_number(slider_target, 120.0), "a value past the range is rejected");
+  expect(!a11y::set_number(slider_target, -1.0), "a value below the range is rejected");
+  expect(!a11y::set_number(slider_target, std::numeric_limits<double>::quiet_NaN()),
+         "a NaN value is rejected");
+  expect(a11y::set_number(slider_target, 55.5), "an in-range value is accepted");
+  expect(slider.value() == 55.5, "the valuator takes the value immediately");
+  expect(slider_calls == 0, "a valuator change runs no callback inside the call");
+  turn();
+  expect(slider_calls == 1, "a valuator change calls back from the loop");
+  expect(a11y::set_number(slider_target, 55.5), "an unchanged value is still accepted");
+  turn();
+  expect(slider_calls == 1, "an unchanged value queues no callback");
+
+  window.hide();
+}
+
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fltk_accessibility_tree_snapshots),
+                 LAYERC_TEST_CASE(fltk_accessibility_actions))
