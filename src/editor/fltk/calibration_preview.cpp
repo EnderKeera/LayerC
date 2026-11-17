@@ -1,6 +1,7 @@
 #include "calibration_window.hpp"
 
 #include "editor_style.hpp"
+#include "accessible_widgets.hpp"
 #include <FL/Fl.H>
 #include <FL/fl_draw.H>
 
@@ -18,7 +19,9 @@ Fl_Color token_color(const std::uint32_t value) {
 } // namespace
 
 CalibrationPreview::CalibrationPreview(int x, int y, int width, int height)
-    : Fl_Widget(x, y, width, height, "Calibration preview") {}
+    : Fl_Widget(x, y, width, height, "Calibration preview") {
+  accessibility::set_accessible_role(*this, a11y::Role::canvas);
+}
 layerc::core::NormalizedRegion CalibrationPreview::image_bounds() const {
   const auto width = mask ? mask->width : frame ? frame->width : 0;
   const auto height = mask ? mask->height : frame ? frame->height : 0;

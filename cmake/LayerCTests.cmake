@@ -391,6 +391,11 @@ if(NOT WIN32)
             SOURCES tests/linux_editor_platform_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
         layerc_editor_build_runtime(layerc_linux_editor_platform_tests)
+        layerc_add_test(layerc_fltk_accessibility_tree_tests
+            SOURCES tests/fltk_accessibility_tree_tests.cpp
+            LINK layerc_editor_fltk TIMEOUT 60 SKIP_RETURN_CODE 77
+            LABELS required editor RESOURCE_LOCK layerc_x11_display)
+        layerc_editor_build_runtime(layerc_fltk_accessibility_tree_tests)
         layerc_add_test(layerc_linux_editor_widget_tests
             SOURCES tests/linux_editor_widget_tests.cpp
                 tests/linux_editor_items_tests.cpp

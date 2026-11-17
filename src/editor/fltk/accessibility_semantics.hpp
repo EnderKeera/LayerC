@@ -1,5 +1,7 @@
 #pragma once
 
+#include "a11y/fltk_semantics.hpp"
+
 #include <FL/Fl.H>
 #include <atk/atk.h>
 
@@ -13,12 +15,8 @@ struct Fl_Menu_Item;
 
 namespace layerc::editor::accessibility {
 
-enum class Kind { application, widget, row, menu_item };
-struct Key {
-  Fl_Widget *widget;
-  Kind kind;
-  int index;
-};
+using Kind = a11y::TargetKind;
+using Key = a11y::Target;
 
 struct Node {
   std::unique_ptr<Fl_Widget_Tracker> tracker;
@@ -60,25 +58,7 @@ void register_root(AtkObject *root);
 void clear_root() noexcept;
 void cancel_deferred();
 
-// Fl_Menu_::size() walks the whole menu, and every menu node asks several
-// times per tree pass or adaptor request; a pass reuses each menu's size.
-// Menus never change while a pass runs: AT-SPI requests only read widgets
-// or defer application callbacks to FLTK's loop.
-struct MenuSize {
-  const Fl_Menu_ *menu;
-  const Fl_Menu_Item *items;
-  int size;
-};
-class TreePass final {
-public:
-  TreePass();
-  ~TreePass();
-  TreePass(const TreePass &) = delete;
-  TreePass &operator=(const TreePass &) = delete;
-private:
-  std::vector<MenuSize> sizes_;
-  std::vector<MenuSize> *previous_;
-};
-int menu_size(const Fl_Menu_ &menu);
+using TreePass = a11y::TreePass;
+using a11y::menu_size;
 
 } // namespace layerc::editor::accessibility

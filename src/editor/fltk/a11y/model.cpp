@@ -24,13 +24,21 @@ std::optional<ModelError> validate(const Snapshot &snapshot) {
     return error(snapshot.root, "accessibility tree has no valid root");
   if (!core::is_valid_utf8(snapshot.announcement))
     return error(snapshot.root, "invalid announcement UTF-8");
+  if (snapshot.announcement_source != no_node &&
+      !snapshot.nodes.contains(snapshot.announcement_source))
+    return error(snapshot.root, "dangling announcement source");
+  std::set<NodeId> attached;
   for (const auto &[id, node] : snapshot.nodes) {
     if (id == no_node || id != node.id)
       return error(id, "invalid accessibility node identity");
     if (!core::is_valid_utf8(node.name) ||
         !core::is_valid_utf8(node.description) ||
-        !core::is_valid_utf8(node.value))
+        !core::is_valid_utf8(node.value) ||
+        !core::is_valid_utf8(node.keybinding))
       return error(id, "invalid accessibility text UTF-8");
+    for (const auto &action : node.actions)
+      if (action.empty() || !core::is_valid_utf8(action))
+        return error(id, "invalid accessibility action name");
     if (!valid_bounds(node.bounds))
       return error(id, "invalid accessibility bounds");
     if (node.states.expanded && node.states.collapsed)
@@ -62,10 +70,9 @@ std::optional<ModelError> validate(const Snapshot &snapshot) {
           r.value < r.minimum || r.value > r.maximum)
         return error(id, "invalid accessibility numeric range");
     }
-    std::set<NodeId> children;
     for (const auto child : node.children) {
       const auto found = snapshot.nodes.find(child);
-      if (!children.insert(child).second || found == snapshot.nodes.end() ||
+      if (!attached.insert(child).second || found == snapshot.nodes.end() ||
           found->second.parent != id)
         return error(id, "invalid accessibility child relation");
     }
@@ -75,9 +82,7 @@ std::optional<ModelError> validate(const Snapshot &snapshot) {
           return error(id, "dangling accessibility relation");
     if (id != snapshot.root) {
       const auto parent = snapshot.nodes.find(node.parent);
-      if (parent == snapshot.nodes.end() ||
-          !std::set<NodeId>(parent->second.children.begin(),
-                            parent->second.children.end()).contains(id))
+      if (parent == snapshot.nodes.end())
         return error(id, "missing accessibility parent relation");
       auto ancestor = node.parent;
       std::size_t depth{};
@@ -88,6 +93,14 @@ std::optional<ModelError> validate(const Snapshot &snapshot) {
         ancestor = found->second.parent;
       }
     }
+  }
+  // Check reverse links only after every parent's list has been visited. IDs
+  // need not be ordered by ancestry, and a wide list must not rebuild its
+  // complete child set once for every row.
+  for (const auto &[id, node] : snapshot.nodes) {
+    (void)node;
+    if (id != snapshot.root && !attached.contains(id))
+      return error(id, "missing accessibility parent relation");
   }
   return std::nullopt;
 }

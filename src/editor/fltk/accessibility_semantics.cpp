@@ -1,9 +1,5 @@
 #include "accessibility_semantics.hpp"
-#include "accessible_widgets.hpp"
-#include "editor_app.hpp"
-#include "editor_menus.hpp"
-#include "calibration_window.hpp"
-#include "editor_scroll.hpp"
+#include "a11y/window_geometry.hpp"
 #include "editor_popup.hpp"
 
 #include <FL/Fl.H>
@@ -25,7 +21,6 @@
 #include <FL/Fl_Slider.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/Fl_Window.H>
-#include <FL/platform.H>
 
 #include <algorithm>
 #include <cctype>
@@ -33,14 +28,9 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace layerc::editor::accessibility {
-
-namespace {
-std::vector<MenuSize> *pass_sizes{};
-}
 
 struct LayerCSemantic { AtkObject parent; Node *node; };
 struct LayerCSemanticClass { AtkObjectClass parent; };
@@ -81,204 +71,37 @@ bool live(const Node &n) {
   return !n.retired && (n.kind == Kind::application || n.widget() != nullptr);
 }
 
-std::string clean_label(const char *label) {
-  std::string result;
-  if (label)
-    for (const char *p = label; *p; ++p) {
-      if (*p == '&' && p[1] != '&') continue;
-      result += *p;
-      if (*p == '&' && p[1] == '&') ++p;
-    }
-  return result;
-}
-// GTK accelerator notation, as AT-SPI clients expect, for printable keys.
-std::string accelerator(int shortcut) {
-  const int key = shortcut & FL_KEY_MASK;
-  if (!shortcut || key < 0x21 || key > 0x7e) return {};
-  std::string result;
-  if (shortcut & FL_CTRL) result += "<Control>";
-  if (shortcut & FL_SHIFT) result += "<Shift>";
-  if (shortcut & FL_ALT) result += "<Alt>";
-  if (shortcut & FL_META) result += "<Super>";
-  return result + static_cast<char>(std::tolower(key));
-}
-std::string mnemonic(const char *label) {
-  if (label)
-    for (const char *p = label; *p; ++p) {
-      if (*p == '&' && p[1] == '&') { ++p; continue; }
-      if (*p == '&' && std::isalnum(static_cast<unsigned char>(p[1])))
-        return std::string("<Alt>") + static_cast<char>(std::tolower(static_cast<unsigned char>(p[1])));
-    }
-  return {};
-}
-
-TreePass::TreePass() : previous_(pass_sizes) { pass_sizes = &sizes_; }
-TreePass::~TreePass() { pass_sizes = previous_; }
-int menu_size(const Fl_Menu_ &menu) {
-  if (!pass_sizes) return menu.size();
-  for (const auto &entry : *pass_sizes)
-    if (entry.menu == &menu && entry.items == menu.menu()) return entry.size;
-  pass_sizes->push_back({&menu, menu.menu(), menu.size()});
-  return pass_sizes->back().size;
-}
-
-Fl_Menu_ *menu_owner(const Node &n) { return dynamic_cast<Fl_Menu_ *>(n.widget()); }
+Key target(const Node &n) { return {n.widget(), n.kind, n.index}; }
 const Fl_Menu_Item *menu_item(const Node &n) {
-  auto *menu = menu_owner(n);
-  if (n.kind != Kind::menu_item || !menu || !menu->menu() || n.index < 0 ||
-      n.index >= menu_size(*menu) - 1)
-    return nullptr;
-  return &menu->menu()[n.index];
+  return live(n) ? a11y::menu_item_of(target(n)) : nullptr;
 }
-// Visible items of one inline menu level; FL_SUBMENU_POINTER is not used.
-std::vector<int> menu_level(const Fl_Menu_ &menu, int first) {
-  std::vector<int> items;
-  const auto *array = menu.menu();
-  if (!array || first < 0 || first >= menu_size(menu) - 1) return items;
-  const Fl_Menu_Item *item = &array[first];
-  if (item->label() && !item->visible()) item = item->next();
-  for (; item && item->label(); item = item->next())
-    items.push_back(static_cast<int>(item - array));
-  return items;
-}
-
-bool selected(const Node &n) {
-  auto *w = n.widget();
-  if (!w || !live(n)) return false;
-  if (n.kind == Kind::row) return static_cast<Fl_Browser *>(w)->selected(n.index) != 0;
-  if (n.kind == Kind::menu_item) {
-    if (auto *menu = menu_owner(n); menu && popup_owner() == menu)
-      return popup_current(*menu, n.index);
-    // Fl_Menu_::value() walks the whole menu; compare the chosen item itself.
-    auto *choice = dynamic_cast<Fl_Choice *>(w);
-    const auto *item = choice ? menu_item(n) : nullptr;
-    return item && choice->mvalue() == item;
-  }
-  if (auto *tabs = dynamic_cast<Fl_Tabs *>(w->parent())) return tabs->value() == w;
-  return false;
-}
-bool focused(const Node &n) {
-  auto *w = n.widget();
-  if (!w || !live(n)) return false;
-  if (auto *owner = popup_owner())
-    return n.kind == Kind::menu_item && owner == w && popup_current(*owner, n.index);
-  if (n.kind == Kind::menu_item || Fl::focus() != w) return false;
-  // A focused list reports its current row, as native toolkits do.
-  if (n.kind == Kind::row) return static_cast<Fl_Browser *>(w)->value() == n.index;
-  return dynamic_cast<Fl_Browser *>(w) == nullptr;
-}
-bool showing(const Node &n) {
-  if (!live(n)) return false;
-  auto *w = n.widget();
-  if (!w) return true;
-  if (n.kind == Kind::menu_item)
-    return popup_item_bounds(*menu_owner(n), n.index).has_value();
-  if (n.kind == Kind::row)
-    if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
-      const auto bounds = list->row_bounds(n.index);
-      return bounds && visible_bounds(*w, *bounds).has_value();
-    }
-  // A page tab is visible whenever its tab strip is, selected or not.
-  if (n.kind == Kind::widget && dynamic_cast<Fl_Tabs *>(w->parent()))
-    return visible_bounds(*w->parent()).has_value();
-  return visible_bounds(*w).has_value();
-}
-bool modal_allows(Fl_Widget &widget) {
-  const auto *modal = Fl::modal();
-  if (auto *document = popup_document_window(modal)) modal = document;
-  return !modal || widget.top_window() == modal;
-}
-bool enabled(const Node &n) {
-  auto *w = n.widget();
-  if (!w) return live(n);
-  if (!w->active_r() || !modal_allows(*w)) return false;
-  const auto *item = menu_item(n);
-  return n.kind != Kind::menu_item || (item && item->active());
-}
-bool checked(const Node &n) {
-  if (const auto *item = menu_item(n))
-    return (item->flags & (FL_MENU_TOGGLE | FL_MENU_RADIO)) && item->value();
-  auto *check = n.kind == Kind::widget ? dynamic_cast<Fl_Check_Button *>(n.widget()) : nullptr;
-  return check && check->value();
-}
+bool selected(const Node &n) { return live(n) && a11y::selected(target(n)); }
+bool focused(const Node &n) { return live(n) && a11y::focused(target(n)); }
+bool showing(const Node &n) { return live(n) && a11y::showing(target(n)); }
+bool enabled(const Node &n) { return live(n) && a11y::enabled(target(n)); }
+bool checked(const Node &n) { return live(n) && a11y::checked(target(n)); }
+using a11y::modal_allows;
 Fl_Input_ *input(void *object) {
   auto &n = node(object);
   return n.kind == Kind::widget && live(n) ? dynamic_cast<Fl_Input_ *>(n.widget()) : nullptr;
 }
-// D-Bus rejects (by default, aborts on) invalid UTF-8, which file names and
-// pasted X selections can contain; every exported string passes through here.
-std::string valid_utf8(const std::string &text) {
-  if (g_utf8_validate(text.data(), static_cast<gssize>(text.size()), nullptr)) return text;
-  gchar *fixed = g_utf8_make_valid(text.data(), static_cast<gssize>(text.size()));
-  std::string result = fixed;
-  g_free(fixed);
-  return result;
-}
+std::string valid_utf8(const std::string &text) { return a11y::valid_utf8(text); }
 std::string input_text(void *object) {
-  auto *w = input(object);
-  return w && w->value() ? valid_utf8(w->value()) : std::string{};
-}
-
-std::string raw_name(const Node &n) {
-  auto *w = n.widget();
-  if (!live(n)) return {};
-  switch (n.kind) {
-  case Kind::application: return "LayerE";
-  case Kind::row: {
-    const auto *text = static_cast<Fl_Browser *>(w)->text(n.index);
-    return text ? text : "";
-  }
-  case Kind::menu_item: {
-    const auto *item = menu_item(n);
-    return item ? clean_label(item->label()) : "";
-  }
-  case Kind::widget: break;
-  }
-  auto name = clean_label(w->label());
-  // A registered name wins over the label: it is what the control says
-  // (DesignSystem.md, Screen readers).
-  if (auto registered = accessible_name(*w); registered) return *registered;
-  if (!name.empty()) return name;
-  if (dynamic_cast<Fl_Window *>(w)) return "LayerE dialog";
-  if (dynamic_cast<PanelPreview *>(w)) return "Panel placement preview";
-  if (dynamic_cast<Fl_Menu_Bar *>(w)) return "Main menu";
-  return w->tooltip() ? w->tooltip() : "";
+  const auto &n = node(object);
+  return live(n) ? a11y::input_text(target(n)) : std::string{};
 }
 std::string current_keybinding(const Node &n) {
-  if (const auto *item = menu_item(n)) {
-    const auto shortcut = accelerator(item->shortcut());
-    return shortcut.empty() ? std::string() : ";;" + shortcut;
-  }
-  auto *button = n.kind == Kind::widget ? dynamic_cast<Fl_Button *>(n.widget()) : nullptr;
-  if (!button) return {};
-  const auto key = mnemonic(button->label());
-  const auto shortcut = accelerator(static_cast<int>(button->shortcut()));
-  if (key.empty() && shortcut.empty()) return {};
-  return key + ";;" + shortcut;
+  return live(n) ? a11y::keybinding(target(n)) : std::string{};
 }
-
-std::string current_name(const Node &n) { return valid_utf8(raw_name(n)); }
-// The line that belongs to a control is its description: the registry's, else
-// the tooltip a labelled control does not already say as its name, else what
-// the adaptor itself stored, such as the panel preview's static text.
+std::string current_name(const Node &n) {
+  return live(n) ? a11y::name(target(n)) : std::string{};
+}
 std::string current_description(AtkObject *object) {
-  auto &n = node(object);
+  const auto &n = node(object);
   if (!live(n)) return {};
-  std::string description;
-  if (n.kind == Kind::widget)
-    if (auto *w = n.widget()) {
-      description = accessible_description(*w);
-      if (description.empty() && !clean_label(w->label()).empty() && w->tooltip())
-        description = w->tooltip();
-    }
-  if (description.empty()) {
-    const auto inherited = ATK_OBJECT_CLASS(semantic_parent_class)->get_description;
-    if (inherited != nullptr)
-      if (const gchar *text = inherited(object); text != nullptr) description = text;
-  }
-  description = valid_utf8(description);
-  // Nothing exists only as a description: repeating the name says it twice.
-  return description == current_name(n) ? std::string() : description;
+  const auto inherited = ATK_OBJECT_CLASS(semantic_parent_class)->get_description;
+  const auto *text = inherited != nullptr ? inherited(object) : nullptr;
+  return a11y::description(target(n), text != nullptr ? text : "");
 }
 // Answers from its own buffer: overwriting the last reported name here would
 // hide the change from report_changes and leave other clients' caches stale.
@@ -316,40 +139,26 @@ AtkStateSet *ref_states(AtkObject *object) {
     atk_state_set_add_state(state, ATK_STATE_DEFUNCT);
     return state;
   }
-  auto *w = n.widget();
-  if (!w || w->visible()) atk_state_set_add_state(state, ATK_STATE_VISIBLE);
-  if (showing(n)) atk_state_set_add_state(state, ATK_STATE_SHOWING);
-  if (enabled(n)) {
-    atk_state_set_add_state(state, ATK_STATE_ENABLED);
-    atk_state_set_add_state(state, ATK_STATE_SENSITIVE);
-  }
-  if (n.kind == Kind::widget && w) {
-    if (auto *window = dynamic_cast<Fl_Window *>(w)) {
-      if (window->modal()) atk_state_set_add_state(state, ATK_STATE_MODAL);
-      if (Fl::focus() && Fl::focus()->top_window() == window)
-        atk_state_set_add_state(state, ATK_STATE_ACTIVE);
-      if (window->resizable()) atk_state_set_add_state(state, ATK_STATE_RESIZABLE);
-    } else if (w->visible_focus() && !dynamic_cast<Fl_Group *>(w)) {
-      atk_state_set_add_state(state, ATK_STATE_FOCUSABLE);
-    } else if (dynamic_cast<Fl_Browser *>(w)) {
-      atk_state_set_add_state(state, ATK_STATE_FOCUSABLE);
-    }
-    if (auto *field = dynamic_cast<Fl_Input_ *>(w)) {
-      if (!field->readonly()) atk_state_set_add_state(state, ATK_STATE_EDITABLE);
-      atk_state_set_add_state(state, field->input_type() & FL_MULTILINE_INPUT
-                                         ? ATK_STATE_MULTI_LINE : ATK_STATE_SINGLE_LINE);
-    }
-    if (dynamic_cast<Fl_Check_Button *>(w)) atk_state_set_add_state(state, ATK_STATE_CHECKABLE);
-    if (dynamic_cast<Fl_Tabs *>(w->parent())) atk_state_set_add_state(state, ATK_STATE_SELECTABLE);
-  }
-  if (n.kind == Kind::row || n.kind == Kind::menu_item)
-    atk_state_set_add_state(state, ATK_STATE_SELECTABLE);
-  if (n.kind == Kind::menu_item) atk_state_set_add_state(state, ATK_STATE_FOCUSABLE);
-  if (const auto *item = menu_item(n); item && (item->flags & (FL_MENU_TOGGLE | FL_MENU_RADIO)))
-    atk_state_set_add_state(state, ATK_STATE_CHECKABLE);
-  if (checked(n)) atk_state_set_add_state(state, ATK_STATE_CHECKED);
-  if (selected(n)) atk_state_set_add_state(state, ATK_STATE_SELECTED);
-  if (focused(n)) atk_state_set_add_state(state, ATK_STATE_FOCUSED);
+  const auto flags = a11y::states(target(n));
+  const auto add = [&](bool present, AtkStateType type) {
+    if (present) atk_state_set_add_state(state, type);
+  };
+  add(flags.visible, ATK_STATE_VISIBLE);
+  add(flags.showing, ATK_STATE_SHOWING);
+  add(!flags.disabled, ATK_STATE_ENABLED);
+  add(!flags.disabled, ATK_STATE_SENSITIVE);
+  add(flags.modal, ATK_STATE_MODAL);
+  add(flags.active, ATK_STATE_ACTIVE);
+  add(flags.resizable, ATK_STATE_RESIZABLE);
+  add(flags.focusable, ATK_STATE_FOCUSABLE);
+  add(flags.editable, ATK_STATE_EDITABLE);
+  if (n.kind == Kind::widget && dynamic_cast<Fl_Input_ *>(n.widget()))
+    add(true, flags.multi_line ? ATK_STATE_MULTI_LINE : ATK_STATE_SINGLE_LINE);
+  add(flags.checkable, ATK_STATE_CHECKABLE);
+  add(flags.selectable, ATK_STATE_SELECTABLE);
+  add(flags.checked, ATK_STATE_CHECKED);
+  add(flags.selected, ATK_STATE_SELECTED);
+  add(flags.focused, ATK_STATE_FOCUSED);
   return state;
 }
 void finalize(GObject *object) {
@@ -389,24 +198,10 @@ void extents(AtkComponent *object, gint *x, gint *y, gint *width, gint *height,
   if (!w) return;
   auto *window = w->top_window();
   if (!window || !window->shown()) return;
-  // ContextBrowser owns the scroll-aware visible row geometry. Menu items and
-  // plain browsers retain their owner bounds; never infer row pitch here.
-  int left = w->x(), top_y = w->y(), width_units = w->w(), height_units = w->h();
-  if (n.kind == Kind::row)
-    if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
-      const auto bounds = list->row_bounds(n.index);
-      if (!bounds) return;
-      left = bounds->x;
-      top_y = bounds->y;
-      width_units = bounds->width;
-      height_units = bounds->height;
-    }
-  auto bounds = n.kind == Kind::menu_item ? popup_item_bounds(*menu_owner(n), n.index)
-      : w == window ? std::optional<EditorBounds>{{0, 0, w->w(), w->h()}}
-                    : visible_bounds(*w, {left, top_y, width_units, height_units});
+  const auto bounds = a11y::local_bounds(target(n));
   if (!bounds) return;
-  left = bounds->x; top_y = bounds->y;
-  width_units = bounds->width; height_units = bounds->height;
+  const auto left = bounds->left, top_y = bounds->top;
+  const auto width_units = bounds->width, height_units = bounds->height;
   const float scale = Fl::screen_scale(window->screen_num());
   const bool top = w == window && n.kind != Kind::menu_item;
   *x = top ? 0 : static_cast<gint>(std::lround(left * scale));
@@ -414,18 +209,13 @@ void extents(AtkComponent *object, gint *x, gint *y, gint *width, gint *height,
   *width = static_cast<gint>(std::lround(width_units * scale));
   *height = static_cast<gint>(std::lround(height_units * scale));
   if (coordinates == ATK_XY_SCREEN) {
-    auto *display = fl_x11_display();
-    const auto xid = fl_x11_xid(window);
-    int origin_x{}, origin_y{};
-    Window child{};
-    if (!display || !xid ||
-        !XTranslateCoordinates(display, xid, DefaultRootWindow(display), 0, 0, &origin_x,
-                               &origin_y, &child)) {
+    const auto origin = a11y::window_screen_origin(*window);
+    if (!origin) {
       *x = *y = *width = *height = 0;
       return;
     }
-    *x += origin_x;
-    *y += origin_y;
+    *x += origin->first;
+    *y += origin->second;
   } else if (coordinates == ATK_XY_PARENT && !top) {
     auto *parent = n.parent ? node(n.parent).widget() : nullptr;
     if (parent && parent != window && parent->top_window() == window) {
@@ -637,11 +427,7 @@ void text_init(AtkTextIface *type) {
 // Edits go through the field's own callback, exactly like typed text.
 Fl_Input_ *editable(void *object) {
   auto *w = input(object);
-  // Offset edits on text that is not valid UTF-8 would not match what was exported.
-  return w && !w->readonly() && enabled(node(object)) && showing(node(object)) &&
-                 g_utf8_validate(w->value(), -1, nullptr)
-             ? w
-             : nullptr;
+  return w && a11y::editable(target(node(object))) ? w : nullptr;
 }
 void editable_init(AtkEditableTextIface *type) {
   type->set_text_contents = [](AtkEditableText *object, const gchar *text) {
@@ -777,14 +563,6 @@ void cancel_deferred() {
 bool same(const Node &n, const Key &key) {
   return live(n) && n.kind == key.kind && n.widget() == key.widget && n.index == key.index;
 }
-// Popup menu buttons and unlabeled decoration are not separate semantics.
-bool exported(Fl_Widget *w) {
-  if (w == popup_owner()) return true;
-  if (w->w() <= 0 || w->h() <= 0) return false;
-  if (dynamic_cast<Fl_Box *>(w) && !(w->label() && *w->label())) return false;
-  return !(dynamic_cast<Fl_Menu_ *>(w) && !dynamic_cast<Fl_Menu_Bar *>(w) &&
-           !dynamic_cast<Fl_Choice *>(w));
-}
 void remember(AtkObject *object) {
   auto &n = node(object);
   n.name = current_name(n);
@@ -802,59 +580,40 @@ AtkObject *make(const Key &key, AtkObject *parent) {
   GType type = semantic_get_type();
   AtkRole role = ATK_ROLE_PANEL;
   auto *w = key.widget;
-  if (key.kind == Kind::application) {
-    role = ATK_ROLE_APPLICATION;
-  } else if (key.kind == Kind::row) {
-    type = action_semantic_get_type();
-    role = ATK_ROLE_LIST_ITEM;
-  } else if (key.kind == Kind::menu_item) {
-    auto *menu = static_cast<Fl_Menu_ *>(w);
-    const auto *item = &menu->menu()[key.index];
-    type = action_semantic_get_type();
-    role = item->submenu() ? ATK_ROLE_MENU
-           : (item->flags & FL_MENU_TOGGLE) ? ATK_ROLE_CHECK_MENU_ITEM
-           : (item->flags & FL_MENU_RADIO) ? ATK_ROLE_RADIO_MENU_ITEM
-                                            : ATK_ROLE_MENU_ITEM;
-  } else if (auto *window = dynamic_cast<Fl_Window *>(w)) {
-    type = window_semantic_get_type();
-    role = window->non_modal() ? ATK_ROLE_DIALOG : ATK_ROLE_FRAME;
-  } else if (auto *field = dynamic_cast<Fl_Input_ *>(w)) {
+  using a11y::Role;
+  switch (a11y::role_of(key)) {
+  case Role::application: role = ATK_ROLE_APPLICATION; break;
+  case Role::window: role = ATK_ROLE_FRAME; type = window_semantic_get_type(); break;
+  case Role::dialog: role = ATK_ROLE_DIALOG; type = window_semantic_get_type(); break;
+  case Role::text_field:
+    role = a11y::states(key).read_only ? ATK_ROLE_TEXT : ATK_ROLE_ENTRY;
     type = text_semantic_get_type();
-    role = field->readonly() ? ATK_ROLE_TEXT : ATK_ROLE_ENTRY;
-  } else if (dynamic_cast<Fl_Valuator *>(w)) {
-    type = value_semantic_get_type();
-    role = dynamic_cast<Fl_Scrollbar *>(w) ? ATK_ROLE_SCROLL_BAR
-         : dynamic_cast<Fl_Value_Input *>(w) ? ATK_ROLE_SPIN_BUTTON
-         : dynamic_cast<Fl_Slider *>(w) ? ATK_ROLE_SLIDER : ATK_ROLE_SPIN_BUTTON;
-  } else if (dynamic_cast<Fl_Menu_Bar *>(w)) {
-    role = ATK_ROLE_MENU_BAR;
-  } else if (dynamic_cast<Fl_Choice *>(w)) {
-    type = selection_semantic_get_type();
-    role = ATK_ROLE_COMBO_BOX;
-  } else if (dynamic_cast<Fl_Menu_ *>(w)) {
-    type = selection_semantic_get_type();
+    break;
+  case Role::number_field: role = ATK_ROLE_SPIN_BUTTON; type = value_semantic_get_type(); break;
+  case Role::scroll_bar: role = ATK_ROLE_SCROLL_BAR; type = value_semantic_get_type(); break;
+  case Role::slider: role = ATK_ROLE_SLIDER; type = value_semantic_get_type(); break;
+  case Role::menu_bar: role = ATK_ROLE_MENU_BAR; break;
+  case Role::menu:
     role = ATK_ROLE_MENU;
-  } else if (dynamic_cast<Fl_Browser *>(w)) {
-    type = selection_semantic_get_type();
-    role = ATK_ROLE_LIST;
-  } else if (dynamic_cast<Fl_Tabs *>(w)) {
-    type = selection_semantic_get_type();
-    role = ATK_ROLE_PAGE_TAB_LIST;
-  } else if (dynamic_cast<Fl_Tabs *>(w->parent())) {
-    type = action_semantic_get_type();
-    role = ATK_ROLE_PAGE_TAB;
-  } else if (dynamic_cast<Fl_Check_Button *>(w)) {
-    type = action_semantic_get_type();
-    role = ATK_ROLE_CHECK_BOX;
-  } else if (dynamic_cast<Fl_Button *>(w)) {
-    type = action_semantic_get_type();
-    role = ATK_ROLE_PUSH_BUTTON;
-  } else if (dynamic_cast<Fl_Box *>(w)) {
-    role = ATK_ROLE_LABEL;
-  } else if (dynamic_cast<Fl_Scroll *>(w)) {
-    role = ATK_ROLE_SCROLL_PANE;
-  } else if (dynamic_cast<PanelPreview *>(w) || dynamic_cast<CalibrationPreview *>(w)) {
-    role = ATK_ROLE_CANVAS;
+    type = key.kind == Kind::menu_item ? action_semantic_get_type() : selection_semantic_get_type();
+    break;
+  case Role::drop_down: role = ATK_ROLE_COMBO_BOX; type = selection_semantic_get_type(); break;
+  case Role::list: role = ATK_ROLE_LIST; type = selection_semantic_get_type(); break;
+  case Role::tab_list: role = ATK_ROLE_PAGE_TAB_LIST; type = selection_semantic_get_type(); break;
+  case Role::tab: role = ATK_ROLE_PAGE_TAB; type = action_semantic_get_type(); break;
+  case Role::list_row: role = ATK_ROLE_LIST_ITEM; type = action_semantic_get_type(); break;
+  case Role::menu_item: role = ATK_ROLE_MENU_ITEM; type = action_semantic_get_type(); break;
+  case Role::check_menu_item: role = ATK_ROLE_CHECK_MENU_ITEM; type = action_semantic_get_type(); break;
+  case Role::radio_menu_item: role = ATK_ROLE_RADIO_MENU_ITEM; type = action_semantic_get_type(); break;
+  case Role::check_box: role = ATK_ROLE_CHECK_BOX; type = action_semantic_get_type(); break;
+  case Role::radio_button: role = ATK_ROLE_RADIO_BUTTON; type = action_semantic_get_type(); break;
+  case Role::button: role = ATK_ROLE_PUSH_BUTTON; type = action_semantic_get_type(); break;
+  case Role::label: role = ATK_ROLE_LABEL; break;
+  case Role::status: role = ATK_ROLE_STATUSBAR; break;
+  case Role::image: role = ATK_ROLE_IMAGE; break;
+  case Role::scroll_pane: role = ATK_ROLE_SCROLL_PANE; break;
+  case Role::canvas: role = ATK_ROLE_CANVAS; break;
+  case Role::group: break;
   }
   auto *object = ATK_OBJECT(g_object_new(type, nullptr));
   auto &n = node(object);
@@ -864,48 +623,16 @@ AtkObject *make(const Key &key, AtkObject *parent) {
   if (w) n.tracker = std::make_unique<Fl_Widget_Tracker>(w);
   atk_object_set_role(object, role);
   atk_object_set_parent(object, parent);
-  if (dynamic_cast<PanelPreview *>(w))
-    atk_object_set_description(object, "Drag a panel to change its anchor. "
-                                       "The Panel fields edit the same values.");
   remember(object);
   return object;
 }
 std::vector<Key> desired(AtkObject *object) {
-  auto &n = node(object);
-  std::vector<Key> keys;
-  auto *w = n.widget();
-  if (n.kind == Kind::application) {
-    std::vector<Fl_Window *> shown;
-    for (auto *window = Fl::first_window(); window; window = Fl::next_window(window))
-      if (!window->parent() && !window->menu_window() && !window->tooltip_window())
-        shown.push_back(window);
-    // Keep known windows in place; FLTK reorders its list on activation.
-    for (auto *child : n.children)
-      if (auto *window = node(child).widget();
-          window && std::find(shown.begin(), shown.end(), window) != shown.end())
-        keys.push_back({window, Kind::widget, 0});
-    for (auto *window : shown)
-      if (std::none_of(keys.begin(), keys.end(), [&](const Key &k) { return k.widget == window; }))
-        keys.push_back({window, Kind::widget, 0});
-  } else if (n.kind == Kind::menu_item) {
-    const auto *item = menu_item(n);
-    if (item && (item->flags & FL_SUBMENU))
-      for (const int index : menu_level(*menu_owner(n), n.index + 1))
-        keys.push_back({w, Kind::menu_item, index});
-  } else if (n.kind == Kind::widget && w) {
-    if (auto *list = dynamic_cast<Fl_Browser *>(w)) {
-      // Hidden pages have no reachable rows. Materialize every row when the
-      // browser is shown; scrolling must not restrict accessible children.
-      if (list->visible_r())
-        for (int row = 1; row <= list->size(); ++row) keys.push_back({w, Kind::row, row});
-    } else if (auto *menu = dynamic_cast<Fl_Menu_ *>(w)) {
-      for (const int index : menu_level(*menu, 0)) keys.push_back({w, Kind::menu_item, index});
-    } else if (auto *group = w->as_group(); group && !dynamic_cast<Fl_Input_ *>(w)) {
-      for (int i = 0; i < group->children(); ++i)
-        if (exported(group->child(i))) keys.push_back({group->child(i), Kind::widget, 0});
-    }
-  }
-  return keys;
+  const auto &n = node(object);
+  if (!live(n)) return {};
+  std::vector<Key> previous;
+  previous.reserve(n.children.size());
+  for (auto *child : n.children) previous.push_back(target(node(child)));
+  return a11y::desired_children(target(n), previous);
 }
 
 } // namespace layerc::editor::accessibility

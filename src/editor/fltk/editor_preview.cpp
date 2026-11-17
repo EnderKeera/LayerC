@@ -1,5 +1,6 @@
 #include "editor_app.hpp"
 #include "editor_style.hpp"
+#include "accessible_widgets.hpp"
 #include "layerc/core/panel_geometry.hpp"
 #include "layerc/core/cooldown_engine.hpp"
 #include "automation_simulator.hpp"
@@ -60,6 +61,9 @@ Fl_Color rgb(std::uint32_t color) {
 }
 PanelPreview::PanelPreview(int x, int y, int width, int height, EditorApp &app)
     : Fl_Widget(x, y, width, height, "Local panel preview"), app_(app) {
+  accessibility::set_accessible_role(*this, a11y::Role::canvas);
+  accessibility::set_accessible_description(*this,
+      "Drag a panel to change its anchor. The Panel fields edit the same values.");
   // The Preview role's default; Appearance may override it.
   color(token_color(current_editor_tokens().input));
 }

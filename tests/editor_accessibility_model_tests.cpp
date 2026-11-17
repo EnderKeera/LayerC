@@ -78,6 +78,95 @@ void text_geometry_is_validated_atomically() {
   }
 }
 
+void protocol_neutral_semantics_are_validated_atomically() {
+  Model model;
+  auto tree = fixture();
+  auto &window = tree.nodes.at(1);
+  window.states.active = true;
+  window.states.resizable = true;
+  window.children.push_back(3);
+  auto &field = tree.nodes.at(2);
+  field.keybinding = "<Alt>p;;<Control>p";
+  field.states.editable = true;
+  field.states.multi_line = true;
+  Node item;
+  item.id = 3;
+  item.parent = 1;
+  item.role = Role::check_menu_item;
+  item.actions = {"toggle"};
+  item.states.checkable = true;
+  item.states.selectable = true;
+  item.states.checked = true;
+  item.states.selected = true;
+  tree.nodes.emplace(3, item);
+  tree.announcement = "Saved";
+  tree.announcement_sequence = 1;
+  tree.announcement_source = 2;
+  expect(!model.publish(tree), "portable roles, states, actions and announcement origin publish");
+  for (int failure = 0; failure < 4; ++failure) {
+    auto bad = tree;
+    switch (failure) {
+    case 0: bad.nodes.at(2).keybinding = "\xff"; break;
+    case 1: bad.nodes.at(3).actions = {""}; break;
+    case 2: bad.announcement_source = 99; break;
+    case 3: bad.nodes.at(3).actions = {"\xff"}; break;
+    }
+    expect(model.publish(bad).has_value(), "invalid protocol metadata is rejected");
+    const auto retained = model.read();
+    expect(retained.generation == 1 && retained.announcement_source == 2 &&
+               retained.nodes.at(2).keybinding == field.keybinding &&
+               retained.nodes.at(3).actions == item.actions,
+           "invalid metadata leaves the complete previously published snapshot intact");
+  }
+}
+
+void wide_and_reordered_parent_links() {
+  Model model;
+  Snapshot wide;
+  wide.root = 6000;
+  Node root;
+  root.id = wide.root;
+  root.role = Role::application;
+  for (NodeId id = 1; id <= 5843; ++id) {
+    Node row;
+    row.id = id;
+    row.parent = root.id;
+    row.role = Role::list_row;
+    root.children.push_back(id);
+    wide.nodes.emplace(id, row);
+  }
+  wide.nodes.emplace(root.id, root);
+  expect(!model.publish(wide), "wide lists publish when parent IDs follow every child");
+  expect(model.read().nodes.size() == 5844, "wide publication retains every row");
+  auto bad = wide;
+  bad.nodes.at(root.id).children.push_back(1);
+  expect(model.publish(bad).has_value(), "duplicate children remain rejected");
+  bad = wide;
+  bad.nodes.at(root.id).children.pop_back();
+  expect(model.publish(bad).has_value(), "wide-list orphan remains rejected");
+  bad = wide;
+  bad.nodes.at(3).children = {2};
+  expect(model.publish(bad).has_value(), "a child cannot be listed by a second parent");
+  expect(model.read().generation == 1, "invalid wide trees never replace the valid snapshot");
+
+  Snapshot nested;
+  nested.root = 99;
+  Node top;
+  top.id = 99;
+  top.children = {20};
+  Node middle;
+  middle.id = 20;
+  middle.parent = 99;
+  middle.children = {2};
+  Node leaf;
+  leaf.id = 2;
+  leaf.parent = 20;
+  nested.nodes.emplace(2, leaf);
+  nested.nodes.emplace(20, middle);
+  nested.nodes.emplace(99, top);
+  expect(!model.publish(nested), "reverse-ID ancestry validates after all child lists are visited");
+}
+
 void value_copy_boundaries() {
   Model model;
   expect(!model.publish(fixture()), "publish fixture");
@@ -102,4 +191,6 @@ void value_copy_boundaries() {
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(validated_atomic_publication),
                  LAYERC_TEST_CASE(text_geometry_is_validated_atomically),
+                 LAYERC_TEST_CASE(protocol_neutral_semantics_are_validated_atomically),
+                 LAYERC_TEST_CASE(wide_and_reordered_parent_links),
                  LAYERC_TEST_CASE(value_copy_boundaries))

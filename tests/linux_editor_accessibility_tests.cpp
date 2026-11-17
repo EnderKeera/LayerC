@@ -1,6 +1,7 @@
 #include "accessible_widgets.hpp"
 #include "editor_commands.hpp"
 #include "accessibility_tree.hpp"
+#include "a11y/fltk_semantics.hpp"
 #include "test_support.hpp"
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -47,6 +48,32 @@ void on_notification(AtkObject *object, const gchar *text, gint live, void *data
 }
 int description_notifies;
 void on_description_notify(GObject *, GParamSpec *, void *) { ++description_notifies; }
+
+// The portable reader must preserve the old bridge's text, including invalid
+// file-name bytes and embedded NULs. GLib is only the legacy test oracle.
+void portable_utf8_repair_matches_legacy() {
+  const auto matches = [](const std::string &text) {
+    auto *expected = g_utf8_make_valid(text.data(), static_cast<gssize>(text.size()));
+    const bool same = layerc::editor::a11y::valid_utf8(text) == expected;
+    g_free(expected);
+    return same;
+  };
+  bool all_match = true;
+  for (unsigned first = 0; first < 256 && all_match; ++first) {
+    all_match = matches(std::string(1, static_cast<char>(first)));
+    for (unsigned second = 0; second < 256 && all_match; ++second) {
+      std::string text(2, static_cast<char>(first));
+      text[1] = static_cast<char>(second);
+      all_match = matches(text);
+    }
+  }
+  expect(all_match, "portable UTF-8 repair preserves every one- and two-byte sequence");
+  for (const auto *text : {"", "Save", "\xE2\x82\xAC", "\xF0\x9F\x98\x80",
+                           "\xE0\x80\x80", "\xED\xA0\x80", "\xF0\x80\x80\x80",
+                           "\xF4\x90\x80\x80", "\xF0\x9F\x98", "\xE2\x82"})
+    expect(matches(text), "portable UTF-8 repair preserves valid scalars and repairs invalid scalars");
+  expect(matches(std::string("A\0B", 3)), "portable UTF-8 repair replaces embedded NULs");
+}
 }
 // Intentional accessibility-independent fallback: a plain Fl_Hold_Browser keeps owner
 // bounds and lazy row lifetime. ContextBrowser geometry: linux_editor_semantic_row_extents.
@@ -130,6 +157,7 @@ void linux_editor_accessibility_tree_rows() {
 // button already says its tooltip as its name (DesignSystem.md, Screen
 // readers).
 void linux_editor_accessibility_descriptions() {
+  portable_utf8_repair_matches_legacy();
   layerc::test::ScopedEnvironment backend("FLTK_BACKEND", std::filesystem::path("x11"));
   layerc::test::require_x11();
   Fl_Window window(360, 200);

@@ -105,6 +105,10 @@ endif()
 # The GUI-only library gives widget tests the real frontend without linking
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
+    src/editor/fltk/a11y/fltk_semantics.cpp
+    src/editor/fltk/a11y/fltk_tree.cpp
+    src/editor/fltk/a11y/input.cpp
+    src/editor/fltk/platform/linux/window_origin.cpp
     src/editor/fltk/editor_accessibility.cpp
     src/editor/fltk/accessibility_semantics.cpp
     src/editor/fltk/accessibility_tree.cpp
@@ -155,7 +159,8 @@ set_source_files_properties(
     src/editor/fltk/accessibility_tree.cpp PROPERTIES
     COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
 target_link_libraries(layerc_editor_fltk PUBLIC
-    layerc_editor_linux layerc_x11 ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})
+    layerc_editor_linux layerc_editor_accessibility layerc_x11
+    ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})
 layerc_enable_warnings(layerc_editor_fltk)
 add_executable(layere src/editor/fltk/main.cpp)
 target_link_libraries(layere PRIVATE layerc_editor_fltk)

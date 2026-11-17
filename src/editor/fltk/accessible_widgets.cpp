@@ -14,6 +14,7 @@ struct Entry {
   std::unique_ptr<Fl_Widget_Tracker> hint;
   std::string name;        // empty: the widget names itself
   std::string description; // used while no hint is registered
+  std::optional<a11y::Role> role; // set for controls FLTK cannot classify
 };
 
 // One list for the whole process: the editor has one widget tree and one
@@ -42,7 +43,7 @@ Entry &entry_for(Fl_Widget &control) {
 }
 
 void drop_if_empty(const Entry &entry) {
-  if (!entry.name.empty() || !entry.description.empty() || entry.hint)
+  if (!entry.name.empty() || !entry.description.empty() || entry.hint || entry.role)
     return;
   std::erase_if(entries(), [&](const std::unique_ptr<Entry> &candidate) {
     return candidate.get() == &entry;
@@ -75,6 +76,15 @@ void describe_with(Fl_Widget &control, Fl_Widget &hint) {
   auto &entry = entry_for(control);
   entry.description.clear();
   entry.hint = std::make_unique<Fl_Widget_Tracker>(&hint);
+}
+
+void set_accessible_role(Fl_Widget &control, a11y::Role role) {
+  entry_for(control).role = role;
+}
+
+std::optional<a11y::Role> accessible_role(const Fl_Widget &control) {
+  const auto *entry = lookup(&control);
+  return entry == nullptr ? std::nullopt : entry->role;
 }
 
 std::optional<std::string> accessible_name(const Fl_Widget &control) {

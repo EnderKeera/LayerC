@@ -3,12 +3,14 @@ include(cmake/LayerCFLTKVendor.cmake)
 
 add_library(layerc_editor_fltk_uia STATIC
     src/editor/fltk/a11y/input.cpp
+    src/editor/fltk/platform/win32/window_origin.cpp
     src/editor/fltk/a11y/uia/context.cpp
     src/editor/fltk/a11y/uia/provider.cpp
     src/editor/fltk/a11y/uia/bridge.cpp
     src/editor/fltk/a11y/uia/events.cpp
     src/editor/fltk/a11y/uia/text_provider.cpp
     src/editor/fltk/a11y/uia/text_range.cpp)
+target_include_directories(layerc_editor_fltk_uia PRIVATE src/editor/fltk)
 target_link_libraries(layerc_editor_fltk_uia PUBLIC
     layerc_editor_accessibility layerc_fltk_vendor
     PRIVATE uiautomationcore oleaut32 ole32 comctl32 uuid)

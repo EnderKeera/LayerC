@@ -28,7 +28,13 @@ CONTROLTYPEID control_type(const Role role) {
   case Role::list_row: return UIA_ListItemControlTypeId;
   case Role::menu_bar: return UIA_MenuBarControlTypeId;
   case Role::menu: return UIA_MenuControlTypeId;
-  case Role::menu_item: return UIA_MenuItemControlTypeId;
+  case Role::menu_item: case Role::check_menu_item: case Role::radio_menu_item:
+    return UIA_MenuItemControlTypeId;
+  case Role::tab_list: return UIA_TabControlTypeId;
+  case Role::tab: return UIA_TabItemControlTypeId;
+  case Role::scroll_bar: return UIA_ScrollBarControlTypeId;
+  case Role::slider: return UIA_SliderControlTypeId;
+  case Role::scroll_pane: case Role::canvas: return UIA_PaneControlTypeId;
   case Role::label: case Role::status: return UIA_TextControlTypeId;
   case Role::image: return UIA_ImageControlTypeId;
   case Role::group: return UIA_GroupControlTypeId;

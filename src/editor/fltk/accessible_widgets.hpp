@@ -1,5 +1,7 @@
 #pragma once
 
+#include "a11y/model.hpp"
+
 #include <FL/Fl.H>
 #include <FL/Fl_Input_.H>
 #include <FL/Fl_Widget.H>
@@ -19,9 +21,12 @@ namespace layerc::editor::accessibility {
 // destroys the widgets: there is no lock and no other thread may call this.
 void set_accessible_name(Fl_Widget &control, std::string text);
 void set_accessible_description(Fl_Widget &control, std::string text);
+// Exported role for controls whose toolkit class does not say what they are.
+void set_accessible_role(Fl_Widget &control, a11y::Role role);
 void describe_with(Fl_Widget &control, Fl_Widget &hint);
 
 [[nodiscard]] std::optional<std::string> accessible_name(const Fl_Widget &control);
+[[nodiscard]] std::optional<a11y::Role> accessible_role(const Fl_Widget &control);
 [[nodiscard]] std::string accessible_description(const Fl_Widget &control);
 
 // A color button's name: its label without FLTK's access-key marker or a
