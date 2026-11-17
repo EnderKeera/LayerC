@@ -250,6 +250,16 @@ std::vector<std::string_view> interfaces(const Node &node, const bool is_root) {
   return names;
 }
 
+bool radio_group(const Snapshot &snapshot, const Node &node) {
+  if (node.role != Role::group) return false;
+  for (const NodeId child : node.children) {
+    const auto found = snapshot.nodes.find(child);
+    if (found != snapshot.nodes.end() && found->second.role == Role::radio_button)
+      return true;
+  }
+  return false;
+}
+
 std::optional<std::size_t> char_offset(const std::string_view value,
                                        const std::size_t byte) {
   const auto starts = starts_of(value);

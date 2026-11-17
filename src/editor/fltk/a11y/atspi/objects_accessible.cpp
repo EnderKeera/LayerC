@@ -261,7 +261,7 @@ int get_interfaces(sd_bus_message *message, void *data, sd_bus_error *error) {
   const auto &source = *static_cast<ObjectSource *>(data);
   const Node *node = node_of_request(source, message, error);
   if (!node) return -ENOENT;
-  const auto names = interfaces(*node, node->id == source.root);
+  const auto names = accessible_interfaces(source, *node);
   sd_bus_message *reply = nullptr;
   if (sd_bus_message_new_method_return(message, &reply) < 0) return -ENOMEM;
   int appended =

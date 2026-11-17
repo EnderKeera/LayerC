@@ -3,13 +3,19 @@
 #include "a11y/atspi/loop_bus.hpp"
 #include "a11y/model.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct sd_bus;
 struct sd_bus_slot;
+
+namespace layerc::editor::a11y {
+class FltkTree;
+}
 
 namespace layerc::editor::a11y::atspi {
 
@@ -24,11 +30,13 @@ inline constexpr std::string_view kCacheItem = "((so)(so)(so)iiassusau)";
 inline constexpr std::string_view kCacheFields = "(so)(so)(so)iiassusau";
 
 // What the object implementations read: the published snapshot (owned by the
-// adaptor and alive for as long as the objects are registered), the root node,
-// the three well-known identity strings, and the desktop reference the registry
+// adaptor and alive for as long as the objects are registered), the tree that
+// resolves a node id to the target protocol actions need, the root node, the
+// three well-known identity strings, and the desktop reference the registry
 // answered Embed with.
 struct ObjectSource {
   const Snapshot *snapshot{};
+  const FltkTree *tree{};
   NodeId root{};
   std::string unique_name;
   std::string desktop_name{"org.a11y.atspi.Registry"};
@@ -59,6 +67,12 @@ void append_parent_reference(sd_bus_message *message,
 void append_cache_item(sd_bus_message *message, const ObjectSource &source,
                        NodeId id, const Node &node);
 
+// The interfaces a node exposes. One list feeds GetInterfaces and the cache
+// item, including the radio-group Selection derivation the plain mapping cannot
+// see (it needs the node's children).
+[[nodiscard]] std::vector<std::string_view> accessible_interfaces(
+    const ObjectSource &source, const Node &node);
+
 // Registers the fallback objects under /org/a11y/atspi/accessible and the cache
 // object at /org/a11y/atspi/cache. The slots belong to the caller.
 void add_accessible_object(sd_bus *bus, ObjectSource *source,
@@ -66,5 +80,11 @@ void add_accessible_object(sd_bus *bus, ObjectSource *source,
 void add_application_object(sd_bus *bus, ObjectSource *source,
                             sd_bus_slot **slot);
 void add_cache_object(sd_bus *bus, ObjectSource *source, sd_bus_slot **slot);
+
+// The protocol interfaces beyond Accessible: Component, Action, Text,
+// EditableText, Value and Selection, one slot each in that order.
+inline constexpr std::size_t kInterfaceObjects = 6;
+void add_interface_objects(sd_bus *bus, ObjectSource *source,
+                           sd_bus_slot **slots);
 
 } // namespace layerc::editor::a11y::atspi

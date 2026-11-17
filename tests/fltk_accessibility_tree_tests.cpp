@@ -15,6 +15,7 @@
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Radio_Button.H>
+#include <FL/Fl_Round_Button.H>
 #include <FL/Fl_Slider.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Window.H>
@@ -499,5 +500,61 @@ void fltk_accessibility_actions() {
   window.hide();
 }
 
+// FLTK decides radio behaviour by the button type, not the class: Fl_Radio_Button
+// is a plain Fl_Button constructed with FL_RADIO_BUTTON, while Fl_Round_Button is
+// a toggle unless it is retyped. The exported role and the checked state follow
+// that type, so a round toggle is a check box and a radio-typed button is a radio.
+void fltk_accessibility_button_roles() {
+#ifndef _WIN32
+  layerc::test::require_x11();
+#endif
+  Fl_Window window(0, 0, 420, 240, "Role probe");
+  Fl_Group choices(20, 10, 300, 90);
+  Fl_Radio_Button radio(30, 20, 200, 24, "Radio");
+  Fl_Round_Button retyped(30, 60, 200, 24, "Retyped round");
+  retyped.type(FL_RADIO_BUTTON);
+  choices.end();
+  Fl_Round_Button toggle(20, 120, 200, 24, "Round toggle");
+  Fl_Check_Button check(20, 160, 200, 24, "Check");
+  window.end();
+  window.show();
+  Fl::check();
+  if (!expect(window.shown(), "the role probe is on screen")) return;
+
+  const auto target = [](Fl_Widget &widget) {
+    return a11y::Target{&widget, a11y::TargetKind::widget, 0};
+  };
+  expect(a11y::role_of(target(radio)) == a11y::Role::radio_button,
+         "a plain button constructed as a radio is a radio button");
+  expect(a11y::role_of(target(retyped)) == a11y::Role::radio_button,
+         "a retyped round button is a radio button");
+  expect(a11y::role_of(target(toggle)) == a11y::Role::check_box,
+         "a round button that was not retyped stays a check box");
+  expect(a11y::role_of(target(check)) == a11y::Role::check_box,
+         "a check button is a check box");
+
+  expect(a11y::states(target(radio)).checkable && a11y::states(target(retyped)).checkable,
+         "every radio button is checkable");
+  expect(a11y::states(target(toggle)).checkable && a11y::states(target(check)).checkable,
+         "every toggle is checkable");
+  expect(!a11y::checked(target(radio)) && !a11y::checked(target(retyped)),
+         "an unchosen radio button reports unchecked");
+  radio.setonly();
+  expect(a11y::checked(target(radio)) && !a11y::checked(target(retyped)),
+         "choosing one radio button checks it and clears the other");
+  retyped.setonly();
+  expect(a11y::checked(target(retyped)) && !a11y::checked(target(radio)),
+         "choosing the other moves the checked state");
+  expect(!a11y::checked(target(toggle)), "a round toggle starts unchecked");
+  toggle.value(1);
+  expect(a11y::checked(target(toggle)), "a round toggle reports its value");
+  expect(!a11y::checked(target(check)), "a check box starts unchecked");
+  check.value(1);
+  expect(a11y::checked(target(check)), "a check box reports its value");
+
+  window.hide();
+}
+
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fltk_accessibility_tree_snapshots),
-                 LAYERC_TEST_CASE(fltk_accessibility_actions))
+                 LAYERC_TEST_CASE(fltk_accessibility_actions),
+                 LAYERC_TEST_CASE(fltk_accessibility_button_roles))

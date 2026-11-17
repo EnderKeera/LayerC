@@ -68,7 +68,9 @@ constexpr const char *kRegistryOwner =
 } // namespace
 
 struct Adaptor::Impl {
-  explicit Impl(FltkTree &exported) : tree(exported) {}
+  explicit Impl(FltkTree &exported) : tree(exported) {
+    source.tree = &tree;
+  }
 
   ~Impl() { shutdown(); }
 
@@ -115,6 +117,7 @@ struct Adaptor::Impl {
   sd_bus_slot *accessible_slot{};
   sd_bus_slot *application_slot{};
   sd_bus_slot *cache_slot{};
+  sd_bus_slot *interface_slots[kInterfaceObjects]{};
   sd_bus_slot *listener_slot{};
   sd_bus_slot *listener_gone_slot{};
   sd_bus_slot *owner_slot{};
@@ -263,6 +266,7 @@ bool Adaptor::Impl::open_a11y(const std::string &bus_address) {
   add_accessible_object(a11y->bus(), &source, &accessible_slot);
   add_application_object(a11y->bus(), &source, &application_slot);
   add_cache_object(a11y->bus(), &source, &cache_slot);
+  add_interface_objects(a11y->bus(), &source, interface_slots);
   if (!add_matches()) {
     // close_a11y() clears the faults of the connection it releases, so the
     // reason survives the teardown it triggers here.
@@ -328,6 +332,10 @@ void Adaptor::Impl::close_a11y() {
     sd_bus_slot_unref(accessible_slot);
     sd_bus_slot_unref(application_slot);
     sd_bus_slot_unref(cache_slot);
+    for (auto *&slot : interface_slots) {
+      sd_bus_slot_unref(slot);
+      slot = nullptr;
+    }
     sd_bus_slot_unref(listener_slot);
     sd_bus_slot_unref(listener_gone_slot);
     sd_bus_slot_unref(owner_slot);

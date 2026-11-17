@@ -430,6 +430,8 @@ if(NOT WIN32)
         layerc_add_test(layerc_linux_atspi_adaptor_tests
             SOURCES tests/linux_atspi_adaptor_tests.cpp
                 tests/linux_atspi_adaptor_lifecycle_tests.cpp
+                tests/linux_atspi_interfaces_tests.cpp
+                tests/linux_atspi_text_tests.cpp
                 tests/linux_atspi_test_harness.cpp
             LINK layerc_editor_fltk NO_REGISTER)
         add_test(NAME layerc_linux_atspi_adaptor_tests

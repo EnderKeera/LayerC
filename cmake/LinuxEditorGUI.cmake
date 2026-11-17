@@ -117,7 +117,12 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/a11y/atspi/mapping.cpp
     src/editor/fltk/a11y/atspi/objects.cpp
     src/editor/fltk/a11y/atspi/objects_accessible.cpp
+    src/editor/fltk/a11y/atspi/objects_action_value.cpp
+    src/editor/fltk/a11y/atspi/objects_component.cpp
+    src/editor/fltk/a11y/atspi/objects_editable.cpp
+    src/editor/fltk/a11y/atspi/objects_selection.cpp
     src/editor/fltk/a11y/atspi/objects_services.cpp
+    src/editor/fltk/a11y/atspi/objects_text.cpp
     src/editor/fltk/a11y/atspi/status.cpp
     src/editor/fltk/a11y/fltk_actions.cpp
     src/editor/fltk/a11y/fltk_semantics.cpp

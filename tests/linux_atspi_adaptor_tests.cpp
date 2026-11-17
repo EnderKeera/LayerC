@@ -7,6 +7,12 @@ void a_refused_embed_is_reported_and_recovered();
 void listeners_from_two_buses_are_tracked_separately();
 void a_listener_signal_before_the_reply_keeps_the_known_listeners();
 void a_failed_bus_open_names_its_cause_and_recovers();
+void interfaces_follow_each_roles_capabilities();
+void component_geometry_follows_the_coordinate_type();
+void action_names_and_activation_reach_the_widget();
+void value_and_selection_mutations_reach_the_widgets();
+void text_offsets_are_characters_and_geometry_is_real();
+void edits_run_through_the_fields_own_path_and_report_text_changes();
 } // namespace
 
 namespace layerc::test::atspi_fixture {
@@ -284,9 +290,13 @@ void changes_reach_listeners_as_protocol_events() {
   expect(named && named->text == "Full name",
          "renaming a field reports the new accessible name");
 
-  // Focus.
+  // Focus. A window opens with its first focusable widget focused, and in a
+  // headless session that is this button, so move the focus away first: the
+  // step below has to be a real change on every desktop.
+  expect(fixture.input->take_focus(), "the field takes keyboard focus");
+  harness.spin(ms(250));
   mark = harness.signals().size();
-  fixture.button->take_focus();
+  expect(fixture.button->take_focus(), "the button takes keyboard focus back");
   wait_for(mark, focus, "Focus", {});
   expect(find(mark, focus, "Focus", {}).has_value(),
          "moving focus reports a focus event");
@@ -544,4 +554,10 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(a_refused_embed_is_reported_and_recovered),
     LAYERC_TEST_CASE(listeners_from_two_buses_are_tracked_separately),
     LAYERC_TEST_CASE(a_listener_signal_before_the_reply_keeps_the_known_listeners),
-    LAYERC_TEST_CASE(a_failed_bus_open_names_its_cause_and_recovers))
+    LAYERC_TEST_CASE(a_failed_bus_open_names_its_cause_and_recovers),
+    LAYERC_TEST_CASE(interfaces_follow_each_roles_capabilities),
+    LAYERC_TEST_CASE(component_geometry_follows_the_coordinate_type),
+    LAYERC_TEST_CASE(action_names_and_activation_reach_the_widget),
+    LAYERC_TEST_CASE(value_and_selection_mutations_reach_the_widgets),
+    LAYERC_TEST_CASE(text_offsets_are_characters_and_geometry_is_real),
+    LAYERC_TEST_CASE(edits_run_through_the_fields_own_path_and_report_text_changes))

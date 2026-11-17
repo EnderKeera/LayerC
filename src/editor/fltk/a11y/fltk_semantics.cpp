@@ -16,6 +16,7 @@
 #include <FL/Fl_Input_.H>
 #include <FL/Fl_Menu_.H>
 #include <FL/Fl_Menu_Bar.H>
+#include <FL/Fl_Round_Button.H>
 #include <FL/Fl_Scroll.H>
 #include <FL/Fl_Scrollbar.H>
 #include <FL/Fl_Slider.H>
@@ -203,12 +204,26 @@ bool selected(const Target &target) {
   return false;
 }
 
+// FLTK's radio behaviour is the button type, not the class: Fl_Radio_Button is a
+// plain Fl_Button constructed with FL_RADIO_BUTTON, while Fl_Round_Button's own
+// constructor sets FL_TOGGLE_BUTTON and only acts as a radio when retyped.
+[[nodiscard]] bool radio_typed(const Fl_Widget *widget) {
+  const auto *button = dynamic_cast<const Fl_Button *>(widget);
+  return button != nullptr && button->type() == FL_RADIO_BUTTON;
+}
+
 bool checked(const Target &target) {
   if (const auto *item = menu_item_of(target))
     return (item->flags & (FL_MENU_TOGGLE | FL_MENU_RADIO)) && item->value();
-  auto *check =
-      target.kind == TargetKind::widget ? dynamic_cast<Fl_Check_Button *>(target.widget) : nullptr;
-  return check && check->value();
+  const Fl_Widget *w = target.kind == TargetKind::widget ? target.widget : nullptr;
+  if (const auto *check = dynamic_cast<const Fl_Check_Button *>(w))
+    return check->value() != 0;
+  if (const auto *round = dynamic_cast<const Fl_Round_Button *>(w)) return round->value() != 0;
+  // Any other radio-typed button is a momentary toggle that clears its siblings,
+  // so the chosen one is the group's selection and reports itself checked.
+  if (const auto *button = dynamic_cast<const Fl_Button *>(w))
+    return radio_typed(button) && button->value() != 0;
+  return false;
 }
 
 Role role_of(const Target &target) {
@@ -243,7 +258,9 @@ Role role_of(const Target &target) {
   if (dynamic_cast<Fl_Browser *>(w)) return Role::list;
   if (dynamic_cast<Fl_Tabs *>(w)) return Role::tab_list;
   if (dynamic_cast<Fl_Tabs *>(w->parent())) return Role::tab;
+  if (radio_typed(w)) return Role::radio_button;
   if (dynamic_cast<Fl_Check_Button *>(w)) return Role::check_box;
+  if (dynamic_cast<Fl_Round_Button *>(w)) return Role::check_box;
   if (dynamic_cast<Fl_Button *>(w)) return Role::button;
   if (dynamic_cast<Fl_Box *>(w)) return Role::label;
   if (dynamic_cast<Fl_Scroll *>(w)) return Role::scroll_pane;
@@ -344,7 +361,9 @@ States states(const Target &target) {
       result.multi_line = (field->input_type() & FL_MULTILINE_INPUT) != 0;
       result.password = field->input_type() == FL_SECRET_INPUT;
     }
-    if (dynamic_cast<Fl_Check_Button *>(w)) result.checkable = true;
+    if (radio_typed(w) || dynamic_cast<Fl_Check_Button *>(w) ||
+        dynamic_cast<Fl_Round_Button *>(w))
+      result.checkable = true;
     if (dynamic_cast<Fl_Tabs *>(w->parent())) result.selectable = true;
   }
   if (target.kind == TargetKind::row || target.kind == TargetKind::menu_item)
