@@ -1,0 +1,618 @@
+#include "a11y/atspi/adaptor.hpp"
+
+#include "a11y/atspi/events.hpp"
+#include "a11y/atspi/objects.hpp"
+#include "a11y/changes.hpp"
+#include "a11y/fltk_tree.hpp"
+#include "a11y/model.hpp"
+
+#include <FL/Fl.H>
+#include <FL/Fl_Widget.H>
+#include <systemd/sd-bus.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace layerc::editor::a11y::atspi {
+namespace {
+
+constexpr std::uint64_t kCallDeadlineUsec = 5000000;
+// Fl::add_check runs on every loop iteration; snapshots are throttled to keep
+// a large editor from paying for a tree walk per event.
+constexpr auto kRefreshInterval = std::chrono::milliseconds{100};
+constexpr const char *kRegistryName = "org.a11y.atspi.Registry";
+constexpr const char *kRegistryPath = "/org/a11y/atspi/registry";
+constexpr const char *kRegistryInterface = "org.a11y.atspi.Registry";
+constexpr const char *kSocketInterface = "org.a11y.atspi.Socket";
+
+constexpr const char *kListenerAdded =
+    "type='signal',sender='org.a11y.atspi.Registry',"
+    "path='/org/a11y/atspi/registry',interface='org.a11y.atspi.Registry',"
+    "member='EventListenerRegistered'";
+constexpr const char *kListenerRemoved =
+    "type='signal',sender='org.a11y.atspi.Registry',"
+    "path='/org/a11y/atspi/registry',interface='org.a11y.atspi.Registry',"
+    "member='EventListenerDeregistered'";
+constexpr const char *kRegistryOwner =
+    "type='signal',sender='org.freedesktop.DBus',"
+    "interface='org.freedesktop.DBus',member='NameOwnerChanged',"
+    "arg0='org.a11y.atspi.Registry'";
+
+[[nodiscard]] std::string error_text(const int code) {
+  return std::string{std::strerror(code < 0 ? -code : code)};
+}
+
+[[nodiscard]] std::string error_name(sd_bus_message *message) {
+  const sd_bus_error *error = sd_bus_message_get_error(message);
+  if (!error || !error->name) return "an unknown error";
+  return error->name;
+}
+
+// Whether an error reply means "no registry is running", which is the normal
+// state of an accessibility bus nobody listens to, as opposed to a registry
+// that refused the application.
+[[nodiscard]] bool registry_missing(sd_bus_message *message) {
+  const sd_bus_error *error = sd_bus_message_get_error(message);
+  if (!error) return false;
+  return sd_bus_error_has_name(error, SD_BUS_ERROR_SERVICE_UNKNOWN) ||
+         sd_bus_error_has_name(error, SD_BUS_ERROR_NAME_HAS_NO_OWNER);
+}
+
+} // namespace
+
+struct Adaptor::Impl {
+  explicit Impl(FltkTree &exported) : tree(exported) {}
+
+  ~Impl() { shutdown(); }
+
+  void start();
+  void shutdown();
+  void update_status();
+
+  void on_status(const StatusReport &report);
+  bool open_a11y(const std::string &address);
+  void close_a11y();
+  void refresh();
+  void embed();
+  void ask_registered_events();
+  void add_listener(std::string bus, const std::string &event);
+  void remove_listener(const std::string &bus, const std::string &event);
+  bool add_matches();
+
+  [[nodiscard]] NodeId announcement_node(const Snapshot &snapshot) const;
+
+  static void on_check(void *data);
+  static void on_refresh_timer(void *data);
+  static void on_a11y_failed(void *data);
+  static void on_bus_loss(void *data);
+  static int on_embedded(sd_bus_message *message, void *data,
+                         sd_bus_error *error);
+  static int on_registered(sd_bus_message *message, void *data,
+                           sd_bus_error *error);
+  static int on_listener(sd_bus_message *message, void *data,
+                         sd_bus_error *error);
+  static int on_registry_owner(sd_bus_message *message, void *data,
+                               sd_bus_error *error);
+
+  FltkTree &tree;
+  Model model;
+  // The published generation, which the D-Bus objects read: both live on the
+  // FLTK thread, so no read crosses a thread boundary and no request copies
+  // the tree.
+  Snapshot served;
+  ObjectSource source;
+  std::unique_ptr<LoopBus> session;
+  std::unique_ptr<LoopBus> a11y;
+  std::unique_ptr<StatusWatch> watch;
+
+  sd_bus_slot *accessible_slot{};
+  sd_bus_slot *application_slot{};
+  sd_bus_slot *cache_slot{};
+  sd_bus_slot *listener_slot{};
+  sd_bus_slot *listener_gone_slot{};
+  sd_bus_slot *owner_slot{};
+
+  std::vector<Listener> listeners;
+  bool listeners_known{};
+  std::string address;
+  std::string announcement;
+  std::uint64_t announcement_sequence{};
+  Fl_Widget *announcement_source{};
+
+  StatusState watch_state{StatusState::off};
+  std::string watch_reason;
+  // A registry that answered Embed with a refusal, and a lost accessibility
+  // connection: both outlive the status report that revealed them.
+  std::string registry_fault;
+  std::string bus_fault;
+  // Why the last open_a11y() failed. It is stored into bus_fault only after the
+  // failed connection is closed, so the reason survives close_a11y().
+  std::string open_fault;
+  std::string rejection;
+  AdaptorStatus status;
+  std::uint64_t snapshots{};
+  std::chrono::steady_clock::time_point next_refresh{};
+  bool check_registered{};
+  bool refresh_armed{};
+  bool bus_loss_armed{};
+  bool started{};
+};
+
+// --- lifecycle ------------------------------------------------------------
+
+void Adaptor::Impl::start() {
+  if (started) return;
+  started = true;
+  sd_bus *bus = nullptr;
+  int started_bus = sd_bus_open_user(&bus);
+  if (started_bus < 0) {
+    watch_state = StatusState::unavailable;
+    watch_reason = "the session bus is unavailable: " + error_text(started_bus);
+    update_status();
+    return;
+  }
+  session = std::make_unique<LoopBus>(bus);
+  if (!session->attach()) {
+    watch_state = StatusState::unavailable;
+    watch_reason = session->failure();
+    update_status();
+    return;
+  }
+  watch = std::make_unique<StatusWatch>();
+  watch->start(*session,
+               [this](const StatusReport &report) { on_status(report); });
+}
+
+void Adaptor::Impl::shutdown() {
+  close_a11y();
+  // The watch's signal slots belong to the session connection: they are
+  // released before it, or the bus would free them first.
+  watch.reset();
+  session.reset();
+}
+
+void Adaptor::Impl::update_status() {
+  AdaptorStatus next;
+  switch (watch_state) {
+  case StatusState::unavailable:
+    next = {StatusState::unavailable, watch_reason};
+    break;
+  case StatusState::off:
+    next = {StatusState::off, watch_reason};
+    break;
+  case StatusState::on:
+    if (!a11y || a11y->failed()) {
+      next = {StatusState::unavailable,
+              !bus_fault.empty()
+                  ? bus_fault
+                  : (a11y ? a11y->failure()
+                          : std::string{"the accessibility bus is not "
+                                        "connected"})};
+    } else if (!registry_fault.empty()) {
+      next = {StatusState::unavailable, registry_fault};
+    } else if (!rejection.empty()) {
+      next = {StatusState::unavailable, rejection};
+    } else {
+      next = {StatusState::on, {}};
+    }
+    break;
+  }
+  if (next.state == status.state && next.reason == status.reason) return;
+  status = std::move(next);
+}
+
+void Adaptor::Impl::on_status(const StatusReport &report) {
+  watch_state = report.state;
+  watch_reason = report.reason;
+  if (report.state == StatusState::on) {
+    if (!open_a11y(report.address)) {
+      // close_a11y() clears the faults of the connection it releases, so the
+      // failure reason is handed over to bus_fault afterwards: the status then
+      // names the real cause instead of a generic "not connected".
+      std::string why = std::move(open_fault);
+      close_a11y();
+      bus_fault = why.empty() ? "the accessibility bus is not connected"
+                              : std::move(why);
+    }
+  } else {
+    close_a11y();
+  }
+  update_status();
+}
+
+bool Adaptor::Impl::open_a11y(const std::string &bus_address) {
+  if (a11y && bus_address == address) return true;
+  if (a11y) close_a11y();
+  open_fault.clear();
+  if (bus_address.empty()) {
+    open_fault = "the accessibility bus address is empty";
+    return false;
+  }
+  sd_bus *bus = nullptr;
+  int problem = sd_bus_new(&bus);
+  if (problem >= 0) problem = sd_bus_set_address(bus, bus_address.c_str());
+  if (problem >= 0) problem = sd_bus_set_bus_client(bus, 1);
+  if (problem >= 0) problem = sd_bus_start(bus);
+  if (problem < 0) {
+    open_fault = "the accessibility bus is unavailable: " + error_text(problem);
+    sd_bus_unref(bus);
+    return false;
+  }
+  auto loop = std::make_unique<LoopBus>(bus);
+  loop->set_failure_handler(on_a11y_failed, this);
+  if (!loop->attach()) {
+    open_fault = loop->failure();
+    return false;
+  }
+  a11y = std::move(loop);
+  bus_fault.clear();
+  address = bus_address;
+  const char *unique = nullptr;
+  if (sd_bus_get_unique_name(a11y->bus(), &unique) < 0) unique = nullptr;
+  source.unique_name = unique != nullptr ? unique : "";
+  source.snapshot = nullptr;
+  source.root = 0;
+  served = Snapshot{};
+  add_accessible_object(a11y->bus(), &source, &accessible_slot);
+  add_application_object(a11y->bus(), &source, &application_slot);
+  add_cache_object(a11y->bus(), &source, &cache_slot);
+  if (!add_matches()) {
+    // close_a11y() clears the faults of the connection it releases, so the
+    // reason survives the teardown it triggers here.
+    std::string why = std::move(open_fault);
+    close_a11y();
+    open_fault = std::move(why);
+    return false;
+  }
+  Fl::add_check(on_check, this);
+  check_registered = true;
+  next_refresh = std::chrono::steady_clock::now();
+  refresh();
+  if (a11y && !a11y->failed()) {
+    embed();
+    ask_registered_events();
+  }
+  if (a11y && a11y->failed()) {
+    open_fault = a11y->failure();
+    return false;
+  }
+  return true;
+}
+
+bool Adaptor::Impl::add_matches() {
+  if (sd_bus_add_match(a11y->bus(), &listener_slot, kListenerAdded, on_listener,
+                       this) < 0 ||
+      sd_bus_add_match(a11y->bus(), &listener_gone_slot, kListenerRemoved,
+                       on_listener, this) < 0 ||
+      sd_bus_add_match(a11y->bus(), &owner_slot, kRegistryOwner,
+                       on_registry_owner, this) < 0) {
+    open_fault = "the accessibility bus refused the registry watches";
+    return false;
+  }
+  return true;
+}
+
+void Adaptor::Impl::close_a11y() {
+  if (check_registered) {
+    Fl::remove_check(on_check, this);
+    check_registered = false;
+  }
+  if (refresh_armed) {
+    Fl::remove_timeout(on_refresh_timer, this);
+    refresh_armed = false;
+  }
+  if (bus_loss_armed) {
+    Fl::remove_timeout(on_bus_loss, this);
+    bus_loss_armed = false;
+  }
+  if (a11y) {
+    if (!a11y->failed() && !source.unique_name.empty()) {
+      sd_bus_message *message = nullptr;
+      if (sd_bus_message_new_method_call(a11y->bus(), &message, kRegistryName,
+                                         kRegistryPath, kRegistryInterface,
+                                         "DeregisterApplication") >= 0) {
+        const char *unique = source.unique_name.c_str();
+        if (sd_bus_message_append_basic(message, SD_BUS_TYPE_STRING, unique) >=
+            0)
+          sd_bus_send(a11y->bus(), message, nullptr);
+        sd_bus_message_unref(message);
+      }
+    }
+    sd_bus_slot_unref(accessible_slot);
+    sd_bus_slot_unref(application_slot);
+    sd_bus_slot_unref(cache_slot);
+    sd_bus_slot_unref(listener_slot);
+    sd_bus_slot_unref(listener_gone_slot);
+    sd_bus_slot_unref(owner_slot);
+    accessible_slot = nullptr;
+    application_slot = nullptr;
+    cache_slot = nullptr;
+    listener_slot = nullptr;
+    listener_gone_slot = nullptr;
+    owner_slot = nullptr;
+    a11y.reset();
+  }
+  address.clear();
+  listeners.clear();
+  listeners_known = false;
+  announcement.clear();
+  announcement_sequence = 0;
+  announcement_source = nullptr;
+  source = ObjectSource{};
+  served = Snapshot{};
+  model.clear();
+  tree.clear();
+  rejection.clear();
+  registry_fault.clear();
+  bus_fault.clear();
+  open_fault.clear();
+  snapshots = 0;
+}
+
+// --- snapshot publishing --------------------------------------------------
+
+NodeId Adaptor::Impl::announcement_node(const Snapshot &snapshot) const {
+  if (announcement_source) {
+    const NodeId id = tree.id_for(*announcement_source);
+    if (id != no_node) return id;
+  }
+  for (const auto &[id, node] : snapshot.nodes)
+    if (node.states.focused) return id;
+  return snapshot.root;
+}
+
+void Adaptor::Impl::on_check(void *data) {
+  auto *impl = static_cast<Impl *>(data);
+  const auto now = std::chrono::steady_clock::now();
+  if (now < impl->next_refresh) {
+    // Checks run once per loop iteration, so a change made inside the window
+    // waits for unrelated input unless the remaining interval is armed.
+    if (!impl->refresh_armed) {
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::microseconds>(
+              impl->next_refresh - now);
+      Fl::add_timeout(static_cast<double>(remaining.count()) / 1.0e6,
+                      on_refresh_timer, impl);
+      impl->refresh_armed = true;
+    }
+    return;
+  }
+  impl->next_refresh = now + kRefreshInterval;
+  impl->refresh();
+}
+
+void Adaptor::Impl::on_refresh_timer(void *data) {
+  auto *impl = static_cast<Impl *>(data);
+  impl->refresh_armed = false;
+  impl->next_refresh = std::chrono::steady_clock::now() + kRefreshInterval;
+  impl->refresh();
+}
+
+// Called from inside LoopBus::dispatch: the connection that is dispatching
+// must outlive the callback, so the recovery runs on the next loop iteration.
+void Adaptor::Impl::on_a11y_failed(void *data) {
+  auto *impl = static_cast<Impl *>(data);
+  if (impl->bus_loss_armed) return;
+  impl->bus_loss_armed = true;
+  Fl::add_timeout(0.0, on_bus_loss, impl);
+}
+
+void Adaptor::Impl::on_bus_loss(void *data) {
+  auto *impl = static_cast<Impl *>(data);
+  impl->bus_loss_armed = false;
+  const std::string reason = impl->a11y ? impl->a11y->failure() : std::string{};
+  impl->close_a11y();
+  impl->bus_fault = reason.empty() ? "the accessibility bus connection failed"
+                                   : reason;
+  impl->update_status();
+}
+
+void Adaptor::Impl::refresh() {
+  if (!a11y || a11y->failed()) return;
+  // The previous generation moves into the diff; nothing is served until the
+  // next one is published, and no request can interleave on this thread.
+  Snapshot before = std::move(served);
+  source.snapshot = nullptr;
+  Snapshot next = tree.snapshot();
+  if (!announcement.empty()) {
+    next.announcement = announcement;
+    next.announcement_sequence = announcement_sequence;
+    next.announcement_source = announcement_node(next);
+  }
+  if (const auto error = model.publish(next)) {
+    rejection = "the accessibility tree was rejected: " + error->message;
+    served = std::move(before);
+    source.snapshot = &served;
+    update_status();
+    return;
+  }
+  rejection.clear();
+  const bool baseline = snapshots == 0;
+  const std::vector<Change> differences =
+      baseline ? std::vector<Change>{} : changes(before, next);
+  ++snapshots;
+  served = std::move(next);
+  source.snapshot = &served;
+  source.root = served.root;
+  update_status();
+  // The first snapshot is what clients fetch through Cache.GetItems; only
+  // later differences are announced as events.
+  if (!baseline)
+    emit_events(*a11y, source, before, served, differences,
+                listeners_known ? &listeners : nullptr);
+}
+
+// --- registry -------------------------------------------------------------
+
+void Adaptor::Impl::embed() {
+  if (!a11y || a11y->failed()) return;
+  sd_bus_message *call = nullptr;
+  if (sd_bus_message_new_method_call(a11y->bus(), &call, kRegistryName,
+                                     std::string{kRootPath}.c_str(),
+                                     kSocketInterface, "Embed") < 0) {
+    registry_fault = "the registry call could not be built";
+    update_status();
+    return;
+  }
+  if (append_reference(call, source.unique_name, source.root, source.root) <
+      0) {
+    sd_bus_message_unref(call);
+    registry_fault = "the registry call could not be built";
+    update_status();
+    return;
+  }
+  if (!call_async(*a11y, call, kCallDeadlineUsec, on_embedded, this))
+    registry_fault = "the registry call could not be sent";
+  update_status();
+}
+
+int Adaptor::Impl::on_embedded(sd_bus_message *message, void *data,
+                               sd_bus_error *) {
+  auto *impl = static_cast<Impl *>(data);
+  if (sd_bus_message_is_method_error(message, nullptr)) {
+    // Nobody listening is not a refusal: accessibility stays on until a
+    // registry exists, which announce themselves with an owner change.
+    if (!registry_missing(message)) {
+      impl->registry_fault =
+          "the registry did not accept the application: " + error_name(message);
+      impl->update_status();
+    }
+    return 0;
+  }
+  impl->registry_fault.clear();
+  if (sd_bus_message_enter_container(message, SD_BUS_TYPE_STRUCT, "so") < 0) {
+    impl->update_status();
+    return 0;
+  }
+  const char *name = nullptr;
+  const char *path = nullptr;
+  if (sd_bus_message_read_basic(message, SD_BUS_TYPE_STRING, &name) >= 0 &&
+      name)
+    impl->source.desktop_name = name;
+  if (sd_bus_message_read_basic(message, SD_BUS_TYPE_OBJECT_PATH, &path) >= 0 &&
+      path)
+    impl->source.desktop_path = path;
+  sd_bus_message_exit_container(message);
+  impl->update_status();
+  return 0;
+}
+
+void Adaptor::Impl::ask_registered_events() {
+  if (!a11y || a11y->failed()) return;
+  sd_bus_message *call = nullptr;
+  if (sd_bus_message_new_method_call(a11y->bus(), &call, kRegistryName,
+                                     kRegistryPath, kRegistryInterface,
+                                     "GetRegisteredEvents") < 0)
+    return;
+  if (!call_async(*a11y, call, kCallDeadlineUsec, on_registered, this)) return;
+}
+
+int Adaptor::Impl::on_registered(sd_bus_message *message, void *data,
+                                 sd_bus_error *) {
+  auto *impl = static_cast<Impl *>(data);
+  if (sd_bus_message_is_method_error(message, nullptr)) return 0;
+  if (sd_bus_message_enter_container(message, SD_BUS_TYPE_ARRAY, "(ss)") < 0)
+    return 0;
+  while (sd_bus_message_enter_container(message, SD_BUS_TYPE_STRUCT, "ss") >
+         0) {
+    const char *bus = nullptr;
+    const char *event = nullptr;
+    if (sd_bus_message_read(message, "ss", &bus, &event) < 0) break;
+    if (event && *event) impl->add_listener(bus ? bus : "", event);
+    sd_bus_message_exit_container(message);
+  }
+  sd_bus_message_exit_container(message);
+  // Only the registry's complete answer decides which events are wanted; a
+  // single listener signal says nothing about the ones it did not name.
+  impl->listeners_known = true;
+  return 0;
+}
+
+void Adaptor::Impl::add_listener(std::string bus,
+                                 const std::string &event) {
+  const auto known = std::find_if(
+      listeners.begin(), listeners.end(), [&](const Listener &listener) {
+        return listener.bus == bus && listener.event == event;
+      });
+  if (known == listeners.end())
+    listeners.push_back(Listener{std::move(bus), event});
+}
+
+void Adaptor::Impl::remove_listener(const std::string &bus,
+                                    const std::string &event) {
+  std::erase_if(listeners, [&](const Listener &listener) {
+    return listener.bus == bus && listener.event == event;
+  });
+}
+
+int Adaptor::Impl::on_listener(sd_bus_message *message, void *data,
+                               sd_bus_error *) {
+  auto *impl = static_cast<Impl *>(data);
+  const char *bus = nullptr;
+  const char *event = nullptr;
+  const char *member = sd_bus_message_get_member(message);
+  if (sd_bus_message_read(message, "ss", &bus, &event) < 0) return 0;
+  if (!event || !*event) return 0;
+  const std::string owner = bus ? bus : "";
+  if (member && std::string{member} == "EventListenerDeregistered")
+    impl->remove_listener(owner, event);
+  else
+    impl->add_listener(owner, event);
+  return 0;
+}
+
+int Adaptor::Impl::on_registry_owner(sd_bus_message *message, void *data,
+                                     sd_bus_error *) {
+  auto *impl = static_cast<Impl *>(data);
+  const char *name = nullptr;
+  const char *previous = nullptr;
+  const char *next = nullptr;
+  if (sd_bus_message_read(message, "sss", &name, &previous, &next) < 0)
+    return 0;
+  if (!next || !*next) {
+    // The registry left; a new one announces itself before it can listen.
+    impl->listeners.clear();
+    impl->listeners_known = false;
+    return 0;
+  }
+  // A different registry knows its own listeners: start from its answer.
+  impl->listeners.clear();
+  impl->listeners_known = false;
+  impl->embed();
+  impl->ask_registered_events();
+  return 0;
+}
+
+// --- the public surface ---------------------------------------------------
+
+Adaptor::Adaptor(FltkTree &tree) : impl_(std::make_unique<Impl>(tree)) {
+  impl_->start();
+}
+
+Adaptor::~Adaptor() = default;
+
+AdaptorStatus Adaptor::status() const { return impl_->status; }
+
+void Adaptor::announce(Fl_Widget *source, std::string text) {
+  if (!impl_->a11y || impl_->a11y->failed()) return;
+  impl_->announcement = std::move(text);
+  impl_->announcement_source = source;
+  ++impl_->announcement_sequence;
+}
+
+std::uint64_t Adaptor::snapshot_count() const { return impl_->snapshots; }
+
+bool Adaptor::connected() const {
+  return impl_->a11y != nullptr && !impl_->a11y->failed();
+}
+
+bool Adaptor::watching() const { return impl_->check_registered; }
+
+} // namespace layerc::editor::a11y::atspi

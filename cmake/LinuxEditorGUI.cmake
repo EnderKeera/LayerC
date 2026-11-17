@@ -46,6 +46,12 @@ endif()
 if(NOT LAYERC_ATK_FOUND)
     layerc_editor_unavailable("ATK/AT-SPI 2.62 or later development files unavailable")
 endif()
+# The editor's own AT-SPI bridge speaks D-Bus directly, so it needs the sd-bus
+# lane the Wayland modules already probe. A build without it would ship the
+# editor without its accessibility connection, so it is unavailable.
+if(NOT LAYERC_HAVE_SDBUS)
+    layerc_editor_unavailable("sd-bus development files unavailable for the AT-SPI bridge")
+endif()
 execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --cxxflags
     OUTPUT_VARIABLE LAYERC_FLTK_CXXFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
     RESULT_VARIABLE layerc_fltk_cxx_result)
@@ -105,7 +111,14 @@ endif()
 # The GUI-only library gives widget tests the real frontend without linking
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
+    src/editor/fltk/a11y/atspi/adaptor.cpp
+    src/editor/fltk/a11y/atspi/events.cpp
+    src/editor/fltk/a11y/atspi/loop_bus.cpp
     src/editor/fltk/a11y/atspi/mapping.cpp
+    src/editor/fltk/a11y/atspi/objects.cpp
+    src/editor/fltk/a11y/atspi/objects_accessible.cpp
+    src/editor/fltk/a11y/atspi/objects_services.cpp
+    src/editor/fltk/a11y/atspi/status.cpp
     src/editor/fltk/a11y/fltk_actions.cpp
     src/editor/fltk/a11y/fltk_semantics.cpp
     src/editor/fltk/a11y/fltk_tree.cpp
@@ -162,7 +175,7 @@ set_source_files_properties(
     COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
 target_link_libraries(layerc_editor_fltk PUBLIC
     layerc_editor_linux layerc_editor_accessibility layerc_x11
-    ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})
+    PkgConfig::LAYERC_SDBUS ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})
 layerc_enable_warnings(layerc_editor_fltk)
 add_executable(layere src/editor/fltk/main.cpp)
 target_link_libraries(layere PRIVATE layerc_editor_fltk)

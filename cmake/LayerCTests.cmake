@@ -425,6 +425,20 @@ if(NOT WIN32)
             target_link_libraries(layerc_linux_editor_widget_tests PRIVATE ${X11_Xtst_LIB})
             target_compile_definitions(layerc_linux_editor_widget_tests PRIVATE LAYERC_TEST_XTEST=1)
         endif()
+        # The AT-SPI bridge suite serves fake org.a11y.Bus/Registry names, so it
+        # always runs on its own private bus, never the caller's desktop bus.
+        layerc_add_test(layerc_linux_atspi_adaptor_tests
+            SOURCES tests/linux_atspi_adaptor_tests.cpp
+                tests/linux_atspi_adaptor_lifecycle_tests.cpp
+                tests/linux_atspi_test_harness.cpp
+            LINK layerc_editor_fltk NO_REGISTER)
+        add_test(NAME layerc_linux_atspi_adaptor_tests
+            COMMAND bash "${PROJECT_SOURCE_DIR}/tools/dbus-test-session.sh"
+                $<TARGET_FILE:layerc_linux_atspi_adaptor_tests>)
+        set_tests_properties(layerc_linux_atspi_adaptor_tests PROPERTIES
+            TIMEOUT 90 SKIP_RETURN_CODE 77 LABELS "required;editor"
+            RESOURCE_LOCK layerc_x11_display)
+        layerc_editor_build_runtime(layerc_linux_atspi_adaptor_tests)
         layerc_add_test(layerc_linux_editor_autosave_tests
             SOURCES tests/linux_editor_autosave_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
