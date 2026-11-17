@@ -43,6 +43,47 @@ bool valid_endpoint(TextPatternRangeEndpoint endpoint) {
          endpoint == TextPatternRangeEndpoint_End;
 }
 
+bool inside(const Bounds &bounds, const Bounds &clip) {
+  return bounds.left >= clip.left && bounds.top >= clip.top &&
+         bounds.left + bounds.width <= clip.left + clip.width &&
+         bounds.top + bounds.height <= clip.top + clip.height;
+}
+
+// Only a widget that already shows the whole range can claim it was revealed.
+// Every text unit must be covered by a glyph inside the clip; an insertion
+// point uses the glyph that starts at the offset, or the right edge of the
+// glyph that ends the document, because a caret left of a horizontally
+// scrolled viewport is offscreen too.
+bool visible(const TextInfo &info, const Span span) {
+  if (!info.node.states.showing) return false;
+  const auto &clip = info.node.bounds;
+  if (span.begin == span.end) {
+    if (info.value.empty()) return true;
+    const Glyph *starting{};
+    const Glyph *ending{};
+    for (const auto &glyph : info.glyphs) {
+      if (glyph.begin == span.begin) { starting = &glyph; break; }
+      if (glyph.end == span.begin) ending = &glyph;
+    }
+    if (starting != nullptr)
+      return inside({starting->bounds.left, starting->bounds.top, 1,
+                      starting->bounds.height}, clip);
+    if (ending != nullptr)
+      return inside({ending->bounds.left + ending->bounds.width,
+                      ending->bounds.top, 1, ending->bounds.height}, clip);
+    return false; // No glyph covers this insertion point: nothing to reveal.
+  }
+  std::size_t unit = span.begin;
+  for (const auto &glyph : info.glyphs) {
+    if (glyph.end <= unit) continue;
+    if (glyph.begin > unit) return false; // Omitted text counts as not visible.
+    if (!inside(glyph.bounds, clip)) return false;
+    unit = glyph.end;
+    if (unit >= span.end) return true;
+  }
+  return false;
+}
+
 HRESULT attribute(const TextInfo &info, TEXTATTRIBUTEID id, VARIANT *result) {
   VariantInit(result);
   if (id == UIA_IsReadOnlyAttributeId || id == UIA_IsHiddenAttributeId) {
@@ -382,20 +423,11 @@ public:
     return guarded([&]() -> HRESULT {
       const auto info = text_info(context_, id_);
       if (!info) return UIA_E_ELEMENTNOTAVAILABLE;
-      const auto span = clipped(read(), info->value);
-      const auto &clip = info->node.bounds;
-      bool visible = info->node.states.showing;
-      for (const auto &glyph : info->glyphs) {
-        if (glyph.end <= span.begin || glyph.begin >= span.end) continue;
-        const auto &g = glyph.bounds;
-        visible = visible && g.left >= clip.left && g.top >= clip.top &&
-            g.left + g.width <= clip.left + clip.width &&
-            g.top + g.height <= clip.top + clip.height;
-      }
       // Stock FLTK inputs have no non-selection horizontal scroll operation.
       // Never move the caret/selection, synthesize input, or claim an offscreen
       // range was revealed when the widget cannot perform that operation.
-      return visible ? S_OK : UIA_E_NOTSUPPORTED;
+      return visible(*info, clipped(read(), info->value)) ? S_OK
+                                                          : UIA_E_NOTSUPPORTED;
     });
   }
   HRESULT STDMETHODCALLTYPE GetChildren(SAFEARRAY **result) override {

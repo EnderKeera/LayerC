@@ -47,6 +47,7 @@ struct Bridge::Impl : std::enable_shared_from_this<Impl> {
   NodeId next_node{1};
   std::optional<BridgeError> fault;
   std::string announcement;
+  std::uint64_t announcement_sequence{};
   bool attached{}, caret_created{};
   int caret_height{};
 
@@ -199,6 +200,7 @@ struct Bridge::Impl : std::enable_shared_from_this<Impl> {
     Snapshot next;
     next.root = 1;
     next.announcement = announcement;
+    next.announcement_sequence = announcement_sequence;
     widgets.clear();
     collect(window, no_node, next, origin, sx, sy);
     std::set<Fl_Widget *> live;
@@ -304,6 +306,8 @@ std::optional<BridgeError> Bridge::sync() { return impl_->sync(); }
 std::optional<BridgeError> Bridge::error() const { return impl_->fault; }
 void Bridge::announce(std::string text) {
   impl_->announcement = std::move(text);
+  // Every call is its own occurrence, including a repeated identical message.
+  ++impl_->announcement_sequence;
   (void)impl_->sync();
 }
 } // namespace layerc::editor::a11y::uia

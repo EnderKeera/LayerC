@@ -1,5 +1,7 @@
 #include "a11y/input.hpp"
 #include "a11y/uia/bridge.hpp"
+#include "a11y/uia/context.hpp"
+#include "a11y/uia/text.hpp"
 #include "test_support.hpp"
 
 #include <FL/Fl.H>
@@ -16,6 +18,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -115,12 +118,18 @@ public:
     try {
       const std::lock_guard lock(mutex);
       notification.assign(text, SysStringLen(text));
+      notifications.push_back(notification);
       return S_OK;
     } catch (...) { return E_OUTOFMEMORY; }
   }
+  [[nodiscard]] std::size_t notification_count() const {
+    const std::lock_guard lock(mutex);
+    return notifications.size();
+  }
   std::atomic<int> text_changes{}, selection_changes{}, value_changes{}, focus_changes{};
-  std::mutex mutex;
+  mutable std::mutex mutex;
   std::wstring notification;
+  std::vector<std::wstring> notifications;
 private:
   std::atomic<ULONG> references_{1};
 };
@@ -178,6 +187,266 @@ Ref<IUIAutomationElement> find(IUIAutomation &automation, IUIAutomationElement &
         "find real UIA descendant");
   expect(static_cast<bool>(element), "fixture element is in the client tree");
   return element;
+}
+
+// M2: sparse visible runs must keep their own document offsets. The model
+// accepts runs that omit offscreen text, so the adaptor is tested against a
+// published snapshot rather than only the contiguous runs FLTK emits.
+void sparse_text_runs(HWND hwnd) {
+  using namespace layerc::editor::a11y;
+  auto context = std::make_shared<uia::Context>(hwnd);
+  Snapshot tree;
+  tree.root = 1;
+  Node root;
+  root.id = 1;
+  root.role = Role::window;
+  root.children = {2};
+  tree.nodes.emplace(1, root);
+  Node field;
+  field.id = 2;
+  field.parent = 1;
+  field.role = Role::text_field;
+  field.name = "Sparse runs";
+  field.bounds = {0, 0, 200, 20};
+  // "\U0001f642xa\u20acyb": runs cover only "a" (bytes 5..6) and "b" (10..11).
+  field.text = Text{"\xf0\x9f\x99\x82xa\xe2\x82\xacyb", 11, 11};
+  field.text->runs = {{5, 6, {10, 0, 8, 12}}, {10, 11, {60, 0, 8, 12}}};
+  field.text->caret_bounds = {70, 0, 1, 12};
+  tree.nodes.emplace(2, field);
+  const auto error = context->model.publish(tree);
+  if (!expect(!error, error ? error->message : "sparse text snapshot publishes")) return;
+  const auto info = uia::text_info(context, 2);
+  if (!expect(info.has_value(), "sparse text info is available")) return;
+  expect(info->value == L"\U0001f642xa\u20acyb", "document text keeps every UTF-16 unit");
+  if (!expect(info->glyphs.size() == 2, "only visible runs become glyphs")) return;
+  expect(info->glyphs[0].begin == 3 && info->glyphs[0].end == 4,
+         "the first run keeps its own UTF-16 offsets");
+  expect(info->glyphs[1].begin == 6 && info->glyphs[1].end == 7,
+         "the second run keeps its own UTF-16 offsets");
+  expect(info->glyphs[0].bounds.left == 10 && info->glyphs[1].bounds.left == 60,
+         "glyph bounds stay attached to their own runs");
+  Ref<ITextRangeProvider> range;
+  *range.put() = uia::make_range(context, 2, {6, 7});
+  if (!expect(range.get() != nullptr, "sparse run range is available")) return;
+  String text;
+  if (ok(range->GetText(-1, &text.value), "read sparse run text"))
+    expect(text.text() == L"b", "a range over the second run reads its own glyph");
+  SAFEARRAY *boxes{};
+  if (ok(range->GetBoundingRectangles(&boxes), "sparse run rectangles") && boxes) {
+    double left{};
+    LONG index{};
+    ok(SafeArrayGetElement(boxes, &index, &left), "first sparse rectangle left");
+    expect(left == 60, "the second run keeps its own rectangle");
+    SafeArrayDestroy(boxes);
+  }
+}
+
+// M3: a horizontally scrolled field must refuse an offscreen insertion point
+// instead of claiming it was revealed.
+void scrolled_input_range(IUIAutomationElement &field,
+                          IUIAutomationTextPattern &text) {
+  Ref<IUIAutomationValuePattern> value;
+  if (!ok(field.GetCurrentPatternAs(UIA_ValuePatternId, IID_IUIAutomationValuePattern,
+                                    reinterpret_cast<void **>(value.put())),
+          "value pattern for wider text") || !value) return;
+  std::wstring wide;
+  for (int count = 0; count < 24; ++count) wide += L"0123456789";
+  String widened(wide.c_str());
+  if (!ok(value->SetValue(widened.value), "set text wider than the field")) return;
+  // FLTK scrolls its own viewport around the caret when it draws, and the
+  // bridge republishes geometry from its UI-thread check callback, so poll the
+  // hit test instead of sleeping for a fixed period.
+  RECT bounds{};
+  if (!ok(field.get_CurrentBoundingRectangle(&bounds), "field bounds for wider text")) return;
+  Ref<IUIAutomationTextRange> document;
+  if (!ok(text.get_DocumentRange(document.put()), "document range for wider text") || !document)
+    return;
+  int start{};
+  HRESULT hit_status = E_FAIL;
+  HRESULT compare_status = E_FAIL;
+  const auto scroll_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  for (;;) {
+    Ref<IUIAutomationTextRange> hit;
+    hit_status = text.RangeFromPoint({bounds.left + 2, (bounds.top + bounds.bottom) / 2},
+                                     hit.put());
+    if (SUCCEEDED(hit_status) && hit)
+      compare_status = hit->CompareEndpoints(TextPatternRangeEndpoint_Start, document.get(),
+                                             TextPatternRangeEndpoint_Start, &start);
+    if ((SUCCEEDED(compare_status) && start > 0) ||
+        std::chrono::steady_clock::now() >= scroll_deadline)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ok(hit_status, "hit test at the scrolled left edge");
+  ok(compare_status, "compare the left edge with the document start");
+  expect(start > 0, "the caret at the end scrolls the document start offscreen");
+  Ref<IUIAutomationTextRange> beginning;
+  if (!ok(document->Clone(beginning.put()), "clone the wider document") || !beginning) return;
+  int moved{};
+  ok(beginning->MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Document, -1, &moved),
+     "collapse the wider range to the document start");
+  expect(beginning->ScrollIntoView(TRUE) == static_cast<HRESULT>(UIA_E_NOTSUPPORTED),
+         "an offscreen insertion point is not reported as revealed");
+  Ref<IUIAutomationTextRangeArray> selection;
+  if (!ok(text.GetSelection(selection.put()), "selection after a refused reveal") || !selection)
+    return;
+  int length{};
+  ok(selection->get_Length(&length), "selection count after a refused reveal");
+  if (!expect(length == 1, "one selection remains after a refused reveal") || length != 1) return;
+  Ref<IUIAutomationTextRange> caret;
+  if (!ok(selection->GetElement(0, caret.put()), "caret range after a refused reveal") || !caret)
+    return;
+  int at_end{};
+  ok(caret->CompareEndpoints(TextPatternRangeEndpoint_End, document.get(),
+                              TextPatternRangeEndpoint_End, &at_end),
+     "compare the caret with the document end");
+  expect(at_end == 0, "a refused reveal leaves the caret untouched");
+  expect(caret->ScrollIntoView(TRUE) == S_OK, "the visible caret range is revealed");
+}
+
+// H1: one Tab through FLTK's own keyboard dispatch, executed on the UI thread.
+struct TabStep {
+  Fl_Window *window{};
+  bool backward{};
+  std::shared_ptr<std::atomic<int>> handled;
+};
+
+// H1: the fixture holds the foreground while traversal is measured, so the
+// desktop focus state the client reads describes the fixture. A locked or busy
+// desktop keeps another window active; `activate_now` reports that instead of
+// pretending the fixture was observed.
+bool activate(Fl_Window &window) {
+  auto *hwnd = fl_xid(&window);
+  if (hwnd == nullptr) return false;
+  const HWND root = GetAncestor(hwnd, GA_ROOT);
+  const DWORD foreground = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+  const DWORD current = GetCurrentThreadId();
+  const bool attached = foreground != 0 && foreground != current;
+  if (attached) AttachThreadInput(current, foreground, TRUE);
+  SetForegroundWindow(root);
+  ::SetFocus(hwnd);
+  if (attached) AttachThreadInput(current, foreground, FALSE);
+  return GetForegroundWindow() == root;
+}
+
+void press_tab(void *data) {
+  std::unique_ptr<TabStep> step(static_cast<TabStep *>(data));
+  activate(*step->window);
+  Fl::e_keysym = FL_Tab;
+  Fl::e_state = step->backward ? FL_SHIFT : 0;
+  Fl::e_length = 0;
+  step->handled->store(Fl::handle(FL_KEYBOARD, step->window));
+}
+
+// H1: activation must happen on the thread that owns the window, so the
+// provider's own ::GetFocus() check observes the fixture while traversal runs.
+struct ActivateStep {
+  Fl_Window *window{};
+  std::shared_ptr<std::atomic<int>> done;
+};
+
+void activate_ui(void *data) {
+  std::unique_ptr<ActivateStep> step(static_cast<ActivateStep *>(data));
+  step->done->store(activate(*step->window) ? 1 : 0);
+}
+
+// Returns whether the fixture owns the foreground: only then does the desktop
+// focus state read by the client describe this fixture.
+bool activate_now(Fl_Window &window) {
+  auto done = std::make_shared<std::atomic<int>>(-1);
+  Fl::awake(activate_ui, new ActivateStep{&window, done});
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (done->load() == -1 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  return done->load() == 1;
+}
+
+// H1: the fixture's own keyboard focus, read through this provider's published
+// state. A locked or otherwise busy desktop keeps another application in front,
+// and then the desktop focus element names that application instead.
+std::wstring provider_focus(IUIAutomationElement &element, IUIAutomationTreeWalker &walker) {
+  BOOL keyboard_focus{};
+  if (SUCCEEDED(element.get_CurrentHasKeyboardFocus(&keyboard_focus)) &&
+      keyboard_focus != FALSE) {
+    String name;
+    if (SUCCEEDED(element.get_CurrentName(&name.value))) return name.text();
+  }
+  Ref<IUIAutomationElement> child;
+  if (FAILED(walker.GetFirstChildElement(&element, child.put())) || !child) return {};
+  for (;;) {
+    std::wstring found = provider_focus(*child.get(), walker);
+    if (!found.empty()) return found;
+    Ref<IUIAutomationElement> sibling;
+    if (FAILED(walker.GetNextSiblingElement(child.get(), sibling.put())) || !sibling) return {};
+    child = std::move(sibling);
+  }
+}
+
+struct FocusReading {
+  std::wstring name;
+  bool from_desktop{};
+};
+
+// H1: the focused element as a client reads it, preferring the desktop state
+// and falling back to the provider's published focus when another application
+// owns the foreground.
+FocusReading focus_reading(IUIAutomation &automation, Fl_Window &window) {
+  Ref<IUIAutomationElement> fixture;
+  Ref<IUIAutomationTreeWalker> walker;
+  const bool walkable =
+      SUCCEEDED(automation.ElementFromHandle(fl_xid(&window), fixture.put())) && fixture &&
+      SUCCEEDED(automation.get_RawViewWalker(walker.put())) && walker;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  for (;;) {
+    Ref<IUIAutomationElement> focused;
+    if (SUCCEEDED(automation.GetFocusedElement(focused.put())) && focused) {
+      String id;
+      // Only this provider's elements describe the fixture: whatever another
+      // application on the desktop has focused is not an answer.
+      if (SUCCEEDED(focused->get_CurrentAutomationId(&id.value)) &&
+          id.text().rfind(L"layerc-", 0) == 0) {
+        String name;
+        if (SUCCEEDED(focused->get_CurrentName(&name.value)) && !name.text().empty())
+          return {name.text(), true};
+      }
+    }
+    if (walkable) {
+      std::wstring name = provider_focus(*fixture.get(), *walker.get());
+      if (!name.empty()) return {name, false};
+    }
+    if (std::chrono::steady_clock::now() >= deadline) return {};
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+}
+
+FocusReading tab_once(IUIAutomation &automation, Fl_Window &window, bool backward,
+                      const std::wstring &previous) {
+  auto handled = std::make_shared<std::atomic<int>>(-1);
+  Fl::awake(press_tab, new TabStep{&window, backward, handled});
+  const auto dispatch = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (handled->load() == -1 && std::chrono::steady_clock::now() < dispatch)
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  if (!expect(handled->load() > 0, backward ? "Shift+Tab reaches FLTK group navigation"
+                                            : "Tab reaches FLTK group navigation"))
+    return {};
+  // The republished focus and UI Automation's own bookkeeping both settle on
+  // the UI thread's message loop; poll until the client sees the new element.
+  const auto settle = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  FocusReading reading = focus_reading(automation, window);
+  while (reading.name == previous && std::chrono::steady_clock::now() < settle) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    reading = focus_reading(automation, window);
+  }
+  return reading;
+}
+
+// Hosted GitHub runners have an unlocked interactive desktop, so the desktop
+// focus path must work there. A locked interactive desktop cannot grant any
+// process the foreground, so the strict path is only required on hosted CI.
+bool hosted_ci() {
+  wchar_t value[8]{};
+  const DWORD length = GetEnvironmentVariableW(L"GITHUB_ACTIONS", value, 8);
+  return length > 0 && length < 8 && std::wstring_view(value, length) == L"true";
 }
 
 void text_ranges(IUIAutomation &automation, IUIAutomationElement &field,
@@ -310,6 +579,7 @@ void client(Fixture &fixture, HWND hwnd) {
   }
   Ref<IUIAutomationElement> root;
   if (!ok(automation->ElementFromHandle(hwnd, root.put()), "client finds FLTK HWND") || !root) return;
+  sparse_text_runs(hwnd);
   String root_name;
   ok(root->get_CurrentName(&root_name.value), "root accessible name");
   expect(root_name.text() == L"LayerE UIA fixture", "root name is the window title");
@@ -339,7 +609,7 @@ void client(Fixture &fixture, HWND hwnd) {
       current = std::move(next);
     }
     expect(names == std::vector<std::wstring>{L"Profile name", L"Read-only value",
-        L"Run fixture", L"Fixture status"}, "tree keeps reading/focus order");
+        L"Run fixture", L"Fixture status"}, "tree keeps reading order");
   }
   Ref<Events> events;
   *events.put() = new Events;
@@ -371,8 +641,10 @@ void client(Fixture &fixture, HWND hwnd) {
   expect(round_trip.text() == updated.text(), "value mutation commits before returning");
   Ref<IUIAutomationTextPattern> text;
   if (ok(field->GetCurrentPatternAs(UIA_TextPatternId, IID_IUIAutomationTextPattern,
-                                   reinterpret_cast<void **>(text.put())), "Text pattern") && text)
+                                   reinterpret_cast<void **>(text.put())), "Text pattern") && text) {
     text_ranges(*automation.get(), *field.get(), *text.get());
+    scrolled_input_range(*field.get(), *text.get());
+  }
   Ref<IUIAutomationValuePattern> read_value;
   if (ok(readonly->GetCurrentPatternAs(UIA_ValuePatternId, IID_IUIAutomationValuePattern,
                                       reinterpret_cast<void **>(read_value.put())), "read-only Value pattern") && read_value) {
@@ -403,6 +675,101 @@ void client(Fixture &fixture, HWND hwnd) {
   expect(events->focus_changes.load() > 0, "client receives focus event");
   { const std::lock_guard lock(events->mutex);
     expect(events->notification == L"Fixture status", "client receives status notification"); }
+  // M1: the same announcement repeated is a separate occurrence.
+  if (invoke) {
+    const auto delivered = events->notification_count();
+    ok(invoke->Invoke(), "invoke the announcing action a second time");
+    const auto repeat_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (events->notification_count() < delivered + 1 &&
+           std::chrono::steady_clock::now() < repeat_deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const std::lock_guard lock(events->mutex);
+    expect(events->notifications.size() > delivered &&
+           events->notifications.back() == L"Fixture status",
+           "a repeated identical announcement still reaches the client");
+  }
+  // H1: forward and backward traversal through FLTK's real keyboard dispatch.
+  {
+    Ref<IUIAutomationTreeWalker> tab_walker;
+    std::vector<std::wstring> focusable;
+    if (ok(automation->get_RawViewWalker(tab_walker.put()), "raw tree walker for focus order") &&
+        tab_walker) {
+      Ref<IUIAutomationElement> current;
+      ok(tab_walker->GetFirstChildElement(root.get(), current.put()),
+         "first child for focus order");
+      for (int count = 0; current && count < 20; ++count) {
+        // UI Automation injects the window's non-client TitleBar alongside this
+        // provider's own fragments; only LayerC elements belong to the FLTK
+        // keyboard traversal.
+        String framework;
+        ok(current->get_CurrentFrameworkId(&framework.value), "child framework id");
+        if (framework.text() == L"LayerC.FLTK") {
+          BOOL keyboard_focusable{};
+          ok(current->get_CurrentIsKeyboardFocusable(&keyboard_focusable),
+             "child keyboard focusable");
+          if (keyboard_focusable != FALSE) {
+            String name;
+            ok(current->get_CurrentName(&name.value), "focusable child name");
+            focusable.push_back(name.text());
+          }
+        }
+        Ref<IUIAutomationElement> next;
+        ok(tab_walker->GetNextSiblingElement(current.get(), next.put()),
+           "next sibling for focus order");
+        current = std::move(next);
+      }
+    }
+    const std::vector<std::wstring> fixture_order{L"Profile name", L"Read-only value",
+                                                   L"Run fixture"};
+    expect(focusable == fixture_order, "keyboard-focusable controls match the fixture");
+    if (expect(focusable.size() == 3, "the fixture exposes three keyboard-focusable controls")) {
+      ok(field->SetFocus(), "restore the fixture field before traversal");
+      const bool desktop_focus = activate_now(fixture.window);
+      if (!desktop_focus)
+        std::cerr << "note: another window owns the foreground (a locked or busy desktop), so "
+                     "focus is read from this provider's HasKeyboardFocus state\n";
+      FocusReading reading = focus_reading(*automation.get(), fixture.window);
+      bool desktop_reads = desktop_focus && reading.from_desktop;
+      expect(reading.name == focusable[0], "traversal starts at the first focusable control");
+      std::vector<std::wstring> forward;
+      for (std::size_t step = 0; step < focusable.size(); ++step) {
+        reading = tab_once(*automation.get(), fixture.window, false, reading.name);
+        desktop_reads = desktop_reads && reading.from_desktop;
+        forward.push_back(reading.name);
+      }
+      expect(forward == std::vector<std::wstring>{focusable[1], focusable[2], focusable[0]},
+             "Tab visits focusable controls in reading order and wraps");
+      std::vector<std::wstring> backward;
+      for (std::size_t step = 0; step < focusable.size(); ++step) {
+        reading = tab_once(*automation.get(), fixture.window, true, reading.name);
+        desktop_reads = desktop_reads && reading.from_desktop;
+        backward.push_back(reading.name);
+      }
+      expect(backward == std::vector<std::wstring>{focusable[2], focusable[1], focusable[0]},
+             "Shift+Tab visits them in reverse reading order and wraps");
+      // A fallback read only counts against the desktop when the fixture owned
+      // the foreground for the whole traversal.
+      expect(!desktop_focus || desktop_reads,
+             "UI Automation reports the fixture's focused element while the fixture owns the "
+             "foreground");
+      std::cerr << "note: traversal focus read through "
+                << (desktop_reads ? "GetFocusedElement" : "the provider fallback")
+                << (desktop_focus ? " with the fixture in the foreground"
+                                  : " while another window owned the foreground")
+                << '\n';
+      if (hosted_ci()) {
+        // Hosted CI has an unlocked session, so the provider fallback must not
+        // stand in for the desktop path there.
+        expect(desktop_focus, "hosted CI grants the fixture the desktop foreground");
+        expect(desktop_reads,
+               "hosted CI reads every traversal step through GetFocusedElement");
+      }
+      for (const auto &name : forward)
+        expect(name != L"Fixture status", "a non-focusable status never receives focus");
+      for (const auto &name : backward)
+        expect(name != L"Fixture status", "a non-focusable status never receives focus");
+    }
+  }
   fixture.close_from_client();
   const auto close_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (!fixture.closed.load() && std::chrono::steady_clock::now() < close_deadline)

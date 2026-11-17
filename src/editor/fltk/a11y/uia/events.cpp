@@ -67,7 +67,8 @@ void raise_changes(const std::shared_ptr<Context> &context,
       (void)UiaRaiseAutomationEvent(provider, UIA_AutomationFocusChangedEventId);
     provider->Release();
   }
-  if (!after.announcement.empty() && before.announcement != after.announcement) {
+  if (!after.announcement.empty() &&
+      before.announcement_sequence != after.announcement_sequence) {
     auto *root = make_provider(context, after.root);
     const auto notify = notification_function();
     const auto text = core::try_utf8_to_wide(after.announcement);

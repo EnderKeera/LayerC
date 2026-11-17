@@ -62,6 +62,9 @@ struct Snapshot {
   NodeId root{};
   std::map<NodeId, Node> nodes;
   std::string announcement;
+  // Monotonic announcement occurrence. Repeating the same text is a new
+  // occurrence, so adaptors never rely on the text alone to detect one.
+  std::uint64_t announcement_sequence{};
   std::uint64_t generation{};
 };
 

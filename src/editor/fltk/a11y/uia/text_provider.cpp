@@ -146,13 +146,13 @@ std::optional<TextInfo> text_info(const std::shared_ptr<Context> &context,
   if (!caret || !anchor) return std::nullopt;
   info.caret = caret->size();
   info.anchor = anchor->size();
-  std::size_t units{};
+  // Visible runs may omit offscreen text, so each glyph's UTF-16 offsets come
+  // from the document prefix before its own run, never from accumulated runs.
   for (const auto &run : current->text->runs) {
-    const auto glyph = core::try_utf8_to_wide(
-        std::string_view(current->text->value).substr(run.begin, run.end - run.begin));
-    if (!glyph) return std::nullopt;
-    info.glyphs.push_back({units, units + glyph->size(), run.bounds});
-    units += glyph->size();
+    const auto begin = offset(run.begin);
+    const auto end = offset(run.end);
+    if (!begin || !end || begin->size() >= end->size()) return std::nullopt;
+    info.glyphs.push_back({begin->size(), end->size(), run.bounds});
   }
   info.node = std::move(*current);
   return info;
