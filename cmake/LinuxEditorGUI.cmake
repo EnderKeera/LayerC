@@ -105,6 +105,7 @@ endif()
 # The GUI-only library gives widget tests the real frontend without linking
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
+    src/editor/fltk/a11y/atspi/mapping.cpp
     src/editor/fltk/a11y/fltk_actions.cpp
     src/editor/fltk/a11y/fltk_semantics.cpp
     src/editor/fltk/a11y/fltk_tree.cpp

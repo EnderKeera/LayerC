@@ -144,7 +144,9 @@ target_compile_features(layerc_core PUBLIC cxx_std_20)
 layerc_enable_warnings(layerc_core)
 
 if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
-    add_library(layerc_editor_accessibility STATIC src/editor/fltk/a11y/model.cpp)
+    add_library(layerc_editor_accessibility STATIC
+        src/editor/fltk/a11y/changes.cpp
+        src/editor/fltk/a11y/model.cpp)
     target_include_directories(layerc_editor_accessibility PUBLIC src/editor/fltk)
     target_link_libraries(layerc_editor_accessibility PUBLIC layerc_core)
     layerc_enable_warnings(layerc_editor_accessibility)

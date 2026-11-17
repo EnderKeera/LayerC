@@ -75,6 +75,10 @@ layerc_add_test(layerc_editor_accessibility_model_tests
     SOURCES tests/editor_accessibility_model_tests.cpp
     LINK layerc_editor_accessibility TIMEOUT 30)
 
+layerc_add_test(layerc_editor_accessibility_changes_tests
+    SOURCES tests/editor_accessibility_changes_tests.cpp
+    LINK layerc_editor_accessibility TIMEOUT 30)
+
 layerc_add_test(layerc_runtime_tests
     SOURCES tests/runtime_services_tests.cpp tests/runtime_display_diagnostics_tests.cpp
     LINK layerc_runtime)
@@ -391,6 +395,9 @@ if(NOT WIN32)
             SOURCES tests/linux_editor_platform_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
         layerc_editor_build_runtime(layerc_linux_editor_platform_tests)
+        layerc_add_test(layerc_linux_editor_atspi_mapping_tests
+            SOURCES tests/linux_atspi_mapping_tests.cpp
+            LINK layerc_editor_fltk TIMEOUT 30 LABELS required headless)
         layerc_add_test(layerc_fltk_accessibility_tree_tests
             SOURCES tests/fltk_accessibility_tree_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 60 SKIP_RETURN_CODE 77
