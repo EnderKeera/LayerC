@@ -20,7 +20,8 @@ void close_smoke_window(void *data) {
 }
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR command_line, int) {
+int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR command_line,
+                    _In_ int) {
   const HRESULT apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   if (FAILED(apartment)) return 1;
   struct Apartment {

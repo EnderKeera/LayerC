@@ -199,8 +199,11 @@ public:
                                       ITextRangeProvider **result) override {
     if (result == nullptr) return E_POINTER;
     *result = nullptr;
-    if (text == nullptr || SysStringLen(text) == 0) return E_INVALIDARG;
     return guarded([&]() -> HRESULT {
+      // Validated where the value is used: /analyze cannot carry the caller's
+      // null fact into the closure, and a null BSTR must never reach
+      // CompareStringOrdinal.
+      if (text == nullptr || SysStringLen(text) == 0) return E_INVALIDARG;
       const auto info = text_info(context_, id_);
       if (!info) return UIA_E_ELEMENTNOTAVAILABLE;
       const auto span = clipped(read(), info->value);

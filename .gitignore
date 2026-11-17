@@ -83,3 +83,12 @@ desktop.ini
 *.7z
 *.deb
 *.vhdx
+
+# The vendored FLTK snapshot is committed byte-for-byte against its upstream
+# release (third_party/fltk/UPSTREAM.md records every file), so the general
+# build-artifact patterns above must not drop upstream Makefiles, changelogs or
+# the libdecor build directory.
+!third_party/fltk/Makefile
+!third_party/fltk/**/Makefile
+!third_party/fltk/jpeg/change.log
+!third_party/fltk/libdecor/build/
