@@ -10,6 +10,8 @@ void a_failed_bus_open_names_its_cause_and_recovers();
 void a_missing_launcher_waits_and_is_not_activated();
 void a_launcher_that_names_no_bus_is_unavailable();
 void interfaces_follow_each_roles_capabilities();
+void an_action_reads_back_in_the_generation_it_made();
+void reads_without_a_listener_stay_within_the_walk_budget();
 void component_geometry_follows_the_coordinate_type();
 void action_names_and_activation_reach_the_widget();
 void value_and_selection_mutations_reach_the_widgets();
@@ -560,6 +562,8 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(a_missing_launcher_waits_and_is_not_activated),
     LAYERC_TEST_CASE(a_launcher_that_names_no_bus_is_unavailable),
     LAYERC_TEST_CASE(interfaces_follow_each_roles_capabilities),
+    LAYERC_TEST_CASE(an_action_reads_back_in_the_generation_it_made),
+    LAYERC_TEST_CASE(reads_without_a_listener_stay_within_the_walk_budget),
     LAYERC_TEST_CASE(component_geometry_follows_the_coordinate_type),
     LAYERC_TEST_CASE(action_names_and_activation_reach_the_widget),
     LAYERC_TEST_CASE(value_and_selection_mutations_reach_the_widgets),

@@ -37,6 +37,13 @@ namespace layerc::editor::a11y {
 // widget queues no callback, exactly like the widget's own setter.
 [[nodiscard]] bool set_number(const Target &target, double value);
 
+// Told once after an action took effect: immediately for the edits and caret
+// moves that land in the call, and from the loop for the steps whose
+// application callback ran there. A protocol bridge marks its published
+// snapshot stale here instead of walking inside the notification.
+using ChangedHandler = void (*)(void *data);
+void set_changed_handler(ChangedHandler handler, void *data);
+
 // Drops queued steps and removes the loop timeout: adaptor teardown.
 void cancel_deferred();
 

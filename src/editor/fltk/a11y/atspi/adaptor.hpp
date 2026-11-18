@@ -41,9 +41,11 @@ public:
   // refresh; ignored while no consumer listens.
   void announce(Fl_Widget *source, std::string text);
 
-  // Test seams: the number of published snapshots, whether the accessibility
-  // connection is up, and whether the loop still watches the tree.
+  // Test seams: the number of published snapshots, the number of tree walks
+  // those came from, whether the accessibility connection is up, and whether
+  // the loop still watches the tree.
   [[nodiscard]] std::uint64_t snapshot_count() const;
+  [[nodiscard]] std::uint64_t walks_for_testing() const;
   [[nodiscard]] bool connected() const;
   [[nodiscard]] bool watching() const;
 

@@ -3,6 +3,7 @@
 #include "a11y/atspi/events.hpp"
 #include "a11y/atspi/objects.hpp"
 #include "a11y/changes.hpp"
+#include "a11y/fltk_actions.hpp"
 #include "a11y/fltk_tree.hpp"
 #include "a11y/model.hpp"
 
@@ -67,6 +68,15 @@ constexpr const char *kRegistryOwner =
 
 } // namespace
 
+// Clears the walk guard on every return path, including the rejected publish.
+struct WalkGuard {
+  explicit WalkGuard(bool &flag) : flag(flag) { flag = true; }
+  ~WalkGuard() { flag = false; }
+  WalkGuard(const WalkGuard &) = delete;
+  WalkGuard &operator=(const WalkGuard &) = delete;
+  bool &flag;
+};
+
 struct Adaptor::Impl {
   explicit Impl(FltkTree &exported) : tree(exported) {
     source.tree = &tree;
@@ -83,6 +93,12 @@ struct Adaptor::Impl {
   bool open_a11y(const std::string &address);
   void close_a11y();
   void refresh();
+  void ensure_current();
+  // Marks the published generation stale; the action layer calls it after a
+  // step took effect, which must not walk inside the notification.
+  static void on_action_changed(void *data);
+  static int on_request(sd_bus_message *message, void *data,
+                        sd_bus_error *error);
   void embed();
   void ask_registered_events();
   void add_listener(std::string bus, const std::string &event);
@@ -122,6 +138,7 @@ struct Adaptor::Impl {
   sd_bus_slot *listener_slot{};
   sd_bus_slot *listener_gone_slot{};
   sd_bus_slot *owner_slot{};
+  sd_bus_slot *request_slot{};
 
   std::vector<Listener> listeners;
   bool listeners_known{};
@@ -145,6 +162,12 @@ struct Adaptor::Impl {
   void *status_handler_data{};
   bool status_notify_armed{};
   std::uint64_t snapshots{};
+  std::uint64_t walks{};
+  // Serving a request walks at most once per interval, plus once per action the
+  // client itself made take effect; a walk in progress is never re-entered.
+  std::chrono::steady_clock::time_point last_walk{};
+  bool actions_dirty{};
+  bool walking{};
   std::chrono::steady_clock::time_point next_refresh{};
   bool check_registered{};
   bool refresh_armed{};
@@ -279,6 +302,7 @@ bool Adaptor::Impl::open_a11y(const std::string &bus_address) {
   a11y = std::move(loop);
   bus_fault.clear();
   address = bus_address;
+  layerc::editor::a11y::set_changed_handler(on_action_changed, this);
   const char *unique = nullptr;
   if (sd_bus_get_unique_name(a11y->bus(), &unique) < 0) unique = nullptr;
   source.unique_name = unique != nullptr ? unique : "";
@@ -313,6 +337,13 @@ bool Adaptor::Impl::open_a11y(const std::string &bus_address) {
 }
 
 bool Adaptor::Impl::add_matches() {
+  sd_bus *bus = a11y->bus();
+  // Requests are served with the generation their own action produced: the
+  // filter runs before the object handlers and never swallows a message.
+  if (sd_bus_add_filter(bus, &request_slot, on_request, this) < 0) {
+    open_fault = "the accessibility bus refused the request watch";
+    return false;
+  }
   if (sd_bus_add_match(a11y->bus(), &listener_slot, kListenerAdded, on_listener,
                        this) < 0 ||
       sd_bus_add_match(a11y->bus(), &listener_gone_slot, kListenerRemoved,
@@ -334,6 +365,7 @@ void Adaptor::Impl::close_a11y() {
     Fl::remove_timeout(on_refresh_timer, this);
     refresh_armed = false;
   }
+  layerc::editor::a11y::set_changed_handler(nullptr, nullptr);
   if (bus_loss_armed) {
     Fl::remove_timeout(on_bus_loss, this);
     bus_loss_armed = false;
@@ -361,12 +393,14 @@ void Adaptor::Impl::close_a11y() {
     sd_bus_slot_unref(listener_slot);
     sd_bus_slot_unref(listener_gone_slot);
     sd_bus_slot_unref(owner_slot);
+    sd_bus_slot_unref(request_slot);
     accessible_slot = nullptr;
     application_slot = nullptr;
     cache_slot = nullptr;
     listener_slot = nullptr;
     listener_gone_slot = nullptr;
     owner_slot = nullptr;
+    request_slot = nullptr;
     a11y.reset();
   }
   address.clear();
@@ -384,6 +418,10 @@ void Adaptor::Impl::close_a11y() {
   bus_fault.clear();
   open_fault.clear();
   snapshots = 0;
+  walks = 0;
+  actions_dirty = false;
+  walking = false;
+  last_walk = std::chrono::steady_clock::time_point{};
 }
 
 // --- snapshot publishing --------------------------------------------------
@@ -446,6 +484,23 @@ void Adaptor::Impl::on_bus_loss(void *data) {
 
 void Adaptor::Impl::refresh() {
   if (!a11y || a11y->failed()) return;
+  // The walk publishes, and publishing emits: a request that arrives during it
+  // must not nest a second walk on the one whose events are still going out.
+  if (walking) return;
+  WalkGuard guard{walking};
+  last_walk = std::chrono::steady_clock::now();
+  // The request walk and the periodic check share one cadence: neither walks on
+  // the heels of the other, so a client polling in a tight loop never sees two
+  // walks in one interval.
+  next_refresh = last_walk + kRefreshInterval;
+  // A timer armed for the previous cadence would walk again on the heels of
+  // this one; the next check re-arms it for the new deadline.
+  if (refresh_armed) {
+    Fl::remove_timeout(on_refresh_timer, this);
+    refresh_armed = false;
+  }
+  actions_dirty = false;
+  ++walks;
   // The previous generation moves into the diff; nothing is served until the
   // next one is published, and no request can interleave on this thread.
   Snapshot before = std::move(served);
@@ -460,6 +515,9 @@ void Adaptor::Impl::refresh() {
     rejection = "the accessibility tree was rejected: " + error->message;
     served = std::move(before);
     source.snapshot = &served;
+    // The request that triggered this walk is served the old generation, so the
+    // next one walks again instead of waiting out the interval.
+    actions_dirty = true;
     update_status();
     return;
   }
@@ -477,6 +535,30 @@ void Adaptor::Impl::refresh() {
   if (!baseline)
     emit_events(*a11y, source, before, served, differences,
                 listeners_known ? &listeners : nullptr);
+}
+
+// --- requests -------------------------------------------------------------
+
+void Adaptor::Impl::ensure_current() {
+  if (!a11y || a11y->failed() || walking) return;
+  // A listener-less client that polls in a tight loop pays at most one walk per
+  // interval, plus one for each action of its own that took effect.
+  if (!actions_dirty &&
+      std::chrono::steady_clock::now() - last_walk < kRefreshInterval)
+    return;
+  refresh();
+}
+
+void Adaptor::Impl::on_action_changed(void *data) {
+  static_cast<Impl *>(data)->actions_dirty = true;
+}
+
+int Adaptor::Impl::on_request(sd_bus_message *message, void *data,
+                              sd_bus_error *) {
+  auto *impl = static_cast<Impl *>(data);
+  if (sd_bus_message_is_method_call(message, nullptr, nullptr) > 0)
+    impl->ensure_current();
+  return 0;
 }
 
 // --- registry -------------------------------------------------------------
@@ -629,6 +711,8 @@ Adaptor::Adaptor(FltkTree &tree) : impl_(std::make_unique<Impl>(tree)) {
 Adaptor::~Adaptor() = default;
 
 AdaptorStatus Adaptor::status() const { return impl_->status; }
+
+std::uint64_t Adaptor::walks_for_testing() const { return impl_->walks; }
 
 void Adaptor::on_status_change(StatusHandler handler, void *data) {
   impl_->status_handler = handler;

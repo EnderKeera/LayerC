@@ -2,7 +2,10 @@
 
 #include <FL/Fl_Widget.H>
 
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <string>
 #include <tuple>
 
 namespace layerc::test::atspi_fixture {
@@ -542,6 +545,103 @@ void value_and_selection_mutations_reach_the_widgets() {
                                      return sd_bus_message_append(call, "i", 1);
                                    }).reply) == std::optional<bool>{false},
          "a radio group cannot deselect without choosing another button");
+}
+
+// --- case p: an action is read back with its own effect -------------------
+
+// A client that activates a control and then reads sees the generation its own
+// action produced, without waiting for the next periodic walk.
+void an_action_reads_back_in_the_generation_it_made() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  RichFixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+  harness.spin(ms(250));
+
+  const auto button = node_path_named(harness, "Apply");
+  const auto label = node_path_named(harness, "Static");
+  if (!expect(button.has_value() && label.has_value(),
+              "the button and the label have paths"))
+    return;
+
+  // The button's own callback renames another widget; its node keeps its path.
+  struct Renamed {
+    Fl_Box *label{};
+    int applied{};
+  } renamed{fixture.label, 0};
+  fixture.button->callback(
+      [](Fl_Widget *, void *data) {
+        auto *state = static_cast<Renamed *>(data);
+        state->label->label("Applied");
+        state->label->redraw();
+        ++state->applied;
+      },
+      &renamed);
+
+  const auto activated = harness.ask(
+      harness.embed_name(), *button, "org.a11y.atspi.Action", "DoAction",
+      [](sd_bus_message *call) { return sd_bus_message_append(call, "i", 0); });
+  expect(parse_bool(activated.reply) == std::optional<bool>{true},
+         "DoAction is accepted");
+  expect(harness.spin_until([&] { return renamed.applied == 1; }, ms(2000)),
+         "the widget's own callback ran");
+  // No wait: the request below walks the generation the callback produced.
+  expect(variant_text(harness.property(*label, kAccessibleInterface, "Name")
+                          .reply) == std::optional<std::string>{"Applied"},
+         "the read right after the action names the new label");
+}
+
+// --- case q: the walk budget ----------------------------------------------
+
+// A listener-less client that polls a large tree pays at most one walk per
+// refresh interval; its own actions would add one walk each.
+void reads_without_a_listener_stay_within_the_walk_budget() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  RichFixture fixture;
+  for (int row = 1; row <= 2000; ++row) {
+    const std::string text = "row " + std::to_string(row);
+    fixture.items->add(text.c_str());
+  }
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+  harness.spin(ms(250));
+
+  const auto items = node_path_named(harness, "Items");
+  if (!expect(items.has_value(), "the browser has a path")) return;
+  const auto rows = children_of(harness, *items);
+  if (!expect(rows.size() >= 300, "the browser exports its rows")) return;
+
+  const auto walks = adaptor.walks_for_testing();
+  const auto started = Clock::now();
+  for (int read = 0; read < 300; ++read) {
+    const auto &node = rows[static_cast<std::size_t>(read) % rows.size()];
+    (void)harness.property(node.path, kAccessibleInterface, "Name");
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      Clock::now() - started);
+  // The production interval is kRefreshInterval in adaptor.cpp: 100 ms.
+  const auto budget = static_cast<std::uint64_t>(elapsed.count() / 100000) + 2;
+  const auto taken = adaptor.walks_for_testing() - walks;
+  std::fprintf(stderr, "[walks] %llu walks in %lld ms (budget %llu)\n",
+               static_cast<unsigned long long>(taken),
+               static_cast<long long>(elapsed.count() / 1000),
+               static_cast<unsigned long long>(budget));
+  expect(taken <= budget,
+         "300 reads stay within one walk per refresh interval");
 }
 
 } // namespace layerc::test::atspi_fixture

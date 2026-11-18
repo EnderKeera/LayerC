@@ -30,6 +30,15 @@ namespace {
 // cancels its step.
 std::vector<std::function<void()>> deferred;
 
+ChangedHandler changed_handler = nullptr;
+void *changed_handler_data = nullptr;
+
+// A bridge that published a tree hears about every action that took effect;
+// the hook only marks that tree stale, so it never walks here.
+void notify_changed() {
+  if (changed_handler != nullptr) changed_handler(changed_handler_data);
+}
+
 void run_deferred(void *) {
   auto steps = std::move(deferred);
   deferred.clear();
@@ -41,8 +50,10 @@ void defer(Fl_Widget *widget, std::function<void(Fl_Widget &)> step) {
   if (deferred.empty()) Fl::add_timeout(0.0, run_deferred);
   deferred.push_back([tracker, step = std::move(step)] {
     if (auto *live_widget = tracker->widget();
-        live_widget && live_widget->active_r() && modal_allows(*live_widget))
+        live_widget && live_widget->active_r() && modal_allows(*live_widget)) {
       step(*live_widget);
+      notify_changed();
+    }
   });
 }
 
@@ -83,6 +94,11 @@ Fl_Input_ *addressable_field(const Target &target, std::string &text) {
 }
 
 } // namespace
+
+void set_changed_handler(ChangedHandler handler, void *data) {
+  changed_handler = handler;
+  changed_handler_data = data;
+}
 
 void cancel_deferred() {
   Fl::remove_timeout(run_deferred);
@@ -156,6 +172,7 @@ bool set_caret(const Target &target, std::size_t offset) {
   if (field == nullptr || !addressable(text, offset)) return false;
   field->insert_position(static_cast<int>(offset));
   field->redraw();
+  notify_changed();
   return true;
 }
 
@@ -165,6 +182,7 @@ bool select_text(const Target &target, std::size_t anchor, std::size_t caret) {
   if (field == nullptr || !addressable(text, anchor) || !addressable(text, caret)) return false;
   field->insert_position(static_cast<int>(caret), static_cast<int>(anchor));
   field->redraw();
+  notify_changed();
   return true;
 }
 
@@ -175,6 +193,7 @@ bool set_text(const Target &target, std::string_view text) {
   field->value(text.data(), static_cast<int>(text.size()));
   field->redraw();
   queue_callback(*field);
+  notify_changed();
   return true;
 }
 
@@ -191,6 +210,7 @@ bool insert_text(const Target &target, std::size_t offset, std::string_view text
   field->insert_position(static_cast<int>(offset + text.size()));
   field->redraw();
   queue_callback(*field);
+  notify_changed();
   return true;
 }
 
@@ -204,6 +224,7 @@ bool delete_text(const Target &target, std::size_t begin, std::size_t end) {
   field->insert_position(static_cast<int>(begin));
   field->redraw();
   queue_callback(*field);
+  notify_changed();
   return true;
 }
 
@@ -213,7 +234,10 @@ bool set_number(const Target &target, double value) {
   const auto low = std::min(valuator->minimum(), valuator->maximum());
   const auto high = std::max(valuator->minimum(), valuator->maximum());
   if (!std::isfinite(value) || value < low || value > high) return false;
-  if (valuator->value(value)) queue_callback(*valuator);
+  if (valuator->value(value)) {
+    notify_changed();
+    queue_callback(*valuator);
+  }
   valuator->redraw();
   return true;
 }
