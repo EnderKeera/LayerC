@@ -429,7 +429,6 @@ Paths are relative to this directory.
     04f20dc91a14e2c468abdf79db56edfbee8faa48703a888b601ce50f3a5fa3b6  FL/glut.H
     1ce200e6909da3bfe90348d7e1752afa409791719a3c5c5ad3765c3f0f36e2ae  FL/mac.H
     bb09289eafecf7f2f868dca6b4614eee4558b0341c39b27f7d1fe81efcabc319  FL/Makefile.in
-    55142fba696da25fe7cafe23c83fcf2245b227bddbc73ea5220db5381bc04665  FL/math.h
     a8732a90a50c7a39e2e11104241cd6f9369ab683b35e569449f81323f7214b2e  FL/names.h
     1e987e1fc952a7bf014a642f327c9626ae7eb5fc21b098bf0fca357b23325f39  FL/platform.H
     de5af46d5bdbf54721005f7a3c23adca9b9d19a09a1d6949911f83f30c0c92ff  FL/platform_types.h
@@ -1549,9 +1548,24 @@ Paths are relative to this directory.
     8ced40d8c88588811edd2bdb35b7439983d5e1f8e9e32b8a3b244731f3c317b7  zlib/zutil.c
     dddb2dc7a1dc339ecf2c8e089b366f08bb731c0839c7110240d17ce731bb4fea  zlib/zutil.h
 
+## Patched files
+
+These files differ from the release archive. Each is hashed after its patch,
+and its entry records the upstream hash it replaced.
+
+`FL/math.h` backports upstream commit
+`afdb76446778fd2dab89820948e2c67f8ee8d3ba` ("Fix definition of 'rint()' for
+more recent Windows versions"). It limits FLTK's fallback `rint` and
+`copysign` definitions to compilers before Visual Studio 2013
+(`_MSC_VER < 1800`): newer C runtimes provide both, and MSVC 14.52 rejects
+the redefinition of its `copysign` intrinsic (error C2169).
+Upstream SHA-256: `55142fba696da25fe7cafe23c83fcf2245b227bddbc73ea5220db5381bc04665`
+
+    51cbb964d698cd87016a4a4932ba6cc007ce919ca746a3efdd2cc768e5f23381  FL/math.h
+
 ## Local files
 
 - `UPSTREAM.md` is this provenance record, not an upstream file.
 
-No upstream file is patched. Any future patch must be listed here with its
-reason and updated hash in the same commit.
+Any further patch must be listed under Patched files with its reason, the
+upstream hash it replaces and its updated hash in the same commit.

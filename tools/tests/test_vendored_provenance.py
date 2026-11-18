@@ -64,6 +64,21 @@ class FltkProvenanceTests(unittest.TestCase):
         self.assertEqual(set(), recorded - present, "recorded files are missing")
         self.assertEqual(set(), recorded & local)
 
+    def test_patched_files_are_declared_apart_from_unmodified_copies(self) -> None:
+        record = (FLTK / "UPSTREAM.md").read_text(encoding="utf-8")
+        unmodified, patched = record.split("## Patched files\n", 1)
+        patched = patched.split("## Local files\n", 1)[0]
+        line = r"^ {4}([0-9a-f]{64})  (\S+)$"
+        copies = {name for _, name in re.findall(line, unmodified, re.M)}
+        entries = re.findall(line, patched, re.M)
+        replaced = re.findall(r"^Upstream SHA-256: `([0-9a-f]{64})`$", patched, re.M)
+        self.assertEqual(len(entries), len(replaced), "each patch records its upstream hash")
+        for (digest, name), original in zip(entries, replaced, strict=True):
+            with self.subTest(name=name):
+                self.assertNotIn(name, copies)
+                self.assertIn(f"`{name}`", patched)
+                self.assertNotEqual(digest, original)
+
     def test_flatpak_uses_the_same_pinned_release_archive(self) -> None:
         manifest = json.loads((ROOT / "packaging/flatpak/io.github.EnderKeera.LayerC.json")
                               .read_text(encoding="utf-8"))
