@@ -80,6 +80,9 @@ void Context::prune(const Snapshot &snapshot) {
 std::optional<Node> node(const std::shared_ptr<Context> &context,
                          const NodeId id) {
   if (!context->connected.load()) return std::nullopt;
+  context->last_touch.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count());
   return context->model.read(id);
 }
 } // namespace layerc::editor::a11y::uia

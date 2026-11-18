@@ -374,7 +374,11 @@ States states(const Target &target) {
       result.modal = window->modal() != 0;
       result.active = Fl::focus() != nullptr && Fl::focus()->top_window() == window;
       result.resizable = window->resizable() != nullptr;
-    } else if (w->visible_focus() && dynamic_cast<Fl_Group *>(w) == nullptr) {
+    } else if (w->visible_focus() && dynamic_cast<Fl_Group *>(w) == nullptr &&
+               dynamic_cast<Fl_Box *>(w) == nullptr) {
+      // FLTK sets its focus-box flag on every widget, but display-only widgets
+      // (Fl_Box, Fl_Progress) reject FL_FOCUS, so they never take the keyboard
+      // focus that settable widgets do.
       result.focusable = true;
     } else if (dynamic_cast<Fl_Browser *>(w)) {
       result.focusable = true;

@@ -1,7 +1,9 @@
+#include "a11y/fltk_tree.hpp"
 #include "a11y/input.hpp"
-#include "a11y/uia/bridge.hpp"
+#include "a11y/uia/adaptor.hpp"
 #include "a11y/uia/context.hpp"
 #include "a11y/uia/text.hpp"
+#include "accessible_widgets.hpp"
 #include "test_support.hpp"
 
 #include <FL/Fl.H>
@@ -25,9 +27,13 @@
 
 namespace {
 using layerc::test::expect;
+using layerc::editor::a11y::FltkTree;
 using layerc::editor::a11y::Input;
 using layerc::editor::a11y::Role;
-using layerc::editor::a11y::uia::Bridge;
+using layerc::editor::a11y::uia::Adaptor;
+using layerc::editor::accessibility::set_accessible_description;
+using layerc::editor::accessibility::set_accessible_name;
+using layerc::editor::accessibility::set_accessible_role;
 
 template <typename T> class Ref {
 public:
@@ -70,6 +76,35 @@ bool ok(HRESULT result, const char *message) {
                                   << static_cast<unsigned long>(result) << std::dec << '\n';
   return expect(SUCCEEDED(result), message);
 }
+
+// A real UI Automation client on its own apartment, with bounded timeouts so a
+// stuck provider fails the case instead of hanging the suite.
+struct Client {
+  Apartment apartment;
+  Ref<IUIAutomation> automation;
+  Client() {
+    if (!ok(apartment.result, "initialize client MTA")) return;
+    if (!ok(CoCreateInstance(CLSID_CUIAutomation8, nullptr, CLSCTX_INPROC_SERVER,
+                             IID_IUIAutomation,
+                             reinterpret_cast<void **>(automation.put())),
+             "create real IUIAutomation client"))
+      return;
+    Ref<IUIAutomation2> timeouts;
+    if (ok(automation->QueryInterface(IID_IUIAutomation2,
+                                      reinterpret_cast<void **>(timeouts.put())),
+           "UIA timeout interface")) {
+      ok(timeouts->put_ConnectionTimeout(2000), "bound connection timeout");
+      ok(timeouts->put_TransactionTimeout(2000), "bound transaction timeout");
+    }
+  }
+  explicit operator bool() const { return static_cast<bool>(automation); }
+  [[nodiscard]] Ref<IUIAutomationElement> root(const HWND hwnd) {
+    Ref<IUIAutomationElement> element;
+    if (static_cast<bool>(automation))
+      ok(automation->ElementFromHandle(hwnd, element.put()), "client finds FLTK HWND");
+    return element;
+  }
+};
 
 class Events final : public IUIAutomationEventHandler,
                      public IUIAutomationPropertyChangedEventHandler,
@@ -141,7 +176,8 @@ struct Fixture {
   Input readonly{130, 76, 350, 28, "Read-only value"};
   Fl_Button button{130, 120, 120, 28, "Run fixture"};
   Fl_Box status{130, 164, 350, 28, "Waiting"};
-  std::unique_ptr<Bridge> bridge;
+  FltkTree tree;
+  std::unique_ptr<Adaptor> adaptor;
   std::atomic<int> invoked{};
   std::atomic<bool> closed{};
   Fixture() {
@@ -153,15 +189,20 @@ struct Fixture {
       auto &self = *static_cast<Fixture *>(data);
       ++self.invoked;
       self.status.copy_label("Fixture status");
-      self.bridge->announce("Fixture status");
+      self.adaptor->announce(&self.status, "Fixture status");
     }, this);
+    set_accessible_role(field, Role::text_field);
+    set_accessible_name(field, "Profile name");
+    set_accessible_description(field, "Editable fixture field");
+    set_accessible_role(readonly, Role::text_field);
+    set_accessible_name(readonly, "Read-only value");
+    set_accessible_role(button, Role::button);
+    set_accessible_name(button, "Run fixture");
+    set_accessible_role(status, Role::status);
+    set_accessible_name(status, "Fixture status");
     window.show();
     Fl::check();
-    bridge = std::make_unique<Bridge>(window);
-    bridge->bind(field, Role::text_field, "Profile name", "Editable fixture field");
-    bridge->bind(readonly, Role::text_field, "Read-only value");
-    bridge->bind(button, Role::button, "Run fixture");
-    bridge->bind(status, Role::status, "Fixture status");
+    adaptor = std::make_unique<Adaptor>(tree);
   }
   void close_from_client() {
     Fl::awake([](void *data) {
@@ -195,6 +236,7 @@ Ref<IUIAutomationElement> find(IUIAutomation &automation, IUIAutomationElement &
 void sparse_text_runs(HWND hwnd) {
   using namespace layerc::editor::a11y;
   auto context = std::make_shared<uia::Context>(hwnd);
+  context->root.store(1);
   Snapshot tree;
   tree.root = 1;
   Node root;
@@ -254,7 +296,7 @@ void scrolled_input_range(IUIAutomationElement &field,
   String widened(wide.c_str());
   if (!ok(value->SetValue(widened.value), "set text wider than the field")) return;
   // FLTK scrolls its own viewport around the caret when it draws, and the
-  // bridge republishes geometry from its UI-thread check callback, so poll the
+  // adaptor republishes geometry from its UI-thread check callback, so poll the
   // hit test instead of sleeping for a fixed period.
   RECT bounds{};
   if (!ok(field.get_CurrentBoundingRectangle(&bounds), "field bounds for wider text")) return;
@@ -660,6 +702,11 @@ void client(Fixture &fixture, HWND hwnd) {
   if (ok(button->GetCurrentPatternAs(UIA_InvokePatternId, IID_IUIAutomationInvokePattern,
                                      reinterpret_cast<void **>(invoke.put())), "Invoke pattern") && invoke)
     ok(invoke->Invoke(), "invoke real FLTK callback");
+  // Invoke returns without running the callback: it runs from FLTK's loop, so
+  // the client waits for the observed effect instead of assuming it completed.
+  const auto invoked_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (fixture.invoked.load() == 0 && std::chrono::steady_clock::now() < invoked_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
   expect(fixture.invoked.load() == 1, "callback executed once");
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -698,20 +745,19 @@ void client(Fixture &fixture, HWND hwnd) {
       ok(tab_walker->GetFirstChildElement(root.get(), current.put()),
          "first child for focus order");
       for (int count = 0; current && count < 20; ++count) {
-        // UI Automation injects the window's non-client TitleBar alongside this
-        // provider's own fragments; only LayerC elements belong to the FLTK
-        // keyboard traversal.
-        String framework;
-        ok(current->get_CurrentFrameworkId(&framework.value), "child framework id");
-        if (framework.text() == L"LayerC.FLTK") {
+        String name;
+        ok(current->get_CurrentName(&name.value), "child name");
+        // Only the fixture's own controls belong to its reading order; the
+        // window's non-client decorations are not freestanding controls.
+        const bool fixture_control = name.text() == L"Profile name" ||
+                                     name.text() == L"Read-only value" ||
+                                     name.text() == L"Run fixture" ||
+                                     name.text() == L"Fixture status";
+        if (fixture_control) {
           BOOL keyboard_focusable{};
           ok(current->get_CurrentIsKeyboardFocusable(&keyboard_focusable),
              "child keyboard focusable");
-          if (keyboard_focusable != FALSE) {
-            String name;
-            ok(current->get_CurrentName(&name.value), "focusable child name");
-            focusable.push_back(name.text());
-          }
+          if (keyboard_focusable != FALSE) focusable.push_back(name.text());
         }
         Ref<IUIAutomationElement> next;
         ok(tab_walker->GetNextSiblingElement(current.get(), next.put()),
@@ -785,8 +831,8 @@ void real_client_tree_and_text() {
   struct Sta { ~Sta() { CoUninitialize(); } } sta;
   Fl::lock();
   Fixture fixture;
-  const auto error = fixture.bridge->sync();
-  if (!expect(!error, error ? error->message : "valid UIA bridge")) return;
+  const auto error = fixture.adaptor->sync();
+  if (!expect(!error, error ? error->message : "valid UIA adaptor")) return;
   const HWND hwnd = fl_xid(&fixture.window);
   std::thread worker([&] {
     try { client(fixture, hwnd); }
@@ -797,6 +843,122 @@ void real_client_tree_and_text() {
   Fl::run();
   worker.join();
 }
+
+// D1: no client, no walk. The adaptor hosts the window but exports nothing
+// until a client asks for the root object, and the explicit sync() above is the
+// only walk allowed before that.
+void demand_drives_walking() {
+  const auto apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (!ok(apartment, "initialize demand fixture STA")) return;
+  struct Sta { ~Sta() { CoUninitialize(); } } sta;
+  Fl::lock();
+  Fl_Double_Window window(260, 140, "LayerE UIA demand");
+  Fl_Button button{40, 60, 180, 28, "Demand button"};
+  window.end();
+  window.show();
+  Fl::check();
+  FltkTree tree;
+  Adaptor adaptor(tree);
+  const HWND hwnd = fl_xid(&window);
+  std::thread worker([&] {
+    try {
+      // The FLTK loop runs with no client attached for longer than the refresh
+      // interval; walking here would be work nobody asked for.
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      expect(adaptor.walks_for_testing() == 0,
+             "no tree walk happens while no client asks for the tree");
+      expect(adaptor.hosted_windows_for_testing() == 1,
+             "the shown window is hosted before any client asks");
+      Client client;
+      if (!client) return;
+      auto root = client.root(hwnd);
+      expect(static_cast<bool>(root), "the client reaches the window");
+      expect(adaptor.walks_for_testing() > 0,
+             "asking for the root object walks the tree");
+      Fl::awake([](void *data) { static_cast<Fl_Window *>(data)->hide(); }, &window);
+    } catch (...) { expect(false, "unexpected demand exception"); }
+  });
+  Fl::run();
+  worker.join();
+}
+
+// D1: every shown top-level window is its own fragment root: the dialog's
+// controls appear in the dialog's tree only, and hiding it retires that host
+// while the main window keeps working.
+void second_window_hosting() {
+  const auto apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (!ok(apartment, "initialize dialog fixture STA")) return;
+  struct Sta { ~Sta() { CoUninitialize(); } } sta;
+  Fl::lock();
+  Fixture fixture;
+  Fl_Double_Window dialog(260, 140, "LayerE UIA dialog");
+  Fl_Button dialog_button{40, 60, 180, 28, "Dialog action"};
+  dialog.end();
+  set_accessible_role(dialog_button, Role::button);
+  dialog.show();
+  Fl::check();
+  const auto error = fixture.adaptor->sync();
+  if (!expect(!error, error ? error->message : "valid UIA adaptor")) return;
+  expect(fixture.adaptor->hosted_windows_for_testing() == 2,
+         "both shown windows are hosted");
+  const HWND main_hwnd = fl_xid(&fixture.window);
+  const HWND dialog_hwnd = fl_xid(&dialog);
+  std::thread worker([&] {
+    try {
+      Client client;
+      if (!client) return;
+      auto main_root = client.root(main_hwnd);
+      auto dialog_root = client.root(dialog_hwnd);
+      if (!expect(static_cast<bool>(main_root) && static_cast<bool>(dialog_root),
+                  "the client reaches both windows"))
+        return;
+      String name;
+      ok(dialog_root->get_CurrentName(&name.value), "dialog root name");
+      expect(name.text() == L"LayerE UIA dialog", "the dialog is its own root window");
+      auto field = find(*client.automation.get(), *main_root.get(), L"Profile name");
+      auto dialog_action = find(*client.automation.get(), *dialog_root.get(), L"Dialog action");
+      if (!field || !dialog_action) return;
+      // The dialog's button must not appear in the main window's subtree.
+      VARIANT value{};
+      value.vt = VT_BSTR;
+      value.bstrVal = SysAllocString(L"Dialog action");
+      Ref<IUIAutomationCondition> condition;
+      ok(client.automation->CreatePropertyCondition(UIA_NamePropertyId, value, condition.put()),
+         "build dialog-name condition");
+      VariantClear(&value);
+      Ref<IUIAutomationElement> leaked;
+      if (condition)
+        ok(main_root->FindFirst(TreeScope_Descendants, condition.get(), leaked.put()),
+           "search the main window for the dialog control");
+      expect(!leaked, "one window's controls stay out of another window's tree");
+      // Hiding the dialog drops its host, and its retained providers disconnect.
+      Fl::awake([](void *data) { static_cast<Fl_Window *>(data)->hide(); }, &dialog);
+      const auto hide_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (fixture.adaptor->hosted_windows_for_testing() != 1 &&
+             std::chrono::steady_clock::now() < hide_deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      expect(fixture.adaptor->hosted_windows_for_testing() == 1,
+             "hiding the dialog drops its host");
+      String retired;
+      expect(FAILED(dialog_action->get_CurrentName(&retired.value)),
+             "a closed dialog's retained provider disconnects");
+      String still_there;
+      ok(field->get_CurrentName(&still_there.value), "the main window keeps working");
+      expect(still_there.text() == L"Profile name",
+             "the main window's elements survive the dialog closing");
+      fixture.close_from_client();
+      const auto close_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (!fixture.closed.load() && std::chrono::steady_clock::now() < close_deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    } catch (const std::exception &exception) { expect(false, exception.what()); }
+    catch (...) { expect(false, "unexpected dialog exception"); }
+    if (!fixture.closed.load()) fixture.close_from_client();
+  });
+  Fl::run();
+  worker.join();
+}
 } // namespace
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(real_client_tree_and_text))
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(real_client_tree_and_text),
+                 LAYERC_TEST_CASE(demand_drives_walking),
+                 LAYERC_TEST_CASE(second_window_hosting))

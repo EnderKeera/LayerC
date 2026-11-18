@@ -1,5 +1,6 @@
 #include "editor_layout_rules.hpp"
-#include "a11y/uia/bridge.hpp"
+#include "a11y/fltk_tree.hpp"
+#include "a11y/uia/adaptor.hpp"
 #include "layerc/platform/native_theme.hpp"
 
 #include <FL/Fl.H>
@@ -39,8 +40,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR command_line,
   window.end();
   window.resizable(window);
   window.show();
-  layerc::editor::a11y::uia::Bridge accessibility(window);
-  if (accessibility.error()) return 1;
+  layerc::editor::a11y::FltkTree tree;
+  layerc::editor::a11y::uia::Adaptor accessibility(tree);
+  if (accessibility.sync()) return 1;
   layerc::platform::set_window_frame_colors(
       fl_xid(&window), colors.fill, colors.border, colors.text);
   const bool smoke = command_line != nullptr &&

@@ -66,6 +66,10 @@ if(TARGET layerc_editor_fltk_uia)
     layerc_add_test(layerc_windows_fltk_accessibility_tests WIN32
         SOURCES tests/windows_fltk_accessibility_tests.cpp
         LINK layerc_editor_fltk_uia TIMEOUT 60 LABELS required editor)
+    # An announcement made while no client listens must not be replayed later.
+    layerc_add_test(layerc_windows_fltk_notification_tests WIN32
+        SOURCES tests/windows_fltk_notification_tests.cpp
+        LINK layerc_editor_fltk_uia TIMEOUT 60 LABELS required editor)
     # The shared FLTK tree pass; Linux registers the same suite with its display lock.
     layerc_add_test(layerc_fltk_accessibility_tree_tests WIN32
         SOURCES tests/fltk_accessibility_tree_tests.cpp

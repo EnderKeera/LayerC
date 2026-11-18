@@ -12,7 +12,7 @@ layerc_win32(layerc_editor_fltk_a11y)
 add_library(layerc_editor_fltk_uia STATIC
     src/editor/fltk/a11y/uia/context.cpp
     src/editor/fltk/a11y/uia/provider.cpp
-    src/editor/fltk/a11y/uia/bridge.cpp
+    src/editor/fltk/a11y/uia/adaptor.cpp
     src/editor/fltk/a11y/uia/events.cpp
     src/editor/fltk/a11y/uia/text_provider.cpp
     src/editor/fltk/a11y/uia/text_range.cpp)

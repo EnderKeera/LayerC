@@ -319,7 +319,7 @@ public:
     });
   }
 private:
-  bool is_root() const noexcept { return id_ == 1; }
+  bool is_root() const noexcept { return id_ == context_->root.load(); }
   std::atomic<ULONG> references_{1};
   std::shared_ptr<Context> context_;
   NodeId id_;

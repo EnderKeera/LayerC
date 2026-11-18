@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,12 @@ struct Context {
   const UINT message;
   const ULONG_PTR cookie;
   std::atomic<bool> connected{true};
+  // The node this window hosts as its root; UI Automation treats it as the
+  // fragment root, so no provider may assume the application node's id.
+  std::atomic<NodeId> root{no_node};
+  // Steady-clock nanoseconds of the last provider request: a client that stops
+  // asking lets the adaptor stop walking.
+  std::atomic<std::int64_t> last_touch{};
   Model model;
 
   [[nodiscard]] HRESULT dispatch(Action action);
