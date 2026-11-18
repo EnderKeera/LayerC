@@ -20,6 +20,8 @@ libraries and their notices in `jpeg/`, `png/` and `zlib/`.
 The Windows FLTK trial statically links only the base FLTK library, without
 OpenGL or the image libraries; it is not yet installed or shipped. The
 existing Win32 editor is unchanged. Native Linux uses the distribution's
-FLTK (1.4 or later); the Flatpak builds the checksum-pinned 1.4.5 archive.
+FLTK (1.4 or later); a Linux source build on a distribution without it
+statically links the same base library from this snapshot, and the Flatpak
+builds the checksum-pinned 1.4.5 archive.
 FLTK licensing and provenance ship under `licenses/fltk/` on Windows and
 `share/licenses/LayerC/fltk/` on Linux and in the Flatpak.

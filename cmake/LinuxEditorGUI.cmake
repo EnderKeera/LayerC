@@ -10,19 +10,38 @@ macro(layerc_editor_unavailable reason)
 endmacro()
 set(LAYERC_EDITOR_SYSROOT "" CACHE PATH
     "Optional extracted dependency root for Linux editor development")
+# Native packages link the distribution's FLTK 1.4 (tools/linux_package_check.py
+# requires its runtime). A source build on a distribution without FLTK 1.4
+# (Ubuntu 24.04 ships 1.3) builds the pinned third_party/fltk instead.
+option(LAYERC_FLTK_FALLBACK
+    "Build the pinned third_party/fltk when the system lacks FLTK 1.4" ON)
 find_program(LAYERC_FLTK_CONFIG
     NAMES "${CMAKE_LIBRARY_ARCHITECTURE}-fltk-config" fltk-config)
+set(layerc_fltk_problem "")
 if(NOT LAYERC_FLTK_CONFIG)
-    layerc_editor_unavailable("FLTK 1.4 development files unavailable")
+    set(layerc_fltk_problem "FLTK 1.4 development files unavailable")
+else()
+    execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --version
+        OUTPUT_VARIABLE LAYERC_FLTK_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE layerc_fltk_result)
+    if(NOT layerc_fltk_result EQUAL 0)
+        set(layerc_fltk_problem "${LAYERC_FLTK_CONFIG} --version failed")
+    elseif(LAYERC_FLTK_VERSION VERSION_LESS 1.4)
+        set(layerc_fltk_problem "FLTK 1.4 or later required")
+    endif()
 endif()
-execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --version
-    OUTPUT_VARIABLE LAYERC_FLTK_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE layerc_fltk_result)
-if(NOT layerc_fltk_result EQUAL 0)
-    layerc_editor_unavailable("${LAYERC_FLTK_CONFIG} --version failed")
-endif()
-if(LAYERC_FLTK_VERSION VERSION_LESS 1.4)
-    layerc_editor_unavailable("FLTK 1.4 or later required")
+set(LAYERC_FLTK_BUNDLED OFF)
+if(layerc_fltk_problem)
+    if(NOT LAYERC_FLTK_FALLBACK)
+        layerc_editor_unavailable("${layerc_fltk_problem}")
+    endif()
+    # The bundled build draws text through Xft, as the distribution's does;
+    # core X fonts would change every editor metric.
+    find_package(X11 QUIET)
+    if(NOT X11_Xft_FOUND)
+        layerc_editor_unavailable("${layerc_fltk_problem}; the bundled FLTK 1.4.5 needs Xft development files")
+    endif()
+    set(LAYERC_FLTK_BUNDLED ON)
 endif()
 # Screen-reader access is part of the editor, not an optional extra.
 # The editor's own AT-SPI bridge speaks D-Bus directly, so it needs the sd-bus
@@ -31,18 +50,26 @@ endif()
 if(NOT LAYERC_HAVE_SDBUS)
     layerc_editor_unavailable("sd-bus development files unavailable for the AT-SPI bridge")
 endif()
-execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --cxxflags
-    OUTPUT_VARIABLE LAYERC_FLTK_CXXFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE layerc_fltk_cxx_result)
-execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --ldflags
-    OUTPUT_VARIABLE LAYERC_FLTK_LDFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE layerc_fltk_ld_result)
-if(NOT layerc_fltk_cxx_result EQUAL 0 OR NOT layerc_fltk_ld_result EQUAL 0)
-    layerc_editor_unavailable("${LAYERC_FLTK_CONFIG} did not report its build flags")
+set(LAYERC_FLTK_CXXFLAGS "")
+set(LAYERC_FLTK_LDFLAGS "")
+if(LAYERC_FLTK_BUNDLED)
+    message(STATUS "Linux LayerE uses the bundled FLTK 1.4.5: ${layerc_fltk_problem}")
+    include("${CMAKE_CURRENT_LIST_DIR}/LayerCFLTKVendor.cmake")
+    set(LAYERC_FLTK_LDFLAGS layerc_fltk_vendor)
+else()
+    execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --cxxflags
+        OUTPUT_VARIABLE LAYERC_FLTK_CXXFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE layerc_fltk_cxx_result)
+    execute_process(COMMAND "${LAYERC_FLTK_CONFIG}" --ldflags
+        OUTPUT_VARIABLE LAYERC_FLTK_LDFLAGS OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE layerc_fltk_ld_result)
+    if(NOT layerc_fltk_cxx_result EQUAL 0 OR NOT layerc_fltk_ld_result EQUAL 0)
+        layerc_editor_unavailable("${LAYERC_FLTK_CONFIG} did not report its build flags")
+    endif()
+    separate_arguments(LAYERC_FLTK_CXXFLAGS UNIX_COMMAND "${LAYERC_FLTK_CXXFLAGS}")
+    separate_arguments(LAYERC_FLTK_LDFLAGS UNIX_COMMAND "${LAYERC_FLTK_LDFLAGS}")
 endif()
-separate_arguments(LAYERC_FLTK_CXXFLAGS UNIX_COMMAND "${LAYERC_FLTK_CXXFLAGS}")
-separate_arguments(LAYERC_FLTK_LDFLAGS UNIX_COMMAND "${LAYERC_FLTK_LDFLAGS}")
-if(LAYERC_EDITOR_SYSROOT)
+if(LAYERC_EDITOR_SYSROOT AND NOT LAYERC_FLTK_BUNDLED)
     foreach(list_name LAYERC_FLTK_CXXFLAGS LAYERC_FLTK_LDFLAGS)
         set(relocated)
         foreach(flag IN LISTS ${list_name})

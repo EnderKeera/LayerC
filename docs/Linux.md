@@ -326,16 +326,19 @@ has no Generic HID capture, Game Bar companion, capture exclusion or isolated
 recognition (their data is preserved), the isolated-runtime setting has no
 Linux counterpart (its value is preserved), and there is no Pick Window or direct
 overlay drag because X11 overlays never take input. When X11 development libraries, FLTK 1.4+ with
-`fltk-config`, and ATK, its AT-SPI adaptor and libatspi 2.62 or later are
+`fltk-config`, and sd-bus development files (`libsystemd-dev`) are
 available, `LAYERC_BUILD_EDITOR=ON` (the default) adds the `layere`
-target. Older ATK/AT-SPI adaptors crash during cleanup, so 2.62 is the
-floor: Debian 13 takes 2.62 from `trixie-backports` (its main archive has
-2.56), while Ubuntu 24.04 (2.52) does not qualify. `tools/linux-editor-deps.txt`
-lists the editor's Debian packages and their suite. Missing dependencies leave the existing daemon/CLI and headless build
+target. Where the distribution has no FLTK 1.4 (Ubuntu 24.04 ships 1.3), a
+source build instead compiles the pinned FLTK 1.4.5 in `third_party/fltk`
+statically for X11 with Xft text; it needs the Xft, fontconfig, Xinerama,
+Xcursor and Xrender development headers, and `-DLAYERC_FLTK_FALLBACK=OFF`
+reports the editor unavailable instead. The native package always links the
+distribution's FLTK 1.4. `tools/linux-editor-deps.txt` lists the editor's
+Debian packages and their suite. Missing dependencies leave the existing daemon/CLI and headless build
 graph usable and do not count as passing an editor gate. Configure with
 `-DLAYERC_REQUIRE_EDITOR=ON` to make them a configuration error instead.
-FLTK and ATK are linked into `layere` only, not into `layerd` or the shared
-core. GTK widgets are not used.
+FLTK and the editor's AT-SPI bridge are linked into `layere` only, not into
+`layerd` or the shared core. GTK widgets and ATK are not used.
 
 ```sh
 cmake --build build-linux --target layere
@@ -371,9 +374,12 @@ data blocks Save rather than being silently discarded. Save uses the shared dura
 stage/commit path, then asks the daemon to reload through the authenticated
 private control socket.
 
-LayerE exports its windows, menus and controls to screen readers through ATK
-and the AT-SPI bus without GTK widgets. When the bus or a coherent ≥ 2.62
-library set is unavailable, the window shows the reason and editing continues.
+LayerE exports its windows, menus and controls to screen readers through its
+own AT-SPI bridge, which speaks the AT-SPI D-Bus protocol through sd-bus
+without ATK, libatspi or GTK widgets. It stays idle until an assistive
+technology enables the accessibility bus (`org.a11y.Status`) and stops sending
+events when none listens. When the bus is unavailable, the window shows the
+reason and editing continues.
 Keyboard focus scrolls controls into view in small main and calibration windows;
 AT-SPI visibility and extents are clipped to the scroll viewport. Open menus and
 choice popups expose the highlighted item's focus, selection and row geometry
@@ -605,8 +611,9 @@ ctest --test-dir build-linux --output-on-failure   # portable + Linux suites
 ```
 
 Linux builds `layerd`, `layerctl`, and `layercal` when the required X11
-libraries are present. FLTK 1.4+ and ATK/AT-SPI 2.62+ development files
-additionally enable the X11 `layere` editor described above.
+libraries are present. FLTK 1.4+ (or the pinned fallback described above) and
+sd-bus development files additionally enable the X11 `layere` editor
+described above.
 Missing editor dependencies do not disable
 the existing headless/source targets. The isolated capture worker and Game Bar
 host remain Windows-only.
@@ -653,7 +660,7 @@ disposable workers and performs the following:
 - with `--editor auto|required` (default `auto`), runs the CTest `editor` gate
   (`linux-editor` in `tools/test-gates.json`) under Xvfb and the installed
   editor smoke. `required` configures with `LAYERC_REQUIRE_EDITOR=ON`, so a
-  missing FLTK/ATK dependency fails instead of shrinking coverage; `off`
+  missing FLTK/sd-bus dependency fails instead of shrinking coverage; `off`
   records `not-run`;
 - with `--package auto|required` (default `off`), builds a separate
   `/usr`-prefixed Release tree, creates the Debian package with CPack and
@@ -797,12 +804,12 @@ cpack --config build-deb/CPackConfig.cmake -B build-deb/cpack   # layerc_2.7.2-1
 ```
 
 CPack derives the library dependencies with `dpkg-shlibdeps` (needs
-`dpkg-dev` and `file`) and adds the ATK, ATK bridge and AT-SPI ≥ 2.62 floor.
-Debian 13's main archive has 2.56, so enable `trixie-backports` and install
-from it explicitly:
+`dpkg-dev` and `file`), including the distribution's FLTK 1.4 and the
+`libsystemd0` runtime of the editor's AT-SPI bridge, and recommends
+`at-spi2-core` for the accessibility bus that screen readers use:
 
 ```sh
-sudo apt install -t trixie-backports ./layerc_2.7.2-1_amd64.deb
+sudo apt install ./layerc_2.7.2-1_amd64.deb
 ```
 
 One `layerc` package carries the daemon, CLIs and editor. It also installs
@@ -825,10 +832,10 @@ and `UMask=0077`. Direct launch remains the baseline and behaves equivalently.
 ## Flatpak
 
 Manifest: `packaging/flatpak/io.github.EnderKeera.LayerC.json`
-(runtime `org.freedesktop.Platform` 25.08). The runtime has no FLTK and only
-AT-SPI 2.54, so the manifest builds FLTK 1.4.5 (static; the same release
-archive vendored in `third_party/fltk`) and at-spi2-core 2.62.0 from
-checksum-pinned upstream archives before LayerC; the editor is
+(runtime `org.freedesktop.Platform` 25.08). The runtime has no FLTK, so the
+manifest builds FLTK 1.4.5 (static; the same release archive vendored in
+`third_party/fltk`) from a checksum-pinned upstream archive before LayerC;
+the editor's own AT-SPI bridge uses the runtime's sd-bus. The editor is
 required there. Its default command is `layere`, and it installs the desktop
 entry, icons and desktop-application metainfo. Every Linux install, including the Flatpak, carries the notices for the
 statically linked miniz and for FLTK under `share/licenses/LayerC/`
@@ -841,7 +848,7 @@ project-level license; replace it only with an owner-approved SPDX license.
 Authenticated repository access confirms control of the `EnderKeera/LayerC`
 namespace, but the code-hosting URL must also be publicly reachable before a
 Flathub submission. The manifest has not been submitted and builds its
-bundled FLTK and AT-SPI from source, so it is for local or self-hosted Flatpak
+bundled FLTK from source, so it is for local or self-hosted Flatpak
 repositories until a publishing channel accepts it.
 
 The manifest grants `--socket=x11` for XI2, Shape, RandR, EWMH and the
@@ -897,8 +904,9 @@ The `linux` (`debian:stable`, `ubuntu:24.04`) and `linux-flatpak` jobs in
 job details are in
 [`../CONTRIBUTING.md`](../CONTRIBUTING.md#ci-and-release-gates). The
 `debian:stable` job runs `--editor required --package required`; `ubuntu:24.04`
-(AT-SPI below 2.62) runs `--editor off --package off`, keeping the source and
-headless build without the editor. `release.yml` reruns the
+(FLTK 1.3) runs `--editor required --package off`: its editor builds the
+pinned FLTK 1.4.5 and must pass the same editor gate, while the native package,
+which depends on the distribution's FLTK 1.4, stays on Debian. `release.yml` reruns the
 `debian:stable` gate and the Flatpak gate on the tag and publishes their
 `.deb` and bundle with the Windows ZIP; `ci.yml` and `rolling` keep them as
 gate evidence only. Physical

@@ -18,7 +18,8 @@ Archive SHA-256: b5a52489b7ffae196db2076adb4c1b18170db0d047f5e93539a382603461564
 `COPYING` contains FLTK's GNU Library General Public License, version 2,
 with the FLTK static-linking exception. Upstream bundled image libraries
 retain their own notices in `jpeg`, `png` and `zlib`; LayerC's Windows trial
-links only the base FLTK library, not the image or OpenGL libraries.
+and its Linux source-build fallback link only the base FLTK library, not the
+image or OpenGL libraries.
 
 ## Upstream files
 

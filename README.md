@@ -94,8 +94,9 @@ $env:LAYERC_SETTINGS_KEY = 'Software\LayerC.Dev'
 
 Requirements: a C++20 compiler, CMake 3.28+, and Ninja or Make. X11 development
 libraries enable input, overlays, capture, and `layercal`; without them LayerC
-builds a headless store/control daemon. FLTK 1.4+ with `fltk-config` and
-ATK/AT-SPI 2.62+ additionally enable the Linux `layere` editor; see
+builds a headless store/control daemon. FLTK 1.4+ with `fltk-config` (or,
+where the distribution lacks it, the pinned FLTK 1.4.5 in `third_party/fltk`)
+and sd-bus development files additionally enable the Linux `layere` editor; see
 [`docs/Linux.md`](docs/Linux.md#x11-editor-v26c).
 
 ```sh
@@ -338,6 +339,9 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
+| `layerc_linux_editor_atspi_mapping_tests` | Display-free AT-SPI mapping of the editor accessibility model: role codes and names, refined text-field roles, state bits and state-event names, exposed interfaces, UTF-8/character offset translation and reading-unit boundaries |
+| `layerc_linux_atspi_adaptor_tests` | The editor's own sd-bus AT-SPI bridge on a private bus with fake `org.a11y.Bus`/registry services (CTest label `editor`): idle until a consumer listens, one embedded application, tree reads, protocol events and throttling, actions, values, selection, component geometry, character-offset text and edits through the field's own path, `NO_AT_BRIDGE`, and reported/recovered missing launcher, failed bus, refused embed and lost bus |
+| `layerc_fltk_accessibility_tree_tests` | FLTK widgets published to the toolkit-neutral accessibility tree under an X display: consistent snapshots, button roles and actions |
 | `layerc_linux_editor_platform_tests` | Editor platform services: stable process identity, folder launcher arguments and exit status, an idle missing launcher, and a visible calibration-unavailable fault |
 | `layerc_linux_editor_model_tests` | Production editor session: validated profile edits and durable save/roundtrip with retained cooldown/panel/binding fields, selection identity across a rescan, atomically refused invalid candidates, honest offline reload, and appearance (preset contrast floors, status glyph classification, outlines, desktop text scaling and XSETTINGS parsing)/task/placement helpers |
 | `layerc_linux_editor_session_tests` | Toolkit-free editor session: drafts and history, mutation candidates with preserved data, save/delete failures, enablement, reviewed import/export and import races, and field parsing |

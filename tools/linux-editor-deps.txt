@@ -1,4 +1,11 @@
 main libfltk1.4-dev
+# Where the distribution lacks FLTK 1.4 (Ubuntu 24.04), cmake/LinuxEditorGUI.cmake
+# builds the pinned third_party/fltk for X11 and Xft text with these headers.
+main libxft-dev
+main libfontconfig-dev
+main libxinerama-dev
+main libxcursor-dev
+main libxrender-dev
 main libsystemd-dev
 main dbus
 main xdotool
