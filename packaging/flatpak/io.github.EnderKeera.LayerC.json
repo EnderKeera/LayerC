@@ -40,30 +40,6 @@
             ]
         },
         {
-            "name": "at-spi2-core",
-            "buildsystem": "meson",
-            "config-opts": [
-                "-Ddocs=false",
-                "-Dintrospection=disabled",
-                "-Dgtk2_atk_adaptor=false",
-                "-Duse_systemd=false",
-                "-Ddefault_bus=dbus-daemon",
-                "-Dlibdir=lib"
-            ],
-            "cleanup": [
-                "/etc", "/include", "/lib/pkgconfig", "/lib/systemd",
-                "/lib/gnome-settings-daemon-3.0", "/lib/python*", "/lib/*.so",
-                "/libexec", "/share/dbus-1", "/share/defaults"
-            ],
-            "sources": [
-                {
-                    "type": "archive",
-                    "url": "https://download.gnome.org/sources/at-spi2-core/2.62/at-spi2-core-2.62.0.tar.xz",
-                    "sha256": "03a94f7bf35f300daf2843a37cdf36479a91bc53f59a8ea437c79e25d95d1de3"
-                }
-            ]
-        },
-        {
             "name": "layerc",
             "buildsystem": "cmake-ninja",
             "config-opts": [

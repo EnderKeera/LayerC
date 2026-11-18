@@ -236,7 +236,6 @@ git -c "safe.directory=$source_dir" -C "$source_dir" status --short >"$evidence_
   flatpak --version 2>/dev/null || true
   flatpak-builder --version 2>/dev/null || true
   fltk-config --version 2>/dev/null | sed 's/^/fltk /' || true
-  pkg-config --modversion atk-bridge-2.0 2>/dev/null | sed 's/^/atk-bridge-2.0 /' || true
   dpkg-deb --version 2>/dev/null | head -n1 || true
   sway --version 2>/dev/null || true
   gjs --version 2>/dev/null || true
@@ -414,7 +413,7 @@ else
         apt-get install -y --no-install-recommends "$deb"
       {
         dpkg -s layerc
-        apt-cache policy libatk-bridge2.0-0t64 libatspi2.0-0t64 libfltk1.4 2>/dev/null || true
+        apt-cache policy libsystemd0 libfltk1.4 2>/dev/null || true
       } >"$evidence_dir/package-installed.txt"
       run_logged package-headless-smoke env -u DISPLAY \
         bash "$source_dir/tools/linux-runtime-smoke.sh" headless \

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Run tools/run-linux-tests.sh as root inside a disposable container root
 # (tools/ci-linux.sh). Installs the build dependencies and, unless --editor off
-# is selected, the editor dependencies (Debian 13 takes AT-SPI 2.62 from
-# trixie-backports). The launcher must declare the root disposable
-# (LAYERC_DISPOSABLE_ROOT=1) and the root must be a container; this script
-# never declares it on its own, so it cannot install packages on a host.
+# is selected, the editor dependencies. The launcher must declare the root
+# disposable (LAYERC_DISPOSABLE_ROOT=1) and the root must be a container; this
+# script never declares it on its own, so it cannot install packages on a host.
 set -Eeuo pipefail
 
 if [[ $# -lt 3 || $(id -u) -ne 0 ]]; then
@@ -66,16 +65,18 @@ if [[ $editor != off ]]; then
   done < <(read_list "$source_dir/tools/linux-editor-deps.txt")
   if [[ ${ID:-} == debian && ${VERSION_CODENAME:-} == trixie ]]; then
     apt-get install -y --no-install-recommends "${main[@]}"
-    if ! grep -rqsE '^[^#]*trixie-backports' /etc/apt/sources.list /etc/apt/sources.list.d; then
-      echo 'deb http://deb.debian.org/debian trixie-backports main' \
-        >/etc/apt/sources.list.d/layerc-trixie-backports.list
-      apt-get update
+    if ((${#backports[@]})); then
+      if ! grep -rqsE '^[^#]*trixie-backports' /etc/apt/sources.list /etc/apt/sources.list.d; then
+        echo 'deb http://deb.debian.org/debian trixie-backports main' \
+          >/etc/apt/sources.list.d/layerc-trixie-backports.list
+        apt-get update
+      fi
+      apt-get install -y --no-install-recommends -t trixie-backports "${backports[@]}"
     fi
-    apt-get install -y --no-install-recommends -t trixie-backports "${backports[@]}"
   else
     # Elsewhere the distribution's own versions apply, one package at a time
     # and with a visible warning; the CMake gate reports (or, when required,
-    # fails on) a missing FLTK 1.4 or anything older than AT-SPI 2.62.
+    # fails on) a missing FLTK 1.4 or missing sd-bus development files.
     for package in "${main[@]}" "${backports[@]}"; do
       apt-get install -y --no-install-recommends "$package" ||
         echo "warning: $package is unavailable on this distribution" >&2

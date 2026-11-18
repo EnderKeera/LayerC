@@ -2,9 +2,10 @@
 """Check a built LayerC Debian package before anything installs it.
 
 The control fields must carry the configured version and, when the package
-ships the editor, the AT-SPI 2.62 floor; the payload must hold every program,
-the third-party notices and, for the editor, a valid desktop entry, icon set
-and AppStream component. Writes a JSON report and exits non-zero on failure.
+ships the editor, the sd-bus runtime of its own AT-SPI bridge, no ATK or
+libatspi, and a recommendation of the accessibility bus; the payload must hold
+every program, the third-party notices and, for the editor, a valid desktop
+entry, icon set and AppStream component. Writes a JSON report and exits non-zero on failure.
 """
 
 from __future__ import annotations
@@ -34,11 +35,12 @@ EDITOR_FILES = (
     f"usr/share/metainfo/{APP_ID}.metainfo.xml",
     *(f"usr/share/icons/hicolor/{size}x{size}/apps/{APP_ID}.png" for size in (48, 64, 128, 256)),
 )
-ATSPI_FLOOR = (
-    "libatk1.0-0t64 (>= 2.62)",
-    "libatk-bridge2.0-0t64 (>= 2.62)",
-    "libatspi2.0-0t64 (>= 2.62)",
-)
+# The editor speaks AT-SPI over sd-bus itself: libsystemd (or libelogind)
+# carries the bridge, ATK and libatspi must not return, and at-spi2-core
+# provides the accessibility bus screen readers use.
+BRIDGE_RUNTIMES = ("libsystemd0", "libelogind0")
+RETIRED_ACCESSIBILITY = ("libatk1.0", "libatk-bridge2.0", "libatspi2.0")
+ACCESSIBILITY_BUS = "at-spi2-core"
 
 
 def run(*command: str) -> str:
@@ -49,8 +51,8 @@ def check(deb: Path, version: str, editor: bool) -> dict[str, object]:
     failures: list[str] = []
     fields = {
         name: run("dpkg-deb", "-f", str(deb), name).strip()
-        for name in ("Package", "Version", "Architecture", "Depends", "Installed-Size",
-                     "Maintainer", "Description")
+        for name in ("Package", "Version", "Architecture", "Depends", "Recommends",
+                     "Installed-Size", "Maintainer", "Description")
     }
     if "installer created using CPack" in fields["Description"]:
         failures.append("Description is CPack's generic placeholder")
@@ -59,8 +61,14 @@ def check(deb: Path, version: str, editor: bool) -> dict[str, object]:
     if fields["Version"] != f"{version}-1":
         failures.append(f"version {fields['Version']!r} does not match configured {version}-1")
     depends = [item.strip() for item in fields["Depends"].split(",") if item.strip()]
+    recommends = [item.strip() for item in fields["Recommends"].split(",") if item.strip()]
     if editor:
-        failures += [f"Depends lacks {floor}" for floor in ATSPI_FLOOR if floor not in depends]
+        if not any(item.split()[0] in BRIDGE_RUNTIMES for item in depends):
+            failures.append("Depends lacks the sd-bus runtime of the AT-SPI bridge")
+        failures += [f"Depends names retired {item}" for item in depends
+                     if item.split()[0].startswith(RETIRED_ACCESSIBILITY)]
+        if ACCESSIBILITY_BUS not in (item.split()[0] for item in recommends):
+            failures.append(f"Recommends lacks {ACCESSIBILITY_BUS}")
         if not any(item.startswith("libfltk1.4") for item in depends):
             failures.append("Depends lacks the FLTK 1.4 runtime")
 

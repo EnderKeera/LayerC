@@ -907,9 +907,10 @@ include(CPack)
 else()
 # Native Debian package. Configure it with CMAKE_INSTALL_PREFIX=/usr; the
 # optional user unit embeds the configured binary path, so the package installs
-# under that same prefix. dpkg-shlibdeps derives the library dependencies, and
-# the editor adds the AT-SPI floor its accessibility bridge needs (Debian 13:
-# trixie-backports).
+# under that same prefix. dpkg-shlibdeps derives the library dependencies,
+# including libsystemd0 for the editor's own AT-SPI bridge. The editor
+# recommends at-spi2-core, which provides the accessibility bus that screen
+# readers use.
 set(CPACK_GENERATOR "DEB")
 set(CPACK_PACKAGE_NAME "layerc")
 set(CPACK_PACKAGE_VENDOR "LayerC")
@@ -935,8 +936,7 @@ set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/EnderKeera/LayerC")
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 if(TARGET layere)
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS
-        "libatk1.0-0t64 (>= 2.62), libatk-bridge2.0-0t64 (>= 2.62), libatspi2.0-0t64 (>= 2.62)")
+    set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "at-spi2-core")
 endif()
 include(CPack)
 endif()
