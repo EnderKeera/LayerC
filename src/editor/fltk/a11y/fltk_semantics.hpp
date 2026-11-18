@@ -21,11 +21,8 @@ class Fl_Input_;
 class Fl_Menu_;
 class Fl_Valuator;
 
-namespace layerc::editor {
-class ContextBrowser;
-}
-
 namespace layerc::editor::a11y {
+class RowGeometry;
 
 // The equivalent of an ATK object's identity: a whole widget, one browser row,
 // or one inline menu item of a menu widget.
@@ -50,7 +47,7 @@ struct MenuSize {
 // A browser's row offsets for one pass. Row geometry walks the item list, so a
 // pass that asks about every row reads it once per list, not once per row.
 struct RowTops {
-  const layerc::editor::ContextBrowser *list;
+  const RowGeometry *list;
   std::vector<int> tops;
 };
 class TreePass final {
@@ -67,8 +64,7 @@ private:
 };
 [[nodiscard]] int menu_size(const Fl_Menu_ &menu);
 // One row's visible slice inside its list viewport, from the pass's row table.
-[[nodiscard]] std::optional<EditorBounds> list_row_bounds(const layerc::editor::ContextBrowser &list,
-                                                        int row);
+[[nodiscard]] std::optional<EditorBounds> list_row_bounds(const RowGeometry &list, int row);
 [[nodiscard]] const Fl_Menu_Item *menu_item_of(const Target &target);
 [[nodiscard]] std::vector<int> menu_level(const Fl_Menu_ &menu, int first);
 

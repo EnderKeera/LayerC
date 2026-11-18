@@ -1,4 +1,5 @@
 #include "editor_popup.hpp"
+#include "a11y/fltk_hooks.hpp"
 #include "editor_style.hpp"
 #include <FL/Fl.H>
 #include <FL/Fl_Choice.H>
@@ -366,4 +367,15 @@ int EditorChoice::handle(int event) {
   }
   return Fl_Choice::handle(event);
 }
+namespace {
+// Every executable that can open an editor popup links this file, so the
+// accessibility layer knows the popups before the first one opens.
+[[maybe_unused]] const bool popup_menus_installed = [] {
+  a11y::set_popup_menus({&layerc::editor::popup_owner, &layerc::editor::popup_current,
+                         &layerc::editor::popup_item_bounds,
+                         &layerc::editor::popup_document_window,
+                         &layerc::editor::popup_pick, &layerc::editor::track_editor_popup});
+  return true;
+}();
+} // namespace
 } // namespace layerc::editor

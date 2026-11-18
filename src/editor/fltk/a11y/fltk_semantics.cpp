@@ -1,9 +1,8 @@
 #include "fltk_semantics.hpp"
 
 #include "accessible_widgets.hpp"
-#include "editor_menus.hpp"
-#include "editor_popup.hpp"
 #include "editor_scroll.hpp"
+#include "fltk_hooks.hpp"
 
 #include "layerc/core/utf8.hpp"
 
@@ -56,7 +55,7 @@ TreePass::~TreePass() {
   pass_rows = previous_rows_;
 }
 
-const std::vector<int> &row_tops(const layerc::editor::ContextBrowser &list) {
+const std::vector<int> &row_tops(const RowGeometry &list) {
   std::vector<RowTops> &store = pass_rows ? *pass_rows : loose_rows;
   if (!pass_rows) loose_rows.clear();
   for (const auto &entry : store)
@@ -65,9 +64,9 @@ const std::vector<int> &row_tops(const layerc::editor::ContextBrowser &list) {
   return store.back().tops;
 }
 
-std::optional<EditorBounds> list_row_bounds(const layerc::editor::ContextBrowser &list,
-                                           int row) {
-  if (row < 1 || row > list.size()) return std::nullopt;
+std::optional<EditorBounds> list_row_bounds(const RowGeometry &list, int row) {
+  const auto *browser = dynamic_cast<const Fl_Browser *>(&list);
+  if (!browser || row < 1 || row > browser->size()) return std::nullopt;
   return list.row_bounds(row, row_tops(list));
 }
 
@@ -176,7 +175,7 @@ bool showing(const Target &target) {
   if (target.kind == TargetKind::menu_item)
     return popup_item_bounds(*menu_owner(target), target.index).has_value();
   if (target.kind == TargetKind::row)
-    if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
+    if (const auto *list = dynamic_cast<const RowGeometry *>(w)) {
       const auto bounds = list_row_bounds(*list, target.index);
       return bounds && visible_bounds(*w, *bounds).has_value();
     }
@@ -407,11 +406,11 @@ std::optional<Bounds> local_bounds(const Target &target) {
   if (!live(target) || !w) return std::nullopt;
   auto *window = w->top_window();
   if (!window || !window->shown()) return std::nullopt;
-  // ContextBrowser owns the scroll-aware visible row geometry. Menu items and
-  // plain browsers retain their owner bounds; never infer row pitch here.
+  // A RowGeometry list owns the scroll-aware visible row geometry. Menu items
+  // and plain browsers retain their owner bounds; never infer row pitch here.
   int left = w->x(), top = w->y(), width = w->w(), height = w->h();
   if (target.kind == TargetKind::row)
-    if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
+    if (const auto *list = dynamic_cast<const RowGeometry *>(w)) {
       const auto bounds = list_row_bounds(*list, target.index);
       if (!bounds) return std::nullopt;
       left = bounds->x;

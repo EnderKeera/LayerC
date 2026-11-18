@@ -150,6 +150,16 @@ if(LAYERC_BUILD_EDITOR OR LAYERC_BUILD_TESTS)
     target_include_directories(layerc_editor_accessibility PUBLIC src/editor/fltk)
     target_link_libraries(layerc_editor_accessibility PUBLIC layerc_core)
     layerc_enable_warnings(layerc_editor_accessibility)
+    # Toolkit-side accessibility both adaptors share (FLTK tree pass, semantics,
+    # actions); each platform adds FLTK and its window_origin seam.
+    set(LAYERC_EDITOR_FLTK_A11Y_SOURCES
+        src/editor/fltk/a11y/fltk_hooks.cpp
+        src/editor/fltk/a11y/fltk_actions.cpp
+        src/editor/fltk/a11y/fltk_semantics.cpp
+        src/editor/fltk/a11y/fltk_tree.cpp
+        src/editor/fltk/a11y/input.cpp
+        src/editor/fltk/accessible_widgets.cpp
+        src/editor/fltk/editor_scroll.cpp)
 endif()
 
 # Build-time tool that writes the launch-time updater manifest; CI signs its

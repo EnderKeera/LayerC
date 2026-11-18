@@ -88,6 +88,19 @@ if(LAYERC_EDITOR_SYSROOT AND NOT LAYERC_FLTK_BUNDLED)
     list(PREPEND LAYERC_FLTK_LDFLAGS
         "-L${LAYERC_EDITOR_SYSROOT}/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
 endif()
+# The toolkit-side accessibility layer, shared with the Windows UIA adaptor;
+# it links neither the editor frontend nor its platform services.
+add_library(layerc_editor_fltk_a11y STATIC
+    ${LAYERC_EDITOR_FLTK_A11Y_SOURCES}
+    src/editor/fltk/platform/linux/window_origin.cpp)
+if(LAYERC_EDITOR_SYSROOT)
+    target_include_directories(layerc_editor_fltk_a11y SYSTEM PUBLIC
+        "${LAYERC_EDITOR_SYSROOT}/usr/include")
+endif()
+target_compile_options(layerc_editor_fltk_a11y PUBLIC ${LAYERC_FLTK_CXXFLAGS})
+target_link_libraries(layerc_editor_fltk_a11y PUBLIC
+    layerc_editor_accessibility layerc_x11 ${LAYERC_FLTK_LDFLAGS})
+layerc_enable_warnings(layerc_editor_fltk_a11y)
 # The GUI-only library gives widget tests the real frontend without linking
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
@@ -104,15 +117,9 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/a11y/atspi/objects_services.cpp
     src/editor/fltk/a11y/atspi/objects_text.cpp
     src/editor/fltk/a11y/atspi/status.cpp
-    src/editor/fltk/a11y/fltk_actions.cpp
-    src/editor/fltk/a11y/fltk_semantics.cpp
-    src/editor/fltk/a11y/fltk_tree.cpp
-    src/editor/fltk/a11y/input.cpp
-    src/editor/fltk/platform/linux/window_origin.cpp
     src/editor/fltk/editor_accessibility.cpp
     src/editor/fltk/editor_app.cpp
     src/editor/fltk/editor_style.cpp
-    src/editor/fltk/editor_scroll.cpp
     src/editor/fltk/editor_popup.cpp
     src/editor/fltk/editor_color_chooser.cpp
     src/editor/fltk/editor_autosave.cpp
@@ -150,7 +157,7 @@ if(LAYERC_EDITOR_SYSROOT)
 endif()
 target_compile_options(layerc_editor_fltk PUBLIC ${LAYERC_FLTK_CXXFLAGS})
 target_link_libraries(layerc_editor_fltk PUBLIC
-    layerc_editor_linux layerc_editor_accessibility layerc_x11
+    layerc_editor_linux layerc_editor_fltk_a11y layerc_editor_accessibility layerc_x11
     PkgConfig::LAYERC_SDBUS ${LAYERC_FLTK_LDFLAGS})
 layerc_enable_warnings(layerc_editor_fltk)
 add_executable(layere src/editor/fltk/main.cpp)

@@ -66,6 +66,10 @@ if(TARGET layerc_editor_fltk_uia)
     layerc_add_test(layerc_windows_fltk_accessibility_tests WIN32
         SOURCES tests/windows_fltk_accessibility_tests.cpp
         LINK layerc_editor_fltk_uia TIMEOUT 60 LABELS required editor)
+    # The shared FLTK tree pass; Linux registers the same suite with its display lock.
+    layerc_add_test(layerc_fltk_accessibility_tree_tests WIN32
+        SOURCES tests/fltk_accessibility_tree_tests.cpp
+        LINK layerc_editor_fltk_a11y TIMEOUT 60 LABELS required editor)
 endif()
 if(TARGET layere_fltk)
     add_test(NAME layerc_windows_fltk_smoke COMMAND layere_fltk --smoke)
@@ -407,7 +411,7 @@ if(NOT WIN32)
             LINK layerc_editor_fltk TIMEOUT 30 LABELS required headless)
         layerc_add_test(layerc_fltk_accessibility_tree_tests
             SOURCES tests/fltk_accessibility_tree_tests.cpp
-            LINK layerc_editor_fltk TIMEOUT 60 SKIP_RETURN_CODE 77
+            LINK layerc_editor_fltk_a11y TIMEOUT 60 SKIP_RETURN_CODE 77
             LABELS required editor RESOURCE_LOCK layerc_x11_display)
         layerc_editor_build_runtime(layerc_fltk_accessibility_tree_tests)
         layerc_add_test(layerc_linux_editor_widget_tests

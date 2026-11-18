@@ -1,6 +1,6 @@
 #include "fltk_actions.hpp"
 
-#include "editor_popup.hpp"
+#include "fltk_hooks.hpp"
 
 #include "layerc/core/utf8.hpp"
 
@@ -125,8 +125,9 @@ bool activate(const Target &target) {
       auto &menu = static_cast<Fl_Menu_ &>(chosen);
       if (index >= menu_size(menu) - 1 || !menu.menu()[index].activevisible()) return;
       if (popup_pick(menu, index)) return;
-      if (menu.menu()[index].submenu()) track_editor_popup(menu, index);
-      else (void)menu.picked(&menu.menu()[index]);
+      // FLTK's own popup only when no frontend popup can open this title.
+      if (menu.menu()[index].submenu() && popup_open(menu, index)) return;
+      (void)menu.picked(&menu.menu()[index]);
     } else if (auto *tabs = dynamic_cast<Fl_Tabs *>(chosen.parent())) {
       if (tabs->value(&chosen)) tabs->do_callback();
       tabs->redraw();

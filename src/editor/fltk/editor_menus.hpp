@@ -1,5 +1,6 @@
 #pragma once
 
+#include "a11y/fltk_hooks.hpp"
 #include "editor_commands.hpp"
 #include "editor_geometry.hpp"
 
@@ -64,7 +65,7 @@ private:
 
 // Hit-testing uses FLTK's actual row geometry, including scroll position;
 // right-clicking empty space never silently targets the previous selection.
-class ContextBrowser final : public Fl_Hold_Browser {
+class ContextBrowser final : public Fl_Hold_Browser, public a11y::RowGeometry {
 public:
   ContextBrowser(int x, int y, int width, int height, const char *label,
                  EditorApp &app, EditorMenuContext context);
@@ -72,12 +73,12 @@ public:
   // The visible row slice in the browser viewport, not the entire browser.
   [[nodiscard]] std::optional<EditorBounds> row_bounds(int row);
   // The same slice from a row table a wider walk already read.
-  [[nodiscard]] std::optional<EditorBounds> row_bounds(int row,
-                                                        const std::vector<int> &tops) const;
+  [[nodiscard]] std::optional<EditorBounds>
+  row_bounds(int row, const std::vector<int> &tops) const override;
   // Row offsets for one walk of the items: entry i is where row i+1 starts and
   // entry size() is where the last row ends. A caller asking about every row
   // reads this once instead of walking the item list per row.
-  [[nodiscard]] std::vector<int> row_tops() const;
+  [[nodiscard]] std::vector<int> row_tops() const override;
   int handle(int event) override;
 protected:
   void draw() override;
