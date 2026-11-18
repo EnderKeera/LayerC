@@ -186,24 +186,33 @@ int ContextBrowser::row_at(int x, int y) {
   }
   return 0;
 }
+std::vector<int> ContextBrowser::row_tops() const {
+  std::vector<int> tops;
+  tops.reserve(static_cast<std::size_t>(std::max(0, size())) + 1);
+  int row_top = y() - vposition();
+  for (auto *item = item_first(); item; item = item_next(item)) {
+    tops.push_back(row_top);
+    row_top += item_height(item);
+  }
+  tops.push_back(row_top);
+  return tops;
+}
 std::optional<EditorBounds> ContextBrowser::row_bounds(int row) {
+  const std::vector<int> tops = row_tops();
+  return row_bounds(row, tops);
+}
+std::optional<EditorBounds> ContextBrowser::row_bounds(int row,
+                                                       const std::vector<int> &tops) const {
   if (!visible_r() || row < 1 || row > size()) return std::nullopt;
   int left{}, top{}, width{}, height{};
   bbox(left, top, width, height);
   if (width <= 0 || height <= 0) return std::nullopt;
-  int row_top = top - vposition();
-  int index = 1;
-  for (auto *item = item_first(); item; item = item_next(item), ++index) {
-    const int row_height = item_height(item);
-    if (index == row) {
-      const int visible_top = std::max(top, row_top);
-      const int bottom = std::min(top + height, row_top + row_height);
-      if (bottom <= visible_top) return std::nullopt;
-      return EditorBounds{left, visible_top, width, bottom - visible_top};
-    }
-    row_top += row_height;
-  }
-  return std::nullopt;
+  const auto first = static_cast<std::size_t>(row - 1);
+  if (tops.size() <= first + 1) return std::nullopt;
+  const int visible_top = std::max(top, tops[first]);
+  const int bottom = std::min(top + height, tops[first + 1]);
+  if (bottom <= visible_top) return std::nullopt;
+  return EditorBounds{left, visible_top, width, bottom - visible_top};
 }
 void ContextBrowser::draw() {
   const bool show_focus = visible_focus() != 0;

@@ -1,6 +1,5 @@
 // F17 diagnostics: the panel-colours layout, the field-specific status text and
 // the pending-automation validation box the Linux editor reports.
-#include "accessibility_tree.hpp"
 #include "automation_editor.hpp"
 #include "automation_graph.hpp"
 #include "editor_app.hpp"
@@ -11,6 +10,7 @@
 #include "profile_edit.hpp"
 #include "linux_editor_test_access.hpp"
 #include "test_support.hpp"
+#include "fltk_a11y_snapshot_support.hpp"
 
 namespace editor = layerc::editor;
 
@@ -203,7 +203,8 @@ void linux_editor_pending_automation_status_contracts() {
 }
 
 void linux_editor_semantic_row_extents() {
-  namespace a11y = layerc::editor::accessibility;
+  namespace a11y = layerc::editor::a11y;
+  namespace a11y_snapshot = layerc::test::a11y_snapshot;
   Fixture fixture;
   fixture.store();
   editor::EditorApp app;
@@ -229,41 +230,21 @@ void linux_editor_semantic_row_extents() {
   locate(window);
   if (!expect(bar != nullptr, "the editor window owns a menu bar")) return;
   {
-    a11y::AccessibilityTree tree;
-    std::string fault;
-    if (!expect(tree.initialize(fault), "row geometry tree initializes")) return;
-    tree.reconcile(true);
-    std::function<AtkObject *(AtkObject *, Fl_Widget *)> find =
-        [&](AtkObject *object, Fl_Widget *widget) -> AtkObject * {
-      auto &node = a11y::node(object);
-      if (node.kind == a11y::Kind::widget && node.widget() == widget) return object;
-      for (auto *child : node.children)
-        if (auto *found = find(child, widget)) return found;
-      return nullptr;
-    };
-    auto *browser = find(atk_get_root(), list);
-    auto *menu_object = find(atk_get_root(), bar);
+    a11y::FltkTree tree;
+    auto snapshot = tree.snapshot();
+    const auto *browser = a11y_snapshot::find(tree, snapshot, *list);
+    const auto *menu_object = a11y_snapshot::find(tree, snapshot, *bar);
     if (!expect(browser && menu_object, "browser and menu are exported")) return;
-    const auto unref = [](AtkObject *p) { if (p) g_object_unref(p); };
-    using Ref = std::unique_ptr<AtkObject, decltype(unref)>;
-    Ref first(atk_object_ref_accessible_child(browser, 0), unref);
-    Ref second(atk_object_ref_accessible_child(browser, 1), unref);
-    Ref last(atk_object_ref_accessible_child(browser, 79), unref);
-    Ref item(atk_object_ref_accessible_child(menu_object, 0), unref);
+    const auto *first = a11y_snapshot::child(snapshot, *browser, 0);
+    const auto *second = a11y_snapshot::child(snapshot, *browser, 1);
+    const auto *last = a11y_snapshot::child(snapshot, *browser, 79);
+    const auto *item = a11y_snapshot::child(snapshot, *menu_object, 0);
     if (!expect(first && second && last && item, "rows and menu item are reachable")) return;
-    const auto bounds = [](AtkObject *object, AtkCoordType coordinates = ATK_XY_SCREEN) {
-      std::array<gint, 4> value{};
-      atk_component_get_extents(ATK_COMPONENT(object), &value[0], &value[1],
-                                &value[2], &value[3], coordinates);
-      return value;
-    };
-    const auto showing = [](AtkObject *object) {
-      auto *state = atk_object_ref_state_set(object);
-      const bool result = atk_state_set_contains_state(state, ATK_STATE_SHOWING) != 0;
-      g_object_unref(state);
-      return result;
-    };
-    const auto owner = bounds(browser), one = bounds(first.get()), two = bounds(second.get());
+    const auto first_id = first->id;
+    const auto last_id = last->id;
+    const auto owner = a11y_snapshot::bounds(browser);
+    const auto one = a11y_snapshot::bounds(first);
+    const auto two = a11y_snapshot::bounds(second);
     expect(one[2] > 0 && one[3] > 0 && two[2] > 0 && two[3] > 0 &&
                one[1] + one[3] <= two[1] && one != two,
            "semantic rows have positive distinct ordered nonoverlapping extents");
@@ -272,22 +253,22 @@ void linux_editor_semantic_row_extents() {
                  row[0] + row[2] <= owner[0] + owner[2] &&
                  row[1] + row[3] <= owner[1] + owner[3],
              "visible row extents stay within the browser viewport");
-    const auto parent = bounds(first.get(), ATK_XY_PARENT);
-    expect(parent[0] == one[0] - owner[0] && parent[1] == one[1] - owner[1] &&
-               parent[2] == one[2] && parent[3] == one[3],
-           "row parent coordinates are relative to its browser");
-    const auto title = bounds(item.get()), bar_bounds = bounds(menu_object);
+    const auto title = a11y_snapshot::bounds(item);
+    const auto bar_bounds = a11y_snapshot::bounds(menu_object);
     expect(title[2] > 0 && title[2] < bar_bounds[2] && title[3] > 0 &&
                title[0] >= bar_bounds[0] && title[0] + title[2] <= bar_bounds[0] + bar_bounds[2],
            "closed menu-bar titles retain their own header geometry, not the whole bar");
     list->topline(80);
     list->redraw();
     Fl::check();
-    tree.sync();
-    expect(bounds(first.get()) == std::array<gint, 4>{} && !showing(first.get()),
+    snapshot = tree.snapshot();
+    const auto *first_now = a11y_snapshot::lookup(snapshot, first_id);
+    const auto *last_now = a11y_snapshot::lookup(snapshot, last_id);
+    expect(a11y_snapshot::bounds(first_now) == a11y_snapshot::Bounds{} &&
+               !a11y_snapshot::showing(first_now),
            "a scrolled-out production row is zero-sized and not showing");
-    const auto final = bounds(last.get());
-    expect(final[2] > 0 && final[3] > 0 && showing(last.get()),
+    const auto final = a11y_snapshot::bounds(last_now);
+    expect(final[2] > 0 && final[3] > 0 && a11y_snapshot::showing(last_now),
            "scrolling reveals the final row's own geometry");
   }
   window.hide();

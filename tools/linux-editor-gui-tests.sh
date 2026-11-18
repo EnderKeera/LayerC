@@ -166,6 +166,18 @@ PY
     -- "$build/layerd" "$work/daemon.control"
   wait_for 10 "$build/layerctl" status --json
 
+  # The editor's AT-SPI bridge is demand-driven: while org.a11y.Status
+  # IsEnabled is false it stays idle by design, so this private session bus
+  # (never the user's) is marked enabled before layere starts. gdbus activates
+  # the bus launcher here; layere never asks the bus to auto-start it.
+  if ! gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus \
+      --method org.freedesktop.DBus.Properties.Set org.a11y.Status IsEnabled \
+      '<true>' >"$out/a11y-enable.log" 2>&1; then
+    echo "error: could not enable org.a11y.Status on the private session bus" >&2
+    cat "$out/a11y-enable.log" >&2
+    return 1
+  fi
+
   local nonce editor_pid editor_start editor
   # The editor's working directory is disposable, never the source mirror.
   cd "$work"
@@ -369,7 +381,7 @@ trap 'exit 143' TERM
 display_commands=(Xvfb xauth openbox)
 [[ $mode != wayland ]] || display_commands=(sway Xwayland foot)
 for command in "${display_commands[@]}" xdpyinfo xprop xwininfo xev stdbuf xdotool import convert python3 \
-    dbus-run-session pgrep sha256sum timeout; do
+    dbus-run-session gdbus pgrep sha256sum timeout; do
   if ! command -v "$command" >/dev/null; then
     setup_error="missing required dependency: $command"
     echo "$setup_error" >&2

@@ -95,10 +95,11 @@ void EditorApp::build() {
     if (app.may_leave()) app.window.hide();
   }, this);
   accessibility = std::make_unique<EditorAccessibility>(*this);
-  status_pane_->set_accessibility(
-      accessibility->available()
-          ? "Accessibility: AT-SPI bridge active"
-          : "Accessibility unavailable: " + accessibility->fault());
+  // The visible line follows every change, including the one that happens
+  // while the editor is already open.
+  accessibility->set_status_handler([this](const a11y::atspi::AdaptorStatus &status) {
+    status_pane_->set_accessibility(accessibility_status_line(status));
+  });
   load_appearance();
   if (!session.profiles().profiles.empty()) {
     if (const auto error = session.open(0)) report(StatusKind::failure, *error);

@@ -34,6 +34,10 @@ namespace layerc::editor::a11y {
 
 namespace {
 std::vector<MenuSize> *pass_sizes{};
+std::vector<RowTops> *pass_rows{};
+// A query outside a pass (a draw or a list's own scroll check) still needs the
+// table, so it is rebuilt per call instead of being kept across passes.
+std::vector<RowTops> loose_rows;
 
 Fl_Menu_ *menu_owner(const Target &target) {
   return target.kind == TargetKind::menu_item ? dynamic_cast<Fl_Menu_ *>(target.widget) : nullptr;
@@ -43,8 +47,29 @@ Fl_Input_ *input_of(const Target &target) {
 }
 } // namespace
 
-TreePass::TreePass() : previous_(pass_sizes) { pass_sizes = &sizes_; }
-TreePass::~TreePass() { pass_sizes = previous_; }
+TreePass::TreePass() : previous_(pass_sizes), previous_rows_(pass_rows) {
+  pass_sizes = &sizes_;
+  pass_rows = &rows_;
+}
+TreePass::~TreePass() {
+  pass_sizes = previous_;
+  pass_rows = previous_rows_;
+}
+
+const std::vector<int> &row_tops(const layerc::editor::ContextBrowser &list) {
+  std::vector<RowTops> &store = pass_rows ? *pass_rows : loose_rows;
+  if (!pass_rows) loose_rows.clear();
+  for (const auto &entry : store)
+    if (entry.list == &list) return entry.tops;
+  store.push_back({&list, list.row_tops()});
+  return store.back().tops;
+}
+
+std::optional<EditorBounds> list_row_bounds(const layerc::editor::ContextBrowser &list,
+                                           int row) {
+  if (row < 1 || row > list.size()) return std::nullopt;
+  return list.row_bounds(row, row_tops(list));
+}
 
 int menu_size(const Fl_Menu_ &menu) {
   if (!pass_sizes) return menu.size();
@@ -152,7 +177,7 @@ bool showing(const Target &target) {
     return popup_item_bounds(*menu_owner(target), target.index).has_value();
   if (target.kind == TargetKind::row)
     if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
-      const auto bounds = list->row_bounds(target.index);
+      const auto bounds = list_row_bounds(*list, target.index);
       return bounds && visible_bounds(*w, *bounds).has_value();
     }
   // A page tab is visible whenever its tab strip is, selected or not.
@@ -387,7 +412,7 @@ std::optional<Bounds> local_bounds(const Target &target) {
   int left = w->x(), top = w->y(), width = w->w(), height = w->h();
   if (target.kind == TargetKind::row)
     if (auto *list = dynamic_cast<ContextBrowser *>(w)) {
-      const auto bounds = list->row_bounds(target.index);
+      const auto bounds = list_row_bounds(*list, target.index);
       if (!bounds) return std::nullopt;
       left = bounds->x;
       top = bounds->y;

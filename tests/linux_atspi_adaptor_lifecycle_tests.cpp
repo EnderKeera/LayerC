@@ -423,4 +423,68 @@ void a_launcher_that_names_no_bus_is_unavailable() {
   expect(reports.seen.size() == 2, "the recovery is one more report");
 }
 
+// --- case o ---------------------------------------------------------------
+
+// NO_AT_BRIDGE=1 is the standard opt-out that toolkits honour: the bridge says
+// so and stops there — no session bus, no watch, no export, and re-enabling
+// cannot revive it because nothing is watching for a consumer.
+void no_at_bridge_disables_the_adaptor() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  // The guard restores the variable on every path, including an early return.
+  const layerc::test::ScopedEnvironment bridge{"NO_AT_BRIDGE", "1"};
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  Reports reports{&adaptor, {}};
+  adaptor.on_status_change(Reports::note, &reports);
+  harness.set_flags(true, false);
+  harness.spin(ms(300));
+  const auto status = adaptor.status();
+  expect(status.state == atspi::StatusState::unavailable,
+         "NO_AT_BRIDGE=1 leaves the bridge unavailable");
+  expect(status.reason == "disabled by NO_AT_BRIDGE=1",
+         "the disabled state names the standard opt-out");
+  expect(!adaptor.connected(), "no accessibility connection is opened");
+  expect(harness.embeds() == 0, "nothing is embedded while disabled");
+  expect(harness.address_reads() == 0,
+         "the accessibility bus is never asked for an address");
+  // A consumer appearing later changes nothing: no watch exists to notice it.
+  harness.set_flags(false, false);
+  harness.set_flags(true, false);
+  harness.spin(ms(300));
+  expect(adaptor.status().state == atspi::StatusState::unavailable &&
+             adaptor.status().reason == "disabled by NO_AT_BRIDGE=1",
+         "a later consumer cannot enable the opted-out bridge");
+  expect(harness.embeds() == 0, "the opted-out bridge still exports nothing");
+}
+
+// --- case p ---------------------------------------------------------------
+
+// Any other NO_AT_BRIDGE value is not the opt-out: the bridge works as it does
+// with the variable unset.
+void no_at_bridge_zero_behaves_normally() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment bridge{"NO_AT_BRIDGE", "0"};
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  expect(harness.spin_until(
+             [&] { return adaptor.status().state == atspi::StatusState::on; },
+             ms(3000)),
+         "NO_AT_BRIDGE=0 leaves the bridge working");
+  expect(adaptor.connected(), "the bridge connects normally");
+  expect(adaptor.status().reason.empty(), "a working bridge names no fault");
+}
+
 } // namespace layerc::test::atspi_fixture

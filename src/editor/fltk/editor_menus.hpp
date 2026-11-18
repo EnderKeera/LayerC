@@ -7,6 +7,7 @@
 #include <FL/Fl_Double_Window.H>
 #include <array>
 #include <string>
+#include <vector>
 
 class Fl_Menu_Bar;
 class Fl_Menu_Button;
@@ -70,6 +71,13 @@ public:
   [[nodiscard]] int row_at(int x, int y);
   // The visible row slice in the browser viewport, not the entire browser.
   [[nodiscard]] std::optional<EditorBounds> row_bounds(int row);
+  // The same slice from a row table a wider walk already read.
+  [[nodiscard]] std::optional<EditorBounds> row_bounds(int row,
+                                                        const std::vector<int> &tops) const;
+  // Row offsets for one walk of the items: entry i is where row i+1 starts and
+  // entry size() is where the last row ends. A caller asking about every row
+  // reads this once instead of walking the item list per row.
+  [[nodiscard]] std::vector<int> row_tops() const;
   int handle(int event) override;
 protected:
   void draw() override;

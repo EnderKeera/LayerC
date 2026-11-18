@@ -1,9 +1,10 @@
 #pragma once
 
-// Toolkit-only accessibility queries shared by the ATK adaptor (today) and the
-// FLTK tree pass. Nothing here includes ATK, GLib, X11 or Win32 headers: the
-// platform seam owns screen origins, and protocol adaptors own their own types.
+// Toolkit-only accessibility queries of the FLTK tree pass. Nothing here
+// includes X11, Win32, D-Bus or protocol headers: the platform seam owns screen
+// origins, and protocol adaptors own their own types.
 
+#include "editor_geometry.hpp"
 #include "model.hpp"
 
 #include <FL/Fl.H>
@@ -19,6 +20,10 @@
 class Fl_Input_;
 class Fl_Menu_;
 class Fl_Valuator;
+
+namespace layerc::editor {
+class ContextBrowser;
+}
 
 namespace layerc::editor::a11y {
 
@@ -41,6 +46,13 @@ struct MenuSize {
   const Fl_Menu_Item *items;
   int size;
 };
+
+// A browser's row offsets for one pass. Row geometry walks the item list, so a
+// pass that asks about every row reads it once per list, not once per row.
+struct RowTops {
+  const layerc::editor::ContextBrowser *list;
+  std::vector<int> tops;
+};
 class TreePass final {
 public:
   TreePass();
@@ -50,8 +62,13 @@ public:
 private:
   std::vector<MenuSize> sizes_;
   std::vector<MenuSize> *previous_;
+  std::vector<RowTops> rows_;
+  std::vector<RowTops> *previous_rows_;
 };
 [[nodiscard]] int menu_size(const Fl_Menu_ &menu);
+// One row's visible slice inside its list viewport, from the pass's row table.
+[[nodiscard]] std::optional<EditorBounds> list_row_bounds(const layerc::editor::ContextBrowser &list,
+                                                        int row);
 [[nodiscard]] const Fl_Menu_Item *menu_item_of(const Target &target);
 [[nodiscard]] std::vector<int> menu_level(const Fl_Menu_ &menu, int first);
 

@@ -1,6 +1,5 @@
 // Regressions for review/archiv/layer2.review-2026-11-15.md. Native widgets in a
 // disposable X11 display; these checks are not physical/Orca speech evidence.
-#include "accessibility_tree.hpp"
 #include "accessible_widgets.hpp"
 #include "appearance_window.hpp"
 #include "diagnostics_window.hpp"
@@ -8,6 +7,7 @@
 #include "editor_popup.hpp"
 #include "editor_scroll.hpp"
 #include "editor_style.hpp"
+#include "fltk_a11y_snapshot_support.hpp"
 #include "test_support.hpp"
 #include <FL/Fl.H>
 #include <FL/Fl_Box.H>
@@ -28,29 +28,30 @@
 
 namespace {
 namespace editor = layerc::editor;
-namespace a11y = editor::accessibility;
+namespace a11y = layerc::editor::a11y;
+namespace a11y_snapshot = layerc::test::a11y_snapshot;
 using layerc::test::expect;
-AtkObject *find(AtkObject *root, Fl_Widget &widget, a11y::Kind kind = a11y::Kind::widget, int index = 0) {
-  const auto &node = a11y::node(root);
-  if (node.widget() == &widget && node.kind == kind && node.index == index) return root;
-  for (auto *child : node.children) if (auto *found = find(child, widget, kind, index)) return found;
+// The node owning `widget`, or the row or menu item it publishes at `index`.
+const a11y::Node *find(a11y::FltkTree &tree, const a11y::Snapshot &snapshot,
+                       Fl_Widget &widget,
+                       const a11y::TargetKind kind = a11y::TargetKind::widget,
+                       const int index = 0) {
+  return a11y_snapshot::find(tree, snapshot, widget, kind, index);
+}
+// The focused node in a pass, so a test can tell whether focus moved between
+// two passes the way the legacy state-change signal reported.
+const a11y::Node *focused_node(const a11y::Snapshot &snapshot) {
+  for (const auto &[id, node] : snapshot.nodes) {
+    (void)id;
+    if (node.states.focused) return &node;
+  }
   return nullptr;
-}
-bool state(AtkObject *object, AtkStateType type) {
-  auto *set = atk_object_ref_state_set(object);
-  const bool answer = atk_state_set_contains_state(set, type) != 0;
-  g_object_unref(set); return answer;
-}
-std::array<gint, 4> bounds(AtkObject *object) {
-  std::array<gint, 4> result{};
-  atk_component_get_extents(ATK_COMPONENT(object), &result[0], &result[1], &result[2], &result[3], ATK_XY_WINDOW);
-  return result;
 }
 template <class T> T *control(Fl_Group &group, std::string_view name) {
   for (int i = 0; i < group.children(); ++i) {
     auto *child = group.child(i);
     if (auto *typed = dynamic_cast<T *>(child); typed && child->visible_r() &&
-        a11y::accessible_name(*child).value_or(child->label() ? child->label() : "") == name) return typed;
+        editor::accessibility::accessible_name(*child).value_or(child->label() ? child->label() : "") == name) return typed;
     if (auto *nested = dynamic_cast<Fl_Group *>(child))
       if (auto *found = control<T>(*nested, name)) return found;
   }
@@ -87,28 +88,37 @@ void scroll_focus_and_effective_extents() {
   Fl_Input far(680, 600, 160, 28, "Far");
   canvas.end(); host.end(); window.resizable(host); window.end();
   window.show(); near.take_focus(); Fl::check();
-  a11y::AccessibilityTree tree; std::string fault;
-  if (!expect(tree.initialize(fault), "LNX-01 tree initializes")) return;
-  tree.sync();
-  auto *object = find(atk_get_root(), far);
+  a11y::FltkTree tree;
+  auto snapshot = tree.snapshot();
+  const a11y::Node *object = find(tree, snapshot, far);
   if (!expect(object != nullptr, "LNX-01 offscreen widget stays exported")) return;
-  expect(!state(object, ATK_STATE_SHOWING) && bounds(object) == std::array<gint, 4>{},
+  const auto far_id = object->id;
+  expect(!a11y_snapshot::showing(object) &&
+             a11y_snapshot::bounds(object) == a11y_snapshot::Bounds{},
          "LNX-01 fully clipped controls are not showing and have zero extents");
   expect(far.take_focus() != 0, "LNX-01 offscreen input can take keyboard focus");
-  Fl::check(); tree.sync();
+  Fl::check();
+  snapshot = tree.snapshot();
+  object = a11y_snapshot::lookup(snapshot, far_id);
   const auto view = host.viewport();
   expect(host.xposition() > 0 && host.yposition() > 0 && far.x() >= view.x && far.y() >= view.y &&
              far.x() + far.w() <= view.x + view.width && far.y() + far.h() <= view.y + view.height,
          "LNX-01 a focus transition reveals the whole input on both axes, excluding scrollbars");
-  expect(state(object, ATK_STATE_SHOWING) && state(object, ATK_STATE_FOCUSED),
+  expect(a11y_snapshot::showing(object) && a11y_snapshot::focused(object),
          "LNX-01 revealed input reports focused and showing");
   host.scroll_to(host.xposition() + far.x() - host.viewport().x + far.w() / 2, host.yposition());
-  Fl::check(); tree.sync();
-  const auto partial = bounds(object);
-  expect(partial[2] > 0 && partial[2] < far.w() && state(object, ATK_STATE_SHOWING),
+  Fl::check();
+  snapshot = tree.snapshot();
+  object = a11y_snapshot::lookup(snapshot, far_id);
+  const auto partial = a11y_snapshot::bounds(object);
+  expect(partial[2] > 0 && partial[2] < far.w() && a11y_snapshot::showing(object),
          "LNX-01 partially clipped extents are intersected, without undoing manual scroll");
-  near.take_focus(); Fl::check(); tree.sync();
-  expect(!state(object, ATK_STATE_SHOWING), "LNX-01 reverse focus scrolls back and clips the distant input");
+  near.take_focus();
+  Fl::check();
+  snapshot = tree.snapshot();
+  object = a11y_snapshot::lookup(snapshot, far_id);
+  expect(!a11y_snapshot::showing(object),
+         "LNX-01 reverse focus scrolls back and clips the distant input");
   window.hide();
 }
 void popup_semantics_and_recovery() {
@@ -125,48 +135,65 @@ void popup_semantics_and_recovery() {
   choice.add("One|Two|Three"); choice.value(0); choice.callback(callback, &invoked);
   Fl_Button previous(20, 150, 150, editor::editor_button_height, "Previous focus");
   window.end(); window.show(); previous.take_focus(); Fl::check();
-  a11y::AccessibilityTree tree; std::string fault;
-  if (!expect(tree.initialize(fault), "LNX-02 tree initializes")) return;
-  tree.sync();
-  auto *first = find(atk_get_root(), bar, a11y::Kind::menu_item, 1);
-  auto *last = find(atk_get_root(), bar, a11y::Kind::menu_item, 3);
-  auto *previous_object = find(atk_get_root(), previous);
+  a11y::FltkTree tree;
+  auto snapshot = tree.snapshot();
+  const a11y::Node *first = find(tree, snapshot, bar, a11y::TargetKind::menu_item, 1);
+  const a11y::Node *last = find(tree, snapshot, bar, a11y::TargetKind::menu_item, 3);
+  const a11y::Node *previous_object = find(tree, snapshot, previous);
   if (!expect(first && last && previous_object, "LNX-02 menu items and focus owner are exported")) return;
-  expect(!state(first, ATK_STATE_SHOWING) && bounds(first) == std::array<gint, 4>{},
+  const auto first_id = first->id;
+  const auto last_id = last->id;
+  const auto previous_id = previous_object->id;
+  expect(!a11y_snapshot::showing(first) &&
+             a11y_snapshot::bounds(first) == a11y_snapshot::Bounds{},
          "LNX-02 closed dropdown items have no onscreen rectangle");
+  // The legacy signal counted focus entering the first row; count the same
+  // transition between passes.
   int focus_events = 0;
-  g_signal_connect(first, "state-change", G_CALLBACK(+[](AtkObject *, const gchar *name, gboolean value, void *data) {
-    if (std::string_view(name) == "focused" && value) ++*static_cast<int *>(data);
-  }), &focus_events);
+  a11y::NodeId observed_focus = focused_node(snapshot)
+                                    ? focused_node(snapshot)->id
+                                    : a11y::no_node;
+  const auto sync = [&] {
+    snapshot = tree.snapshot();
+    const auto now = focused_node(snapshot);
+    const auto focused_id = now ? now->id : a11y::no_node;
+    if (focused_id == first_id && focused_id != observed_focus) ++focus_events;
+    observed_focus = focused_id;
+    first = a11y_snapshot::lookup(snapshot, first_id);
+    last = a11y_snapshot::lookup(snapshot, last_id);
+    previous_object = a11y_snapshot::lookup(snapshot, previous_id);
+  };
   {
     DuringModal probe([&](Fl_Window &) {
-      key(FL_Down); tree.sync();
-      expect(state(first, ATK_STATE_ENABLED) && state(first, ATK_STATE_SHOWING) &&
-                 state(first, ATK_STATE_FOCUSED) && state(first, ATK_STATE_SELECTED),
+      key(FL_Down); sync();
+      expect(a11y_snapshot::enabled(first) && a11y_snapshot::showing(first) &&
+                 a11y_snapshot::focused(first) && a11y_snapshot::selected(first),
              "LNX-02 highlighted open item is enabled/showing/focused/selected");
-      expect(state(previous_object, ATK_STATE_ENABLED) && !state(previous_object, ATK_STATE_FOCUSED),
+      expect(a11y_snapshot::enabled(previous_object) && !a11y_snapshot::focused(previous_object),
              "LNX-02 popup preserves real owner enabled state but owns focus");
-      const auto one = bounds(first), other = bounds(last);
+      const auto one = a11y_snapshot::bounds(first), other = a11y_snapshot::bounds(last);
       expect(one[2] > 0 && one[3] > 0 && one[1] + one[3] <= other[1],
              "LNX-02 visible menu rows have distinct ordered extents");
-      key(FL_Down); tree.sync();
-      expect(state(last, ATK_STATE_FOCUSED) && !state(first, ATK_STATE_FOCUSED) && focus_events == 1,
+      key(FL_Down); sync();
+      expect(a11y_snapshot::focused(last) && !a11y_snapshot::focused(first) && focus_events == 1,
              "LNX-02 arrows skip disabled items and emit focused state changes");
       key(FL_Escape);
     });
     editor::track_editor_popup(bar, 0);
   }
-  tree.sync();
+  sync();
   expect(!editor::popup_owner() && !Fl::grab() && invoked == 0 &&
-             state(previous_object, ATK_STATE_FOCUSED) && !state(last, ATK_STATE_SHOWING),
+             a11y_snapshot::focused(previous_object) && !a11y_snapshot::showing(last),
          "LNX-02 Escape releases tracking, restores focus and invokes nothing");
   {
     DuringModal probe([&](Fl_Window &) {
-      key(FL_Down); tree.sync();
-      auto *one = find(atk_get_root(), choice, a11y::Kind::menu_item, 0);
-      auto *two = find(atk_get_root(), choice, a11y::Kind::menu_item, 1);
-      expect(one && two && choice.value() == 0 && !state(one, ATK_STATE_SELECTED) &&
-                 state(two, ATK_STATE_SELECTED) && state(two, ATK_STATE_FOCUSED),
+      key(FL_Down); sync();
+      const auto *one =
+          find(tree, snapshot, choice, a11y::TargetKind::menu_item, 0);
+      const auto *two =
+          find(tree, snapshot, choice, a11y::TargetKind::menu_item, 1);
+      expect(one && two && choice.value() == 0 && !a11y_snapshot::selected(one) &&
+                 a11y_snapshot::selected(two) && a11y_snapshot::focused(two),
              "LNX-02 open choice selection follows highlight, not the committed value");
       key(FL_Enter);
     });
@@ -180,12 +207,12 @@ void popup_semantics_and_recovery() {
   expect(choice.value() == 1 && invoked == 1, "LNX-02 cancelled choice retains the committed value");
   {
     DuringModal probe([&](Fl_Window &) {
-      key(FL_Down); key(FL_Right); tree.sync();
+      key(FL_Down); key(FL_Right); sync();
       const int small = static_cast<int>(bar.find_item("&View/&Size/&Small") - bar.menu());
-      auto *item = find(atk_get_root(), bar, a11y::Kind::menu_item, small);
-      expect(item && state(item, ATK_STATE_FOCUSED) && state(item, ATK_STATE_SHOWING),
+      const auto *item = find(tree, snapshot, bar, a11y::TargetKind::menu_item, small);
+      expect(item && a11y_snapshot::focused(item) && a11y_snapshot::showing(item),
              "LNX-02 keyboard reaches an owned nested submenu");
-      if (item) expect(atk_action_do_action(ATK_ACTION(item), 0) != 0,
+      if (item) expect(a11y_snapshot::activate(tree, item),
                        "LNX-02 accessible popup action queues a pick");
       else key(FL_Escape);
     });
@@ -199,18 +226,18 @@ void popup_semantics_and_recovery() {
   Fl_Group::current(nullptr);
   {
     DuringModal probe([&](Fl_Window &) {
-      key(FL_Down); tree.sync();
-      auto *owner = find(atk_get_root(), context);
-      auto *item = find(atk_get_root(), context, a11y::Kind::menu_item, 0);
-      expect(owner && item && state(item, ATK_STATE_ENABLED) && state(item, ATK_STATE_FOCUSED),
+      key(FL_Down); sync();
+      const auto *owner = find(tree, snapshot, context);
+      const auto *item = find(tree, snapshot, context, a11y::TargetKind::menu_item, 0);
+      expect(owner && item && a11y_snapshot::enabled(item) && a11y_snapshot::focused(item),
              "LNX-02 zero-sized temporary context owner is exported while tracking");
       key(FL_Escape);
     });
     editor::track_editor_popup(context);
   }
-  tree.sync();
-  expect(!find(atk_get_root(), context), "LNX-02 closed temporary context owner is removed");
-  g_signal_handlers_disconnect_by_data(first, &focus_events);
+  sync();
+  expect(find(tree, snapshot, context) == nullptr,
+         "LNX-02 closed temporary context owner is removed");
   window.hide();
 }
 void text_dialog_layouts() {
@@ -245,16 +272,19 @@ void named_color_chooser_and_roles() {
   Fl_Slider slider(10, 50, 200, 28, "Slider");
   Fl_Scrollbar scrollbar(10, 90, 200, 28, "Scrollbar");
   owner.end(); owner.show(); Fl::check();
-  a11y::AccessibilityTree tree; std::string fault;
-  if (!expect(tree.initialize(fault), "LNX-04 tree initializes")) return;
-  tree.sync();
-  expect(atk_object_get_role(find(atk_get_root(), number)) == ATK_ROLE_SPIN_BUTTON &&
-             atk_object_get_role(find(atk_get_root(), slider)) == ATK_ROLE_SLIDER &&
-             atk_object_get_role(find(atk_get_root(), scrollbar)) == ATK_ROLE_SCROLL_BAR,
+  a11y::FltkTree tree;
+  auto snapshot = tree.snapshot();
+  const auto *number_node = find(tree, snapshot, number);
+  const auto *slider_node = find(tree, snapshot, slider);
+  const auto *scrollbar_node = find(tree, snapshot, scrollbar);
+  expect(number_node && slider_node && scrollbar_node &&
+             number_node->role == a11y::Role::number_field &&
+             slider_node->role == a11y::Role::slider &&
+             scrollbar_node->role == a11y::Role::scroll_bar,
          "LNX-04 concrete valuators have spin/slider/scrollbar roles");
   {
     DuringModal probe([&](Fl_Window &modal) {
-      tree.sync();
+      snapshot = tree.snapshot();
       auto *mode = control<editor::EditorChoice>(modal, "Color mode");
       auto *red = control<Fl_Value_Input>(modal, "Red");
       auto *green = control<Fl_Value_Input>(modal, "Green");
@@ -262,10 +292,12 @@ void named_color_chooser_and_roles() {
       expect(mode && red && green && blue && control<Fl_Widget>(modal, "Hue and saturation") &&
                  control<Fl_Widget>(modal, "Value"), "LNX-04 native chooser controls have semantic names");
       if (mode && red && green && blue) {
-        for (auto *channel : {red, green, blue})
-          expect(atk_object_get_role(find(atk_get_root(), *channel)) == ATK_ROLE_SPIN_BUTTON,
+        for (auto *channel : {red, green, blue}) {
+          const auto *node = find(tree, snapshot, *channel);
+          expect(node && node->role == a11y::Role::number_field,
                  "LNX-04 chooser channels are spin buttons");
-        mode->value(3); mode->do_callback(); tree.sync();
+        }
+        mode->value(3); mode->do_callback(); snapshot = tree.snapshot();
         expect(control<Fl_Value_Input>(modal, "Hue") == red && control<Fl_Value_Input>(modal, "Saturation") == green &&
                    control<Fl_Value_Input>(modal, "Value") == blue,
                "LNX-04 HSV mode renames the same native channel controls");

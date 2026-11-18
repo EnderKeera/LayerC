@@ -200,8 +200,8 @@ struct EditorAppTestAccess {
   static DiagnosticsWindow *diagnostics(EditorApp &app) { return app.diagnostics.get(); }
   static TasksWindow *tasks_window(EditorApp &app) { return app.tasks_window.get(); }
   static EditorAccessibility *accessibility(EditorApp &app) { return app.accessibility.get(); }
-  // Drops the app's bridge so a test can own the single ATK root itself; the
-  // app only consults its accessibility object during build().
+  // Drops the app's bridge so a test can own the single AT-SPI adaptor itself;
+  // the app only consults its accessibility object during build().
   static void release_accessibility(EditorApp &app) { app.accessibility.reset(); }
 };
 

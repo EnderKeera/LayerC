@@ -24,28 +24,7 @@ endif()
 if(LAYERC_FLTK_VERSION VERSION_LESS 1.4)
     layerc_editor_unavailable("FLTK 1.4 or later required")
 endif()
-# Screen-reader access is part of the editor, not an optional extra. ATK and
-# its AT-SPI adaptor before 2.62 crash during cleanup (at-spi2-core c4ddb104,
-# 8db3f580), so older development files leave LayerE unbuilt like FLTK does.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    set(layerc_pkg_config_path "$ENV{PKG_CONFIG_PATH}")
-    if(LAYERC_EDITOR_SYSROOT)
-        # The version gate must see the sysroot's packages, not the host's.
-        set(layerc_sysroot_lib "${LAYERC_EDITOR_SYSROOT}/usr/lib")
-        set(ENV{PKG_CONFIG_PATH} "${layerc_sysroot_lib}/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig:${layerc_sysroot_lib}/pkgconfig:${LAYERC_EDITOR_SYSROOT}/usr/share/pkgconfig:${layerc_pkg_config_path}")
-    endif()
-    # FindPkgConfig caches a passed check; re-run it when the root changes.
-    if(NOT "${LAYERC_EDITOR_SYSROOT}" STREQUAL "${LAYERC_ATK_CHECKED_ROOT}")
-        unset(__pkg_config_checked_LAYERC_ATK CACHE)
-        set(LAYERC_ATK_CHECKED_ROOT "${LAYERC_EDITOR_SYSROOT}" CACHE INTERNAL "")
-    endif()
-    pkg_check_modules(LAYERC_ATK QUIET "atk>=2.62" "atk-bridge-2.0>=2.62" "atspi-2>=2.62")
-    set(ENV{PKG_CONFIG_PATH} "${layerc_pkg_config_path}")
-endif()
-if(NOT LAYERC_ATK_FOUND)
-    layerc_editor_unavailable("ATK/AT-SPI 2.62 or later development files unavailable")
-endif()
+# Screen-reader access is part of the editor, not an optional extra.
 # The editor's own AT-SPI bridge speaks D-Bus directly, so it needs the sd-bus
 # lane the Wayland modules already probe. A build without it would ship the
 # editor without its accessibility connection, so it is unavailable.
@@ -82,32 +61,6 @@ if(LAYERC_EDITOR_SYSROOT)
     list(PREPEND LAYERC_FLTK_LDFLAGS
         "-L${LAYERC_EDITOR_SYSROOT}/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}")
 endif()
-# GLib/ATK headers are system headers: project warnings must not apply.
-set(LAYERC_ATK_INCLUDES)
-foreach(dir IN LISTS LAYERC_ATK_INCLUDE_DIRS)
-    # A compiler default root (the Flatpak SDK's pkg-config reports
-    # /usr/include) must not be re-added: it would break #include_next.
-    cmake_path(NORMAL_PATH dir OUTPUT_VARIABLE layerc_atk_dir)
-    string(REGEX REPLACE "(.)/$" "\\1" layerc_atk_dir "${layerc_atk_dir}")
-    if(layerc_atk_dir IN_LIST CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES OR
-       "${LAYERC_EDITOR_SYSROOT}${layerc_atk_dir}" IN_LIST
-       CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES)
-        continue()
-    endif()
-    if(LAYERC_EDITOR_SYSROOT AND EXISTS "${LAYERC_EDITOR_SYSROOT}${dir}")
-        list(APPEND LAYERC_ATK_INCLUDES -isystem "${LAYERC_EDITOR_SYSROOT}${dir}")
-    elseif(EXISTS "${dir}")
-        # A sysroot may supply only ATK/AT-SPI; GLib then comes from the host.
-        list(APPEND LAYERC_ATK_INCLUDES -isystem "${dir}")
-    endif()
-endforeach()
-if(LAYERC_EDITOR_SYSROOT)
-    # The sysroot's own libraries resolve through its -L directory above.
-    set(LAYERC_ATK_LINK atk-bridge-2.0 atk-1.0 atspi gobject-2.0 glib-2.0)
-else()
-    # Full paths from the version-checked packages, including prefix installs.
-    set(LAYERC_ATK_LINK ${LAYERC_ATK_LINK_LIBRARIES})
-endif()
 # The GUI-only library gives widget tests the real frontend without linking
 # any toolkit into shared core, the daemon, or CLI tools.
 add_library(layerc_editor_fltk STATIC
@@ -130,8 +83,6 @@ add_library(layerc_editor_fltk STATIC
     src/editor/fltk/a11y/input.cpp
     src/editor/fltk/platform/linux/window_origin.cpp
     src/editor/fltk/editor_accessibility.cpp
-    src/editor/fltk/accessibility_semantics.cpp
-    src/editor/fltk/accessibility_tree.cpp
     src/editor/fltk/editor_app.cpp
     src/editor/fltk/editor_style.cpp
     src/editor/fltk/editor_scroll.cpp
@@ -171,16 +122,9 @@ if(LAYERC_EDITOR_SYSROOT)
         "${LAYERC_EDITOR_SYSROOT}/usr/include")
 endif()
 target_compile_options(layerc_editor_fltk PUBLIC ${LAYERC_FLTK_CXXFLAGS})
-# Only the adapter sees the GLib/ATK headers; it links only what it calls,
-# and the loader resolves their own dependencies such as D-Bus.
-set_source_files_properties(
-    src/editor/fltk/editor_accessibility.cpp
-    src/editor/fltk/accessibility_semantics.cpp
-    src/editor/fltk/accessibility_tree.cpp PROPERTIES
-    COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
 target_link_libraries(layerc_editor_fltk PUBLIC
     layerc_editor_linux layerc_editor_accessibility layerc_x11
-    PkgConfig::LAYERC_SDBUS ${LAYERC_FLTK_LDFLAGS} ${LAYERC_ATK_LINK})
+    PkgConfig::LAYERC_SDBUS ${LAYERC_FLTK_LDFLAGS})
 layerc_enable_warnings(layerc_editor_fltk)
 add_executable(layere src/editor/fltk/main.cpp)
 target_link_libraries(layere PRIVATE layerc_editor_fltk)

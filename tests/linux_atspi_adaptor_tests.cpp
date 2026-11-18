@@ -9,6 +9,8 @@ void a_listener_signal_before_the_reply_keeps_the_known_listeners();
 void a_failed_bus_open_names_its_cause_and_recovers();
 void a_missing_launcher_waits_and_is_not_activated();
 void a_launcher_that_names_no_bus_is_unavailable();
+void no_at_bridge_disables_the_adaptor();
+void no_at_bridge_zero_behaves_normally();
 void interfaces_follow_each_roles_capabilities();
 void an_action_reads_back_in_the_generation_it_made();
 void reads_without_a_listener_stay_within_the_walk_budget();
@@ -561,6 +563,8 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(a_failed_bus_open_names_its_cause_and_recovers),
     LAYERC_TEST_CASE(a_missing_launcher_waits_and_is_not_activated),
     LAYERC_TEST_CASE(a_launcher_that_names_no_bus_is_unavailable),
+    LAYERC_TEST_CASE(no_at_bridge_disables_the_adaptor),
+    LAYERC_TEST_CASE(no_at_bridge_zero_behaves_normally),
     LAYERC_TEST_CASE(interfaces_follow_each_roles_capabilities),
     LAYERC_TEST_CASE(an_action_reads_back_in_the_generation_it_made),
     LAYERC_TEST_CASE(reads_without_a_listener_stay_within_the_walk_budget),

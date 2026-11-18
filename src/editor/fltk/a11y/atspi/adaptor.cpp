@@ -15,9 +15,11 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -180,6 +182,14 @@ struct Adaptor::Impl {
 void Adaptor::Impl::start() {
   if (started) return;
   started = true;
+  // The standard opt-out GTK and Qt honour: no bus, no watch, nothing exported.
+  if (const char *disable = std::getenv("NO_AT_BRIDGE");
+      disable != nullptr && std::string_view{disable} == "1") {
+    watch_state = StatusState::unavailable;
+    watch_reason = "disabled by NO_AT_BRIDGE=1";
+    update_status();
+    return;
+  }
   sd_bus *bus = nullptr;
   int started_bus = sd_bus_open_user(&bus);
   if (started_bus < 0) {

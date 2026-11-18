@@ -47,6 +47,13 @@ function(layerc_add_test target)
     if(TEST_RESOURCE_LOCK)
         list(APPEND properties RESOURCE_LOCK ${TEST_RESOURCE_LOCK})
     endif()
+    if(TEST_RESOURCE_LOCK MATCHES "layerc_x11_display")
+        # These suites require X11 (require_x11()) and read screen geometry. A
+        # session that also exports WAYLAND_DISPLAY must not move FLTK to its
+        # Wayland backend, where an X11 window has no XID and no screen
+        # geometry.
+        list(APPEND properties ENVIRONMENT "FLTK_BACKEND=x11")
+    endif()
     if(MINGW)
         get_filename_component(mingw_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
         list(APPEND properties ENVIRONMENT_MODIFICATION
@@ -414,12 +421,20 @@ if(NOT WIN32)
                 tests/linux_editor_review_tests.cpp
                 tests/linux_editor_command_registry_tests.cpp
                 tests/linux_editor_design_system_paint_tests.cpp
+                tests/linux_atspi_test_harness.cpp
             LINK layerc_editor_fltk TIMEOUT 45 SKIP_RETURN_CODE 77
-            LABELS required editor RESOURCE_LOCK layerc_x11_display)
-        set_source_files_properties(
-            tests/linux_editor_accessibility_tests.cpp tests/linux_editor_diagnostics_tests.cpp
-            tests/linux_editor_review_tests.cpp
-            PROPERTIES COMPILE_OPTIONS "${LAYERC_ATK_INCLUDES};${LAYERC_ATK_CFLAGS_OTHER}")
+            LABELS required editor RESOURCE_LOCK layerc_x11_display NO_REGISTER)
+        # The accessibility cases read the editor over the AT-SPI bridge, so the
+        # suite serves its own org.a11y.Bus on a private bus, never a desktop bus.
+        add_test(NAME layerc_linux_editor_widget_tests
+            COMMAND bash "${PROJECT_SOURCE_DIR}/tools/dbus-test-session.sh"
+                $<TARGET_FILE:layerc_linux_editor_widget_tests>)
+        # About 55 s locally with the D-Bus accessibility cases; hosted
+        # runners are slower, so the bound keeps a little over 3x headroom.
+        set_tests_properties(layerc_linux_editor_widget_tests PROPERTIES
+            TIMEOUT 180 SKIP_RETURN_CODE 77 LABELS "required;editor"
+            ENVIRONMENT "FLTK_BACKEND=x11"
+            RESOURCE_LOCK layerc_x11_display)
         layerc_editor_build_runtime(layerc_linux_editor_widget_tests)
         if(X11_Xtst_LIB)
             target_link_libraries(layerc_linux_editor_widget_tests PRIVATE ${X11_Xtst_LIB})
@@ -439,6 +454,7 @@ if(NOT WIN32)
                 $<TARGET_FILE:layerc_linux_atspi_adaptor_tests>)
         set_tests_properties(layerc_linux_atspi_adaptor_tests PROPERTIES
             TIMEOUT 90 SKIP_RETURN_CODE 77 LABELS "required;editor"
+            ENVIRONMENT "FLTK_BACKEND=x11"
             RESOURCE_LOCK layerc_x11_display)
         layerc_editor_build_runtime(layerc_linux_atspi_adaptor_tests)
         layerc_add_test(layerc_linux_editor_autosave_tests
