@@ -1,6 +1,6 @@
 # One LayerE editor on FLTK: migration plan
 
-**Status:** approved for trial implementation, 2026-11-16; phase 0 is in progress and no phase gate has passed. Support claims stay in [`README.md`](../README.md) and [`Linux.md`](Linux.md); design rules stay in [`DesignSystem.md`](DesignSystem.md); dated Linux editor evidence stays in [`LinuxEditorPlan.md`](LinuxEditorPlan.md).
+**Status:** approved for trial implementation, 2026-11-16. Phase 0's gate passed on 2026-11-17 (commit `1487afc`); phase 1 is in progress. Support claims stay in [`README.md`](../README.md) and [`Linux.md`](Linux.md); design rules stay in [`DesignSystem.md`](DesignSystem.md); dated Linux editor evidence stays in [`LinuxEditorPlan.md`](LinuxEditorPlan.md).
 
 ## 1. Decisions
 
@@ -24,7 +24,7 @@ Made by the user on 2026-11-16. Changing one goes back to the user.
 - **Two frontends.** Every editor change is built twice: the Win32 frontend (about 15,700 lines in `src/editor/`, with the GDI painters in `src/platform/win32/native_controls.cpp` and `native_theme.cpp`) and the FLTK frontend (about 12,200 lines in `src/editor/fltk/` after the phase 0 rename). Every v2.1 item under [Not yet in the code](DesignSystem.md#not-yet-in-the-code) names Windows and Linux files.
 - **The Linux editor doesn't follow LayerE.** It is laid out in fixed coordinates for one 1080 × 790 window, with tabs, labels above fields and 28 / 30 px controls; it uses neither `Fl_Flex` nor `Fl_Grid`; `main.cpp` forces `FLTK_BACKEND=x11`, so a Wayland session shows it through XWayland, blurred at fractional scales; and FLTK's stock choices, tabs, browsers and colour chooser are only partly restyled.
 - **FLTK is not the limit.** FLTK draws every control itself, which square, flat LayerE needs, and the [toolkit gate](LinuxEditorPlan.md#6-toolkit-selection-gate) measured it at about 7–9 MiB USS against the [approved Linux ceilings](Linux.md#linux-editor-resource-targets) of 20, 32 and 48 MiB. GTK 4 measured 55–65 MiB with Cairo and was rejected. FLTK has no screen-reader support of its own; this project already builds that itself.
-- **Ubuntu 24.04 gets no native editor.** The ATK path needs ATK/AT-SPI 2.62 because older adaptors crash at cleanup ([Linux.md](Linux.md)); Ubuntu 24.04 ships 2.52, so its CI row runs `--editor off`. D3 removes that floor.
+- **Ubuntu 24.04 gets no native editor.** The ATK path needs ATK/AT-SPI 2.62 because older adaptors crash at cleanup ([Linux.md](Linux.md)); Ubuntu 24.04 ships 2.52, so its CI row runs `--editor off`. D3 removes that floor. Ubuntu 24.04 also ships FLTK 1.3, so phase 1 lets a Linux source build without the distribution's FLTK 1.4 statically link the pinned 1.4.5 (D9); native packages still need the distribution's FLTK 1.4.
 
 ## 3. Planning baseline
 
@@ -70,30 +70,36 @@ Interfaces carry no Win32, X11 or FLTK types; shared-core interfaces stay free o
 
 ### 5.1 Model
 
-A toolkit-neutral tree built by today's tree pass from FLTK widgets, in FLTK's own loop, with no thread. Per node: stable id, role, name, description, states (focusable, focused, selected, checked, mixed, expanded, collapsed, disabled, read-only, modal, showing), value or range (minimum, maximum, step), text with caret and selection for fields, actions, parent and children, relations (labelled-by, described-by), bounds in screen pixels, and pending announcements. Changes between passes become events.
+A toolkit-neutral tree built by today's tree pass from FLTK widgets, in FLTK's own loop, with no thread. Per node: stable id, role, name, description, states (focusable, focused, selected, checked, mixed, expanded, collapsed, disabled, read-only, modal, showing, password), value or range (minimum, maximum, step), text with caret and selection for fields, actions, parent and children, relations (labelled-by, described-by), bounds in screen pixels, and pending announcements. Changes between passes become events.
 
 | Model role | AT-SPI role | UIA control type |
 | --- | --- | --- |
 | application / window / dialog | application / frame / dialog | Window |
 | push button | push button | Button |
 | check box / radio button | check box / radio button | CheckBox / RadioButton |
-| text field | entry | Edit |
+| text field | entry; read-only: text; masked: password text | Edit |
 | number field | spin button | Spinner, with an Edit child |
 | drop-down | combo box | ComboBox |
 | list / list row | list / list item | List / ListItem |
 | menu bar / menu / menu item | menu bar / menu / menu item | MenuBar / Menu / MenuItem |
-| label, status line | label | Text |
+| check / radio menu item | check menu item / radio menu item | MenuItem |
+| tab list / tab | page tab list / page tab | Tab / TabItem |
+| scroll bar / slider | scroll bar / slider | ScrollBar / Slider |
+| scroll pane, canvas | scroll pane / canvas | Pane |
+| label / status line | label / status bar | Text |
 | preview image | image | Image |
 | group, slot | panel | Group |
+
+The model has no expandable state or radio-group role: an adaptor reports expandable when a node is expanded or collapsed, reports a mixed check box as indeterminate, and treats a group whose direct children include a radio button as a radio group for selection. Masked fields publish no text.
 
 ### 5.2 AT-SPI adaptor on sd-bus (Linux)
 
 - **Activation.** On the session bus, read `org.a11y.Status` (`IsEnabled`, `ScreenReaderEnabled`) and watch for changes. Only when one is true, get the accessibility bus address from `org.a11y.Bus.GetAddress`, connect, and build the tree; otherwise no tree and no cost.
 - **Registration.** Call `org.a11y.atspi.Socket.Embed` on the registry with the editor's unique bus name and its root object path; the root implements `org.a11y.atspi.Application`, and the registry sets its `Id`.
-- **Interfaces by role:** `Accessible` on every node; `Application` on the root; `Component` (extents, focus, hit testing); `Action` (buttons, check boxes, menu items); `Text` and `EditableText` (fields); `Value` (number fields); `Selection` (lists, radio groups).
+- **Interfaces by role:** `Accessible` on every node; `Application` on the root; `Component` (extents, focus, hit testing); `Action` (buttons, check boxes, menu items); `Text` and `EditableText` (fields); `Value` (number fields); `Selection` (lists, tab lists, drop-downs, menus and radio groups).
 - **Events:** `Object` state, property, children, text, caret and selection changes, `Announcement` for status lines, `Focus`, and `Window` activate and deactivate.
 - **Cache:** `org.a11y.atspi.Cache` with `GetItems` and the add and remove signals, so Orca can fetch the tree in one call.
-- **Loop:** the connection's file descriptor joins FLTK's loop through `Fl::add_fd`, as GLib's does today.
+- **Loop:** the connection's file descriptor joins FLTK's loop through `Fl::add_fd`, and its timeout through `Fl::add_timeout`; no GLib loop runs. Reads are served from a tree no older than one refresh interval, rebuilt on demand without a listener.
 - **Packaging:** the native package needs sd-bus (`libsystemd` or `libelogind`) instead of ATK, its bridge and libatspi; the Flatpak drops its pinned `at-spi2-core` module and keeps access to the accessibility bus. A desktop without either sd-bus library builds no editor and says why, as the ATK requirement does today.
 
 ### 5.3 UI Automation adaptor (Windows)

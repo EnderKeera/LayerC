@@ -509,8 +509,8 @@ without an edit.
 ## Screen readers
 
 What a sighted person reads, a screen reader says: UI Automation on Windows
-(Narrator, NVDA), ATK and AT-SPI on Linux (Orca, through
-`EditorAccessibility`).
+(Narrator, NVDA), AT-SPI on Linux (Orca, through `EditorAccessibility`'s
+own D-Bus adaptor).
 
 - **Names** are the visible label without its access-key marker ("Profile
   name", "Browse..."). A button without a word (+, −, ...) takes its
