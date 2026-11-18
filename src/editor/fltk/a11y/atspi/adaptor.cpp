@@ -77,6 +77,7 @@ struct Adaptor::Impl {
   void start();
   void shutdown();
   void update_status();
+  static void on_status_notify(void *data);
 
   void on_status(const StatusReport &report);
   bool open_a11y(const std::string &address);
@@ -140,6 +141,9 @@ struct Adaptor::Impl {
   std::string open_fault;
   std::string rejection;
   AdaptorStatus status;
+  StatusHandler status_handler{};
+  void *status_handler_data{};
+  bool status_notify_armed{};
   std::uint64_t snapshots{};
   std::chrono::steady_clock::time_point next_refresh{};
   bool check_registered{};
@@ -174,6 +178,12 @@ void Adaptor::Impl::start() {
 }
 
 void Adaptor::Impl::shutdown() {
+  if (status_notify_armed) {
+    Fl::remove_timeout(on_status_notify, this);
+    status_notify_armed = false;
+  }
+  status_handler = nullptr;
+  status_handler_data = nullptr;
   close_a11y();
   // The watch's signal slots belong to the session connection: they are
   // released before it, or the bus would free them first.
@@ -209,6 +219,18 @@ void Adaptor::Impl::update_status() {
   }
   if (next.state == status.state && next.reason == status.reason) return;
   status = std::move(next);
+  // Deferred to the loop: this runs inside a bus dispatch, and a handler may
+  // destroy the adaptor, which must not happen with the dispatch on the stack.
+  if (status_handler && !status_notify_armed) {
+    status_notify_armed = true;
+    Fl::add_timeout(0.0, on_status_notify, this);
+  }
+}
+
+void Adaptor::Impl::on_status_notify(void *data) {
+  auto *impl = static_cast<Impl *>(data);
+  impl->status_notify_armed = false;
+  if (impl->status_handler) impl->status_handler(impl->status_handler_data);
 }
 
 void Adaptor::Impl::on_status(const StatusReport &report) {
@@ -607,6 +629,11 @@ Adaptor::Adaptor(FltkTree &tree) : impl_(std::make_unique<Impl>(tree)) {
 Adaptor::~Adaptor() = default;
 
 AdaptorStatus Adaptor::status() const { return impl_->status; }
+
+void Adaptor::on_status_change(StatusHandler handler, void *data) {
+  impl_->status_handler = handler;
+  impl_->status_handler_data = data;
+}
 
 void Adaptor::announce(Fl_Widget *source, std::string text) {
   if (!impl_->a11y || impl_->a11y->failed()) return;

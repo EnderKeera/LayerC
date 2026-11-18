@@ -7,6 +7,8 @@ void a_refused_embed_is_reported_and_recovered();
 void listeners_from_two_buses_are_tracked_separately();
 void a_listener_signal_before_the_reply_keeps_the_known_listeners();
 void a_failed_bus_open_names_its_cause_and_recovers();
+void a_missing_launcher_waits_and_is_not_activated();
+void a_launcher_that_names_no_bus_is_unavailable();
 void interfaces_follow_each_roles_capabilities();
 void component_geometry_follows_the_coordinate_type();
 void action_names_and_activation_reach_the_widget();
@@ -555,6 +557,8 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(listeners_from_two_buses_are_tracked_separately),
     LAYERC_TEST_CASE(a_listener_signal_before_the_reply_keeps_the_known_listeners),
     LAYERC_TEST_CASE(a_failed_bus_open_names_its_cause_and_recovers),
+    LAYERC_TEST_CASE(a_missing_launcher_waits_and_is_not_activated),
+    LAYERC_TEST_CASE(a_launcher_that_names_no_bus_is_unavailable),
     LAYERC_TEST_CASE(interfaces_follow_each_roles_capabilities),
     LAYERC_TEST_CASE(component_geometry_follows_the_coordinate_type),
     LAYERC_TEST_CASE(action_names_and_activation_reach_the_widget),

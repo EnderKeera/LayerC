@@ -422,6 +422,10 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
              },
              ms(2000)),
          "the multi-line field grew a line");
+  // The published tree is one generation behind until the next walk: the
+  // widget changed inside the wait above, so the snapshot a client reads is
+  // taken after the periodic refresh, as a screen reader would see it.
+  harness.spin(ms(400));
   expect(node_text(harness, *notes) ==
              std::optional<std::string>{"first\nsecond\nthird"},
          "the published text matches the widget");

@@ -22,6 +22,16 @@ constexpr const char *kSessionOwner =
   return address && *address ? address : nullptr;
 }
 
+// Whether the bus launcher itself has no owner, as opposed to being there and
+// refusing: a launcher that is gone is a resting state an assistive technology
+// ends by activating it.
+[[nodiscard]] bool launcher_absent(sd_bus_message *message) {
+  const sd_bus_error *error = sd_bus_message_get_error(message);
+  if (!error) return false;
+  return sd_bus_error_has_name(error, SD_BUS_ERROR_SERVICE_UNKNOWN) ||
+         sd_bus_error_has_name(error, SD_BUS_ERROR_NAME_HAS_NO_OWNER);
+}
+
 // Whether an error means "org.a11y.Bus is not there", as opposed to "it is
 // there and broke".
 [[nodiscard]] bool missing_service(sd_bus_message *message) {
@@ -102,8 +112,15 @@ void StatusWatch::probe() {
   if (sd_bus_message_new_method_call(session_->bus(), &call, "org.a11y.Bus",
                                      "/org/a11y/bus",
                                      "org.freedesktop.DBus.Properties",
-                                     "GetAll") < 0 ||
-      sd_bus_message_append(call, "s", "org.a11y.Status") < 0) {
+                                     "GetAll") < 0) {
+    sd_bus_message_unref(call);
+    unavailable("cannot query org.a11y.Status");
+    return;
+  }
+  // Asking about the launcher must not start it: only an assistive technology
+  // activates org.a11y.Bus, and until one does the bridge waits.
+  sd_bus_message_set_auto_start(call, 0);
+  if (sd_bus_message_append(call, "s", "org.a11y.Status") < 0) {
     sd_bus_message_unref(call);
     unavailable("cannot query org.a11y.Status");
     return;
@@ -125,6 +142,7 @@ void StatusWatch::ask_address() {
     unavailable("cannot ask org.a11y.Bus for an address");
     return;
   }
+  sd_bus_message_set_auto_start(call, 0);
   if (!call_async(*session_, call, kQueryDeadlineUsec, on_address, this))
     unavailable("cannot ask org.a11y.Bus for an address");
 }
@@ -194,8 +212,7 @@ int StatusWatch::on_owner(sd_bus_message *message, void *data, sd_bus_error *) {
     if (const char *address = env_address())
       watch->publish(StatusReport{StatusState::on, {}, address});
     else
-      watch->publish(StatusReport{StatusState::off,
-                                  "org.a11y.Bus is not on the session bus", {}});
+      watch->publish(StatusReport{StatusState::off, {}, {}});
     return 0;
   }
   // The bus appeared after us; ask again. A new owner is a new accessibility
@@ -223,12 +240,18 @@ int StatusWatch::on_answers(sd_bus_message *message, void *data,
       watch->publish(StatusReport{StatusState::on, {}, address});
       return 0;
     }
+    // No owner is the resting state: an assistive technology activates the
+    // launcher, and the NameOwnerChanged watch re-queries when it appears.
+    if (launcher_absent(message)) {
+      watch->publish(StatusReport{StatusState::off, {}, {}});
+      return 0;
+    }
     if (!watch->answering_) {
       watch->answering_ = true;
       watch->ask_address();
       return 0;
     }
-    watch->unavailable("org.a11y.Bus is not on the session bus");
+    watch->unavailable("org.a11y.Bus has no org.a11y.Status");
     return 0;
   }
   watch->read_status_reply(message);
@@ -240,6 +263,10 @@ int StatusWatch::on_address(sd_bus_message *message, void *data,
   auto *watch = static_cast<StatusWatch *>(data);
   watch->answering_ = false;
   if (sd_bus_message_is_method_error(message, nullptr)) {
+    if (launcher_absent(message)) {
+      watch->publish(StatusReport{StatusState::off, {}, {}});
+      return 0;
+    }
     watch->unavailable("org.a11y.Bus has no accessible bus: " +
                        error_name(message));
     return 0;

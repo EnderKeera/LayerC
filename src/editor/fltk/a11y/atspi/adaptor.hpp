@@ -32,6 +32,11 @@ public:
   Adaptor &operator=(const Adaptor &) = delete;
 
   [[nodiscard]] AdaptorStatus status() const;
+
+  // Told once per status change, on the FLTK thread, from the loop: never from
+  // a destructor and never while a bus dispatch is on the stack.
+  using StatusHandler = void (*)(void *data);
+  void on_status_change(StatusHandler handler, void *data);
   // Raises a live-region announcement on the widget's node at the next
   // refresh; ignored while no consumer listens.
   void announce(Fl_Widget *source, std::string text);
