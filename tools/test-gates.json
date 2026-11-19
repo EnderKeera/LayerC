@@ -13,6 +13,7 @@
         "layerc_companion_tests",
         "layerc_core_tests",
         "layerc_daemon_runtime_tests",
+        "layerc_editor_accessibility_changes_tests",
         "layerc_editor_accessibility_model_tests",
         "layerc_editor_document_tests",
         "layerc_editor_diagnostics_view_tests",
@@ -21,6 +22,7 @@
         "layerc_editor_color_tests",
         "layerc_editor_live_edit_tests",
         "layerc_editor_tests",
+        "layerc_fltk_accessibility_tree_tests",
         "layerc_isolated_visual_tests",
         "layerc_launcher_tests",
         "layerc_launcher_win_tests",
@@ -30,7 +32,10 @@
         "layerc_template_png_tests",
         "layerc_visual_asset_gc_contract_tests",
         "layerc_windows_fltk_accessibility_tests",
-        "layerc_windows_fltk_smoke"
+        "layerc_windows_fltk_notification_tests",
+        "layerc_windows_fltk_patterns_tests",
+        "layerc_windows_fltk_smoke",
+        "layerc_windows_fltk_text_tests"
       ],
       "allowSkip": {
         "layerc_overlay_tests": "the runner cannot create an isolated desktop; unavailable interactive coverage, not a pass"
@@ -44,6 +49,7 @@
         "layerc_automation_persistence_tests",
         "layerc_capture_tests",
         "layerc_core_tests",
+        "layerc_editor_accessibility_changes_tests",
         "layerc_editor_accessibility_model_tests",
         "layerc_editor_document_tests",
         "layerc_editor_diagnostics_view_tests",
@@ -113,7 +119,9 @@
       "description": "Linux LayerE toolkit suites under an X display (CTest label editor); selected by tools/run-linux-tests.sh --editor.",
       "label": "editor",
       "required": [
+        "layerc_fltk_accessibility_tree_tests",
         "layerc_linux_atspi_adaptor_tests",
+        "layerc_linux_editor_atspi_mapping_tests",
         "layerc_linux_editor_autosave_tests",
         "layerc_linux_editor_platform_tests",
         "layerc_linux_editor_widget_tests"

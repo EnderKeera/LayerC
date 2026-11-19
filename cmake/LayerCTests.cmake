@@ -418,9 +418,11 @@ if(NOT WIN32)
             SOURCES tests/linux_editor_platform_tests.cpp
             LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
         layerc_editor_build_runtime(layerc_linux_editor_platform_tests)
+        # Display-free, but registered only with the editor, so it belongs to
+        # the editor gate: an editor-off build still meets the headless gate.
         layerc_add_test(layerc_linux_editor_atspi_mapping_tests
             SOURCES tests/linux_atspi_mapping_tests.cpp
-            LINK layerc_editor_fltk TIMEOUT 30 LABELS required headless)
+            LINK layerc_editor_fltk TIMEOUT 30 LABELS required editor)
         layerc_add_test(layerc_fltk_accessibility_tree_tests
             SOURCES tests/fltk_accessibility_tree_tests.cpp
             LINK layerc_editor_fltk_a11y TIMEOUT 60 SKIP_RETURN_CODE 77
