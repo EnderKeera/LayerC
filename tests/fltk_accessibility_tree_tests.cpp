@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -546,6 +547,45 @@ void fltk_accessibility_actions() {
   window.hide();
 }
 
+void fltk_accessibility_actions_allow_closing_the_source() {
+#ifndef _WIN32
+  layerc::test::require_x11();
+#endif
+  {
+    Fl_Window window(300, 200, "Row action");
+    auto list = std::make_unique<Fl_Hold_Browser>(20, 20, 240, 120);
+    list->add("Row");
+    list->callback([](Fl_Widget *, void *owner) {
+      static_cast<std::unique_ptr<Fl_Hold_Browser> *>(owner)->reset();
+    }, &list);
+    window.end();
+    window.show();
+    Fl::check();
+    expect(a11y::activate({list.get(), a11y::TargetKind::row, 1}) && list,
+           "a row activation defers closing its browser");
+    Fl::check();
+    expect(!list, "the deferred row callback can close its browser");
+  }
+  {
+    auto window = std::make_unique<Fl_Window>(300, 200, "Tab action");
+    auto *tabs = new Fl_Tabs(20, 20, 240, 120);
+    (new Fl_Group(20, 44, 240, 96, "First"))->end();
+    auto *page = new Fl_Group(20, 44, 240, 96, "Second");
+    page->end();
+    tabs->end();
+    tabs->callback([](Fl_Widget *, void *owner) {
+      static_cast<std::unique_ptr<Fl_Window> *>(owner)->reset();
+    }, &window);
+    window->end();
+    window->show();
+    Fl::check();
+    expect(a11y::activate({page, a11y::TargetKind::widget, 0}) && window,
+           "a tab activation defers closing its window");
+    Fl::check();
+    expect(!window, "the deferred tab callback can close its window");
+  }
+}
+
 // FLTK decides radio behaviour by the button type, not the class: Fl_Radio_Button
 // is a plain Fl_Button constructed with FL_RADIO_BUTTON, while Fl_Round_Button is
 // a toggle unless it is retyped. The exported role and the checked state follow
@@ -985,6 +1025,7 @@ void fltk_accessibility_field_text_snapshot() {
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fltk_accessibility_tree_snapshots),
                  LAYERC_TEST_CASE(fltk_accessibility_expansion_and_scroll),
                  LAYERC_TEST_CASE(fltk_accessibility_actions),
+                 LAYERC_TEST_CASE(fltk_accessibility_actions_allow_closing_the_source),
                  LAYERC_TEST_CASE(fltk_accessibility_button_roles),
                  LAYERC_TEST_CASE(fltk_accessibility_field_text_equivalence),
                  LAYERC_TEST_CASE(fltk_accessibility_field_text_work_bound),

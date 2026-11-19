@@ -120,8 +120,9 @@ bool activate(const Target &target) {
       auto &list = static_cast<Fl_Browser &>(chosen);
       if (index > list.size()) return;
       list.value(index);
-      list.do_callback();
       list.redraw();
+      // Application callbacks may destroy the list or its window.
+      list.do_callback();
     } else if (kind == TargetKind::menu_item) {
       auto &menu = static_cast<Fl_Menu_ &>(chosen);
       if (index >= menu_size(menu) - 1 || !menu.menu()[index].activevisible()) return;
@@ -130,8 +131,9 @@ bool activate(const Target &target) {
       if (menu.menu()[index].submenu() && popup_open(menu, index)) return;
       (void)menu.picked(&menu.menu()[index]);
     } else if (auto *tabs = dynamic_cast<Fl_Tabs *>(chosen.parent())) {
-      if (tabs->value(&chosen)) tabs->do_callback();
+      const bool changed = tabs->value(&chosen) != 0;
       tabs->redraw();
+      if (changed) tabs->do_callback();
     } else if (auto *button = dynamic_cast<Fl_Button *>(&chosen);
                button != nullptr && button->type() == FL_RADIO_BUTTON) {
       button->setonly();
