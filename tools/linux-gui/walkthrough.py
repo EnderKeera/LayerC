@@ -276,8 +276,12 @@ class Walk(AutomationWalk, VisualWalk, AutosaveWalk, RuntimeWalk, DeviceWalk, To
         self.focus(EDITOR, "a11y-focused")
         report = self.request("a11y_check", screenshot=self.shot["screenshot"])
         self.capture("a11y-after")
-        self.notes["a11y"] = {"checks": report.get("checks"), "error": report.get("error")}
-        check(report.get("passed"), f"accessibility check failed: {report.get('error')}")
+        self.notes["a11y"] = {"checks": report.get("checks"), "error": report.get("error"),
+                              "traceback": report.get("traceback")}
+        # A bare assertion has no message: the failing line is in the traceback.
+        where = (report.get("traceback") or "").strip().splitlines()[-3:]
+        check(report.get("passed"),
+              f"accessibility check failed: {report.get('error')} {' | '.join(where)}".rstrip())
         self.base_hash = self.profile()[0]["sha256"]
         return f"{len(report.get('checks') or [])} semantic checks passed"
 
