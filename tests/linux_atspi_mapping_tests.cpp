@@ -1,3 +1,4 @@
+#include "a11y/atspi/events.hpp"
 #include "a11y/atspi/mapping.hpp"
 #include "test_support.hpp"
 
@@ -296,6 +297,70 @@ void boundaries_follow_reading_units() {
   expect(!boundary_at("\xc3", 0, Granularity::word),
          "invalid UTF-8 is rejected");
 }
+
+// --- registrations carry the registry's spelling --------------------------
+
+void registrations_are_compared_in_the_registry_spelling() {
+  expect(canonical_event("object:text-changed") == "Object:TextChanged",
+         "a component starts with a capital letter");
+  expect(canonical_event("Object:TextChanged:") == "Object:TextChanged",
+         "the registry's trailing separator is dropped");
+  expect(canonical_event("focus:") == "Focus",
+         "a one-component registration keeps its component");
+  expect(canonical_event("object:property-change:accessible-name") ==
+             "Object:PropertyChange:AccessibleName",
+         "a hyphen is dropped and capitalizes the letter after it");
+  expect(canonical_event("object:state-changed:focused") ==
+             "Object:StateChanged:Focused",
+         "each detail component is spelled the same way");
+  for (const char *name : {"Object:TextChanged", "object:text-changed",
+                           "Object:StateChanged:Focused"})
+    expect(canonical_event(canonical_event(name)) == canonical_event(name),
+           "canonicalizing its own output changes nothing");
+  expect(canonical_event("").empty(), "an empty registration is nothing");
+  expect(canonical_event(":").empty(),
+         "a registration with no component is nothing");
+  expect(canonical_event("object::text-changed") == "Object",
+         "comparison stops at the first empty component");
+}
+
+void coverage_follows_the_registered_components() {
+  expect(covers("Object:TextChanged:", "object:text-changed:insert"),
+         "the registry's spelling covers the event it names");
+  expect(covers("object:text-changed", "Object:TextChanged:Insert"),
+         "a lowercase registration covers the registry's event");
+  expect(!covers("Object:TextChanged:Delete", "object:text-changed:insert"),
+         "a registration for another detail does not cover the event");
+  expect(!covers("Object:StateChanged", "object:text-changed:insert"),
+         "an unrelated registration does not cover the event");
+  expect(!covers("Object:StateChanged:Focused", "object:state-changed"),
+         "a more specific pattern does not cover its base event");
+  expect(covers("", "object:text-changed:insert"),
+         "the empty pattern covers everything");
+  expect(covers("Focus:", "focus:"),
+         "a trailing separator is not a component");
+  expect(covers("Window:Create", "window:create"),
+         "casing alone never separates a pattern from its event");
+}
+
+void listener_registrations_select_their_events() {
+  const std::vector<Listener> registry{{ ":1.50", "Object:TextChanged:" },
+                                       { ":1.50", "Object:TextCaretMoved:" },
+                                       { ":1.51", "Focus" }};
+  expect(listens(registry, "object:text-changed:insert"),
+         "a registry-spelled registration selects its text event");
+  expect(listens(registry, "object:text-caret-moved"),
+         "a registry-spelled registration selects its caret event");
+  expect(listens(registry, "focus:"),
+         "a registry-spelled registration selects its focus event");
+  const std::vector<Listener> nameless{{ ":1.60", "" }, { ":1.61", ":" }};
+  expect(!listens(nameless, "object:text-changed:insert"),
+         "a registration that names nothing selects nothing");
+  const std::vector<Listener> unrelated{{ ":1.62", "Window:Create" }};
+  expect(!listens(unrelated, "object:text-changed:insert"),
+         "an unrelated registration selects nothing");
+  expect(!listens({}, "focus:"), "no registration selects nothing");
+}
 } // namespace
 
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(every_role_has_a_code_and_name),
@@ -305,4 +370,7 @@ LAYERC_TEST_MAIN(LAYERC_TEST_CASE(every_role_has_a_code_and_name),
                  LAYERC_TEST_CASE(state_event_names_match_at_spi),
                  LAYERC_TEST_CASE(interfaces_follow_the_node),
                  LAYERC_TEST_CASE(utf8_offsets_translate_both_ways),
-                 LAYERC_TEST_CASE(boundaries_follow_reading_units))
+                 LAYERC_TEST_CASE(boundaries_follow_reading_units),
+                 LAYERC_TEST_CASE(registrations_are_compared_in_the_registry_spelling),
+                 LAYERC_TEST_CASE(coverage_follows_the_registered_components),
+                 LAYERC_TEST_CASE(listener_registrations_select_their_events))

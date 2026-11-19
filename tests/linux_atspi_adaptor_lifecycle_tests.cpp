@@ -487,4 +487,124 @@ void no_at_bridge_zero_behaves_normally() {
   expect(adaptor.status().reason.empty(), "a working bridge names no fault");
 }
 
+// --- case n: registrations in the registry's own spelling ------------------
+
+void a_registry_spelled_listener_signal_turns_events_on() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  // The answer names nobody; the registration arrives as a signal instead.
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(harness.spin_until(
+                  [&] {
+                    return harness.embeds() > 0 &&
+                           harness.registered_calls() > 0;
+                  },
+                  ms(3000)),
+              "the application embeds and reads the listeners"))
+    return;
+
+  const EventQuery announcement{"org.a11y.atspi.Event.Object", "Announcement",
+                                {}};
+  harness.announce_listener_from(":1.51", "Object:Announcement");
+  harness.spin(ms(200));
+  const auto mark = harness.signals().size();
+  adaptor.announce(fixture.button, "Saved");
+  expect(wait_event(harness, mark, announcement, ms(3000)),
+         "a registration announced in the registry's spelling receives the "
+         "announcement");
+}
+
+// --- case o ---------------------------------------------------------------
+
+void a_departed_listener_is_removed_with_its_bus() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(harness.spin_until(
+                  [&] {
+                    return harness.embeds() > 0 &&
+                           harness.registered_calls() > 0;
+                  },
+                  ms(3000)),
+              "the application embeds and reads the listeners"))
+    return;
+
+  const EventQuery announcement{"org.a11y.atspi.Event.Object", "Announcement",
+                                {}};
+  harness.announce_listener_from(":1.100", "Object:Announcement");
+  harness.announce_listener_from(":1.101", "Object:Announcement");
+  harness.spin(ms(200));
+
+  // An empty deregistration is a listener that left the bus, and it removes
+  // only that bus's registrations.
+  harness.deregister_listener(":1.100", "");
+  harness.spin(ms(200));
+  auto mark = harness.signals().size();
+  adaptor.announce(fixture.button, "Still here");
+  expect(wait_event(harness, mark, announcement, ms(3000)),
+         "the listener on the other bus still receives the announcement");
+
+  harness.deregister_listener(":1.101", "");
+  harness.spin(ms(200));
+  mark = harness.signals().size();
+  adaptor.announce(fixture.button, "Gone");
+  harness.spin(ms(400));
+  expect(!find_event(harness, mark, announcement).has_value(),
+         "an empty deregistration removes the listener that left");
+}
+
+// --- case p ---------------------------------------------------------------
+
+void a_pattern_deregistration_removes_the_listeners_it_covers() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  Fixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(harness.spin_until(
+                  [&] {
+                    return harness.embeds() > 0 &&
+                           harness.registered_calls() > 0;
+                  },
+                  ms(3000)),
+              "the application embeds and reads the listeners"))
+    return;
+
+  const EventQuery announcement{"org.a11y.atspi.Event.Object", "Announcement",
+                                {}};
+  harness.announce_listener_from(":1.102", "Object:Announcement");
+  harness.spin(ms(200));
+  auto mark = harness.signals().size();
+  adaptor.announce(fixture.button, "Before");
+  expect(wait_event(harness, mark, announcement, ms(3000)),
+         "the listener receives the announcement before it withdraws");
+
+  harness.deregister_listener(":1.102", "Object");
+  harness.spin(ms(200));
+  mark = harness.signals().size();
+  adaptor.announce(fixture.button, "After");
+  harness.spin(ms(400));
+  expect(!find_event(harness, mark, announcement).has_value(),
+         "a component pattern removes every registration it covers");
+}
+
 } // namespace layerc::test::atspi_fixture

@@ -18,10 +18,22 @@ struct Listener {
   std::string event;
 };
 
-// Whether a registered listener covers an event type. Listener strings name
-// ':'-separated components ("object", "state-changed", "focused"); a missing
-// trailing component is a wildcard, and empty components are ignored, so
-// "object:" and "object:state-changed" both cover "object:state-changed:focused".
+// The spelling at-spi2-core compares event names in. The registry rewrites
+// every registration (ensure_proper_format): each ':'-separated component is
+// capitalized and a '-' is dropped with the letter after it capitalized, then
+// the name is compared up to its first empty component. "object:text-changed"
+// and the registry's own "Object:TextChanged:" are both "Object:TextChanged".
+[[nodiscard]] std::string canonical_event(std::string_view name);
+
+// Whether an event type falls under a registration pattern, in either
+// spelling: every component of the pattern equals the event's, so a missing
+// trailing component is a wildcard. "object:" and "Object:StateChanged" both
+// cover "object:state-changed:focused"; an empty pattern covers every event,
+// which is how the registry withdraws all of a departed listener's events.
+[[nodiscard]] bool covers(std::string_view pattern, std::string_view event);
+
+// Whether a registered listener covers an event type. A registration that
+// names nothing selects nothing.
 [[nodiscard]] bool listens(const std::vector<Listener> &listeners,
                            std::string_view event);
 

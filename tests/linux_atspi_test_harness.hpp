@@ -1,6 +1,7 @@
 #pragma once
 
 #include "a11y/atspi/adaptor.hpp"
+#include "a11y/atspi/events.hpp"
 #include "a11y/atspi/mapping.hpp"
 #include "a11y/atspi/objects.hpp"
 #include "a11y/fltk_tree.hpp"
@@ -274,9 +275,15 @@ public:
     emit_listener("EventListenerRegistered", bus, event);
   }
 
+  // The registry withdraws every registration of the bus that the pattern
+  // covers; an empty pattern is a listener that left the bus. Only the
+  // answers to later GetRegisteredEvents calls depend on this, so it mirrors
+  // the registry rather than the adaptor under test.
   void deregister_listener(const std::string &bus, const std::string &event) {
     std::erase_if(registered_, [&](const Registered &listener) {
-      return listener.bus == bus && listener.event == event;
+      return listener.bus == bus &&
+             (event.empty() || listener.event == event ||
+              atspi::covers(event, listener.event));
     });
     emit_listener("EventListenerDeregistered", bus, event);
   }

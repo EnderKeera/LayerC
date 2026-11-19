@@ -427,4 +427,68 @@ void edits_run_through_the_fields_own_path_and_report_text_changes() {
          "the published text matches the widget");
 }
 
+// --- case f: the registry's spelling of a registration --------------------
+
+void a_registry_spelled_registration_reaches_the_text_events() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  // What at-spi2-core answers after rewriting a registration, not what the
+  // client sent.
+  harness.set_registered_listeners({{":1.50", "Object:TextChanged:"},
+                                    {":1.50", "Object:TextCaretMoved:"}});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                    std::nullopt};
+  RichFixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+  harness.spin(ms(250));
+
+  const auto path = node_path_named(harness, "Name");
+  if (!expect(path.has_value(), "the field has a path")) return;
+  const std::string field = *path;
+
+  const auto saw = [&](const std::size_t mark, const char *member,
+                       const std::string &name) {
+    const auto &signals = harness.signals();
+    for (std::size_t i = mark; i < signals.size(); ++i) {
+      const auto &signal = signals[i];
+      if (signal.interface == "org.a11y.atspi.Event.Object" &&
+          signal.member == member && signal.path == field &&
+          signal.name == name)
+        return true;
+    }
+    return false;
+  };
+
+  std::size_t mark = harness.signals().size();
+  expect(parse_bool(text_call(harness, field, kEditableInterface,
+                              "SetTextContents",
+                              [](sd_bus_message *call) {
+                                return sd_bus_message_append(call, "s", "fresh");
+                              })
+                        .reply) == std::optional<bool>{true},
+         "a client replaces the whole text");
+  expect(harness.spin_until(
+             [&] {
+               return saw(mark, "TextChanged", "insert") ||
+                      saw(mark, "TextChanged", "delete");
+             },
+             ms(3000)),
+         "a registry-spelled text-changed registration receives the change");
+
+  mark = harness.signals().size();
+  expect(parse_bool(text_call(harness, field, kTextInterface, "SetCaretOffset",
+                              [](sd_bus_message *call) {
+                                return sd_bus_message_append(call, "i", 2);
+                              })
+                        .reply) == std::optional<bool>{true},
+         "a client moves the caret");
+  expect(harness.spin_until([&] { return saw(mark, "TextCaretMoved", {}); },
+                            ms(3000)),
+         "a registry-spelled caret registration receives the move");
+}
+
 } // namespace layerc::test::atspi_fixture

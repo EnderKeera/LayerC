@@ -4,6 +4,7 @@
 
 #include <systemd/sd-bus.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -120,17 +121,17 @@ void send(LoopBus &loop, const ObjectSource &source, const NodeId node,
   if (!send_message(loop, message)) return;
 }
 
+// The components of a canonical name, which has no empty ones.
 [[nodiscard]] std::vector<std::string_view>
-components(const std::string_view text) {
+components(const std::string_view canonical) {
   std::vector<std::string_view> parts;
-  std::string_view rest = text;
-  while (true) {
+  std::string_view rest = canonical;
+  while (!rest.empty()) {
     const auto colon = rest.find(':');
     parts.push_back(rest.substr(0, colon));
     if (colon == std::string_view::npos) break;
     rest.remove_prefix(colon + 1);
   }
-  while (!parts.empty() && parts.back().empty()) parts.pop_back();
   return parts;
 }
 
@@ -147,22 +148,56 @@ components(const std::string_view text) {
 
 } // namespace
 
+std::string canonical_event(const std::string_view name) {
+  // ensure_proper_format, character for character (ASCII, so no locale).
+  std::string spelled;
+  spelled.reserve(name.size());
+  bool upper = true;
+  for (const char c : name) {
+    if (upper) {
+      spelled.push_back(c >= 'a' && c <= 'z' ? static_cast<char>(c - 'a' + 'A')
+                                             : c);
+      upper = false;
+    } else if (c == '-') {
+      upper = true;
+    } else if (c == ':') {
+      upper = true;
+      spelled.push_back(c);
+    } else {
+      spelled.push_back(c);
+    }
+  }
+  // The registry and the bridge stop comparing at the first empty component.
+  std::string canonical;
+  std::string_view rest = spelled;
+  while (true) {
+    const auto colon = rest.find(':');
+    const auto part = rest.substr(0, colon);
+    if (part.empty()) break;
+    if (!canonical.empty()) canonical.push_back(':');
+    canonical.append(part);
+    if (colon == std::string_view::npos) break;
+    rest.remove_prefix(colon + 1);
+  }
+  return canonical;
+}
+
+bool covers(const std::string_view pattern, const std::string_view event) {
+  const std::string given_name = canonical_event(pattern);
+  const std::string wanted_name = canonical_event(event);
+  const auto given = components(given_name);
+  const auto wanted = components(wanted_name);
+  return given.size() <= wanted.size() &&
+         std::equal(given.begin(), given.end(), wanted.begin());
+}
+
 bool listens(const std::vector<Listener> &listeners,
              const std::string_view event) {
-  const auto wanted = components(event);
-  for (const auto &listener : listeners) {
-    const auto given = components(listener.event);
-    if (given.empty() || given.size() > wanted.size()) continue;
-    bool matches = true;
-    for (std::size_t i = 0; i < given.size(); ++i) {
-      if (given[i] != wanted[i]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) return true;
-  }
-  return false;
+  return std::any_of(listeners.begin(), listeners.end(),
+                     [&](const Listener &listener) {
+                       return !canonical_event(listener.event).empty() &&
+                              covers(listener.event, event);
+                     });
 }
 
 void emit_cache_added(LoopBus &loop, const ObjectSource &source,

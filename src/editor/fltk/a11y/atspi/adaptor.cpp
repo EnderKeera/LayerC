@@ -668,20 +668,27 @@ int Adaptor::Impl::on_registered(sd_bus_message *message, void *data,
   return 0;
 }
 
+// Registrations are kept in the registry's spelling, so its answer
+// ("Object:TextChanged:") and its signal ("Object:TextChanged") for the same
+// registration are one listener.
 void Adaptor::Impl::add_listener(std::string bus,
                                  const std::string &event) {
+  std::string canonical = canonical_event(event);
+  if (canonical.empty()) return;
   const auto known = std::find_if(
       listeners.begin(), listeners.end(), [&](const Listener &listener) {
-        return listener.bus == bus && listener.event == event;
+        return listener.bus == bus && listener.event == canonical;
       });
   if (known == listeners.end())
-    listeners.push_back(Listener{std::move(bus), event});
+    listeners.push_back(Listener{std::move(bus), std::move(canonical)});
 }
 
+// The registry withdraws every registration of the bus that the pattern
+// covers; an empty pattern is a listener that left the bus.
 void Adaptor::Impl::remove_listener(const std::string &bus,
                                     const std::string &event) {
   std::erase_if(listeners, [&](const Listener &listener) {
-    return listener.bus == bus && listener.event == event;
+    return listener.bus == bus && covers(event, listener.event);
   });
 }
 
@@ -692,12 +699,12 @@ int Adaptor::Impl::on_listener(sd_bus_message *message, void *data,
   const char *event = nullptr;
   const char *member = sd_bus_message_get_member(message);
   if (sd_bus_message_read(message, "ss", &bus, &event) < 0) return 0;
-  if (!event || !*event) return 0;
   const std::string owner = bus ? bus : "";
+  const std::string name = event ? event : "";
   if (member && std::string{member} == "EventListenerDeregistered")
-    impl->remove_listener(owner, event);
+    impl->remove_listener(owner, name);
   else
-    impl->add_listener(owner, event);
+    impl->add_listener(owner, name);
   return 0;
 }
 
