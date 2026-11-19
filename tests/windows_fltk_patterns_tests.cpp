@@ -36,6 +36,11 @@
 
 namespace {
 constexpr HRESULT kInvalidOperation = static_cast<HRESULT>(UIA_E_INVALIDOPERATION);
+// MinGW does not declare the UI Automation NoScroll sentinel.
+constexpr double kNoScroll = -1.0;
+#ifdef UIA_ScrollPatternNoScroll
+static_assert(kNoScroll == UIA_ScrollPatternNoScroll);
+#endif
 using layerc::test::expect;
 using layerc::editor::a11y::FltkTree;
 using layerc::editor::a11y::PopupMenus;
@@ -678,7 +683,7 @@ void selection_and_selection_item() {
              }),
              "the chosen radio reports IsSelected");
       // A chosen radio is checked rather than selected; it still fills the group.
-      expect(other_radio->AddToSelection() == UIA_E_INVALIDOPERATION,
+      expect(other_radio->AddToSelection() == kInvalidOperation,
              "a radio cannot join a group whose choice is already made");
 
       fixture.close_from_client();
@@ -766,10 +771,10 @@ void expand_collapse_and_scroll() {
              "the pane scrolls only where it overflows");
       double percent{};
       ok(scroll->get_CurrentHorizontalScrollPercent(&percent), "read horizontal percent");
-      expect(percent == UIA_ScrollPatternNoScroll, "a fixed axis reports NoScroll");
+      expect(percent == kNoScroll, "a fixed axis reports NoScroll");
       ok(scroll->get_CurrentVerticalScrollPercent(&percent), "read vertical percent");
       expect(percent >= 0.0 && percent <= 100.0, "the scrolling axis reports a percentage");
-      expect(scroll->SetScrollPercent(UIA_ScrollPatternNoScroll, 100.0) == S_OK,
+      expect(scroll->SetScrollPercent(kNoScroll, 100.0) == S_OK,
              "scroll to the bottom of the pane");
       expect(wait([&] {
                double now = 0.0;
@@ -799,7 +804,7 @@ void expand_collapse_and_scroll() {
            "read the wide pane's horizontal axis");
         expect(widens != FALSE,
                "the vertical scrollbar narrows the viewport until the content overflows");
-        expect(wide_scroll->SetScrollPercent(UIA_ScrollPatternNoScroll, 100.0) == S_OK,
+        expect(wide_scroll->SetScrollPercent(kNoScroll, 100.0) == S_OK,
                "scroll the wide pane to its bottom");
         expect(wait([&] {
                  double now = -1.0;
@@ -834,7 +839,7 @@ void expand_collapse_and_scroll() {
         BOOL scrolls{FALSE};
         ok(list_scroll->get_CurrentVerticallyScrollable(&scrolls), "read list vertical scrolling");
         expect(scrolls != FALSE, "a long list reports its vertical axis without being drawn");
-        expect(list_scroll->SetScrollPercent(UIA_ScrollPatternNoScroll, 100.0) == S_OK,
+        expect(list_scroll->SetScrollPercent(kNoScroll, 100.0) == S_OK,
                "scroll the list to its last row");
         expect(wait([&] {
                  double now = -1.0;
