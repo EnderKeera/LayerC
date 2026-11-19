@@ -3,6 +3,9 @@
 #include "layerc/core/utf8.hpp"
 
 #include <cstring>
+#include <memory>
+#include <optional>
+#include <string>
 
 namespace layerc::editor::a11y::uia {
 namespace {
@@ -20,6 +23,23 @@ void property(IRawElementProviderSimple *provider, PROPERTYID id,
     (void)UiaRaiseAutomationPropertyChangedEvent(provider, id, old_value, new_value);
   VariantClear(&old_value);
   VariantClear(&new_value);
+}
+
+void integer(IRawElementProviderSimple *provider, PROPERTYID id, int before, int after) {
+  if (before == after) return;
+  VARIANT old_value{}, new_value{};
+  old_value.vt = new_value.vt = VT_I4;
+  old_value.lVal = before;
+  new_value.lVal = after;
+  (void)UiaRaiseAutomationPropertyChangedEvent(provider, id, old_value, new_value);
+}
+void real(IRawElementProviderSimple *provider, PROPERTYID id, double before, double after) {
+  if (before == after) return;
+  VARIANT old_value{}, new_value{};
+  old_value.vt = new_value.vt = VT_R8;
+  old_value.dblVal = before;
+  new_value.dblVal = after;
+  (void)UiaRaiseAutomationPropertyChangedEvent(provider, id, old_value, new_value);
 }
 
 using Notify = HRESULT(WINAPI *)(IRawElementProviderSimple *, NotificationKind,
@@ -61,6 +81,28 @@ void raise_changes(const std::shared_ptr<Context> &context,
             current.text->anchor != old->second.text->anchor)
           (void)UiaRaiseAutomationEvent(provider, UIA_Text_TextSelectionChangedEventId);
       }
+      const auto toggle = [](const States &states) {
+        return states.mixed ? 2 : states.checked ? 1 : 0;
+      };
+      integer(provider, UIA_ToggleToggleStatePropertyId, toggle(old->second.states),
+              toggle(current.states));
+      integer(provider, UIA_ExpandCollapseExpandCollapseStatePropertyId,
+              old->second.states.expanded ? 1 : 0, current.states.expanded ? 1 : 0);
+      if (current.range && old->second.range)
+        real(provider, UIA_RangeValueValuePropertyId, old->second.range->value,
+             current.range->value);
+      const auto scroll_percent = [](const std::optional<Scroll> &scroll, bool horizontal) {
+        if (!scroll) return -1.0;
+        return horizontal ? scroll->horizontal : scroll->vertical;
+      };
+      real(provider, UIA_ScrollHorizontalScrollPercentPropertyId,
+           scroll_percent(old->second.scroll, true), scroll_percent(current.scroll, true));
+      real(provider, UIA_ScrollVerticalScrollPercentPropertyId,
+           scroll_percent(old->second.scroll, false), scroll_percent(current.scroll, false));
+      // A selection that moved onto this item is the event clients wait for;
+      // losing one is reported through the container's structure changes.
+      if (current.states.selected && !old->second.states.selected)
+        (void)UiaRaiseAutomationEvent(provider, UIA_SelectionItem_ElementSelectedEventId);
     }
     if (current.states.focused &&
         (old == before.nodes.end() || !old->second.states.focused))

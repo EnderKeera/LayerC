@@ -15,6 +15,7 @@ add_library(layerc_editor_fltk_uia STATIC
     src/editor/fltk/a11y/uia/adaptor.cpp
     src/editor/fltk/a11y/uia/events.cpp
     src/editor/fltk/a11y/uia/text_provider.cpp
+    src/editor/fltk/a11y/uia/patterns.cpp
     src/editor/fltk/a11y/uia/text_range.cpp)
 target_include_directories(layerc_editor_fltk_uia PRIVATE src/editor/fltk)
 target_link_libraries(layerc_editor_fltk_uia PUBLIC

@@ -140,7 +140,9 @@ int do_action(sd_bus_message *message, void *data, sd_bus_error *error) {
   const Node *node = request_node(source, message, error);
   if (!node) return -ENOENT;
   if (action_at(*node, *index, error) == nullptr) return -EINVAL;
-  if (node->states.disabled || !node->states.showing) return reply_bool(message, false);
+  // Visibility is the shared layer's rule, not the snapshot's: an item of a
+  // closed menu is not showing, yet it is invoked through its visible menu.
+  if (node->states.disabled) return reply_bool(message, false);
   const auto target = target_of(source, *node);
   if (!target) return reply_bool(message, false);
   // True means queued on FLTK's loop; the application callback runs there, so

@@ -1,4 +1,5 @@
 #include "a11y/fltk_actions.hpp"
+#include "a11y/fltk_hooks.hpp"
 #include "a11y/fltk_tree.hpp"
 #include "a11y/model.hpp"
 #include "a11y/input.hpp"
@@ -11,11 +12,14 @@
 #include <FL/Fl_Browser.H>
 #include <FL/Fl_Button.H>
 #include <FL/Fl_Check_Button.H>
+#include <FL/Fl_Choice.H>
 #include <FL/Fl_Group.H>
 #include <FL/Fl_Hold_Browser.H>
 #include <FL/Fl_Input.H>
+#include <FL/Fl_Menu_Bar.H>
 #include <FL/Fl_Radio_Button.H>
 #include <FL/Fl_Round_Button.H>
+#include <FL/Fl_Scroll.H>
 #include <FL/Fl_Slider.H>
 #include <FL/Fl_Tabs.H>
 #include <FL/Fl_Window.H>
@@ -119,6 +123,42 @@ bool children_are_consistent(const a11y::Snapshot &snapshot) {
     }
   }
   return roots == 1;
+}
+
+// A frontend popup that records which menu it opened, so a published expansion
+// follows the frontend's own popup rather than FLTK's transient window.
+struct FakePopup {
+  static inline Fl_Menu_ *open_owner{};
+  static inline int open_title{-1};
+  static Fl_Menu_ *owner() { return open_owner; }
+  static bool current(const Fl_Menu_ &, int) { return false; }
+  static std::optional<layerc::editor::EditorBounds> item_bounds(const Fl_Menu_ &, int) {
+    return std::nullopt;
+  }
+  static Fl_Window *document_window(const Fl_Window *) { return nullptr; }
+  static bool pick(Fl_Menu_ &, int) { return false; }
+  static void open(Fl_Menu_ &menu, int title) {
+    open_owner = &menu;
+    open_title = title;
+  }
+  static bool dismiss(Fl_Menu_ &menu) {
+    if (open_owner != &menu) return false;
+    open_owner = nullptr;
+    open_title = -1;
+    return true;
+  }
+  static int title(const Fl_Menu_ &menu) { return open_owner == &menu ? open_title : -1; }
+  static a11y::PopupMenus menus() {
+    return {&owner, &current, &item_bounds, &document_window, &pick, &open, &dismiss, &title};
+  }
+};
+
+// The first node whose name is label, search order irrelevant while names are
+// unique in this probe.
+const a11y::Node *named(const a11y::Snapshot &snapshot, const std::string &label) {
+  for (const auto &[id, node] : snapshot.nodes)
+    if (node.name == label) return &node;
+  return nullptr;
 }
 } // namespace
 
@@ -555,6 +595,100 @@ void fltk_accessibility_button_roles() {
   window.hide();
 }
 
+void fltk_accessibility_expansion_and_scroll() {
+  a11y::set_popup_menus(FakePopup::menus());
+  Fl_Window window(0, 0, 560, 340, "Expansion probe");
+  Fl_Choice choice(10, 10, 160, 24, "Units");
+  Fl_Menu_Bar bar(10, 44, 300, 24);
+  Fl_Scroll pane(10, 120, 240, 100, "Pane");
+  Fl_Browser tall(280, 120, 240, 100, "Tall");
+  Fl_Browser short_list(280, 240, 240, 60, "Short");
+  window.begin();
+  window.add(choice);
+  window.add(bar);
+  window.add(pane);
+  window.add(tall);
+  window.add(short_list);
+  choice.add("Millimetres");
+  choice.add("Inches");
+  bar.add("File/Open");
+  bar.add("File/Quit");
+  bar.add("Help/About");
+  pane.begin();
+  new Fl_Box(10, 120, 200, 360);
+  pane.end();
+  for (int row = 1; row <= 200; ++row) tall.add(("row " + std::to_string(row)).c_str());
+  short_list.add("only row");
+  window.end();
+  window.show();
+  Fl::check();
+
+  a11y::FltkTree tree;
+  a11y::Snapshot snapshot = tree.snapshot();
+  const auto *drop = named(snapshot, "Units");
+  expect(drop != nullptr, "the drop-down publishes its own node");
+  if (drop == nullptr) return;
+  expect(drop->states.collapsed && !drop->states.expanded,
+         "a closed drop-down publishes collapsed");
+  const auto *title = named(snapshot, "File");
+  expect(title != nullptr, "a menu title publishes its own node");
+  if (title == nullptr) return;
+  expect(title->states.collapsed && !title->states.expanded,
+         "a closed submenu title publishes collapsed");
+
+  // The frontend opens one popup at a time; only the opened menu publishes
+  // expanded, and dismissing it publishes collapsed again.
+  FakePopup::open(choice, -1);
+  const auto *file = bar.menu();
+  int file_index = -1;
+  for (int index = 0; index < bar.size(); ++index)
+    if (file[index].label() != nullptr && std::string(file[index].label()) == "File")
+      file_index = index;
+  expect(file_index >= 0, "the menu bar has a File title");
+  snapshot = tree.snapshot();
+  expect(named(snapshot, "Units")->states.expanded, "an open drop-down publishes expanded");
+  expect(!named(snapshot, "Units")->states.collapsed, "an open drop-down is not collapsed");
+  FakePopup::dismiss(choice);
+  snapshot = tree.snapshot();
+  expect(named(snapshot, "Units")->states.collapsed, "a dismissed drop-down is collapsed again");
+  FakePopup::open(bar, file_index);
+  snapshot = tree.snapshot();
+  expect(named(snapshot, "File")->states.expanded, "an open submenu title publishes expanded");
+  expect(named(snapshot, "Help")->states.collapsed, "a closed sibling title stays collapsed");
+  FakePopup::dismiss(bar);
+  snapshot = tree.snapshot();
+
+  const auto *pane_node = named(snapshot, "Pane");
+  expect(pane_node != nullptr && pane_node->scroll.has_value(),
+         "an overflowing pane publishes its scroll state");
+  if (pane_node != nullptr && pane_node->scroll) {
+    expect(pane_node->scroll->horizontal == -1.0,
+           "a pane that does not overflow sideways reports no horizontal axis");
+    expect(pane_node->scroll->vertical >= 0.0 && pane_node->scroll->vertical <= 100.0,
+           "a pane publishes its vertical percentage");
+    expect(pane_node->scroll->vertical_view > 0.0 &&
+               pane_node->scroll->vertical_view < 100.0,
+           "a pane publishes the share of its content it shows");
+  }
+  const auto *tall_node = named(snapshot, "Tall");
+  expect(tall_node != nullptr && tall_node->scroll.has_value(),
+         "a long list publishes its scroll state");
+  if (tall_node != nullptr && tall_node->scroll) {
+    expect(tall_node->scroll->vertical >= 0.0 && tall_node->scroll->vertical <= 100.0,
+           "a long list publishes its vertical axis");
+    expect(tall_node->scroll->vertical_view < 100.0,
+           "a long list publishes the share of its rows it shows");
+    expect(tall_node->scroll->horizontal == -1.0,
+           "a list whose rows fit sideways reports no horizontal axis");
+  }
+  const auto *short_node = named(snapshot, "Short");
+  expect(short_node != nullptr && short_node->scroll.has_value() &&
+             short_node->scroll->horizontal == -1.0 && short_node->scroll->vertical == -1.0,
+         "a list that fits reports no scrollable axis");
+  a11y::set_popup_menus(a11y::PopupMenus{});
+}
+
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(fltk_accessibility_tree_snapshots),
+                 LAYERC_TEST_CASE(fltk_accessibility_expansion_and_scroll),
                  LAYERC_TEST_CASE(fltk_accessibility_actions),
                  LAYERC_TEST_CASE(fltk_accessibility_button_roles))

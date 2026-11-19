@@ -98,6 +98,27 @@ public:
       if (pattern == UIA_TextPatternId && current->text &&
           !current->states.password)
         return make_text_pattern(context_, id_, result);
+      // UI Automation's RadioButton control type never supports Toggle; a
+      // radio's checked state is its SelectionItem state instead.
+      if (pattern == UIA_TogglePatternId && current->states.checkable &&
+          current->role != Role::radio_button)
+        return make_toggle_pattern(context_, id_, result);
+      if (pattern == UIA_RangeValuePatternId && current->range && !current->states.password)
+        return make_range_value_pattern(context_, id_, result);
+      if (pattern == UIA_SelectionPatternId &&
+          (current->role == Role::list || current->role == Role::tab_list))
+        return make_selection_pattern(context_, id_, result);
+      if (pattern == UIA_SelectionItemPatternId &&
+          (current->role == Role::list_row || current->role == Role::tab ||
+           current->role == Role::radio_button))
+        return make_selection_item_pattern(context_, id_, result);
+      // Only a node that publishes an expansion state offers the pattern, so a
+      // leaf reports it as absent rather than answering Collapsed forever.
+      if (pattern == UIA_ExpandCollapsePatternId &&
+          (current->states.expanded || current->states.collapsed))
+        return make_expand_collapse_pattern(context_, id_, result);
+      if (pattern == UIA_ScrollPatternId && current->scroll)
+        return make_scroll_pattern(context_, id_, result);
       return S_OK; // Unsupported patterns are not advertised.
     });
   }

@@ -153,6 +153,7 @@ struct FltkTree::Impl {
       if (auto *field = dynamic_cast<Fl_Input_ *>(target.widget))
         node.text = exportable(node.states, field_text(*field));
       if (auto *valuator = dynamic_cast<Fl_Valuator *>(target.widget)) node.range = range_of(*valuator);
+      node.scroll = scroll_of(target);
     }
     if (const auto local = local_bounds(target))
       if (const auto bounds = screen_bounds(target, *local)) node.bounds = *bounds;

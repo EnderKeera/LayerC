@@ -107,6 +107,9 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
   std::atomic<std::size_t> hosted{};
   std::chrono::steady_clock::time_point next_refresh{};
   bool refresh_armed{};
+  // Set by a walk that ran from the refresh timer; the check that follows sees it
+  // and stays quiet, so an idle loop performs no periodic walk at all.
+  bool walked_in_check{};
   HWND caret_handle{};
   bool caret_created{};
   int caret_height{};
@@ -143,10 +146,18 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
     auto *self = static_cast<Impl *>(data);
     self->refresh_armed = false;
     (void)self->refresh();
+    // A walk from this timer is the loop's only activity in this pass: the next
+    // check runs before anything else can have changed the tree, so it stays
+    // quiet instead of re-arming and walking again.
+    self->walked_in_check = true;
   }
 
   void tick() {
     discover();
+    if (walked_in_check) {
+      walked_in_check = false;
+      return;
+    }
     if (!demand()) return;
     const auto now = std::chrono::steady_clock::now();
     if (!stale && now < next_refresh) {
@@ -401,6 +412,21 @@ struct Adaptor::Impl : std::enable_shared_from_this<Impl> {
       break;
     case ActionKind::set_number:
       if (!set_number(*target, action.number)) status = E_INVALIDARG;
+      break;
+    case ActionKind::toggle:
+      // A check state flips through the widget's own toggle, from FLTK's loop.
+      if (!activate(*target)) status = E_INVALIDARG;
+      break;
+    case ActionKind::expand:
+      // The popup runs its own modal loop, so opening lands from FLTK's loop;
+      // an already-open or popup-less node cannot expand again.
+      if (!expand(*target)) status = UIA_E_INVALIDOPERATION;
+      break;
+    case ActionKind::collapse:
+      if (!collapse(*target)) status = UIA_E_INVALIDOPERATION;
+      break;
+    case ActionKind::scroll:
+      if (!scroll_to(*target, action.horizontal, action.vertical)) status = E_INVALIDARG;
       break;
     }
     if (!context->connected.load()) return status; // Invoke may close its window.

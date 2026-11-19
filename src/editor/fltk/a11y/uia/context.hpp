@@ -68,6 +68,18 @@ private:
     IRawElementProviderFragment **result);
 [[nodiscard]] HRESULT make_text_pattern(
     const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
+[[nodiscard]] HRESULT make_toggle_pattern(
+    const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
+[[nodiscard]] HRESULT make_range_value_pattern(
+    const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
+[[nodiscard]] HRESULT make_selection_pattern(
+    const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
+[[nodiscard]] HRESULT make_selection_item_pattern(
+    const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
+[[nodiscard]] HRESULT make_expand_collapse_pattern(
+    const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
+[[nodiscard]] HRESULT make_scroll_pattern(
+    const std::shared_ptr<Context> &context, NodeId id, IUnknown **result);
 void raise_changes(const std::shared_ptr<Context> &context,
                    const Snapshot &before, const Snapshot &after);
 

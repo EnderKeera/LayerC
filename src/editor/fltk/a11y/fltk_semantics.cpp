@@ -15,6 +15,7 @@
 #include <FL/Fl_Input_.H>
 #include <FL/Fl_Menu_.H>
 #include <FL/Fl_Menu_Bar.H>
+#include <FL/Fl_Menu_Button.H>
 #include <FL/Fl_Round_Button.H>
 #include <FL/Fl_Scroll.H>
 #include <FL/Fl_Scrollbar.H>
@@ -26,8 +27,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <cstdio>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace layerc::editor::a11y {
 
@@ -44,7 +47,100 @@ Fl_Menu_ *menu_owner(const Target &target) {
 Fl_Input_ *input_of(const Target &target) {
   return target.kind == TargetKind::widget ? dynamic_cast<Fl_Input_ *>(target.widget) : nullptr;
 }
+
+// The menu a node expands: a drop-down widget owns its popup, a submenu title
+// owns the nested one.
+Fl_Menu_ *expansion_owner(const Target &target) {
+  if (target.kind == TargetKind::menu_item) return menu_owner(target);
+  return target.kind == TargetKind::widget ? dynamic_cast<Fl_Menu_ *>(target.widget) : nullptr;
+}
+
+// Fl_Scroll lays its scrollbars out while drawing, so a pane's extents come from
+// its children and its own box rather than from bars that may still be empty.
+struct PaneExtent {
+  int content_width{}, content_height{}, view_width{}, view_height{};
+};
+
+std::optional<PaneExtent> pane_extent(const Fl_Scroll &pane) {
+  int left = 0, top = 0, right = 0, bottom = 0;
+  bool any = false;
+  for (int index = 0; index < pane.children(); ++index) {
+    const Fl_Widget *child = pane.child(index);
+    if (child == &pane.scrollbar || child == &pane.hscrollbar || !child->visible()) continue;
+    if (!any) {
+      left = child->x();
+      top = child->y();
+      any = true;
+    } else {
+      left = std::min(left, child->x());
+      top = std::min(top, child->y());
+    }
+    right = std::max(right, child->x() + child->w());
+    bottom = std::max(bottom, child->y() + child->h());
+  }
+  if (!any) return std::nullopt;
+  // A visible scrollbar is part of the frame, not the viewport: Fl_Scroll::
+  // recalc_scrollbars shrinks the inner box per axis that overflows.
+  const int thickness = pane.scrollbar_size() > 0 ? pane.scrollbar_size() : Fl::scrollbar_size();
+  const int content_width = right - left;
+  const int content_height = bottom - top;
+  int view_width = pane.w() - Fl::box_dw(pane.box());
+  int view_height = pane.h() - Fl::box_dh(pane.box());
+  const bool vertical_allowed = (pane.type() & Fl_Scroll::VERTICAL) != 0;
+  bool vertical = vertical_allowed && content_height > view_height;
+  if (vertical) view_width -= thickness;
+  if ((pane.type() & Fl_Scroll::HORIZONTAL) != 0 && content_width > view_width)
+    view_height -= thickness;
+  if (!vertical && vertical_allowed && content_height > view_height) view_width -= thickness;
+  return PaneExtent{content_width, content_height, std::max(0, view_width),
+                    std::max(0, view_height)};
+}
+
+// Fl_Browser_ lays its scrollbars out only in draw(), so reading them would
+// make a showing-but-undrawn list publish no axis. Its extent therefore comes
+// from its content, the way a pane's does. full_height()/full_width() are
+// protected, so their member pointers are formed on a helper type and applied
+// through Fl_Browser_&: a pointer to a virtual member of the base class is
+// valid for every derived list, without casting the object.
+struct BrowserExtent : Fl_Browser_ {
+  static constexpr int (Fl_Browser_::*height)() const = &BrowserExtent::full_height;
+  static constexpr int (Fl_Browser_::*width)() const = &BrowserExtent::full_width;
+};
+
+std::optional<PaneExtent> list_extent(const Fl_Browser_ &list) {
+  int content_height = (list.*BrowserExtent::height)();
+  if (const auto *rows = dynamic_cast<const RowGeometry *>(&list)) {
+    // The frontend's own rows end where the last entry says they do.
+    const auto &tops = rows->row_tops();
+    if (!tops.empty()) content_height = tops.back();
+  }
+  const int content_width = (list.*BrowserExtent::width)();
+  const int thickness = list.scrollbar_size() > 0 ? list.scrollbar_size() : Fl::scrollbar_size();
+  int view_width = list.w() - Fl::box_dw(list.box());
+  int view_height = list.h() - Fl::box_dh(list.box());
+  const uchar mode = list.has_scrollbar();
+  const bool forced = (mode & Fl_Browser_::ALWAYS_ON) != 0;
+  const bool wants_vertical = (mode & Fl_Browser_::VERTICAL) != 0;
+  const bool wants_horizontal = (mode & Fl_Browser_::HORIZONTAL) != 0;
+  bool vertical = wants_vertical && (forced || content_height > view_height);
+  if (vertical) view_width -= thickness;
+  if (wants_horizontal && (forced || content_width > view_width)) view_height -= thickness;
+  if (!vertical && wants_vertical && content_height > view_height) view_width -= thickness;
+  return PaneExtent{content_width, content_height, std::max(0, view_width),
+                    std::max(0, view_height)};
+}
+
+// One axis of a pane: the percentage scrolled and the visible share.
+std::pair<double, double> pane_axis(const int content, const int view, const int position) {
+  if (view <= 0 || content <= view) return {-1.0, 100.0};
+  const double travel = static_cast<double>(content - view);
+  return {std::clamp(100.0 * static_cast<double>(position) / travel, 0.0, 100.0),
+          std::clamp(100.0 * static_cast<double>(view) / static_cast<double>(content), 0.0,
+                     100.0)};
+}
 } // namespace
+
+Fl_Menu_ *expansion_menu(const Target &target) { return expansion_owner(target); }
 
 TreePass::TreePass() : previous_(pass_sizes), previous_rows_(pass_rows) {
   pass_sizes = &sizes_;
@@ -250,6 +346,29 @@ bool checked(const Target &target) {
   return false;
 }
 
+bool expansion_published(const Target &target) {
+  if (!live(target)) return false;
+  if (target.kind == TargetKind::menu_item) {
+    const auto *item = menu_item_of(target);
+    return item != nullptr && item->submenu() != 0;
+  }
+  const auto *menu = expansion_owner(target);
+  if (menu == nullptr) return false;
+  // A menu bar's titles are menu items, and a plain menu is a container.
+  if (dynamic_cast<const Fl_Menu_Bar *>(menu) != nullptr) return false;
+  if (dynamic_cast<const Fl_Choice *>(menu) != nullptr) return true;
+  if (dynamic_cast<const Fl_Menu_Button *>(menu) != nullptr) return true;
+  return popup_owner() == menu;
+}
+
+bool expanded_now(const Target &target) {
+  if (!expansion_published(target)) return false;
+  auto *menu = expansion_owner(target);
+  if (menu == nullptr || popup_owner() != menu) return false;
+  // A submenu title is open only while that title's own level is the open one.
+  return target.kind != TargetKind::menu_item || popup_title(*menu) == target.index;
+}
+
 Role role_of(const Target &target) {
   auto *w = target.widget;
   if (target.kind == TargetKind::application) return Role::application;
@@ -402,6 +521,10 @@ States states(const Target &target) {
   result.checked = checked(target);
   result.selected = selected(target);
   result.focused = focused(target);
+  // A closed drop-down is collapsed, not merely unexpanded: an expansion
+  // interface needs one of those two states on every node that offers it.
+  result.expanded = expanded_now(target);
+  result.collapsed = expansion_published(target) && !result.expanded;
   return result;
 }
 
@@ -429,6 +552,67 @@ std::optional<Bounds> local_bounds(const Target &target) {
   if (!bounds) return std::nullopt;
   return Bounds{static_cast<double>(bounds->x), static_cast<double>(bounds->y),
                 static_cast<double>(bounds->width), static_cast<double>(bounds->height)};
+}
+
+std::optional<Scroll> scroll_of(const Target &target) {
+  if (target.kind != TargetKind::widget || !live(target) || !showing(target)) return std::nullopt;
+  // Both widgets derive their percentages from their content extent, never from
+  // a scrollbar FLTK may not have laid out yet.
+  if (const auto *list = dynamic_cast<const Fl_Browser_ *>(target.widget)) {
+    const auto extent = list_extent(*list);
+    if (!extent) return std::nullopt;
+    const auto [horizontal, h_view] = pane_axis(extent->content_width, extent->view_width,
+                                                list->hposition());
+    const auto [vertical, v_view] = pane_axis(extent->content_height, extent->view_height,
+                                              list->vposition());
+    return Scroll{horizontal, vertical, h_view, v_view};
+  }
+  if (const auto *pane = dynamic_cast<const Fl_Scroll *>(target.widget)) {
+    const auto extent = pane_extent(*pane);
+    if (!extent) return std::nullopt;
+    const auto [horizontal, h_view] =
+        pane_axis(extent->content_width, extent->view_width, pane->xposition());
+    const auto [vertical, v_view] =
+        pane_axis(extent->content_height, extent->view_height, pane->yposition());
+    return Scroll{horizontal, vertical, h_view, v_view};
+  }
+  return std::nullopt;
+}
+
+bool set_scroll(const Target &target, double horizontal, double vertical) {
+  if (target.kind != TargetKind::widget || !live(target) || !showing(target) || !enabled(target))
+    return false;
+  const auto list_pixel = [](const int content, const int view, const double percent) {
+    const double travel = std::max(0, content - view);
+    return static_cast<int>(std::lround(travel * std::clamp(percent, 0.0, 100.0) / 100.0));
+  };
+  if (auto *list = dynamic_cast<Fl_Browser_ *>(target.widget)) {
+    const auto extent = list_extent(*list);
+    if (!extent) return false;
+    if (horizontal >= 0)
+      list->hposition(list_pixel(extent->content_width, extent->view_width, horizontal));
+    if (vertical >= 0)
+      list->vposition(list_pixel(extent->content_height, extent->view_height, vertical));
+    list->redraw();
+    return true;
+  }
+  if (auto *pane = dynamic_cast<Fl_Scroll *>(target.widget)) {
+    const auto extent = pane_extent(*pane);
+    if (!extent) return false;
+    const auto pane_pixel = [](const int content, const int view, const double percent) {
+      const double travel = std::max(0, content - view);
+      return static_cast<int>(std::lround(travel * std::clamp(percent, 0.0, 100.0) / 100.0));
+    };
+    pane->scroll_to(horizontal >= 0
+                        ? pane_pixel(extent->content_width, extent->view_width, horizontal)
+                        : pane->xposition(),
+                    vertical >= 0
+                        ? pane_pixel(extent->content_height, extent->view_height, vertical)
+                        : pane->yposition());
+    pane->redraw();
+    return true;
+  }
+  return false;
 }
 
 std::optional<Range> range_of(const Fl_Valuator &valuator) {

@@ -19,6 +19,8 @@ void action_names_and_activation_reach_the_widget();
 void value_and_selection_mutations_reach_the_widgets();
 void text_offsets_are_characters_and_geometry_is_real();
 void edits_run_through_the_fields_own_path_and_report_text_changes();
+void an_idle_listener_does_not_keep_walking();
+void an_app_change_reaches_the_listener();
 } // namespace
 
 namespace layerc::test::atspi_fixture {
@@ -572,4 +574,6 @@ LAYERC_TEST_MAIN(
     LAYERC_TEST_CASE(action_names_and_activation_reach_the_widget),
     LAYERC_TEST_CASE(value_and_selection_mutations_reach_the_widgets),
     LAYERC_TEST_CASE(text_offsets_are_characters_and_geometry_is_real),
-    LAYERC_TEST_CASE(edits_run_through_the_fields_own_path_and_report_text_changes))
+    LAYERC_TEST_CASE(edits_run_through_the_fields_own_path_and_report_text_changes),
+    LAYERC_TEST_CASE(an_idle_listener_does_not_keep_walking),
+    LAYERC_TEST_CASE(an_app_change_reaches_the_listener))

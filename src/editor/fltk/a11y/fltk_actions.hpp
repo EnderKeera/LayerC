@@ -37,6 +37,17 @@ namespace layerc::editor::a11y {
 // widget queues no callback, exactly like the widget's own setter.
 [[nodiscard]] bool set_number(const Target &target, double value);
 
+// Drop-downs and submenu titles only. Expanding opens the popup from FLTK's
+// loop, because a popup runs its own modal loop; collapsing closes it in the
+// call without choosing an item, so no application callback runs. Neither
+// reports a change when the node is already in that state.
+[[nodiscard]] bool expand(const Target &target);
+[[nodiscard]] bool collapse(const Target &target);
+
+// Lists and scroll panes only. Percentages are 0..100, and -1 keeps that axis.
+// The new position lands immediately, so the next read sees it.
+[[nodiscard]] bool scroll_to(const Target &target, double horizontal, double vertical);
+
 // Told once after an action took effect: immediately for the edits and caret
 // moves that land in the call, and from the loop for the steps whose
 // application callback ran there. A protocol bridge marks its published

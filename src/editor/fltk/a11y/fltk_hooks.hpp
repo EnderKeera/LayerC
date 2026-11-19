@@ -37,8 +37,14 @@ struct PopupMenus {
   Fl_Window *(*document_window)(const Fl_Window *transient){};
   // Chooses an item of the open popup; false when owner has none open.
   bool (*pick)(Fl_Menu_ &owner, int index){};
-  // Opens the popup of a menu title.
+  // Opens the popup of a menu title; -1 opens a whole-menu popup.
   void (*open)(Fl_Menu_ &owner, int title){};
+  // Closes the open popup without choosing an item, so no application
+  // callback runs; false when owner has none open.
+  bool (*dismiss)(Fl_Menu_ &owner){};
+  // Index of the open popup's title, or -1 for a whole-menu popup and when
+  // owner's popup is not open.
+  int (*title)(const Fl_Menu_ &owner){};
 };
 // FLTK thread only. The frontend that owns popup menus installs them once.
 void set_popup_menus(const PopupMenus &menus) noexcept;
@@ -48,6 +54,13 @@ void set_popup_menus(const PopupMenus &menus) noexcept;
 [[nodiscard]] std::optional<EditorBounds> popup_item_bounds(const Fl_Menu_ &owner, int index);
 [[nodiscard]] Fl_Window *popup_document_window(const Fl_Window *transient);
 [[nodiscard]] bool popup_pick(Fl_Menu_ &owner, int index);
+// False when the frontend has no popup to open, so a caller that must know
+// before it acts reports the failure instead of opening FLTK's own popup.
+[[nodiscard]] bool popup_supported();
 // False when no frontend popup can open, so the caller falls back to FLTK.
 [[nodiscard]] bool popup_open(Fl_Menu_ &owner, int title);
+// False when no frontend popup for owner is open.
+[[nodiscard]] bool popup_dismiss(Fl_Menu_ &owner);
+// -1 when no frontend popup reports a title for owner.
+[[nodiscard]] int popup_title(const Fl_Menu_ &owner);
 } // namespace layerc::editor::a11y

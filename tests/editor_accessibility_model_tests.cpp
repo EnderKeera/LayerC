@@ -1,6 +1,7 @@
 #include "a11y/model.hpp"
 #include "test_support.hpp"
 
+#include <cmath>
 #include <limits>
 #include <thread>
 
@@ -120,6 +121,37 @@ void protocol_neutral_semantics_are_validated_atomically() {
   }
 }
 
+void scroll_state_is_validated() {
+  Model model;
+  auto tree = fixture();
+  auto &field = tree.nodes.at(2);
+  Scroll scroll;
+  // -1 marks an axis that cannot scroll; a view share on such an axis is
+  // meaningless but harmless, so the validator keeps it.
+  scroll.horizontal = -1.0;
+  scroll.vertical = 40.0;
+  scroll.horizontal_view = 0.0;
+  scroll.vertical_view = 25.0;
+  field.scroll = scroll;
+  expect(!model.publish(tree), "a scroll state inside the content publishes");
+  const auto retained = model.read();
+  expect(retained.nodes.at(2).scroll && retained.nodes.at(2).scroll->vertical == 40.0 &&
+             retained.nodes.at(2).scroll->horizontal == -1.0,
+         "the published node keeps both axes");
+  for (int failure = 0; failure < 4; ++failure) {
+    auto bad = tree;
+    auto &state = bad.nodes.at(2).scroll.emplace();
+    switch (failure) {
+    case 0: state.vertical = 150.0; break;
+    case 1: state.vertical = -2.0; break;
+    case 2: state.vertical_view = 130.0; break;
+    case 3: state.horizontal_view = std::nan(""); break;
+    }
+    expect(model.publish(bad).has_value(), "an invalid scroll state is rejected");
+    expect(model.read().generation == 1, "a rejected scroll state never commits");
+  }
+}
+
 void wide_and_reordered_parent_links() {
   Model model;
   Snapshot wide;
@@ -192,5 +224,6 @@ void value_copy_boundaries() {
 LAYERC_TEST_MAIN(LAYERC_TEST_CASE(validated_atomic_publication),
                  LAYERC_TEST_CASE(text_geometry_is_validated_atomically),
                  LAYERC_TEST_CASE(protocol_neutral_semantics_are_validated_atomically),
+                  LAYERC_TEST_CASE(scroll_state_is_validated),
                  LAYERC_TEST_CASE(wide_and_reordered_parent_links),
                  LAYERC_TEST_CASE(value_copy_boundaries))

@@ -173,6 +173,9 @@ struct Adaptor::Impl {
   std::chrono::steady_clock::time_point next_refresh{};
   bool check_registered{};
   bool refresh_armed{};
+  // Set by a walk that ran from the refresh timer; the check that follows sees it
+  // and stays quiet, so an idle loop performs no periodic walk at all.
+  bool walked_in_check{};
   bool bus_loss_armed{};
   bool started{};
 };
@@ -448,6 +451,10 @@ NodeId Adaptor::Impl::announcement_node(const Snapshot &snapshot) const {
 
 void Adaptor::Impl::on_check(void *data) {
   auto *impl = static_cast<Impl *>(data);
+  if (impl->walked_in_check) {
+    impl->walked_in_check = false;
+    return;
+  }
   const auto now = std::chrono::steady_clock::now();
   if (now < impl->next_refresh) {
     // Checks run once per loop iteration, so a change made inside the window
@@ -471,6 +478,10 @@ void Adaptor::Impl::on_refresh_timer(void *data) {
   impl->refresh_armed = false;
   impl->next_refresh = std::chrono::steady_clock::now() + kRefreshInterval;
   impl->refresh();
+  // A walk from this timer is the loop's only activity in this pass: the next
+  // check runs before anything else can have changed the tree, so it stays
+  // quiet instead of re-arming and walking again.
+  impl->walked_in_check = true;
 }
 
 // Called from inside LoopBus::dispatch: the connection that is dispatching

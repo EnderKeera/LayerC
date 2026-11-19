@@ -368,13 +368,27 @@ int EditorChoice::handle(int event) {
   return Fl_Choice::handle(event);
 }
 namespace {
+// A dismissed popup ends its loop without choosing an item, so no application
+// callback runs and the owner keeps its previous state.
+bool dismiss_session(Fl_Menu_ &owner) {
+  if (!tracking || tracking->tracker.deleted() || &tracking->owner != &owner) return false;
+  tracking->finish();
+  return true;
+}
+int open_title(const Fl_Menu_ &owner) {
+  if (!tracking || tracking->tracker.deleted() || &tracking->owner != &owner) return -1;
+  return tracking->title;
+}
+} // namespace
+namespace {
 // Every executable that can open an editor popup links this file, so the
 // accessibility layer knows the popups before the first one opens.
 [[maybe_unused]] const bool popup_menus_installed = [] {
   a11y::set_popup_menus({&layerc::editor::popup_owner, &layerc::editor::popup_current,
                          &layerc::editor::popup_item_bounds,
                          &layerc::editor::popup_document_window,
-                         &layerc::editor::popup_pick, &layerc::editor::track_editor_popup});
+                         &layerc::editor::popup_pick, &layerc::editor::track_editor_popup,
+                         &layerc::editor::dismiss_session, &layerc::editor::open_title});
   return true;
 }();
 } // namespace

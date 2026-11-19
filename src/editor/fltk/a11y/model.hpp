@@ -50,6 +50,12 @@ struct Range {
   double minimum{}, maximum{}, step{}, value{};
 };
 
+// Scrollable content: percentages, and -1 for an axis that cannot scroll.
+struct Scroll {
+  double horizontal{-1}, vertical{-1};
+  double horizontal_view{}, vertical_view{};
+};
+
 struct Node {
   NodeId id{}, parent{};
   Role role{Role::group};
@@ -58,6 +64,7 @@ struct Node {
   Bounds bounds;
   std::optional<Text> text;
   std::optional<Range> range;
+  std::optional<Scroll> scroll;
   // Protocol-neutral keybinding (mnemonic and accelerator) and action names;
   // an empty action list means the node exposes no action interface.
   std::string keybinding;
@@ -96,7 +103,9 @@ private:
   Snapshot snapshot_;
 };
 
-enum class ActionKind { focus, invoke, set_value, select_text, set_number };
+enum class ActionKind {
+  focus, invoke, set_value, select_text, set_number, toggle, expand, collapse, scroll
+};
 struct Action {
   NodeId node{};
   ActionKind kind{ActionKind::focus};
@@ -106,6 +115,8 @@ struct Action {
   // set_value moves the caret when the protocol action does, and only then.
   bool place_caret{};
   double number{};
+  // Scroll percentages; -1 keeps an axis where it is.
+  double horizontal{-1}, vertical{-1};
 };
 
 } // namespace layerc::editor::a11y

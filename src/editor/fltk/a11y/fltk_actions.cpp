@@ -1,6 +1,7 @@
 #include "fltk_actions.hpp"
 
 #include "fltk_hooks.hpp"
+#include "fltk_semantics.hpp"
 
 #include "layerc/core/utf8.hpp"
 
@@ -240,6 +241,31 @@ bool set_number(const Target &target, double value) {
     queue_callback(*valuator);
   }
   valuator->redraw();
+  return true;
+}
+
+bool expand(const Target &target) {
+  auto *menu = expansion_menu(target);
+  if (menu == nullptr || !expansion_published(target) || expanded_now(target)) return false;
+  // A popup runs its own modal loop, so it opens from FLTK's loop and only when
+  // a frontend owns popups; otherwise the caller sees the failure.
+  if (!popup_supported() || !enabled(target) || !showing(target)) return false;
+  const int title = target.kind == TargetKind::menu_item ? target.index : -1;
+  defer(menu,
+        [title](Fl_Widget &owner) { (void)popup_open(static_cast<Fl_Menu_ &>(owner), title); });
+  return true;
+}
+
+bool collapse(const Target &target) {
+  auto *menu = expansion_menu(target);
+  if (menu == nullptr || !expanded_now(target) || !popup_dismiss(*menu)) return false;
+  notify_changed();
+  return true;
+}
+
+bool scroll_to(const Target &target, double horizontal, double vertical) {
+  if ((horizontal < 0 && vertical < 0) || !set_scroll(target, horizontal, vertical)) return false;
+  notify_changed();
   return true;
 }
 

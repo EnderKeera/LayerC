@@ -3,7 +3,9 @@
 #include "layerc/core/utf8.hpp"
 
 #include <cmath>
+#include <cstddef>
 #include <set>
+#include <string_view>
 #include <utility>
 
 namespace layerc::editor::a11y {
@@ -69,6 +71,17 @@ std::optional<ModelError> validate(const Snapshot &snapshot) {
           r.minimum > r.maximum || r.step < 0 ||
           r.value < r.minimum || r.value > r.maximum)
         return error(id, "invalid accessibility numeric range");
+    }
+    if (node.scroll) {
+      const auto &s = *node.scroll;
+      // -1 marks an axis that cannot scroll; every other percentage is a
+      // position inside the content, and view shares are always fractions.
+      const auto percentage = [](double value) {
+        return std::isfinite(value) && (value == -1 || (value >= 0 && value <= 100));
+      };
+      if (!percentage(s.horizontal) || !percentage(s.vertical) ||
+          !percentage(s.horizontal_view) || !percentage(s.vertical_view))
+        return error(id, "invalid accessibility scroll state");
     }
     for (const auto child : node.children) {
       const auto found = snapshot.nodes.find(child);

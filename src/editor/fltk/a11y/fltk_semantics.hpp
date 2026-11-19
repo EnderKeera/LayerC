@@ -85,6 +85,13 @@ private:
 [[nodiscard]] bool selected(const Target &target);
 [[nodiscard]] bool checked(const Target &target);
 [[nodiscard]] bool modal_allows(Fl_Widget &widget);
+// Whether the node publishes an expansion state at all: a drop-down widget or a
+// submenu title, never a leaf.
+[[nodiscard]] bool expansion_published(const Target &target);
+// Whether that node's popup is open now. Always false when none is published.
+[[nodiscard]] bool expanded_now(const Target &target);
+// The menu whose popup that node expands, or null when it publishes none.
+[[nodiscard]] Fl_Menu_ *expansion_menu(const Target &target);
 
 [[nodiscard]] Role role_of(const Target &target);
 [[nodiscard]] std::string name(const Target &target);
@@ -96,6 +103,11 @@ private:
 // Adaptors add the owning window's screen origin and their own scale.
 [[nodiscard]] std::optional<Bounds> local_bounds(const Target &target);
 [[nodiscard]] std::optional<Range> range_of(const Fl_Valuator &valuator);
+// Scrolled content of a list or scroll pane; nothing for any other widget.
+[[nodiscard]] std::optional<Scroll> scroll_of(const Target &target);
+// Moves a list or scroll pane; a negative percentage keeps that axis. FLTK
+// clamps the position, so a call always lands inside the content.
+[[nodiscard]] bool set_scroll(const Target &target, double horizontal, double vertical);
 [[nodiscard]] std::string input_text(const Target &target);
 struct Selection {
   std::size_t begin{}, end{}; // UTF-8 byte offsets.

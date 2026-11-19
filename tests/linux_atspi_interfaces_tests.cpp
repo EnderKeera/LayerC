@@ -644,4 +644,98 @@ void reads_without_a_listener_stay_within_the_walk_budget() {
          "300 reads stay within one walk per refresh interval");
 }
 
+// --- case r: an idle listener does not keep walking ------------------------
+
+// The periodic check only exists to publish app-side changes; a walk that just
+// ran is not followed by another one until something changes or a request asks.
+void an_idle_listener_does_not_keep_walking() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({"object:"});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                     std::nullopt};
+  RichFixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+  harness.spin(ms(400));
+
+  // Two warm-up waits settle the interval the embed left armed; then an idle
+  // loop must sleep through each whole slice instead of waking for our timer.
+  const auto walks = adaptor.walks_for_testing();
+  const auto started = Clock::now();
+  for (int warm = 0; warm < 2; ++warm) (void)Fl::wait(0.5);
+  long long shortest = 5000;
+  for (int pass = 0; pass < 3; ++pass) {
+    const auto before = Clock::now();
+    (void)Fl::wait(0.5);
+    const long long took = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               Clock::now() - before)
+                               .count();
+    std::fprintf(stderr, "[idle] wait %d took %lld ms\n", pass, took);
+    if (took < shortest) shortest = took;
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+      Clock::now() - started);
+  const auto taken = adaptor.walks_for_testing() - walks;
+  // The check and the refresh timer share one cadence (kRefreshInterval, 100 ms
+  // in adaptor.cpp), so an idle listener costs exactly one walk per interval
+  // and never two in one pass.
+  const auto budget = static_cast<std::uint64_t>(elapsed.count() / 100000) + 2;
+  std::fprintf(stderr, "[idle] %llu walks in %lld ms with a listener\n",
+               static_cast<unsigned long long>(taken),
+               static_cast<long long>(elapsed.count() / 1000));
+  expect(taken <= budget, "an idle loop walks at most once per interval");
+  // A wait lasts at least its slice unless something wakes the loop early, and
+  // slowness can only lengthen it, so this holds under load too.
+  expect(shortest >= 400, "an idle loop is not woken by the accessibility refresh");
+}
+
+// --- case s: an app-side change reaches the listener -----------------------
+
+// A widget changed from an application timeout is published without any client
+// request and without input, so a listener sees it within a refresh interval.
+void an_app_change_reaches_the_listener() {
+  layerc::test::require_x11();
+  require_session_bus();
+  Harness harness;
+  require_private_bus(harness);
+  harness.set_registered_events({"object:"});
+  const layerc::test::ScopedEnvironment environment{"AT_SPI_BUS_ADDRESS",
+                                                     std::nullopt};
+  RichFixture fixture;
+  atspi::Adaptor adaptor{fixture.tree};
+  harness.set_flags(true, false);
+  if (!expect(embed(harness, adaptor), "the application embeds")) return;
+  harness.spin(ms(250));
+
+  const auto mark = harness.signals().size();
+  const auto started = Clock::now();
+  Fl_Widget *field = fixture.name;
+  Fl::add_timeout(0.05, [](void *data) { static_cast<Fl_Widget *>(data)->label("Later"); },
+                  field);
+  const bool arrived = harness.spin_until(
+      [&] {
+        const auto &signals = harness.signals();
+        for (std::size_t i = mark; i < signals.size(); ++i) {
+          const auto &signal = signals[i];
+          if (signal.interface == "org.a11y.atspi.Event.Object" &&
+              signal.member == "PropertyChange" && signal.name == "accessible-name" &&
+              signal.text == "Later")
+            return true;
+        }
+        return false;
+      },
+      ms(1500));
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      Clock::now() - started);
+  std::fprintf(stderr, "[activity] the change reached the listener in %lld ms\n",
+               static_cast<long long>(elapsed.count()));
+  expect(arrived, "an app-side change reaches the listener");
+  // Two production refresh intervals (kRefreshInterval is 100 ms).
+  expect(elapsed.count() <= 400, "the change arrives within two refresh intervals");
+}
+
 } // namespace layerc::test::atspi_fixture

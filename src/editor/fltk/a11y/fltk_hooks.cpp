@@ -34,4 +34,14 @@ bool popup_open(Fl_Menu_ &owner, int title) {
   installed.open(owner, title);
   return true;
 }
+
+bool popup_supported() { return installed.open != nullptr; }
+
+bool popup_dismiss(Fl_Menu_ &owner) {
+  return installed.dismiss && installed.dismiss(owner);
+}
+
+int popup_title(const Fl_Menu_ &owner) {
+  return installed.title ? installed.title(owner) : -1;
+}
 } // namespace layerc::editor::a11y
