@@ -16,9 +16,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <utility>
@@ -163,6 +166,7 @@ struct Fixture {
   Fl_Multiline_Input one_line{20, 160, 320, 28, "Tall notes"};
   Fl_Multiline_Input empty_multi{380, 80, 200, 56, "Empty notes"};
   Input long_single{20, 220, 200, 28, "Long line"};
+  Fl_Multiline_Input lines{380, 160, 200, 80, "Lines"};
   FltkTree tree;
   std::unique_ptr<Adaptor> adaptor;
   std::atomic<bool> closed{};
@@ -174,6 +178,7 @@ struct Fixture {
     one_line.value("a\nb\n");
     empty_multi.value("");
     long_single.value("Short");
+    lines.value("one\ntwo\nthree");
     const struct {
       Fl_Widget *widget;
       Role role;
@@ -185,6 +190,7 @@ struct Fixture {
         {&one_line, Role::text_field, "Tall notes"},
         {&empty_multi, Role::text_field, "Empty notes"},
         {&long_single, Role::text_field, "Long line"},
+        {&lines, Role::text_field, "Lines"},
     };
     for (const auto &entry : named) {
       set_accessible_role(*entry.widget, entry.role);
@@ -756,6 +762,236 @@ void trailing_newline(IUIAutomation &automation, IUIAutomationElement &root,
            "an offscreen insertion point is not reported as revealed");
   }
 }
+
+// --- case: line units over a three-line field -----------------------------
+
+// "one\ntwo\nthree" has lines starting at 0, 4 and 8; the last has no newline.
+void line_moves(IUIAutomation &automation, IUIAutomationElement &root) {
+  auto field = find(automation, root, L"Lines");
+  if (!field) return;
+  auto text = text_of(*field);
+  if (!text) return;
+  auto document = document_of(*text);
+  if (!document) return;
+  expect(range_text(*document) == L"one\ntwo\nthree", "the three-line document reads back");
+
+  Ref<IUIAutomationTextRange> line;
+  if (ok(document->Clone(line.put()), "clone for line movement") && line) {
+    int moved{};
+    ok(line->Move(TextUnit_Line, 1, &moved), "move a range by one line");
+    expect(moved == 1, "one line is one move");
+    expect(range_text(*line) == L"two\n", "a line move lands on the second line");
+    ok(line->Move(TextUnit_Line, 5, &moved), "move past the last line");
+    expect(moved == 1, "a move stops at the last line");
+    expect(range_text(*line) == L"three", "the last line has no newline");
+    ok(line->Move(TextUnit_Line, 1, &moved), "move forward from the last line");
+    expect(moved == 0, "no line follows the last line");
+    expect(range_text(*line) == L"three", "a refused move keeps the last line");
+    ok(line->Move(TextUnit_Line, -5, &moved), "move back past the first line");
+    expect(moved == -2, "a backward move stops at the first line");
+    expect(range_text(*line) == L"one\n", "the first line keeps its newline");
+    ok(line->Move(TextUnit_Line, -1, &moved), "move back from the first line");
+    expect(moved == 0, "no line precedes the first line");
+  }
+
+  Ref<IUIAutomationTextRange> edges;
+  if (ok(document->Clone(edges.put()), "clone for line endpoints") && edges) {
+    int moved{};
+    ok(edges->MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Line, -1, &moved),
+       "move the end back one line");
+    expect(moved == -1 && range_text(*edges) == L"one\ntwo\n",
+           "the end endpoint lands on the last line's start");
+    ok(edges->MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 1, &moved),
+       "move the start forward one line");
+    expect(moved == 1 && range_text(*edges) == L"two\n",
+           "the start endpoint lands on the second line");
+    ok(edges->MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Line, 5, &moved),
+       "move the end past the document end");
+    expect(moved == 1 && range_text(*edges) == L"two\nthree",
+           "the end endpoint stops at the document end");
+    ok(edges->MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -5, &moved),
+       "move the start before the document start");
+    expect(moved == -1 && range_text(*edges) == L"one\ntwo\nthree",
+           "the start endpoint stops at the document start");
+    ok(edges->MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 5, &moved),
+       "move the start past the end");
+    expect(moved == 3 && range_text(*edges).empty(),
+           "a start moved past the end collapses the range at the document end");
+  }
+
+  // A collapsed range moves between line starts and expands to its line.
+  Ref<IUIAutomationTextRange> point;
+  if (ok(document->Clone(point.put()), "clone for a collapsed line move") && point &&
+      ok(point->MoveEndpointByRange(TextPatternRangeEndpoint_End, document.get(),
+                                    TextPatternRangeEndpoint_Start),
+         "collapse onto the document start")) {
+    int moved{};
+    ok(point->Move(TextUnit_Line, 2, &moved), "move a collapsed range by two lines");
+    expect(moved == 2 && range_text(*point).empty(),
+           "a collapsed range stays collapsed across lines");
+    expect(compare(*point, *document, TextPatternRangeEndpoint_Start) == 8,
+           "a collapsed range lands on the last line's start");
+    ok(point->ExpandToEnclosingUnit(TextUnit_Line), "expand onto the enclosing line");
+    expect(range_text(*point) == L"three", "the enclosing last line has no newline");
+  }
+}
+
+// --- case: selection kind and embedded children ---------------------------
+
+void selection_kind_and_children(IUIAutomation &automation, IUIAutomationElement &root) {
+  auto field = find(automation, root, L"Lines");
+  if (!field) return;
+  auto text = text_of(*field);
+  if (!text) return;
+  SupportedTextSelection kind{SupportedTextSelection_None};
+  if (ok(text->get_SupportedTextSelection(&kind), "read the supported selection"))
+    expect(kind == SupportedTextSelection_Single,
+           "a field supports one contiguous selection");
+  // A plain input embeds no child objects, so no element maps to a range in it.
+  auto other = find(automation, root, L"Profile name");
+  for (IUIAutomationElement *element : {field.get(), other.get()}) {
+    if (element == nullptr) continue;
+    Ref<IUIAutomationTextRange> range;
+    const HRESULT refused = text->RangeFromChild(element, range.put());
+    expect(FAILED(refused) && !range, "no element maps to an embedded child range");
+  }
+}
+
+// --- case: the invisible system caret follows the focused field ------------
+
+struct SystemCaret {
+  HWND owner{};
+  RECT screen{};
+};
+
+// What Windows itself reports for the FLTK thread's caret, in screen pixels.
+SystemCaret system_caret_of(const DWORD thread) {
+  GUITHREADINFO info{};
+  info.cbSize = sizeof(info);
+  if (!GetGUIThreadInfo(thread, &info) || info.hwndCaret == nullptr) return {};
+  POINT corners[2] = {{info.rcCaret.left, info.rcCaret.top},
+                      {info.rcCaret.right, info.rcCaret.bottom}};
+  if (!ClientToScreen(info.hwndCaret, &corners[0]) ||
+      !ClientToScreen(info.hwndCaret, &corners[1]))
+    return {};
+  return {info.hwndCaret, {corners[0].x, corners[0].y, corners[1].x, corners[1].y}};
+}
+
+// The active caret range's insertion rectangle, as the client reads it.
+std::optional<RECT> caret_box(IUIAutomationTextPattern2 &text) {
+  BOOL active{};
+  Ref<IUIAutomationTextRange> caret;
+  if (FAILED(text.GetCaretRange(&active, caret.put())) || !caret || active == FALSE)
+    return std::nullopt;
+  SAFEARRAY *boxes{};
+  if (FAILED(caret->GetBoundingRectangles(&boxes)) || boxes == nullptr) return std::nullopt;
+  std::optional<RECT> found;
+  double *values{};
+  if (boxes->rgsabound[0].cElements >= 4 &&
+      SUCCEEDED(SafeArrayAccessData(boxes, reinterpret_cast<void **>(&values)))) {
+    found = RECT{std::lround(values[0]), std::lround(values[1]),
+                 std::lround(values[0] + values[2]), std::lround(values[1] + values[3])};
+    SafeArrayUnaccessData(boxes);
+  }
+  SafeArrayDestroy(boxes);
+  return found;
+}
+
+// Polls until the system caret is on `owner` at the caret range's position.
+bool caret_follows(IUIAutomationTextPattern2 &text, const DWORD thread, const HWND owner,
+                   RECT *seen, const std::optional<LONG> below = std::nullopt) {
+  return wait_for([&] {
+    const auto box = caret_box(text);
+    if (!box) return false;
+    const auto caret = system_caret_of(thread);
+    const auto height = caret.screen.bottom - caret.screen.top;
+    // A caret still on the previous line is a publish that has not caught up.
+    if (below && caret.screen.top <= *below) return false;
+    if (caret.owner != owner || std::abs(caret.screen.left - box->left) > 1 ||
+        std::abs(caret.screen.top - box->top) > 1 || height <= 0 ||
+        std::abs(height - (box->bottom - box->top)) > 1)
+      return false;
+    if (seen != nullptr) *seen = caret.screen;
+    return true;
+  });
+}
+
+Ref<IUIAutomationTextPattern2> text2_of(IUIAutomationElement *element) {
+  Ref<IUIAutomationTextPattern2> text;
+  if (element != nullptr)
+    ok(element->GetCurrentPatternAs(UIA_TextPattern2Id, IID_IUIAutomationTextPattern2,
+                                    reinterpret_cast<void **>(text.put())),
+       "TextPattern2 for the caret field");
+  return text;
+}
+
+void system_caret(IUIAutomation &automation, IUIAutomationElement &root, Fixture &fixture) {
+  const HWND hwnd = fl_xid(&fixture.window);
+  const DWORD thread = GetWindowThreadProcessId(hwnd, nullptr);
+  auto field = find(automation, root, L"Lines");
+  auto text = text2_of(field.get());
+  if (!text) return;
+
+  fixture.on_fltk([&] {
+    fixture.lines.insert_position(5);
+    fixture.lines.mark(5);
+    fixture.lines.take_focus();
+  });
+  RECT first{};
+  expect(caret_follows(*text, thread, hwnd, &first),
+         "the system caret sits at the focused field's caret");
+  fixture.on_fltk([&] {
+    fixture.lines.insert_position(10);
+    fixture.lines.mark(10);
+  });
+  expect(caret_follows(*text, thread, hwnd, nullptr, first.top),
+         "the system caret follows the caret onto a later line");
+
+  fixture.on_fltk([] { Fl::focus(nullptr); });
+  expect(wait_for([&] {
+           BOOL active{};
+           Ref<IUIAutomationTextRange> ignored;
+           (void)text->GetCaretRange(&active, ignored.put());
+           return system_caret_of(thread).owner == nullptr;
+         }),
+         "the system caret is destroyed when no field has focus");
+
+  // A second top-level window owns the caret while its field has focus, and
+  // closing that window leaves no caret on it.
+  std::unique_ptr<Fl_Double_Window> extra;
+  Input *extra_field{};
+  HWND extra_handle{};
+  fixture.on_fltk([&] {
+    extra = std::make_unique<Fl_Double_Window>(360, 90, "LayerE UIA caret window");
+    extra_field = new Input(20, 30, 300, 28, "Caret field");
+    extra->end();
+    set_accessible_role(*extra_field, Role::text_field);
+    set_accessible_name(*extra_field, "Caret field");
+    extra_field->value("caret");
+    extra->show();
+    extra_handle = fl_xid(extra.get());
+  });
+  Ref<IUIAutomationElement> extra_root;
+  if (expect(extra_handle != nullptr, "the second caret window has a handle") &&
+      ok(automation.ElementFromHandle(extra_handle, extra_root.put()),
+         "client finds the second window") &&
+      extra_root) {
+    auto extra_element = find(automation, *extra_root, L"Caret field");
+    auto extra_text = text2_of(extra_element.get());
+    fixture.on_fltk([&] {
+      extra_field->insert_position(2);
+      extra_field->mark(2);
+      extra_field->take_focus();
+    });
+    if (extra_text)
+      expect(caret_follows(*extra_text, thread, extra_handle, nullptr),
+             "the system caret moves to the focused field's own window");
+    fixture.on_fltk([&] { extra->hide(); });
+    expect(wait_for([&] { return system_caret_of(thread).owner != extra_handle; }),
+           "closing the caret's window leaves no caret on it");
+  }
+  fixture.on_fltk([&] { extra.reset(); });
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -779,6 +1015,11 @@ int main(int argc, char **argv) {
         run("text_pattern2", [&] { text_pattern2(*client.automation.get(), *root.get(), fixture); });
         run("insertion_geometry", [&] { insertion_geometry(fl_xid(&fixture.window)); });
         run("trailing_newline", [&] { trailing_newline(*client.automation.get(), *root.get(), fixture); });
+        run("line_moves", [&] { line_moves(*client.automation.get(), *root.get()); });
+        run("selection_kind_and_children",
+            [&] { selection_kind_and_children(*client.automation.get(), *root.get()); });
+        // Last: it opens and closes a second top-level window.
+        run("system_caret", [&] { system_caret(*client.automation.get(), *root.get(), fixture); });
       }
     }
     fixture.close_from_client();

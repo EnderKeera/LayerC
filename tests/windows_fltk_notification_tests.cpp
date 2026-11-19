@@ -16,6 +16,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -133,7 +134,6 @@ struct Fixture {
   Fl_Box status{20, 44, 280, 24, "Waiting"};
   FltkTree tree;
   std::unique_ptr<Adaptor> adaptor;
-  std::atomic<bool> closed{};
   Fixture() {
     window.end();
     set_accessible_role(status, Role::status);
@@ -146,9 +146,15 @@ struct Fixture {
     Fl::awake([](void *data) {
       auto &self = *static_cast<Fixture *>(data);
       self.window.hide();
-      self.closed.store(true);
     }, this);
   }
+};
+
+// Keep the FLTK thread serving UIA until the client's handlers and COM
+// references are released, including on a failed assertion or early return.
+struct CloseOnExit {
+  Fixture &fixture;
+  ~CloseOnExit() { fixture.close_from_client(); }
 };
 
 struct AnnounceStep {
@@ -179,6 +185,7 @@ void stale_announcement_is_not_replayed() {
          "an announcement nobody can hear does not walk the tree");
   const HWND hwnd = fl_xid(&fixture.window);
   std::thread worker([&] {
+    CloseOnExit close{fixture};
     try {
       Client client;
       if (!client) return;
@@ -228,17 +235,119 @@ void stale_announcement_is_not_replayed() {
         expect(seen->texts.size() == 1, detail);
         expect(!seen->texts.empty() && seen->texts.front() == L"fresh",
                "the connected client receives the new announcement, not the dropped one"); }
-      fixture.close_from_client();
-      const auto close_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-      while (!fixture.closed.load() && std::chrono::steady_clock::now() < close_deadline)
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     } catch (const std::exception &exception) { expect(false, exception.what()); }
     catch (...) { expect(false, "unexpected UIA notification exception"); }
-    if (!fixture.closed.load()) fixture.close_from_client();
+  });
+  Fl::run();
+  worker.join();
+}
+// Both subscriptions are element-scoped: child invalidation must come from
+// the parent, while the Name property must come from the existing status.
+class Changes final : public IUIAutomationStructureChangedEventHandler,
+                      public IUIAutomationPropertyChangedEventHandler {
+public:
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **result) override {
+    if (result == nullptr) return E_POINTER;
+    *result = nullptr;
+    if (iid == IID_IUnknown || iid == IID_IAgileObject ||
+        iid == IID_IUIAutomationStructureChangedEventHandler)
+      *result = static_cast<IUIAutomationStructureChangedEventHandler *>(this);
+    else if (iid == IID_IUIAutomationPropertyChangedEventHandler)
+      *result = static_cast<IUIAutomationPropertyChangedEventHandler *>(this);
+    else return E_NOINTERFACE;
+    AddRef();
+    return S_OK;
+  }
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++references_; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    const auto left = --references_;
+    if (left == 0) delete this;
+    return left;
+  }
+  HRESULT STDMETHODCALLTYPE HandleStructureChangedEvent(IUIAutomationElement *,
+      StructureChangeType change, SAFEARRAY *) override {
+    if (change == StructureChangeType_ChildrenInvalidated) invalidated.store(true);
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE HandlePropertyChangedEvent(IUIAutomationElement *,
+      PROPERTYID property, VARIANT value) override {
+    if (property == UIA_NamePropertyId && value.vt == VT_BSTR && value.bstrVal &&
+        std::wstring_view(value.bstrVal, SysStringLen(value.bstrVal)) == L"Ready")
+      renamed.store(true);
+    return S_OK;
+  }
+  std::atomic<bool> invalidated{}, renamed{};
+private:
+  std::atomic<ULONG> references_{1};
+};
+
+Ref<IUIAutomationElement> named_child(IUIAutomation &client, IUIAutomationElement &parent,
+                                      const wchar_t *name) {
+  Ref<IUIAutomationElement> child;
+  VARIANT value{};
+  value.vt = VT_BSTR;
+  value.bstrVal = SysAllocString(name);
+  if (!expect(value.bstrVal != nullptr, "allocate child name")) return child;
+  Ref<IUIAutomationCondition> condition;
+  const HRESULT made = client.CreatePropertyCondition(UIA_NamePropertyId, value, condition.put());
+  VariantClear(&value);
+  if (ok(made, "make child name condition") && condition)
+    ok(parent.FindFirst(TreeScope_Children, condition.get(), child.put()), "read the parent's children");
+  return child;
+}
+
+void child_and_name_changes_reach_subscribers() {
+  const auto apartment = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (!ok(apartment, "initialize change fixture STA")) return;
+  struct Sta { ~Sta() { CoUninitialize(); } } sta;
+  Fl::lock();
+  Fixture fixture;
+  const HWND hwnd = fl_xid(&fixture.window);
+  std::thread worker([&] {
+    CloseOnExit close{fixture};
+    Client client;
+    if (!client) return;
+    Ref<IUIAutomationElement> root;
+    if (!ok(client.automation->ElementFromHandle(hwnd, root.put()), "find changes fixture") || !root)
+      return;
+    auto status = named_child(*client.automation.get(), *root.get(), L"Announcement status");
+    if (!expect(status.get() != nullptr, "the unchanged status is a child")) return;
+    expect(!named_child(*client.automation.get(), *root.get(), L"Added child"),
+           "the new child is not in the original tree");
+    Ref<Changes> seen;
+    *seen.put() = new Changes;
+    struct Unsubscribe {
+      IUIAutomation *client;
+      ~Unsubscribe() { client->RemoveAllEventHandlers(); }
+    } unsubscribe{client.automation.get()};
+    PROPERTYID property = UIA_NamePropertyId;
+    if (!ok(client.automation->AddStructureChangedEventHandler(root.get(), TreeScope_Element,
+                nullptr, seen.get()), "subscribe to the parent's structure") ||
+        !ok(client.automation->AddPropertyChangedEventHandlerNativeArray(status.get(),
+                TreeScope_Element, nullptr, seen.get(), &property, 1), "subscribe to the child's name"))
+      return;
+    Fl::awake([](void *data) {
+      auto &ui = *static_cast<Fixture *>(data);
+      auto *child = new Fl_Box(20, 80, 280, 24, "Added child");
+      ui.window.add(child); // window owns the child
+      set_accessible_name(*child, "Added child");
+      set_accessible_name(ui.status, "Ready");
+    }, &fixture);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while ((!seen->invalidated.load() || !seen->renamed.load()) &&
+           std::chrono::steady_clock::now() < deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    expect(seen->invalidated.load(), "the parent emits ChildrenInvalidated after a child is added");
+    expect(seen->renamed.load(), "the status emits a Name change with its new name");
+    expect(named_child(*client.automation.get(), *root.get(), L"Added child").get() != nullptr,
+           "the parent's tree contains the added child");
+    expect(named_child(*client.automation.get(), *root.get(), L"Ready").get() != nullptr,
+           "the tree exposes the renamed status");
   });
   Fl::run();
   worker.join();
 }
 } // namespace
 
-LAYERC_TEST_MAIN(LAYERC_TEST_CASE(stale_announcement_is_not_replayed))
+LAYERC_TEST_MAIN(LAYERC_TEST_CASE(stale_announcement_is_not_replayed),
+                 LAYERC_TEST_CASE(child_and_name_changes_reach_subscribers))

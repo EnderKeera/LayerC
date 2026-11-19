@@ -299,6 +299,8 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_visual_asset_gc_contract_tests` | No automatic collection from production edit/calibration paths; recovered store ownership for offline maintenance |
 | `layerc_editor_document_tests` | Shared editor document: cooldown-removal dependencies, undo/redo, the commit pipeline, store round trip, sidecar recovery, and upgrade consent |
 | `layerc_editor_accessibility_model_tests` | Toolkit-neutral editor accessibility model: validated atomic tree publication, text geometry checks, and value-copy boundaries |
+| `layerc_editor_accessibility_changes_tests` | Toolkit-neutral differences between two accessibility snapshots: additions, ordered structure, property and state changes, text/value spans, caret and selection, one focused node, window activation, announcements as occurrences, and silent geometry changes |
+| `layerc_fltk_accessibility_tree_tests` | FLTK widgets published to the toolkit-neutral accessibility tree (CTest label `editor`; on Linux under an X display): consistent snapshots, expansion and scroll state, actions, button roles, and field text equivalence, work bound and snapshots |
 
 ### Windows
 
@@ -315,6 +317,9 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_editor_tests` | Editor dialogs, v2 contrast/focus/glyph and contrast-theme seams, layout and accessibility contracts, schema helpers, and automation palette |
 | `layerc_calibration_tests` | Calibration window layout, behavior, and worker interaction |
 | `layerc_windows_fltk_accessibility_tests` | FLTK editor trial (not shipped): a real `IUIAutomation` client reads a fixture window's names, roles, descriptions and reading order, edits and invokes through Value/Invoke, checks read-only refusal, text ranges, text/selection/value/focus events and status notifications, and sees providers disconnect on close |
+| `layerc_windows_fltk_notification_tests` | FLTK editor trial: a real UI Automation client receives child-list and accessible-name changes, but not announcements made before it connected |
+| `layerc_windows_fltk_patterns_tests` | FLTK editor trial: a real `IUIAutomation` client drives Toggle, RangeValue, Selection/SelectionItem, ExpandCollapse and Scroll, an idle client costs at most one tree walk per refresh interval, and app-side changes are published without a client request |
+| `layerc_windows_fltk_text_tests` | FLTK editor trial: a real client drives Text and TextPattern2 on single-line, multiline and scrolled fields: line and endpoint movement, search, single-selection and child-range contracts, text and selection events, insertion-point geometry, offscreen range refusal, and Windows system-caret position and lifetime |
 | `layerc_windows_fltk_smoke` | `layere_fltk --smoke`: the unshipped FLTK trial opens its empty window with its UI Automation bridge, then closes |
 
 ### Linux
@@ -339,9 +344,8 @@ tests skip with code 77 when a display or required extension is unavailable.
 | `layerc_linux_control_channel_tests` | Unix-socket framing, peer UID, stale sockets, and `layerctl` commands |
 | `layerc_linux_control_ownership_tests` | Bind-failure cleanup, descriptor reuse, and preserved startup error (test-only linker fault simulation) |
 | `layerc_linux_editor_daemon_link_tests` | Editor status/reload: offline vs inspection faults, queue deadlines, live-socket preservation, refused and lost acknowledgements |
-| `layerc_linux_editor_atspi_mapping_tests` | Display-free AT-SPI mapping of the editor accessibility model: role codes and names, refined text-field roles, state bits and state-event names, exposed interfaces, UTF-8/character offset translation and reading-unit boundaries |
+| `layerc_linux_editor_atspi_mapping_tests` | Display-free (CTest label `editor`) AT-SPI mapping of the editor accessibility model: role codes and names, refined text-field roles, state bits and state-event names, exposed interfaces, UTF-8/character offset translation and reading-unit boundaries |
 | `layerc_linux_atspi_adaptor_tests` | The editor's own sd-bus AT-SPI bridge on a private bus with fake `org.a11y.Bus`/registry services (CTest label `editor`): idle until a consumer listens, one embedded application, tree reads, protocol events and throttling, actions, values, selection, component geometry, character-offset text and edits through the field's own path, `NO_AT_BRIDGE`, and reported/recovered missing launcher, failed bus, refused embed and lost bus |
-| `layerc_fltk_accessibility_tree_tests` | FLTK widgets published to the toolkit-neutral accessibility tree under an X display: consistent snapshots, button roles and actions |
 | `layerc_linux_editor_platform_tests` | Editor platform services: stable process identity, folder launcher arguments and exit status, an idle missing launcher, and a visible calibration-unavailable fault |
 | `layerc_linux_editor_model_tests` | Production editor session: validated profile edits and durable save/roundtrip with retained cooldown/panel/binding fields, selection identity across a rescan, atomically refused invalid candidates, honest offline reload, and appearance (preset contrast floors, status glyph classification, outlines, desktop text scaling and XSETTINGS parsing)/task/placement helpers |
 | `layerc_linux_editor_session_tests` | Toolkit-free editor session: drafts and history, mutation candidates with preserved data, save/delete failures, enablement, reviewed import/export and import races, and field parsing |
