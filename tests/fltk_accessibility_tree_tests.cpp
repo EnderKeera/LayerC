@@ -257,6 +257,7 @@ void fltk_accessibility_tree_snapshots() {
   const auto *raw_node = widget_node(tree, first, fixture.raw);
   if (!expect(secret_node && raw_node, "secret and raw fields are exported")) return;
   expect(secret_node->states.password, "a secret field is a password");
+  expect(!secret_node->states.multi_line, "a secret field is a single-line field");
   expect(!secret_node->text && secret_node->value.empty(), "a secret field exports no text");
   expect(!raw_node->text && raw_node->value.empty(), "undecodable text exports no text interface");
 

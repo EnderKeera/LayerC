@@ -505,8 +505,11 @@ States states(const Target &target) {
     if (auto *field = dynamic_cast<Fl_Input_ *>(w)) {
       result.read_only = field->readonly() != 0;
       result.editable = field->readonly() == 0;
-      result.multi_line = (field->input_type() & FL_MULTILINE_INPUT) != 0;
-      result.password = field->input_type() == FL_SECRET_INPUT;
+      // The low bits are one field kind; FL_SECRET_INPUT (5) shares a bit with
+      // FL_MULTILINE_INPUT (4), so a bit test would make a secret field multiline.
+      const int kind = field->input_type() & FL_INPUT_TYPE;
+      result.multi_line = kind == FL_MULTILINE_INPUT;
+      result.password = kind == FL_SECRET_INPUT;
     }
     if (radio_typed(w) || dynamic_cast<Fl_Check_Button *>(w) ||
         dynamic_cast<Fl_Round_Button *>(w))
